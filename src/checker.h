@@ -171,6 +171,8 @@ public:
     bool literalType(const Expr& literal, RuntimeType& out) const;
     // A type written with a built-in type's name that means a class of the program's own there.
     bool namesOwnClass(const TypeAnnotation& written) const;
+    // A type written with a name that names nothing in reach, which the checker has reported.
+    bool namesNothing(const TypeAnnotation& written) const;
     // `val out : open List<T> = []`: the type it is declared as, which names a type parameter.
     bool declaredLiteralType(const Expr& literal, RuntimeType& out) const;
 

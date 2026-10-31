@@ -2338,6 +2338,8 @@ private:
         if (s.name == "|") return type;
         // `any` takes every value; `unit` is what a function that returns nothing is declared as.
         if (!s.present() || s.typeParam || s.name == "any" || s.name == "unit" || s.name == "nothing") return type;
+        // A name that names nothing: the checker has said so, and nothing more is said of it here.
+        if (session_.checker != nullptr && session_.checker->namesNothing(s)) return type;
 
         uint8_t id = builtinTypeId(builtinSpelling(s.name));
         if (id != 0 && session_.checker != nullptr && session_.checker->namesOwnClass(s)) id = 0;  // the program's own class

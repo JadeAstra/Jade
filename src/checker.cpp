@@ -1248,6 +1248,8 @@ struct Checker::Impl {
     // A class of the program's own whose name is also a built-in type's, in reach here: what that
     // name means in a type written here. Only Title-case names may be both.
     std::unordered_set<const TypeAnnotation*> ownClassAnnotations;
+    // Types written with a name that names nothing in reach, each reported.
+    std::unordered_set<const TypeAnnotation*> namelessAnnotations;
     ClassInfo* ownClassNamed(Unit& u, const std::string& n) {
         if (n.empty() || n[0] < 'A' || n[0] > 'Z') return nullptr;
         if (builtinTypeId(n) == 0 && n != "Unit" && n != "Nothing" && n != "MutableList" && n != "MutableMap" && n != "MutableSet") return nullptr;
@@ -1466,7 +1468,11 @@ struct Checker::Impl {
                     t.args.push_back(i < a.args.size() ? resolve(a.args[i], u) : unknownType());
             } else {
                 if (std::string advice = removedName(n); !advice.empty()) report(a, advice);
-                return unknownType();  // a name only the VM knows
+                else if (builtinTypeId(n) == 0 && !u.prelude && !namesValue(u, n)) {
+                    report(a, unknownTypeName(n));
+                    namelessAnnotations.insert(&a);  // the compiler says nothing more of it
+                }
+                return unknownType();  // a variable holding a class (`val kind = Square; x is kind`): the program finds it
             }
         }
         t.nullable = a.nullable;
@@ -2180,6 +2186,30 @@ struct Checker::Impl {
 
     // What Java's and Kotlin's names for threads and waiting are in Astra (D81 to D90, D118):
     // each a compile error saying what to write, where nothing of the program declares the name.
+    // Whether a name written as a type is a variable, a parameter or a field in reach, or starts
+    // with one (`shapes.kind`): one may hold a class, which the program tests against as it runs.
+    bool namesValue(Unit& u, const std::string& name) {
+        const std::string first = name.substr(0, name.find('.'));
+        if (findLocal(first) != nullptr) return true;
+        if (const GlobalSym* g = findGlobal(u, first); g != nullptr && g->alias == nullptr) return true;
+        if (ClassInfo* k = classAround()) return lookupMember(classType(k), first, true).found();
+        return false;
+    }
+
+    // A type name that names nothing in reach. Kotlin's and Java's names of the basic types are
+    // said in Astra's spelling (Int is int), as the lowercase names are its own.
+    static std::string unknownTypeName(const std::string& name) {
+        static const std::unordered_map<std::string, std::string> spelled = {
+            {"Int", "int"}, {"Long", "int"}, {"Short", "int16"}, {"Integer", "int"}, {"Double", "float"}, {"Float", "float"},
+            {"Boolean", "bool"}, {"Bool", "bool"}, {"String", "string"}, {"Char", "char"}, {"Character", "char"}, {"Byte", "byte"},
+            {"Any", "any"}, {"Object", "any"}, {"ByteArray", "Bytes"}, {"Void", "unit"}, {"Int16", "int16"}, {"Int32", "int32"},
+            {"UInt16", "uint16"}, {"UInt32", "uint32"}, {"Float32", "float32"}};
+        if (auto found = spelled.find(name); found != spelled.end())
+            return "'" + name + "' is written " + found->second + " in Astra: the types of numbers, text, truth values and any value " +
+                   "are lowercase (int, float, string, bool, char, byte, any)";
+        return "there is no type named '" + name + "' here: no class, interface, enum or type alias of that name is in reach";
+    }
+
     static std::string removedName(const std::string& name) {
         static const std::unordered_map<std::string, std::string> gone = {
             {"Future", "a result to come is a Job<T> in Astra, from task { }, thread { } or a pool's submit { }: then { }, get(timeout = ...) (D89)"},
@@ -6453,6 +6483,19 @@ struct Checker::Impl {
         methodCall = &c;
         Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
         auto envOfForm = [&](size_t i) -> const Env& { return envs != nullptr && i < envs->size() ? (*envs)[i] : env; };
+        // A function declared on an open list, map or set changes it (D32): called through a name
+        // that may only read it, or on a frozen one (D26), whether it has one form or several
+        // (G29). Said once, and the call checked on as if what it is called on were open.
+        Type opened;
+        if (receiver != nullptr && changesReceiver(fs, *receiver)) {
+            const Type plain = withNull(*receiver, false);
+            const Expr* through = c.callee->kind == ExprKind::Member ? static_cast<const MemberExpr&>(*c.callee).object.get() : nullptr;
+            report(*c.callee, plain.frozen ? frozenChange(plain) : readOnlyChange(plain, through));
+            opened = *receiver;
+            opened.open = true;
+            opened.frozen = false;
+            receiver = &opened;
+        }
         if (fs.size() == 1) checkInfixCall(fs[0], c);
         if (fs.size() == 1) noteSelfCall(fs[0], c);
         if (fs.size() == 1 && fs[0]->isExtension && fs[0]->receiver.nullable) chosenForms[&c] = fs[0];  // as below
@@ -7551,12 +7594,29 @@ struct Checker::Impl {
         return (t.kind == Type::List || t.kind == Type::Map || t.kind == Type::Set) && !t.open && !t.frozen;
     }
 
-    std::string readOnlyChange(const Type& t, const Expr& through) {
+    std::string readOnlyChange(const Type& t, const Expr& through) { return readOnlyChange(t, &through); }
+    // Through `through`, or `this` where the call names no object (inside an extension).
+    std::string readOnlyChange(const Type& t, const Expr* through) {
         const char* kind = t.kind == Type::List ? "List" : t.kind == Type::Map ? "Map" : "Set";
         Type open = withNull(t, false);
         open.open = true;
-        return placeText(through) + " is " + describe(withNull(t, false)) + ", which may only be read through it: one changed is declared " + text(open) +
-               ", or toOpen" + kind + "() makes a copy that can be (D32)";
+        return (through != nullptr ? placeText(*through) : std::string("this")) + " is " + describe(withNull(t, false)) +
+               ", which may only be read through it: one changed is declared " + text(open) + ", or toOpen" + kind + "() makes a copy that can be (D32)";
+    }
+
+    // Whether every form of a call is an extension declared on an open list, map or set, and
+    // the call is made on one of that kind that may only be read, or is frozen (G29).
+    bool changesReceiver(const std::vector<FuncInfo*>& fs, const Type& receiver) {
+        const Type plain = withNull(receiver, false);
+        if (plain.kind != Type::List && plain.kind != Type::Map && plain.kind != Type::Set) return false;
+        if (!readOnly(plain) && !plain.frozen) return false;
+        if (fs.empty()) return false;
+        for (FuncInfo* f : fs) {
+            if (!f->isExtension) return false;
+            resolveFunc(f);
+            if (f->receiver.kind != plain.kind || !f->receiver.open) return false;
+        }
+        return true;
     }
 
     // A union has nothing of its own when the program runs (D40).
@@ -9524,6 +9584,7 @@ bool Checker::varargListType(const FunctionDecl& fn, RuntimeType& out) const {
 }
 
 bool Checker::namesOwnClass(const TypeAnnotation& written) const { return impl_->ownClassAnnotations.count(&written) != 0; }
+bool Checker::namesNothing(const TypeAnnotation& written) const { return impl_->namelessAnnotations.count(&written) != 0; }
 
 bool Checker::returnsValue(const FunctionDecl& fn) const {
     if (impl_->valueLambdas.count(&fn) != 0) return true;

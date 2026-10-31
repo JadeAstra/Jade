@@ -300,7 +300,8 @@ catchable `ClassCastException`.
 Type names: `int`, `float`, `Number`, `string`, `char`, `byte`, `bool`, `List`, `Map`, `Set`,
 `Range`, `Index`, `Function`, `Bytes`, `FrozenList`, `FrozenMap`, `FrozenSet`, `any`, or the name
 of a class, interface or enum (`Event.Click` for one declared inside another class). Without `?`, a typed variable must be initialized and can
-never be null.
+never be null. A name that names no type is a compile error; Kotlin's `Int`, `String` and
+`Boolean` are said as `int`, `string` and `bool`.
 
 A class of the program's own may have a built-in type's name (`Range`, `Index`, `Values`,
 `Bytes`): where it is in reach, the name means the program's class, in types as in calls, as
@@ -371,7 +372,9 @@ A list made with `[...]`, `listOf`, a slice, `+`, or a method that makes a new o
 make a copy that can be changed; no cast makes what may only be read open (`as open List<T>`
 on a read-only list is a compile error). Through `accepts Button`, adding takes a Button and
 reading gives `any?`. A read-only map or set goes where one of wider types is read; an open
-one only at its own. Whether a name is open is the checker's: when the program runs, a list
+one only at its own. A function declared on an open receiver (`fun open List<int>.push(x : int)`, the
+standard library's `addFirst` and `parallelSort`) changes it, so it is called only through an
+open name. Whether a name is open is the checker's: when the program runs, a list
 is a list.
 
 **Frozen collections.** `frozen()` makes a copy nobody may change, the lists, maps and sets

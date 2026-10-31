@@ -71,3 +71,23 @@ fun maps(buttons : Map<string, Button>, openButtons : open Map<string, Button>, 
 
 val ported : MutableList<int> = [1]  // check: MutableList is written open List: a List that may be changed through the name it has (D32)
 val notOpen : open int = 1           // check: only a List, a Map or a Set is open, which may be changed through the name it has (D32)
+
+// A function declared on an open list, map or set changes it, by whatever name it has: through
+// a name that may only read it, one with a single form is refused as one with several is (G29).
+fun open List<int>.push(x : int) { add(x) }
+fun open Map<string, int>.bump(k : string) { this[k] = (this[k] ?: 0) + 1 }
+fun List<int>.grow() { addLast(1) }  // check: this is a List<int>, which may only be read through it: one changed is declared open List<int>, or toOpenList() makes a copy that can be (D32)
+fun open List<int>.growOpen() { addLast(1) }
+fun changeAll(xs : List<int>, m : Map<string, int>, opened : open List<int>) {
+  xs.addFirst(0)                     // check: xs is a List<int>, which may only be read through it: one changed is declared open List<int>, or toOpenList() makes a copy that can be (D32)
+  xs.addLast(9)                      // check: xs is a List<int>, which may only be read through it: one changed is declared open List<int>, or toOpenList() makes a copy that can be (D32)
+  xs.parallelSort()                  // check: xs is a List<int>, which may only be read through it: one changed is declared open List<int>, or toOpenList() makes a copy that can be (D32)
+  xs.push(4)                         // check: xs is a List<int>, which may only be read through it: one changed is declared open List<int>, or toOpenList() makes a copy that can be (D32)
+  m.bump("a")                        // check: m is a Map<string, int>, which may only be read through it: one changed is declared open Map<string, int>, or toOpenMap() makes a copy that can be (D32)
+  opened.addFirst(0)
+  opened.push(4)
+  opened.growOpen()
+  print(xs.sorted(), xs.first())
+}
+val frozenInts = [1, 2].frozen()
+frozenInts.addFirst(0)               // check: a FrozenList cannot be changed: toOpenList() makes a copy that can be (D26)
