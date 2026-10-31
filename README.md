@@ -2408,6 +2408,10 @@ something that can: a data class with a `var`, or a class whose `==` or `hashCod
 can tell, and the program when it runs otherwise. A class with its own `==` has its own
 `hashCode` too, and the other way round.
 
+A map or a set keeps each key's hash, as Python's dict and Java's `HashMap` do: a key's
+`hashCode` runs once as it goes in and once for each lookup, never as the map grows, and `==`
+runs only on keys of the same hash.
+
 ### Sets and decks
 
 A **`Set`** holds each value once, in the order the values were first added, and tells values

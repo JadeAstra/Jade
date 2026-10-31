@@ -694,10 +694,8 @@ void registerMapMethods(VM& vm) {
 
     // Gives the value that was there, or null.
     vm.defineMethod(T, "remove", 1, 1, [](VM&, Value self, int, Value* args) -> Value {
-        const Value* found = asMap(self)->map.find(args[0]);
-        if (found == nullptr) return Value::null();
-        Value removed = *found;
-        asMap(self)->map.remove(args[0]);
+        Value removed = Value::null();
+        asMap(self)->map.remove(args[0], &removed);  // one lookup, one hashCode (G28)
         return removed;
     });
 

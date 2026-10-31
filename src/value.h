@@ -438,34 +438,54 @@ private:
     void grow();
 };
 
-// Insertion-ordered hash map from Value to Value: the storage behind Astra maps.
+// Insertion-ordered hash map from Value to Value: the storage behind Astra maps and sets.
+// Built as Python's dict is: the entries in the order they came, and beside them an index of
+// open slots, each holding an entry's place. Each entry keeps its key's hash, so the index
+// grows and is rebuilt from what it keeps: a key's hashCode runs once as it goes in and once
+// for each lookup, never when the map grows (G28).
 class ValueMap {
 public:
     struct Entry {
         Value key;
         Value value;
         bool live = false;
+        uint32_t hash = 0;  // the key's hash, folded to 32 bits
     };
 
-    const Value* find(const Value& key) const;
+    const Value* find(const Value& key) const { return live_ == 0 ? nullptr : find(key, hashOf(key)); }
     void set(const Value& key, const Value& value);
-    bool remove(const Value& key);
+    // Takes `key` out, giving what it held in `removed` if asked; false if it was not there.
+    bool remove(const Value& key, Value* removed = nullptr);
     void clear();
-    size_t size() const { return index_.size(); }
+    size_t size() const { return live_; }
+
+    // For a lookup followed by an insert, with the key's hash worked out once (its hashCode,
+    // for an object of a class with its own): the hash, a lookup with it, and an insert of a
+    // key known not to be there.
+    static uint32_t hashOf(const Value& key);
+    const Value* find(const Value& key, uint32_t hash) const;
+    void addNew(const Value& key, const Value& value, uint32_t hash);
 
     // Includes removed entries (live == false); iterate by index and skip those.
     const std::vector<Entry>& entries() const { return entries_; }
 
 private:
-    struct Hash {
-        size_t operator()(const Value& v) const { return keyHash(v); }
-    };
-    struct Eq {
-        bool operator()(const Value& a, const Value& b) const { return keysEqual(a, b); }
-    };
+    // A slot holds an entry's place plus one; 0 is an empty slot, kGone one whose entry went.
+    static constexpr uint32_t kGone = 0xFFFFFFFFu;
 
     std::vector<Entry> entries_;
-    std::unordered_map<Value, uint32_t, Hash, Eq> index_;
+    std::vector<uint32_t> slots_;  // a power of two in size, or none
+    uint32_t live_ = 0;            // live entries
+    uint32_t used_ = 0;            // slots not empty: live entries and gone ones
+    uint32_t shift_ = 32;          // 32 less the slots' bits, for the first slot a hash tries
+    uint64_t version_ = 0;         // changes with the index, which a class's own == may change
+
+    size_t firstSlot(uint32_t hash) const { return hash >> shift_; }
+    // The slot of the entry whose key equals `key`, or -1.
+    int64_t lookup(const Value& key, uint32_t hash) const;
+    // An index of `capacity` slots for `entries`, the live ones placed by their kept hashes.
+    static std::vector<uint32_t> indexFor(const std::vector<Entry>& entries, size_t capacity, uint32_t shift);
+    static uint32_t shiftFor(size_t capacity);
 };
 
 struct ObjTypeInfo;

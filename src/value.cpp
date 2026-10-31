@@ -851,52 +851,123 @@ thread_local KeyMethods* keyMethods = nullptr;
 
 // ---- ValueMap ----
 
-const Value* ValueMap::find(const Value& key) const {
-    auto it = index_.find(key);
-    return it == index_.end() ? nullptr : &entries_[it->second].value;
+// The key's hash, its 64 bits mixed into 32 (Fibonacci hashing): the top bits pick the first
+// slot, so a run of ints, or hashes that differ only high up, spread over the index.
+uint32_t ValueMap::hashOf(const Value& key) {
+    const uint64_t h = keyHash(key);
+    return static_cast<uint32_t>((h * 0x9E3779B97F4A7C15ULL) >> 32);
+}
+
+uint32_t ValueMap::shiftFor(size_t capacity) {
+    uint32_t bits = 0;
+    while ((size_t{1} << bits) < capacity) bits++;
+    return 32 - bits;
+}
+
+std::vector<uint32_t> ValueMap::indexFor(const std::vector<Entry>& entries, size_t capacity, uint32_t shift) {
+    std::vector<uint32_t> slots(capacity, 0);
+    const size_t mask = capacity - 1;
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (!entries[i].live) continue;
+        size_t at = entries[i].hash >> shift;
+        while (slots[at] != 0) at = (at + 1) & mask;
+        slots[at] = static_cast<uint32_t>(i + 1);
+    }
+    return slots;
+}
+
+int64_t ValueMap::lookup(const Value& key, uint32_t hash) const {
+    // A class's own == may change this map as it runs (D26 lets it read only what cannot change,
+    // but a global map is reachable); if it did, the search starts again, as Python's does.
+    for (;;) {
+        const uint64_t version = version_;
+        const size_t mask = slots_.size() - 1;
+        bool changed = false;
+        for (size_t at = firstSlot(hash);; at = (at + 1) & mask) {
+            const uint32_t slot = slots_[at];
+            if (slot == 0) return -1;
+            if (slot == kGone || entries_[slot - 1].hash != hash) continue;
+            const Value stored = entries_[slot - 1].key;  // a copy: == may move the entries
+            const bool same = keysEqual(stored, key);
+            if (version_ != version) {
+                changed = true;
+                break;
+            }
+            if (same) return static_cast<int64_t>(at);
+        }
+        if (!changed || slots_.empty()) return -1;
+    }
+}
+
+const Value* ValueMap::find(const Value& key, uint32_t hash) const {
+    if (live_ == 0) return nullptr;
+    const int64_t at = lookup(key, hash);
+    if (at < 0) return nullptr;
+    return &entries_[slots_[static_cast<size_t>(at)] - 1].value;
 }
 
 void ValueMap::set(const Value& key, const Value& value) {
-    auto it = index_.find(key);
-    if (it != index_.end()) {
-        entries_[it->second].value = value;
-        return;
+    const uint32_t hash = hashOf(key);
+    if (live_ != 0) {
+        const int64_t at = lookup(key, hash);
+        if (at >= 0) {
+            entries_[slots_[static_cast<size_t>(at)] - 1].value = value;
+            return;
+        }
     }
-    // The entry first, then its place in the index; if the index cannot grow, the entry goes
-    // again, so that the two never disagree.
-    // A new key, which must not be able to change (D26).
-    if (!stableKey(key) && keyMethods != nullptr) keyMethods->refuseKey(key);
-    entries_.push_back(Entry{key, value, true});
-    try {
-        index_.emplace(key, static_cast<uint32_t>(entries_.size() - 1));
-    } catch (...) {
-        entries_.pop_back();
-        throw;
-    }
+    addNew(key, value, hash);
 }
 
-bool ValueMap::remove(const Value& key) {
-    auto it = index_.find(key);
-    if (it == index_.end()) return false;
+void ValueMap::addNew(const Value& key, const Value& value, uint32_t hash) {
+    // A new key, which must not be able to change (D26).
+    if (!stableKey(key) && keyMethods != nullptr) keyMethods->refuseKey(key);
+    // Room in the index first, at most three slots in four used: a new index of twice the live
+    // entries, at least 8 slots, built from the hashes kept. Then the entry. Should either
+    // allocation fail, the map is as it was.
+    if (size_t{used_ + 1} * 4 > slots_.size() * 3) {
+        size_t capacity = 8;
+        while (capacity < size_t{live_ + 1} * 2) capacity *= 2;
+        const uint32_t shift = shiftFor(capacity);
+        std::vector<uint32_t> slots = indexFor(entries_, capacity, shift);
+        slots_ = std::move(slots);
+        shift_ = shift;
+        used_ = live_;
+        version_++;
+    }
+    entries_.push_back(Entry{key, value, true, hash});
+    const size_t mask = slots_.size() - 1;
+    size_t at = firstSlot(hash);
+    while (slots_[at] != 0 && slots_[at] != kGone) at = (at + 1) & mask;
+    if (slots_[at] == 0) used_++;
+    slots_[at] = static_cast<uint32_t>(entries_.size());
+    live_++;
+    version_++;
+}
 
-    entries_[it->second] = Entry{};
-    index_.erase(it);
+bool ValueMap::remove(const Value& key, Value* removed) {
+    if (live_ == 0) return false;
+    const int64_t at = lookup(key, hashOf(key));
+    if (at < 0) return false;
+    if (removed != nullptr) *removed = entries_[slots_[static_cast<size_t>(at)] - 1].value;
 
-    // Squeeze out removed entries once they outnumber the live ones. Built aside and then
-    // swapped in; without the memory to build it, the map simply stays as it is.
-    if (entries_.size() > 32 && entries_.size() > index_.size() * 2) {
+    entries_[slots_[static_cast<size_t>(at)] - 1] = Entry{};
+    slots_[static_cast<size_t>(at)] = kGone;
+    live_--;
+    version_++;
+
+    // Squeeze out removed entries once they outnumber the live ones, the index rebuilt from the
+    // hashes kept. Built aside and then swapped in; without the memory to build them, the map
+    // simply stays as it is.
+    if (entries_.size() > 32 && entries_.size() > size_t{live_} * 2) {
         try {
             std::vector<Entry> compacted;
-            compacted.reserve(index_.size());
-            decltype(index_) rebuilt;
-            rebuilt.reserve(index_.size());
-            for (const Entry& e : entries_) {
-                if (!e.live) continue;
-                rebuilt.emplace(e.key, static_cast<uint32_t>(compacted.size()));
-                compacted.push_back(e);
-            }
+            compacted.reserve(live_);
+            for (const Entry& e : entries_)
+                if (e.live) compacted.push_back(e);
+            std::vector<uint32_t> slots = indexFor(compacted, slots_.size(), shift_);
             entries_ = std::move(compacted);
-            index_ = std::move(rebuilt);
+            slots_ = std::move(slots);
+            used_ = live_;
         } catch (const std::bad_alloc&) {
         }
     }
@@ -905,7 +976,11 @@ bool ValueMap::remove(const Value& key) {
 
 void ValueMap::clear() {
     entries_.clear();
-    index_.clear();
+    slots_.clear();
+    live_ = 0;
+    used_ = 0;
+    shift_ = 32;
+    version_++;
 }
 
 // ---- ObjRange ----

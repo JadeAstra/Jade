@@ -4257,8 +4257,9 @@ AstraThrow VM::viewChanged(const ObjSet* view) {
 
 bool VM::setAdd(ObjSet* set, Value item) {
     if (set->view()) throw viewChanged(set);
-    if (set->items.find(item) != nullptr) return false;
-    set->items.set(own(item), Value::null());
+    const uint32_t hash = ValueMap::hashOf(item);  // once, for the lookup and the insert (G28)
+    if (set->items.find(item, hash) != nullptr) return false;
+    set->items.addNew(own(item), Value::null(), hash);
     account(64);
     return true;
 }

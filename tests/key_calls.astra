@@ -1,0 +1,93 @@
+// How often a map or a set calls a class's own hashCode and == (G28): a map keeps each key's
+// hash, so a key's hashCode runs once as it goes in and once for each lookup, never as the map
+// grows, and == runs only on a key of the same hash.
+
+fun attempt(f : () -> any?) : string {
+  try { return "${f()}" } catch (e) { return "${e.message}" }
+}
+
+var hashes = 0
+var compares = 0
+class Key(val id : int) {
+  op ==(other : any?) : bool {
+    compares += 1
+    return other is Key and other.id == id
+  }
+  fun hashCode() : int {
+    hashes += 1
+    return id
+  }
+}
+
+// Ten thousand in: one hashCode each, though the map grows many times; none equal another.
+val m : open Map<Key, int> = {:}
+for (i in 0..<10000) { m[Key(i)] = i }
+print(m.size, hashes, compares)   // expect: 10000 10000 0
+
+// A lookup: one hashCode, one ==; a key not there, one hashCode and no ==.
+hashes = 0
+print(m[Key(1234)], m[Key(-1)], hashes, compares)   // expect: 1234 null 2 1
+
+// Keys that share a hash are told apart by ==, and only they are compared.
+class Clash(val id : int) {
+  op ==(other : any?) : bool {
+    compares += 1
+    return other is Clash and other.id == id
+  }
+  fun hashCode() : int => 7
+}
+compares = 0
+val clashing : open Set<Clash> = Set()
+for (i in 0..<5) { clashing.add(Clash(i)) }
+print(clashing.size, compares, Clash(3) in clashing, Clash(9) in clashing)   // expect: 5 10 true false
+
+// Taking keys out, then putting more in: the order of the rest kept, the gaps reused, each
+// key's hashCode not asked again.
+hashes = 0
+for (i in 0..<10000) {
+  if (i % 3 != 0) { m.remove(Key(i)) }
+}
+print(m.size, hashes, m.keys.toList().take(4).map { it.id })   // expect: 3334 6666 [0, 3, 6, 9]
+hashes = 0
+for (i in 10000..<12000) { m[Key(i)] = i }
+print(m.size, hashes, m.keys.toList().last().id, m[Key(9999)], m[Key(10001)])   // expect: 5334 2000 11999 9999 10001
+
+// A hashCode that throws: the map is as it was.
+class Broken(val id : int) {
+  op ==(other : any?) : bool => other is Broken and other.id == id
+  fun hashCode() : int {
+    if (id < 0) { throw IllegalStateException("no hash for $id") }
+    return id
+  }
+}
+val held : open Map<Broken, string> = {:}
+held[Broken(1)] = "one"
+print(attempt { held[Broken(-1)] = "minus" }, held.size, held.keys.map { it.id })   // expect: no hash for -1 1 [1]
+
+// A map cleared and filled again; sets the same way.
+m.clear()
+for (i in 0..<3) { m[Key(i * 100)] = i }
+print(m.size, m[Key(200)], m.keys.map { it.id })   // expect: 3 2 [0, 100, 200]
+val words : open Set<string> = Set()
+for (i in 0..<2000) { words.add("w$i") }
+for (i in 0..<2000) { if (i % 2 == 0) { words.remove("w$i") } }
+print(words.size, words.toList().take(3), "w1999" in words, "w1998" in words)   // expect: 1000 ["w1", "w3", "w5"] true false
+
+// An == that changes the very map it is asked for, part way through a lookup: the lookup
+// starts again on the map as it is now.
+var changed = false
+class Sneaky(val id : int) {
+  op ==(other : any?) : bool {
+    if (!changed) {
+      changed = true
+      for (i in 100..<400) { table[Sneaky(i)] = i }
+      table.remove(Sneaky(100))
+    }
+    return other is Sneaky and other.id == id
+  }
+  fun hashCode() : int => id < 3 ? 5 : id
+}
+val table : open Map<Sneaky, int> = {:}
+table[Sneaky(1)] = 1
+table[Sneaky(2)] = 2
+print(table.size, table[Sneaky(2)], table[Sneaky(1)], table[Sneaky(399)], table[Sneaky(100)])   // expect: 301 2 1 399 null
