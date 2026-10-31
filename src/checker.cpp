@@ -513,16 +513,124 @@ struct Checker::Impl {
         Unit* unit = nullptr;
         int resolved = 0;  // 0 not yet, 1 resolved, 2 being resolved
         std::vector<ClassInfo*> types;
+        // For each type that is no class, the built-in type it is (G30): string, List<int>, List
+        // for every list; unknown where it is neither, or is written as no extend takes it.
+        std::vector<Type> builtins;
         ClassInfo* iface = nullptr;
     };
     std::vector<ExtendInfo> extendsDeclared;
+
+    // The built-in types an extend may fit to an interface, written plainly (G30).
+    static bool extendableBuiltin(const Type& t) {
+        switch (t.kind) {
+            case Type::Int:
+            case Type::Float:
+            case Type::String:
+            case Type::Bool:
+            case Type::Char:
+            case Type::Byte:
+            case Type::Bytes:
+            case Type::Range:
+            case Type::List:
+            case Type::Map:
+            case Type::Set:
+                return !t.nullable && !t.open && !t.frozen && t.storage == 0;
+            default:
+                return false;
+        }
+    }
+
+    // Whether a built-in type has a member of its own, or the standard library gives it one: what
+    // an extend need not bridge, and may not replace. Asked for a property, only a property
+    // will do (a list's sum() is no `val sum`); asked for a method, a method; asked for either,
+    // any member.
+    enum class Want { Property, Method, Either };
+    bool builtinHas(const Type& t, const std::string& name, Want want = Want::Either) {
+        Type found;
+        if (want != Want::Method && builtinProperty(t, name, found)) return true;
+        for (FuncInfo* f : findExtensions(t, name)) {
+            const bool property = f->stmt != nullptr && f->stmt->isProperty;
+            if (want == Want::Either || property == (want == Want::Property)) return true;
+        }
+        if (want == Want::Method) return false;
+        if (name == "size") return t.kind == Type::String || t.kind == Type::List || t.kind == Type::Map || t.kind == Type::Set ||
+                                   t.kind == Type::Bytes || t.kind == Type::Range;
+        if (name == "lastIndex" || name == "indices") return t.kind == Type::String || t.kind == Type::List;
+        return false;
+    }
+
+    // Whether a built-in type fits an interface by an extend in reach (G30): one of the types
+    // the extend names takes it (List<int> a List<int>; List every list), and its interface is
+    // the one asked for or below it.
+    bool builtinExtended(const Type& from, ClassInfo* iface) {
+        if (extendsDeclared.empty() || iface == nullptr || !iface->isInterface) return false;
+        const Type plain = withNull(from, false);
+        if (!extendableBuiltin(Type::of(plain.kind)) && plain.kind != Type::List && plain.kind != Type::Map && plain.kind != Type::Set)
+            return false;
+        for (ExtendInfo& e : extendsDeclared) {
+            if (!extendInReach(e) || !resolveExtend(e) || !isSubclass(e.iface, iface)) continue;
+            for (const Type& b : e.builtins)
+                if (b.known() && b.kind == plain.kind && fits(plain, b)) return true;
+        }
+        return false;
+    }
+
+    // What an extend in reach brings a built-in type (G30): a bridging getter, or what its
+    // interface has. A property gives its type; methods give their forms.
+    bool fitProperty(const Type& plain, const std::string& name, Type& result) {
+        for (ExtendInfo& e : extendsDeclared) {
+            if (!extendInReach(e) || !resolveExtend(e)) continue;
+            for (const Type& b : e.builtins) {
+                if (!b.known() || b.kind != plain.kind || !fits(plain, b)) continue;
+                for (const auto& bridge : e.stmt->bridges)
+                    if (bridge->name == name) {
+                        silent++;
+                        result = bridge->type.present() ? resolve(bridge->type, *e.unit) : unknownType();
+                        silent--;
+                        return true;
+                    }
+                const Member m = lookupMember(classType(e.iface), name);
+                if (m.field) {
+                    result = fieldType(m.field);
+                    return true;
+                }
+                if (m.getter) {
+                    result = resultOf(m.getter);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    std::vector<FuncInfo*> fitMethods(const Type& plain, const std::string& name) {
+        for (ExtendInfo& e : extendsDeclared) {
+            if (!extendInReach(e) || !resolveExtend(e)) continue;
+            for (const Type& b : e.builtins) {
+                if (!b.known() || b.kind != plain.kind || !fits(plain, b)) continue;
+                const Member m = lookupMember(classType(e.iface), name, true);
+                if (!m.methods.empty()) return m.methods;
+            }
+        }
+        return {};
+    }
 
     bool resolveExtend(ExtendInfo& e) {
         if (e.resolved == 1) return e.iface != nullptr;
         if (e.resolved == 2) return false;
         e.resolved = 2;
         e.iface = findClass(*e.unit, e.stmt->interfaceType.name, nullptr);
-        for (const TypeAnnotation& t : e.stmt->types) e.types.push_back(findClass(*e.unit, t.name, nullptr));
+        for (const TypeAnnotation& t : e.stmt->types) {
+            ClassInfo* k = findClass(*e.unit, t.name, nullptr);
+            e.types.push_back(k);
+            Type b = unknownType();
+            if (k == nullptr) {
+                silent++;
+                b = resolve(t, *e.unit);
+                silent--;
+                if (!extendableBuiltin(b)) b = unknownType();
+            }
+            e.builtins.push_back(b);
+        }
         e.resolved = 1;
         return e.iface != nullptr && e.iface->isInterface;
     }
@@ -558,9 +666,17 @@ struct Checker::Impl {
         for (const auto& b : s.bridges) bridged.insert(b->name);
         for (size_t t = 0; t < s.types.size(); t++) {
             ClassInfo* k = info->types[t];
+            if (k == nullptr && info->builtins[t].known()) {
+                checkBuiltinExtend(s, t, info->builtins[t], *info, bridged);
+                continue;
+            }
             if (k == nullptr) {
-                report(s.types[t], "an extend fits a class to an interface; " + s.types[t].name + " is not a class of the program or a library " +
-                                       "(a built-in type is not yet) (D33)");
+                const Type written = resolve(s.types[t], *unit);
+                if (written.known() && written.kind != Type::Class)
+                    report(s.types[t], "an extend fits a type as it is written plainly: int, float, string, bool, char, byte, Bytes, Range, " +
+                                           std::string("List, Map or Set, and these with what they hold (List<int>); not ") + text(written) + " (G30)");
+                else if (written.known())
+                    report(s.types[t], "an extend fits a class or a built-in type to an interface; " + s.types[t].name + " is neither (D33)");
                 continue;
             }
             // Two of the same class and interface are one when they say the same, an error otherwise.
@@ -602,6 +718,48 @@ struct Checker::Impl {
                 FuncInfo* getter = newFunc(*b->getter, info->unit, k);
                 checkFunctionBody(getter, nullptr);
             }
+        }
+    }
+
+    // An extend of a built-in type (G30): what the interface asks of it, it has or a getter
+    // gives; a getter replaces nothing of its own; one type and interface, one way.
+    std::map<std::pair<std::string, ClassInfo*>, const ExtendStmt*> builtinExtendsSeen;
+    void checkBuiltinExtend(const ExtendStmt& s, size_t t, const Type& type, ExtendInfo& info, const std::set<std::string>& bridged) {
+        ClassInfo* iface = info.iface;
+        const std::string name = text(type);
+        auto [seenAt, first] = builtinExtendsSeen.emplace(std::make_pair(name, iface), &s);
+        if (!first && seenAt->second != &s) {
+            std::set<std::string> other;
+            for (const auto& b : seenAt->second->bridges) other.insert(b->name);
+            if (other != bridged)
+                report(s, "a second extend of " + name + " : " + iface->name + ", with other getters than the one on line " +
+                              std::to_string(seenAt->second->line) + ": there is one way a type fits an interface (D33)");
+        }
+        std::unordered_set<ClassInfo*> visited;
+        std::function<void(ClassInfo*)> need = [&](ClassInfo* i) {
+            if (i == nullptr || !visited.insert(i).second) return;
+            resolveSupers(i);
+            for (const auto& [member, field] : i->fields) {
+                if (field->decl != nullptr && (field->decl->getter || field->decl->init)) continue;  // comes with the interface
+                if (!builtinHas(type, member, Want::Property) && !bridged.count(member))
+                    report(s.types[t], name + " does not fit " + iface->name + ": it has no '" + member + "'; a get() in the extend " +
+                                           "can give it from what it has (G30)");
+            }
+            for (const auto& [member, forms] : i->methods)
+                for (FuncInfo* f : forms)
+                    if (f->decl != nullptr && f->decl->isAbstract && !builtinHas(type, member, Want::Method))
+                        report(s.types[t], name + " does not fit " + iface->name + ": it has no " + member + "() (G30)");
+            for (ClassInfo* above : i->interfaces) need(above);
+        };
+        need(iface);
+        for (const auto& b : s.bridges)
+            if (builtinHas(type, b->name))
+                report(*b, "'" + b->name + "' is " + name + "'s own: an extend does not replace what a type has (G30)");
+        for (const auto& b : s.bridges) {
+            FuncInfo* getter = newFunc(*b->getter, info.unit, nullptr);
+            getter->isExtension = true;
+            getter->receiver = type;
+            checkFunctionBody(getter, nullptr);
         }
     }
 
@@ -781,7 +939,7 @@ struct Checker::Impl {
                 return true;
             }
             case Type::Class: {
-                if (from.kind != Type::Class) return false;
+                if (from.kind != Type::Class) return to.cls != nullptr && to.cls->isInterface && builtinExtended(from, to.cls);  // G30
                 if (!isSubclass(from.cls, to.cls)) return false;
                 if (to.args.empty()) return true;
                 Type above = asSuper(withNull(from, false), to.cls);
@@ -5971,7 +6129,7 @@ struct Checker::Impl {
                                                  : k->name + " has no member '" + name + "'");
                 }
             }
-        } else if (!builtinProperty(obj, name, result) && !extensionProperty(plain, name, at, result)) {
+        } else if (!builtinProperty(obj, name, result) && !extensionProperty(plain, name, at, result) && !fitProperty(plain, name, result)) {
             if (name == "length" && builtinDeclared(plain))
                 report(at, goneAdvice(name));
             else if (name == "code" && plain.kind == Type::String)
@@ -7730,6 +7888,8 @@ struct Checker::Impl {
         }
         std::vector<FuncInfo*> ext = findExtensions(plain, m.name);
         if (!ext.empty()) return callFunctions(ext, c, m.name, {}, &plain);
+        // A method an extend's interface brings a built-in type (G30).
+        if (std::vector<FuncInfo*> fitted = fitMethods(plain, m.name); !fitted.empty()) return callFunctions(fitted, c, m.name, {}, &plain);
         for (const ExprPtr& a : c.args) expr(*a);
         // A change asked of a map's values, which show the map and change with it alone (G22).
         if (plain.kind == Type::Values && (listChangingName(m.name, c.args.size()) || m.name == "add" || m.name == "addAll" || m.name == "put")) {

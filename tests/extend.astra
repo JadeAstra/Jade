@@ -27,3 +27,7 @@ print(c is Weighed, Student("s", 2) is Weighed, (c as Weighed).describe(), Perso
 // From an imported folder: its extension function, and its extend.
 val sized : Sized = Crate(3)
 print("hey".shout(), sized.size)        // expect: HEY! 3
+
+// The folder's extend of a built-in type: a string is a Sized where ExtLib is imported (G30).
+val sizedText : Sized = "abcd"
+print(sizedText.size, ("ab" as any) is Sized)   // expect: 4 true

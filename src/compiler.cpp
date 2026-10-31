@@ -454,12 +454,21 @@ public:
     void compileExtend(const ExtendStmt& s) {
         for (const TypeAnnotation& type : s.types) {
             line_ = s.line;
-            emitTypeName(type.name, type);
+            // A built-in type (G30) as written, with what it holds (List<int>); a class by its name.
+            const TypeSpec spec = resolveType(type);
+            const bool builtin = spec.typed() && spec.id() != kTypeInstance;
+            if (builtin) {
+                std::string shape;
+                emitWrittenType(type, shape);
+                emit(Op::MakeType, stringConstant(shape));
+            } else {
+                emitTypeName(type.name, type);
+            }
             emitTypeName(s.interfaceType.name, s.interfaceType);
             emit(Op::Extend);
             for (const auto& bridge : s.bridges) {
                 nextIsExtension_ = true;
-                nextReceiverType_ = type.name;
+                if (!builtin) nextReceiverType_ = type.name;
                 compileFunction(*bridge->getter, FunctionKind::Method, type.name + "." + bridge->name);
                 line_ = bridge->line;
                 emit(Op::Bridge, stringConstant(bridge->name));
@@ -2796,6 +2805,12 @@ private:
                unfrozenTypeId(declared) == actual;                  // and why a list is not a FrozenList (D26)
     }
 
+    // A built-in value where a class is declared: an interface an extend fits the built-in type
+    // to (G30), which the checker has seen to; checked as the program runs.
+    static bool mayFitByExtend(uint8_t declared, uint8_t actual) {
+        return declared == kTypeInstance && actual != 0 && actual != kStaticNull && actual != kTypeInstance;
+    }
+
     bool checkInitializer(const VarStmt& s, const TypeSpec& type) {
         uint8_t actual = s.init ? staticTypeHere(*s.init) : kStaticNull;
         if (actual == 0) return !provenFits(provenType(*s.init), type);
@@ -2809,6 +2824,7 @@ private:
                                      type.text() + "? to allow null)");
         }
 
+        if (mayFitByExtend(type.id(), actual)) return true;
         if (!staticFits(type.id(), actual))
             throw error(*s.init, "cannot initialize '" + s.name + "' of type " + type.text() + " with a value of type " +
                                      typeText(actual, ""));
@@ -2921,7 +2937,7 @@ private:
             if (type.nullable()) return;
             throw error(at, fs_->proto->name + "() is declared to return " + type.text() + " and cannot return null");
         }
-        if (actual != 0) {
+        if (actual != 0 && !mayFitByExtend(type.id(), actual)) {
             if (!staticFits(type.id(), actual))
                 throw error(at, fs_->proto->name + "() is declared to return " + type.text() +
                                     " and cannot return a value of type " + typeText(actual, ""));
@@ -2936,7 +2952,7 @@ private:
     // Rejects an initial or default value that can never fit the declared type.
     void checkStaticFit(const TypeSpec& type, const Expr& value, const std::string& what) {
         uint8_t actual = staticTypeHere(value);
-        if (actual == 0) return;
+        if (actual == 0 || mayFitByExtend(type.id(), actual)) return;
         bool fits = actual == kStaticNull ? type.nullable() : staticFits(type.id(), actual);
         if (!fits)
             throw error(value, "cannot initialize " + what + " of type " + type.text() + " with " +

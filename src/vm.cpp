@@ -530,6 +530,8 @@ bool VM::isSubtype(const ObjTypeInfo* a, const ObjTypeInfo* b) {
     if (b->id == 0) return true;  // any
     if (a->id == 0) return false;
     if (b->id == kTypeNumber && (a->id == kTypeInt || a->id == kTypeFloat || a->id == kTypeNumber)) return true;
+    // A built-in type an extend fits to an interface (G30): List<int> where a Summable goes.
+    if (b->id == kTypeInstance && a->id != kTypeInstance && hasBuiltinFits_) return builtinTypeFitsClass(a, b->cls);
     // A FrozenList is a List (D26).
     if (a->id != b->id && unfrozenTypeId(a->id) != b->id) return false;
     if (a->id == kTypeInstance && !a->cls->isSubclassOf(b->cls)) return false;
@@ -551,7 +553,8 @@ bool VM::fitsType(const Value& v, const ObjTypeInfo* type) {
     if (type->id == kTypeNull) return false;  // null alone (D48)
     if (type->id == kTypeInstance) {
         const ObjClass* const cls = classOf(v);
-        if (cls == nullptr || !cls->isSubclassOf(type->cls)) return false;
+        if (cls == nullptr) return builtinFitsClass(v, type->cls);  // a built-in value an extend fits (G30)
+        if (!cls->isSubclassOf(type->cls)) return false;
         if (type->args.empty() || !v.isObjType(ObjType::Instance)) return true;  // a value keeps no type arguments yet
         // An object made without its type arguments takes any; one of a subclass is seen as
         // the class it extends.
@@ -881,6 +884,111 @@ const Value* VM::findExtension(Value receiver, const ObjString* name) const {
     return found;
 }
 
+// ---- extend of a built-in type (D33, G30) ----
+
+// The built-in type of a value with no class: its TypeId, or 0 for an object or a value of a
+// class (whose extends its class keeps) and anything else.
+uint8_t VM::builtinIdOf(const Value& v) {
+    switch (v.kind) {
+        case ValueKind::Bool: return kTypeBool;
+        case ValueKind::Int: return kTypeInt;
+        case ValueKind::Float: return kTypeFloat;
+        case ValueKind::Char: return kTypeChar;
+        case ValueKind::Byte: return kTypeByte;
+        case ValueKind::Obj:
+            switch (v.as.obj->type) {
+                case ObjType::String: return kTypeString;
+                case ObjType::List: return kTypeList;
+                case ObjType::Map: return kTypeMap;
+                case ObjType::Set: return asSet(v)->values ? 0 : kTypeSet;
+                case ObjType::Range: return kTypeRange;
+                case ObjType::Bytes: return kTypeBytes;
+                default: return 0;
+            }
+        default: return 0;
+    }
+}
+
+// Whether a fit holds for the value: for every value of the type, or, for one written with
+// what it holds (List<int>), by what the collection was made to hold. One made without saying
+// (a list from before types were kept) is judged by what it holds.
+bool VM::fitHolds(const BuiltinFit& fit, const Value& v) {
+    if (fit.type->args.empty()) return true;
+    const ObjTypeInfo* made = v.isObjType(ObjType::List) ? asList(v)->type
+                            : v.isObjType(ObjType::Map)  ? asMap(v)->type
+                            : v.isObjType(ObjType::Set)  ? asSet(v)->type
+                                                         : nullptr;
+    if (made != nullptr) return isSubtype(made, fit.type);
+    if (v.isObjType(ObjType::List)) {
+        ObjList* list = asList(v);
+        for (size_t i = 0; i < list->size(); i++)
+            if (!fitsType(listGet(list, i), fit.type->args[0])) return false;
+        return true;
+    }
+    if (v.isObjType(ObjType::Set)) {
+        for (const ValueMap::Entry& e : asSet(v)->items.entries())
+            if (e.live && !fitsType(e.key, fit.type->args[0])) return false;
+        return true;
+    }
+    if (v.isObjType(ObjType::Map) && fit.type->args.size() == 2) {
+        for (const ValueMap::Entry& e : asMap(v)->map.entries())
+            if (e.live && (!fitsType(e.key, fit.type->args[0]) || !fitsType(e.value, fit.type->args[1]))) return false;
+        return true;
+    }
+    return false;
+}
+
+std::vector<ObjClass*> VM::builtinInterfaces(const ObjTypeInfo* type) {
+    std::vector<ObjClass*> found;
+    if (type->id == 0 || type->id == kTypeInstance || type->id >= kTypeCount_) return found;
+    for (const BuiltinFit& fit : builtinFits_[unfrozenTypeId(type->id)])
+        if (isSubtype(type, fit.type) && std::find(found.begin(), found.end(), fit.iface) == found.end()) found.push_back(fit.iface);
+    return found;
+}
+
+bool VM::builtinFitsClass(const Value& v, const ObjClass* target) {
+    if (!hasBuiltinFits_ || target == nullptr || !target->isInterface) return false;
+    const uint8_t id = builtinIdOf(v);
+    if (id == 0) return false;
+    for (const BuiltinFit& fit : builtinFits_[id])
+        if (fit.iface == target && fitHolds(fit, v)) return true;
+    return false;
+}
+
+bool VM::builtinTypeFitsClass(const ObjTypeInfo* type, const ObjClass* target) {
+    if (!hasBuiltinFits_ || target == nullptr || !target->isInterface || type->id == kTypeInstance || type->id >= kTypeCount_) return false;
+    // A FrozenList is a List (D26).
+    for (const BuiltinFit& fit : builtinFits_[unfrozenTypeId(type->id)])
+        if (fit.iface == target && isSubtype(type, fit.type)) return true;
+    return false;
+}
+
+// The fits written with what the type holds come first: the nearer to what the value is.
+const Value* VM::builtinFitGetter(const Value& v, const ObjString* name) {
+    if (!hasBuiltinFits_) return nullptr;
+    const uint8_t id = builtinIdOf(v);
+    if (id == 0 || builtinFits_[id].empty()) return nullptr;
+    for (int pass = 0; pass < 2; pass++)
+        for (const BuiltinFit& fit : builtinFits_[id]) {
+            if (fit.type->args.empty() != (pass == 1) || !fitHolds(fit, v)) continue;
+            if (const Value* getter = fit.getters.find(name)) return getter;
+            if (const Value* getter = fit.iface->getters.find(name)) return getter;
+        }
+    return nullptr;
+}
+
+const Value* VM::builtinFitMethod(const Value& v, const ObjString* name) {
+    if (!hasBuiltinFits_) return nullptr;
+    const uint8_t id = builtinIdOf(v);
+    if (id == 0 || builtinFits_[id].empty()) return nullptr;
+    for (int pass = 0; pass < 2; pass++)
+        for (const BuiltinFit& fit : builtinFits_[id]) {
+            if (fit.type->args.empty() != (pass == 1) || !fitHolds(fit, v)) continue;
+            if (const Value* method = fit.iface->methods.find(name)) return method;
+        }
+    return nullptr;
+}
+
 // Whether a bare name written in code that runs on `candidate` means a member of it.
 bool VM::hasMember(Value candidate, const ObjString* name) const {
     guardRead(candidate);
@@ -907,15 +1015,28 @@ bool VM::hasMember(Value candidate, const ObjString* name) const {
     // An extension function on a built-in type runs on a string, a list, a number...
     if (!hasExtensions_) return false;
     if (findNativeMethod(candidate, name) != nullptr || findExtension(candidate, name) != nullptr) return true;
+    if (hasBuiltinFits_) {
+        VM& self = const_cast<VM&>(*this);
+        if (self.builtinFitGetter(candidate, name) != nullptr || self.builtinFitMethod(candidate, name) != nullptr) return true;
+    }
+    // The properties getProperty answers for the built-in types, as it answers them.
+    if (candidate.isChar()) return name == names.code;
+    if (candidate.isInt() || candidate.isFromEnd()) {
+        if (name == names.fromEnd || name == names.value) return true;
+        if (!candidate.isInt()) return false;
+    }
+    if (candidate.isInt() || candidate.isFloat())
+        return name == names.absoluteValue || name == names.sign || (candidate.isInt() && name == names.character);
     if (!candidate.isObj()) return false;
     const ObjType type = candidate.as.obj->type;
     if (name == names.size)
         return type == ObjType::String || type == ObjType::List || type == ObjType::Map || type == ObjType::Range ||
                type == ObjType::Bytes || type == ObjType::Set;
     if (name == names.indices || name == names.lastIndex) return type == ObjType::String || type == ObjType::List;
-    if (name == names.itemType) return type == ObjType::List;
-    if (name == names.keyType || name == names.valueType) return type == ObjType::Map;
-    return type == ObjType::Range && (name == names.start || name == names.end || name == names.step);
+    if (name == names.itemType) return type == ObjType::List || type == ObjType::Set;
+    if (name == names.keyType || name == names.valueType || name == names.keys || name == names.values || name == names.entries)
+        return type == ObjType::Map;
+    return type == ObjType::Range && (name == names.start || name == names.end || name == names.step || name == names.first || name == names.last);
 }
 
 // ---- Who may use a member ----
@@ -2067,6 +2188,18 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
             else callClosure(asClosure(*extension), argc);
             return true;
         }
+        // What an extend brought the built-in type (G30): the interface's method, or what a
+        // getter gives, called.
+        if (const Value* fitted = builtinFitMethod(receiver, name)) {
+            if (trailing) callTrailing(asClosure(*fitted), argc);
+            else callClosure(asClosure(*fitted), argc);
+            return true;
+        }
+        if (const Value* getter = builtinFitGetter(receiver, name)) {
+            Value callee = callWithReceiver(receiver, asClosure(*getter));
+            sp_[-argc - 1] = callee;
+            return trailing ? callValueTrailing(callee, argc) : callValue(callee, argc);
+        }
         if (const int done = scopeFunction(name, argc)) return done == 2;
         throw runtimeError(Thrown::UnsupportedOperationException, "undefined method '" + name->utf8() + "' on a value of type " + typeName(receiver));
     }
@@ -2421,6 +2554,9 @@ Value VM::getProperty(Value obj, ObjString* name) {
         return Value::object(alloc<ObjBoundNative>(obj, method));
     if (const Value* extension = findExtension(obj, name))
         return Value::object(alloc<ObjBoundMethod>(obj, asClosure(*extension)));
+    // What an extend brought the built-in type (G30).
+    if (const Value* getter = builtinFitGetter(obj, name)) return callWithReceiver(obj, asClosure(*getter));
+    if (const Value* method = builtinFitMethod(obj, name)) return Value::object(alloc<ObjBoundMethod>(obj, asClosure(*method)));
     throw runtimeError(Thrown::UnsupportedOperationException, "undefined property '" + name->utf8() + "' on a value of type " + typeName(obj));
 }
 
@@ -4036,7 +4172,10 @@ bool VM::matchesType(const Value& v, uint8_t type, const ObjClass* cls) const {
         case kTypeFunction:
             return v.isObjType(ObjType::Closure) || v.isObjType(ObjType::Native) ||
                    v.isObjType(ObjType::BoundMethod) || v.isObjType(ObjType::BoundNative);
-        case kTypeInstance: return classOf(v) != nullptr && classOf(v)->isSubclassOf(cls);
+        case kTypeInstance: {
+            const ObjClass* own = classOf(v);
+            return own != nullptr ? own->isSubclassOf(cls) : const_cast<VM*>(this)->builtinFitsClass(v, cls);  // G30
+        }
         default: return false;
     }
 }
@@ -6143,7 +6282,8 @@ void VM::run(int baseFrame) {
                         Value type = *--sp_;
                         if (!type.isObjType(ObjType::Class)) throw runtimeError(Thrown::ClassCastException, "right operand of 'is' must be a class");
                         Value value = sp_[-1];
-                        sp_[-1] = Value::boolean(classOf(value) != nullptr && classOf(value)->isSubclassOf(asClass(type)));
+                        const ObjClass* cls = classOf(value);
+                        sp_[-1] = Value::boolean(cls != nullptr ? cls->isSubclassOf(asClass(type)) : builtinFitsClass(value, asClass(type)));
                         break;
                     }
 
@@ -6641,6 +6781,30 @@ void VM::run(int baseFrame) {
                         // ones above it, and has what they bring that it has not.
                         if (!sp_[-1].isObjType(ObjType::Class) || !asClass(sp_[-1])->isInterface)
                             throw runtimeError(Thrown::IllegalArgumentException, "an extend fits a class to an interface");
+                        if (sp_[-2].isObjType(ObjType::TypeInfo)) {
+                            // A built-in type (G30): kept by its id, with the interfaces above too.
+                            ObjTypeInfo* type = static_cast<ObjTypeInfo*>(sp_[-2].as.obj);
+                            ObjClass* iface = asClass(sp_[-1]);
+                            const uint8_t id = unfrozenTypeId(type->id);
+                            if (id == 0 || id == kTypeInstance || id >= kTypeCount_)
+                                throw runtimeError(Thrown::IllegalArgumentException, "an extend fits a class or a built-in type to an interface");
+                            if (coreId_ != 0) throw notOwned("an extend is made for the whole program");
+                            std::deque<BuiltinFit>& fits = builtinFits_[id];
+                            auto fit = [&](ObjClass* to) -> BuiltinFit* {
+                                for (BuiltinFit& f : fits)
+                                    if (f.type == type && f.iface == to) return &f;
+                                fits.emplace_back();
+                                fits.back().type = type;
+                                fits.back().iface = to;
+                                return &fits.back();
+                            };
+                            for (ObjClass* above : iface->interfaces) fit(above);
+                            extending_ = fit(iface);  // last, so that no later one moves it before its getters come
+                            hasBuiltinFits_ = true;
+                            extensionEpoch_++;
+                            sp_--;
+                            break;
+                        }
                         if (!sp_[-2].isObjType(ObjType::Class)) throw runtimeError(Thrown::IllegalArgumentException, "an extend fits a class to an interface");
                         ObjClass* iface = asClass(sp_[-1]);
                         ObjClass* cls = asClass(sp_[-2]);
@@ -6663,6 +6827,11 @@ void VM::run(int baseFrame) {
                     }
                     case Op::Bridge: {
                         ObjString* name = asString(consts[READ_U16()]);
+                        if (sp_[-2].isObjType(ObjType::TypeInfo) && extending_ != nullptr) {
+                            extending_->getters.set(name, sp_[-1]);  // of a built-in type (G30)
+                            sp_--;
+                            break;
+                        }
                         if (!sp_[-2].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid extend");
                         asClass(sp_[-2])->extendGetters.set(name, sp_[-1]);
                         sp_--;
@@ -8009,6 +8178,12 @@ void VM::collectGarbage() {
     for (const Timer& timer : timers_) markValue(timer.task);
     for (const Value& global : globals_) markValue(global);
     for (const Table& table : typeExtensions_) markTable(table);
+    for (const std::deque<BuiltinFit>& fits : builtinFits_)
+        for (const BuiltinFit& fit : fits) {
+            markObject(fit.type);
+            markObject(fit.iface);
+            markTable(fit.getters);
+        }
     for (const auto& [key, type] : types_) markObject(type);  // what the types name, their classes
     markTable(nullExtensions_);
     markTable(nullExtensionOwners_);

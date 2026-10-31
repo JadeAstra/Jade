@@ -261,10 +261,18 @@ void VM::refreshFromRoot() {
     classOfFn_ = root_->classOfFn_;
     viewClass_ = root_->viewClass_;
     hasExtensions_ = root_->hasExtensions_;
+    hasBuiltinFits_ = root_->hasBuiltinFits_;
     if (extensionEpoch_ != root_->extensionEpoch_) {
         for (size_t i = 0; i < kTypeCount_; i++) {
             typeExtensions_[i].clear();
             typeExtensions_[i].addAll(root_->typeExtensions_[i]);
+            builtinFits_[i].clear();
+            for (const BuiltinFit& fit : root_->builtinFits_[i]) {
+                builtinFits_[i].emplace_back();
+                builtinFits_[i].back().type = fit.type;
+                builtinFits_[i].back().iface = fit.iface;
+                builtinFits_[i].back().getters.addAll(fit.getters);
+            }
         }
         nullExtensions_.clear();
         nullExtensions_.addAll(root_->nullExtensions_);

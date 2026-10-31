@@ -201,6 +201,9 @@ void registerReflection(VM& vm) {
                 for (ObjClass* fitted : k->extendedTo)
                     if (std::find(classes.begin(), classes.end(), fitted) == classes.end()) classes.push_back(fitted);
             for (ObjClass* iface : classes) found.push_back(seenAs(vm, t, iface));
+        } else {
+            // A built-in type's, by its extends (G30).
+            for (ObjClass* iface : vm.builtinInterfaces(t)) found.push_back(vm.typeOf(kTypeInstance, false, iface, {}));
         }
         return typeList(vm, found);
     });

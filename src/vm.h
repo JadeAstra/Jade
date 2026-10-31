@@ -623,6 +623,9 @@ public:
     int mainModule_ = -1;  // the program's own file's module (Program.name)
     // That file's name without its folder and .astra: "bank" for bank.astra; "program" if none.
     std::string mainFileName() const;
+    // The interfaces extends fitted a built-in type to (G30), for reflection: those that hold for
+    // every value of the type as written (List<int>#: List's and List<int>'s).
+    std::vector<ObjClass*> builtinInterfaces(const ObjTypeInfo* type);
     std::mt19937_64 rng;
     Names names{};
 
@@ -1076,6 +1079,29 @@ private:
     std::unordered_map<std::string, std::unique_ptr<FunctionProto>> extensionSets_;  // the protos of their sets, by name
     const Value* findExtension(Value receiver, const ObjString* name) const;
     bool hasMember(Value candidate, const ObjString* name) const;
+
+    // `extend string : Sized`, `extend List<int> : Summable` (D33, G30): the interfaces an
+    // extend fitted a built-in type to, by the type's id. Each holds the type as written, which
+    // for List<int> asks what a list holds and for List alone takes every list; the interface
+    // or one above it; and the extend's getters bridging names. A built-in value has no class
+    // to keep these in, so is, as, typed collections and members ask here.
+    struct BuiltinFit {
+        ObjTypeInfo* type = nullptr;
+        ObjClass* iface = nullptr;
+        Table getters;
+    };
+    std::deque<BuiltinFit> builtinFits_[kTypeCount_];  // a deque: a fit stays where it is as more come
+    bool hasBuiltinFits_ = false;
+    BuiltinFit* extending_ = nullptr;  // the fit an extend being made is giving its getters to
+    static uint8_t builtinIdOf(const Value& v);
+    bool fitHolds(const BuiltinFit& fit, const Value& v);
+    // Whether a built-in value, or a built-in type, fits an interface by an extend.
+    bool builtinFitsClass(const Value& v, const ObjClass* target);
+    bool builtinTypeFitsClass(const ObjTypeInfo* type, const ObjClass* target);
+    // What an extend brought a built-in value: a bridging getter, the interface's own getter
+    // or method; null where none did.
+    const Value* builtinFitGetter(const Value& v, const ObjString* name);
+    const Value* builtinFitMethod(const Value& v, const ObjString* name);
     void declareEntryFields(ObjClass* cls);
     void nameEntry(ObjInstance* entry, ObjString* name, int ordinal);
     void checkFieldAssignment(ObjInstance* instance, ObjString* name, Value value);

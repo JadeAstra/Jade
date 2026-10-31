@@ -1713,6 +1713,25 @@ An `extend` holds where its folder's names do, as an extension function does. Th
 twice is one; two that say different things are an error. A class written in the program
 itself implements the interface instead.
 
+A built-in type is fitted the same way (D185): `int`, `float`, `string`, `bool`, `char`, `byte`,
+`Bytes`, `Range`, `List`, `Map` and `Set`. Written with what it holds, the extend is for those
+collections only: `extend List<int> : Totalled` fits a list made to hold ints, and not a
+`List<any>` that happens to hold them; `List` alone fits every list. Its members are then the
+type's own too, so `"abc".weight` and `[1, 2].total` read them, and `string#.interfaces` lists
+them.
+
+```astra
+extend string : Weighed {
+  val weight : int
+    get() => size
+}
+extend List<int> : Totalled {
+  val total : int
+    get() => sum()
+}
+val loads : List<Weighed> = ["crate", Car("Mini", 1200)]
+```
+
 ### Errors
 
 ```astra

@@ -17,3 +17,24 @@ extend Bag : Weighed {
 
 // ExtLib is not imported here, so its extension functions are not in reach.
 fun quiet(text : string) : string => text.shout()   // check: a string has no method 'shout'
+
+// A built-in type (G30): written plainly, with all the interface asks for.
+extend string? : Weighed        // check: an extend fits a type as it is written plainly: int, float, string, bool, char, byte, Bytes, Range, List, Map or Set, and these with what they hold (List<int>); not string? (G30)
+extend open List<int> : Weighed // check: an extend fits a type as it is written plainly: int, float, string, bool, char, byte, Bytes, Range, List, Map or Set, and these with what they hold (List<int>); not open List<int> (G30)
+extend any : Weighed            // check: an extend fits a type as it is written plainly: int, float, string, bool, char, byte, Bytes, Range, List, Map or Set, and these with what they hold (List<int>); not any (G30)
+extend int : Weighed            // check: int does not fit Weighed: it has no 'weight'; a get() in the extend can give it from what it has (G30)
+extend List<int> : Weighed      // check: List<int> does not fit Weighed: it has no 'weight'; a get() in the extend can give it from what it has (G30)
+extend string : Weighed {       // check: string does not fit Weighed: it has no 'weight'; a get() in the extend can give it from what it has (G30)
+  val size : int                // check: 'size' is string's own: an extend does not replace what a type has (G30)
+    get() => 1
+}
+interface Totalled {
+  val total : int
+}
+extend List<int> : Totalled {
+  val total : int
+    get() => sum()
+}
+val counts : Totalled = [1, 2]
+val names : Totalled = ["a"]    // check: 'names' is a Totalled; it cannot start as an open List<string>
+val flag : Totalled = true      // check: 'flag' is a Totalled; it cannot start as a bool

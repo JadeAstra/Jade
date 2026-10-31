@@ -1,0 +1,68 @@
+// extend of a built-in type (G30): a string, a number, a list fitted to an interface of the
+// program's, by getters bridging what it lacks. List<int> is fitted for lists made to hold
+// ints only; List alone for every list.
+
+interface Weighed {
+  val weight : int
+  fun describe() : string => "weighs $weight"
+}
+extend string : Weighed {
+  val weight : int
+    get() => size
+}
+extend List : Weighed {
+  val weight : int
+    get() => size * 10
+}
+extend int : Weighed {
+  val weight : int
+    get() => this
+}
+
+// Where a Weighed goes, and its members on the types themselves.
+fun heaviest(items : List<Weighed>) : int => items.maxOf { it.weight }
+print(heaviest(["ab", "cdef"]), "xyz".weight, "xyz".describe(), 7.describe())   // expect: 4 3 weighs 3 weighs 7
+val w : Weighed = "hello"
+print(w.weight, w.describe(), w is Weighed)   // expect: 5 weighs 5 true
+val mixed : List<Weighed> = ["ab", [1, 2, 3], 40]
+print(mixed.map { it.weight }, mixed.map { it.describe() })   // expect: [2, 30, 40] ["weighs 2", "weighs 30", "weighs 40"]
+fun <T : Weighed> heavier(a : T, b : T) : T => a.weight >= b.weight ? a : b
+print(heavier("ab", "xyz"), heavier(3, 2))   // expect: xyz 3
+
+// is and as as the program runs, on values of type any.
+fun hidden(x : any?) : any? => x
+print(hidden("a") is Weighed, hidden(5) is Weighed, hidden(2.5) is Weighed, hidden(true) is Weighed, hidden(null) is Weighed)   // expect: true true false false false
+print((hidden("abc") as Weighed).weight, (hidden(2.5) as? Weighed) == null)   // expect: 3 true
+
+// By what a collection holds: List<int> and Map<string, int>.
+interface Totalled {
+  val total : int
+}
+extend List<int> : Totalled {
+  val total : int
+    get() => sum()
+}
+extend Map<string, int> : Totalled {
+  val total : int
+    get() => values.sumOf { it }
+}
+val ints = [1, 2, 3]
+val t : Totalled = ints
+print(t.total, ints.total, {"a": 5, "b": 6}.total)   // expect: 6 6 11
+val totals : open List<Totalled> = []
+totals.add([4, 5])
+totals.add({"x": 1})
+print(totals.map { it.total })   // expect: [9, 1]
+val anys : List<any> = [1, 2]
+print(hidden(ints) is Totalled, hidden(anys) is Totalled, hidden(["a"]) is Totalled, hidden([1.5]) is Totalled, hidden({"a": 1.5}) is Totalled)   // expect: true false false false false
+// A list of ints is Weighed as every list is, and Totalled as a list of ints.
+print(ints.weight, ints is Weighed, hidden(["a"]) is Weighed)   // expect: 30 true true
+val frozenInts = [4, 5].frozen()
+val f : Totalled = frozenInts
+print(f.total)   // expect: 9
+
+// In a parallel section, as on the main thread.
+print(listOf("a", "bb", "ccc").parallelStream().map { (it as Weighed).weight }.toList())   // expect: [1, 2, 3]
+
+// Reflection: a built-in type's interfaces, by its extends.
+print(string#.interfaces, float#.interfaces, ints#.interfaces, ["a"]#.interfaces)   // expect: [Weighed] [] [Weighed, Totalled] [Weighed]
