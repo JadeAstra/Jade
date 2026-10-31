@@ -1089,6 +1089,7 @@ private:
         ObjTypeInfo* type = nullptr;
         ObjClass* iface = nullptr;
         Table getters;
+        Table methods;  // the extend's funs (D186)
     };
     std::deque<BuiltinFit> builtinFits_[kTypeCount_];  // a deque: a fit stays where it is as more come
     bool hasBuiltinFits_ = false;

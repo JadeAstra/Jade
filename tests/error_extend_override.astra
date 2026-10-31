@@ -1,0 +1,8 @@
+// A fun in an extend gives a type a method it has none of: there is nothing to override.
+interface Shape {
+  fun area() : float
+}
+extend string : Shape {
+  override fun area() : float => 1.0
+}
+// expect compile error: error_extend_override.astra:6:3: error: a fun in an extend is written without override: it gives a type the interface's method, which the type has none of (D186)

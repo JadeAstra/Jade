@@ -584,11 +584,13 @@ struct TypeAliasStmt : Stmt {
 };
 
 // `extend Person, Car : Weighed { val name : string get() => model }` (D33): types someone else
-// wrote fit an interface of this program; names that differ are bridged by property getters.
+// wrote fit an interface of this program; names that differ are bridged by property getters, and
+// the interface's methods the types lack are written as funs (D186).
 struct ExtendStmt : Stmt {
     std::vector<TypeAnnotation> types;
     TypeAnnotation interfaceType;
     std::vector<std::unique_ptr<VarStmt>> bridges;  // each with a getter and nothing stored
+    std::vector<std::unique_ptr<FunctionDecl>> methods;  // each one of the interface's methods
     ExtendStmt() : Stmt(StmtKind::Extend) {}
 };
 

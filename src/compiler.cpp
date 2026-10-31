@@ -473,6 +473,17 @@ public:
                 line_ = bridge->line;
                 emit(Op::Bridge, stringConstant(bridge->name));
             }
+            // The interface's methods the type has none of (D186), by the names they are known by
+            // when the program runs: where the interface's name has several forms, the form's.
+            for (const auto& fun : s.methods) {
+                nextIsExtension_ = true;
+                if (!builtin) nextReceiverType_ = type.name;
+                compileFunction(*fun, FunctionKind::Method, type.name + "." + fun->name);
+                line_ = fun->line;
+                const FunctionDecl* form = session_.checker != nullptr ? session_.checker->extendForm(*fun) : nullptr;
+                const FunctionDecl* root = form != nullptr ? session_.checker->formRoot(*form) : nullptr;
+                emit(Op::BridgeMethod, stringConstant(root != nullptr ? fun->name + signatureText(*root) : fun->name));
+            }
             emit(Op::Pop);
         }
     }

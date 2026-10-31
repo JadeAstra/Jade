@@ -1,0 +1,92 @@
+// A fun in an extend (D186): an interface's method a type has none of, written where the type
+// is fitted to the interface, for a class, a value type and a built-in type alike.
+
+interface Shape {
+  fun area() : float
+  fun scaled(by : float) : float
+  fun describe() : string => "area ${area()}"
+}
+class Box(val w : float, val h : float)
+extend Box : Shape {
+  fun area() : float => w * h
+  fun scaled(by : float) : float => area() * by
+}
+value Square(val side : float)
+extend Square : Shape {
+  fun area() : float => side * side
+  fun scaled(by : float) : float => area() * by
+}
+extend string : Shape {
+  fun area() : float => size * 1.0
+  fun scaled(by : float) : float => area() * by
+  fun describe() : string => "text of $size"   // in place of the interface's own
+}
+extend List<int> : Shape {
+  fun area() : float => sum() * 1.0
+  fun scaled(by : float) : float => area() * by
+}
+
+// Where a Shape goes, and on the types themselves.
+val shapes : List<Shape> = [Box(2.0, 3.0), Square(3.0), "abcd", [1, 2, 3]]
+print(shapes.map { it.area() }, shapes.map { it.scaled(2.0) })   // expect: [6.0, 9.0, 4.0, 6.0] [12.0, 18.0, 8.0, 12.0]
+print(shapes.map { it.describe() })   // expect: ["area 6.0", "area 9.0", "text of 4", "area 6.0"]
+print(Box(1.0, 2.0).area(), Square(2.0).scaled(0.5), "xy".area(), [5].area(), "xy".describe())   // expect: 2.0 2.0 2.0 5.0 text of 2
+
+// is and as as the program runs, on values of type any.
+fun hidden(x : any?) : any? => x
+print((hidden("abc") as Shape).area(), (hidden(Box(1.0, 1.0)) as Shape).scaled(3.0), (hidden(Square(1.0)) as Shape).describe())   // expect: 3.0 3.0 area 1.0
+print(hidden([4, 4]) is Shape, hidden([1.5]) is Shape)   // expect: true false
+
+// An interface whose method has several forms: each form written, each found by its parameters.
+interface Grows {
+  fun grow(by : int) : float
+  fun grow(by : float) : float
+}
+extend Box : Grows {
+  fun grow(by : int) : float => w + by
+  fun grow(by : float) : float => w * by
+}
+extend string : Grows {
+  fun grow(by : int) : float => size + by * 1.0
+  fun grow(by : float) : float => size * by
+}
+val g : Grows = "abc"
+val b : Grows = Box(2.0, 1.0)
+print(g.grow(1), g.grow(2.0), b.grow(1), b.grow(2.0), "ab".grow(10))   // expect: 4.0 6.0 3.0 4.0 12.0
+
+// A generic interface, as the extend gives it its types.
+interface Keeper<T> {
+  fun keep(item : T) : bool
+  fun top() : T
+}
+class Shelf(val items : open List<string>)
+extend Shelf : Keeper<string> {
+  fun keep(item : string) : bool => items.add(item)
+  fun top() : string => items.last()
+}
+val shelf = Shelf([])
+shelf.keep("a")
+shelf.keep("b")
+val keeper : Keeper<string> = shelf
+print(shelf.top(), keeper.top(), (hidden(shelf) as Keeper<string>).top())   // expect: b b b
+
+// With a getter: each finds the other by its bare name.
+interface Named {
+  val name : string
+  fun greet() : string
+}
+class Car(val model : string)
+extend Car : Named {
+  val name : string
+    get() => model
+  fun greet() : string => "I am $name"
+}
+extend Square : Named {
+  val name : string
+    get() => "square $side"
+  fun greet() : string => "I am a $name"
+}
+print(listOf<Named>(Car("mini"), Square(2.0)).map { it.greet() })   // expect: ["I am mini", "I am a square 2.0"]
+
+// In a parallel section, as on the main thread.
+print(listOf("a", "bb", "ccc").parallelStream().map { (it as Shape).area() }.toList())   // expect: [1.0, 2.0, 3.0]

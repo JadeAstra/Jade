@@ -664,6 +664,7 @@ struct Checker::Impl {
         ClassInfo* iface = info->iface;
         std::set<std::string> bridged;
         for (const auto& b : s.bridges) bridged.insert(b->name);
+        for (const auto& m : s.methods) bridged.insert("fun " + m->name);  // never a property's name: it has a space
         for (size_t t = 0; t < s.types.size(); t++) {
             ClassInfo* k = info->types[t];
             if (k == nullptr && info->builtins[t].known()) {
@@ -684,12 +685,18 @@ struct Checker::Impl {
             if (!first && seenAt->second != &s) {
                 std::set<std::string> other;
                 for (const auto& b : seenAt->second->bridges) other.insert(b->name);
+                for (const auto& m : seenAt->second->methods) other.insert("fun " + m->name);
                 if (other != bridged)
-                    report(s, "a second extend of " + k->name + " : " + iface->name + ", with other getters than the one on line " +
+                    report(s, "a second extend of " + k->name + " : " + iface->name + ", with other getters or methods than the one on line " +
                                   std::to_string(seenAt->second->line) + ": there is one way a class fits an interface (D33)");
             }
-            // What the interface leaves for the class: it has it, or a getter here gives it.
+            // What the interface leaves for the class: it has it, or a getter or fun here gives it.
+            const std::vector<FuncInfo*> funs = extendFuns(s, *info, k, nullptr);
             const bool wasOwn = std::exchange(ownMembersOnly, true);
+            const Type own = classType(k);
+            const std::unordered_set<const FunctionDecl*> filled = checkExtendFuns(*info, k->name, funs, t == 0, [&](const std::string& n) {
+                return lookupMember(own, n, true).found() || lookupMember(own, n).found();
+            });
             std::unordered_set<ClassInfo*> visited;
             std::function<void(ClassInfo*)> need = [&](ClassInfo* i) {
                 if (i == nullptr || !visited.insert(i).second) return;
@@ -703,8 +710,9 @@ struct Checker::Impl {
                 }
                 for (const auto& [name, forms] : i->methods)
                     for (FuncInfo* f : forms)
-                        if (f->decl != nullptr && f->decl->isAbstract && !lookupMember(self, name, true).found())
-                            report(s.types[t], k->name + " does not fit " + iface->name + ": it has no " + name + "() (D33)");
+                        if (f->decl != nullptr && f->decl->isAbstract && !lookupMember(self, name, true).found() && !filled.count(f->decl))
+                            report(s.types[t], k->name + " does not fit " + iface->name + ": it has no " + name + "(); a fun in the extend " +
+                                                   "can give it (D33, D186)");
                 for (ClassInfo* above : i->interfaces) need(above);
             };
             need(iface);
@@ -718,6 +726,7 @@ struct Checker::Impl {
                 FuncInfo* getter = newFunc(*b->getter, info->unit, k);
                 checkFunctionBody(getter, nullptr);
             }
+            for (FuncInfo* f : funs) checkFunctionBody(f, nullptr);
         }
     }
 
@@ -731,10 +740,14 @@ struct Checker::Impl {
         if (!first && seenAt->second != &s) {
             std::set<std::string> other;
             for (const auto& b : seenAt->second->bridges) other.insert(b->name);
+            for (const auto& m : seenAt->second->methods) other.insert("fun " + m->name);
             if (other != bridged)
-                report(s, "a second extend of " + name + " : " + iface->name + ", with other getters than the one on line " +
+                report(s, "a second extend of " + name + " : " + iface->name + ", with other getters or methods than the one on line " +
                               std::to_string(seenAt->second->line) + ": there is one way a type fits an interface (D33)");
         }
+        const std::vector<FuncInfo*> funs = extendFuns(s, info, nullptr, &type);
+        const std::unordered_set<const FunctionDecl*> filled =
+            checkExtendFuns(info, name, funs, t == 0, [&](const std::string& n) { return builtinHas(type, n); });
         std::unordered_set<ClassInfo*> visited;
         std::function<void(ClassInfo*)> need = [&](ClassInfo* i) {
             if (i == nullptr || !visited.insert(i).second) return;
@@ -747,8 +760,9 @@ struct Checker::Impl {
             }
             for (const auto& [member, forms] : i->methods)
                 for (FuncInfo* f : forms)
-                    if (f->decl != nullptr && f->decl->isAbstract && !builtinHas(type, member, Want::Method))
-                        report(s.types[t], name + " does not fit " + iface->name + ": it has no " + member + "() (G30)");
+                    if (f->decl != nullptr && f->decl->isAbstract && !builtinHas(type, member, Want::Method) && !filled.count(f->decl))
+                        report(s.types[t], name + " does not fit " + iface->name + ": it has no " + member + "(); a fun in the extend " +
+                                               "can give it (G30, D186)");
             for (ClassInfo* above : i->interfaces) need(above);
         };
         need(iface);
@@ -761,6 +775,103 @@ struct Checker::Impl {
             getter->receiver = type;
             checkFunctionBody(getter, nullptr);
         }
+        for (FuncInfo* f : funs) checkFunctionBody(f, nullptr);
+    }
+
+    // The funs an extend writes (D186), as methods of a class or of a built-in type.
+    std::vector<FuncInfo*> extendFuns(const ExtendStmt& s, ExtendInfo& info, ClassInfo* k, const Type* builtin) {
+        std::vector<FuncInfo*> funs;
+        for (const auto& m : s.methods) {
+            FuncInfo* f = newFunc(*m, info.unit, k);
+            if (builtin != nullptr) {
+                f->isExtension = true;
+                f->receiver = *builtin;
+            }
+            funs.push_back(f);
+        }
+        return funs;
+    }
+
+    // Each fun an extend writes (D186) is one of its interface's methods, with that one's
+    // parameters, giving what it gives; it replaces nothing the type has. The interface's type
+    // parameters are what the extend writes (Keeper<string>), or anything where it writes none.
+    // What it gives back: the interface's methods the funs are. `first`: the extend's first type,
+    // for what is wrong whatever the type.
+    std::unordered_map<const FunctionDecl*, const FunctionDecl*> extendForms;  // Checker::extendForm
+    std::unordered_set<const FunctionDecl*> checkExtendFuns(ExtendInfo& info, const std::string& typeName, const std::vector<FuncInfo*>& funs,
+                                                            bool first, const std::function<bool(const std::string&)>& has) {
+        std::unordered_set<const FunctionDecl*> filled;
+        if (funs.empty()) return filled;
+        ClassInfo* iface = info.iface;
+        Env written;
+        silent++;
+        const Type asWritten = resolve(info.stmt->interfaceType, *info.unit);
+        silent--;
+        for (size_t i = 0; i < iface->typeParams.size(); i++)
+            written[iface->typeParams[i]] = asWritten.kind == Type::Class && asWritten.cls == iface && i < asWritten.args.size()
+                                                ? asWritten.args[i] : unknownType();
+        std::set<std::string> signatures;
+        for (FuncInfo* f : funs) {
+            const FunctionDecl& fun = *f->decl;
+            resolveFunc(f);
+            if (!signatures.insert(fun.name + "(" + signatureOf(f, {}) + ")").second) {
+                if (first) report(fun, "'" + fun.name + "' is written twice in this extend with the same parameters (D186)");
+                continue;
+            }
+            if (has(fun.name)) {
+                report(fun, "'" + fun.name + "' is " + typeName + "'s own: an extend does not replace what a type has (D186)");
+                continue;
+            }
+            const Member m = lookupMember(classType(iface), fun.name, true);
+            if (m.methods.empty()) {
+                if (first)
+                    report(fun, iface->name + " has no " + fun.name + "(): a fun in an extend gives one of the interface's methods; " +
+                                    "one of " + typeName + "'s own is an extension function, fun " + typeName + "." + fun.name + "() (D186)");
+                continue;
+            }
+            // A form of the interface's as the extend has it: the types the interfaces above are
+            // given, then the extend's.
+            auto envOf = [&](size_t i) {
+                Env e = i < m.methodEnvs.size() ? m.methodEnvs[i] : Env{};
+                for (auto& [param, type] : e) type = subst(type, written);
+                for (const auto& [param, type] : written) e.emplace(param, type);
+                return e;
+            };
+            size_t same = m.methods.size();
+            for (size_t i = 0; i < m.methods.size() && same == m.methods.size(); i++) {
+                FuncInfo* g = m.methods[i];
+                resolveFunc(g);
+                if (g->params.size() != f->params.size() || g->vararg != f->vararg) continue;
+                const Env env = envOf(i);
+                bool alike = true;
+                for (size_t p = 0; p < f->params.size() && alike; p++) {
+                    const Type x = static_cast<int>(p) == f->vararg ? f->varargItem : f->params[p];
+                    const Type y = subst(static_cast<int>(p) == g->vararg ? g->varargItem : g->params[p], env);
+                    alike = x.unknown() || y.unknown() || argText(x) == argText(y);
+                }
+                if (alike) same = i;
+            }
+            if (same == m.methods.size()) {
+                if (first) {
+                    std::string forms;
+                    for (size_t i = 0; i < m.methods.size(); i++)
+                        forms += (i == 0 ? "" : i + 1 == m.methods.size() ? " and " : ", ") +
+                                 formText(iface->name + "." + fun.name, m.methods[i], envOf(i));
+                    report(fun, "'" + fun.name + "' here has other parameters than " + forms + ": a fun in an extend is one of the " +
+                                    "interface's methods as it is declared (D186)");
+                }
+                continue;
+            }
+            FuncInfo* form = m.methods[same];
+            const Env env = envOf(same);
+            const Type given = resultOf(f), wanted = subst(resultOf(form), env);
+            if (first && fun.returnType.present() && !fits(given, wanted))
+                report(fun, "'" + fun.name + "' gives " + describe(given) + ", where " + formText(iface->name + "." + fun.name, form, env) +
+                                " gives " + describe(wanted) + " (D186)");
+            extendForms.emplace(&fun, form->decl);
+            filled.insert(form->decl);
+        }
+        return filled;
     }
 
     bool hasUnknownSuper(ClassInfo* c) {
@@ -9404,6 +9515,11 @@ void Checker::addImport(const std::string& fileKey, const std::string& alias, bo
 }
 
 const FunctionDecl* Checker::formRoot(const FunctionDecl& method) { return impl_->formRoot(method); }
+
+const FunctionDecl* Checker::extendForm(const FunctionDecl& fun) const {
+    auto found = impl_->extendForms.find(&fun);
+    return found != impl_->extendForms.end() ? found->second : nullptr;
+}
 
 std::vector<const FunctionDecl*> Checker::formRoots(const ClassStmt& cls, const std::string& name) {
     return impl_->formRoots(cls, name);

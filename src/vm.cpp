@@ -984,6 +984,7 @@ const Value* VM::builtinFitMethod(const Value& v, const ObjString* name) {
     for (int pass = 0; pass < 2; pass++)
         for (const BuiltinFit& fit : builtinFits_[id]) {
             if (fit.type->args.empty() != (pass == 1) || !fitHolds(fit, v)) continue;
+            if (const Value* method = fit.methods.find(name)) return method;
             if (const Value* method = fit.iface->methods.find(name)) return method;
         }
     return nullptr;
@@ -996,6 +997,7 @@ bool VM::hasMember(Value candidate, const ObjString* name) const {
         const ObjClass* cls = classOf(candidate);
         if (cls->declaredIndex.find(name) != nullptr || cls->methods.find(name) != nullptr || cls->getters.find(name) != nullptr)
             return true;
+        if (cls->extendMethod(name) != nullptr || cls->extendGetter(name) != nullptr) return true;  // an extend's (D33, D186)
         return findExtension(candidate, name) != nullptr;
     }
     if (candidate.isObjType(ObjType::Instance)) {
@@ -1005,6 +1007,7 @@ bool VM::hasMember(Value candidate, const ObjString* name) const {
             cls->declaredIndex.find(name) != nullptr ||
             (cls->hasAccessors && (cls->getters.find(name) != nullptr || cls->setters.find(name) != nullptr)))
             return true;
+        if (cls->extendMethod(name) != nullptr || cls->extendGetter(name) != nullptr) return true;  // an extend's (D33, D186)
         return findExtension(candidate, name) != nullptr;
     }
     // Slot 0 of an ordinary function is the function itself, which has no members to speak of.
@@ -2161,6 +2164,17 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
                 sp_[-argc - 1] = callee;
                 return trailing ? callValueTrailing(callee, argc) : callValue(callee, argc);
             }
+            // What an extend brought the value's type (D33, D186).
+            if (const Value* method = box->cls->extendMethod(name)) {
+                if (trailing) callTrailing(asClosure(*method), argc);
+                else callClosure(asClosure(*method), argc);
+                return true;
+            }
+            if (const Value* getter = box->cls->extendGetter(name)) {
+                Value callee = callWithReceiver(receiver, asClosure(*getter));
+                sp_[-argc - 1] = callee;
+                return trailing ? callValueTrailing(callee, argc) : callValue(callee, argc);
+            }
             if (const Value* extension = findExtension(receiver, name)) {
                 if (trailing) callTrailing(asClosure(*extension), argc);
                 else callClosure(asClosure(*extension), argc);
@@ -2467,6 +2481,9 @@ Value VM::getProperty(Value obj, ObjString* name) {
                 if (const Value* getter = box->cls->getters.find(name)) return callWithReceiver(obj, asClosure(*getter));
                 if (const Value* extension = findExtension(obj, name))
                     return Value::object(alloc<ObjBoundMethod>(obj, asClosure(*extension)));
+                if (const Value* getter = box->cls->extendGetter(name)) return callWithReceiver(obj, asClosure(*getter));  // D33
+                if (const Value* method = box->cls->extendMethod(name))
+                    return Value::object(alloc<ObjBoundMethod>(obj, asClosure(*method)));
                 throw runtimeError(Thrown::UnsupportedOperationException, "undefined property '" + name->utf8() + "' on " + box->cls->name->utf8());
             }
             case ObjType::Class: {
@@ -6837,6 +6854,18 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
+                    case Op::BridgeMethod: {
+                        // A fun in an extend (D186): the interface's method, for a type that has none.
+                        ObjString* name = asString(consts[READ_U16()]);
+                        if (sp_[-2].isObjType(ObjType::TypeInfo) && extending_ != nullptr) {
+                            extending_->methods.set(name, sp_[-1]);
+                        } else {
+                            if (!sp_[-2].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid extend");
+                            asClass(sp_[-2])->extendMethods.set(name, sp_[-1]);
+                        }
+                        sp_--;
+                        break;
+                    }
                     case Op::Lazy: {
                         if (!sp_[-1].isObjType(ObjType::Closure)) throw runtimeError(Thrown::InternalError, "invalid lazy value");
                         ObjLazy* lazy = alloc<ObjLazy>();
@@ -8183,6 +8212,7 @@ void VM::collectGarbage() {
             markObject(fit.type);
             markObject(fit.iface);
             markTable(fit.getters);
+            markTable(fit.methods);
         }
     for (const auto& [key, type] : types_) markObject(type);  // what the types name, their classes
     markTable(nullExtensions_);

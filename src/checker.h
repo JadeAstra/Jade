@@ -167,6 +167,10 @@ public:
     // empty where the name has one form.
     std::vector<const FunctionDecl*> formRoots(const ClassStmt& cls, const std::string& name);
 
+    // For a fun in an extend (D186): the interface's method it is, by whose form it is known
+    // when the program runs. Null where it is none of them.
+    const FunctionDecl* extendForm(const FunctionDecl& fun) const;
+
     // For a list or map literal: the type it is made as, where that is known.
     bool literalType(const Expr& literal, RuntimeType& out) const;
     // A type written with a built-in type's name that means a class of the program's own there.

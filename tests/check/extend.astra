@@ -38,3 +38,31 @@ extend List<int> : Totalled {
 val counts : Totalled = [1, 2]
 val names : Totalled = ["a"]    // check: 'names' is a Totalled; it cannot start as an open List<string>
 val flag : Totalled = true      // check: 'flag' is a Totalled; it cannot start as a bool
+
+// A fun in an extend (D186): one of the interface's methods, as declared, that the type lacks.
+interface Measured {
+  fun area() : float
+  fun grow(by : int) : float
+}
+class Plot(val w : float) {
+  fun area() : float => w
+}
+class Field(val w : float)
+extend Plot : Measured {
+  fun area() : float => 2.0     // check: 'area' is Plot's own: an extend does not replace what a type has (D186)
+  fun grow(by : int) : float => w + by
+}
+extend Field : Measured {       // check: Field does not fit Measured: it has no area(); a fun in the extend can give it (D33, D186)
+  fun area(x : int) : float => w   // check: 'area' here has other parameters than Measured.area(): a fun in an extend is one of the interface's methods as it is declared (D186)
+  fun grow(by : int) : string => "no"   // check: 'grow' gives a string, where Measured.grow(by : int) gives a float (D186)
+  fun extra() : int => 1        // check: Measured has no extra(): a fun in an extend gives one of the interface's methods; one of Field's own is an extension function, fun Field.extra() (D186)
+}
+extend string : Measured {
+  fun area() : float => 1.0
+  fun area() : float => 2.0     // check: 'area' is written twice in this extend with the same parameters (D186)
+  fun grow(by : int) : float => size + by
+  fun size() : int => 1         // check: 'size' is string's own: an extend does not replace what a type has (D186)
+}
+extend bool : Measured {        // check: bool does not fit Measured: it has no area(); a fun in the extend can give it (G30, D186)
+  fun grow(by : int) : float => 1.0
+}

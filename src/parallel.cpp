@@ -272,6 +272,7 @@ void VM::refreshFromRoot() {
                 builtinFits_[i].back().type = fit.type;
                 builtinFits_[i].back().iface = fit.iface;
                 builtinFits_[i].back().getters.addAll(fit.getters);
+                builtinFits_[i].back().methods.addAll(fit.methods);
             }
         }
         nullExtensions_.clear();

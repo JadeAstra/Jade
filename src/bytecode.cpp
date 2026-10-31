@@ -133,6 +133,7 @@ const OpInfo kOps[] = {
     {"LAZY", Operand::None},
     {"EXTEND", Operand::None},
     {"BRIDGE", Operand::U16},
+    {"BRIDGE_METHOD", Operand::U16},
     {"COMPONENT", Operand::U8},
     {"MISSING_ARG", Operand::U16},
     {"TAIL_LOOP", Operand::U8},
@@ -571,6 +572,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial) 
                     pushes = 1;
                     break;
                 case Op::Bridge:
+                case Op::BridgeMethod:
                     requireName(a);
                     pops = 2;
                     pushes = 1;
@@ -1329,7 +1331,7 @@ void disassemble(const Program& program, std::ostream& out) {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 22;
+const uint8_t kFormatVersion = 23;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };

@@ -1696,8 +1696,9 @@ folder and in the files that import it, with the access words; the standard libr
 everywhere. The file's own folder's comes first.
 
 **`extend`** fits a class someone else wrote to an interface of yours. Names that differ are
-bridged by getters in it; nothing is stored, and nothing the class has is replaced. A class
-that lacks something the interface asks for is an error at the `extend`.
+bridged by getters in it, and the interface's methods the class lacks are written in it as
+`fun`s (D186); nothing is stored, and nothing the class has is replaced. A class that lacks
+something the interface asks for is an error at the `extend`.
 
 ```astra
 interface Weighed { val weight : int; val name : string }
@@ -1707,7 +1708,17 @@ extend Car, Truck : Weighed {            // several in one line
     get() => model
 }
 val loads : List<Weighed> = [Person("Ann", 60), Car("Mini", 1200)]
+
+interface Shape { fun area() : float }
+extend Rect : Shape {
+  fun area() : float => width * height   // the interface's method, written for Rect
+}
 ```
+
+A `fun` in an `extend` is one of the interface's methods, with its parameters (as the extend
+gives a generic interface its types: `Keeper<string>`), and gives what that gives. It is
+written without `override`, since the type has none to replace. A function the interface does
+not ask for is an extension function instead (`fun Rect.perimeter()`).
 
 An `extend` holds where its folder's names do, as an extension function does. The same one
 twice is one; two that say different things are an error. A class written in the program
@@ -1728,6 +1739,9 @@ extend string : Weighed {
 extend List<int> : Totalled {
   val total : int
     get() => sum()
+}
+extend string : Shape {
+  fun area() : float => size * 1.0
 }
 val loads : List<Weighed> = ["crate", Car("Mini", 1200)]
 ```

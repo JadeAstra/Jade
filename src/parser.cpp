@@ -280,8 +280,16 @@ StmtPtr Parser::declaration() {
                         skipSemicolons();
                         if (check(TokenType::RBrace) || check(TokenType::Eof)) break;
                         const Token& at = peek();
+                        if (check(TokenType::Fun)) {
+                            s->methods.push_back(method());  // one of the interface's methods (D186)
+                            continue;
+                        }
+                        if (at.type == TokenType::Identifier && at.text == "override" && peekNext().type == TokenType::Fun)
+                            throw error(at, "a fun in an extend is written without override: it gives a type the interface's method, " +
+                                                std::string("which the type has none of (D186)"));
                         if (!check(TokenType::Val))
-                            throw error(at, "an extend holds property getters that bridge the interface's names, as in val name : string get() => model (D33)");
+                            throw error(at, "an extend holds property getters and methods that give a type what the interface asks of it, " +
+                                                std::string("as in val name : string get() => model, or fun area() : float => width * height (D33, D186)"));
                         auto bridge = varDeclaration(true);
                         fieldAccessors(*bridge);
                         if (bridge->init || !bridge->getter || bridge->setter)

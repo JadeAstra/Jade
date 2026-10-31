@@ -165,6 +165,7 @@ enum class Op : uint8_t {
     Lazy,               //                                 closure -> a lazy value, worked out when first read (D37)
     Extend,             //                                 class interface -> class: fitted to the interface (D33)
     Bridge,             // u16 name                        class getter -> class: a getter an extend gives it (D33)
+    BridgeMethod,       // u16 name                        class method -> class: a method an extend gives it (D186)
     Component,          // u8 index                        value -> part
 
     MissingArg,         // u16 parameter name              throws: the call left out an argument that has no default
