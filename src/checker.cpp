@@ -330,6 +330,9 @@ struct FnCtx {
 const char* article(const std::string& word) {
     if (word.empty()) return "a";
     char c = static_cast<char>(std::tolower(static_cast<unsigned char>(word[0])));
+    // A type parameter of one letter is read as the letter: an E, a U.
+    if (std::isupper(static_cast<unsigned char>(word[0])) && (word.size() == 1 || !std::isalpha(static_cast<unsigned char>(word[1]))))
+        return std::string("aefhilmnorsx").find(c) != std::string::npos ? "an" : "a";
     return (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') ? "an" : "a";
 }
 
@@ -842,11 +845,11 @@ struct Checker::Impl {
                 FuncInfo* g = m.methods[i];
                 resolveFunc(g);
                 if (g->params.size() != f->params.size() || g->vararg != f->vararg) continue;
-                const Env env = envOf(i);
+                const Env env = envOf(i), mine = byPlace(f), theirs = byPlace(g, env);
                 bool alike = true;
                 for (size_t p = 0; p < f->params.size() && alike; p++) {
-                    const Type x = static_cast<int>(p) == f->vararg ? f->varargItem : f->params[p];
-                    const Type y = subst(static_cast<int>(p) == g->vararg ? g->varargItem : g->params[p], env);
+                    const Type x = subst(static_cast<int>(p) == f->vararg ? f->varargItem : f->params[p], mine);
+                    const Type y = subst(static_cast<int>(p) == g->vararg ? g->varargItem : g->params[p], theirs);
                     alike = x.unknown() || y.unknown() || argText(x) == argText(y);
                 }
                 if (alike) same = i;
@@ -863,9 +866,11 @@ struct Checker::Impl {
                 continue;
             }
             FuncInfo* form = m.methods[same];
-            const Env env = envOf(same);
+            Env env = envOf(same);
+            for (size_t i = 0; i < form->typeParams.size() && i < f->typeParams.size(); i++)
+                env[form->typeParams[i]] = typeParamType(f->typeParams[i]);
             const Type given = resultOf(f), wanted = subst(resultOf(form), env);
-            if (first && fun.returnType.present() && !fits(given, wanted))
+            if (first && fun.returnType.present() && !givesInPlace(given, wanted))
                 report(fun, "'" + fun.name + "' gives " + describe(given) + ", where " + formText(iface->name + "." + fun.name, form, env) +
                                 " gives " + describe(wanted) + " (D186)");
             extendForms.emplace(&fun, form->decl);
@@ -966,6 +971,23 @@ struct Checker::Impl {
             if (!covered) return false;
         }
         return true;
+    }
+
+    // What an override gives, for what the member above gives: it fits, and where a type
+    // parameter is asked for, it is that one. A type parameter fits anything while its generic
+    // is checked, but code that calls through the type above gets what it put in its place
+    // (pick("a") is a string), so an int there would be wrong.
+    bool givesInPlace(const Type& given, const Type& wanted) { return fits(given, wanted) && keepsTypeParams(given, wanted); }
+
+    bool keepsTypeParams(const Type& given, const Type& wanted) {
+        if (given.unknown() || wanted.unknown() || given.kind == Type::Nothing || given.kind == Type::Null) return true;
+        if (wanted.kind == Type::TypeParam) return given.kind == Type::TypeParam && given.name == wanted.name;
+        // Of other types, those built alike, part by part: List<int> is not List<U>.
+        if (given.kind != wanted.kind || wanted.kind == Type::Union || given.args.size() != wanted.args.size()) return true;
+        if (given.kind == Type::Class && given.cls != wanted.cls) return true;
+        for (size_t i = 0; i < given.args.size(); i++)
+            if (!keepsTypeParams(given.args[i], wanted.args[i])) return false;
+        return !(given.result && wanted.result) || keepsTypeParams(*given.result, *wanted.result);
     }
 
     bool fits(const Type& from, const Type& to) {
@@ -2042,16 +2064,18 @@ struct Checker::Impl {
     }
 
     // Whether one method takes the place of another: as many parameters, a vararg in the same
-    // place, and each parameter of the same type, or of a type not written in either.
+    // place, and each parameter of the same type, or of a type not written in either; their own
+    // type parameters by their places.
     bool sameForm(FuncInfo* a, FuncInfo* b) {
         resolveFunc(a);
         resolveFunc(b);
         if (a->params.size() != b->params.size() || a->vararg != b->vararg) return false;
         // Two declared in one class are two forms unless they are written alike.
         if (a->owner != nullptr && a->owner == b->owner) return signatureOf(a, {}) == signatureOf(b, {});
+        const Env aPlaces = byPlace(a), bPlaces = byPlace(b);
         for (size_t i = 0; i < a->params.size(); i++) {
-            const Type& x = static_cast<int>(i) == a->vararg ? a->varargItem : a->params[i];
-            const Type& y = static_cast<int>(i) == b->vararg ? b->varargItem : b->params[i];
+            const Type x = subst(static_cast<int>(i) == a->vararg ? a->varargItem : a->params[i], aPlaces);
+            const Type y = subst(static_cast<int>(i) == b->vararg ? b->varargItem : b->params[i], bPlaces);
             if (x.unknown() || y.unknown()) continue;
             if (argText(x) != argText(y)) return false;
         }
@@ -2269,14 +2293,27 @@ struct Checker::Impl {
         return roots;
     }
 
+    // A function's own type parameters by their places, `#0`, `#1`, added to an env: the names
+    // they are written with tell no call apart, so fun <U> pick(x : U) and fun <V> pick(x : V)
+    // are one form.
+    static Env byPlace(const FuncInfo* f, Env env = {}) {
+        for (size_t i = 0; i < f->typeParams.size(); i++) {
+            Type t = Type::of(Type::TypeParam);
+            t.name = "#" + std::to_string(i);
+            env[f->typeParams[i]] = t;
+        }
+        return env;
+    }
+
     // What tells a function's forms apart: its parameters' types.
     std::string signatureOf(FuncInfo* f, const Env& env) {
         resolveFunc(f);
+        const Env places = byPlace(f, env);
         std::string sig;
         for (size_t i = 0; i < f->params.size(); i++) {
             if (i > 0) sig += ", ";
             if (static_cast<int>(i) == f->vararg) sig += "vararg ";
-            sig += argText(subst(static_cast<int>(i) == f->vararg ? f->varargItem : f->params[i], env));
+            sig += argText(subst(static_cast<int>(i) == f->vararg ? f->varargItem : f->params[i], places));
         }
         return sig;
     }
@@ -3827,7 +3864,7 @@ struct Checker::Impl {
                 for (size_t i = 0; i < same->typeParams.size() && i < f->typeParams.size(); i++)
                     env[same->typeParams[i]] = typeParamType(f->typeParams[i]);
                 const Type given = resultOf(f), wanted = subst(resultOf(same), env);
-                if (!fits(given, wanted))
+                if (!givesInPlace(given, wanted))
                     report(*m, "'" + m->name + "' gives " + describe(given) + ", where what it overrides (" +
                                    formText(same->owner->name + "." + m->name, same, env) + ") gives " + describe(wanted) +
                                    ": code that calls it through " + same->owner->name + " counts on that");
@@ -3859,11 +3896,11 @@ struct Checker::Impl {
             FieldInfo* theirs = owner->fields[field->name];
             const Type own = fieldType(mine->second);
             const Type above = subst(fieldType(theirs), envOf(asSuper(selfType(k), owner)));
-            if (!fits(own, above))
+            if (!givesInPlace(own, above))
                 report(*field, "'" + field->name + "' is " + describe(own) + ", where " + owner->name + "." + field->name +
                                    ", which it overrides, is " + describe(above) + ": code that reads it through " + owner->name +
                                    " counts on that");
-            else if (!theirs->isVal && !fits(above, own))
+            else if (!theirs->isVal && !givesInPlace(above, own))
                 report(*field, "'" + field->name + "' is " + describe(own) + ", where " + owner->name + "." + field->name +
                                    ", which it overrides, is a var of " + describe(above) + ": a var is overridden with its own type, " +
                                    "as it may be written through either");

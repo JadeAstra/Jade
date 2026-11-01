@@ -1,0 +1,7 @@
+// Two forms that differ only in the names of their type parameters are one form written twice.
+class Both {
+  fun <U> pick(x : U) : U => x
+  fun pick(x : int, y : int) : int => x
+  fun <V> pick(x : V) : V => x
+}
+// expect compile error: 'pick(V)' is declared twice in class 'Both'; the forms of a name differ in their parameters' types, which the names of type parameters do not change

@@ -1,0 +1,37 @@
+// An override's own type parameters are matched to those above by their places, not their
+// names: fun <V> pick(x : V) overrides fun <U> pick(x : U), as no call could tell them apart.
+interface Picker {
+  fun <U> pick(x : U) : U
+  fun pick(x : int, y : int) : int
+  fun <U> first(xs : List<U>) : U
+  fun <A, B> pair(a : A, b : B) : string
+}
+class Plain : Picker {
+  override fun <V> pick(x : V) : V => x
+  override fun pick(x : int, y : int) : int => x + y
+  override fun <W> first(xs : List<W>) : W => xs[0]
+  override fun <B, A> pair(a : B, b : A) : string => "$a and $b"
+}
+class Loud : Plain {
+  override fun <Q> pick(x : Q) : Q => x
+}
+val p : Picker = Plain()
+print(p.pick("s"), p.pick(1, 2), p.first([7, 8]), p.pair(1, "x"))   // expect: s 3 7 1 and x
+print(Plain().pick(4.5), (Loud() as Picker).pick(9))               // expect: 4.5 9
+
+// A superclass's generic method, and an extend's fun for an interface's.
+class Base {
+  fun <T> wrap(x : T) : List<T> => [x]
+}
+class Sub : Base {
+  override fun <S> wrap(x : S) : List<S> => [x, x]
+}
+val b : Base = Sub()
+print(b.wrap(1))   // expect: [1, 1]
+interface Boxer {
+  fun <T> box(x : T) : List<T>
+}
+extend string : Boxer {
+  fun <S> box(x : S) : List<S> => [x]
+}
+print(("a" as Boxer).box(5))   // expect: [5]

@@ -740,12 +740,15 @@ chooses when it runs, by the values it is given. Between two forms that fit as w
 without a `vararg` comes first, then one that leaves fewer parameters to their defaults. A
 call that no form takes, or that two fit as well (`pair(1, 1)` with `pair(a : int, b : Number)`
 and `pair(a : Number, b : int)`), is an error that lists the forms; two forms with the same
-parameters' types are a compile error.
+parameters' types are a compile error. A form's own type parameters count by their places,
+not their names, as no call could tell them apart: `fun <U> first(xs : List<U>)` and
+`fun <V> first(xs : List<V>)` are one form written twice.
 
 Methods, static methods, operators and extension functions have forms in the same way. A
 subclass may override one form and add others: an override has the parameters of the form it
 takes the place of, and a method with other parameters is another form, written without
-`override`.
+`override`. So `override fun <V> pick(x : V) : V` overrides `fun <U> pick(x : U) : U`, and
+without `override` it is an error to write it.
 Extension functions for one type are told apart by the receiver's type too, type arguments
 included, so `List<int>` and `List<float>` can each have a `total()`. A list does not carry
 its element type when the program runs, so such forms are chosen only when compiling, where
@@ -1254,7 +1257,10 @@ class Square(val side : int) : Shape("square") {
   uses it through the class or interface above counts on that: `fun parent() : Ruler` may
   override `fun parent() : Measured?`, and `override val label : int` is an error where the
   interface has `val label : string`. A `var` is overridden with its own type, as it may be
-  written through either.
+  written through either. Where a type parameter is asked for, the same one is given:
+  `override fun next() : int` is an error for `fun next() : T` in `class Gen<T> : Source<T>`,
+  and `List<int>` for `List<U>`, since code that calls through the type above gets what it
+  put in that place.
 - `init { }` blocks run when an object is made, after the header's entries are set, in order
   with the initial values of the fields around them. A class has either such blocks or a
   hand-written `fun init`, not both.

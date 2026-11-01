@@ -1,0 +1,4 @@
+// Two forms that differ only in the names of their type parameters are one form written twice.
+fun <U> first(xs : List<U>) : U => xs[0]
+fun <V> first(xs : List<V>) : V => xs[0]
+// expect compile error: 'first(List<V>)' is declared twice; the forms of a name differ in their parameters' types, which the names of type parameters do not change

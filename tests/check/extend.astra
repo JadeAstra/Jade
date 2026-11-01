@@ -66,3 +66,12 @@ extend string : Measured {
 extend bool : Measured {        // check: bool does not fit Measured: it has no area(); a fun in the extend can give it (G30, D186)
   fun grow(by : int) : float => 1.0
 }
+interface Wrapper {
+  fun <T> wrap(x : T) : List<T>
+}
+extend string : Wrapper {
+  fun <S> wrap(x : S) : List<int> => [1]                   // check: 'wrap' gives a List<int>, where Wrapper.wrap(x : S) gives a List<S> (D186)
+}
+extend int : Wrapper {
+  fun <S> wrap(x : S) : List<S> => [x]
+}

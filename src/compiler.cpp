@@ -4050,7 +4050,7 @@ private:
                                            "var); since the class defines its own init, declare the parameter there");
         }
 
-        std::unordered_set<std::string> seen;
+        std::unordered_set<std::string> seen, keys;
         for (const auto& method : s.methods) {
             // A form of a name with several (D56) is known by its signature as well.
             const std::string runtimeName = formNameOf(s, *method);
@@ -4094,9 +4094,11 @@ private:
                 continue;
             }
 
-            if (!seen.insert((method->isStatic ? "static " : "") + runtimeName).second)
+            const std::string staticWord = method->isStatic ? "static " : "";
+            if (!seen.insert(staticWord + runtimeName).second || !keys.insert(staticWord + method->name + formKey(*method)).second)
                 throw error(*method, "'" + method->name + signatureText(*method) + "' is declared twice in class '" + s.name +
-                                         "'; the forms of a name differ in their parameters' types");
+                                         "'; the forms of a name differ in their parameters' types" +
+                                         (method->typeParams.empty() ? "" : ", which the names of type parameters do not change"));
 
             FunctionKind kind = method->isStatic ? FunctionKind::StaticMethod
                                 : method->name == "init" ? FunctionKind::Initializer
@@ -6604,21 +6606,24 @@ private:
 
 // ---- Forms ----
 
-std::string annotationText(const TypeAnnotation& t) {
+std::string annotationText(const TypeAnnotation& t, const std::vector<TypeParam>* own) {
     if (!t.present() || t.star) return "*";
     std::string text;
     if (t.isFunction()) {
         text = "(";
-        for (size_t i = 0; i < t.params.size(); i++) text += (i > 0 ? ", " : "") + annotationText(t.params[i]);
-        text += ") -> " + annotationText(t.result[0]);
+        for (size_t i = 0; i < t.params.size(); i++) text += (i > 0 ? ", " : "") + annotationText(t.params[i], own);
+        text += ") -> " + annotationText(t.result[0], own);
         return t.nullable ? "(" + text + ")?" : text;
     }
     // A class is known by the last part of its name, however it was reached (ui.Button).
     const size_t dot = t.name.rfind('.');
     text = dot == std::string::npos ? t.name : t.name.substr(dot + 1);
+    if (own != nullptr && t.args.empty())
+        for (size_t i = 0; i < own->size(); i++)
+            if ((*own)[i].name == t.name) text = "#" + std::to_string(i);
     if (!t.args.empty()) {
         text += "<";
-        for (size_t i = 0; i < t.args.size(); i++) text += (i > 0 ? ", " : "") + annotationText(t.args[i]);
+        for (size_t i = 0; i < t.args.size(); i++) text += (i > 0 ? ", " : "") + annotationText(t.args[i], own);
         text += ">";
     }
     return t.nullable ? text + "?" : text;
@@ -6630,6 +6635,16 @@ std::string signatureText(const FunctionDecl& fn) {
         if (i > 0) text += ", ";
         if (static_cast<int>(i) == fn.varargIndex) text += "vararg ";
         text += i < fn.paramTypes.size() ? annotationText(fn.paramTypes[i]) : std::string("*");
+    }
+    return text + ")";
+}
+
+std::string formKey(const FunctionDecl& fn) {
+    std::string text = "(";
+    for (size_t i = 0; i < fn.params.size(); i++) {
+        if (i > 0) text += ", ";
+        if (static_cast<int>(i) == fn.varargIndex) text += "vararg ";
+        text += i < fn.paramTypes.size() ? annotationText(fn.paramTypes[i], &fn.typeParams) : std::string("*");
     }
     return text + ")";
 }
@@ -7438,12 +7453,15 @@ void CompilerSession::predeclare(Namespace& ns, const std::string& fileKey, cons
         GlobalName& entry = isPrivate ? mine[name] : ns.names[name];
         if (entry.declared && fn != nullptr && entry.isFunction && !shell) {
             // Another form of a function: it differs from the others in its parameters' types.
-            const std::string signature = signatureText(*fn);
-            const bool repeated = entry.forms.empty() ? signature == entry.firstSignature : entry.formSlot(signature) >= 0;
+            const std::string signature = signatureText(*fn), key = formKey(*fn);
+            const bool repeated = (entry.forms.empty() ? signature == entry.firstSignature : entry.formSlot(signature) >= 0) ||
+                                  std::find(entry.keys.begin(), entry.keys.end(), key) != entry.keys.end();
             if (repeated)
                 throw CompileError(file, at.line, at.col,
                                    "'" + name + signature + "' is declared twice" + (entry.file != file ? " (also in " + entry.file + ")" : "") +
-                                       "; the forms of a name differ in their parameters' types");
+                                       "; the forms of a name differ in their parameters' types" +
+                                       (fn->typeParams.empty() ? "" : ", which the names of type parameters do not change"));
+            entry.keys.push_back(key);
             if (entry.forms.empty()) entry.forms.emplace_back(entry.firstSignature, newSlot(name + entry.firstSignature));
             entry.forms.emplace_back(signature, newSlot(name + signature));
             entry.returnType = 0;  // which form a call gets is not known here
@@ -7463,6 +7481,7 @@ void CompilerSession::predeclare(Namespace& ns, const std::string& fileKey, cons
         entry.file = file;
         entry.isFunction = fn != nullptr;
         if (fn != nullptr) entry.firstSignature = signatureText(*fn);
+        if (fn != nullptr) entry.keys = {formKey(*fn)};
         entry.returnType = 0;
         if (fn != nullptr && !shell) {
             const TypeAnnotation& result = fn->returnType;

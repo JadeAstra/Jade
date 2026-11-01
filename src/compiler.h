@@ -38,6 +38,7 @@ struct GlobalName {
     uint8_t returnType = 0;
     std::string firstSignature;  // of the first form, until a second one comes
     std::vector<std::pair<std::string, int>> forms;  // signature and slot, in the order written
+    std::vector<std::string> keys;  // each form's formKey, which no two may share
 
     int formSlot(const std::string& signature) const {
         for (const auto& [written, at] : forms)
@@ -51,7 +52,11 @@ struct GlobalName {
 std::string signatureText(const FunctionDecl& fn);
 
 // A type as written, as signatures show it: the last part of a class's name, `List<int>`, `string?`.
-std::string annotationText(const TypeAnnotation& t);
+std::string annotationText(const TypeAnnotation& t, const std::vector<TypeParam>* own = nullptr);
+
+// What makes two forms one: signatureText with the function's own type parameters by their
+// places, `(#0)`, as the names they are written with tell no call apart.
+std::string formKey(const FunctionDecl& fn);
 
 // A folder of source files. Its files share their top-level names; other folders see the
 // public ones when they import it, and the internal ones too if they belong to the same library.
