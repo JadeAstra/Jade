@@ -79,3 +79,12 @@ class Added : Base() {
   override fun paint(g : int) : string => paint(g, 1.0)
   fun paint(g : int, alpha : float) : string => "added"
 }
+
+// Two forms each of a type parameter in another place: neither is more specific.
+fun <T> placed(a : T, b : int) : string => "T first"
+fun <T> placed(a : int, b : T) : string => "T second"
+fun placing() {
+  val chosen : string = placed("a", 1) + placed(1, "a")
+  print(placed(1, 1))         // check: this call fits more than one form of placed(...): placed(a : T, b : int) and placed(a : int, b : T); give an argument a type that tells them apart, with a typed variable or 'as'
+  print(chosen)
+}

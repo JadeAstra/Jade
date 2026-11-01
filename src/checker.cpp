@@ -7530,6 +7530,21 @@ struct Checker::Impl {
         int narrowed = 0;     // int constants taken as bytes (D19)
     };
 
+    // A type with the given type parameters, wherever they are in it, as their bound, or as
+    // any? where they have none: what they may stand for.
+    static Type loosened(const Type& t, const std::vector<std::string>& names) {
+        if (names.empty()) return t;
+        if (t.kind == Type::TypeParam && std::find(names.begin(), names.end(), t.name) != names.end()) {
+            Type r = t.bound != nullptr ? *t.bound : withNull(Type::of(Type::Any));
+            return t.nullable ? withNull(r) : r;
+        }
+        Type r = t;
+        for (Type& a : r.args) a = loosened(a, names);
+        if (t.result) r.result = std::make_shared<Type>(loosened(*t.result, names));
+        if (t.receiver) r.receiver = std::make_shared<Type>(loosened(*t.receiver, names));
+        return r;
+    }
+
     template <typename EnvOf>
     FuncInfo* chooseForm(const std::vector<FuncInfo*>& fs, const EnvOf& envOfForm, const Args& args,
                          const std::vector<TypeAnnotation>& typeArgs, const Type* receiver, const Node& at,
@@ -7641,14 +7656,23 @@ struct Checker::Impl {
             return fs[index];
         }
 
-        // The parameter each argument goes to, in a form; unknown where it goes to none.
+        // The parameter each argument goes to, in a form; unknown where it goes to none. The
+        // form's own type parameters are what they may be, their bound or anything, not what
+        // this call makes them: fun pick(x : int) is more specific than fun <U> pick(x : U),
+        // though pick(3) makes U an int.
+        auto mayBe = [&](const Fit& fit, const Type& declared) {
+            FuncInfo* f = fs[fit.index];
+            Env env = fit.env;
+            for (const std::string& v : f->typeParams) env.erase(v);
+            return subst(loosened(declared, f->typeParams), env);
+        };
         auto paramType = [&](const Fit& fit, size_t i) -> Type {
             FuncInfo* f = fs[fit.index];
             const int p = fit.binding.paramOf[i];
             if (p < 0) return unknownType();
             // A parameter without a type, or of a type parameter, takes anything: it is the least
             // specific there is.
-            Type t = subst(p == f->vararg ? f->varargItem : f->params[static_cast<size_t>(p)], fit.env);
+            Type t = mayBe(fit, p == f->vararg ? f->varargItem : f->params[static_cast<size_t>(p)]);
             return t.unknown() || t.kind == Type::TypeParam ? withNull(Type::of(Type::Any)) : t;
         };
         // Where an argument's type is not known, the forms cannot be told apart by it: that is
@@ -7664,12 +7688,20 @@ struct Checker::Impl {
         auto asSpecific = [&](const Fit& a, const Fit& b) {
             FuncInfo* fa = fs[a.index];
             FuncInfo* fb = fs[b.index];
-            if (fa->isExtension && fb->isExtension && !fits(subst(fa->receiver, a.env), subst(fb->receiver, b.env))) return false;
+            if (fa->isExtension && fb->isExtension && !fits(mayBe(a, fa->receiver), mayBe(b, fb->receiver))) return false;
             for (size_t i = 0; i < args.exprs.size(); i++) {
                 if (args.exprs[i]->kind == ExprKind::Function) continue;
                 if (!fits(paramType(a, i), paramType(b, i))) return false;
             }
             return true;
+        };
+        // Whether a form takes one of its own type parameters somewhere in its parameters or its
+        // receiver.
+        auto generic = [&](FuncInfo* f) {
+            for (const Type& p : f->params)
+                if (argText(loosened(p, f->typeParams)) != argText(p)) return true;
+            if (f->isExtension && argText(loosened(f->receiver, f->typeParams)) != argText(f->receiver)) return true;
+            return f->vararg >= 0 && argText(loosened(f->varargItem, f->typeParams)) != argText(f->varargItem);
         };
         auto better = [&](const Fit& a, const Fit& b) {
             const bool ab = asSpecific(a, b), ba = asSpecific(b, a);
@@ -7680,6 +7712,9 @@ struct Checker::Impl {
             if (!ab) return a.narrowed < b.narrowed;
             if (a.narrowed != b.narrowed) return a.narrowed < b.narrowed;
             if (a.conversions != b.conversions) return a.conversions < b.conversions;  // a function type before an interface
+            // One of no type parameters before one whose type parameter is bound as tightly:
+            // fun f(x : Number) before fun <T : Number> f(x : T).
+            if (generic(fs[a.index]) != generic(fs[b.index])) return !generic(fs[a.index]);
             if (a.vararg != b.vararg) return !a.vararg;
             return a.defaultsUsed < b.defaultsUsed;
         };

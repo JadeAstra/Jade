@@ -152,3 +152,22 @@ val ints : List<int> = [1, 2, 3]
 val floats : List<float> = [1.5, 2.5]
 fun looseTotal(xs : any?) => unknown(xs).total()
 print(ints.total(), floats.total(), attempt(fun() => looseTotal(ints)))   // expect: 6 4.0 this call fits more than one form of total(): total[List<int>]() and total[List<float>](); write the types of what is passed, so that the form is chosen when compiling
+
+// A form of no type parameter is more specific than one that takes anything there: U may be
+// anything, so pick(3) means pick(x : int), though it makes U an int. Where the type parameter
+// is bound as tightly, the one without comes first.
+class Picker {
+  fun <U> pick(x : U) : string => "anything"
+  fun pick(x : int) : string => "an int"
+}
+print(Picker().pick(3), Picker().pick("a"), Picker().pick(unknown(3)))   // expect: an int anything an int
+fun <T> shown(xs : List<T>) => "a list"
+fun shown(xs : List<int>) => "ints"
+fun <T : Number> measured(x : T) => "bound"
+fun measured(x : Number) => "a number"
+print(shown([1]), shown(["a"]), measured(1), measured(2.5))   // expect: ints a list a number a number
+fun <T> List<T>.kind() : string => "a list"
+fun List<int>.kind() : string => "ints"
+fun string.taking(x : int) : string => "an int"
+fun <T> string.taking(x : T) : string => "anything"
+print([1].kind(), ["a"].kind(), "s".taking(1), "s".taking(true))   // expect: ints a list an int anything

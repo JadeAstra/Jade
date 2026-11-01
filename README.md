@@ -736,12 +736,16 @@ describe(true)                    // something
 
 Where the arguments' types are known when compiling, the form is chosen then and called
 directly. Where they are not (an argument without a type, or of type `any`), the call
-chooses when it runs, by the values it is given. Between two forms that fit as well, one
-without a `vararg` comes first, then one that leaves fewer parameters to their defaults. A
-call that no form takes, or that two fit as well (`pair(1, 1)` with `pair(a : int, b : Number)`
-and `pair(a : Number, b : int)`), is an error that lists the forms; two forms with the same
-parameters' types are a compile error. A form's own type parameters count by their places,
-not their names, as no call could tell them apart: `fun <U> first(xs : List<U>)` and
+chooses when it runs, by the values it is given. A type parameter of a form's own may be
+anything (or anything its bound allows), so a form with a type in its place is more specific:
+with `fun <U> pick(x : U)` and `fun pick(x : int)`, `pick(3)` means the second, and
+`List<int>` comes before `List<T>`, for a parameter or an extension's receiver. Between two
+forms that fit as well, one without type parameters comes first (`fun f(x : Number)` before
+`fun <T : Number> f(x : T)`), then one without a `vararg`, then one that leaves fewer
+parameters to their defaults. A call that no form takes, or that two fit as well
+(`pair(1, 1)` with `pair(a : int, b : Number)` and `pair(a : Number, b : int)`), is an error
+that lists the forms; two forms with the same parameters' types are a compile error. A form's
+own type parameters count by their places, not their names, as no call could tell them apart: `fun <U> first(xs : List<U>)` and
 `fun <V> first(xs : List<V>)` are one form written twice.
 
 Methods, static methods, operators and extension functions have forms in the same way. A
