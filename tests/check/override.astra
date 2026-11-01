@@ -42,3 +42,45 @@ fun make() {
     override fun aera() => 0                               // check: 'aera' in class Wrong is marked override, but there is nothing of that name for it to replace
   }
 }
+
+// An override gives what the one above gives, or less: a narrower type, a subclass, a throw.
+interface Measured {
+  fun size() : float
+  fun parent() : Measured?
+  val label : string
+  var count : int?
+}
+class Ruler : Measured {
+  override fun size() : string => "long"                   // check: 'size' gives a string, where what it overrides (Measured.size()) gives a float: code that calls it through Measured counts on that
+  override fun parent() : Ruler => Ruler()
+  override val label : int = 1                             // check: 'label' is an int, where Measured.label, which it overrides, is a string: code that reads it through Measured counts on that
+  override var count : int = 0                             // check: 'count' is an int, where Measured.count, which it overrides, is a var of an int?: a var is overridden with its own type, as it may be written through either
+}
+class Tape : Measured {
+  override fun size() : float => throw IllegalStateException("unmeasured")
+  override fun parent() : Measured? => null
+  override val label = "tape"
+  override var count : int? = null
+}
+class Base2 {
+  fun weight() : int => 1
+}
+class Heavy : Base2() {
+  override fun weight() : float => 2.0                     // check: 'weight' gives a float, where what it overrides (Base2.weight()) gives an int: code that calls it through Base2 counts on that
+}
+interface Source<T> {
+  fun next() : T
+}
+class Numbers : Source<int> {
+  override fun next() : string => "1"                      // check: 'next' gives a string, where what it overrides (Source.next()) gives an int: code that calls it through Source counts on that
+}
+class Echo<T>(val item : T) : Source<T> {
+  override fun next() : T => item
+}
+enum Level : Measured {
+  Low;
+  override fun size() : int? => null                       // check: 'size' gives an int?, where what it overrides (Measured.size()) gives a float: code that calls it through Measured counts on that
+  override fun parent() : Measured? => null
+  override val label = "low"
+  override var count : int? = null
+}

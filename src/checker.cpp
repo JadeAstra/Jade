@@ -3820,6 +3820,17 @@ struct Checker::Impl {
             for (FuncInfo* g : above)
                 if (same == nullptr && sameForm(f, g)) same = g;
             if (same != nullptr) {
+                // It gives what the form above gives, or less: code that calls it through the
+                // class or interface above counts on that. The types above as this class gives
+                // them (Box<int>), and the method's own type parameters by their places.
+                Env env = envOf(asSuper(selfType(k), same->owner));
+                for (size_t i = 0; i < same->typeParams.size() && i < f->typeParams.size(); i++)
+                    env[same->typeParams[i]] = typeParamType(f->typeParams[i]);
+                const Type given = resultOf(f), wanted = subst(resultOf(same), env);
+                if (!fits(given, wanted))
+                    report(*m, "'" + m->name + "' gives " + describe(given) + ", where what it overrides (" +
+                                   formText(same->owner->name + "." + m->name, same, env) + ") gives " + describe(wanted) +
+                                   ": code that calls it through " + same->owner->name + " counts on that");
                 const bool waits = same->decl != nullptr && same->decl->isSuspend;
                 const std::string form = formText(same->owner->name + "." + m->name, same, {});
                 if (m->isSuspend && !waits)
@@ -3836,6 +3847,26 @@ struct Checker::Impl {
                 forms += (i == 0 ? "" : i + 1 == above.size() ? " and " : ", ") + formText(above[i]->owner->name + "." + m->name, above[i], {});
             report(*m, "'" + m->name + "' is written override, but no form above has its parameters (" + forms +
                            "); give it those, or make it a form of its own without override");
+        }
+        // A property written override is of the type of the one above, or narrower; a var of
+        // that type alone, as it is written through either.
+        for (const auto& field : c.fields) {
+            if (!field->isOverride) continue;
+            bool asked = false;
+            ClassInfo* owner = fieldAbove(k, field->name, asked);
+            auto mine = k->fields.find(field->name);
+            if (owner == nullptr || mine == k->fields.end()) continue;
+            FieldInfo* theirs = owner->fields[field->name];
+            const Type own = fieldType(mine->second);
+            const Type above = subst(fieldType(theirs), envOf(asSuper(selfType(k), owner)));
+            if (!fits(own, above))
+                report(*field, "'" + field->name + "' is " + describe(own) + ", where " + owner->name + "." + field->name +
+                                   ", which it overrides, is " + describe(above) + ": code that reads it through " + owner->name +
+                                   " counts on that");
+            else if (!theirs->isVal && !fits(above, own))
+                report(*field, "'" + field->name + "' is " + describe(own) + ", where " + owner->name + "." + field->name +
+                                   ", which it overrides, is a var of " + describe(above) + ": a var is overridden with its own type, " +
+                                   "as it may be written through either");
         }
         if (requireTypes)
             for (const HeaderParam& p : c.header)

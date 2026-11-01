@@ -1250,6 +1250,11 @@ class Square(val side : int) : Shape("square") {
   an error where there is nothing of that name to replace. So a method can neither replace
   another by accident nor miss the one it was meant to replace through a misspelt name.
   `toString` and `==` can always be written with it, and `init` never needs it.
+- An override gives what the member it replaces gives, or something narrower, since code that
+  uses it through the class or interface above counts on that: `fun parent() : Ruler` may
+  override `fun parent() : Measured?`, and `override val label : int` is an error where the
+  interface has `val label : string`. A `var` is overridden with its own type, as it may be
+  written through either.
 - `init { }` blocks run when an object is made, after the header's entries are set, in order
   with the initial values of the fields around them. A class has either such blocks or a
   hand-written `fun init`, not both.
