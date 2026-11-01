@@ -1708,7 +1708,9 @@ an enum, or `int`, `float`, `Number`, `string`, `bool`, `List`, `Map`, `Range`, 
 `Bytes` and `any`. A member of the same name always comes first, so an extension cannot change what
 a type already does. An extension function is in reach where a name of its folder is: in its
 folder and in the files that import it, with the access words; the standard library's are
-everywhere. The file's own folder's comes first.
+everywhere, and a program's own come before them. Two in reach of one file with one name,
+receiver and parameters are an error (D187), at the declaration if the file has it, or else at
+the import that brings in the second: nothing written could say which a call means.
 
 **`extend`** fits a class someone else wrote to an interface of yours. Names that differ are
 bridged by getters in it, and the interface's methods the class lacks are written in it as
@@ -1736,7 +1738,8 @@ written without `override`, since the type has none to replace. A function the i
 not ask for is an extension function instead (`fun Rect.perimeter()`).
 
 An `extend` holds where its folder's names do, as an extension function does. The same one
-twice is one; two that say different things are an error. A class written in the program
+twice is one; two that say different things are an error, and so are two in reach of one file
+from different folders, each with getters or funs (D187). A class written in the program
 itself implements the interface instead.
 
 A built-in type is fitted the same way (D185): `int`, `float`, `string`, `bool`, `char`, `byte`,
@@ -1964,10 +1967,11 @@ import "../shared/util" as Util    // a path that is not made of plain names goe
   `Shapes.Circle` still works, for the cases below.
 - An import counts for the file that writes it, and only that file. It is not passed on: what
   the folder itself imported stays its own business.
-- A file's own folder comes first. A name declared there is the one meant, even if a `.*`
-  import declares it too; the import's is then written with its name in front.
-- When two `.*` imports declare the same name, its bare use is an error that asks which is
-  meant: `Shapes.title` or `Text.title`.
+- A bare name means one thing (D187). A name the file's folder declares that a `.*` import
+  brings in too is an error at the declaration, if the file has it, or else at the import;
+  so is a name two `.*` imports both bring in, at the second, whether or not it is used.
+  Import one of them without `.*` and write `Shapes.title`, or give one another name. The
+  standard library's names are not counted: a program's own come before them.
 - A name with an import in front works in types too (`fun show(b : Ui.Block)`).
 - A library may hold an object called like itself. `Jade.Button` is then the library's class,
   and what the library has no name for, `Jade.requestRepaint()`, is looked for on the object.

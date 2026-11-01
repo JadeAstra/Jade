@@ -7641,7 +7641,7 @@ void CompilerSession::gather(const std::string& key, const std::string& name, co
             if (std::vector<StmtPtr>* parsed = parseFile(fileKey, fileKey, canonical.filename().string()))
                 gather(fileKey, canonical.filename().string(), parent, *parsed, imported, false);
         }
-        checker->addImport(key, s.alias, s.all, imported);
+        checker->addImport(key, s.alias, s.all, imported, &s, s.path);
     }
 }
 
@@ -7686,9 +7686,13 @@ void CompilerSession::prefetch(const std::vector<std::pair<std::string, std::str
 // compile error: the first, with the rest listed after it (M6.5 part 3, step 5).
 void CompilerSession::check() {
     const size_t before = checker->diagnostics.size();
-    {
+    try {
         PartTimer timed(compileTimes.check);
         checker->run();
+    } catch (const CompileError&) {
+        // What the checker found before it (at an import, say) comes first: it may be the cause.
+        reportNew(before);
+        throw;
     }
     reportNew(before);
 }

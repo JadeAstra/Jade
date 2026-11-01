@@ -1,5 +1,6 @@
-// Two imports that declare the same name: its bare name could mean either.
+// Two imports that declare the same name: its bare name could mean either, so the second
+// import is an error, whether or not the name is used.
 import NsShapes.*
 import NsText.*
 print(title)
-// expect compile error: 'title' is declared by both NsShapes and NsText; say which, as in NsText.title
+// expect compile error: error_ns_ambiguous.astra:4:1: error: import NsText.* brings in 'label' and 'title', which import NsShapes.* brings in too: a bare use could mean either; import NsText without .* and write NsText. in front of its names, or give one of them another name

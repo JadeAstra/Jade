@@ -243,6 +243,8 @@ struct ImportInfo {
     std::string alias;
     bool all = false;
     Namespace* ns = nullptr;
+    const Node* at = nullptr;  // the import, for what is reported at it
+    std::string path;          // as written
 };
 
 // What a top-level name of a file stands for.
@@ -1316,6 +1318,21 @@ struct Checker::Impl {
     std::vector<ShellUndo> shellUndo;
     std::vector<std::pair<std::vector<FuncInfo*>*, size_t>> shellExtensionsUndo;
 
+    // Where each top-level name of a folder or a file was first declared, for the errors of
+    // checkAmbiguity. The tables' entries stay where they are as others are added.
+    struct DeclaredBy {
+        Unit* unit = nullptr;
+        const Node* at = nullptr;
+        uint8_t visibility = 0;
+    };
+    std::unordered_map<const GlobalSym*, DeclaredBy> declaredBy;
+
+    GlobalSym& declared(Unit& u, uint8_t visibility, const std::string& name, const Node& at) {
+        GlobalSym& g = declared(u, visibility, name);
+        if (!u.shell) declaredBy.emplace(&g, DeclaredBy{&u, &at, visibility});
+        return g;
+    }
+
     GlobalSym& declared(Unit& u, uint8_t visibility, const std::string& name) {
         auto& table = symbolsFor(u, visibility);
         if (!u.shell) return table[name];
@@ -1457,14 +1474,14 @@ struct Checker::Impl {
                             FieldInfo* f = newField(name, &u, nullptr);
                             f->isVal = v.isVal;
                             f->state = 2;  // the parts' types are worked out where they are declared
-                            declared(u, stmt->visibility, name).var = f;
+                            declared(u, stmt->visibility, name, *stmt).var = f;
                         }
                         break;
                     }
                     FieldInfo* f = newField(v.name, &u, nullptr);
                     f->decl = &v;
                     f->isVal = v.isVal;
-                    declared(u, stmt->visibility, v.name).var = f;
+                    declared(u, stmt->visibility, v.name, *stmt).var = f;
                     break;
                 }
                 case StmtKind::Function: {
@@ -1480,14 +1497,14 @@ struct Checker::Impl {
                         f->stmt = &fs;
                         addExtension(u, extensions[fs.receiverType.typeParam ? std::string("<T>") : fs.receiver][fs.fn->name], f);
                     } else {
-                        declared(u, stmt->visibility, fs.fn->name).funcs.push_back(f);
+                        declared(u, stmt->visibility, fs.fn->name, *stmt).funcs.push_back(f);
                         if (stmt->visibility == 0) topLevelPublic.insert(fs.fn.get());
                     }
                     break;
                 }
                 case StmtKind::Class: {
                     const auto& c = static_cast<const ClassStmt&>(*stmt);
-                    declared(u, stmt->visibility, c.name).cls = gatherClass(c, &u, nullptr, true);
+                    declared(u, stmt->visibility, c.name, *stmt).cls = gatherClass(c, &u, nullptr, true);
                     break;
                 }
                 case StmtKind::Extend:
@@ -1495,7 +1512,7 @@ struct Checker::Impl {
                     break;
                 case StmtKind::TypeAlias: {
                     const auto& a = static_cast<const TypeAliasStmt&>(*stmt);
-                    GlobalSym& g = declared(u, stmt->visibility, a.name);
+                    GlobalSym& g = declared(u, stmt->visibility, a.name, *stmt);
                     g.alias = &a;
                     g.aliasUnit = &u;
                     break;
@@ -8545,6 +8562,7 @@ struct Checker::Impl {
         formsAboveKnown.clear();
         familyKnown.clear();
         for (size_t i = first; i < units.size(); i++) gather(*units[i]);
+        for (size_t i = first; i < units.size(); i++) checkAmbiguity(*units[i]);
         for (size_t i = first; i < units.size(); i++)
             if (!units[i]->skipBodies) checkUnit(units[i].get());
         // The bodies of a kept file's inline functions are checked all the same: they are
@@ -8565,6 +8583,163 @@ struct Checker::Impl {
         judgeInline();
         judgeThrows();
     }
+
+    // Where a file meets two of one thing that nothing written could tell apart (G32): a bare
+    // name its folder declares that a .* import brings in too, or that two .* imports both
+    // bring in; two extension functions of one name and parameters on one type; two extends of
+    // a type to one interface, each with getters or funs. Reported where the file brings in
+    // the second: at its declaration, where the file declares it, or else at the import. The
+    // standard library's are not counted: what a program declares comes before them.
+    void checkAmbiguity(Unit& u) {
+        if (u.prelude || u.shell || u.ns == nullptr || u.statements == nullptr) return;
+        unit = &u;
+        // Where one of the two came from: this folder (via null) or an import.
+        struct Source {
+            Unit* unit = nullptr;
+            const Node* at = nullptr;
+            const ImportInfo* via = nullptr;
+        };
+        auto importText = [](const ImportInfo& imp) { return "import " + imp.path + (imp.all ? ".*" : ""); };
+        auto shortFile = [](const Unit* from) {
+            const size_t slash = from->file.find_last_of("/\\");
+            return slash == std::string::npos ? from->file : from->file.substr(slash + 1);
+        };
+        auto listed = [](std::vector<std::string> names) {
+            std::sort(names.begin(), names.end());
+            std::string s;
+            for (size_t i = 0; i < names.size(); i++) s += (i == 0 ? "" : i + 1 == names.size() ? " and " : ", ") + names[i];
+            return s;
+        };
+        auto visibleFrom = [&](uint8_t visibility, const Namespace* ns) {
+            return visibility == 0 || (visibility == 1 && ns != nullptr && ns->library == u.ns->library);
+        };
+        // The second of two that are one: reported at a declaration of this file's, or at the
+        // import that brought it, by the groups of what is reported at each import.
+        std::map<std::pair<const ImportInfo*, std::string>, std::vector<std::string>> atImports;
+        auto clash = [&](const Source& first, const Source& second, const std::string& what, const std::string& kind,
+                         const std::string& why) {
+            // Two of this folder are reported at the second, by the file that has it.
+            const Source* mine = second.via == nullptr && second.unit == &u                      ? &second
+                                 : first.via == nullptr && first.unit == &u && second.via != nullptr ? &first
+                                                                                                     : nullptr;
+            const Source& other = mine == &second ? first : second;
+            if (mine != nullptr) {
+                std::string where = other.via != nullptr ? "by " + other.via->path + ", which this file imports"
+                                    : other.unit == &u ? "on line " + std::to_string(other.at->line)
+                                                       : "in " + shortFile(other.unit) + ", of this folder";
+                report(*mine->at, what + " is declared here and " + where + ": " + why);
+                return;
+            }
+            if (second.via == nullptr) return;  // two of this folder's other files: reported in theirs
+            const std::string with = first.via != nullptr ? "which " + importText(*first.via) + " brings in too"
+                                                          : "which this folder declares too, in " + shortFile(first.unit);
+            atImports[{second.via, kind + "\x01" + with + "\x01" + why}].push_back(what);
+        };
+        const auto& privateNames = privates[u.fileKey];
+        const auto& folderNames = byNamespace[u.ns];
+
+        // Bare names.
+        std::unordered_map<std::string, Source> bare;
+        for (const ImportInfo& imp : u.imports) {
+            if (!imp.all || imp.ns == nullptr || imp.ns == u.ns || imp.at == nullptr) continue;
+            auto table = byNamespace.find(imp.ns);
+            if (table == byNamespace.end()) continue;
+            for (const auto& [name, sym] : table->second) {
+                auto by = declaredBy.find(&sym);
+                if (by == declaredBy.end() || !visibleFrom(by->second.visibility, imp.ns)) continue;
+                const Source theirs{by->second.unit, by->second.at, &imp};
+                const std::string why = "a bare use could mean either; import " + imp.path + " without .* and write " +
+                                        (imp.alias.empty() ? imp.path : imp.alias) + ". in front of its names, or give one of them another name";
+                const GlobalSym* own = nullptr;
+                if (auto p = privateNames.find(name); p != privateNames.end()) own = &p->second;
+                else if (auto f = folderNames.find(name); f != folderNames.end()) own = &f->second;
+                if (own != nullptr) {
+                    auto ownBy = declaredBy.find(own);
+                    if (ownBy != declaredBy.end()) clash(Source{ownBy->second.unit, ownBy->second.at, nullptr}, theirs, "'" + name + "'", "name", why);
+                    continue;
+                }
+                auto [before, added] = bare.emplace(name, theirs);
+                if (!added && before->second.via->ns != imp.ns && before->second.at != theirs.at)
+                    clash(before->second, theirs, "'" + name + "'", "name", why);
+            }
+        }
+
+        // Where a declaration of another file is in reach of this one: its folder, or the first
+        // import of its folder that lets this file see it.
+        auto sourceOf = [&](Unit* from, uint8_t visibility, const Node* at, Source& out) {
+            if (from == nullptr || from->prelude || from->ns == nullptr) return false;
+            if (from->ns == u.ns) {
+                if (visibility == 2 && from != &u) return false;
+                out = Source{from, at, nullptr};
+                return true;
+            }
+            for (const ImportInfo& imp : u.imports)
+                if (imp.ns == from->ns && imp.at != nullptr) {
+                    if (!visibleFrom(visibility, imp.ns)) return false;
+                    out = Source{from, at, &imp};
+                    return true;
+                }
+            return false;
+        };
+        // This folder's first, then each import's in the order written.
+        auto order = [&](const Source& s) {
+            if (s.via == nullptr) return size_t(0);
+            return static_cast<size_t>(s.via - u.imports.data()) + 1;
+        };
+
+        // Extension functions: one receiver, name and parameters (their own type parameters by
+        // their places) are one.
+        std::vector<std::pair<Source, FuncInfo*>> reached;
+        for (const auto& [receiver, byName] : extensions)
+            for (const auto& [name, forms] : byName)
+                for (FuncInfo* f : forms) {
+                    if (f->stmt == nullptr) continue;
+                    Source s;
+                    if (sourceOf(f->unit, f->stmt->visibility, f->stmt, s)) reached.emplace_back(s, f);
+                }
+        std::stable_sort(reached.begin(), reached.end(), [&](const auto& a, const auto& b) { return order(a.first) < order(b.first); });
+        std::unordered_map<std::string, Source> forms;
+        for (const auto& [s, f] : reached) {
+            const FunctionDecl& fn = *f->stmt->fn;
+            const std::string key = annotationText(f->stmt->receiverType, &fn.typeParams) + "." + fn.name + formKey(fn);
+            auto [before, added] = forms.emplace(key, s);
+            if (added || before->second.at == s.at) continue;
+            clash(before->second, s, annotationText(f->stmt->receiverType) + "." + fn.name + signatureText(fn), "extension",
+                  "a call could not tell them apart; give one another name");
+        }
+
+        // Extends of a type to one interface, each with getters or funs: a value of the type
+        // would fit it in two ways. Two of one folder are found by checkExtend.
+        std::vector<std::pair<Source, ExtendInfo*>> extendsReached;
+        for (ExtendInfo& e : extendsDeclared) {
+            Source s;
+            if ((!e.stmt->bridges.empty() || !e.stmt->methods.empty()) && sourceOf(e.unit, e.stmt->visibility, e.stmt, s))
+                extendsReached.emplace_back(s, &e);
+        }
+        std::stable_sort(extendsReached.begin(), extendsReached.end(), [&](const auto& a, const auto& b) { return order(a.first) < order(b.first); });
+        std::map<std::pair<std::string, ClassInfo*>, Source> fitted;
+        for (const auto& [s, e] : extendsReached) {
+            if (!resolveExtend(*e)) continue;
+            for (size_t t = 0; t < e->types.size(); t++) {
+                const std::string type = e->types[t] != nullptr ? "\x01" + std::to_string(reinterpret_cast<uintptr_t>(e->types[t]))
+                                         : e->builtins[t].known() ? text(e->builtins[t]) : std::string();
+                if (type.empty()) continue;
+                auto [before, added] = fitted.emplace(std::make_pair(type, e->iface), s);
+                if (added || before->second.at == s.at || before->second.unit->ns == s.unit->ns) continue;
+                const std::string name = e->types[t] != nullptr ? e->types[t]->name : text(e->builtins[t]);
+                clash(before->second, s, "an extend of " + name + " : " + e->iface->name, "extend",
+                      "a value would fit the interface in two ways, and there is one way a type fits an interface (D33)");
+            }
+        }
+
+        for (const auto& [where, whats] : atImports) {
+            const std::string& group = where.second;
+            const size_t a = group.find('\x01'), b = group.find('\x01', a + 1);
+            report(*where.first->at, importText(*where.first) + " brings in " + listed(whats) + ", " + group.substr(a + 1, b - a - 1) +
+                                         ": " + group.substr(b + 1));
+        }
+    }
+
 
     // A file's top level, in order, then its functions, classes and extensions.
     void checkUnit(Unit* u) {
@@ -9601,7 +9776,8 @@ std::string Checker::summaryFacts(const std::string& fileKey) {
     return facts;
 }
 
-void Checker::addImport(const std::string& fileKey, const std::string& alias, bool all, Namespace* ns) {
+void Checker::addImport(const std::string& fileKey, const std::string& alias, bool all, Namespace* ns, const Node* at,
+                        const std::string& path) {
     auto found = impl_->unitsByKey.find(fileKey);
     Unit* u;
     if (found == impl_->unitsByKey.end()) {
@@ -9614,7 +9790,7 @@ void Checker::addImport(const std::string& fileKey, const std::string& alias, bo
     } else {
         u = found->second;
     }
-    u->imports.push_back(ImportInfo{alias, all, ns});
+    u->imports.push_back(ImportInfo{alias, all, ns, at, path});
 }
 
 const FunctionDecl* Checker::formRoot(const FunctionDecl& method) { return impl_->formRoot(method); }

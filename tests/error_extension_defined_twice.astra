@@ -1,0 +1,6 @@
+// An extension function a file declares where an import gives one of the same name and
+// parameters on the same type: a call could not tell them apart (G32).
+import ExtLib
+fun string.shout() : string => "mine"
+print("a".shout())
+// expect compile error: error_extension_defined_twice.astra:4:1: error: string.shout() is declared here and by ExtLib, which this file imports: a call could not tell them apart; give one another name

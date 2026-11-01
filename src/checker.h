@@ -99,7 +99,8 @@ public:
     std::string summaryFacts(const std::string& fileKey);
 
     // An `import` in a file: what it imports, and how the file reaches it.
-    void addImport(const std::string& fileKey, const std::string& alias, bool all, Namespace* ns);
+    void addImport(const std::string& fileKey, const std::string& alias, bool all, Namespace* ns, const Node* at = nullptr,
+                   const std::string& path = "");
 
     // Checks what was added since the last run: what a file uses must have been added by
     // then. Diagnostics are in the order found, without repeats.

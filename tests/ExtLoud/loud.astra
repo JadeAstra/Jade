@@ -1,0 +1,4 @@
+// A second folder giving string a shout(), as ExtLib does: a file importing both could not
+// tell the two apart (G32).
+
+fun string.shout() : string => this.upper() + "!!!"
