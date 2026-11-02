@@ -107,10 +107,13 @@ class Path {
     return names.map { Path(directory, it) }
   }
 
-  // Every path below this directory, each directory before what is in it, read as it goes.
-  fun walk() : Sequence<Path> {
+  // Every path below this directory, each directory before what is in it, read as it goes. A
+  // directory it cannot read, this one too, is an UncheckedIOException where the walk comes to
+  // it, the IOException its cause, as Java's Files.walk throws (G55); with `onError`, that is
+  // given the directory and the IOException, and the walk goes on past it.
+  fun walk(onError : ((Path, IOException) -> unit)? = null) : Sequence<Path> {
     val top = this
-    return sequence { __walkBelow(top) }
+    return sequence { __walkBelow(top, onError) }
   }
 
   // -- Reading and writing --
@@ -205,12 +208,20 @@ class Path {
   override fun toString() : string => text
 }
 
-// The paths below `directory`, for walk(): each, and below each directory what is in it.
-suspend fun SequenceScope<Path>.__walkBelow(directory : Path) {
-  val inside = try { directory.list() } catch (e : IOException) { listOf<Path>() }
+// The paths below `directory`, for walk(): each, and below each directory what is in it; one
+// that cannot be read thrown, or given to `onError` and gone past.
+suspend fun SequenceScope<Path>.__walkBelow(directory : Path, onError : ((Path, IOException) -> unit)?) {
+  var inside : List<Path> = listOf<Path>()
+  try {
+    inside = directory.list()
+  } catch (e : IOException) {
+    if (onError == null) { throw UncheckedIOException(e) }
+    onError(directory, e)
+    return
+  }
   for path in inside {
     yield(path)
-    if (path.isDirectory()) { __walkBelow(path) }
+    if (path.isDirectory()) { __walkBelow(path, onError) }
   }
 }
 

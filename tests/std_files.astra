@@ -58,6 +58,14 @@ sub.mkdir()
 print(sub.isDirectory(), Path(root, "sub").list(), root.list().map { it.name })   // expect: true [astra-files-test\sub\deeper] ["café ☕.txt", "data.bin", "e", "latin.txt", "notes.txt", "sub", "wide.txt"]
 print(root.list()[1] == b, root.walk().map { it.name }.toList())   // expect: true ["café ☕.txt", "data.bin", "e", "latin.txt", "notes.txt", "sub", "deeper", "wide.txt"]
 try { f.list() } catch (e : IOException) { print(e.message!!.startsWith("cannot list the directory")) }   // expect: true
+// A directory the walk cannot read: thrown where it comes to it, or handed over and gone past (G55).
+try {
+  Path(root, "no-such").walk().toList()
+} catch (e : UncheckedIOException) {
+  print(e.cause is IOException, e.message!!.startsWith("cannot list the directory"))   // expect: true true
+}
+val unread : open List<string> = []
+print(f.walk { dir, e -> unread.add(dir.name) }.toList(), unread)   // expect: [] ["notes.txt"]
 try { Path(root, "no/such").mkdir(parents = false) } catch (e : IOException) { print(e.message!!.startsWith("cannot make the directory")) }   // expect: true
 print(Path(root, "one").also { it.mkdir(parents = false) }.isDirectory())   // expect: true
 

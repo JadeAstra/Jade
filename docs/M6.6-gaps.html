@@ -726,7 +726,7 @@ td.when { min-width: 9em; }
 
 <section class="decision" id="p8-walk-list">
 <h3><span class="code">8.8a</span>What list() and walk() give (part 8, group 8)</h3>
-<p>D138 has <code>list()</code> give Paths and <code>walk()</code> every path below, as a sequence. As built, both go in order of name; <code>list()</code> throws an IOException for something that is not a directory, where Java&#39;s <code>list()</code> gave null; <code>walk()</code> gives each directory before what is in it, not the directory it starts from (Kotlin&#39;s <code>walkTopDown</code> and Java&#39;s <code>Files.walk</code> give that too), and goes past a directory it cannot read without a word.</p>
+<p>D138 has <code>list()</code> give Paths and <code>walk()</code> every path below, as a sequence. As built, both go in order of name; <code>list()</code> throws an IOException for something that is not a directory, where Java&#39;s <code>list()</code> gave null; <code>walk()</code> gives each directory before what is in it, not the directory it starts from (Kotlin&#39;s <code>walkTopDown</code> and Java&#39;s <code>Files.walk</code> give that too), and a directory it cannot read is an <code>UncheckedIOException</code> where it comes to it, as Java&#39;s <code>Files.walk</code> throws; <code>walk(onError)</code> is given the directory and the <code>IOException</code> and goes on past it (G55).</p>
 <div class="verdict"><span class="label">Your choice</span><span class="blank"></span></div>
 </section>
 
@@ -872,7 +872,6 @@ td.when { min-width: 9em; }
 <tr><td class="part" id="g46">G46</td><td class="part">8.6</td><td><code>@Deprecated</code>, which D153 places at 1.0.</td><td class="when">1.0</td></tr>
 <tr><td class="part" id="g53">G53</td><td class="part">8.8</td><td>Five character sets only; Windows-1252, which old mail uses, and others can be added without changing a call (D127). UTF-16 is read without looking for a byte order mark.</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g54">G54</td><td class="part">8.8</td><td>A file's times are int milliseconds since 1970, and there is no type for a moment in time (8.8c).</td><td class="when">Not placed yet</td></tr>
-<tr><td class="part" id="g55">G55</td><td class="part">8.8</td><td><code>walk()</code> goes past a directory it cannot read without a word (8.8a).</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g56">G56</td><td class="part">8.8</td><td>Processes and sockets are there on Windows only, as before; <code>Path</code> works everywhere.</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g57">G57</td><td class="part">8.9</td><td>The checker does not report a static member a class lacks, except an old name of the standard library&#39;s it has advice for: it does not keep static properties with getters or a superclass&#39;s statics reached through a subclass, so a wrong static name is found when the program runs (8.9k).</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g59">G59</td><td class="part">8.9</td><td>The graphics card fills an oval by distance in a shader, a little short of its area at the edge (1.6% on a small one); an image&#39;s canvas, in memory, is within a pixel (8.9j). The two agree on every straight edge, not quite on curved ones.</td><td class="when">Not placed yet</td></tr>
