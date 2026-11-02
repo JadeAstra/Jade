@@ -898,18 +898,28 @@ ViewParts writableView(VM& vm, const Value& v) {
 
 // ---- Shared collections (D94) ----
 //
-// A SharedMap keeps its entries in a map that any piece of a section may change, each change
-// whole: the map's lock, one of the few shared by address, is held for an instant inside, and
-// never while the program's code runs. What goes in has to be shareable: a value, text, frozen
+// A SharedMap keeps its entries in 16 maps by the key's hash (G49), any of which any piece of a
+// section may change, each change whole: a part's lock, one of the few shared by address, is
+// held for an instant inside, and never while the program's code runs, so cores changing
+// different keys seldom take turns. What goes in has to be shareable: a value, text, frozen
 // data, or an object nothing in the section changes.
 
 namespace {
 
+constexpr size_t kSharedParts = 16;
+
 std::mutex& sharedLock(const Obj* map) { return atomicLocks[(reinterpret_cast<uintptr_t>(map) >> 4) & 63]; }
 
-ObjMap* sharedMap(VM& vm, const Value& v) {
-    if (!v.isObjType(ObjType::Map)) throw vm.runtimeError(Thrown::InternalError, "a SharedMap's entries are a map");
-    return asMap(v);
+std::vector<Value>& sharedParts(VM& vm, const Value& v) {
+    if (!v.isObjType(ObjType::List) || asList(v)->values().size() != kSharedParts)
+        throw vm.runtimeError(Thrown::InternalError, "a SharedMap's entries are its parts");
+    return asList(v)->values();
+}
+
+// The part the key is kept in, and the key's hash, worked out before any lock is taken.
+ObjMap* sharedPart(VM& vm, const Value& v, const Value& key, uint32_t& hash) {
+    hash = ValueMap::hashOf(key);
+    return asMap(sharedParts(vm, v)[(hash * 0x9E3779B1u) >> 28]);
 }
 
 void shareable(VM& vm, const Value& v, const char* what) {
@@ -960,71 +970,89 @@ void registerShared(VM& vm, ObjClass* parallel) {
         return Value::null();
     });
 
-    def("sharedMap", 0, [](VM& vm, int, Value*) -> Value { return Value::object(vm.alloc<ObjMap>()); });
+    def("sharedMap", 0, [](VM& vm, int, Value*) -> Value {
+        ObjList* parts = newList(vm);
+        TempRoot keep(vm, Value::object(parts));
+        for (size_t i = 0; i < kSharedParts; i++) parts->values().push_back(Value::object(vm.alloc<ObjMap>()));
+        return Value::object(parts);
+    });
     def("sharedGet", 2, [](VM& vm, int, Value* args) -> Value {
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        const Value* found = map->map.find(args[1]);
+        const Value* found = map->map.find(args[1], hash);
         return found != nullptr ? *found : Value::null();
     });
     def("sharedHas", 2, [](VM& vm, int, Value* args) -> Value {
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        return Value::boolean(map->map.find(args[1]) != nullptr);
+        return Value::boolean(map->map.find(args[1], hash) != nullptr);
     });
     def("sharedPut", 3, [](VM& vm, int, Value* args) -> Value {
         shareable(vm, args[1], "keys");
         shareable(vm, args[2], "values");
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        const Value* found = map->map.find(args[1]);
+        Value* found = const_cast<Value*>(map->map.find(args[1], hash));
         const Value before = found != nullptr ? *found : Value::null();
-        map->map.set(args[1], args[2]);
+        if (found != nullptr) *found = args[2];
+        else map->map.addNew(args[1], args[2], hash);
         return before;
     });
     // Adds the key with the value if it is not there: whether it was added.
     def("sharedAdd", 3, [](VM& vm, int, Value* args) -> Value {
         shareable(vm, args[1], "keys");
         shareable(vm, args[2], "values");
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        if (map->map.find(args[1]) != nullptr) return Value::boolean(false);
-        map->map.set(args[1], args[2]);
+        if (map->map.find(args[1], hash) != nullptr) return Value::boolean(false);
+        map->map.addNew(args[1], args[2], hash);
         return Value::boolean(true);
     });
     def("sharedRemove", 2, [](VM& vm, int, Value* args) -> Value {
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        const Value* found = map->map.find(args[1]);
-        const Value before = found != nullptr ? *found : Value::null();
+        const Value* found = map->map.find(args[1], hash);
+        if (found == nullptr) return Value::null();
+        const Value before = *found;
         map->map.remove(args[1]);
         return before;
     });
+    // How many keys it holds: each part's count as it is when it is looked at.
     def("sharedSize", 1, [](VM& vm, int, Value* args) -> Value {
-        ObjMap* map = sharedMap(vm, args[0]);
-        std::lock_guard<std::mutex> hold(sharedLock(map));
-        return Value::integer(static_cast<int64_t>(map->map.size()));
+        int64_t size = 0;
+        for (const Value& part : sharedParts(vm, args[0])) {
+            std::lock_guard<std::mutex> hold(sharedLock(part.as.obj));
+            size += static_cast<int64_t>(asMap(part)->map.size());
+        }
+        return Value::integer(size);
     });
     // Sets the key's value to `value` if it holds `expected` (the same value, or the very same
     // object; null for none): whether it did. What putIfAbsent and update are built on.
     def("sharedSwap", 4, [](VM& vm, int, Value* args) -> Value {
         shareable(vm, args[3], "values");
-        ObjMap* map = sharedMap(vm, args[0]);
+        uint32_t hash = 0;
+        ObjMap* map = sharedPart(vm, args[0], args[1], hash);
         std::lock_guard<std::mutex> hold(sharedLock(map));
-        const Value* found = map->map.find(args[1]);
+        Value* found = const_cast<Value*>(map->map.find(args[1], hash));
         const Value now = found != nullptr ? *found : Value::null();
         if (found == nullptr ? !args[2].isNull() : !sameValue(now, args[2])) return Value::boolean(false);
         shareable(vm, args[1], "keys");
-        map->map.set(args[1], args[3]);
+        if (found != nullptr) *found = args[3];
+        else map->map.addNew(args[1], args[3], hash);
         return Value::boolean(true);
     });
-    // A copy of the entries as they are, an ordinary map: [keys, values].
+    // A copy of the entries as they are, an ordinary map, each part's as it is when it is
+    // looked at: [keys, values].
     def("sharedCopy", 1, [](VM& vm, int, Value* args) -> Value {
-        ObjMap* map = sharedMap(vm, args[0]);
         std::vector<Value> keys, values;
-        {
-            std::lock_guard<std::mutex> hold(sharedLock(map));
-            for (const ValueMap::Entry& entry : map->map.entries())
+        for (const Value& part : sharedParts(vm, args[0])) {
+            std::lock_guard<std::mutex> hold(sharedLock(part.as.obj));
+            for (const ValueMap::Entry& entry : asMap(part)->map.entries())
                 if (entry.live) {
                     keys.push_back(entry.key);
                     values.push_back(entry.value);
