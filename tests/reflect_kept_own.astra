@@ -1,0 +1,8 @@
+// What a built program keeps for reflection (D50, G42) where a `#` is of one of reflection's
+// own classes, whose members give other classes' by name: every class keeps everything. The
+// line runs the same way built.
+
+class Tool(val n : int) {
+  fun use() : int => n
+}
+print((Class#.field("methods")!!.get(Tool#) as List<Method>).map { it.name })   // expect: ["use"]

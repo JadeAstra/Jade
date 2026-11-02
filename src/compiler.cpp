@@ -460,6 +460,7 @@ public:
             // A built-in type (G30) as written, with what it holds (List<int>); a class by its name.
             const TypeSpec spec = resolveType(type);
             const bool builtin = spec.typed() && spec.id() != kTypeInstance;
+            const size_t fittedAt = code().size();
             if (builtin) {
                 std::string shape;
                 emitWrittenType(type, shape);
@@ -467,7 +468,13 @@ public:
             } else {
                 emitTypeName(type.name, type);
             }
+            const size_t iface = code().size();
             emitTypeName(s.interfaceType.name, s.interfaceType);
+            // What a built program keeps for reflection goes by the interfaces a class has
+            // (G42): this one too.
+            const int fitted = builtin ? -1 : globalGotAt(fittedAt), interface = globalGotAt(iface);
+            if (fitted >= 0 && interface >= 0)
+                fs_->proto->noted().supertypes.push_back({static_cast<uint16_t>(fitted), static_cast<uint16_t>(interface)});
             emit(Op::Extend);
             for (const auto& bridge : s.bridges) {
                 nextIsExtension_ = true;
@@ -3186,6 +3193,10 @@ private:
                         // the value or the mark instead of whatever happens to be on the stack.
                         code().resize(codeMark);
                         fs_->proto->lines.resize(codeMark);
+                        if (fs_->proto->reflection != nullptr) {
+                            auto& notes = fs_->proto->reflection->notes;
+                            notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const FunctionProto::ReflectNote& n) { return n.at >= codeMark; }), notes.end());
+                        }
                         fs_->proto->protos.resize(protoMark);
                         if (fs_->loop != nullptr) fs_->loop->breakJumps.resize(breakMark);
 
@@ -5391,6 +5402,7 @@ private:
         if (s.isExternal || session_.checker == nullptr) return;
         ReflectedClass r;
         if (session_.checker->reflected(s, r)) {
+            noteSupertypes(key, r.supertypes);
             const std::string storage = s.isObject ? "(object " + bound + ")" : bound;
             for (int which = 0; which < 2; which++) {
                 const int start = static_cast<int>(code().size());
@@ -5580,7 +5592,127 @@ private:
         for (const ExprPtr& arg : args) compileArg(*arg);
     }
 
+    // ---- What a built program keeps of its classes for reflection (D50, G42) ----
+
+    // The globals of the top-level declarations of the classes a type is made of; false where
+    // it may be a class not named so (any, a type parameter, a class declared inside a
+    // function), or one of reflection's own (`reflective` then set), whose members give
+    // others' (`Class#.field("methods")`). With `lenient`, those are passed over.
+    bool classGlobals(const RuntimeType& t, std::vector<uint16_t>& out, bool lenient, bool* reflective = nullptr) {
+        switch (t.kind) {
+            case RuntimeType::Any:
+            case RuntimeType::TypeParam:
+            case RuntimeType::Unknown: return lenient;
+            case RuntimeType::Class: {
+                // `Outer.Inner` is part of Outer's declaration.
+                const std::string top = t.global.substr(0, t.global.find('.'));
+                const GlobalName* global = nullptr;
+                if (!t.privateFile.empty()) {
+                    auto& file = session_.privates_[t.privateFile];
+                    if (auto found = file.find(top); found != file.end()) global = &found->second;
+                } else if (t.ns != nullptr) {
+                    if (auto found = t.ns->names.find(top); found != t.ns->names.end()) global = &found->second;
+                }
+                const bool reflection = t.ns == session_.builtins_ && (top == "Class" || top == "Field" || top == "Method" ||
+                                                                       top == "Constructor" || top == "Parameter");
+                if (reflection && reflective != nullptr) *reflective = true;
+                if (global == nullptr || global->slot < 0 || global->slot >= kNoGlobal || reflection) {
+                    if (!lenient) return false;
+                } else {
+                    out.push_back(static_cast<uint16_t>(global->slot));
+                }
+                break;
+            }
+            default: break;
+        }
+        for (const RuntimeType& arg : t.args)
+            if (!classGlobals(arg, out, lenient, reflective)) return false;
+        return true;
+    }
+
+    // Of the Op::ClassOf about to be written for `e`: the classes the Class may be, and what is
+    // asked of it (FunctionProto::ReflectNote).
+    void noteClassOf(const ClassOfExpr& e, int how, const RuntimeType& named) {
+        FunctionProto::ReflectNote note;
+        note.at = static_cast<uint32_t>(code().size());
+        const std::string asked = session_.checker->classOfAsked(e);
+        if (asked == "name" || asked == "origin" || asked == "isInstance" || asked == "hashCode" || asked == "toString") note.flags = 0;
+        else if (asked == "methods" || asked == "method" || asked == "constructors") note.flags = kReflectFields | kReflectMethods;
+        else note.flags = kReflectFields;
+        if (note.flags != 0) {
+            RuntimeType value;
+            bool known = false, reflective = false;
+            if (how == 1) {
+                known = classGlobals(named, note.globals, false, &reflective);
+                note.flags |= kReflectExact;
+            } else if (how == 0 && session_.checker->classOfValueType(e, value)) {
+                known = classGlobals(value, note.globals, false, &reflective);
+            }
+            if (!known) {
+                note.globals.clear();
+                note.flags = static_cast<uint8_t>((note.flags & ~kReflectExact) | kReflectAll);
+            }
+            if (reflective) note.flags |= kReflectMethods;
+        }
+        fs_->proto->noted().notes.push_back(std::move(note));
+    }
+
+    // What a class is besides: the classes it extends and its interfaces, for `key` (a
+    // top-level declaration's global, or -1 for none).
+    void noteSupertypes(int key, const std::vector<RuntimeType>& supertypes) {
+        std::vector<uint16_t> entry{key >= 0 && key < kNoGlobal ? static_cast<uint16_t>(key) : kNoGlobal};
+        for (const RuntimeType& above : supertypes) classGlobals(above, entry, true);
+        if (entry.size() > 1) fs_->proto->noted().supertypes.push_back(std::move(entry));
+    }
+
+    // The global the instruction at `at` gets, or -1.
+    int globalGotAt(size_t at) const {
+        const std::vector<uint8_t>& bytes = fs_->proto->code;
+        if (at + 2 >= bytes.size() || bytes[at] != static_cast<uint8_t>(Op::GetGlobal)) return -1;
+        return bytes[at + 1] | (bytes[at + 2] << 8);
+    }
+
+    // The code of each `methods`, `method` and `constructors` compiled, of the function it is
+    // in: what is inside the code of one is not that one's own use of the name.
+    struct NameUse {
+        const FunctionProto* proto;
+        size_t start, end;
+    };
+    std::vector<NameUse> methodsUses_;
+
     void compileExpr(const Expr& expr) {
+        const MemberExpr* member = nullptr;
+        if (expr.kind == ExprKind::Member) {
+            member = &static_cast<const MemberExpr&>(expr);
+        } else if (expr.kind == ExprKind::Call) {
+            const Expr& callee = *static_cast<const CallExpr&>(expr).callee;
+            if (callee.kind == ExprKind::Member) member = &static_cast<const MemberExpr&>(callee);
+        }
+        if (member == nullptr || (member->name != "methods" && member->name != "method" && member->name != "constructors")) {
+            compileExprBody(expr);
+            return;
+        }
+        // Where it asks nothing of a Class's methods, noted on the instruction that uses the
+        // name; any other such use asks for those of every Class given on (G42).
+        const size_t start = code().size(), inner = methodsUses_.size();
+        compileExprBody(expr);
+        const size_t end = code().size();
+        if (session_.checker->asksNoMethods(*member)) {
+            size_t own = end;
+            for (size_t at = start; at < end; at += instructionSize(code(), at)) {
+                bool theirs = false;
+                for (size_t i = inner; i < methodsUses_.size(); i++)
+                    theirs = theirs || (methodsUses_[i].proto == fs_->proto && at >= methodsUses_[i].start && at < methodsUses_[i].end);
+                const std::string* used = theirs ? nullptr : memberNameAt(*fs_->proto, at);
+                if (used != nullptr && used->substr(0, used->find('[')) == member->name) own = at;
+            }
+            if (own < end) fs_->proto->noted().notes.push_back(FunctionProto::ReflectNote{static_cast<uint32_t>(own), kReflectNotMethods, {}});
+        }
+        methodsUses_.resize(inner);
+        methodsUses_.push_back(NameUse{fs_->proto, start, end});
+    }
+
+    void compileExprBody(const Expr& expr) {
         line_ = expr.line;
         if (emitConstant(expr)) return;
         switch (expr.kind) {
@@ -5983,6 +6115,7 @@ private:
                     compileExpr(*e.value);
                 }
                 line_ = e.line;
+                noteClassOf(e, how, named);
                 emit(Op::ClassOf);
                 emitByte(how == 1 ? 0 : how == 2 ? 2 : 1);
                 emit(Op::Call);

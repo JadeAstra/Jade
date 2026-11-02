@@ -1,0 +1,20 @@
+// What a built program keeps for reflection (D50, G42) where a `#` is of a value whose type
+// says nothing of its class: every class keeps its fields, and asked for them, its methods.
+// Each line runs the same way built.
+
+class Point(val x : int, val y : int) {
+  fun sum() : int => x + y
+}
+class Label(val text : string)
+
+val things : List<any> = [Point(1, 2), Label("hi")]
+for (thing in things) {
+  print(thing#.name, thing#.fields)
+}
+// expect: Point [x : int, y : int]
+// expect: Label [text : string]
+val first : any = things[0]
+print(first#.methods.map { it.name })            // expect: ["sum"]
+
+fun <T> fieldsOf(value : T) : List<string> => value#.fields.map { it.name }
+print(fieldsOf(Label("x")), fieldsOf(Point(0, 0)))   // expect: ["text"] ["x", "y"]

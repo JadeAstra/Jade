@@ -642,7 +642,37 @@ struct FunctionProto {
         std::vector<uint16_t> ids;
     };
     std::vector<Rights> rights;
+
+    // What a built program keeps of its classes for reflection (D50, G42), read only when it
+    // is built, which then drops them. A note at `at`, in order: of the Op::ClassOf there, the
+    // classes the Class it gives may be, by the globals of the top-level declarations they are
+    // part of (with the classes below them, unless kReflectExact), or every class
+    // (kReflectAll); and what is asked of it: nothing, kReflectFields for anything (it may be
+    // given on, and asked for its methods where those of any Class given on are), or with
+    // kReflectMethods too its methods (`x#.methods`). Or kReflectNotMethods, of the
+    // instruction there, a use of `methods`, `method` or `constructors` that asks nothing of a
+    // Class's methods; any other such use asks for the methods of every Class given on.
+    // And `supertypes`: what each class declared here is besides, its global (or kNoGlobal for
+    // one declared inside a function), then those of the classes it extends and its interfaces,
+    // as `extend` adds them too. Kept apart, and made only for a function that has some.
+    struct ReflectNote {
+        uint32_t at = 0;
+        uint8_t flags = 0;
+        std::vector<uint16_t> globals;
+    };
+    struct Reflection {
+        std::vector<ReflectNote> notes;
+        std::vector<std::vector<uint16_t>> supertypes;
+    };
+    std::unique_ptr<Reflection> reflection;
+    Reflection& noted() {
+        if (reflection == nullptr) reflection = std::make_unique<Reflection>();
+        return *reflection;
+    }
 };
+
+constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
+constexpr uint16_t kNoGlobal = 0xFFFF;
 
 
 // A whole compiled program, ready to run or to write to a bytecode file.
@@ -719,5 +749,9 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
 
 // Whether any code of the program names one of these globals.
 bool namesGlobal(const Program& program, const std::vector<std::string>& names);
+
+// The name of the member the instruction at `at` uses (GetProp, Invoke and the like), with
+// the signature of a form after it; null for an instruction that uses none.
+const std::string* memberNameAt(const FunctionProto& f, size_t at);
 
 }  // namespace astra

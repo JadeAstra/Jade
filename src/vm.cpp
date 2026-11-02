@@ -4922,6 +4922,12 @@ inline int32_t operandI32(const uint8_t* at) {
     return static_cast<int32_t>(v);
 }
 
+// Its start is kept on a 64-byte line in the Clang build, which the benchmarks are timed with:
+// how fast it runs depends on where its jumps fall, and code growing elsewhere in the program
+// moved it otherwise (numeric 14% slower for an unrelated change, G42).
+#if defined(__clang__)
+__attribute__((aligned(64)))
+#endif
 void VM::run(int baseFrame) {
     // Maps and sets on this thread call this VM for a class's own == and hashCode (D26).
     struct KeysHere {

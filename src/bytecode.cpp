@@ -1105,6 +1105,17 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial) 
 void verifyFunction(FunctionProto& f, const Program& program) {
     for (const FunctionProto::Rights& r : f.rights)
         if (r.start > r.end || r.end > f.code.size()) throw std::runtime_error("invalid bytecode: rights of copied code out of range");
+    if (f.reflection != nullptr) {
+        for (const FunctionProto::ReflectNote& note : f.reflection->notes) {
+            if (note.at >= f.code.size()) throw std::runtime_error("invalid bytecode: a note on reflection out of range");
+            for (uint16_t global : note.globals)
+                if (global >= program.globalNames.size()) throw std::runtime_error("invalid bytecode: a note on reflection names no global");
+        }
+        for (const std::vector<uint16_t>& entry : f.reflection->supertypes)
+            for (size_t i = 0; i < entry.size(); i++)
+                if (entry[i] >= program.globalNames.size() && !(i == 0 && entry[i] == kNoGlobal))
+                    throw std::runtime_error("invalid bytecode: a class's supertypes name no global");
+    }
     analyzeStack(f, program, false);
 }
 
@@ -1377,7 +1388,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 25;
+const uint8_t kFormatVersion = 26;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1460,6 +1471,22 @@ struct Writer {
             u32(span.end);
             u16(span.key);
             u8(span.kind);
+        }
+        // Notes on reflection, which only a program not yet built has: a byte saying which.
+        static const FunctionProto::Reflection none;
+        const FunctionProto::Reflection& noted = f.reflection != nullptr ? *f.reflection : none;
+        u8(static_cast<uint8_t>((noted.notes.empty() ? 0 : 1) | (noted.supertypes.empty() ? 0 : 2)));
+        if (!noted.notes.empty()) u32(static_cast<uint32_t>(noted.notes.size()));
+        for (const FunctionProto::ReflectNote& note : noted.notes) {
+            u32(note.at);
+            u8(note.flags);
+            u16(static_cast<uint16_t>(note.globals.size()));
+            for (uint16_t global : note.globals) u16(global);
+        }
+        if (!noted.supertypes.empty()) u32(static_cast<uint32_t>(noted.supertypes.size()));
+        for (const std::vector<uint16_t>& entry : noted.supertypes) {
+            u16(static_cast<uint16_t>(entry.size()));
+            for (uint16_t global : entry) u16(global);
         }
 
         // Line table, run-length encoded.
@@ -1620,6 +1647,25 @@ struct Reader {
             span.kind = static_cast<DeclarationSpan::Kind>(kind);
             f->spans.push_back(span);
         }
+        const uint8_t noted = u8();
+        if (noted > 3) corrupt();
+        const uint32_t noteCount = (noted & 1) != 0 ? count(7) : 0;
+        for (uint32_t i = 0; i < noteCount; i++) {
+            FunctionProto::ReflectNote note;
+            note.at = u32();
+            note.flags = u8();
+            const uint16_t globals = u16();
+            for (uint16_t k = 0; k < globals; k++) note.globals.push_back(u16());
+            if (note.at >= codeSize) corrupt();
+            f->noted().notes.push_back(std::move(note));
+        }
+        const uint32_t supertypeCount = (noted & 2) != 0 ? count(2) : 0;
+        for (uint32_t i = 0; i < supertypeCount; i++) {
+            std::vector<uint16_t> entry;
+            const uint16_t globals = u16();
+            for (uint16_t k = 0; k < globals; k++) entry.push_back(u16());
+            f->noted().supertypes.push_back(std::move(entry));
+        }
 
         uint32_t runs = count(8);
         for (uint32_t i = 0; i < runs; i++) {
@@ -1717,6 +1763,13 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm) {
     for (uint16_t& id : f.classIds) id = static_cast<uint16_t>(r.number(id));
     for (FunctionProto::Rights& rights : f.rights)
         for (uint16_t& id : rights.ids) id = static_cast<uint16_t>(r.number(id));
+    if (f.reflection != nullptr) {
+        for (FunctionProto::ReflectNote& note : f.reflection->notes)
+            for (uint16_t& global : note.globals) global = static_cast<uint16_t>(r.global(global));
+        for (std::vector<uint16_t>& entry : f.reflection->supertypes)
+            for (uint16_t& global : entry)
+                if (global != kNoGlobal) global = static_cast<uint16_t>(r.global(global));
+    }
     if (f.ownClass != 0) f.ownClass = static_cast<uint16_t>(r.number(f.ownClass));
     // The script a worker runs is named by a string the compiler made: "\x01<module>\x01<path>".
     for (Value& c : f.constants) {
@@ -1896,15 +1949,117 @@ struct Reach {
     std::vector<std::pair<FunctionProto*, size_t>> spanWork;  // spans to look through
     std::vector<FunctionProto*> protoWork;                   // whole functions to look through
 
-    // Reflection (D50): whether code reached makes a class with `#`, and whether code reached
-    // uses a class's methods or constructors; the spans describing classes (Op::ClassMeta), and
-    // which of them are kept: those of the classes kept, the methods' only where they are used.
-    bool reflects = false;
-    bool reflectsMethods = false;
+    // Reflection (D50, G42). The `#`s reached, each with the classes the Class it gives may be
+    // and what is asked of it (FunctionProto::ReflectNote), and the classes the descriptions
+    // reached name, given on; whether code reached asks for the methods of a Class given on.
+    // What each class is besides, both ways: a class by the global of its top-level
+    // declaration, one declared inside a function after the globals. The classes whose
+    // fields', and whose methods', descriptions are kept, with what is above them (1), and
+    // with what is below them too (2); or all. The spans describing classes (Op::ClassMeta),
+    // which of them are kept, and the functions they make, which are the descriptions.
+    struct Asked {
+        std::vector<uint16_t> globals;
+        uint8_t flags = 0;
+    };
+    std::vector<Asked> asked;
+    size_t settled = 0;
+    bool methodsAsked = false, settledMethods = false;
+    std::vector<std::vector<int>> above, below;
+    std::vector<char> fieldsKept, methodsKept;
+    bool allFields = false, allMethods = false;
     std::vector<std::pair<FunctionProto*, size_t>> metaSpans;
     std::set<std::pair<const FunctionProto*, size_t>> metaKept;
+    std::unordered_set<const FunctionProto*> descriptions;
+    std::vector<uint16_t>* named = nullptr;  // where the globals a description names go
 
-    explicit Reach(Program& p) : program(p), reachedGlobal(p.globalNames.size(), 0) {}
+    explicit Reach(Program& p) : program(p), reachedGlobal(p.globalNames.size(), 0), above(p.globalNames.size()), below(p.globalNames.size()) {}
+
+    // A class's entry of FunctionProto::supertypes.
+    void relate(const std::vector<uint16_t>& entry) {
+        const size_t globals = reachedGlobal.size();
+        if (entry.size() < 2 || (entry[0] >= globals && entry[0] != kNoGlobal)) return;
+        size_t self = entry[0];
+        if (entry[0] == kNoGlobal) {
+            self = above.size();
+            above.emplace_back();
+            below.emplace_back();
+        }
+        for (size_t i = 1; i < entry.size(); i++) {
+            if (entry[i] >= globals || entry[i] == self) continue;
+            above[self].push_back(entry[i]);
+            below[entry[i]].push_back(static_cast<int>(self));
+        }
+    }
+
+    // The note on the instruction at `at`: one saying it asks nothing of methods, or that of a `#`.
+    static const FunctionProto::ReflectNote* noteAt(const FunctionProto& f, size_t at, bool notMethods) {
+        if (f.reflection == nullptr) return nullptr;
+        const std::vector<FunctionProto::ReflectNote>& notes = f.reflection->notes;
+        auto first = std::lower_bound(notes.begin(), notes.end(), at,
+                                      [](const FunctionProto::ReflectNote& note, size_t place) { return note.at < place; });
+        for (; first != notes.end() && first->at == at; ++first)
+            if (((first->flags & kReflectNotMethods) != 0) == notMethods) return &*first;
+        return nullptr;
+    }
+
+    // A class, and what is above it, marked kept in `kept`; what is below it too unless
+    // `exact`. A class marked has what is above it marked (1), and with 2 what is below too.
+    void keep(std::vector<char>& kept, int cls, bool exact) {
+        std::vector<int> up;
+        if (exact) {
+            if (kept[static_cast<size_t>(cls)] == 0) {
+                kept[static_cast<size_t>(cls)] = 1;
+                up.push_back(cls);
+            }
+        } else {
+            std::vector<int> down{cls};
+            while (!down.empty()) {
+                const int k = down.back();
+                down.pop_back();
+                if (kept[static_cast<size_t>(k)] == 2) continue;
+                if (kept[static_cast<size_t>(k)] == 0) up.push_back(k);
+                kept[static_cast<size_t>(k)] = 2;
+                for (int b : below[static_cast<size_t>(k)]) down.push_back(b);
+            }
+        }
+        while (!up.empty()) {
+            const int k = up.back();
+            up.pop_back();
+            for (int a : above[static_cast<size_t>(k)])
+                if (kept[static_cast<size_t>(a)] == 0) {
+                    kept[static_cast<size_t>(a)] = 1;
+                    up.push_back(a);
+                }
+        }
+    }
+
+    // What the `#`s reached since last time ask, and what those given on ask now that methods
+    // are asked for.
+    void settle() {
+        if (fieldsKept.empty()) {
+            fieldsKept.assign(above.size(), 0);
+            methodsKept.assign(above.size(), 0);
+        }
+        const bool again = methodsAsked && !settledMethods;
+        settledMethods = methodsAsked;
+        for (size_t i = again ? 0 : settled; i < asked.size(); i++) {
+            const Asked& a = asked[i];
+            const bool fields = (a.flags & kReflectFields) != 0;
+            const bool givenOn = fields && (a.flags & kReflectMethods) == 0;
+            if (i < settled && !givenOn) continue;
+            const bool methods = (a.flags & kReflectMethods) != 0 || (givenOn && methodsAsked);
+            if ((a.flags & kReflectAll) != 0) {
+                allFields = allFields || fields;
+                allMethods = allMethods || methods;
+                continue;
+            }
+            for (uint16_t cls : a.globals) {
+                if (fields) keep(fieldsKept, cls, (a.flags & kReflectExact) != 0);
+                if (methods) keep(methodsKept, cls, (a.flags & kReflectExact) != 0);
+            }
+        }
+        settled = asked.size();
+    }
 
     void global(int slot) {
         if (slot < 0 || static_cast<size_t>(slot) >= reachedGlobal.size() || reachedGlobal[static_cast<size_t>(slot)]) return;
@@ -1962,13 +2117,22 @@ struct Reach {
             const int which = globalOperand(op, a);
             if (which == 1) global(a);
             if (which == 2) global(b);
+            if (named != nullptr && op == Op::GetGlobal && static_cast<size_t>(a) < reachedGlobal.size()) named->push_back(static_cast<uint16_t>(a));
+            if (op == Op::ClassMeta && static_cast<size_t>(a) < f.protos.size()) descriptions.insert(f.protos[static_cast<size_t>(a)]);
             if (makesFunction(op) && static_cast<size_t>(a) < f.protos.size()) function(f.protos[static_cast<size_t>(a)]);
             if (usesMemberName(op) && static_cast<size_t>(a) < f.constants.size() && f.constants[static_cast<size_t>(a)].isString()) {
                 const std::string& used = asString(f.constants[static_cast<size_t>(a)])->utf8();
                 name(used);
-                if (used == "methods" || used == "method" || used == "constructors" || used == "call") reflectsMethods = true;
+                const std::string member = bare(used);
+                if (!methodsAsked && (member == "methods" || member == "method" || member == "constructors") && noteAt(f, at, true) == nullptr)
+                    methodsAsked = true;
             }
-            if (op == Op::ClassOf) reflects = true;
+            if (op == Op::ClassOf) {
+                // What is asked of the Class: as noted, or of every class, anything.
+                const FunctionProto::ReflectNote* note = noteAt(f, at, false);
+                if (note != nullptr) asked.push_back(Asked{note->globals, note->flags});
+                else asked.push_back(Asked{{}, static_cast<uint8_t>(kReflectAll | kReflectFields)});
+            }
             at += 1 + operandSize(kOps[raw].operand);
         }
     }
@@ -1984,14 +2148,28 @@ struct Reach {
                 } else {
                     FunctionProto* f = protoWork.back();
                     protoWork.pop_back();
-                    look(*f, 0, f->code.size(), !f->spans.empty());
+                    if (descriptions.count(f) != 0) {
+                        // A description: the classes it names (its fields' and parameters'
+                        // types, its annotations) may be given on as Classes.
+                        Asked given;
+                        given.flags = kReflectExact | kReflectFields;
+                        named = &given.globals;
+                        look(*f, 0, f->code.size(), !f->spans.empty());
+                        named = nullptr;
+                        if (!given.globals.empty()) asked.push_back(std::move(given));
+                    } else {
+                        look(*f, 0, f->code.size(), !f->spans.empty());
+                    }
                 }
             }
-            // What describes the classes kept, once reflection is used: that may reach more.
+            // What describes the classes asked of, with those above them and, for a value's
+            // class, below: that may reach more.
+            settle();
             bool more = false;
             for (const auto& [module, index] : metaSpans) {
                 const DeclarationSpan& span = module->spans[index];
-                if (!reflects || (span.kind == DeclarationSpan::ReflectMethods && !reflectsMethods)) continue;
+                const bool methods = span.kind == DeclarationSpan::ReflectMethods;
+                if (!(methods ? allMethods : allFields) && (span.key >= fieldsKept.size() || (methods ? methodsKept : fieldsKept)[span.key] == 0)) continue;
                 if (span.key >= reachedGlobal.size() || !reachedGlobal[span.key] || !metaKept.insert({module, index}).second) continue;
                 spanWork.emplace_back(module, index);
                 more = true;
@@ -2111,6 +2289,16 @@ void leaveOut(FunctionProto& module, const Reach& reach, size_t& before, size_t&
 
 }  // namespace
 
+const std::string* memberNameAt(const FunctionProto& f, size_t at) {
+    if (at >= f.code.size() || f.code[at] >= static_cast<uint8_t>(Op::Count_)) return nullptr;
+    const uint8_t raw = f.code[at];
+    if (!usesMemberName(static_cast<Op>(raw))) return nullptr;
+    int a = 0, b = 0;
+    decodeOperands(f.code, at, kOps[raw].operand, a, b);
+    if (static_cast<size_t>(a) >= f.constants.size() || !f.constants[static_cast<size_t>(a)].isString()) return nullptr;
+    return &asString(f.constants[static_cast<size_t>(a)])->utf8();
+}
+
 bool namesGlobal(const Program& program, const std::vector<std::string>& names) {
     std::vector<char> wanted(program.globalNames.size(), 0);
     bool any = false;
@@ -2141,6 +2329,21 @@ bool namesGlobal(const Program& program, const std::vector<std::string>& names) 
 LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& globalsByName,
                             const std::vector<std::string>& membersByName) {
     Reach reach(program);
+    // Every function's notes on reflection, in order, and what its classes are besides; taken
+    // out once done with, a built program having no more use for them.
+    std::vector<FunctionProto*> every;
+    for (FunctionProto* module : program.modules)
+        if (module != nullptr) every.push_back(module);
+    for (size_t i = 0; i < every.size(); i++) {
+        FunctionProto& f = *every[i];
+        if (f.reflection != nullptr) {
+            std::stable_sort(f.reflection->notes.begin(), f.reflection->notes.end(),
+                             [](const FunctionProto::ReflectNote& a, const FunctionProto::ReflectNote& b) { return a.at < b.at; });
+            for (const std::vector<uint16_t>& entry : f.reflection->supertypes) reach.relate(entry);
+        }
+        for (FunctionProto* nested : f.protos)
+            if (nested != nullptr) every.push_back(nested);
+    }
     for (FunctionProto* module : program.modules) {
         if (module == nullptr) continue;
         for (size_t i = 0; i < module->spans.size(); i++) {
@@ -2168,6 +2371,9 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
         for (const DeclarationSpan& span : module->spans)
             if (!reach.reached(*module, span)) result.declarations++;
         leaveOut(*module, reach, result.codeBefore, result.codeAfter);
+    }
+    for (FunctionProto* f : every) {
+        f->reflection.reset();
     }
     for (FunctionProto* module : program.modules)
         if (module != nullptr) verifyModule(*module, program);

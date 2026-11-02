@@ -73,6 +73,12 @@ add_library(astra_compiler OBJECT
   src/command.cpp
   src/doc.cpp
 )
+# The instruction loop (VM::run) runs as fast whatever is linked before it: with Clang, the
+# benchmarks' build, every jump target in vm.cpp starts on 32 bytes (and VM::run on 64, in
+# vm.cpp). Without this, code growing elsewhere moved numeric by 14% (G42).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  set_source_files_properties(src/vm.cpp PROPERTIES COMPILE_OPTIONS "-mllvm;-align-all-nofallthru-blocks=5")
+endif()
 add_executable(astra src/main.cpp $<TARGET_OBJECTS:astra_core> $<TARGET_OBJECTS:astra_window> $<TARGET_OBJECTS:astra_compiler>)
 
 # The proof that what a built program keeps needs nothing left out of it: the core and the

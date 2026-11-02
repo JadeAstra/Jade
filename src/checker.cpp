@@ -6051,6 +6051,7 @@ struct Checker::Impl {
             }
         }
         Type obj = expr(*m.object);
+        noteAskedOf(m, obj);
         Type result = memberOf(obj, m.name, m, m.safe);
         if (obj.kind == Type::Class && obj.cls != nullptr) {
             if (FieldInfo* f = fieldNamed(obj.cls, m.name)) {
@@ -6106,6 +6107,41 @@ struct Checker::Impl {
     // `Image#`, `ui.Button#`, `Box<int>#`, `int#`: the class or built-in type a `#` names (D48).
     std::unordered_map<const Expr*, Type> namedClasses;
 
+    // What a built program keeps of its classes for reflection (D50, G42): for each `x#`, the
+    // member asked at once of the Class it gives (`x#.fields`: "fields"), and the type the value
+    // was found to have; and the uses of `methods`, `method` and `constructors` that ask
+    // nothing of a Class's methods: on something known not to be a Class, or at once on an
+    // `x#`, whose own note says what it asks. A use found to be either is neither.
+    std::unordered_map<const Expr*, std::string> classOfAsked;
+    std::unordered_map<const Expr*, Type> classOfValues;
+    std::unordered_set<const Expr*> methodsNotAsked, methodsAsked;
+
+    void noteAskedOf(const MemberExpr& m, const Type& obj) {
+        const bool onClassOf = m.object->kind == ExprKind::ClassOf;
+        if (onClassOf) {
+            auto [at, added] = classOfAsked.emplace(m.object.get(), m.name);
+            if (!added && at->second != m.name) at->second.clear();
+        }
+        if (m.name != "methods" && m.name != "method" && m.name != "constructors") return;
+        bool mayBeClass = !onClassOf;
+        if (mayBeClass && obj.known() && obj.kind != Type::Any && obj.kind != Type::TypeParam && obj.kind != Type::Union) {
+            const Type cls = stdClassType("Class");
+            const Type plain = withNull(obj, false);
+            mayBeClass = plain.kind == Type::Class && (plain.cls == nullptr || fits(plain, cls) || fits(cls, plain));
+        }
+        if (mayBeClass) {
+            methodsAsked.insert(&m);
+            methodsNotAsked.erase(&m);
+        } else if (methodsAsked.count(&m) == 0) {
+            methodsNotAsked.insert(&m);
+        }
+    }
+
+    void noteClassOfValue(const ClassOfExpr& c, const Type& value) {
+        auto [at, added] = classOfValues.emplace(&c, value);
+        if (!added && describe(at->second) != describe(value)) at->second = unknownType();
+    }
+
     // The type `value#` names, when `value` is a class's or a built-in type's name, not a value.
     bool typeNamedBy(const ClassOfExpr& c, Type& found) {
         std::string dotted;
@@ -6144,7 +6180,7 @@ struct Checker::Impl {
             if (silent == 0) namedClasses[&c] = named;
         } else {
             if (!c.typeArgs.empty()) report(c, "type arguments go with the name of a class, as in Box<int>#; a value's class has its own");
-            expr(*c.value);  // null's class too: null# is the built-in class null (D48)
+            noteClassOfValue(c, expr(*c.value));  // null's class too: null# is the built-in class null (D48)
         }
         return stdClassType("Class");
     }
@@ -8569,6 +8605,7 @@ struct Checker::Impl {
                 }
             }
             Type obj = expr(*m.object);
+            noteAskedOf(m, obj);
             if (obj.unknown()) {
                 for (const ExprPtr& a : c.args) expr(*a);
                 return unknownType();
@@ -10270,6 +10307,15 @@ bool Checker::reflected(const ClassStmt& cls, ReflectedClass& out) {
             }
             if (r.kind != RuntimeType::Unknown) out.kinds.push_back(std::move(r));
         }
+    // What it is besides (G42): the class it extends, with what it gives that class, and its
+    // interfaces.
+    c.resolveSupers(k);
+    if (k->superclass != nullptr) {
+        Type above = c.classType(k->superclass);
+        above.args = k->superArgs;
+        out.supertypes.push_back(runtimeTypeOf(above));
+    }
+    for (ClassInfo* iface : k->interfaces) out.supertypes.push_back(runtimeTypeOf(c.classType(iface)));
     return true;
 }
 
@@ -10324,6 +10370,20 @@ int Checker::protocolLoop(const ForInStmt& loop) const {
     auto found = impl_->protocolLoops.find(&loop);
     return found == impl_->protocolLoops.end() ? 0 : found->second ? 2 : 1;
 }
+
+std::string Checker::classOfAsked(const ClassOfExpr& e) const {
+    auto found = impl_->classOfAsked.find(&e);
+    return found == impl_->classOfAsked.end() ? std::string() : found->second;
+}
+
+bool Checker::classOfValueType(const ClassOfExpr& e, RuntimeType& out) const {
+    auto found = impl_->classOfValues.find(&e);
+    if (found == impl_->classOfValues.end() || !found->second.known()) return false;
+    out = runtimeTypeOf(found->second);
+    return out.kind != RuntimeType::Unknown;
+}
+
+bool Checker::asksNoMethods(const MemberExpr& m) const { return impl_->methodsNotAsked.count(&m) != 0; }
 
 int Checker::namedClassOf(const ClassOfExpr& e, RuntimeType& out) const {
     auto found = impl_->namedClasses.find(&e);

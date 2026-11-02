@@ -1,0 +1,40 @@
+// What a built program keeps for reflection (D50, G42) where a Class is given on and asked for
+// its methods elsewhere: then every Class given on may be, so each keeps its methods. Each line
+// runs the same way built.
+
+interface Shape { fun area() : float }
+class Item(val weight : int) {
+  fun heavier(by : int) : Item => Item(weight + by)
+}
+class Crate(val item : Item) : Shape {
+  override fun area() : float => 1.0
+  fun open() : Item => item
+}
+class Dog(val name : string) : Animal(4) {
+  fun bark() : string => "woof"
+}
+class Animal(val legs : int) {
+  fun walk() : string => "walking"
+}
+
+// -- Kept in a variable, then asked --
+val kind = Dog("Rex")#
+print(kind.methods.map { it.name })                           // expect: ["walk", "bark"]
+
+// -- Through what is above --
+print(Dog#.superclass!!.methods.map { it.name })              // expect: ["walk"]
+
+// -- Through a field's type, and a method's result --
+print(Crate#.fields[0].type.methods.map { it.name })          // expect: ["heavier"]
+print(Crate#.method("open")!!.result!!.method("heavier")!!.parameters)   // expect: [by : int]
+
+// -- Through a method's owner, back to its class's fields --
+print(Crate#.methods[0].owner.fields)                         // expect: [item : Item]
+
+// -- Through what a list's type gives --
+val items = [Item(1)]
+print(items#.typeArguments[0].methods.map { it.name })        // expect: ["heavier"]
+
+// -- A list of classes, one found by its name --
+val found = Class.namedFrom("Dog", [Item#, Dog#])!!
+print(found.method("bark")!!.call(Dog("Ace")))                // expect: woof

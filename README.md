@@ -1909,9 +1909,11 @@ class) is an `IllegalArgumentException` of its own.
 **A class is found by a name only among those the program lists** (D50):
 `Class.namedFrom(json["kind"], [Circle#, Square#])` gives the one named so, or null. There is no
 lookup by a name alone, so a name read from a file can only reach what the program allowed, and
-the compiler knows every class reflection can reach: a built program keeps the description of
-a class's fields only where reflection is used, and of its methods and constructors only where
-`methods`, `method`, `constructors` or `call` is.
+the compiler knows every class reflection can reach. A built program keeps a class's
+descriptions only where a `#` may reach it: for `x#`, the classes of the type `x` has, those
+below and above them, and those its type arguments name (every class for an `any`); its
+methods and constructors only where they are asked for, as `x#.methods`, or `methods`,
+`method` or `constructors` asked of a Class passed on.
 
 `x.class`, `Image.class` and `Image.className` are gone, for `x#`, `Image#` and `Image#.name`;
 `class` may be a member's name (`token.class`), and `type(x)` is gone for `x#.name`. Null has a class

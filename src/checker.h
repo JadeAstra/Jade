@@ -69,6 +69,7 @@ struct ReflectedMember {
 struct ReflectedClass {
     std::vector<ReflectedMember> fields, methods, constructors;
     std::vector<RuntimeType> kinds;     // an enum class's (D39)
+    std::vector<RuntimeType> supertypes;  // the class it extends and its interfaces (G42)
 };
 
 class Checker {
@@ -223,6 +224,14 @@ public:
     // or a built-in type, written in `out`; 2 where it names a class declared inside a function,
     // whose name gives the class itself.
     int namedClassOf(const ClassOfExpr& e, RuntimeType& out) const;
+    // What a built program keeps for reflection (D50, G42). For `x#`: the member asked at once
+    // of the Class it gives ("fields" for `x#.fields`), empty where it is used otherwise; and
+    // for `x#` of a value, the type the checker found it to have, false where that is not
+    // known. A use of `methods`, `method` or `constructors` that asks nothing of a Class's
+    // methods: on what is known not to be a Class, or at once on an `x#`.
+    std::string classOfAsked(const ClassOfExpr& e) const;
+    bool classOfValueType(const ClassOfExpr& e, RuntimeType& out) const;
+    bool asksNoMethods(const MemberExpr& m) const;
     // A class's own members, as reflection lists them (D38); false where the class is not known.
     bool reflected(const ClassStmt& cls, ReflectedClass& out);
 
