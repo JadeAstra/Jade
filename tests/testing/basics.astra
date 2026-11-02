@@ -15,7 +15,7 @@ val log : open List<string> = []
   val wrong = assertFailsWith<IllegalArgumentException> { require(false) { "no" } }
   assertEquals("no", wrong.message)
 }
-@Test @Timeout(200) fun loops() {
+@Test @Timeout(200.milliseconds) fun loops() {
   var n = 0
   while (true) { n++ }
 }

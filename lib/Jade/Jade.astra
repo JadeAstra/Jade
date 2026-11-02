@@ -11,8 +11,8 @@
 class FrameTime(val time : float, val delta : float, val frame : int)
 
 object Jade {
-  // Runs a task after a delay, in milliseconds. The window that is in front sets it.
-  var scheduler : ((int, () -> unit) -> unit)? = null
+  // Runs a task after a delay. The window that is in front sets it.
+  var scheduler : ((Duration, () -> unit) -> unit)? = null
 
   // How many of the screen's pixels there are to a layout unit where text is now being
   // measured for layout: the scale of the window being laid out or painted, which sets it.

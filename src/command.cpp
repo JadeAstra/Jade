@@ -844,16 +844,23 @@ private:
         return true;
     }
 
+    // A test's @Timeout, in milliseconds, at least 1: `@Timeout(2.seconds)` (G52). 0 for none.
     int64_t timeoutOf(const FunctionDecl& test) {
         const Annotation* limit = annotationNamed(test.annotations, "Timeout");
         if (limit == nullptr) return 0;
         const auto& call = static_cast<const CallExpr&>(*limit->call);
-        if (call.args.empty()) return 0;
-        ConstValue value;
-        if (call.args[0]->kind == ExprKind::Literal && static_cast<const LiteralExpr&>(*call.args[0]).type == LiteralExpr::Type::Int)
-            return static_cast<const LiteralExpr&>(*call.args[0]).intValue;
-        if (checker_.folded(*call.args[0], value) && value.kind == ConstValue::Int) return value.i;
-        return 0;
+        if (call.args.empty() || call.args[0]->kind != ExprKind::Member) return 0;
+        const auto& written = static_cast<const MemberExpr&>(*call.args[0]);
+        const int64_t unit = durationUnit(written.name);
+        ConstValue amount;
+        const Expr& object = *written.object;
+        double count = 0;
+        if (object.kind == ExprKind::Literal && static_cast<const LiteralExpr&>(object).type == LiteralExpr::Type::Int) count = static_cast<double>(static_cast<const LiteralExpr&>(object).intValue);
+        else if (object.kind == ExprKind::Literal && static_cast<const LiteralExpr&>(object).type == LiteralExpr::Type::Float) count = static_cast<const LiteralExpr&>(object).floatValue;
+        else if (checker_.folded(object, amount) && amount.kind == ConstValue::Int) count = static_cast<double>(amount.i);
+        else if (checker_.folded(object, amount) && amount.kind == ConstValue::Float) count = amount.d;
+        if (unit == 0 || count <= 0) return 0;
+        return std::max<int64_t>(1, static_cast<int64_t>(count * static_cast<double>(unit) / 1e6 + 0.5));
     }
 
     // One test, with what runs around it: the file's @BeforeTest functions, then for a test of

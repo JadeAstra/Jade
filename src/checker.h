@@ -54,6 +54,10 @@ struct CheckDiagnostic {
 // What it finds is a compile error: the program does not run (M6.5 part 3, step 5). `astra
 // check` lists all of it. A parameter has its type written; a local's type is worked out from
 // its first value, and a value whose type cannot be known is `any`, used through a cast.
+// How many nanoseconds one of a Duration's units is (`seconds`, as `2.seconds` writes it); 0
+// for a name that is no unit (G52).
+int64_t durationUnit(const std::string& name);
+
 // A member of a class as reflection lists it (D38), for the description the compiler writes.
 struct ReflectedMember {
     std::string name;

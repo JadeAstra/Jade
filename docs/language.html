@@ -442,7 +442,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Canvas"><code>Canvas</code></a> (38)</li>
 <li><a href="#Channel"><code>Channel</code></a> (10)</li>
 <li><a href="#Charset"><code>Charset</code></a> (1)</li>
-<li><a href="#Class"><code>Class</code></a> (19)</li>
+<li><a href="#Class"><code>Class</code></a> (23)</li>
 <li><a href="#ClassCastException"><code>ClassCastException</code></a> (1)</li>
 <li><a href="#Color"><code>Color</code></a> (24)</li>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
@@ -455,7 +455,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#EventLoop"><code>EventLoop</code></a> (6)</li>
 <li><a href="#Exception"><code>Exception</code></a> (1)</li>
 <li><a href="#ExecutionException"><code>ExecutionException</code></a> (1)</li>
-<li><a href="#Field"><code>Field</code></a> (9)</li>
+<li><a href="#Field"><code>Field</code></a> (10)</li>
 <li><a href="#Font"><code>Font</code></a> (33)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
@@ -482,7 +482,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#Lock"><code>Lock</code></a> (2)</li>
 <li><a href="#LockBox"><code>LockBox</code></a> (2)</li>
-<li><a href="#Map.size"><code>Map</code></a> (57)</li>
+<li><a href="#Map.size"><code>Map</code></a> (58)</li>
 <li><a href="#MapEntry"><code>MapEntry</code></a> (2)</li>
 <li><a href="#Math"><code>Math</code></a> (36)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
@@ -507,7 +507,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
-<li><a href="#SequenceScope"><code>SequenceScope</code></a> (4)</li>
+<li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (5)</li>
 <li><a href="#Set.size"><code>Set</code></a> (78)</li>
 <li><a href="#Shape"><code>Shape</code></a> (1)</li>
@@ -525,7 +525,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#TextMetrics"><code>TextMetrics</code></a> (1)</li>
 <li><a href="#Thread"><code>Thread</code></a> (15)</li>
 <li><a href="#ThreadPool"><code>ThreadPool</code></a> (8)</li>
-<li><a href="#Throwable"><code>Throwable</code></a> (2)</li>
+<li><a href="#Throwable"><code>Throwable</code></a> (4)</li>
 <li><a href="#Timeout"><code>Timeout</code></a> (1)</li>
 <li><a href="#TimeoutException"><code>TimeoutException</code></a> (1)</li>
 <li><a href="#Timer"><code>Timer</code></a> (2)</li>
@@ -535,7 +535,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#UncheckedIOException"><code>UncheckedIOException</code></a> (1)</li>
 <li><a href="#UnsupportedOperationException"><code>UnsupportedOperationException</code></a> (1)</li>
 <li><a href="#Values.size"><code>Values</code></a> (51)</li>
-<li><a href="#Worker"><code>Worker</code></a> (8)</li>
+<li><a href="#Worker"><code>Worker</code></a> (9)</li>
 <li><a href="#WorkerParent"><code>WorkerParent</code></a> (4)</li>
 <li><a href="#Writer"><code>Writer</code></a> (10)</li>
 <li><a href="#any.toString"><code>any</code></a> (5)</li>
@@ -1424,7 +1424,7 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <p>Lets go of what it holds; <code>use</code> calls it when its block ends.</p>
 </div>
 <div class="entry" id="T.use"><code class="sig">inline fun &lt;T : AutoCloseable, R&gt; T.use(block : (T) -&gt; R) : R</code><a class="anchor" href="#T.use">#</a>
-<p>Runs the block on this and closes it afterwards, however the block ends: at its end, by a return, or by an exception. Copied in where it is called.</p>
+<p>Runs the block on this and closes it afterwards, however the block ends: at its end, by a return, or by an exception. An error from close() after one from the block is set aside for the block's, which goes on, as Java has it. Copied in where it is called.</p>
 </div>
 <div class="entry" id="TODO"><code class="sig">fun TODO(reason : string = &quot;&quot;) : nothing</code><a class="anchor" href="#TODO">#</a>
 <p>Throws a NotImplementedError: for what is not written yet, as Kotlin's TODO().</p>
@@ -1589,6 +1589,12 @@ Exception: everything else, which a bare `catch (e)` catches.
 </pre>
 <div class="entry" id="Throwable"><code class="sig">class Throwable(val message : string? = null, val cause : Throwable? = null)</code><a class="anchor" href="#Throwable">#</a>
 <p>What can be thrown, the root of every exception and error. <code>message</code> says what went wrong and may be null; <code>cause</code> is the Throwable that led to this one, if any.</p>
+</div>
+<div class="entry member" id="Throwable.suppressed"><code class="sig">val suppressed : List&lt;Throwable&gt;</code><a class="anchor" href="#Throwable.suppressed">#</a>
+<p>The errors set aside for this one, in the order they came.</p>
+</div>
+<div class="entry member" id="Throwable.addSuppressed"><code class="sig">fun addSuppressed(e : Throwable)</code><a class="anchor" href="#Throwable.addSuppressed">#</a>
+<p>Sets <code>e</code> aside for this one, to be shown with it. An error is not set aside for itself.</p>
 </div>
 <div class="entry member" id="Throwable.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Throwable.toString">#</a>
 <p>The name of the class, then &quot;: &quot; and the message when there is one.</p>
@@ -3639,6 +3645,12 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Class.constructors"><code class="sig">val constructors : List&lt;Constructor&gt;</code><a class="anchor" href="#Class.constructors">#</a>
 <p>Its constructors: none for an interface, an abstract class, an object or an enum.</p>
 </div>
+<div class="entry member" id="Class.staticFields"><code class="sig">val staticFields : List&lt;Field&gt;</code><a class="anchor" href="#Class.staticFields">#</a>
+<p>Its own static fields, each one the code that wrote the <code>#</code> may use: read and set with no object.</p>
+</div>
+<div class="entry member" id="Class.staticMethods"><code class="sig">val staticMethods : List&lt;Method&gt;</code><a class="anchor" href="#Class.staticMethods">#</a>
+<p>Its own static methods, the same way: called with null for the object.</p>
+</div>
 <div class="entry member" id="Class.annotations"><code class="sig">val annotations : List&lt;any&gt;</code><a class="anchor" href="#Class.annotations">#</a>
 <p>The annotations written on it.</p>
 </div>
@@ -3646,10 +3658,16 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>The first annotation written on it that is an <code>A</code>, as <code>Shape#.annotation&lt;Tag&gt;()</code>; null where there is none.</p>
 </div>
 <div class="entry member" id="Class.field"><code class="sig">fun field(name : string) : Field?</code><a class="anchor" href="#Class.field">#</a>
-<p>The field, or the method, of that name; null where there is none the code may use. Of a method with several forms, the first.</p>
+<p>The field of that name; null where there is none the code may use.</p>
 </div>
-<div class="entry member" id="Class.method"><code class="sig">fun method(name : string) : Method?</code><a class="anchor" href="#Class.method">#</a>
-<p>The method named <code>name</code>, the first of its forms where it has several; null where there is none the code may use.</p>
+<div class="entry member" id="Class.method"><code class="sig">fun method(name : string, vararg parameterTypes : Class) : Method?</code><a class="anchor" href="#Class.method">#</a>
+<p>The method named <code>name</code>: with <code>parameterTypes</code>, the form whose parameters are of exactly those classes (<code>method(&quot;scale&quot;, float#, float#)</code>, G44), and without, the first of its forms; null where there is none the code may use.</p>
+</div>
+<div class="entry member" id="Class.staticField"><code class="sig">fun staticField(name : string) : Field?</code><a class="anchor" href="#Class.staticField">#</a>
+<p>The static field of that name, as field finds one.</p>
+</div>
+<div class="entry member" id="Class.staticMethod"><code class="sig">fun staticMethod(name : string, vararg parameterTypes : Class) : Method?</code><a class="anchor" href="#Class.staticMethod">#</a>
+<p>The static method of that name, as method finds one.</p>
 </div>
 <div class="entry member" id="Class.isInstance"><code class="sig">fun isInstance(value : any?) : bool</code><a class="anchor" href="#Class.isInstance">#</a>
 <p>Whether a value is an object of the class, or of a class below it.</p>
@@ -3667,7 +3685,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>The class among <code>classes</code> whose name is <code>name</code>, or null: a name read from a file finds only a class the program lists, as <code>Class.namedFrom(kind, [Circle#, Square#])</code>.</p>
 </div>
 <div class="entry" id="Field"><code class="sig">class Field(val owner : Class, entry : List&lt;any?&gt;)</code><a class="anchor" href="#Field">#</a>
-<p>A field or a property of a class. <code>owner</code> is the Class that lists it.</p>
+<p>A field or a property of a class, or a static one. <code>owner</code> is the Class that lists it.</p>
 </div>
 <div class="entry member" id="Field.name"><code class="sig">val name : string</code><a class="anchor" href="#Field.name">#</a>
 <p>Its name, as written in the class.</p>
@@ -3681,11 +3699,14 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Field.isMutable"><code class="sig">val isMutable : bool</code><a class="anchor" href="#Field.isMutable">#</a>
 <p>Whether <code>set</code> may change it: a var, or a property with a setter, that the code may assign to.</p>
 </div>
-<div class="entry member" id="Field.get"><code class="sig">fun get(obj : any) : any? throws InvocationTargetException</code><a class="anchor" href="#Field.get">#</a>
-<p>Its value in <code>obj</code>, an object of the class. A property's getter runs.</p>
+<div class="entry member" id="Field.isStatic"><code class="sig">val isStatic : bool</code><a class="anchor" href="#Field.isStatic">#</a>
+<p>Whether it is a static field of the class, read and set with no object.</p>
 </div>
-<div class="entry member" id="Field.set"><code class="sig">fun set(obj : any, value : any?) throws InvocationTargetException</code><a class="anchor" href="#Field.set">#</a>
-<p>Gives it a new value in <code>obj</code>, which has to fit its type. A property's setter runs.</p>
+<div class="entry member" id="Field.get"><code class="sig">fun get(obj : any? = null) : any? throws InvocationTargetException</code><a class="anchor" href="#Field.get">#</a>
+<p>Its value in <code>obj</code>, an object of the class; for a static field, its value, <code>obj</code> left out. A property's getter runs.</p>
+</div>
+<div class="entry member" id="Field.set"><code class="sig">fun set(obj : any?, value : any?) throws InvocationTargetException</code><a class="anchor" href="#Field.set">#</a>
+<p>Gives it a new value in <code>obj</code>, which has to fit its type; for a static field, <code>obj</code> is null. A property's setter runs.</p>
 </div>
 <div class="entry member" id="Field.annotation"><code class="sig">fun &lt;A&gt; annotation() : A?</code><a class="anchor" href="#Field.annotation">#</a>
 <p>The first annotation written on it that is an <code>A</code>; null where there is none.</p>
@@ -3714,8 +3735,8 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Parameter.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#Parameter.toString">#</a>
 <p>Its name and type, as &quot;extra : string&quot;; a default is not shown.</p>
 </div>
-<div class="entry" id="Method"><code class="sig">class Method(val owner : Class, entry : List&lt;any?&gt;)</code><a class="anchor" href="#Method">#</a>
-<p>A method of a class. <code>owner</code> is the Class that lists it.</p>
+<div class="entry" id="Method"><code class="sig">class Method(val owner : Class, entry : List&lt;any?&gt;, val isStatic : bool = false)</code><a class="anchor" href="#Method">#</a>
+<p>A method of a class, or a static one (<code>isStatic</code>, G44), called with no object. <code>owner</code> is the Class that lists it.</p>
 </div>
 <div class="entry member" id="Method.name"><code class="sig">val name : string</code><a class="anchor" href="#Method.name">#</a>
 <p>Its name; the forms of a method with several share it.</p>
@@ -3729,8 +3750,8 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Method.annotations"><code class="sig">val annotations : List&lt;any&gt;</code><a class="anchor" href="#Method.annotations">#</a>
 <p>The annotations written on it, in their order.</p>
 </div>
-<div class="entry member" id="Method.call"><code class="sig">fun call(obj : any, vararg args : any?) : any? throws InvocationTargetException</code><a class="anchor" href="#Method.call">#</a>
-<p>Runs it on <code>obj</code>, an object of the class, with <code>args</code>.</p>
+<div class="entry member" id="Method.call"><code class="sig">fun call(obj : any?, vararg args : any?) : any? throws InvocationTargetException</code><a class="anchor" href="#Method.call">#</a>
+<p>Runs it on <code>obj</code>, an object of the class, with <code>args</code>; a static method with null for <code>obj</code>.</p>
 </div>
 <div class="entry member" id="Method.annotation"><code class="sig">fun &lt;A&gt; annotation() : A?</code><a class="anchor" href="#Method.annotation">#</a>
 <p>The first annotation written on it that is an <code>A</code>; null where there is none.</p>
@@ -3903,6 +3924,15 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry member" id="SequenceScope.yieldAll-2"><code class="sig">suspend fun yieldAll(items : List&lt;T&gt;)</code><a class="anchor" href="#SequenceScope.yieldAll-2">#</a>
 <p>Gives each item of <code>items</code> in turn, as yield does.</p>
 </div>
+<div class="entry member" id="SequenceScope.yieldAll-3"><code class="sig">suspend fun yieldAll(items : Set&lt;T&gt;)</code><a class="anchor" href="#SequenceScope.yieldAll-3">#</a>
+<p>Gives each item of a set in turn, in its order, as yield does.</p>
+</div>
+<div class="entry member" id="SequenceScope.yieldAll-4"><code class="sig">suspend fun yieldAll(items : Iterable&lt;T&gt;)</code><a class="anchor" href="#SequenceScope.yieldAll-4">#</a>
+<p>Gives each item of what an Iterable goes through in turn, as yield does.</p>
+</div>
+<div class="entry member" id="SequenceScope.yieldAll-5"><code class="sig">suspend fun yieldAll(items : Iterator&lt;T&gt;)</code><a class="anchor" href="#SequenceScope.yieldAll-5">#</a>
+<p>Gives each item an Iterator has left in turn, as yield does.</p>
+</div>
 <div class="entry" id="sequence"><code class="sig">fun &lt;T&gt; sequence(block : suspend SequenceScope&lt;T&gt;.() -&gt; unit) : Sequence&lt;T&gt;</code><a class="anchor" href="#sequence">#</a>
 <p>A sequence of what the block gives with yield. The block runs as its values are asked for, up to the yield of the next one each time, on a stack of its own that starts small; it waits nowhere else.</p>
 </div>
@@ -3929,6 +3959,9 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 </div>
 <div class="entry" id="string.asSequence"><code class="sig">fun string.asSequence() : Sequence&lt;char&gt;</code><a class="anchor" href="#string.asSequence">#</a>
 <p>The characters, as a sequence. They are copied into a list when this is called.</p>
+</div>
+<div class="entry" id="Map.asSequence"><code class="sig">fun &lt;K, V&gt; Map&lt;K, V&gt;.asSequence() : Sequence&lt;MapEntry&lt;K, V&gt;&gt;</code><a class="anchor" href="#Map.asSequence">#</a>
+<p>The map's entries, in its order, as a sequence. They are copied when this is called, so a later change to the map does not show.</p>
 </div>
 <div class="entry" id="Sequence.asSequence"><code class="sig">fun &lt;T&gt; Sequence&lt;T&gt;.asSequence() : Sequence&lt;T&gt;</code><a class="anchor" href="#Sequence.asSequence">#</a>
 <p>The sequence itself.</p>
@@ -4545,7 +4578,7 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <h3>Tests: what <code>astra test</code> runs</h3>
 <p>A function written @Test is a test: <code>astra test file.astra</code> runs it, and it passes unless it throws. Around each test run the functions written @BeforeTest and @AfterTest, and around all of a file's tests those written @BeforeAll and @AfterAll. A test may be a method of a class, which is made anew for each of its tests, with no arguments; its own @BeforeTest and @AfterTest methods run on that object, and its static @BeforeAll and @AfterAll methods once.</p>
 <pre>@Test fun adds() { assertEquals(4, 2 + 2) }
-@Test @Timeout(500) fun quick() { ... }
+@Test @Timeout(500.milliseconds) fun quick() { ... }
 @Test fun writes(@TempDir dir : Path) { Path(dir, &quot;a.txt&quot;).writeText(&quot;hi&quot;) }
 </pre>
 <div class="entry" id="Test"><code class="sig">annotation Test</code><a class="anchor" href="#Test">#</a>
@@ -4563,8 +4596,8 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <div class="entry" id="AfterAll"><code class="sig">annotation AfterAll</code><a class="anchor" href="#AfterAll">#</a>
 <p>Makes a function one that runs once after all of the file's tests, or a static method one that runs once after its class's tests; where it throws, that is a failure.</p>
 </div>
-<div class="entry" id="Timeout"><code class="sig">annotation Timeout(val millis : int)</code><a class="anchor" href="#Timeout">#</a>
-<p>The longest the test may run, in milliseconds: once that is past it fails, stopped where it is.</p>
+<div class="entry" id="Timeout"><code class="sig">annotation Timeout(val time : Duration)</code><a class="anchor" href="#Timeout">#</a>
+<p>The longest the test may run, written as a constant (<code>2.seconds</code>, G52): once that is past it fails, stopped where it is, even in a wait.</p>
 </div>
 <div class="entry" id="TempDir"><code class="sig">annotation TempDir</code><a class="anchor" href="#TempDir">#</a>
 <p>A test's parameter that is given a Path naming a new, empty directory of its own, deleted with what it holds once the test is over.</p>
@@ -5258,6 +5291,9 @@ worker.post({&quot;upTo&quot;: 100000})
 </div>
 <div class="entry member" id="Worker.parent"><code class="sig">val parent</code><a class="anchor" href="#Worker.parent">#</a>
 <p>In a worker: the program that started it. Null in a program that is not a worker.</p>
+</div>
+<div class="entry member" id="Worker.sharedHoldsForTest"><code class="sig">fun sharedHoldsForTest(data : any?) : int</code><a class="anchor" href="#Worker.sharedHoldsForTest">#</a>
+<p>For tests: how many hold the block frozen data is shared as, this program and the messages carrying it among them; 0 for data never sent.</p>
 </div>
 <div class="entry member" id="Worker.onMessage"><code class="sig">var onMessage : ((any?) -&gt; unit)?</code><a class="anchor" href="#Worker.onMessage">#</a>
 <p>Called with each message the worker sends, on this program's event loop.</p>

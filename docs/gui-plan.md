@@ -2100,11 +2100,10 @@ Group 7, concurrency (built 2026-10-21):
 - The `for` loop takes any object with `hasNext` and `next`, or an `iterator()` giving one.
 Choices made where the decisions left room, for the user to confirm (M6.6-gaps.html, 8.7a to 8.7m):
 where a task's error goes; what `Job.all` and `Job.any` give; `fold` on a parallel stream; a
-`Thread` made with a lambda; `@Timeout` and Jade's `scheduler` left in milliseconds; how Atomic
+`Thread` made with a lambda; `@Timeout` and Jade's `scheduler` taking a Duration (G52); how Atomic
 and the shared collections keep a change whole; how a section is divided; `parallelChunks` and
 views; frozen data shared with workers; a `for` over a channel and waking at a Lock; how a
-sequence's block runs; what an atomic field is; what a Duration is. Left: `@Timeout` and
-`scheduler` in milliseconds.
+sequence's block runs; what an atomic field is; what a Duration is.
 Tests: `tasks.astra` (was `flows.astra`) and `threads.astra` rewritten, `sequences.astra`,
 `parallel_tools.astra`, `durations.astra`, `workers_sharing.astra`, `check/concurrency.astra`,
 `error_atomic_field.astra`, and every test and example that used the old names brought to the

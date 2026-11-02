@@ -7,19 +7,19 @@ fun daemon(task : suspend () -> any?) : Thread {
   return t.start()
 }
 
-@Test @Timeout(200) suspend fun sleeps() {
+@Test @Timeout(200.milliseconds) suspend fun sleeps() {
   Thread.sleep(60.seconds)
 }
-@Test @Timeout(200) suspend fun joins() {
+@Test @Timeout(200.milliseconds) suspend fun joins() {
   daemon { Thread.sleep(60.seconds) }.join()
 }
-@Test @Timeout(200) suspend fun locks() {
+@Test @Timeout(200.milliseconds) suspend fun locks() {
   val key = Lock()
   daemon { key.useKey { Thread.sleep(60.seconds) } }
   Thread.sleep(50.milliseconds)
   key.useKey { }
 }
-@Test @Timeout(200) fun loops() {
+@Test @Timeout(200.milliseconds) fun loops() {
   val far = EventLoop.after(60.seconds) { }
   try {
     EventLoop.run()
@@ -27,7 +27,7 @@ fun daemon(task : suspend () -> any?) : Thread {
     far.cancel()
   }
 }
-@Test @Timeout(500) suspend fun reads() {
+@Test @Timeout(0.5.seconds) suspend fun reads() {
   val quiet = Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul")
   quiet.output.readLine()
 }

@@ -318,7 +318,7 @@ class WindowHost : WindowHandle {
 
   // What the window in front owns of the toolkit's shared things.
   private fun takeGlobals() {
-    Jade.scheduler = { delayMs, task -> EventLoop.after(delayMs.milliseconds, task) }
+    Jade.scheduler = { delay, task -> EventLoop.after(delay, task) }
     Jade.onFocusRequested { comp ->
       setKeyboardFocus(true)
       ensureLayout()

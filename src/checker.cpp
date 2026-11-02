@@ -9089,10 +9089,16 @@ struct Checker::Impl {
         }
     }
 
-    // What an annotation's argument may be: a constant, a class (`Box#`), an enum's entry,
-    // another annotation, or a list of those, each known when compiling.
+    // What an annotation's argument may be: a constant, a Duration written as one (`2.seconds`),
+    // a class (`Box#`), an enum's entry, another annotation, or a list of those, each known
+    // when compiling.
     void annotationArgument(const Expr& e) {
         if (foldQuietly(e).kind != ConstValue::None) return;
+        if (e.kind == ExprKind::Member) {
+            const auto& m = static_cast<const MemberExpr&>(e);
+            const ConstValue amount = foldQuietly(*m.object);
+            if (durationUnit(m.name) != 0 && (amount.kind == ConstValue::Int || amount.kind == ConstValue::Float)) return;
+        }
         if (e.kind == ExprKind::ClassOf && namedClasses.count(&e) != 0) return;
         if (e.kind == ExprKind::List) {
             for (const ExprPtr& item : static_cast<const ListExpr&>(e).items) annotationArgument(*item);
@@ -9106,7 +9112,7 @@ struct Checker::Impl {
             for (const ExprPtr& arg : static_cast<const CallExpr&>(e).args) annotationArgument(*arg);
             return;
         }
-        report(e, "an annotation is given constants: numbers, text, a class (Box#), an enum's entry, another annotation, or a list of those (D153)");
+        report(e, "an annotation is given constants: numbers, text, a Duration (2.seconds), a class (Box#), an enum's entry, another annotation, or a list of those (D153)");
     }
 
     // What an annotation may hold: what its arguments may be.
@@ -9124,7 +9130,7 @@ struct Checker::Impl {
                 case Type::List: return t.args.size() == 1 && holdable(t.args[0]);
                 case Type::Class:
                     return t.cls != nullptr && (t.cls->isEnum || (t.cls->decl != nullptr && t.cls->decl->isAnnotation) ||
-                                                (t.cls->name == "Class" && t.cls->unit != nullptr && t.cls->unit->prelude));
+                                                ((t.cls->name == "Class" || t.cls->name == "Duration") && t.cls->unit != nullptr && t.cls->unit->prelude));
                 default: return false;
             }
         };
@@ -9133,7 +9139,7 @@ struct Checker::Impl {
             if (f == k->fields.end()) continue;
             const Type t = fieldType(f->second);
             if (t.known() && (t.nullable || !holdable(t)))
-                report(p, "an annotation holds constants: an int, a float, a bool, a char, a byte, a string, a Class, an enum, another annotation, or a list of those; not " +
+                report(p, "an annotation holds constants: an int, a float, a bool, a char, a byte, a string, a Duration, a Class, an enum, another annotation, or a list of those; not " +
                               describe(t) + " (D153)");
         }
     }
@@ -10392,6 +10398,17 @@ bool Checker::atomicField(const Expr& e, AtomicFieldOp& out) const {
 int Checker::protocolLoop(const ForInStmt& loop) const {
     auto found = impl_->protocolLoops.find(&loop);
     return found == impl_->protocolLoops.end() ? 0 : found->second ? 2 : 1;
+}
+
+int64_t durationUnit(const std::string& name) {
+    if (name == "nanoseconds") return 1;
+    if (name == "microseconds") return 1000;
+    if (name == "milliseconds") return 1000000;
+    if (name == "seconds") return 1000000000;
+    if (name == "minutes") return 60000000000;
+    if (name == "hours") return 3600000000000;
+    if (name == "days") return 86400000000000;
+    return 0;
 }
 
 std::string Checker::classOfAsked(const ClassOfExpr& e) const {

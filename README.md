@@ -1959,7 +1959,7 @@ that say what Astra writes in their place: `@Synchronized` a `Lock`, `@JvmStatic
 
 ```astra
 @Test fun adds() { assertEquals(4, 2 + 2) }
-@Test @Timeout(500) fun quick() { ... }                   // fails, stopped, after half a second
+@Test @Timeout(500.milliseconds) fun quick() { ... }      // fails, stopped, after half a second
 @Test fun writes(@TempDir dir : Path) { Path(dir, "a.txt").writeText("hi") }
 ```
 

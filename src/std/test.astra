@@ -6,7 +6,7 @@
 // @AfterTest methods run on that object, and its static @BeforeAll and @AfterAll methods once.
 //
 //   @Test fun adds() { assertEquals(4, 2 + 2) }
-//   @Test @Timeout(500) fun quick() { ... }
+//   @Test @Timeout(500.milliseconds) fun quick() { ... }
 //   @Test fun writes(@TempDir dir : Path) { Path(dir, "a.txt").writeText("hi") }
 
 // Makes a function, or a method of a class, a test that `astra test` runs; it passes unless it
@@ -25,8 +25,9 @@ annotation BeforeAll
 // Makes a function one that runs once after all of the file's tests, or a static method one that
 // runs once after its class's tests; where it throws, that is a failure.
 annotation AfterAll
-// The longest the test may run, in milliseconds: once that is past it fails, stopped where it is.
-annotation Timeout(val millis : int)
+// The longest the test may run, written as a constant (`2.seconds`, G52): once that is past it
+// fails, stopped where it is, even in a wait.
+annotation Timeout(val time : Duration)
 // A test's parameter that is given a Path naming a new, empty directory of its own, deleted
 // with what it holds once the test is over.
 annotation TempDir

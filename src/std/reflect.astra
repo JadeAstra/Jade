@@ -81,10 +81,11 @@ class Class(internal val type : Type, private val asker : any? = null) {
   val constructors : List<Constructor>
     get() => __typeConstructors(type).map { Constructor(this, it) }
 
-  // Its own static fields, and its own static methods (G44), each one the code that wrote the
-  // `#` may use: read, set and called with no object.
+  // Its own static fields (G44), each one the code that wrote the `#` may use: read and set
+  // with no object.
   val staticFields : List<Field>
     get() => __typeStaticFields(type, asker).map { Field(this, it) }
+  // Its own static methods, the same way: called with null for the object.
   val staticMethods : List<Method>
     get() => __typeStaticMethods(type, asker).map { Method(this, it, true) }
 
@@ -104,8 +105,9 @@ class Class(internal val type : Type, private val asker : any? = null) {
   // those classes (`method("scale", float#, float#)`, G44), and without, the first of its forms;
   // null where there is none the code may use.
   fun method(name : string, vararg parameterTypes : Class) : Method? => __formOf(methods, name, parameterTypes)
-  // The static field, or the static method, of that name, as field and method find them.
+  // The static field of that name, as field finds one.
   fun staticField(name : string) : Field? => staticFields.firstOrNull { it.name == name }
+  // The static method of that name, as method finds one.
   fun staticMethod(name : string, vararg parameterTypes : Class) : Method? => __formOf(staticMethods, name, parameterTypes)
 
   // Whether a value is an object of the class, or of a class below it.

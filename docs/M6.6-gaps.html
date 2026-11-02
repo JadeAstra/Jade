@@ -672,7 +672,7 @@ td.when { min-width: 9em; }
 
 <section class="decision" id="p8-int-millis-left">
 <h3><span class="code">8.7e</span>Times still in milliseconds (part 8, group 7)</h3>
-<p>D90 puts a Duration wherever a time is meant. Two are left as int milliseconds: <code>@Timeout(millis)</code>, since an annotation&#39;s arguments are constants and a Duration is made by a call; and Jade&#39;s <code>scheduler</code>, which is JadeUI&#39;s API and so waits for your word (D83). Changing either is a line or two each.</p>
+<p>D90 puts a Duration wherever a time is meant. Two were left as int milliseconds: <code>@Timeout(millis)</code>, since an annotation&#39;s arguments are constants and a Duration is made by a call; and Jade&#39;s <code>scheduler</code>, JadeUI&#39;s API (D83). Chosen 2026-11-02 (G52): both take a Duration. An annotation is given one written as a constant, a number and its unit (<code>@Timeout(2.seconds)</code>, <code>500.milliseconds</code>), and may hold one; <code>Jade.scheduler</code> is <code>(Duration, () -&gt; unit) -&gt; unit</code>.</p>
 <div class="verdict"><span class="label">Your choice</span><span class="blank"></span></div>
 </section>
 
@@ -870,7 +870,6 @@ td.when { min-width: 9em; }
 <tbody>
 <tr><td class="part" id="g42">G42</td><td class="part">8.6</td><td>D50&#39;s following of which classes&#39; objects reach each <code>x#</code> goes by types (8.6g): a <code>#</code> of <code>any</code> or of a type parameter keeps every class&#39;s descriptions, and a Class kept in a variable or passed on, where any code asks a Class for its methods, keeps its methods&#39; and those of every class its descriptions name.</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g46">G46</td><td class="part">8.6</td><td><code>@Deprecated</code>, which D153 places at 1.0.</td><td class="when">1.0</td></tr>
-<tr><td class="part" id="g52">G52</td><td class="part">8.7</td><td><code>@Timeout</code> and Jade&#39;s <code>scheduler</code> take int milliseconds, not a Duration (8.7e).</td><td class="when">Your choice on 8.7e</td></tr>
 <tr><td class="part" id="g53">G53</td><td class="part">8.8</td><td>Five character sets only; Windows-1252, which old mail uses, and others can be added without changing a call (D127). UTF-16 is read without looking for a byte order mark.</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g54">G54</td><td class="part">8.8</td><td>A file's times are int milliseconds since 1970, and there is no type for a moment in time (8.8c).</td><td class="when">Not placed yet</td></tr>
 <tr><td class="part" id="g55">G55</td><td class="part">8.8</td><td><code>walk()</code> goes past a directory it cannot read without a word (8.8a).</td><td class="when">Not placed yet</td></tr>
