@@ -1998,8 +1998,48 @@ struct Reach {
         auto first = std::lower_bound(notes.begin(), notes.end(), at,
                                       [](const FunctionProto::ReflectNote& note, size_t place) { return note.at < place; });
         for (; first != notes.end() && first->at == at; ++first)
-            if (((first->flags & kReflectNotMethods) != 0) == notMethods) return &*first;
+            if (((first->flags & kReflectNotMethods) != 0) == notMethods && (first->flags & kReflectDescribes) == 0) return &*first;
         return nullptr;
+    }
+
+    // The note of the Op::ClassMeta at `at` of a class no global holds (G43), if any.
+    static const FunctionProto::ReflectNote* describesAt(const FunctionProto& f, size_t at) {
+        if (f.reflection == nullptr) return nullptr;
+        for (const FunctionProto::ReflectNote& note : f.reflection->notes)
+            if (note.at == at && (note.flags & kReflectDescribes) != 0) return &note;
+        return nullptr;
+    }
+
+    // The descriptions of the classes no global holds (G43), each the class's node in what is
+    // above and below and whether it is of its fields (0) or methods (1): reached only where
+    // that is asked for, and emptied where it never is.
+    struct Unheld {
+        FunctionProto* description;
+        int node;
+        int which;
+        bool reached = false;
+    };
+    std::vector<Unheld> unheld;
+
+    // A node for such a class, below the classes `supertypes` names; marked kept at once where
+    // what is below one of them is kept already.
+    int nodeBelow(const std::vector<uint16_t>& supertypes) {
+        const int self = static_cast<int>(above.size());
+        above.emplace_back();
+        below.emplace_back();
+        for (uint16_t cls : supertypes) {
+            if (cls >= reachedGlobal.size()) continue;
+            above[static_cast<size_t>(self)].push_back(cls);
+            below[cls].push_back(self);
+        }
+        if (!fieldsKept.empty()) {
+            fieldsKept.push_back(0);
+            methodsKept.push_back(0);
+            for (std::vector<char>* kept : {&fieldsKept, &methodsKept})
+                for (uint16_t cls : supertypes)
+                    if (cls < reachedGlobal.size() && (*kept)[cls] == 2) keep(*kept, self, false);
+        }
+        return self;
     }
 
     // A class, and what is above it, marked kept in `kept`; what is below it too unless
@@ -2118,8 +2158,14 @@ struct Reach {
             if (which == 1) global(a);
             if (which == 2) global(b);
             if (named != nullptr && op == Op::GetGlobal && static_cast<size_t>(a) < reachedGlobal.size()) named->push_back(static_cast<uint16_t>(a));
-            if (op == Op::ClassMeta && static_cast<size_t>(a) < f.protos.size()) descriptions.insert(f.protos[static_cast<size_t>(a)]);
-            if (makesFunction(op) && static_cast<size_t>(a) < f.protos.size()) function(f.protos[static_cast<size_t>(a)]);
+            const FunctionProto::ReflectNote* unheldClass = op == Op::ClassMeta ? describesAt(f, at) : nullptr;
+            if (unheldClass != nullptr && static_cast<size_t>(a) < f.protos.size()) {
+                // Reached only where it is asked for (G43).
+                unheld.push_back(Unheld{f.protos[static_cast<size_t>(a)], nodeBelow(unheldClass->globals), b});
+            } else {
+                if (op == Op::ClassMeta && static_cast<size_t>(a) < f.protos.size()) descriptions.insert(f.protos[static_cast<size_t>(a)]);
+                if (makesFunction(op) && static_cast<size_t>(a) < f.protos.size()) function(f.protos[static_cast<size_t>(a)]);
+            }
             if (usesMemberName(op) && static_cast<size_t>(a) < f.constants.size() && f.constants[static_cast<size_t>(a)].isString()) {
                 const std::string& used = asString(f.constants[static_cast<size_t>(a)])->utf8();
                 name(used);
@@ -2173,6 +2219,15 @@ struct Reach {
                 if (!(methods ? allMethods : allFields) && (span.key >= fieldsKept.size() || (methods ? methodsKept : fieldsKept)[span.key] == 0)) continue;
                 if (span.key >= reachedGlobal.size() || !reachedGlobal[span.key] || !metaKept.insert({module, index}).second) continue;
                 spanWork.emplace_back(module, index);
+                more = true;
+            }
+            for (Unheld& u : unheld) {
+                if (u.reached || !(u.which == 0 ? allFields || fieldsKept[static_cast<size_t>(u.node)] != 0
+                                                : allMethods || methodsKept[static_cast<size_t>(u.node)] != 0))
+                    continue;
+                u.reached = true;
+                descriptions.insert(u.description);
+                function(u.description);
                 more = true;
             }
             if (!more) return;
@@ -2365,6 +2420,20 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
     for (FunctionProto* module : program.modules)
         if (module != nullptr) reach.function(module);
     reach.run();
+    // The descriptions of classes no global holds that nothing asks for: emptied, describing
+    // nothing (G43).
+    for (const Reach::Unheld& u : reach.unheld) {
+        if (u.reached) continue;
+        FunctionProto& f = *u.description;
+        const int line = f.lines.empty() ? 0 : f.lines.front();
+        f.code = {static_cast<uint8_t>(Op::Null), static_cast<uint8_t>(Op::Return)};
+        f.lines.assign(2, line);
+        f.constants.clear();
+        f.protos.clear();
+        f.rights.clear();
+        f.caches.reset();
+        f.cacheCount = 0;
+    }
 
     LeftOut result;
     for (FunctionProto* module : program.modules) {

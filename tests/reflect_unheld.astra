@@ -1,0 +1,30 @@
+// Reflection on classes no global holds (G43): an anonymous object's class and a class declared
+// inside a function list what they declare. A built program keeps their descriptions only where
+// a `#` may reach them, here through the interfaces they are seen as; each line runs the same
+// way built.
+
+interface Greeter { fun greet() : string }
+val greeter : Greeter = object : Greeter {
+  val name = "Ann"
+  override fun greet() : string => "hi " + name
+  fun extra(n : int) : int => n * 2
+}
+print(greeter#.fields, greeter#.methods.map { it.name })   // expect: [name : string] ["greet", "extra"]
+print(greeter#.method("extra")!!.call(greeter, 4))          // expect: 8
+
+interface Summed { fun sum() : int }
+fun inside() : string {
+  class Pair(val left : int, var right : int) : Summed {
+    override fun sum() : int => left + right
+  }
+  val p : Summed = Pair(1, 2)
+  return "${p#.fields} ${p#.methods}"
+}
+print(inside())                                               // expect: [left : int, right : int] [sum() : int]
+
+// One no # reaches: its description is left empty in a built program, and nothing changes.
+interface Quiet { fun hush() : int }
+val quiet = object : Quiet {
+  override fun hush() : int => 0
+}
+print(quiet.hush())                                           // expect: 0

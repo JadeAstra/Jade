@@ -5415,18 +5415,24 @@ private:
     // class set up ahead, each kept in a built program only where reflection reaches it (D50):
     // `key` the global of the top-level declaration it is part of. Then the same for the classes
     // inside it.
-    void emitClassMetas(const ClassStmt& s, const std::string& bound, int key) {
+    void emitClassMetas(const ClassStmt& s, const std::string& bound, int key, bool anonymous = false) {
         if (s.isExternal || session_.checker == nullptr) return;
         ReflectedClass r;
         if (session_.checker->reflected(s, r)) {
-            noteSupertypes(key, r.supertypes);
-            const std::string storage = s.isObject ? "(object " + bound + ")" : bound;
+            // A class no global holds: its descriptions noted with the classes it is below, so
+            // that a built program that never asks for them empties them (G43). Where one of
+            // those is no global's either, it is kept as it is, with what it is besides.
+            std::vector<uint16_t> above;
+            const bool unheld = key < 0 && supertypeGlobals(r.supertypes, above);
+            if (!unheld) noteSupertypes(key, r.supertypes);
+            const std::string storage = anonymous || !s.isObject ? bound : "(object " + bound + ")";
             for (int which = 0; which < 2; which++) {
                 const int start = static_cast<int>(code().size());
                 line_ = s.line;
                 const int meta = compileMeta(s, r, which);
                 line_ = s.line;
                 emitGet(storage, s);
+                if (unheld) fs_->proto->noted().notes.push_back(FunctionProto::ReflectNote{static_cast<uint32_t>(code().size()), kReflectDescribes, above});
                 emit(Op::ClassMeta, meta);
                 emitByte(which);
                 emit(Op::Pop);
@@ -5681,6 +5687,20 @@ private:
         std::vector<uint16_t> entry{key >= 0 && key < kNoGlobal ? static_cast<uint16_t>(key) : kNoGlobal};
         for (const RuntimeType& above : supertypes) classGlobals(above, entry, true);
         if (entry.size() > 1) fs_->proto->noted().supertypes.push_back(std::move(entry));
+    }
+
+    // The globals of a class's supertypes, and of the classes their type arguments name; false
+    // where one of them is a class no global holds (G43).
+    bool supertypeGlobals(const std::vector<RuntimeType>& supertypes, std::vector<uint16_t>& out) {
+        for (const RuntimeType& above : supertypes) {
+            if (above.kind != RuntimeType::Class) continue;
+            const size_t before = out.size();
+            RuntimeType head = above;
+            head.args.clear();
+            if (!classGlobals(head, out, false) || out.size() == before) return false;
+            for (const RuntimeType& arg : above.args) classGlobals(arg, out, true);
+        }
+        return true;
     }
 
     // The global the instruction at `at` gets, or -1.
@@ -6199,6 +6219,7 @@ private:
             emitI32(0);
         }
         compileClass(cls, bound);
+        emitClassMetas(cls, bound, -1, true);  // what it declares, listed by reflection (G43)
         objectBuild_ = build.outer;
         line_ = cls.line;
         if (skip >= 0) {

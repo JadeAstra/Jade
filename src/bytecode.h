@@ -672,6 +672,10 @@ struct FunctionProto {
 };
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
+// A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,
+// an anonymous object's, G43): `globals` are the classes it is below; a built program that never
+// asks for its description empties it.
+constexpr uint8_t kReflectDescribes = 32;
 constexpr uint16_t kNoGlobal = 0xFFFF;
 
 
