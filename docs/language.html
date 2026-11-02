@@ -2634,7 +2634,7 @@ image.save(Path(&quot;out.png&quot;))
 </pre>
 <h3>Character sets</h3>
 <div class="entry" id="Charset"><code class="sig">enum Charset</code><a class="anchor" href="#Charset">#</a>
-<p>What text is read and written in. Astra's own text is UTF-8, the default everywhere; the others are for files, programs and protocols that use them (mail's Latin-1, Windows' UTF-16). A character the set has no place for is written as '?', and bytes that spell no character are read as U+FFFD.</p>
+<p>What text is read and written in. Astra's own text is UTF-8, the default everywhere; the others are for files, programs and protocols that use them (mail's Latin-1 and Windows-1252, Windows' UTF-16). A character the set has no place for is written as '?', and bytes that spell no character are read as U+FFFD. utf16 is Java's &quot;UTF-16&quot;: read in the order a byte order mark says, big-endian where there is none, and written big-endian after a mark; utf16le and utf16be take no mark. latin9 is ISO-8859-15, Latin-1 with the euro.</p>
 </div>
 <h3>Reader and Writer</h3>
 <div class="entry" id="Reader"><code class="sig">class Reader : AutoCloseable</code><a class="anchor" href="#Reader">#</a>

@@ -2597,7 +2597,9 @@ for file in Path("src").walk() { if (file.extension == "astra") { print(file.tex
 | New | `Path.createTempDirectory(prefix)`, `Path.createTempFile(prefix, suffix)` |
 
 Each text call reads and writes UTF-8, or the character set given: `Charset.utf8`, `latin1`,
-`ascii`, `utf16le` or `utf16be` (`path.readText(Charset.latin1)`, D127), and so do
+`ascii`, `utf16le`, `utf16be`, `utf16`, `windows1252` or `latin9` (`path.readText(Charset.latin1)`,
+D127; `utf16` reads in the order a byte order mark says and writes big-endian after one, as
+Java's "UTF-16"), and so do
 `string.toBytes(charset)` and `bytes.decodeToString(charset)`. A character a set has no place
 for is written as `?`, and bytes that spell no character are read as U+FFFD. A path may hold
 any characters. Each of `readText`, `writeText` and the like reads or writes the whole file.

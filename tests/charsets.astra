@@ -1,0 +1,40 @@
+// Character sets added in G53: Windows-1252 and Latin-9, of one byte a character, and UTF-16
+// with a byte order mark, read in the order the mark says. The test works in a directory of its
+// own, which it removes at the end.
+
+// -- Windows-1252: Latin-1, with quotes, dashes and the euro in 0x80 to 0x9F --
+val quoted = "“Café” – 5 €"
+print(quoted.toBytes(Charset.windows1252))                  // expect: Bytes[147, 67, 97, 102, 233, 148, 32, 150, 32, 53, 32, 128]
+print(quoted.toBytes(Charset.windows1252).decodeToString(Charset.windows1252) == quoted)   // expect: true
+// Five bytes there stand for nothing; a character it lacks is '?'.
+print(Bytes([129, 65]).decodeToString(Charset.windows1252), "𝄞ā".toBytes(Charset.windows1252))   // expect: �A Bytes[63, 63]
+
+// -- Latin-9: Latin-1 with the euro, Š, Ž, Œ and Ÿ in eight of its places --
+print("€ŠŒŸ".toBytes(Charset.latin9), Bytes([164, 189]).decodeToString(Charset.latin9))   // expect: Bytes[164, 166, 188, 190] €œ
+// What Latin-1 had in those places Latin-9 has not.
+print("¤½é".toBytes(Charset.latin9))                          // expect: Bytes[63, 63, 233]
+
+// -- UTF-16 with a byte order mark --
+print("hé".toBytes(Charset.utf16))                            // expect: Bytes[254, 255, 0, 104, 0, 233]
+print(Bytes([255, 254, 104, 0, 233, 0]).decodeToString(Charset.utf16), Bytes([0, 104, 0, 105]).decodeToString(Charset.utf16))   // expect: hé hi
+// utf16le and utf16be take no mark: one there is a character (U+FEFF) of the text.
+print(Bytes([255, 254, 104, 0]).decodeToString(Charset.utf16le).size)   // expect: 2
+
+val root = Path("astra-charsets-test")
+root.deleteRecursively()
+root.mkdir()
+val little = Path(root, "little.txt")
+little.writeBytes(Bytes([255, 254, 97, 0, 10, 0, 233, 0, 10, 0]))
+print(little.readLines(Charset.utf16), little.readText(Charset.utf16).size)   // expect: ["a", "é"] 4
+little.reader(Charset.utf16).use { print(it.readLine(), it.readLine(), it.readLine()) }   // expect: a é null
+
+// Written: one mark at the start, big-endian after it, however many writes.
+val big = Path(root, "big.txt")
+big.writer(charset = Charset.utf16).use { it.print("a"); it.print("b") }
+big.appendText("c", Charset.utf16)
+print(big.readBytes(), big.readText(Charset.utf16))           // expect: Bytes[254, 255, 0, 97, 0, 98, 0, 99] abc
+val fresh = Path(root, "fresh.txt")
+fresh.appendText("d", Charset.utf16)
+print(fresh.readBytes())                                      // expect: Bytes[254, 255, 0, 100]
+
+print(root.deleteRecursively(), root.exists())               // expect: true false

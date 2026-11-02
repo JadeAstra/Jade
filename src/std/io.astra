@@ -13,10 +13,12 @@
 
 // ---- Character sets (D127) ----
 // What text is read and written in. Astra's own text is UTF-8, the default everywhere; the
-// others are for files, programs and protocols that use them (mail's Latin-1, Windows'
-// UTF-16). A character the set has no place for is written as '?', and bytes that spell no
-// character are read as U+FFFD.
-enum Charset { utf8, latin1, ascii, utf16le, utf16be }
+// others are for files, programs and protocols that use them (mail's Latin-1 and Windows-1252,
+// Windows' UTF-16). A character the set has no place for is written as '?', and bytes that spell
+// no character are read as U+FFFD. utf16 is Java's "UTF-16": read in the order a byte order mark
+// says, big-endian where there is none, and written big-endian after a mark; utf16le and
+// utf16be take no mark (G53). latin9 is ISO-8859-15, Latin-1 with the euro.
+enum Charset { utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 }
 
 // ---- Reader and Writer (D119) ----
 

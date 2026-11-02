@@ -87,6 +87,11 @@ struct Stream {
     size_t position = 0;
     bool ended = false;
     std::mutex writeMutex;
+    // Read in Charset.utf16: whether its start has been looked at for a byte order mark, and
+    // the order it says (G53); written in it, whether the mark has been.
+    bool orderKnown = false;
+    Charset readOrder = Charset::Utf16Be;
+    bool markWritten = false;
 
     // A process that has ended, and what it ended with.
     std::atomic<bool> exited{false};
@@ -240,6 +245,22 @@ bool fill(Stream& s, Outcome& out) {
     s.buffer.resize(before + static_cast<size_t>(got > 0 ? got : 0));
     if (got <= 0) s.ended = got == 0;
     return got > 0;
+}
+
+// The set a stream is read in: for Charset.utf16, the order the byte order mark at its start
+// says, the mark passed over (G53). Called holding the read lock; false where reading failed.
+bool readingOrder(Stream& s, Charset& cs, Outcome& out) {
+    if (cs != Charset::Utf16) return true;
+    if (!s.orderKnown) {
+        while (s.buffer.size() - s.position < 2 && fill(s, out)) {}
+        if (!out.error.empty()) return false;
+        size_t mark = 0;
+        s.readOrder = utf16Order(std::string_view(s.buffer).substr(s.position), Charset::Utf16Be, mark);
+        s.position += mark;
+        s.orderKnown = true;
+    }
+    cs = s.readOrder;
+    return true;
 }
 
 // ---- Processes ----
@@ -444,9 +465,11 @@ void registerIo(VM& vm) {
         return vm.blocking(
             [=] {
                 std::lock_guard<std::mutex> hold(s->readMutex);
+                Charset order = cs;
+                if (!readingOrder(*s, order, *out)) return;
                 while (fill(*s, *out)) {}
                 if (!out->error.empty()) return;
-                out->data = decodeText(std::string_view(s->buffer).substr(s->position), cs);
+                out->data = decodeText(std::string_view(s->buffer).substr(s->position), order);
                 s->buffer.clear();
                 s->position = 0;
             },
@@ -464,11 +487,13 @@ void registerIo(VM& vm) {
         return vm.blocking(
             [=] {
                 std::lock_guard<std::mutex> hold(s->readMutex);
+                Charset order = cs;
+                if (!readingOrder(*s, order, *out)) return;
                 size_t searched = 0;  // how much of what is waiting has been looked through
-                const size_t unit = cs == Charset::Utf16Le || cs == Charset::Utf16Be ? 2 : 1;
+                const size_t unit = isUtf16(order) ? 2 : 1;
                 for (;;) {
                     size_t endSize = 1;
-                    const size_t at = lineEnd(s->buffer, s->position + searched, cs, endSize);
+                    const size_t at = lineEnd(s->buffer, s->position + searched, order, endSize);
                     if (at != std::string::npos) {
                         out->data.assign(s->buffer, s->position, at - s->position);
                         s->position = at + endSize;
@@ -487,7 +512,7 @@ void registerIo(VM& vm) {
                         break;
                     }
                 }
-                out->data = decodeText(withoutCarriageReturn(std::move(out->data), cs), cs);
+                out->data = decodeText(withoutCarriageReturn(std::move(out->data), order), order);
             },
             [out](VM& vm) -> Value {
                 if (!out->error.empty()) throw ioError(vm, out->error);
@@ -500,12 +525,23 @@ void registerIo(VM& vm) {
     def("write", 2, 3, [](VM& vm, int argc, Value* args) -> Value {
         auto s = streamOf(vm, args[0]);
         std::string data;
-        if (args[1].isObjType(ObjType::Bytes)) data.assign(asBytes(args[1])->data.begin(), asBytes(args[1])->data.end());
-        else data = encodeText(vm.stringify(args[1]), charsetOf(vm, argc > 2 ? args[2] : Value::null()));
+        // In Charset.utf16, a byte order mark before the stream's first text, none after (G53).
+        bool marked = false;
+        if (args[1].isObjType(ObjType::Bytes)) {
+            data.assign(asBytes(args[1])->data.begin(), asBytes(args[1])->data.end());
+        } else {
+            const Charset cs = charsetOf(vm, argc > 2 ? args[2] : Value::null());
+            marked = cs == Charset::Utf16;
+            data = encodeText(vm.stringify(args[1]), marked ? Charset::Utf16Be : cs);
+        }
         auto out = std::make_shared<Outcome>();
         return vm.blocking(
-            [s, out, data = std::move(data)] {
+            [s, out, marked, data = std::move(data)] {
                 std::lock_guard<std::mutex> hold(s->writeMutex);
+                if (marked && !s->markWritten) {
+                    s->markWritten = true;
+                    if (!rawWrite(*s, "\xFE\xFF", 2, out->error)) return;
+                }
                 rawWrite(*s, data.data(), data.size(), out->error);
             },
             [out](VM& vm) -> Value {

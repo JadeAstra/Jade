@@ -2589,8 +2589,8 @@ struct Checker::Impl {
             {"BufferedWriter", "a Writer in Astra: path.writer() (D119)"},
             {"PrintWriter", "a Writer in Astra has print and println: path.writer() (D119)"},
             {"ProcessBuilder", "a program is started with Process(command..., directory = ..., environment = {...}, input = ..., output = ..., error = ...) in Astra, or run to its end with Process.run(...) (D91)"},
-            {"Charsets", "a character set is a Charset in Astra: Charset.utf8, latin1, ascii, utf16le, utf16be (D127)"},
-            {"StandardCharsets", "a character set is a Charset in Astra: Charset.utf8, latin1, ascii, utf16le, utf16be (D127)"},
+            {"Charsets", "a character set is a Charset in Astra: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
+            {"StandardCharsets", "a character set is a Charset in Astra: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
             // Graphics (D99, D101 to D106, L79 to L86, L101, L102).
             {"Dimension", "a width and a height are a Size in Astra, a value type: Size(width, height) (L82)"},
             {"Rectangle", "a rectangle is a Rect in Astra, a value type: Rect(x, y, width, height) (L84)"},

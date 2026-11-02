@@ -1275,6 +1275,7 @@ struct FileJob {
     std::string data;
     std::string error;
     Charset charset = Charset::Utf8;  // what text read is in (D127)
+    bool markIfNew = false;           // text appended in Charset.utf16: a byte order mark only where the file is empty (G53)
 };
 
 void readWhole(FileJob& job) {
@@ -1287,6 +1288,11 @@ void readWhole(FileJob& job) {
 }
 
 void writeWhole(FileJob& job, bool append) {
+    if (job.markIfNew) {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(toPath(job.path), ec);
+        if (ec || size == 0) job.data.insert(0, "\xFE\xFF", 2);
+    }
     std::ofstream out(toPath(job.path), std::ios::binary | (append ? std::ios::app : std::ios::trunc));
     if (!out || !out.write(job.data.data(), static_cast<std::streamsize>(job.data.size())).flush()) job.error = "cannot write file '" + job.path + "'";
 }
@@ -1316,7 +1322,9 @@ Value writeFile(VM& vm, Value path, Value content, bool bytesOnly, bool append, 
     } else if (bytesOnly) {
         throw vm.runtimeError(Thrown::ClassCastException, "writeBytes takes bytes, not a value of type " + vm.typeName(content) + (content.isString() ? "; text is written with writeText" : ""));
     } else {
-        job->data = encodeText(vm.stringify(content), charsetOf(vm, charset));
+        const Charset cs = charsetOf(vm, charset);
+        job->markIfNew = append && cs == Charset::Utf16;
+        job->data = encodeText(vm.stringify(content), job->markIfNew ? Charset::Utf16Be : cs);
     }
     return vm.blocking([job, append] { writeWhole(*job, append); }, [job](VM& vm) -> Value {
         if (!job->error.empty()) throw vm.errorOf("IOException", job->error);
