@@ -810,7 +810,10 @@ private:
     // read is a copy (D59), but for an item an inline body hands to a lambda copied in
     // (handsItemToLambda).
     bool inPlaceOff() const { return inlineDepth_ > 0 || copiedDepth_ > 0; }
-    bool copyReadsHere() const { return copyingReads() || inPlaceOff(); }
+    // Code copied in from an inline function, and a lambda copied into it, read where the
+    // checker found they may, as the code as written does (G35): what such code is given where
+    // it is it copies as a function would as it starts (compileInlineCall, compileBoundLambda).
+    bool copyReadsHere() const { return copyingReads(); }
 
     CodeScope scopeNow() const {
         CodeScope s;
@@ -1038,6 +1041,24 @@ private:
             else emit(Op::Null);
             addLocal(fn.params[p], true, fn, true);
         }
+        // As a function does as it starts: given an item of a list where it is, a copy of its
+        // own where it may change such lists (G35); the list a vararg gathers, of the type its
+        // parameter is declared with (G25).
+        for (int param : session_.checker->paramsOwned(fn)) {
+            VarInfo info;
+            const int slot = static_cast<size_t>(param) < n && !bound[static_cast<size_t>(param)] ? resolveLocal(fs_, fn.params[static_cast<size_t>(param)], fn, info) : -1;
+            if (slot >= 0) emit(Op::OwnLocal, slotOf(slot));
+        }
+        if (receiver >= 0 && session_.checker->ownsThis(fn)) emit(Op::OwnLocal, slotOf(receiver));
+        if (RuntimeType gathered; fn.varargIndex >= 0 && session_.checker->varargListType(fn, gathered)) {
+            VarInfo info;
+            const int slot = resolveLocal(fs_, fn.params[static_cast<size_t>(fn.varargIndex)], fn, info);
+            if (slot >= 0) {
+                emit(Op::GetLocal, slotOf(slot));
+                emitTag(gathered, fn);
+                emit(Op::Pop);
+            }
+        }
         compileInlineBody(fn.body);
         endScopeKeepingValue();
         for (int jump : frame.exits) patchJump(jump);
@@ -1130,10 +1151,31 @@ private:
             compileExpr(*receiver);
             object = addLocal("(block receiver)", true, at, true);
         }
+        // `action(items[i])`: the item given where it is (G35). The lambda takes a copy of its
+        // own as it starts where it may change such a list or keep the item (below), and gives
+        // back nothing that could be it; what is given after it is a name or a literal, which
+        // changes nothing.
+        auto itemInPlace = [&](size_t k) {
+            if (copyingReads() || session_.checker == nullptr || args[k]->kind != ExprKind::Index) return false;
+            const auto& ix = static_cast<const IndexExpr&>(*args[k]);
+            if (!ix.more.empty() || ix.defaultValue || session_.checker->mayGiveValue(lambda)) return false;
+            for (size_t j = k + 1; j < args.size(); j++)
+                if (args[j]->kind != ExprKind::Name && args[j]->kind != ExprKind::Literal) return false;
+            return true;
+        };
         std::vector<int> given;
-        for (const Expr* arg : args) {
-            compileExpr(*arg);
-            given.push_back(addLocal("(block argument)", true, *arg, true));
+        for (size_t k = 0; k < args.size(); k++) {
+            const Expr& arg = *args[k];
+            if (itemInPlace(k)) {
+                const auto& ix = static_cast<const IndexExpr&>(arg);
+                compileExpr(*ix.object);
+                compileExpr(*ix.index);
+                line_ = ix.line;
+                emit(Op::GetIndexRef);
+            } else {
+                compileExpr(arg);
+            }
+            given.push_back(addLocal("(block argument)", true, arg, true));
         }
         const CodeScope here = scopeNow();
         CodeScope scope = b.scope;

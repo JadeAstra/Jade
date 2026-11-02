@@ -1,0 +1,55 @@
+// Code copied in from an inline function, and a lambda copied into it, read items of a list of
+// values where they are (G35), and take a copy of their own wherever the list may change or the
+// item be kept meanwhile: each case here gives what copying every read gives.
+value Point(val x : int, val y : int)
+fun fresh() : open List<Point> => [Point(1, 2), Point(3, 4), Point(5, 6)]
+
+inline fun <T> sumBy(items : List<T>, f : (T) -> int) : int {
+  var s = 0
+  for (i in 0 ..< items.size) { s += f(items[i]) }
+  return s
+}
+// 1. The lambda changes the list it is given an item of.
+var pts = fresh()
+print(sumBy(pts) { p -> if (pts.size < 50) { repeat(40) { pts.add(Point(0, 0)) } }; p.x + p.y })   // expect: 21
+// 2. The lambda keeps the item.
+pts = fresh()
+val kept : open List<Point> = []
+print(sumBy(pts) { kept.add(it); it.x }, kept)   // expect: 9 [Point(x=1, y=2), Point(x=3, y=4), Point(x=5, y=6)]
+pts[0] = Point(9, 9)
+print(kept[0])   // expect: Point(x=1, y=2)
+// 3. The inline body holds an item across a lambda that clears the list.
+inline fun <T> firstThen(items : List<T>, f : () -> unit) : T {
+  val first = items[0]
+  f()
+  return first
+}
+pts = fresh()
+print(firstThen(pts) { pts.clear(); pts.add(Point(7, 7)) })   // expect: Point(x=1, y=2)
+fun firstThenPlain(items : List<Point>, f : () -> unit) : Point {
+  val first = items[0]
+  f()
+  return first
+}
+pts = fresh()
+print(firstThenPlain(pts) { pts.clear(); pts.add(Point(7, 7)) })   // expect: Point(x=1, y=2)
+// 4. An inline function given an item where it is, changing the list.
+inline fun grabThenClear(x : Point, list : open List<Point>) : Point {
+  list.clear()
+  list.add(Point(0, 0))
+  return x
+}
+pts = fresh()
+print(grabThenClear(pts[1], pts))   // expect: Point(x=3, y=4)
+// 5. A lambda giving back the item it was given.
+inline fun <T> mapOne(items : open List<T>, f : (T) -> T) : T {
+  val got = f(items[0])
+  items.clear()
+  return got
+}
+pts = fresh()
+print(mapOne(pts) { it })   // expect: Point(x=1, y=2)
+// 6. A for loop's item in an inline body, handed on.
+inline fun <T> each(items : List<T>, f : (T) -> unit) { for (x in items) { f(x) } }
+pts = fresh()
+each(pts) { p -> pts.clear(); print(p) }   // expect: Point(x=1, y=2)
