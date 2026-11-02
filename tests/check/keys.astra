@@ -40,6 +40,11 @@ fun keys(list : List<int>, frozen : FrozenList<int>, bytes : Bytes, set : Set<st
   m[Follows(1, 2)] = "h"
   m[FollowsVar(1)] = "i"            // check: a FollowsVar cannot be a key: its == or hashCode reads the var 'n', which can change (D26)
   m[Spot(1, 2)] = "j"
+  // A class of the standard library's, read from the cache or compiled afresh (G60).
+  m[Grid<int>(1, 1)] = "k"          // check: a Grid<int> cannot be a key: its == or hashCode reads the var 'width', which can change (D26)
+  // The keys mapOf and setOf make a map or a set with (G60).
+  val made = mapOf(Moving(2) to 1)  // check: a Moving cannot be a key: its var 'x' can change (D26)
+  val items = setOf(Moving(3), Spot(1, 1))   // check: a Moving cannot be a key: its var 'x' can change (D26)
   val s = Set<any>()
   s.add([1, 2])                     // check: a List<int> can change, so it cannot be a key: a frozen copy can, key.frozen() (D26)
   val literal = {[list]: "x"}       // check: a List<int> can change, so it cannot be a key: a frozen copy can, list.frozen() (D26)

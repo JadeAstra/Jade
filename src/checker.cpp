@@ -8050,6 +8050,25 @@ struct Checker::Impl {
         if (silent == 0 && t.known()) pendingKeys.push_back(PendingKey{unit, &at, t});
     }
 
+    // The keys a map or a set of the standard library's is made with (G60): setOf(a, b) and
+    // mutableSetOf's items, and mapOf(k to v) and mutableMapOf's keys written with `to`.
+    void noteMadeKeys(const CallExpr& c, const std::string& name, const FuncInfo* f) {
+        if (f == nullptr || f->unit == nullptr || !f->unit->prelude || c.namedCount != 0) return;
+        const bool set = name == "setOf" || name == "mutableSetOf";
+        if (!set && name != "mapOf" && name != "mutableMapOf") return;
+        for (const ExprPtr& arg : c.args) {
+            if (set) {
+                noteKey(*arg, typeQuietly(*arg));
+                continue;
+            }
+            if (arg->kind != ExprKind::Call) continue;
+            const auto& pair = static_cast<const CallExpr&>(*arg);
+            if (pair.callee->kind != ExprKind::Member || static_cast<const MemberExpr&>(*pair.callee).name != "to") continue;
+            const Expr& key = *static_cast<const MemberExpr&>(*pair.callee).object;
+            noteKey(key, typeQuietly(key));
+        }
+    }
+
     // Why an object of the class cannot be a key, as words after "cannot be a key:"; empty when
     // it can, or when only the program running can tell (an interface, which any class may be).
     // What reading a function as part of a class's == or hashCode finds, following what it
@@ -8549,7 +8568,11 @@ struct Checker::Impl {
                     Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                     return constructorCall(g->cls, args, c.typeArgs, c);
                 }
-                if (!g->funcs.empty()) return callFunctions(g->funcs, c, n, {}, nullptr);
+                if (!g->funcs.empty()) {
+                    const Type made = callFunctions(g->funcs, c, n, {}, nullptr);
+                    noteMadeKeys(c, n, g->funcs[0]);
+                    return made;
+                }
                 if (g->var != nullptr) return callValue(fieldType(g->var), c, n);
             }
             // The free conversion functions that went for members (D142, D74).
