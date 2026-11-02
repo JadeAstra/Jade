@@ -1,0 +1,7 @@
+// Reading a property calls its getter, and what that may throw goes where a call's would (G38).
+class Doc(var path : string) {
+  val text : string
+    get() => throw IOException("no " + path)
+}
+val reader : () -> string = { Doc("x").text }
+// expect compile error: error_getter_throws_kept.astra:6:29: error: this lambda may throw IOException, which nothing can catch where it is called: it is kept as a () -> string, which throws nothing checked; catch it inside the lambda (D35)

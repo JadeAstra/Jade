@@ -201,7 +201,10 @@ struct FieldInfo {
     bool typeWritten = false;
     Type type;
     int state = 0;  // as FuncInfo::resultState
-    FuncInfo* getterFn = nullptr;  // the accessor written under it, once its class is checked
+    // The accessors written under it, as functions (accessorOf): what reading or assigning it
+    // calls, and so what that may throw (G38).
+    FuncInfo* getterFn = nullptr;
+    FuncInfo* setterFn = nullptr;
 };
 
 struct ClassInfo {
@@ -729,11 +732,21 @@ struct Checker::Impl {
             ownMembersOnly = wasOwn;
             for (const auto& b : s.bridges) {
                 FuncInfo* getter = newFunc(*b->getter, info->unit, k);
+                bridgeGetters.push_back({getter, iface, b->name});
                 checkFunctionBody(getter, nullptr);
             }
             for (FuncInfo* f : funs) checkFunctionBody(f, nullptr);
         }
     }
+
+    // The getters of the extends checked, with the interface whose property each gives: each
+    // throws no more than that property's getter may (G39).
+    struct BridgeGetter {
+        FuncInfo* getter;
+        ClassInfo* iface;
+        std::string name;
+    };
+    std::vector<BridgeGetter> bridgeGetters;
 
     // An extend of a built-in type (G30): what the interface asks of it, it has or a getter
     // gives; a getter replaces nothing of its own; one type and interface, one way.
@@ -778,6 +791,7 @@ struct Checker::Impl {
             FuncInfo* getter = newFunc(*b->getter, info.unit, nullptr);
             getter->isExtension = true;
             getter->receiver = type;
+            bridgeGetters.push_back({getter, iface, b->name});
             checkFunctionBody(getter, nullptr);
         }
         for (FuncInfo* f : funs) checkFunctionBody(f, nullptr);
@@ -3959,8 +3973,7 @@ struct Checker::Impl {
             }
             for (const auto* acc : {field->getter.get(), field->setter.get()}) {
                 if (acc == nullptr) continue;
-                FuncInfo* fn = newFunc(*acc, k->unit, k);
-                if (acc == field->getter.get()) f->getterFn = fn;
+                FuncInfo* fn = accessorOf(f, acc == field->setter.get());
                 if (acc == field->getter.get() && !acc->returnType.present()) {
                     fn->resolved = true;
                     fn->resultWritten = declared.known();
@@ -4381,6 +4394,7 @@ struct Checker::Impl {
             case ExprKind::IncDec: {
                 const auto& i = static_cast<const IncDecExpr&>(e);
                 checkValueFieldWrite(*i.target);
+                if (FieldInfo* p = propertyAssigned(*i.target)) noteAccessor(p, true, *i.target);
                 Type t = expr(*i.target);
                 // a?.count++ does nothing when a is null, so the null that ?. adds is not the
                 // field's own
@@ -4826,6 +4840,7 @@ struct Checker::Impl {
                 Member m = lookupMember(self.kind == Type::Class && !self.nullable ? self : selfType(ctx->cls), n.name);
                 noteKeyMember(m, n.name);
                 if (m.field) {
+                    noteAccessor(m.field, false, n);
                     if (ClassInfo* t = insideObject(ctx->cls, fieldType(m.field))) fieldCandidates[&n] = IndexCandidate{effectKey(), t};
                     return subst(fieldType(noteConst(n, m.field)), m.env);
                 }
@@ -4858,7 +4873,10 @@ struct Checker::Impl {
             for (const auto& [label, around] : ctx->cls->outerThis) {
                 if (!around.known()) return unknownType();
                 Member m = lookupMember(around, n.name);
-                if (m.field) return subst(fieldType(m.field), m.env);
+                if (m.field) {
+                    noteAccessor(m.field, false, n);
+                    return subst(fieldType(m.field), m.env);
+                }
                 if (m.getter) return subst(resultOf(m.getter), m.env);
                 if (!m.methods.empty()) return unknownType();
             }
@@ -5206,6 +5224,40 @@ struct Checker::Impl {
                 (c->noWait == ObjectMade || (c->fn != nullptr && (c->fn->name == "init" || (c->fn->decl != nullptr && c->fn->decl->isMutating)))))
                 return c->cls;
             if (!c->isLambda) break;
+        }
+        return nullptr;
+    }
+
+    // The getter or setter written under a property, as a function, made when first asked for:
+    // reading the property calls its getter and assigning it its setter, and they throw what
+    // those may (G38). Null for a field with neither.
+    FuncInfo* accessorOf(FieldInfo* f, bool setter) {
+        if (f == nullptr || f->decl == nullptr) return nullptr;
+        const FunctionDecl* d = setter ? f->decl->setter.get() : f->decl->getter.get();
+        if (d == nullptr) return nullptr;
+        FuncInfo*& fn = setter ? f->setterFn : f->getterFn;
+        if (fn == nullptr) {
+            auto known = funcOf.find(d);
+            fn = known != funcOf.end() ? known->second : newFunc(*d, f->unit, f->owner);
+        }
+        return fn;
+    }
+    // The target of a plain `x = v`, which reads nothing: its getter is not called.
+    const Node* assignedOnly = nullptr;
+    void noteAccessor(FieldInfo* f, bool setter, const Node& at) {
+        if (!setter && &at == assignedOnly) return;
+        if (FuncInfo* fn = accessorOf(f, setter)) noteCallThrows(fn, nullptr, noArgs(), nullptr, at);
+    }
+    // The property an assignment, `+=` or `++` gives a value, if it is a field of a class.
+    FieldInfo* propertyAssigned(const Expr& target) {
+        if (target.kind == ExprKind::Member) {
+            const auto& m = static_cast<const MemberExpr&>(target);
+            const Type owner = withNull(typeQuietly(*m.object), false);
+            return owner.kind == Type::Class && owner.cls != nullptr ? fieldNamed(owner.cls, m.name) : nullptr;
+        }
+        if (target.kind == ExprKind::Name && ctx != nullptr && ctx->cls != nullptr && !ctx->isStatic) {
+            const auto& n = static_cast<const NameExpr&>(target);
+            if (findLocal(n.name) == nullptr) return fieldNamed(ctx->cls, n.name);
         }
         return nullptr;
     }
@@ -5714,6 +5766,13 @@ struct Checker::Impl {
     Type assign(const AssignExpr& a) {
         atomicAssign(a);
         checkValueFieldWrite(*a.target);
+        if (FieldInfo* p = propertyAssigned(*a.target)) noteAccessor(p, true, *a.target);
+        struct Restore {
+            const Node*& at;
+            const Node* saved;
+            ~Restore() { at = saved; }
+        } restore{assignedOnly, assignedOnly};
+        if (a.op == TokenType::Eq) assignedOnly = a.target.get();
         if (a.target->kind == ExprKind::Index) {
             const Type list = typeQuietly(*static_cast<const IndexExpr&>(*a.target).object);
             noteListChange(list);
@@ -6302,6 +6361,7 @@ struct Checker::Impl {
             const bool named = at.object->kind == ExprKind::Name || at.object->kind == ExprKind::This;
             if (m.field) {
                 if (named) noteConst(at, m.field);
+                noteAccessor(m.field, false, at);
                 result = subst(fieldType(m.field), m.env);
             } else if (m.getter) {
                 noteCallThrows(m.getter, nullptr, noArgs(), nullptr, at);
@@ -7389,6 +7449,40 @@ struct Checker::Impl {
                                      "catch it here, or write throws " + classList(extra) + " on " + f->owner->name + "." + f->name + " (D53)");
             }
         }
+        // A property's getter or setter, or an extend's getter, taking the place of a property
+        // above throws no more than that one's may, which is what callers through it handle
+        // (D53, G38, G39); a property above with no getter or setter of its own may throw nothing.
+        auto accessorWord = [](bool setter) { return std::string(setter ? "set()" : "get()"); };
+        auto judgeAccessor = [&](FuncInfo* g, bool setter, FieldInfo* above, const std::string& what) {
+            if (g == nullptr || g->unit == nullptr || judging.count(g->unit) == 0 || above == nullptr || above->owner == nullptr) return;
+            FuncInfo* b = accessorOf(above, setter);
+            const std::vector<ClassInfo*> extra = beyond(allowance(g).classes, b != nullptr ? allowance(b).classes : std::vector<ClassInfo*>{});
+            if (extra.empty()) return;
+            const std::string place = above->owner->name + "." + above->name;
+            unit = g->unit;
+            report(*g->decl, what + " may throw " + classList(extra) + ", which " + place + " it takes the place of cannot: callers " +
+                                 "through " + above->owner->name + " would not catch it; catch it here, or write throws " + classList(extra) +
+                                 " on the " + accessorWord(setter) + " of " + place + " (D53)");
+        };
+        for (const auto& k : classStore) {
+            if (k->unit == nullptr || judging.count(k->unit) == 0) continue;
+            resolveSupers(k.get());
+            for (const auto& [name, f] : k->fields) {
+                if (f->owner != k.get()) continue;
+                for (bool setter : {false, true}) {
+                    FuncInfo* g = accessorOf(f, setter);
+                    if (g == nullptr) continue;
+                    std::vector<ClassInfo*> supers;
+                    if (k->superclass != nullptr) supers.push_back(k->superclass);
+                    supers.insert(supers.end(), k->interfaces.begin(), k->interfaces.end());
+                    for (ClassInfo* s : supers)
+                        judgeAccessor(g, setter, lookupMember(classType(s), name).field, "the " + accessorWord(setter) + " of '" + name + "'");
+                }
+            }
+        }
+        for (const BridgeGetter& b : bridgeGetters)
+            judgeAccessor(b.getter, false, lookupMember(classType(b.iface), b.name).field, "this get() of '" + b.name + "'");
+
         // A function as a value throws what it writes (D52).
         for (const auto& [f, at, user] : functionValues) {
             if (judging.count(user) == 0) continue;
@@ -8934,6 +9028,10 @@ struct Checker::Impl {
     static void eachFunction(const std::vector<StmtPtr>& statements, const std::function<void(const FunctionDecl&)>& visit) {
         std::function<void(const ClassStmt&)> inClass = [&](const ClassStmt& c) {
             for (const auto& m : c.methods) visit(*m);
+            for (const auto& field : c.fields) {
+                if (field->getter) visit(*field->getter);
+                if (field->setter) visit(*field->setter);
+            }
             for (const auto& nested : c.nested) inClass(*nested);
         };
         for (const StmtPtr& s : statements) {

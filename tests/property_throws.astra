@@ -1,0 +1,46 @@
+// A property's getter and setter throw as functions do (G38): reading it calls its getter and
+// assigning it its setter, so what they may throw goes where a call's would.
+class Doc(var path : string) {
+  val text : string
+    get() => path.isEmpty() ? throw IOException("no path") : "text of " + path
+  var saved : string = ""
+    set(v) {
+      if (v.isEmpty()) { throw IOException("nothing to save") }
+      field = v
+    }
+}
+// Passed on by a function to its caller, which catches it.
+fun read(d : Doc) : string => d.text
+fun save(d : Doc, v : string) { d.saved = v }
+try { print(read(Doc(""))) } catch (e : IOException) { print(e.message) }            // expect: no path
+try { save(Doc("a"), "") } catch (e : IOException) { print(e.message) }               // expect: nothing to save
+// A lambda kept as one that throws IOException may read and assign them.
+val reader : () -> string throws IOException = { Doc("b").text }
+print(reader())                                                                        // expect: text of b
+val counter = Doc("c")
+val saver : () -> unit throws IOException = { counter.saved = "kept" }
+saver()
+print(counter.saved)                                                                   // expect: kept
+
+// `x = v` reads nothing: a getter that throws is not called by it.
+class Gauge {
+  var level : int = 0
+    get() => field < 0 ? throw IOException("broken") : field
+    set(v) { field = v }
+}
+val g = Gauge()
+val setOnly : () -> unit = { g.level = 3 }
+setOnly()
+try { print(g.level) } catch (e : IOException) { print("broken") }                    // expect: 3
+
+// throws written on a getter or setter is a promise its body keeps, and room for overrides.
+interface Weighed {
+  val weight : int
+    get() throws IOException
+}
+class Box(val w : int) : Weighed {
+  override val weight : int
+    get() throws IOException => w < 0 ? throw IOException("no weight") : w
+}
+fun weigh(x : Weighed) : int => x.weight
+try { print(weigh(Box(5)), weigh(Box(-1))) } catch (e : IOException) { print(e.message) }   // expect: no weight

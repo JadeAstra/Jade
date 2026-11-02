@@ -1831,10 +1831,14 @@ it on:
 
 - a lambda kept to be called later (a stored callback, a thread's or a task's body, a field of a
   function type): it may throw only what its type says, so it catches what it can meet;
-- a method taking the place of another, or a class fitting an interface: it throws no more
-  than the one it replaces says (D51, D53);
+- a method taking the place of another, a property's getter or setter taking the place of one
+  above, or a class fitting an interface, an `extend`'s getters too: it throws no more than the
+  one it replaces says (D51, D53);
 - a static or lazy starting value, and a function used as a value, which throws what it writes;
 - a library's public function, which says what it throws.
+
+Reading a property calls its getter, and assigning it (`=`, `+=`, `++`) its setter: what they
+may throw goes where a call's would. `x = v` reads nothing, so a getter is not called by it.
 
 A function that calls a lambda it was given throws what that lambda throws, so
 `paths.map { readText(it) }` needs nothing, and its caller handles the `IOException`. A `throw e`
@@ -1842,7 +1846,8 @@ of a catch clause's variable throws again only what the `try` could throw, of th
 the top of a script an uncaught exception is reported when it happens.
 
 `throws`, after the result type, says what a function may throw, with `|` between several
-(D54). It is required on a library's public functions and on a method with no body; anywhere
+(D54), and after `get()` or `set(v)` for a property's. It is required on a library's public
+functions and on a method with no body; anywhere
 else it is a check, an error if the body can throw anything else, and room for overrides to
 throw what it names. A function type says it the same way:
 
