@@ -236,6 +236,7 @@ struct ClassInfo {
     std::unordered_map<std::string, std::vector<FuncInfo*>> staticMethods;
     std::unordered_map<std::string, FuncInfo*> getters;  // `get name()`: a property
     std::unordered_map<std::string, FuncInfo*> setters;  // `set name(value)`
+    std::unordered_map<std::string, FuncInfo*> staticGetters, staticSetters;  // a static property's (G57)
     std::vector<FuncInfo*> inits;
     bool headerInit = false;          // the generated initializer, from the header
     FuncInfo* headerFunc = nullptr;   // ... as a function, once worked out
@@ -1446,8 +1447,8 @@ struct Checker::Impl {
         for (const auto& m : c.methods) {
             FuncInfo* f = newFunc(*m, u, k);
             f->isExternal = c.isExternal;
-            if (m->accessor == FunctionDecl::Accessor::Get) k->getters[m->name] = f;
-            else if (m->accessor == FunctionDecl::Accessor::Set) k->setters[m->name] = f;
+            if (m->accessor == FunctionDecl::Accessor::Get) (m->isStatic ? k->staticGetters : k->getters)[m->name] = f;
+            else if (m->accessor == FunctionDecl::Accessor::Set) (m->isStatic ? k->staticSetters : k->setters)[m->name] = f;
             else if (m->name == "init" && !m->isStatic) k->inits.push_back(f);
             else if (m->isStatic) k->staticMethods[m->name].push_back(f);
             else k->methods[m->name].push_back(f);
@@ -5769,6 +5770,7 @@ struct Checker::Impl {
 
     Type assign(const AssignExpr& a) {
         atomicAssign(a);
+        noteStaticAssigned(*a.target);
         checkValueFieldWrite(*a.target);
         if (FieldInfo* p = propertyAssigned(*a.target)) noteAccessor(p, true, *a.target);
         struct Restore {
@@ -6043,9 +6045,11 @@ struct Checker::Impl {
                     return unknownType();
                 }
                 if (ClassInfo* k = classNamed(base)) {
-                    if ((m.name == "className" || m.name == "class") && k->statics.count(m.name) == 0)
+                    if ((m.name == "className" || m.name == "class") && k->statics.count(m.name) == 0) {
                         report(m, base + "." + m.name + " is written " + base + "#" + (m.name == "className" ? ".name" : "") +
                                       ": `#` gives a class (D48)");
+                        return unknownType();
+                    }
                     return staticMember(k, m);
                 }
             }
@@ -6210,23 +6214,77 @@ struct Checker::Impl {
     }
 
     Type staticMember(ClassInfo* k, const MemberExpr& m) {
-        auto s = k->statics.find(m.name);
-        if (s != k->statics.end()) return fieldType(noteConst(m, s->second));
-        auto n = k->nested.find(m.name);
-        if (n != k->nested.end()) return n->second->isObject ? classType(n->second) : unknownType();
-        auto sm = k->staticMethods.find(m.name);
-        if (sm != k->staticMethods.end() && sm->second.size() == 1) return functionValue(sm->second[0]);
-        // An old name of the standard library's, Font.bold and the like, is said; other names the
-        // checker cannot yet rule out (static properties with getters are not kept here).
-        if (sm == k->staticMethods.end() && !hasStatic(k, m.name))
-            if (const std::string advice = preludeAdvice(k, m.name); !advice.empty()) report(m, advice);
+        // The class's own, or those of a class above it reached through it (G57).
+        for (ClassInfo* c = k; c != nullptr; c = c->superclass) {
+            resolveSupers(c);
+            auto s = c->statics.find(m.name);
+            if (s != c->statics.end()) return fieldType(noteConst(m, s->second));
+            auto n = c->nested.find(m.name);
+            if (n != c->nested.end()) return n->second->isObject ? classType(n->second) : unknownType();
+            auto sm = c->staticMethods.find(m.name);
+            if (sm != c->staticMethods.end()) return sm->second.size() == 1 ? functionValue(sm->second[0]) : unknownType();
+            auto g = c->staticGetters.find(m.name);
+            if (g != c->staticGetters.end()) return resultOf(g->second);
+            if (c->isEnum && (m.name == "entries" || m.name == "valueOf" || m.name == "values")) return unknownType();
+        }
+        missingStatic(k, m.name, m, "static member");
         return unknownType();
     }
 
-    // Whether a class or one above it has a static member, a nested class or an entry of the name.
+    // A static name the class and those above it lack (G57): an old name of the standard
+    // library's says what it is now (Font.bold and the like); any other is an error too, unless a
+    // class above is one the checker cannot see.
+    void missingStatic(ClassInfo* k, const std::string& name, const Node& at, const char* what) {
+        if (hasStatic(k, name)) return;
+        if (const std::string advice = preludeAdvice(k, name); !advice.empty()) {
+            report(at, advice);
+            return;
+        }
+        // Judged once the program has been read: a name the program assigns on the class
+        // (`Counter.note = "kept"`) is stored there, and is one of its statics.
+        if (!hasUnknownSuper(k) && silent == 0) pendingStatics.push_back(PendingStatic{unit, &at, k, name, what});
+    }
+
+    struct PendingStatic {
+        Unit* unit;
+        const Node* at;
+        ClassInfo* cls;
+        std::string name;
+        const char* what;
+    };
+    std::vector<PendingStatic> pendingStatics;
+    std::set<std::pair<const ClassInfo*, std::string>> assignedStatics;  // `K.name = value` anywhere
+
+    // `K.name = value`, a class's name and a name: the name is stored on the class.
+    void noteStaticAssigned(const Expr& target) {
+        if (target.kind != ExprKind::Member) return;
+        const auto& m = static_cast<const MemberExpr&>(target);
+        if (m.object->kind != ExprKind::Name) return;
+        const std::string& base = static_cast<const NameExpr&>(*m.object).name;
+        if (findLocal(base) != nullptr || nameIsMember(base)) return;
+        if (ClassInfo* k = classNamed(base)) assignedStatics.insert({k, m.name});
+    }
+
+    void judgeStatics() {
+        Unit* saved = unit;
+        for (const PendingStatic& p : pendingStatics) {
+            bool assigned = false;
+            for (const ClassInfo* c = p.cls; c != nullptr && !assigned; c = c->superclass) assigned = assignedStatics.count({c, p.name}) != 0;
+            if (assigned) continue;
+            unit = p.unit;
+            report(*p.at, p.cls->name + " has no " + p.what + " '" + p.name + "'");
+        }
+        pendingStatics.clear();
+        unit = saved;
+    }
+
+    // Whether a class or one above it has a static member, a static property, a nested class or
+    // an entry of the name.
     static bool hasStatic(const ClassInfo* k, const std::string& name) {
         for (const ClassInfo* c = k; c != nullptr; c = c->superclass) {
-            if (c->statics.count(name) != 0 || c->nested.count(name) != 0 || c->staticMethods.count(name) != 0) return true;
+            if (c->statics.count(name) != 0 || c->nested.count(name) != 0 || c->staticMethods.count(name) != 0 ||
+                c->staticGetters.count(name) != 0)
+                return true;
             if (c->isEnum && (name == "entries" || name == "valueOf" || name == "values")) return true;
         }
         return false;
@@ -8615,14 +8673,19 @@ struct Checker::Impl {
                         return unknownType();
                     }
                     if (ClassInfo* k = classNamed(base)) {
-                        auto sm = k->staticMethods.find(m.name);
-                        if (sm != k->staticMethods.end()) return callFunctions(sm->second, c, k->name + "." + m.name, {}, nullptr);
-                        auto nested = k->nested.find(m.name);
-                        if (nested != k->nested.end() && !nested->second->isObject) {
-                            Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
-                            return constructorCall(nested->second, args, c.typeArgs, c);
+                        // The class's own, or a class above it's, reached through it (G57).
+                        for (ClassInfo* above = k; above != nullptr; above = above->superclass) {
+                            resolveSupers(above);
+                            auto sm = above->staticMethods.find(m.name);
+                            if (sm != above->staticMethods.end()) return callFunctions(sm->second, c, above->name + "." + m.name, {}, nullptr);
+                            auto nested = above->nested.find(m.name);
+                            if (nested != above->nested.end() && !nested->second->isObject) {
+                                Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
+                                return constructorCall(nested->second, args, c.typeArgs, c);
+                            }
                         }
                         for (const ExprPtr& a : c.args) expr(*a);
+                        missingStatic(k, m.name, m, "static function");
                         return unknownType();
                     }
                 }
@@ -8818,6 +8881,7 @@ struct Checker::Impl {
         ctx = nullptr;
         judgeWaits();
         judgeKeys();
+        judgeStatics();
         judging.clear();
         for (size_t i = first; i < units.size(); i++) judging.insert(units[i].get());
         judgeInline();
@@ -10033,6 +10097,7 @@ void Checker::checkBodiesOf(const std::string& fileKey) {
     impl_->checkUnit(u);
     impl_->judgeWaits();
     impl_->judgeKeys();  // keys it uses, as for the files checked at first (G26)
+    impl_->judgeStatics();
 }
 
 std::string Checker::inPlaceFacts(const std::string& fileKey) {

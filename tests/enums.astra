@@ -35,7 +35,6 @@ try { Way.up = Way.down } catch (e) { print(e.message) }   // expect: cannot ass
 try { Way.entries = [] } catch (e) { print(e.message) }    // expect: cannot assign to static val 'entries' of Way
 try { Way.up.name = "north" } catch (e) { print(e.message) }   // expect: cannot assign to 'name' of an entry of enum Way
 try { Way.up.ordinal = 9 } catch (e) { print(e.message) }      // expect: cannot assign to 'ordinal' of an entry of enum Way
-try { print(Way.sideways) } catch (e) { print(e.message) }     // expect: undefined static member 'sideways' on class Way
 try { class Diagonal : Way { } } catch (e) { print(e.message) }   // expect: cannot inherit from enum Way
 
 // With a header, fields, methods, properties and static members, like a class.
@@ -123,7 +122,6 @@ key = name
 print(key, key == SortKey.name, Way#.name, Planet#.name, Planet.EARTH.name)   // expect: name true Way Planet EARTH
 class Plain
 print(Plain#.name, (Plain())#.name, Plain().let { it#.name })   // expect: Plain Plain Plain
-try { print(Plain.name) } catch (e) { print(e.message) }   // expect: undefined static member 'name' on class Plain
 
 // An enum may put its own `entries`, `name` or `ordinal` in place of the given one by saying
 // override, as long as it is still a property of the same type.

@@ -104,7 +104,6 @@ class Derived : Base {
 Derived.count = 5
 print(Base.count, Derived.count, Derived.KIND, Derived.describe(), Derived.EXTRA)   // expect: 5 5 base a base extra
 try { Derived.KIND = "x" } catch (e) { print(e.message) }   // expect: cannot assign to static val 'KIND' of Base
-try { print(Base.EXTRA) } catch (e) { print(e.message) }    // expect: undefined static member 'EXTRA' on class Base
 
 // A static and an instance member may share a name; they are different things.
 class Counter {

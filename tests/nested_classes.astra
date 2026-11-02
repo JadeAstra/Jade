@@ -137,7 +137,6 @@ print(A.B.C.NAME, A.B.C().where(), A.B.make() is A.B.C)   // expect: A.B.C A.B.C
 
 // A nested class is a val of the outer class.
 try { Event.Click = null } catch (e) { print(e.message) }   // expect: cannot assign to static val 'Click' of Event
-try { print(Event.Nothing) } catch (e) { print(e.message) }   // expect: undefined static member 'Nothing' on class Event
 
 // In a function.
 fun local() {
