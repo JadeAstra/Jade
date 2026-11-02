@@ -6666,16 +6666,6 @@ void VM::run(int baseFrame) {
                         // this round keeps its values, the arguments become the parameters, and it
                         // starts again in this frame.
                         const int count = READ_U8();
-                        // A generic function given its type arguments again (G33): its frame's from
-                        // here on, made before anything moves, as making them may collect.
-                        if (pendingTypeArgs_ != nullptr) {
-                            const FunctionProto* own = frame->closure->proto;
-                            if ((own->typeArgs & kTypeArgsOwn) != 0)
-                                frameTypeArgs(frame - frames_) = own->typeArgBase != 0
-                                                                     ? joinTypeArgs(frame->closure->typeArgs, own->typeArgBase, pendingTypeArgs_)
-                                                                     : pendingTypeArgs_;
-                            pendingTypeArgs_ = nullptr;
-                        }
                         Value* const given = sp_ - count;
                         closeUpvalues(base + 1);
                         for (int i = 0; i < count; i++) base[1 + i] = given[i];

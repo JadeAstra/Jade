@@ -354,6 +354,7 @@ struct Args {
     const std::vector<std::string>& names;
     bool trailing = false;
     bool spread = false;
+    const std::vector<char>* spreadAt = nullptr;  // one per argument: `*list`
 };
 
 }  // namespace
@@ -3769,7 +3770,7 @@ struct Checker::Impl {
             if (!kind->isObject) return nullptr;  // a class's name is not a value
             return std::make_unique<Type>(classType(kind));
         }
-        Args args{call->args, call->names, call->trailingLambda, call->hasSpread};
+        Args args{call->args, call->names, call->trailingLambda, call->hasSpread, &call->spread};
         return std::make_unique<Type>(constructorCall(kind, args, call->typeArgs, *call));
     }
 
@@ -6506,6 +6507,39 @@ struct Checker::Impl {
         std::vector<std::tuple<int, Type, const Expr*, std::string>> bundled;
     };
 
+    // The parameter of each argument of a call with `*list` among them, where that is known: the
+    // arguments before the vararg go to the parameters in turn, and those from it on, spread or
+    // not, to the vararg; one by name, and a lambda after the call, as for any call.
+    bool spreadBinding(FuncInfo* f, const Args& args, Binding& b) {
+        resolveFunc(f);
+        const size_t n = f->params.size();
+        if (f->vararg < 0) return false;
+        b.given.assign(n, false);
+        b.paramOf.assign(args.exprs.size(), -1);
+        const size_t count = args.trailing && !args.exprs.empty() ? args.exprs.size() - 1 : args.exprs.size();
+        size_t positional = 0;
+        for (size_t i = 0; i < count; i++) {
+            const std::string name = i < args.names.size() ? args.names[i] : std::string();
+            const bool spread = args.spreadAt == nullptr || (i < args.spreadAt->size() && (*args.spreadAt)[i] != 0);
+            if (!name.empty()) {
+                auto found = std::find(f->paramNames.begin(), f->paramNames.end(), name);
+                if (found == f->paramNames.end()) return false;
+                b.paramOf[i] = static_cast<int>(found - f->paramNames.begin());
+            } else if (positional < static_cast<size_t>(f->vararg)) {
+                if (spread) return false;  // a list spread over parameters that are not the vararg
+                b.paramOf[i] = static_cast<int>(positional++);
+            } else {
+                b.paramOf[i] = f->vararg;
+            }
+            b.given[static_cast<size_t>(b.paramOf[i])] = true;
+        }
+        if (args.trailing && !args.exprs.empty() && n > 0) {
+            b.paramOf.back() = static_cast<int>(n - 1);
+            b.given[n - 1] = true;
+        }
+        return true;
+    }
+
     Binding bind(FuncInfo* f, const Args& args, const Node& at, const std::string& what) {
         resolveFunc(f);
         Binding b;
@@ -6627,6 +6661,12 @@ struct Checker::Impl {
             for (const ExprPtr& a : args.exprs) expr(*a);
             if (envOut != nullptr) *envOut = env;
             noteTypeArguments(f, env, at);
+            // Where every list spread goes to the vararg, each argument's parameter is known, and
+            // an inline function is copied in as for any call (G34).
+            Binding b;
+            const bool bound = spreadBinding(f, args, b);
+            if (bound && f->decl != nullptr && f->decl->isInline && silent == 0) noteInlineCall(f, b, at);
+            noteCallThrows(f, nullptr, args, bound ? &b : nullptr, at);
             return finishCall(f, env, vars, at);
         }
         Binding b = bind(f, args, at, what);
@@ -6898,7 +6938,7 @@ struct Checker::Impl {
             ~Noted() { at = saved; }
         } noted{methodCall, methodCall};
         methodCall = &c;
-        Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+        Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
         auto envOfForm = [&](size_t i) -> const Env& { return envs != nullptr && i < envs->size() ? (*envs)[i] : env; };
         // A function declared on an open list, map or set changes it (D32): called through a name
         // that may only read it, or on a frozen one (D26), whether it has one form or several
@@ -8373,13 +8413,13 @@ struct Checker::Impl {
                 if (lt.kind == Type::Function && !lt.nullable && lt.fnRef != nullptr && !lt.fnRef->typeParams.empty() && l->paramOf == nullptr &&
                     lt.fnRef->decl != nullptr) {
                     noteValueCallThrows(lt, c);
-                    Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                    Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                     return callWith(lt.fnRef, args, c.typeArgs, {}, nullptr, c, n + "(...)");
                 }
                 return callValue(lt, c, n);
             }
             if (ClassInfo* k = localClass(n); k != nullptr && !k->isObject) {
-                Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                 return constructorCall(k, args, c.typeArgs, c);
             }
             // A method of an object the code runs on.
@@ -8430,14 +8470,14 @@ struct Checker::Impl {
                     if (s != k->staticMethods.end()) return callFunctions(s->second, c, n, {}, nullptr);
                     auto nested = k->nested.find(n);
                     if (nested != k->nested.end() && !nested->second->isObject) {
-                        Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                        Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                         return constructorCall(nested->second, args, c.typeArgs, c);
                     }
                 }
             }
             if (const GlobalSym* g = findGlobal(*unit, n)) {
                 if (g->cls != nullptr && !g->cls->isObject) {
-                    Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                    Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                     return constructorCall(g->cls, args, c.typeArgs, c);
                 }
                 if (!g->funcs.empty()) return callFunctions(g->funcs, c, n, {}, nullptr);
@@ -8474,7 +8514,7 @@ struct Checker::Impl {
                     if (Namespace* ns = findAlias(*unit, base)) {
                         if (const GlobalSym* g = findIn(ns, m.name)) {
                             if (g->cls != nullptr && !g->cls->isObject) {
-                                Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                                Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                                 return constructorCall(g->cls, args, c.typeArgs, c);
                             }
                             if (!g->funcs.empty()) return callFunctions(g->funcs, c, m.name, {}, nullptr);
@@ -8487,7 +8527,7 @@ struct Checker::Impl {
                         if (sm != k->staticMethods.end()) return callFunctions(sm->second, c, k->name + "." + m.name, {}, nullptr);
                         auto nested = k->nested.find(m.name);
                         if (nested != k->nested.end() && !nested->second->isObject) {
-                            Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                            Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                             return constructorCall(nested->second, args, c.typeArgs, c);
                         }
                         for (const ExprPtr& a : c.args) expr(*a);
@@ -8584,7 +8624,7 @@ struct Checker::Impl {
                 if (ctx->cls->superclass != nullptr) {
                     Type sup = selfTypeArgs(ctx->cls->superclass, ctx->cls->superArgs);
                     if (s.method == "init") {
-                        Args args{c.args, c.names, c.trailingLambda, c.hasSpread};
+                        Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
                         superCall = true;
                         return constructorCall(ctx->cls->superclass, args, {}, c);
                     }

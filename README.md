@@ -798,7 +798,10 @@ does, is copied in; one the body keeps or passes elsewhere is made as usual, and
 variables its own, and it keeps its rights where it is copied: a private inline member may
 use the class's private fields wherever it is called. An inline function cannot call itself,
 directly or through others, cannot be declared inside another function, and an inline member
-cannot be overridden. The standard library's functions that take a lambda and run it there
+cannot be overridden. One with a `vararg` is copied in with the list it is given, made at the
+call, and so is a static one, `Class.f()`. A call giving a list with `*` is copied in where the
+list goes to the vararg; spread over the parameters before it, where the parameter each item
+goes to is known only when the call runs, it is an ordinary call. The standard library's functions that take a lambda and run it there
 and then are inline: `forEach`, `map`, `filter`, `any`, `first`, `fold`, `sumOf` and the rest
 for lists, maps and sets, the scope functions, `repeat`, `buildList` and `buildMap`.
 
@@ -806,8 +809,8 @@ for lists, maps and sets, the scope functions, `repeat`, `buildList` and `buildM
 
 A function that calls itself as its last step starts again in the same frame instead, so
 recursion of that shape never runs out of stack (D29). This holds for a top-level function,
-an extension, a function declared inside another, a generic one (with whatever type arguments
-the call gives), and a method calling itself on its own object where no subclass overrides it;
+an extension, a function declared inside another, a generic one giving itself its own type
+parameters again, and a method calling itself on its own object where no subclass overrides it;
 the call may be `return f(...)`, an expression body, a branch of `? :` or what follows `?:`, or
 what a branch of `if` or `when` gives, in what is returned. Inside a `try` it stays a call, as
 with Kotlin's `tailrec`: as a loop, an error from a deeper round would pass by the handlers of

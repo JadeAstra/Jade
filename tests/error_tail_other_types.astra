@@ -1,0 +1,5 @@
+// A generic function's call of itself giving it other type arguments than its own is not a
+// loop, so tail fun refuses it (D29, G33).
+tail fun <T> lastIs(x : any?, probe : T, n : int) : bool => n == 0 ? x is T : lastIs(x, "text", n - 1)
+print(lastIs("a", 1, 3))
+// expect compile error: this call cannot be a loop, as tail fun lastIs asks: it gives lastIs other type arguments than its own, which a loop keeps (D29)

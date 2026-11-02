@@ -1,0 +1,43 @@
+// An inline function with a vararg, a static one, and a call passing a list with * to the
+// vararg are copied in where they are called too (D59, G34): a bare return in their lambdas
+// leaves the function around.
+inline fun firstOver(limit : int, vararg values : int, action : (int) -> unit) {
+  for v in values {
+    if (v > limit) { action(v) }
+  }
+}
+fun findBig() : int {
+  firstOver(5, 1, 7, 9) { return it }
+  return -1
+}
+fun findIn(xs : List<int>) : int {
+  firstOver(5, *xs, 0, *[6]) { return it }
+  return -1
+}
+fun findNone() : int {
+  firstOver(0) { return it }
+  return -2
+}
+print(findBig(), findIn([2, 8, 3]), findIn([1]), findNone())   // expect: 7 8 6 -2
+
+// The list a vararg is given is its own: a list passed with * is not changed through it.
+inline fun grow(vararg values : int) : List<int> {
+  val all = values as open List<int>
+  all.add(0)
+  return all
+}
+val three = [1, 2, 3]
+print(grow(*three), three)                                      // expect: [1, 2, 3, 0] [1, 2, 3]
+
+class Maths {
+  static {
+    inline fun applyTwice(x : int, f : (int) -> int) : int => f(f(x))
+  }
+}
+fun capped(x : int) : int {
+  return Maths.applyTwice(x) {
+    if (it > 100) { return -1 }
+    it * 10
+  }
+}
+print(capped(2), capped(20))                                    // expect: 200 -1

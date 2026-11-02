@@ -889,10 +889,11 @@ private:
         Checker::InlineCall info;
         if (!session_.checker->inlineCall(e, info)) return false;
         const FunctionDecl& fn = *info.fn;
-        if (fn.varargIndex >= 0 || fn.isStatic || fn.isAbstract || e.hasSpread) return false;
+        if (fn.isAbstract) return false;
         const MemberExpr* member = e.callee->kind == ExprKind::Member ? static_cast<const MemberExpr*>(e.callee.get()) : nullptr;
         if (member != nullptr && importedMember(*member->object, member->name, *member) != nullptr) member = nullptr;
-        const bool hasReceiver = info.extension || info.owner != nullptr;
+        // A static member has no object: `Class.f()` names its class, which there is nothing to work out of (G34).
+        const bool hasReceiver = info.extension || (info.owner != nullptr && !fn.isStatic);
         if (hasReceiver && member == nullptr && e.callee->kind != ExprKind::Name) return false;
 
         const int saved = enterValueBlock();
@@ -920,6 +921,37 @@ private:
             if (p < 0 || static_cast<size_t>(p) >= n) {
                 compileExpr(arg);
                 emit(Op::Pop);
+                continue;
+            }
+            if (p == fn.varargIndex) {
+                // The vararg's arguments, from here on, gathered into the list it is (G34): each
+                // run of plain ones, and each list written with a star, added in turn.
+                size_t end = i;
+                while (end < e.args.size() && end < info.paramOf.size() && info.paramOf[end] == p) end++;
+                bool spreading = false;
+                for (size_t k = i; k < end; k++) spreading = spreading || (k < e.spread.size() && e.spread[k]);
+                if (!spreading) {
+                    for (size_t k = i; k < end; k++) compileArg(*e.args[k]);
+                    emit(Op::BuildList, static_cast<int>(end - i));
+                } else {
+                    emit(Op::BuildList, 0);
+                    for (size_t k = i; k < end;) {
+                        int run = 0;
+                        for (; k < end && !e.spread[k]; k++, run++) compileArg(*e.args[k]);
+                        if (run > 0) {
+                            emit(Op::BuildList, run);
+                            emit(Op::Spread);
+                        }
+                        if (k < end) {
+                            compileExpr(*e.args[k]);
+                            line_ = e.args[k]->line;
+                            emit(Op::Spread);
+                            k++;
+                        }
+                    }
+                }
+                given[static_cast<size_t>(p)] = addLocal("(inline argument)", true, arg, true);
+                i = end - 1;
                 continue;
             }
             if (session_.checker->copiedIn(fn, p)) {
@@ -999,8 +1031,10 @@ private:
                 aliasLocal(fn.params[p], slotOf(given[p]));
                 continue;
             }
-            // Left out: its default, worked out here from the parameters before it.
-            if (fn.paramDefaults[p]) compileExpr(*fn.paramDefaults[p]);
+            // Left out: its default, worked out here from the parameters before it; a vararg
+            // given nothing is an empty list.
+            if (static_cast<int>(p) == fn.varargIndex) emit(Op::BuildList, 0);
+            else if (fn.paramDefaults[p]) compileExpr(*fn.paramDefaults[p]);
             else emit(Op::Null);
             addLocal(fn.params[p], true, fn, true);
         }
@@ -3317,9 +3351,9 @@ private:
     //
     // A function calling itself as its last step, on the same object, starts again in the same
     // frame: `return walk(next)`, or such a call as a branch of `? :`, after `?:`, or where a
-    // branch of `if` or `when` gives what it returns; a generic one with the type arguments the
-    // call gives (G33). Not inside a try, whose handlers belong to the frame's round, as with
-    // Kotlin's tailrec, nor with arguments by name or spread.
+    // branch of `if` or `when` gives what it returns; a generic one where the call gives it its
+    // own type parameters again, which its frame keeps (G33). Not inside a try, whose handlers
+    // belong to the frame's round, as with Kotlin's tailrec, nor with arguments by name or spread.
     bool tailReturnHere() const {
         return session_.checker != nullptr && fs_->decl != nullptr && !fs_->isLambda && fs_->tryDepth == 0 && fs_->finally == nullptr &&
                (fs_->kind == FunctionKind::Function || fs_->kind == FunctionKind::Method) && fs_->decl->varargIndex < 0;
@@ -3327,9 +3361,21 @@ private:
     bool selfCallFits(const Expr& e) const {
         if (e.kind != ExprKind::Call) return false;
         const auto& call = static_cast<const CallExpr&>(e);
-        return session_.checker->callsItself(call) && call.namedCount == 0 && !call.hasSpread &&
+        return session_.checker->callsItself(call) && call.namedCount == 0 && !call.hasSpread && sameTypeArguments(call) &&
                call.args.size() <= fs_->decl->params.size();
     }
+    // A generic function's call of itself giving it its own type parameters, in their order:
+    // the frame's stay as they are. A loop with others would have to give the frame new ones,
+    // which the instruction that starts it again does not, as it is kept small (G33).
+    bool sameTypeArguments(const CallExpr& call) const {
+        if (fs_->decl == nullptr || fs_->decl->typeParams.empty()) return true;
+        std::vector<RuntimeType> args;
+        if (!session_.checker->typeArguments(call, args) || args.size() != fs_->decl->typeParams.size()) return false;
+        for (size_t i = 0; i < args.size(); i++)
+            if (args[i].kind != RuntimeType::TypeParam || args[i].nullable || args[i].typeParam != fs_->decl->typeParams[i].name) return false;
+        return true;
+    }
+
     bool hasSelfCall(const Expr& e) const {
         if (selfCallFits(e)) return true;
         if (e.kind == ExprKind::Ternary) {
@@ -3368,6 +3414,7 @@ private:
         const std::string name = fs_->decl->name;
         std::string why = "it is not the last step, what it gives being used afterwards; a parameter that gathers the result can do that instead";
         if (overridden) why = "a subclass overrides " + name + ", so the call may run another function";
+        else if (!sameTypeArguments(call)) why = "it gives " + name + " other type arguments than its own, which a loop keeps";
         else if (fs_->tryDepth > 0 || fs_->finally != nullptr) why = "it is inside a try, whose handlers belong to this round";
         else if (fs_->decl->varargIndex >= 0) why = "it takes a vararg";
         else if (call.namedCount != 0 || call.hasSpread) why = "its arguments are given by name or spread";
@@ -3379,7 +3426,6 @@ private:
             const auto& call = static_cast<const CallExpr&>(value);
             for (size_t i = 0; i < call.args.size(); i++) compileExprFor(*call.args[i], fs_->locals[i + 1].info.type);
             for (size_t i = call.args.size(); i < fs_->decl->params.size(); i++) emit(Op::Unset);  // its default, worked out again
-            emitTypeArguments(call);  // a generic function's, which its frame takes from here on
             line_ = call.line;
             emit(Op::TailLoop);
             emitByte(static_cast<int>(fs_->decl->params.size()));
