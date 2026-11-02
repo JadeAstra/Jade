@@ -3601,7 +3601,7 @@ struct Checker::Impl {
         c.isLambda = d.isLambda;
         c.placeDecl = &d;
         c.suspendLambda = typed && expected->suspend;
-        if (silent == 0) c.throwScope = newThrowRoot(&d, ThrowRoot::Lambda, d);
+        if (silent == 0 && !keptCode()) c.throwScope = newThrowRoot(&d, ThrowRoot::Lambda, d);
         std::vector<Type> returns;
         c.returns = &returns;
         if (!d.isLambda && d.returnType.present()) {
@@ -7091,6 +7091,11 @@ struct Checker::Impl {
         throwScopes.emplace_back();
         return &throwScopes.back();
     }
+    // Code of a file put back as it was kept, the standard library's attached to astra.exe among
+    // them: its inline functions' bodies are checked, being copied where they are called, but
+    // what its functions may throw its kept facts say (D145), so nothing of it is noted (G41).
+    bool keptCode() const { return unit != nullptr && unit->skipBodies; }
+
     ThrowScope* newThrowRoot(const void* key, ThrowRoot::Kind kind, const Node& at, FuncInfo* fn = nullptr) {
         ThrowRoot& r = throwRoots[key];
         r.kind = kind;
@@ -7105,7 +7110,7 @@ struct Checker::Impl {
     // silently. Made when first needed: a function's, a class's construction (its fields'
     // values and init blocks), a static or lazy starting value's, or the top level's.
     ThrowScope* throwHere(const Node& at) {
-        if (ctx == nullptr || silent != 0) return nullptr;
+        if (ctx == nullptr || silent != 0 || keptCode()) return nullptr;
         if (ctx->throwScope != nullptr) return static_cast<ThrowScope*>(ctx->throwScope);
         if (ctx->isLambda) return nullptr;
         ThrowScope* scope = nullptr;
@@ -7307,6 +7312,7 @@ struct Checker::Impl {
                 if (f->params[i].kind == Type::Function && inPlace(f, static_cast<int>(i))) addParam(s, {f, static_cast<int>(i)});
             return s;
         }
+        noteThrowRead(f->decl);
         auto found = thrownBy.find(f->decl);
         if (found != thrownBy.end()) s = found->second;
         return s;
@@ -7315,6 +7321,7 @@ struct Checker::Impl {
     ThrowSet constructionThrows(ClassInfo* k, int depth = 0) {
         ThrowSet s;
         if (k == nullptr || depth > 64) return s;
+        noteThrowRead(k);
         if (auto found = thrownBy.find(k); found != thrownBy.end()) addAll(s, found->second);
         return s;
     }
@@ -7333,6 +7340,7 @@ struct Checker::Impl {
             if (mark.second < 0 || static_cast<size_t>(mark.second) >= r.params.size()) continue;
             const ArgSource& src = r.params[static_cast<size_t>(mark.second)];
             if (src.lambda != nullptr) {
+                noteThrowRead(src.lambda);
                 if (auto found = thrownBy.find(src.lambda); found != thrownBy.end()) addAll(set, found->second);
             } else if (src.param.first != nullptr) {
                 addParam(set, src.param);
@@ -7408,21 +7416,46 @@ struct Checker::Impl {
     std::unordered_set<Unit*> judging;  // the files checked this time, whose places are told
 
     // After the whole program: what may leave each body, then each place that cannot pass it on.
+    // The roots that read what each key (a function, a lambda, a class) may throw as they were
+    // worked out: a change to it has them worked out again (G41).
+    std::unordered_map<const void*, std::vector<const void*>> throwReaders;
+    std::vector<const void*>* throwReads = nullptr;
+    void noteThrowRead(const void* key) {
+        if (throwReads != nullptr) throwReads->push_back(key);
+    }
+
     void judgeThrows() {
         if (stdClass("Exception") == nullptr) return;
-        for (int round = 0; round < 64; round++) {
-            bool changed = false;
-            for (const auto& [key, root] : throwRoots) {
-                ThrowSet now = evalScope(root.scope);
-                ThrowSet& was = thrownBy[key];
-                if (!(now == was)) {
-                    ThrowSet merged = was;
-                    addAll(merged, now);
-                    if (!(merged == was)) changed = true;
-                    was = merged;
-                }
+        // Each root worked out once, then again only where something it reads has grown, until
+        // nothing does; what each may throw only grows, so it ends.
+        std::deque<const void*> work;
+        std::unordered_set<const void*> waiting;
+        for (const auto& [key, root] : throwRoots) {
+            work.push_back(key);
+            waiting.insert(key);
+        }
+        std::vector<const void*> reads;
+        while (!work.empty()) {
+            const void* key = work.front();
+            work.pop_front();
+            waiting.erase(key);
+            reads.clear();
+            throwReads = &reads;
+            const ThrowSet now = evalScope(throwRoots.find(key)->second.scope);
+            throwReads = nullptr;
+            for (const void* read : reads) {
+                std::vector<const void*>& readers = throwReaders[read];
+                if (std::find(readers.begin(), readers.end(), key) == readers.end()) readers.push_back(key);
             }
-            if (!changed) break;
+            ThrowSet& was = thrownBy[key];
+            if (now == was) continue;
+            ThrowSet merged = was;
+            addAll(merged, now);
+            if (merged == was) continue;
+            was = std::move(merged);
+            if (auto readers = throwReaders.find(key); readers != throwReaders.end())
+                for (const void* reader : readers->second)
+                    if (waiting.insert(reader).second) work.push_back(reader);
         }
         Unit* saved = unit;
         // A lambda given where it is only called passes on what it throws; any other is kept,
