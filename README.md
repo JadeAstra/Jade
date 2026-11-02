@@ -806,9 +806,12 @@ for lists, maps and sets, the scope functions, `repeat`, `buildList` and `buildM
 
 A function that calls itself as its last step starts again in the same frame instead, so
 recursion of that shape never runs out of stack (D29). This holds for a top-level function,
-an extension, and a method calling itself on its own object where no subclass overrides it; the
-call may be `return f(...)`, an expression body, or a branch of `? :` or what follows `?:` in
-what is returned. `tail fun` asks for it: a call of itself that is not its last step is then a
+an extension, a function declared inside another, a generic one (with whatever type arguments
+the call gives), and a method calling itself on its own object where no subclass overrides it;
+the call may be `return f(...)`, an expression body, a branch of `? :` or what follows `?:`, or
+what a branch of `if` or `when` gives, in what is returned. Inside a `try` it stays a call, as
+with Kotlin's `tailrec`: as a loop, an error from a deeper round would pass by the handlers of
+the rounds above it. `tail fun` asks for it: a call of itself that is not its last step is then a
 compile error saying why (Kotlin's `tailrec` is written `tail`). An error's trace counts the
 repeats in place of the frames saved: `at sum (list.astra:5), 10,001 times`.
 
@@ -3312,8 +3315,6 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 - `if` always needs its braces, also as a value: `if wide { 200 } else { 100 }`.
 - There are no extension properties. A class has one initializer: there are no secondary
   constructors.
-- A call of itself is a loop only for a function of the top level or a class, not for one
-  declared inside another or a generic one; nor inside a try.
 - Text is one glyph for each character, left to right. Scripts whose letters join or change
   places (Arabic, Hebrew's direction, Devanagari, Thai's marks) and emoji made of several
   characters are not laid out yet: that is the second part of the text engine.

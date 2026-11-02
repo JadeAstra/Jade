@@ -3615,7 +3615,8 @@ struct Checker::Impl {
             if (typed && expected->receiver) {
                 c.hasReceiver = true;
                 c.receiver = *expected->receiver;
-                if (c.receiver.unknown() || c.receiver.kind == Type::TypeParam) c.receiverUnknown = true;
+                // A type parameter is a type like another: `this` is a T, with what its bound has.
+                if (c.receiver.unknown()) c.receiverUnknown = true;
             } else if (!typed) {
                 c.receiverUnknown = keptLambdas.count(&d) == 0;
             }
@@ -3662,7 +3663,9 @@ struct Checker::Impl {
         if (c.hasReceiver) ft.receiver = std::make_shared<Type>(c.receiver);
         ft.suspend = c.suspendLambda;
         if (silent == 0 && d.isLambda) {
-            if (c.hasReceiver && !c.receiverUnknown) onObject.insert(&d);
+            // Run on an object where its type says so, whether or not the object's type is known
+            // (G37): `this` in it is that object.
+            if (c.hasReceiver) onObject.insert(&d);
             else onObject.erase(&d);
         }
         if (silent == 0) {
@@ -6967,6 +6970,9 @@ struct Checker::Impl {
     }
     bool overriddenBelow(const FuncInfo* f) const {
         if (f->owner == nullptr || f->isStatic) return false;
+        // Only a method of the class: a function declared inside one has its class as its owner too.
+        auto own = f->owner->methods.find(f->name);
+        if (own == f->owner->methods.end() || std::find(own->second.begin(), own->second.end(), f) == own->second.end()) return false;
         for (const auto& k : classStore) {
             if (k.get() == f->owner || k->methods.count(f->name) == 0) continue;
             for (const ClassInfo* above = k->superclass; above != nullptr; above = above->superclass)
@@ -8363,6 +8369,7 @@ struct Checker::Impl {
                 // A generic function declared here (G1): called as one, so that its type
                 // arguments are worked out and handed to it.
                 const Type lt = localType(n, *l);
+                if (lt.kind == Type::Function && lt.fnRef != nullptr) noteSelfCall(lt.fnRef, c);  // a function declared here (G33)
                 if (lt.kind == Type::Function && !lt.nullable && lt.fnRef != nullptr && !lt.fnRef->typeParams.empty() && l->paramOf == nullptr &&
                     lt.fnRef->decl != nullptr) {
                     noteValueCallThrows(lt, c);

@@ -1,0 +1,32 @@
+// `this` in a block run on an object is that object where the object's type is a type
+// parameter too, as it is where the type is known (D58, G37).
+fun <R> runOn(x : R, block : R.() -> unit) { x.block() }
+
+class Box(val label : string) {
+  fun <T> tag(x : T) : string {
+    var seen = ""
+    runOn(x) { seen = "$this and ${this@Box}" }
+    return seen
+  }
+  override fun toString() : string => "Box($label)"
+}
+print(Box("b").tag(42))                     // expect: 42 and Box(b)
+
+fun <T> shown(x : T) : string {
+  var seen = ""
+  runOn(x) { seen = "$this" }
+  return seen
+}
+print(shown("hi"), shown([1, 2]))           // expect: hi [1, 2]
+
+// A bound gives the members a bare name in the block reaches.
+interface Named {
+  val name : string
+}
+class Cat(override val name : string) : Named
+fun <T : Named> nameOf(x : T) : string {
+  var seen = ""
+  runOn(x) { seen = name }
+  return seen
+}
+print(nameOf(Cat("Tom")))                   // expect: Tom

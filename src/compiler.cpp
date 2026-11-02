@@ -3316,13 +3316,13 @@ private:
     // ---- Tail calls (D29) ----
     //
     // A function calling itself as its last step, on the same object, starts again in the same
-    // frame: `return walk(next)`, or such a call as a branch of `? :` or after `?:` in what it
-    // returns. Not inside a try, whose handlers belong to the frame's round, nor for a generic
-    // function, whose type arguments the call may change, nor with arguments by name or spread.
+    // frame: `return walk(next)`, or such a call as a branch of `? :`, after `?:`, or where a
+    // branch of `if` or `when` gives what it returns; a generic one with the type arguments the
+    // call gives (G33). Not inside a try, whose handlers belong to the frame's round, as with
+    // Kotlin's tailrec, nor with arguments by name or spread.
     bool tailReturnHere() const {
         return session_.checker != nullptr && fs_->decl != nullptr && !fs_->isLambda && fs_->tryDepth == 0 && fs_->finally == nullptr &&
-               (fs_->kind == FunctionKind::Function || fs_->kind == FunctionKind::Method) && fs_->decl->typeParams.empty() &&
-               fs_->decl->varargIndex < 0 && fs_->typeParams.empty();
+               (fs_->kind == FunctionKind::Function || fs_->kind == FunctionKind::Method) && fs_->decl->varargIndex < 0;
     }
     bool selfCallFits(const Expr& e) const {
         if (e.kind != ExprKind::Call) return false;
@@ -3337,6 +3337,28 @@ private:
             return hasSelfCall(*t.then) || hasSelfCall(*t.otherwise);
         }
         if (e.kind == ExprKind::Elvis) return hasSelfCall(*static_cast<const ElvisExpr&>(e).right);
+        if (e.kind == ExprKind::When) {
+            for (const WhenBranch& branch : static_cast<const WhenExpr&>(e).branches)
+                if (branchHasSelfCall(*branch.body)) return true;
+            return false;
+        }
+        if (e.kind == ExprKind::Statement) return branchHasSelfCall(*static_cast<const StatementExpr&>(e).statement);
+        return false;
+    }
+    // Whether what a branch of `if` or `when` gives, its last expression, has a call of itself.
+    bool branchHasSelfCall(const Stmt& s) const {
+        if (s.kind == StmtKind::Block) {
+            const auto& statements = static_cast<const BlockStmt&>(s).statements;
+            return !statements.empty() && branchHasSelfCall(*statements.back());
+        }
+        if (s.kind == StmtKind::Expr) {
+            const Expr& e = *static_cast<const ExprStmt&>(s).expr;
+            return e.kind != ExprKind::IncDec && hasSelfCall(e);
+        }
+        if (s.kind == StmtKind::If) {
+            const auto& i = static_cast<const IfStmt&>(s);
+            return branchHasSelfCall(*i.then) || (i.otherwise != nullptr && branchHasSelfCall(*i.otherwise));
+        }
         return false;
     }
     // In a `tail fun`, a call of itself that is not made a loop is an error saying why (D29).
@@ -3347,7 +3369,6 @@ private:
         std::string why = "it is not the last step, what it gives being used afterwards; a parameter that gathers the result can do that instead";
         if (overridden) why = "a subclass overrides " + name + ", so the call may run another function";
         else if (fs_->tryDepth > 0 || fs_->finally != nullptr) why = "it is inside a try, whose handlers belong to this round";
-        else if (!fs_->decl->typeParams.empty() || !fs_->typeParams.empty()) why = "a generic function may be given other type arguments by it";
         else if (fs_->decl->varargIndex >= 0) why = "it takes a vararg";
         else if (call.namedCount != 0 || call.hasSpread) why = "its arguments are given by name or spread";
         throw error(call, "this call cannot be a loop, as tail fun " + name + " asks: " + why + " (D29)");
@@ -3358,6 +3379,7 @@ private:
             const auto& call = static_cast<const CallExpr&>(value);
             for (size_t i = 0; i < call.args.size(); i++) compileExprFor(*call.args[i], fs_->locals[i + 1].info.type);
             for (size_t i = call.args.size(); i < fs_->decl->params.size(); i++) emit(Op::Unset);  // its default, worked out again
+            emitTypeArguments(call);  // a generic function's, which its frame takes from here on
             line_ = call.line;
             emit(Op::TailLoop);
             emitByte(static_cast<int>(fs_->decl->params.size()));
@@ -3386,7 +3408,18 @@ private:
             compileTailReturn(*e.right, s);
             return;
         }
-        compileExprFor(value, fs_->returnType);
+        if ((value.kind == ExprKind::When || value.kind == ExprKind::Statement) && hasSelfCall(value)) {
+            // Each branch's value: a call of itself starts again, and anything else is returned.
+            if (value.kind == ExprKind::When) {
+                compileWhen(static_cast<const WhenExpr&>(value), &s);
+            } else {
+                const int saved = enterValueBlock();
+                compileStatementValue(*static_cast<const StatementExpr&>(value).statement, &s);
+                leaveValueBlock(saved);
+            }
+        } else {
+            compileExprFor(value, fs_->returnType);
+        }
         line_ = s.line;
         emitReturnCheck(staticTypeHere(value), value, &value);
         emit(Op::Return);
@@ -6035,7 +6068,9 @@ private:
     }
 
     // Compiles a statement and leaves a value: its own if it is an expression, else null.
-    void compileStatementValue(const Stmt& stmt) {
+    // `tail`: the value is what the function returns, so that a call of itself in it starts it
+    // again (D29, G33).
+    void compileStatementValue(const Stmt& stmt, const ReturnStmt* tail = nullptr) {
         if (stmt.kind == StmtKind::Block) {
             const auto& statements = static_cast<const BlockStmt&>(stmt).statements;
             if (statements.empty()) {
@@ -6044,21 +6079,27 @@ private:
             }
             beginScope();
             for (size_t i = 0; i + 1 < statements.size(); i++) compileStmt(*statements[i]);
-            compileStatementValue(*statements.back());
+            compileStatementValue(*statements.back(), tail);
             endScopeKeepingValue();
         } else if (stmt.kind == StmtKind::Expr && static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::IncDec) {
             line_ = stmt.line;
-            compileExpr(*static_cast<const ExprStmt&>(stmt).expr);
+            const Expr& value = *static_cast<const ExprStmt&>(stmt).expr;
+            if (tail != nullptr && hasSelfCall(value)) {
+                compileTailReturn(value, *tail);
+                emit(Op::Null);  // never reached: it stands for the value the code after expects
+            } else {
+                compileExpr(value);
+            }
         } else if (stmt.kind == StmtKind::If) {
             // The value of the branch taken, or null when there is none to take.
             const auto& s = static_cast<const IfStmt&>(stmt);
             line_ = s.line;
             compileExpr(*s.condition);
             int toElse = emitJump(Op::JumpIfFalse);
-            compileStatementValue(*s.then);
+            compileStatementValue(*s.then, tail);
             int toEnd = emitJump(Op::Jump);
             patchJump(toElse);
-            if (s.otherwise) compileStatementValue(*s.otherwise);
+            if (s.otherwise) compileStatementValue(*s.otherwise, tail);
             else emit(Op::Null);
             patchJump(toEnd);
         } else if (stmt.kind == StmtKind::Try) {
@@ -6099,7 +6140,7 @@ private:
         valueTryLocal_ = target;
     }
 
-    void compileWhen(const WhenExpr& e) {
+    void compileWhen(const WhenExpr& e, const ReturnStmt* tail = nullptr) {
         const int saved = enterValueBlock();
         int subject = -1;
         const TypeSpec subjectType = e.subject ? declaredTypeOf(*e.subject) : TypeSpec();
@@ -6126,7 +6167,7 @@ private:
                 for (int jump : toBody) patchJump(jump);
                 toNext = emitJump(Op::JumpIfFalse);
             }
-            compileStatementValue(*branch.body);
+            compileStatementValue(*branch.body, tail);
             if (!branch.isElse) {
                 toEnd.push_back(emitJump(Op::Jump));
                 patchJump(toNext);
