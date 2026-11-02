@@ -2052,8 +2052,7 @@ Choices made where the decisions left room, for the user to confirm (M6.6-gaps.h
 what `#` names; what a Class is; which members are listed; who may see a member; what is
 wrapped; types that cannot be named; what a built program keeps; what an annotation is; which of
 Kotlin's annotations are errors; how astra test runs; `type(x)` kept. Left: D50's flow of
-objects done by types, every class kept for a `#` of `any` (G42); `@Deprecated` (1.0); the cost
-at start.
+objects done by types, every class kept for a `#` of `any` (G42); `@Deprecated` (1.0).
 Tests: `reflection.astra`, `check/reflection.astra`, `testing/basics.astra` (run by `astra test`),
 `shell/reflection.shell`, `annotation_jvm.astra`, `error_double_colon.astra`, and the tests that used
 `className` or `@Volatile` brought to `#` and none; the suite, 763 checks,

@@ -12,6 +12,8 @@
 
 namespace astra {
 
+class Program;
+
 // Instruction set of the Astra VM. Operands are little-endian: u8, u16, or i32 (absolute
 // jump targets within the function).
 enum class Op : uint8_t {
@@ -669,7 +671,21 @@ struct FunctionProto {
         if (reflection == nullptr) reflection = std::make_unique<Reflection>();
         return *reflection;
     }
+
+    // A class's description (Op::ClassMeta, compileMeta): a program's image keeps it apart, and
+    // a program read from one reads it only when reflection first asks for it (G47). Until then
+    // `deferred` holds its bytes, with what reads them, and of the rest only its typeArgs.
+    bool describes = false;
+    struct Deferred {
+        std::string bytes;
+        VM* vm;
+        Program* program;
+    };
+    std::unique_ptr<Deferred> deferred;
 };
+
+// Reads a description kept apart into the function, and verifies it; nothing for one read.
+void loadDeferred(FunctionProto& f);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,

@@ -5308,6 +5308,7 @@ private:
         state.proto->name = s.name + (which == 0 ? " (fields)" : " (methods)");
         state.proto->source = file_;
         state.proto->typeArgs = kTypeArgsOwn;
+        state.proto->describes = true;  // kept apart in a program's image (G47)
         state.scopeDepth = 1;
         for (const TypeParam& p : s.typeParams) state.typeParams.push_back(p.name);
         state.add(Local{"", 1, VarInfo{}});

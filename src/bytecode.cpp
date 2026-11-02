@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <set>
@@ -1137,6 +1138,7 @@ std::string constantText(const Value& v) {
 }
 
 void disassembleFunction(const FunctionProto& f, const Program& program, std::ostream& out) {
+    if (f.deferred != nullptr) loadDeferred(const_cast<FunctionProto&>(f));
     std::string arity = std::to_string(f.arity);
     if (f.requiredArgs() != f.arity) arity = std::to_string(f.requiredArgs()) + ".." + arity;
     out << "== " << f.name << " (" << f.source << ")  arity=" << arity << " upvalues=" << f.upvalues.size()
@@ -1388,7 +1390,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 26;
+const uint8_t kFormatVersion = 27;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1520,8 +1522,29 @@ struct Writer {
             }
         }
 
+        // Each nested function: 0 and the function, or 1 for a class's description, kept apart:
+        // its typeArgs, then its length and the function, written with what it needs of its own
+        // (its reaches in full) so that it can be read by itself (G47).
         u32(static_cast<uint32_t>(f.protos.size()));
-        for (const FunctionProto* nested : f.protos) proto(*nested);
+        for (const FunctionProto* nested : f.protos) {
+            if (!nested->describes && nested->deferred == nullptr) {
+                u8(0);
+                proto(*nested);
+                continue;
+            }
+            std::string bytes;
+            if (nested->deferred != nullptr) {
+                bytes = nested->deferred->bytes;
+            } else {
+                std::ostringstream apart;
+                Writer own{apart};
+                own.proto(*nested);
+                bytes = apart.str();
+            }
+            u8(1);
+            u8(nested->typeArgs);
+            str(bytes);
+        }
     }
 };
 
@@ -1531,6 +1554,7 @@ struct Reader {
     VM& vm;
     size_t pos = 0;
     std::vector<const FileReach*> reaches;  // as they were written
+    bool defer = false;                     // a class's description left to be read when asked for
 
     [[noreturn]] void corrupt() { throw std::runtime_error("corrupt or truncated bytecode file"); }
 
@@ -1709,12 +1733,55 @@ struct Reader {
         }
 
         uint32_t protoCount = count(1);
-        for (uint32_t i = 0; i < protoCount; i++) f->protos.push_back(proto(nesting + 1));
+        for (uint32_t i = 0; i < protoCount; i++) {
+            const uint8_t kind = u8();
+            if (kind == 0) {
+                f->protos.push_back(proto(nesting + 1));
+                continue;
+            }
+            if (kind != 1) corrupt();
+            // A class's description, kept apart: read now, or when it is asked for.
+            const uint8_t typeArgs = u8();
+            const uint32_t size = count(1);
+            FunctionProto* described;
+            if (defer) {
+                described = program.newProto();
+                described->deferred = std::make_unique<FunctionProto::Deferred>(FunctionProto::Deferred{data.substr(pos, size), &vm, &program});
+            } else {
+                Reader apart{data, program, vm, pos};
+                described = apart.proto(nesting + 1);
+                if (apart.pos != pos + size) corrupt();
+            }
+            described->describes = true;
+            described->typeArgs = typeArgs;
+            pos += size;
+            f->protos.push_back(described);
+        }
         return f;
     }
 };
 
+void verifyTree(FunctionProto& f, const Program& program);
+
+}  // namespace
+
+void loadDeferred(FunctionProto& f) {
+    static std::mutex loading;
+    std::lock_guard<std::mutex> hold(loading);
+    if (f.deferred == nullptr) return;
+    const std::unique_ptr<FunctionProto::Deferred> kept = std::move(f.deferred);
+    Reader r{kept->bytes, *kept->program, *kept->vm, 0};
+    FunctionProto* read = r.proto(1);
+    if (r.pos != kept->bytes.size()) r.corrupt();
+    verifyTree(*read, *kept->program);
+    f = std::move(*read);
+    f.describes = true;
+}
+
+namespace {
+
 void verifyTree(FunctionProto& f, const Program& program) {
+    if (f.deferred != nullptr) return;  // verified when it is read
     verifyFunction(f, program);
     for (FunctionProto* nested : f.protos) verifyTree(*nested, program);
 }
@@ -1727,6 +1794,7 @@ void writeU16(std::vector<uint8_t>& code, size_t at, int v) {
 }  // namespace
 
 void renumber(FunctionProto& f, const Renumbering& r, VM& vm) {
+    if (f.deferred != nullptr) loadDeferred(f);
     std::vector<uint8_t>& code = f.code;
     for (DeclarationSpan& span : f.spans)
         if (span.kind != DeclarationSpan::Extension) span.key = static_cast<uint16_t>(r.global(span.key));
@@ -1827,6 +1895,7 @@ bool looksLikeBytecode(const std::string& data) {
 void readProgram(Program& program, VM& vm, const std::string& data) {
     if (!looksLikeBytecode(data)) throw std::runtime_error("not an Astra bytecode file");
     Reader r{data, program, vm, sizeof kMagic};
+    r.defer = true;
 
     uint8_t version = r.u8();
     if (version != kFormatVersion)
@@ -2367,6 +2436,7 @@ bool namesGlobal(const Program& program, const std::vector<std::string>& names) 
         const FunctionProto* f = work.back();
         work.pop_back();
         if (f == nullptr) continue;
+        if (f->deferred != nullptr) loadDeferred(const_cast<FunctionProto&>(*f));
         for (const FunctionProto* nested : f->protos) work.push_back(nested);
         for (size_t at = 0; at < f->code.size();) {
             const uint8_t raw = f->code[at];
@@ -2392,6 +2462,7 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
         if (module != nullptr) every.push_back(module);
     for (size_t i = 0; i < every.size(); i++) {
         FunctionProto& f = *every[i];
+        if (f.deferred != nullptr) loadDeferred(f);
         if (f.reflection != nullptr) {
             std::stable_sort(f.reflection->notes.begin(), f.reflection->notes.end(),
                              [](const FunctionProto::ReflectNote& a, const FunctionProto::ReflectNote& b) { return a.at < b.at; });

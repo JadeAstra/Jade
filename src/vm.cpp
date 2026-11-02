@@ -212,6 +212,8 @@ Value VM::classDescription(ObjClass* cls, const ObjTypeInfo* own, int which) {
     // Made outside the lock, which making a type takes, as is the function; two cores may make
     // them at once, and the first kept is kept.
     if (meta == nullptr) {
+        // Read now, where the program's image left it to be (G47).
+        if (cls->metaProto[which]->deferred != nullptr) loadDeferred(const_cast<FunctionProto&>(*cls->metaProto[which]));
         meta = alloc<ObjClosure>(cls->metaProto[which], 0);
         std::lock_guard<std::mutex> hold(root.internMutex_);
         if (cls->meta[which] == nullptr) cls->meta[which] = meta;
