@@ -247,6 +247,11 @@ void registerGlobals(VM& vm) {
         auto now = std::chrono::steady_clock::now().time_since_epoch();
         return Value::number(std::chrono::duration<double>(now).count());
     });
+    // What the system's clock says, in nanoseconds since the start of 1970 (Instant.now, G54).
+    vm.defineNative("__epochNanoseconds", 0, 0, [](VM&, int, Value*) -> Value {
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        return Value::integer(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+    });
 
     vm.defineNative("Range", 1, 3, [](VM& vm, int argc, Value* args) -> Value {
         int64_t start = 0, end, step = 1;

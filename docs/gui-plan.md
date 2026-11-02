@@ -2141,7 +2141,7 @@ Choices made where the decisions left room, for the user to confirm (M6.6-gaps.h
 what `list()` and `walk()` give; deleting and what fails; permissions; what a Charset is; a
 line read lazily that fails; what a read past `readTimeout` throws; a started program's
 members; what `Process.run` does; bare entries for a union parameter; the C++ declared; Paths
-in Jade. Left: times as milliseconds; processes and sockets on Windows only.
+in Jade. Left: processes and sockets on Windows only.
 Tests: `std_files.astra` and `io_streams.astra` rewritten, `check/files.astra`, and the tests
 that used `File` brought to `Path`; the suite, 787 checks, passes as it is, with every read from
 a list of values a copy, under the thread stress setting and with the C++ results checked, under

@@ -1,0 +1,28 @@
+// Moments in time (G54): an Instant is the nanoseconds since the start of 1970 in UTC, written
+// and read in ISO 8601, and taken from or added to with Durations.
+
+print(Instant(0), Instant.fromEpochMilliseconds(1700000000000), Instant.fromEpochSeconds(1, 5))   // expect: 1970-01-01T00:00:00Z 2023-11-14T22:13:20Z 1970-01-01T00:00:01.000000005Z
+print(Instant(-1), Instant.fromEpochMilliseconds(-1).epochSeconds, Instant(1500000).epochMilliseconds)   // expect: 1969-12-31T23:59:59.999999999Z -1 1
+print(Instant.fromEpochMilliseconds(-86400000 * 365), Instant.fromEpochSeconds(951782400))   // expect: 1969-01-01T00:00:00Z 2000-02-29T00:00:00Z
+
+// Read as written; an offset from UTC is taken off.
+print(Instant.parse("2026-11-02T14:05:31.25Z"), Instant.parse("2024-02-29T23:30:00+01:30"), Instant.parse("1999-12-31t23:59:59.123456z"))   // expect: 2026-11-02T14:05:31.250Z 2024-02-29T22:00:00Z 1999-12-31T23:59:59.123456Z
+print(Instant.parse(Instant(123456789).toString()) == Instant(123456789))   // expect: true
+for (wrong in ["2026-02-30T00:00:00Z", "2026-11-02 14:05:31Z", "2026-11-02T14:05:31", "2026-11-02T24:00:00Z", "2026-11-02T14:05:31.Z"]) {
+  try { Instant.parse(wrong) } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: not a moment in ISO 8601 (2026-11-02T14:05:31Z): '2026-02-30T00:00:00Z'
+// expect: not a moment in ISO 8601 (2026-11-02T14:05:31Z): '2026-11-02 14:05:31Z'
+// expect: not a moment in ISO 8601 (2026-11-02T14:05:31Z): '2026-11-02T14:05:31'
+// expect: not a moment in ISO 8601 (2026-11-02T14:05:31Z): '2026-11-02T24:00:00Z'
+// expect: not a moment in ISO 8601 (2026-11-02T14:05:31Z): '2026-11-02T14:05:31.Z'
+
+// With Durations, and in order.
+val start = Instant.parse("2025-12-31T23:00:00Z")
+val end = start + 90.minutes
+print(end, end - start, start - end, end - 30.minutes)       // expect: 2026-01-01T00:30:00Z 1h 30m -1h 30m 2026-01-01T00:00:00Z
+print(start < end, end <= start, [end, start].sorted(), start.compareTo(end))   // expect: true false [2025-12-31T23:00:00Z, 2026-01-01T00:30:00Z] -1
+
+// Now, by the system's clock.
+val now = Instant.now()
+print(now > Instant.parse("2026-01-01T00:00:00Z"), Instant.now() - now < 1.seconds)   // expect: true true

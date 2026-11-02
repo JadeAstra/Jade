@@ -93,8 +93,11 @@ class Path {
   // The size in bytes, and when it was last written in milliseconds since the start of 1970.
   // Both are 0 for a file that is not there.
   fun size() : int => __file.size(text)
-  // When it was last written, in milliseconds since the start of 1970; 0 where nothing is there.
-  fun lastModified() : int => __file.lastModified(text)
+  // When it was last written (G54); null where nothing is there.
+  fun lastModified() : Instant? {
+    val nanos = __file.lastModified(text)
+    return nanos == null ? null : Instant(nanos)
+  }
 
   // With `.`, `..` and links worked out; an IOException if it is not there (D135).
   fun canonical() : Path throws IOException => Path(__file.canonical(text))
@@ -195,9 +198,8 @@ class Path {
   // Lets it be written, or keeps it from being written (on Windows, its read-only flag); an
   // IOException where nothing is there.
   fun setWritable(writable : bool) throws IOException { __file.setWritable(text, writable) }
-  // Sets when it was last written, `millis` since the start of 1970; an IOException where
-  // nothing is there.
-  fun setLastModified(millis : int) throws IOException { __file.setLastModified(text, millis) }
+  // Sets when it was last written (G54); an IOException where nothing is there.
+  fun setLastModified(time : Instant) throws IOException { __file.setLastModified(text, time.epochNanoseconds) }
 
   // Whether `other` is a Path with the same text. Paths that name one file in different words,
   // as "a" and "./a", are not ==; their canonical() Paths are, where the file is there.
@@ -239,7 +241,7 @@ external object __file {
   fun isDirectory(path : string) : bool
   fun permissions(path : string) : int
   fun size(path : string) : int
-  fun lastModified(path : string) : int
+  fun lastModified(path : string) : int?
   fun delete(path : string, mustExist : bool) : bool throws IOException
   fun deleteRecursively(path : string) : bool
   fun mkdir(path : string, parents : bool) throws IOException
@@ -249,7 +251,7 @@ external object __file {
   fun canonical(path : string) : string throws IOException
   fun absolute(path : string) : string
   fun setWritable(path : string, writable : bool) throws IOException
-  fun setLastModified(path : string, millis : int) throws IOException
+  fun setLastModified(path : string, nanoseconds : int) throws IOException
   fun createTemp(prefix : string, suffix : string, directory : bool) : string throws IOException
   fun name(path : string) : string
   fun parent(path : string) : string?

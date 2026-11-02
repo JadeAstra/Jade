@@ -470,6 +470,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
 <li><a href="#IndexedValue"><code>IndexedValue</code></a> (1)</li>
 <li><a href="#Insets"><code>Insets</code></a> (2)</li>
+<li><a href="#Instant"><code>Instant</code></a> (16)</li>
 <li><a href="#InternalError"><code>InternalError</code></a> (1)</li>
 <li><a href="#InterruptedException"><code>InterruptedException</code></a> (1)</li>
 <li><a href="#InvocationTargetException"><code>InvocationTargetException</code></a> (1)</li>
@@ -1746,8 +1747,8 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <div class="entry member" id="Path.size"><code class="sig">fun size() : int</code><a class="anchor" href="#Path.size">#</a>
 <p>The size in bytes, and when it was last written in milliseconds since the start of 1970. Both are 0 for a file that is not there.</p>
 </div>
-<div class="entry member" id="Path.lastModified"><code class="sig">fun lastModified() : int</code><a class="anchor" href="#Path.lastModified">#</a>
-<p>When it was last written, in milliseconds since the start of 1970; 0 where nothing is there.</p>
+<div class="entry member" id="Path.lastModified"><code class="sig">fun lastModified() : Instant?</code><a class="anchor" href="#Path.lastModified">#</a>
+<p>When it was last written; null where nothing is there.</p>
 </div>
 <div class="entry member" id="Path.canonical"><code class="sig">fun canonical() : Path throws IOException</code><a class="anchor" href="#Path.canonical">#</a>
 <p>With <code>.</code>, <code>..</code> and links worked out; an IOException if it is not there.</p>
@@ -1814,8 +1815,8 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <div class="entry member" id="Path.setWritable"><code class="sig">fun setWritable(writable : bool) throws IOException</code><a class="anchor" href="#Path.setWritable">#</a>
 <p>Lets it be written, or keeps it from being written (on Windows, its read-only flag); an IOException where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.setLastModified"><code class="sig">fun setLastModified(millis : int) throws IOException</code><a class="anchor" href="#Path.setLastModified">#</a>
-<p>Sets when it was last written, <code>millis</code> since the start of 1970; an IOException where nothing is there.</p>
+<div class="entry member" id="Path.setLastModified"><code class="sig">fun setLastModified(time : Instant) throws IOException</code><a class="anchor" href="#Path.setLastModified">#</a>
+<p>Sets when it was last written; an IOException where nothing is there.</p>
 </div>
 <div class="entry member" id="Path.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#Path.==">#</a>
 <p>Whether <code>other</code> is a Path with the same text. Paths that name one file in different words, as &quot;a&quot; and &quot;./a&quot;, are not ==; their canonical() Paths are, where the file is there.</p>
@@ -5109,6 +5110,61 @@ val frame = 1.seconds / 60          // 16.666666ms
 </div>
 <div class="entry" id="float.days"><code class="sig">val float.days : Duration</code><a class="anchor" href="#float.days">#</a>
 <p>This many days, rounded to the nearest nanosecond, as a Duration.</p>
+</div>
+<h3>Moments in time</h3>
+<p>A moment, kept as the nanoseconds since the start of 1970 in UTC, as Java's Instant and Kotlin's count them (leap seconds left out), in a value of its own:</p>
+<pre>val started = Instant.now()
+val took : Duration = Instant.now() - started
+print(path.lastModified())                  // 2026-11-02T14:05:31.250Z
+</pre>
+<p>It reaches from 1677 to 2262; past that is an ArithmeticException. Dates in a calendar and time zones are not part of it.</p>
+<div class="entry" id="Instant"><code class="sig">value Instant(val epochNanoseconds : int)</code><a class="anchor" href="#Instant">#</a>
+<p>The moment <code>epochNanoseconds</code> nanoseconds after the start of 1970, UTC (before it where negative).</p>
+</div>
+<div class="entry member" id="Instant.+"><code class="sig">op +(time : Duration) : Instant</code><a class="anchor" href="#Instant.+">#</a>
+<p>The moment a Duration later, or earlier for a negative one.</p>
+</div>
+<div class="entry member" id="Instant.-"><code class="sig">op -(time : Duration) : Instant</code><a class="anchor" href="#Instant.-">#</a>
+<p>The moment a Duration earlier.</p>
+</div>
+<div class="entry member" id="Instant.--2"><code class="sig">op -(other : Instant) : Duration</code><a class="anchor" href="#Instant.--2">#</a>
+<p>How long after <code>other</code> this is: negative where it is before.</p>
+</div>
+<div class="entry member" id="Instant.&lt;"><code class="sig">op &lt;(other : Instant) : bool =&gt; epochNanoseconds &lt; other.epochNanoseconds  op &lt;=(other : Instant) : bool =&gt; epochNanoseconds &lt;= other.epochNanoseconds  op &gt;(other : Instant) : bool =&gt; epochNanoseconds &gt; other.epochNanoseconds</code><a class="anchor" href="#Instant.&lt;">#</a>
+<p>Whether this is before <code>other</code>.</p>
+</div>
+<div class="entry member" id="Instant.&lt;="><code class="sig">op &lt;=(other : Instant) : bool =&gt; epochNanoseconds &lt;= other.epochNanoseconds  op &gt;(other : Instant) : bool</code><a class="anchor" href="#Instant.&lt;=">#</a>
+<p>Whether this is before <code>other</code> or the same moment.</p>
+</div>
+<div class="entry member" id="Instant.&gt;"><code class="sig">op &gt;(other : Instant) : bool</code><a class="anchor" href="#Instant.&gt;">#</a>
+<p>Whether this is after <code>other</code>.</p>
+</div>
+<div class="entry member" id="Instant.&gt;="><code class="sig">op &gt;=(other : Instant) : bool</code><a class="anchor" href="#Instant.&gt;=">#</a>
+<p>Whether this is after <code>other</code> or the same moment.</p>
+</div>
+<div class="entry member" id="Instant.compareTo"><code class="sig">fun compareTo(other : Instant) : int</code><a class="anchor" href="#Instant.compareTo">#</a>
+<p>Negative, zero or positive as this is before, at or after <code>other</code>.</p>
+</div>
+<div class="entry member" id="Instant.epochMilliseconds"><code class="sig">val epochMilliseconds : int</code><a class="anchor" href="#Instant.epochMilliseconds">#</a>
+<p>The whole milliseconds since the start of 1970, rounded down, as Java's toEpochMilli.</p>
+</div>
+<div class="entry member" id="Instant.epochSeconds"><code class="sig">val epochSeconds : int</code><a class="anchor" href="#Instant.epochSeconds">#</a>
+<p>The whole seconds since the start of 1970, rounded down.</p>
+</div>
+<div class="entry member" id="Instant.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#Instant.toString">#</a>
+<p>The moment in ISO 8601, in UTC: 2026-11-02T14:05:31Z, with the fraction of a second where there is one, in 3, 6 or 9 digits as it needs, as Java writes it (2026-11-02T14:05:31.250Z).</p>
+</div>
+<div class="entry member" id="Instant.now"><code class="sig">fun now() : Instant</code><a class="anchor" href="#Instant.now">#</a>
+<p>The moment it is now, by the system's clock (which may be set back or forward; to time something, clock() and Durations go only forward).</p>
+</div>
+<div class="entry member" id="Instant.fromEpochMilliseconds"><code class="sig">fun fromEpochMilliseconds(milliseconds : int) : Instant</code><a class="anchor" href="#Instant.fromEpochMilliseconds">#</a>
+<p>The moment <code>milliseconds</code> after the start of 1970, as Java's ofEpochMilli.</p>
+</div>
+<div class="entry member" id="Instant.fromEpochSeconds"><code class="sig">fun fromEpochSeconds(seconds : int, nanoseconds : int = 0) : Instant</code><a class="anchor" href="#Instant.fromEpochSeconds">#</a>
+<p>The moment <code>seconds</code> and <code>nanoseconds</code> after the start of 1970.</p>
+</div>
+<div class="entry member" id="Instant.parse"><code class="sig">fun parse(text : string) : Instant</code><a class="anchor" href="#Instant.parse">#</a>
+<p>The moment ISO 8601 text gives, as toString writes it: a date, a time to the second with up to nine digits of fraction, and Z or an offset from UTC (+01:00). An IllegalArgumentException for anything else.</p>
 </div>
 </section>
 <section class="file" id="file-values-astra">

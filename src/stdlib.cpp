@@ -1370,13 +1370,14 @@ void registerFiles(VM& vm) {
         const auto size = fs::file_size(toPath(vm.toStr(args[0], "file path")), ec);
         return Value::integer(ec ? 0 : static_cast<int64_t>(size));
     });
-    // When the file was last written, in milliseconds since the start of 1970; 0 if it is not there.
+    // When the file was last written, in nanoseconds since the start of 1970 (G54); null if it
+    // is not there.
     def("lastModified", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const auto time = fs::last_write_time(toPath(vm.toStr(args[0], "file path")), ec);
-        if (ec) return Value::integer(0);
+        if (ec) return Value::null();
         const auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
-        return Value::integer(std::chrono::duration_cast<std::chrono::milliseconds>(system.time_since_epoch()).count());
+        return Value::integer(std::chrono::duration_cast<std::chrono::nanoseconds>(system.time_since_epoch()).count());
     });
     // A file, or a directory with nothing in it. True if it was there and is gone; with
     // `mustExist`, an IOException where it was not there or could not go.
@@ -1487,7 +1488,8 @@ void registerFiles(VM& vm) {
     def("setLastModified", 2, 2, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const std::string& path = vm.toStr(args[0], "file path");
-        const auto system = std::chrono::system_clock::time_point(std::chrono::milliseconds(vm.toInt(args[1], "time")));
+        const auto system = std::chrono::system_clock::time_point(
+            std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::nanoseconds(vm.toInt(args[1], "time"))));
         fs::last_write_time(toPath(path), std::chrono::clock_cast<fs::file_time_type::clock>(system), ec);
         if (ec) throw pathError(vm, "set the time of", path, ec);
         return Value::null();

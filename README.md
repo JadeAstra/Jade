@@ -2589,7 +2589,7 @@ for file in Path("src").walk() { if (file.extension == "astra") { print(file.tex
 | | |
 | --- | --- |
 | The path | `text` (also `toString()`, so `"$path"` works), `name`, `extension`, `nameWithoutExtension`, `parent` (a `Path`, null at the top), `absolute`, `resolve(child)` |
-| On disk | `exists()`, `isFile()`, `isDirectory()`, `isReadable()`, `isWritable()`, `isExecutable()`, `size()`, `lastModified()`, `canonical()`, `list()` (the `Path`s in a directory), `walk()` (every path below, as a sequence) |
+| On disk | `exists()`, `isFile()`, `isDirectory()`, `isReadable()`, `isWritable()`, `isExecutable()`, `size()`, `lastModified()` (an `Instant`), `canonical()`, `list()` (the `Path`s in a directory), `walk()` (every path below, as a sequence) |
 | Text | `readText()`, `readLines()`, `forEachLine { }`, `useLines { lines -> }` (a sequence, read as it goes), `writeText(s)`, `appendText(s)` |
 | Bytes | `readBytes()`, `writeBytes(b)`, `appendBytes(b)` |
 | A piece at a time | `reader()`, `writer(append?)` |

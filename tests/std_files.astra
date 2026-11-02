@@ -18,9 +18,9 @@ print(Path("a/b/c").parent, Path("a").parent, Path("a/b").parent!!.parent, Path(
 print(f, "$f" == f.text, f == Path(root, "notes.txt"), f == Path("other"), f == unknown(f.text), f.absolute.text.endsWith("notes.txt"), f.absolute.name)   // expect: astra-files-test\notes.txt true true false false true notes.txt
 
 // Text.
-print(f.exists(), f.size(), f.lastModified())              // expect: false 0 0
+print(f.exists(), f.size(), f.lastModified())              // expect: false 0 null
 f.writeText("first line\nsecond line\n")
-print(f.exists(), f.isFile(), f.isDirectory(), f.size(), f.lastModified() > 1600000000000)   // expect: true true false 23 true
+print(f.exists(), f.isFile(), f.isDirectory(), f.size(), f.lastModified()!! > Instant.parse("2020-09-13T12:26:40Z"))   // expect: true true false 23 true
 print(f.readText().size, f.readLines(), f.readText().lines().size)   // expect: 23 ["first line", "second line"] 3
 f.appendText("naïve café")
 print(f.readLines(), f.size(), f.readText().size)        // expect: ["first line", "second line", "naïve café"] 35 33
@@ -92,8 +92,8 @@ moved.setWritable(false)
 print(moved.isWritable())                                    // expect: false
 try { moved.writeText("no") } catch (e : IOException) { print("refused") }   // expect: refused
 moved.setWritable(true)
-moved.setLastModified(1700000000000)
-print(moved.lastModified())                                  // expect: 1700000000000
+moved.setLastModified(Instant.parse("2023-11-14T22:13:20.5Z"))
+print(moved.lastModified())                                  // expect: 2023-11-14T22:13:20.500Z
 try { Path(root, "nothing").canonical() } catch (e : IOException) { print("not there") }   // expect: not there
 
 // Temporary directories and files (D131).
