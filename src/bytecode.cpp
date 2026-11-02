@@ -2124,7 +2124,8 @@ struct Reach {
                 const std::string& used = asString(f.constants[static_cast<size_t>(a)])->utf8();
                 name(used);
                 const std::string member = bare(used);
-                if (!methodsAsked && (member == "methods" || member == "method" || member == "constructors") && noteAt(f, at, true) == nullptr)
+                if (!methodsAsked && (member == "methods" || member == "method" || member == "constructors" || member == "staticMethods" || member == "staticMethod") &&
+                    noteAt(f, at, true) == nullptr)
                     methodsAsked = true;
             }
             if (op == Op::ClassOf) {

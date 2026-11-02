@@ -60,7 +60,7 @@ struct ReflectedMember {
     const Annotations* annotations = nullptr;  // those written on it (D153)
     const FunctionDecl* fn = nullptr;   // a method's or an init's; null for a field and a generated init
     RuntimeType type;                   // a field's type, a method's result; Unknown where it gives nothing
-    int flags = 0;                      // a field's: 1 it may be set, 2 a property worked out by its getter
+    int flags = 0;                      // a field's: 1 it may be set, 2 a property worked out by its getter, 4 static
     std::vector<std::string> paramNames;
     std::vector<RuntimeType> params;
     std::vector<bool> optional;         // the parameter has a default
@@ -68,6 +68,7 @@ struct ReflectedMember {
 };
 struct ReflectedClass {
     std::vector<ReflectedMember> fields, methods, constructors;
+    std::vector<ReflectedMember> staticFields, staticMethods;  // its own (G44)
     std::vector<RuntimeType> kinds;     // an enum class's (D39)
     std::vector<RuntimeType> supertypes;  // the class it extends and its interfaces (G42)
 };

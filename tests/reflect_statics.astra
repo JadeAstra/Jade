@@ -1,0 +1,42 @@
+// Reflection on a class's static members, and on one form of a method with several (G44).
+
+class Counter(var n : int) {
+  static {
+    var made = 0
+    val limit : int = 10
+    fun create(start : int) : Counter {
+      made++
+      return Counter(start)
+    }
+    fun create(start : int, step : int) : Counter => Counter(start * step)
+    private fun secret() : int => 7
+  }
+  fun add(by : int) { n += by }
+  fun add(by : float) { n += by.toInt() }
+}
+
+// -- Listed apart, the class's own --
+print(Counter#.staticFields)                                  // expect: [made : int, limit : int]
+print(Counter#.staticMethods.map { it.name })                 // expect: ["create", "create"]
+print(Counter#.fields, Counter#.staticFields.map { it.isStatic })   // expect: [n : int] [true, true]
+
+// -- Read, set and called with no object --
+val made = Counter#.staticField("made")!!
+val one = Counter#.staticMethod("create", int#)!!.call(null, 5) as Counter
+val two = Counter#.staticMethod("create", int#, int#)!!.call(null, 3, 4) as Counter
+print(one.n, two.n, made.get())                               // expect: 5 12 1
+made.set(null, 40)
+print(Counter.made, made.isMutable, Counter#.staticField("limit")!!.isMutable)   // expect: 40 true false
+try {
+  made.get(one)
+} catch (e : IllegalArgumentException) {
+  print(e.message)                                            // expect: Counter's static members take no object, not <Counter instance>
+}
+
+// -- One form of a method, by its parameters' classes --
+val byFloat = Counter#.method("add", float#)!!
+byFloat.call(one, 2.5)
+print(one.n, byFloat, Counter#.method("add", string#))        // expect: 7 add(by : float) null
+
+// -- What the class keeps private is listed to its own code only --
+print(Counter#.staticMethod("secret"))                        // expect: null

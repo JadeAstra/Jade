@@ -6122,7 +6122,7 @@ struct Checker::Impl {
             auto [at, added] = classOfAsked.emplace(m.object.get(), m.name);
             if (!added && at->second != m.name) at->second.clear();
         }
-        if (m.name != "methods" && m.name != "method" && m.name != "constructors") return;
+        if (m.name != "methods" && m.name != "method" && m.name != "constructors" && m.name != "staticMethods" && m.name != "staticMethod") return;
         bool mayBeClass = !onClassOf;
         if (mayBeClass && obj.known() && obj.kind != Type::Any && obj.kind != Type::TypeParam && obj.kind != Type::Union) {
             const Type cls = stdClassType("Class");
@@ -10307,6 +10307,29 @@ bool Checker::reflected(const ClassStmt& cls, ReflectedClass& out) {
             }
             if (r.kind != RuntimeType::Unknown) out.kinds.push_back(std::move(r));
         }
+    // Its static fields and methods (G44).
+    for (const auto& field : cls.staticFields) {
+        auto f = k->statics.find(field->name);
+        if (f == k->statics.end()) continue;
+        ReflectedMember m;
+        m.name = field->name;
+        m.annotations = &field->annotations;
+        m.type = runtime(c.fieldType(f->second));
+        m.flags = (!field->isVal ? 1 : 0) | 4;
+        out.staticFields.push_back(std::move(m));
+    }
+    for (const auto& method : cls.methods) {
+        if (!method->isStatic || method->accessor != FunctionDecl::Accessor::None || method->name == "init") continue;
+        auto f = c.funcOf.find(method.get());
+        if (f == c.funcOf.end()) continue;
+        ReflectedMember m;
+        m.name = method->name;
+        m.annotations = &method->annotations;
+        m.fn = method.get();
+        function(f->second, m);
+        m.type = runtime(c.resultOf(f->second));
+        out.staticMethods.push_back(std::move(m));
+    }
     // What it is besides (G42): the class it extends, with what it gives that class, and its
     // interfaces.
     c.resolveSupers(k);

@@ -1897,7 +1897,11 @@ A class has `name`, `superclass`, `interfaces` (those an `extend` fitted it to i
 `isInstance(x)`. Its members are those it inherits too, those of the classes above first. A
 field has `name`, `type`, `isMutable`, `get(obj)` and `set(obj, value)`; a method `name`,
 `parameters`, `result` and `call(obj, ...)`; a constructor `parameters` and `call(...)`. A
-property is a field, and reading or setting it runs its getter or setter.
+property is a field, and reading or setting it runs its getter or setter. A class's own
+static members are listed apart, as Kotlin lists a companion's: `staticFields` and
+`staticMethods`, found with `staticField(name)` and `staticMethod(name)`, read, set and called
+with no object (`get()`, `call(null, ...)`), each saying `isStatic`. Of a method with several
+forms, `method("scale", float#, float#)` gives the one with those parameters (G44).
 
 **Only what the code may use is listed** (D38): a class's private members are listed to its
 own code and to no other, as the access words say anywhere. **What a method called by its name

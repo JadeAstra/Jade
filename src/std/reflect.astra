@@ -19,6 +19,9 @@ external fun __typeHas(type : Type, value : any?) : bool
 external fun __typeFields(type : Type, asker : any?) : List<List<any?>>
 external fun __typeMethods(type : Type, asker : any?) : List<List<any?>>
 external fun __typeConstructors(type : Type) : List<List<any?>>
+external fun __typeStaticFields(type : Type, asker : any?) : List<List<any?>>
+external fun __typeStaticMethods(type : Type, asker : any?) : List<List<any?>>
+external fun __typeClass(type : Type) : any
 external fun __typeAnnotations(type : Type) : List<any>
 external fun __typeKinds(type : Type) : List<Type>
 external fun __typeConstruct(type : Type, args : List<any?>) : any
@@ -78,6 +81,13 @@ class Class(internal val type : Type, private val asker : any? = null) {
   val constructors : List<Constructor>
     get() => __typeConstructors(type).map { Constructor(this, it) }
 
+  // Its own static fields, and its own static methods (G44), each one the code that wrote the
+  // `#` may use: read, set and called with no object.
+  val staticFields : List<Field>
+    get() => __typeStaticFields(type, asker).map { Field(this, it) }
+  val staticMethods : List<Method>
+    get() => __typeStaticMethods(type, asker).map { Method(this, it, true) }
+
   // The annotations written on it (D153).
   val annotations : List<any>
     get() => __typeAnnotations(type)
@@ -85,18 +95,18 @@ class Class(internal val type : Type, private val asker : any? = null) {
   // there is none.
   fun <A> annotation() : A? => __typeAnnotations(type).firstOrNull { it is A } as A?
 
-  // The field, or the method, of that name; null where there is none the code may use. Of a
-  // method with several forms, the first.
+  // The field of that name; null where there is none the code may use.
   fun field(name : string) : Field? {
     val entry = __typeFields(type, asker).firstOrNull { it[0] == name }
     return entry == null ? null : Field(this, entry)
   }
-  // The method named `name`, the first of its forms where it has several; null where there is
-  // none the code may use.
-  fun method(name : string) : Method? {
-    val entry = __typeMethods(type, asker).firstOrNull { it[0] == name }
-    return entry == null ? null : Method(this, entry)
-  }
+  // The method named `name`: with `parameterTypes`, the form whose parameters are of exactly
+  // those classes (`method("scale", float#, float#)`, G44), and without, the first of its forms;
+  // null where there is none the code may use.
+  fun method(name : string, vararg parameterTypes : Class) : Method? => __formOf(methods, name, parameterTypes)
+  // The static field, or the static method, of that name, as field and method find them.
+  fun staticField(name : string) : Field? => staticFields.firstOrNull { it.name == name }
+  fun staticMethod(name : string, vararg parameterTypes : Class) : Method? => __formOf(staticMethods, name, parameterTypes)
 
   // Whether a value is an object of the class, or of a class below it.
   fun isInstance(value : any?) : bool => __typeHas(type, value)
@@ -116,7 +126,12 @@ class Class(internal val type : Type, private val asker : any? = null) {
   }
 }
 
-// A field or a property of a class.
+// The method of `methods` named `name` whose parameters are of the classes `types`; the first
+// so named where none are given.
+fun __formOf(methods : List<Method>, name : string, types : List<Class>) : Method? =>
+  methods.firstOrNull { it.name == name and (types.isEmpty() or it.parameters.map { p -> p.type } == types) }
+
+// A field or a property of a class, or a static one.
 // `owner` is the Class that lists it.
 class Field(val owner : Class, entry : List<any?>) {
   // Its name, as written in the class.
@@ -131,25 +146,30 @@ class Field(val owner : Class, entry : List<any?>) {
   // Whether `set` may change it: a var, or a property with a setter, that the code may assign to.
   val isMutable : bool
     get() => (flags & 1) != 0
+  // Whether it is a static field of the class (G44), read and set with no object.
+  val isStatic : bool
+    get() => (flags & 4) != 0
 
-  // Its value in `obj`, an object of the class. A property's getter runs.
-  fun get(obj : any) : any? throws InvocationTargetException {
-    require(owner.isInstance(obj)) { "$obj is not an object of ${owner.name}" }
-    if ((flags & 2) == 0) { return __memberGet(obj, name) }
+  // Its value in `obj`, an object of the class; for a static field, its value, `obj` left out.
+  // A property's getter runs.
+  fun get(obj : any? = null) : any? throws InvocationTargetException {
+    val holder = __holderOf(owner, isStatic, obj)
+    if ((flags & 2) == 0) { return __memberGet(holder, name) }
     try {
-      return __memberGet(obj, name)
+      return __memberGet(holder, name)
     } catch (e) {
       throw InvocationTargetException(e)
     }
   }
 
-  // Gives it a new value in `obj`, which has to fit its type. A property's setter runs.
-  fun set(obj : any, value : any?) throws InvocationTargetException {
-    require(owner.isInstance(obj)) { "$obj is not an object of ${owner.name}" }
+  // Gives it a new value in `obj`, which has to fit its type; for a static field, `obj` is
+  // null. A property's setter runs.
+  fun set(obj : any?, value : any?) throws InvocationTargetException {
+    val holder = __holderOf(owner, isStatic, obj)
     require(isMutable) { "${owner.name}.$name cannot be set here" }
     require(__typeHas(rawType, value)) { "${owner.name}.$name holds $type, which $value is not" }
     try {
-      __memberSet(obj, name, value)
+      __memberSet(holder, name, value)
     } catch (e) {
       throw InvocationTargetException(e)
     }
@@ -179,6 +199,17 @@ class Parameter(entry : List<any?>) {
   fun toString() : string => "$name : $type"
 }
 
+// What a member is read, set or called on: an object of the class, or for a static one the
+// class itself, no object given.
+fun __holderOf(owner : Class, isStatic : bool, obj : any?) : any {
+  if (isStatic) {
+    require(obj == null) { "${owner.name}'s static members take no object, not $obj" }
+    return __typeClass(owner.type)
+  }
+  require(obj != null and owner.isInstance(obj)) { "$obj is not an object of ${owner.name}" }
+  return obj as any
+}
+
 // What a call by name checks of its arguments before it is made (D49).
 fun __checkArguments(what : string, parameters : List<Parameter>, args : List<any?>) {
   val required = parameters.count { !it.isOptional }
@@ -190,9 +221,9 @@ fun __checkArguments(what : string, parameters : List<Parameter>, args : List<an
   }
 }
 
-// A method of a class.
+// A method of a class, or a static one (`isStatic`, G44), called with no object.
 // `owner` is the Class that lists it.
-class Method(val owner : Class, entry : List<any?>) {
+class Method(val owner : Class, entry : List<any?>, val isStatic : bool = false) {
   // Its name; the forms of a method with several share it.
   val name : string = entry[0] as string
   private val key : string = entry[1] as string
@@ -203,13 +234,12 @@ class Method(val owner : Class, entry : List<any?>) {
   val result : Class? = rawResult == null ? null : Class(rawResult)
   // The annotations written on it, in their order.
   val annotations : List<any> = entry[4] as List<any>
-
-  // Runs it on `obj`, an object of the class, with `args`.
-  fun call(obj : any, vararg args : any?) : any? throws InvocationTargetException {
-    require(owner.isInstance(obj)) { "$obj is not an object of ${owner.name}" }
+  // Runs it on `obj`, an object of the class, with `args`; a static method with null for `obj`.
+  fun call(obj : any?, vararg args : any?) : any? throws InvocationTargetException {
+    val holder = __holderOf(owner, isStatic, obj)
     __checkArguments("${owner.name}.$name", parameters, args)
     try {
-      return __memberCall(obj, key, args)
+      return __memberCall(holder, key, args)
     } catch (e) {
       throw InvocationTargetException(e)
     }

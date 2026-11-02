@@ -105,6 +105,31 @@ Value members(VM& vm, const ObjTypeInfo* t, const FunctionProto* asker, int whic
     return Value::object(out);
 }
 
+// The class's own static fields (`which` 0) or methods (1), as far as the code of `asker` may
+// use them (G44): a static field the code may not assign to is listed as one it may not set.
+Value staticMembers(VM& vm, const ObjTypeInfo* t, const FunctionProto* asker, int which) {
+    ObjList* out = newList(vm);
+    TempRoot keep(vm, Value::object(out));
+    if (t->id != kTypeInstance) return Value::object(out);
+    const Value description = vm.classDescription(t->cls, t->args.empty() ? nullptr : t, which);
+    if (description.isNull()) return Value::object(out);
+    const Value entries = partOf(vm, description, which == 0 ? 3 : 2);
+    const Value cls = Value::object(t->cls);
+    for (size_t i = 0; i < asList(entries)->size(); i++) {
+        const Value entry = vm.listGet(asList(entries), i);
+        ObjString* name = asString(partOf(vm, entry, 0));
+        if (vm.accessDenied(cls, name, asker, false)) continue;
+        if (which == 0 && (partOf(vm, entry, 2).as.i & 1) != 0 && vm.accessDenied(cls, name, asker, true)) {
+            std::vector<Value> parts = asList(entry)->values();
+            parts[2] = Value::integer(parts[2].as.i & ~int64_t{1});
+            out->values().push_back(Value::object(newList(vm, std::move(parts))));
+            continue;
+        }
+        out->values().push_back(entry);
+    }
+    return Value::object(out);
+}
+
 // Part `part` of what the class itself says (`which` 0 or 1), not those above it: an empty
 // list where it says nothing.
 Value ownPart(VM& vm, const ObjTypeInfo* t, int which, size_t part) {
@@ -134,6 +159,19 @@ void registerReflection(VM& vm) {
     });
     vm.defineNative("__typeMethods", 2, 2, [](VM& vm, int, Value* args) -> Value {
         return members(vm, typeGiven(vm, args[0]), askerOf(args[1]), 1);
+    });
+    // The class's own static fields and methods (G44), and the class itself, whose statics they
+    // are read, set and called on.
+    vm.defineNative("__typeStaticFields", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        return staticMembers(vm, typeGiven(vm, args[0]), askerOf(args[1]), 0);
+    });
+    vm.defineNative("__typeStaticMethods", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        return staticMembers(vm, typeGiven(vm, args[0]), askerOf(args[1]), 1);
+    });
+    vm.defineNative("__typeClass", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const ObjTypeInfo* t = typeGiven(vm, args[0]);
+        if (t->id != kTypeInstance) throw vm.runtimeError(Thrown::IllegalArgumentException, vm.typeInfoText(t) + " has no statics");
+        return Value::object(t->cls);
     });
     // The class's own constructors, annotations and kinds.
     vm.defineNative("__typeConstructors", 1, 1, [](VM& vm, int, Value* args) -> Value {

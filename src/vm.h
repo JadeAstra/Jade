@@ -450,6 +450,8 @@ public:
     // Whether the code of `proto` may not use the member `name` of an object of `cls`, or may
     // not assign to it; with no code, what only some code may use.
     bool memberDenied(const ObjClass* cls, const ObjString* name, const FunctionProto* proto, bool write) const;
+    // The same for a member reached through `target`: an object, or a class for its statics.
+    bool accessDenied(Value target, const ObjString* name, const FunctionProto* proto, bool write) const;
     // A member read, set or found by its name, whoever may use it: as reflection does once it
     // has listed it to the code asking.
     Value memberGet(Value obj, ObjString* name);
@@ -1068,7 +1070,6 @@ private:
     void setAccess(ObjClass* cls, Table& marks, ObjString* name, bool write, const std::vector<uint16_t>& run, int kind);
     void declareAccess(ObjClass* cls, Table& marks, ObjString* name, int id, int kind, bool write);
     void joinProtected(ObjClass* subclass);
-    bool accessDenied(Value target, const ObjString* name, const FunctionProto* proto, bool write) const;
     bool accessDeniedTo(Value target, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const;
     bool memberDeniedTo(const ObjClass* cls, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const;
     bool rightsAllow(Value target, const ObjString* name, const FunctionProto* proto, const uint8_t* ip, bool write) const;

@@ -5327,7 +5327,15 @@ private:
             emitAnnotations(&s.annotations);
             for (const RuntimeType& kind : r.kinds) emitMetaType(kind, s);
             emitBuildList(r.kinds.size(), s);
-            emitBuildList(3, s);
+            for (const ReflectedMember& m : r.staticFields) {
+                emit(Op::Const, stringConstant(m.name));
+                emitMetaType(m.type, s);
+                emit(Op::Const, intConstant(m.flags));
+                emitAnnotations(m.annotations);
+                emitBuildList(4, s);
+            }
+            emitBuildList(r.staticFields.size(), s);
+            emitBuildList(4, s);
         } else {
             for (const ReflectedMember& m : r.methods) {
                 emit(Op::Const, stringConstant(m.name));
@@ -5344,7 +5352,16 @@ private:
                 emitBuildList(2, s);
             }
             emitBuildList(r.constructors.size(), s);
-            emitBuildList(2, s);
+            for (const ReflectedMember& m : r.staticMethods) {
+                emit(Op::Const, stringConstant(m.name));
+                emit(Op::Const, stringConstant(formNameOf(s, *m.fn)));
+                emitMetaParams(m, s);
+                emitMetaType(m.type, s);
+                emitAnnotations(m.annotations);
+                emitBuildList(5, s);
+            }
+            emitBuildList(r.staticMethods.size(), s);
+            emitBuildList(3, s);
         }
         emit(Op::Return);
         finish(state);
@@ -5637,7 +5654,8 @@ private:
         note.at = static_cast<uint32_t>(code().size());
         const std::string asked = session_.checker->classOfAsked(e);
         if (asked == "name" || asked == "origin" || asked == "isInstance" || asked == "hashCode" || asked == "toString") note.flags = 0;
-        else if (asked == "methods" || asked == "method" || asked == "constructors") note.flags = kReflectFields | kReflectMethods;
+        else if (asked == "methods" || asked == "method" || asked == "constructors" || asked == "staticMethods" || asked == "staticMethod")
+            note.flags = kReflectFields | kReflectMethods;
         else note.flags = kReflectFields;
         if (note.flags != 0) {
             RuntimeType value;
@@ -5688,7 +5706,8 @@ private:
             const Expr& callee = *static_cast<const CallExpr&>(expr).callee;
             if (callee.kind == ExprKind::Member) member = &static_cast<const MemberExpr&>(callee);
         }
-        if (member == nullptr || (member->name != "methods" && member->name != "method" && member->name != "constructors")) {
+        if (member == nullptr || (member->name != "methods" && member->name != "method" && member->name != "constructors" &&
+                                  member->name != "staticMethods" && member->name != "staticMethod")) {
             compileExprBody(expr);
             return;
         }
