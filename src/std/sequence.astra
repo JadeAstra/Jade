@@ -390,6 +390,27 @@ class SequenceScope<T> {
   suspend fun yieldAll(items : List<T>) {
     for item in items { yield(item) }
   }
+
+  // Gives each item of a set in turn, in its order, as yield does.
+  suspend fun yieldAll(items : Set<T>) {
+    for item in items { yield(item) }
+  }
+
+  // Gives each item of what an Iterable goes through in turn, as yield does (G51).
+  suspend fun yieldAll(items : Iterable<T>) {
+    for item in items { yield(item) }
+  }
+
+  // Gives each item an Iterator has left in turn, as yield does.
+  suspend fun yieldAll(items : Iterator<T>) {
+    while (items.hasNext()) { yield(items.next()) }
+  }
+}
+
+// A range goes through its numbers as an Iterable does (G51): yieldAll takes one, as anything
+// taking an Iterable<int> does.
+extend Range : Iterable<int> {
+  fun iterator() : Iterator<int> => this.asSequence().iterator()
 }
 
 // A sequence of what the block gives with yield. The block runs as its values are asked for,
@@ -460,6 +481,10 @@ fun <T> Set<T>.asSequence() : Sequence<T> => this.toList().asSequence()
 
 // The characters, as a sequence. They are copied into a list when this is called.
 fun string.asSequence() : Sequence<char> => this.toList().asSequence()
+
+// The map's entries, in its order, as a sequence (G51). They are copied when this is called,
+// so a later change to the map does not show.
+fun <K, V> Map<K, V>.asSequence() : Sequence<MapEntry<K, V>> => this.entries.asSequence()
 
 // The sequence itself.
 fun <T> Sequence<T>.asSequence() : Sequence<T> => this

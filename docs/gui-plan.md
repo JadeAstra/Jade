@@ -2107,7 +2107,7 @@ and the shared collections keep a change whole; how a section is divided; `paral
 views; frozen data shared with workers; a `for` over a channel and waking at a Lock; how a
 sequence's block runs; what an atomic field is; what a Duration is. Left: a message never read
 keeps its hold on shared data; a shared collection locked whole; a sequence's 4,000 calls;
-`yieldAll`'s two forms; `@Timeout` and `scheduler` in milliseconds.
+`@Timeout` and `scheduler` in milliseconds.
 Tests: `tasks.astra` (was `flows.astra`) and `threads.astra` rewritten, `sequences.astra`,
 `parallel_tools.astra`, `durations.astra`, `workers_sharing.astra`, `check/concurrency.astra`,
 `error_atomic_field.astra`, and every test and example that used the old names brought to the

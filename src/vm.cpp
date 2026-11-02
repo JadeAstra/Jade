@@ -1548,7 +1548,7 @@ int VM::paramFit(Value v, uint8_t type, const ObjString* className) const {
         return (type & kTypeMask) == kTypeNumber ? 1 : 2;
     }
     if (v.isNull()) return (type & kTypeNullable) != 0 ? 1 : -1;
-    if (classOf(v) == nullptr || className == nullptr) return -1;
+    if (className == nullptr) return -1;
     // The class is known by its name, as written: the last part of it.
     auto named = [&](const ObjClass* c) {
         const std::string& n = c->name->utf8();
@@ -1556,6 +1556,15 @@ int VM::paramFit(Value v, uint8_t type, const ObjString* className) const {
         return n == want || (n.size() > want.size() && n[n.size() - want.size() - 1] == '.' &&
                              n.compare(n.size() - want.size(), want.size(), want) == 0);
     };
+    if (classOf(v) == nullptr) {
+        // A built-in value an extend fitted to the interface (G30, G51): `1..3` for an Iterable,
+        // as narrowly as an interface well above a class.
+        const uint8_t id = hasBuiltinFits_ ? builtinIdOf(v) : 0;
+        if (id != 0)
+            for (const BuiltinFit& fit : builtinFits_[id])
+                if (named(fit.iface) && const_cast<VM*>(this)->fitHolds(fit, v)) return 2;
+        return -1;
+    }
     int distance = 0;
     for (const ObjClass* c = classOf(v); c != nullptr; c = c->super, distance++) {
         if (named(c)) return 2 + std::max(0, 64 - distance);

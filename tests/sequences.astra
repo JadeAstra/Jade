@@ -32,6 +32,27 @@ for x in parts { print(x) }
 // expect: 3
 // expect: 4
 // expect: 5
+// yieldAll of a set, a range, an Iterator and an Iterable (G51).
+class Down(var at : int) : Iterator<int> {
+  override fun hasNext() : bool => at > 0
+  override fun next() : int {
+    at -= 1
+    return at + 1
+  }
+}
+class Countdown(val from : int) : Iterable<int> {
+  override fun iterator() : Iterator<int> => Down(from)
+}
+val mixed = sequence {
+  yieldAll(setOf(1, 2))
+  yieldAll(3..4)
+  yieldAll(Down(6))
+  yieldAll(Countdown(2))
+}
+print(mixed.toList())                                         // expect: [1, 2, 3, 4, 6, 5, 4, 3, 2, 1, 2, 1]
+// A map's entries as a sequence.
+val ages = mapOf("ann" to 30, "bob" to 25)
+print(ages.asSequence().filter { it.value > 26 }.map { it.key }.toList())   // expect: ["ann"]
 // One sequence gone over inside another's block.
 print(sequence { for x in fibonacci.take(5) { yield(x * 100) } }.toList())   // expect: [0, 100, 100, 200, 300]
 // A suspend function of SequenceScope's may yield for the block.
