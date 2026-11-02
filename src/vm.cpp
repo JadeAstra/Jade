@@ -8434,7 +8434,8 @@ void VM::blacken(Obj* obj) {
         }
         case ObjType::Fiber: {
             ObjFiber* fiber = static_cast<ObjFiber*>(obj);
-            liveBytes_ += sizeof(ObjFiber) + ObjFiber::kStackSize;
+            liveBytes_ += sizeof(ObjFiber) + static_cast<size_t>(fiber->context.stackEnd - fiber->context.stack) * sizeof(Value) +
+                          static_cast<size_t>(fiber->context.frameLimit) * sizeof(CallFrame);
             markValue(fiber->entry);
             markValue(fiber->early);
             // One that is running is marked as a context of the thread it is running on;

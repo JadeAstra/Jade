@@ -224,3 +224,12 @@ EventLoop.run()
 val stub = answering { title -> "stubbed $title" }
 print(log, task { await { stub("x", it) } }.getOrNull(), task { askText("later") }.getOrNull())   // expect: ["colour for name??"] stubbed x null
 EventLoop.run()
+
+// A task goes as deep as a thread may (G50), its stack growing as it is used.
+fun nested(k : int) : int => k == 0 ? 0 : 1 + nested(k - 1)
+print(task { nested(15000) }.getOrNull())   // expect: 15000
+var overflowed = ""
+task {
+  try { nested(1_000_000) } catch (e : StackOverflowError) { overflowed = e.message ?: "" }
+}
+print(overflowed)   // expect: stack overflow

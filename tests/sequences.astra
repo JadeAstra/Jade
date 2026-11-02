@@ -107,7 +107,7 @@ var total = 0
 for g in many { total += g.next() }
 print(total)                                                  // expect: 2001000
 fun depth(k : int) : int => k == 0 ? 0 : 1 + depth(k - 1)
-print(sequence { yield(depth(3000)) }.first())                // expect: 3000
+print(sequence { yield(depth(15000)) }.first())               // expect: 15000
 try { sequence { yield(depth(1_000_000)) }.first() } catch (e : StackOverflowError) { print(e.message) }   // expect: stack overflow
 
 // A sequence gone over in a task: the task waits as it likes between items.

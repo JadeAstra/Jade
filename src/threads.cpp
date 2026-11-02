@@ -68,12 +68,40 @@ void unreserve(void* at, size_t bytes) {
 
 const size_t kFrameBytes = sizeof(CallFrame) + sizeof(const ObjTypeInfo*) + sizeof(Value);
 
+// Stacks that grow, of tasks that have finished, kept to be used again (G50): reserving and
+// letting go of one is two calls to the system each, which a program making many small tasks
+// would otherwise pay for every one. Kept with what they had committed, unless that is much.
+struct KeptStack {
+    Value* stack;
+    Value* stackEnd;
+    CallFrame* frames;
+    int frameLimit;
+};
+std::mutex keptStacksMutex;
+std::vector<KeptStack> keptStacks;
+const size_t kStacksKept = 64;
+const size_t kKeptValues = size_t{1} << 14;  // a stack that grew past this many values is let go
+
 }  // namespace
 
 Context::Context(size_t stackSize, int frameLimit, bool grows) : maxFrames(frameLimit), growable(grows) {
     // Each frame's type arguments come after the frames (VM::frameTypeArgs).
     static_assert(sizeof(CallFrame) % alignof(const ObjTypeInfo*) == 0);
     // and their destinations (VM::frameDestination) after those.
+    if (grows && stackSize == ObjFiber::kStackSize && frameLimit == ObjFiber::kMaxFrames) {
+        std::lock_guard<std::mutex> hold(keptStacksMutex);
+        if (!keptStacks.empty()) {
+            const KeptStack kept = keptStacks.back();
+            keptStacks.pop_back();
+            stack = kept.stack;
+            stackEnd = kept.stackEnd;
+            stackReserveEnd = stack + stackSize;
+            frames = kept.frames;
+            this->frameLimit = kept.frameLimit;
+            sp = stack;
+            return;
+        }
+    }
     if (grows) {
         stack = static_cast<Value*>(reserve(stackSize * sizeof(Value)));
         frames = static_cast<CallFrame*>(reserve(static_cast<size_t>(frameLimit) * kFrameBytes));
@@ -136,8 +164,19 @@ Context::~Context() { release(); }
 
 void Context::release() {
     if (growable) {
-        unreserve(stack, static_cast<size_t>(stackReserveEnd - stack) * sizeof(Value));
-        unreserve(frames, static_cast<size_t>(maxFrames) * kFrameBytes);
+        bool kept = false;
+        if (stack != nullptr && static_cast<size_t>(stackReserveEnd - stack) == ObjFiber::kStackSize && maxFrames == ObjFiber::kMaxFrames &&
+            static_cast<size_t>(stackEnd - stack) <= kKeptValues) {
+            std::lock_guard<std::mutex> hold(keptStacksMutex);
+            if (keptStacks.size() < kStacksKept) {
+                keptStacks.push_back(KeptStack{stack, stackEnd, frames, frameLimit});
+                kept = true;
+            }
+        }
+        if (!kept) {
+            unreserve(stack, static_cast<size_t>(stackReserveEnd - stack) * sizeof(Value));
+            unreserve(frames, static_cast<size_t>(maxFrames) * kFrameBytes);
+        }
         stack = stackEnd = sp = stackReserveEnd = nullptr;
         frames = nullptr;
         frameCount = 0;
@@ -983,7 +1022,7 @@ void registerThreads(VM& vm) {
     // Starts a task running `function`, and returns when it finishes or is first set aside.
     define(vm, task, "start", 1, 1, [](VM& vm, int, Value* args) -> Value {
         ObjFiber* fiber = vm.alloc<ObjFiber>(args[0]);
-        vm.account(64 * 1024);
+        vm.account(4 * 1024);
         vm.runFiber(fiber, true, Value::null());
         return Value::null();
     });
@@ -995,13 +1034,13 @@ void registerThreads(VM& vm) {
     });
 
     // -- Generators: what sequence { } runs on (D98) --
-    // A generator is a task with a small stack that grows as needed, so that many can be alive
-    // at once. It is set aside only where it yields, and taken up again when the next value is
+    // A generator is a task, its stack starting small and growing as needed as every task's
+    // does. It is set aside only where it yields, and taken up again when the next value is
     // asked for.
 
     // Starts a generator running `function`, up to its first yield or its end.
     define(vm, task, "generate", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        ObjFiber* fiber = vm.alloc<ObjFiber>(args[0], true);
+        ObjFiber* fiber = vm.alloc<ObjFiber>(args[0]);
         fiber->generator = true;
         TempRoot keep(vm, Value::object(fiber));
         vm.account(4 * 1024);

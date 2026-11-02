@@ -100,8 +100,9 @@ struct Context {
 enum class FiberState : uint8_t { Fresh, Running, Suspended, Done };
 
 struct ObjFiber final : Obj {
-    static constexpr size_t kStackSize = 1 << 16;
-    static constexpr int kMaxFrames = 4000;
+    // As deep as a thread's may go (G50): reserved whole, and committed as it is used.
+    static constexpr size_t kStackSize = 1 << 20;
+    static constexpr int kMaxFrames = 20000;
 
     Context context;
     FiberState state = FiberState::Fresh;
@@ -115,9 +116,8 @@ struct ObjFiber final : Obj {
     bool earlyOk = false;
     Value early;
 
-    // A generator's (D98) has a stack that starts small and grows as needed, so that many can
-    // be alive at once.
-    explicit ObjFiber(Value function, bool small = false) : Obj(ObjType::Fiber), context(kStackSize, kMaxFrames, small), entry(function) {
+    // Its stack starts small and grows as needed, so that many can be alive at once (D98, G50).
+    explicit ObjFiber(Value function) : Obj(ObjType::Fiber), context(kStackSize, kMaxFrames, true), entry(function) {
         context.fiber = this;
     }
 };
