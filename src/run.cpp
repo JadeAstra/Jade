@@ -69,6 +69,12 @@ void reportUncaught(VM& vm, AstraThrow& thrown) {
 
     std::string report = "Uncaught " + text + "\n";
     for (const std::string& line : thrown.trace) report += "  " + line + "\n";
+    // The errors set aside for it on the way (G40), as Java shows them.
+    try {
+        for (const Value& aside : vm.setAsideOf(thrown.value)) report += "  Suppressed: " + vm.stringify(aside) + "\n";
+    } catch (const AstraThrow&) {
+        report += "  Suppressed: (its toString() failed)\n";
+    }
     reportFatal(report);
 }
 

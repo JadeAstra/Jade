@@ -1782,7 +1782,9 @@ try {
 ```
 
 Only a `Throwable` is thrown, in Java's tree, which Kotlin code uses (D35). It has a `message`,
-which may be null, and the `cause` it came from, if any.
+which may be null, and the `cause` it came from, if any. Errors that came while it was on its
+way are set aside for it in `suppressed`, as Java keeps them: `addSuppressed(e)` adds one, and
+an uncaught error shows them under its trace.
 
 - **`Error`** is what the VM cannot go on from: `StackOverflowError`, `OutOfMemoryError` (a
   list, a string or a buffer larger than the system can give; the program can catch it and go
@@ -1851,7 +1853,8 @@ val onSave : () -> unit throws IOException = { file.writeText(text) }
 ```
 
 **`use { }`** runs its block on something to close, and closes it afterwards, however the block
-ends: `Path(p).reader().use { it.readText() }` (D113). It is for an `AutoCloseable`, which the
+ends: `Path(p).reader().use { it.readText() }` (D113). Where the block fails and `close()` then
+fails too, the block's error goes on, with `close()`'s set aside in its `suppressed`. It is for an `AutoCloseable`, which the
 standard library's streams and sockets are; a class of someone else's that has a `close()` is
 fitted to it with `extend`. Like the other functions taking a lambda, it is copied in where it
 is called.

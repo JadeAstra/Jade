@@ -616,6 +616,8 @@ public:
     static bool builtinTypeNamed(const std::string& name, BuiltinType& type);
     // Everything a list, map, string, range, bytes or object with an iterator() holds, in order.
     void collect(Value iterable, std::vector<Value>& out);
+    // The errors set aside for an error (Throwable.suppressed, G40), in the order they came.
+    std::vector<Value> setAsideOf(Value error);
 
     std::ostream* output;
     std::istream* input;

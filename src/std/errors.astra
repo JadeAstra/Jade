@@ -13,6 +13,21 @@
 // What can be thrown, the root of every exception and error. `message` says what went wrong and
 // may be null; `cause` is the Throwable that led to this one, if any.
 class Throwable(val message : string? = null, val cause : Throwable? = null) {
+  // Errors set aside for this one while it was on its way, as Java keeps them (G40): one from
+  // close() after this one came from the block of use { }. None until one is added.
+  private var setAside : open List<Throwable>? = null
+
+  // The errors set aside for this one, in the order they came.
+  val suppressed : List<Throwable>
+    get() => setAside ?: []
+
+  // Sets `e` aside for this one, to be shown with it. An error is not set aside for itself.
+  fun addSuppressed(e : Throwable) {
+    if (e === this) { throw IllegalArgumentException("an error cannot be set aside for itself") }
+    val kept = setAside
+    if (kept == null) { setAside = [e] } else { kept.add(e) }
+  }
+
   // The name of the class, then ": " and the message when there is one.
   //   IllegalStateException("no file").toString()   // "IllegalStateException: no file"
   override fun toString() : string => message == null ? this#.name : this#.name + ": " + message

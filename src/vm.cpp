@@ -673,6 +673,14 @@ bool VM::builtinTypeNamed(const std::string& name, BuiltinType& type) {
     return true;
 }
 
+std::vector<Value> VM::setAsideOf(Value error) {
+    std::vector<Value> out;
+    if (!error.isObjType(ObjType::Instance)) return out;
+    const Value* kept = asInstance(error)->field(intern("setAside"));
+    if (kept != nullptr && kept->isObjType(ObjType::List)) collect(*kept, out);
+    return out;
+}
+
 void VM::collect(Value iterable, std::vector<Value>& out) {
     guardRead(iterable);
     if (iterable.isObjType(ObjType::List)) {
@@ -1312,6 +1320,7 @@ AstraThrow VM::runtimeError(Thrown kind, const std::string& message) {
         ObjInstance* error = newInstance(cls);
         error->setField(names.message, str(message));
         error->setField(names.cause, Value::null());
+        error->setField(intern("setAside"), Value::null());  // Throwable's errors set aside for it (G40)
         t.value = Value::object(error);
     }
     return t;

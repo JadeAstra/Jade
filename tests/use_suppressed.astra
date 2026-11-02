@@ -1,0 +1,32 @@
+// An error from close() after one from the block of use { } is set aside for the block's,
+// which goes on, as Java keeps it (G40).
+class Res(val name : string, val fails : bool) : AutoCloseable {
+  override fun close() {
+    if (fails) { throw IllegalStateException("close of $name") }
+  }
+}
+try { Res("a", true).use { throw IllegalArgumentException("block") } } catch (e) {
+  print(e.message, e.suppressed.size, e.suppressed[0].message)   // expect: block 1 close of a
+}
+// Where the block ends well, close()'s error goes on.
+try { Res("b", true).use { 1 } } catch (e) { print(e.message, e.suppressed.size) }   // expect: close of b 0
+print(Res("c", false).use { it.name })                                              // expect: c
+// A bare return from the block still closes, and nothing is set aside.
+fun firstOf(name : string) : string {
+  Res(name, false).use { r -> return r.name[0..<1] }
+}
+print(firstOf("delta"))                                                             // expect: d
+
+// Set aside by hand; an error is not set aside for itself.
+val e = RuntimeException("x")
+e.addSuppressed(IllegalStateException("y"))
+e.addSuppressed(IllegalStateException("z"))
+print(e.suppressed)                                                  // expect: [IllegalStateException: y, IllegalStateException: z]
+try { e.addSuppressed(e) } catch (f : IllegalArgumentException) { print(f.message) }   // expect: an error cannot be set aside for itself
+// One the program makes when it runs has none.
+try { val xs = [1]; print(xs[5]) } catch (i) { print(i.suppressed.size) }          // expect: 0
+
+// use { } passes on what its block and close() throw, and nothing more: a lambda kept as a
+// () -> int, which throws nothing checked, may use it.
+val kept : () -> int = { Res("e", false).use { 2 } }
+print(kept())                                                                       // expect: 2

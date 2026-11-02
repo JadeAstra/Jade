@@ -99,12 +99,22 @@ interface AutoCloseable {
 }
 
 // Runs the block on this and closes it afterwards, however the block ends: at its end, by a
-// return, or by an exception (D113). Copied in where it is called (D59).
+// return, or by an exception (D113). An error from close() after one from the block is set
+// aside for the block's, which goes on (G40), as Java has it. Copied in where it is called (D59).
 inline fun <T : AutoCloseable, R> T.use(block : (T) -> R) : R {
+  var failed : Throwable? = null
   try {
     return block(this)
+  } catch (e : Throwable) {
+    failed = e
+    throw e
   } finally {
-    this.close()
+    val first = failed
+    if (first == null) {
+      this.close()
+    } else {
+      try { this.close() } catch (c : Throwable) { first.addSuppressed(c) }
+    }
   }
 }
 

@@ -1,0 +1,6 @@
+// An uncaught error shows the errors set aside for it (G40).
+class Res : AutoCloseable {
+  override fun close() { throw IllegalStateException("could not close") }
+}
+Res().use { throw IllegalArgumentException("the block failed") }
+// expect runtime error: Suppressed: IllegalStateException: could not close
