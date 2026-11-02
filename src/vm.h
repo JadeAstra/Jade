@@ -471,14 +471,28 @@ public:
     Value globalAt(int slot) const {
         return slot >= 0 && static_cast<size_t>(slot) < globals_.size() ? globals_[static_cast<size_t>(slot)] : Value::null();
     }
-    // A test's time limit, `millis` long, passed: the next safe point throws an AssertionError
-    // saying so. Called from another thread; clearTimeLimit() forgets one not yet acted on.
+    // A test's time limit, `millis` long, is kept from now on: a read made meanwhile can be
+    // stopped when it passes (G45).
+    void armTimeLimit(int64_t millis) { timeLimitMillis_ = millis; }
+    // It passed: the next safe point throws an AssertionError saying so, and a test waiting
+    // (sleep, join, a lock, the event loop, a read) is woken to throw it. Called from another
+    // thread; clearTimeLimit() forgets one not yet acted on.
     void timeLimitPassed(int64_t millis) {
         timeLimitMillis_ = millis;
         timeLimitPassed_ = true;
         attention_ = true;
+        wakeForTimeLimit();
     }
-    void clearTimeLimit() { timeLimitPassed_ = false; }
+    void clearTimeLimit() {
+        timeLimitPassed_ = false;
+        timeLimitMillis_ = 0;
+    }
+    // Whether the limit has passed, where the AssertionError may be thrown; then throws it.
+    bool timeLimitDue() const { return timeLimitPassed_.load(std::memory_order_relaxed) && keyCalls_ == 0; }
+    void throwIfTimeLimitPassed() {
+        if (timeLimitDue()) safePoint();
+    }
+    void wakeForTimeLimit();
     // A type as the program writes it: `List<Point?>`.
     std::string typeInfoText(const ObjTypeInfo* type) const;
     // Whether every value of `a` is one of `b`. A list or map read through a type is read as

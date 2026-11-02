@@ -296,6 +296,12 @@ void VM::safePoint() {
     }
 }
 
+// Wakes the main thread, which runs the tests, wherever it waits (G45).
+void VM::wakeForTimeLimit() {
+    unpark(&mainThread_);
+    wakeLoop();
+}
+
 void VM::requestStop() {
     stopRequested_ = true;
     attention_ = true;
@@ -437,6 +443,7 @@ bool VM::joinThread(int64_t id, int64_t timeoutMs) {
         target = findThread(id);  // it may be gone, and with it the list
         if (target != nullptr) removeFrom(target->joiners, me);
         if (me->interrupted.load()) return target == nullptr;
+        throwIfTimeLimitPassed();
     }
 }
 
@@ -483,7 +490,16 @@ void VM::monitorEnter(Value lock) {
     // entries, so the reference stays good across the waits.
     Monitor& monitor = monitors_[key];
     monitor.entering.push_back(me);
-    while (monitor.owner != nullptr) park(-1);
+    while (monitor.owner != nullptr) {
+        park(-1);
+        if (timeLimitDue()) {
+            // A test's time is up (G45): it waits no more, and a thread woken to take the lock
+            // in its place is woken again.
+            removeFrom(monitor.entering, me);
+            if (monitor.owner == nullptr && !monitor.entering.empty()) unpark(monitor.entering.front());
+            safePoint();
+        }
+    }
     removeFrom(monitor.entering, me);
     monitor.owner = me;
     monitor.count = 1;
@@ -533,6 +549,10 @@ int VM::monitorWait(Value lock, int64_t timeoutMs) {
             status = 1;
             break;
         }
+        if (timeLimitDue()) {
+            status = 3;  // a test's time is up (G45): thrown once the lock is taken back
+            break;
+        }
         park(deadline.left());
     }
     removeFrom(monitor.waiting, me);
@@ -544,6 +564,7 @@ int VM::monitorWait(Value lock, int64_t timeoutMs) {
     removeFrom(monitor.entering, me);
     monitor.owner = me;
     monitor.count = held;
+    if (status == 3) safePoint();
     return status;
 }
 
@@ -636,6 +657,7 @@ void VM::runEventLoop(bool wait, int64_t budgetMs) {
     bool ranOne = false;
     for (;;) {
         if (stopRequested_.load()) throw WorkerStop{};
+        throwIfTimeLimitPassed();
         if (!wait && budgetMs >= 0 && ranOne && Clock::now() >= deadline) return;
         ranOne = true;
         // What a worker thread has handed over: the end of a read, say, with a task to take up.
@@ -793,6 +815,40 @@ Value VM::blocking(std::function<void()> work, std::function<Value(VM&)> finish)
         fiber->waitingAt = 0;
         suspendFiber();
     }
+    if (timeLimitMillis_.load() > 0 && thread_ == &mainThread_) {
+        // In a test with a time limit (G45): the work is done on a thread of its own, and when
+        // the time is up the test goes on without it, its read cancelled where the system can.
+        struct Waiting {
+            std::mutex mutex;
+            std::condition_variable done;
+            bool finished = false;
+        };
+        auto waiting = std::make_shared<Waiting>();
+        std::thread doer([waiting, work = std::move(work)] {
+            work();
+            std::lock_guard<std::mutex> hold(waiting->mutex);
+            waiting->finished = true;
+            waiting->done.notify_all();
+        });
+        bool finished = false;
+        {
+            LockReleased released(*this);
+            std::unique_lock<std::mutex> hold(waiting->mutex);
+            while (!waiting->finished && !timeLimitPassed_.load())
+                waiting->done.wait_for(hold, std::chrono::milliseconds(10));
+            finished = waiting->finished;
+        }
+        if (finished) {
+            doer.join();
+            return finish(*this);
+        }
+#ifdef _WIN32
+        CancelSynchronousIo(doer.native_handle());
+#endif
+        doer.detach();
+        safePoint();
+        throw runtimeError(Thrown::AssertionError, "the test ran longer than its time limit");
+    }
     {
         LockReleased released(*this);
         work();
@@ -918,6 +974,7 @@ void registerThreads(VM& vm) {
         for (;;) {
             if (me->interrupted.exchange(false)) return Value::boolean(false);
             if (deadline.passed()) return Value::boolean(true);
+            vm.throwIfTimeLimitPassed();
             vm.park(deadline.left());
         }
     });

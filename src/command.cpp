@@ -802,6 +802,7 @@ private:
         std::condition_variable wake;
         bool done = false;
         std::thread watch;
+        if (timeout > 0) vm_.armTimeLimit(timeout);
         if (timeout > 0)
             watch = std::thread([&] {
                 std::unique_lock<std::mutex> hold(mutex);
