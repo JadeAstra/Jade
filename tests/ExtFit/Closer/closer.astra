@@ -1,0 +1,5 @@
+// A folder that fits Range to AutoCloseable with a close() of its own (G31, D188).
+
+extend Range : AutoCloseable {
+  fun close() { print("closed by Closer") }
+}

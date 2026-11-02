@@ -1,0 +1,5 @@
+// A folder that imports Closer, so that what imports it does not have Closer's extend in
+// reach (G31, D188).
+import Closer.*
+
+fun closeIt(r : Range) { r.close() }

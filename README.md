@@ -1710,7 +1710,11 @@ a type already does. An extension function is in reach where a name of its folde
 folder and in the files that import it, with the access words; the standard library's are
 everywhere, and a program's own come before them. Two in reach of one file with one name,
 receiver and parameters are an error (D187), at the declaration if the file has it, or else at
-the import that brings in the second: nothing written could say which a call means.
+the import that brings in the second: nothing written could say which a call means. A call runs
+the one in reach of the file it is written in, also where it is found as the program runs
+(D188): two libraries may each give `string` a `shout()`, each called by its own files, and the
+standard library's functions call their own whatever a program declares. Which class's runs is
+told by the value's class, as for a method.
 
 **`extend`** fits a class someone else wrote to an interface of yours. Names that differ are
 bridged by getters in it, and the interface's methods the class lacks are written in it as
@@ -1738,8 +1742,9 @@ written without `override`, since the type has none to replace. A function the i
 not ask for is an extension function instead (`fun Rect.perimeter()`).
 
 An `extend` holds where its folder's names do, as an extension function does. The same one
-twice is one; two that say different things are an error, and so are two in reach of one file
-from different folders, each with getters or funs (D187). A class written in the program
+twice is one; two that say different things are an error, and so are two from different
+folders, each with getters or funs, anywhere in the program (D187, D188): a value fits an
+interface in one way, whichever file made it fit. A class written in the program
 itself implements the interface instead.
 
 A built-in type is fitted the same way (D185): `int`, `float`, `string`, `bool`, `char`, `byte`,
@@ -3297,8 +3302,8 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 - A class declared inside another does not belong to one object of the outer class (there is
   no `inner`), and an inherited static member needs the class name in front (`Base.max`).
 - `if` always needs its braces, also as a value: `if wide { 200 } else { 100 }`.
-- Extension functions are not scoped to the file that imports them, and there are no extension
-  properties. A class has one initializer: there are no secondary constructors.
+- There are no extension properties. A class has one initializer: there are no secondary
+  constructors.
 - A call of itself is a loop only for a function of the top level or a class, not for one
   declared inside another or a generic one; nor inside a try.
 - Text is one glyph for each character, left to right. Scripts whose letters join or change

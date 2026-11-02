@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <map>
+#include <mutex>
 #include <ostream>
 #include <stdexcept>
 #include <unordered_map>
@@ -1328,16 +1330,57 @@ void disassemble(const Program& program, std::ostream& out) {
 
 // ---- Bytecode files ----
 
+// The library keys given numbers so far, for every VM of the process: a program's are known
+// before it runs, while its workers, each with a VM of its own, run its functions.
+namespace {
+std::mutex libraryMutex;
+// With libraryMutex held.
+uint16_t libraryNumber(const std::string& key) {
+    static std::unordered_map<std::string, uint16_t> numbers{{"p:<builtin>", kEverywhere}};
+    auto [at, added] = numbers.emplace(key, static_cast<uint16_t>(numbers.size() + 1));
+    if (added && numbers.size() >= 0xFFFF) throw std::runtime_error("a process cannot load more than 65534 libraries");
+    return at->second;
+}
+}  // namespace
+
+uint16_t extensionLibrary(const std::string& key) {
+    std::lock_guard<std::mutex> lock(libraryMutex);
+    return libraryNumber(key);
+}
+
+const FileReach* makeReach(std::vector<std::string> keys) {
+    std::lock_guard<std::mutex> lock(libraryMutex);
+    static std::map<std::vector<std::string>, std::unique_ptr<FileReach>> made;
+    std::unique_ptr<FileReach>& reach = made[keys];
+    if (reach == nullptr) {
+        reach = std::make_unique<FileReach>();
+        for (const std::string& key : keys) {
+            const uint16_t library = libraryNumber(key);
+            const size_t word = library >> 6;
+            if (reach->bits.size() <= word) reach->bits.resize(word + 1, 0);
+            reach->bits[word] |= uint64_t{1} << (library & 63);
+        }
+        reach->keys = std::move(keys);
+    }
+    return reach.get();
+}
+
+void FunctionProto::noteLibrary() {
+    const size_t mark = signature.rfind(kLibraryMark);
+    library = mark == std::string::npos ? 0 : extensionLibrary(signature.substr(mark + 1));
+}
+
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 23;
+const uint8_t kFormatVersion = 24;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
 
 struct Writer {
     std::ostream& out;
+    std::unordered_map<const FileReach*, uint32_t> reaches;  // those written already, by their place
 
     void u8(uint8_t v) { out.put(static_cast<char>(v)); }
     void u16(uint16_t v) {
@@ -1379,6 +1422,18 @@ struct Writer {
         u16(f.ownClass);
         u8(f.chooser ? 1 : 0);
         str(f.signature);
+        // A reach: 0 for none, the place of one written before, or all ones and the keys.
+        if (f.reach == nullptr) {
+            u32(0);
+        } else if (auto known = reaches.find(f.reach); known != reaches.end()) {
+            u32(known->second);
+        } else {
+            u32(0xFFFFFFFF);
+            u32(static_cast<uint32_t>(f.reach->keys.size()));
+            for (const std::string& key : f.reach->keys) str(key);
+            const uint32_t place = static_cast<uint32_t>(reaches.size()) + 1;
+            reaches.emplace(f.reach, place);
+        }
         u32(static_cast<uint32_t>(f.paramTypes.size()));
         for (size_t i = 0; i < f.paramTypes.size(); i++) {
             u8(f.paramTypes[i]);
@@ -1437,6 +1492,7 @@ struct Reader {
     Program& program;
     VM& vm;
     size_t pos = 0;
+    std::vector<const FileReach*> reaches;  // as they were written
 
     [[noreturn]] void corrupt() { throw std::runtime_error("corrupt or truncated bytecode file"); }
 
@@ -1509,6 +1565,17 @@ struct Reader {
         f->ownClass = u16();
         f->chooser = u8() != 0;
         f->signature = str();
+        f->noteLibrary();
+        if (const uint32_t reach = u32(); reach == 0xFFFFFFFF) {
+            const uint32_t keyCount = count(4);
+            std::vector<std::string> keys;
+            for (uint32_t i = 0; i < keyCount; i++) keys.push_back(str());
+            reaches.push_back(makeReach(std::move(keys)));
+            f->reach = reaches.back();
+        } else if (reach != 0) {
+            if (reach > reaches.size()) corrupt();
+            f->reach = reaches[reach - 1];
+        }
         uint32_t typed = count(2);
         if (typed != 0 && typed != static_cast<uint32_t>(f->arity)) corrupt();
         for (uint32_t i = 0; i < typed; i++) {

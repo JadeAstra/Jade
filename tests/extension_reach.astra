@@ -1,0 +1,25 @@
+// An extension function is found where it is in reach of the file a call is written in, as
+// the checker has it, and not by its name alone (G31, D188).
+
+// Two folders each import a string.shout() of their own, with the same parameters: each call
+// runs the one its file has in reach, known when compiling or found as it runs.
+import ExtLeft.*
+import ExtRight.*
+print(leftSays("hi"), rightSays("hi"))                  // expect: HI! (hi)
+print(leftSaysUnknown("hi"), rightSaysUnknown("hi"))    // expect: HI! (hi)
+print(leftSaysInline("hi"))                             // expect: HI!
+
+// The standard library's min() calls its own minOrNull(); the program's own one is the
+// program's.
+fun <T> List<T>.minOrNull() : T? => null
+print([3, 1, 2].min(), [3, 1, 2].minOrNull())           // expect: 1 null
+val unknown = { value -> value }
+print(unknown([3, 1, 2]).minOrNull())                   // expect: null
+
+// Which class's extension function runs is still told by the value's class.
+interface Shape {}
+class Square : Shape {}
+fun Shape.kind() => "a shape"
+fun Square.kind() => "a square"
+val s : Shape = Square()
+print(s.kind())                                         // expect: a square

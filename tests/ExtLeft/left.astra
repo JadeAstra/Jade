@@ -1,0 +1,10 @@
+// A folder whose calls of shout() mean Loud's, whatever else the program has (G31, D188).
+import Loud.*
+
+val leftUnknown = { value -> value }
+
+fun leftSays(s : string) : string => s.shout()
+// Found when it runs, where the checker does not see the type.
+fun leftSaysUnknown(s : string) : string => leftUnknown(s).shout()
+// Copied into the file that calls it, which has no shout() in reach.
+inline fun leftSaysInline(s : string) : string => s.shout()

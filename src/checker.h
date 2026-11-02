@@ -133,6 +133,9 @@ public:
     // For a call of a name with several forms (overloads, D56): the declaration of the form it
     // means, where that could be told; null otherwise, and the form is chosen when it runs.
     const FunctionDecl* chosenForm(const CallExpr& call) const;
+    // For a call of an extension function: the declaration the checker found, whether or not
+    // the name has other forms; null for any other call.
+    const FunctionDecl* extensionCalled(const CallExpr& call) const;
     // A call of a class's name that chose a secondary constructor: the static function made of it.
     const FunctionDecl* secondaryConstructor(const CallExpr& call) const;
     // Bundles of named arguments (D143): the names `...bundle` passes on at a call; whether a
@@ -304,6 +307,8 @@ public:
 
     // For an extension function: its receiver's type as written; null for anything else.
     const TypeAnnotation* extensionReceiver(const FunctionDecl& fn) const;
+    // For an extension function: the key of its library when the program runs (libraryKey).
+    std::string extensionLibraryKey(const FunctionDecl& fn) const;
 
 private:
     struct Impl;

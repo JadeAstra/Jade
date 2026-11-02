@@ -1,0 +1,4 @@
+// A string.shout() that only ExtRight imports, the same in name and parameters as ExtLeft's
+// (G31, D188).
+
+fun string.shout() : string => "(" + this + ")"

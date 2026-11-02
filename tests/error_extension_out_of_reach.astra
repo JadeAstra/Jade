@@ -1,0 +1,7 @@
+// A call found as it runs, of an extension function that the program has but this file does
+// not have in reach: there is no such function here (G31, D188).
+import ExtLeft.*
+print(leftSays("hi"))   // expect: HI!
+val unknown = { value -> value }
+print(unknown("hi").shout())
+// expect runtime error: undefined method 'shout' on a value of type string

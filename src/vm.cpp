@@ -835,12 +835,25 @@ void VM::addExtensionForm(Table& table, ObjString* name, Value function) {
     table.set(name, Value::object(set));
 }
 
-const Value* VM::findExtension(Value receiver, const ObjString* name) const {
+bool VM::inReachSlow(const Value* found, const ObjString* name) const {
+    for (const ObjClosure* form : static_cast<const ObjForms*>(asClosure(*found))->forms)
+        if (inReach(form->proto)) return true;
+    return inReachSlow(name);
+}
+
+// A form named whole: code copied in from an inline function names the one it means in the
+// file it is written in.
+bool VM::inReachSlow(const ObjString* name) const { return name->utf8().find(kLibraryMark) != std::string::npos; }
+
+template <bool InReach>
+const Value* VM::findExtensionOf(Value receiver, const ObjString* name) const {
     if (!hasExtensions_) return nullptr;
     const Value* found = nullptr;
+    // What a type has under the name; with InReach, only if the running function has it in reach.
+    auto reached = [&](const Value* v) { return !InReach || inReach(v, name) ? v : nullptr; };
     switch (receiver.kind) {
         case ValueKind::Null:
-            found = nullExtensions_.find(name);
+            found = reached(nullExtensions_.find(name));
             // Two types each have one that takes null (string?.orEmpty, list?.orEmpty), and
             // null does not say which is meant.
             if (found != nullptr && !found->isObjType(ObjType::Closure))
@@ -848,30 +861,30 @@ const Value* VM::findExtension(Value receiver, const ObjString* name) const {
                     name->utf8() + "() is called on null, and more than one type has its own " + name->utf8() +
                     "() that takes null, so there is no telling which is meant; use ?: to say what stands in for null");
             break;
-        case ValueKind::Bool: found = typeExtensions_[kTypeBool].find(name); break;
-        case ValueKind::Int: found = typeExtensions_[kTypeInt].find(name); break;
-        case ValueKind::Float: found = typeExtensions_[kTypeFloat].find(name); break;
-        case ValueKind::Char: found = typeExtensions_[kTypeChar].find(name); break;
-        case ValueKind::Byte: found = typeExtensions_[kTypeByte].find(name); break;
-        case ValueKind::FromEnd: found = typeExtensions_[kTypeIndex].find(name); break;
+        case ValueKind::Bool: found = reached(typeExtensions_[kTypeBool].find(name)); break;
+        case ValueKind::Int: found = reached(typeExtensions_[kTypeInt].find(name)); break;
+        case ValueKind::Float: found = reached(typeExtensions_[kTypeFloat].find(name)); break;
+        case ValueKind::Char: found = reached(typeExtensions_[kTypeChar].find(name)); break;
+        case ValueKind::Byte: found = reached(typeExtensions_[kTypeByte].find(name)); break;
+        case ValueKind::FromEnd: found = reached(typeExtensions_[kTypeIndex].find(name)); break;
         case ValueKind::Obj:
             switch (receiver.as.obj->type) {
-                case ObjType::String: found = typeExtensions_[kTypeString].find(name); break;
-                case ObjType::List: found = typeExtensions_[kTypeList].find(name); break;
-                case ObjType::Map: found = typeExtensions_[kTypeMap].find(name); break;
-                case ObjType::Set: found = typeExtensions_[asSet(receiver)->values ? kTypeValues : kTypeSet].find(name); break;
-                case ObjType::Range: found = typeExtensions_[kTypeRange].find(name); break;
-                case ObjType::Bytes: found = typeExtensions_[kTypeBytes].find(name); break;
+                case ObjType::String: found = reached(typeExtensions_[kTypeString].find(name)); break;
+                case ObjType::List: found = reached(typeExtensions_[kTypeList].find(name)); break;
+                case ObjType::Map: found = reached(typeExtensions_[kTypeMap].find(name)); break;
+                case ObjType::Set: found = reached(typeExtensions_[asSet(receiver)->values ? kTypeValues : kTypeSet].find(name)); break;
+                case ObjType::Range: found = reached(typeExtensions_[kTypeRange].find(name)); break;
+                case ObjType::Bytes: found = reached(typeExtensions_[kTypeBytes].find(name)); break;
                 case ObjType::Closure:
                 case ObjType::Native:
                 case ObjType::BoundMethod:
-                case ObjType::BoundNative: found = typeExtensions_[kTypeFunction].find(name); break;
+                case ObjType::BoundNative: found = reached(typeExtensions_[kTypeFunction].find(name)); break;
                 case ObjType::Instance:
                 case ObjType::Value: {
                     const ObjClass* cls = classOf(receiver);
-                    for (const ObjClass* k = cls; k != nullptr && found == nullptr; k = k->super) found = k->extensions.find(name);
+                    for (const ObjClass* k = cls; k != nullptr && found == nullptr; k = k->super) found = reached(k->extensions.find(name));
                     for (size_t i = 0; i < cls->interfaces.size() && found == nullptr; i++)
-                        found = cls->interfaces[i]->extensions.find(name);
+                        found = reached(cls->interfaces[i]->extensions.find(name));
                     break;
                 }
                 default: break;
@@ -879,9 +892,18 @@ const Value* VM::findExtension(Value receiver, const ObjString* name) const {
             break;
         default: break;
     }
-    if (found == nullptr && receiver.isNumber()) found = typeExtensions_[kTypeNumber].find(name);
-    if (found == nullptr && !receiver.isNull()) found = anyExtensions_.find(name);
+    if (found == nullptr && receiver.isNumber()) found = reached(typeExtensions_[kTypeNumber].find(name));
+    if (found == nullptr && !receiver.isNull()) found = reached(anyExtensions_.find(name));
     return found;
+}
+template const Value* VM::findExtensionOf<false>(Value, const ObjString*) const;
+template const Value* VM::findExtensionOf<true>(Value, const ObjString*) const;
+
+const Value* VM::findExtension(Value receiver, const ObjString* name) const {
+    const Value* found = findExtensionOf<false>(receiver, name);
+    // Nearly always one in reach: only where it is not is the search made again, passing over
+    // those out of reach.
+    return found == nullptr || inReach(found, name) ? found : findExtensionOf<true>(receiver, name);
 }
 
 // ---- extend of a built-in type (D33, G30) ----
@@ -1584,10 +1606,19 @@ ObjClosure* VM::chooseForm(const ObjForms* set, const Value* args, int positiona
     bool bestVararg = false, tie = false;
     for (ObjClosure* form : set->forms) {
         int score = 0, defaults = 0;
-        if (!formTakes(form->proto, args, positional, pairs, named, score, defaults)) continue;
+        if (!inReach(form->proto) || !formTakes(form->proto, args, positional, pairs, named, score, defaults)) continue;
         const bool vararg = form->proto->varargIndex >= 0;
         bool better = best == nullptr || score > bestScore;
         bool same = !better && score == bestScore;
+        // A program's own extension comes before the standard library's with the same
+        // parameters, as the checker has it.
+        if (same && form->proto->library != best->proto->library &&
+            (form->proto->library == kEverywhere || best->proto->library == kEverywhere) &&
+            form->proto->signature.substr(0, form->proto->signature.rfind(kLibraryMark)) ==
+                best->proto->signature.substr(0, best->proto->signature.rfind(kLibraryMark))) {
+            better = best->proto->library == kEverywhere;
+            same = false;
+        }
         if (same && vararg != bestVararg) {
             better = !vararg;
             same = false;
@@ -1611,7 +1642,8 @@ ObjClosure* VM::chooseForm(const ObjForms* set, const Value* args, int positiona
         std::string text;
         for (size_t i = 0; i < forms.size(); i++) {
             if (i > 0) text += i + 1 == forms.size() ? " and " : ", ";
-            text += name + forms[i]->proto->signature;
+            const std::string& signature = forms[i]->proto->signature;
+            text += name + signature.substr(0, signature.rfind(kLibraryMark));
         }
         return text;
     };

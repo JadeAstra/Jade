@@ -527,6 +527,28 @@ struct DeclarationSpan {
     Kind kind = Global;
 };
 
+// What the file a function is written in has in reach (G31, D188): the keys of its folder,
+// itself and the folders it imports (libraryKey in the compiler), and the same as bits by the
+// numbers extensionLibrary gives them. An extension function is found for a call where its
+// key is among the calling function's.
+struct FileReach {
+    std::vector<std::string> keys;
+    std::vector<uint64_t> bits;
+    bool has(uint16_t library) const {
+        const size_t word = library >> 6;
+        return word < bits.size() && ((bits[word] >> (library & 63)) & 1) != 0;
+    }
+};
+// The reach of those keys, one for each set of keys, kept while the process runs.
+const FileReach* makeReach(std::vector<std::string> keys);
+
+// The number of a library key, the same for every VM of the process. The standard library's
+// is kEverywhere: it is in reach of every file.
+uint16_t extensionLibrary(const std::string& key);
+constexpr uint16_t kEverywhere = 1;
+// What an extension function's signature has before its library's key.
+constexpr char kLibraryMark = '\x02';
+
 // A compiled function: the unit the compiler emits and the bytecode file stores.
 struct FunctionProto {
     std::string name;
@@ -594,6 +616,9 @@ struct FunctionProto {
     // The set of a name's forms, made by MakeForms: it has no code of its own; calling it
     // calls the form the arguments fit (VM::chooseForm).
     bool chooser = false;
+    // Of an extension function, the number of its library (extensionLibrary), from the key at
+    // the end of its signature; 0 for any other function.
+    uint16_t library = 0;
 
     // Where each GetProp, SetProp, GetOwn and SetOwn remembers the field it last found (M6.5
     // part 4), by its second operand. Each holds the layout of the object's class
@@ -602,6 +627,12 @@ struct FunctionProto {
     // Made empty by verifyFunction; not part of the program as it is written out.
     std::unique_ptr<std::atomic<uint64_t>[]> caches;
     uint32_t cacheCount = 0;
+
+    // What its file has in reach, which calls of extension functions in it go by; none for a
+    // function no file is written in (the set of a name's forms), which reaches everything.
+    const FileReach* reach = nullptr;
+    // Sets `library` from the signature.
+    void noteLibrary();
 };
 
 

@@ -1,0 +1,7 @@
+// A folder whose calls of shout() mean Quiet's, whatever else the program has (G31, D188).
+import Quiet.*
+
+val rightUnknown = { value -> value }
+
+fun rightSays(s : string) : string => s.shout()
+fun rightSaysUnknown(s : string) : string => rightUnknown(s).shout()

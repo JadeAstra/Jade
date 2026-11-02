@@ -299,7 +299,7 @@ bool readFile(const std::string& path, std::string& out) {
 class ModuleCompiler {
 public:
     ModuleCompiler(CompilerSession& session, std::string file, std::string directory, Namespace* ns, std::string fileKey)
-        : session_(session), file_(std::move(file)), directory_(std::move(directory)), ns_(ns), fileKey_(std::move(fileKey)) {}
+        : session_(session), file_(std::move(file)), directory_(std::move(directory)), ns_(ns), fileKey_(std::move(fileKey)), homeFile_(fileKey_) {}
 
     // A file on its own. Before anything else of it runs, its imports are loaded, its functions
     // defined and the structure of its classes set up, so that the order they are written in
@@ -713,6 +713,32 @@ private:
         bool all;           // `import jade.*`: its names can be written bare
     };
     std::vector<Import> imports_;
+    const std::string homeFile_;  // the file compiled, whatever code is copied into it
+
+    // What the file whose code is being compiled has in reach (G31, D188): its folder, itself
+    // and the folders it imports. Code copied in from an inline function is in its own file's.
+    const FileReach* reach_ = nullptr;
+    std::string reachFile_;
+    const Namespace* reachNs_ = nullptr;
+    size_t reachImports_ = 0;
+    const FileReach* reachNow() {
+        if (reach_ != nullptr && reachFile_ == fileKey_ && reachNs_ == ns_ && reachImports_ == imports_.size()) return reach_;
+        std::vector<std::string> keys;
+        auto add = [&](std::string key) {
+            if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(std::move(key));
+        };
+        for (uint8_t visibility = 0; visibility <= 2; visibility++) add(libraryKey(ns_, fileKey_, visibility));
+        for (const Import& i : imports_) {
+            if (i.ns == nullptr || i.ns == ns_) continue;
+            add(libraryKey(i.ns, "", 0));
+            if (ns_ != nullptr && i.ns->library == ns_->library) add(libraryKey(i.ns, "", 1));
+        }
+        reach_ = makeReach(std::move(keys));
+        reachFile_ = fileKey_;
+        reachNs_ = ns_;
+        reachImports_ = imports_.size();
+        return reach_;
+    }
 
 public:
     // The shell's imports, which last from one input to the next.
@@ -1177,6 +1203,7 @@ private:
     }
 
     void finish(FunctionState& state) {
+        if (state.proto->reach == nullptr) state.proto->reach = reachNow();
         try {
             verifyFunction(*state.proto, session_.program);
         } catch (const std::runtime_error& e) {
@@ -1648,10 +1675,14 @@ private:
     // several forms the call means, that form's own name, with nothing to choose when it runs.
     std::string calledName(const CallExpr& e, const std::string& name) {
         const FunctionDecl* chosen = session_.checker->chosenForm(e);
+        // Code copied in from an inline function of another file runs where that file's reach
+        // is not: it names the extension function it means whole.
+        if (chosen == nullptr && fileKey_ != homeFile_) chosen = session_.checker->extensionCalled(e);
         if (chosen == nullptr) return name;
         if (chosen->isStatic) return name + signatureText(*chosen);  // chosen among the class's own
         if (const TypeAnnotation* receiver = session_.checker->extensionReceiver(*chosen))
-            return name + "[" + annotationText(*receiver) + "]" + signatureText(*chosen);
+            return name + "[" + annotationText(*receiver) + "]" + signatureText(*chosen) + kLibraryMark +
+                   session_.checker->extensionLibraryKey(*chosen);
         const FunctionDecl* root = session_.checker->formRoot(*chosen);
         return root != nullptr ? name + signatureText(*root) : name;
     }
@@ -3445,7 +3476,9 @@ private:
         // written is part of what tells them apart, with the parameters'.
         FunctionProto& proto = *fs_->proto->protos.back();
         markForm(proto, fn);
-        proto.signature = "[" + annotationText(s.receiverType) + "]" + proto.signature;
+        // With its library's (G31, D188): two libraries' are two, each found where it is in reach.
+        proto.signature = "[" + annotationText(s.receiverType) + "]" + proto.signature + kLibraryMark + libraryKey(ns_, fileKey_, s.visibility);
+        proto.noteLibrary();
         emit(Op::Extension);
         emitU16(stringConstant(fn.name));
         emitByte(type | (s.receiverNullable ? kTypeNullable : 0));

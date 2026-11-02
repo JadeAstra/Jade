@@ -1,0 +1,3 @@
+// A string.shout() that only ExtLeft imports (G31, D188).
+
+fun string.shout() : string => this.upper() + "!"

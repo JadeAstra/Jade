@@ -66,6 +66,14 @@ struct Namespace {
     std::unordered_map<std::string, GlobalName> names;  // public and internal
 };
 
+// The key an extension function's library has when the program runs (G31, D188): its folder's
+// with its access word, or its file's for a private one; the standard library is one for all.
+inline std::string libraryKey(const Namespace* ns, const std::string& fileKey, uint8_t visibility) {
+    if (ns == nullptr || ns->directory == "<builtin>") return "p:<builtin>";
+    if (visibility == 2) return "f:" + fileKey;
+    return (visibility == 1 ? "i:" : "p:") + ns->directory;
+}
+
 // How long compiling took, by part, in milliseconds: shown when ASTRA_TIMES is set, for the
 // budgets of D145. A part inside another of the same kind is counted once.
 struct CompileTimes {

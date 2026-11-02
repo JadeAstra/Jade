@@ -6853,6 +6853,7 @@ struct Checker::Impl {
         if (fs.size() == 1) checkInfixCall(fs[0], c);
         if (fs.size() == 1) noteSelfCall(fs[0], c);
         if (fs.size() == 1 && fs[0]->isExtension && fs[0]->receiver.nullable) chosenForms[&c] = fs[0];  // as below
+        if (fs.size() == 1 && fs[0]->isExtension) extensionCalls[&c] = fs[0];
         if (fs.size() == 1) return callWith(fs[0], args, c.typeArgs, envOfForm(0), receiver, c, what + "(...)");
         // Forms with the same receiver and parameters are one form declared in several places:
         // the nearest is the one meant, as for any name.
@@ -6876,6 +6877,7 @@ struct Checker::Impl {
         // An extension that takes null (`string?.orEmpty()`) is called by its own name: on null,
         // where every type's of that name would fit, the program could not choose.
         if (forms.size() == 1 && forms[0]->isExtension && forms[0]->receiver.nullable) chosenForms[&c] = forms[0];
+        if (forms.size() == 1 && forms[0]->isExtension) extensionCalls[&c] = forms[0];
         if (forms.size() == 1) return callWith(forms[0], args, c.typeArgs, formEnvs[0], receiver, c, what + "(...)");
         size_t index = 0;
         auto envOfChosen = [&](size_t i) -> const Env& { return formEnvs[i]; };
@@ -7536,6 +7538,9 @@ struct Checker::Impl {
     // goes first. Null where none fits or several do, which is reported, and where an argument
     // or a parameter has a type not known well enough to choose by, which is not.
     std::unordered_map<const CallExpr*, FuncInfo*> chosenForms;
+    // Calls of an extension function with one form in reach, which the program finds by its
+    // name when it runs; code copied in from an inline function names it whole (G31).
+    std::unordered_map<const CallExpr*, FuncInfo*> extensionCalls;
 
     struct Fit {
         size_t index = 0;
@@ -8563,6 +8568,7 @@ struct Checker::Impl {
         familyKnown.clear();
         for (size_t i = first; i < units.size(); i++) gather(*units[i]);
         for (size_t i = first; i < units.size(); i++) checkAmbiguity(*units[i]);
+        checkProgramExtends(first);
         for (size_t i = first; i < units.size(); i++)
             if (!units[i]->skipBodies) checkUnit(units[i].get());
         // The bodies of a kept file's inline functions are checked all the same: they are
@@ -8726,6 +8732,7 @@ struct Checker::Impl {
                 if (type.empty()) continue;
                 auto [before, added] = fitted.emplace(std::make_pair(type, e->iface), s);
                 if (added || before->second.at == s.at || before->second.unit->ns == s.unit->ns) continue;
+                extendClashes.insert(std::minmax(before->second.at, s.at));
                 const std::string name = e->types[t] != nullptr ? e->types[t]->name : text(e->builtins[t]);
                 clash(before->second, s, "an extend of " + name + " : " + e->iface->name, "extend",
                       "a value would fit the interface in two ways, and there is one way a type fits an interface (D33)");
@@ -8740,6 +8747,44 @@ struct Checker::Impl {
         }
     }
 
+
+    // Two extends found by checkAmbiguity, which checkProgramExtends does not report again.
+    std::set<std::pair<const Node*, const Node*>> extendClashes;
+
+    // Two extends of a type to one interface from different folders, each with getters or
+    // funs, anywhere in the program (G31, D188): when it runs, a value fits an interface in one
+    // way, whichever file it was made to fit it in. Reported at the second, unless one file
+    // has both in reach, where checkAmbiguity reported them. The standard library's are not
+    // counted, as there.
+    void checkProgramExtends(size_t first) {
+        std::unordered_set<const Unit*> fresh;
+        for (size_t i = first; i < units.size(); i++) fresh.insert(units[i].get());
+        auto fileOf = [](const Unit* from) {
+            const size_t slash = from->file.find_last_of("/\\");
+            return slash == std::string::npos ? from->file : from->file.substr(slash + 1);
+        };
+        std::map<std::pair<std::string, ClassInfo*>, ExtendInfo*> fitted;
+        for (ExtendInfo& e : extendsDeclared) {
+            if (e.unit == nullptr || e.unit->prelude || e.unit->ns == nullptr || (e.stmt->bridges.empty() && e.stmt->methods.empty()))
+                continue;
+            if (!resolveExtend(e)) continue;
+            for (size_t t = 0; t < e.types.size(); t++) {
+                const std::string type = e.types[t] != nullptr ? "\x01" + std::to_string(reinterpret_cast<uintptr_t>(e.types[t]))
+                                         : e.builtins[t].known() ? text(e.builtins[t]) : std::string();
+                if (type.empty()) continue;
+                auto [before, added] = fitted.emplace(std::make_pair(type, e.iface), &e);
+                if (added) continue;
+                const ExtendInfo& other = *before->second;
+                if (other.stmt == e.stmt || other.unit->ns == e.unit->ns) continue;
+                if (fresh.count(e.unit) == 0 && fresh.count(other.unit) == 0) continue;
+                if (extendClashes.count(std::minmax<const Node*>(other.stmt, e.stmt)) != 0) continue;
+                const std::string name = e.types[t] != nullptr ? e.types[t]->name : text(e.builtins[t]);
+                unit = e.unit;
+                report(*e.stmt, "an extend of " + name + " : " + e.iface->name + " is declared here and in " + fileOf(other.unit) + ", of another folder"
+                                    ": a value would fit the interface in two ways, and a program has one way a type fits an interface (D33, D188)");
+            }
+        }
+    }
 
     // A file's top level, in order, then its functions, classes and extensions.
     void checkUnit(Unit* u) {
@@ -9802,6 +9847,21 @@ const FunctionDecl* Checker::extendForm(const FunctionDecl& fun) const {
 
 std::vector<const FunctionDecl*> Checker::formRoots(const ClassStmt& cls, const std::string& name) {
     return impl_->formRoots(cls, name);
+}
+
+const FunctionDecl* Checker::extensionCalled(const CallExpr& call) const {
+    const FuncInfo* f = nullptr;
+    if (auto chosen = impl_->chosenForms.find(&call); chosen != impl_->chosenForms.end()) f = chosen->second;
+    else if (auto one = impl_->extensionCalls.find(&call); one != impl_->extensionCalls.end()) f = one->second;
+    if (f == nullptr || !f->isExtension || f->isExternal) return nullptr;
+    return f->decl;
+}
+
+std::string Checker::extensionLibraryKey(const FunctionDecl& fn) const {
+    auto found = impl_->funcOf.find(&fn);
+    if (found == impl_->funcOf.end() || found->second->unit == nullptr) return libraryKey(nullptr, "", 0);
+    const FuncInfo* f = found->second;
+    return libraryKey(f->unit->ns, f->unit->fileKey, f->stmt != nullptr ? f->stmt->visibility : 0);
 }
 
 const TypeAnnotation* Checker::extensionReceiver(const FunctionDecl& fn) const {

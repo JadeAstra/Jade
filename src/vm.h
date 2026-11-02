@@ -1078,6 +1078,27 @@ private:
     void addExtensionForm(Table& table, ObjString* name, Value function);
     std::unordered_map<std::string, std::unique_ptr<FunctionProto>> extensionSets_;  // the protos of their sets, by name
     const Value* findExtension(Value receiver, const ObjString* name) const;
+    template <bool InReach>
+    const Value* findExtensionOf(Value receiver, const ObjString* name) const;
+    // Whether an extension function, or one of a name's forms, is in reach of the function
+    // running (G31, D188): of its file's folder, of its file, of a folder its file imports, or
+    // the standard library's. A call that names a form whole is given it all the same.
+    bool inReach(const FunctionProto* form) const {
+        if (form->library <= kEverywhere || frameCount_ == 0) return true;
+        const FileReach* reach = frames_[frameCount_ - 1].closure->proto->reach;
+        return reach == nullptr || reach->has(form->library);
+    }
+    // What a table has under a name, if any: the standard library's and one form alone are
+    // told here, as most are; a name's forms and others' by inReachSlow.
+    bool inReach(const Value* found, const ObjString* name) const {
+        if (found == nullptr) return false;
+        if (!found->isObjType(ObjType::Closure)) return true;
+        const FunctionProto* proto = asClosure(*found)->proto;
+        if (!proto->chooser) return inReach(proto) || inReachSlow(name);
+        return inReachSlow(found, name);
+    }
+    bool inReachSlow(const Value* found, const ObjString* name) const;
+    bool inReachSlow(const ObjString* name) const;
     bool hasMember(Value candidate, const ObjString* name) const;
 
     // `extend string : Sized`, `extend List<int> : Summable` (D33, G30): the interfaces an
