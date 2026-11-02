@@ -260,11 +260,14 @@ class Constructor(val owner : Class, entry : List<any?>) {
   val parameters : List<Parameter> = (entry[0] as List<List<any?>>).map { Parameter(it) }
   // The annotations written on it, in their order.
   val annotations : List<any> = entry[1] as List<any>
+  // For a secondary constructor (G61), the static function of the class it is called by.
+  private val form : string? = entry[2] as string?
 
   // A new object of the class, with its type arguments, made from `args`.
   fun call(vararg args : any?) : any throws InvocationTargetException {
     __checkArguments(owner.name, parameters, args)
     try {
+      if (form != null) { return __memberCall(__typeClass(owner.type), form, args) as any }
       return __typeConstruct(owner.type, args)
     } catch (e) {
       throw InvocationTargetException(e)

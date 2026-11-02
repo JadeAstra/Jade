@@ -10333,6 +10333,12 @@ bool Checker::reflected(const ClassStmt& cls, ReflectedClass& out) {
         m.annotations = &method->annotations;
         m.fn = method.get();
         function(f->second, m);
+        if (method->generated && method->name.rfind("<constructor ", 0) == 0) {
+            // A secondary constructor (G61): one of the class's constructors, not a static method.
+            m.flags = 8;
+            out.constructors.push_back(std::move(m));
+            continue;
+        }
         m.type = runtime(c.resultOf(f->second));
         out.staticMethods.push_back(std::move(m));
     }

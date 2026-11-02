@@ -5350,7 +5350,10 @@ private:
             for (const ReflectedMember& m : r.constructors) {
                 emitMetaParams(m, s);
                 emitAnnotations(m.annotations);
-                emitBuildList(2, s);
+                // A secondary constructor: the static function it is called by (G61).
+                if ((m.flags & 8) != 0 && m.fn != nullptr) emit(Op::Const, stringConstant(formNameOf(s, *m.fn)));
+                else emit(Op::Null);
+                emitBuildList(3, s);
             }
             emitBuildList(r.constructors.size(), s);
             for (const ReflectedMember& m : r.staticMethods) {

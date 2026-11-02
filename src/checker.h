@@ -64,7 +64,8 @@ struct ReflectedMember {
     const Annotations* annotations = nullptr;  // those written on it (D153)
     const FunctionDecl* fn = nullptr;   // a method's or an init's; null for a field and a generated init
     RuntimeType type;                   // a field's type, a method's result; Unknown where it gives nothing
-    int flags = 0;                      // a field's: 1 it may be set, 2 a property worked out by its getter, 4 static
+    int flags = 0;                      // a field's: 1 it may be set, 2 a property worked out by its getter, 4 static;
+                                        // a constructor's: 8 a secondary one, the static function `fn`
     std::vector<std::string> paramNames;
     std::vector<RuntimeType> params;
     std::vector<bool> optional;         // the parameter has a default

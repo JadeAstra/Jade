@@ -1,0 +1,16 @@
+// Reflection on secondary constructors (G61): listed with the header's, and called through the
+// static function each is made into; neither is a static method.
+
+class Tag(val name : string, val size : int) {
+  constructor(name : string) : this(name, name.size)
+  constructor(size : int) : this("#$size", size) {
+    print("made by size")
+  }
+}
+
+print(Tag#.constructors)                                 // expect: [Tag(name : string, size : int), Tag(name : string), Tag(size : int)]
+print(Tag#.staticMethods)                                // expect: []
+val bySize = Tag#.constructors[2].call(4) as Tag         // expect: made by size
+val byName = Tag#.constructors[1].call("abc") as Tag
+print(bySize.name, bySize.size, byName.size)             // expect: #4 4 3
+print(Color#.constructors.size, Color#.staticMethods.filter { it.name.startsWith("<") })   // expect: 4 []
