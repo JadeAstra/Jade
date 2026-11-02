@@ -23,6 +23,10 @@ class Worker {
   static {
     // In a worker: the program that started it. Null in a program that is not a worker.
     val parent = __worker.inWorker() ? WorkerParent() : null
+
+    // For tests (G48): how many hold the block frozen data is shared as, this program and the
+    // messages carrying it among them; 0 for data never sent.
+    fun sharedHoldsForTest(data : any?) : int => __worker.holds(data)
   }
 
   // Called with each message the worker sends, on this program's event loop.

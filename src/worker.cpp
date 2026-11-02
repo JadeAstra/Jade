@@ -23,7 +23,7 @@ struct WorkerLink {
     std::mutex mutex;
     VM* parent = nullptr;            // the VM that started the worker
     VM* worker = nullptr;            // the worker's own; null before it is up and after it has ended
-    std::deque<std::string> early;   // messages sent before it was up
+    std::deque<std::shared_ptr<struct Message>> early;   // messages sent before it was up
     int64_t id = 0;
     bool daemon = false;
     bool ended = false;
@@ -63,6 +63,29 @@ void take(SharedBlock* block) {
     std::lock_guard<std::mutex> hold(blocksMutex);
     block->holds++;
 }
+
+}  // namespace
+
+// A message on its way to another VM: its bytes, and what it holds until it is dropped, read
+// or not (G48): a hold on each shared block it carries, and a buffer handed over. The VM that
+// reads it takes holds of its own; one that never does (a worker that ended first) lets all
+// of it go with the message.
+struct Message {
+    std::string data;
+    std::vector<SharedBlock*> blocks;
+    std::unique_ptr<std::vector<uint8_t>> handed;
+    Message() = default;
+    Message(const Message&) = delete;
+    Message& operator=(const Message&) = delete;
+    ~Message() {
+        for (SharedBlock* block : blocks) letGo(block);
+    }
+};
+
+namespace {
+
+// The message being written on this thread, which what it carries is noted in.
+thread_local Message* writing = nullptr;
 
 // A copy of frozen data outside every heap, every object of it in `block`.
 Value outsideCopy(VM& vm, Value v, SharedBlock& block, int depth) {
@@ -155,6 +178,7 @@ SharedBlock* shareFrozen(VM& vm, Value v) {
         vm.heldBlocks.insert(block);
     }
     take(block);
+    if (writing != nullptr) writing->blocks.push_back(block);
     return block;
 }
 
@@ -404,21 +428,18 @@ Value decode(VM& vm, Reader& in) {
         case kByte: return Value::byte(static_cast<uint8_t>(in.raw<int64_t>()));
         case kString: return vm.str(std::string(in.text()));
         case kShared: {
-            // What frozen data was shared as: the message's hold on it becomes this VM's, if it
-            // does not hold the block already.
+            // What frozen data was shared as: held by this VM too, if it does not hold the
+            // block already; the message lets go of its own hold when it is dropped.
             SharedBlock* block = in.raw<SharedBlock*>();
             if (block == nullptr) return Value::null();
-            if (!vm.heldBlocks.insert(block).second) letGo(block);
+            if (vm.heldBlocks.insert(block).second) take(block);
             return Value::object(block->objects.front());
         }
         case kHandedOver: {
-            // A buffer moved here, not copied.
+            // A buffer moved here, not copied; what is left of it the message frees.
             std::vector<uint8_t>* data = in.raw<std::vector<uint8_t>*>();
             ObjBytes* made = vm.alloc<ObjBytes>();
-            if (data != nullptr) {
-                made->data.swap(*data);
-                delete data;
-            }
+            if (data != nullptr) made->data.swap(*data);
             vm.account(made->data.size());
             return Value::object(made);
         }
@@ -558,8 +579,26 @@ void handOver(VM& vm, Value v, std::string& out) {
     vm.guardWrite(v.as.obj);
     auto* data = new std::vector<uint8_t>();
     data->swap(asBytes(v)->data);
+    writing->handed.reset(data);
     out += kHandedOver;
     putRaw(out, &data, sizeof data);
+}
+
+// A message of `v`, handed over (bytes, moved) or written out; what it carries is let go of
+// should writing it fail.
+std::shared_ptr<Message> writeMessage(VM& vm, Value v, bool handed) {
+    auto message = std::make_shared<Message>();
+    Message* outer = writing;
+    writing = message.get();
+    try {
+        if (handed) handOver(vm, v, message->data);
+        else encode(vm, v, message->data, 0);
+    } catch (...) {
+        writing = outer;
+        throw;
+    }
+    writing = outer;
+    return message;
 }
 
 // Calls the function in field `name` of `object`, if there is one, with one argument.
@@ -597,8 +636,8 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
         {
             std::lock_guard<std::mutex> hold(link->mutex);
             link->worker = vm;
-            for (std::string& message : link->early)
-                vm->postNative([data = std::move(message)](VM& vm) { deliverToWorker(vm, data); });
+            for (std::shared_ptr<Message>& message : link->early)
+                vm->postNative([message](VM& vm) { deliverToWorker(vm, message->data); });
             link->early.clear();
         }
         vm->jobStarted();  // it waits for messages until it closes or is terminated
@@ -622,7 +661,14 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
         std::lock_guard<std::mutex> hold(link->mutex);
         link->worker = nullptr;
         link->ended = true;
+        link->early.clear();  // never read: what they hold is let go of (G48)
         parent = link->parent;
+    }
+    // Taken apart before the parent hears of the end, with what it was sent and never read
+    // (G48), unless threads of its own are still running.
+    if (!vm->threadsAlive()) {
+        delete vm;
+        delete program;
     }
     // The parent hears of the end on its loop: the worker counts for nothing any more, and
     // an error that ended it is handed to onError, or reported.
@@ -646,10 +692,6 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
                 std::cerr << "Uncaught " << failure << "\n  in worker " << link->path << "\n";
             }
         });
-    }
-    if (!vm->threadsAlive()) {
-        delete vm;
-        delete program;
     }
 }
 
@@ -700,14 +742,12 @@ void registerWorkers(VM& vm) {
 
     def("post", 2, 3, [](VM& vm, int argc, Value* args) -> Value {
         auto link = linkOf(vm, args[0]);
-        std::string data;
-        if (argc > 2 && args[2].truthy()) handOver(vm, args[1], data);
-        else encode(vm, args[1], data, 0);
+        std::shared_ptr<Message> message = writeMessage(vm, args[1], argc > 2 && args[2].truthy());
         if (link == nullptr) return Value::boolean(false);  // it has ended
         std::lock_guard<std::mutex> hold(link->mutex);
         if (link->ended) return Value::boolean(false);
-        if (link->worker == nullptr) link->early.push_back(std::move(data));
-        else link->worker->postNative([data = std::move(data)](VM& vm) { deliverToWorker(vm, data); });
+        if (link->worker == nullptr) link->early.push_back(std::move(message));
+        else link->worker->postNative([message](VM& vm) { deliverToWorker(vm, message->data); });
         return Value::boolean(true);
     });
 
@@ -722,6 +762,17 @@ void registerWorkers(VM& vm) {
 
     def("isAlive", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(linkOf(vm, args[0]) != nullptr); });
 
+    // For the tests (G48): how many hold the block frozen data is shared as, this VM among
+    // them; 0 for data never shared.
+    def("holds", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObj()) return Value::integer(0);
+        std::lock_guard<std::mutex> hold(blocksMutex);
+        const auto outside = blockOf.find(args[0].as.obj);
+        const auto own = vm.sharedAs.find(args[0].as.obj);
+        const SharedBlock* block = outside != blockOf.end() ? outside->second : own != vm.sharedAs.end() ? own->second : nullptr;
+        return Value::integer(block == nullptr ? 0 : block->holds);
+    });
+
     // ---- For the worker itself ----
 
     def("inWorker", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::boolean(vm.isWorker()); });
@@ -735,14 +786,13 @@ void registerWorkers(VM& vm) {
     def("send", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
         std::shared_ptr<WorkerLink> link = vm.workerLink;
         if (link == nullptr) throw vm.runtimeError(Thrown::IllegalStateException, "this program is not a worker: it has no parent to send to");
-        std::string data;
-        if (argc > 1 && args[1].truthy()) handOver(vm, args[0], data);
-        else encode(vm, args[0], data, 0);
+        std::shared_ptr<Message> message = writeMessage(vm, args[0], argc > 1 && args[1].truthy());
         std::lock_guard<std::mutex> hold(link->mutex);
         if (link->parent == nullptr) return Value::null();
-        link->parent->postNative([link, data = std::move(data)](VM& vm) {
+        link->parent->postNative([link, message](VM& vm) {
             const auto object = vm.workerObjects.find(link->id);
             if (object == vm.workerObjects.end()) return;
+            const std::string& data = message->data;
             Reader in{data.data(), data.data() + data.size()};
             callField(vm, object->second, "onMessage", decode(vm, in));
         });
