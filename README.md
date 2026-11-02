@@ -795,8 +795,9 @@ A lambda parameter that the body only calls, or passes on to another inline func
 does, is copied in; one the body keeps or passes elsewhere is made as usual, and a bare
 `return` in a lambda given for it is the usual error. So there is no `noinline` or
 `crossinline`. The body's names are those of the file and class it is written in, its
-variables its own, and it keeps its rights where it is copied: a private inline member may
-use the class's private fields wherever it is called. An inline function cannot call itself,
+variables its own, and it keeps its rights where it is copied, and only there: a private inline
+member may use the class's private fields wherever it is called, while the rest of the function
+it is copied into, and a lambda written at the call, keep their own. An inline function cannot call itself,
 directly or through others, cannot be declared inside another function, and an inline member
 cannot be overridden. One with a `vararg` is copied in with the list it is given, made at the
 call, and so is a static one, `Class.f()`. A call giving a list with `*` is copied in where the

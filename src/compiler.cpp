@@ -178,6 +178,9 @@ inline bool isCaptureMark(int resolved) { return resolved >= kCaptureMark; }
 
 struct FunctionState {
     FunctionState* enclosing = nullptr;
+    // Rights of code copied in, from where they were taken on (ModuleCompiler::noteRights, G36).
+    std::vector<uint16_t> rightsIds;
+    uint32_t rightsStart = 0;
     const FunctionDecl* decl = nullptr;  // what is compiled, where it is written; null for a script
     ObjectBuild* object = nullptr;  // a member of an anonymous object's class, which reaches the code around through it
     FunctionKind kind = FunctionKind::Script;
@@ -840,6 +843,34 @@ private:
         frame_ = s.frame;
         fs_->owner = s.owner;
         lineFixed_ = s.lineFixed;
+        noteRights();
+    }
+
+    // Code copied in from an inline function keeps its own rights where it is copied, and only
+    // there (D59, G36): the code of the scope entered may use what its class and its library
+    // keep to themselves, where those are not the function's own. A range of the function's
+    // code is noted with each change.
+    void noteRights() {
+        if (fs_ == nullptr || fs_->proto == nullptr) return;
+        std::vector<uint16_t> ids;
+        auto add = [&](int id) {
+            const std::vector<uint16_t>& own = fs_->proto->classIds;
+            const uint16_t number = static_cast<uint16_t>(id);
+            if (std::find(own.begin(), own.end(), number) == own.end() && std::find(ids.begin(), ids.end(), number) == ids.end()) ids.push_back(number);
+        };
+        for (const ClassState* cls = class_; cls != nullptr; cls = cls->enclosing) add(cls->id);
+        add(libraryId());
+        if (ids == fs_->rightsIds) return;
+        closeRights(*fs_);
+        fs_->rightsIds = std::move(ids);
+        fs_->rightsStart = static_cast<uint32_t>(here());
+    }
+    void closeRights(FunctionState& state) {
+        const uint32_t end = static_cast<uint32_t>(state.proto->code.size());
+        if (!state.rightsIds.empty() && end > state.rightsStart)
+            state.proto->rights.push_back(FunctionProto::Rights{state.rightsStart, end, state.rightsIds});
+        state.rightsIds.clear();
+        if (&state == fs_) here();
     }
 
     // Another name for a local's slot, in the code of the current owner.
@@ -1017,14 +1048,6 @@ private:
         body.lineFixed = lineFixed_ >= 0 ? lineFixed_ : e.line;
         enterScope(body);
         inlineDepth_++;
-        // It keeps its own rights where it is copied: the function it is copied into may use what
-        // its class and its library keep to themselves (see Op::MemberAccess).
-        auto grant = [&](int id) {
-            std::vector<uint16_t>& ids = fs_->proto->classIds;
-            if (std::find(ids.begin(), ids.end(), static_cast<uint16_t>(id)) == ids.end()) ids.insert(ids.end() - 1, static_cast<uint16_t>(id));
-        };
-        if (class_ != nullptr) grant(class_->id);
-        grant(libraryId());
         beginScope();
         frame.baseSlot = fs_->slotTop;
         if (receiver >= 0) aliasLocal("this", slotOf(receiver));
@@ -1279,6 +1302,7 @@ private:
     }
 
     void finish(FunctionState& state) {
+        closeRights(state);
         if (state.proto->reach == nullptr) state.proto->reach = reachNow();
         try {
             verifyFunction(*state.proto, session_.program);

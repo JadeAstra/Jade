@@ -1,0 +1,22 @@
+// An inline function keeps its rights where it is copied, and only there (D59, G36): the rest
+// of the function it is copied into, and a lambda written at the call, may not use what its
+// class keeps to itself.
+class Vault(private val secret : int) {
+  inline fun peekOther(other : Vault) : int => other.secret
+  inline fun around(block : () -> int) : int => secret + block()
+}
+// A value whose type the checker does not see, so that only the program running checks.
+val unknown = { value -> value }
+
+fun peeked(v : Vault, w : Vault) : int => v.peekOther(w)
+print(peeked(Vault(1), Vault(41)))                                     // expect: 41
+
+fun sneak(v : Vault, w : Vault) : any? {
+  val seen = v.peekOther(w)
+  return unknown(w).secret
+}
+try { sneak(Vault(1), Vault(2)) } catch (e) { print(e.message) }       // expect: 'secret' is private in class Vault: only code written in that class can use it
+
+fun sneakInBlock(v : Vault, w : Vault) : any? => v.around { unknown(w).secret as int }
+try { sneakInBlock(Vault(1), Vault(2)) } catch (e) { print(e.message) }   // expect: 'secret' is private in class Vault: only code written in that class can use it
+print(Vault(3).around { 4 })                                           // expect: 7

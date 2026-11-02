@@ -1102,7 +1102,11 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial) 
     return endDepth;
 }
 
-void verifyFunction(FunctionProto& f, const Program& program) { analyzeStack(f, program, false); }
+void verifyFunction(FunctionProto& f, const Program& program) {
+    for (const FunctionProto::Rights& r : f.rights)
+        if (r.start > r.end || r.end > f.code.size()) throw std::runtime_error("invalid bytecode: rights of copied code out of range");
+    analyzeStack(f, program, false);
+}
 
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }
 
@@ -1373,7 +1377,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 24;
+const uint8_t kFormatVersion = 25;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1433,6 +1437,13 @@ struct Writer {
             for (const std::string& key : f.reach->keys) str(key);
             const uint32_t place = static_cast<uint32_t>(reaches.size()) + 1;
             reaches.emplace(f.reach, place);
+        }
+        u32(static_cast<uint32_t>(f.rights.size()));
+        for (const FunctionProto::Rights& r : f.rights) {
+            u32(r.start);
+            u32(r.end);
+            u8(static_cast<uint8_t>(r.ids.size()));
+            for (uint16_t id : r.ids) u16(id);
         }
         u32(static_cast<uint32_t>(f.paramTypes.size()));
         for (size_t i = 0; i < f.paramTypes.size(); i++) {
@@ -1576,6 +1587,15 @@ struct Reader {
             if (reach > reaches.size()) corrupt();
             f->reach = reaches[reach - 1];
         }
+        const uint32_t rightsCount = count(9);
+        for (uint32_t i = 0; i < rightsCount; i++) {
+            FunctionProto::Rights r;
+            r.start = u32();
+            r.end = u32();
+            const uint8_t ids = u8();
+            for (uint8_t k = 0; k < ids; k++) r.ids.push_back(u16());
+            f->rights.push_back(std::move(r));
+        }
         uint32_t typed = count(2);
         if (typed != 0 && typed != static_cast<uint32_t>(f->arity)) corrupt();
         for (uint32_t i = 0; i < typed; i++) {
@@ -1695,6 +1715,8 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm) {
         ip += size;
     }
     for (uint16_t& id : f.classIds) id = static_cast<uint16_t>(r.number(id));
+    for (FunctionProto::Rights& rights : f.rights)
+        for (uint16_t& id : rights.ids) id = static_cast<uint16_t>(r.number(id));
     if (f.ownClass != 0) f.ownClass = static_cast<uint16_t>(r.number(f.ownClass));
     // The script a worker runs is named by a string the compiler made: "\x01<module>\x01<path>".
     for (Value& c : f.constants) {
@@ -1989,6 +2011,11 @@ void leaveOut(FunctionProto& module, const Reach& reach, size_t& before, size_t&
     starts[code.size()] = 1;
     std::vector<char> gone(code.size(), 0);
     bool any = false;
+    for (const FunctionProto::Rights& r : module.rights)
+        if (r.end > code.size() || !starts[r.start] || !starts[r.end]) {
+            after += code.size();
+            return;
+        }
     for (const DeclarationSpan& span : module.spans) {
         if (!starts[span.start] || !starts[span.end]) {
             after += code.size();
@@ -2067,6 +2094,12 @@ void leaveOut(FunctionProto& module, const Reach& reach, size_t& before, size_t&
     for (const DeclarationSpan& span : module.spans)
         if (reach.reached(module, span))
             spans.push_back(DeclarationSpan{static_cast<uint32_t>(moved[span.start]), static_cast<uint32_t>(moved[span.end]), span.key, span.kind});
+    std::vector<FunctionProto::Rights> rights;
+    for (const FunctionProto::Rights& r : module.rights) {
+        const int64_t start = moved[r.start], end = moved[r.end];
+        if (start >= 0 && end > start) rights.push_back(FunctionProto::Rights{static_cast<uint32_t>(start), static_cast<uint32_t>(end), r.ids});
+    }
+    module.rights = std::move(rights);
     code = std::move(kept);
     module.lines = std::move(lines);
     module.protos = std::move(protos);

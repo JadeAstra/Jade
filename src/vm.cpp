@@ -1099,19 +1099,21 @@ inline uint32_t halfCount(uint32_t half) { return half & 0xFF; }
 inline int halfKind(uint32_t half) { return static_cast<int>((half >> 8) & 0xF); }
 inline const uint16_t* halfRun(const ObjClass* cls, uint32_t half) { return cls->accessIds.data() + (half >> 12); }
 
-// Whether a half keeps the member from the code of `proto`.
-inline bool halfDenies(const ObjClass* cls, uint32_t half, const FunctionProto* proto) {
+// Whether a half keeps the member from code with the rights of `ids` (FunctionProto::classIds).
+inline bool halfDenies(const ObjClass* cls, uint32_t half, const std::vector<uint16_t>& ids) {
     const uint32_t count = halfCount(half);
     if (count == 0) return false;
     const uint16_t* allowed = halfRun(cls, half);
-    for (uint16_t written : proto->classIds)
+    for (uint16_t written : ids)
         for (uint32_t i = 0; i < count; i++)
             if (allowed[i] == written) return false;
     return true;
 }
 
-inline bool writtenIn(const FunctionProto* proto, const ObjClass* cls) {
-    for (uint16_t written : proto->classIds)
+inline bool halfDenies(const ObjClass* cls, uint32_t half, const FunctionProto* proto) { return halfDenies(cls, half, proto->classIds); }
+
+inline bool writtenIn(const std::vector<uint16_t>& ids, const ObjClass* cls) {
+    for (uint16_t written : ids)
         if (written == cls->number) return true;
     return false;
 }
@@ -1183,32 +1185,56 @@ void VM::joinProtected(ObjClass* subclass) {
 // class for its static members), or may not assign to it. This is only asked for a name that
 // some class restricts (see CHECK_ACCESS).
 bool VM::memberDenied(const ObjClass* cls, const ObjString* name, const FunctionProto* proto, bool write) const {
+    return memberDeniedTo(cls, name, proto != nullptr ? &proto->classIds : nullptr, write);
+}
+
+// As memberDenied, for code with the rights of `ids`; none for null.
+bool VM::memberDeniedTo(const ObjClass* cls, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const {
     // Code written in the object's own class may use all that the class has, or all but what a
     // class above keeps private: then a name that is private nowhere is its to use.
     if ((cls->accessBits >> (name->hash & 63) & 1) == 0) return false;
-    if (proto != nullptr && (cls->accessAllOwn || (cls->accessSharedOwn && (name->restricted & 4) == 0)) && writtenIn(proto, cls)) return false;
+    if (ids != nullptr && (cls->accessAllOwn || (cls->accessSharedOwn && (name->restricted & 4) == 0)) && writtenIn(*ids, cls)) return false;
     const Value* mark = cls->accessMarks.find(name);
     if (mark == nullptr) return false;
-    if (proto == nullptr) return halfCount(halfOf(*mark, false)) != 0 || (write && halfCount(halfOf(*mark, true)) != 0);
-    return halfDenies(cls, halfOf(*mark, false), proto) || (write && halfDenies(cls, halfOf(*mark, true), proto));
+    if (ids == nullptr) return halfCount(halfOf(*mark, false)) != 0 || (write && halfCount(halfOf(*mark, true)) != 0);
+    return halfDenies(cls, halfOf(*mark, false), *ids) || (write && halfDenies(cls, halfOf(*mark, true), *ids));
 }
 
 bool VM::accessDenied(Value target, const ObjString* name, const FunctionProto* proto, bool write) const {
+    return accessDeniedTo(target, name, proto != nullptr ? &proto->classIds : nullptr, write);
+}
+
+bool VM::accessDeniedTo(Value target, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const {
     if (!target.isObj() && !target.isSmall() && !target.isRef()) return false;
     const ObjClass* cls;
     const Table* marks;
     if (!target.isObj() || target.as.obj->type == ObjType::Instance || target.as.obj->type == ObjType::Value) {
-        return memberDenied(classOf(target), name, proto, write);
+        return memberDeniedTo(classOf(target), name, ids, write);
     } else if (target.as.obj->type == ObjType::Class) {
         cls = asClass(target);
         marks = &cls->staticAccessMarks;
-        if (marks->size() == 0 || writtenIn(proto, cls)) return false;
+        if (marks->size() == 0 || (ids != nullptr && writtenIn(*ids, cls))) return false;
     } else {
         return false;
     }
     const Value* mark = marks->find(name);
     if (mark == nullptr) return false;
-    return halfDenies(cls, halfOf(*mark, false), proto) || (write && halfDenies(cls, halfOf(*mark, true), proto));
+    if (ids == nullptr) return halfCount(halfOf(*mark, false)) != 0 || (write && halfCount(halfOf(*mark, true)) != 0);
+    return halfDenies(cls, halfOf(*mark, false), *ids) || (write && halfDenies(cls, halfOf(*mark, true), *ids));
+}
+
+// As accessDenied, for the instruction before `ip`: code copied in from an inline function of
+// another class or library may use what that one's own code may, where it is (D59, G36).
+bool VM::accessDeniedAt(Value target, const ObjString* name, const FunctionProto* proto, bool write, const uint8_t* ip) const {
+    return accessDenied(target, name, proto, write) && (proto->rights.empty() || !rightsAllow(target, name, proto, ip, write));
+}
+
+// Whether a range of `proto` around `ip` lets its code use the member.
+bool VM::rightsAllow(Value target, const ObjString* name, const FunctionProto* proto, const uint8_t* ip, bool write) const {
+    const uint32_t at = static_cast<uint32_t>(ip - proto->code.data());
+    for (const FunctionProto::Rights& r : proto->rights)
+        if (r.start < at && at <= r.end && !accessDeniedTo(target, name, &r.ids, write)) return true;
+    return false;
 }
 
 // What is said of a member used by code that may not.
@@ -4943,7 +4969,7 @@ void VM::run(int baseFrame) {
                                 (classOf(target_)->number == proto_->ownClass &&                 \
                                  (classOf(target_)->accessAllOwn ||                              \
                                   (classOf(target_)->accessSharedOwn && (name->restricted & 4) == 0))))); \
-            if (!own_ && accessDenied(target_, name, proto_, (write))) {                         \
+            if (!own_ && accessDeniedAt(target_, name, proto_, (write), ip)) {                   \
                 SAVE_IP();                                                                       \
                 throw accessError(target_, name, proto_);                                        \
             }                                                                                    \

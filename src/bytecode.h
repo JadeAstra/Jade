@@ -633,6 +633,15 @@ struct FunctionProto {
     const FileReach* reach = nullptr;
     // Sets `library` from the signature.
     void noteLibrary();
+
+    // Code copied in from an inline function of another class or library (D59, G36): from
+    // `start` to `end` it may use too what the numbers in `ids` may (a class's, then a
+    // library's), as the inline function's own code may; the rest of the function may not.
+    struct Rights {
+        uint32_t start = 0, end = 0;
+        std::vector<uint16_t> ids;
+    };
+    std::vector<Rights> rights;
 };
 
 

@@ -1055,6 +1055,10 @@ private:
     void declareAccess(ObjClass* cls, Table& marks, ObjString* name, int id, int kind, bool write);
     void joinProtected(ObjClass* subclass);
     bool accessDenied(Value target, const ObjString* name, const FunctionProto* proto, bool write) const;
+    bool accessDeniedTo(Value target, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const;
+    bool memberDeniedTo(const ObjClass* cls, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const;
+    bool rightsAllow(Value target, const ObjString* name, const FunctionProto* proto, const uint8_t* ip, bool write) const;
+    bool accessDeniedAt(Value target, const ObjString* name, const FunctionProto* proto, bool write, const uint8_t* ip) const;
     AstraThrow accessError(Value target, const ObjString* name, const FunctionProto* proto);
     AstraThrow undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global);
     void ensureClassInit(ObjClass* cls);
