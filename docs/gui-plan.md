@@ -26,6 +26,14 @@ In Astra the library is called **Jade** (`import Jade`, or `import Jade.*` for b
 means the Kotlin original. Sections that describe the Kotlin library use its names
 (`JadeComponent`); sections about Astra use Jade's (`Component`).
 
+Names for the future (the user's, 2026-11-03), not yet used anywhere:
+
+| What | Name |
+|---|---|
+| The language | Jade |
+| The window and graphics library | Topaz |
+| The game engine | Carnelian |
+
 - The library is written in Astra.
 - C++ is used only for what a script cannot do: windows, input, drawing, text, images,
   clipboard, file dialogs.
