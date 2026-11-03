@@ -27,6 +27,11 @@ enum class ObjType : uint8_t {
     Lazy,      // what a lazy field, static or global works its value out with (ObjLazy, D37)
 };
 
+// The core of an image's pixels while a parallel section draws on it in parts (G64): no piece's,
+// so no piece may look into them, and only the parts of the image's canvas handed out draw on
+// them (parallel.cpp, text/api.cpp). A piece's number is never this: they go up to 254.
+constexpr uint8_t kDrawnInParts = 255;
+
 // Header shared by every garbage-collected object.
 struct Obj {
     Obj* next = nullptr;  // intrusive list of all objects, owned by the VM

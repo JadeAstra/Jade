@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 
 #include "../builtins.h"
@@ -31,7 +32,7 @@ using text::FontBook;
 // The fonts handed out to programs. Shared by every runtime of the process (workers have
 // their own), so a lock goes with it.
 struct Handles {
-    std::mutex mutex;
+    std::shared_mutex mutex;  // shared by those that look a number up, which a drawing core does for each text (G64)
     std::vector<std::shared_ptr<Face>> faces;
     std::unordered_map<const Face*, int64_t> faceNumbers;
     std::vector<std::shared_ptr<Font>> fonts;
@@ -45,7 +46,7 @@ Handles& handles() {
 
 int64_t numberOf(const std::shared_ptr<Face>& face) {
     Handles& h = handles();
-    std::lock_guard<std::mutex> hold(h.mutex);
+    std::unique_lock<std::shared_mutex> hold(h.mutex);
     auto known = h.faceNumbers.find(face.get());
     if (known != h.faceNumbers.end()) return known->second;
     h.faces.push_back(face);
@@ -54,7 +55,7 @@ int64_t numberOf(const std::shared_ptr<Face>& face) {
 
 int64_t numberOf(const std::shared_ptr<Font>& font) {
     Handles& h = handles();
-    std::lock_guard<std::mutex> hold(h.mutex);
+    std::unique_lock<std::shared_mutex> hold(h.mutex);
     auto known = h.fontNumbers.find(font.get());
     if (known != h.fontNumbers.end()) return known->second;
     h.fonts.push_back(font);
@@ -64,7 +65,7 @@ int64_t numberOf(const std::shared_ptr<Font>& font) {
 std::shared_ptr<Face> faceOf(VM& vm, Value v) {
     const int64_t number = vm.toInt(v, "typeface");
     Handles& h = handles();
-    std::lock_guard<std::mutex> hold(h.mutex);
+    std::shared_lock<std::shared_mutex> hold(h.mutex);
     if (number < 0 || static_cast<size_t>(number) >= h.faces.size()) throw vm.runtimeError(Thrown::IllegalStateException, "not a typeface");
     return h.faces[static_cast<size_t>(number)];
 }
@@ -72,7 +73,7 @@ std::shared_ptr<Face> faceOf(VM& vm, Value v) {
 std::shared_ptr<Font> fontOf(VM& vm, Value v) {
     const int64_t number = vm.toInt(v, "font");
     Handles& h = handles();
-    std::lock_guard<std::mutex> hold(h.mutex);
+    std::shared_lock<std::shared_mutex> hold(h.mutex);
     if (number < 0 || static_cast<size_t>(number) >= h.fonts.size()) throw vm.runtimeError(Thrown::IllegalStateException, "not a font");
     return h.fonts[static_cast<size_t>(number)];
 }
@@ -158,12 +159,35 @@ std::vector<uint8_t>& rgbaOf(VM& vm, Value v, int64_t w, int64_t h) {
     return *data;
 }
 
-// target(pixels, width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom): the first ten arguments.
+// In a parallel section a canvas draws on an image the piece made, or through a part of the
+// image's latest split that was handed to the piece, while the section has the image's pixels
+// marked as drawn on in parts (parallel.cpp); the parts' clips never overlap. Nothing else.
+void mayDraw(VM& vm, const ObjInstance* canvas, const Value& pixels) {
+    if (!pixels.isObj()) return;  // rgbaOf says what is wrong
+    const Obj* list = pixels.as.obj;
+    if (list->core == vm.coreId() && list->frozen == 0) return;
+    if (list->core == kDrawnInParts && canvas->core == vm.coreId()) {
+        Value part, image, splits;
+        if (canvas->read(vm.intern("part"), part) && part.isInt() && part.as.i != 0 && canvas->read(vm.intern("image"), image) &&
+            image.isObjType(ObjType::Instance) && asInstance(image)->read(vm.intern("splits"), splits) && splits.isInt() && splits.as.i == part.as.i)
+            return;
+        throw vm.runtimeError(Thrown::IllegalStateException, "this part is from an earlier split of the image: only the parts of its latest split draw on it in a parallel section");
+    }
+    throw vm.runtimeError(Thrown::IllegalStateException,
+                          "in a parallel section a canvas draws only on an image this piece made, or through a part from its canvas's split() that was handed to this piece");
+}
+
+// target(canvas, width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom):
+// the first ten arguments, the canvas an ImageCanvas, whose image's pixels it holds.
 Target targetOf(VM& vm, Value* args) {
     Target t;
     t.width = static_cast<int>(vm.toInt(args[1], "width"));
     t.height = static_cast<int>(vm.toInt(args[2], "height"));
-    t.rgba = rgbaOf(vm, args[0], t.width, t.height).data();
+    Value pixels;
+    if (!args[0].isObjType(ObjType::Instance) || !asInstance(args[0])->read(vm.intern("pixels"), pixels))
+        throw vm.runtimeError(Thrown::InternalError, "an ImageCanvas is drawn on");
+    if (vm.coreId() != 0) mayDraw(vm, asInstance(args[0]), pixels);
+    t.rgba = rgbaOf(vm, pixels, t.width, t.height).data();
     t.scale = vm.toNumber(args[3], "scale");
     t.originX = vm.toNumber(args[4], "origin");
     t.originY = vm.toNumber(args[5], "origin");
@@ -231,7 +255,7 @@ void fillPath(const Target& t, const text::Path& downward, uint32_t color) {
     // The rasterizer has y growing upwards: the outline turned over, and the result put back.
     text::Path up = downward;
     for (size_t i = 1; i < up.points.size(); i += 2) up.points[i] = -up.points[i];
-    const text::GlyphImage image = text::rasterize(up, text::kShapeFineness);
+    const text::GlyphImage image = text::rasterize(up, text::kShapeFineness, t.clipTop, t.clipBottom);
     blendImage(t, image, 0, 0, color);
 }
 
@@ -920,8 +944,11 @@ void registerText(VM& vm) {
     });
 
     vm.defineGlobal("__text", Value::object(lib));
-    // Measuring changes nothing a program can see, so it may be done in a parallel section.
-    vm.markNotParallel("__text", {"width", "charWidth", "faceGlyph"});
+    // What may be done in a parallel section: measuring, and finding a font to draw with, which
+    // change nothing a program can see (the engine's tables have locks of their own, held for an
+    // instant); and drawing on a canvas, which says itself what it may draw on (mayDraw).
+    vm.markNotParallel("__text", {"width", "charWidth", "faceGlyph", "find", "faceInfo", "font", "fontInfo", "canvasFillRect", "canvasDrawRect",
+                                  "canvasClear", "canvasRoundRect", "canvasOval", "canvasLine", "canvasPolygon", "canvasText", "canvasPicture"});
 }
 
 }  // namespace astra

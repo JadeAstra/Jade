@@ -740,6 +740,8 @@ Value VM::runModule(int index) {
             if (program_->globalNames[i] == "Class" && globals_[i].isObjType(ObjType::Class) && classOfFn_.isNull()) classOfFn_ = globals_[i];
             if (program_->globalNames[i] == "ListView" && globals_[i].isObjType(ObjType::Class) && viewClass_ == nullptr)
                 viewClass_ = asClass(globals_[i]);
+            if (program_->globalNames[i] == "ImageCanvas" && globals_[i].isObjType(ObjType::Class) && imageCanvasClass_ == nullptr)
+                imageCanvasClass_ = asClass(globals_[i]);
         }
     }
     loaded_[static_cast<size_t>(index)] = true;
@@ -8311,6 +8313,7 @@ void VM::collectGarbage() {
     for (ObjClass* cls : thrownClasses_) markObject(cls);
     markObject(mapEntryClass_);
     markObject(viewClass_);
+    markObject(imageCanvasClass_);
     for (const TypeConstraint& declared : globalTypes_) markObject(declared.cls);
 
     while (!gray_.empty()) {

@@ -132,22 +132,36 @@ std::shared_ptr<Font> Font::of(const Match& match, const FontRequest& asked) {
     }
     f.xHeight_ = roundHalfUp(f.xSnapped_);
     f.capHeight_ = roundHalfUp(f.capSnapped_);
-    f.advances_.assign(static_cast<size_t>(f.face_->glyphCount()), INT_MIN);
+    const int glyphs = std::max(0, f.face_->glyphCount());
+    f.advances_ = std::make_unique<std::atomic<int>[]>(static_cast<size_t>(glyphs));
+    for (int g = 0; g < glyphs; g++) f.advances_[static_cast<size_t>(g)].store(INT_MIN, std::memory_order_relaxed);
+    f.pageCount_ = (glyphs + kPage - 1) / kPage;
+    f.pages_ = std::make_unique<std::atomic<std::atomic<GlyphImage*>*>[]>(static_cast<size_t>(f.pageCount_));
 
     cache()[key] = font;
     return font;
 }
 
+Font::~Font() {
+    for (int p = 0; p < pageCount_; p++) {
+        std::atomic<GlyphImage*>* page = pages_[static_cast<size_t>(p)].load(std::memory_order_acquire);
+        if (page == nullptr) continue;
+        for (int k = 0; k < kPage; k++) delete page[k].load(std::memory_order_acquire);
+        delete[] page;
+    }
+}
+
 int Font::advance(int glyph) {
     if (glyph < 0 || glyph >= face_->glyphCount()) return 0;
-    std::lock_guard<std::mutex> hold(mutex_);
-    int& known = advances_[static_cast<size_t>(glyph)];
-    if (known == INT_MIN) {
+    std::atomic<int>& known = advances_[static_cast<size_t>(glyph)];
+    int width = known.load(std::memory_order_relaxed);
+    if (width == INT_MIN) {
         const float units = face_->advance(glyph, coords_);
-        known = std::max(0, roundHalfUp(units * unit_));
-        if (known > 0) known += boldExtra_;
+        width = std::max(0, roundHalfUp(units * unit_));
+        if (width > 0) width += boldExtra_;
+        known.store(width, std::memory_order_relaxed);
     }
-    return known;
+    return width;
 }
 
 Font* Font::fontFor(uint32_t codepoint, int& glyph) {
@@ -207,6 +221,22 @@ int Font::place(std::string_view utf8, std::vector<PlacedGlyph>& out) {
 const GlyphImage& Font::image(int glyph, uint32_t foreground) {
     const ColorTables* color = face_->color();
     const bool colored = color != nullptr && color->has(glyph);
+    if (!colored && glyph >= 0 && glyph < face_->glyphCount()) {
+        // Found without a lock; a page or a picture two threads make at once is kept once.
+        std::atomic<std::atomic<GlyphImage*>*>& pageSlot = pages_[static_cast<size_t>(glyph / kPage)];
+        std::atomic<GlyphImage*>* page = pageSlot.load(std::memory_order_acquire);
+        if (page == nullptr) {
+            auto* made = new std::atomic<GlyphImage*>[kPage]();
+            if (pageSlot.compare_exchange_strong(page, made, std::memory_order_acq_rel, std::memory_order_acquire)) page = made;
+            else delete[] made;
+        }
+        std::atomic<GlyphImage*>& slot = page[glyph % kPage];
+        GlyphImage* known = slot.load(std::memory_order_acquire);
+        if (known != nullptr) return *known;
+        auto made = std::make_unique<GlyphImage>(render(glyph, foreground));
+        if (slot.compare_exchange_strong(known, made.get(), std::memory_order_acq_rel, std::memory_order_acquire)) return *made.release();
+        return *known;
+    }
     const uint64_t key = static_cast<uint64_t>(static_cast<uint32_t>(glyph)) | (colored ? static_cast<uint64_t>(foreground) << 32 : 0);
     {
         std::lock_guard<std::mutex> hold(mutex_);

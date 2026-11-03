@@ -2763,7 +2763,7 @@ struct Checker::Impl {
         };
         const std::unordered_map<std::string, std::string>* table = cls == "Color" ? &color
                                                                  : cls == "Font" ? &font
-                                                                 : cls == "Canvas" ? &canvas
+                                                                 : cls == "Canvas" || cls == "ImageCanvas" ? &canvas
                                                                  : cls == "Image" ? &image
                                                                  : cls == "Size" ? &size
                                                                  : cls == "Rect" ? &rect

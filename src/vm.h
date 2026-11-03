@@ -995,6 +995,7 @@ private:
     Value classValue(ObjTypeInfo* type);
   private:
     ObjClass* viewClass_ = nullptr;      // ListView, from the standard library: what splitAt hands out (D96)
+    ObjClass* imageCanvasClass_ = nullptr;  // ImageCanvas, from the standard library: what canvas.split() hands out (G64)
     ObjString* opNames_[static_cast<int>(Op::Count_)] = {};
 
     // Heap state

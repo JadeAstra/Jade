@@ -465,7 +465,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
 <li><a href="#Image"><code>Image</code></a> (23)</li>
-<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (16)</li>
+<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (17)</li>
 <li><a href="#Index.of"><code>Index</code></a> (3)</li>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
 <li><a href="#IndexedValue"><code>IndexedValue</code></a> (1)</li>
@@ -2500,7 +2500,7 @@ image[10, 10] = Color.red                     one pixel; get, set and getOrNull 
 image.editPixels { pixels -&gt; pixels[3, 4] = Color.blue }    many at once, a Grid&lt;Color&gt;
 image.save(Path(&quot;out.png&quot;))
 </pre>
-<p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Jade keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed.</p>
+<p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Jade keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed. Threads may draw on one image together: each shape, text or picture is drawn whole before another thread draws, and the copy on the card misses none of them. In a parallel section a piece draws on an image it made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).</p>
 </div>
 <div class="entry member" id="Image.width"><code class="sig">override val width : int</code><a class="anchor" href="#Image.width">#</a>
 <p>Its width, in pixels.</p>
@@ -2538,10 +2538,10 @@ image.save(Path(&quot;out.png&quot;))
 <div class="entry member" id="Image.editPixels"><code class="sig">fun editPixels(block : (Grid&lt;Color&gt;) -&gt; unit)</code><a class="anchor" href="#Image.editPixels">#</a>
 <p>All of them, to be changed in the block: the image is marked changed when it ends.</p>
 </div>
-<div class="entry member" id="Image.canvas"><code class="sig">fun canvas() : Canvas</code><a class="anchor" href="#Image.canvas">#</a>
+<div class="entry member" id="Image.canvas"><code class="sig">fun canvas() : ImageCanvas</code><a class="anchor" href="#Image.canvas">#</a>
 <p>Something to draw on it with, one unit to the pixel.</p>
 </div>
-<div class="entry member" id="Image.canvasAt"><code class="sig">fun canvasAt(width : int, height : int, scale : Number) : Canvas</code><a class="anchor" href="#Image.canvasAt">#</a>
+<div class="entry member" id="Image.canvasAt"><code class="sig">fun canvasAt(width : int, height : int, scale : Number) : ImageCanvas</code><a class="anchor" href="#Image.canvasAt">#</a>
 <p>The same for an image that stands for <code>width</code> by <code>height</code> units at <code>scale</code> pixels to the unit: what a window's picture is on a dense screen.</p>
 </div>
 <div class="entry member" id="Image.crop"><code class="sig">fun crop(x : int, y : int, w : int, h : int) : Image</code><a class="anchor" href="#Image.crop">#</a>
@@ -2571,8 +2571,14 @@ image.save(Path(&quot;out.png&quot;))
 <div class="entry" id="ImageCanvas"><code class="sig">class ImageCanvas : Canvas</code><a class="anchor" href="#ImageCanvas">#</a>
 <p>What draws on an Image: the software engine, in the image's pixels.</p>
 </div>
+<div class="entry member" id="ImageCanvas.split"><code class="sig">fun split(columns : int = 1, rows : int = availableProcessors()) : List&lt;ImageCanvas&gt;</code><a class="anchor" href="#ImageCanvas.split">#</a>
+<p>The canvas in <code>columns</code> by <code>rows</code> parts that do not overlap, for drawing on the image on several cores at once: each part draws as this canvas does, in its units from its (0, 0), and keeps what lands in its own part (its visibleBounds). Handed to the pieces of a parallel section, a part to a piece, they draw together; meanwhile nothing else reads the image or draws on it.</p>
+<pre>canvas.split().parallelStream().forEach { part -&gt; drawScene(part) }
+</pre>
+<p>Split by rows, as it is unless told otherwise, each core works out only its own rows of a shape. The parts are cut in pixels, as evenly as can be, and there are no more than the canvas has pixels each way. Once the image's canvas is split again, these parts draw outside parallel sections only.</p>
+</div>
 <div class="entry member" id="ImageCanvas.another"><code class="sig">protected override fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas</code><a class="anchor" href="#ImageCanvas.another">#</a>
-<p>An ImageCanvas over the same image at another place, with another clip: what sub and clipped give.</p>
+<p>An ImageCanvas over the same image at another place, with another clip: what sub and clipped give. One made from a part is a part too, inside it, so it is made only by the code that may draw through the part: in a parallel section, the piece it was handed to.</p>
 </div>
 <div class="entry member" id="ImageCanvas.fillRect"><code class="sig">override fun fillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.fillRect">#</a>
 <p>Fills the rectangle in the image's pixels, laid over what is there by the colour's alpha; nothing when <code>w</code> or <code>h</code> is 0 or less.</p>
@@ -3317,7 +3323,7 @@ val totals = orders.parallelStream().map { priceOf(it) }.toList()
   lists and objects, and whatever an item holds that is an object of its own.
 </pre>
 <p>A lambda that keeps to that runs on every core. One that does not, { it.move(); moved.add(it) } say, gets an error the first time it runs: it never damages anything. Results come back by being returned: map, filter, sumOf and the rest put them together afterwards.</p>
-<p>Nothing waits inside a section: no lock, no reading or writing, no setting a task aside. The section itself is an ordinary call, which returns when every core has finished. A section may start sections of its own, and parallel({ a }, { b }) runs functions at once; the cores share the work out between them as they come free. What every core may change is an Atomic, an <code>atomic var</code> field, a SharedMap or a SharedSet; gather gives each core a result of its own, merged at the end.</p>
+<p>Nothing waits inside a section: no lock, no reading or writing, no setting a task aside. The section itself is an ordinary call, which returns when every core has finished. A section may start sections of its own, and parallel({ a }, { b }) runs functions at once; the cores share the work out between them as they come free. What every core may change is an Atomic, an <code>atomic var</code> field, a SharedMap or a SharedSet; gather gives each core a result of its own, merged at the end. An image is drawn on by several cores through the parts of its canvas, image.canvas().split(), a part to a piece.</p>
 <div class="entry" id="ParallelStream"><code class="sig">class ParallelStream&lt;T&gt;</code><a class="anchor" href="#ParallelStream">#</a>
 <p>A list's items for every core to work on at once, from parallelStream(): the items themselves, not copies. map, filter and the like give a new stream; toList() and the totals end one.</p>
 </div>

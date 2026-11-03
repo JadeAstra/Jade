@@ -20,7 +20,8 @@
 // section may start sections of its own, and parallel({ a }, { b }) runs functions at once
 // (D96); the cores share the work out between them as they come free. What every core may
 // change is an Atomic, an `atomic var` field, a SharedMap or a SharedSet (D85, D92, D94);
-// gather gives each core a result of its own, merged at the end (D93).
+// gather gives each core a result of its own, merged at the end (D93). An image is drawn on by
+// several cores through the parts of its canvas, image.canvas().split(), a part to a piece (G64).
 
 // Inside Astra: the work is done by the built-in __parallel (parallel.cpp).
 

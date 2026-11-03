@@ -278,16 +278,19 @@ class Font {
   }
 
   // The text engine's font at a scale, made once for each scale it is asked at (D125). Jade's
-  // native layer is handed the Font and asks for it.
+  // native layer is handed the Font and asks for it. A piece of a parallel section drawing with
+  // a font it shares (a part of a split canvas, say) keeps nothing in it: one not made yet is
+  // made each time, which the engine finds again at once.
   internal fun engineAt(scale : Number) : TextFont {
     val last = lastEngine   // the one asked for last, mostly the one asked for next
     if (last != null and last.scale == scale) { return last }
     var found = engines[scale]
+    val keep = __parallel.owns(this)
     if (found == null) {
       found = TextFont(source ?: name, size, isBold, isItalic, weightAsked, scale)
-      engines[scale] = found
+      if (keep) { engines[scale] = found }
     }
-    lastEngine = found
+    if (keep) { lastEngine = found }
     return found
   }
   private var lastEngine : TextFont? = null

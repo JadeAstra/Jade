@@ -34,6 +34,14 @@ constexpr float kShapeFineness = 9.0f;
 // antialiasing: each pixel's value is the share of it that lies inside the outline.
 GlyphImage rasterize(const Path& path, float fineness = kGlyphFineness);
 
+// The same with only the rows that land from `fromRow` up to `toRow` of a picture (y growing
+// downwards, the image placed with its top at -top, as blendImage places a shape): a clip's rows.
+// Each comes out exactly as rasterize gives it, so a shape drawn in parts matches one drawn
+// whole, and a big shape inside a small clip costs only the clip's rows. A shape taller than
+// 8192 pixels is drawn, its rows in the clip; one wider than that, or with more rows in the clip,
+// is not.
+GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow);
+
 // The same into a box given beforehand, which a colour glyph's layers share: `left` and
 // `top` say where the box sits, as in GlyphImage. Adds nothing if the path is empty.
 void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage,

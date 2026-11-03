@@ -201,7 +201,10 @@ abstract class Canvas {
 //
 // A pixel outside the image is an IndexOutOfBoundsException (D134). Its canvas draws in memory,
 // on any thread, so a worker can draw a thumbnail; Jade keeps a copy of it on the graphics card
-// for drawing it there, brought up to date from what has changed (D124).
+// for drawing it there, brought up to date from what has changed (D124). Threads may draw on one
+// image together: each shape, text or picture is drawn whole before another thread draws, and
+// the copy on the card misses none of them. In a parallel section a piece draws on an image it
+// made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).
 class Image : Drawable {
   // Its width, in pixels.
   override val width : int
@@ -218,6 +221,9 @@ class Image : Drawable {
   // Jade's native layer's: its copy on the graphics card, and the change number it was made at.
   internal var card : any? = null
   internal var cardAt = -1
+  // How many times its canvases have been split: the number of the latest split, whose parts
+  // alone draw on it in a parallel section (ImageCanvas.split).
+  internal var splits = 0
 
   // An image of one colour: clear unless another is given.
   fun init(width : int, height : int, color : Color = Color.clear) {
@@ -292,11 +298,11 @@ class Image : Drawable {
   // -- Drawing on it --
 
   // Something to draw on it with, one unit to the pixel.
-  fun canvas() : Canvas => ImageCanvas(this, width, height, 1)
+  fun canvas() : ImageCanvas => ImageCanvas(this, width, height, 1)
 
   // The same for an image that stands for `width` by `height` units at `scale` pixels to the
   // unit: what a window's picture is on a dense screen.
-  fun canvasAt(width : int, height : int, scale : Number) : Canvas => ImageCanvas(this, width, height, scale)
+  fun canvasAt(width : int, height : int, scale : Number) : ImageCanvas => ImageCanvas(this, width, height, scale)
 
   // -- As a whole --
 
@@ -332,12 +338,19 @@ class Image : Drawable {
   override fun toString() : string => "Image($width x $height)"
 
   // Says that the pixels from (left, top) up to (right, bottom) have changed.
+  //
+  // Done in one step for other threads: a thread gives the others a turn only at a call or at
+  // the end of a loop's body, and this has neither, so none of them (Jade sending the changes to
+  // the graphics card among them) sees it half done (G64). Keep calls out of it: a Math.min of
+  // two ints is no call today, but nothing here should hang on that.
   internal fun changed(left : int, top : int, right : int, bottom : int) {
     if (changedRight <= changedLeft or changedBottom <= changedTop) {
       changedLeft = left; changedTop = top; changedRight = right; changedBottom = bottom
     } else {
-      changedLeft = Math.min(changedLeft, left); changedTop = Math.min(changedTop, top)
-      changedRight = Math.max(changedRight, right); changedBottom = Math.max(changedBottom, bottom)
+      changedLeft = left < changedLeft ? left : changedLeft
+      changedTop = top < changedTop ? top : changedTop
+      changedRight = right > changedRight ? right : changedRight
+      changedBottom = bottom > changedBottom ? bottom : changedBottom
     }
     changes += 1
   }
@@ -346,90 +359,134 @@ class Image : Drawable {
 // What draws on an Image: the software engine, in the image's pixels (D123).
 class ImageCanvas : Canvas {
   private val image : Image
+  // The image's pixels, which the text engine draws in (text/api.cpp reads them from here).
+  private val pixels : List<Color>
+  // The number of the split it is a part of, or a canvas made from such a part; 0 for any other.
+  internal val part : int
 
   internal fun init(image : Image, width : int, height : int, scale : Number, originX : int = 0, originY : int = 0,
-                    clipLeft : int = 0, clipTop : int = 0, clipRight : int = image.width, clipBottom : int = image.height) {
+                    clipLeft : int = 0, clipTop : int = 0, clipRight : int = image.width, clipBottom : int = image.height, part : int = 0) {
     super.init(width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom)
     this.image = image
+    this.pixels = image.cells.cells
+    this.part = part
+  }
+
+  // The canvas in `columns` by `rows` parts that do not overlap, for drawing on the image on
+  // several cores at once: each part draws as this canvas does, in its units from its (0, 0),
+  // and keeps what lands in its own part (its visibleBounds). Handed to the pieces of a parallel
+  // section, a part to a piece, they draw together; meanwhile nothing else reads the image or
+  // draws on it.
+  //
+  //   canvas.split().parallelStream().forEach { part -> drawScene(part) }
+  //
+  // Split by rows, as it is unless told otherwise, each core works out only its own rows of a
+  // shape. The parts are cut in pixels, as evenly as can be, and there are no more than the
+  // canvas has pixels each way. Once the image's canvas is split again, these parts draw outside
+  // parallel sections only.
+  fun split(columns : int = 1, rows : int = availableProcessors()) : List<ImageCanvas> {
+    if (columns < 1 or rows < 1) { throw IllegalArgumentException("a canvas splits into one column and one row or more, not $columns by $rows") }
+    if (!__parallel.owns(image)) { throw IllegalStateException("split hands out parts to draw on the image through, and this code may only read it") }
+    image.splits += 1
+    font.engineAt(scale)   // made ready now: a part shares the font, and keeps nothing in it
+    val left = Math.max(0, clipLeft)
+    val top = Math.max(0, clipTop)
+    val across = Math.max(0, Math.min(image.width, clipRight) - left)
+    val down = Math.max(0, Math.min(image.height, clipBottom) - top)
+    val columnCount = Math.max(1, Math.min(columns, across))
+    val rowCount = Math.max(1, Math.min(rows, down))
+    return List(columnCount * rowCount) { i ->
+      val c = i % columnCount
+      val r = i / columnCount
+      val made = ImageCanvas(image, width, height, scale, originX, originY, left + across * c / columnCount, top + down * r / rowCount,
+                             left + across * (c + 1) / columnCount, top + down * (r + 1) / rowCount, image.splits)
+      made.color = color
+      made.font = font
+      made
+    }
   }
 
   // An ImageCanvas over the same image at another place, with another clip: what sub and clipped
-  // give.
-  protected override fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas =>
-    ImageCanvas(image, width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom)
-
-  // The whole clip is marked changed: what was drawn is somewhere in it.
-  private fun drawn() {
-    image.changed(Math.max(0, clipLeft), Math.max(0, clipTop), Math.min(image.width, clipRight), Math.min(image.height, clipBottom))
+  // give. One made from a part is a part too, inside it, so it is made only by the code that may
+  // draw through the part: in a parallel section, the piece it was handed to.
+  protected override fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas {
+    if (part != 0 and !__parallel.owns(this)) { throw IllegalStateException("in a parallel section a part of a split canvas is narrowed only by the piece it was handed to") }
+    return ImageCanvas(image, width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, part)
   }
-  private val pixels : List<Color>
-    get() => image.cells.cells
+
+  // The whole clip is marked changed: what was drawn is somewhere in it. A part handed to a piece
+  // of a parallel section leaves that to the section, which marks all its parts as it starts.
+  private fun drawn() {
+    if (part == 0 or __parallel.owns(image)) {
+      image.changed(Math.max(0, clipLeft), Math.max(0, clipTop), Math.min(image.width, clipRight), Math.min(image.height, clipBottom))
+    }
+  }
 
   // Fills the rectangle in the image's pixels, laid over what is there by the colour's alpha;
   // nothing when `w` or `h` is 0 or less.
   override fun fillRect(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasFillRect(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
+    __text.canvasFillRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
     drawn()
   }
   // The rectangle's outline, one unit thick, covering `w` + 1 by `h` + 1 units; nothing when `w` or
   // `h` is below 0.
   override fun drawRect(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasDrawRect(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
+    __text.canvasDrawRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
     drawn()
   }
   // Makes the pixels of the rectangle clear, all four bytes 0, its edges on whole pixels, inside
   // the clip.
   override fun clearRect(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasClear(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, x, y, w, h)
+    __text.canvasClear(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, x, y, w, h)
     drawn()
   }
   // Fills a rectangle with rounded corners, smooth at its edges, laid over what is there.
   override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
-    __text.canvasRoundRect(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, true)
+    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, true)
     drawn()
   }
   // The outline of a rectangle with rounded corners, one unit thick.
   override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
-    __text.canvasRoundRect(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, false)
+    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, false)
     drawn()
   }
   // Fills the oval inside the rectangle, smooth at its edge, laid over what is there.
   override fun fillOval(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasOval(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, true)
+    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, true)
     drawn()
   }
   // The outline of the oval inside the rectangle, one unit thick, covering `w` + 1 by `h` + 1 units.
   override fun drawOval(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasOval(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, false)
+    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, false)
     drawn()
   }
   // A line one unit thick with square ends: one across or up and down sits on whole pixels, a
   // slanted one has smooth edges.
   override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
-    __text.canvasLine(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x1, y1, x2, y2)
+    __text.canvasLine(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x1, y1, x2, y2)
     drawn()
   }
   // Lines through the first `n` points, or all of them, left open; `n` is cut down to the shorter
   // list, and fewer than 2 points draw nothing.
   override fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, false)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, false)
     drawn()
   }
   // Lines through the first `n` points, or all of them, closed back to the first; fewer than 2
   // points draw nothing.
   override fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, true)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, true)
     drawn()
   }
   // Fills the polygon through the first `n` points, or all of them; fewer than 2 draw nothing.
   override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, true, true)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, true, true)
     drawn()
   }
   // Draws `text` in the canvas's font and colour, its baseline at `y`, and gives the width it took,
   // in units rounded up.
   override fun drawString(text : string, x : Number, y : Number) : int {
-    val device : int = __text.canvasText(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb,
+    val device : int = __text.canvasText(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb,
                                          font.engineHandle(scale), text, x, y)
     drawn()
     return scale == 1 ? device : Math.ceil(device / scale.toFloat()).toInt()
@@ -446,7 +503,7 @@ class ImageCanvas : Canvas {
   protected override fun drawPicturePart(picture : Drawable, sourceX : Number, sourceY : Number, sourceW : Number, sourceH : Number, x : Number, y : Number,
                                          w : Number, h : Number, alpha : Number) {
     val from = __imageOf(picture)
-    __text.canvasPicture(pixels, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom,
+    __text.canvasPicture(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom,
                          from.cells.cells, from.width, from.height, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha)
     drawn()
   }

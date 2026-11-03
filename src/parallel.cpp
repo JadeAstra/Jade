@@ -260,6 +260,7 @@ void VM::refreshFromRoot() {
     mapEntryClass_ = root_->mapEntryClass_;
     classOfFn_ = root_->classOfFn_;
     viewClass_ = root_->viewClass_;
+    imageCanvasClass_ = root_->imageCanvasClass_;
     hasExtensions_ = root_->hasExtensions_;
     hasBuiltinFits_ = root_->hasBuiltinFits_;
     if (extensionEpoch_ != root_->extensionEpoch_) {
@@ -432,6 +433,53 @@ struct Dealt {
     }
 };
 
+// Whether the object is a part of a split canvas (G64): an ImageCanvas with a split's number.
+bool isCanvasPart(VM& vm, ObjClass* canvasClass, const Obj* obj) {
+    if (canvasClass == nullptr || obj->type != ObjType::Instance || static_cast<const ObjInstance*>(obj)->cls != canvasClass) return false;
+    Value part;
+    return static_cast<const ObjInstance*>(obj)->read(vm.intern("part"), part) && part.isInt() && part.as.i != 0;
+}
+
+// A part of a split canvas handed to a piece (G64). It has to be of its image's latest split,
+// whose parts never overlap. While the section lasts the image's pixels are drawn on through
+// the parts alone, each by the piece it was handed to, and no piece reads them (kDrawnInParts).
+// The image is marked changed over the part here, as Image.changed does, since a piece cannot
+// change an image it may only read: done for each part of an image whose pixels this dealing
+// marks, `marked` keeping which. An image this code may only read is left alone, and its parts
+// draw nothing (mayDraw says why). In a section inside a section, the part was dealt already.
+void dealCanvasPart(VM& vm, ObjInstance* canvas, Dealt& dealt, std::vector<const Obj*>& marked) {
+    Value part, image, pixels, splits;
+    if (!canvas->read(vm.intern("part"), part) || !canvas->read(vm.intern("image"), image) || !canvas->read(vm.intern("pixels"), pixels) ||
+        !image.isObjType(ObjType::Instance) || !pixels.isObj())
+        return;
+    ObjInstance* img = asInstance(image);
+    if (!img->read(vm.intern("splits"), splits) || !splits.isInt()) return;
+    if (splits.as.i != part.as.i)
+        throw vm.runtimeError(Thrown::IllegalStateException, "a part of an earlier split of an image's canvas is handed out: only the parts of its latest split draw on it together");
+    Obj* list = pixels.as.obj;
+    if (list->core == vm.coreId() && img->core == vm.coreId() && list->frozen == 0) {
+        list->core = kDrawnInParts;
+        dealt.objects.push_back(list);
+        marked.push_back(list);
+    } else if (std::find(marked.begin(), marked.end(), list) == marked.end()) {
+        return;
+    }
+    auto get = [&](ObjInstance* from, const char* name) {
+        Value v;
+        return from->read(vm.intern(name), v) && v.isInt() ? v.as.i : 0;
+    };
+    const int64_t l = std::max<int64_t>(0, get(canvas, "clipLeft")), t = std::max<int64_t>(0, get(canvas, "clipTop"));
+    const int64_t r = std::min(get(img, "width"), get(canvas, "clipRight")), b = std::min(get(img, "height"), get(canvas, "clipBottom"));
+    if (r <= l || b <= t) return;
+    const int64_t cl = get(img, "changedLeft"), ct = get(img, "changedTop"), cr = get(img, "changedRight"), cb = get(img, "changedBottom");
+    const bool none = cr <= cl || cb <= ct;
+    img->setField(vm.intern("changedLeft"), Value::integer(none ? l : std::min(cl, l)));
+    img->setField(vm.intern("changedTop"), Value::integer(none ? t : std::min(ct, t)));
+    img->setField(vm.intern("changedRight"), Value::integer(none ? r : std::max(cr, r)));
+    img->setField(vm.intern("changedBottom"), Value::integer(none ? b : std::max(cb, b)));
+    img->setField(vm.intern("changes"), Value::integer(get(img, "changes") + 1));
+}
+
 std::string describe(const VM& vm, const Obj* obj) {
     switch (obj->type) {
         case ObjType::Instance: return "this " + static_cast<const ObjInstance*>(obj)->cls->name->utf8();
@@ -488,24 +536,47 @@ void VM::runSection(ParallelSection& section) {
     }
 
     {
+        // The pieces' numbers are given back however the section ends, an error in handing out
+        // its items among the ways, once the items themselves are given back.
+        struct Owners {
+            ParallelPool& pool;
+            const ParallelSection& section;
+            const bool taken;
+            ~Owners() {
+                if (taken) pool.giveOwners(section);
+            }
+        } owners{pool, section, !alone};
         // Each piece owns its items for as long as the section lasts: those the starter owns.
         Dealt dealt;
         dealt.to = coreId_;
-        // The views of a list each function of a parallel(...) captures are its own (D96).
-        if (!alone && section.kind == ParallelSection::Functions && viewClass_ != nullptr) {
+        std::vector<const Obj*> marked;  // images' pixels this section draws on in parts
+        // The views of a list each function of a parallel(...) captures are its own (D96), and so
+        // are the parts of a split canvas (G64).
+        if (!alone && section.kind == ParallelSection::Functions) {
             for (ParallelPiece& piece : section.pieces) {
                 const Value& function = (*section.functions)[piece.index];
                 if (!function.isObjType(ObjType::Closure)) continue;
                 const ObjClosure* closure = asClosure(function);
                 for (size_t u = 0; u < closure->upvalues.size(); u++) {
                     const Value held = *closure->upvalues[u]->location;
-                    if (!held.isObjType(ObjType::Instance) || asInstance(held)->cls != viewClass_) continue;
+                    if (!held.isObjType(ObjType::Instance)) continue;
+                    const bool isView = viewClass_ != nullptr && asInstance(held)->cls == viewClass_;
+                    const bool isPart = !isView && isCanvasPart(*this, imageCanvasClass_, held.as.obj);
+                    if (!isView && !isPart) continue;
                     ObjInstance* view = asInstance(held);
                     if (view->core == piece.owner) continue;  // captured twice by the one function
                     bool ours = false;
                     for (const ParallelPiece& other : section.pieces) ours = ours || other.owner == view->core;
-                    if (ours) throw runtimeError(Thrown::IllegalStateException, "the same view is given to two of the functions: each view is one function's own");
+                    if (ours)
+                        throw runtimeError(Thrown::IllegalStateException, isView ? "the same view is given to two of the functions: each view is one function's own"
+                                                                                 : "the same part of a canvas is given to two of the functions: each part is one function's own");
                     if (view->core != coreId_) continue;  // not the starter's to give: read, not written
+                    if (isPart) {
+                        view->core = piece.owner;
+                        dealt.objects.push_back(view);
+                        dealCanvasPart(*this, view, dealt, marked);
+                        continue;
+                    }
                     Value lent;
                     if (view->read(intern("lent"), lent) && lent.truthy())
                         throw runtimeError(Thrown::IllegalStateException, "this view has been split: its halves are given out in its place until splitAt's block ends");
@@ -530,6 +601,7 @@ void VM::runSection(ParallelSection& section) {
                     }
                     obj->core = piece.owner;
                     dealt.objects.push_back(obj);
+                    if (isCanvasPart(*this, imageCanvasClass_, obj)) dealCanvasPart(*this, static_cast<ObjInstance*>(obj), dealt, marked);
                 }
             }
         }
@@ -542,7 +614,6 @@ void VM::runSection(ParallelSection& section) {
             pool.post(section, coreId_ != 0 ? coreIndex_ : -1);
             if (coreId_ == 0) pool.await(section);
             else pool.help(coreIndex_, section);
-            pool.giveOwners(section);
         }
     }
     // The outermost section over: what the cores made is the program's, and nobody's in particular.
@@ -687,6 +758,9 @@ AstraThrow VM::notOwned(const Obj* obj) const {
 }
 
 AstraThrow VM::otherCores(const Obj* obj) const {
+    if (obj->core == kDrawnInParts)
+        return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "the pixels of an image are drawn on in parts in this parallel section: until it ends they are "
+                                                                                   "drawn on through the parts of its canvas alone, and read by nothing");
     // To read every item, the section goes over the positions instead, which leaves the list
     // shared and every item readable (D95).
     return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, describe(*this, obj) + " is another core's item in this parallel section: a core looks only into its own items " +

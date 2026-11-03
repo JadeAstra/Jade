@@ -1,0 +1,117 @@
+// An image drawn on by several cores at once, through the parts of its canvas (G64): split()
+// cuts the canvas into parts that never overlap, and a parallel section hands them out, a part
+// to a piece. What the parts draw is what the whole canvas draws, pixel for pixel.
+
+fun scene(c : Canvas) {
+  c.color = Color(30, 60, 200)
+  c.fillOval(10, 7, 300, 211)
+  c.color = Color(200, 20, 20, 128)
+  c.fillRoundRect(40.5, 30.25, 170, 150, 33, 21)
+  c.color = Color.black
+  c.drawLine(0, 0, 319, 239)
+  c.drawOval(100, 50, 77, 133)
+  c.fillPolygon([5, 300, 160, 20], [230, 220, 3, 100])
+  c.drawPolygon([15, 290, 150], [200, 210, 30])
+  c.font = Font("Dialog", 18)
+  c.drawString("Parts and the whole", 30, 120)
+  c.clearRect(250, 10, 30, 30)
+  c.fillRect(260.5, 50, 50, 150)
+}
+
+val whole = Image(320, 240, Color.white)
+scene(whole.canvas())
+
+// By rows, one to a core unless told otherwise; each part draws in the canvas's own units.
+val parted = Image(320, 240, Color.white)
+val parts = parted.canvas().split(rows = 8)
+print(parts.size, parts[0].visibleBounds, parts[7].visibleBounds)   // expect: 8 Rect(0, 0, 320 x 30) Rect(0, 210, 320 x 30)
+parts.parallelStream().forEach { scene(it) }
+print(whole == parted)   // expect: true
+print(whole.canvas().split().size == availableProcessors())   // expect: true
+
+// In columns and rows.
+val tiles = Image(320, 240, Color.white)
+val grid = tiles.canvas().split(3, 5)
+grid.parallelStream().forEach { scene(it) }
+print(grid.size, whole == tiles)   // expect: 15 true
+
+// Each function of a parallel(...) given a part of its own.
+fun byFunctions() : Image {
+  val two = Image(320, 240, Color.white)
+  val halves = two.canvas().split(2, 1)
+  val a = halves[0]
+  val b = halves[1]
+  parallel({ scene(a) }, { scene(b) })
+  return two
+}
+print(whole == byFunctions())   // expect: true
+
+// On a dense picture, cut in pixels.
+val dense = Image(480, 360, Color.white)
+scene(dense.canvasAt(320, 240, 1.5))
+val denseParts = Image(480, 360, Color.white)
+denseParts.canvasAt(320, 240, 1.5).split(1, 7).parallelStream().forEach { scene(it) }
+print(dense == denseParts)   // expect: true
+
+// No more parts than pixels, and at least one of each.
+val small = Image(64, 32, Color.white)
+val canvas = small.canvas()
+print(canvas.split(100, 100).size, (canvas.clipped(0, 0, 3, 2) as ImageCanvas).split(1, 32).size)   // expect: 2048 2
+try { canvas.split(0, 2) } catch (e) { print(e.message) }   // expect: a canvas splits into one column and one row or more, not 0 by 2
+
+// -- What a section may not do with an image --
+
+// Draw on a shared image through its whole canvas.
+try { [1, 2].parallelStream().forEach { canvas.fillRect(0, 0, 4, 4) } } catch (e) { print(e.message) }   // expect: in a parallel section a canvas draws only on an image this piece made, or through a part from its canvas's split() that was handed to this piece
+// An image a piece made itself it draws on as it likes.
+print([1, 2, 3].parallelStream().map { n -> val own = Image(8, 8); own.canvas().fillRect(0, 0, n, n); own[n - 1, n - 1] }.toList())   // expect: [Color(0, 0, 0), Color(0, 0, 0), Color(0, 0, 0)]
+
+// Read the pixels while the parts draw, or draw the image itself on a part. The section stops at
+// the error, and which parts drew before it depends on the timing; the pixels are read again after.
+val quarters = canvas.split(1, 4)
+try { quarters.parallelStream().forEach { part -> part.fillRect(0, 0, 64, 32); print(small[0, 0]) } } catch (e) { print(e.message) }   // expect: the pixels of an image are drawn on in parts in this parallel section: until it ends they are drawn on through the parts of its canvas alone, and read by nothing
+try { quarters.parallelStream().forEach { part -> part.draw(small, 0, 0) } } catch (e) { print(e.message) }   // expect: the pixels of an image are drawn on in parts in this parallel section: until it ends they are drawn on through the parts of its canvas alone, and read by nothing
+print(small[0, 31].alpha, small[63, 0].alpha)   // expect: 255 255
+
+// Hand out the parts of an earlier split.
+val halves = canvas.split(1, 2)
+try { quarters.parallelStream().forEach { it.fillRect(0, 0, 1, 1) } } catch (e) { print(e.message) }   // expect: a part of an earlier split of an image's canvas is handed out: only the parts of its latest split draw on it together
+halves.parallelStream().forEach { it.fillRect(0, 0, 1, 1) }
+quarters[0].fillRect(0, 0, 1, 1)   // outside a section any part draws
+print("halves drawn")   // expect: halves drawn
+
+canvas.fillRect(0, 0, 64, 32)   // all black, whatever the sections above drew
+
+// Narrow a part that was not handed out; a part handed out its piece narrows.
+val thirds = canvas.split(1, 3)
+try { [1, 2].parallelStream().forEach { thirds[0].sub(0, 0, 4, 4) } } catch (e) { print(e.message) }   // expect: in a parallel section a part of a split canvas is narrowed only by the piece it was handed to
+thirds.parallelStream().forEach { it.color = Color.red; it.clipped(0, 0, 10, 32).fillRect(0, 0, 64, 32) }
+print(small[9, 31], small[10, 0])   // expect: Color(255, 0, 0) Color(0, 0, 0)
+
+// Split a shared image's canvas.
+try { [1, 2].parallelStream().forEach { canvas.split() } } catch (e) { print(e.message) }   // expect: split hands out parts to draw on the image through, and this code may only read it
+
+// Give one part to two functions.
+fun twice() {
+  val ps = canvas.split(2, 1)
+  val p = ps[0]
+  parallel({ p.fillRect(0, 0, 1, 1) }, { p.fillRect(0, 0, 1, 1) })
+}
+try { twice() } catch (e) { print(e.message) }   // expect: the same part of a canvas is given to two of the functions: each part is one function's own
+
+// A font not drawn with before, shared by the parts, draws in a section.
+val font = Font("Dialog", 23)
+val textWhole = Image(64, 32, Color.white)
+val tw = textWhole.canvas()
+tw.font = font
+tw.drawString("Hi", 2, 24)
+val textParts = Image(64, 32, Color.white)
+val unused = Font("Dialog", 23)
+textParts.canvas().split(1, 3).parallelStream().forEach { it.font = unused; it.drawString("Hi", 2, 24) }
+print(textWhole == textParts)   // expect: true
+
+// Sections that fail as their items are handed out give the cores' numbers back (G64): three
+// hundred of them, and the next section still runs on every core.
+var failed = 0
+for (i in 0..<300) { try { twice() } catch (e) { failed += 1 } }
+print(failed, (1..100).parallelStream().map { it * 2 }.sumOf { it })   // expect: 300 10100

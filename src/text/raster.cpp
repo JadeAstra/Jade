@@ -12,11 +12,17 @@ namespace astra::text {
 namespace {
 
 // Accumulates exact area coverage: each edge adds, along its length, how much of every pixel
-// lies to its right. A running sum over each row then gives the coverage of every pixel.
+// lies to its right. A running sum along each row then gives the coverage of every pixel.
 // (The method of font-rs. Nothing here depends on which way a contour winds.)
+//
+// Only the rows from `from` up to `to` are kept: a shape drawn inside a clip is worked out for
+// the clip's rows alone. An edge is still followed from its first row, so every row kept comes
+// out exactly as it would with all of them. Each row has a cell past its last pixel for what
+// lands to the right of the picture, and its sum starts from nothing.
 class Accumulator {
 public:
-    Accumulator(int width, int height) : w_(width), h_(height), a_(static_cast<size_t>(width) * static_cast<size_t>(height) + 4, 0.0f) {}
+    Accumulator(int width, int height, int from, int to)
+        : w_(width), h_(height), from_(from), to_(to), a_(static_cast<size_t>(width + 1) * static_cast<size_t>(to - from), 0.0f) {}
 
     void line(float x0, float y0, float x1, float y1) {
         if (y0 == y1) return;
@@ -31,11 +37,15 @@ public:
         if (y0 < 0) x -= y0 * dxdy;
 
         const int firstRow = std::max(0, static_cast<int>(std::floor(y0)));
-        const int lastRow = std::min(h_, static_cast<int>(std::ceil(y1)));
+        const int lastRow = std::min({h_, to_, static_cast<int>(std::ceil(y1))});
         for (int row = firstRow; row < lastRow; row++) {
-            const size_t start = static_cast<size_t>(row) * static_cast<size_t>(w_);
             const float dy = std::min(static_cast<float>(row + 1), y1) - std::max(static_cast<float>(row), y0);
             const float xNext = x + dxdy * dy;
+            if (row < from_) {
+                x = xNext;  // above the rows kept: only where the edge has got to
+                continue;
+            }
+            const size_t start = static_cast<size_t>(row - from_) * static_cast<size_t>(w_ + 1);
             const float d = dy * dir;
             const float left = std::min(x, xNext), right = std::max(x, xNext);
             const float leftFloor = std::floor(left);
@@ -69,25 +79,30 @@ public:
         }
     }
 
+    // The kept rows' coverage, a byte a pixel, row after row.
     void finish(std::vector<uint8_t>& out) const {
-        out.resize(static_cast<size_t>(w_) * static_cast<size_t>(h_));
-        float sum = 0.0f;
-        for (size_t i = 0; i < out.size(); i++) {
-            sum += a_[i];
-            const float coverage = std::min(std::fabs(sum), 1.0f);
-            out[i] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+        const size_t w = static_cast<size_t>(w_);
+        out.resize(w * static_cast<size_t>(to_ - from_));
+        for (size_t row = 0; row < static_cast<size_t>(to_ - from_); row++) {
+            const float* in = a_.data() + row * (w + 1);
+            uint8_t* to = out.data() + row * w;
+            float sum = 0.0f;
+            for (size_t i = 0; i < w; i++) {
+                sum += in[i];
+                const float coverage = std::min(std::fabs(sum), 1.0f);
+                to[i] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+            }
         }
     }
 
 private:
-    int w_, h_;
+    int w_, h_, from_, to_;
     std::vector<float> a_;
 
     void add(size_t rowStart, int cell, float amount) {
         if (cell < 0) cell = 0;
         if (cell > w_) cell = w_;
-        const size_t at = rowStart + static_cast<size_t>(cell);
-        if (at < a_.size()) a_[at] += amount;
+        a_[rowStart + static_cast<size_t>(cell)] += amount;
     }
 };
 
@@ -170,7 +185,7 @@ void flatten(const Path& path, float fineness, Line&& line) {
 void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage, float fineness) {
     coverage.assign(static_cast<size_t>(std::max(width, 0)) * static_cast<size_t>(std::max(height, 0)), 0);
     if (path.empty() || width <= 0 || height <= 0) return;
-    Accumulator acc(width, height);
+    Accumulator acc(width, height, 0, height);
     const float originX = static_cast<float>(left), originY = static_cast<float>(top);
     flatten(path, fineness, [&](float x0, float y0, float x1, float y1) { acc.line(x0 - originX, originY - y0, x1 - originX, originY - y1); });
     acc.finish(coverage);
@@ -186,6 +201,29 @@ GlyphImage rasterize(const Path& path, float fineness) {
     image.height = image.top - static_cast<int>(std::floor(minY)) + 1;
     if (image.width <= 0 || image.height <= 0 || image.width > 8192 || image.height > 8192) return GlyphImage{};
     rasterizeInto(path, image.left, image.top, image.width, image.height, image.pixels, fineness);
+    return image;
+}
+
+GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow) {
+    GlyphImage image;
+    float minX, minY, maxX, maxY;
+    if (!path.bounds(minX, minY, maxX, maxY)) return image;
+    // Far beyond any picture: nothing to draw, and nothing to overflow an int.
+    const float far = 1 << 24;
+    if (!(minX > -far && maxX < far && minY > -far && maxY < far)) return image;
+    image.left = static_cast<int>(std::floor(minX));
+    image.top = static_cast<int>(std::ceil(maxY));
+    image.width = static_cast<int>(std::ceil(maxX)) - image.left + 1;
+    const int height = image.top - static_cast<int>(std::floor(minY)) + 1;
+    // The rows kept, counted from the image's top: row r lands on the picture's row r - top.
+    const int from = std::max(0, fromRow + image.top), to = std::min(height, toRow + image.top);
+    if (image.width <= 0 || image.width > 8192 || from >= to || to - from > 8192) return GlyphImage{};
+    Accumulator acc(image.width, height, from, to);
+    const float originX = static_cast<float>(image.left), originY = static_cast<float>(image.top);
+    flatten(path, fineness, [&](float x0, float y0, float x1, float y1) { acc.line(x0 - originX, originY - y0, x1 - originX, originY - y1); });
+    acc.finish(image.pixels);
+    image.top -= from;
+    image.height = to - from;
     return image;
 }
 

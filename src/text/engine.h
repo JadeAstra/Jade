@@ -20,6 +20,7 @@
 // scripts) are part two of the engine.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -94,6 +95,10 @@ public:
     // for as long as the font is.
     const GlyphImage& image(int glyph, uint32_t foreground = 0x000000FF);
 
+    ~Font();
+    Font(const Font&) = delete;
+    Font& operator=(const Font&) = delete;
+
 private:
     Font() = default;
 
@@ -107,8 +112,18 @@ private:
     // The hinting rule: where the x-height and the capital height are, and where they go.
     float xScaled_ = 0, capScaled_ = 0, xSnapped_ = 0, capSnapped_ = 0;
 
+    // What any thread reads without a lock, so that the cores of a parallel section drawing
+    // text in one font never wait for each other (G64): each glyph's width, INT_MIN until it is
+    // worked out (two threads working one out at once find the same); and an ordinary glyph's
+    // picture by its number, in pages of kPage made as they are first needed. A picture, once
+    // there, stays for as long as the font.
+    static constexpr int kPage = 256;
+    std::unique_ptr<std::atomic<int>[]> advances_;
+    std::unique_ptr<std::atomic<std::atomic<GlyphImage*>*>[]> pages_;
+    int pageCount_ = 0;
+    // The rest, under the lock: colour glyphs' pictures, by glyph and the text's colour, and
+    // what was found for the characters this font lacks.
     std::mutex mutex_;
-    std::vector<int> advances_;
     std::unordered_map<uint64_t, std::unique_ptr<GlyphImage>> images_;
     struct Other {
         std::shared_ptr<Font> font;  // null: this font

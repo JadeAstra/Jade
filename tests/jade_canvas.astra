@@ -247,6 +247,17 @@ imageCanvas.color = Color.black
 imageCanvas.fillRect(1, 1, 2, 2)
 tc.draw(image, 5, 5)
 print(table.toImage()[6, 6] == black, table.toImage()[8, 8] == Color.red)   // expect: true true
+// And what the parts of its canvas draw on several cores at once (G64).
+image.canvas().split(1, 3).parallelStream().forEach { it.color = Color.green; it.fillRect(0, 0, 8, 6) }
+tc.draw(image, 5, 5)
+print(table.toImage()[5, 5] == Color.green, table.toImage()[12, 10] == Color.green)   // expect: true true
+// Two threads drawing on it at once, a column at a time: every column reaches the card.
+val left = Thread({ for (x in 0..<4) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.red; c.fillRect(0, 0, 1, 6) } }).start()
+val right = Thread({ for (x in 4..<8) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.blue; c.fillRect(0, 0, 1, 6) } }).start()
+left.join()
+right.join()
+tc.draw(image, 5, 5)
+print(table.toImage().crop(5, 5, 8, 6) == image)   // expect: true
 // Drawn on with a canvas, and its pixels read again: each side follows the other.
 val drawn = Image(10, 10, Color.black)
 print(drawn[3, 3] == black)   // expect: true
