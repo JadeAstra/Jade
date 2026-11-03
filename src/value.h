@@ -29,8 +29,11 @@ enum class ObjType : uint8_t {
 
 // The core of an image's pixels while a parallel section draws on it in parts (G64): no piece's,
 // so no piece may look into them, and only the parts of the image's canvas handed out draw on
-// them (parallel.cpp, text/api.cpp). A piece's number is never this: they go up to 254.
+// them (parallel.cpp, text/api.cpp). A piece's number is never this: they go up to 253.
 constexpr uint8_t kDrawnInParts = 255;
+// The same for a list while views of it (splitAt, D96) are handed to the pieces of a section:
+// it is written through those views alone, and read by nothing else.
+constexpr uint8_t kViewedInParts = 254;
 
 // Header shared by every garbage-collected object.
 struct Obj {
@@ -49,6 +52,9 @@ struct Obj {
     // Frozen data a worker was sent (D97): kept once outside every VM's heap, read in place by
     // each that holds it, and freed when the last lets go. No VM marks or sweeps it.
     bool outside = false;
+    // A list lent to the views of a splitAt (or parallelSort) while its block runs: it is split
+    // again only through those views, so that no two views of it overlap (D96).
+    bool lent = false;
 
     explicit Obj(ObjType t) : type(t) {}
     virtual ~Obj() = default;

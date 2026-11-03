@@ -1,0 +1,91 @@
+// Views of a list (D96) never overlap while they are in use, so no two cores write one item:
+// a list is lent to the views of a splitAt until its block ends, a view to its halves, and a
+// view whose block has ended is used no more. While pieces write a list through its views,
+// nothing else looks into it.
+
+fun attempt(f : () -> any?) : string {
+  try { f() } catch (e) { return e.message ?: "" }
+  return "no error"
+}
+
+// Divide and conquer, in place.
+fun increment(view : ListView<int>) {
+  if (view.size < 100) { for (i in view.indices) { view[i] += 1 } }
+  else { view.splitAt(view.size / 2) { left, right -> parallel({ increment(left) }, { increment(right) }) } }
+}
+fun counted() : open List<int> {
+  val xs : open List<int> = List(1000) { it }
+  xs.splitAt(xs.size / 2) { left, right -> parallel({ increment(left) }, { increment(right) }) }
+  return xs
+}
+print(counted().sum())   // expect: 500500
+
+// A list split twice at once: the second split is of its views.
+fun twice() {
+  val xs = (0..<10).toList()
+  xs.splitAt(5) { a, b -> xs.splitAt(3) { c, d -> parallel({ a[0] = 1 }, { c[0] = 2 }) } }
+}
+print(attempt { twice() })   // expect: this list is split already: until that splitAt's block ends, split its views instead (left.splitAt(...))
+fun sortedMeanwhile() {
+  val xs : open List<int> = List(20000) { 20000 - it }
+  xs.splitAt(5) { a, b -> xs.parallelSort() }
+}
+print(attempt { sortedMeanwhile() })   // expect: this list is split already: until that splitAt's block ends, split its views instead (left.splitAt(...))
+
+// A view split twice at once.
+fun viewTwice() {
+  val xs = (0..<10).toList()
+  xs.splitAt(5) { a, b -> a.splitAt(2) { c, d -> a.splitAt(1) { e, f -> parallel({ c[0] = 1 }, { e[0] = 2 }) } } }
+}
+print(attempt { viewTwice() })   // expect: this view is split already: until that splitAt's block ends, split its halves instead
+
+// A view kept after its block has ended.
+var kept : ListView<int>? = null
+val ys : open List<int> = List(10) { it }
+ys.splitAt(5) { a, b -> kept = a }
+print(attempt { kept!![0] = 9 }, "|", kept!![0])   // expect: this view's splitAt has ended: a view is written through inside the block it was handed to | 0
+print(attempt { kept!!.splitAt(1) { l, r -> } })   // expect: this view's splitAt has ended: a view is split inside the block it was handed to
+fun handedOutLate() {
+  val old = kept!!
+  ys.splitAt(3) { c, d -> parallel({ old[0] = 1 }, { c[1] = 2 }) }
+}
+print(attempt { handedOutLate() })   // expect: this view's splitAt has ended: a view is given out inside the block it was handed to
+// Split again once the first block has ended.
+ys.splitAt(3) { a, b -> a[0] = 7 }
+print(ys[0])   // expect: 7
+
+// While pieces write a list through its views, the list and the other views are not read.
+fun readsTheList() {
+  val xs = (0..<10).toList()
+  xs.splitAt(5) { a, b -> parallel({ a[0] = 1 }, { b[0] = xs[9] }) }
+}
+print(attempt { readsTheList() })   // expect: this list is written through its views in this parallel section: until it ends each piece reads and writes it through the views given to it, and nothing else looks into it
+var other : ListView<int>? = null
+fun readsAnotherView() {
+  val xs = (0..<10).toList()
+  xs.splitAt(5) { a, b -> other = b; parallel({ a[0] = 1 }, { other!![0] }) }
+}
+print(attempt { readsAnotherView() })   // expect: this list is written through its views in this parallel section: until it ends each piece reads and writes it through the views given to it, and nothing else looks into it
+
+// Views given out as the items of a stream, a view each.
+fun byStream() : List<int> {
+  val xs : open List<int> = List(10) { it }
+  xs.splitAt(4) { a, b -> [a, b].parallelStream().forEach { v -> for (i in v.indices) { v[i] = v[i] * 2 } } }
+  return xs
+}
+print(byStream())   // expect: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+fun splitInStream() {
+  val xs = (0..<10).toList()
+  xs.splitAt(4) { a, b -> a.splitAt(2) { c, d -> [a, c].parallelStream().forEach { it[0] = 1 } } }
+}
+print(attempt { splitInStream() })   // expect: this view has been split: its halves are given out in its place until splitAt's block ends
+fun listAndView() {
+  val xs : open List<int> = List(10) { it }
+  xs.splitAt(4) { a, b -> [xs, a].parallelStream().forEach { } }
+}
+print(attempt { listAndView() })   // expect: a list and a view of it are both given out: each piece writes the list through its views alone
+
+// Afterwards the list is everyone's to read again.
+val zs : open List<int> = List(6) { it }
+zs.splitAt(3) { a, b -> parallel({ a[0] = 10 }, { b[0] = 30 }) }
+print(zs, (0..<6).parallelStream().map { zs[it] }.toList())   // expect: [10, 1, 2, 30, 4, 5] [10, 1, 2, 30, 4, 5]

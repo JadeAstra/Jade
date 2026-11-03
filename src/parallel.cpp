@@ -99,6 +99,8 @@ struct ParallelPool {
 
     ParallelPool(VM& owner, int cores) : root(owner), count(cores), vms(static_cast<size_t>(cores), nullptr), queues(static_cast<size_t>(cores)) {
         owners.set(0);
+        owners.set(kViewedInParts);  // never a piece's: the marks of what pieces write in parts
+        owners.set(kDrawnInParts);
         for (int i = 0; i < count; i++) threads.emplace_back([this, i] { coreMain(i); });
         // Their VMs are made from the root's tables, which is safe now: the root is here, waiting.
         std::unique_lock<std::mutex> hold(mutex);
@@ -118,7 +120,7 @@ struct ParallelPool {
     // the piece that starts it instead.
     bool takeOwners(ParallelSection& section) {
         std::lock_guard<std::mutex> hold(mutex);
-        if (owners.count() + section.pieces.size() > 255) return false;
+        if (owners.count() + section.pieces.size() > 256) return false;
         uint8_t next = 1;
         for (ParallelPiece& piece : section.pieces) {
             while (owners.test(next)) next++;
@@ -480,6 +482,39 @@ void dealCanvasPart(VM& vm, ObjInstance* canvas, Dealt& dealt, std::vector<const
     img->setField(vm.intern("changes"), Value::integer(get(img, "changes") + 1));
 }
 
+}  // namespace
+
+// What a piece is told when it looks into a list that pieces write through its views.
+const char* const kViewedMessage =
+    "this list is written through its views in this parallel section: until it ends each piece reads and writes it through the views given to it, and nothing else looks into it";
+
+namespace {
+
+// A view of a list handed to a piece (D96): one that is not split meanwhile, from a splitAt
+// whose block is still running, so that the views handed out never overlap. While the section
+// lasts the list is written through its views alone, each by the piece it was handed to, and
+// no piece reads it otherwise (kViewedInParts). In a section inside a section, the list was
+// marked by the section outside.
+void dealView(VM& vm, const ParallelSection& section, ObjInstance* view, Dealt& dealt) {
+    Value lent, ended, list;
+    if (view->read(vm.intern("lent"), lent) && lent.truthy())
+        throw vm.runtimeError(Thrown::IllegalStateException, "this view has been split: its halves are given out in its place until splitAt's block ends");
+    if (view->read(vm.intern("ended"), ended) && ended.truthy())
+        throw vm.runtimeError(Thrown::IllegalStateException, "this view's splitAt has ended: a view is given out inside the block it was handed to");
+    if (!view->read(vm.intern("list"), list) || !list.isObj()) return;
+    Obj* items = list.as.obj;
+    if (items->core == kViewedInParts) return;
+    if (items->core == vm.coreId() && items->frozen == 0) {
+        items->core = kViewedInParts;
+        dealt.objects.push_back(items);
+        return;
+    }
+    for (const ParallelPiece& piece : section.pieces)
+        if (piece.owner == items->core)
+            throw vm.runtimeError(Thrown::IllegalStateException, "a list and a view of it are both given out: each piece writes the list through its views alone");
+    throw vm.runtimeError(Thrown::IllegalStateException, "this view's list is not this code's to change, so its views are not given out");
+}
+
 std::string describe(const VM& vm, const Obj* obj) {
     switch (obj->type) {
         case ObjType::Instance: return "this " + static_cast<const ObjInstance*>(obj)->cls->name->utf8();
@@ -571,17 +606,10 @@ void VM::runSection(ParallelSection& section) {
                         throw runtimeError(Thrown::IllegalStateException, isView ? "the same view is given to two of the functions: each view is one function's own"
                                                                                  : "the same part of a canvas is given to two of the functions: each part is one function's own");
                     if (view->core != coreId_) continue;  // not the starter's to give: read, not written
-                    if (isPart) {
-                        view->core = piece.owner;
-                        dealt.objects.push_back(view);
-                        dealCanvasPart(*this, view, dealt, marked);
-                        continue;
-                    }
-                    Value lent;
-                    if (view->read(intern("lent"), lent) && lent.truthy())
-                        throw runtimeError(Thrown::IllegalStateException, "this view has been split: its halves are given out in its place until splitAt's block ends");
                     view->core = piece.owner;
                     dealt.objects.push_back(view);
+                    if (isPart) dealCanvasPart(*this, view, dealt, marked);
+                    else dealView(*this, section, view, dealt);
                 }
             }
         }
@@ -602,6 +630,8 @@ void VM::runSection(ParallelSection& section) {
                     obj->core = piece.owner;
                     dealt.objects.push_back(obj);
                     if (isCanvasPart(*this, imageCanvasClass_, obj)) dealCanvasPart(*this, static_cast<ObjInstance*>(obj), dealt, marked);
+                    else if (viewClass_ != nullptr && obj->type == ObjType::Instance && static_cast<ObjInstance*>(obj)->cls == viewClass_)
+                        dealView(*this, section, static_cast<ObjInstance*>(obj), dealt);
                 }
             }
         }
@@ -761,6 +791,8 @@ AstraThrow VM::otherCores(const Obj* obj) const {
     if (obj->core == kDrawnInParts)
         return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "the pixels of an image are drawn on in parts in this parallel section: until it ends they are "
                                                                                    "drawn on through the parts of its canvas alone, and read by nothing");
+    if (obj->core == kViewedInParts)
+        return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, kViewedMessage);
     // To read every item, the section goes over the positions instead, which leaves the list
     // shared and every item readable (D95).
     return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, describe(*this, obj) + " is another core's item in this parallel section: a core looks only into its own items " +
@@ -933,6 +965,7 @@ struct ViewParts {
     ObjList* list = nullptr;
     size_t start = 0, size = 0;
     bool lent = false;
+    bool ended = false;  // its splitAt's block is over
 };
 
 ViewParts viewOf(VM& vm, const Value& v) {
@@ -947,6 +980,8 @@ ViewParts viewOf(VM& vm, const Value& v) {
     parts.start = static_cast<size_t>(start.as.i);
     parts.size = static_cast<size_t>(size.as.i);
     parts.lent = lent.truthy();
+    Value ended;
+    parts.ended = parts.view->read(vm.intern("ended"), ended) && ended.truthy();
     if (parts.start + parts.size > parts.list->size())
         throw vm.runtimeError(Thrown::ConcurrentModificationException, "the list a view is of has become shorter than the view");
     return parts;
@@ -965,6 +1000,7 @@ ViewParts writableView(VM& vm, const Value& v) {
     if (parts.view->core != vm.coreId())
         throw vm.runtimeError(Thrown::IllegalStateException, "a parallel section writes only through the views given to it: this one is another piece's, or shared");
     if (parts.lent) throw vm.runtimeError(Thrown::IllegalStateException, "this view has been split: its halves are written through until splitAt's block ends");
+    if (parts.ended) throw vm.runtimeError(Thrown::IllegalStateException, "this view's splitAt has ended: a view is written through inside the block it was handed to");
     return parts;
 }
 
@@ -1014,6 +1050,9 @@ void registerShared(VM& vm, ObjClass* parallel) {
     def("viewGet", 2, [](VM& vm, int, Value* args) -> Value {
         vm.guardRead(args[0]);
         const ViewParts parts = viewOf(vm, args[0]);
+        // While views of the list are written by the pieces they were given to, each reads
+        // through its own and nothing else reads the list.
+        if (parts.list->core == kViewedInParts && parts.view->core != vm.coreId()) throw vm.runtimeError(Thrown::IllegalStateException, kViewedMessage);
         return vm.listGet(parts.list, viewIndex(vm, parts, args[1]));
     });
     def("viewSet", 3, [](VM& vm, int, Value* args) -> Value {
@@ -1024,6 +1063,19 @@ void registerShared(VM& vm, ObjClass* parallel) {
     // Whether the code running may change this list: what splitAt asks of a list it splits.
     def("owns", 1, [](VM& vm, int, Value* args) -> Value {
         return Value::boolean(args[0].isObj() && args[0].as.obj->core == vm.coreId() && args[0].as.obj->frozen == 0);
+    });
+    // The list lent to the views of a splitAt or a parallelSort until it is given back: split
+    // again meanwhile, it would give views that overlap those (D96).
+    def("lend", 1, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::InternalError, "a list is lent");
+        if (args[0].as.obj->lent)
+            throw vm.runtimeError(Thrown::IllegalStateException, "this list is split already: until that splitAt's block ends, split its views instead (left.splitAt(...))");
+        args[0].as.obj->lent = true;
+        return Value::null();
+    });
+    def("giveBack", 1, [](VM&, int, Value* args) -> Value {
+        if (args[0].isObj()) args[0].as.obj->lent = false;
+        return Value::null();
     });
     // The view's items sorted in place, in their natural order; with `mid`, its two halves, each
     // sorted, merged.

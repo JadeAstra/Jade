@@ -183,7 +183,14 @@ fun <T> open List<T>.parallelSort() {
     return
   }
   if (!__parallel.owns(this)) { throw IllegalStateException("parallelSort changes the list, which this code may only read") }
-  __parallelSort(ListView(__viewKey, this, 0, size))
+  __parallel.lend(this)
+  val whole = ListView(__viewKey, this, 0, size)
+  try {
+    __parallelSort(whole)
+  } finally {
+    __parallel.giveBack(this)
+    whole.ended = true
+  }
 }
 
 fun <T> __parallelSort(view : ListView<T>) {
@@ -203,7 +210,7 @@ fun <T> __parallelSort(view : ListView<T>) {
 //
 //   fun increment(view : ListView<int>) {
 //     if (view.size < 1000) { for (i in view.indices) { view[i] += 1 } }
-//     else view.splitAt(view.size / 2) { left, right -> parallel({ increment(left) }, { increment(right) }) }
+//     else { view.splitAt(view.size / 2) { left, right -> parallel({ increment(left) }, { increment(right) }) } }
 //   }
 //   xs.splitAt(xs.size / 2) { left, right -> ... }
 class ListView<T> {
@@ -212,6 +219,9 @@ class ListView<T> {
   // How many items the view has.
   val size : int
   internal var lent = false
+  // Whether the splitAt block it was handed to has ended: it is written through, split and
+  // given out no more, so that no view still in use overlaps it.
+  internal var ended = false
 
   // Made only by splitAt: two views can never overlap.
   fun init(key : __ViewKey, list : open List<T>, start : int, size : int) {
@@ -221,11 +231,12 @@ class ListView<T> {
   }
 
   // The item at `index`, counted from the view's start: IndexOutOfBoundsException outside
-  // 0..<size.
+  // 0..<size. In a parallel section where views of the list are given out, each piece reads it
+  // through its own.
   op [](index : int) : T => __parallel.viewGet(this, index) as T
   // Sets the item at `index`, counted from the view's start, in the list itself:
-  // IndexOutOfBoundsException outside 0..<size. IllegalStateException while the view is split, or
-  // in a parallel section if the view is not this piece's own.
+  // IndexOutOfBoundsException outside 0..<size. IllegalStateException while the view is split, once
+  // its splitAt's block has ended, or in a parallel section if the view is not this piece's own.
   op []=(index : int, item : T) {
     __parallel.viewSet(this, index, item)
   }
@@ -237,14 +248,21 @@ class ListView<T> {
   fun isEmpty() : bool => size == 0
 
   // Its first `mid` items and the rest, as two views, to the block; meanwhile this one is lent
-  // to them, and nothing is written through it.
+  // to them, and nothing is written through it or split again. The two are for the block: once
+  // it ends they are written through no more.
   fun splitAt(mid : int, block : (ListView<T>, ListView<T>) -> unit) {
     if (mid < 0 or mid > size) { throw IndexOutOfBoundsException("a view of $size items is split at 0 to $size, not $mid") }
+    if (lent) { throw IllegalStateException("this view is split already: until that splitAt's block ends, split its halves instead") }
+    if (ended) { throw IllegalStateException("this view's splitAt has ended: a view is split inside the block it was handed to") }
     lent = true
+    val left = ListView(__viewKey, list, start, mid)
+    val right = ListView(__viewKey, list, start + mid, size - mid)
     try {
-      block(ListView(__viewKey, list, start, mid), ListView(__viewKey, list, start + mid, size - mid))
+      block(left, right)
     } finally {
       lent = false
+      left.ended = true
+      right.ended = true
     }
   }
 
@@ -265,10 +283,20 @@ class ListView<T> {
 class __ViewKey
 val __viewKey = __ViewKey()
 
-// The list's first `mid` items and the rest, as two views that never overlap, to the block.
+// The list's first `mid` items and the rest, as two views that never overlap, to the block. The
+// list is lent to them while it runs: split again meanwhile, it is split through them
+// (left.splitAt(...)), so that no two views of it in use overlap. In a parallel section given
+// its views, each piece reads and writes the list through its own, and nothing else looks into it.
 fun <T> open List<T>.splitAt(mid : int, block : (ListView<T>, ListView<T>) -> unit) {
   if (!__parallel.owns(this)) { throw IllegalStateException("splitAt hands out views to change the list through, and this code may only read it") }
-  ListView(__viewKey, this, 0, size).splitAt(mid, block)
+  __parallel.lend(this)
+  val whole = ListView(__viewKey, this, 0, size)
+  try {
+    whole.splitAt(mid, block)
+  } finally {
+    __parallel.giveBack(this)
+    whole.ended = true
+  }
 }
 
 // ---- Shared collections (D94) ----

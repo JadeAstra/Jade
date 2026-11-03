@@ -3431,7 +3431,7 @@ val totals = orders.parallelStream().map { priceOf(it) }.toList()
 <p>A stretch of a list, read and changed in place: what splitAt hands out. Two views from one splitAt never overlap, so each may go to a function of its own in a parallel(...), which writes through it whatever else is going on, and divide and conquer can be written in place:</p>
 <pre>fun increment(view : ListView&lt;int&gt;) {
   if (view.size &lt; 1000) { for (i in view.indices) { view[i] += 1 } }
-  else view.splitAt(view.size / 2) { left, right -&gt; parallel({ increment(left) }, { increment(right) }) }
+  else { view.splitAt(view.size / 2) { left, right -&gt; parallel({ increment(left) }, { increment(right) }) } }
 }
 xs.splitAt(xs.size / 2) { left, right -&gt; ... }
 </pre>
@@ -3440,10 +3440,10 @@ xs.splitAt(xs.size / 2) { left, right -&gt; ... }
 <p>How many items the view has.</p>
 </div>
 <div class="entry member" id="ListView.[]"><code class="sig">op [](index : int) : T</code><a class="anchor" href="#ListView.[]">#</a>
-<p>The item at <code>index</code>, counted from the view's start: IndexOutOfBoundsException outside 0..&lt;size.</p>
+<p>The item at <code>index</code>, counted from the view's start: IndexOutOfBoundsException outside 0..&lt;size. In a parallel section where views of the list are given out, each piece reads it through its own.</p>
 </div>
 <div class="entry member" id="ListView.[]="><code class="sig">op []=(index : int, item : T)</code><a class="anchor" href="#ListView.[]=">#</a>
-<p>Sets the item at <code>index</code>, counted from the view's start, in the list itself: IndexOutOfBoundsException outside 0..&lt;size. IllegalStateException while the view is split, or in a parallel section if the view is not this piece's own.</p>
+<p>Sets the item at <code>index</code>, counted from the view's start, in the list itself: IndexOutOfBoundsException outside 0..&lt;size. IllegalStateException while the view is split, once its splitAt's block has ended, or in a parallel section if the view is not this piece's own.</p>
 </div>
 <div class="entry member" id="ListView.indices"><code class="sig">val indices : Range</code><a class="anchor" href="#ListView.indices">#</a>
 <p>The view's positions, 0..&lt;size.</p>
@@ -3452,7 +3452,7 @@ xs.splitAt(xs.size / 2) { left, right -&gt; ... }
 <p>Whether the view has no items.</p>
 </div>
 <div class="entry member" id="ListView.splitAt"><code class="sig">fun splitAt(mid : int, block : (ListView&lt;T&gt;, ListView&lt;T&gt;) -&gt; unit)</code><a class="anchor" href="#ListView.splitAt">#</a>
-<p>Its first <code>mid</code> items and the rest, as two views, to the block; meanwhile this one is lent to them, and nothing is written through it.</p>
+<p>Its first <code>mid</code> items and the rest, as two views, to the block; meanwhile this one is lent to them, and nothing is written through it or split again. The two are for the block: once it ends they are written through no more.</p>
 </div>
 <div class="entry member" id="ListView.sort"><code class="sig">fun sort()</code><a class="anchor" href="#ListView.sort">#</a>
 <p>Its items sorted in place, in their natural order.</p>
@@ -3467,7 +3467,7 @@ xs.splitAt(xs.size / 2) { left, right -&gt; ... }
 <p>The view's items written as a list: [1, 2].</p>
 </div>
 <div class="entry" id="List.splitAt"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.splitAt(mid : int, block : (ListView&lt;T&gt;, ListView&lt;T&gt;) -&gt; unit)</code><a class="anchor" href="#List.splitAt">#</a>
-<p>The list's first <code>mid</code> items and the rest, as two views that never overlap, to the block.</p>
+<p>The list's first <code>mid</code> items and the rest, as two views that never overlap, to the block. The list is lent to them while it runs: split again meanwhile, it is split through them (left.splitAt(...)), so that no two views of it in use overlap. In a parallel section given its views, each piece reads and writes the list through its own, and nothing else looks into it.</p>
 </div>
 <h3>Shared collections</h3>
 <p>A map and a set any core of a parallel section may change, each change done whole:</p>
