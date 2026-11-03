@@ -162,6 +162,17 @@ bool mentionsTypeParam(const Type& t) {
     return false;
 }
 
+// Whether a type as a function declares it names one of the function's type parameters that
+// the call has not worked out yet: `List<R>` of flatMap's `(T) -> List<R>` before its lambda is
+// checked.
+bool leavesOpen(const Type& t, const std::vector<std::string>& vars, const std::unordered_map<std::string, Type>& env) {
+    if (t.kind == Type::TypeParam) return env.count(t.name) == 0 && std::find(vars.begin(), vars.end(), t.name) != vars.end();
+    for (const Type& a : t.args)
+        if (leavesOpen(a, vars, env)) return true;
+    if (t.result && leavesOpen(*t.result, vars, env)) return true;
+    return t.receiver && leavesOpen(*t.receiver, vars, env);
+}
+
 // ---- What the program declares ----
 
 struct Unit;
@@ -6798,6 +6809,10 @@ struct Checker::Impl {
                 if ((pass == 0) == isLambda) continue;
                 Type want = wanted(i);
                 Type expected = subst(want, env);
+                // A lambda whose result is still partly to be worked out gives it from its body
+                // (G67): taking `List<R>` as its result would leave R unknown.
+                if (isLambda && want.kind == Type::Function && want.result && leavesOpen(*want.result, vars, env))
+                    expected.result = std::make_shared<Type>(unknownType());
                 if (isLambda) noteLambdaSite(*args.exprs[i], f, b.paramOf[i]);
                 if (args.exprs[i]->kind == ExprKind::Name) {
                     if (Local* l = findLocal(static_cast<const NameExpr&>(*args.exprs[i]).name)) {

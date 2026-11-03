@@ -30,3 +30,25 @@ print(made)   // expect: [1, 2]
 // What a function of the program's makes from its own type parameter is typed by the call's (G3).
 fun <T> twice(x : T) : List<T> => [x, x]
 print(twice(5).itemType, twice("x").itemType)   // expect: int string
+
+// What an inline function makes inside a generic function, from that function's type parameter
+// (G67): the call's own type, and never one of the inline function's of the same name.
+fun <T> doubled(items : List<T>) => items.flatMap { [it, it] }
+fun <T> copied(items : List<T>) => items.map { it }
+fun <R> sameName(items : List<R>) => items.map { it }
+fun <T> crossed(xs : List<int>, y : T) => xs.map { y }
+fun <T> nested(items : List<T>) => items.flatMap { x -> listOf(x).map { it } }
+fun <T> inLambda(items : List<T>) : () -> List<T> => { items.filter { true } }
+print(doubled(ints).itemType, copied(["a"]).itemType, sameName([1.5]).itemType, crossed(ints, "s").itemType)   // expect: int string float string
+print(nested(ints).itemType, inLambda(["a"])().itemType)   // expect: int string
+class Twice {
+  static {
+    fun <T> of(items : List<T>) => items.flatMap { [it, it] }
+  }
+}
+print(Twice.of(ints).itemType, Twice.of(ints))   // expect: int [1, 1, 2, 2, 3, 3]
+val doubledMade = doubled(ints) as open List<any>
+try { doubledMade.add("x") } catch (e : Exception) { print(e.message) }   // expect: cannot put a value of type string in a List<int>, which keeps only what it was made to hold
+
+// flatMap's R is worked out from what its lambda gives (G67): a List<int> here, at compile time too.
+print(ints.flatMap { [it, it] }.itemType, ints.flatMap { listOf("$it") }.itemType)   // expect: int string

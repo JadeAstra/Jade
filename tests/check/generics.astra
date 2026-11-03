@@ -49,3 +49,8 @@ val sec : int = [1, 2, 3].second()
 val sec2 : string = [1, 2, 3].second()   // check: 'sec2' is a string; it cannot start as an int
 fun <T> T.twice() : List<T> => [this, this]
 val tw : List<string> = "a".twice()
+
+// A type parameter found inside what a lambda gives (G67): flatMap's R from `List<R>`.
+val numbers = [1, 2, 3]
+val twiceOver : List<int> = numbers.flatMap { [it, it] }
+val wrongItems : List<string> = numbers.flatMap { [it, it] }   // check: 'wrongItems' is a List<string>; it cannot start as an open List<int>

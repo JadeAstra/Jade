@@ -1026,12 +1026,7 @@ private:
         frame.owner = ++nextOwner_;
         if (std::vector<RuntimeType> args; session_.checker->typeArguments(e, args))
             for (size_t i = 0; i < fn.typeParams.size() && i < args.size(); i++)
-                if (args[i].kind == RuntimeType::TypeParam) {
-                    // One of an inline function's own, from the call in its body: the type that call gave it.
-                    if (const RuntimeType* outer = inlineTypeArgument(args[i].typeParam)) frame.typeArgs[fn.typeParams[i].name] = *outer;
-                } else if (args[i].kind != RuntimeType::Unknown) {
-                    frame.typeArgs[fn.typeParams[i].name] = args[i];
-                }
+                if (RuntimeType given = args[i]; fromCall(given)) frame.typeArgs[fn.typeParams[i].name] = given;
         inlineBodies_.insert(frame.owner);
         frame.finallyAtEntry = fs_->finally;
         frame.tryDepth = fs_->tryDepth;
@@ -2817,12 +2812,13 @@ private:
             TypeParamPlace place;
             std::string part;
             std::vector<TypeOperand> operands;
-            if (findTypeParam(t.name, place)) {
+            if (inlineTypeParam(t.name)) {
+                const RuntimeType* given = inlineTypeArgument(t.name);
+                // The type the inline call gave it, made here.
+                shape += given != nullptr && shapeOf(*given, part, operands) && emitShape(part, operands, t) ? 'P' : 'a';
+            } else if (findTypeParam(t.name, place)) {
                 emitTypeParam(place, t);
                 shape += 'P';
-            } else if (const RuntimeType* given = inlineTypeArgument(t.name);
-                       given != nullptr && shapeOf(*given, part, operands) && emitShape(part, operands, t)) {
-                shape += 'P';  // the type the inline call gave it, made here
             } else {
                 shape += 'a';
             }
@@ -2886,7 +2882,7 @@ private:
     bool givenInFrame(RuntimeType& t) const {
         if (t.kind == RuntimeType::TypeParam) {
             const RuntimeType* given = inlineTypeArgument(t.typeParam);
-            if (given == nullptr || !concrete(*given)) return false;
+            if (given == nullptr || !reachable(*given)) return false;
             const bool nullable = t.nullable;
             t = *given;
             t.nullable = t.nullable || nullable;
@@ -2907,6 +2903,51 @@ private:
         return true;
     }
 
+    // Known as the program runs: made of types, and of type parameters of the function being
+    // compiled, which its frame is given (G67): `map`'s R inside `fun <T> f(items : List<T>)`.
+    // Not a class's: in an inline body `this` is the inline function's receiver, not the object
+    // that has them.
+    bool reachable(const RuntimeType& t) const {
+        if (t.kind == RuntimeType::Unknown) return false;
+        if (t.kind == RuntimeType::TypeParam) {
+            TypeParamPlace place;
+            return findTypeParam(t.typeParam, place) && !place.ofObject;
+        }
+        for (const RuntimeType& a : t.args)
+            if (!reachable(a)) return false;
+        return true;
+    }
+
+    // A type argument the checker found for an inline call, put in the terms its body is given it
+    // in: types, and type parameters of the code being compiled, never one of an inline
+    // function's, whose name its body could take for one of its own. In an inline body a type
+    // parameter is that body's, replaced by what its own call gave it; anywhere else it is the
+    // code's own. False where a part of it is not known.
+    bool fromCall(RuntimeType& t) const {
+        if (t.kind == RuntimeType::Unknown) return false;
+        if (t.kind == RuntimeType::TypeParam) {
+            if (frame_ == nullptr) return reachable(t);
+            const RuntimeType* given = inlineTypeArgument(t.typeParam);
+            if (given == nullptr) return false;
+            const bool nullable = t.nullable;
+            t = *given;
+            t.nullable = t.nullable || nullable;
+            return true;
+        }
+        for (RuntimeType& a : t.args)
+            if (!fromCall(a)) return false;
+        return true;
+    }
+
+    // Whether a type parameter written here is one of the inline function's whose body this is:
+    // then it is what the call gave it, and never one of the calling code's of the same name.
+    bool inlineTypeParam(const std::string& name) const {
+        if (frame_ == nullptr || frame_->fn == nullptr) return false;
+        for (const TypeParam& p : frame_->fn->typeParams)
+            if (p.name == name) return true;
+        return false;
+    }
+
     const RuntimeType* inlineTypeArgument(const std::string& name) const {
         if (frame_ == nullptr) return nullptr;
         auto found = frame_->typeArgs.find(name);
@@ -2917,7 +2958,7 @@ private:
         const TypeAnnotation& t = written(written_);
         if (t.name == "|") return false;
         TypeParamPlace place;
-        if (t.typeParam) return findTypeParam(t.name, place) || inlineTypeArgument(t.name) != nullptr;
+        if (t.typeParam) return inlineTypeParam(t.name) ? inlineTypeArgument(t.name) != nullptr : findTypeParam(t.name, place);
         return !t.args.empty() && t.result.empty();
     }
 
