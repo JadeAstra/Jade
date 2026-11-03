@@ -3732,6 +3732,64 @@ struct Checker::Impl {
         return false;
     }
 
+    // How many bytes a value type takes, and its alignment, laid out as VM::layoutOf lays it out:
+    // a field after another at its own alignment, the whole rounded to the largest. Keep the two
+    // in step; the VM checks the limit again as it lays a type out.
+    std::pair<uint64_t, uint64_t> valueBytes(ClassInfo* k, std::vector<ClassInfo*>& visiting) {
+        uint64_t at = 0, align = 1;
+        auto place = [&](uint64_t size, uint64_t a) {
+            at = (at + a - 1) / a * a;
+            align = std::max(align, a);
+            at += size;
+        };
+        std::vector<FieldInfo*> order;
+        if (k->decl != nullptr)
+            for (const HeaderParam* p : headerFields(*k->decl)) {
+                auto f = k->fields.find(p->name);
+                if (f != k->fields.end()) order.push_back(f->second);
+            }
+        for (const auto& [name, field] : k->fields)
+            if (std::find(order.begin(), order.end(), field) == order.end() && !(field->decl != nullptr && field->decl->getter && !field->decl->init))
+                order.push_back(field);
+        for (FieldInfo* field : order) {
+            const Type t = fieldType(field);
+            if (t.nullable) {
+                const bool pointer = t.kind == Type::String || t.kind == Type::List || t.kind == Type::Map || t.kind == Type::Set ||
+                                     t.kind == Type::Bytes || t.kind == Type::Range || t.kind == Type::Function || t.kind == Type::Class;
+                place(pointer ? 8 : 16, 8);
+                continue;
+            }
+            switch (t.kind) {
+                case Type::Int:
+                case Type::Float:
+                    if (t.storage != 0) {
+                        const uint64_t n = narrowSize(narrowOf(t.storage));
+                        place(n, n);
+                    } else {
+                        place(8, 8);
+                    }
+                    break;
+                case Type::Bool:
+                case Type::Byte: place(1, 1); break;
+                case Type::Char: place(4, 4); break;
+                case Type::Class:
+                    if (t.cls != nullptr && t.cls->isValue && std::find(visiting.begin(), visiting.end(), t.cls) == visiting.end()) {
+                        visiting.push_back(t.cls);
+                        const auto [size, a] = valueBytes(t.cls, visiting);
+                        visiting.pop_back();
+                        place(size, a);
+                    } else {
+                        place(8, 8);
+                    }
+                    break;
+                case Type::String: case Type::List: case Type::Map: case Type::Set: case Type::Bytes:
+                case Type::Range: case Type::Function: place(8, 8); break;
+                default: place(16, 8); break;  // any, Number, a union: a whole value
+            }
+        }
+        return {(at + align - 1) / align * align, align};
+    }
+
     // Kinds of an enum class named bare (D39), for the compiler: the node, the full name.
     std::unordered_map<const Node*, std::string> kindNames;
     std::unordered_map<const Node*, ClassInfo*> kindClasses;
@@ -3885,9 +3943,17 @@ struct Checker::Impl {
                                "it is called on, where an object of a class changes its fields itself");
         if (k->isValue) {
             std::vector<ClassInfo*> visited{k};
-            if (holdsValue(k, k, visited))
+            if (holdsValue(k, k, visited)) {
                 report(c, "value " + k->name + " holds itself, and would have no end: make the field that holds it nullable, " +
                               k->name + "?, which keeps it in a box");
+            } else {
+                // A place inside a value is found by its offset in 16 bits (Value::refOffset).
+                std::vector<ClassInfo*> visiting{k};
+                const uint64_t size = valueBytes(k, visiting).first;
+                if (size > kMaxValueBytes)
+                    report(c, "value " + k->name + " is " + std::to_string(size) + " bytes, and a value type is at most 64 KB (65,536 bytes), " +
+                                  "as it is copied whole: make it a class");
+            }
         }
         // A member that takes the place of one from above, or supplies what an interface or an
         // abstract class asks for, says override; one that says it has something to replace.

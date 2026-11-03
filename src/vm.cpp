@@ -2749,6 +2749,8 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
         made->fields.push_back(field);
     }
     made->size = (at + made->align - 1) / made->align * made->align;
+    // The checker refuses a bigger one; this holds for one it did not see (Size, 2026-11-03).
+    if (made->size > kMaxValueBytes) valueTooBig(cls, made->size);
 
     // Two cores may lay a type out at once; the first kept is kept, and the same.
     VM& root = root_ != nullptr ? *root_ : *this;
@@ -3327,6 +3329,9 @@ void VM::layInline(ObjClass* cls) {
             continue;
         }
         if (layout == nullptr || type->smallId != 0) continue;  // not a value type, or kept in the value itself
+        // Past 64 KB of values inside the object, a place in one could not be told by its offset:
+        // the rest stay in boxes of their own, as a value does before its class is laid out.
+        if ((at + 7) / 8 * 8 + layout->size > kMaxValueBytes) continue;
         at = (at + 7) / 8 * 8;
         offsets[i] = static_cast<int32_t>(at);
         fields.push_back({at, layout->size, type});
@@ -8583,6 +8588,18 @@ void VM::sweep() {
             delete obj;
         }
     }
+}
+
+// A value type over 64 KB, which the checker did not see (layoutOf). Kept here, after run(), and
+// out of line: an error nobody meets, which should move nothing of the interpreter's.
+#ifdef _MSC_VER
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+void VM::valueTooBig(const ObjClass* cls, uint32_t size) {
+    throw runtimeError(Thrown::IllegalStateException, "value " + cls->name->utf8() + " is " + std::to_string(size) +
+                                                          " bytes, and a value type is at most 64 KB (65,536 bytes), as it is copied whole: make it a class");
 }
 
 }  // namespace astra

@@ -35,6 +35,10 @@ constexpr uint8_t kDrawnInParts = 255;
 // it is written through those views alone, and read by nothing else.
 constexpr uint8_t kViewedInParts = 254;
 
+// The most bytes a value type may take, and the most an object keeps of the values held inside
+// it: a place inside either is found by its offset in 16 bits (Value::refOffset).
+constexpr uint32_t kMaxValueBytes = 65536;
+
 // Header shared by every garbage-collected object.
 struct Obj {
     Obj* next = nullptr;  // intrusive list of all objects, owned by the VM

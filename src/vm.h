@@ -392,6 +392,7 @@ public:
     // ---- Value types (M6.6 part 2) ----
     ObjClass* fieldClass(FieldDecl& field);
     const ValueLayout& layoutOf(ObjClass* cls);
+    [[noreturn]] void valueTooBig(const ObjClass* cls, uint32_t size);
     ObjValue* newValue(ObjClass* cls);
     Value readValueField(const uint8_t* at, const ValueField& field);
     // An int, float or bool field read with no call, for the interpreter's quick paths.
