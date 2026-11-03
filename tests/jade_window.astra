@@ -1,3 +1,4 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
 // Windows of Jade's native layer, without showing one: a window that is never shown still
 // has its picture, its size and its events, and events made up here go the way real ones do.
 import Jade.*

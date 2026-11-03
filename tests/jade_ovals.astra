@@ -1,3 +1,4 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
 // Ovals on the graphics card and on an image's canvas (G59): each covers its area to within a
 // pixel, and the two agree to within a few steps of 255 on every pixel of the curved edge (the
 // card smooths the edge by distance, the image by the area each pixel has inside).

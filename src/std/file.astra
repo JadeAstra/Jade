@@ -87,7 +87,8 @@ class Path {
   // Whether this program may write it (on Windows, whether it is not read-only); false where
   // nothing is there.
   fun isWritable() : bool => (__file.permissions(text) & 2) != 0
-  // Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists.
+  // Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists;
+  // elsewhere, one marked so (or a directory that may be entered).
   fun isExecutable() : bool => (__file.permissions(text) & 1) != 0
 
   // The size in bytes, and when it was last written in milliseconds since the start of 1970.
@@ -195,8 +196,8 @@ class Path {
     return to
   }
 
-  // Lets it be written, or keeps it from being written (on Windows, its read-only flag); an
-  // IOException where nothing is there.
+  // Lets it be written, or keeps it from being written (on Windows, its read-only flag;
+  // elsewhere, written by its owner, or by no one); an IOException where nothing is there.
   fun setWritable(writable : bool) throws IOException { __file.setWritable(text, writable) }
   // Sets when it was last written (G54); an IOException where nothing is there.
   fun setLastModified(time : Instant) throws IOException { __file.setLastModified(text, time.epochNanoseconds) }

@@ -20,6 +20,14 @@ size_t clampPosition(int64_t position, size_t length);
 // Upper or lower case for all letters, not only the ASCII ones.
 std::string changeCase(const std::string& s, bool upper);
 
+#ifndef _WIN32
+// What the C library's Unicode tables say of a character (G56), where Windows asks the system:
+// its kinds (kUnicode*), and the character in upper or lower case.
+constexpr int kUnicodeLetter = 1, kUnicodeDigit = 2, kUnicodeSpace = 4, kUnicodeUpper = 8, kUnicodeLower = 16;
+int unicodeKinds(uint32_t c);
+uint32_t unicodeCase(uint32_t c, bool upper);
+#endif
+
 std::string_view trimmed(std::string_view s);
 bool parseInt(std::string_view s, int64_t& out);
 bool parseFloat(std::string_view s, double& out);

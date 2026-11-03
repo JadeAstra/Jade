@@ -52,6 +52,24 @@ bool loadGl(void* (*find)(const char* name), const char*& missing) {
     fetch(gl.CheckFramebufferStatus, "glCheckFramebufferStatus");
     fetch(gl.DeleteFramebuffers, "glDeleteFramebuffers");
     fetch(gl.BlendFuncSeparate, "glBlendFuncSeparate");
+#ifdef ASTRA_GL_TABLE_1_1
+    fetch(gl.PixelStorei, "glPixelStorei");
+    fetch(gl.TexImage2D, "glTexImage2D");
+    fetch(gl.TexSubImage2D, "glTexSubImage2D");
+    fetch(gl.BindTexture, "glBindTexture");
+    fetch(gl.TexParameteri, "glTexParameteri");
+    fetch(gl.GenTextures, "glGenTextures");
+    fetch(gl.DeleteTextures, "glDeleteTextures");
+    fetch(gl.Enable, "glEnable");
+    fetch(gl.Disable, "glDisable");
+    fetch(gl.ClearColor, "glClearColor");
+    fetch(gl.Clear, "glClear");
+    fetch(gl.Viewport, "glViewport");
+    fetch(gl.Scissor, "glScissor");
+    fetch(gl.ReadPixels, "glReadPixels");
+    fetch(gl.GetIntegerv, "glGetIntegerv");
+    fetch(gl.GetString, "glGetString");
+#endif
     return complete;
 }
 

@@ -29,11 +29,12 @@ print(colours[Color(255, 0, 0)], colours[Color.red], colours[Color(255, 0, 0).ar
 
 // -- Font: the standard library's, with named options --
 val font = Font("Segoe UI", 13, bold = true)
-print(font, font.name, font.size, font.isBold, font.isItalic, font.family, font.weight)   // expect: Font(Segoe UI, 13, bold) Segoe UI 13 true false Segoe UI 700
+print(font, font.name, font.size, font.isBold, font.isItalic, font.weight)   // expect: Font(Segoe UI, 13, bold) Segoe UI 13 true false 700
 print(Font("Arial", 9, bold = true, italic = true), Font("Arial"), Font("Arial", 10, weight = 300))   // expect: Font(Arial, 9, bold, italic) Font(Arial, 12) Font(Arial, 10, weight 300)
 // Another style, another size, or both.
 print(font.copy(bold = false, italic = true), font.copy(size = 20.0), font.copy(size = 9.5, bold = false), font.copy(bold = false).isBold)   // expect: Font(Segoe UI, 13, italic) Font(Segoe UI, 20.0, bold) Font(Segoe UI, 9.5) false
-print(font == Font("Segoe UI", 13, bold = true), font == font.copy(bold = false), font.fontName, Font("Segoe UI", 13, italic = true).fontName)   // expect: true false Segoe UI Bold Segoe UI Italic
+// Its typeface is one of the family's, its bold one (tests/fonts.astra names them on Windows).
+print(font == Font("Segoe UI", 13, bold = true), font == font.copy(bold = false), font.fontName.startsWith(font.family), font.fontName != Font(font.family, 13).fontName)   // expect: true false true true
 // The names that mean the system's own font; one that is not installed gives the system's too.
 print(Font(Font.monospaced, 12).typeface.isMonospace, Font("Dialog", 12).family == Font("SansSerif", 12).family, Font("No Such Font", 12).family == Font(Font.sansSerif, 12).family)   // expect: true true true
 // Sizes from the font itself, in pixels at a scale.

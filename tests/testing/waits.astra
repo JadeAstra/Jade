@@ -28,7 +28,8 @@ fun daemon(task : suspend () -> any?) : Thread {
   }
 }
 @Test @Timeout(0.5.seconds) suspend fun reads() {
-  val quiet = Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul")
+  // A program that writes nothing for half a minute: by Windows's ping, or elsewhere sleep (G56).
+  val quiet = Path.separator == "\\" ? Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul") : Process("sleep", "30")
   quiet.output.readLine()
 }
 @Test fun after() { assertEquals(2, 1 + 1) }
@@ -47,6 +48,6 @@ fun daemon(task : suspend () -> any?) : Thread {
 // expect:           at loops (waits.astra:27)
 // expect:   FAIL  reads
 // expect:         AssertionError: the test ran longer than its time limit, 500 ms
-// expect:           at reads (waits.astra:32)
+// expect:           at reads (waits.astra:33)
 // expect:   ok    after
 // expect: 6 tests: 1 passed, 5 failed

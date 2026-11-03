@@ -1,3 +1,4 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
 // A Window and what it makes of the keyboard and the pointer: which widget a press belongs
 // to, what a drag and a release go to, who has the keyboard, what Tab does. The windows
 // here are never shown (Jade.windowOpener is the one for tests); the events are sent the

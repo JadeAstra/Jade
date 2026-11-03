@@ -1,3 +1,4 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
 // Painting components: what is recorded, what style reaches a content, when a kept picture
 // is used and when it is painted again, and that a picture used again is wiped first. These
 // are JadeUI's own tests (RecordingCanvasTest, PaintStyleTest, PaintCacheTest,

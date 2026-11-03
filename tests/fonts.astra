@@ -1,3 +1,4 @@
+// windows only: it measures and draws with the fonts every Windows since 10 has, Segoe UI and the rest
 // The fonts installed, read from their files: families, styles, matching, characters.
 // (Uses fonts every Windows since 10 has: Segoe UI, Arial, Consolas, Times New Roman, Cambria,
 // Bahnschrift, Segoe UI Emoji.)
@@ -19,6 +20,8 @@ print(regular.isMonospace, regular.isSymbol, regular.isVariable, regular.hasCubi
 val bold = Fonts.find("Segoe UI", 700)!!
 val boldItalic = Fonts.find("Segoe UI", 700, true)!!
 print(bold.fullName, bold.weight, boldItalic.fullName, boldItalic.isItalic, Fonts.find("Segoe UI", italic = true)!!.style)   // expect: Segoe UI Bold 700 Segoe UI Bold Italic true Italic
+// A Font says which of them it is drawn with.
+print(Font("Segoe UI", 13, bold = true).fontName, Font("Segoe UI", 13, italic = true).fontName)   // expect: Segoe UI Bold Segoe UI Italic
 print(Fonts.find("Segoe UI", 600)!!.style, Fonts.find("Segoe UI", 300)!!.style, Fonts.find("Segoe UI", 100)!!.weight <= 300, Fonts.find("Segoe UI", 900)!!.weight >= 700)   // expect: Semibold Light true true
 // Just above regular there is nothing, so regular it is; just below bold, bold.
 print(Fonts.find("Segoe UI", 450)!!.weight, Fonts.find("Segoe UI", 500)!!.weight, Fonts.find("Arial", 600)!!.weight)   // expect: 400 400 700

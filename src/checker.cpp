@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <functional>
 #include <deque>
@@ -7059,6 +7060,9 @@ struct Checker::Impl {
         std::unordered_map<std::string, size_t> bySignature;
         for (size_t i = 0; i < fs.size(); i++) {
             FuncInfo* f = fs[i];
+            // Its types first: the receiver is read below, and the two sides of a + may be
+            // worked out in either order (Clang on Linux reads the left one first).
+            resolveFunc(f);
             const std::string key = (f->isExtension ? argText(f->receiver) : std::string()) + "|" + signatureOf(f, envOfForm(i));
             auto [at, added] = bySignature.emplace(key, forms.size());
             if (added) {

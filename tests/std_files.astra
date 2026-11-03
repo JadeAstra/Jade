@@ -15,7 +15,8 @@ val f = Path(root, "notes.txt")
 print(f.name, f.extension, f.nameWithoutExtension, f.parent, f.parent!!.name, f.text == root.text + Path.separator + "notes.txt")   // expect: notes.txt txt notes astra-files-test astra-files-test true
 print(Path("a/b/c.tar.gz").name, Path("a/b/c.tar.gz").extension, Path("a/b/c.tar.gz").nameWithoutExtension, Path("a/b/").name, Path("plain").extension, Path(".hidden").nameWithoutExtension == "")   // expect: c.tar.gz gz c.tar b  true
 print(Path("a/b/c").parent, Path("a").parent, Path("a/b").parent!!.parent, Path("a", "b").name, Path(Path("a"), "b") == Path("a").resolve("b"))   // expect: a/b null null b true
-print(f, "$f" == f.text, f == Path(root, "notes.txt"), f == Path("other"), f == unknown(f.text), f.absolute.text.endsWith("notes.txt"), f.absolute.name)   // expect: astra-files-test\notes.txt true true false false true notes.txt
+// (A path is written with the system's separator, \ on Windows and / elsewhere: shown here with /.)
+print("$f".replace(Path.separator, "/"), "$f" == f.text, f == Path(root, "notes.txt"), f == Path("other"), f == unknown(f.text), f.absolute.text.endsWith("notes.txt"), f.absolute.name)   // expect: astra-files-test/notes.txt true true false false true notes.txt
 
 // Text.
 print(f.exists(), f.size(), f.lastModified())              // expect: false 0 null
@@ -55,7 +56,7 @@ print(accented.exists(), accented.readText(), accented.name, accented.extension)
 // Directories, and what is in them (D126, D138).
 val sub = Path(root, "sub/deeper")
 sub.mkdir()
-print(sub.isDirectory(), Path(root, "sub").list(), root.list().map { it.name })   // expect: true [astra-files-test\sub\deeper] ["café ☕.txt", "data.bin", "e", "latin.txt", "notes.txt", "sub", "wide.txt"]
+print(sub.isDirectory(), Path(root, "sub").list().map { it.text.replace(Path.separator, "/") }, root.list().map { it.name })   // expect: true ["astra-files-test/sub/deeper"] ["café ☕.txt", "data.bin", "e", "latin.txt", "notes.txt", "sub", "wide.txt"]
 print(root.list()[1] == b, root.walk().map { it.name }.toList())   // expect: true ["café ☕.txt", "data.bin", "e", "latin.txt", "notes.txt", "sub", "deeper", "wide.txt"]
 try { f.list() } catch (e : IOException) { print(e.message!!.startsWith("cannot list the directory")) }   // expect: true
 // A directory the walk cannot read: thrown where it comes to it, or handed over and gone past (G55).
@@ -86,8 +87,9 @@ print(copy.exists(), copy.deleteIfExists(), sub.deleteIfExists(), Path(root, "su
 try { copy.delete() } catch (e : IOException) { print(e.message!!.endsWith("there is nothing there")) }   // expect: true
 try { Path(root, "missing.txt").readText() } catch (e) { print(e.message!!.startsWith("cannot read file"), e is Exception) }   // expect: true true
 
-// What else the disk says (D131, D135).
-print(root.canonical() == root.absolute, moved.isReadable(), moved.isWritable(), moved.isExecutable(), Path(root, "run.cmd").also { it.writeText("") }.isExecutable())   // expect: true true true false true
+// What else the disk says (D131, D135). A .cmd file is a program on Windows; elsewhere a file
+// is one when it is marked so, and a new one is not.
+print(root.canonical() == root.absolute, moved.isReadable(), moved.isWritable(), moved.isExecutable(), Path(root, "run.cmd").also { it.writeText("") }.isExecutable() == (Path.separator == "\\"))   // expect: true true true false true
 moved.setWritable(false)
 print(moved.isWritable())                                    // expect: false
 try { moved.writeText("no") } catch (e : IOException) { print("refused") }   // expect: refused

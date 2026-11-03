@@ -1,3 +1,4 @@
+// windows only: it measures and draws with the fonts every Windows since 10 has, Segoe UI and the rest
 // Drawing text into an image: where the pixels fall, and that they fall where measuring says.
 
 val font = Font("Segoe UI", 16)

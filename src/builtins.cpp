@@ -7,6 +7,17 @@
 #include <windows.h>
 #endif
 
+#ifdef __linux__
+#include <sys/sysinfo.h>
+#endif
+#ifndef _WIN32
+#include <locale.h>
+#include <wctype.h>
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -30,9 +41,16 @@ namespace astra {
 // allocator does not fail in the ordinary way.)
 void VM::checkRoomFor(uint64_t bytes) {
     static const uint64_t limit = [] {
+#ifdef _WIN32
         MEMORYSTATUSEX status{};
         status.dwLength = sizeof status;
         return GlobalMemoryStatusEx(&status) ? static_cast<uint64_t>(status.ullTotalPageFile) : UINT64_MAX;
+#elif defined(__linux__)
+        struct sysinfo info{};
+        return sysinfo(&info) == 0 ? (static_cast<uint64_t>(info.totalram) + info.totalswap) * info.mem_unit : UINT64_MAX;
+#else
+        return UINT64_MAX;
+#endif
     }();
     if (bytes > limit) throw outOfMemory();
 }
@@ -70,14 +88,53 @@ std::string changeCase(const std::string& s, bool upper) {
     WideCharToMultiByte(CP_UTF8, 0, mapped.data(), mappedLength, out.data(), length, nullptr, nullptr);
     return out;
 #else
-    std::string out = s;
-    for (char& c : out) {
-        if (upper && c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-        if (!upper && c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-    }
+    const Characters text = Characters::fromUtf8(s);
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < text.size(); i++) appendUtf8(out, unicodeCase(text[i], upper));
     return out;
 #endif
 }
+
+#ifndef _WIN32
+// A locale whose character classes and case mapping are Unicode's, asked of without making it
+// the program's (which would change how it reads and writes numbers); none where the system has
+// no UTF-8 locale, and then only ASCII's.
+locale_t unicodeLocale() {
+    static const locale_t made = [] {
+        for (const char* name : {"C.UTF-8", "C.utf8", "en_US.UTF-8", "en_US.utf8", "UTF-8"})
+            if (locale_t found = newlocale(LC_CTYPE_MASK, name, static_cast<locale_t>(0))) return found;
+        return static_cast<locale_t>(0);
+    }();
+    return made;
+}
+
+int unicodeKinds(uint32_t c) {
+    const locale_t here = unicodeLocale();
+    if (here == static_cast<locale_t>(0) || c < 0x80) {
+        const bool upper = c >= 'A' && c <= 'Z', lower = c >= 'a' && c <= 'z', digit = c >= '0' && c <= '9';
+        const bool space = c == ' ' || (c >= '\t' && c <= '\r');
+        return (upper || lower ? kUnicodeLetter : 0) | (digit ? kUnicodeDigit : 0) | (space ? kUnicodeSpace : 0) | (upper ? kUnicodeUpper : 0) |
+               (lower ? kUnicodeLower : 0);
+    }
+    const auto w = static_cast<wint_t>(c);
+    const bool letter = iswalpha_l(w, here) != 0;
+    // A digit of another script (Arabic-Indic, Devanagari) is alphanumeric and no letter.
+    const bool digit = iswdigit_l(w, here) != 0 || (iswalnum_l(w, here) != 0 && !letter);
+    return (letter ? kUnicodeLetter : 0) | (digit ? kUnicodeDigit : 0) | (iswspace_l(w, here) != 0 ? kUnicodeSpace : 0) |
+           (iswupper_l(w, here) != 0 ? kUnicodeUpper : 0) | (iswlower_l(w, here) != 0 ? kUnicodeLower : 0);
+}
+
+uint32_t unicodeCase(uint32_t c, bool upper) {
+    const locale_t here = unicodeLocale();
+    if (here == static_cast<locale_t>(0) || c < 0x80) {
+        if (upper && c >= 'a' && c <= 'z') return c - 'a' + 'A';
+        if (!upper && c >= 'A' && c <= 'Z') return c - 'A' + 'a';
+        return c;
+    }
+    return static_cast<uint32_t>(upper ? towupper_l(static_cast<wint_t>(c), here) : towlower_l(static_cast<wint_t>(c), here));
+}
+#endif
 
 std::string_view trimmed(std::string_view s) {
     const char* whitespace = " \t\r\n\f\v";

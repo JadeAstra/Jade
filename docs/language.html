@@ -1742,7 +1742,7 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>Whether this program may write it (on Windows, whether it is not read-only); false where nothing is there.</p>
 </div>
 <div class="entry member" id="Path.isExecutable"><code class="sig">fun isExecutable() : bool</code><a class="anchor" href="#Path.isExecutable">#</a>
-<p>Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists.</p>
+<p>Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists; elsewhere, one marked so (or a directory that may be entered).</p>
 </div>
 <div class="entry member" id="Path.size"><code class="sig">fun size() : int</code><a class="anchor" href="#Path.size">#</a>
 <p>The size in bytes, and when it was last written in milliseconds since the start of 1970. Both are 0 for a file that is not there.</p>
@@ -1813,7 +1813,7 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>A copy of the file at <code>target</code>, given as a Path. Only a file is copied: a directory is an IOException, as is a <code>target</code> already there while <code>overwrite</code> is false.</p>
 </div>
 <div class="entry member" id="Path.setWritable"><code class="sig">fun setWritable(writable : bool) throws IOException</code><a class="anchor" href="#Path.setWritable">#</a>
-<p>Lets it be written, or keeps it from being written (on Windows, its read-only flag); an IOException where nothing is there.</p>
+<p>Lets it be written, or keeps it from being written (on Windows, its read-only flag; elsewhere, written by its owner, or by no one); an IOException where nothing is there.</p>
 </div>
 <div class="entry member" id="Path.setLastModified"><code class="sig">fun setLastModified(time : Instant) throws IOException</code><a class="anchor" href="#Path.setLastModified">#</a>
 <p>Sets when it was last written; an IOException where nothing is there.</p>

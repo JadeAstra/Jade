@@ -36,8 +36,20 @@ build.bat
 
 This finds the MSVC toolchain, configures with the CMake and Ninja that ship with Visual
 Studio, and produces `build\astra.exe` with a copy of `lib` beside it. Any other CMake setup
-works too (`cmake -S . -B build && cmake --build build`); GCC and Clang flags are in
-`CMakeLists.txt` but only the MSVC build has been tested.
+works too (`cmake -S . -B build && cmake --build build`).
+
+Linux with GCC 13 or later, or Clang 17 or later, and CMake:
+
+```
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+python3 tests/run.py --astra build/astra --parallel 16
+```
+
+Scripts, files, processes and sockets work there as on Windows; windows, the fonts the text
+engine reads, and `astra build --exe` are Windows's only so far, and the tests of them say
+so in a line `// windows only: <why>` and are passed over. macOS has the same code as Linux
+but has not been tried.
 
 ## Usage
 
@@ -3335,7 +3347,8 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
   set. Emoji drawn as SVG are not read. The first use of fonts in a program reads the names
   of all installed ones, about a tenth of a second.
 - Images are read and written as PNG only.
-- Streams, processes and sockets are there on Windows only. There is no way yet to fetch a URL.
+- Windows, the text engine's fonts and `astra build --exe` are there on Windows only; files,
+  processes and sockets on Linux too. There is no way yet to fetch a URL.
 - Astra code runs on several cores at once only in a parallel section, on the items of one
   list, or in workers, which share nothing. Threads take turns.
 - Drawing on a window or a surface is done from the main thread only; an image's canvas draws

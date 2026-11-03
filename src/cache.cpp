@@ -258,9 +258,17 @@ bool attachPrelude(const fs::path& copy, const std::string& image) {
     file += image;
     for (int i = 0; i < 8; i++) file.push_back(static_cast<char>((static_cast<uint64_t>(image.size()) >> (8 * i)) & 0xFF));
     file.append(kPreludeMarker, sizeof kPreludeMarker);
-    std::ofstream out(copy, std::ios::binary | std::ios::trunc);
-    out.write(file.data(), static_cast<std::streamsize>(file.size()));
-    return static_cast<bool>(out);
+    {
+        std::ofstream out(copy, std::ios::binary | std::ios::trunc);
+        out.write(file.data(), static_cast<std::streamsize>(file.size()));
+        if (!out) return false;
+    }
+    // Who may run it, as astra itself: on Linux and macOS a new file is not a program until it
+    // is marked as one.
+    std::error_code ec;
+    const fs::perms own = fs::status(executable(), ec).permissions();
+    if (!ec) fs::permissions(copy, own, fs::perm_options::replace, ec);
+    return !ec;
 }
 
 bool readWholeFile(const fs::path& path, std::string& out) {

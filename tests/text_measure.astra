@@ -1,3 +1,4 @@
+// windows only: it measures and draws with the fonts every Windows since 10 has, Segoe UI and the rest
 // Measuring text: one rule. A character's width is a whole number of pixels, a text's
 // width is the sum of its characters' widths, and that is where the text ends when drawn.
 

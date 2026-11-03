@@ -18,10 +18,44 @@
 #include <windows.h>
 #include <GL/gl.h>
 #else
-#include <GL/gl.h>
-#ifndef APIENTRY
+// Elsewhere OpenGL comes from a library found when a window first needs one, not one astra is
+// linked with, so that astra runs where there is none (G56): the types and the few names of
+// OpenGL 1.1 used here are declared below, and its functions are reached through `gl` as the
+// later ones are (the gl* names below stand for them).
 #define APIENTRY
-#endif
+using GLenum = unsigned int;
+using GLuint = unsigned int;
+using GLint = int;
+using GLsizei = int;
+using GLfloat = float;
+using GLboolean = unsigned char;
+using GLubyte = unsigned char;
+using GLbitfield = unsigned int;
+#define GL_FALSE 0
+#define GL_TRUE 1
+#define GL_ONE 1
+#define GL_COLOR_BUFFER_BIT 0x00004000
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_CULL_FACE 0x0B44
+#define GL_DEPTH_TEST 0x0B71
+#define GL_BLEND 0x0BE2
+#define GL_SCISSOR_TEST 0x0C11
+#define GL_UNPACK_ALIGNMENT 0x0CF5
+#define GL_PACK_ALIGNMENT 0x0D05
+#define GL_MAX_TEXTURE_SIZE 0x0D33
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_FLOAT 0x1406
+#define GL_RGBA 0x1908
+#define GL_RENDERER 0x1F01
+#define GL_VERSION 0x1F02
+#define GL_NEAREST 0x2600
+#define GL_LINEAR 0x2601
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#define ASTRA_GL_TABLE_1_1 1
 #endif
 
 #include <cstddef>
@@ -64,9 +98,47 @@ struct GlApi {
     GLenum(APIENTRY* CheckFramebufferStatus)(GLenum);
     void(APIENTRY* DeleteFramebuffers)(GLsizei, const GLuint*);
     void(APIENTRY* BlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
+#ifdef ASTRA_GL_TABLE_1_1
+    // OpenGL 1.1's, which Windows' own library gives by name and elsewhere are fetched too.
+    void(APIENTRY* PixelStorei)(GLenum, GLint);
+    void(APIENTRY* TexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*);
+    void(APIENTRY* TexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*);
+    void(APIENTRY* BindTexture)(GLenum, GLuint);
+    void(APIENTRY* TexParameteri)(GLenum, GLenum, GLint);
+    void(APIENTRY* GenTextures)(GLsizei, GLuint*);
+    void(APIENTRY* DeleteTextures)(GLsizei, const GLuint*);
+    void(APIENTRY* Enable)(GLenum);
+    void(APIENTRY* Disable)(GLenum);
+    void(APIENTRY* ClearColor)(GLfloat, GLfloat, GLfloat, GLfloat);
+    void(APIENTRY* Clear)(GLbitfield);
+    void(APIENTRY* Viewport)(GLint, GLint, GLsizei, GLsizei);
+    void(APIENTRY* Scissor)(GLint, GLint, GLsizei, GLsizei);
+    void(APIENTRY* ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
+    void(APIENTRY* GetIntegerv)(GLenum, GLint*);
+    const GLubyte*(APIENTRY* GetString)(GLenum);
+#endif
 };
 
 extern GlApi gl;
+
+#ifdef ASTRA_GL_TABLE_1_1
+#define glPixelStorei ::astra::jade::gl.PixelStorei
+#define glTexImage2D ::astra::jade::gl.TexImage2D
+#define glTexSubImage2D ::astra::jade::gl.TexSubImage2D
+#define glBindTexture ::astra::jade::gl.BindTexture
+#define glTexParameteri ::astra::jade::gl.TexParameteri
+#define glGenTextures ::astra::jade::gl.GenTextures
+#define glDeleteTextures ::astra::jade::gl.DeleteTextures
+#define glEnable ::astra::jade::gl.Enable
+#define glDisable ::astra::jade::gl.Disable
+#define glClearColor ::astra::jade::gl.ClearColor
+#define glClear ::astra::jade::gl.Clear
+#define glViewport ::astra::jade::gl.Viewport
+#define glScissor ::astra::jade::gl.Scissor
+#define glReadPixels ::astra::jade::gl.ReadPixels
+#define glGetIntegerv ::astra::jade::gl.GetIntegerv
+#define glGetString ::astra::jade::gl.GetString
+#endif
 
 // Fills `gl` through a function that finds an OpenGL function by name (the window system's
 // own). False, with the name of the first one missing, if the driver lacks any.

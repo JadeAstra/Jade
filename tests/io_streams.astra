@@ -51,31 +51,35 @@ try { Path("no-such-directory/x.txt").reader() } catch (e : IOException) { print
 try { Path("no-such-file.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file 'no-such-file.txt'
 
 // ---- A program run to its end (D91) ----
-val run = Process.run("cmd", "/c", "echo out& echo err 1>&2")
+// The system's shell runs the commands: cmd on Windows, sh elsewhere (G56), each written for both.
+val onWindows = Path.separator == "\\"
+fun shell(windows : string, posix : string) : List<string> => onWindows ? ["cmd", "/c", windows] : ["sh", "-c", posix]
+val outAndErr = shell("echo out& echo err 1>&2", "echo out; echo err 1>&2")
+val run = Process.run(outAndErr)
 print(run.exitCode, run.output.trim(), run.error.trim())     // expect: 0 out err
-print(Process.run(["cmd", "/c", "exit 3"]).exitCode, Process.run("cmd", "/c", "echo out& echo err 1>&2", error = toOutput).output.trim().lines().map { it.trim() })   // expect: 3 ["out", "err"]
+print(Process.run(shell("exit 3", "exit 3")).exitCode, Process.run(outAndErr, error = toOutput).output.trim().lines().map { it.trim() })   // expect: 3 ["out", "err"]
 val directory = Path("io streams directory")
 directory.mkdir()
-print(Process.run("cmd", "/c", "cd", directory = directory).output.trim().endsWith("io streams directory"))   // expect: true
+print(Process.run(shell("cd", "pwd"), directory = directory).output.trim().endsWith("io streams directory"))   // expect: true
 directory.delete()
-print(Process.run("cmd", "/c", "echo %ASTRA_TEST_VALUE%", environment = {"ASTRA_TEST_VALUE": "from the parent"}).output.trim())   // expect: from the parent
+print(Process.run(shell("echo %ASTRA_TEST_VALUE%", "echo \$ASTRA_TEST_VALUE"), environment = {"ASTRA_TEST_VALUE": "from the parent"}).output.trim())   // expect: from the parent
 
 // ---- A program started, its streams where they are said to go ----
-val listing = Process("cmd", "/c", "echo out& echo err 1>&2")
+val listing = Process(outAndErr)
 print(listing.output.readLines(), listing.error.readText().trim(), listing.waitFor(), listing.isAlive, listing.exitCode)   // expect: ["out"] err 0 false 0
-val merged = Process("cmd", "/c", "echo out& echo err 1>&2", error = toOutput)
+val merged = Process(outAndErr, error = toOutput)
 print(merged.output.readLines().map { it.trim() })            // expect: ["out", "err"]
 try { merged.error } catch (e : IllegalStateException) { print(e.message) }   // expect: the program's errors were not a pipe: start it with error = pipe to read them
-val quiet = Process("cmd", "/c", "echo out& echo err 1>&2", output = discard, error = discard)
+val quiet = Process(outAndErr, output = discard, error = discard)
 print(quiet.waitFor())                                       // expect: 0
 // To and from a file.
 val saved = Path("io-streams-out.txt")
-Process("cmd", "/c", "echo kept", output = saved).waitFor()
-val finder = Process("cmd", "/c", "findstr k", input = saved)
+Process(shell("echo kept", "echo kept"), output = saved).waitFor()
+val finder = Process(shell("findstr k", "grep k"), input = saved)
 print(saved.readText().trim(), finder.output.readText().trim(), finder.waitFor())   // expect: kept kept 0
 saved.delete()
 try { Process("no-such-program-xyz") } catch (e : IOException) { print(e.message!!.startsWith("cannot start 'no-such-program-xyz'")) }   // expect: true
-try { Process("cmd", input = toOutput) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: toOutput is for a program's errors, not its input
+try { Process(shell("exit", "exit"), input = toOutput) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: toOutput is for a program's errors, not its input
 
 // ---- A conversation over a program's pipes ----
 val echo = Process(Process.currentCommand() + ["echo"])
@@ -94,7 +98,8 @@ print(echo.waitFor(), echo.output.readLine(), echo.isAlive)   // expect: 7 null 
 val endless = Process(Process.currentCommand() + ["echo"])
 endless.output.readLine()
 endless.kill()
-print(endless.waitFor(5.seconds), endless.isAlive)           // expect: 1 false
+// Its exit code is the system's for a program ended: 1 on Windows, 128 and the signal's number elsewhere.
+print(endless.waitFor(5.seconds) != 0, endless.isAlive)      // expect: true false
 
 // ---- Sockets (D120) ----
 val server = ServerSocket(0, bindAddress = "127.0.0.1")

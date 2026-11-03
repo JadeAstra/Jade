@@ -6,6 +6,8 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -156,7 +158,21 @@ bool charactersAre(const std::string& s, CharacterClass which) {
     }
     return true;
 #else
-    return false;
+    const Characters text = Characters::fromUtf8(s);
+    for (size_t i = 0; i < text.size(); i++) {
+        const int kinds = unicodeKinds(text[i]);
+        bool is = false;
+        switch (which) {
+            case CharacterClass::Letter: is = (kinds & kUnicodeLetter) != 0; break;
+            case CharacterClass::Digit: is = (kinds & kUnicodeDigit) != 0; break;
+            case CharacterClass::LetterOrDigit: is = (kinds & (kUnicodeLetter | kUnicodeDigit)) != 0; break;
+            case CharacterClass::Whitespace: is = (kinds & kUnicodeSpace) != 0; break;
+            case CharacterClass::Upper: is = (kinds & kUnicodeUpper) != 0; break;
+            case CharacterClass::Lower: is = (kinds & kUnicodeLower) != 0; break;
+        }
+        if (!is) return false;
+    }
+    return true;
 #endif
 }
 
@@ -187,7 +203,14 @@ bool casedAre(const std::string& s, bool upper) {
     }
     return seen;
 #else
-    return false;
+    const Characters text = Characters::fromUtf8(s);
+    for (size_t i = 0; i < text.size(); i++) {
+        const int kinds = unicodeKinds(text[i]);
+        const bool isUpper = (kinds & kUnicodeUpper) != 0, isLower = (kinds & kUnicodeLower) != 0;
+        if (upper ? isLower : isUpper) return false;
+        seen = seen || (upper ? isUpper : isLower);
+    }
+    return seen;
 #endif
 }
 
@@ -1454,16 +1477,16 @@ void registerFiles(VM& vm) {
         if (ec) throw pathError(vm, "find", path, ec);
         return vm.str(fromPath(made));
     });
-    // Who may do what to it, as bits: 4 read, 2 write, 1 run; 0 if it is not there.
+    // What this program may do to it, as bits: 4 read, 2 write, 1 run; 0 if it is not there.
     def("permissions", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const fs::path path = toPath(vm.toStr(args[0], "file path"));
         const fs::file_status status = fs::status(path, ec);
         if (ec || !fs::exists(status)) return Value::integer(0);
+#ifdef _WIN32
         const fs::perms p = status.permissions();
         int64_t bits = (p & fs::perms::owner_read) != fs::perms::none ? 4 : 0;
         if ((p & fs::perms::owner_write) != fs::perms::none) bits |= 2;
-#ifdef _WIN32
         // Windows runs a file by its extension, which PATHEXT lists.
         std::string ext = fromPath(path.extension());
         for (char& c : ext) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1471,16 +1494,22 @@ void registerFiles(VM& vm) {
         const std::string list = runnable != nullptr ? runnable : ".COM;.EXE;.BAT;.CMD";
         if (fs::is_regular_file(status) && !ext.empty() && (";" + list + ";").find(";" + ext + ";") != std::string::npos) bits |= 1;
 #else
-        if ((p & fs::perms::owner_exec) != fs::perms::none) bits |= 1;
+        // As the system judges it for this program: by owner, group or anyone, and for root.
+        const std::string native = path.native();
+        int64_t bits = ::access(native.c_str(), R_OK) == 0 ? 4 : 0;
+        if (::access(native.c_str(), W_OK) == 0) bits |= 2;
+        if (::access(native.c_str(), X_OK) == 0) bits |= 1;
 #endif
         return Value::integer(bits);
     });
-    // Lets it be written, or not (on Windows, its read-only flag).
+    // Lets it be written, or not (on Windows, its read-only flag): elsewhere by its owner, as
+    // Java's setWritable has it, and kept from being written by anyone.
     def("setWritable", 2, 2, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const std::string& path = vm.toStr(args[0], "file path");
-        fs::permissions(toPath(path), fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
-                        args[1].truthy() ? fs::perm_options::add : fs::perm_options::remove, ec);
+        const bool writable = args[1].truthy();
+        fs::permissions(toPath(path), writable ? fs::perms::owner_write : fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
+                        writable ? fs::perm_options::add : fs::perm_options::remove, ec);
         if (ec) throw pathError(vm, "change who may write", path, ec);
         return Value::null();
     });
