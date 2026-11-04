@@ -80,8 +80,11 @@ class Path {
   fun exists() : bool => __file.exists(text)
   // Whether a file is there; false for a directory and where nothing is there.
   fun isFile() : bool => __file.isFile(text)
-  // Whether a directory is there; false for a file and where nothing is there.
+  // Whether a directory is there; false for a file and where nothing is there. Through a link,
+  // whether it leads to one.
   fun isDirectory() : bool => __file.isDirectory(text)
+  // Whether it is a symbolic link itself (on Windows, a junction too), whatever it leads to.
+  fun isSymbolicLink() : bool => __file.isSymbolicLink(text)
   // Whether this program may read it; false where nothing is there.
   fun isReadable() : bool => (__file.permissions(text) & 4) != 0
   // Whether this program may write it (on Windows, whether it is not read-only); false where
@@ -112,9 +115,11 @@ class Path {
   }
 
   // Every path below this directory, each directory before what is in it, read as it goes. A
-  // directory it cannot read, this one too, is an UncheckedIOException where the walk comes to
-  // it, the IOException its cause, as Java's Files.walk throws (G55); with `onError`, that is
-  // given the directory and the IOException, and the walk goes on past it.
+  // symbolic link is given but not gone into, as Java's Files.walk does (8.8a): one to a
+  // directory above would go round for ever. A directory it cannot read, this one too, is an
+  // UncheckedIOException where the walk comes to it, the IOException its cause, as Java's
+  // Files.walk throws (G55); with `onError`, that is given the directory and the IOException, and
+  // the walk goes on past it.
   fun walk(onError : ((Path, IOException) -> unit)? = null) : Sequence<Path> {
     val top = this
     return sequence { __walkBelow(top, onError) }
@@ -224,7 +229,7 @@ suspend fun SequenceScope<Path>.__walkBelow(directory : Path, onError : ((Path, 
   }
   for path in inside {
     yield(path)
-    if (path.isDirectory()) { __walkBelow(path, onError) }
+    if (path.isDirectory() and !path.isSymbolicLink()) { __walkBelow(path, onError) }
   }
 }
 
@@ -240,6 +245,7 @@ external object __file {
   fun exists(path : string) : bool
   fun isFile(path : string) : bool
   fun isDirectory(path : string) : bool
+  fun isSymbolicLink(path : string) : bool
   fun permissions(path : string) : int
   fun size(path : string) : int
   fun lastModified(path : string) : int?

@@ -500,7 +500,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (25)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
-<li><a href="#Path"><code>Path</code></a> (44)</li>
+<li><a href="#Path"><code>Path</code></a> (45)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
@@ -1736,7 +1736,10 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>Whether a file is there; false for a directory and where nothing is there.</p>
 </div>
 <div class="entry member" id="Path.isDirectory"><code class="sig">fun isDirectory() : bool</code><a class="anchor" href="#Path.isDirectory">#</a>
-<p>Whether a directory is there; false for a file and where nothing is there.</p>
+<p>Whether a directory is there; false for a file and where nothing is there. Through a link, whether it leads to one.</p>
+</div>
+<div class="entry member" id="Path.isSymbolicLink"><code class="sig">fun isSymbolicLink() : bool</code><a class="anchor" href="#Path.isSymbolicLink">#</a>
+<p>Whether it is a symbolic link itself (on Windows, a junction too), whatever it leads to.</p>
 </div>
 <div class="entry member" id="Path.isReadable"><code class="sig">fun isReadable() : bool</code><a class="anchor" href="#Path.isReadable">#</a>
 <p>Whether this program may read it; false where nothing is there.</p>
@@ -1760,7 +1763,7 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>What is directly in this directory, in order of name; an IOException if it is not a directory.</p>
 </div>
 <div class="entry member" id="Path.walk"><code class="sig">fun walk(onError : ((Path, IOException) -&gt; unit)? = null) : Sequence&lt;Path&gt;</code><a class="anchor" href="#Path.walk">#</a>
-<p>Every path below this directory, each directory before what is in it, read as it goes. A directory it cannot read, this one too, is an UncheckedIOException where the walk comes to it, the IOException its cause, as Java's Files.walk throws; with <code>onError</code>, that is given the directory and the IOException, and the walk goes on past it.</p>
+<p>Every path below this directory, each directory before what is in it, read as it goes. A symbolic link is given but not gone into, as Java's Files.walk does (8.8a): one to a directory above would go round for ever. A directory it cannot read, this one too, is an UncheckedIOException where the walk comes to it, the IOException its cause, as Java's Files.walk throws; with <code>onError</code>, that is given the directory and the IOException, and the walk goes on past it.</p>
 </div>
 <div class="entry member" id="Path.readText"><code class="sig">fun readText(charset : Charset = Charset.utf8) : string throws IOException</code><a class="anchor" href="#Path.readText">#</a>
 <p>The whole file as text in <code>charset</code>; an IOException where it cannot be read, as when it is not there or is a directory.</p>

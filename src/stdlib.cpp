@@ -1387,6 +1387,16 @@ void registerFiles(VM& vm) {
         std::error_code ec;
         return Value::boolean(fs::is_directory(toPath(vm.toStr(args[0], "file path")), ec));
     });
+    // Whether the path itself is a symbolic link (on Windows a junction too), whatever it leads to.
+    def("isSymbolicLink", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        std::error_code ec;
+        const fs::file_status status = fs::symlink_status(toPath(vm.toStr(args[0], "file path")), ec);
+        if (ec) return Value::boolean(false);
+#ifdef _WIN32
+        if (status.type() == fs::file_type::junction) return Value::boolean(true);
+#endif
+        return Value::boolean(status.type() == fs::file_type::symlink);
+    });
     // In bytes; 0 for a file that is not there.
     def("size", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
@@ -1451,7 +1461,8 @@ void registerFiles(VM& vm) {
             throw vm.runtimeError(Thrown::IOException, "cannot copy '" + from + "' to '" + to + "'" + (ec ? ": " + ec.message() : ": it is already there"));
         return Value::null();
     });
-    // The names in a directory, in order; an IOException if it is not one.
+    // The names in a directory, in order; an IOException if it is not one, or if reading it fails
+    // part of the way, rather than the names read so far (8.8a).
     def("list", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         std::vector<std::string> names;
@@ -1459,9 +1470,10 @@ void registerFiles(VM& vm) {
         fs::directory_iterator it(toPath(path), ec);
         if (ec) throw pathError(vm, "list the directory", path, ec);
         for (const fs::directory_iterator end; it != end; it.increment(ec)) {
-            if (ec) break;
             names.push_back(fromPath(it->path().filename()));
         }
+        // A failed step leaves the iterator at the end, the error in ec.
+        if (ec) throw pathError(vm, "list the directory", path, ec);
         std::sort(names.begin(), names.end());
         ObjList* list = newList(vm);
         TempRoot keep(vm, Value::object(list));
