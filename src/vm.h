@@ -756,6 +756,10 @@ public:
     // A frozen copy of a list, a map or a set (D26), which nobody may change; the lists, maps
     // and sets inside it are frozen copies too. One already frozen is itself.
     Value frozenCopy(Value v, int depth = 0);
+    // A frozen copy's type: the lists, maps and sets it holds frozen, as the copy freezes them,
+    // so that it is what the checker says frozen() gives (8.2e).
+    ObjTypeInfo* frozenArgs(ObjTypeInfo* type);
+    ObjTypeInfo* frozenWhole(ObjTypeInfo* type);
     // In a value's bytes laid out as `layout`, each list, map or set held given a frozen copy (G27).
     void freezeInside(uint8_t* at, const ValueLayout& layout, int depth);
     // A lazy field's, static's or global's value (D37), worked out on this first read and given

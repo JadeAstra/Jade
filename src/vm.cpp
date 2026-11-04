@@ -4593,6 +4593,24 @@ void VM::freezeInside(uint8_t* at, const ValueLayout& layout, int depth) {
     }
 }
 
+ObjTypeInfo* VM::frozenArgs(ObjTypeInfo* type) {
+    if (type == nullptr || type->args.empty() || frozenTypeId(unfrozenTypeId(type->id)) == 0) return type;
+    std::vector<ObjTypeInfo*> args;
+    bool changed = false;
+    for (ObjTypeInfo* arg : type->args) {
+        args.push_back(frozenWhole(arg));
+        changed = changed || args.back() != arg;
+    }
+    return changed ? typeOf(type->id, type->nullable, type->cls, args) : type;
+}
+
+ObjTypeInfo* VM::frozenWhole(ObjTypeInfo* type) {
+    if (type == nullptr) return type;
+    const uint8_t frozen = frozenTypeId(type->id);
+    if (frozen == 0) return frozenArgs(type);  // a frozen one's inside, or anything else as it is
+    return typeOf(frozen, type->nullable, type->cls, frozenArgs(type)->args);
+}
+
 Value VM::frozenCopy(Value v, int depth) {
     if (!v.isObj() || v.as.obj->frozen != 0) return v;
     if (v.isObjType(ObjType::Value)) {
@@ -4630,6 +4648,7 @@ Value VM::frozenCopy(Value v, int depth) {
         ObjList* list = asList(v);
         ObjList* made = listLike(list);
         TempRoot keep(*this, Value::object(made));
+        made->type = frozenArgs(list->type);
         if (list->packed()) {
             listCopyRange(made, list, 0, list->size());
             if (list->store() == ListStore::Items) {
@@ -4653,6 +4672,7 @@ Value VM::frozenCopy(Value v, int depth) {
         ObjMap* made = alloc<ObjMap>();
         made->type = map->type;
         TempRoot keep(*this, Value::object(made));
+        made->type = frozenArgs(map->type);
         // By position: a key's hashCode, run as it goes in, may change the map.
         for (size_t i = 0; i < map->map.entries().size(); i++) {
             const ValueMap::Entry entry = map->map.entries()[i];
