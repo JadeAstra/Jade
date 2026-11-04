@@ -133,3 +133,14 @@ print(null#, nothing#.name, word#.name, null# == nothing#, null# == int#)   // e
 print(null#.isInstance(null), null#.isInstance(0), int#.isInstance(null), null#.fields, null#.superclass)   // expect: true false false [] null
 val mixed : List<any?> = [1, null, "x"]
 print(mixed.map { it#.name })   // expect: ["int", "null", "string"]
+
+// -- The Class a member gives for its type lists what the asking code may use, as the one it came from does (8.6d) --
+class Link(private val secret : int, val next : Link?) {
+  fun inside() : string {
+    val method = Link#.method("pass")!!
+    return "${Link#.field("next")!!.type.fields.map { it.name }} ${method.parameters[0].type.fields.map { it.name }} ${method.result!!.fields.map { it.name }}"
+  }
+  fun pass(other : Link) : Link => other
+}
+print(Link(1, null).inside())                          // expect: ["secret", "next"] ["secret", "next"] ["secret", "next"]
+print(Link#.field("next")!!.type.fields.map { it.name })   // expect: ["next"]

@@ -54,10 +54,7 @@ namespace astra {
 
 namespace {
 
-// A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in Java (D120).
-AstraThrow ioError(VM& vm, const std::string& message) {
-    return vm.errorOf(message == "the read timed out" ? "SocketTimeoutException" : "IOException", message);
-}
+AstraThrow ioError(VM& vm, const std::string& message) { return vm.errorOf("IOException", message); }
 
 // What a blocking piece of work leaves for the function that turns it into a value.
 struct Stream;
@@ -67,7 +64,12 @@ struct Outcome {
     bool end = false;
     int64_t number = 0;
     std::shared_ptr<Stream> made;
+    bool timedOut = false;  // a read ran past the socket's readTimeout
 };
+
+// A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in
+// Java (D120), told by the mark the wait left, not by the message's text (8.8f).
+AstraThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
 
 #ifdef _WIN32
 
@@ -162,28 +164,31 @@ struct Use {
     ~Use() { stream.users--; }
 };
 
-// Reads up to `max` bytes. The count read; 0 at the end; -1 with `error` filled in.
-int rawRead(Stream& s, char* out, size_t max, std::string& error) {
+// Reads up to `max` bytes. The count read; 0 at the end; -1 with `result.error` filled in.
+int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
     Use use(s);
     if (s.closed.load()) {
-        error = "the stream is closed";
+        result.error = "the stream is closed";
         return -1;
     }
     if (s.isSocket()) {
         const int got = recv(s.socket, out, static_cast<int>(std::min<size_t>(max, 1 << 30)), 0);
         if (got >= 0) return got;
         const int code = WSAGetLastError();
-        if (s.closed.load()) error = "the socket is closed";
-        else if (code == WSAETIMEDOUT) error = "the read timed out";
+        if (s.closed.load()) result.error = "the socket is closed";
+        else if (code == WSAETIMEDOUT) {
+            result.error = "the read timed out";
+            result.timedOut = true;
+        }
         else if (code == WSAECONNRESET || code == WSAECONNABORTED) return 0;  // the other side went away
-        else error = "cannot read from the socket: " + systemMessage(static_cast<DWORD>(code));
+        else result.error = "cannot read from the socket: " + systemMessage(static_cast<DWORD>(code));
         return -1;
     }
     DWORD got = 0;
     if (ReadFile(s.handle, out, static_cast<DWORD>(std::min<size_t>(max, 1 << 30)), &got, nullptr)) return static_cast<int>(got);
     const DWORD code = GetLastError();
     if (code == ERROR_BROKEN_PIPE || code == ERROR_HANDLE_EOF) return 0;  // the writer has closed its end
-    error = code == ERROR_OPERATION_ABORTED || s.closed.load() ? "the stream is closed" : "cannot read: " + systemMessage(code);
+    result.error = code == ERROR_OPERATION_ABORTED || s.closed.load() ? "the stream is closed" : "cannot read: " + systemMessage(code);
     return -1;
 }
 
@@ -285,18 +290,19 @@ struct Use {
 // Waits until the stream has something to read (or its end, or an error, which the read then
 // says), or it is closed, or `timeout` ms have passed (-1 for no limit). In slices, so that a
 // close() is seen at once, which on these systems does not wake a read already waiting.
-bool waitReadable(Stream& s, int timeout, std::string& error) {
+bool waitReadable(Stream& s, int timeout, Outcome& result) {
     const auto started = std::chrono::steady_clock::now();
     for (;;) {
         if (s.closed.load()) {
-            error = s.isSocket() ? "the socket is closed" : "the stream is closed";
+            result.error = s.isSocket() ? "the socket is closed" : "the stream is closed";
             return false;
         }
         int slice = 100;
         if (timeout >= 0) {
             const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
             if (spent >= timeout) {
-                error = "the read timed out";
+                result.error = "the read timed out";
+                result.timedOut = true;
                 return false;
             }
             slice = static_cast<int>(std::min<int64_t>(slice, timeout - spent));
@@ -305,29 +311,29 @@ bool waitReadable(Stream& s, int timeout, std::string& error) {
         const int ready = ::poll(&waiting, 1, slice);
         if (ready > 0) return true;
         if (ready < 0 && errno != EINTR) {
-            error = "cannot read: " + systemMessage(errno);
+            result.error = "cannot read: " + systemMessage(errno);
             return false;
         }
     }
 }
 
-// Reads up to `max` bytes. The count read; 0 at the end; -1 with `error` filled in.
-int rawRead(Stream& s, char* out, size_t max, std::string& error) {
+// Reads up to `max` bytes. The count read; 0 at the end; -1 with `result.error` filled in.
+int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
     Use use(s);
     if (s.closed.load()) {
-        error = "the stream is closed";
+        result.error = "the stream is closed";
         return -1;
     }
     // A file has something to read at once; anything else may wait.
-    if (s.kind != Stream::Kind::File && !waitReadable(s, s.isSocket() && s.readTimeout > 0 ? s.readTimeout : -1, error)) return -1;
+    if (s.kind != Stream::Kind::File && !waitReadable(s, s.isSocket() && s.readTimeout > 0 ? s.readTimeout : -1, result)) return -1;
     const size_t wanted = std::min<size_t>(max, 1 << 30);
     for (;;) {
         const ssize_t got = s.isSocket() ? ::recv(s.fd, out, wanted, 0) : ::read(s.fd, out, wanted);
         if (got >= 0) return static_cast<int>(got);
         if (errno == EINTR) continue;
         if (s.isSocket() && (errno == ECONNRESET || errno == ECONNABORTED)) return 0;  // the other side went away
-        if (s.closed.load()) error = s.isSocket() ? "the socket is closed" : "the stream is closed";
-        else error = (s.isSocket() ? "cannot read from the socket: " : "cannot read: ") + systemMessage(errno);
+        if (s.closed.load()) result.error = s.isSocket() ? "the socket is closed" : "the stream is closed";
+        else result.error = (s.isSocket() ? "cannot read from the socket: " : "cannot read: ") + systemMessage(errno);
         return -1;
     }
 }
@@ -404,7 +410,7 @@ bool fill(Stream& s, Outcome& out) {
     }
     const size_t before = s.buffer.size();
     s.buffer.resize(before + 64 * 1024);
-    const int got = rawRead(s, s.buffer.data() + before, 64 * 1024, out.error);
+    const int got = rawRead(s, s.buffer.data() + before, 64 * 1024, out);
     s.buffer.resize(before + static_cast<size_t>(got > 0 ? got : 0));
     if (got <= 0) s.ended = got == 0;
     return got > 0;
@@ -993,7 +999,7 @@ std::shared_ptr<Stream> listenOn(VM& vm, int64_t port, const std::string& addres
 
 void acceptOn(Stream& s, Outcome& out) {
     Use use(s);
-    if (!waitReadable(s, -1, out.error)) return;
+    if (!waitReadable(s, -1, out)) return;
     const int connection = ::accept(s.fd, nullptr, nullptr);
     if (connection < 0) {
         out.error = s.closed.load() ? "the socket is closed" : "cannot accept a connection: " + systemMessage(errno);
@@ -1061,7 +1067,7 @@ void registerIo(VM& vm) {
         auto out = std::make_shared<Outcome>();
         return vm.blocking([=] { openFile(path, mode, *out); },
                            [out](VM& vm) -> Value {
-                               if (!out->error.empty()) throw ioError(vm, out->error);
+                               if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
                            });
     });
@@ -1085,7 +1091,7 @@ void registerIo(VM& vm) {
                 s->position += count;
             },
             [out](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 return out->end ? Value::null() : bytesValue(vm, out->data);
             });
     });
@@ -1104,7 +1110,7 @@ void registerIo(VM& vm) {
                 s->position = 0;
             },
             [out](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 return bytesValue(vm, out->data);
             });
     });
@@ -1126,7 +1132,7 @@ void registerIo(VM& vm) {
                 s->position = 0;
             },
             [out](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 return vm.str(std::move(out->data));
             });
     });
@@ -1167,7 +1173,7 @@ void registerIo(VM& vm) {
                 out->data = decodeText(withoutCarriageReturn(std::move(out->data), order), order);
             },
             [out](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 return out->end ? Value::null() : vm.str(out->data);
             });
     });
@@ -1197,7 +1203,7 @@ void registerIo(VM& vm) {
                 rawWrite(*s, data.data(), data.size(), out->error);
             },
             [out](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 return Value::null();
             });
     });
@@ -1284,7 +1290,7 @@ void registerIo(VM& vm) {
                 out->number = process->exitCode.load();
             },
             [out, texts](VM& vm) -> Value {
-                if (!out->error.empty()) throw ioError(vm, out->error);
+                if (!out->error.empty()) throw ioError(vm, *out);
                 ObjList* result = newList(vm);
                 TempRoot keepResult(vm, Value::object(result));
                 result->values().push_back(Value::integer(out->number));
@@ -1329,7 +1335,7 @@ void registerIo(VM& vm) {
         auto out = std::make_shared<Outcome>();
         return vm.blocking([=] { connectTo(host, port, timeout, *out); },
                            [out](VM& vm) -> Value {
-                               if (!out->error.empty()) throw ioError(vm, out->error);
+                               if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
                            });
     });
@@ -1350,7 +1356,7 @@ void registerIo(VM& vm) {
         auto out = std::make_shared<Outcome>();
         return vm.blocking([=] { acceptOn(*s, *out); },
                            [out](VM& vm) -> Value {
-                               if (!out->error.empty()) throw ioError(vm, out->error);
+                               if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
                            });
     });

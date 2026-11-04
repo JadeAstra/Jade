@@ -3634,7 +3634,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <h3>Reflection</h3>
 <p><code>Image#</code> is the class named Image and <code>x#</code> the class of the object x: a Class. It tells the class's name, what it extends and implements and the type arguments it was given, and lists its fields, methods and constructors, as far as the code where the <code>#</code> is written may use them: what a class keeps private is listed only to that class's own code. A member listed is read, set or called by its name, through what lists it.</p>
 <p>What a method or constructor called this way throws arrives wrapped in a checked InvocationTargetException, the original in <code>cause</code>. A call the member cannot take, as one with too few arguments or of the wrong types, or on an object of another class, is an IllegalArgumentException of its own.</p>
-<div class="entry" id="Class"><code class="sig">class Class(internal val type : Type, private val asker : any? = null)</code><a class="anchor" href="#Class">#</a>
+<div class="entry" id="Class"><code class="sig">class Class(internal val type : Type, internal val asker : any? = null)</code><a class="anchor" href="#Class">#</a>
 <p>A class, or a built-in type, as <code>Image#</code> or <code>x#</code> gives it, with its type arguments (the class of a Box&lt;int&gt; is Box&lt;int&gt;), and as <code>items.itemType</code> gives what a list was made to hold: a type as the program runs is always a Class. What it lists is what the code where the <code>#</code> is written may use. <code>type</code> is the type it stands for, which only the standard library sees.</p>
 </div>
 <div class="entry member" id="Class.name"><code class="sig">val name : string</code><a class="anchor" href="#Class.name">#</a>
@@ -3710,7 +3710,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>Its name, as written in the class.</p>
 </div>
 <div class="entry member" id="Field.type"><code class="sig">val type : Class</code><a class="anchor" href="#Field.type">#</a>
-<p>What it holds, as a class: <code>any?</code> where its type cannot be named as the program runs.</p>
+<p>What it holds, as a class: <code>any?</code> where its type cannot be named as the program runs. It lists what the code that asked for <code>owner</code> may use, as <code>owner</code> does (8.6d).</p>
 </div>
 <div class="entry member" id="Field.annotations"><code class="sig">val annotations : List&lt;any&gt;</code><a class="anchor" href="#Field.annotations">#</a>
 <p>The annotations written on it, in their order.</p>
@@ -3733,14 +3733,14 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Field.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#Field.toString">#</a>
 <p>Its name and type, as &quot;count : int&quot;.</p>
 </div>
-<div class="entry" id="Parameter"><code class="sig">class Parameter(entry : List&lt;any?&gt;)</code><a class="anchor" href="#Parameter">#</a>
+<div class="entry" id="Parameter"><code class="sig">class Parameter(entry : List&lt;any?&gt;, asker : any? = null)</code><a class="anchor" href="#Parameter">#</a>
 <p>A parameter of a method or a constructor.</p>
 </div>
 <div class="entry member" id="Parameter.name"><code class="sig">val name : string</code><a class="anchor" href="#Parameter.name">#</a>
 <p>Its name, as written in the declaration.</p>
 </div>
 <div class="entry member" id="Parameter.type"><code class="sig">val type : Class</code><a class="anchor" href="#Parameter.type">#</a>
-<p>The type an argument for it has to be, as a class.</p>
+<p>The type an argument for it has to be, as a class, listing what the code that asked for the method's class may use (8.6d).</p>
 </div>
 <div class="entry member" id="Parameter.isOptional"><code class="sig">val isOptional : bool</code><a class="anchor" href="#Parameter.isOptional">#</a>
 <p>Whether a call may leave it out, for its default.</p>
@@ -3764,7 +3764,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>Its parameters, in their order.</p>
 </div>
 <div class="entry member" id="Method.result"><code class="sig">val result : Class?</code><a class="anchor" href="#Method.result">#</a>
-<p>What it gives, as a class; null where it gives nothing.</p>
+<p>What it gives, as a class; null where it gives nothing. It lists what the code that asked for <code>owner</code> may use, as <code>owner</code> does (8.6d).</p>
 </div>
 <div class="entry member" id="Method.annotations"><code class="sig">val annotations : List&lt;any&gt;</code><a class="anchor" href="#Method.annotations">#</a>
 <p>The annotations written on it, in their order.</p>

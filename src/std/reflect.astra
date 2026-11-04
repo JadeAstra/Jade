@@ -37,7 +37,7 @@ fun __classOf(type : Type, asker : any) : Class => Class(type, asker)
 // a Box<int> is Box<int>), and as `items.itemType` gives what a list was made to hold (D162): a
 // type as the program runs is always a Class. What it lists is what the code where the `#` is
 // written may use. `type` is the type it stands for, which only the standard library sees.
-class Class(internal val type : Type, private val asker : any? = null) {
+class Class(internal val type : Type, internal val asker : any? = null) {
   // The class's name, or a built-in type's: "Circle", "int", "List".
   val name : string
     get() => __typeName(type)
@@ -139,8 +139,9 @@ class Field(val owner : Class, entry : List<any?>) {
   // Its name, as written in the class.
   val name : string = entry[0] as string
   internal val rawType : Type = entry[1] as Type
-  // What it holds, as a class: `any?` where its type cannot be named as the program runs.
-  val type : Class = Class(rawType)
+  // What it holds, as a class: `any?` where its type cannot be named as the program runs. It
+  // lists what the code that asked for `owner` may use, as `owner` does (8.6d).
+  val type : Class = Class(rawType, owner.asker)
   private val flags : int = entry[2] as int
   // The annotations written on it, in their order.
   val annotations : List<any> = entry[3] as List<any>
@@ -184,12 +185,13 @@ class Field(val owner : Class, entry : List<any?>) {
 }
 
 // A parameter of a method or a constructor.
-class Parameter(entry : List<any?>) {
+class Parameter(entry : List<any?>, asker : any? = null) {
   // Its name, as written in the declaration.
   val name : string = entry[0] as string
   internal val rawType : Type = entry[1] as Type
-  // The type an argument for it has to be, as a class.
-  val type : Class = Class(rawType)
+  // The type an argument for it has to be, as a class, listing what the code that asked for the
+  // method's class may use (8.6d).
+  val type : Class = Class(rawType, asker)
   // Whether a call may leave it out, for its default.
   val isOptional : bool = entry[2] as bool
   // The annotations written on it, in their order.
@@ -230,10 +232,11 @@ class Method(val owner : Class, entry : List<any?>, val isStatic : bool = false)
   val name : string = entry[0] as string
   private val key : string = entry[1] as string
   // Its parameters, in their order.
-  val parameters : List<Parameter> = (entry[2] as List<List<any?>>).map { Parameter(it) }
+  val parameters : List<Parameter> = (entry[2] as List<List<any?>>).map { Parameter(it, owner.asker) }
   private val rawResult : Type? = entry[3] as Type?
-  // What it gives, as a class; null where it gives nothing.
-  val result : Class? = rawResult == null ? null : Class(rawResult)
+  // What it gives, as a class; null where it gives nothing. It lists what the code that asked
+  // for `owner` may use, as `owner` does (8.6d).
+  val result : Class? = rawResult == null ? null : Class(rawResult, owner.asker)
   // The annotations written on it, in their order.
   val annotations : List<any> = entry[4] as List<any>
   // Runs it on `obj`, an object of the class, with `args`; a static method with null for `obj`.
@@ -257,7 +260,7 @@ class Method(val owner : Class, entry : List<any?>, val isStatic : bool = false)
 // `owner` is the Class it makes objects of.
 class Constructor(val owner : Class, entry : List<any?>) {
   // Its parameters, in their order.
-  val parameters : List<Parameter> = (entry[0] as List<List<any?>>).map { Parameter(it) }
+  val parameters : List<Parameter> = (entry[0] as List<List<any?>>).map { Parameter(it, owner.asker) }
   // The annotations written on it, in their order.
   val annotations : List<any> = entry[1] as List<any>
   // For a secondary constructor (G61), the static function of the class it is called by.
