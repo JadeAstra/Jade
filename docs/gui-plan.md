@@ -2263,7 +2263,12 @@ by them, refined by the value's contents where a recorded one is wider. Invisibl
 but for G4's `is` and `as`; bytecode files are made again. Measured before and after on the benchmarks of M6.5 part 4;
 the aim is one and a half to three times on top of M6.5 and M6.6. Scripts run from source,
 the shell, workers and tests keep running on the VM even once built programs can be native
-code (M14), so this stays worth having.
+code (M14), so this stays worth having. Also in M6.7, decided 2026-11-04 by the user: tasks
+started in a scope, `taskScope { task { ... }; task { ... } }` (Kotlin's structured concurrency),
+which waits for its jobs as it ends and throws the first failure there, where a `try` around it
+takes it, with how `task { }`, `thread { }` and pools stand to scopes settled with it; and
+`use { }` checked against each class's own `close()`, so that `AutoCloseable.close` may declare
+`throws IOException` (M6.6 choice 8.5i).
 
 **M7. Core, part two.** `Text.kt`, `TextNav.kt`, `TextArea.kt` (text model, field, area,
 undo, selection), `Scroll`, `HScrollBar`, `Split`, `Tabs`, `Controls` (check box, radio,
