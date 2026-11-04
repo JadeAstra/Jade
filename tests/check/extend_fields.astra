@@ -1,0 +1,36 @@
+// What an extend may add as fields (D157): to a class, a name it has nothing of, with a
+// starting value of its type.
+class Box(val size : int)
+data Pair2(val a : int)
+value Spot(val x : int)
+interface Shape
+
+extend Box {
+  var tag : string? = null
+  var size = 1                               // check: 'size' is Box's own: an extend does not replace what a class has (D157)
+  var note : string = 5                      // check: 'note' is a string; it cannot start as an int
+  var empty = null                           // check: 'empty' starts as null, so its type must be written (empty : Type? = null)
+}
+extend Pair2 {                               // check: an extend adds fields to a class, kept beside each of its objects; Pair2 is a data class, which is made and compared by its own fields (D157)
+  var tag = 0
+}
+extend Spot {                                // check: an extend adds fields to a class, kept beside each of its objects; Spot is a value type, which is made and compared by its own fields (D157)
+  var tag = 0
+}
+extend Shape {                               // check: an extend adds fields to a class, kept beside each of its objects; Shape is an interface (D157)
+  var tag = 0
+}
+
+// Two extends adding one name to a class: the same field only if written alike.
+extend Box {
+  var tag : string? = null
+  var count : int = 0
+}
+class Crate(val size : int)
+extend Crate { var mark : int = 0 }
+extend Crate { var mark : string = "" }      // check: 'mark' is added to Crate by another extend too, on line 30, written otherwise: an object has one field of a name (D157)
+
+// Read and written as a field, with its type.
+val box = Box(3)
+val tagged : string? = box.tag
+box.count = "many"                           // check: 'count' is an int; it cannot be given a string

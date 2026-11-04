@@ -1738,8 +1738,9 @@ told by the value's class, as for a method.
 
 **`extend`** fits a class someone else wrote to an interface of yours. Names that differ are
 bridged by getters in it, and the interface's methods the class lacks are written in it as
-`fun`s (D186); nothing is stored, and nothing the class has is replaced. A class that lacks
-something the interface asks for is an error at the `extend`.
+`fun`s (D186); nothing the class has is replaced. A class that lacks something the interface
+asks for is an error at the `extend`. It may also add fields to the class (D157), with or
+without an interface, shown below.
 
 ```astra
 interface Weighed { val weight : int; val name : string }
@@ -1766,6 +1767,25 @@ twice is one; two that say different things are an error, and so are two from di
 folders, each with getters or funs, anywhere in the program (D187, D188): a value fits an
 interface in one way, whichever file made it fit. A class written in the program
 itself implements the interface instead.
+
+An `extend` may add fields to a class (D157): `var` or `val`, each with a starting value, which
+is made for each object the first time its field is read. Every object of the class and of the
+classes below it has them, where the extend is in reach; they are kept beside the object, not
+in it, so the class and the code compiled for it stay as they are, and they go when the object
+does. They are not for a value type, a data class, an enum, an interface or a built-in type,
+whose objects are made and compared by their own fields, and a name the class has is not
+replaced. The funs of an extend of the class read them by bare name, as fields.
+
+```astra
+extend Button {
+  var tag : string? = null
+  var clicks = 0
+  val notes : open List<string> = []     // a list of its own for each button
+}
+ok.tag = "primary"
+ok.clicks++
+print(ok.tag, cancel.tag)                // primary null
+```
 
 A built-in type is fitted the same way (D185): `int`, `float`, `string`, `bool`, `char`, `byte`,
 `Bytes`, `Range`, `List`, `Map` and `Set`. Written with what it holds, the extend is for those

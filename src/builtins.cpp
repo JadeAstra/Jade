@@ -331,6 +331,14 @@ void registerGlobals(VM& vm) {
         throw thrown;
     });
     vm.defineNative("__callThrowing", 1, 1, [](VM& vm, int, Value* args) -> Value { return vm.call(args[0], 0, nullptr); });
+    // `extend Button { var tag : string? = null }` (D157): the class, the field's name, and what
+    // makes its starting value. A second extend giving the same name keeps the first.
+    vm.defineNative("__addExtendField", 3, 3, [](VM&, int, Value* args) -> Value {
+        ObjClass* cls = asClass(args[0]);
+        ObjString* name = asString(args[1]);
+        if (cls->extendFields.find(name) == nullptr) cls->extendFields.set(name, args[2]);
+        return Value::null();
+    });
 
     vm.defineNative("assert", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
         if (args[0].truthy()) return Value::null();

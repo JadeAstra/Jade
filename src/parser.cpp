@@ -266,15 +266,16 @@ StmtPtr Parser::declaration() {
             if (word.text == "const" && !after.newlineBefore &&
                 (after.type == TokenType::Identifier || after.type == TokenType::Val || after.type == TokenType::Var))
                 return constDeclaration(false);
-            // `extend Person, Car : Weighed { ... }` (D33): only special here.
+            // `extend Person, Car : Weighed { ... }` (D33), and `extend Button { var tag : string? = null }`
+            // (D157): only special here.
             if (word.text == "extend" && after.type == TokenType::Identifier && !after.newlineBefore) {
                 advance();
                 auto s = node<ExtendStmt>(word);
                 do {
                     s->types.push_back(typeExpression());
                 } while (match(TokenType::Comma));
-                expect(TokenType::Colon, "':' and the interface the types fit");
-                s->interfaceType = typeExpression();
+                if (match(TokenType::Colon)) s->interfaceType = typeExpression();
+                else if (!check(TokenType::LBrace)) expect(TokenType::Colon, "':' and the interface the types fit, or '{' and the fields it adds");
                 if (match(TokenType::LBrace)) {
                     for (;;) {
                         skipSemicolons();
@@ -287,17 +288,35 @@ StmtPtr Parser::declaration() {
                         if (at.type == TokenType::Identifier && at.text == "override" && peekNext().type == TokenType::Fun)
                             throw error(at, "a fun in an extend is written without override: it gives a type the interface's method, " +
                                                 std::string("which the type has none of (D186)"));
-                        if (!check(TokenType::Val))
+                        const bool lateinit = at.type == TokenType::Identifier && at.text == "lateinit";
+                        if (!check(TokenType::Val) && !check(TokenType::Var) && !lateinit)
                             throw error(at, "an extend holds property getters and methods that give a type what the interface asks of it, " +
-                                                std::string("as in val name : string get() => model, or fun area() : float => width * height (D33, D186)"));
-                        auto bridge = varDeclaration(true);
-                        fieldAccessors(*bridge);
-                        if (bridge->init || !bridge->getter || bridge->setter)
-                            throw error(at, "'" + bridge->name + "' in an extend keeps nothing: it is a get() of the type's own members (D33)");
-                        s->bridges.push_back(std::move(bridge));
+                                                std::string("as in val name : string get() => model, or fun area() : float => width * height (D33, D186), ") +
+                                                "and fields it adds, as in var tag : string? = null (D157)");
+                        if (lateinit)
+                            throw error(at, "a field an extend adds has a starting value, made for each object when the field is first read: " +
+                                                std::string("var name : T = ... (D157)"));
+                        auto field = varDeclaration(true);
+                        fieldAccessors(*field);
+                        if (field->getter && !field->init && !field->setter && field->isVal) {
+                            s->bridges.push_back(std::move(field));  // a get() of the type's own members (D33)
+                            continue;
+                        }
+                        if (field->getter || field->setter)
+                            throw error(at, "'" + field->name + "' in an extend is a get() of the type's own members (D33), or a field it adds with " +
+                                                "a starting value (D157), not both");
+                        if (!field->init)
+                            throw error(at, "'" + field->name + "', a field an extend adds, needs a starting value, made for each object when it is " +
+                                                "first read: " + (field->isVal ? "val " : "var ") + field->name + " : T = ... (D157)");
+                        if (field->isLazy || field->isAtomic || field->isConst)
+                            throw error(at, "a field an extend adds is a plain val or var with a starting value (D157)");
+                        s->stored.push_back(std::move(field));
                     }
                     expect(TokenType::RBrace, "'}' to end the extend");
                 }
+                if (s->interfaceType.name.empty() && (s->stored.empty() || !s->bridges.empty() || !s->methods.empty()))
+                    throw error(word, "an extend without an interface only adds fields, var name : T = ... (D157); a function for a type " +
+                                          std::string("is an extension function, fun ") + s->types[0].name + ".name() (D33)");
                 return s;
             }
             // `annotation JsonField(val name : string = "")` (D153): a class holding the values

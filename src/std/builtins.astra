@@ -40,6 +40,12 @@ external fun __hashCode(value : any?) : int
 // Runs the block with nothing catching what it throws: a thread { }'s, whose error is then
 // reported where it was thrown (8.7a).
 external fun __callThrowing(block : suspend () -> any? throws Exception) : any?
+// A field an extend adds to a class (D157): its name, and what makes its starting value.
+external fun __addExtendField(cls : any, name : string, init : () -> any?)
+// What a compiled extend calls for each field it adds (D157).
+fun __extendField(cls : any, name : string, init : () -> any?) {
+  __addExtendField(cls, name, init)
+}
 // A time in seconds, as a float, from a clock that only goes forward: the difference between two
 // readings is the time that passed. What it counts from is not fixed.
 external fun clock() : float

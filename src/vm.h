@@ -345,6 +345,15 @@ public:
     // A value as it is kept: a Ref replaced by a box with a copy, anything else as it is. What
     // is stored anywhere but a thread's stack goes through this.
     Value own(Value v) { return v.kind == ValueKind::Ref ? ownRef(v) : v; }
+
+    // The fields extends add (D157), kept beside the objects that have read or set one: each
+    // object's entry holds them by name. The collector keeps what an entry holds while its object
+    // lives and drops the entry with the object; a lock keeps the cores of a parallel section
+    // from meeting in the table.
+    Value extraField(ObjInstance* instance, ObjString* name, Value init);
+    void setExtraField(ObjInstance* instance, ObjString* name, Value value);
+    std::unordered_map<Obj*, Table> extras_;
+    std::mutex extrasLock_;
     // A value of a value type in a box of its own, whatever form it is in (M6.6 part 5): for
     // the code that works on boxes, and C++ that is given values.
     Value boxed(Value v) { return v.kind == ValueKind::Ref ? ownRef(v) : v.kind == ValueKind::Small ? boxSmall(v) : v; }

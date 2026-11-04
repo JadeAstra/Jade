@@ -588,9 +588,12 @@ struct TypeAliasStmt : Stmt {
 // the interface's methods the types lack are written as funs (D186).
 struct ExtendStmt : Stmt {
     std::vector<TypeAnnotation> types;
-    TypeAnnotation interfaceType;
+    TypeAnnotation interfaceType;  // no name where it fits no interface and only adds fields
     std::vector<std::unique_ptr<VarStmt>> bridges;  // each with a getter and nothing stored
     std::vector<std::unique_ptr<FunctionDecl>> methods;  // each one of the interface's methods
+    // `var tag : string? = null` (D157): a field each object of the class has where the extend is
+    // in reach, kept beside the object, its starting value made when it is first read.
+    std::vector<std::unique_ptr<VarStmt>> stored;
     ExtendStmt() : Stmt(StmtKind::Extend) {}
 };
 

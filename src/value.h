@@ -1025,6 +1025,9 @@ struct ObjClass final : Obj {
     std::vector<ObjClass*> extendedTo;
     Table extendMethods;
     Table extendGetters;
+    // The fields extends add to it (D157), each name with the closure that makes its starting
+    // value; their values are kept beside the objects (VM::extraField).
+    Table extendFields;
     std::vector<std::pair<ObjString*, ObjClass*>> required;
 
     explicit ObjClass(ObjString* n) : Obj(ObjType::Class), name(n) {}
@@ -1050,6 +1053,11 @@ struct ObjClass final : Obj {
     const Value* extendGetter(const ObjString* key) const {
         for (const ObjClass* k = this; k != nullptr; k = k->super)
             if (const Value* v = k->extendGetters.find(key)) return v;
+        return nullptr;
+    }
+    const Value* extendField(const ObjString* key) const {
+        for (const ObjClass* k = this; k != nullptr; k = k->super)
+            if (const Value* v = k->extendFields.find(key)) return v;
         return nullptr;
     }
 

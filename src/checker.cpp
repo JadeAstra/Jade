@@ -539,8 +539,38 @@ struct Checker::Impl {
         // for every list; unknown where it is neither, or is written as no extend takes it.
         std::vector<Type> builtins;
         ClassInfo* iface = nullptr;
+        // The fields it adds (D157), as the fields of a class of their own that each type it
+        // extends reaches as it reaches an interface, where the extend is in reach; null if none.
+        ClassInfo* stored = nullptr;
     };
     std::vector<ExtendInfo> extendsDeclared;
+
+    // The class holding the fields an extend adds (D157): no class of the program, reached only
+    // through extendedTo. Its declaration is an empty interface's, with nothing above it.
+    std::vector<std::unique_ptr<ClassStmt>> storedDecls;
+    ClassInfo* storedFieldsOf(const ExtendStmt& s, Unit* u) {
+        if (s.stored.empty()) return nullptr;
+        storedDecls.push_back(std::make_unique<ClassStmt>());
+        ClassStmt& decl = *storedDecls.back();
+        decl.line = s.line;
+        decl.col = s.col;
+        decl.name = "extend " + s.types[0].name;
+        decl.isInterface = true;
+        classStore.push_back(std::make_unique<ClassInfo>());
+        ClassInfo* k = classStore.back().get();
+        k->name = decl.name;
+        k->decl = &decl;
+        k->unit = u;
+        k->isInterface = true;     // members only, nothing made of it
+        k->supersResolved = true;  // and nothing above it
+        for (const auto& field : s.stored) {
+            FieldInfo* f = newField(field->name, u, k);
+            f->decl = field.get();
+            f->isVal = field->isVal;
+            k->fields[field->name] = f;
+        }
+        return k;
+    }
 
     // The built-in types an extend may fit to an interface, written plainly (G30).
     static bool extendableBuiltin(const Type& t) {
@@ -679,6 +709,8 @@ struct Checker::Impl {
             if (e.stmt == &s) info = &e;
         if (info == nullptr) return;
         resolveExtend(*info);
+        if (info->stored != nullptr) checkStoredFields(s, *info);
+        if (s.interfaceType.name.empty()) return;  // it only adds fields (D157)
         if (info->iface == nullptr || !info->iface->isInterface) {
             report(s.interfaceType, "an extend fits types to an interface; " + s.interfaceType.name + " is not one (D33)");
             return;
@@ -750,6 +782,62 @@ struct Checker::Impl {
                 checkFunctionBody(getter, nullptr);
             }
             for (FuncInfo* f : funs) checkFunctionBody(f, nullptr);
+        }
+    }
+
+    // The fields an extend adds (D157): to a class, each a name the class has nothing of, given
+    // by no other extend of it or of a class above or below it, and its starting value of its type.
+    void checkStoredFields(const ExtendStmt& s, ExtendInfo& info) {
+        for (size_t t = 0; t < s.types.size(); t++) {
+            ClassInfo* k = info.types[t];
+            if (k == nullptr || k->isInterface || k->isValue || k->isData || k->isEnum || k->isEnumClass) {
+                const std::string what = k == nullptr ? "a built-in type" : k->isInterface ? "an interface" : k->isValue ? "a value type"
+                                         : k->isData ? "a data class" : "an enum";
+                report(s.types[t], "an extend adds fields to a class, kept beside each of its objects; " + s.types[t].name + " is " + what +
+                                       (k != nullptr && (k->isValue || k->isData) ? ", which is made and compared by its own fields" : "") + " (D157)");
+                continue;
+            }
+            const bool wasOwn = std::exchange(ownMembersOnly, true);
+            for (const auto& field : s.stored)
+                if (lookupMember(classType(k), field->name).found() || lookupMember(classType(k), field->name, true).found())
+                    report(*field, "'" + field->name + "' is " + k->name + "'s own: an extend does not replace what a class has (D157)");
+            ownMembersOnly = wasOwn;
+            // Two extends adding the same name to one object: the same field only if written alike,
+            // said at the later.
+            for (ExtendInfo& other : extendsDeclared) {
+                if (other.stmt == &s) break;
+                if (other.stored == nullptr) continue;
+                resolveExtend(other);
+                bool related = false;
+                for (ClassInfo* o : other.types)
+                    if (o != nullptr && (isSubclass(o, k) || isSubclass(k, o))) related = true;
+                if (!related) continue;
+                for (const auto& field : s.stored) {
+                    auto same = other.stored->fields.find(field->name);
+                    if (same == other.stored->fields.end()) continue;
+                    const VarStmt& was = *same->second->decl;
+                    if (was.isVal != field->isVal || text(resolve(was.type, *other.unit)) != text(resolve(field->type, *info.unit)) ||
+                        !was.type.present() || !field->type.present())
+                        report(*field, "'" + field->name + "' is added to " + k->name + " by another extend too, on line " + std::to_string(was.line) +
+                                           ", written otherwise: an object has one field of a name (D157)");
+                }
+            }
+        }
+        for (const auto& field : s.stored) {
+            FieldInfo* f = info.stored->fields[field->name];
+            const Type declared = fieldType(f);
+            FnCtx fc;
+            fc.topLevel = true;
+            fc.noWait = ObjectMade;
+            withCtx(fc, [&] {
+                if (!field->type.present()) keptLambda(*field->init);
+                const Type value = exprExpected(*field->init, declared);
+                if (field->type.present() && !fits(value, declared))
+                    report(*field->init, "'" + field->name + "' is " + describe(declared) + "; it cannot start as " + describe(value) +
+                                             toByteAdvice(value, declared, *field->init));
+                if (!field->type.present() && value.kind == Type::Null)
+                    report(*field, "'" + field->name + "' starts as null, so its type must be written (" + field->name + " : Type? = null)");
+            });
         }
     }
 
@@ -1535,9 +1623,13 @@ struct Checker::Impl {
                     declared(u, stmt->visibility, c.name, *stmt).cls = gatherClass(c, &u, nullptr, true);
                     break;
                 }
-                case StmtKind::Extend:
-                    extendsDeclared.push_back(ExtendInfo{static_cast<const ExtendStmt*>(stmt.get()), &u});
+                case StmtKind::Extend: {
+                    const auto& e = static_cast<const ExtendStmt&>(*stmt);
+                    ExtendInfo info{&e, &u};
+                    info.stored = storedFieldsOf(e, &u);
+                    extendsDeclared.push_back(info);
                     break;
+                }
                 case StmtKind::TypeAlias: {
                     const auto& a = static_cast<const TypeAliasStmt&>(*stmt);
                     GlobalSym& g = declared(u, stmt->visibility, a.name, *stmt);
@@ -2069,9 +2161,13 @@ struct Checker::Impl {
     std::vector<ClassInfo*> extendedTo(ClassInfo* c) {
         std::vector<ClassInfo*> fitted;
         if (ownMembersOnly || c == nullptr) return fitted;
-        for (ExtendInfo& e : extendsDeclared)
-            if (extendInReach(e) && resolveExtend(e) && std::find(e.types.begin(), e.types.end(), c) != e.types.end())
-                fitted.push_back(e.iface);
+        for (ExtendInfo& e : extendsDeclared) {
+            if (!extendInReach(e)) continue;
+            const bool fits = resolveExtend(e);
+            if (std::find(e.types.begin(), e.types.end(), c) == e.types.end()) continue;
+            if (fits) fitted.push_back(e.iface);
+            if (e.stored != nullptr) fitted.push_back(e.stored);  // the fields it adds (D157)
+        }
         return fitted;
     }
 

@@ -1,0 +1,64 @@
+// An extend may add fields to a class the program did not write (D157): each object has its
+// own, kept beside it, its starting value made for it when the field is first read.
+class Button(val label : string)
+class IconButton(label : string, val icon : string) : Button(label)
+
+extend Button {
+  var tag : string? = null
+  var clicks = 0
+  val notes : open List<string> = []
+  var onPress : (() -> unit)? = null
+}
+
+val ok = Button("OK")
+val cancel = Button("Cancel")
+print(ok.tag, ok.clicks)                          // expect: null 0
+ok.tag = "primary"
+ok.clicks += 2
+ok.clicks++
+print(ok.tag, ok.clicks, cancel.tag, cancel.clicks)   // expect: primary 3 null 0
+
+// Each object's starting value is its own.
+ok.notes.add("first")
+print(ok.notes, cancel.notes)                     // expect: ["first"] []
+
+// A subclass's objects have them too.
+val save = IconButton("Save", "disk")
+save.tag = "icon"
+print(save.tag, save.icon, save.clicks)           // expect: icon disk 0
+
+// A function kept in one, called.
+var pressed = 0
+ok.onPress = { pressed++ }
+val handler = ok.onPress
+if (handler != null) { handler() }
+print(pressed)                                    // expect: 1
+
+// Beside an interface's getters and funs, and read by bare name in them.
+interface Clickable {
+  val text : string
+  fun click()
+}
+extend Button : Clickable {
+  val text : string get() => label
+  fun click() { clicks++ }
+}
+ok.click()
+cancel.click()
+print(ok.clicks, cancel.clicks, (ok as Clickable).text)   // expect: 4 1 OK
+
+// Many objects made and dropped: what they kept goes with them.
+var total = 0
+for (i in 0..<20000) {
+  val b = Button("b$i")
+  b.tag = "t$i"
+  b.clicks = i
+  total += b.clicks
+}
+print(total, ok.tag)                              // expect: 199990000 primary
+
+// On the cores of a parallel section: each reads, and makes on first reading, the fields of
+// the objects it is given.
+val many = (0..<2000).map { Button("p$it") }
+for (b in many) { b.clicks = 1 }
+print(many.parallelStream().map { it.clicks + (it.tag ?: "none").size }.toList().sum())   // expect: 10000

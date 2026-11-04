@@ -1,0 +1,5 @@
+// An extend without an interface only adds fields (D157).
+class Box(val size : int)
+extend Box {   // expect compile error: an extend without an interface only adds fields, var name : T = ... (D157); a function for a type is an extension function, fun Box.name() (D33)
+  fun twice() : int => size * 2
+}

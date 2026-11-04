@@ -1,0 +1,5 @@
+// A field an extend adds has a starting value, made for each object (D157).
+class Box(val size : int)
+extend Box {
+  var tag : string?   // expect compile error: 'tag', a field an extend adds, needs a starting value, made for each object when it is first read: var tag : T = ... (D157)
+}

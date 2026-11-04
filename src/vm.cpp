@@ -242,6 +242,31 @@ void VM::bundleValues(int count) {
     for (const Value& v : pairs) *sp_++ = v;
 }
 
+// A field an extend adds (D157), read: the object's value, or its starting value, made for
+// it now and kept. The table is the root's, which every core of a parallel section reads and
+// only the root collects.
+Value VM::extraField(ObjInstance* instance, ObjString* name, Value init) {
+    VM& home = root_ != nullptr ? *root_ : *this;
+    {
+        std::lock_guard<std::mutex> hold(home.extrasLock_);
+        if (auto found = home.extras_.find(instance); found != home.extras_.end())
+            if (const Value* value = found->second.find(name)) return *value;
+    }
+    TempRoot keep(*this, Value::object(instance));
+    const Value made = own(call(init, 0, nullptr));
+    std::lock_guard<std::mutex> hold(home.extrasLock_);
+    Table& record = home.extras_[instance];
+    if (const Value* value = record.find(name)) return *value;  // another core made it meanwhile
+    record.set(name, made);
+    return made;
+}
+
+void VM::setExtraField(ObjInstance* instance, ObjString* name, Value value) {
+    VM& home = root_ != nullptr ? *root_ : *this;
+    std::lock_guard<std::mutex> hold(home.extrasLock_);
+    home.extras_[instance].set(name, value);
+}
+
 // Op::MergeBundle: a + b of two bundles, b's value where both have a name. Every bundle is
 // made here, params(...) as an empty one and its names, so each is marked as one (8.9e).
 void VM::mergeBundles() {
@@ -1042,7 +1067,7 @@ bool VM::hasMember(Value candidate, const ObjString* name) const {
     if (candidate.isObjType(ObjType::Instance)) {
         const ObjInstance* instance = asInstance(candidate);
         const ObjClass* cls = instance->cls;
-        if (instance->hasValue(name) || cls->methods.find(name) != nullptr ||
+        if (instance->hasValue(name) || cls->methods.find(name) != nullptr || cls->extendField(name) != nullptr ||
             cls->declaredIndex.find(name) != nullptr ||
             (cls->hasAccessors && (cls->getters.find(name) != nullptr || cls->setters.find(name) != nullptr)))
             return true;
@@ -2221,6 +2246,12 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
                 sp_[-argc - 1] = callee;
                 return trailing ? callValueTrailing(callee, argc) : callValue(callee, argc);
             }
+            if (const Value* init = instance->cls->extendField(name)) {
+                // A function kept in a field an extend adds (D157), called.
+                Value callee = extraField(instance, name, *init);
+                sp_[-argc - 1] = callee;
+                return trailing ? callValueTrailing(callee, argc) : callValue(callee, argc);
+            }
             if (const Value* extension = findExtension(receiver, name)) {
                 if (trailing) callTrailing(asClosure(*extension), argc);
                 else callClosure(asClosure(*extension), argc);
@@ -2549,6 +2580,7 @@ Value VM::getProperty(Value obj, ObjString* name) {
                 if (const Value* getter = instance->cls->extendGetter(name)) return callWithReceiver(obj, asClosure(*getter));  // D33
                 if (const Value* method = instance->cls->extendMethod(name))
                     return Value::object(alloc<ObjBoundMethod>(obj, asClosure(*method)));
+                if (const Value* init = instance->cls->extendField(name)) return extraField(instance, name, *init);  // D157
                 if (const FieldDecl* decl = instance->declOf(name)) {
                     if (decl->payload == FieldDecl::NoPayload && instance->fields()[decl->slot].isLazy())
                         return forceLazy(instance->fields()[decl->slot], [&](Value v) { instance->fields()[decl->slot] = v; },
@@ -3891,6 +3923,10 @@ void VM::setProperty(Value obj, ObjString* name, Value value) {
         guardWrite(instance);
         if (instance->cls->isEnum && (name == names.name || name == names.ordinal))
             throw runtimeError(Thrown::UnsupportedOperationException, "cannot assign to '" + name->utf8() + "' of an entry of enum " + instance->cls->name->utf8());
+        if (instance->cls->declaredIndex.find(name) == nullptr && instance->cls->extendField(name) != nullptr) {
+            setExtraField(instance, name, own(value));  // a field an extend adds (D157)
+            return;
+        }
         checkFieldAssignment(instance, name, value);  // every field is declared (R24)
         if (instance->inlined) {
             const FieldDecl* decl = instance->declOf(name);
@@ -8375,6 +8411,22 @@ void VM::collectGarbage() {
         gray_.pop_back();
         blacken(obj);
     }
+    // The fields extends add (D157): what an object's entry holds lives while the object does,
+    // and may reach objects with entries of their own; an entry goes with its object.
+    if (!extras_.empty()) {
+        for (;;) {
+            for (const auto& [obj, record] : extras_)
+                if (obj->marked || obj->immortal) markTable(record);
+            if (gray_.empty()) break;
+            while (!gray_.empty()) {
+                Obj* obj = gray_.back();
+                gray_.pop_back();
+                blacken(obj);
+            }
+        }
+        for (auto it = extras_.begin(); it != extras_.end();)
+            it = it->first->marked || it->first->immortal ? std::next(it) : extras_.erase(it);
+    }
 
     releaseUnreachedBlocks();
     sweep();
@@ -8535,6 +8587,7 @@ void VM::blacken(Obj* obj) {
             for (ObjClass* fitted : cls->extendedTo) markObject(fitted);
             markTable(cls->extendMethods);
             markTable(cls->extendGetters);
+            markTable(cls->extendFields);
             for (ObjString* part : cls->components) markObject(part);
             for (const auto& [name, interface] : cls->required) {
                 markObject(name);

@@ -499,6 +499,20 @@ public:
     void compileExtend(const ExtendStmt& s) {
         for (const TypeAnnotation& type : s.types) {
             line_ = s.line;
+            // The fields it adds (D157): each named on the class with what makes its starting
+            // value, which the runtime keeps beside each object once it is read or set.
+            for (const auto& field : s.stored) {
+                line_ = field->line;
+                emit(Op::GetGlobal, stdGlobal("__extendField", *field));
+                emitTypeName(type.name, type);
+                emit(Op::Const, stringConstant(field->name));
+                compileThunk([&] { compileExpr(*field->init); }, type.name + "." + field->name, field->line);
+                emit(Op::Call);
+                emitByte(3);
+                emit(Op::Pop);
+            }
+            if (s.interfaceType.name.empty()) continue;  // it only adds fields
+            line_ = s.line;
             // A built-in type (G30) as written, with what it holds (List<int>); a class by its name.
             const TypeSpec spec = resolveType(type);
             const bool builtin = spec.typed() && spec.id() != kTypeInstance;
@@ -5019,12 +5033,19 @@ private:
     }
 
     void compileLazyWith(const std::function<void()>& body, const std::string& displayName, int line) {
+        compileThunk(body, displayName + " (lazy)", line);
+        emit(Op::Lazy);
+    }
+
+    // A closure of no parameters that gives what `body` leaves: a lazy value's, or the starting
+    // value of a field an extend adds (D157).
+    void compileThunk(const std::function<void()>& body, const std::string& protoName, int line) {
         FunctionState state;
         state.enclosing = fs_;
         state.kind = FunctionKind::Function;
         state.object = objectMember(state);
         state.proto = newProto();
-        state.proto->name = displayName + " (lazy)";
+        state.proto->name = protoName;
         state.proto->source = file_;
         state.scopeDepth = 1;
         state.isLambda = true;
@@ -5048,7 +5069,6 @@ private:
         int index = static_cast<int>(fs_->proto->protos.size());
         fs_->proto->protos.push_back(state.proto);
         emit(Op::Closure, index);
-        emit(Op::Lazy);
     }
 
     // Emits a closure that returns the class called `className`. A field's class type is

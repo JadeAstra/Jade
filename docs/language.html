@@ -171,10 +171,11 @@ for (f in Row#.fields) { print(f.annotation&lt;JsonField&gt;()?.name ?: f.name) 
 val t : Table = {"a": [1, 2]}</pre></dd>
 
 <dt><code>extend</code></dt>
-<dd>Makes classes someone else wrote fit an interface of this program. Where the names differ, the properties written in its body bridge them.
+<dd>Makes classes someone else wrote fit an interface of this program. Where the names differ, the properties written in its body bridge them. It may also add fields to a class, each with a starting value made for each object when first read, kept beside the object (D157).
 <pre>class Crate(val count : int)
 interface Sized { val size : int }
-extend Crate : Sized { val size : int get() =&gt; count }</pre></dd>
+extend Crate : Sized { val size : int get() =&gt; count }
+extend Crate { var label : string? = null }</pre></dd>
 </dl>
 
 <h3 id="kw-members">Members, access and kinds of function</h3>
