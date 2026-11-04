@@ -459,7 +459,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Exception"><code>Exception</code></a> (1)</li>
 <li><a href="#ExecutionException"><code>ExecutionException</code></a> (1)</li>
 <li><a href="#Field"><code>Field</code></a> (10)</li>
-<li><a href="#Font"><code>Font</code></a> (33)</li>
+<li><a href="#Font"><code>Font</code></a> (35)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
@@ -1621,10 +1621,10 @@ Exception: everything else, which a bare `catch (e)` catches.
 <div class="entry" id="StackOverflowError"><code class="sig">class StackOverflowError(message : string? = &quot;stack overflow&quot;) : Error(message)</code><a class="anchor" href="#StackOverflowError">#</a>
 <p>The calls went too deep, as in a function that calls itself with no end. An Error, which a bare <code>catch (e)</code> does not catch.</p>
 </div>
-<div class="entry" id="InternalError"><code class="sig">class InternalError(message : string? = null) : Error(message)</code><a class="anchor" href="#InternalError">#</a>
+<div class="entry" id="InternalError"><code class="sig">class InternalError(message : string? = null, cause : Throwable? = null) : Error(message, cause)</code><a class="anchor" href="#InternalError">#</a>
 <p>Something wrong with the program as compiled, as against the program's own code.</p>
 </div>
-<div class="entry" id="AssertionError"><code class="sig">class AssertionError(message : string? = &quot;assertion failed&quot;) : Error(message)</code><a class="anchor" href="#AssertionError">#</a>
+<div class="entry" id="AssertionError"><code class="sig">class AssertionError(message : string? = &quot;assertion failed&quot;, cause : Throwable? = null) : Error(message, cause)</code><a class="anchor" href="#AssertionError">#</a>
 <p>assert(...) that does not hold.</p>
 </div>
 <div class="entry" id="NotImplementedError"><code class="sig">class NotImplementedError(message : string? = &quot;an operation is not implemented&quot;) : Error(message)</code><a class="anchor" href="#NotImplementedError">#</a>
@@ -1664,7 +1664,7 @@ Exception: everything else, which a bare `catch (e)` catches.
 <div class="entry" id="InterruptedException"><code class="sig">class InterruptedException(message : string? = &quot;the thread was interrupted&quot;) : RuntimeException(message)</code><a class="anchor" href="#InterruptedException">#</a>
 <p>A wait that was interrupted (sleep, join, wait or a queue): unchecked, so that waiting needs no try.</p>
 </div>
-<div class="entry" id="CancellationException"><code class="sig">class CancellationException(message : string? = &quot;the task was cancelled&quot;) : IllegalStateException(message)</code><a class="anchor" href="#CancellationException">#</a>
+<div class="entry" id="CancellationException"><code class="sig">class CancellationException(message : string? = &quot;the task was cancelled&quot;, cause : Throwable? = null) : IllegalStateException(message, cause)</code><a class="anchor" href="#CancellationException">#</a>
 <p>A task that was cancelled, thrown by what waits for it: unchecked.</p>
 </div>
 <h4>Checked</h4>
@@ -1953,8 +1953,8 @@ page.save(&quot;hello.png&quot;)
 <div class="entry member" id="Fonts.fallback"><code class="sig">fun fallback(character : any, weight : Number = 400, italic : bool = false) : Typeface?</code><a class="anchor" href="#Fonts.fallback">#</a>
 <p>A typeface that has a character, for text in a font that lacks it; null if none has.</p>
 </div>
-<div class="entry member" id="Fonts.load"><code class="sig">fun load(path : Path | string | Bytes, index : int = 0) : Typeface</code><a class="anchor" href="#Fonts.load">#</a>
-<p>A font from a file that is not installed, or from the bytes of one. A collection (.ttc) holds several: <code>count</code> says how many, <code>index</code> picks one.</p>
+<div class="entry member" id="Fonts.load"><code class="sig">fun load(path : Path | string | Bytes, index : int = 0) : Typeface throws IOException</code><a class="anchor" href="#Fonts.load">#</a>
+<p>A font from a file that is not installed, or from the bytes of one. A collection (.ttc) holds several: <code>count</code> says how many, <code>index</code> picks one. An IOException where the file cannot be read or is no font.</p>
 </div>
 <div class="entry member" id="Fonts.count"><code class="sig">fun count(path : Path | string) : int</code><a class="anchor" href="#Fonts.count">#</a>
 <p>How many fonts the file at <code>path</code> holds: more than 1 for a collection (.ttc), 0 if it cannot be read or is not a font file.</p>
@@ -2048,10 +2048,16 @@ font.copy(size = 16, bold = false)            the same with some options changed
 <div class="entry member" id="Font.lineHeight-2"><code class="sig">fun lineHeight(scale : Number) : int</code><a class="anchor" href="#Font.lineHeight-2">#</a>
 <p>The <code>lineHeight</code> in the pixels of a screen with <code>scale</code> of them to a unit, measured at that size; a <code>scale</code> of 0 or less throws an IllegalArgumentException.</p>
 </div>
-<div class="entry member" id="Font.width"><code class="sig">fun width(text : any?, scale : Number = 1) : int</code><a class="anchor" href="#Font.width">#</a>
+<div class="entry member" id="Font.xHeight-2"><code class="sig">fun xHeight(scale : Number) : int</code><a class="anchor" href="#Font.xHeight-2">#</a>
+<p>The <code>xHeight</code> in the pixels of a screen with <code>scale</code> of them to a unit, measured at that size; a <code>scale</code> of 0 or less throws an IllegalArgumentException.</p>
+</div>
+<div class="entry member" id="Font.capHeight-2"><code class="sig">fun capHeight(scale : Number) : int</code><a class="anchor" href="#Font.capHeight-2">#</a>
+<p>The <code>capHeight</code> in the pixels of a screen with <code>scale</code> of them to a unit, measured at that size; a <code>scale</code> of 0 or less throws an IllegalArgumentException.</p>
+</div>
+<div class="entry member" id="Font.width"><code class="sig">fun width(text : string | char, scale : Number = 1) : int</code><a class="anchor" href="#Font.width">#</a>
 <p>The width of <code>text</code>, a string or a char, in layout units, or with <code>scale</code> in the pixels of a screen with that many to a unit: the sum of its characters' widths, and so where it ends when drawn.</p>
 </div>
-<div class="entry member" id="Font.offsets"><code class="sig">fun offsets(text : any?, scale : Number = 1) : open List&lt;int&gt;</code><a class="anchor" href="#Font.offsets">#</a>
+<div class="entry member" id="Font.offsets"><code class="sig">fun offsets(text : string | char, scale : Number = 1) : open List&lt;int&gt;</code><a class="anchor" href="#Font.offsets">#</a>
 <p>Where each character of <code>text</code> starts and where the last one ends, in layout units or with <code>scale</code> in that screen's pixels: one number more than it has characters, the first 0.</p>
 <pre>font.offsets(&quot;abc&quot;)   [0, font.width(&quot;a&quot;), font.width(&quot;ab&quot;), font.width(&quot;abc&quot;)]
 </pre>

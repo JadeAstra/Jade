@@ -61,3 +61,10 @@ print(style.copy(italic = true))  // check: the bundle has no 'italic' to change
 print(params(18))                 // check: params(...) holds named arguments: params(bold = true, size = 14); to add another bundle's, write a + b
 val area = Size(2, 3)
 print(label("a", ...area))        // check: '...' passes the arguments of a bundle made with params(...), not a Size
+
+// Fonts.load says it throws an IOException (8.8j).
+val loadFont : () -> Typeface = { Fonts.load("x.ttf") }   // check: this lambda may throw IOException, which nothing can catch where it is called: it is kept as a () -> Typeface, which throws nothing checked; catch it inside the lambda (D35)
+
+// A font measures a string or a char (8.9g).
+val measured = Font("Segoe UI", 12)
+val wrongText = measured.width(5)          // check: Font.width(...) takes a string | char for 'text', not an int

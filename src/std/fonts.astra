@@ -137,8 +137,9 @@ object Fonts {
   }
 
   // A font from a file that is not installed, or from the bytes of one. A collection
-  // (.ttc) holds several: `count` says how many, `index` picks one.
-  fun load(path : Path | string | Bytes, index : int = 0) : Typeface => Typeface(path is Bytes ? __text.fromBytes(path, index) : __text.load("$path", index))
+  // (.ttc) holds several: `count` says how many, `index` picks one. An IOException where the
+  // file cannot be read or is no font.
+  fun load(path : Path | string | Bytes, index : int = 0) : Typeface throws IOException => Typeface(path is Bytes ? __text.fromBytes(path, index) : __text.load("$path", index))
   // How many fonts the file at `path` holds: more than 1 for a collection (.ttc), 0 if it
   // cannot be read or is not a font file.
   fun count(path : Path | string) : int => __text.countIn("$path")
@@ -249,15 +250,21 @@ class Font {
   // The `lineHeight` in the pixels of a screen with `scale` of them to a unit, measured at that
   // size; a `scale` of 0 or less throws an IllegalArgumentException.
   fun lineHeight(scale : Number) : int => engineAt(scale).height
+  // The `xHeight` in the pixels of a screen with `scale` of them to a unit, measured at that
+  // size; a `scale` of 0 or less throws an IllegalArgumentException.
+  fun xHeight(scale : Number) : int => engineAt(scale).xHeight
+  // The `capHeight` in the pixels of a screen with `scale` of them to a unit, measured at that
+  // size; a `scale` of 0 or less throws an IllegalArgumentException.
+  fun capHeight(scale : Number) : int => engineAt(scale).capHeight
 
   // The width of `text`, a string or a char, in layout units, or with `scale` in the pixels of
   // a screen with that many to a unit: the sum of its characters' widths, and so where it ends
   // when drawn.
-  fun width(text : any?, scale : Number = 1) : int => text is char ? engineAt(scale).charWidth(text) : engineAt(scale).width(text)
+  fun width(text : string | char, scale : Number = 1) : int => text is char ? engineAt(scale).charWidth(text) : engineAt(scale).width(text)
   // Where each character of `text` starts and where the last one ends, in layout units or with
   // `scale` in that screen's pixels: one number more than it has characters, the first 0.
   //   font.offsets("abc")   [0, font.width("a"), font.width("ab"), font.width("abc")]
-  fun offsets(text : any?, scale : Number = 1) : open List<int> => engineAt(scale).offsets(text)
+  fun offsets(text : string | char, scale : Number = 1) : open List<int> => engineAt(scale).offsets(text)
 
   // The typeface a character is drawn from: this font's own, or another one that has it when
   // this one does not. Null if no installed font has it.

@@ -1,0 +1,6 @@
+// AssertionError, InternalError and CancellationException take a cause, as in Java and Kotlin (8.5b).
+val root = IOException("disk full")
+print(AssertionError("check failed", root).cause)          // expect: IOException: disk full
+print(InternalError("bad state", root).cause!!.message)    // expect: disk full
+print(CancellationException("stopped", root).cause)        // expect: IOException: disk full
+print(AssertionError().message, CancellationException().cause)   // expect: assertion failed null

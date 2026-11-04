@@ -57,6 +57,7 @@ hiddenChildRecordsNothing()
 print("RecordingCanvasTest:", checks, "checks,", failed)   // expect: RecordingCanvasTest: 7 checks, []
 
 // -- PaintStyleTest --
+// A component paints in its own style (8.9h): nothing is handed down to it.
 
 class Probe : Content {
   override var owner : Component? = null
@@ -70,49 +71,37 @@ class Probe : Content {
 }
 
 // On a canvas that really draws, and on one that records.
-fun live(c : Component, given : Style) {
+fun live(c : Component) {
   val surface = Surface(40, 20)
   c.layout(40, 20)
-  c.paintInto(surface.canvas(), given)
+  c.paintInto(surface.canvas())
 }
-fun recorded(c : Component, given : Style) {
+fun recorded(c : Component) {
   c.layout(40, 20)
-  c.paintInto(RecordingCanvas(40, 20, []), given)
-}
-val handed = Style(Color.yellow, Color.red, true, false)
-
-// whatTheComponentDoesNotSetIsTheParents
-for (paint in [live, recorded]) {
-  val p = Probe()
-  paint(Component(p), handed)
-  same("all of it, kept or not", p.seen, handed)
+  c.paintInto(RecordingCanvas(40, 20, []))
 }
 
-// whatTheComponentSetsItselfWins
+// itsOwnStyleKeptOrNot
 for (paint in [live, recorded]) {
   val p = Probe()
   val c = Component(p)
   c.foreground = Color.blue
   c.enabled = false
-  paint(c, handed)
-  same("its foreground and its being disabled", p.seen, Style(Color.yellow, Color.blue, false, false))
+  paint(c)
+  same("its foreground and its being disabled", p.seen, Style(null, Color.blue, false))
 }
 
-// aDisabledParentDisablesIt
-val disabledProbe = Probe()
-live(Component(disabledProbe), handed.copy(enabled = false))
-same("disabled from above", disabledProbe.seen!!.enabled, false)
-
-// anotherStyleHandedDownPaintsItAgain: the kept picture is good for the style it was
-// painted in, and no other.
+// anotherStylePaintsItAgain: the kept picture is good for the style it was painted in, and
+// no other.
 val styled = Probe()
 val styledComponent = Component(styled)
-live(styledComponent, handed)
-live(styledComponent, handed)
+live(styledComponent)
+live(styledComponent)
 same("the same style: the kept picture", styled.paints, 1)
-live(styledComponent, handed.copy(framed = true))
+styledComponent.foreground = Color.red
+live(styledComponent)
 same("another style: painted again", styled.paints, 2)
-same("and it saw the new one", styled.seen!!.framed, true)
+same("and it saw the new one", styled.seen!!.foreground, Color.red)
 
 // tooBigToKeepStillPaintsInItsOwnStyle: past the size a picture is kept for, the content
 // is painted live, and in its own style, as when it is kept.
@@ -120,11 +109,11 @@ val bigProbe = Probe()
 val big = Component(bigProbe)
 big.foreground = Color.blue
 big.layout(3000, 3000)
-big.paintInto(Surface(40, 20).canvas().sub(0, 0, 3000, 3000), handed)
+big.paintInto(Surface(40, 20).canvas().sub(0, 0, 3000, 3000))
 same("too big to keep: its own foreground", bigProbe.seen!!.foreground, Color.blue)
 
 // theOverlayIsPaintedInItsOwnStyleToo: the caret and selection are drawn live over the kept
-// picture, in the component's style, not its parent's.
+// picture, in the component's style.
 class OverlayProbe : Content, OverlayContent {
   override var owner : Component? = null
   var seen : Style? = null
@@ -135,9 +124,9 @@ class OverlayProbe : Content, OverlayContent {
 val overlayProbe = OverlayProbe()
 val overlaid = Component(overlayProbe)
 overlaid.foreground = Color.blue
-live(overlaid, handed)
+live(overlaid)
 same("the overlay over a kept picture: its own foreground", overlayProbe.seen!!.foreground, Color.blue)
-print("PaintStyleTest:", checks, "checks,", failed)   // expect: PaintStyleTest: 17 checks, []
+print("PaintStyleTest:", checks, "checks,", failed)   // expect: PaintStyleTest: 14 checks, []
 
 // -- PaintCacheTest --
 
@@ -212,7 +201,7 @@ fun aSizeChangeRepaintsEvenAtTheSameGeneration() {
   same("wider: painted again", ct.paints, 2)
 }
 aSizeChangeRepaintsEvenAtTheSameGeneration()
-print("PaintCacheTest:", checks, "checks,", failed)   // expect: PaintCacheTest: 25 checks, []
+print("PaintCacheTest:", checks, "checks,", failed)   // expect: PaintCacheTest: 22 checks, []
 
 // -- RenderIntoTest --
 
@@ -238,12 +227,12 @@ fun reusingABufferDoesNotGhostThePreviousFrame() {
   yes("the picture used again is a new render of the new content", pixels(fresh) == pixels(buf))
 }
 reusingABufferDoesNotGhostThePreviousFrame()
-print("RenderIntoTest:", checks, "checks,", failed)   // expect: RenderIntoTest: 28 checks, []
+print("RenderIntoTest:", checks, "checks,", failed)   // expect: RenderIntoTest: 25 checks, []
 
 // -- More --
 
 // A picture at a scale has that many pixels to the unit, and the same thing in them.
-val twice = button("Scale").renderToImage(80, 30, 2.0, 2.0)
+val twice = button("Scale").renderToImage(80, 30, 2.0)
 val once = button("Scale").renderToImage(80, 30)
 print(once, twice, twice.inkBox()!!.width > once.inkBox()!!.width * 2 - 4)   // expect: Image(80 x 30) Image(160 x 60) true
 

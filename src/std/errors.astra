@@ -50,9 +50,9 @@ class OutOfMemoryError(message : string? = "out of memory") : Error(message)
 // bare `catch (e)` does not catch.
 class StackOverflowError(message : string? = "stack overflow") : Error(message)
 // Something wrong with the program as compiled, as against the program's own code.
-class InternalError(message : string? = null) : Error(message)
+class InternalError(message : string? = null, cause : Throwable? = null) : Error(message, cause)
 // assert(...) that does not hold.
-class AssertionError(message : string? = "assertion failed") : Error(message)
+class AssertionError(message : string? = "assertion failed", cause : Throwable? = null) : Error(message, cause)
 // TODO(): what is not written yet.
 class NotImplementedError(message : string? = "an operation is not implemented") : Error(message)
 
@@ -83,7 +83,7 @@ class ConcurrentModificationException(message : string? = null, cause : Throwabl
 // no try (D35).
 class InterruptedException(message : string? = "the thread was interrupted") : RuntimeException(message)
 // A task that was cancelled, thrown by what waits for it: unchecked.
-class CancellationException(message : string? = "the task was cancelled") : IllegalStateException(message)
+class CancellationException(message : string? = "the task was cancelled", cause : Throwable? = null) : IllegalStateException(message, cause)
 
 // -- Checked --
 

@@ -95,6 +95,7 @@ print(font.width("a\u{10FFFD}b") == font.width("a") + font.width("\u{10FFFD}") +
 val plain = Font("Segoe UI", 12)
 val large = Font("Segoe UI", 24)
 print(plain.ascent(2) == large.ascent, plain.descent(2) == large.descent, plain.lineHeight(2) == large.lineHeight, plain.width("The quick brown fox", 2) == large.width("The quick brown fox"))   // expect: true true true true
+print(plain.xHeight(2) == large.xHeight, plain.capHeight(2) == large.capHeight, plain.width('W', 2) == large.width('W'))   // expect: true true true
 // So a line at 2x is as wide, in the layout's units, as its characters truly are to within
 // a quarter of a pixel each; rounding in the layout's units would be twice as loose.
 val line = "The quick brown fox jumps over the lazy dog"
