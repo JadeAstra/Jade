@@ -1,0 +1,36 @@
+// A call of itself on another receiver as the last step is a loop too (8.4c): an extension's
+// (n.next.last()) or a method's that no class overrides, so a long chain walks in one frame.
+class Node(val value : int, val next : Node?) {
+  fun last() : Node => next == null ? this : next!!.last()
+  fun sumFrom(total : int) : int => next == null ? total + value : next!!.sumFrom(total + value)
+}
+fun Node.lastByExtension() : Node {
+  val n = next
+  return n == null ? this : n.lastByExtension()
+}
+var head : Node? = null
+for (i in 0..<30000) { head = Node(i, head) }      // more than a thread has frames
+print(head!!.last().value, head!!.lastByExtension().value, head!!.sumFrom(0))   // expect: 0 0 449985000
+
+// The arguments are worked out with the receiver it was called on, before it changes.
+class Counter(val n : int, val below : Counter?) {
+  fun gather(into : string) : string => below == null ? into + n : below!!.gather(into + n + ",")
+}
+print(Counter(3, Counter(2, Counter(1, null))).gather(""))   // expect: 3,2,1
+
+// A method a subclass overrides is called as it is, the subclass's running where it is the one.
+class Shape(val inner : Shape?) {
+  fun depth(d : int) : int => inner == null ? d : inner!!.depth(d + 1)
+}
+class Ring(inner : Shape?) : Shape(inner) {
+  override fun depth(d : int) : int => 100 + d
+}
+print(Shape(Shape(Ring(null))).depth(0))                      // expect: 102
+
+// One with a lambda inside, which may keep its `this`, is called as it is too.
+fun Node.withLambda() : int {
+  val f = { value }
+  val n = next
+  return n == null ? f() : n.withLambda()
+}
+print(Node(1, Node(2, Node(3, null))).withLambda())           // expect: 3

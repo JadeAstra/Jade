@@ -824,9 +824,11 @@ for lists, maps and sets, the scope functions, `repeat`, `buildList` and `buildM
 A function that calls itself as its last step starts again in the same frame instead, so
 recursion of that shape never runs out of stack (D29). This holds for a top-level function,
 an extension, a function declared inside another, a generic one giving itself its own type
-parameters again, and a method calling itself on its own object where no subclass overrides it;
-the call may be `return f(...)`, an expression body, a branch of `? :` or what follows `?:`, or
-what a branch of `if` or `when` gives, in what is returned. Inside a `try` it stays a call, as
+parameters again, and a method calling itself where no subclass overrides it; on another
+receiver too (`n.next.last()`, 8.4c), the next round running on it, where the function has no
+lambda or function inside it that might keep its `this`. The call may be `return f(...)`, an
+expression body, a branch of `? :` or what follows `?:`, or what a branch of `if` or `when`
+gives, in what is returned. Inside a `try` it stays a call, as
 with Kotlin's `tailrec`: as a loop, an error from a deeper round would pass by the handlers of
 the rounds above it. `tail fun` asks for it: a call of itself that is not its last step is then a
 compile error saying why (Kotlin's `tailrec` is written `tail`). An error's trace counts the

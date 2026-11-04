@@ -3639,11 +3639,29 @@ private:
         if (selfCallFits(value)) {
             const auto& call = static_cast<const CallExpr&>(value);
             fs_->tailLoops++;
+            // On another receiver (8.4c): it is worked out first, kept aside while the arguments
+            // are, which may read `this`, and then put where `this` was.
+            const bool onOther = session_.checker->callsItselfOn(call);
+            int receiverSlot = -1;
+            if (onOther) {
+                compileExpr(*static_cast<const MemberExpr&>(*call.callee).object);
+                fs_->add(Local{"(next receiver)", fs_->scopeDepth, VarInfo{}});
+                receiverSlot = fs_->locals.back().slot;
+            }
             for (size_t i = 0; i < call.args.size(); i++) compileExprFor(*call.args[i], fs_->locals[i + 1].info.type);
             for (size_t i = call.args.size(); i < fs_->decl->params.size(); i++) emit(Op::Unset);  // its default, worked out again
             line_ = call.line;
+            if (onOther) {
+                emit(Op::GetLocal, receiverSlot);
+                emit(Op::SetLocal, 0);
+                emit(Op::Pop);
+            }
             emit(Op::TailLoop);
             emitByte(static_cast<int>(fs_->decl->params.size()));
+            if (onOther) {
+                fs_->locals.pop_back();  // gone with the round: the code after this is another branch's
+                fs_->slotTop--;
+            }
             return;
         }
         if (value.kind == ExprKind::Ternary) {

@@ -271,6 +271,8 @@ public:
     // A call of the function it is written in, on the same object, which nothing overrides:
     // as its last step, a loop (D29).
     bool callsItself(const CallExpr& call) const;
+    // Such a call on another receiver (8.4c): the loop puts that receiver where `this` was.
+    bool callsItselfOn(const CallExpr& call) const;
     // Any call of the function it is written in, on the same object; `overridden` when a
     // subclass has one of its own (D29, for `tail fun`).
     bool selfCall(const CallExpr& call, bool& overridden) const;

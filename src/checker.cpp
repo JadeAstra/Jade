@@ -3436,6 +3436,7 @@ struct Checker::Impl {
             case StmtKind::Function: {
                 const auto& fs = static_cast<const FunctionStmt&>(s);
                 if (ctx != nullptr && ctx->topLevel && scopes.size() <= 1) break;  // checked with the file's functions
+                noteHeldFunction();
                 // A function declared inside another: a local whose type is a function.
                 if (fs.fn->isInline) report(*fs.fn, "a function declared inside another cannot be inline: it is a value of the code around it (D59)");
                 FuncInfo* f = newFunc(*fs.fn, unit, ctx ? ctx->cls : nullptr);
@@ -3733,6 +3734,7 @@ struct Checker::Impl {
     // A lambda or `fun (x) { ... }` used as a value, with the function type expected where it
     // stands, if one is: its parameters and the object it runs on are taken from it.
     Type lambda(const FunctionDecl& d, const Type* expected) {
+        noteHeldFunction();
         const bool typed = expected != nullptr && expected->kind == Type::Function && expected->knownParams;
         FnCtx c;
         c.parent = ctx;
@@ -7580,15 +7582,32 @@ struct Checker::Impl {
     // A call of the function being checked, on the same object: a bare name or `this.name`
     // (D29). Whether a subclass overrides it is seen once the whole program is.
     std::unordered_map<const CallExpr*, FuncInfo*> selfCalls;
+    // A call of it on another receiver, `n.next.last()` in fun Node.last(), or `other.size()` in
+    // a method nothing overrides (8.4c): a loop too, which puts the receiver where `this` was.
+    std::unordered_map<const CallExpr*, FuncInfo*> selfCallsOn;
     void noteSelfCall(FuncInfo* f, const CallExpr& c) {
         if (silent != 0 || ctx == nullptr || ctx->isLambda || ctx->fn != f || f->decl == nullptr || f->decl->isLambda) return;
         if (c.callee->kind == ExprKind::Member) {
             const auto& m = static_cast<const MemberExpr&>(*c.callee);
-            if (m.safe || m.object->kind != ExprKind::This || !static_cast<const ThisExpr&>(*m.object).label.empty()) return;
+            if (m.safe) return;
+            if (m.object->kind != ExprKind::This || !static_cast<const ThisExpr&>(*m.object).label.empty()) {
+                // Not for a value type, whose receiver is a place, nor a static function.
+                const bool method = f->owner != nullptr && !f->isStatic && !f->isExtension && !f->owner->isValue && !f->owner->isInterface;
+                const bool extension = f->isExtension && !(f->receiver.kind == Type::Class && f->receiver.cls != nullptr && f->receiver.cls->isValue);
+                if (method || extension) selfCallsOn[&c] = f;
+                return;
+            }
         } else if (c.callee->kind != ExprKind::Name) {
             return;
         }
         selfCalls[&c] = f;
+    }
+    // The functions with a lambda or a function written inside them: their `this` may be kept by
+    // one, so a call of themselves on another receiver is not a loop, which would change it.
+    std::unordered_set<const FuncInfo*> holdingFunctions;
+    void noteHeldFunction() {
+        for (FnCtx* c = ctx; c != nullptr; c = c->parent)
+            if (c->fn != nullptr) holdingFunctions.insert(c->fn);
     }
     bool overriddenBelow(const FuncInfo* f) const {
         if (f->owner == nullptr || f->isStatic) return false;
@@ -11065,7 +11084,12 @@ bool Checker::selfCall(const CallExpr& call, bool& overridden) const {
 
 bool Checker::callsItself(const CallExpr& call) const {
     auto found = impl_->selfCalls.find(&call);
-    return found != impl_->selfCalls.end() && !impl_->overriddenBelow(found->second);
+    return (found != impl_->selfCalls.end() && !impl_->overriddenBelow(found->second)) || callsItselfOn(call);
+}
+
+bool Checker::callsItselfOn(const CallExpr& call) const {
+    auto found = impl_->selfCallsOn.find(&call);
+    return found != impl_->selfCallsOn.end() && !impl_->overriddenBelow(found->second) && impl_->holdingFunctions.count(found->second) == 0;
 }
 
 bool Checker::typeArguments(const Node& call, std::vector<RuntimeType>& out) const {
