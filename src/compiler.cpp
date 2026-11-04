@@ -3513,6 +3513,40 @@ private:
         }
     }
 
+    // `is open` and `as open` on a list, map or set (8.2g): open is the checker's (D32), but a
+    // frozen collection knows it is one, so these refuse it as the program runs, at the cost of
+    // one test. With the value on the stack: where it is frozen, `is` gives false, `as?` null and
+    // `as` throws, and the jump returned (-1 for any other type) goes past the usual test.
+    int refuseFrozen(const TypeAnnotation& written, bool cast, bool safe, const Node& at) {
+        if (!written.isOpen) return -1;
+        const std::string& kind = written.name;
+        if (kind != "List" && kind != "Map" && kind != "Set") return -1;
+        TypeAnnotation frozen;
+        frozen.line = written.line;
+        frozen.col = written.col;
+        frozen.name = "Frozen" + kind;
+        emit(Op::Dup);
+        emitTypeOperand(Op::IsType, resolveType(frozen), frozen);
+        const int notFrozen = emitJump(Op::JumpIfFalse);
+        emit(Op::Pop);
+        if (!cast) {
+            emit(Op::False);
+        } else if (safe) {
+            emit(Op::Null);
+        } else {
+            std::string lower = kind;
+            lower[0] = static_cast<char>(lower[0] - 'A' + 'a');
+            emit(Op::GetGlobal, stdGlobal("__notOpen", at));
+            emit(Op::Const, stringConstant("cannot cast a frozen " + lower + " to open " + kind + ": toOpen" + kind +
+                                           "() makes a copy that can be changed"));
+            emit(Op::Call);
+            emitByte(1);
+        }
+        const int past = emitJump(Op::Jump);
+        patchJump(notFrozen);
+        return past;
+    }
+
     // ---- Tail calls (D29) ----
     //
     // A function calling itself as its last step, on the same object, starts again in the same
@@ -6203,6 +6237,8 @@ private:
                 compileExpr(*e.value);
                 line_ = e.line;
                 TypeSpec type = resolveType(e.type);
+                // `x is open List<int>`: a frozen one is not (8.2g).
+                const int frozenIsNot = refuseFrozen(e.type, false, false, e);
                 if (hasTypeArguments(e.type)) {
                     // `x is List<int>`: what the list was made to hold is checked too.
                     std::string shape;
@@ -6215,6 +6251,7 @@ private:
                     emit(Op::Pop);  // `any` takes every value
                     emit(Op::True);
                 }
+                if (frozenIsNot >= 0) patchJump(frozenIsNot);
                 if (e.negated) emit(Op::Not);
                 break;
             }
@@ -6224,6 +6261,8 @@ private:
                 compileExpr(*e.value);
                 line_ = e.line;
                 TypeSpec type = resolveType(e.type);
+                // `x as open List<int>`: a frozen one is refused, or null for `as?` (8.2g).
+                const int frozenRefused = refuseFrozen(e.type, true, e.safe, e);
                 if (hasTypeArguments(e.type)) {
                     std::string shape;
                     emitWrittenType(e.type, shape);
@@ -6233,6 +6272,7 @@ private:
                 } else if (type.typed()) {
                     emitTypeOperand(e.safe ? Op::CastOrNull : Op::Cast, type, e.type);
                 }
+                if (frozenRefused >= 0) patchJump(frozenRefused);
                 break;
             }
 

@@ -27,6 +27,5 @@ try { ints[3] = 1 } catch (e : IndexOutOfBoundsException) { print(e.message) }  
 try { print(ints[unknown(-1) as int]) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: list index -1 is out of range (size 3): a negative number is no position; the last is [^1]
 try { ints[0] = unknown("text") } catch (e : Exception) { print(e.message) }   // expect: cannot put a value of type string in a List<int>, which keeps only what it was made to hold
 try { floats[0] = unknown(1) } catch (e : Exception) { print(e.message) }   // expect: cannot put a value of type int in a List<float>, which keeps only what it was made to hold
-val fixed = ints.frozen() as open List<int>
-try { fixed[0] = 1 } catch (e : Exception) { print(e#.name) }   // expect: UnsupportedOperationException
+try { (ints.frozen() as open List<int>)[0] = 1 } catch (e : Exception) { print(e#.name) }   // expect: ClassCastException
 print(ints, ints[^1])   // expect: [6, 20, 3] 3

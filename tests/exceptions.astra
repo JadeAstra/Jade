@@ -16,7 +16,7 @@ val missing : int? = unknown(null)
 print(kind { missing!! }, kind { unknown("a") as int })           // expect: NullPointerException ClassCastException
 print(kind { "abc".toInt() }, kind { listOf<int>().first() })     // expect: NumberFormatException NoSuchElementException
 print(kind { require(false) }, kind { check(false) }, kind { error("no") })   // expect: IllegalArgumentException IllegalStateException IllegalStateException
-print(kind { items.frozen().toOpenList(); (items.frozen() as any as open List<int>).add(3) })   // expect: UnsupportedOperationException
+print(kind { items.frozen().toOpenList(); (items.frozen() as any as open List<int>).add(3) })   // expect: ClassCastException
 print(kind { int.maxValue + unknown(1) }, kind { assert(false) }, kind { TODO("later") })   // expect: ArithmeticException AssertionError NotImplementedError
 
 // The tree.

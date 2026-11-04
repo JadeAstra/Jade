@@ -39,4 +39,17 @@ print(attempt { frozenByKey["k"]!!.items.add(11) }, byKey["k"]!!.items.add(12), 
 // Objects are by identity: a frozen list of them holds the same objects, which can change.
 val accounts = [Account(5)].frozen()
 accounts[0].deposit(10)
-print(accounts[0].balance, attempt { (accounts as open List<Account>).add(Account(1)) })   // expect: 15 UnsupportedOperationException
+print(accounts[0].balance, attempt { (accounts as open List<Account>).add(Account(1)) })   // expect: 15 ClassCastException
+
+// is open and as open refuse a frozen collection as the program runs, as the object knows it is
+// frozen; an open list reached through a read-only name still passes (8.2g).
+val frozenAny : any = [1].frozen()
+val openAny : any = [1]
+print(frozenAny is open List<int>, openAny is open List<int>, frozenAny is List<int>, frozenAny !is open List<int>)   // expect: false true true true
+print(frozenAny as? open List<int>, openAny as? open List<int>)   // expect: null [1]
+try { frozenAny as open List<int> } catch (e : ClassCastException) { print(e.message) }   // expect: cannot cast a frozen list to open List: toOpenList() makes a copy that can be changed
+val frozenMap : any = mapOf(1 to 2).frozen()
+print(frozenMap is open Map<int, int>, setOf(1).frozen() as any is open Set<int>)   // expect: false false
+try { frozenMap as open Map<int, int> } catch (e : ClassCastException) { print(e.message) }   // expect: cannot cast a frozen map to open Map: toOpenMap() makes a copy that can be changed
+val readOnly : List<int> = [1]
+print(readOnly as any is open List<int>)   // expect: true

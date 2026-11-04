@@ -255,6 +255,11 @@ fun <T> Function.reversed() : (T, T) -> int {
   return { a, b -> comparator(b, a) }
 }
 
+// `x as open List<int>` where x is frozen (8.2g): what the compiled cast calls.
+fun __notOpen(message : string) : nothing {
+  throw ClassCastException(message)
+}
+
 // ---- Making collections ----
 
 // A new list of `items`, in their order, which can be changed: listOf(1, 2, 3).

@@ -387,7 +387,8 @@ reading gives `any?`. A read-only map or set goes where one of wider types is re
 one only at its own. A function declared on an open receiver (`fun open List<int>.push(x : int)`, the
 standard library's `addFirst` and `parallelSort`) changes it, so it is called only through an
 open name. Whether a name is open is the checker's: when the program runs, a list
-is a list.
+is a list, except that a frozen one knows it is frozen, so `x is open List<int>` is false for it
+and `x as open List<int>` throws a ClassCastException (8.2g).
 
 **Frozen collections.** `frozen()` makes a copy nobody may change, the lists, maps and sets
 inside it frozen too: a `FrozenList`, `FrozenMap` or `FrozenSet`, which goes wherever a

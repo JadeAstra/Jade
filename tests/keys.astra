@@ -18,7 +18,7 @@ val seen = setOf(1, 2).frozen()
 print(table, table is FrozenMap, table["a"] is FrozenList, seen, seen is FrozenSet, seen is Set, setOf(2, 1) == seen)
 // expect: {"a": [1]} true true {1, 2} true true true
 print(attempt { (hidden(frozen) as open List<any>).add(1) }, attempt { (hidden(table) as open Map<string, any>)["b"] = 2 }, attempt { (hidden(seen) as open Set<int>).add(3) })
-// expect: a frozen list cannot be changed: toOpenList() makes a copy that can be a frozen map cannot be changed: toOpenMap() makes a copy that can be a frozen set cannot be changed: toOpenSet() makes a copy that can be
+// expect: cannot cast a frozen list to open List: toOpenList() makes a copy that can be changed cannot cast a frozen map to open Map: toOpenMap() makes a copy that can be changed cannot cast a frozen set to open Set: toOpenSet() makes a copy that can be changed
 val copy = frozen.toOpenList()
 copy.add([4].frozen())
 print(copy, copy is FrozenList, frozen.size)   // expect: [[1, 2], [3], [4]] false 2
