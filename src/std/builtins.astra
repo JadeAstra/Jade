@@ -214,9 +214,6 @@ external fun <T> open List<T>.addAll(items : any) : bool
 // Puts `items` in before the item at `index`, from 0 to `size`; true if there were any. An
 // IndexOutOfBoundsException for any other `index`.
 external fun <T> open List<T>.addAll(index : int, items : any) : bool
-// Puts `item` in before the item at `index`, from 0 to `size` (the end). An
-// IndexOutOfBoundsException for any other `index`.
-external fun <T> open List<T>.insert(index : int, item : T)
 // The item at `index`, from 0; unlike `list[i]`, never counted from the end. An
 // IndexOutOfBoundsException where there is none.
 external fun <T> List<T>.get(index : int) : T
@@ -576,9 +573,8 @@ external fun int.toUint16Wrapped() : int
 external fun int.toInt32Wrapped() : int
 // The low 32 bits as an unsigned number, from 0 to 4294967295: -1 gives 4294967295.
 external fun int.toUint32Wrapped() : int
-// For 32-bit work ported from Kotlin (D148): the low 32 bits as a signed number, and their
-// rotations, each a signed 32-bit number as Kotlin's Int is.
-external fun int.wrap32() : int
+// For 32-bit work ported from Kotlin (D148): the low 32 bits' rotations, each a signed 32-bit
+// number as Kotlin's Int is. The low 32 bits themselves are toInt32Wrapped().
 // The low 32 bits turned `count` places to the left, those leaving at the top coming back at the
 // bottom, as a signed 32-bit number. Only the low 5 bits of `count` count.
 external fun int.rotateLeft32(count : int) : int

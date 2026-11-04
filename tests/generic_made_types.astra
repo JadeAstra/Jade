@@ -11,7 +11,7 @@ fun <T> gather(vararg items : T) : List<T> => items
 fun names(vararg parts : string) : List<string> => parts
 print(listOf(1, 2).itemType, setOf("a").itemType, gather(1.5, 2.5).itemType, gather(Point(1, 2)).itemType, names("a", "b").itemType)
 // expect: int string float Point string
-print(listOf<int>().itemType, gather<string>().itemType, mutableListOf(1).itemType)   // expect: int string int
+print(listOf<int>().itemType, gather<string>().itemType, listOf(1).itemType)   // expect: int string int
 
 // A set from a list or a set.
 print(ints.toSet().itemType, Set(ints).itemType, setOf(1, 2).toSet().itemType, {"a": 1}.values.toSet().itemType)   // expect: int int int int

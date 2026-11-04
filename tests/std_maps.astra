@@ -2,7 +2,7 @@
 
 // Making maps.
 val ages = mapOf("ann" to 31, "bob" to 25, "cy" to 40)
-print(ages, mutableMapOf(), emptyMap(), hashMapOf(1 to 2))   // expect: {"ann": 31, "bob": 25, "cy": 40} {} {} {1: 2}
+print(ages, mapOf(), emptyMap(), mapOf(1 to 2))   // expect: {"ann": 31, "bob": 25, "cy": 40} {} {} {1: 2}
 print(buildMap { put("a", 1); put("b", 2) })                 // expect: {"a": 1, "b": 2}
 
 // size, keys, values and entries are read without brackets, as in Kotlin; with them they
@@ -20,7 +20,7 @@ try { ages.getValue("zed") } catch (e) { print(e.message) }  // expect: getValue
 print(ages.isEmpty(), ages.isNotEmpty(), {:}.isEmpty(), {:}.isNullOrEmpty(), ages.orEmpty().size, {:}.ifEmpty { ages }.size)   // expect: false true true true 3 3
 
 // Writing. put and remove give the value that was there.
-val m = mutableMapOf("a" to 1)
+val m = mapOf("a" to 1)
 print(m.put("a", 10), m.put("b", 2), m)                      // expect: 1 null {"a": 10, "b": 2}
 m.set("c", 3)
 m.putAll({"d": 4})

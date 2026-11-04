@@ -691,9 +691,6 @@ void registerNumberMethods(VM& vm) {
     });
     // For 32-bit work ported from Kotlin (D148): the low 32 bits as a signed number, and
     // rotations of them, each giving a signed 32-bit number as Kotlin's Int does.
-    vm.defineMethod(T, "wrap32", 0, 0, [](VM& vm, Value self, int, Value*) -> Value {
-        return Value::integer(static_cast<int32_t>(wholeOnly(vm, self, "wrap32")));
-    });
     vm.defineMethod(T, "rotateLeft32", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
         const uint32_t bits = static_cast<uint32_t>(wholeOnly(vm, self, "rotateLeft32"));
         const unsigned count = static_cast<unsigned>(vm.toInt(args[0], "rotation") & 31);
@@ -960,9 +957,9 @@ void registerListMethods(VM& vm) {
             vm.listAdd(list, args[0]);  // at the end, where nothing moves: a Ref is read as it is copied
         } else {
             args[1] = vm.boxed(args[1]);  // copied before the items after it move
-            if (!args[0].isInt() || args[0].as.i < 0 || static_cast<uint64_t>(args[0].as.i) > list->size())
-                throw outOfRange(vm, "add", args[0], list->size());
-            vm.listInsert(list, static_cast<size_t>(args[0].as.i), &args[1], 1);
+            const int64_t at = vm.toInt(args[0], "add position");
+            if (at < 0 || static_cast<uint64_t>(at) > list->size()) throw vm.outOfRange("add position", args[0], list->size());
+            vm.listInsert(list, static_cast<size_t>(at), &args[1], 1);
         }
         return Value::boolean(true);
     });

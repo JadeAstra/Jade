@@ -29,7 +29,7 @@ print(part, items)   // expect: [20, 30, 99] [10, 20, 30, 40]
 val changed = [1, 2, 3]
 changed[^1] = 9
 changed.removeAt(^2)
-print(changed, attempt { changed.insert(-1, 0) })   // expect: [1, 9] insert position -1 is out of range (size 2): a negative number is no position; the last is [^1]
+print(changed, attempt { changed.add(-1, 0) })   // expect: [1, 9] add position -1 is out of range (size 2): a negative number is no position; the last is [^1]
 
 // An Index is an int from the start or ^k from the end; of(size) is the position it means.
 fun at(i : Index) : string => "${i.fromEnd} ${i.value} ${i.of(10)}"

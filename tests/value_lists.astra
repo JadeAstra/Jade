@@ -11,7 +11,7 @@ for (i in 0 ..< 5) { pts.add(Point(i, i * 10)) }
 print(pts.size, pts[2], pts[2].y, pts.first(), pts.last())   // expect: 5 Point(x=2, y=20) 20 Point(x=0, y=0) Point(x=4, y=40)
 pts[1] = Point(-1, -1)
 pts.add(0, Point(9, 9))
-pts.insert(1, Point(8, 8))
+pts.add(1, Point(8, 8))
 print(pts)   // expect: [Point(x=9, y=9), Point(x=8, y=8), Point(x=0, y=0), Point(x=-1, y=-1), Point(x=2, y=20), Point(x=3, y=30), Point(x=4, y=40)]
 print(pts.removeAt(0), pts.remove(Point(8, 8)), pts.remove(Point(7, 7)), pts.size)   // expect: Point(x=9, y=9) true false 5
 print(pts.contains(Point(2, 20)), pts.indexOf(Point(3, 30)), pts.lastIndexOf(Point(0, 0)), pts.getOrNull(9))   // expect: true 3 0 null

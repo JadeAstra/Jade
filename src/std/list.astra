@@ -780,7 +780,7 @@ fun <T> List<T>.toOpenSet() : open Set<T> => Set(this)
 
 // Puts `item` at the front of the list.
 fun <T> open List<T>.addFirst(item : T) {
-  this.insert(0, item)
+  this.add(0, item)
 }
 
 // Puts `item` at the end of the list, as add.

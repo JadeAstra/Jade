@@ -454,7 +454,7 @@ class NativeWindow {
       return bits
     }
     private fun buttonSet(bits : int) : Set<PointerButton> {
-      val held = mutableSetOf()
+      val held = setOf()
       for (button in PointerButton.entries) {
         if (bits & (1 << button.ordinal) != 0) { held.add(button) }
       }

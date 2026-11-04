@@ -36,8 +36,8 @@ group adds its section.
 
 - **Overflow is an error.** Kotlin's `Int` wraps silently past 2,147,483,647; Astra's `int` is 64
   bits and an answer past its range is an error (D27). Code that counts on wrapping says so:
-  `a &+ b`, `a &- b`, `a &* b`, and `.wrap32()` for Kotlin's 32-bit result. Look for:
-  - hash loops, `h = 31 * h + c`: write `h = (31 &* h &+ c.code).wrap32()`, or use `hash(...)`;
+  `a &+ b`, `a &- b`, `a &* b`, and `.toInt32Wrapped()` for Kotlin's 32-bit result. Look for:
+  - hash loops, `h = 31 * h + c`: write `h = (31 &* h &+ c.code).toInt32Wrapped()`, or use `hash(...)`;
   - random number generators and checksums multiplying large numbers;
   - `ushr` on a negative number, which in Kotlin works on 32 bits: `x ushr 16` of a negative
     `Int` is `(x & 0xFFFFFFFF) >>> 16` in Astra, or `x.toUint32Wrapped() >>> 16`;
@@ -68,6 +68,9 @@ overflows, a char compared with a string literal of another length.
 | `MutableList<T>`, `MutableMap<K, V>`, `MutableSet<T>` | `open List<T>`, `open Map<K, V>`, `open Set<T>` | the compiler says so; a list made with `[...]` or `listOf` is open |
 | `MutableList<in Button>` | `open List<accepts Button>` | (D34) |
 | `toMutableList()`, `toMutableMap()`, `toMutableSet()` | `toOpenList()`, `toOpenMap()`, `toOpenSet()` | (D46) |
+| `mutableListOf`, `arrayListOf`, `MutableList(n) { }` | `listOf`, `List(n) { }` | one name for each thing; the compiler says so (D74, 8.2h) |
+| `mutableMapOf`, `hashMapOf`, `linkedMapOf` | `mapOf` | its keys in the order they came |
+| `mutableSetOf`, `hashSetOf`, `linkedSetOf` | `setOf` | its items in the order they came |
 | `s.length`, `list.count()` as a size | `s.size` | every count of things is `size` (D130); `File.length()` is `size()` |
 | `s.substring(a, b)`, `list.subList(a, b)`, `slice(a..b)` | `s[a..<b]`, `list[a..<b]`, `list[a..b]` | a slice, a new string or list (D147) |
 | `s.substring(a)`, `list.drop(a)` as a slice | `s[a..]` | |

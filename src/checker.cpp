@@ -2507,6 +2507,8 @@ struct Checker::Impl {
             {"pop", "pop() is written removeLast(): one name for each thing (D74)"},
             {"uppercase", "uppercase() is written upper(): one name for each thing (D74)"},
             {"lowercase", "lowercase() is written lower(): one name for each thing (D74)"},
+            {"insert", "insert(i, item) is written add(i, item), as in Kotlin: one name for each thing (D74)"},
+            {"wrap32", "wrap32() is written toInt32Wrapped(), as toByteWrapped() and the others are: one name for each thing (D74, D148)"},
             {"uppercaseChar", "uppercaseChar() is written upper(), which gives a char on a char: one name for each thing (D74)"},
             {"lowercaseChar", "lowercaseChar() is written lower(), which gives a char on a char: one name for each thing (D74)"},
             {"titlecase", "titlecase() is written upper(), which gives a char on a char: one name for each thing (D74)"},
@@ -2567,6 +2569,17 @@ struct Checker::Impl {
 
     static std::string removedName(const std::string& name) {
         static const std::unordered_map<std::string, std::string> gone = {
+            // Kotlin's second names for making collections (8.2h): listOf, mapOf and setOf give
+            // ones that can be changed already.
+            {"mutableListOf", "mutableListOf(...) is written listOf(...), which gives a list that can be changed: one name for each thing (D74)"},
+            {"arrayListOf", "arrayListOf(...) is written listOf(...), which gives a list that can be changed: one name for each thing (D74)"},
+            {"MutableList", "MutableList(n) { } is written List(n) { }, which gives a list that can be changed: one name for each thing (D74)"},
+            {"mutableMapOf", "mutableMapOf(...) is written mapOf(...), which gives a map that can be changed: one name for each thing (D74)"},
+            {"hashMapOf", "hashMapOf(...) is written mapOf(...), which gives a map that can be changed: one name for each thing (D74)"},
+            {"linkedMapOf", "linkedMapOf(...) is written mapOf(...), which gives a map that can be changed, in the order its keys came: one name for each thing (D74)"},
+            {"mutableSetOf", "mutableSetOf(...) is written setOf(...), which gives a set that can be changed: one name for each thing (D74)"},
+            {"hashSetOf", "hashSetOf(...) is written setOf(...), which gives a set that can be changed: one name for each thing (D74)"},
+            {"linkedSetOf", "linkedSetOf(...) is written setOf(...), which gives a set that can be changed, in the order its items came: one name for each thing (D74)"},
             {"Future", "a result to come is a Job<T> in Astra, from task { }, thread { } or a pool's submit { }: then { }, get(timeout = ...) (D89)"},
             {"CompletableFuture", "a result to come is a Job<T> in Astra, made by hand as Job<T>() and given its value with complete(v) or fail(e) (D89)"},
             {"Executor", "threads that take jobs are a ThreadPool(threads = n) in Astra, and one thread taking them in order a JobQueue(name): submit { } gives a Job (D88)"},
@@ -5810,7 +5823,7 @@ struct Checker::Impl {
 
     static bool listChangingName(const std::string& name, size_t args) {
         static const std::unordered_set<std::string> changing = {
-            "insert", "remove", "removeAt", "removeFirst", "removeLast", "removeFirstOrNull", "removeLastOrNull", "clear", "sort",
+            "remove", "removeAt", "removeFirst", "removeLast", "removeFirstOrNull", "removeLastOrNull", "clear", "sort",
             "sortBy", "sortByDescending", "sortWith", "sortDescending", "reverse", "fill", "set", "shuffle", "removeAll",
             "retainAll", "removeIf", "replaceAll", "pop"};
         return changing.count(name) != 0 || ((name == "add" || name == "addAll") && args == 2);
@@ -7202,11 +7215,10 @@ struct Checker::Impl {
     std::unordered_map<const Node*, ClassInfo*> constructedValues;
     std::unordered_set<const Node*> newValueAdds;
 
-    // `pts.insert(i, Point(1, 2))` and `pts.add(i, Point(1, 2))` are the same, at position i (G7).
+    // `pts.add(i, Point(1, 2))` the same, at position i (G7).
     void noteNewValueAdded(const FuncInfo* f, const Type* receiver, const Args& args, const Node& at) {
         if (!f->isExternal || receiver == nullptr || args.spread) return;
-        const bool add = f->name == "add" && (args.exprs.size() == 1 || args.exprs.size() == 2), insert = f->name == "insert" && args.exprs.size() == 2;
-        if (!add && !insert) return;
+        if (f->name != "add" || (args.exprs.size() != 1 && args.exprs.size() != 2)) return;
         const Type list = withNull(*receiver, false);
         if (list.kind != Type::List || list.args.size() != 1) return;
         const Type& item = list.args[0];
@@ -8505,11 +8517,11 @@ struct Checker::Impl {
     }
 
     // The keys a map or a set of the standard library's is made with (G60): setOf(a, b) and
-    // mutableSetOf's items, and mapOf(k to v) and mutableMapOf's keys written with `to`.
+    // setOf's items, and mapOf(k to v)'s keys written with `to`.
     void noteMadeKeys(const CallExpr& c, const std::string& name, const FuncInfo* f) {
         if (f == nullptr || f->unit == nullptr || !f->unit->prelude || c.namedCount != 0) return;
-        const bool set = name == "setOf" || name == "mutableSetOf";
-        if (!set && name != "mapOf" && name != "mutableMapOf") return;
+        const bool set = name == "setOf";
+        if (!set && name != "mapOf") return;
         for (const ExprPtr& arg : c.args) {
             if (set) {
                 noteKey(*arg, typeQuietly(*arg));

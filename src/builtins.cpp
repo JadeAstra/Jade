@@ -603,14 +603,6 @@ void registerStringMethods(VM& vm) {
 void registerListMethods(VM& vm) {
     const BuiltinType T = BuiltinType::List;
 
-    vm.defineMethod(T, "insert", 2, 2, [](VM& vm, Value self, int, Value* args) -> Value {
-        ObjList* list = asList(self);
-        const int64_t at = vm.toInt(args[0], "insert position");
-        if (at < 0 || static_cast<uint64_t>(at) > list->size()) throw vm.outOfRange("insert position", args[0], list->size());
-        vm.listInsert(list, static_cast<size_t>(at), &args[1], 1);
-        return Value::null();
-    });
-
     vm.defineMethod(T, "removeAt", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
         ObjList* list = asList(self);
         size_t index;
@@ -975,7 +967,7 @@ void registerBuiltins(VM& vm) {
 
     // For parallel sections: which methods change what they are called on, and which
     // built-in functions wait, or work on something the whole program has one of.
-    vm.markMutating(BuiltinType::List, {"insert", "removeAt", "remove", "clear", "reverse", "sort", "add", "addAll", "set",
+    vm.markMutating(BuiltinType::List, {"removeAt", "remove", "clear", "reverse", "sort", "add", "addAll", "set",
                                         "removeFirst", "removeLast", "removeFirstOrNull", "removeLastOrNull", "fill", "sortBy",
                                         "sortByDescending", "replaceAll"});
     vm.markMutating(BuiltinType::Map, {"remove", "clear", "put", "set"});

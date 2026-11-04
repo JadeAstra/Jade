@@ -4,12 +4,12 @@
 val unknown = { value -> value }
 
 // Making lists.
-print(listOf(1, 2, 3), mutableListOf(), emptyList(), listOfNotNull(1, null, 2))   // expect: [1, 2, 3] [] [] [1, 2]
-print(List(4) { it * it }, MutableList(2) { "x" })       // expect: [0, 1, 4, 9] ["x", "x"]
+print(listOf(1, 2, 3), listOf(), emptyList(), listOfNotNull(1, null, 2))   // expect: [1, 2, 3] [] [] [1, 2]
+print(List(4) { it * it }, List(2) { "x" })       // expect: [0, 1, 4, 9] ["x", "x"]
 print(buildList { add(1); add(2); addAll([3, 4]) })      // expect: [1, 2, 3, 4]
 
 // Adding, reading and removing.
-val xs = mutableListOf(10, 20, 30)
+val xs = listOf(10, 20, 30)
 print(xs.add(40), xs.size, xs.lastIndex, xs.indices)     // expect: true 4 3 0..<4
 xs.add(1, 15)
 xs.addAll([50, 60])

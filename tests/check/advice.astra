@@ -51,3 +51,11 @@ class Holder {
     @Nope var x = 1                        // check: 'Nope' is no annotation: one is declared annotation Nope(val value : T) (D153)
   }
 }
+
+// One name for each thing (8.2h, 8.1f).
+val made1 = mutableListOf(1)               // check: mutableListOf(...) is written listOf(...), which gives a list that can be changed: one name for each thing (D74)
+val made2 = MutableList(2) { 0 }           // check: MutableList(n) { } is written List(n) { }, which gives a list that can be changed: one name for each thing (D74)
+val made3 = hashMapOf(1 to 2)              // check: hashMapOf(...) is written mapOf(...), which gives a map that can be changed: one name for each thing (D74)
+val made4 = linkedSetOf(1)                 // check: linkedSetOf(...) is written setOf(...), which gives a set that can be changed, in the order its items came: one name for each thing (D74)
+fun putFirst(items : open List<int>) { items.insert(0, 1) }   // check: insert(i, item) is written add(i, item), as in Kotlin: one name for each thing (D74)
+val wrapped = 5.wrap32()                   // check: wrap32() is written toInt32Wrapped(), as toByteWrapped() and the others are: one name for each thing (D74, D148)

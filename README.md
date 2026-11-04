@@ -1526,7 +1526,7 @@ and an item read from it is a value as any other.
 ```astra
 val pts : List<Point> = []
 pts.add(Point(1, 2))         // written straight into the list: no Point is made on its own
-pts.insert(0, Point(0, 0))   // the same, at a position (so is pts.add(0, Point(0, 0)))
+pts.add(0, Point(0, 0))      // the same, at a position
 pts[0].x                     // read where it is
 pts.sortBy { it.x }          // each key worked out once, each point moved once
 val list : List<any> = pts
@@ -2364,7 +2364,7 @@ message is a lambda, so it is only worked out when the check fails, and may be l
 | `n.toString()`, `n.toString(16)`, `n.char` | as text, in another base; the character numbered `n` |
 | `n.toByte()`, `n.toByteWrapped()` | as a byte: an error past 0 to 255, or the low 8 bits |
 | `n.toUnsignedString(radix?)`, `a.compareUnsigned(b)`, `a.divideUnsigned(b)`, `a.remainderUnsigned(b)`, `s.parseUnsigned(radix?)` | an int's 64 bits as unsigned; `a >>> n` shifts zeros in |
-| `n.wrap32()`, `n.rotateLeft32(k)`, `n.rotateRight32(k)` | for 32-bit work ported from Kotlin: the low 32 bits as a signed number, and their rotations |
+| `n.toInt32Wrapped()`, `n.rotateLeft32(k)`, `n.rotateRight32(k)` | for 32-bit work ported from Kotlin: the low 32 bits as a signed number, and their rotations |
 | `x.isNaN()`, `x.isInfinite()`, `x.isFinite()` | |
 | `compareValues(a, b)`, `maxOf(a, b, ...)`, `minOf(a, b, ...)` | order numbers or strings; `null` comes first |
 
@@ -2377,7 +2377,7 @@ place. Kotlin's `Int.MAX_VALUE` and the like are errors saying which of these to
 
 An int sum, difference, product or quotient that does not fit in an int is an error, which
 says so, rather than an answer wrapped round: `int.maxValue + 1` fails. `a &+ b`, `a &- b`
-and `a &* b` wrap round where that is meant, as a hash does: `h = (31 &* h &+ c.code).wrap32()`.
+and `a &* b` wrap round where that is meant, as a hash does: `h = (31 &* h &+ c.code).toInt32Wrapped()`.
 `hash(a, b, ...)` gives the hash of several values together, wrapping inside, so a class's
 `hashCode` needs no loop of its own: `fun hashCode() : int => hash(x, y)`. It uses a class's
 own `hashCode` for an object of one.
@@ -2438,8 +2438,8 @@ collections").
 
 | | |
 | --- | --- |
-| Making | `[1, 2]`, `listOf(...)`, `mutableListOf(...)`, `emptyList()`, `listOfNotNull(...)`, `List(n) { index -> }`, `buildList { add(1) }` |
-| Adding and removing | `add(x)`, `add(i, x)`, `addAll(items)`, `addFirst(x)`, `remove(x)`, `removeAt(i)`, `removeFirst()`, `removeLast()`, `removeFirstOrNull()`, `removeLastOrNull()`, `removeAll { }`, `removeAll(items)`, `retainAll(...)`, `clear()`, `set(i, x)`, `fill(x)`, `insert(i, x)` |
+| Making | `[1, 2]`, `listOf(...)`, `emptyList()`, `listOfNotNull(...)`, `List(n) { index -> }`, `buildList { add(1) }` |
+| Adding and removing | `add(x)`, `add(i, x)`, `addAll(items)`, `addFirst(x)`, `remove(x)`, `removeAt(i)`, `removeFirst()`, `removeLast()`, `removeFirstOrNull()`, `removeLastOrNull()`, `removeAll { }`, `removeAll(items)`, `retainAll(...)`, `clear()`, `set(i, x)`, `fill(x)` |
 | Reading | `get(i)`, `getOrNull(i)`, `getOrElse(i) { }`, `first()`, `last()`, `firstOrNull()`, `lastOrNull()`, `single()`, `singleOrNull()`, each of those six also with a condition (`first { it > 2 }`), `find { }`, `findLast { }`, `contains(x)`, `containsAll(items)`, `indexOf(x)`, `lastIndexOf(x)`, `indexOfFirst { }`, `indexOfLast { }` |
 | Asking | `isEmpty()`, `isNotEmpty()`, `isNullOrEmpty()`, `any { }`, `all { }`, `none { }`, `count { }`, `ifEmpty { }` |
 | Going through | `forEach { }`, `forEachIndexed { index, item -> }`, `onEach { }`, `withIndex()` |
@@ -2470,7 +2470,7 @@ are values, equal by what they hold.
 
 | | |
 | --- | --- |
-| Making | `{"a": 1}`, `{:}`, `mapOf("a" to 1, ...)`, `mutableMapOf(...)`, `emptyMap()`, `buildMap { put(k, v) }` |
+| Making | `{"a": 1}`, `{:}`, `mapOf("a" to 1, ...)`, `emptyMap()`, `buildMap { put(k, v) }` |
 | Reading | `map[key]`, `get(key, default?)`, `getValue(key)` (an error if it is not there), `getOrDefault(key, d)`, `getOrElse(key) { }`, `keys.contains(key)`, `key in map.keys`, `values.contains(v)`, `(key to value) in map` |
 | Writing | `map[key] = v`, `put(key, v)` and `remove(key)` (both give what was there before), `set(key, v)`, `putAll(map or pairs)`, `getOrPut(key) { }`, `update(key, start) { old -> new }` (a missing key starts from `start`; gives the new value), `clear()` |
 | Asking | `isEmpty()`, `isNotEmpty()`, `isNullOrEmpty()`, `any { }`, `all { }`, `none { }`, `count { }` |
@@ -2511,7 +2511,7 @@ A **`Set`** holds each value once, in the order the values were first added, and
 apart as a map tells keys apart.
 
 ```astra
-val seen = Set<int>()                // or setOf(1, 2, 3), mutableSetOf(), items.toSet()
+val seen = Set<int>()                // or setOf(1, 2, 3), setOf(), items.toSet()
 if (seen.add(id)) { ... }            // add gives true if it was not there before
 id in seen        seen.remove(id)        seen.size
 a + b        a - b        a.union(b)        a.intersect(b)        a.subtract(b)

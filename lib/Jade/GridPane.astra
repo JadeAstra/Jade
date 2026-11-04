@@ -41,7 +41,7 @@ class GridPane : Content {
   class Cell(val component : Component, val row : int, val col : int, val rowSpan : int, val colSpan : int, val fill : Fill, val anchor : Anchor, val weightX : float, val weightY : float)
 
   private val cellList : open List<Cell> = []
-  private val occupied : open Set<int> = mutableSetOf()
+  private val occupied : open Set<int> = setOf()
   private var builderRow = 0
 
   fun init(insets : Insets? = null, hgap : int = 0, vgap : int = 0) {

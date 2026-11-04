@@ -27,7 +27,7 @@ print(big &+ 1, small &- 1, big &* 2, 5 &+ 3, 7 &- 9, 6 &* 7)   // expect: -9223
 print(2.pow(62), 10.pow(18), 1.5 * 2, big - 1 + 1)   // expect: 4611686018427387904 1000000000000000000 3.0 9223372036854775807
 // The 32-bit hash loop Kotlin wraps: written with &* and &+, or with hash(...).
 var h = 0
-for (c in "a long enough string to wrap") { h = (31 &* h &+ c.code).wrap32() }
+for (c in "a long enough string to wrap") { h = (31 &* h &+ c.code).toInt32Wrapped() }
 print(h, hash(1, "a", null) == hash(1, "a", null), hash() == 1)   // expect: -1482487061 true true
 
 // ---- >>> and the unsigned helpers ----
@@ -104,7 +104,7 @@ fun twice(n : int16) : int => n * 2
 print(narrowLocal, twice(100), attempt { narrowLocal = narrowLocal + 1 }, attempt { twice(100000) })
 // expect: 65535 200 65536 does not fit in a uint16, which holds 0 to 65535; toUint16Wrapped() keeps the low 16 bits ('narrowLocal') 100000 does not fit in an int16, which holds -32768 to 32767; toInt16Wrapped() keeps the low 16 bits (argument 'n' of twice())
 print(70000.toInt16Wrapped(), (-1).toUint16Wrapped(), 0x1FFFFFFFF.toInt32Wrapped(), (-1).toUint32Wrapped())   // expect: 4464 65535 -1 4294967295
-print(0x80000001.wrap32(), 1.rotateLeft32(31), 1.rotateRight32(1), 0x12345678.rotateLeft32(8), (-1).rotateRight32(5))
+print(0x80000001.toInt32Wrapped(), 1.rotateLeft32(31), 1.rotateRight32(1), 0x12345678.rotateLeft32(8), (-1).rotateRight32(5))
 // expect: -2147483647 -2147483648 -2147483648 878082066 -1
 // Two int32s are 8 bytes, so the value is kept in the value itself, with no box.
 value Pair32(val a : int32, val b : int32)

@@ -225,7 +225,7 @@ class WindowHost : WindowHandle {
   private var keyboardFocus = true
   private var shiftHeld = false
   private var ctrlHeld = false
-  private val consumedKeys = mutableSetOf()
+  private val consumedKeys = setOf()
 
   // The pointer.
   private var captured : CapturedTarget? = null        // what the main button was pressed on, which gets the drag and the release

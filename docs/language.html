@@ -482,7 +482,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
 <li><a href="#Line"><code>Line</code></a> (2)</li>
-<li><a href="#List.size"><code>List</code></a> (152)</li>
+<li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#Lock"><code>Lock</code></a> (2)</li>
 <li><a href="#LockBox"><code>LockBox</code></a> (2)</li>
@@ -546,7 +546,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#byte.toInt"><code>byte</code></a> (1)</li>
 <li><a href="#char.code"><code>char</code></a> (11)</li>
 <li><a href="#float.coerceIn"><code>float</code></a> (16)</li>
-<li><a href="#int.char"><code>int</code></a> (31)</li>
+<li><a href="#int.char"><code>int</code></a> (30)</li>
 <li><a href="#string.size"><code>string</code></a> (102)</li>
 </ul>
 <section class="file" id="file-builtins-astra">
@@ -782,9 +782,6 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="List.addAll-2"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.addAll(index : int, items : any) : bool</code><a class="anchor" href="#List.addAll-2">#</a>
 <p>Puts <code>items</code> in before the item at <code>index</code>, from 0 to <code>size</code>; true if there were any. An IndexOutOfBoundsException for any other <code>index</code>.</p>
-</div>
-<div class="entry" id="List.insert"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.insert(index : int, item : T)</code><a class="anchor" href="#List.insert">#</a>
-<p>Puts <code>item</code> in before the item at <code>index</code>, from 0 to <code>size</code> (the end). An IndexOutOfBoundsException for any other <code>index</code>.</p>
 </div>
 <div class="entry" id="List.get"><code class="sig">fun &lt;T&gt; List&lt;T&gt;.get(index : int) : T</code><a class="anchor" href="#List.get">#</a>
 <p>The item at <code>index</code>, from 0; unlike <code>list[i]</code>, never counted from the end. An IndexOutOfBoundsException where there is none.</p>
@@ -1220,11 +1217,8 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry" id="int.toUint32Wrapped"><code class="sig">fun int.toUint32Wrapped() : int</code><a class="anchor" href="#int.toUint32Wrapped">#</a>
 <p>The low 32 bits as an unsigned number, from 0 to 4294967295: -1 gives 4294967295.</p>
 </div>
-<div class="entry" id="int.wrap32"><code class="sig">fun int.wrap32() : int</code><a class="anchor" href="#int.wrap32">#</a>
-<p>For 32-bit work ported from Kotlin: the low 32 bits as a signed number, and their rotations, each a signed 32-bit number as Kotlin's Int is.</p>
-</div>
 <div class="entry" id="int.rotateLeft32"><code class="sig">fun int.rotateLeft32(count : int) : int</code><a class="anchor" href="#int.rotateLeft32">#</a>
-<p>The low 32 bits turned <code>count</code> places to the left, those leaving at the top coming back at the bottom, as a signed 32-bit number. Only the low 5 bits of <code>count</code> count.</p>
+<p>For 32-bit work ported from Kotlin: the low 32 bits' rotations, each a signed 32-bit number as Kotlin's Int is. The low 32 bits themselves are toInt32Wrapped(). The low 32 bits turned <code>count</code> places to the left, those leaving at the top coming back at the bottom, as a signed 32-bit number. Only the low 5 bits of <code>count</code> count.</p>
 </div>
 <div class="entry" id="int.rotateRight32"><code class="sig">fun int.rotateRight32(count : int) : int</code><a class="anchor" href="#int.rotateRight32">#</a>
 <p>The low 32 bits turned <code>count</code> places to the right, those leaving at the bottom coming back at the top, as a signed 32-bit number. Only the low 5 bits of <code>count</code> count.</p>
@@ -1516,12 +1510,6 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <div class="entry" id="listOf"><code class="sig">fun &lt;T&gt; listOf(vararg items : T) : open List&lt;T&gt;</code><a class="anchor" href="#listOf">#</a>
 <p>A new list of <code>items</code>, in their order, which can be changed: listOf(1, 2, 3).</p>
 </div>
-<div class="entry" id="mutableListOf"><code class="sig">fun &lt;T&gt; mutableListOf(vararg items : T) : open List&lt;T&gt;</code><a class="anchor" href="#mutableListOf">#</a>
-<p>The same as listOf: a new list of <code>items</code> that can be changed.</p>
-</div>
-<div class="entry" id="arrayListOf"><code class="sig">fun &lt;T&gt; arrayListOf(vararg items : T) : open List&lt;T&gt;</code><a class="anchor" href="#arrayListOf">#</a>
-<p>The same as listOf: a new list of <code>items</code> that can be changed.</p>
-</div>
 <div class="entry" id="emptyList"><code class="sig">fun &lt;T&gt; emptyList() : List&lt;T&gt;</code><a class="anchor" href="#emptyList">#</a>
 <p>A new empty list, typed as one that is only read.</p>
 </div>
@@ -1531,20 +1519,8 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <div class="entry" id="List"><code class="sig">inline fun &lt;T&gt; List(size : int, init : (int) -&gt; T) : open List&lt;T&gt;</code><a class="anchor" href="#List">#</a>
 <p>List(3) { it * 2 } is [0, 2, 4]: <code>size</code> items, each worked out from its position.</p>
 </div>
-<div class="entry" id="MutableList"><code class="sig">inline fun &lt;T&gt; MutableList(size : int, init : (int) -&gt; T) : open List&lt;T&gt;</code><a class="anchor" href="#MutableList">#</a>
-<p>The same as List(size, init): <code>size</code> items, each worked out from its position.</p>
-</div>
 <div class="entry" id="mapOf"><code class="sig">fun &lt;K, V&gt; mapOf(vararg pairs : Pair&lt;K, V&gt;) : open Map&lt;K, V&gt;</code><a class="anchor" href="#mapOf">#</a>
-<p>mapOf(&quot;a&quot; to 1, &quot;b&quot; to 2)</p>
-</div>
-<div class="entry" id="mutableMapOf"><code class="sig">fun &lt;K, V&gt; mutableMapOf(vararg pairs : Pair&lt;K, V&gt;) : open Map&lt;K, V&gt;</code><a class="anchor" href="#mutableMapOf">#</a>
-<p>The same as mapOf: a new map of <code>pairs</code> that can be changed, its keys in the order they came. A key given twice keeps its first place and its last value.</p>
-</div>
-<div class="entry" id="hashMapOf"><code class="sig">fun &lt;K, V&gt; hashMapOf(vararg pairs : Pair&lt;K, V&gt;) : open Map&lt;K, V&gt;</code><a class="anchor" href="#hashMapOf">#</a>
-<p>The same as mapOf: a new map of <code>pairs</code> that can be changed, its keys in the order they came.</p>
-</div>
-<div class="entry" id="linkedMapOf"><code class="sig">fun &lt;K, V&gt; linkedMapOf(vararg pairs : Pair&lt;K, V&gt;) : open Map&lt;K, V&gt;</code><a class="anchor" href="#linkedMapOf">#</a>
-<p>The same as mapOf: a new map of <code>pairs</code> that can be changed, its keys in the order they came.</p>
+<p>mapOf(&quot;a&quot; to 1, &quot;b&quot; to 2): a new map of <code>pairs</code> that can be changed, its keys in the order they came. A key given twice keeps its first place and its last value.</p>
 </div>
 <div class="entry" id="emptyMap"><code class="sig">fun &lt;K, V&gt; emptyMap() : Map&lt;K, V&gt;</code><a class="anchor" href="#emptyMap">#</a>
 <p>A new empty map, typed as one that is only read.</p>
@@ -1553,15 +1529,6 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <p>A new set of <code>items</code> that can be changed, each once, in the order they first came:</p>
 <pre>setOf(3, 1, 3) is {3, 1}
 </pre>
-</div>
-<div class="entry" id="mutableSetOf"><code class="sig">fun &lt;T&gt; mutableSetOf(vararg items : T) : open Set&lt;T&gt;</code><a class="anchor" href="#mutableSetOf">#</a>
-<p>The same as setOf: a new set of <code>items</code> that can be changed, in the order they first came.</p>
-</div>
-<div class="entry" id="hashSetOf"><code class="sig">fun &lt;T&gt; hashSetOf(vararg items : T) : open Set&lt;T&gt;</code><a class="anchor" href="#hashSetOf">#</a>
-<p>The same as setOf: a new set of <code>items</code> that can be changed, in the order they first came.</p>
-</div>
-<div class="entry" id="linkedSetOf"><code class="sig">fun &lt;T&gt; linkedSetOf(vararg items : T) : open Set&lt;T&gt;</code><a class="anchor" href="#linkedSetOf">#</a>
-<p>The same as setOf: a new set of <code>items</code> that can be changed, in the order they first came.</p>
 </div>
 <div class="entry" id="emptySet"><code class="sig">fun &lt;T&gt; emptySet() : Set&lt;T&gt;</code><a class="anchor" href="#emptySet">#</a>
 <p>A new empty set, typed as one that is only read.</p>

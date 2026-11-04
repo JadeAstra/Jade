@@ -6,7 +6,7 @@ var xs = [1, 2, 3]
 xs.addAll([4, 5])
 print(xs, xs.size, xs.size)           // expect: [1, 2, 3, 4, 5] 5 5
 print(xs[0], xs[^1], xs.removeLast())          // expect: 1 5 5
-xs.insert(0, 0)
+xs.add(0, 0)
 xs[2] = 20
 print(xs)                               // expect: [0, 1, 20, 3, 4]
 print(xs.removeAt(1), xs.remove(20), xs.remove(99))   // expect: 1 true false
