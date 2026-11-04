@@ -14,10 +14,15 @@ namespace astra {
 class Channel {
 public:
     virtual ~Channel() = default;
-    // Up to `max` bytes: how many; 0 at the end; -1 with `error` filled in.
-    virtual int read(char* out, size_t max, std::string& error) = 0;
+    // Up to `max` bytes: how many; 0 at the end; -1 with `error` filled in, and `timedOut` where
+    // what ran out was a read's time limit.
+    virtual int read(char* out, size_t max, std::string& error, bool& timedOut) = 0;
     virtual bool write(const char* data, size_t size, std::string& error) = 0;
     virtual void close() = 0;
+    // A socket's (step 5): nothing more is written, and how long a read waits, in milliseconds,
+    // 0 for as long as it takes.
+    virtual void shutdownOutput() {}
+    virtual void setReadTimeout(int64_t) {}
 };
 
 // What a program reaches outside itself (M6.6.2): files now; streams, processes, the network,

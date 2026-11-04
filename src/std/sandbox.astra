@@ -14,8 +14,9 @@
 // it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real
 // time, and its randomness starts from a fixed seed, so that a test runs the same every time.
 // A program started in it is one the sandbox was given (processes.add), run on a thread of its
-// own. The network and font files have no sandbox's form yet, and are refused in one rather than
-// done on the system; a wait for another thread with a time limit still takes real time.
+// own; a connection is to one of its hosts (network.host), and a ServerSocket listens on a port of
+// its own (network.connect). Font files have no sandbox's form yet, and are refused in one rather
+// than read from the system; a wait for another thread with a time limit still takes real time.
 
 // How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows',
 // C:\data\a.txt, names compared without case.
@@ -32,6 +33,8 @@ class Sandbox {
   val files : SandboxFiles
   // The programs it runs in place of the system's.
   val processes : Programs
+  // Its hosts and ports, in place of the network.
+  val network : Network
 
   internal fun init(handle : any, paths : PathStyle) {
     this.handle = handle
@@ -39,6 +42,7 @@ class Sandbox {
     this.faults = Faults(handle)
     this.files = SandboxFiles(handle)
     this.processes = Programs()
+    this.network = Network(handle)
   }
 
   // Process(...) and Process.run in it: the program of that name it was given, on a thread of
@@ -135,6 +139,101 @@ data Fault(val operation : string, val path : string, val after : int, val error
     fun mkdir(path : Path | string, error : string = "access is denied") : Fault => Fault("mkdir", "$path", 0, error)
     // Everything done to it fails.
     fun any(path : Path | string, error : string = "the device is not ready") : Fault => Fault("any", "$path", 0, error)
+    // Connecting to the host fails.
+    fun connect(host : string, error : string = "the connection timed out") : Fault => Fault("connect", host, 0, error)
+  }
+}
+
+// A sandbox's network: the hosts its code may connect to, each a far side written in Astra, and
+// the ports its ServerSockets listen on.
+class Network(private val handle : any) {
+  internal val hosts : open Map<string, (Peer) -> unit throws Exception> = {:}
+  private val ports : open Map<int, any> = {:}
+  private var nextPort = 40000
+
+  // Connecting to `name`:`port` in the sandbox runs `peer` on a thread of its own, as the far side
+  // of the connection: what it reads is what the code sends, and what it writes the code reads.
+  fun host(name : string, port : int, peer : (Peer) -> unit throws Exception) {
+    hosts["$name:$port"] = peer
+  }
+
+  // Connects to a port a ServerSocket in the sandbox listens on, as another computer would.
+  fun connect(port : int) : Socket throws IOException {
+    val listening = ports[port]
+    if (listening == null or !__io.isOpen(listening)) { throw IOException("cannot connect to port $port: the connection was refused") }
+    return Socket().adopt(__io.sandboxDial(listening))
+  }
+
+  // Socket.connect in the sandbox.
+  internal fun connectTo(host : string, port : int) : any throws IOException {
+    val refused = __sandbox.fault(handle, "connect", host)
+    if (refused != null) { throw IOException("cannot connect to $host:$port: $refused") }
+    val peer = hosts["$host:$port"]
+    if (peer == null) {
+      if (hosts.keys.any { it.startsWith("$host:") }) { throw IOException("cannot connect to $host:$port: the connection was refused") }
+      throw IOException("cannot find host '$host'")
+    }
+    val ends = __io.sandboxSocketPair(host, port)
+    val far = Peer(Socket().adopt(ends[1]), ends[1])
+    thread(name = "$host:$port", daemon = true) {
+      try {
+        peer(far)
+      } catch (e : __ProgramKilled) {
+      } catch (e) {
+      } finally {
+        far.socket.close()
+      }
+    }
+    return ends[0]
+  }
+
+  // A ServerSocket in the sandbox: a port of its own, 0 for the next free one.
+  internal fun listen(port : int) : any {
+    var chosen = port
+    if (chosen == 0) {
+      chosen = nextPort
+      nextPort += 1
+    }
+    val listening = __io.sandboxListen(chosen)
+    ports[chosen] = listening
+    return listening
+  }
+}
+
+// The far side of a connection in a sandbox, as the host's lambda sees it.
+class Peer {
+  // The connection, from the far side.
+  val socket : Socket
+  private val handle : any
+
+  internal fun init(socket : Socket, handle : any) {
+    this.socket = socket
+    this.handle = handle
+  }
+
+  // What the code sent.
+  val reader : Reader
+    get() => socket.reader
+  // What goes to the code.
+  val writer : Writer
+    get() => socket.writer
+
+  // Sends `text` to the code.
+  fun send(text : string) throws IOException {
+    socket.writer.write(text)
+  }
+
+  // Resets the connection, as a far side that went away: once the code has read what was sent
+  // before, what it does with the connection next fails with "the connection was reset".
+  fun reset() {
+    __io.sandboxReset(handle)
+  }
+
+  // Waits for ever, as a far side that stopped answering, until the connection is closed: a read
+  // of the code's with a readTimeout is up at once, by the sandbox's clock.
+  fun waitForever() : nothing {
+    __io.sandboxSocketHang(handle)
+    throw __ProgramKilled()
   }
 }
 
@@ -239,6 +338,7 @@ external object __sandbox {
   fun enter(sandbox : any)
   fun leave()
   fun id(sandbox : any) : int
+  fun fault(sandbox : any, operation : string, path : string) : string?
   fun currentId() : int?
   fun addFault(sandbox : any, operation : string, path : string, after : int, error : string)
   fun changes(sandbox : any) : List<List<string>>

@@ -38,6 +38,8 @@ public:
     virtual std::vector<std::pair<std::string, std::string>> changes() = 0;
     // A directory of the real system copied in, at the root under `name`.
     virtual std::error_code copyIn(Host& real, const std::string& from, const std::string& name) = 0;
+    // What a fault says an operation on a path (or a host) fails with; empty where none does.
+    virtual std::string faultMessage(const std::string& operation, const std::string& path) = 0;
 
     int64_t id = 0;  // the number the program's Sandbox knows it by
 

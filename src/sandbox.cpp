@@ -69,7 +69,7 @@ class VirtualHost;
 class FileChannel final : public Channel {
 public:
     FileChannel(std::shared_ptr<VirtualHost> host, std::string path, bool reading) : host_(std::move(host)), path_(std::move(path)), reading_(reading) {}
-    int read(char* out, size_t max, std::string& error) override;
+    int read(char* out, size_t max, std::string& error, bool& timedOut) override;
     bool write(const char* data, size_t size, std::string& error) override;
     void close() override { closed_ = true; }
 
@@ -533,6 +533,11 @@ public:
         std::lock_guard<std::mutex> hold(mutex_);
         faults_.push_back(std::move(fault));
     }
+    std::string faultMessage(const std::string& operation, const std::string& path) override {
+        std::lock_guard<std::mutex> hold(mutex_);
+        const SandboxFault* fault = faultFor(operation, path);
+        return fault != nullptr ? fault->error : std::string();
+    }
 
     // Everything as it is now: each path with whether it is a directory, and a file's contents.
     std::map<std::string, std::pair<bool, std::string>> snapshot() {
@@ -597,7 +602,7 @@ private:
     std::atomic<uint64_t> tempCounter_{0};
 };
 
-int FileChannel::read(char* out, size_t max, std::string& error) {
+int FileChannel::read(char* out, size_t max, std::string& error, bool&) {
     if (closed_) {
         error = "the stream is closed";
         return -1;
@@ -689,6 +694,11 @@ void registerSandbox(VM& vm) {
         return Value::null();
     });
     def("id", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(sandboxOf(vm, args[0])->id); });
+    // What a fault says an operation on a path or host fails with; null where none does.
+    def("fault", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        const std::string message = sandboxOf(vm, args[0])->faultMessage(vm.toStr(args[1], "operation"), vm.toStr(args[2], "path"));
+        return message.empty() ? Value::null() : vm.str(message);
+    });
     // Its clock moved on by so many nanoseconds, as if that much time had passed (step 3).
     def("advance", 2, 2, [](VM& vm, int, Value* args) -> Value {
         sandboxOf(vm, args[0])->advance(vm.toInt(args[1], "nanoseconds"));

@@ -461,7 +461,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#EventLoop"><code>EventLoop</code></a> (6)</li>
 <li><a href="#Exception"><code>Exception</code></a> (1)</li>
 <li><a href="#ExecutionException"><code>ExecutionException</code></a> (1)</li>
-<li><a href="#Fault"><code>Fault</code></a> (10)</li>
+<li><a href="#Fault"><code>Fault</code></a> (11)</li>
 <li><a href="#Faults"><code>Faults</code></a> (2)</li>
 <li><a href="#Field"><code>Field</code></a> (10)</li>
 <li><a href="#FileChange"><code>FileChange</code></a> (1)</li>
@@ -496,6 +496,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#MapEntry"><code>MapEntry</code></a> (2)</li>
 <li><a href="#Math"><code>Math</code></a> (36)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
+<li><a href="#Network"><code>Network</code></a> (3)</li>
 <li><a href="#NoSuchElementException"><code>NoSuchElementException</code></a> (1)</li>
 <li><a href="#NotImplementedError"><code>NotImplementedError</code></a> (1)</li>
 <li><a href="#NullPointerException"><code>NullPointerException</code></a> (1)</li>
@@ -508,6 +509,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
 <li><a href="#Path"><code>Path</code></a> (45)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
+<li><a href="#Peer"><code>Peer</code></a> (7)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
@@ -518,7 +520,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Rect"><code>Rect</code></a> (24)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
-<li><a href="#Sandbox"><code>Sandbox</code></a> (8)</li>
+<li><a href="#Sandbox"><code>Sandbox</code></a> (9)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
 <li><a href="#SandboxProcess"><code>SandboxProcess</code></a> (8)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
@@ -3804,7 +3806,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
   Path(&quot;/data&quot;).list()            // an IOException: the device is not ready
 }
 </pre>
-<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. A program started in it is one the sandbox was given (processes.add), run on a thread of its own. The network and font files have no sandbox's form yet, and are refused in one rather than done on the system; a wait for another thread with a time limit still takes real time.</p>
+<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. A program started in it is one the sandbox was given (processes.add), run on a thread of its own; a connection is to one of its hosts (network.host), and a ServerSocket listens on a port of its own (network.connect). Font files have no sandbox's form yet, and are refused in one rather than read from the system; a wait for another thread with a time limit still takes real time.</p>
 <div class="entry" id="PathStyle"><code class="sig">enum PathStyle</code><a class="anchor" href="#PathStyle">#</a>
 <p>How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows', C:\data\a.txt, names compared without case.</p>
 </div>
@@ -3822,6 +3824,9 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry member" id="Sandbox.processes"><code class="sig">val processes : Programs</code><a class="anchor" href="#Sandbox.processes">#</a>
 <p>The programs it runs in place of the system's.</p>
+</div>
+<div class="entry member" id="Sandbox.network"><code class="sig">val network : Network</code><a class="anchor" href="#Sandbox.network">#</a>
+<p>Its hosts and ports, in place of the network.</p>
 </div>
 <div class="entry member" id="Sandbox.advance"><code class="sig">fun advance(time : Duration)</code><a class="anchor" href="#Sandbox.advance">#</a>
 <p>Its clock moved on by <code>time</code>, as if that much had passed: the timers due by then run when the event loop next looks.</p>
@@ -3867,6 +3872,39 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry member" id="Fault.any"><code class="sig">fun any(path : Path | string, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.any">#</a>
 <p>Everything done to it fails.</p>
+</div>
+<div class="entry member" id="Fault.connect"><code class="sig">fun connect(host : string, error : string = &quot;the connection timed out&quot;) : Fault</code><a class="anchor" href="#Fault.connect">#</a>
+<p>Connecting to the host fails.</p>
+</div>
+<div class="entry" id="Network"><code class="sig">class Network(private val handle : any)</code><a class="anchor" href="#Network">#</a>
+<p>A sandbox's network: the hosts its code may connect to, each a far side written in Astra, and the ports its ServerSockets listen on.</p>
+</div>
+<div class="entry member" id="Network.host"><code class="sig">fun host(name : string, port : int, peer : (Peer) -&gt; unit throws Exception)</code><a class="anchor" href="#Network.host">#</a>
+<p>Connecting to <code>name</code>:<code>port</code> in the sandbox runs <code>peer</code> on a thread of its own, as the far side of the connection: what it reads is what the code sends, and what it writes the code reads.</p>
+</div>
+<div class="entry member" id="Network.connect"><code class="sig">fun connect(port : int) : Socket throws IOException</code><a class="anchor" href="#Network.connect">#</a>
+<p>Connects to a port a ServerSocket in the sandbox listens on, as another computer would.</p>
+</div>
+<div class="entry" id="Peer"><code class="sig">class Peer</code><a class="anchor" href="#Peer">#</a>
+<p>The far side of a connection in a sandbox, as the host's lambda sees it.</p>
+</div>
+<div class="entry member" id="Peer.socket"><code class="sig">val socket : Socket</code><a class="anchor" href="#Peer.socket">#</a>
+<p>The connection, from the far side.</p>
+</div>
+<div class="entry member" id="Peer.reader"><code class="sig">val reader : Reader</code><a class="anchor" href="#Peer.reader">#</a>
+<p>What the code sent.</p>
+</div>
+<div class="entry member" id="Peer.writer"><code class="sig">val writer : Writer</code><a class="anchor" href="#Peer.writer">#</a>
+<p>What goes to the code.</p>
+</div>
+<div class="entry member" id="Peer.send"><code class="sig">fun send(text : string) throws IOException</code><a class="anchor" href="#Peer.send">#</a>
+<p>Sends <code>text</code> to the code.</p>
+</div>
+<div class="entry member" id="Peer.reset"><code class="sig">fun reset()</code><a class="anchor" href="#Peer.reset">#</a>
+<p>Resets the connection, as a far side that went away: once the code has read what was sent before, what it does with the connection next fails with &quot;the connection was reset&quot;.</p>
+</div>
+<div class="entry member" id="Peer.waitForever"><code class="sig">fun waitForever() : nothing</code><a class="anchor" href="#Peer.waitForever">#</a>
+<p>Waits for ever, as a far side that stopped answering, until the connection is closed: a read of the code's with a readTimeout is up at once, by the sandbox's clock.</p>
 </div>
 <div class="entry" id="Programs"><code class="sig">class Programs</code><a class="anchor" href="#Programs">#</a>
 <p>The programs a sandbox runs in place of the system's, by name.</p>

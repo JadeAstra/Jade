@@ -86,7 +86,7 @@ struct PipeBuffer {
 class PipeEnd final : public Channel {
 public:
     PipeEnd(std::shared_ptr<PipeBuffer> buffer, bool reading) : buffer_(std::move(buffer)), reading_(reading) {}
-    int read(char* out, size_t max, std::string& error) override {
+    int read(char* out, size_t max, std::string& error, bool&) override {
         if (!reading_) {
             error = "the stream is not open for reading";
             return -1;
@@ -122,6 +122,113 @@ public:
 private:
     std::shared_ptr<PipeBuffer> buffer_;
     bool reading_;
+};
+
+// A connection in a sandbox (step 5): what each end writes, kept for the other until read.
+// Either may reset it; an end may wait for ever, so that a read of the other's with a time limit
+// is up at once, by the sandbox's clock.
+struct SocketLink {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string forEnd[2];         // what is waiting to be read by end 0 and by end 1
+    bool doneWriting[2] = {false, false};
+    bool gone[2] = {false, false};  // closed entirely
+    bool hanging[2] = {false, false};
+    bool reset = false;
+    std::shared_ptr<Host> host;
+};
+
+class SocketEnd final : public Channel {
+public:
+    SocketEnd(std::shared_ptr<SocketLink> link, int side, std::string remoteHost, int remotePort, int localPort)
+        : link_(std::move(link)), side_(side), remoteHost(std::move(remoteHost)), remotePort(remotePort), localPort(localPort) {}
+    int read(char* out, size_t max, std::string& error, bool& timedOut) override {
+        SocketLink& l = *link_;
+        const int other = 1 - side_;
+        std::unique_lock<std::mutex> hold(l.mutex);
+        l.changed.wait(hold, [&] {
+            return !l.forEnd[side_].empty() || l.doneWriting[other] || l.gone[other] || l.reset || l.gone[side_] || (l.hanging[other] && timeout_ > 0);
+        });
+        if (l.gone[side_]) {
+            error = "the socket is closed";
+            return -1;
+        }
+        // What was sent before a reset is read first, so that a test sees the same thing however
+        // the threads ran.
+        if (!l.forEnd[side_].empty()) {
+            const size_t count = std::min(max, l.forEnd[side_].size());
+            std::copy_n(l.forEnd[side_].data(), count, out);
+            l.forEnd[side_].erase(0, count);
+            return static_cast<int>(count);
+        }
+        if (l.reset) {
+            error = "the connection was reset";
+            return -1;
+        }
+        if (l.doneWriting[other] || l.gone[other]) return 0;
+        // The other side waits for ever: the time limit is up, the clock moved on by it.
+        if (l.host != nullptr && l.host->isSandbox()) static_cast<SandboxHost&>(*l.host).advance(timeout_ * 1000000);
+        timedOut = true;
+        error = "the read timed out";
+        return -1;
+    }
+    bool write(const char* data, size_t size, std::string& error) override {
+        SocketLink& l = *link_;
+        std::lock_guard<std::mutex> hold(l.mutex);
+        if (l.reset || l.gone[1 - side_]) {
+            error = l.reset ? "the connection was reset" : "the other side has closed the connection";
+            return false;
+        }
+        if (l.doneWriting[side_] || l.gone[side_]) {
+            error = "the socket is closed";
+            return false;
+        }
+        l.forEnd[1 - side_].append(data, size);
+        l.changed.notify_all();
+        return true;
+    }
+    void close() override {
+        std::lock_guard<std::mutex> hold(link_->mutex);
+        link_->gone[side_] = true;
+        link_->doneWriting[side_] = true;
+        link_->changed.notify_all();
+    }
+    void shutdownOutput() override {
+        std::lock_guard<std::mutex> hold(link_->mutex);
+        link_->doneWriting[side_] = true;
+        link_->changed.notify_all();
+    }
+    void setReadTimeout(int64_t ms) override { timeout_ = ms; }
+    void resetLink() {
+        std::lock_guard<std::mutex> hold(link_->mutex);
+        link_->reset = true;
+        link_->changed.notify_all();
+    }
+    // This end waits for ever: until the connection is closed or reset.
+    void hang() {
+        std::unique_lock<std::mutex> hold(link_->mutex);
+        link_->hanging[side_] = true;
+        link_->changed.notify_all();
+        link_->changed.wait(hold, [&] { return link_->reset || link_->gone[0] || link_->gone[1]; });
+    }
+
+    const std::string remoteHost;
+    const int remotePort;
+    const int localPort;
+
+private:
+    std::shared_ptr<SocketLink> link_;
+    int side_;
+    int64_t timeout_ = 0;
+};
+
+// A port a program listens on in a sandbox: the connections made to it, waiting for accept.
+struct SandboxListener {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::deque<std::shared_ptr<Stream>> waiting;
+    bool closed = false;
+    int port = 0;
 };
 
 // A program of a sandbox's: an Astra thread running what the test declared, its end told here.
@@ -232,6 +339,8 @@ struct Stream {
     std::shared_ptr<Channel> channel;
     // A sandbox's program, for a Process stream (M6.6.2 step 4).
     std::shared_ptr<SimulatedProcess> simulated;
+    // A sandbox's port a program listens on, for a Listener (step 5).
+    std::shared_ptr<SandboxListener> listener;
 
     explicit Stream(Kind k) : kind(k) {}
 
@@ -244,6 +353,12 @@ struct Stream {
         if (closed.exchange(true)) return;
         if (channel != nullptr) {
             channel->close();
+            return;
+        }
+        if (listener != nullptr) {
+            std::lock_guard<std::mutex> hold(listener->mutex);
+            listener->closed = true;
+            listener->changed.notify_all();
             return;
         }
         if (isSocket()) {
@@ -277,7 +392,7 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
         result.error = "the stream is closed";
         return -1;
     }
-    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error);
+    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error, result.timedOut);
     if (s.isSocket()) {
         const int got = recv(s.socket, out, static_cast<int>(std::min<size_t>(max, 1 << 30)), 0);
         if (got >= 0) return got;
@@ -381,6 +496,8 @@ struct Stream {
     std::shared_ptr<Channel> channel;
     // A sandbox's program, for a Process stream (M6.6.2 step 4).
     std::shared_ptr<SimulatedProcess> simulated;
+    // A sandbox's port a program listens on, for a Listener (step 5).
+    std::shared_ptr<SandboxListener> listener;
 
     explicit Stream(Kind k) : kind(k) {}
 
@@ -394,6 +511,12 @@ struct Stream {
         if (closed.exchange(true)) return;
         if (channel != nullptr) {
             channel->close();
+            return;
+        }
+        if (listener != nullptr) {
+            std::lock_guard<std::mutex> hold(listener->mutex);
+            listener->closed = true;
+            listener->changed.notify_all();
             return;
         }
         if (fd < 0) return;
@@ -447,7 +570,7 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
         result.error = "the stream is closed";
         return -1;
     }
-    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error);
+    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error, result.timedOut);
     // A file has something to read at once; anything else may wait.
     if (s.kind != Stream::Kind::File && !waitReadable(s, s.isSocket() && s.readTimeout > 0 ? s.readTimeout : -1, result)) return -1;
     const size_t wanted = std::min<size_t>(max, 1 << 30);
@@ -1616,7 +1739,19 @@ void registerIo(VM& vm) {
     def("accept", 1, 1, [](VM& vm, int, Value* args) -> Value {
         auto s = streamOf(vm, args[0]);
         auto out = std::make_shared<Outcome>();
-        return vm.blocking([=] { acceptOn(*s, *out); },
+        return vm.blocking([=] {
+                               if (s->listener == nullptr) return acceptOn(*s, *out);
+                               // A sandbox's port: the next connection made to it (step 5).
+                               SandboxListener& l = *s->listener;
+                               std::unique_lock<std::mutex> hold(l.mutex);
+                               l.changed.wait(hold, [&] { return !l.waiting.empty() || l.closed; });
+                               if (l.closed) {
+                                   out->error = "the socket is closed";
+                                   return;
+                               }
+                               out->made = l.waiting.front();
+                               l.waiting.pop_front();
+                           },
                            [out](VM& vm) -> Value {
                                if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
@@ -1628,6 +1763,19 @@ void registerIo(VM& vm) {
         auto s = streamOf(vm, args[0]);
         ObjList* list = newList(vm);
         TempRoot keepList(vm, Value::object(list));
+        // A sandbox's socket or port (step 5).
+        if (auto end = std::dynamic_pointer_cast<SocketEnd>(s->channel)) {
+            list->values().push_back(Value::integer(end->localPort));
+            list->values().push_back(vm.str(end->remoteHost));
+            list->values().push_back(Value::integer(end->remotePort));
+            return Value::object(list);
+        }
+        if (s->listener != nullptr) {
+            list->values().push_back(Value::integer(s->listener->port));
+            list->values().push_back(Value::null());
+            list->values().push_back(Value::null());
+            return Value::object(list);
+        }
         int port = 0;
         list->values().push_back(localPort(*s, port) ? Value::integer(port) : Value::null());
         std::string host;
@@ -1643,14 +1791,79 @@ void registerIo(VM& vm) {
 
     // How long a read on a socket waits before giving up, in ms; 0 for as long as it takes.
     def("socketTimeout", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        setReadTimeout(*streamOf(vm, args[0]), std::max<int64_t>(vm.toInt(args[1], "time limit"), 0));
+        const auto s = streamOf(vm, args[0]);
+        const int64_t limit = std::max<int64_t>(vm.toInt(args[1], "time limit"), 0);
+        if (s->channel != nullptr) s->channel->setReadTimeout(limit);
+        else setReadTimeout(*s, limit);
         return Value::null();
     });
 
     // No more will be written on this socket: the other side reads the end.
     def("shutdownOutput", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        shutdownOutput(*streamOf(vm, args[0]));
+        const auto s = streamOf(vm, args[0]);
+        if (s->channel != nullptr) s->channel->shutdownOutput();
+        else shutdownOutput(*s);
         return Value::null();
+    });
+
+    // ---- A sandbox's network (M6.6.2 step 5); only in one ----
+
+    // A connection to `host`:`port` in a sandbox: [this program's end, the far side's end].
+    def("sandboxSocketPair", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        if (!vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::IllegalStateException, "a sandbox's connection is made in a sandbox");
+        static std::atomic<int> nextPort{50000};
+        auto link = std::make_shared<SocketLink>();
+        link->host = vm.currentHostShared();
+        const std::string host = vm.toStr(args[0], "host");
+        const int port = static_cast<int>(vm.toInt(args[1], "port"));
+        const int local = nextPort++;
+        auto ours = std::make_shared<Stream>(Stream::Kind::Socket);
+        ours->channel = std::make_shared<SocketEnd>(link, 0, host, port, local);
+        auto theirs = std::make_shared<Stream>(Stream::Kind::Socket);
+        theirs->channel = std::make_shared<SocketEnd>(link, 1, "10.0.0.2", local, port);
+        return Value::object(newList(vm, {Value::integer(keep(ours)), Value::integer(keep(theirs))}));
+    });
+    // A port a program listens on in a sandbox: a Listener stream.
+    def("sandboxListen", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (!vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::IllegalStateException, "a sandbox's port is made in a sandbox");
+        auto made = std::make_shared<Stream>(Stream::Kind::Listener);
+        made->listener = std::make_shared<SandboxListener>();
+        made->listener->port = static_cast<int>(vm.toInt(args[0], "port"));
+        return Value::integer(keep(made));
+    });
+    // A connection made to a port the program listens on: the end of what connects; the other is
+    // the next accept()'s.
+    def("sandboxDial", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const auto listening = streamOf(vm, args[0]);
+        if (listening->listener == nullptr) throw vm.runtimeError(Thrown::IllegalArgumentException, "not a sandbox's port");
+        SandboxListener& l = *listening->listener;
+        auto link = std::make_shared<SocketLink>();
+        link->host = vm.currentHostShared();
+        static std::atomic<int> nextPort{60000};
+        const int from = nextPort++;
+        auto ours = std::make_shared<Stream>(Stream::Kind::Socket);
+        ours->channel = std::make_shared<SocketEnd>(link, 0, "127.0.0.1", l.port, from);
+        auto served = std::make_shared<Stream>(Stream::Kind::Socket);
+        served->channel = std::make_shared<SocketEnd>(link, 1, "10.0.0.2", from, l.port);
+        {
+            std::lock_guard<std::mutex> hold(l.mutex);
+            if (l.closed) throw vm.errorOf("IOException", "cannot connect to port " + std::to_string(l.port) + ": the connection was refused");
+            l.waiting.push_back(served);
+            l.changed.notify_all();
+        }
+        return Value::integer(keep(ours));
+    });
+    // The connection is reset: what either end does with it next fails.
+    def("sandboxReset", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (auto end = std::dynamic_pointer_cast<SocketEnd>(streamOf(vm, args[0])->channel)) end->resetLink();
+        return Value::null();
+    });
+    // This end waits for ever, until the connection is closed or reset: a read of the other's
+    // with a time limit is up at once.
+    def("sandboxSocketHang", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        auto end = std::dynamic_pointer_cast<SocketEnd>(streamOf(vm, args[0])->channel);
+        if (end == nullptr) return Value::null();
+        return vm.blocking([end] { end->hang(); }, [](VM&) -> Value { return Value::null(); });
     });
 
     vm.defineGlobal("__io", Value::object(io));

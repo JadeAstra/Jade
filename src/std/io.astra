@@ -309,7 +309,9 @@ class Socket : AutoCloseable {
   // With a time limit, gives up when it runs out.
   fun connect(host : string, port : int, timeout : Duration? = null) : Socket throws IOException {
     if (handle != null) { throw IOException("the socket is already connected") }
-    adopt(__io.connect(host, port, timeout?.waitMilliseconds))
+    // In a sandbox, one of its hosts (M6.6.2): never the network.
+    val box = Sandbox.current
+    adopt(box == null ? __io.connect(host, port, timeout?.waitMilliseconds) : box.network.connectTo(host, port))
     return this
   }
 
@@ -389,7 +391,9 @@ class ServerSocket : AutoCloseable {
   private val handle : any
 
   fun init(port : int = 0, backlog : int = 50, bindAddress : string? = null) throws IOException {
-    this.handle = __io.listen(port, bindAddress, backlog)
+    // In a sandbox, a port of its own, which its network.connect reaches (M6.6.2).
+    val box = Sandbox.current
+    this.handle = box == null ? __io.listen(port, bindAddress, backlog) : box.network.listen(port)
   }
 
   // The port it listens on, the one the system picked where it was made with port 0; an
@@ -417,6 +421,11 @@ external object __io {
   fun sandboxOwn(process : any, end : any)
   fun sandboxEnded(process : any, code : int)
   fun sandboxHang(process : any)
+  fun sandboxSocketPair(host : string, port : int) : List<any>
+  fun sandboxListen(port : int) : any
+  fun sandboxDial(listener : any) : any throws IOException
+  fun sandboxReset(socket : any)
+  fun sandboxSocketHang(socket : any)
   fun open(path : string, mode : string) : any throws IOException
   fun read(handle : any, count : int) : Bytes? throws IOException
   fun readAll(handle : any) : Bytes throws IOException
