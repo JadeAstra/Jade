@@ -663,7 +663,8 @@ void registerSandbox(VM& vm) {
     // make(windowsPaths, diskSize, copyFrom, seed): a new sandbox, its files empty but for its
     // temporary directory, or with a directory of the real system copied in; diskSize -1 for no
     // limit; its randomness from `seed`.
-    def("make", 4, 4, [](VM& vm, int, Value* args) -> Value {
+    // make(windowsPaths, diskSize, copyFrom, seed, fontsFrom)
+    def("make", 5, 5, [](VM& vm, int, Value* args) -> Value {
         std::shared_ptr<SandboxHost> made = makeSandbox(args[0].truthy(), vm.toInt(args[1], "disk size"));
         made->random.seed(static_cast<uint64_t>(vm.toInt(args[3], "seed")));
         if (!args[2].isNull()) {
@@ -675,6 +676,11 @@ void registerSandbox(VM& vm) {
             if (slash != std::string::npos) name = name.substr(slash + 1);
             if (const std::error_code ec = made->copyIn(realHost(), from, name))
                 throw vm.runtimeError(Thrown::IllegalArgumentException, "cannot copy '" + from + "' into a sandbox: " + ec.message());
+        }
+        if (!args[4].isNull()) {
+            const std::string fonts = vm.toStr(args[4], "directory");
+            if (!realHost().isDirectory(fonts)) throw vm.runtimeError(Thrown::IllegalArgumentException, "cannot take fonts from '" + fonts + "': it is no directory");
+            made->fontsFrom = realHost().absolute(fonts);
         }
         made->keepStart();
         made->id = nextSandbox++;

@@ -77,7 +77,12 @@ int Face::count(const std::string& path) {
     std::ifstream file(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
     uint8_t head[12] = {};
     if (!file.read(reinterpret_cast<char*>(head), sizeof head)) return 0;
-    const Reader r(head, sizeof head);
+    return count(head, sizeof head);
+}
+
+int Face::count(const uint8_t* data, size_t size) {
+    if (size < 12) return 0;
+    const Reader r(data, 12);
     const uint32_t kind = r.u32(0);
     if (kind == tag("ttcf")) return static_cast<int>(std::min<uint32_t>(r.u32(8), 1024));
     return kind == 0x00010000 || kind == tag("true") || kind == tag("OTTO") ? 1 : 0;

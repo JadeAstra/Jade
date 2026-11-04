@@ -59,8 +59,9 @@ public:
     // The font for a family and a style: FontBook::match on the installed fonts, so there
     // is always one unless the machine has no fonts at all (then null).
     static std::shared_ptr<Font> get(const std::string& family, const FontRequest& request);
-    // The same for a font already chosen. Asking twice gives the same Font.
-    static std::shared_ptr<Font> of(const Match& match, const FontRequest& request);
+    // The same for a font already chosen. Asking twice gives the same Font. A character it
+    // lacks is looked for in `book`, the fonts it was chosen from: the installed ones if null.
+    static std::shared_ptr<Font> of(const Match& match, const FontRequest& request, std::shared_ptr<FontBook> book = nullptr);
 
     const Face& face() const { return *face_; }
     const std::shared_ptr<Face>& sharedFace() const { return face_; }
@@ -103,6 +104,7 @@ private:
     Font() = default;
 
     std::shared_ptr<Face> face_;
+    std::shared_ptr<FontBook> book_;  // where a character it lacks is looked for; null: the installed fonts
     FontRequest request_;
     Coords coords_;
     float ppem_ = 0, unit_ = 0;  // unit_: device pixels for one unit of the font

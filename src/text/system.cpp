@@ -139,7 +139,9 @@ std::vector<std::string> installedFontFiles() {
 
 // The families to try, in order, for each of the names that mean "the system's own font of
 // this kind". The first that is installed is used.
-std::vector<std::string> logicalFamily(const std::string& name) {
+namespace {
+
+std::vector<std::string> ownLogicalFamily(const std::string& name) {
 #ifdef _WIN32
     if (name == "sansserif") return {"Segoe UI", "Tahoma", "Arial"};
     if (name == "serif") return {"Times New Roman", "Georgia", "Cambria"};
@@ -154,6 +156,21 @@ std::vector<std::string> logicalFamily(const std::string& name) {
     if (name == "monospaced") return {"Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono"};
 #endif
     return {};
+}
+
+}  // namespace
+
+// This system's families first; then the free families Linux has, which a set of fonts given to
+// a sandbox (M6.6.2) is likely to be made of, so that it finds them on any machine.
+std::vector<std::string> logicalFamily(const std::string& name) {
+    std::vector<std::string> out = ownLogicalFamily(name);
+    std::vector<std::string> portable;
+    if (name == "sansserif") portable = {"Noto Sans", "DejaVu Sans", "Liberation Sans"};
+    else if (name == "serif") portable = {"Noto Serif", "DejaVu Serif", "Liberation Serif"};
+    else if (name == "monospaced") portable = {"Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono"};
+    for (std::string& family : portable)
+        if (std::find(out.begin(), out.end(), family) == out.end()) out.push_back(std::move(family));
+    return out;
 }
 
 // Where to look for a character the chosen font lacks, before looking through every font

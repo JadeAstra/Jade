@@ -17,6 +17,7 @@
 #include <memory>
 
 #include "../builtins.h"
+#include "../sandbox.h"
 #include "../vm.h"
 #include "platform.h"
 #include "render.h"
@@ -401,13 +402,23 @@ void registerJade(VM& vm) {
         state().ownClipboard = args[0].truthy();
         return Value::null();
     });
+    // In a sandbox, a clipboard of its own (M6.6.2).
     def("clipboardGet", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (vm.currentHost().isSandbox()) {
+            auto& box = static_cast<SandboxHost&>(vm.currentHost());
+            std::lock_guard<std::mutex> hold(box.clipboardMutex);
+            return vm.str(box.clipboard);
+        }
         if (state().ownClipboard) return vm.str(state().clipboard);
         return vm.str(need(vm).platform().clipboardText());
     });
     def("clipboardSet", 1, 1, [](VM& vm, int, Value* args) -> Value {
         const std::string& text = vm.toStr(args[0], "text");
-        if (state().ownClipboard) state().clipboard = text;
+        if (vm.currentHost().isSandbox()) {
+            auto& box = static_cast<SandboxHost&>(vm.currentHost());
+            std::lock_guard<std::mutex> hold(box.clipboardMutex);
+            box.clipboard = text;
+        } else if (state().ownClipboard) state().clipboard = text;
         else need(vm).platform().setClipboardText(text);
         return Value::null();
     });

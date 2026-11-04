@@ -60,6 +60,14 @@ public:
     std::mt19937_64 random{1};
     std::mutex randomMutex;
 
+    // Its installed fonts (step 6): the font files of this folder of the real system, if it was
+    // given one; the system's otherwise, which nothing in a sandbox can change.
+    std::string fontsFrom;
+
+    // Its clipboard (step 6), in place of the system's.
+    std::string clipboard;
+    std::mutex clipboardMutex;
+
 private:
     std::atomic<int64_t> clock_{0};
 };

@@ -15,8 +15,10 @@
 // time, and its randomness starts from a fixed seed, so that a test runs the same every time.
 // A program started in it is one the sandbox was given (processes.add), run on a thread of its
 // own; a connection is to one of its hosts (network.host), and a ServerSocket listens on a port of
-// its own (network.connect). Font files have no sandbox's form yet, and are refused in one rather
-// than read from the system; a wait for another thread with a time limit still takes real time.
+// its own (network.connect). Its installed fonts are the system's, which nothing can change, or
+// those of a folder it was given (fontsFrom), so that text measures the same on every machine;
+// it has a clipboard of its own. A wait for another thread with a time limit still takes real
+// time.
 
 // How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows',
 // C:\data\a.txt, names compared without case.
@@ -89,10 +91,11 @@ class Sandbox {
     // at its root under the directory's name (a dry run: files.changes() says what the block
     // did). `diskSize` is the most its files may hold together, in bytes; past it a write fails
     // as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException.
-    // Its randomness starts from `seed`.
+    // Its randomness starts from `seed`. With `fontsFrom`, a directory of the real system, its
+    // installed fonts are the font files there (.ttf, .otf, .ttc) and no others.
     inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, seed : int = 1,
-                       block : Sandbox.() -> T) : T {
-      val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text, seed), paths)
+                       fontsFrom : Path? = null, block : Sandbox.() -> T) : T {
+      val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text, seed, fontsFrom?.text), paths)
       __Sandboxes.add(box)
       __sandbox.enter(box.handle)
       try {
@@ -333,7 +336,7 @@ object __Sandboxes {
 
 // What Sandbox is built on (sandbox.cpp), declared with its types and what it throws.
 external object __sandbox {
-  fun make(windowsPaths : bool, diskSize : int, copyFrom : string?, seed : int) : any
+  fun make(windowsPaths : bool, diskSize : int, copyFrom : string?, seed : int, fontsFrom : string?) : any
   fun advance(sandbox : any, nanoseconds : int)
   fun enter(sandbox : any)
   fun leave()

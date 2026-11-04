@@ -21,11 +21,12 @@ int roundHalfUp(float v) { return static_cast<int>(std::floor(v + 0.5f)); }
 
 struct FontKey {
     const Face* face;
+    const FontBook* book;
     int size64, scale64, weight;
     bool fakeBold, fakeItalic, hinting;
     bool operator<(const FontKey& o) const {
-        return std::tie(face, size64, scale64, weight, fakeBold, fakeItalic, hinting) <
-               std::tie(o.face, o.size64, o.scale64, o.weight, o.fakeBold, o.fakeItalic, o.hinting);
+        return std::tie(face, book, size64, scale64, weight, fakeBold, fakeItalic, hinting) <
+               std::tie(o.face, o.book, o.size64, o.scale64, o.weight, o.fakeBold, o.fakeItalic, o.hinting);
     }
 };
 
@@ -87,13 +88,13 @@ std::shared_ptr<Font> Font::get(const std::string& family, const FontRequest& re
     return of(match, request);
 }
 
-std::shared_ptr<Font> Font::of(const Match& match, const FontRequest& asked) {
+std::shared_ptr<Font> Font::of(const Match& match, const FontRequest& asked, std::shared_ptr<FontBook> book) {
     if (!match) return nullptr;
     FontRequest request = asked;
     request.size = std::clamp(request.size, 1.0f, 2000.0f);
     request.scale = std::clamp(request.scale, 0.25f, 16.0f);
     const int weight = match.face->variable() ? match.weight : match.face->weight();
-    const FontKey key{match.face.get(), roundHalfUp(request.size * 64), roundHalfUp(request.scale * 64), weight, match.fakeBold, match.fakeItalic, request.hinting};
+    const FontKey key{match.face.get(), book.get(), roundHalfUp(request.size * 64), roundHalfUp(request.scale * 64), weight, match.fakeBold, match.fakeItalic, request.hinting};
 
     std::lock_guard<std::mutex> hold(cacheMutex());
     auto found = cache().find(key);
@@ -102,6 +103,7 @@ std::shared_ptr<Font> Font::of(const Match& match, const FontRequest& asked) {
     std::shared_ptr<Font> font(new Font());
     Font& f = *font;
     f.face_ = match.face;
+    f.book_ = std::move(book);
     f.request_ = request;
     f.request_.weight = weight;
     f.fakeBold_ = match.fakeBold;
@@ -177,9 +179,10 @@ Font* Font::fontFor(uint32_t codepoint, int& glyph) {
     }
     // Looked for with this font's lock released: the font found may be asked for its own.
     Other other;
-    const Match match = FontBook::installed().fallback(codepoint, request_.weight >= 600 || fakeBold_ ? 700 : request_.weight, face_->italic() || fakeItalic_);
+    FontBook& book = book_ != nullptr ? *book_ : FontBook::installed();
+    const Match match = book.fallback(codepoint, request_.weight >= 600 || fakeBold_ ? 700 : request_.weight, face_->italic() || fakeItalic_);
     if (match && match.face.get() != face_.get()) {
-        other.font = of(match, request_);
+        other.font = of(match, request_, book_);
         other.glyph = other.font != nullptr ? other.font->face().glyphIndex(codepoint) : 0;
         if (other.glyph == 0) other.font = nullptr;
     }

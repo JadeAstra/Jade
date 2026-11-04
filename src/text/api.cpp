@@ -15,6 +15,7 @@
 
 #include "../builtins.h"
 #include "../image/png.h"
+#include "../sandbox.h"
 #include "../vm.h"
 #include "engine.h"
 #include "fonts.h"
@@ -340,6 +341,44 @@ uint32_t engineColor(VM& vm, Value v) { return colorOf(vm, v); }
 
 }  // namespace
 
+namespace {
+
+// The fonts the code running now sees (M6.6.2). In a sandbox given a folder of fonts, those
+// alone: read the first time they are wanted, and shared by every sandbox given that folder, as
+// the typefaces and fonts made from them are kept for as long as the program. Anywhere else, the
+// system's: null here.
+std::shared_ptr<FontBook> sandboxFonts(VM& vm) {
+    Host& host = vm.currentHost();
+    if (!host.isSandbox()) return nullptr;
+    const std::string& folder = static_cast<SandboxHost&>(host).fontsFrom;
+    if (folder.empty()) return nullptr;
+    static std::mutex mutex;
+    static auto* books = new std::unordered_map<std::string, std::shared_ptr<FontBook>>();  // never torn down, as the fonts are not
+    std::lock_guard<std::mutex> hold(mutex);
+    std::shared_ptr<FontBook>& book = (*books)[folder];
+    if (book == nullptr) {
+        book = std::make_shared<FontBook>();
+        std::vector<std::string> names;
+        if (!realHost().list(folder, names)) {
+            std::sort(names.begin(), names.end());
+            for (const std::string& name : names) {
+                const std::string kind = name.size() > 4 ? text::lowerCase(name.substr(name.size() - 4)) : std::string();
+                if (kind != ".ttf" && kind != ".otf" && kind != ".ttc" && kind != ".otc") continue;
+                std::string error;
+                book->addFile(folder + "/" + name, error);
+            }
+        }
+    }
+    return book;
+}
+
+FontBook& fontsOf(VM& vm) {
+    std::shared_ptr<FontBook> own = sandboxFonts(vm);
+    return own != nullptr ? *own : FontBook::installed();  // a sandbox's is kept for the program
+}
+
+}  // namespace
+
 // For the drawing code of the native layer, which is handed fonts by the same numbers.
 std::shared_ptr<text::Font> textFontOf(VM& vm, Value v) { return fontOf(vm, v); }
 
@@ -354,18 +393,18 @@ void registerText(VM& vm) {
     def("families", 0, 0, [](VM& vm, int, Value*) -> Value {
         ObjList* list = newList(vm);
         TempRoot keep(vm, Value::object(list));
-        for (std::string& family : FontBook::installed().families()) list->values().push_back(vm.str(std::move(family)));
+        for (std::string& family : fontsOf(vm).families()) list->values().push_back(vm.str(std::move(family)));
         vm.account(list->values().size() * sizeof(Value));
         return Value::object(list);
     });
 
     def("hasFamily", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        return Value::boolean(static_cast<bool>(FontBook::installed().matchExactly(vm.toStr(args[0], "font family"), 400, false)));
+        return Value::boolean(static_cast<bool>(fontsOf(vm).matchExactly(vm.toStr(args[0], "font family"), 400, false)));
     });
 
     // The typefaces of a family, or every one installed if the family is null.
     def("typefaces", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        FontBook& book = FontBook::installed();
+        FontBook& book = fontsOf(vm);
         const std::string wanted = args[0].isNull() ? std::string() : text::lowerCase(vm.toStr(args[0], "font family"));
         std::vector<Value> out;
         const std::vector<text::FaceInfo> faces = book.faces();
@@ -376,18 +415,29 @@ void registerText(VM& vm) {
         return listOf(vm, std::move(out));
     });
 
-    // How many fonts a file holds; 0 if it is not a font file.
-    // A font file of the system's; in a sandbox, none yet (M6.6.2): 0 fonts, and an IOException
-    // for loading one.
+    // How many fonts a file holds; 0 if it is not a font file. In a sandbox, a file of its own.
     def("countIn", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        if (vm.currentHost().isSandbox()) return Value::integer(0);
-        return Value::integer(Face::count(vm.toStr(args[0], "file path")));
+        const std::string& path = vm.toStr(args[0], "file path");
+        Host& host = vm.currentHost();
+        if (!host.isSandbox()) return Value::integer(Face::count(path));
+        std::string bytes;
+        if (host.readWhole(path, bytes)) return Value::integer(0);
+        return Value::integer(Face::count(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
     });
 
     def("load", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        if (vm.currentHost().isSandbox()) throw vm.errorOf("IOException", "loading a font file is not available in a sandbox yet");
+        const std::string& path = vm.toStr(args[0], "file path");
+        const int index = clampInt(vm.toInt(args[1], "index"));
+        Host& host = vm.currentHost();
         std::string error;
-        auto face = Face::load(vm.toStr(args[0], "file path"), clampInt(vm.toInt(args[1], "index")), error);
+        std::shared_ptr<Face> face;
+        if (!host.isSandbox()) {
+            face = Face::load(path, index, error);
+        } else {
+            std::string bytes;
+            if (host.readWhole(path, bytes)) throw vm.errorOf("IOException", "cannot read " + path);
+            face = Face::fromBytes(std::vector<uint8_t>(bytes.begin(), bytes.end()), index, path, error);
+        }
         if (face == nullptr) throw vm.errorOf("IOException", error);
         return Value::integer(numberOf(face));
     });
@@ -403,12 +453,12 @@ void registerText(VM& vm) {
     // find(family, weight, italic): [typeface, weight, fakeBold, fakeItalic], or null if no
     // such family is installed.
     def("find", 3, 3, [](VM& vm, int, Value* args) -> Value {
-        return matchValue(vm, FontBook::installed().matchExactly(vm.toStr(args[0], "font family"), clampInt(vm.toInt(args[1], "weight")), args[2].truthy()));
+        return matchValue(vm, fontsOf(vm).matchExactly(vm.toStr(args[0], "font family"), clampInt(vm.toInt(args[1], "weight")), args[2].truthy()));
     });
 
     // The same for a character a font lacks: the font to take it from.
     def("fallback", 3, 3, [](VM& vm, int, Value* args) -> Value {
-        return matchValue(vm, FontBook::installed().fallback(characterOf(vm, args[0]), clampInt(vm.toInt(args[1], "weight")), args[2].truthy()));
+        return matchValue(vm, fontsOf(vm).fallback(characterOf(vm, args[0]), clampInt(vm.toInt(args[1], "weight")), args[2].truthy()));
     });
 
     // ---- A typeface ----
@@ -529,7 +579,7 @@ void registerText(VM& vm) {
         request.weight = match.weight;
         request.italic = match.face->italic() || match.fakeItalic;
         request.hinting = args[6].truthy();
-        auto font = Font::of(match, request);
+        auto font = Font::of(match, request, sandboxFonts(vm));
         if (font == nullptr) throw vm.runtimeError(Thrown::IllegalStateException, "the font cannot be made");
         return Value::integer(numberOf(font));
     });

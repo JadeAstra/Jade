@@ -1,0 +1,53 @@
+// A sandbox's fonts and clipboard (M6.6.2 step 6): the system's fonts, or only those of a folder
+// it is given, so that text measures the same on every machine; and a clipboard of its own.
+import Jade.*
+
+// The machine's own sans-serif, whatever it is, as the one font of a folder.
+val usual = Font("SansSerif", 14).typeface
+val folder = Path.createTempDirectory("sandboxfonts")
+Path(usual.path).copyTo(Path(folder, Path(usual.path).name))
+Path(folder, "notes.txt").writeText("not a font")             // passed over
+val outside = Font("SansSerif", 14).width("Hello, world")
+val systemFamilies = Fonts.families()
+val usualBytes = Path(usual.path).readBytes()
+
+// By default, the system's fonts.
+Sandbox.run {
+  print(Fonts.families() == systemFamilies, systemFamilies.size > 1)       // expect: true true
+}
+
+// Given a folder: its fonts and no others.
+Sandbox.run(fontsFrom = folder) {
+  print(Fonts.families() == [usual.family], Fonts.typefaces().size)       // expect: true 1
+  val font = Font("SansSerif", 14)
+  print(font.typeface.family == usual.family, font.width("Hello, world") == outside)   // expect: true true
+  print(Fonts.find("No Such Family"), Fonts.has(usual.family))            // expect: null true
+  print(Font("No Such Family", 14).typeface.family == usual.family)       // expect: true
+  // A character none of its fonts has comes from none of the system's either.
+  print(Fonts.fallback("\u{10FFFD}"))                                     // expect: null
+}
+
+// Font files in its own files: loaded from there, never from the system's.
+Sandbox.run {
+  Path("/fonts").mkdir()
+  Path("/fonts/mine.ttf").writeBytes(usualBytes)
+  print(Fonts.count("/fonts/mine.ttf"), Fonts.load("/fonts/mine.ttf").family == usual.family)   // expect: 1 true
+  print(Fonts.count(usual.path), Fonts.count("/fonts/none.ttf"))         // expect: 0 0
+  try { Fonts.load("/fonts/none.ttf") } catch (e : IOException) { print(e.message) }   // expect: cannot read /fonts/none.ttf
+}
+
+// A folder that is not there.
+try { Sandbox.run(fontsFrom = Path(folder, "missing")) { } } catch (e : IllegalArgumentException) { print(e.message!!.endsWith("it is no directory")) }   // expect: true
+folder.deleteRecursively()
+
+// The clipboard: each sandbox's own, empty at the start; the system's is left alone.
+Native.useOwnClipboard()
+Native.clipboardText = "outside"
+Sandbox.run {
+  print(Native.clipboardText == "")                                       // expect: true
+  Native.clipboardText = "inside: é 中"
+  print(Native.clipboardText)                                             // expect: inside: é 中
+  print(thread { Native.clipboardText }.get())                            // expect: inside: é 中
+}
+Sandbox.run { print(Native.clipboardText == "") }                         // expect: true
+print(Native.clipboardText)                                               // expect: outside

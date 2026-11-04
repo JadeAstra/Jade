@@ -681,9 +681,9 @@ int64_t VM::addTimer(Value task, int64_t delayMs, int64_t periodMs) {
     timer.periodMs = periodMs;
     timer.task = task;
     // Set in a sandbox: due by its clock (M6.6.2).
-    if (std::shared_ptr<Host> host = currentHostShared(); host->isSandbox()) {
-        timer.sandboxDue = static_cast<SandboxHost&>(*host).now() + std::max<int64_t>(delayMs, 0) * 1000000;
-        timer.sandbox = std::move(host);
+    if (std::shared_ptr<Host> current = currentHostShared(); current->isSandbox()) {
+        timer.sandboxDue = static_cast<SandboxHost&>(*current).now() + std::max<int64_t>(delayMs, 0) * 1000000;
+        timer.sandbox = std::move(current);
     }
     timers_.push_back(timer);
     wakeLoop();

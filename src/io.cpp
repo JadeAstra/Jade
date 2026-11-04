@@ -141,7 +141,7 @@ struct SocketLink {
 class SocketEnd final : public Channel {
 public:
     SocketEnd(std::shared_ptr<SocketLink> link, int side, std::string remoteHost, int remotePort, int localPort)
-        : link_(std::move(link)), side_(side), remoteHost(std::move(remoteHost)), remotePort(remotePort), localPort(localPort) {}
+        : remoteHost(std::move(remoteHost)), remotePort(remotePort), localPort(localPort), link_(std::move(link)), side_(side) {}
     int read(char* out, size_t max, std::string& error, bool& timedOut) override {
         SocketLink& l = *link_;
         const int other = 1 - side_;

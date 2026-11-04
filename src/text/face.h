@@ -124,6 +124,8 @@ public:
     static std::shared_ptr<Face> fromBytes(std::vector<uint8_t> bytes, int index, const std::string& path, std::string& error);
     // How many faces a file holds: 1, or more for a collection, or 0 if it is not a font.
     static int count(const std::string& path);
+    // The same for a file's bytes, or its first 12.
+    static int count(const uint8_t* data, size_t size);
 
     ~Face();
 
