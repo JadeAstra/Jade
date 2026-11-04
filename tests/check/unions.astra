@@ -14,3 +14,14 @@ fun use(source : Source, n : int | string, flag : bool) {
   val t : Table<int, string> = {:}   // check: Table takes 1 type argument, not 2
   print(k, wrong, t)
 }
+
+// A type parameter and another type give their union, where they gave the checker's unknown
+// type (8.3e).
+fun <T> pickOne(flag : bool, t : T) : string {
+  val either = flag ? t : 1
+  either.nothingHere()                       // check: 'nothingHere' is not something every type of T | int has: test which it is first, with is or a when (D40)
+  val asText : string = either               // check: 'asText' is a string; it cannot start as a T | int
+  val both = [t, 1]
+  val kept : List<T | int> = both
+  return "$either"
+}

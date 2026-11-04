@@ -1230,6 +1230,14 @@ struct Checker::Impl {
         if (b.kind == Type::Null) return withNull(a);
         Type plainA = withNull(a, false), plainB = withNull(b, false);
         const bool nullable = a.nullable || b.nullable;
+        // A type parameter and another type: what each may be, T | int (8.3e), as a type
+        // parameter fits anything here, which would give the other alone.
+        const bool paramA = plainA.kind == Type::TypeParam, paramB = plainB.kind == Type::TypeParam;
+        if ((paramA || paramB) && text(plainA) != text(plainB)) {
+            if (plainA.kind == Type::Any || plainB.kind == Type::Any || plainA.kind == Type::Unit || plainB.kind == Type::Unit)
+                return unknownType();
+            return makeUnion({plainA, plainB}, nullable);
+        }
         if (fits(plainA, plainB)) return withNull(plainB, nullable);
         if (fits(plainB, plainA)) return withNull(plainA, nullable);
         if ((plainA.kind == Type::Int || plainA.kind == Type::Float) && (plainB.kind == Type::Int || plainB.kind == Type::Float))
@@ -1249,9 +1257,9 @@ struct Checker::Impl {
             for (ClassInfo* c : above)
                 if (c->typeParams.empty() && isSubclass(plainB.cls, c)) return withNull(classType(c), nullable);
         }
-        // Otherwise the union of the two (D40): `flag ? 1 : "one"` is an int | string.
-        if (plainA.kind == Type::Any || plainB.kind == Type::Any || plainA.kind == Type::TypeParam || plainB.kind == Type::TypeParam ||
-            plainA.kind == Type::Unit || plainB.kind == Type::Unit)
+        // Otherwise the union of the two (D40): `flag ? 1 : "one"` is an int | string, and
+        // `flag ? t : 1` a T | int (8.3e). With any or unit, nothing narrower than they say.
+        if (plainA.kind == Type::Any || plainB.kind == Type::Any || plainA.kind == Type::Unit || plainB.kind == Type::Unit)
             return unknownType();
         return makeUnion({plainA, plainB}, nullable);
     }
