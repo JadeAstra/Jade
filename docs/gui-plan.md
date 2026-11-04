@@ -2246,6 +2246,14 @@ parameter named as its class's; then G67's fix, an empty `[]`, `{:}` or set give
 written where it goes when that type names only the type parameters of the code around it,
 so that `map`, `filter`, `mapOf`, `setOf` and `toSet` give typed, and so packed, results.
 
+**M6.6.2. A sandbox for tests.** Added 2026-11-04, planned in
+[M6.6.2-sandbox-plan.md](M6.6.2-sandbox-plan.md), to be decided before it is built. One C++
+interface, the host, in front of everything of Astra's that touches the system (files, streams,
+processes, sockets, the clock, randomness, installed fonts): the real host is today's code, and
+a virtual one keeps files, a network, programs and time in memory, with a list of faults that
+make the rare failures happen on purpose. `Sandbox.run { ... }` in a test reaches nothing outside
+it.
+
 **M6.7. A faster VM.** Added 2026-10-16. The compiler's code generation and the VM's
 instruction loop rewritten once the language has stopped moving: instructions that name
 registers (a frame's slots) in place of a stack, as Lua 5 did, and combined instructions for
