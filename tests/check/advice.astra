@@ -44,3 +44,10 @@ val b4 : byte = n.toByte()
 @Repeatable annotation Tag(val v : int)    // check: @Repeatable is Kotlin's: an Astra annotation is written once on a declaration; delete it (D153)
 @OptIn fun early() {}                      // check: @OptIn accepts one of Kotlin's experimental APIs, and Astra has none to accept: delete it (D153)
 @Deprecated fun old() {}                   // check: @Deprecated comes with 1.0 (G46); until then, say so in the comment above the declaration
+
+// An annotation on a static field is checked as one on a field (8.6h).
+class Holder {
+  static {
+    @Nope var x = 1                        // check: 'Nope' is no annotation: one is declared annotation Nope(val value : T) (D153)
+  }
+}

@@ -9531,8 +9531,8 @@ struct Checker::Impl {
         if (c.isAnnotation) annotationValues(c);
         for (const HeaderParam& p : c.header) checkAnnotations(p.annotations, p.isField ? AnnotationPlace::Field : AnnotationPlace::Parameter);
         for (const auto& field : c.fields) checkAnnotations(field->annotations, AnnotationPlace::Field);
-        for (const auto& field : c.staticFields)
-            if (!field->annotations.empty()) report(field->annotations[0], "an annotation on a static field is never read: reflection lists an object's members (D153)");
+        // Reflection lists static fields with their annotations (G44, 8.6h).
+        for (const auto& field : c.staticFields) checkAnnotations(field->annotations, AnnotationPlace::Field);
         for (const auto& method : c.methods) annotationsOfFunction(*method);
         for (const auto& nested : c.nested) annotationsOfClass(*nested);
     }

@@ -160,7 +160,7 @@ fun handle(e : Event) : string =&gt; when (e) {
 Counter.hit()</pre></dd>
 
 <dt><code>annotation</code></dt>
-<dd>An annotation: declared like a class, with the values it holds in its header, and written with <code>@</code> on a class, a function, a field or a parameter. Nothing is made from it but what reflection reads.
+<dd>An annotation: declared like a class, with the values it holds in its header, and written with <code>@</code> on a class, a function, a field (a static one too) or a parameter. Nothing is made from it but what reflection reads.
 <pre>annotation JsonField(val name : string = "")
 class Row(@JsonField("row_id") val id : int, val label : string)
 for (f in Row#.fields) { print(f.annotation&lt;JsonField&gt;()?.name ?: f.name) }    // row_id, label</pre></dd>
@@ -249,7 +249,7 @@ Money(150) + Money(250)    // Money(cents=400)</pre></dd>
 <pre>inline fun twice(action : () -&gt; unit) { action(); action() }</pre></dd>
 
 <dt><code>tail</code></dt>
-<dd>Says that each call the function makes of itself is its last step. A function calling itself as its last step is made a loop with or without the word; with it, a call that is not its last step is an error.
+<dd>Says that each call the function makes of itself is its last step. A function calling itself as its last step is made a loop with or without the word; with it, a call that is not its last step is an error, and so is a function that never calls itself.
 <pre>tail fun countDown(n : int) : int {
   if (n == 0) { return 0 }
   return countDown(n - 1)

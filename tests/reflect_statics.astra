@@ -40,3 +40,14 @@ print(one.n, byFloat, Counter#.method("add", string#))        // expect: 7 add(b
 
 // -- What the class keeps private is listed to its own code only --
 print(Counter#.staticMethod("secret"))                        // expect: null
+
+// -- A static field's annotations, as a field's (8.6h) --
+annotation Note(val text : string)
+class Tally {
+  static {
+    @Note("made so far") var made = 0
+    val plain = 1
+  }
+}
+print(Tally#.staticField("made")!!.annotations, Tally#.staticField("plain")!!.annotations)   // expect: [Note(text="made so far")] []
+print(Tally#.staticField("made")!!.annotation<Note>()?.text)   // expect: made so far

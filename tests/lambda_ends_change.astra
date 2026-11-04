@@ -1,0 +1,9 @@
+// A lambda may end with ++ or --: it has no value, so it stays a statement and the lambda gives unit.
+var k = 0
+listOf(1, 2, 3).forEach { k++ }
+print(k)                                      // expect: 3
+val down = { k-- }
+down()
+print(k)                                      // expect: 2
+mapOf("a" to 1).forEach { _, _ -> k++ }
+print(k)                                      // expect: 3

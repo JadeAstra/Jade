@@ -1,0 +1,2 @@
+// tail asks for each call of itself to be a loop; a function that never calls itself has none (8.4d).
+tail fun next(n : int) : int => n + 1   // expect compile error: tail fun next never calls itself as its last step, so there is no call to make a loop of: delete 'tail' (D29)

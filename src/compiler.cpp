@@ -213,6 +213,7 @@ struct FunctionState {
     int scopeDepth = 0;
     LoopState* loop = nullptr;
     int tryDepth = 0;  // try blocks currently open in this function
+    int tailLoops = 0;  // calls of itself made a loop (D29)
     FinallyState* finally = nullptr;  // innermost `finally` block the code is inside of
     TypeSpec returnType;  // untyped unless the function declares one
 
@@ -3589,6 +3590,7 @@ private:
     void compileTailReturn(const Expr& value, const ReturnStmt& s) {
         if (selfCallFits(value)) {
             const auto& call = static_cast<const CallExpr&>(value);
+            fs_->tailLoops++;
             for (size_t i = 0; i < call.args.size(); i++) compileExprFor(*call.args[i], fs_->locals[i + 1].info.type);
             for (size_t i = call.args.size(); i < fs_->decl->params.size(); i++) emit(Op::Unset);  // its default, worked out again
             line_ = call.line;
@@ -5321,6 +5323,10 @@ private:
         inline_ = nullptr;
         compileBlockBody(decl.body);
         inline_ = outerInline;
+        // `tail` asks for calls of itself to be loops; with none, the word asks for nothing (8.4d).
+        if (decl.isTail && state.tailLoops == 0 && !decl.isAbstract)
+            throw error(decl, "tail fun " + decl.name + " never calls itself as its last step, so there is no call to make a loop of: " +
+                                  "delete 'tail' (D29)");
 
         // Running off the end returns null (or the instance, from an initializer).
         if (kind == FunctionKind::Initializer) {

@@ -1339,11 +1339,12 @@ void Parser::classMember(ClassStmt& s, bool inStatic) {
     }
     const Token& at = peek();
     Annotations written = annotations();
-    const size_t fields = s.fields.size(), methods = s.methods.size(), nested = s.nested.size();
+    const size_t fields = s.fields.size(), methods = s.methods.size(), nested = s.nested.size(), statics = s.staticFields.size();
     classMemberBody(s, inStatic);
     Annotations* into = s.nested.size() > nested ? &s.nested.back()->annotations
                         : s.methods.size() > methods ? &s.methods.back()->annotations
                         : s.fields.size() > fields   ? &s.fields.back()->annotations
+                        : s.staticFields.size() > statics ? &s.staticFields.back()->annotations  // listed by reflection (8.6h)
                                                      : nullptr;
     if (into == nullptr) throw error(at, "an annotation goes in front of a class, a function, a field or a parameter (D153)");
     for (Annotation& a : written) into->push_back(std::move(a));
@@ -3116,7 +3117,9 @@ ExprPtr Parser::lambdaLiteral(const Token& open, bool hasParams) {
         result->value = std::move(value);
         result->implicit = true;
         decl->body.back() = std::move(result);
-    } else if (!decl->body.empty() && decl->body.back()->kind == StmtKind::Expr) {
+    } else if (!decl->body.empty() && decl->body.back()->kind == StmtKind::Expr &&
+               static_cast<ExprStmt&>(*decl->body.back()).expr->kind != ExprKind::IncDec) {
+        // `forEach { n++ }`: a ++ or -- has no value, so it stays a statement, and the lambda gives unit.
         auto& last = static_cast<ExprStmt&>(*decl->body.back());
         auto result = std::make_unique<ReturnStmt>();
         result->line = last.line;
