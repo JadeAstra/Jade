@@ -8437,6 +8437,26 @@ struct Checker::Impl {
                 report(at, "no form of " + what + "(...) takes " + argumentsText() + "; there are " + formsText(all));
             return nullptr;
         }
+        // A colour of int constants, Color(255, 128, 0) (8.9b): the header's form, its parts
+        // bytes, so that the value is made with nothing to check or call as the program runs; a
+        // part outside 0 to 255 is an error here, not there.
+        if (fs[0]->owner != nullptr && fs[0]->owner->name == "Color" && fs[0]->owner->unit != nullptr && fs[0]->owner->unit->prelude &&
+            args.exprs.size() >= 3 && std::all_of(args.exprs.begin(), args.exprs.end(), [](const ExprPtr& a) { return literalsOnly(*a); })) {
+            bool inRange = true;
+            for (const ExprPtr& a : args.exprs) {
+                const ConstValue known = foldQuietly(*a);
+                if (known.kind == ConstValue::Int && (known.i < 0 || known.i > 255)) {
+                    report(*a, "a colour's parts are bytes, 0 to 255, and " + std::to_string(known.i) + " is not one (D99)");
+                    inRange = false;
+                }
+            }
+            if (!inRange) return nullptr;
+            for (const Fit& fit : candidates)
+                if (fit.narrowed > 0) {
+                    index = fit.index;
+                    return fs[index];
+                }
+        }
         if (candidates.size() == 1) {
             index = candidates[0].index;
             return fs[index];

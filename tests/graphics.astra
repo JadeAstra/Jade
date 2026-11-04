@@ -7,7 +7,8 @@ print(orange, orange.red, orange.green, orange.blue, orange.alpha, orange.argb =
 print(Color(255, 128, 0, 64), Color(0xFF8000), Color(0x40FF8000, true), Color(0x40FF8000), Color(1.0, 0.5, 0.0))   // expect: Color(255, 128, 0, 64) Color(255, 128, 0) Color(255, 128, 0, 64) Color(255, 128, 0) Color(255, 128, 0)
 print(Color(0.5, 0.5, 0.5, 0.5), Color.decode("#FF8000"), Color.decode("0x0080FF"))   // expect: Color(128, 128, 128, 128) Color(255, 128, 0) Color(0, 128, 255)
 // A part outside 0..255 is a mistake, not clamped.
-try { Color(300, -5, 128) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a colour's red is from 0 to 255, not 300
+val tooBig = 300   // worked out, so found as it runs; a constant is a compile error (8.9b)
+try { Color(tooBig, -5, 128) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a colour's red is from 0 to 255, not 300
 try { Color(0.5, 1.5, 0.0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a colour's green as a fraction is from 0.0 to 1.0, not 1.5
 // The constants, and a constant and a part of a colour that share a name.
 print(Color.white, Color.black, Color.red, Color.red.red, Color.red.green, Color.lightGray, Color.orange, Color.clear)   // expect: Color(255, 255, 255) Color(0, 0, 0) Color(255, 0, 0) 255 0 Color(192, 192, 192) Color(255, 200, 0) Color(0, 0, 0, 0)

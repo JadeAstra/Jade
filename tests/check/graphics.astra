@@ -12,7 +12,7 @@ val c = Color(10, 20, 30)
 print(c.getRed())                 // check: a colour's parts are properties, bytes: color.red (L79)
 print(c.rgb)                      // check: the colour as one number is color.argb, 0xAARRGGBB (L79)
 print(c.getRGB())                 // check: the colour as one number is color.argb, 0xAARRGGBB (L79)
-val tooMuch = Color(300, 0, 0)    // a mistake when it runs: a part is from 0 to 255
+val tooMuch = Color(300, 0, 0)    // check: a colour's parts are bytes, 0 to 255, and 300 is not one (D99)
 
 // -- Fonts --
 val f = Font("Segoe UI", 13)
@@ -68,3 +68,8 @@ val loadFont : () -> Typeface = { Fonts.load("x.ttf") }   // check: this lambda 
 // A font measures a string or a char (8.9g).
 val measured = Font("Segoe UI", 12)
 val wrongText = measured.width(5)          // check: Font.width(...) takes a string | char for 'text', not an int
+
+// A colour of constants is checked when compiled (8.9b).
+val orange = Color(255, 128, 0)
+val tooRed = Color(300, 0, 0)               // check: a colour's parts are bytes, 0 to 255, and 300 is not one (D99)
+val whole = Color(0xFF8000)
