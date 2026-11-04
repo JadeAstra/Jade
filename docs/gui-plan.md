@@ -2253,7 +2253,8 @@ processes, sockets, the clock, randomness, installed fonts): the real host is to
 a virtual one keeps files, a network, programs and time in memory, with a list of faults that
 make the rare failures happen on purpose. Every test of `astra test` runs in a sandbox of its own
 unless marked `@RealHost`, and any program may use one with `Sandbox.run { ... }`, which reaches
-nothing outside it; paths in it are Linux's unless it is asked for Windows'.
+nothing outside it; paths in it are Linux's unless it is asked for Windows'. Built 2026-11-04 in seven
+steps (3a4f32a to f677665); what differs from its plan is under "As built" there.
 
 **M6.7. A faster VM.** Added 2026-10-16. The compiler's code generation and the VM's
 instruction loop rewritten once the language has stopped moving: instructions that name
