@@ -15,10 +15,10 @@ object EventLoop {
 
   // Runs the job once, `delay` from now, or again and again `period` apart. Each gives a Timer,
   // whose cancel() calls it off.
-  fun after(delay : Duration, job : () -> unit) : Timer => Timer(__loop.timer(delay.inWholeMilliseconds, job))
+  fun after(delay : Duration, job : () -> unit) : Timer => Timer(__loop.timer(delay.waitMilliseconds, job))
   // Runs the job every `period`, the first time one `period` from now, until the Timer is cancelled;
   // a running timer keeps the program going.
-  fun every(period : Duration, job : () -> unit) : Timer => Timer(__loop.timer(period.inWholeMilliseconds, job, period.inWholeMilliseconds))
+  fun every(period : Duration, job : () -> unit) : Timer => Timer(__loop.timer(period.waitMilliseconds, job, period.waitMilliseconds))
 
   // Whether the code asking is running on the loop's thread.
   val isLoopThread : bool
@@ -177,7 +177,7 @@ fun Function.fail(error : Throwable) {
 // the event loop goes on; anywhere else the thread sleeps.
 suspend fun delay(time : Duration) {
   if (__task.current() != null and __loop.isLoopThread()) {
-    suspendTask<any?> { resume -> __loop.timer(time.inWholeMilliseconds, { resume(null) }) }
+    suspendTask<any?> { resume -> __loop.timer(time.waitMilliseconds, { resume(null) }) }
   } else {
     Thread.sleep(time)
   }

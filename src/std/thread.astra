@@ -34,7 +34,7 @@ class Thread {
     }
     // Waits for the time given: InterruptedException if the thread is interrupted meanwhile.
     suspend fun sleep(time : Duration) {
-      if (!__thread.sleep(time.inWholeMilliseconds)) { throw InterruptedException() }
+      if (!__thread.sleep(time.waitMilliseconds)) { throw InterruptedException() }
     }
     // Whether the running thread has been interrupted. Asking clears the mark.
     fun interrupted() : bool => __thread.interrupted()
@@ -86,7 +86,7 @@ class Thread {
   // Waits for the thread to finish, `timeout` at most if that is given: whether it finished.
   suspend fun join(timeout : Duration? = null) : bool {
     if (id == 0) { return true }
-    val status = __thread.join(id, timeout?.inWholeMilliseconds)
+    val status = __thread.join(id, timeout?.waitMilliseconds)
     if (status == 2) { throw InterruptedException() }
     return status == 0
   }

@@ -1,0 +1,12 @@
+// A wait of less than a millisecond, but more than none, waits a millisecond, as Kotlin's delay
+// counts it (8.7m), where it used to be counted as no wait at all.
+val start = clock()
+Thread.sleep(0.5.milliseconds)
+print(clock() - start >= 0.0005)                              // expect: true
+val job = task {
+  val began = clock()
+  delay(300.microseconds)
+  clock() - began >= 0.0003
+}
+print(0.5.milliseconds.inWholeMilliseconds, 0.seconds.inWholeMilliseconds)   // expect: 0 0
+job.then { print(it) }                                        // expect: true

@@ -60,9 +60,14 @@ value Duration(val inNanoseconds : int) {
   // The length in days, with what is less than a whole one as a fraction.
   val inDays : float
     get() => inNanoseconds / 86400000000000.0
-  // In whole milliseconds, what is less than one left out: what waiting is counted in.
+  // In whole milliseconds, what is less than one left out.
   val inWholeMilliseconds : int
     get() => inNanoseconds / 1000000
+  // What waiting for it is counted in: whole milliseconds, but one at least for any time above
+  // none, as Kotlin's delay counts it (8.7m): sleep(0.5.milliseconds) waits, and a timeout of
+  // half a millisecond is not 0, which for a socket means no limit.
+  internal val waitMilliseconds : int
+    get() => inNanoseconds <= 0 ? 0 : Math.max(inNanoseconds / 1000000, 1)
 
   // Whether it is less than no time.
   val isNegative : bool

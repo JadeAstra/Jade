@@ -229,7 +229,7 @@ class Process {
   fun waitFor() : int => __io.processWait(handle) as int
   // Waits at most `timeout` for the program to end: its exit code, or null if it is still
   // running then.
-  fun waitFor(timeout : Duration) : int? => __io.processWait(handle, timeout.inWholeMilliseconds)
+  fun waitFor(timeout : Duration) : int? => __io.processWait(handle, timeout.waitMilliseconds)
 
   // Its exit code once it has ended; null while it runs.
   val exitCode : int?
@@ -297,7 +297,7 @@ class Socket : AutoCloseable {
   // With a time limit, gives up when it runs out.
   fun connect(host : string, port : int, timeout : Duration? = null) : Socket throws IOException {
     if (handle != null) { throw IOException("the socket is already connected") }
-    adopt(__io.connect(host, port, timeout?.inWholeMilliseconds))
+    adopt(__io.connect(host, port, timeout?.waitMilliseconds))
     return this
   }
 
@@ -307,7 +307,7 @@ class Socket : AutoCloseable {
     input = Reader(connection)
     output = Writer(connection)
     val limit = readLimit
-    if (limit != null) { __io.socketTimeout(connection, limit.inWholeMilliseconds) }
+    if (limit != null) { __io.socketTimeout(connection, limit.waitMilliseconds) }
     return this
   }
 
@@ -348,7 +348,7 @@ class Socket : AutoCloseable {
     set(limit) {
       readLimit = limit
       val held = handle
-      if (held != null) { __io.socketTimeout(held, limit == null ? 0 : limit.inWholeMilliseconds) }
+      if (held != null) { __io.socketTimeout(held, limit == null ? 0 : limit.waitMilliseconds) }
     }
 
   // Says that nothing more will be written: the other side reads the end.
