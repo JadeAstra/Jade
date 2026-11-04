@@ -113,14 +113,14 @@ class Thread {
 
 // Starts a thread running the block and gives a Job of what it returns, as task { } and a
 // pool's submit { } do: then { } runs on the event loop, get() waits, cancel(interrupt = true)
-// interrupts the thread. An error the block throws fails the job, and ends the thread as any
-// thread's error does, reported where it was thrown.
+// interrupts the thread. An error the block throws fails the job and ends the thread; it is the
+// job's, as a task's is: an error nobody caught only if nothing asks for it (8.7a), and then
+// reported with where it was thrown.
 fun <T> thread(name : string? = null, daemon : bool = false, block : suspend () -> T throws Exception) : Job<T> {
   val job = Job<T>()
   val made = Thread(name)
   made.throwingTask = { job.complete(block()) }
-  // The thread's report is its error asked for: not reported again as the program ends.
-  made.whenFailed = { e -> job.failReported(e) }
+  made.whenFailed = { e -> job.fail(e) }
   made.isDaemon = daemon
   job.interrupter = { made.interrupt() }
   made.start()
@@ -162,11 +162,6 @@ class Job<T> {
   // Finishes it with `error`: get() then throws ExecutionException with `error` as its cause.
   // False if it was finished already.
   fun fail(error : Throwable) : bool => finish(2, error)
-  // As fail, for an error reported already: thread { }'s, by its thread.
-  internal fun failReported(error : Throwable) : bool {
-    ask()
-    return fail(error)
-  }
 
   // Its error is asked for: not reported.
   internal fun ask() {

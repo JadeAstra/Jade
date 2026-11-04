@@ -148,7 +148,6 @@ task {
 log.add("meanwhile")
 EventLoop.run()
 print(log)                                                   // expect: ["meanwhile", "worked on a thread, back on the loop: true", "failed there"]
-// expect error output: IllegalStateException: failed there
 
 // What waits for a lock, a channel or a countdown sets a task aside too, while threads go on.
 log.clear()

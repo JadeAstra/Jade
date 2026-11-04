@@ -1,0 +1,6 @@
+// thread { }'s error is its job's: with nothing asking for it, it is an error nobody caught,
+// reported with where it was thrown and the thread's name, and the exit code is 70 (8.7a).
+// expect runtime error: Uncaught IllegalStateException: never asked
+val lost = thread(name = "t1") { throw IllegalStateException("never asked") }
+Thread.sleep(50.milliseconds)
+print("end")   // expect: end

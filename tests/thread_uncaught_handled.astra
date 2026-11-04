@@ -1,0 +1,7 @@
+// With Program.onUncaughtError set, it takes the error that ends a thread, on that thread as it
+// ends, in place of the report; the exit code is the program's own (8.7a).
+Program.onUncaughtError = { error -> print("handled:", error.message, "on", Thread.currentThread().name) }
+val worker = Thread("unlucky") { throw RuntimeException("worker gave up") }
+worker.start()
+worker.join()                                                // expect: handled: worker gave up on unlucky
+print("and the program goes on")                             // expect: and the program goes on

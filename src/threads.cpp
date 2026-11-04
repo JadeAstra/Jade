@@ -364,17 +364,45 @@ void VM::threadMain(ThreadState* me) {
     } catch (AstraThrow& thrown) {
         // A thread { }'s Job fails with the error first (its Thread's whenFailed), which then is
         // reported where it was thrown, not where something caught it and threw it again (8.7a).
+        // thread { }'s: the error is its job's, as a task's is, and an error nobody caught only
+        // if nothing asks for it; where it was thrown is kept for that report (8.7a).
+        bool toJob = false;
         if (me->self.isObjType(ObjType::Instance)) {
             Value whenFailed = Value::null();
             if (asInstance(me->self)->read(intern("whenFailed"), whenFailed) && !whenFailed.isNull()) {
                 try {
                     call(whenFailed, 1, &thrown.value);
+                    toJob = true;
                 } catch (AstraThrow&) {
-                    // The job is the thread's own; its error is reported below all the same.
+                    // The job could not take it: reported below as the thread's.
                 }
             }
         }
-        if (onThreadError) onThreadError(*this, thrown, me->name);
+        if (toJob) {
+            if (thrown.value.isObj())
+                for (const auto& [job, error] : unaskedFailures)
+                    if (error.isObj() && error.as.obj == thrown.value.as.obj) {
+                        std::vector<std::string> trace = thrown.trace;
+                        trace.push_back("in thread " + me->name);
+                        failureTraces[error.as.obj] = std::move(trace);
+                        break;
+                    }
+        } else if (!uncaughtHandler.isNull()) {
+            // An error nobody caught, as for a job's nothing asked for: to
+            // Program.onUncaughtError where the program set one, run on this thread as it ends;
+            // otherwise reported, and the program's exit code is 70.
+            try {
+                call(uncaughtHandler, 1, &thrown.value);
+            } catch (AstraThrow& again) {
+                uncaughtReported = true;
+                if (onThreadError) onThreadError(*this, again, me->name);
+            } catch (const AstraExit& exit) {
+                if (onThreadExit) onThreadExit(exit.code);
+            }
+        } else {
+            uncaughtReported = true;
+            if (onThreadError) onThreadError(*this, thrown, me->name);
+        }
     } catch (const AstraExit& exit) {
         if (onThreadExit) onThreadExit(exit.code);
     } catch (const FiberSuspend&) {
@@ -975,16 +1003,31 @@ void registerThreads(VM& vm) {
         vm.unaskedDeliver = args[2];
         return Value::null();
     });
+    // Program.onUncaughtError set: what takes the error that ends a thread (and a job's, through
+    // __unaskedFailed).
+    define(vm, thread, "uncaughtHandler", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        vm.uncaughtHandler = args[0];
+        return Value::null();
+    });
     // Something asked for the job's error: it is not reported.
     define(vm, thread, "asked", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        if (args[0].isObj()) vm.unaskedFailures.erase(args[0].as.obj);
+        if (!args[0].isObj()) return Value::null();
+        if (auto found = vm.unaskedFailures.find(args[0].as.obj); found != vm.unaskedFailures.end()) {
+            if (found->second.isObj()) vm.failureTraces.erase(found->second.as.obj);
+            vm.unaskedFailures.erase(found);
+        }
         return Value::null();
     });
     // A job's error nothing asked for and no handler took: reported as one nobody caught, and the
     // program's exit code is 70.
     define(vm, thread, "reportUncaught", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        vm.uncaughtInJob = true;
+        vm.uncaughtReported = true;
         AstraThrow thrown{args[0]};
+        if (args[0].isObj())
+            if (auto kept = vm.failureTraces.find(args[0].as.obj); kept != vm.failureTraces.end()) {
+                thrown.trace = std::move(kept->second);  // a thread { }'s: where it was thrown
+                vm.failureTraces.erase(kept);
+            }
         if (vm.onUnaskedError) vm.onUnaskedError(vm, thrown);
         return Value::null();
     });

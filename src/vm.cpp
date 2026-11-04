@@ -258,9 +258,10 @@ void VM::deliverUnasked(bool atEnd) {
         try {
             call(unaskedDeliver, 1, &error);
         } catch (AstraThrow& thrown) {
-            uncaughtInJob = true;
+            uncaughtReported = true;
             if (onUnaskedError) onUnaskedError(*this, thrown);
         }
+        if (error.isObj()) failureTraces.erase(error.as.obj);  // a handler took it, or it is reported
     }
 }
 
@@ -8403,6 +8404,7 @@ void VM::collectGarbage() {
     for (ObjFiber* fiber : waitingFibers_) markObject(fiber);
     markValue(workerSelf);
     markValue(unaskedDeliver);
+    markValue(uncaughtHandler);
     for (const Value& error : freedFailures) markValue(error);
     for (const auto& [job, error] : unaskedFailures) markValue(error);  // the job is held weakly
     for (const auto& worker : workerObjects) markValue(worker.second);

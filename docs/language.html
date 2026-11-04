@@ -1415,7 +1415,7 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <p>Its name: its own file's, without .astra (&quot;bank&quot; for bank.astra), unless set otherwise. It is the origin of the classes the program declares (Class.origin); set it before it is used.</p>
 </div>
 <div class="entry member" id="Program.onUncaughtError"><code class="sig">var onUncaughtError : ((Throwable) -&gt; unit)?</code><a class="anchor" href="#Program.onUncaughtError">#</a>
-<p>What takes the error of a job that failed with nothing asking for it (by get, then, onError and the like), once nothing can: when the job is collected, or as the program ends (8.7a). Without one, the error is reported as one nobody caught, and the exit code is 70.</p>
+<p>What takes an error nobody caught outside the script itself: the one that ends a thread, on that thread as it ends, and a job's that failed with nothing asking for it (by get, then, onError and the like), once nothing can: when the job is collected, or as the program ends (8.7a). Without one, each is reported as an error nobody caught, the program goes on, and its exit code is 70 when it ends.</p>
 <pre>Program.onUncaughtError = { error -&gt; log.write(&quot;lost: $error&quot;) }
 </pre>
 </div>

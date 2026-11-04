@@ -101,11 +101,17 @@ object Program {
   // Its name: its own file's, without .astra ("bank" for bank.astra), unless set otherwise. It
   // is the origin of the classes the program declares (Class.origin); set it before it is used.
   var name : string = __programName()
-  // What takes the error of a job that failed with nothing asking for it (by get, then, onError
-  // and the like), once nothing can: when the job is collected, or as the program ends (8.7a).
-  // Without one, the error is reported as one nobody caught, and the exit code is 70.
+  // What takes an error nobody caught outside the script itself: the one that ends a thread, on
+  // that thread as it ends, and a job's that failed with nothing asking for it (by get, then,
+  // onError and the like), once nothing can: when the job is collected, or as the program ends
+  // (8.7a). Without one, each is reported as an error nobody caught, the program goes on, and
+  // its exit code is 70 when it ends.
   //   Program.onUncaughtError = { error -> log.write("lost: $error") }
   var onUncaughtError : ((Throwable) -> unit)? = null
+    set(handler) {
+      field = handler
+      __thread.uncaughtHandler(handler)
+    }
 }
 
 // Throws an IllegalStateException with `message` as its text: error("no such user $name").

@@ -2804,6 +2804,15 @@ worker.join(timeout = 500.milliseconds)
 Thread.sleep(250.milliseconds)
 ```
 
+An error nobody catches ends the thread it happens on, and the program goes on. A `Thread`
+reports it there and then; `thread { }` gives it to its job, as `task { }` does, and a job's
+error is reported only if nothing asks for it (by `get`, `then`, `onError` and the like), once
+nothing can: when the job is collected, or as the program ends, with where it was thrown. Either
+report makes the program's exit code 70 when it ends, as an error in the script itself does at
+once.
+`Program.onUncaughtError = { error -> ... }` takes them in place of the report, and the exit
+code is then the program's own.
+
 Threads share everything: a variable or an object is the same one on every thread. One
 thread runs Astra code at a time, and they change places at calls and at the ends of loop
 bodies. So a thread never sees a list or a map half changed, and a race between threads can

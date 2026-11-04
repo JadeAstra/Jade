@@ -111,19 +111,19 @@ int runProgram(VM& vm, Program& program, int entry) {
     };
 
     // As it ends, the jobs that failed with nothing asking for their errors and are still held
-    // (8.7a): each to Program.onUncaughtError, or reported as an error nobody caught, which makes
-    // the exit code 70.
+    // (8.7a): each to Program.onUncaughtError, or reported as an error nobody caught. One so
+    // reported, a thread's or a job's, makes the exit code 70.
     auto reportAtEnd = [&vm](int& code) {
         try {
             vm.deliverUnasked(true);
         } catch (AstraThrow& thrown) {
             reportUncaught(vm, thrown);
-            vm.uncaughtInJob = true;
+            vm.uncaughtReported = true;
         } catch (const AstraExit& exit) {
             code = exit.code;
             return;
         }
-        if (code == 0 && vm.uncaughtInJob) code = kExitRuntimeError;
+        if (code == 0 && vm.uncaughtReported) code = kExitRuntimeError;
     };
 
     int code = 0;

@@ -827,12 +827,19 @@ public:
     // The jobs that failed with nothing asking for their errors (8.7a): each job's error, the
     // job held weakly, so that one nothing can ask any more is reported once it is collected, and
     // the others as the program ends. `unaskedDeliver` reports one (__unaskedFailed: to
-    // Program.onUncaughtError, or as an error nobody caught); `uncaughtInJob` makes the exit
-    // code 70 once one was reported so.
+    // Program.onUncaughtError, or as an error nobody caught).
     std::unordered_map<Obj*, Value> unaskedFailures;
     std::vector<Value> freedFailures;  // their jobs collected, to be reported on the event loop
     Value unaskedDeliver = Value::null();
-    bool uncaughtInJob = false;
+    // Where the error of a thread { }'s job was thrown, kept for its report while nothing has
+    // asked for it, by the error.
+    std::unordered_map<Obj*, std::vector<std::string>> failureTraces;
+    // Program.onUncaughtError, as the program set it: what takes the error that ends a thread,
+    // or a job's nothing asked for; null while there is none.
+    Value uncaughtHandler = Value::null();
+    // An error nobody caught was reported, in a thread or a job, with no handler to take it: the
+    // program's exit code is then 70, however the rest of it ends.
+    bool uncaughtReported = false;
     bool deliveryPosted = false;
     void deliverUnasked(bool atEnd);
 
