@@ -102,7 +102,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="d163">
 <h3><span class="code">D163</span>How the C++ functions&#39; results are checked (part 1)</h3>
 <p>By a test setting, not on every call. <code>ASTRA_CHECK_NATIVE_RESULTS=1</code> compiles a check after every call of an <code>external</code> function against its declaration (the standard library compiled from its source, the cache kept apart); the suite passes with it, and each checkpoint runs it beside the GC and thread stress settings. The C++ is fixed code, so the suite proves its declarations once, and later parts can then trust them while the program runs. The other way, a check on every call, costs every call of the C++. A list or map a C++ function gives is tagged at the call with the type the checker worked out, where it has none.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the stress settings (native results, GC, threads, copied reads) go into <code>tests/run.ps1</code>, so that each checkpoint runs them from the repo and not from a scratch script (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the stress settings (native results, GC, threads, copied reads) go into <code>tests/run.ps1</code>, so that each checkpoint runs them from the repo and not from a scratch script (done 2026-11-04, 4386343).</span></div>
 </section>
 
 <section class="decision" id="d164">
@@ -136,7 +136,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="d180">
 <h3><span class="code">D180</span><code>Rect</code> takes all four numbers (part 7)</h3>
 <p><code>Rect(x, y, width, height)</code> takes all four, with no defaults. Java&#39;s <code>Rectangle()</code> is <code>Rect(0, 0, 0, 0)</code> and <code>Rectangle(w, h)</code> is <code>Rect(0, 0, w, h)</code>: both are compile errors as written, so that <code>Rect(30, 40)</code> cannot quietly mean the corner. <code>Rectangle(other)</code> is <code>other</code>, which is copied wherever it is kept. <code>Point()</code>, <code>Size()</code> and <code>Insets()</code> keep their zeros, as in Java. The reason first given, that Astra has no constructors of other forms, no longer holds: secondary constructors came in part 8 (8.9a), and <code>Color</code> has them. Today <code>Rect(30, 40)</code> says only that <code>width</code> and <code>height</code> are missing.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> still all four numbers, and <code>Rect(30, 40)</code>&#39;s error says that x and y come first, as in <code>Rect(0, 0, 30, 40)</code> (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> still all four numbers, and <code>Rect(30, 40)</code>&#39;s error says that x and y come first, as in <code>Rect(0, 0, 30, 40)</code> (done 2026-11-04, be8950e, 627e517).</span></div>
 </section>
 
 <section class="decision" id="d166">
@@ -290,7 +290,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-char-case">
 <h3><span class="code">8.1c</span>A char&#39;s <code>upper()</code> and <code>lower()</code> give a char (part 8, group 1)</h3>
 <p>D74 keeps <code>upper</code> and <code>lower</code> over <code>uppercase</code> and <code>lowercase</code>; on a char each gives a char, the letter in the other case where that is one character, the char itself otherwise (<code>&#39;ß&#39;.upper()</code> is <code>&#39;ß&#39;</code>, as Kotlin&#39;s <code>uppercaseChar()</code> gives). Kotlin&#39;s <code>Char.uppercase()</code> gives a string (for <code>ß</code>, "SS"); ported <code>replaceFirstChar { it.uppercase() }</code> becomes <code>{ it.upper() }</code>. Since D74 was built, <code>uppercase()</code> and <code>lowercase()</code>, on a string or a char, are errors naming <code>upper()</code> and <code>lower()</code>; <code>uppercaseChar()</code> gets only "a char has no method".</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>uppercaseChar</code>, <code>lowercaseChar</code>, <code>titlecase</code> and <code>titlecaseChar</code> become errors naming <code>upper()</code> or <code>lower()</code> (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>uppercaseChar</code>, <code>lowercaseChar</code>, <code>titlecase</code> and <code>titlecaseChar</code> become errors naming <code>upper()</code> or <code>lower()</code> (done 2026-11-04, be8950e).</span></div>
 </section>
 
 <section class="decision" id="p8-utf8">
@@ -476,7 +476,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-tail-word">
 <h3><span class="code">8.4d</span>What <code>tail</code> asks (part 8, group 4)</h3>
 <p>D29: each call of itself made directly in its body is its last step; one that is not is an error saying why: its result used afterwards, a try around it, a subclass overriding it, type arguments other than its own, a vararg, or arguments given by name or spread. Since G33 a generic function may be <code>tail</code>. A call from inside a lambda in it is not looked at. Kotlin&#39;s <code>tailrec</code> is an error pointing to <code>tail</code>.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a <code>tail fun</code> that never calls itself is an error (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a <code>tail fun</code> that never calls itself is an error (done 2026-11-04, 4c4ed83).</span></div>
 </section>
 
 <section class="decision" id="p8-it-rule">
@@ -530,7 +530,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-throwable-shape">
 <h3><span class="code">8.5b</span>What a Throwable holds (part 8, group 5)</h3>
 <p>As Kotlin: <code>message</code>, a <code>string?</code>, and <code>cause</code>, a <code>Throwable?</code>. So <code>e.message</code> may be null to the checker, and the tests that called a method on it say <code>!!</code>. Most classes take both; as in Java, some take only a message (<code>OutOfMemoryError</code>, <code>StackOverflowError</code>, <code>InternalError</code>, <code>AssertionError</code>, <code>NotImplementedError</code>, <code>InterruptedException</code>, <code>CancellationException</code>, <code>SocketTimeoutException</code>, <code>TimeoutException</code>) and some only a cause (<code>ExecutionException</code>, <code>UncheckedIOException</code>, <code>InvocationTargetException</code>). Since G40 it also holds the errors set aside for it, <code>suppressed</code>, added with <code>addSuppressed</code>. <code>toString()</code> is the class&#39;s name and the message. The classes are in the standard library (<code>errors.astra</code>), not the compiler. A program cannot read a Throwable&#39;s stack trace; only an error nobody catches shows it.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>AssertionError</code>, <code>InternalError</code> and <code>CancellationException</code> take a cause too, as in Java and Kotlin (to be done). A program reading its own stack trace is left for M6.7 or after, with its own decision on what it costs.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>AssertionError</code>, <code>InternalError</code> and <code>CancellationException</code> take a cause too, as in Java and Kotlin (done 2026-11-04, b3a3ca2). A program reading its own stack trace is left for M6.7 or after, with its own decision on what it costs.</span></div>
 </section>
 
 <section class="decision" id="p8-unchecked-waits">
@@ -584,7 +584,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-throws-written">
 <h3><span class="code">8.5k</span>Where throws is written (part 8, group 5)</h3>
 <p>After the result type, or after the parameters where there is none: <code>fun load() : string throws IOException</code>, <code>fun save() throws IOException { }</code>; on a function type after its result, <code>() -&gt; unit throws IOException</code>; several with <code>|</code>. Since G38 and G39, after a property&#39;s <code>get()</code> or <code>set(v)</code> too: <code>get() throws IOException</code>. Kotlin&#39;s <code>@Throws</code> is an error saying what to write; Java&#39;s <code>throws A, B</code> gives only &quot;expected &#39;{&#39;&quot;.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>throws A, B</code> is an error saying to join them with <code>|</code> (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>throws A, B</code> is an error saying to join them with <code>|</code> (done 2026-11-04, be8950e).</span></div>
 </section>
 
 <section class="decision" id="p8-hash-reads">
@@ -608,7 +608,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-rights">
 <h3><span class="code">8.6d</span>Who may see a member (part 8, group 6)</h3>
 <p>D38: what the asking code may use. As built, the code is the function where the <code>#</code> is written: the Class keeps it, and the classes it gives (<code>superclass</code>, <code>interfaces</code>, <code>typeArguments</code>) keep it too. The Classes a member gives for its type (a field&#39;s and a parameter&#39;s <code>type</code>, a method&#39;s <code>result</code>) do not: they list only what any code may use. A field the code may read but not assign to (<code>private set</code>) is listed with <code>isMutable</code> false. Once listed, a member is read, set or called whoever then does it, as a Java <code>Field</code> made accessible is.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the Classes a field, a parameter and a method give for their types keep the asking code too, as <code>superclass</code> and <code>interfaces</code> do (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the Classes a field, a parameter and a method give for their types keep the asking code too, as <code>superclass</code> and <code>interfaces</code> do (done 2026-11-04, 43f7a6d).</span></div>
 </section>
 
 <section class="decision" id="p8-wrapping">
@@ -632,13 +632,13 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-annotation-decl">
 <h3><span class="code">8.6h</span>What an annotation is (part 8, group 6)</h3>
 <p>Declared <code>annotation Name(val a : T = default)</code>: a header of vals and nothing else, no supertypes or type parameters. It holds what an argument may be: an int, a float, a bool, a char, a byte, a string, a Duration written as a constant (<code>2.seconds</code>, since G52), a Class, an enum, another annotation, or a list of those, none nullable. It is a data class, compared and printed by its values (<code>JsonField(name=&quot;id&quot;, optional=false)</code>), as Kotlin&#39;s are. On a header field it is both the field&#39;s and the constructor parameter&#39;s (Kotlin asks which with <code>@field:</code>, an error here). The same one written twice on a declaration is an error; on a variable outside a class, or on a static field, it is an error, as nothing was to read it. Since G44 reflection lists static fields (<code>staticFields</code>), each with a place for its annotations, so the static field&#39;s error no longer holds.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> annotations are allowed on static fields, which <code>staticFields</code> lists with them (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> annotations are allowed on static fields, which <code>staticFields</code> lists with them (done 2026-11-04, 4c4ed83).</span></div>
 </section>
 
 <section class="decision" id="p8-jvm-annotations">
 <h3><span class="code">8.6i</span>Which of Kotlin&#39;s annotations are errors (part 8, group 6)</h3>
 <p>D153 names <code>@Synchronized</code>, <code>@JvmStatic</code>, <code>@Throws</code> and <code>@Suppress</code>; L47 <code>@Volatile</code>. Also refused, each saying it is for the JVM and to delete it: <code>@JvmField</code>, <code>@JvmName</code>, <code>@JvmOverloads</code>, <code>@JvmInline</code>, <code>@JvmDefault</code>, <code>@JvmSuppressWildcards</code>, <code>@JvmWildcard</code>, <code>@JvmRecord</code>, <code>@JvmMultifileClass</code>, <code>@JvmSynthetic</code>, <code>@JvmSerializableLambda</code>, <code>@PublishedApi</code>, <code>@Strictfp</code>, <code>@Transient</code> and <code>@SuppressWarnings</code>. Any other annotation not declared is an error saying it is no annotation and how one is declared; for Kotlin&#39;s <code>@Target</code>, written on nearly every Kotlin annotation, that advice misleads. The tests and the example that wrote <code>@Volatile</code> lost it.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>@Target</code>, <code>@Retention</code>, <code>@Repeatable</code>, <code>@MustBeDocumented</code> and <code>@OptIn</code> say to delete them, and <code>@Deprecated</code> says it comes at 1.0 (G46) (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>@Target</code>, <code>@Retention</code>, <code>@Repeatable</code>, <code>@MustBeDocumented</code> and <code>@OptIn</code> say to delete them, and <code>@Deprecated</code> says it comes at 1.0 (G46) (done 2026-11-04, be8950e).</span></div>
 </section>
 
 <section class="decision" id="p8-astra-test">
@@ -650,7 +650,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-type-function">
 <h3><span class="code">8.6k</span>type(x) and className (part 8, group 6)</h3>
 <p>D48 removes <code>className</code>, for <code>Image#.name</code>; <code>Box.className</code> is an error saying so, but <code>x.className</code> on a value is only &quot;Box has no member &#39;className&#39;&quot;. <code>type(x)</code>, which L26 named as what there was before <code>#</code>, is gone since G24 (2026-10-24): a call is an error saying to write <code>x#.name</code>, which since <code>null#</code> (8.6a) gives a name for every value, null included.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>x.className</code>, <code>.simpleName</code>, <code>.qualifiedName</code> and <code>.javaClass</code> are errors pointing to <code>x#.name</code> or <code>x#</code> (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>x.className</code>, <code>.simpleName</code>, <code>.qualifiedName</code> and <code>.javaClass</code> are errors pointing to <code>x#.name</code> or <code>x#</code> (done 2026-11-04, be8950e).</span></div>
 </section>
 
 <section class="decision" id="p8-task-errors">
@@ -764,7 +764,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-socket-timeout">
 <h3><span class="code">8.8f</span>What a read past readTimeout throws (part 8, group 8)</h3>
 <p>D120 says a read past <code>readTimeout</code> throws a TimeoutException. As built it throws a <code>SocketTimeoutException</code>, Java&#39;s name, which is an IOException: every read says <code>throws IOException</code>, and a TimeoutException, which is not one, would have to be named on every read as well, or would escape what catches an IOException. <code>catch (e : SocketTimeoutException)</code> tells it from other failures. Inside, the C++ chooses it by comparing the failure&#39;s message with &quot;the read timed out&quot;.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the C++ marks a timed-out read with a flag, and chooses <code>SocketTimeoutException</code> by that, not by the message&#39;s text (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the C++ marks a timed-out read with a flag, and chooses <code>SocketTimeoutException</code> by that, not by the message&#39;s text (done 2026-11-04, 43f7a6d).</span></div>
 </section>
 
 <section class="decision" id="p8-process-shape">
@@ -788,19 +788,19 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-native-declared">
 <h3><span class="code">8.8j</span>What the C++ that reads and writes throws (part 8, group 8)</h3>
 <p>Gap 8.5f: the checker knew which of the C++ functions under <code>Path</code>, the readers and writers, processes and sockets throw an IOException from a table of its own. As built, those functions are declared in the standard library as <code>external object __file</code> and <code>external object __io</code>, each with its types and <code>throws IOException</code>, as <code>Math</code> is declared, and the checker reads them as it reads any declaration; the table is gone. The standard library&#39;s own calls of them are now checked for their types as well. The C++ under fonts and images, <code>__text</code>, is not declared yet, so its calls are not checked, and <code>Fonts.load</code> throws an IOException it does not declare.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>Fonts.load</code> declares <code>throws IOException</code> (to be done). Declaring <code>__text</code> as an external object comes later, in M6.7 or after.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>Fonts.load</code> declares <code>throws IOException</code> (done 2026-11-04, b3a3ca2). Declaring <code>__text</code> as an external object comes later, in M6.7 or after.</span></div>
 </section>
 
 <section class="decision" id="p8-jade-paths">
 <h3><span class="code">8.8k</span>Paths in Jade and in images and fonts (part 8, group 8)</h3>
 <p>D107 replaces <code>File</code> everywhere. As built, a window&#39;s <code>onFilesDropped</code> and <code>onFilesDroppedAt</code> give a <code>List&lt;Path&gt;</code> where they gave a <code>List&lt;File&gt;</code>; <code>Image.load</code> (Picture until group 9), <code>Image.save</code>, <code>Fonts.load</code> and <code>count</code>, and a surface&#39;s <code>save</code>, take a <code>Path</code> or its text (and both <code>load</code>s bytes too), where they took anything. <code>Image.load</code> and the two <code>save</code>s declare <code>throws IOException</code>; <code>Fonts.load</code> throws one without declaring it (8.8j), and <code>Fonts.count</code> gives 0 for a file it cannot read. <code>@TempDir</code> gives a Path. Nothing else of Jade&#39;s changed.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date); <code>Fonts.load</code> declares <code>throws IOException</code> with 8.8j (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date); <code>Fonts.load</code> declares <code>throws IOException</code> with 8.8j (done 2026-11-04, b3a3ca2).</span></div>
 </section>
 
 <section class="decision" id="p9-secondary">
 <h3><span class="code">8.9a</span>Secondary constructors (part 8, group 9)</h3>
 <p>You chose (2026-10-22) to give <code>Color</code> its other forms by Kotlin&#39;s secondary constructors, partly reversing D180, which had left them out. As built, a class or a value type may have <code>constructor(...) : this(...)</code>, with a body that runs after the form it calls; in a value type the body changes the value being made. Each is a static function of the class the checker chooses among with the class&#39;s other forms (its header&#39;s, or its hand-written <code>init</code>s), by D56&#39;s rules, so a call costs one more call than the header&#39;s. <code>X#.constructors</code> lists the header&#39;s, then the secondary ones, each called through its own function (G61). A call with a bundle, <code>Color(...params(red = 1, green = 2, blue = 3))</code>, does not choose among the forms: it is reported as fitting more than one, with advice a bundle cannot follow.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a <code>...bundle</code> passed to a class or function with several forms chooses among them by the bundle&#39;s names and types, as arguments written out do; D180&#39;s entry, which still says Astra has no constructors of other forms, is brought up to date (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a <code>...bundle</code> passed to a class or function with several forms chooses among them by the bundle&#39;s names and types, as arguments written out do; D180&#39;s entry, which still says Astra has no constructors of other forms, is brought up to date (done 2026-11-04, 627e517).</span></div>
 </section>
 
 <section class="decision" id="p9-exact-fit">
@@ -812,7 +812,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-byte-int">
 <h3><span class="code">8.9c</span>A byte goes where an int does (part 8, group 9)</h3>
 <p>A colour&#39;s parts are bytes (D99), and <code>color.red + color.green</code>, <code>Math.max(a.red, b.red)</code> or <code>val r : int = color.red</code> were errors or gave a byte. As built, a <code>byte</code> fits where an <code>int</code> or a <code>Number</code> is wanted and becomes an int there: a variable, a parameter, a field, a result, a list of ints, an index, and the natives that take numbers (<code>Math</code>&#39;s functions keep an int an int for it). The other way, an int into a byte, is still an error unless it is a constant that fits.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the error for an int put where a byte goes (<code>val b : byte = n</code>) names <code>n.toByte()</code> (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the error for an int put where a byte goes (<code>val b : byte = n</code>) names <code>n.toByte()</code> (done 2026-11-04, be8950e).</span></div>
 </section>
 
 <section class="decision" id="p9-color">
@@ -824,7 +824,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-bundle">
 <h3><span class="code">8.9e</span>What a bundle is when the program runs (part 8, group 9)</h3>
 <p>D143 calls a bundle a value type, expanded at each call. As built, the checker knows a bundle&#39;s names and types and checks each call against them; when the program runs a bundle is a Map of its names, and <code>...bundle</code> looks each name up as the call is made, a few lookups a call (G58, M6.7). Its type is written <code>params(size : int, bold : bool)</code>, so a bundle can be a parameter or a field; a bundle prints as a map, <code>{&quot;size&quot;: 18, &quot;bold&quot;: true}</code>. <code>+</code> of two bundles with a name in common keeps the right one&#39;s.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a bundle prints as <code>params(size = 18, bold = true)</code>, so what it prints does not show the Map it is kept as (to be done). The lookups at each call stay with G58, in M6.7.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> a bundle prints as <code>params(size = 18, bold = true)</code>, so what it prints does not show the Map it is kept as (done 2026-11-04, 627e517). The lookups at each call stay with G58, in M6.7.</span></div>
 </section>
 
 <section class="decision" id="p9-grid">
@@ -836,19 +836,19 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-font">
 <h3><span class="code">8.9g</span>A font&#39;s measurements at a scale (part 8, group 9)</h3>
 <p>D101 and D125 put the measurements on <code>Font</code>, in layout units, with a scale where pixels are wanted. As built, <code>ascent</code>, <code>descent</code>, <code>leading</code>, <code>lineHeight</code>, <code>xHeight</code>, <code>capHeight</code>, <code>width(text)</code> and <code>offsets(text)</code> are the font at scale 1, and <code>ascent(scale)</code>, <code>descent(scale)</code>, <code>leading(scale)</code>, <code>lineHeight(scale)</code>, <code>width(text, scale)</code> and <code>offsets(text, scale)</code> are in a screen&#39;s pixels; <code>xHeight</code> and <code>capHeight</code> have no form with a scale. <code>width</code> takes a character as well; its text, and <code>offsets</code>&#39;s, is typed <code>any?</code>, so <code>font.width(5)</code> compiles and throws a ClassCastException when it runs. What only the text engine&#39;s font had, <code>glyphBox</code> and turning hinting off, is no longer public, and <code>Typeface.font(size, ...)</code> gives a <code>Font</code>. Jade lays text out in units rounded up from the screen&#39;s pixels (D2), in a class of its own, <code>TextUnits</code>, internal to Jade.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the text <code>width</code> and <code>offsets</code> take is typed <code>string | char</code>, so a wrong one is a compile error, and <code>xHeight(scale)</code> and <code>capHeight(scale)</code> are added (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> the text <code>width</code> and <code>offsets</code> take is typed <code>string | char</code>, so a wrong one is a compile error, and <code>xHeight(scale)</code> and <code>capHeight(scale)</code> are added (done 2026-11-04, b3a3ca2).</span></div>
 </section>
 
 <section class="decision" id="p9-style">
 <h3><span class="code">8.9h</span>The style handed to a component (part 8, group 9)</h3>
 <p>D132 moves the style from the canvas to the component. As built, <code>paintInto(canvas, given = null)</code> works out <code>styleIn(given ?: style())</code> and keeps it as <code>paintStyle</code>; a container hands each child nothing, so the child paints in its own style, as it did when the container made the child&#39;s canvas with the child&#39;s style. Nothing passes <code>given</code>: every call in Jade is <code>paintInto(canvas)</code>. <code>Content</code> now has <code>var owner</code> itself, so <code>OwnedContent</code> is gone and every content declares the field.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>paintInto</code> loses the <code>given</code> parameter nothing uses, until something needs a style handed down (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>paintInto</code> loses the <code>given</code> parameter nothing uses, until something needs a style handed down (done 2026-11-04, b3a3ca2).</span></div>
 </section>
 
 <section class="decision" id="p9-render">
 <h3><span class="code">8.9i</span>Pictures of a component, and where the card copy is kept (part 8, group 9)</h3>
 <p>As built, <code>renderFrame</code> and <code>renderToImage</code> draw on a <code>Surface</code>, on the graphics card as a window is, and give its pixels back as an <code>Image</code>, so a test sees what a window shows. <code>renderToImage(width, height, scaleX, scaleY)</code> uses <code>scaleX</code> alone, a <code>Surface</code> having one scale: <code>scaleY</code> is ignored without a word. D124 keeps an image&#39;s copy on the card in a slot of the C++ only the native layer uses; as built the slot is fields of <code>Image</code> internal to the standard library (the copy, the change number it was made at and the rectangle changed since), which no program can see, and the copy goes when the image is collected. <code>inkBox</code> gives a <code>Rect</code> or null.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>renderToImage</code> takes one <code>scale</code>, in place of a <code>scaleY</code> it ignores (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>renderToImage</code> takes one <code>scale</code>, in place of a <code>scaleY</code> it ignores (done 2026-11-04, b3a3ca2).</span></div>
 </section>
 
 <section class="decision" id="p9-shapes">
@@ -860,7 +860,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-static-advice">
 <h3><span class="code">8.9k</span>Old static names of the standard library (part 8, group 9)</h3>
 <p>D144 makes <code>Font.bold</code>, <code>Font.plain</code> and <code>Font.italic</code> errors showing the named form. As built, a static name a standard-library class lacks is an error saying what to write where there is advice for it, and since G57 any other static name a class lacks is an error too: <code>Base has no static member &#39;nothing&#39;</code>. Java&#39;s upper-case names, <code>Color.WHITE</code> and <code>Font.BOLD</code>, get only that plain error. G57 kept one exception: a name the program gives a value to on the class anywhere (<code>Counter.note = &quot;kept&quot;</code>) is stored there and counts as one of its statics, so a typo, <code>Counter.cuont = 5</code>, makes a new static without a word.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Giving a value to a static a class does not declare is an error</strong>, &ldquo;declare it in static { }&rdquo;, taking back G57&#39;s exception; and Java&#39;s upper-case names point to Astra&#39;s, <code>Color.WHITE</code> to <code>Color.white</code> and <code>Font.BOLD</code> to the named form (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Giving a value to a static a class does not declare is an error</strong>, &ldquo;declare it in static { }&rdquo;, taking back G57&#39;s exception; and Java&#39;s upper-case names point to Astra&#39;s, <code>Color.WHITE</code> to <code>Color.white</code> and <code>Font.BOLD</code> to the named form (the names&#39; advice done 2026-11-04, be8950e; the assignment rule to be done in step 4).</span></div>
 </section>
 
 <section class="decision" id="p9-opaque">
