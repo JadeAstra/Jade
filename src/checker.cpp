@@ -4245,6 +4245,33 @@ struct Checker::Impl {
                 return plain;
             }
         }
+        // A bare name where a union holding enums is expected (8.8i), meaning nothing else here.
+        if (const Type plain = withNull(expected, false); plain.kind == Type::Union && unresolvedName(e)) {
+            std::vector<ClassInfo*> enums;
+            for (const Type& m : plain.args)
+                if (m.kind == Type::Class && m.cls != nullptr && m.cls->isEnum) enums.push_back(m.cls);
+            const std::string& n = static_cast<const NameExpr&>(e).name;
+            if (!enums.empty() && removedName(n).empty() && n.rfind("__", 0) != 0 && !importRoot(*unit, n)) {
+                // One enum: its entry, settled and checked as for a parameter of the enum itself.
+                if (enums.size() == 1) {
+                    if (enums[0]->statics.count(n) == 0) report(e, "'" + n + "' is not an entry of enum " + enums[0]->name + ", nor a variable");
+                    return classType(enums[0]);
+                }
+                // Several: a bare name could be any one's, so it says whose.
+                std::string names;
+                ClassInfo* holder = nullptr;
+                for (size_t i = 0; i < enums.size(); i++) {
+                    names += (i == 0 ? "" : i + 1 == enums.size() ? " or " : ", ") + enums[i]->name;
+                    if (holder == nullptr && enums[i]->statics.count(n) != 0) holder = enums[i];
+                }
+                if (holder == nullptr)
+                    report(e, "'" + n + "' is not an entry of enum " + names + ", nor a variable");
+                else
+                    report(e, "'" + n + "' is a bare name where enum " + names + " may go, and a bare name is an entry of one enum " +
+                                  "alone: write " + holder->name + "." + n);
+                return unknownType();
+            }
+        }
         // `flag ? up : down` where a Way is expected: each branch is, the same.
         if (e.kind == ExprKind::Ternary) {
             ternaryExpected[&e] = expected;

@@ -21,3 +21,14 @@ step(up, left)       // check: 'left' is not an entry of enum Fill, nor a variab
 Cell("z", up)        // check: 'up' is not an entry of enum Fill, nor a variable
 step(up, NONE)
 Cell("y", BOTH, down)
+
+// A union holding enums (8.8i): one enum takes its entries by their bare names, checked as for a
+// parameter of the enum itself; with two or more, a bare name could be any one's.
+fun wayOrText(w : Way | string) => "$w"
+fun wayOrFill(w : Way | Fill) => "$w"
+wayOrText(up)
+wayOrText("text")
+wayOrText(upp)       // check: 'upp' is not an entry of enum Way, nor a variable
+wayOrFill(Way.left)
+wayOrFill(left)      // check: 'left' is a bare name where enum Way or Fill may go, and a bare name is an entry of one enum alone: write Way.left
+wayOrFill(nowhere)   // check: 'nowhere' is not an entry of enum Way or Fill, nor a variable
