@@ -934,8 +934,8 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial) 
                     break;
                 case Op::AtomicField:
                     requireName(a);
-                    if (b > 4) fail("bad atomic operation");
-                    pops = b == 4 ? 3 : 2;
+                    if (b > 6) fail("bad atomic operation");
+                    pops = b == 4 ? 3 : b == 5 ? 1 : 2;
                     pushes = 1;
                     break;
                 case Op::SettleEnum:

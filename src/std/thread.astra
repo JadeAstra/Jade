@@ -837,7 +837,12 @@ class Countdown(private var remaining : int) {
 // begin with. In a parallel section only values are stored in one: storing an object, there, that
 // a core may still change is an IllegalStateException.
 class Atomic<T>(initial : T) {
-  internal val cell : List<any?> = __atomic.make(initial)
+  // The value, and how it is changed, chosen once (8.7f): with the processor's own operations for
+  // an Atomic<int> or an Atomic<float>, which hold nothing else, and under a lock for any other.
+  internal val cell : List<any?> = __atomic.make(initial, wholeNumbers() ? 1 : realNumbers() ? 2 : 0)
+
+  private fun wholeNumbers() : bool => 0 is T and !(1.5 is T) and !(null is T)
+  private fun realNumbers() : bool => 1.5 is T and !(0 is T) and !(null is T)
 
   // The value it holds now.
   fun get() : T => __atomic.get(cell) as T

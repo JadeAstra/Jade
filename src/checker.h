@@ -223,7 +223,7 @@ public:
     // An atomic field's change (D92), one operation: `x.hits += 1`, `best = max(best, v)`,
     // `x.hits.compareAndSet(a, b)`. `object` null for the object the code runs on.
     struct AtomicFieldOp {
-        uint8_t kind = 0;  // 0 add, 1 subtract, 2 max, 3 min, 4 compare and set
+        uint8_t kind = 0;  // 0 add, 1 subtract, 2 max, 3 min, 4 compare and set, 5 read, 6 set (under the lock, 8.7f)
         const Expr* object = nullptr;
         std::string field;
         const Expr* operand = nullptr;

@@ -301,20 +301,21 @@ void VM::memberSet(Value obj, ObjString* name, Value value) {
 // ---- Atomic fields (D92) ----
 // An `atomic var` field changed in one step, whoever runs the code: an int's or a float's kept
 // as its payload with the processor's atomic operations, anything else under a lock shared by
-// address. Any piece of a parallel section may change one of an object it may read; what it
-// stores has to be a value every core may read.
+// address, which reads it (kind 5) and sets it (kind 6) too (8.7f). Any piece of a parallel
+// section may change one of an object it may read; what it stores has to be a value every core
+// may read.
 Value VM::atomicField(Value object, ObjString* name, int kind, const Value* operands) {
     if (!object.isObjType(ObjType::Instance)) throw runtimeError(Thrown::InternalError, "an atomic field belongs to an object");
     guardRead(object);
     ObjInstance* instance = asInstance(object);
     const FieldDecl* d = instance->declOf(name);
     if (d == nullptr) throw runtimeError(Thrown::InternalError, "no atomic field '" + name->utf8() + "'");
-    const Value operand = operands[kind == 4 ? 1 : 0];
+    const Value operand = kind == 5 ? Value::null() : operands[kind == 4 ? 1 : 0];
     if (coreId_ != 0 && operand.isObj() && operand.as.obj->frozen == 0 && operand.as.obj->type != ObjType::String)
         throw runtimeError(Thrown::IllegalStateException, "in a parallel section an atomic field is given values: numbers, bools, small values, text or frozen data; not this " +
                                                               typeName(operand) + ", which a core may still change");
     auto change = [&](const Value& old) -> Value {
-        if (kind == 4) return operand;
+        if (kind == 4 || kind == 6) return operand;
         if (old.isInt() && operand.isInt()) {
             int64_t r = 0;
             if (kind == 0 ? addOverflows(old.as.i, operand.as.i, r) : kind == 1 ? subOverflows(old.as.i, operand.as.i, r) : false)
@@ -343,6 +344,7 @@ Value VM::atomicField(Value object, ObjString* name, int kind, const Value* oper
             return v.as.i;
         };
         int64_t old = held.load();
+        if (kind == 5) return toValue(old);
         if (kind == 4) {
             const Value expected = operands[0];
             if (!expected.isNumber()) return Value::boolean(false);
@@ -360,6 +362,7 @@ Value VM::atomicField(Value object, ObjString* name, int kind, const Value* oper
     static std::mutex locks[64];
     std::lock_guard<std::mutex> hold(locks[(reinterpret_cast<uintptr_t>(instance) >> 4) & 63]);
     Value& slot = instance->fields()[d->slot];
+    if (kind == 5) return slot;
     if (kind == 4) {
         const Value expected = operands[0];
         const bool same = slot.kind == expected.kind && (slot.isObj() ? slot.as.obj == expected.as.obj : slot.isFloat() ? slot.as.i == expected.as.i : slot.as.i == expected.as.i);
@@ -8010,7 +8013,7 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
             ip += 2;
             const int kind = *ip++;
             frame->ip = ip;
-            const int operands = kind == 4 ? 2 : 1;
+            const int operands = kind == 4 ? 2 : kind == 5 ? 0 : 1;
             const Value result = atomicField(sp_[-operands - 1], name, kind, sp_ - operands);
             sp_ -= operands;
             sp_[-1] = result;

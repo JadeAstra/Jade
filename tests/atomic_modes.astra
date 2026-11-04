@@ -1,0 +1,51 @@
+// How an Atomic is changed is chosen once, from its type, when it is made (8.7f): an Atomic<int>'s
+// and an Atomic<float>'s eight bytes with the processor's own operations, anything else's under
+// a lock. Chosen by what it held at each change, a change without the lock and one under it
+// could meet in an Atomic<any> and leave an int's bits taken for an object.
+
+// An Atomic<any> whose kind of value changes, changed from every core at once: a number and text
+// in turn, each read back whole.
+val mixed = Atomic<any?>(0)
+val wrong = Atomic(0)
+(1..20000).parallelStream().forEach { n ->
+  if (n % 3 == 0) { mixed.set("text") } else if (n % 3 == 1) { mixed.set(n) } else { mixed.set(null) }
+  val seen = mixed.get()
+  if (!(seen == null or seen is int or seen == "text" or seen == "other")) { wrong.increment() }
+  mixed.compareAndSet(seen, n % 2 == 0 ? n : "other")
+}
+print(wrong.get())                                            // expect: 0
+
+// Each kind, through each change.
+val count = Atomic(0)
+val total = Atomic<float>(0.0)
+val maybe = Atomic<int?>(1)
+val number = Atomic<Number>(1)
+(1..1000).parallelStream().forEach { n ->
+  count.increment()
+  total.update { it + 0.5 }
+  number.update { it is int ? (it as int) + 1 : it }
+}
+print(count.get(), total.get(), number.get(), maybe.exchange(null), maybe.get(), maybe.compareAndSet(null, 7), maybe.get())   // expect: 1000 500.0 1001 1 null true 7
+print(total.compareAndSet(500.0, 1.5), total.get(), total.exchange(2.0), total.get(), count.add(-1000), count.compareAndSet(0, 9), count.get())   // expect: true 1.5 1.5 2.0 0 true 9
+
+// An Atomic made where its type is not known is changed under the lock, add as well.
+fun <X> held(x : X) : Atomic<X> => Atomic(x)
+val loose = held(5) as Atomic<int>
+Job.all((1..4).map { thread { for i in 1..250 { loose.increment() } } }).get()
+print(loose.get())                                            // expect: 1005
+
+// An atomic var holding text or null is read and set under its lock too.
+class Board {
+  atomic var leader : string? = null
+  atomic var score = 0
+}
+val board = Board()
+val torn = Atomic(0)
+(1..20000).parallelStream().forEach { n ->
+  board.leader.compareAndSet(board.leader, n % 2 == 0 ? null : "core")
+  val now = board.leader
+  if (!(now == null or now == "core")) { torn.increment() }
+  board.score += 1
+}
+board.leader = "done"
+print(torn.get(), board.leader, board.score, "${board.leader}!")   // expect: 0 done 20000 done!

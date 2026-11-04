@@ -826,20 +826,31 @@ void VM::markNotParallel(const std::string& global, std::initializer_list<const 
 
 // ---- Atomic values (D85) ----
 //
-// An Atomic keeps its value in a list of one item, its cell, which any thread and any core of a
-// section may change through these functions, each in one step. An int's or a float's is changed
-// with the processor's atomic operations on its eight bytes (std::atomic_ref); anything else
-// under a lock of its own, one of a few shared by cells by their address.
+// An Atomic keeps its value in a list of two items, its cell: the value, which any thread and any
+// core of a section may change through these functions, each in one step, and how it is changed.
+// That is chosen once, from the Atomic's type, when it is made (8.7f): an Atomic<int>'s or an
+// Atomic<float>'s eight bytes with the processor's atomic operations (std::atomic_ref), anything
+// else's under a lock of its own, one of a few shared by cells by their address. Chosen by what
+// the cell held at each change, a change without the lock and one under it could meet in an
+// Atomic<any>, and leave an int's bits taken for an object.
 
 namespace {
 
 std::mutex atomicLocks[64];
 std::mutex& atomicLock(const Value* cell) { return atomicLocks[(reinterpret_cast<uintptr_t>(cell) >> 4) & 63]; }
 
-Value* atomicCell(VM& vm, const Value& v) {
-    if (!v.isObjType(ObjType::List) || asList(v)->packed() || asList(v)->size() != 1)
-        throw vm.runtimeError(Thrown::InternalError, "an Atomic's cell is a list of one item");
-    return &asList(v)->values()[0];
+enum class AtomicMode : int64_t { Locked = 0, Int = 1, Float = 2 };
+
+struct AtomicCell {
+    Value* value;
+    AtomicMode mode;
+};
+
+AtomicCell atomicCell(VM& vm, const Value& v) {
+    if (!v.isObjType(ObjType::List) || asList(v)->packed() || asList(v)->size() != 2)
+        throw vm.runtimeError(Thrown::InternalError, "an Atomic's cell is a list of two items");
+    std::vector<Value>& items = asList(v)->values();
+    return {&items[0], static_cast<AtomicMode>(items[1].as.i)};
 }
 
 // What a core of a parallel section may store where every core reads it: a value that cannot
@@ -864,24 +875,36 @@ bool sameValue(const Value& a, const Value& b) {
     }
 }
 
-// An int or a float in the cell, given one of the same: changed in place by the processor.
-bool payloadKind(const Value* cell, const Value& with) {
-    return cell->kind == with.kind && (cell->kind == ValueKind::Int || cell->kind == ValueKind::Float);
-}
-
 std::atomic_ref<int64_t> payload(Value* cell) { return std::atomic_ref<int64_t>(cell->as.i); }
 
-int64_t bitsOf(const Value& v) {
-    int64_t bits;
-    std::memcpy(&bits, &v.as, sizeof bits);
-    return bits;
-}
-
-Value withBits(ValueKind kind, int64_t bits) {
-    if (kind == ValueKind::Int) return Value::integer(bits);
+Value withBits(AtomicMode mode, int64_t bits) {
+    if (mode == AtomicMode::Int) return Value::integer(bits);
     double d;
     std::memcpy(&d, &bits, sizeof d);
     return Value::number(d);
+}
+
+// The bits an Atomic<int> or Atomic<float> holds for a value: an int given to an Atomic<float>
+// as the float it is. Its type lets in nothing else; one cast past it is an error, before
+// anything is changed.
+bool bitsFor(AtomicMode mode, const Value& v, int64_t& bits) {
+    if (mode == AtomicMode::Int) {
+        if (!v.isInt()) return false;
+        bits = v.as.i;
+        return true;
+    }
+    if (!v.isNumber()) return false;
+    const double d = v.toDouble();
+    std::memcpy(&bits, &d, sizeof bits);
+    return true;
+}
+
+int64_t bitsOf(VM& vm, AtomicMode mode, const Value& v) {
+    int64_t bits = 0;
+    if (!bitsFor(mode, v, bits))
+        throw vm.runtimeError(Thrown::ClassCastException, std::string("an Atomic<") + (mode == AtomicMode::Int ? "int" : "float") + "> holds " +
+                                                              (mode == AtomicMode::Int ? "ints" : "numbers") + ", not a " + vm.typeName(v));
+    return bits;
 }
 
 }  // namespace
@@ -891,60 +914,81 @@ void registerAtomics(VM& vm) {
     auto def = [&](const char* name, int argc, NativeFn fn) {
         atomic->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("atomic.") + name, argc, argc, fn)));
     };
-    def("make", 1, [](VM& vm, int, Value* args) -> Value {
+    // The value to begin with, and how it is changed: 1 for an Atomic<int>, 2 for an
+    // Atomic<float>, 0 under the lock for anything else (Atomic's own code works it out from T).
+    def("make", 2, [](VM& vm, int, Value* args) -> Value {
         storable(vm, args[0]);
-        return Value::object(newList(vm, {args[0]}));
+        AtomicMode mode = static_cast<AtomicMode>(args[1].isInt() && args[1].as.i >= 0 && args[1].as.i <= 2 ? args[1].as.i : 0);
+        Value initial = args[0];
+        int64_t bits = 0;
+        if (mode != AtomicMode::Locked) {
+            if (!bitsFor(mode, initial, bits)) mode = AtomicMode::Locked;  // a T it cannot tell: under the lock, which takes anything
+            else initial = withBits(mode, bits);
+        }
+        return Value::object(newList(vm, {initial, Value::integer(static_cast<int64_t>(mode))}));
     });
     def("get", 1, [](VM& vm, int, Value* args) -> Value {
-        Value* cell = atomicCell(vm, args[0]);
-        if (cell->kind == ValueKind::Int || cell->kind == ValueKind::Float) return withBits(cell->kind, payload(cell).load());
-        std::lock_guard<std::mutex> hold(atomicLock(cell));
-        return *cell;
+        const AtomicCell cell = atomicCell(vm, args[0]);
+        if (cell.mode != AtomicMode::Locked) return withBits(cell.mode, payload(cell.value).load());
+        std::lock_guard<std::mutex> hold(atomicLock(cell.value));
+        return *cell.value;
     });
     def("set", 2, [](VM& vm, int, Value* args) -> Value {
         storable(vm, args[1]);
-        Value* cell = atomicCell(vm, args[0]);
-        if (payloadKind(cell, args[1])) {
-            payload(cell).store(bitsOf(args[1]));
+        const AtomicCell cell = atomicCell(vm, args[0]);
+        if (cell.mode != AtomicMode::Locked) {
+            payload(cell.value).store(bitsOf(vm, cell.mode, args[1]));
         } else {
-            std::lock_guard<std::mutex> hold(atomicLock(cell));
-            *cell = args[1];
+            std::lock_guard<std::mutex> hold(atomicLock(cell.value));
+            *cell.value = args[1];
         }
         return Value::null();
     });
     def("exchange", 2, [](VM& vm, int, Value* args) -> Value {
         storable(vm, args[1]);
-        Value* cell = atomicCell(vm, args[0]);
-        if (payloadKind(cell, args[1])) return withBits(cell->kind, payload(cell).exchange(bitsOf(args[1])));
-        std::lock_guard<std::mutex> hold(atomicLock(cell));
-        const Value old = *cell;
-        *cell = args[1];
+        const AtomicCell cell = atomicCell(vm, args[0]);
+        if (cell.mode != AtomicMode::Locked) return withBits(cell.mode, payload(cell.value).exchange(bitsOf(vm, cell.mode, args[1])));
+        std::lock_guard<std::mutex> hold(atomicLock(cell.value));
+        const Value old = *cell.value;
+        *cell.value = args[1];
         return old;
     });
     def("compareAndSet", 3, [](VM& vm, int, Value* args) -> Value {
         storable(vm, args[2]);
-        Value* cell = atomicCell(vm, args[0]);
-        if (payloadKind(cell, args[1]) && payloadKind(cell, args[2])) {
-            int64_t expected = bitsOf(args[1]);
-            return Value::boolean(payload(cell).compare_exchange_strong(expected, bitsOf(args[2])));
+        const AtomicCell cell = atomicCell(vm, args[0]);
+        if (cell.mode != AtomicMode::Locked) {
+            const int64_t value = bitsOf(vm, cell.mode, args[2]);
+            int64_t expected = 0;
+            if (!bitsFor(cell.mode, args[1], expected)) return Value::boolean(false);  // never held
+            return Value::boolean(payload(cell.value).compare_exchange_strong(expected, value));
         }
-        std::lock_guard<std::mutex> hold(atomicLock(cell));
-        if (!sameValue(*cell, args[1])) return Value::boolean(false);
-        *cell = args[2];
+        std::lock_guard<std::mutex> hold(atomicLock(cell.value));
+        if (!sameValue(*cell.value, args[1])) return Value::boolean(false);
+        *cell.value = args[2];
         return Value::boolean(true);
     });
     // An int added to, in one step, giving the new value; one that does not fit is an error (D27).
     def("add", 2, [](VM& vm, int, Value* args) -> Value {
-        Value* cell = atomicCell(vm, args[0]);
+        const AtomicCell cell = atomicCell(vm, args[0]);
         const int64_t amount = vm.toInt(args[1], "the amount");
-        if (cell->kind != ValueKind::Int) throw vm.runtimeError(Thrown::ClassCastException, "an Atomic that is added to holds an int, not a " + vm.typeName(*cell));
-        std::atomic_ref<int64_t> held = payload(cell);
-        int64_t old = held.load();
+        auto overflow = [&](int64_t old) {
+            return vm.runtimeError(Thrown::ArithmeticException, std::to_string(old) + " + " + std::to_string(amount) +
+                                                                    " does not fit in an int; update { it &+ n } wraps around (D27)");
+        };
         int64_t next = 0;
+        if (cell.mode == AtomicMode::Locked) {
+            // An Atomic<int> made where its type was not known: under the lock, as its other changes are.
+            std::lock_guard<std::mutex> hold(atomicLock(cell.value));
+            if (!cell.value->isInt()) throw vm.runtimeError(Thrown::ClassCastException, "an Atomic that is added to holds an int, not a " + vm.typeName(*cell.value));
+            if (addOverflows(cell.value->as.i, amount, next)) throw overflow(cell.value->as.i);
+            *cell.value = Value::integer(next);
+            return *cell.value;
+        }
+        if (cell.mode != AtomicMode::Int) throw vm.runtimeError(Thrown::ClassCastException, "an Atomic that is added to holds an int, not a float");
+        std::atomic_ref<int64_t> held = payload(cell.value);
+        int64_t old = held.load();
         do {
-            if (addOverflows(old, amount, next))
-                throw vm.runtimeError(Thrown::ArithmeticException, std::to_string(old) + " + " + std::to_string(amount) +
-                                                                       " does not fit in an int; update { it &+ n } wraps around (D27)");
+            if (addOverflows(old, amount, next)) throw overflow(old);
         } while (!held.compare_exchange_weak(old, next));
         return Value::integer(next);
     });

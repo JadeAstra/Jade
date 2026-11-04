@@ -4927,6 +4927,7 @@ struct Checker::Impl {
                 noteKeyMember(m, n.name);
                 if (m.field) {
                     noteAccessor(m.field, false, n);
+                    noteLockedRead(m.field, n, nullptr);
                     if (ClassInfo* t = insideObject(ctx->cls, fieldType(m.field))) fieldCandidates[&n] = IndexCandidate{effectKey(), t};
                     return subst(fieldType(noteConst(n, m.field)), m.env);
                 }
@@ -6235,6 +6236,7 @@ struct Checker::Impl {
         Type result = memberOf(obj, m.name, m, m.safe);
         if (obj.kind == Type::Class && obj.cls != nullptr) {
             if (FieldInfo* f = fieldNamed(obj.cls, m.name)) {
+                if (!m.safe) noteLockedRead(f, m, m.object.get());
                 if (ClassInfo* t = insideObject(obj.cls, fieldType(f))) fieldCandidates[&m] = IndexCandidate{effectKey(), t};
                 // `node.sizes().pref`: what the call gives is read at once, with nothing run in
                 // between, so it may be where the function found it (M6.6 part 5).
@@ -6538,6 +6540,23 @@ struct Checker::Impl {
         return false;
     }
 
+    // An atomic var that holds anything but an int or a float is read and set under its lock, as
+    // it is changed (8.7f): read as it is being set, it could be half the old value and half the
+    // new, a null's bits taken for an object.
+    bool lockedAtomic(FieldInfo* f) {
+        if (f == nullptr || f->decl == nullptr || !f->decl->isAtomic) return false;
+        const Type t = fieldType(f);
+        return !((t.kind == Type::Int || t.kind == Type::Float) && !t.nullable);
+    }
+    void noteLockedRead(FieldInfo* f, const Expr& at, const Expr* object) {
+        if (silent > 0 || !lockedAtomic(f)) return;
+        AtomicOp op;
+        op.kind = 5;
+        op.object = object;
+        op.field = f->name;
+        atomicOps.emplace(&at, op);
+    }
+
     // `x.hits += 1`, `best = max(best, v)`: noted as the one operation it is, where it is one.
     void atomicAssign(const AssignExpr& a) {
         const Expr* object = nullptr;
@@ -6560,6 +6579,8 @@ struct Checker::Impl {
                 if (inParallelSection())
                     report(a, "'" + f->name + "' is an atomic var: in a parallel section it changes through +=, -=, = max(" + f->name + ", v), = min(" + f->name +
                                   ", v) or " + f->name + ".compareAndSet(expected, v) (D92)");
+                else
+                    noteLockedSet(f, a, op);
                 return;
             }
             op.kind = max ? 2 : 3;
@@ -6568,9 +6589,18 @@ struct Checker::Impl {
             if (inParallelSection())
                 report(a, "'" + f->name + "' is an atomic var: in a parallel section it changes through +=, -=, = max(" + f->name + ", v), = min(" + f->name +
                               ", v) or " + f->name + ".compareAndSet(expected, v) (D92)");
+            else if (a.op == TokenType::Eq)
+                noteLockedSet(f, a, op);
             return;
         }
         if (silent == 0) atomicOps[&a] = op;
+    }
+    // `obj.name = v` outside a parallel section, for an atomic var held under its lock.
+    void noteLockedSet(FieldInfo* f, const AssignExpr& a, AtomicOp op) {
+        if (silent > 0 || !lockedAtomic(f)) return;
+        op.kind = 6;
+        op.operand = a.value.get();
+        atomicOps[&a] = op;
     }
 
     // `x.hits.compareAndSet(expected, v)`: true where it set the field. Unknown where the call is

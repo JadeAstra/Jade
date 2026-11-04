@@ -5776,6 +5776,13 @@ private:
     std::vector<NameUse> methodsUses_;
 
     void compileExpr(const Expr& expr) {
+        if (expr.kind == ExprKind::Name || expr.kind == ExprKind::Member) {
+            // An atomic var held under its lock, read under it (8.7f).
+            if (Checker::AtomicFieldOp atomic; session_.checker != nullptr && session_.checker->atomicField(expr, atomic)) {
+                compileAtomicField(atomic, expr);
+                return;
+            }
+        }
         const MemberExpr* member = nullptr;
         if (expr.kind == ExprKind::Member) {
             member = &static_cast<const MemberExpr&>(expr);
@@ -6907,7 +6914,7 @@ private:
         if (op.object != nullptr) compileExpr(*op.object);
         else emitGet("this", at);
         if (op.expected != nullptr) compileExpr(*op.expected);
-        compileExpr(*op.operand);
+        if (op.operand != nullptr) compileExpr(*op.operand);
         line_ = at.line;
         emit(Op::AtomicField, stringConstant(op.field));
         emitByte(op.kind);
