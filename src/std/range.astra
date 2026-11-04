@@ -3,19 +3,19 @@
 // list of its numbers where it needs one.
 
 // Calls `action` with each number of the range, in order.
-fun Range.forEach(action : (int) -> unit) {
+inline fun Range.forEach(action : (int) -> unit) {
   for number in this { action(number) }
 }
 
 // What `transform` gives for each number, in order, as a new list.
-fun <R> Range.map(transform : (int) -> R) : open List<R> {
+inline fun <R> Range.map(transform : (int) -> R) : open List<R> {
   val out : open List<R> = []
   for number in this { out.add(transform(number)) }
   return out
 }
 
 // What `transform` gives for each number, the nulls left out, as a new list.
-fun <R> Range.mapNotNull(transform : (int) -> R?) : open List<R> {
+inline fun <R> Range.mapNotNull(transform : (int) -> R?) : open List<R> {
   val out : open List<R> = []
   for number in this {
     val made = transform(number)
@@ -25,14 +25,14 @@ fun <R> Range.mapNotNull(transform : (int) -> R?) : open List<R> {
 }
 
 // The items of the lists `transform` gives for each number, one after the other, as a new list.
-fun <R> Range.flatMap(transform : (int) -> List<R>) : open List<R> {
+inline fun <R> Range.flatMap(transform : (int) -> List<R>) : open List<R> {
   val out : open List<R> = []
   for number in this { out.addAll(transform(number)) }
   return out
 }
 
 // The numbers for which `predicate` is true, in their order, as a new list.
-fun Range.filter(predicate : (int) -> bool) : open List<int> {
+inline fun Range.filter(predicate : (int) -> bool) : open List<int> {
   val out : open List<int> = []
   for number in this {
     if (predicate(number)) { out.add(number) }
@@ -44,7 +44,7 @@ fun Range.filter(predicate : (int) -> bool) : open List<int> {
 fun Range.any() : bool => this.size > 0
 
 // Whether `predicate` is true of at least one number; it stops at the first that it is true of.
-fun Range.any(predicate : (int) -> bool) : bool {
+inline fun Range.any(predicate : (int) -> bool) : bool {
   for number in this {
     if (predicate(number)) { return true }
   }
@@ -52,7 +52,7 @@ fun Range.any(predicate : (int) -> bool) : bool {
 }
 
 // Whether `predicate` is true of every number; true for an empty range.
-fun Range.all(predicate : (int) -> bool) : bool {
+inline fun Range.all(predicate : (int) -> bool) : bool {
   for number in this {
     if (!predicate(number)) { return false }
   }
@@ -63,7 +63,7 @@ fun Range.all(predicate : (int) -> bool) : bool {
 fun Range.none() : bool => this.size == 0
 
 // Whether `predicate` is true of no number; true for an empty range.
-fun Range.none(predicate : (int) -> bool) : bool {
+inline fun Range.none(predicate : (int) -> bool) : bool {
   for number in this {
     if (predicate(number)) { return false }
   }
@@ -74,7 +74,7 @@ fun Range.none(predicate : (int) -> bool) : bool {
 fun Range.count() : int => this.size
 
 // How many numbers `predicate` is true of.
-fun Range.count(predicate : (int) -> bool) : int {
+inline fun Range.count(predicate : (int) -> bool) : int {
   var total = 0
   for number in this {
     if (predicate(number)) { total += 1 }
@@ -86,7 +86,7 @@ fun Range.count(predicate : (int) -> bool) : int {
 fun Range.firstOrNull() : int? => this.size == 0 ? null : this.start
 
 // The first number, in the range's order, for which `predicate` is true; null where there is none.
-fun Range.firstOrNull(predicate : (int) -> bool) : int? {
+inline fun Range.firstOrNull(predicate : (int) -> bool) : int? {
   for number in this {
     if (predicate(number)) { return number }
   }
@@ -94,7 +94,7 @@ fun Range.firstOrNull(predicate : (int) -> bool) : int? {
 }
 
 // The same as firstOrNull(predicate).
-fun Range.find(predicate : (int) -> bool) : int? => this.firstOrNull(predicate)
+inline fun Range.find(predicate : (int) -> bool) : int? => this.firstOrNull(predicate)
 
 // The sum of the numbers; 0 for an empty range.
 fun Range.sum() : int {
@@ -105,7 +105,7 @@ fun Range.sum() : int {
 
 // The sum of what `selector` gives for each number; for an empty range a zero of the kind
 // `selector` gives, 0 or 0.0.
-fun <R : Number> Range.sumOf(selector : (int) -> R) : R {
+inline fun <R : Number> Range.sumOf(selector : (int) -> R) : R {
   var total : Number = 0
   for number in this { total += selector(number) }
   return total is R ? total as R : total.toFloat() as R
@@ -113,7 +113,7 @@ fun <R : Number> Range.sumOf(selector : (int) -> R) : R {
 
 // A new map from each number to what `valueSelector` gives for it, in the range's order.
 //   (1..3).associateWith { it * it }   // {1: 1, 2: 4, 3: 9}
-fun <V> Range.associateWith(valueSelector : (int) -> V) : open Map<int, V> {
+inline fun <V> Range.associateWith(valueSelector : (int) -> V) : open Map<int, V> {
   val out : open Map<int, V> = {:}
   for number in this { out[number] = valueSelector(number) }
   return out

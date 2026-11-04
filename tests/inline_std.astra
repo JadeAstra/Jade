@@ -1,0 +1,26 @@
+// The standard library's functions that take a lambda and only call it are copied in where
+// they are called (8.4i): require and check in two forms, with a message and without.
+fun f(n : int) : int {
+  require(n > 0) { "n is $n" }
+  check(n < 100)
+  return requireNotNull(n as int?) { "null" } + checkNotNull(1 as int?)
+}
+print(f(5))                                                  // expect: 6
+try { f(0) } catch (e) { print(e) }                          // expect: IllegalArgumentException: n is 0
+try { f(200) } catch (e) { print(e) }                        // expect: IllegalStateException: Check failed.
+try { require(false) } catch (e) { print(e) }                // expect: IllegalArgumentException: Failed requirement.
+try { checkNotNull(null as int?) { "gone" } } catch (e) { print(e) }   // expect: IllegalStateException: gone
+
+// A string's and a range's.
+print("hello".count { it == 'l' }, "abc".map { it.code }, (1..5).filter { it % 2 == 0 }, "".ifEmpty { "x" })   // expect: 2 [97, 98, 99] [2, 4] x
+print((1..4).sumOf { it * 10 }, "a1b2".filter { it.isDigit() }, (1..9).find { it * it > 10 })   // expect: 100 12 4
+
+// A return in the lambda leaves the function around the call, as for a list's.
+fun firstVowel(s : string) : char? {
+  s.forEach { if ("aeiou".contains(it)) { return it } }
+  return null
+}
+print(firstVowel("rhythm and"), firstVowel("xyz"))           // expect: a null
+
+// runCatching and LockBox.useKey.
+print(runCatching { 1 / 0 }.isFailure, runCatching { 5 }.getOrNull(), LockBox(3).useKey { it * 2 })   // expect: true 5 6

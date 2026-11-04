@@ -1372,19 +1372,32 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>An item with its position: what withIndex() gives.</p>
 </div>
 <h3>Checks</h3>
-<div class="entry" id="require"><code class="sig">fun require(condition : bool, lazyMessage : (() -&gt; any?)? = null)</code><a class="anchor" href="#require">#</a>
+<p>Each in two forms, with a message and without, copied in where it is called, so that a check that passes costs a test and nothing is made for its message (8.4i).</p>
+<div class="entry" id="require"><code class="sig">inline fun require(condition : bool)</code><a class="anchor" href="#require">#</a>
 <p>Throws an IllegalArgumentException unless <code>condition</code> holds: for checking what a function is given. The message is what <code>lazyMessage</code> gives, worked out only then, or &quot;Failed requirement.&quot;:</p>
 <pre>require(n &gt; 0) { &quot;n is $n&quot; }
 </pre>
 </div>
-<div class="entry" id="check"><code class="sig">fun check(condition : bool, lazyMessage : (() -&gt; any?)? = null)</code><a class="anchor" href="#check">#</a>
+<div class="entry" id="require-2"><code class="sig">inline fun require(condition : bool, lazyMessage : () -&gt; any?)</code><a class="anchor" href="#require-2">#</a>
+<p>The same, the IllegalArgumentException's message what <code>lazyMessage</code> gives.</p>
+</div>
+<div class="entry" id="check"><code class="sig">inline fun check(condition : bool)</code><a class="anchor" href="#check">#</a>
 <p>Throws an IllegalStateException unless <code>condition</code> holds: for the state things are in. The message is what <code>lazyMessage</code> gives, worked out only then, or &quot;Check failed.&quot;.</p>
 </div>
-<div class="entry" id="requireNotNull"><code class="sig">fun &lt;T&gt; requireNotNull(value : T?, lazyMessage : (() -&gt; any?)? = null) : T</code><a class="anchor" href="#requireNotNull">#</a>
+<div class="entry" id="check-2"><code class="sig">inline fun check(condition : bool, lazyMessage : () -&gt; any?)</code><a class="anchor" href="#check-2">#</a>
+<p>The same, the IllegalStateException's message what <code>lazyMessage</code> gives.</p>
+</div>
+<div class="entry" id="requireNotNull"><code class="sig">inline fun &lt;T&gt; requireNotNull(value : T?) : T</code><a class="anchor" href="#requireNotNull">#</a>
 <p><code>value</code>, now known not to be null; an IllegalArgumentException when it is null, its message what <code>lazyMessage</code> gives or &quot;Required value was null.&quot;.</p>
 </div>
-<div class="entry" id="checkNotNull"><code class="sig">fun &lt;T&gt; checkNotNull(value : T?, lazyMessage : (() -&gt; any?)? = null) : T</code><a class="anchor" href="#checkNotNull">#</a>
+<div class="entry" id="requireNotNull-2"><code class="sig">inline fun &lt;T&gt; requireNotNull(value : T?, lazyMessage : () -&gt; any?) : T</code><a class="anchor" href="#requireNotNull-2">#</a>
+<p>The same, the IllegalArgumentException's message what <code>lazyMessage</code> gives.</p>
+</div>
+<div class="entry" id="checkNotNull"><code class="sig">inline fun &lt;T&gt; checkNotNull(value : T?) : T</code><a class="anchor" href="#checkNotNull">#</a>
 <p><code>value</code>, now known not to be null; an IllegalStateException when it is null, its message what <code>lazyMessage</code> gives or &quot;Required value was null.&quot;.</p>
+</div>
+<div class="entry" id="checkNotNull-2"><code class="sig">inline fun &lt;T&gt; checkNotNull(value : T?, lazyMessage : () -&gt; any?) : T</code><a class="anchor" href="#checkNotNull-2">#</a>
+<p>The same, the IllegalStateException's message what <code>lazyMessage</code> gives.</p>
 </div>
 <div class="entry" id="Program"><code class="sig">object Program</code><a class="anchor" href="#Program">#</a>
 <p>The program as it runs: what it was started with, and its name.</p>
@@ -3517,58 +3530,58 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <h2>range.astra</h2>
 <h3>Ranges</h3>
 <p>A range can be looped over, and has the methods of a list that only read: each makes a list of its numbers where it needs one.</p>
-<div class="entry" id="Range.forEach"><code class="sig">fun Range.forEach(action : (int) -&gt; unit)</code><a class="anchor" href="#Range.forEach">#</a>
+<div class="entry" id="Range.forEach"><code class="sig">inline fun Range.forEach(action : (int) -&gt; unit)</code><a class="anchor" href="#Range.forEach">#</a>
 <p>Calls <code>action</code> with each number of the range, in order.</p>
 </div>
-<div class="entry" id="Range.map"><code class="sig">fun &lt;R&gt; Range.map(transform : (int) -&gt; R) : open List&lt;R&gt;</code><a class="anchor" href="#Range.map">#</a>
+<div class="entry" id="Range.map"><code class="sig">inline fun &lt;R&gt; Range.map(transform : (int) -&gt; R) : open List&lt;R&gt;</code><a class="anchor" href="#Range.map">#</a>
 <p>What <code>transform</code> gives for each number, in order, as a new list.</p>
 </div>
-<div class="entry" id="Range.mapNotNull"><code class="sig">fun &lt;R&gt; Range.mapNotNull(transform : (int) -&gt; R?) : open List&lt;R&gt;</code><a class="anchor" href="#Range.mapNotNull">#</a>
+<div class="entry" id="Range.mapNotNull"><code class="sig">inline fun &lt;R&gt; Range.mapNotNull(transform : (int) -&gt; R?) : open List&lt;R&gt;</code><a class="anchor" href="#Range.mapNotNull">#</a>
 <p>What <code>transform</code> gives for each number, the nulls left out, as a new list.</p>
 </div>
-<div class="entry" id="Range.flatMap"><code class="sig">fun &lt;R&gt; Range.flatMap(transform : (int) -&gt; List&lt;R&gt;) : open List&lt;R&gt;</code><a class="anchor" href="#Range.flatMap">#</a>
+<div class="entry" id="Range.flatMap"><code class="sig">inline fun &lt;R&gt; Range.flatMap(transform : (int) -&gt; List&lt;R&gt;) : open List&lt;R&gt;</code><a class="anchor" href="#Range.flatMap">#</a>
 <p>The items of the lists <code>transform</code> gives for each number, one after the other, as a new list.</p>
 </div>
-<div class="entry" id="Range.filter"><code class="sig">fun Range.filter(predicate : (int) -&gt; bool) : open List&lt;int&gt;</code><a class="anchor" href="#Range.filter">#</a>
+<div class="entry" id="Range.filter"><code class="sig">inline fun Range.filter(predicate : (int) -&gt; bool) : open List&lt;int&gt;</code><a class="anchor" href="#Range.filter">#</a>
 <p>The numbers for which <code>predicate</code> is true, in their order, as a new list.</p>
 </div>
 <div class="entry" id="Range.any"><code class="sig">fun Range.any() : bool</code><a class="anchor" href="#Range.any">#</a>
 <p>Whether the range has any numbers.</p>
 </div>
-<div class="entry" id="Range.any-2"><code class="sig">fun Range.any(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.any-2">#</a>
+<div class="entry" id="Range.any-2"><code class="sig">inline fun Range.any(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.any-2">#</a>
 <p>Whether <code>predicate</code> is true of at least one number; it stops at the first that it is true of.</p>
 </div>
-<div class="entry" id="Range.all"><code class="sig">fun Range.all(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.all">#</a>
+<div class="entry" id="Range.all"><code class="sig">inline fun Range.all(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.all">#</a>
 <p>Whether <code>predicate</code> is true of every number; true for an empty range.</p>
 </div>
 <div class="entry" id="Range.none"><code class="sig">fun Range.none() : bool</code><a class="anchor" href="#Range.none">#</a>
 <p>Whether the range is empty, as 1..0 is.</p>
 </div>
-<div class="entry" id="Range.none-2"><code class="sig">fun Range.none(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.none-2">#</a>
+<div class="entry" id="Range.none-2"><code class="sig">inline fun Range.none(predicate : (int) -&gt; bool) : bool</code><a class="anchor" href="#Range.none-2">#</a>
 <p>Whether <code>predicate</code> is true of no number; true for an empty range.</p>
 </div>
 <div class="entry" id="Range.count"><code class="sig">fun Range.count() : int</code><a class="anchor" href="#Range.count">#</a>
 <p>How many numbers the range has: its size.</p>
 </div>
-<div class="entry" id="Range.count-2"><code class="sig">fun Range.count(predicate : (int) -&gt; bool) : int</code><a class="anchor" href="#Range.count-2">#</a>
+<div class="entry" id="Range.count-2"><code class="sig">inline fun Range.count(predicate : (int) -&gt; bool) : int</code><a class="anchor" href="#Range.count-2">#</a>
 <p>How many numbers <code>predicate</code> is true of.</p>
 </div>
 <div class="entry" id="Range.firstOrNull"><code class="sig">fun Range.firstOrNull() : int?</code><a class="anchor" href="#Range.firstOrNull">#</a>
 <p>The first number, its start; null for an empty range.</p>
 </div>
-<div class="entry" id="Range.firstOrNull-2"><code class="sig">fun Range.firstOrNull(predicate : (int) -&gt; bool) : int?</code><a class="anchor" href="#Range.firstOrNull-2">#</a>
+<div class="entry" id="Range.firstOrNull-2"><code class="sig">inline fun Range.firstOrNull(predicate : (int) -&gt; bool) : int?</code><a class="anchor" href="#Range.firstOrNull-2">#</a>
 <p>The first number, in the range's order, for which <code>predicate</code> is true; null where there is none.</p>
 </div>
-<div class="entry" id="Range.find"><code class="sig">fun Range.find(predicate : (int) -&gt; bool) : int?</code><a class="anchor" href="#Range.find">#</a>
+<div class="entry" id="Range.find"><code class="sig">inline fun Range.find(predicate : (int) -&gt; bool) : int?</code><a class="anchor" href="#Range.find">#</a>
 <p>The same as firstOrNull(predicate).</p>
 </div>
 <div class="entry" id="Range.sum"><code class="sig">fun Range.sum() : int</code><a class="anchor" href="#Range.sum">#</a>
 <p>The sum of the numbers; 0 for an empty range.</p>
 </div>
-<div class="entry" id="Range.sumOf"><code class="sig">fun &lt;R : Number&gt; Range.sumOf(selector : (int) -&gt; R) : R</code><a class="anchor" href="#Range.sumOf">#</a>
+<div class="entry" id="Range.sumOf"><code class="sig">inline fun &lt;R : Number&gt; Range.sumOf(selector : (int) -&gt; R) : R</code><a class="anchor" href="#Range.sumOf">#</a>
 <p>The sum of what <code>selector</code> gives for each number; for an empty range a zero of the kind <code>selector</code> gives, 0 or 0.0.</p>
 </div>
-<div class="entry" id="Range.associateWith"><code class="sig">fun &lt;V&gt; Range.associateWith(valueSelector : (int) -&gt; V) : open Map&lt;int, V&gt;</code><a class="anchor" href="#Range.associateWith">#</a>
+<div class="entry" id="Range.associateWith"><code class="sig">inline fun &lt;V&gt; Range.associateWith(valueSelector : (int) -&gt; V) : open Map&lt;int, V&gt;</code><a class="anchor" href="#Range.associateWith">#</a>
 <p>A new map from each number to what <code>valueSelector</code> gives for it, in the range's order.</p>
 <pre>(1..3).associateWith { it * it }   // {1: 1, 2: 4, 3: 9}
 </pre>
@@ -4299,12 +4312,12 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry" id="string.dropLast"><code class="sig">fun string.dropLast(count : int) : string</code><a class="anchor" href="#string.dropLast">#</a>
 <p>All but the last <code>count</code> characters: &quot;&quot; when the string has no more than <code>count</code>. A negative <code>count</code> is an IllegalArgumentException.</p>
 </div>
-<div class="entry" id="string.takeWhile"><code class="sig">fun string.takeWhile(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.takeWhile">#</a>
+<div class="entry" id="string.takeWhile"><code class="sig">inline fun string.takeWhile(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.takeWhile">#</a>
 <p>The characters from the start for as long as <code>predicate</code> is true of them.</p>
 <pre>&quot;123abc&quot;.takeWhile { it.isDigit() }   // &quot;123&quot;
 </pre>
 </div>
-<div class="entry" id="string.dropWhile"><code class="sig">fun string.dropWhile(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.dropWhile">#</a>
+<div class="entry" id="string.dropWhile"><code class="sig">inline fun string.dropWhile(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.dropWhile">#</a>
 <p>The string from the first character for which <code>predicate</code> is false; &quot;&quot; when it is true of all.</p>
 </div>
 <div class="entry" id="string.substringBefore"><code class="sig">fun string.substringBefore(delimiter : string, missingDelimiterValue : string? = null) : string</code><a class="anchor" href="#string.substringBefore">#</a>
@@ -4338,7 +4351,7 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry" id="string.replaceFirst"><code class="sig">fun string.replaceFirst(oldValue : string, newValue : string) : string</code><a class="anchor" href="#string.replaceFirst">#</a>
 <p>The string with the first <code>oldValue</code> in it put back as <code>newValue</code>; the string as it is when <code>oldValue</code> is not there. An empty <code>oldValue</code> puts <code>newValue</code> at the start.</p>
 </div>
-<div class="entry" id="string.replaceFirstChar"><code class="sig">fun string.replaceFirstChar(transform : (char) -&gt; any?) : string</code><a class="anchor" href="#string.replaceFirstChar">#</a>
+<div class="entry" id="string.replaceFirstChar"><code class="sig">inline fun string.replaceFirstChar(transform : (char) -&gt; any?) : string</code><a class="anchor" href="#string.replaceFirstChar">#</a>
 <p>The text with its first character put through a function: name.replaceFirstChar { it.upper() }</p>
 </div>
 <div class="entry" id="string.commonPrefixWith"><code class="sig">fun string.commonPrefixWith(other : string) : string</code><a class="anchor" href="#string.commonPrefixWith">#</a>
@@ -4348,25 +4361,25 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry" id="string.first"><code class="sig">fun string.first() : char</code><a class="anchor" href="#string.first">#</a>
 <p>The first character; a NoSuchElementException when the string is empty.</p>
 </div>
-<div class="entry" id="string.first-2"><code class="sig">fun string.first(predicate : (char) -&gt; bool) : char</code><a class="anchor" href="#string.first-2">#</a>
+<div class="entry" id="string.first-2"><code class="sig">inline fun string.first(predicate : (char) -&gt; bool) : char</code><a class="anchor" href="#string.first-2">#</a>
 <p>The first character for which <code>predicate</code> is true; a NoSuchElementException when there is none.</p>
 </div>
 <div class="entry" id="string.last"><code class="sig">fun string.last() : char</code><a class="anchor" href="#string.last">#</a>
 <p>The last character; a NoSuchElementException when the string is empty.</p>
 </div>
-<div class="entry" id="string.last-2"><code class="sig">fun string.last(predicate : (char) -&gt; bool) : char</code><a class="anchor" href="#string.last-2">#</a>
+<div class="entry" id="string.last-2"><code class="sig">inline fun string.last(predicate : (char) -&gt; bool) : char</code><a class="anchor" href="#string.last-2">#</a>
 <p>The last character for which <code>predicate</code> is true; a NoSuchElementException when there is none.</p>
 </div>
 <div class="entry" id="string.firstOrNull"><code class="sig">fun string.firstOrNull() : char?</code><a class="anchor" href="#string.firstOrNull">#</a>
 <p>The first character, or null when the string is empty.</p>
 </div>
-<div class="entry" id="string.firstOrNull-2"><code class="sig">fun string.firstOrNull(predicate : (char) -&gt; bool) : char?</code><a class="anchor" href="#string.firstOrNull-2">#</a>
+<div class="entry" id="string.firstOrNull-2"><code class="sig">inline fun string.firstOrNull(predicate : (char) -&gt; bool) : char?</code><a class="anchor" href="#string.firstOrNull-2">#</a>
 <p>The first character for which <code>predicate</code> is true, or null when there is none.</p>
 </div>
 <div class="entry" id="string.lastOrNull"><code class="sig">fun string.lastOrNull() : char?</code><a class="anchor" href="#string.lastOrNull">#</a>
 <p>The last character, or null when the string is empty.</p>
 </div>
-<div class="entry" id="string.lastOrNull-2"><code class="sig">fun string.lastOrNull(predicate : (char) -&gt; bool) : char?</code><a class="anchor" href="#string.lastOrNull-2">#</a>
+<div class="entry" id="string.lastOrNull-2"><code class="sig">inline fun string.lastOrNull(predicate : (char) -&gt; bool) : char?</code><a class="anchor" href="#string.lastOrNull-2">#</a>
 <p>The last character for which <code>predicate</code> is true, or null when there is none.</p>
 </div>
 <div class="entry" id="string.get"><code class="sig">fun string.get(index : int) : char</code><a class="anchor" href="#string.get">#</a>
@@ -4375,46 +4388,46 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry" id="string.getOrNull"><code class="sig">fun string.getOrNull(index : int) : char?</code><a class="anchor" href="#string.getOrNull">#</a>
 <p>The character at <code>index</code>, counted from 0, or null when there is none.</p>
 </div>
-<div class="entry" id="string.indexOfFirst"><code class="sig">fun string.indexOfFirst(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.indexOfFirst">#</a>
+<div class="entry" id="string.indexOfFirst"><code class="sig">inline fun string.indexOfFirst(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.indexOfFirst">#</a>
 <p>The position of the first character for which <code>predicate</code> is true, or -1 when there is none.</p>
 </div>
-<div class="entry" id="string.indexOfLast"><code class="sig">fun string.indexOfLast(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.indexOfLast">#</a>
+<div class="entry" id="string.indexOfLast"><code class="sig">inline fun string.indexOfLast(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.indexOfLast">#</a>
 <p>The position of the last character for which <code>predicate</code> is true, or -1 when there is none.</p>
 </div>
-<div class="entry" id="string.forEach"><code class="sig">fun string.forEach(action : (char) -&gt; unit)</code><a class="anchor" href="#string.forEach">#</a>
+<div class="entry" id="string.forEach"><code class="sig">inline fun string.forEach(action : (char) -&gt; unit)</code><a class="anchor" href="#string.forEach">#</a>
 <p>Runs <code>action</code> on each character, in order.</p>
 </div>
-<div class="entry" id="string.forEachIndexed"><code class="sig">fun string.forEachIndexed(action : (int, char) -&gt; unit)</code><a class="anchor" href="#string.forEachIndexed">#</a>
+<div class="entry" id="string.forEachIndexed"><code class="sig">inline fun string.forEachIndexed(action : (int, char) -&gt; unit)</code><a class="anchor" href="#string.forEachIndexed">#</a>
 <p>Runs <code>action</code> on each character, in order, with its position (from 0) first.</p>
 </div>
 <div class="entry" id="string.any"><code class="sig">fun string.any() : bool</code><a class="anchor" href="#string.any">#</a>
 <p>Whether the string has any characters at all.</p>
 </div>
-<div class="entry" id="string.any-2"><code class="sig">fun string.any(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.any-2">#</a>
+<div class="entry" id="string.any-2"><code class="sig">inline fun string.any(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.any-2">#</a>
 <p>Whether <code>predicate</code> is true of at least one character; false for an empty string.</p>
 </div>
-<div class="entry" id="string.all"><code class="sig">fun string.all(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.all">#</a>
+<div class="entry" id="string.all"><code class="sig">inline fun string.all(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.all">#</a>
 <p>Whether <code>predicate</code> is true of every character; true for an empty string.</p>
 </div>
 <div class="entry" id="string.none"><code class="sig">fun string.none() : bool</code><a class="anchor" href="#string.none">#</a>
 <p>Whether the string is empty.</p>
 </div>
-<div class="entry" id="string.none-2"><code class="sig">fun string.none(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.none-2">#</a>
+<div class="entry" id="string.none-2"><code class="sig">inline fun string.none(predicate : (char) -&gt; bool) : bool</code><a class="anchor" href="#string.none-2">#</a>
 <p>Whether <code>predicate</code> is true of no character; true for an empty string.</p>
 </div>
 <div class="entry" id="string.count"><code class="sig">fun string.count() : int</code><a class="anchor" href="#string.count">#</a>
 <p>The number of characters, the same as <code>size</code>.</p>
 </div>
-<div class="entry" id="string.count-2"><code class="sig">fun string.count(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.count-2">#</a>
+<div class="entry" id="string.count-2"><code class="sig">inline fun string.count(predicate : (char) -&gt; bool) : int</code><a class="anchor" href="#string.count-2">#</a>
 <p>The number of characters for which <code>predicate</code> is true.</p>
 </div>
-<div class="entry" id="string.map"><code class="sig">fun &lt;R&gt; string.map(transform : (char) -&gt; R) : open List&lt;R&gt;</code><a class="anchor" href="#string.map">#</a>
+<div class="entry" id="string.map"><code class="sig">inline fun &lt;R&gt; string.map(transform : (char) -&gt; R) : open List&lt;R&gt;</code><a class="anchor" href="#string.map">#</a>
 <p>A list of what the function gives for each character.</p>
 </div>
-<div class="entry" id="string.filter"><code class="sig">fun string.filter(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.filter">#</a>
+<div class="entry" id="string.filter"><code class="sig">inline fun string.filter(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.filter">#</a>
 <p>The characters that meet the condition, as a string.</p>
 </div>
-<div class="entry" id="string.filterNot"><code class="sig">fun string.filterNot(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.filterNot">#</a>
+<div class="entry" id="string.filterNot"><code class="sig">inline fun string.filterNot(predicate : (char) -&gt; bool) : string</code><a class="anchor" href="#string.filterNot">#</a>
 <p>The characters for which <code>predicate</code> is false, in their order, as a string.</p>
 </div>
 <div class="entry" id="string.toList"><code class="sig">fun string.toList() : open List&lt;char&gt;</code><a class="anchor" href="#string.toList">#</a>
@@ -4439,10 +4452,10 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <div class="entry" id="string.orEmpty"><code class="sig">fun string?.orEmpty() : string</code><a class="anchor" href="#string.orEmpty">#</a>
 <p>The string, or &quot;&quot; when it is null.</p>
 </div>
-<div class="entry" id="string.ifEmpty"><code class="sig">fun string.ifEmpty(defaultValue : () -&gt; string) : string</code><a class="anchor" href="#string.ifEmpty">#</a>
+<div class="entry" id="string.ifEmpty"><code class="sig">inline fun string.ifEmpty(defaultValue : () -&gt; string) : string</code><a class="anchor" href="#string.ifEmpty">#</a>
 <p>The string, or what <code>defaultValue</code> gives when the string is empty. <code>defaultValue</code> runs only then.</p>
 </div>
-<div class="entry" id="string.ifBlank"><code class="sig">fun string.ifBlank(defaultValue : () -&gt; string) : string</code><a class="anchor" href="#string.ifBlank">#</a>
+<div class="entry" id="string.ifBlank"><code class="sig">inline fun string.ifBlank(defaultValue : () -&gt; string) : string</code><a class="anchor" href="#string.ifBlank">#</a>
 <p>The string, or what <code>defaultValue</code> gives when the string is blank (empty, or only spaces, tabs and line breaks). <code>defaultValue</code> runs only then.</p>
 </div>
 <h4>To other types</h4>
@@ -4538,7 +4551,7 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <div class="entry member" id="Result.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Result.toString">#</a>
 <p>&quot;Success(value)&quot; or &quot;Failure(error)&quot;.</p>
 </div>
-<div class="entry" id="runCatching"><code class="sig">fun &lt;T&gt; runCatching(block : () -&gt; T) : Result&lt;T&gt;</code><a class="anchor" href="#runCatching">#</a>
+<div class="entry" id="runCatching"><code class="sig">inline fun &lt;T&gt; runCatching(block : () -&gt; T) : Result&lt;T&gt;</code><a class="anchor" href="#runCatching">#</a>
 <p>Runs the block and gives its value, or the error it threw, as a Result.</p>
 </div>
 <div class="entry" id="task"><code class="sig">fun &lt;T&gt; task(block : suspend () -&gt; T throws Exception) : Job&lt;T&gt;</code><a class="anchor" href="#task">#</a>
@@ -4835,7 +4848,7 @@ counts.useKey { it[&quot;clicks&quot;] = (it[&quot;clicks&quot;] ?: 0) + 1 }
 <div class="entry" id="LockBox"><code class="sig">class LockBox&lt;T&gt;(private val value : T)</code><a class="anchor" href="#LockBox">#</a>
 <p>Data reached only with the key: useKey gives the block the value.</p>
 </div>
-<div class="entry member" id="LockBox.useKey"><code class="sig">fun &lt;R&gt; useKey(block : (T) -&gt; R) : R</code><a class="anchor" href="#LockBox.useKey">#</a>
+<div class="entry member" id="LockBox.useKey"><code class="sig">inline fun &lt;R&gt; useKey(block : (T) -&gt; R) : R</code><a class="anchor" href="#LockBox.useKey">#</a>
 <p>Runs <code>block</code> with the value, holding the box's key: gives what the block gives.</p>
 </div>
 <div class="entry" id="waitUntil"><code class="sig">suspend fun waitUntil(timeout : Duration? = null, condition : () -&gt; bool) : bool</code><a class="anchor" href="#waitUntil">#</a>

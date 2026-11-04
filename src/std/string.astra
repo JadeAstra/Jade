@@ -34,14 +34,14 @@ fun string.dropLast(count : int) : string {
 
 // The characters from the start for as long as `predicate` is true of them.
 //   "123abc".takeWhile { it.isDigit() }   // "123"
-fun string.takeWhile(predicate : (char) -> bool) : string {
+inline fun string.takeWhile(predicate : (char) -> bool) : string {
   var index = 0
   while (index < this.size and predicate(this[index])) { index += 1 }
   return this[0..<index]
 }
 
 // The string from the first character for which `predicate` is false; "" when it is true of all.
-fun string.dropWhile(predicate : (char) -> bool) : string {
+inline fun string.dropWhile(predicate : (char) -> bool) : string {
   var index = 0
   while (index < this.size and predicate(this[index])) { index += 1 }
   return this[index..]
@@ -115,7 +115,7 @@ fun string.replaceFirst(oldValue : string, newValue : string) : string {
 }
 
 // The text with its first character put through a function: name.replaceFirstChar { it.upper() }
-fun string.replaceFirstChar(transform : (char) -> any?) : string => this.size == 0 ? this : "${transform(this[0])}" + this[1..]
+inline fun string.replaceFirstChar(transform : (char) -> any?) : string => this.size == 0 ? this : "${transform(this[0])}" + this[1..]
 
 // The longest start that this string and `other` have in common; "" when none.
 fun string.commonPrefixWith(other : string) : string {
@@ -133,7 +133,7 @@ fun string.first() : char {
 }
 
 // The first character for which `predicate` is true; a NoSuchElementException when there is none.
-fun string.first(predicate : (char) -> bool) : char {
+inline fun string.first(predicate : (char) -> bool) : char {
   for character in this {
     if (predicate(character)) { return character }
   }
@@ -147,7 +147,7 @@ fun string.last() : char {
 }
 
 // The last character for which `predicate` is true; a NoSuchElementException when there is none.
-fun string.last(predicate : (char) -> bool) : char {
+inline fun string.last(predicate : (char) -> bool) : char {
   var index = this.size - 1
   while (index >= 0) {
     if (predicate(this[index])) { return this[index] }
@@ -160,7 +160,7 @@ fun string.last(predicate : (char) -> bool) : char {
 fun string.firstOrNull() : char? => this.size == 0 ? null : this[0]
 
 // The first character for which `predicate` is true, or null when there is none.
-fun string.firstOrNull(predicate : (char) -> bool) : char? {
+inline fun string.firstOrNull(predicate : (char) -> bool) : char? {
   for character in this {
     if (predicate(character)) { return character }
   }
@@ -171,7 +171,7 @@ fun string.firstOrNull(predicate : (char) -> bool) : char? {
 fun string.lastOrNull() : char? => this.size == 0 ? null : this[this.size - 1]
 
 // The last character for which `predicate` is true, or null when there is none.
-fun string.lastOrNull(predicate : (char) -> bool) : char? {
+inline fun string.lastOrNull(predicate : (char) -> bool) : char? {
   var index = this.size - 1
   while (index >= 0) {
     if (predicate(this[index])) { return this[index] }
@@ -193,7 +193,7 @@ fun string.get(index : int) : char {
 fun string.getOrNull(index : int) : char? => index >= 0 and index < this.size ? this[index] : null
 
 // The position of the first character for which `predicate` is true, or -1 when there is none.
-fun string.indexOfFirst(predicate : (char) -> bool) : int {
+inline fun string.indexOfFirst(predicate : (char) -> bool) : int {
   var index = 0
   for character in this {
     if (predicate(character)) { return index }
@@ -203,7 +203,7 @@ fun string.indexOfFirst(predicate : (char) -> bool) : int {
 }
 
 // The position of the last character for which `predicate` is true, or -1 when there is none.
-fun string.indexOfLast(predicate : (char) -> bool) : int {
+inline fun string.indexOfLast(predicate : (char) -> bool) : int {
   var index = this.size - 1
   while (index >= 0) {
     if (predicate(this[index])) { return index }
@@ -213,12 +213,12 @@ fun string.indexOfLast(predicate : (char) -> bool) : int {
 }
 
 // Runs `action` on each character, in order.
-fun string.forEach(action : (char) -> unit) {
+inline fun string.forEach(action : (char) -> unit) {
   for character in this { action(character) }
 }
 
 // Runs `action` on each character, in order, with its position (from 0) first.
-fun string.forEachIndexed(action : (int, char) -> unit) {
+inline fun string.forEachIndexed(action : (int, char) -> unit) {
   var index = 0
   for character in this {
     action(index, character)
@@ -230,7 +230,7 @@ fun string.forEachIndexed(action : (int, char) -> unit) {
 fun string.any() : bool => this.size > 0
 
 // Whether `predicate` is true of at least one character; false for an empty string.
-fun string.any(predicate : (char) -> bool) : bool {
+inline fun string.any(predicate : (char) -> bool) : bool {
   for character in this {
     if (predicate(character)) { return true }
   }
@@ -238,7 +238,7 @@ fun string.any(predicate : (char) -> bool) : bool {
 }
 
 // Whether `predicate` is true of every character; true for an empty string.
-fun string.all(predicate : (char) -> bool) : bool {
+inline fun string.all(predicate : (char) -> bool) : bool {
   for character in this {
     if (!predicate(character)) { return false }
   }
@@ -249,7 +249,7 @@ fun string.all(predicate : (char) -> bool) : bool {
 fun string.none() : bool => this.size == 0
 
 // Whether `predicate` is true of no character; true for an empty string.
-fun string.none(predicate : (char) -> bool) : bool {
+inline fun string.none(predicate : (char) -> bool) : bool {
   for character in this {
     if (predicate(character)) { return false }
   }
@@ -260,7 +260,7 @@ fun string.none(predicate : (char) -> bool) : bool {
 fun string.count() : int => this.size
 
 // The number of characters for which `predicate` is true.
-fun string.count(predicate : (char) -> bool) : int {
+inline fun string.count(predicate : (char) -> bool) : int {
   var total = 0
   for character in this {
     if (predicate(character)) { total += 1 }
@@ -269,14 +269,14 @@ fun string.count(predicate : (char) -> bool) : int {
 }
 
 // A list of what the function gives for each character.
-fun <R> string.map(transform : (char) -> R) : open List<R> {
+inline fun <R> string.map(transform : (char) -> R) : open List<R> {
   val out : open List<R> = []
   for character in this { out.add(transform(character)) }
   return out
 }
 
 // The characters that meet the condition, as a string.
-fun string.filter(predicate : (char) -> bool) : string {
+inline fun string.filter(predicate : (char) -> bool) : string {
   val out : open List<char> = []
   for character in this {
     if (predicate(character)) { out.add(character) }
@@ -285,7 +285,7 @@ fun string.filter(predicate : (char) -> bool) : string {
 }
 
 // The characters for which `predicate` is false, in their order, as a string.
-fun string.filterNot(predicate : (char) -> bool) : string {
+inline fun string.filterNot(predicate : (char) -> bool) : string {
   val out : open List<char> = []
   for character in this {
     if (!predicate(character)) { out.add(character) }
@@ -321,10 +321,10 @@ fun string?.isNullOrBlank() : bool => this == null or this.isBlank()
 // The string, or "" when it is null.
 fun string?.orEmpty() : string => this == null ? "" : this
 // The string, or what `defaultValue` gives when the string is empty. `defaultValue` runs only then.
-fun string.ifEmpty(defaultValue : () -> string) : string => this.size == 0 ? defaultValue() : this
+inline fun string.ifEmpty(defaultValue : () -> string) : string => this.size == 0 ? defaultValue() : this
 // The string, or what `defaultValue` gives when the string is blank (empty, or only spaces, tabs
 // and line breaks). `defaultValue` runs only then.
-fun string.ifBlank(defaultValue : () -> string) : string => this.isBlank() ? defaultValue() : this
+inline fun string.ifBlank(defaultValue : () -> string) : string => this.isBlank() ? defaultValue() : this
 
 // -- To other types --
 // toInt, toIntOrNull, toFloat and toFloatOrNull are built in. Astra has one type for whole

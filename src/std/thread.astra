@@ -455,7 +455,7 @@ class LockBox<T>(private val value : T) {
   private val lock = Lock()
 
   // Runs `block` with the value, holding the box's key: gives what the block gives.
-  fun <R> useKey(block : (T) -> R) : R => lock.useKey { block(value) }
+  inline fun <R> useKey(block : (T) -> R) : R => lock.useKey { block(value) }
 }
 
 // Inside useKey: gives the key back until `condition` holds, checked again each time a key is

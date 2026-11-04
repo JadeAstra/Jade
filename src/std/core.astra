@@ -30,30 +30,51 @@ value IndexedValue<T>(val index : int, val value : T)
 
 // ---- Checks ----
 
+// Each in two forms, with a message and without, copied in where it is called, so that a check
+// that passes costs a test and nothing is made for its message (8.4i).
+
 // Throws an IllegalArgumentException unless `condition` holds: for checking what a function is
 // given. The message is what `lazyMessage` gives, worked out only then, or "Failed requirement.":
 //   require(n > 0) { "n is $n" }
-fun require(condition : bool, lazyMessage : (() -> any?)? = null) {
-  if (!condition) { throw IllegalArgumentException(lazyMessage == null ? "Failed requirement." : "${lazyMessage()}") }
+inline fun require(condition : bool) {
+  if (!condition) { throw IllegalArgumentException("Failed requirement.") }
+}
+// The same, the IllegalArgumentException's message what `lazyMessage` gives.
+inline fun require(condition : bool, lazyMessage : () -> any?) {
+  if (!condition) { throw IllegalArgumentException("${lazyMessage()}") }
 }
 
 // Throws an IllegalStateException unless `condition` holds: for the state things are in. The
 // message is what `lazyMessage` gives, worked out only then, or "Check failed.".
-fun check(condition : bool, lazyMessage : (() -> any?)? = null) {
-  if (!condition) { throw IllegalStateException(lazyMessage == null ? "Check failed." : "${lazyMessage()}") }
+inline fun check(condition : bool) {
+  if (!condition) { throw IllegalStateException("Check failed.") }
+}
+// The same, the IllegalStateException's message what `lazyMessage` gives.
+inline fun check(condition : bool, lazyMessage : () -> any?) {
+  if (!condition) { throw IllegalStateException("${lazyMessage()}") }
 }
 
 // `value`, now known not to be null; an IllegalArgumentException when it is null, its message
 // what `lazyMessage` gives or "Required value was null.".
-fun <T> requireNotNull(value : T?, lazyMessage : (() -> any?)? = null) : T {
-  if (value == null) { throw IllegalArgumentException(lazyMessage == null ? "Required value was null." : "${lazyMessage()}") }
+inline fun <T> requireNotNull(value : T?) : T {
+  if (value == null) { throw IllegalArgumentException("Required value was null.") }
+  return value
+}
+// The same, the IllegalArgumentException's message what `lazyMessage` gives.
+inline fun <T> requireNotNull(value : T?, lazyMessage : () -> any?) : T {
+  if (value == null) { throw IllegalArgumentException("${lazyMessage()}") }
   return value
 }
 
 // `value`, now known not to be null; an IllegalStateException when it is null, its message what
 // `lazyMessage` gives or "Required value was null.".
-fun <T> checkNotNull(value : T?, lazyMessage : (() -> any?)? = null) : T {
-  if (value == null) { throw IllegalStateException(lazyMessage == null ? "Required value was null." : "${lazyMessage()}") }
+inline fun <T> checkNotNull(value : T?) : T {
+  if (value == null) { throw IllegalStateException("Required value was null.") }
+  return value
+}
+// The same, the IllegalStateException's message what `lazyMessage` gives.
+inline fun <T> checkNotNull(value : T?, lazyMessage : () -> any?) : T {
+  if (value == null) { throw IllegalStateException("${lazyMessage()}") }
   return value
 }
 

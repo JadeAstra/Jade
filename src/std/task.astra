@@ -114,7 +114,7 @@ class Result<T> {
 }
 
 // Runs the block and gives its value, or the error it threw, as a Result.
-fun <T> runCatching(block : () -> T) : Result<T> {
+inline fun <T> runCatching(block : () -> T) : Result<T> {
   try {
     return Result.success(block())
   } catch (e) {
