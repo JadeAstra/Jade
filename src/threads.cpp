@@ -25,6 +25,7 @@
 #endif
 
 #include "builtins.h"
+#include "sandbox.h"
 #include "vm.h"
 
 namespace astra {
@@ -679,6 +680,11 @@ int64_t VM::addTimer(Value task, int64_t delayMs, int64_t periodMs) {
     timer.due = Clock::now() + std::chrono::milliseconds(delayMs < 0 ? 0 : delayMs);
     timer.periodMs = periodMs;
     timer.task = task;
+    // Set in a sandbox: due by its clock (M6.6.2).
+    if (std::shared_ptr<Host> host = currentHostShared(); host->isSandbox()) {
+        timer.sandboxDue = static_cast<SandboxHost&>(*host).now() + std::max<int64_t>(delayMs, 0) * 1000000;
+        timer.sandbox = std::move(host);
+    }
     timers_.push_back(timer);
     wakeLoop();
     return timer.id;
@@ -687,6 +693,33 @@ int64_t VM::addTimer(Value task, int64_t delayMs, int64_t periodMs) {
 void VM::cancelTimer(int64_t id) {
     timers_.erase(std::remove_if(timers_.begin(), timers_.end(), [&](const Timer& timer) { return timer.id == id; }), timers_.end());
     wakeLoop();
+}
+
+// The next of the sandboxes' timers (M6.6.2), if one is due by its sandbox's clock, or if nothing
+// else is ready: no task, no timer of the system's due. The clock then jumps to it, as no real
+// time need pass for a sandbox's wait. Work in progress is not waited for: a task set aside on
+// the timer is some, and what a sandbox reads and writes takes no time to speak of. Whether one
+// ran.
+bool VM::runSandboxTimer() {
+    size_t next = timers_.size();
+    for (size_t i = 0; i < timers_.size(); i++)
+        if (timers_[i].sandbox != nullptr && (next == timers_.size() || timers_[i].sandboxDue < timers_[next].sandboxDue)) next = i;
+    if (next == timers_.size()) return false;
+    SandboxHost& box = static_cast<SandboxHost&>(*timers_[next].sandbox);
+    if (box.now() < timers_[next].sandboxDue) {
+        {
+            std::lock_guard<std::mutex> hold(loopMutex_);
+            if (!nativeTasks_.empty()) return false;
+        }
+        for (const Timer& timer : timers_)
+            if (timer.sandbox == nullptr && timer.due <= Clock::now()) return false;
+        box.advanceTo(timers_[next].sandboxDue);
+    }
+    TempRoot task(*this, timers_[next].task);
+    if (timers_[next].periodMs > 0) timers_[next].sandboxDue += timers_[next].periodMs * 1000000;
+    else timers_.erase(timers_.begin() + static_cast<std::ptrdiff_t>(next));
+    call(task.get(), 0, nullptr);
+    return true;
 }
 
 void VM::runEventLoop(bool wait, int64_t budgetMs) {
@@ -725,9 +758,11 @@ void VM::runEventLoop(bool wait, int64_t budgetMs) {
             continue;
         }
 
+        if (runSandboxTimer()) continue;
+
         size_t next = timers_.size();
         for (size_t i = 0; i < timers_.size(); i++)
-            if (next == timers_.size() || timers_[i].due < timers_[next].due) next = i;
+            if (timers_[i].sandbox == nullptr && (next == timers_.size() || timers_[i].due < timers_[next].due)) next = i;
         const bool haveTimer = next < timers_.size();
         const Clock::time_point due = haveTimer ? timers_[next].due : Clock::time_point();
         if (haveTimer && due <= Clock::now()) {
@@ -1047,6 +1082,16 @@ void registerThreads(VM& vm) {
     // False if the thread was interrupted before the time was up.
     define(vm, thread, "sleep", 1, 1, [](VM& vm, int argc, Value* args) -> Value {
         ThreadState* me = vm.currentThread();
+        // In a sandbox, its clock moves on and no real time passes; the other threads have a turn
+        // (M6.6.2).
+        if (Host& host = vm.currentHost(); host.isSandbox()) {
+            if (me->interrupted.exchange(false)) return Value::boolean(false);
+            static_cast<SandboxHost&>(host).advance(std::max<int64_t>(timeLimit(vm, argc, args, 0), 0) * 1000000);
+            vm.releaseLock();
+            std::this_thread::yield();
+            vm.acquireLock(me);
+            return Value::boolean(true);
+        }
         const Deadline deadline(timeLimit(vm, argc, args, 0));
         for (;;) {
             if (me->interrupted.exchange(false)) return Value::boolean(false);

@@ -11,8 +11,11 @@
 //   }
 //
 // What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in
-// it too. Starting a program, the network and font files have no sandbox's form yet, and are
-// refused in one rather than done on the system.
+// it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real
+// time, and its randomness starts from a fixed seed, so that a test runs the same every time.
+// Starting a program, the network and font files have no sandbox's form yet, and are refused in
+// one rather than done on the system; a wait for another thread with a time limit still takes
+// real time.
 
 // How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows',
 // C:\data\a.txt, names compared without case.
@@ -35,14 +38,22 @@ class Sandbox {
     this.files = SandboxFiles(handle)
   }
 
+  // Its clock moved on by `time`, as if that much had passed: the timers due by then run when
+  // the event loop next looks.
+  fun advance(time : Duration) {
+    __sandbox.advance(handle, time.inNanoseconds)
+  }
+
   static {
     // Runs `block` in a new sandbox, and gives what it gives; the block reaches nothing outside
     // it. With `copyFrom`, the sandbox starts with a copy of that directory of the real system,
     // at its root under the directory's name (a dry run: files.changes() says what the block
     // did). `diskSize` is the most its files may hold together, in bytes; past it a write fails
     // as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException.
-    inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, block : Sandbox.() -> T) : T {
-      val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text), paths)
+    // Its randomness starts from `seed`.
+    inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, seed : int = 1,
+                       block : Sandbox.() -> T) : T {
+      val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text, seed), paths)
       __Sandboxes.add(box)
       __sandbox.enter(box.handle)
       try {
@@ -127,7 +138,8 @@ object __Sandboxes {
 
 // What Sandbox is built on (sandbox.cpp), declared with its types and what it throws.
 external object __sandbox {
-  fun make(windowsPaths : bool, diskSize : int, copyFrom : string?) : any
+  fun make(windowsPaths : bool, diskSize : int, copyFrom : string?, seed : int) : any
+  fun advance(sandbox : any, nanoseconds : int)
   fun enter(sandbox : any)
   fun leave()
   fun id(sandbox : any) : int

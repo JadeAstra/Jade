@@ -655,10 +655,12 @@ void registerSandbox(VM& vm) {
         box->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("Sandbox.") + name, minArgs, maxArgs, fn)));
     };
 
-    // make(windowsPaths, diskSize, copyFrom): a new sandbox, its files empty but for its temporary
-    // directory, or with a directory of the real system copied in; diskSize -1 for no limit.
-    def("make", 3, 3, [](VM& vm, int, Value* args) -> Value {
+    // make(windowsPaths, diskSize, copyFrom, seed): a new sandbox, its files empty but for its
+    // temporary directory, or with a directory of the real system copied in; diskSize -1 for no
+    // limit; its randomness from `seed`.
+    def("make", 4, 4, [](VM& vm, int, Value* args) -> Value {
         std::shared_ptr<SandboxHost> made = makeSandbox(args[0].truthy(), vm.toInt(args[1], "disk size"));
+        made->random.seed(static_cast<uint64_t>(vm.toInt(args[3], "seed")));
         if (!args[2].isNull()) {
             const std::string from = vm.toStr(args[2], "directory");
             if (!realHost().isDirectory(from)) throw vm.runtimeError(Thrown::IllegalArgumentException, "cannot copy '" + from + "' into a sandbox: it is no directory");
@@ -687,6 +689,11 @@ void registerSandbox(VM& vm) {
         return Value::null();
     });
     def("id", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(sandboxOf(vm, args[0])->id); });
+    // Its clock moved on by so many nanoseconds, as if that much time had passed (step 3).
+    def("advance", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        sandboxOf(vm, args[0])->advance(vm.toInt(args[1], "nanoseconds"));
+        return Value::null();
+    });
     // The number of the sandbox the code running now is in; null on the real system.
     def("currentId", 0, 0, [](VM& vm, int, Value*) -> Value {
         Host& here = vm.currentHost();

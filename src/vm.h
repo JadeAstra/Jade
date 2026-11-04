@@ -982,7 +982,11 @@ private:
         std::chrono::steady_clock::time_point due;
         int64_t periodMs;
         Value task;
+        // One set in a sandbox (M6.6.2): due by its clock, in its nanoseconds, not by `due`.
+        std::shared_ptr<Host> sandbox;
+        int64_t sandboxDue = 0;
     };
+    bool runSandboxTimer();
     std::deque<Value> loopTasks_;
     std::vector<Timer> timers_;
     int64_t nextTimerId_ = 1;

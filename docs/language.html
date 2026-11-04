@@ -517,7 +517,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Rect"><code>Rect</code></a> (24)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
-<li><a href="#Sandbox"><code>Sandbox</code></a> (6)</li>
+<li><a href="#Sandbox"><code>Sandbox</code></a> (7)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
@@ -3802,7 +3802,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
   Path(&quot;/data&quot;).list()            // an IOException: the device is not ready
 }
 </pre>
-<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Starting a program, the network and font files have no sandbox's form yet, and are refused in one rather than done on the system.</p>
+<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. Starting a program, the network and font files have no sandbox's form yet, and are refused in one rather than done on the system; a wait for another thread with a time limit still takes real time.</p>
 <div class="entry" id="PathStyle"><code class="sig">enum PathStyle</code><a class="anchor" href="#PathStyle">#</a>
 <p>How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows', C:\data\a.txt, names compared without case.</p>
 </div>
@@ -3818,8 +3818,11 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry member" id="Sandbox.files"><code class="sig">val files : SandboxFiles</code><a class="anchor" href="#Sandbox.files">#</a>
 <p>Its files, as they have changed.</p>
 </div>
-<div class="entry member" id="Sandbox.run"><code class="sig">inline fun &lt;T&gt; run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, block : Sandbox.() -&gt; T) : T</code><a class="anchor" href="#Sandbox.run">#</a>
-<p>Runs <code>block</code> in a new sandbox, and gives what it gives; the block reaches nothing outside it. With <code>copyFrom</code>, the sandbox starts with a copy of that directory of the real system, at its root under the directory's name (a dry run: files.changes() says what the block did). <code>diskSize</code> is the most its files may hold together, in bytes; past it a write fails as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException.</p>
+<div class="entry member" id="Sandbox.advance"><code class="sig">fun advance(time : Duration)</code><a class="anchor" href="#Sandbox.advance">#</a>
+<p>Its clock moved on by <code>time</code>, as if that much had passed: the timers due by then run when the event loop next looks.</p>
+</div>
+<div class="entry member" id="Sandbox.run"><code class="sig">inline fun &lt;T&gt; run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, seed : int = 1, block : Sandbox.() -&gt; T) : T</code><a class="anchor" href="#Sandbox.run">#</a>
+<p>Runs <code>block</code> in a new sandbox, and gives what it gives; the block reaches nothing outside it. With <code>copyFrom</code>, the sandbox starts with a copy of that directory of the real system, at its root under the directory's name (a dry run: files.changes() says what the block did). <code>diskSize</code> is the most its files may hold together, in bytes; past it a write fails as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException. Its randomness starts from <code>seed</code>.</p>
 </div>
 <div class="entry member" id="Sandbox.current"><code class="sig">val current : Sandbox? get()</code><a class="anchor" href="#Sandbox.current">#</a>
 <p>The sandbox the code running now is in; null on the real system.</p>

@@ -1,0 +1,43 @@
+// A sandbox's clock (M6.6.2 step 3): it moves only when the program waits, a sleep or a timer's
+// delay taking no real time, and its randomness starts from a fixed seed.
+val wall = clock()
+
+Sandbox.run {
+  print(clock(), Instant.now())                               // expect: 0.0 2000-01-01T00:00:00Z
+  Thread.sleep(5.minutes)
+  print(clock(), Instant.now())                               // expect: 300.0 2000-01-01T00:05:00Z
+  advance(1.seconds)
+  print(clock())                                              // expect: 301.0
+}
+
+// A timer's delay, in a task on the event loop: the clock jumps to it when nothing else is ready.
+Sandbox.run {
+  val start = clock()
+  val later = task {
+    delay(2.hours)
+    clock() - start
+  }
+  val every = EventLoop.every(10.minutes) { }
+  later.then { seconds ->
+    print("two hours on:", seconds)                           // after the script: see the end
+    every.cancel()
+  }
+}
+
+// What a thread started in it does takes its clock too.
+Sandbox.run {
+  thread { Thread.sleep(1.hours) }.get()
+  print(clock())                                              // expect: 3600.0
+}
+
+// The same seed gives the same numbers; another gives others.
+fun draw(seed : int) : List<int> => Sandbox.run(seed = seed) { (1..5).map { Math.randomInt(1, 1000000) } }
+print(draw(1) == draw(1), draw(1) == draw(2))                 // expect: true false
+val seeded = Sandbox.run {
+  Math.seed(42)
+  Math.random()
+}
+print(seeded == Sandbox.run(seed = 42) { Math.random() })     // expect: true
+
+print(clock() - wall < 5.0)                                   // expect: true
+// expect: two hours on: 7200.0

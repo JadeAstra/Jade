@@ -31,6 +31,7 @@
 #include "builtins.h"
 #include "charset.h"
 #include "run.h"
+#include "sandbox.h"
 #include "vm.h"
 
 namespace astra {
@@ -300,12 +301,16 @@ void registerGlobals(VM& vm) {
 
 
 
-    vm.defineNative("clock", 0, 0, [](VM&, int, Value*) -> Value {
+    // In a sandbox, its own clock, which moves only when the program waits (M6.6.2).
+    vm.defineNative("clock", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (Host& host = vm.currentHost(); host.isSandbox()) return Value::number(static_cast<double>(static_cast<SandboxHost&>(host).now()) / 1e9);
         auto now = std::chrono::steady_clock::now().time_since_epoch();
         return Value::number(std::chrono::duration<double>(now).count());
     });
-    // What the system's clock says, in nanoseconds since the start of 1970 (Instant.now, G54).
-    vm.defineNative("__epochNanoseconds", 0, 0, [](VM&, int, Value*) -> Value {
+    // What the system's clock says, in nanoseconds since the start of 1970 (Instant.now, G54); in
+    // a sandbox, its own, from 2000-01-01.
+    vm.defineNative("__epochNanoseconds", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (Host& host = vm.currentHost(); host.isSandbox()) return Value::integer(SandboxHost::kWallStart + static_cast<SandboxHost&>(host).now());
         const auto now = std::chrono::system_clock::now().time_since_epoch();
         return Value::integer(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
     });
@@ -460,7 +465,13 @@ void registerMath(VM& vm) {
         return Value::number(std::pow(vm.toNumber(args[0], "Math.pow() base"), vm.toNumber(args[1], "Math.pow() exponent")));
     });
 
+    // In a sandbox, its own randomness, from a fixed seed (M6.6.2).
     def("random", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (Host& host = vm.currentHost(); host.isSandbox()) {
+            SandboxHost& box = static_cast<SandboxHost&>(host);
+            std::lock_guard<std::mutex> hold(box.randomMutex);
+            return Value::number(std::uniform_real_distribution<double>(0.0, 1.0)(box.random));
+        }
         return Value::number(std::uniform_real_distribution<double>(0.0, 1.0)(vm.rng));
     });
 
@@ -468,11 +479,23 @@ void registerMath(VM& vm) {
         int64_t lo = vm.toInt(args[0], "Math.randomInt() lower bound");
         int64_t hi = vm.toInt(args[1], "Math.randomInt() upper bound");
         if (lo > hi) throw vm.runtimeError(Thrown::IllegalArgumentException, "Math.randomInt() lower bound is greater than the upper bound");
+        if (Host& host = vm.currentHost(); host.isSandbox()) {
+            SandboxHost& box = static_cast<SandboxHost&>(host);
+            std::lock_guard<std::mutex> hold(box.randomMutex);
+            return Value::integer(std::uniform_int_distribution<int64_t>(lo, hi)(box.random));
+        }
         return Value::integer(std::uniform_int_distribution<int64_t>(lo, hi)(vm.rng));
     });
 
     def("seed", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        vm.rng.seed(static_cast<uint64_t>(vm.toInt(args[0], "Math.seed() argument")));
+        const uint64_t seed = static_cast<uint64_t>(vm.toInt(args[0], "Math.seed() argument"));
+        if (Host& host = vm.currentHost(); host.isSandbox()) {
+            SandboxHost& box = static_cast<SandboxHost&>(host);
+            std::lock_guard<std::mutex> hold(box.randomMutex);
+            box.random.seed(seed);
+            return Value::null();
+        }
+        vm.rng.seed(seed);
         return Value::null();
     });
 
