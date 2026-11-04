@@ -5,7 +5,7 @@ val font = Font("Segoe UI", 16)
 
 // How much is painted: the sum of every pixel's alpha.
 fun ink(image : Image) {
-  val bytes = image.pixels.bytes
+  val bytes = image.pixels.toBytes()
   var total = 0
   var i = 3
   while (i < bytes.size) { total += bytes[i]; i += 4 }

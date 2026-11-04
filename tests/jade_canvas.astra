@@ -171,8 +171,8 @@ ec.color = Color.black
 ec.font = wc.font
 val inMemory = ec.drawString("Text on the card: 中 😀", 6, 26)
 val got = words.toImage()
-val gotBytes = got.pixels.bytes
-val expectedBytes = expected.pixels.bytes
+val gotBytes = got.pixels.toBytes()
+val expectedBytes = expected.pixels.toBytes()
 var worst = 0
 var differing = 0
 for (i in 0..<gotBytes.size) {
@@ -270,7 +270,7 @@ ic.color = Color.red
 ic.fillRect(8, 8, 2, 2)
 print(drawn[3, 3] == Color.blue, drawn[9, 9] == Color.red, drawn[2, 2] == Color.yellow)   // expect: true true true
 val sub = drawn.crop(2, 2, 4, 4)
-print(sub, sub[1, 1] == Color.blue, sub[0, 0] == Color.yellow, Image.of(10, 10, drawn.pixels.bytes)[9, 9] == Color.red)   // expect: Image(4 x 4) true true true
+print(sub, sub[1, 1] == Color.blue, sub[0, 0] == Color.yellow, Image.of(10, 10, drawn.pixels.toBytes())[9, 9] == Color.red)   // expect: Image(4 x 4) true true true
 fun attempt(block : () -> any?) {
   try { block(); return "no error" } catch (e) { return "${e.message}" }
 }

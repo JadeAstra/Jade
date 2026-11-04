@@ -406,7 +406,7 @@ names otherwise (`parentFile`, `absolutePath`, `listFiles`, `mkdirs`, `renameTo`
 - **`Font` has no scale**: a canvas draws it at its own, and `font.width(text)` is at scale 1.
   On a dense screen, `font.width(text, scale)` gives the screen's pixels.
 - **`image.pixels` may only be read**; `editPixels { pixels -> }` changes them.
-- **`Grid.bytes` is a copy** of the cells' storage.
+- **`grid.toBytes()` is a copy** of the cells' storage, a function as it copies all of it (8.9f).
 - **A grid's rows and columns are added by making a new grid**: `g.appendRows(2)` alone does
   nothing to `g` (a compile error); `g .= appendRows(2)`.
 

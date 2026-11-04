@@ -7,9 +7,9 @@ print(walls, walls.width, walls.height, walls.size, walls[1, 2], walls[0, 0], wa
 val heights = Grid<float32>(3, 2, fill = 1.5)
 heights.set(2, 1, 4.0)
 heights[0, 0] += 1.0
-print(heights.toList(), heights.bytes.size)   // expect: [2.5, 1.5, 1.5, 1.5, 1.5, 4.0] 24
+print(heights.toList(), heights.toBytes().size)   // expect: [2.5, 1.5, 1.5, 1.5, 1.5, 4.0] 24
 // Each type starts at its zero: false, 0, 0.0, a clear colour.
-print(Grid<int>(2, 1).toList(), Grid<byte>(2, 1).bytes, Grid<Color>(1, 1)[0, 0], Grid<int16>(2, 1).bytes.size)   // expect: [0, 0] Bytes[0, 0] Color(0, 0, 0, 0) 4
+print(Grid<int>(2, 1).toList(), Grid<byte>(2, 1).toBytes(), Grid<Color>(1, 1)[0, 0], Grid<int16>(2, 1).toBytes().size)   // expect: [0, 0] Bytes[0, 0] Color(0, 0, 0, 0) 4
 // A grid of objects has no zero: it is given a fill.
 val names = Grid<string>(2, 2, fill = "-")
 names[1, 0] = "b"
@@ -17,7 +17,6 @@ print(names.toList())   // expect: ["-", "b", "-", "-"]
 fun attempt(block : () -> any?) : string {
   try { block(); return "no error" } catch (e) { return "${e#.name}: ${e.message}" }
 }
-print(attempt { Grid<string>(2, 2) })   // expect: IllegalArgumentException: a grid of objects has no zero to start from: give it a fill, Grid(width, height, fill)
 print(attempt { walls[4, 0] }, "|", attempt { walls[0, 3] = true })   // expect: IndexOutOfBoundsException: (4, 0) is outside the grid, which is 4 by 3 | IndexOutOfBoundsException: (0, 3) is outside the grid, which is 4 by 3
 
 // -- Parts --

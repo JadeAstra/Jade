@@ -205,7 +205,7 @@ print("PaintCacheTest:", checks, "checks,", failed)   // expect: PaintCacheTest:
 
 // -- RenderIntoTest --
 
-fun pixels(picture : Drawable) => (picture is Surface ? picture.toImage() : picture as Image).pixels.bytes
+fun pixels(picture : Drawable) => (picture is Surface ? picture.toImage() : picture as Image).pixels.toBytes()
 
 // reusedBufferMatchesAFreshRender: a picture used again is the same, pixel for pixel, as a new one.
 fun reusedBufferMatchesAFreshRender() {

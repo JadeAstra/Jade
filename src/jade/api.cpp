@@ -80,6 +80,18 @@ State& state() {
     return made;
 }
 
+// The pixels of an image's grid (a Grid<Color>), four bytes each, where the grid keeps them:
+// nothing is copied (8.9f). `count` is how many the picture they go to has.
+const uint8_t* gridPixels(VM& vm, Value grid, size_t count) {
+    Value cells;
+    if (!grid.isObjType(ObjType::Instance) || !asInstance(grid)->read(vm.intern("cells"), cells) || !cells.isObjType(ObjType::List))
+        throw vm.runtimeError(Thrown::ClassCastException, "expected an image's pixels");
+    ObjList* list = asList(cells);
+    if (!list->packed() || list->pack->width != 4 || list->pack->count != count)
+        throw vm.runtimeError(Thrown::IllegalArgumentException, "the pixels do not fit the picture");
+    return list->pack->block.data();
+}
+
 Renderer& need(VM& vm) {
     if (!vm.onLoopThread()) throw vm.runtimeError(Thrown::IllegalStateException, "windows and drawing belong to the main thread; hand the work to it with EventLoop.post");
     if (state().renderer == nullptr) {
@@ -528,8 +540,10 @@ void registerJade(VM& vm) {
     // windowIcon(window, pixels, width, height): red, green, blue, alpha, four bytes a pixel.
     def("windowIcon", 4, 4, [](VM& vm, int, Value* args) -> Value {
         Window& window = windowOf(vm, args[0]);
-        if (!args[1].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::ClassCastException, "an icon's pixels are bytes");
-        window.native->setIcon(asBytes(args[1])->data, vm.toInt32(args[2], "width"), vm.toInt32(args[3], "height"));
+        const int width = vm.toInt32(args[2], "width"), height = vm.toInt32(args[3], "height");
+        const size_t count = static_cast<size_t>(std::max(width, 0)) * static_cast<size_t>(std::max(height, 0));
+        const uint8_t* pixels = gridPixels(vm, args[1], count);
+        window.native->setIcon(std::vector<uint8_t>(pixels, pixels + count * 4), width, height);
         return Value::null();
     });
     def("windowCursor", 2, 2, [](VM& vm, int, Value* args) -> Value {
@@ -651,9 +665,7 @@ void registerJade(VM& vm) {
     def("surfaceUpload", 2, 2, [](VM& vm, int, Value* args) -> Value {
         Renderer& r = need(vm);
         jade::Surface& s = surfaceNeeded(vm, r, args[0]);
-        if (!args[1].isObjType(ObjType::Bytes) || asBytes(args[1])->data.size() != static_cast<size_t>(s.width) * static_cast<size_t>(s.height) * 4)
-            throw vm.runtimeError(Thrown::IllegalArgumentException, "the pixels do not fit the picture");
-        r.upload(surfaceOf(vm, args[0]), asBytes(args[1])->data.data());
+        r.upload(surfaceOf(vm, args[0]), gridPixels(vm, args[1], static_cast<size_t>(s.width) * static_cast<size_t>(s.height)));
         return Value::null();
     });
 

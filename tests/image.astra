@@ -122,7 +122,7 @@ print(board[1, 1] == black, board[2, 1] == white, board[4, 4] == white, board[3,
 
 // -- Pixels as a grid: read freely, changed in editPixels --
 val px = Image(3, 2, Color.green)
-print(px.pixels, px.pixels[2, 1], px.pixels.toList().size, px.pixels.bytes.size)   // expect: Grid(3 x 2) Color(0, 255, 0) 6 24
+print(px.pixels, px.pixels[2, 1], px.pixels.toList().size, px.pixels.toBytes().size)   // expect: Grid(3 x 2) Color(0, 255, 0) 6 24
 print(attempt { px.pixels[0, 0] = black })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }
 px.editPixels { cells -> cells[0, 0] = black }
 print(px[0, 0] == black, px.crop(0, 0, 1, 1) == Image(1, 1, black), px.copy() == px, px.copy() === px)   // expect: true true true false

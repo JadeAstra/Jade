@@ -2312,8 +2312,8 @@ walls .= appendRows(2)                                  two rows more, a new gri
 <div class="entry member" id="Grid.toList"><code class="sig">fun toList() : open List&lt;T&gt;</code><a class="anchor" href="#Grid.toList">#</a>
 <p>The cells, row by row, as a new list.</p>
 </div>
-<div class="entry member" id="Grid.bytes"><code class="sig">val bytes : Bytes</code><a class="anchor" href="#Grid.bytes">#</a>
-<p>A copy of its storage, its cells' bytes one after another: for a grid of numbers, bools or value types (an image's pixels: four bytes each, red, green, blue, alpha).</p>
+<div class="entry member" id="Grid.toBytes"><code class="sig">fun toBytes() : Bytes</code><a class="anchor" href="#Grid.toBytes">#</a>
+<p>A copy of its storage, its cells' bytes one after another: for a grid of numbers, bools or value types (an image's pixels: four bytes each, red, green, blue, alpha). A function, as it copies everything (8.9f).</p>
 </div>
 <div class="entry member" id="Grid.insertRows"><code class="sig">fun insertRows(at : int, count : int = 1, fill : T? = null) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.insertRows">#</a>
 <p><code>count</code> rows before row <code>at</code> (0 to height), each cell <code>fill</code> or T's zero.</p>

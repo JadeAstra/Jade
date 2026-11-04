@@ -73,3 +73,10 @@ val wrongText = measured.width(5)          // check: Font.width(...) takes a str
 val orange = Color(255, 128, 0)
 val tooRed = Color(300, 0, 0)               // check: a colour's parts are bytes, 0 to 255, and 300 is not one (D99)
 val whole = Color(0xFF8000)
+
+// A grid of objects has no zero for its cells: it is given a fill (8.9f).
+val gridNames = Grid<string>(2, 2)          // check: a grid of string has no zero to start its cells from: give it a fill, Grid<string>(width, height, fill), or make its cells nullable (8.9f)
+val gridFilled = Grid<string>(2, 2, "")
+val gridMaybe = Grid<string?>(2, 2)
+val gridCounts = Grid<int>(2, 2)
+val gridCopied = gridCounts.bytes           // check: a grid's bytes are a copy of all of it, made by grid.toBytes() (8.9f)

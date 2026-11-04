@@ -126,7 +126,7 @@ class Surface : Drawable, ToImage {
     if (image.width != deviceWidth or image.height != deviceHeight) {
       throw IllegalArgumentException("an image of ${image.width} by ${image.height} does not fit a surface of $deviceWidth by $deviceHeight pixels")
     }
-    __jade.surfaceUpload(handle, image.pixels.bytes)
+    __jade.surfaceUpload(handle, image.pixels)
   }
 
   fun save(path : Path | string) throws IOException {
@@ -378,7 +378,7 @@ class NativeWindow {
 
   // The picture for its title bar and the task bar.
   fun setIcon(image : Image) {
-    __jade.windowIcon(id, image.pixels.bytes, image.width, image.height)
+    __jade.windowIcon(id, image.pixels, image.width, image.height)
   }
 
   var cursor : CursorKind

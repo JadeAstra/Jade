@@ -93,9 +93,9 @@ class Grid<T> {
   fun toList() : open List<T> => cells.toList()
 
   // A copy of its storage, its cells' bytes one after another: for a grid of numbers, bools or
-  // value types (an image's pixels: four bytes each, red, green, blue, alpha).
-  val bytes : Bytes
-    get() => __grid.bytes(cells)
+  // value types (an image's pixels: four bytes each, red, green, blue, alpha). A function, as it
+  // copies everything (8.9f).
+  fun toBytes() : Bytes => __grid.bytes(cells)
 
   // -- New grids with rows and columns added or taken away --
   // Each gives a new grid and leaves this one as it was: grid .= appendRows(2).

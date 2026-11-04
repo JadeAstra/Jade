@@ -2581,7 +2581,7 @@ val names = Grid<string>(3, 3, fill = "-")           // a grid of objects is giv
 | `grid[xs, ys]`, `grid[xs, ys] = other` | a part by two ranges (`^1` counts from the end), as a new grid, or written from one |
 | `width`, `height`, `size` | `size` is a `Size` |
 | `map { }` | a grid of what each cell gives, of any type |
-| `toList()`, `bytes` | the cells row by row; `bytes` a copy of their storage, for numbers and value types |
+| `toList()`, `toBytes()` | the cells row by row; `toBytes()` a copy of their storage, for numbers and value types |
 | `insertRows(at, count = 1, fill?)`, `insertColumns(...)` | a new grid with rows or columns added; or `insertRows(at, rows)` with another grid's |
 | `prependRows`, `appendRows`, `prependColumns`, `appendColumns` | the same at an edge |
 | `removeRows(at, count = 1)`, `removeColumns(...)` | a new grid without them; `at` may be `^1` |

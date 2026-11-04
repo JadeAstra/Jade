@@ -2902,6 +2902,7 @@ struct Checker::Impl {
     static std::string preludeAdvice(const ClassInfo* k, const std::string& name) {
         for (const ClassInfo* c = k; c != nullptr; c = c->superclass) {
             if (c->unit == nullptr || !c->unit->prelude) continue;
+            if (c->name == "Grid" && name == "bytes") return "a grid's bytes are a copy of all of it, made by grid.toBytes() (8.9f)";
             // A fold's starting value and operation cannot be split among the cores (8.7c).
             if (c->name == "ParallelStream" && name == "fold")
                 return "fold on a parallel stream would run on one core, its items in order: reduce { a, b -> ... } deals an associative "
@@ -7423,6 +7424,18 @@ struct Checker::Impl {
             for (const ExprPtr& a : args.exprs) expr(*a);
             report(at, "Java's Font(name, style, size) is Font(name, size, bold = true, italic = true) in Astra: a style is said by name (L80)");
             return classType(k);
+        }
+        // Grid<Label>(w, h): a grid of objects has no zero to start its cells from (8.9f).
+        if (k->name == "Grid" && k->unit != nullptr && k->unit->prelude && typeArgs.size() == 1 && !args.spread && args.exprs.size() < 3 &&
+            std::find(args.names.begin(), args.names.end(), "fill") == args.names.end()) {
+            const Type item = resolve(typeArgs[0], *unit);
+            const bool zero = item.nullable || item.kind == Type::Int || item.kind == Type::Float || item.kind == Type::Number ||
+                              item.kind == Type::Bool || item.kind == Type::Char || item.kind == Type::Byte || item.kind == Type::Any ||
+                              (item.kind == Type::Class && item.cls != nullptr && item.cls->isValue) || !item.known() ||
+                              item.kind == Type::TypeParam;
+            if (!zero)
+                report(at, "a grid of " + text(item) + " has no zero to start its cells from: give it a fill, Grid<" + text(item) +
+                               ">(width, height, fill), or make its cells nullable (8.9f)");
         }
         // `Action { ... }`: the lambda, as the interface (D28).
         if (k->isInterface && args.exprs.size() == 1 && args.exprs[0]->kind == ExprKind::Function && !args.spread) {
