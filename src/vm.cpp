@@ -4059,6 +4059,9 @@ Value VM::getIndex(Value obj, Value index) {
                 const std::vector<uint8_t>& data = asBytes(obj)->data;
                 size_t i;
                 if (!position(index, data.size(), i, "bytes index")) throw outOfRange("bytes index", index, data.size());
+                // In a parallel section over the parts of a buffer, a core reads its own part only,
+                // as for a list: another's would be read while that core writes it (8.7h).
+                if (obj.as.obj == bandObject_ && (i < bandFrom_ || i >= bandTo_)) [[unlikely]] throw outsideBand(i);
                 return Value::byte(data[i]);  // a byte (D19)
             }
             default:

@@ -769,8 +769,9 @@ AstraThrow VM::outsideBand(size_t i) const {
     if (bandObject_->type == ObjType::List)
         return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "item " + std::to_string(i) + " is another core's in this parallel section: a core looks only into its "
                                                    "own items, " + std::to_string(bandFrom_) + " to " + std::to_string(bandTo_ - 1));
-    return notOwned("position " + std::to_string(i) + " is outside this core's part of the buffer, which is " + std::to_string(bandFrom_) + " to " +
-                    std::to_string(bandTo_ - 1));
+    return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "position " + std::to_string(i) + " of the buffer is another core's in this " +
+                                               "parallel section: a core looks only into its own part, " + std::to_string(bandFrom_) + " to " +
+                                               std::to_string(bandTo_ - 1) + " (8.7h)");
 }
 
 AstraThrow VM::notOwned(const std::string& what) const {

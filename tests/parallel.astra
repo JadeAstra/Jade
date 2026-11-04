@@ -157,6 +157,14 @@ try {
   print(e.message!!.contains("is outside this core's part of the buffer") ? "outside this core's part" : e.message)
 }
 // expect: outside this core's part
+// Nor read another core's part, which that core may be writing (8.7h).
+try {
+  buffer.parallelChunks { positions -> buffer[positions.first] = buffer[(positions.last + 1) % 10000] }
+  print(availableProcessors() == 1 ? "another core's" : "not refused")
+} catch (e) {
+  print(e.message!!.contains("of the buffer is another core's in this parallel section") ? "another core's" : e.message)
+}
+// expect: another core's
 try { buffer.parallelChunks { buffer.fill(0) } } catch (e) { print(e.message) }
 // expect: a parallel section changes only the item it was given and what it makes itself: this Bytes is shared with the other cores, so here it can be read and not changed
 
