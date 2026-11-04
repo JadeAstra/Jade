@@ -2,7 +2,7 @@
 // wait ends: a sleep, a join, a lock another thread holds, the event loop, a read.
 
 fun daemon(task : suspend () -> any?) : Thread {
-  val t = Thread(task)
+  val t = Thread(task = task)
   t.isDaemon = true
   return t.start()
 }

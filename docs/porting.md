@@ -283,7 +283,9 @@ can change, and an `==` without a `hashCode`.
   compile error, where Kotlin's `@RestrictsSuspension` gives a less direct one.
 - **Frozen data sent to a worker is shared**, not copied: `table.frozen()` sent to eight
   workers is one copy. `post(bytes, handOver = true)` leaves the sender's buffer empty.
-- **A `Thread` made with a lambda takes it in parentheses**: `Thread({ work() }, "name")`.
+- **A `Thread` takes its name first and its work after**: `Thread("name") { work() }`, or
+  `Thread { work() }` as in Kotlin. Java's order, `Thread({ work() }, "name")`, is an error giving
+  this form.
 
 ### What the compiler says
 

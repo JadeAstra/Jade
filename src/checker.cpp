@@ -7165,13 +7165,18 @@ struct Checker::Impl {
             const Type want = subst(f->params[static_cast<size_t>(p)], env);
             if (!fits(given, want)) report(*from, what + " takes " + describe(want) + " for '" + name + "', and the bundle gives " + describe(given));
         }
+        bool threadOrder = false;  // Java's Thread(task, name), said once (8.7d)
         for (size_t i = 0; i < args.exprs.size(); i++) {
             if (b.paramOf[i] < 0) continue;
             Type want = subst(wanted(i), env);
             if (!fits(types[i], want)) {
                 const std::string& param = f->paramNames[static_cast<size_t>(b.paramOf[i])];
                 const Type plainWant = withNull(want, false);
-                if (plainWant.kind == Type::Class && plainWant.cls != nullptr && plainWant.cls->name == "Duration" && plainWant.cls->unit != nullptr &&
+                const bool thread = f->owner != nullptr && f->owner->name == "Thread" && f->owner->unit != nullptr && f->owner->unit->prelude;
+                if (thread && ((param == "name" && types[i].kind == Type::Function) || (param == "task" && types[i].kind == Type::String))) {
+                    if (std::exchange(threadOrder, true)) continue;
+                    report(*args.exprs[i], "a Thread takes its name first and its work after: Thread(\"name\") { work() }, or Thread { work() } (8.7d)");
+                } else if (plainWant.kind == Type::Class && plainWant.cls != nullptr && plainWant.cls->name == "Duration" && plainWant.cls->unit != nullptr &&
                     plainWant.cls->unit->prelude && (types[i].kind == Type::Int || types[i].kind == Type::Float || types[i].kind == Type::Number))
                     report(*args.exprs[i], what + " takes a Duration for '" + param + "': a time says its unit, as 16.milliseconds or 2.seconds (D90)");
                 else

@@ -38,9 +38,9 @@ print(replaced, letters)   // expect: a ["z", "b"]
 
 // The main thread, and threads given names, take no number of the Thread-N names.
 print(Thread.currentThread().name)   // expect: main
-val named = Thread({ }, "loader")
-val first = Thread({ })
-val second = Thread({ })
+val named = Thread("loader") { }
+val first = Thread { }
+val second = Thread { }
 print(named.name, first.name, second.name)   // expect: loader Thread-1 Thread-2
 
 // An image's hash comes from its pixels as well as its size, as its == does.

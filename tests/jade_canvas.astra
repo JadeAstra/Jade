@@ -252,8 +252,8 @@ image.canvas().split(1, 3).parallelStream().forEach { it.color = Color.green; it
 tc.draw(image, 5, 5)
 print(table.toImage()[5, 5] == Color.green, table.toImage()[12, 10] == Color.green)   // expect: true true
 // Two threads drawing on it at once, a column at a time: every column reaches the card.
-val left = Thread({ for (x in 0..<4) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.red; c.fillRect(0, 0, 1, 6) } }).start()
-val right = Thread({ for (x in 4..<8) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.blue; c.fillRect(0, 0, 1, 6) } }).start()
+val left = Thread { for (x in 0..<4) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.red; c.fillRect(0, 0, 1, 6) } }.start()
+val right = Thread { for (x in 4..<8) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.blue; c.fillRect(0, 0, 1, 6) } }.start()
 left.join()
 right.join()
 tc.draw(image, 5, 5)

@@ -3,7 +3,7 @@
 
 // A thread runs a function; join waits for it.
 val log : open List<any?> = []
-val first = Thread({ log.add("ran on " + Thread.currentThread().name) }, "worker-1")
+val first = Thread("worker-1") { log.add("ran on " + Thread.currentThread().name) }
 print(first.name, first.isAlive, first.isDaemon)             // expect: worker-1 false false
 first.start()
 first.join()
@@ -15,7 +15,7 @@ val helper = thread(name = "helper") { log.add(Thread.currentThread().name); 6 *
 print(helper.get(), log.last(), Thread.currentThread().name, Thread.currentThread() === Thread.currentThread())   // expect: 42 helper main true
 
 // A class can extend Thread and say what it does itself.
-class Counter(val upTo : int) : Thread(null, "counter") {
+class Counter(val upTo : int) : Thread("counter") {
   var total = 0
   override suspend fun run() {
     for i in 1..upTo { total += i }
@@ -125,12 +125,12 @@ sleeper.cancel(interrupt = true)
 print(sleeperDone.await(timeout = 10.seconds), caught, sleeper.isCancelled)   // expect: true the thread was interrupted true
 var noticed = false
 val started = Countdown(1)
-val busyThread = Thread({
+val busyThread = Thread {
   started.countDown()
   while (!Thread.currentThread().isInterrupted) { Thread.yield() }
   noticed = Thread.interrupted()
   log.add(Thread.interrupted())
-})
+}
 busyThread.start()
 started.await()
 busyThread.interrupt()
@@ -138,7 +138,7 @@ busyThread.join()
 print(noticed, log.last(), busyThread.isInterrupted)         // expect: true false false
 
 // join with a time limit comes back when the time is up.
-val slow = Thread({ Thread.sleep(1.minutes) })
+val slow = Thread { Thread.sleep(1.minutes) }
 slow.isDaemon = true
 slow.start()
 print(slow.join(timeout = 20.milliseconds), slow.isAlive, slow.isDaemon)   // expect: false true true

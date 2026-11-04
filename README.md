@@ -2774,7 +2774,7 @@ has something to do after the loop is idle calls `EventLoop.run()` itself.
 val loading = thread(name = "loader") { load(file) }    // a Job of what the block gives
 loading.then { shown = it }                              // on the event loop, when it is done
 
-val worker = Thread({ load(file) }, "loader")           // made, and started by hand
+val worker = Thread("loader") { load(file) }           // made, and started by hand
 worker.isDaemon = true            // a daemon does not keep the program alive
 worker.start()
 worker.join(timeout = 500.milliseconds)
@@ -2793,7 +2793,7 @@ for a lock leaves the others free.
 | | |
 | --- | --- |
 | `thread(name?, daemon?) { }` | starts a thread, and gives a `Job` of what the block returns; an error it does not catch fails the job and is reported |
-| `Thread` | `Thread(task, name?)`, `start()`, `join(timeout?)` (false if the time ran out), `isAlive`, `isDaemon`, `name`, `interrupt()`, `isInterrupted`; a class may extend it and override `run()` |
+| `Thread` | `Thread(name?) { task }`, `start()`, `join(timeout?)` (false if the time ran out), `isAlive`, `isDaemon`, `name`, `interrupt()`, `isInterrupted`; a class may extend it and override `run()` |
 | on the running thread | `Thread.currentThread()`, `Thread.sleep(time)`, `Thread.interrupted()`, `Thread.yield()` |
 | `Lock` | `useKey { }`: runs the block holding the key; no other thread holds it meanwhile, and it is given back however the block ends |
 | `LockBox(value)` | data reached only with the key: `counts.useKey { it["clicks"] = 1 }` |

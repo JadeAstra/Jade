@@ -38,3 +38,8 @@ val values = sequence<int> {
   yield(1)
   Thread.sleep(1.milliseconds)          // check: 'sleep' may wait (it is a suspend function), and a sequence's block waits only where it gives a value (yield, yieldAll): its values are worked out as they are asked for, by whoever asks. Wait before making the sequence, or make a list in a task instead: task { buildList { ... } }
 }
+
+// A Thread takes its name first and its work after; Java's order says so (8.7d).
+val javaOrder = Thread({ print("x") }, "loader")   // check: a Thread takes its name first and its work after: Thread("name") { work() }, or Thread { work() } (8.7d)
+val kotlinWay = Thread { print("x") }
+val named = Thread("loader") { print("x") }

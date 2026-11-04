@@ -75,7 +75,7 @@ class Shared {
   }
 }
 val shared = Shared()
-val readers = (1..4).map { Thread({ print("read ${shared.value}") }) }
+val readers = (1..4).map { Thread { print("read ${shared.value}") } }
 readers.forEach { it.start() }
 readers.forEach { it.join() }
 print(made)   // expect: read 7

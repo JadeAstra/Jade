@@ -25,7 +25,7 @@ class Thread {
       var current : Thread? = __thread.current()
       if (current == null) {
         // The main thread, which no program made.
-        val main = Thread(null, __thread.currentName())
+        val main = Thread(__thread.currentName())
         main.id = __thread.currentId()
         __thread.setCurrent(main)
         return main
@@ -58,8 +58,9 @@ class Thread {
   // its error is reported where it was thrown.
   internal var throwingTask : (suspend () -> any? throws Exception)? = null
 
-  // Thread(task) or Thread(task, name); a class that extends Thread gives none and replaces run().
-  fun init(task : (suspend () -> any?)? = null, name : string? = null) {
+  // Thread { work() } or Thread("loader") { work() }: the name first, the work after (8.7d). A
+  // class that extends Thread gives no work and replaces run().
+  fun init(name : string? = null, task : (suspend () -> any?)? = null) {
     this.task = task
     if (name == null) { Thread.made += 1 }
     this.name = name ?: "Thread-${Thread.made}"
@@ -116,7 +117,7 @@ class Thread {
 // thread's error does, reported where it was thrown.
 fun <T> thread(name : string? = null, daemon : bool = false, block : suspend () -> T throws Exception) : Job<T> {
   val job = Job<T>()
-  val made = Thread(null, name)
+  val made = Thread(name)
   made.throwingTask = { job.complete(block()) }
   // The thread's report is its error asked for: not reported again as the program ends.
   made.whenFailed = { e -> job.failReported(e) }
@@ -715,7 +716,7 @@ class ThreadPool : AutoCloseable {
         timed.add(job)
         if (keeper == null) {
           val self = this
-          val made = Thread({ self.keepTime() }, "$name-timer")
+          val made = Thread("$name-timer") { self.keepTime() }
           made.isDaemon = daemon
           keeper = made
           made.start()
@@ -726,7 +727,7 @@ class ThreadPool : AutoCloseable {
 
   private fun addWorker() {
     val self = this
-    val worker = Thread({ self.work() }, "$name-${workers.size + 1}")
+    val worker = Thread("$name-${workers.size + 1}") { self.work() }
     worker.isDaemon = daemon
     workers.add(worker)
     worker.start()
