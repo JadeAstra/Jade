@@ -78,7 +78,7 @@ Sandbox.run {
   print(seen, inTask.get())                                   // expect: from the block true
 }
 
-// -- What a sandbox has no form of yet is refused, not done on the system --
+// -- A program of the system's is never started in it: only those it was given (step 4) --
 Sandbox.run {
-  try { Process.run("cmd", "/c", "echo", "hi") } catch (e : IOException) { print(e.message) }   // expect: starting a program is not available in a sandbox yet
+  try { Process.run("cmd", "/c", "echo", "hi") } catch (e : IOException) { print(e.message) }   // expect: cannot start 'cmd': no program of that name was added to the sandbox
 }

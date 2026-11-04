@@ -181,8 +181,8 @@ class Process {
            input : Stream | Path = Stream.pipe, output : Stream | Path = Stream.pipe, error : Stream | Path = Stream.pipe,
            charset : Charset = Charset.utf8) throws IOException {
     val words = __processWords(command)
-    val handles : List<any?> = __io.spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
-                                         __redirect(output, "output", ">"), __redirect(error, "error", ">"), environment)
+    val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
+                                       __redirect(output, "output", ">"), __redirect(error, "error", ">"), environment)
     this.handle = handles[0] as any
     this.toProgram = handles[1] == null ? null : Writer(handles[1] as any, charset)
     this.fromProgram = handles[2] == null ? null : Reader(handles[2] as any, charset)
@@ -198,8 +198,8 @@ class Process {
             input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8,
             timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException {
       val words = __processWords(command)
-      val handles : List<any?> = __io.spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
-                                           "pipe", __redirect(error, "error", ">"), environment)
+      val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
+                                         "pipe", __redirect(error, "error", ">"), environment)
       if (handles[1] != null) { __io.close(handles[1] as any) }
       val ended : List<any?> = __io.collect(handles[0], handles[2], handles[3], charset, timeout?.waitMilliseconds)
       for k in 0..3 {
@@ -252,6 +252,16 @@ class Process {
 
 // What a program run to its end with Process.run gave.
 data ProcessResult(val exitCode : int, val output : string, val error : string)
+
+// Starts a program: the system's, or in a sandbox one the sandbox was given (M6.6.2): [the
+// process, what writes its input, what reads its output, what reads its errors], each null where
+// it is no pipe.
+fun __spawn(words : List<string>, directory : string?, input : string, output : string, error : string,
+            environment : Map<string, string?>?) : List<any?> throws IOException {
+  val box = Sandbox.current
+  if (box == null) { return __io.spawn(words, directory, input, output, error, environment) }
+  return box.startProgram(words, environment, input, output, error)
+}
 
 // The command's words: separate ones, or one list.
 fun __processWords(command : List<any>) : List<string> {
@@ -402,6 +412,11 @@ class ServerSocket : AutoCloseable {
 // What the classes above are built on (io.cpp), declared with its types and what it throws.
 // A handle is a number of the C++'s own.
 external object __io {
+  fun sandboxPipe() : List<any>
+  fun sandboxProcess() : any
+  fun sandboxOwn(process : any, end : any)
+  fun sandboxEnded(process : any, code : int)
+  fun sandboxHang(process : any)
   fun open(path : string, mode : string) : any throws IOException
   fun read(handle : any, count : int) : Bytes? throws IOException
   fun readAll(handle : any) : Bytes throws IOException

@@ -512,13 +512,15 @@ addButton(widgets)</pre></dd>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
 <li><a href="#Program"><code>Program</code></a> (4)</li>
+<li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#Rect"><code>Rect</code></a> (24)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
-<li><a href="#Sandbox"><code>Sandbox</code></a> (7)</li>
+<li><a href="#Sandbox"><code>Sandbox</code></a> (8)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
+<li><a href="#SandboxProcess"><code>SandboxProcess</code></a> (8)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (5)</li>
@@ -3802,7 +3804,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
   Path(&quot;/data&quot;).list()            // an IOException: the device is not ready
 }
 </pre>
-<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. Starting a program, the network and font files have no sandbox's form yet, and are refused in one rather than done on the system; a wait for another thread with a time limit still takes real time.</p>
+<p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. A program started in it is one the sandbox was given (processes.add), run on a thread of its own. The network and font files have no sandbox's form yet, and are refused in one rather than done on the system; a wait for another thread with a time limit still takes real time.</p>
 <div class="entry" id="PathStyle"><code class="sig">enum PathStyle</code><a class="anchor" href="#PathStyle">#</a>
 <p>How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows', C:\data\a.txt, names compared without case.</p>
 </div>
@@ -3817,6 +3819,9 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry member" id="Sandbox.files"><code class="sig">val files : SandboxFiles</code><a class="anchor" href="#Sandbox.files">#</a>
 <p>Its files, as they have changed.</p>
+</div>
+<div class="entry member" id="Sandbox.processes"><code class="sig">val processes : Programs</code><a class="anchor" href="#Sandbox.processes">#</a>
+<p>The programs it runs in place of the system's.</p>
 </div>
 <div class="entry member" id="Sandbox.advance"><code class="sig">fun advance(time : Duration)</code><a class="anchor" href="#Sandbox.advance">#</a>
 <p>Its clock moved on by <code>time</code>, as if that much had passed: the timers due by then run when the event loop next looks.</p>
@@ -3862,6 +3867,36 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry member" id="Fault.any"><code class="sig">fun any(path : Path | string, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.any">#</a>
 <p>Everything done to it fails.</p>
+</div>
+<div class="entry" id="Programs"><code class="sig">class Programs</code><a class="anchor" href="#Programs">#</a>
+<p>The programs a sandbox runs in place of the system's, by name.</p>
+</div>
+<div class="entry member" id="Programs.add"><code class="sig">fun add(name : string, program : (SandboxProcess) -&gt; unit throws Exception)</code><a class="anchor" href="#Programs.add">#</a>
+<p>Starting <code>name</code> in the sandbox, with Process or Process.run, runs <code>program</code> on a thread of its own: given its arguments, environment and streams, ending with process.exitCode, or 1 where it throws, its error written to its errors.</p>
+</div>
+<div class="entry" id="SandboxProcess"><code class="sig">class SandboxProcess</code><a class="anchor" href="#SandboxProcess">#</a>
+<p>A program of a sandbox's, as its lambda sees it.</p>
+</div>
+<div class="entry member" id="SandboxProcess.arguments"><code class="sig">val arguments : List&lt;string&gt;</code><a class="anchor" href="#SandboxProcess.arguments">#</a>
+<p>Its arguments, after its name.</p>
+</div>
+<div class="entry member" id="SandboxProcess.environment"><code class="sig">val environment : Map&lt;string, string?&gt;</code><a class="anchor" href="#SandboxProcess.environment">#</a>
+<p>The variables it was given (in a sandbox, only those).</p>
+</div>
+<div class="entry member" id="SandboxProcess.input"><code class="sig">val input : Reader</code><a class="anchor" href="#SandboxProcess.input">#</a>
+<p>What it reads.</p>
+</div>
+<div class="entry member" id="SandboxProcess.output"><code class="sig">val output : Writer</code><a class="anchor" href="#SandboxProcess.output">#</a>
+<p>What it writes.</p>
+</div>
+<div class="entry member" id="SandboxProcess.error"><code class="sig">val error : Writer</code><a class="anchor" href="#SandboxProcess.error">#</a>
+<p>What it writes as errors.</p>
+</div>
+<div class="entry member" id="SandboxProcess.exitCode"><code class="sig">var exitCode</code><a class="anchor" href="#SandboxProcess.exitCode">#</a>
+<p>What it ends with: 0 unless set.</p>
+</div>
+<div class="entry member" id="SandboxProcess.waitForever"><code class="sig">fun waitForever() : nothing</code><a class="anchor" href="#SandboxProcess.waitForever">#</a>
+<p>Waits for ever, as a program that hangs, until it is killed: a time limit on it, Process.run's timeout or waitFor's, is up at once by the sandbox's clock.</p>
 </div>
 <div class="entry" id="SandboxFiles"><code class="sig">class SandboxFiles(private val handle : any)</code><a class="anchor" href="#SandboxFiles">#</a>
 <p>A sandbox's files, as they have changed.</p>

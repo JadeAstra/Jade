@@ -1,0 +1,39 @@
+// A sandbox's programs (M6.6.2 step 4): Process and Process.run in a sandbox start a program it
+// was given, on a thread of its own, joined by pipes, never one of the system's.
+Sandbox.run {
+  processes.add("greet") { process ->
+    val who = process.input.readText().trim()
+    process.output.write("hello $who, ${process.arguments}\n")
+    process.error.write("a warning\n")
+    process.exitCode = 3
+  }
+  processes.add("slow") { process -> process.waitForever() }
+  processes.add("broken") { process -> throw IllegalStateException("it broke") }
+  processes.add("env") { process -> process.output.write("${process.environment["MODE"]}") }
+
+  // Run to its end, its input nothing.
+  val result = Process.run("greet", "a", "b")
+  print(result.exitCode, result.output.trim(), result.error.trim())   // expect: 3 hello , ["a", "b"] a warning
+  print(Process.run("env", environment = mapOf("MODE" to "test")).output)   // expect: test
+
+  // Started, written to and read from as it runs.
+  val p = Process("greet")
+  p.input.write("Ann")
+  p.input.close()
+  print(p.output.readText().trim(), p.waitFor(), p.pid > 0)   // expect: hello Ann, [] 3 true
+
+  // One that hangs: a time limit is up at once, by the sandbox's clock.
+  val start = clock()
+  try { Process.run("slow", timeout = 5.minutes) } catch (e : TimeoutException) { print(e.message, clock() - start) }   // expect: the program ran longer than 300000 ms, and was stopped 300.0
+  val hung = Process("slow")
+  print(hung.waitFor(30.seconds), hung.isAlive)               // expect: null true
+  hung.kill()
+  print(hung.waitFor(), hung.isAlive)                         // expect: 1 false
+
+  // One that fails, and one that is not there.
+  print(Process.run("broken").error.trim())                   // expect: IllegalStateException: it broke
+  try { Process.run("nothing") } catch (e : IOException) { print(e.message) }   // expect: cannot start 'nothing': no program of that name was added to the sandbox
+
+  // Its output to a file of the sandbox's, and its errors with its output.
+  Process.run("greet", error = Stream.toOutput, input = Path("/in.txt").also { it.writeText("Bo") }).output.also { print(it.lines().size) }   // expect: 3
+}

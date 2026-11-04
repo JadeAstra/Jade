@@ -48,6 +48,7 @@ extern char** environ;
 
 #include "builtins.h"
 #include "charset.h"
+#include "sandbox.h"
 #include "vm.h"
 
 namespace astra {
@@ -70,6 +71,102 @@ struct Outcome {
 // A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in
 // Java (D120), told by the mark the wait left, not by the message's text (8.8f).
 AstraThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
+
+// ---- A sandbox's programs and pipes (M6.6.2 step 4) ----
+
+// A pipe between two ends in a sandbox: what is written is kept until it is read, however much.
+struct PipeBuffer {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string data;
+    bool writerClosed = false;
+    bool readerClosed = false;
+};
+
+class PipeEnd final : public Channel {
+public:
+    PipeEnd(std::shared_ptr<PipeBuffer> buffer, bool reading) : buffer_(std::move(buffer)), reading_(reading) {}
+    int read(char* out, size_t max, std::string& error) override {
+        if (!reading_) {
+            error = "the stream is not open for reading";
+            return -1;
+        }
+        std::unique_lock<std::mutex> hold(buffer_->mutex);
+        buffer_->changed.wait(hold, [&] { return !buffer_->data.empty() || buffer_->writerClosed || buffer_->readerClosed; });
+        if (buffer_->readerClosed) {
+            error = "the stream is closed";
+            return -1;
+        }
+        if (buffer_->data.empty()) return 0;  // the writer has closed its end
+        const size_t count = std::min(max, buffer_->data.size());
+        std::copy_n(buffer_->data.data(), count, out);
+        buffer_->data.erase(0, count);
+        return static_cast<int>(count);
+    }
+    bool write(const char* data, size_t size, std::string& error) override {
+        std::lock_guard<std::mutex> hold(buffer_->mutex);
+        if (reading_ || buffer_->writerClosed || buffer_->readerClosed) {
+            error = reading_ ? "the stream is not open for writing" : "the pipe is closed";
+            return false;
+        }
+        buffer_->data.append(data, size);
+        buffer_->changed.notify_all();
+        return true;
+    }
+    void close() override {
+        std::lock_guard<std::mutex> hold(buffer_->mutex);
+        (reading_ ? buffer_->readerClosed : buffer_->writerClosed) = true;
+        buffer_->changed.notify_all();
+    }
+
+private:
+    std::shared_ptr<PipeBuffer> buffer_;
+    bool reading_;
+};
+
+// A program of a sandbox's: an Astra thread running what the test declared, its end told here.
+struct SimulatedProcess {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool ended = false;
+    int code = 0;
+    bool hanging = false;  // it waits for ever (SandboxProcess.waitForever): a time limit on it is up at once
+    int64_t pid = 0;
+    std::shared_ptr<Host> host;                          // whose clock such a time limit moves on
+    std::vector<std::shared_ptr<Channel>> programEnds;  // its own ends of the pipes, closed when it is killed
+};
+
+// Waits for it to end, `limit` ms at most (-1 for none): whether it did. A limit on one that waits
+// for ever moves its sandbox's clock on by the limit, and is up at once.
+bool waitSimulated(SimulatedProcess& p, int64_t limit, int& code) {
+    std::unique_lock<std::mutex> hold(p.mutex);
+    for (;;) {
+        if (p.ended) {
+            code = p.code;
+            return true;
+        }
+        if (limit == 0) return false;
+        if (p.hanging && limit > 0) {
+            if (p.host != nullptr && p.host->isSandbox()) static_cast<SandboxHost&>(*p.host).advance(limit * 1000000);
+            return false;
+        }
+        p.changed.wait(hold);
+    }
+}
+
+// Its end, with `code`; killed, its ends of the pipes are closed, so that what reads them ends.
+void endSimulated(SimulatedProcess& p, int code, bool killed) {
+    std::vector<std::shared_ptr<Channel>> ends;
+    {
+        std::lock_guard<std::mutex> hold(p.mutex);
+        if (p.ended) return;
+        p.ended = true;
+        p.code = code;
+        if (killed) ends = p.programEnds;
+        p.changed.notify_all();
+    }
+    for (const auto& end : ends) end->close();
+}
 
 #ifdef _WIN32
 
@@ -131,8 +228,10 @@ struct Stream {
     std::atomic<bool> exited{false};
     std::atomic<int> exitCode{0};
 
-    // A sandbox's file (M6.6.2): read, written and closed through it, not the system.
+    // A sandbox's file or pipe (M6.6.2): read, written and closed through it, not the system.
     std::shared_ptr<Channel> channel;
+    // A sandbox's program, for a Process stream (M6.6.2 step 4).
+    std::shared_ptr<SimulatedProcess> simulated;
 
     explicit Stream(Kind k) : kind(k) {}
 
@@ -278,8 +377,10 @@ struct Stream {
     std::atomic<int> exitCode{0};
     std::mutex waitMutex;
 
-    // A sandbox's file (M6.6.2): read, written and closed through it, not the system.
+    // A sandbox's file or pipe (M6.6.2): read, written and closed through it, not the system.
     std::shared_ptr<Channel> channel;
+    // A sandbox's program, for a Process stream (M6.6.2 step 4).
+    std::shared_ptr<SimulatedProcess> simulated;
 
     explicit Stream(Kind k) : kind(k) {}
 
@@ -663,6 +764,13 @@ std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) 
 // Waits for a process to end, `limit` ms at most (-1 for as long as it takes): whether it
 // ended, its exit code then kept.
 bool waitProcess(Stream& s, int64_t limit) {
+    if (s.simulated != nullptr) {
+        int code = 0;
+        if (!waitSimulated(*s.simulated, limit, code)) return false;
+        s.exitCode = code;
+        s.exited = true;
+        return true;
+    }
     if (s.exited.load()) return true;
     if (s.closed.load() || WaitForSingleObject(s.handle, limit < 0 ? INFINITE : static_cast<DWORD>(std::min<int64_t>(limit, 4000000000))) != WAIT_OBJECT_0)
         return false;
@@ -673,7 +781,10 @@ bool waitProcess(Stream& s, int64_t limit) {
     return true;
 }
 
-void killProcess(Stream& s) { TerminateProcess(s.handle, 1); }
+void killProcess(Stream& s) {
+    if (s.simulated != nullptr) return endSimulated(*s.simulated, 1, true);
+    TerminateProcess(s.handle, 1);
+}
 
 int64_t currentProcessId() { return GetCurrentProcessId(); }
 
@@ -914,6 +1025,13 @@ std::array<std::shared_ptr<Stream>, 4> startProcess(VM& vm, const Spawn& spawn) 
 // ended, its exit code then kept (128 and the signal's number for one a signal ended, as a
 // shell says).
 bool waitProcess(Stream& s, int64_t limit) {
+    if (s.simulated != nullptr) {
+        int code = 0;
+        if (!waitSimulated(*s.simulated, limit, code)) return false;
+        s.exitCode = code;
+        s.exited = true;
+        return true;
+    }
     const auto started = std::chrono::steady_clock::now();
     int pause = 1;
     for (;;) {
@@ -942,6 +1060,7 @@ bool waitProcess(Stream& s, int64_t limit) {
 
 // Only one not yet seen to end: once it has been waited for, its number may be another's.
 void killProcess(Stream& s) {
+    if (s.simulated != nullptr) return endSimulated(*s.simulated, 1, true);
     std::lock_guard<std::mutex> hold(s.waitMutex);
     if (!s.exited.load()) ::kill(s.pid, SIGKILL);
 }
@@ -1327,7 +1446,16 @@ void registerIo(VM& vm) {
                 std::condition_variable watchWake;
                 bool finished = false;
                 std::thread watch;
-                if (limit >= 0)
+                if (limit >= 0 && process->simulated != nullptr)
+                    // A sandbox's program: a time limit is up at once on one that waits for ever.
+                    watch = std::thread([&, sim = process->simulated] {
+                        int code = 0;
+                        if (!waitSimulated(*sim, limit, code)) {
+                            killed->store(true);
+                            endSimulated(*sim, 1, true);
+                        }
+                    });
+                else if (limit >= 0)
                     watch = std::thread([&] {
                         std::unique_lock<std::mutex> hold(watchMutex);
                         if (!watchWake.wait_for(hold, std::chrono::milliseconds(limit), [&] { return finished; }) && !process->exited.load()) {
@@ -1386,7 +1514,64 @@ void registerIo(VM& vm) {
         return Value::null();
     });
 
-    def("processId", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(static_cast<int64_t>(streamOf(vm, args[0])->pid)); });
+    def("processId", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const auto s = streamOf(vm, args[0]);
+        return Value::integer(s->simulated != nullptr ? s->simulated->pid : static_cast<int64_t>(s->pid));
+    });
+
+    // ---- A sandbox's programs (M6.6.2 step 4); only in one ----
+
+    // A pipe: [the reading end, the writing end], each a stream.
+    def("sandboxPipe", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (!vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::IllegalStateException, "a sandbox's pipe is made in a sandbox");
+        auto buffer = std::make_shared<PipeBuffer>();
+        auto reading = std::make_shared<Stream>(Stream::Kind::Pipe);
+        reading->channel = std::make_shared<PipeEnd>(buffer, true);
+        auto writing = std::make_shared<Stream>(Stream::Kind::Pipe);
+        writing->channel = std::make_shared<PipeEnd>(buffer, false);
+        return Value::object(newList(vm, {Value::integer(keep(reading)), Value::integer(keep(writing))}));
+    });
+    // A program of the sandbox's, as a Process stream: its end told by sandboxEnded.
+    def("sandboxProcess", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (!vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::IllegalStateException, "a sandbox's program is started in a sandbox");
+        static std::atomic<int64_t> nextPid{40000};
+        auto made = std::make_shared<Stream>(Stream::Kind::Process);
+        made->simulated = std::make_shared<SimulatedProcess>();
+        made->simulated->pid = nextPid++;
+        made->simulated->host = vm.currentHostShared();
+        return Value::integer(keep(made));
+    });
+    // One of the program's own ends of its pipes, closed when it is killed.
+    def("sandboxOwn", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const auto process = streamOf(vm, args[0]);
+        const auto end = streamOf(vm, args[1]);
+        if (process->simulated != nullptr && end->channel != nullptr) {
+            std::lock_guard<std::mutex> hold(process->simulated->mutex);
+            process->simulated->programEnds.push_back(end->channel);
+        }
+        return Value::null();
+    });
+    // The program has ended, with its exit code.
+    def("sandboxEnded", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const auto process = streamOf(vm, args[0]);
+        if (process->simulated != nullptr) endSimulated(*process->simulated, static_cast<int>(vm.toInt(args[1], "exit code")), false);
+        return Value::null();
+    });
+    // The program waits for ever: until it is killed.
+    def("sandboxHang", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const auto process = streamOf(vm, args[0]);
+        auto sim = process->simulated;
+        if (sim == nullptr) return Value::null();
+        {
+            std::lock_guard<std::mutex> hold(sim->mutex);
+            sim->hanging = true;
+            sim->changed.notify_all();
+        }
+        return vm.blocking([sim] {
+            std::unique_lock<std::mutex> hold(sim->mutex);
+            sim->changed.wait(hold, [&] { return sim->ended; });
+        }, [](VM&) -> Value { return Value::null(); });
+    });
 
     def("currentPid", 0, 0, [](VM&, int, Value*) -> Value { return Value::integer(currentProcessId()); });
 
