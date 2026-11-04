@@ -4402,11 +4402,17 @@ Value VM::makeIterator(Value iterable) {
     if (iterable.isObj()) {
         switch (iterable.as.obj->type) {
             case ObjType::List:
-            case ObjType::Map:
             case ObjType::String:
             case ObjType::Bytes:
-            case ObjType::Set:
                 return Value::object(alloc<ObjIterator>(iterable));
+            case ObjType::Map:
+            case ObjType::Set: {
+                // The map's change count as the for begins: a key added or taken out meanwhile
+                // stops the for (8.2i), where it would skip items or see one twice.
+                ObjIterator* it = alloc<ObjIterator>(iterable);
+                it->version = keysOf(iterable).version();
+                return Value::object(it);
+            }
             case ObjType::Range: {
                 if (asRange(iterable)->fromEnd()) throw rangeFromEnd(asRange(iterable), "a for loop");
                 ObjIterator* it = alloc<ObjIterator>(iterable);
@@ -4787,6 +4793,7 @@ bool VM::iteratorNext(ObjIterator* it, Value& out) {
         case ObjType::Set: {
             // A set's items; a view's, the map's keys or entries as they are (D77).
             const ObjSet* set = asSet(source);
+            checkUnchanged(it);
             const std::vector<ValueMap::Entry>& entries = set->view() ? set->viewOf->map.entries() : set->items.entries();
             while (it->index < entries.size()) {
                 const ValueMap::Entry& entry = entries[it->index++];
@@ -4797,6 +4804,7 @@ bool VM::iteratorNext(ObjIterator* it, Value& out) {
             return false;
         }
         case ObjType::Map: {
+            checkUnchanged(it);
             const std::vector<ValueMap::Entry>& entries = asMap(source)->map.entries();
             while (it->index < entries.size()) {
                 const ValueMap::Entry& entry = entries[it->index++];
@@ -4821,6 +4829,19 @@ bool VM::iteratorNext(ObjIterator* it, Value& out) {
         default:
             return false;
     }
+}
+
+// The error checkUnchanged throws, out of the loops' way.
+#ifdef _MSC_VER
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+void VM::changedInLoop(const ObjIterator* it) {
+    const bool map = it->source.isObjType(ObjType::Map) || asSet(it->source)->view();
+    throw runtimeError(Thrown::ConcurrentModificationException,
+                       std::string(map ? "the map" : "the set") + " was changed while a for went through it: removeAll { } takes items out as it goes, " +
+                           "or go through a copy, toList()");
 }
 
 bool VM::isIteratorObject(Value v) const {
@@ -6983,6 +7004,7 @@ void VM::run(int baseFrame) {
                         SAVE_IP();
                         if (it->source.isObjType(ObjType::Map)) {
                             // A map's key and value, as they are: no entry made (D73).
+                            checkUnchanged(it);
                             const std::vector<ValueMap::Entry>& entries = asMap(it->source)->map.entries();
                             while (it->index < entries.size() && !entries[it->index].live) it->index++;
                             if (it->index >= entries.size()) {

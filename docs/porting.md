@@ -99,8 +99,9 @@ overflows, a char compared with a string literal of another length.
   value that cannot change (an id, a string).
 - **A map's `keys` and `entries` are live**: they show the map as it is, later changes too, and
   cannot be changed through. Copy with `toList()` or `toSet()` to keep them as they were.
-- **A `for` over a set sees it as it is**: an item added while it runs is reached, where Kotlin
-  throws `ConcurrentModificationException`.
+- **A `for` over a set or a map stops when its keys change**, with
+  `ConcurrentModificationException`, as in Kotlin (8.2i); a value given to a key already there is
+  no change. `removeAll { }` takes items out as it goes.
 - **`Pair`, `Triple`, map entries and `IndexedValue` are values**, copied where they go and equal
   by what they hold (D73); `===` on them is a compile error, since a value has no identity.
 

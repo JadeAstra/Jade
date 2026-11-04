@@ -464,6 +464,18 @@ public:
     void mergeBundles();           // Op::MergeBundle
     // Whether a value is an Iterator, an object with hasNext() and next().
     bool isIteratorObject(Value v) const;
+    // The map a for over a map or a set goes through: the set's own, or a view's map.
+    static const ValueMap& keysOf(Value v) {
+        if (v.isObjType(ObjType::Map)) return asMap(v)->map;
+        const ObjSet* set = asSet(v);
+        return set->view() ? set->viewOf->map : set->items;
+    }
+    // A for over a map or a set whose keys have changed since it began stops, as Kotlin's does:
+    // going on, it could skip items or see one twice (8.2i).
+    void checkUnchanged(const ObjIterator* it) {
+        if (keysOf(it->source).version() != it->version) [[unlikely]] changedInLoop(it);
+    }
+    [[noreturn]] void changedInLoop(const ObjIterator* it);
     void memberSet(Value obj, ObjString* name, Value value);
     // An atomic field changed in one step (Op::AtomicField, D92).
     Value atomicField(Value object, ObjString* name, int kind, const Value* operands);

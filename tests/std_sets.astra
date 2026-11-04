@@ -15,14 +15,18 @@ print(m.removeAll(["y", 1]), m.removeIf { it == 99 }, m.toList())   // expect: t
 m.clear()
 print(m, m.size, m.isNullOrEmpty())                          // expect: {} 0 true
 
-// Looping, and changing the set while looping over it.
+// Looping; changing the set while looping over it stops the loop (8.2i).
 val loop = setOf("a", "b", "c")
-for item in loop {
-  write(item)
-  loop.remove("c")
-  loop.add("d")
+try {
+  for item in loop {
+    write(item)
+    loop.remove("c")
+    loop.add("d")
+  }
+} catch (e : ConcurrentModificationException) {
+  print("", "stopped")                                       // expect: a stopped
 }
-print("", loop)                                              // expect: abd {"a", "b", "d"}
+print(loop)                                                  // expect: {"a", "b", "d"}
 
 // The algebra. Each gives a new set.
 val a = setOf(1, 2, 3)

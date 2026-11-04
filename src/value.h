@@ -483,6 +483,9 @@ public:
 
     // Includes removed entries (live == false); iterate by index and skip those.
     const std::vector<Entry>& entries() const { return entries_; }
+    // Moves on with every key added or taken out (not with a value given to a key there): a for
+    // going through the map stops with an error once it has (8.2i).
+    uint64_t version() const { return version_; }
 
 private:
     // A slot holds an entry's place plus one; 0 is an empty slot, kGone one whose entry went.
@@ -1321,6 +1324,7 @@ struct ObjIterator final : Obj {
     size_t index = 0;
     int64_t nextValue = 0;  // ranges: next value to yield
     int64_t remaining = 0;  // ranges: values left
+    uint64_t version = 0;   // a map's or a set's, as the for began (ValueMap::version)
     explicit ObjIterator(Value s) : Obj(ObjType::Iterator), source(s) {}
 };
 

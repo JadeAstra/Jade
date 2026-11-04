@@ -76,7 +76,8 @@ class IllegalStateException(message : string? = null, cause : Throwable? = null)
 class UnsupportedOperationException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // The first of nothing, a key that is not there.
 class NoSuchElementException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
-// A list changed while it was gone through.
+// A collection changed while it was gone through: a set or a map whose keys change during a for
+// over it (8.2i).
 class ConcurrentModificationException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // A wait that was interrupted (sleep, join, wait or a queue): unchecked, so that waiting needs
 // no try (D35).

@@ -1,0 +1,24 @@
+// A for over a set or a map whose keys change as it goes stops with an error, as Kotlin's does
+// (8.2i): going on, it would skip items or see one twice. A value given to a key already there
+// is no change of its keys.
+
+val s : open Set<int> = Set((0..<100).toList())
+try { for (x in s) { s.remove(x) } } catch (e : ConcurrentModificationException) { print(e.message) }
+// expect: the set was changed while a for went through it: removeAll { } takes items out as it goes, or go through a copy, toList()
+print(s.size)   // expect: 99
+
+val m : open Map<string, int> = {"a": 1, "b": 2, "c": 3}
+try { for (k in m.keys) { m.remove(k) } } catch (e : ConcurrentModificationException) { print(e.message) }
+// expect: the map was changed while a for went through it: removeAll { } takes items out as it goes, or go through a copy, toList()
+try { for ((k, v) in m) { m[k + "!"] = v } } catch (e : ConcurrentModificationException) { print("added: stopped") }   // expect: added: stopped
+try { for (entry in m) { m.clear() } } catch (e : ConcurrentModificationException) { print("cleared: stopped") }   // expect: cleared: stopped
+
+// Values changed as it goes, and the ways to take items out.
+val n : open Map<string, int> = {"a": 1, "b": 2, "c": 3}
+for ((k, v) in n) { n[k] = v * 10 }
+print(n)   // expect: {"a": 10, "b": 20, "c": 30}
+for (k in n.keys.toList()) { if (k != "b") { n.remove(k) } }
+print(n)   // expect: {"b": 20}
+val t : open Set<int> = Set((0..<10).toList())
+t.removeAll { it % 2 == 0 }
+print(t)   // expect: {1, 3, 5, 7, 9}

@@ -1656,7 +1656,7 @@ Exception: everything else, which a bare `catch (e)` catches.
 <p>The first of nothing, a key that is not there.</p>
 </div>
 <div class="entry" id="ConcurrentModificationException"><code class="sig">class ConcurrentModificationException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)</code><a class="anchor" href="#ConcurrentModificationException">#</a>
-<p>A list changed while it was gone through.</p>
+<p>A collection changed while it was gone through: a set or a map whose keys change during a for over it (8.2i).</p>
 </div>
 <div class="entry" id="InterruptedException"><code class="sig">class InterruptedException(message : string? = &quot;the thread was interrupted&quot;) : RuntimeException(message)</code><a class="anchor" href="#InterruptedException">#</a>
 <p>A wait that was interrupted (sleep, join, wait or a queue): unchecked, so that waiting needs no try.</p>
