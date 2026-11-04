@@ -308,7 +308,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-wrap32">
 <h3><span class="code">8.1f</span><code>wrap32()</code> beside <code>toInt32Wrapped()</code> (part 8, group 1)</h3>
 <p>D148 names both, and they give the same: the low 32 bits as a signed number. Both are built; one name for each thing (D74) would keep one, <code>wrap32()</code> for the hashing it is meant for, or <code>toInt32Wrapped()</code> for its family (<code>toByteWrapped</code>, <code>toInt16Wrapped</code>, <code>toUint16Wrapped</code>, <code>toUint32Wrapped</code>), which the errors for a number that does not fit already name.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>One name, <code>toInt32Wrapped()</code>:</strong> <code>wrap32()</code> becomes a compile error naming it; <code>rotateLeft32</code> and <code>rotateRight32</code> stay (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>One name, <code>toInt32Wrapped()</code>:</strong> <code>wrap32()</code> becomes a compile error naming it; <code>rotateLeft32</code> and <code>rotateRight32</code> stay (done 2026-11-04, c48ea64).</span></div>
 </section>
 
 <section class="decision" id="p8-hash">
@@ -356,13 +356,13 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-open-runtime">
 <h3><span class="code">8.2g</span><code>open</code> is the checker&#39;s alone (part 8, group 2)</h3>
 <p>When the program runs a list is a list: <code>x is open List&lt;int&gt;</code> and <code>x as open List&lt;int&gt;</code> on a value of type <code>any</code> test only <code>List&lt;int&gt;</code>, so a frozen list passes and fails when changed. Frozen collections are known when running: <code>is FrozenList</code> asks the list. Keeping a read-only mark on each list passed through a read-only name is the other way, at a cost on every pass.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong><code>open</code> stays the checker&#39;s, but <code>is open</code> and <code>as open</code> refuse a frozen collection as the program runs,</strong> at no cost, as the object knows it is frozen; an open list reached through a read-only name still cannot be told, which is right (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong><code>open</code> stays the checker&#39;s, but <code>is open</code> and <code>as open</code> refuse a frozen collection as the program runs,</strong> at no cost, as the object knows it is frozen; an open list reached through a read-only name still cannot be told, which is right (done 2026-11-04, 130eb53).</span></div>
 </section>
 
 <section class="decision" id="p8-mutable-of">
 <h3><span class="code">8.2h</span><code>mutableListOf</code> and the like are kept (part 8, group 2)</h3>
 <p><code>listOf</code>, <code>setOf</code> and <code>mapOf</code> give open collections already, so Kotlin&#39;s <code>mutableListOf</code>, <code>mutableSetOf</code>, <code>mutableMapOf</code>, <code>arrayListOf</code>, <code>hashMapOf</code>, <code>hashSetOf</code>, <code>linkedMapOf</code>, <code>linkedSetOf</code> and <code>MutableList(n) { }</code> make the same thing. They are kept for ported code, though <code>toMutableList()</code> and the <code>MutableList</code> type are errors already (D46, 8.2a); one name for each thing (D74) would make them errors naming <code>listOf</code>. Likewise <code>insert(i, x)</code> beside Kotlin&#39;s <code>add(i, x)</code>.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>One name for each:</strong> <code>mutableListOf</code>, <code>mutableMapOf</code>, <code>mutableSetOf</code>, <code>arrayListOf</code>, <code>hashMapOf</code>, <code>hashSetOf</code>, <code>linkedMapOf</code>, <code>linkedSetOf</code>, <code>MutableList(n) { }</code> and <code>insert(i, x)</code> become compile errors naming <code>listOf</code>, <code>mapOf</code>, <code>setOf</code>, <code>List(n) { }</code> or <code>add(i, x)</code>; Jade&#39;s uses change with them (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>One name for each:</strong> <code>mutableListOf</code>, <code>mutableMapOf</code>, <code>mutableSetOf</code>, <code>arrayListOf</code>, <code>hashMapOf</code>, <code>hashSetOf</code>, <code>linkedMapOf</code>, <code>linkedSetOf</code>, <code>MutableList(n) { }</code> and <code>insert(i, x)</code> become compile errors naming <code>listOf</code>, <code>mapOf</code>, <code>setOf</code>, <code>List(n) { }</code> or <code>add(i, x)</code>; Jade&#39;s uses change with them (done 2026-11-04, c48ea64).</span></div>
 </section>
 
 <section class="decision" id="p8-live-loops">
@@ -386,7 +386,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-positions">
 <h3><span class="code">8.2l</span>Positions: <code>^k</code> a value, a negative one an error (part 8, group 2)</h3>
 <p>D146 and D147: <code>^k</code> is a value of type <code>Index</code>: it can be kept (<code>val last = ^1</code>) and passed, and an int is one counted from the start. A range with a <code>^</code> end (<code>2..^1</code>) is only for slicing, and a <code>for</code> over one is an error. A negative position written as a literal (<code>items[-1]</code>) is a compile error naming <code>items[^1]</code>; a computed one is out of range when running. A slice past the ends is an error, as an index is; <code>take</code> and <code>drop</code> clamp. D25&#39;s row still says a negative index counts from the end, and the note on <code>List.get</code> in builtins.astra still sets it against <code>list[i]</code> as "never counted from the end"; both are older than D146.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date); D25&#39;s row and the note on <code>List.get</code> are to be corrected (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date); D25&#39;s row and the note on <code>List.get</code> are to be corrected (done 2026-11-04, 6f7a517).</span></div>
 </section>
 
 <section class="decision" id="p8-lateinit">
@@ -446,7 +446,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-extend-scope">
 <h3><span class="code">8.3j</span>What <code>extend</code> covers (part 8, group 3)</h3>
 <p>D33 for classes and interfaces, of the program or a library; since G30 (D185) for the built-in types too (<code>int</code>, <code>string</code>, <code>List&lt;int&gt;</code> and the like), a collection by what it holds. Since D186 an <code>extend</code> holds the interface&#39;s methods the type lacks, written as <code>fun</code>s. Two identical <code>extend</code>s of one type and interface are one; two from different folders, each with getters or funs, are an error anywhere in the program (D187, D188). The checker holds an extend where it is in reach; when the program runs, an extend holds once its file is loaded, so <code>is</code> on a value of type <code>any</code> answers by every extend loaded. An <code>extend</code> adds no stored fields: D157&#39;s <code>extend Button { var tag : string? = null }</code> was decided but not built.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date), <strong>and stored fields in <code>extend</code> are to be built:</strong> D157 stands and D33&#39;s &quot;no stored fields&quot; is withdrawn; <code>extend Button { var tag : string? = null }</code> may add a <code>var</code> with a starting value, kept beside the object (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date), <strong>and stored fields in <code>extend</code> are to be built:</strong> D157 stands and D33&#39;s &quot;no stored fields&quot; is withdrawn; <code>extend Button { var tag : string? = null }</code> may add a <code>var</code> with a starting value, kept beside the object (done 2026-11-04, 6279a4a).</span></div>
 </section>
 
 <section class="decision" id="p8-ext-reach">
@@ -458,7 +458,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-infix-lines">
 <h3><span class="code">8.4a</span>Where an infix call may break (part 8, group 4)</h3>
 <p>D72: the name is on the line its left side ends on, as Kotlin asks, and what it is given starts on that line too; Kotlin lets that go on the next line. A word at the start of a line begins something new, so a statement can never be joined to the one above by accident. <code>and</code> and <code>or</code> stay Astra&#39;s logical words and cannot be infix names.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built.</strong> The comment in <code>parser.cpp</code> that says what an infix call is given may start the next line is corrected to match (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built.</strong> The comment in <code>parser.cpp</code> that says what an infix call is given may start the next line is corrected to match (done 2026-11-04, 6f7a517).</span></div>
 </section>
 
 <section class="decision" id="p8-sam-object">
@@ -518,7 +518,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-range-words">
 <h3><span class="code">8.4k</span>How <code>downTo</code> and <code>step</code> are written (part 8, group 4)</h3>
 <p>They are infix functions of the standard library done in C++, which the compiler writes in place, as a range made with <code>..</code> is, wherever it sees them; a <code>for</code> over one counts through it with nothing made. A step that is not a positive int is an <code>IllegalArgumentException</code>. <code>step</code> is both a property of a range and this infix function, as in Kotlin. <code>to</code> is an inline infix function written in Astra. D72&#39;s row in the plan still says <code>downTo</code> and <code>step</code> are inline infix functions.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). D72&#39;s row is corrected to say what was built (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). D72&#39;s row is corrected to say what was built (done 2026-11-04, 6f7a517).</span></div>
 </section>
 
 <section class="decision" id="p8-vm-classes">
@@ -668,13 +668,13 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-parallel-fold">
 <h3><span class="code">8.7c</span>fold on a parallel stream (part 8, group 7)</h3>
 <p>D93 keeps <code>fold</code> and <code>reduce</code> giving one answer. As built, <code>reduce</code> is dealt out to the cores, each reducing its share and the shares reduced in order (each share a stretch of the items, kept in order), so its operation must be associative, as Java&#39;s is; <code>fold</code> goes over the items in order on one core, since its starting value and operation (an <code>(R, T) -&gt; R</code>) cannot be split, and so does nothing <code>list.fold</code> does not. <code>gather</code> is the parallel form of a fold.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong><code>fold</code> on a parallel stream becomes a compile error</strong> saying to use <code>reduce</code> (an associative operation), <code>gather</code>, or <code>fold</code> on the list itself, since it would run on one core without a word. This takes back D93&#39;s &quot;keep fold&quot; for parallel streams; <code>reduce</code> stays (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong><code>fold</code> on a parallel stream becomes a compile error</strong> saying to use <code>reduce</code> (an associative operation), <code>gather</code>, or <code>fold</code> on the list itself, since it would run on one core without a word. This takes back D93&#39;s &quot;keep fold&quot; for parallel streams; <code>reduce</code> stays (done 2026-11-04, 8e31e68).</span></div>
 </section>
 
 <section class="decision" id="p8-thread-lambda">
 <h3><span class="code">8.7d</span>A Thread made with a lambda (part 8, group 7)</h3>
 <p>D117 keeps <code>Thread</code> for making and extending threads. As built, its constructor takes <code>(task, name)</code> as Java&#39;s does, so the lambda is written in the parentheses, <code>Thread({ work() }, &quot;name&quot;)</code>. A lambda after the call goes to the last parameter (L34), the name, so neither <code>Thread(&quot;name&quot;) { work() }</code>, which the README showed before, nor Kotlin&#39;s <code>Thread { work() }</code> compiles, each with an error about the name&#39;s type; and a class has one constructor, so both orders cannot be offered. <code>thread(name) { }</code> is the usual way, and gives a Job.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>The constructor becomes <code>Thread(name : string? = null, task = null)</code>,</strong> so <code>Thread { work() }</code> and <code>Thread(&quot;loader&quot;) { work() }</code> both work; Java&#39;s order, <code>Thread({ work() }, &quot;x&quot;)</code>, becomes an error giving the new form. The tests, the README and porting.md follow (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>The constructor becomes <code>Thread(name : string? = null, task = null)</code>,</strong> so <code>Thread { work() }</code> and <code>Thread(&quot;loader&quot;) { work() }</code> both work; Java&#39;s order, <code>Thread({ work() }, &quot;x&quot;)</code>, becomes an error giving the new form. The tests, the README and porting.md follow (done 2026-11-04, d3baf35).</span></div>
 </section>
 
 <section class="decision" id="p8-int-millis-left">
@@ -860,7 +860,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-static-advice">
 <h3><span class="code">8.9k</span>Old static names of the standard library (part 8, group 9)</h3>
 <p>D144 makes <code>Font.bold</code>, <code>Font.plain</code> and <code>Font.italic</code> errors showing the named form. As built, a static name a standard-library class lacks is an error saying what to write where there is advice for it, and since G57 any other static name a class lacks is an error too: <code>Base has no static member &#39;nothing&#39;</code>. Java&#39;s upper-case names, <code>Color.WHITE</code> and <code>Font.BOLD</code>, get only that plain error. G57 kept one exception: a name the program gives a value to on the class anywhere (<code>Counter.note = &quot;kept&quot;</code>) is stored there and counts as one of its statics, so a typo, <code>Counter.cuont = 5</code>, makes a new static without a word.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Giving a value to a static a class does not declare is an error</strong>, &ldquo;declare it in static { }&rdquo;, taking back G57&#39;s exception; and Java&#39;s upper-case names point to Astra&#39;s, <code>Color.WHITE</code> to <code>Color.white</code> and <code>Font.BOLD</code> to the named form (the names&#39; advice done 2026-11-04, be8950e; the assignment rule to be done in step 4).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Giving a value to a static a class does not declare is an error</strong>, &ldquo;declare it in static { }&rdquo;, taking back G57&#39;s exception; and Java&#39;s upper-case names point to Astra&#39;s, <code>Color.WHITE</code> to <code>Color.white</code> and <code>Font.BOLD</code> to the named form (done 2026-11-04, be8950e, 53874f9).</span></div>
 </section>
 
 <section class="decision" id="p9-opaque">
