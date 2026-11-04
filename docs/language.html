@@ -498,7 +498,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#OutOfMemoryError"><code>OutOfMemoryError</code></a> (1)</li>
 <li><a href="#Oval"><code>Oval</code></a> (2)</li>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
-<li><a href="#ParallelStream"><code>ParallelStream</code></a> (25)</li>
+<li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
 <li><a href="#Path"><code>Path</code></a> (45)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
@@ -3404,9 +3404,6 @@ val totals = orders.parallelStream().map { priceOf(it) }.toList()
 </div>
 <div class="entry member" id="ParallelStream.reduce"><code class="sig">fun reduce(operation : (T, T) -&gt; T) : T</code><a class="anchor" href="#ParallelStream.reduce">#</a>
 <p>One answer from every item, as on a list: the items combined two at a time, each core's share on its own, then the cores' answers. <code>operation</code> has to give the same whichever way its operands are grouped, as + and max do.</p>
-</div>
-<div class="entry member" id="ParallelStream.fold"><code class="sig">fun &lt;R&gt; fold(initial : R, operation : (R, T) -&gt; R) : R</code><a class="anchor" href="#ParallelStream.fold">#</a>
-<p>One answer from every item, starting from <code>initial</code>, as on a list: the items in order.</p>
 </div>
 <div class="entry member" id="ParallelStream.gather"><code class="sig">fun &lt;R&gt; gather(into : () -&gt; R, each : (R, T) -&gt; unit, merge : (R, R) -&gt; unit) : R</code><a class="anchor" href="#ParallelStream.gather">#</a>
 <p>A result of its own for each core, made empty by <code>into</code>, every item added to one of them by <code>each</code>, and the results merged into the first by <code>merge</code> once every core is done. Nothing is shared while the cores work:</p>

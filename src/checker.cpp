@@ -2793,6 +2793,11 @@ struct Checker::Impl {
     static std::string preludeAdvice(const ClassInfo* k, const std::string& name) {
         for (const ClassInfo* c = k; c != nullptr; c = c->superclass) {
             if (c->unit == nullptr || !c->unit->prelude) continue;
+            // A fold's starting value and operation cannot be split among the cores (8.7c).
+            if (c->name == "ParallelStream" && name == "fold")
+                return "fold on a parallel stream would run on one core, its items in order: reduce { a, b -> ... } deals an associative "
+                       "operation out to the cores, gather(...) makes a result on each core and merges them, and list.fold(...) is the "
+                       "fold on one core (8.7c)";
             std::string advice = ioAdvice(c->name, name);
             if (advice.empty()) advice = graphicsAdvice(c->name, name);
             return advice;

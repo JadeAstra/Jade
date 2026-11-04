@@ -2933,7 +2933,7 @@ So a section hands its results back by returning them, and they are put together
 | `forEach { }` | runs the lambda on every item |
 | `replaceAll { }` | replaces every item of the list by what the lambda gives for it |
 | `map { }`, `mapNotNull { }`, `filter { }`, `flatMap { }` | give a stream to go on from; `toList()`, `toSet()`, `sorted()` end it. The order of the items is kept |
-| `sumOf { }`, `maxOf { }`, `minOf { }`, `count { }`, `any { }`, `all { }`, `none { }`, `reduce { }` | one value from all the items; `fold(initial) { }` goes over them in order, on one core |
+| `sumOf { }`, `maxOf { }`, `minOf { }`, `count { }`, `any { }`, `all { }`, `none { }`, `reduce { }` | one value from all the items; `reduce`'s operation is dealt out to the cores, so it must be associative. A stream has no `fold`, which could only go over the items in order on one core: `list.fold` does that |
 | `gather(into, each, merge)` | each core fills a container of its own (`into`), item by item (`each`), and the containers are merged at the end (`merge`) |
 
 `list.parallelStream()` and `range.parallelStream()` start one; `availableProcessors()` says

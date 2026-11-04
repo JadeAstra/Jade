@@ -9,7 +9,7 @@ val counts = words.parallelStream().gather(
   each = { m, w -> m[w] = (m[w] ?: 0) + 1 },
   merge = { a, b -> for ((k, v) in b) { a[k] = (a[k] ?: 0) + v } })
 print(counts)                                                 // expect: {"a": 3, "b": 2, "c": 1}
-print((1..100).parallelStream().reduce { a, b -> a + b }, (1..4).parallelStream().fold(10) { a, b -> a + b })   // expect: 5050 20
+print((1..100).parallelStream().reduce { a, b -> a + b }, (1..4).toList().fold(10) { a, b -> a + b })   // expect: 5050 20
 print((1..3).parallelStream().flatMap { [it, it * 10] }.toList())   // expect: [1, 10, 2, 20, 3, 30]
 
 // parallel(): a few functions at once, their results in order.

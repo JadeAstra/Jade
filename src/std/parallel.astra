@@ -130,9 +130,6 @@ class ParallelStream<T> {
     return answers.reduce(operation)
   }
 
-  // One answer from every item, starting from `initial`, as on a list: the items in order.
-  fun <R> fold(initial : R, operation : (R, T) -> R) : R => items.fold(initial, operation)
-
   // A result of its own for each core, made empty by `into`, every item added to one of them by
   // `each`, and the results merged into the first by `merge` once every core is done (D93).
   // Nothing is shared while the cores work:

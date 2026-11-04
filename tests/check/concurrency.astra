@@ -43,3 +43,7 @@ val values = sequence<int> {
 val javaOrder = Thread({ print("x") }, "loader")   // check: a Thread takes its name first and its work after: Thread("name") { work() }, or Thread { work() } (8.7d)
 val kotlinWay = Thread { print("x") }
 val named = Thread("loader") { print("x") }
+
+// A parallel stream has no fold, which would run on one core (8.7c).
+val folded = listOf(1, 2, 3).parallelStream().fold(0) { a, b -> a + b }   // check: fold on a parallel stream would run on one core, its items in order: reduce { a, b -> ... } deals an associative operation out to the cores, gather(...) makes a result on each core and merges them, and list.fold(...) is the fold on one core (8.7c)
+val reduced = listOf(1, 2, 3).parallelStream().reduce { a, b -> a + b }

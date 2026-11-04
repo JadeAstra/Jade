@@ -274,8 +274,9 @@ can change, and an `==` without a `hashCode`.
 - **`Job.all` and `Job.any` give Jobs**, not lists: `Job.all(jobs).get()` waits for them all.
 - **Threads take turns.** One thread runs Astra code at a time, so threads overlap waiting,
   not computing. Work that is to use the cores goes to a parallel section or to workers.
-- **`fold` on a parallel stream goes over the items in order, on one core**: what it combines
-  need not be associative. `reduce` is dealt out to the cores.
+- **A parallel stream has no `fold`**, which could only go over the items in order on one core:
+  it is a compile error saying to use `reduce` (an associative operation, dealt out to the
+  cores), `gather`, or `fold` on the list itself.
 - **A parallel section changes only its own items.** Code that adds to a shared list from
   `forEach` gets an error the first time it tries; it returns its results (`map`, `gather`)
   or uses `Atomic`, `atomic var`, `SharedMap` or `SharedSet`.
