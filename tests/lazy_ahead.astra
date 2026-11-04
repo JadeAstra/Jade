@@ -1,0 +1,32 @@
+// A file's top-level lazy values and objects are in place as it starts (8.3b, 8.3c): a function
+// called above their lines reads them, each worked out or made on that first read. A read of an
+// object's val makes the object, init and all, unless making it does nothing a program could see.
+fun early() : int => later + Board.size + Quiet.n
+print(early())
+// expect: later worked out
+// expect: Board made
+// expect: 17
+print(later, Board.size)                                      // expect: 10 5
+
+lazy val later : int = workedOut("later", 10)
+fun workedOut(name : string, value : int) : int {
+  print("$name worked out")
+  return value
+}
+object Board {
+  val size = 5
+  init { print("Board made") }
+}
+object Quiet {
+  val n = 2
+}
+
+// A constant val of an object with an init: reading it makes the object, as Kotlin's does.
+object Settings {
+  val limit = 3
+  init { print("Settings made") }
+}
+print(Settings.limit)
+// expect: Settings made
+// expect: 3
+print(Settings.limit)                                         // expect: 3

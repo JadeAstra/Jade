@@ -152,7 +152,7 @@ fun handle(e : Event) : string =&gt; when (e) {
 }</pre></dd>
 
 <dt><code>object</code></dt>
-<dd><code>object Name { ... }</code> declares a class and makes its one object, reached by the name. Where a value is expected, <code>object : Listener { ... }</code> is an object of a class with no name.
+<dd><code>object Name { ... }</code> declares a class and makes its one object, reached by the name, when it is first used: from anywhere in the file, above its line too, and a read of one of its <code>val</code>s makes it, <code>init</code> and all. Where a value is expected, <code>object : Listener { ... }</code> is an object of a class with no name.
 <pre>object Counter {
   var hits = 0
   fun hit() { hits += 1 }
@@ -220,7 +220,7 @@ Temperature.fromFahrenheit(212.0).celsius    // 100.0</pre></dd>
 <dd>A <code>var</code> field given its value after the object is made. Reading it before that is an error.</dd>
 
 <dt><code>lazy</code></dt>
-<dd>A <code>val</code> whose value is worked out the first time it is read, and kept.
+<dd>A <code>val</code> whose value is worked out the first time it is read, and kept. One at the top level of a file may be read from anywhere in it, a function called above its line too.
 <pre>class Config {
   lateinit var path : string
   lazy val size : int = path.size

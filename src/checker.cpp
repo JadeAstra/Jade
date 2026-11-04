@@ -9587,13 +9587,32 @@ struct Checker::Impl {
 
     // A val that is the same for every read, so that a constant value may be folded: one of
     // the top level, an object or a class's static code. An instance field of a class may be
-    // overridden, and one with an accessor is worked out each time.
-    bool foldableVal(const FieldInfo* f) const {
+    // overridden, and one with an accessor is worked out each time. An object's only where
+    // making the object does nothing a program could see: a read of it makes the object, init
+    // and all, as Kotlin's does (8.3c).
+    bool foldableVal(const FieldInfo* f) {
         const VarStmt& d = *f->decl;
         if (!d.isVal || d.isConst || d.init == nullptr || d.getter != nullptr || d.isExternal || !d.pattern.empty()) return false;
-        if (f->owner == nullptr || f->owner->isObject) return true;
+        if (f->owner == nullptr) return true;
+        if (f->owner->isObject) return quietToMake(f->owner);
         auto st = f->owner->statics.find(f->name);
         return st != f->owner->statics.end() && st->second == f;
+    }
+
+    // An object whose making does nothing a program could see: no init, no class above it, and
+    // only constant starting values.
+    std::unordered_map<const ClassInfo*, bool> quietObjects;
+    bool quietToMake(const ClassInfo* k) {
+        auto known = quietObjects.find(k);
+        if (known != quietObjects.end()) return known->second;
+        quietObjects[k] = false;  // while it is worked out
+        bool quiet = k->decl != nullptr && k->superclass == nullptr && k->decl->initBlocks.empty() && k->methods.count("init") == 0;
+        for (size_t i = 0; quiet && i < k->decl->fields.size(); i++) {
+            const VarStmt& field = *k->decl->fields[i];
+            if (field.init != nullptr && !field.isConst && foldQuietly(*field.init).kind == ConstValue::None) quiet = false;
+        }
+        quietObjects[k] = quiet;
+        return quiet;
     }
 
     // Reads of vals that may be folded, and what each val came to (1 being worked out, 2 known).

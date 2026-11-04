@@ -319,6 +319,7 @@ public:
         std::vector<std::string> names{file_};
         for (const UnitClass& cls : orderClasses(files, names)) hoistClass(*cls.stmt);
         hoistExtensions(statements);
+        hoistLazies(statements);
         compileRemainder(statements, shell);
         endScript(state);
         return state.proto;
@@ -450,6 +451,46 @@ public:
             noteDeclaration(start, extensionIn(start), DeclarationSpan::Extension);
             hoisted_.insert(stmt.get());
         }
+    }
+
+    // A file's top-level lazy values, and the one instance of each of its objects, are put in
+    // place as it starts, each with what works it out on its first read (8.3b, 8.3c): a function
+    // called above the line one is written on reads it as well as one called below. A class
+    // whose structure was set up ahead is there for its object to be made from.
+    void hoistLazies(const std::vector<StmtPtr>& statements) {
+        for (const StmtPtr& stmt : statements) {
+            const int start = static_cast<int>(code().size());
+            if (stmt->kind == StmtKind::Var) {
+                const auto& s = static_cast<const VarStmt&>(*stmt);
+                if (!s.isLazy || s.isExternal || !s.pattern.empty()) continue;
+                compileStmt(s);
+            } else if (stmt->kind == StmtKind::Class) {
+                const auto& cls = static_cast<const ClassStmt&>(*stmt);
+                if (!cls.isObject || cls.isExternal || hoisted_.count(&cls) == 0) continue;
+                line_ = cls.line;
+                defineObject(cls, cls.name, "(object " + cls.name + ")", true);
+                objectsAhead_.insert(&cls);
+            } else {
+                continue;
+            }
+            noteDeclaration(start, definedIn(start));
+            hoisted_.insert(stmt.get());
+        }
+    }
+    std::unordered_set<const ClassStmt*> objectsAhead_;  // objects whose instance hoistLazies put in place
+
+    // An object's one instance under its name: made when first read where `lazy`, as at the top
+    // level and inside a class (D66), and where it is written inside a function.
+    void defineObject(const ClassStmt& s, const std::string& bound, const std::string& storage, bool lazy) {
+        auto make = [&] {
+            emitGet(storage, s);
+            emit(Op::Call);
+            emitByte(0);
+        };
+        if (lazy) compileLazyWith(make, bound, s.line);
+        else make();
+        if (isGlobalScope()) emit(Op::DefineGlobal, declareGlobal(bound, true, s));
+        else addLocal(bound, true, s, true);
     }
 
     // `extend Person, Car : Weighed { val name : string get() => model }` (D33): each class is
@@ -4500,20 +4541,11 @@ private:
         for (const ClassStmt* inner : nestedInOrder(s))
             if (!inner->isObject) compileClass(*inner, bound + "." + inner->name, &cls, ClassPart::Values);
 
-        if (s.isObject) {
+        if (s.isObject && objectsAhead_.count(&s) == 0) {
             line_ = s.line;
             // A named object is made when it is first used, as a lazy value is (D66): at the top
             // level and inside a class. One inside a function is made where it is written.
-            const bool lazy = isGlobalScope() || objectInClass_;
-            auto make = [&] {
-                emitGet(storage, s);
-                emit(Op::Call);
-                emitByte(0);
-            };
-            if (lazy) compileLazyWith(make, bound, s.line);
-            else make();
-            if (isGlobalScope()) emit(Op::DefineGlobal, declareGlobal(bound, true, s));
-            else addLocal(bound, true, s, true);
+            defineObject(s, bound, storage, isGlobalScope() || objectInClass_);
         }
     }
 
@@ -8353,6 +8385,10 @@ void CompilerSession::loadFolder(const std::string& folder, const std::string& d
         for (size_t i = 0; i < units.size(); i++) {
             compilers[i]->continueScript(ahead);
             compilers[i]->hoistExtensions(*units[i].statements);
+        }
+        for (size_t i = 0; i < units.size(); i++) {
+            compilers[i]->continueScript(ahead);
+            compilers[i]->hoistLazies(*units[i].statements);
         }
         compilers[0]->endScript(ahead);
         program.modules[static_cast<size_t>(header)] = ahead.proto;
