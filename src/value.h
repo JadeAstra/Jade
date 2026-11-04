@@ -689,6 +689,7 @@ private:
 struct ObjMap final : Obj {
     ValueMap map;
     ObjTypeInfo* type = nullptr;  // `Map<string, int>`, as for a list
+    bool bundle = false;          // named arguments from params(...) (D143): printed as params(size = 18)
     ObjMap() : Obj(ObjType::Map) {}
 };
 

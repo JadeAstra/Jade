@@ -8268,6 +8268,13 @@ struct Checker::Impl {
                     }
                 }
             }
+            // A bundle's arguments, each against the parameter of its name in this form (8.9a).
+            for (const auto& [p, given, from, name] : fit.binding.bundled) {
+                if (!ok) break;
+                const Type want = f->params[static_cast<size_t>(p)];
+                unify(want, given, fit.env, vars);
+                ok = fits(given, subst(want, fit.env));
+            }
             if (!ok) continue;
             for (size_t p = 0; p < f->params.size(); p++)
                 if (!fit.binding.given[p] && f->hasDefault[p]) fit.defaultsUsed++;
@@ -8350,6 +8357,11 @@ struct Checker::Impl {
                 if (args.exprs[i]->kind == ExprKind::Function) continue;
                 if (!fits(paramType(a, i), paramType(b, i))) return false;
             }
+            // A bundle's arguments, by name (8.9a).
+            for (const auto& [pa, given, from, name] : a.binding.bundled)
+                for (const auto& [pb, givenB, fromB, nameB] : b.binding.bundled)
+                    if (name == nameB && !fits(mayBe(a, fa->params[static_cast<size_t>(pa)]), mayBe(b, fb->params[static_cast<size_t>(pb)])))
+                        return false;
             return true;
         };
         // Whether a form takes one of its own type parameters somewhere in its parameters or its

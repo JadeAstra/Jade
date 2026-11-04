@@ -242,11 +242,13 @@ void VM::bundleValues(int count) {
     for (const Value& v : pairs) *sp_++ = v;
 }
 
-// Op::MergeBundle: a + b of two bundles, b's value where both have a name.
+// Op::MergeBundle: a + b of two bundles, b's value where both have a name. Every bundle is
+// made here, params(...) as an empty one and its names, so each is marked as one (8.9e).
 void VM::mergeBundles() {
     const Value a = sp_[-2], b = sp_[-1];
     if (!a.isObjType(ObjType::Map) || !b.isObjType(ObjType::Map)) throw runtimeError(Thrown::ClassCastException, "expected bundles of named arguments");
     ObjMap* made = alloc<ObjMap>();
+    made->bundle = true;
     made->map = asMap(a)->map;
     for (const ValueMap::Entry& entry : asMap(b)->map.entries())
         if (entry.live) made->map.set(entry.key, entry.value);
@@ -4671,6 +4673,7 @@ Value VM::frozenCopy(Value v, int depth) {
         ObjMap* map = asMap(v);
         ObjMap* made = alloc<ObjMap>();
         made->type = map->type;
+        made->bundle = map->bundle;
         TempRoot keep(*this, Value::object(made));
         made->type = frozenArgs(map->type);
         // By position: a key's hashCode, run as it goes in, may change the map.
@@ -8141,18 +8144,18 @@ void VM::stringifyInto(std::string& out, Value v, bool quote, int depth) {
                 return;
             }
             ObjMap* map = asMap(v);
-            out += '{';
+            out += map->bundle ? "params(" : "{";
             bool first = true;
             for (size_t i = 0; i < map->map.entries().size(); i++) {
                 ValueMap::Entry entry = map->map.entries()[i];
                 if (!entry.live) continue;
                 if (!first) out += ", ";
                 first = false;
-                stringifyInto(out, entry.key, true, depth + 1);
-                out += ": ";
+                stringifyInto(out, entry.key, !map->bundle, depth + 1);  // a bundle's names as written
+                out += map->bundle ? " = " : ": ";
                 stringifyInto(out, entry.value, true, depth + 1);
             }
-            out += '}';
+            out += map->bundle ? ')' : '}';
             return;
         }
 

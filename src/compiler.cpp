@@ -6027,13 +6027,14 @@ private:
                     // params(...), or a copy with some of them changed.
                     const bool copy = session_.checker->bundleCopy(e);
                     if (copy) compileExpr(*static_cast<const MemberExpr&>(*e.callee).object);
+                    else emit(Op::BuildMap, 0);  // made as {} + its names, so MergeBundle marks it a bundle (8.9e)
                     for (size_t i = 0; i < e.args.size(); i++) {
                         emit(Op::Const, stringConstant(e.names[i]));
                         compileExpr(*e.args[i]);
                     }
                     line_ = e.line;
                     emit(Op::BuildMap, static_cast<int>(e.args.size()));
-                    if (copy) emit(Op::MergeBundle);
+                    emit(Op::MergeBundle);
                     break;
                 }
                 if (session_.checker != nullptr && session_.checker->samCall(e)) {

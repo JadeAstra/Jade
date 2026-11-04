@@ -18,6 +18,14 @@ val font = Font("Segoe UI", ...type)
 print(font, label("x", ...type))   // expect: Font(Segoe UI, 20, bold) x[20 bold black]
 // Passed on through a parameter of the bundle's type, and printed as what it holds.
 fun twice(text : string, style : params(size : int, bold : bool)) : string => label(text, ...style) + label(text.upper(), ...style)
-print(twice("ok", heading), heading)   // expect: ok[18 bold black]OK[18 bold black] {"size": 18, "bold": true}
+print(twice("ok", heading), heading)   // expect: ok[18 bold black]OK[18 bold black] params(size = 18, bold = true)
 // An empty one passes nothing.
 print(label("plain", ...params()))   // expect: plain[12 black]
+
+// -- A bundle chooses among the forms of what it is given to, as written arguments do (8.9a) --
+val shade = params(red = 10, green = 20, blue = 30)
+print(Color(...shade), Color(...params(red = 0.5, green = 0.5, blue = 0.5)).red)   // expect: Color(10, 20, 30) 128
+fun describe(size : int, bold : bool = false) : string => "int $size"
+fun describe(size : string, bold : bool = false) : string => "string $size"
+print(describe(...params(size = 3)), describe(...params(size = "big", bold = true)))   // expect: int 3 string big
+print(shade + params(alpha = 40), shade.copy(red = 1))   // expect: params(red = 10, green = 20, blue = 30, alpha = 40) params(red = 1, green = 20, blue = 30)
