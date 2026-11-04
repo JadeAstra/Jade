@@ -32,16 +32,18 @@ std::string fromPath(const fs::path& path) {
 
 class RealHost final : public Host {
 public:
-    bool readWhole(const std::string& path, std::string& data) override {
+    // The system says no more than that it failed: the standard library's message says the rest.
+    std::error_code readWhole(const std::string& path, std::string& data) override {
         std::ifstream in(toPath(path), std::ios::binary);
-        if (!in) return false;
+        if (!in) return std::make_error_code(std::errc::io_error);
         data.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        return true;
+        return {};
     }
 
-    bool writeWhole(const std::string& path, const std::string& data, bool append) override {
+    std::error_code writeWhole(const std::string& path, const std::string& data, bool append) override {
         std::ofstream out(toPath(path), std::ios::binary | (append ? std::ios::app : std::ios::trunc));
-        return out && out.write(data.data(), static_cast<std::streamsize>(data.size())).flush();
+        if (out && out.write(data.data(), static_cast<std::streamsize>(data.size())).flush()) return {};
+        return std::make_error_code(std::errc::io_error);
     }
 
     bool exists(const std::string& path) override {

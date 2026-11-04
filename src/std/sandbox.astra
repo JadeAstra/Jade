@@ -1,0 +1,137 @@
+// ---- The sandbox (M6.6.2) ----
+// A world of files of its own, kept in memory, which the code in it reaches in place of the
+// system's, so that nothing outside it is touched; and faults, which make the rare failures
+// happen on purpose (docs/M6.6.2-sandbox-plan.md):
+//
+//   Sandbox.run {
+//     Path("/data").mkdir()
+//     Path("/data/a.txt").writeText("1")
+//     faults.add(Fault.list("/data", after = 0))
+//     Path("/data").list()            // an IOException: the device is not ready
+//   }
+//
+// What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in
+// it too. Starting a program, the network and font files have no sandbox's form yet, and are
+// refused in one rather than done on the system.
+
+// How a sandbox's paths are written, whatever the machine: Linux's, /data/a.txt, or Windows',
+// C:\data\a.txt, names compared without case.
+enum PathStyle { linux, windows }
+
+// A sandbox: its files, the failures it makes happen, and what has changed in it.
+class Sandbox {
+  internal val handle : any
+  // How its paths are written.
+  val paths : PathStyle
+  // The failures it makes happen.
+  val faults : Faults
+  // Its files, as they have changed.
+  val files : SandboxFiles
+
+  internal fun init(handle : any, paths : PathStyle) {
+    this.handle = handle
+    this.paths = paths
+    this.faults = Faults(handle)
+    this.files = SandboxFiles(handle)
+  }
+
+  static {
+    // Runs `block` in a new sandbox, and gives what it gives; the block reaches nothing outside
+    // it. With `copyFrom`, the sandbox starts with a copy of that directory of the real system,
+    // at its root under the directory's name (a dry run: files.changes() says what the block
+    // did). `diskSize` is the most its files may hold together, in bytes; past it a write fails
+    // as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException.
+    inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, block : Sandbox.() -> T) : T {
+      val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text), paths)
+      __Sandboxes.add(box)
+      __sandbox.enter(box.handle)
+      try {
+        return box.block()
+      } finally {
+        __sandbox.leave()
+        __Sandboxes.remove(box)
+      }
+    }
+
+    // The sandbox the code running now is in; null on the real system.
+    val current : Sandbox? get() => __Sandboxes.current()
+  }
+}
+
+// What fails in a sandbox: each fault added, from then on, each time what it names is done.
+class Faults(private val handle : any) {
+  // Makes `fault` happen from now on, each time what it names is done.
+  fun add(fault : Fault) {
+    __sandbox.addFault(handle, fault.operation, fault.path, fault.after, fault.error)
+  }
+}
+
+// A failure a sandbox makes happen: whenever `operation` is done to `path` ("*" for any), with
+// `error` as what the system would say. A read, a write and a list go `after` bytes or names
+// first and fail then; the others fail at once.
+data Fault(val operation : string, val path : string, val after : int, val error : string) {
+  static {
+    // Listing the directory fails after `after` names.
+    fun list(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("list", "$path", after, error)
+    // Reading the file fails after `after` bytes: a whole read at once, a stream's when it gets there.
+    fun read(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("read", "$path", after, error)
+    // Writing the file fails after `after` bytes, those written.
+    fun write(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("write", "$path", after, error)
+    // Opening the file, to read or to write, fails.
+    fun open(path : Path | string, error : string = "access is denied") : Fault => Fault("open", "$path", 0, error)
+    // Deleting it fails.
+    fun delete(path : Path | string, error : string = "access is denied") : Fault => Fault("delete", "$path", 0, error)
+    // Moving it fails.
+    fun move(path : Path | string, error : string = "access is denied") : Fault => Fault("move", "$path", 0, error)
+    // Copying it fails.
+    fun copy(path : Path | string, error : string = "access is denied") : Fault => Fault("copy", "$path", 0, error)
+    // Making the directory fails.
+    fun mkdir(path : Path | string, error : string = "access is denied") : Fault => Fault("mkdir", "$path", 0, error)
+    // Everything done to it fails.
+    fun any(path : Path | string, error : string = "the device is not ready") : Fault => Fault("any", "$path", 0, error)
+  }
+}
+
+// A sandbox's files, as they have changed.
+class SandboxFiles(private val handle : any) {
+  // What has been made, changed and deleted since the sandbox was made (with what was copied in),
+  // by path.
+  fun changes() : List<FileChange> => __sandbox.changes(handle).map { FileChange(__changeKind(it[0]), Path(it[1])) }
+}
+
+// What became of a file or directory in a sandbox.
+enum ChangeKind { made, changed, deleted }
+
+// A file or directory made, changed or deleted in a sandbox.
+data FileChange(val kind : ChangeKind, val path : Path)
+
+fun __changeKind(name : string) : ChangeKind => name == "made" ? ChangeKind.made : name == "changed" ? ChangeKind.changed : ChangeKind.deleted
+
+// The program's sandboxes while code runs in them, by number: what Sandbox.current finds.
+object __Sandboxes {
+  private val lock = Lock()
+  private val held : open Map<int, Sandbox> = {:}
+
+  fun add(box : Sandbox) {
+    lock.useKey { held[__sandbox.id(box.handle)] = box }
+  }
+  fun remove(box : Sandbox) {
+    lock.useKey { held.remove(__sandbox.id(box.handle)) }
+  }
+  fun current() : Sandbox? {
+    val id = __sandbox.currentId()
+    if (id == null) { return null }
+    return lock.useKey { held[id] }
+  }
+}
+
+// What Sandbox is built on (sandbox.cpp), declared with its types and what it throws.
+external object __sandbox {
+  fun make(windowsPaths : bool, diskSize : int, copyFrom : string?) : any
+  fun enter(sandbox : any)
+  fun leave()
+  fun id(sandbox : any) : int
+  fun currentId() : int?
+  fun addFault(sandbox : any, operation : string, path : string, after : int, error : string)
+  fun changes(sandbox : any) : List<List<string>>
+}

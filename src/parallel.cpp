@@ -59,6 +59,7 @@ struct ParallelSection {
     uint8_t starter = 0;                // the owner of the code that started it, whose what the pieces make becomes
     std::bitset<256> readable;          // what its pieces may read besides their own and what is shared
     uint64_t generation = 0;            // the outermost section's number: a core takes the program's state once for it
+    std::shared_ptr<Host> host;         // that of the code that started it: its pieces' (M6.6.2)
 
     Value function;                              // what each piece runs
     const std::vector<Value>* items = nullptr;   // Items, Gather: the function is called on each of these
@@ -323,6 +324,8 @@ void VM::runParallelPiece(ParallelPiece& piece) {
     coreId_ = piece.owner;
     currentCore = piece.owner;
     readable_ = &section.readable;
+    const std::shared_ptr<Host> savedHost = context_->host;
+    context_->host = section.host;
     currentReadable = readable_;
     section_ = &section;
     bandObject_ = nullptr;
@@ -409,6 +412,7 @@ void VM::runParallelPiece(ParallelPiece& piece) {
     bandFrom_ = savedFrom;
     bandTo_ = savedTo;
     pendingDestination_ = savedDestination;
+    context_->host = savedHost;
 }
 
 // ---- Starting a section ----
@@ -675,6 +679,7 @@ Value VM::runParallel(Value source, Value function, bool keep, bool replace) {
 
     ParallelSection section;
     section.kind = values != nullptr ? ParallelSection::Values : ParallelSection::Items;
+    section.host = currentHostShared();
     section.function = function;
     section.items = &items;
     section.values = values;
@@ -712,6 +717,7 @@ void VM::runParallelChunks(Value buffer, Value function, size_t align) {
 
     ParallelSection section;
     section.kind = ParallelSection::Chunks;
+    section.host = currentHostShared();
     section.function = function;
     section.buffer = buffer.as.obj;
     if (align == 0) align = 1;
@@ -725,6 +731,7 @@ Value VM::runParallelFunctions(const std::vector<Value>& functions) {
     if (functions.empty()) return Value::object(out);
     ParallelSection section;
     section.kind = ParallelSection::Functions;
+    section.host = currentHostShared();
     section.functions = &functions;
     section.pieces.resize(functions.size());
     for (size_t k = 0; k < functions.size(); k++) {
@@ -749,6 +756,7 @@ Value VM::runParallelGather(Value source, Value into, Value each) {
     }
     ParallelSection section;
     section.kind = ParallelSection::Gather;
+    section.host = currentHostShared();
     section.function = into;
     section.each = each;
     section.items = &items;

@@ -351,6 +351,7 @@ int64_t VM::startThread(Value function, Value self, const std::string& name, boo
     thread->daemon = daemon;
     thread->function = function;
     thread->self = self;
+    inheritHost(thread->base);  // in the sandbox of the code that starts it (M6.6.2)
     threads_.push_back(thread);
     if (threadStress_) attention_ = true;
     std::thread([this, thread] { threadMain(thread); }).detach();
@@ -1155,6 +1156,7 @@ void registerThreads(VM& vm) {
     // Starts a task running `function`, and returns when it finishes or is first set aside.
     define(vm, task, "start", 1, 1, [](VM& vm, int, Value* args) -> Value {
         ObjFiber* fiber = vm.alloc<ObjFiber>(args[0]);
+        vm.inheritHost(fiber->context);  // in the sandbox of the code that starts it (M6.6.2)
         vm.account(4 * 1024);
         vm.runFiber(fiber, true, Value::null());
         return Value::null();
@@ -1174,6 +1176,7 @@ void registerThreads(VM& vm) {
     // Starts a generator running `function`, up to its first yield or its end.
     define(vm, task, "generate", 1, 1, [](VM& vm, int, Value* args) -> Value {
         ObjFiber* fiber = vm.alloc<ObjFiber>(args[0]);
+        vm.inheritHost(fiber->context);
         fiber->generator = true;
         TempRoot keep(vm, Value::object(fiber));
         vm.account(4 * 1024);

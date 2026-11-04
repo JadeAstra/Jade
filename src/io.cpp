@@ -131,6 +131,9 @@ struct Stream {
     std::atomic<bool> exited{false};
     std::atomic<int> exitCode{0};
 
+    // A sandbox's file (M6.6.2): read, written and closed through it, not the system.
+    std::shared_ptr<Channel> channel;
+
     explicit Stream(Kind k) : kind(k) {}
 
     ~Stream() { close(); }
@@ -140,6 +143,10 @@ struct Stream {
     // Closes it, first getting any thread that is waiting in it out.
     void close() {
         if (closed.exchange(true)) return;
+        if (channel != nullptr) {
+            channel->close();
+            return;
+        }
         if (isSocket()) {
             if (socket != INVALID_SOCKET) {
                 shutdown(socket, SD_BOTH);
@@ -171,6 +178,7 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
         result.error = "the stream is closed";
         return -1;
     }
+    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error);
     if (s.isSocket()) {
         const int got = recv(s.socket, out, static_cast<int>(std::min<size_t>(max, 1 << 30)), 0);
         if (got >= 0) return got;
@@ -194,6 +202,13 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
 
 bool rawWrite(Stream& s, const char* data, size_t size, std::string& error) {
     Use use(s);
+    if (s.channel != nullptr) {
+        if (s.closed.load()) {
+            error = "the stream is closed";
+            return false;
+        }
+        return s.channel->write(data, size, error);
+    }
     while (size > 0) {
         if (s.closed.load()) {
             error = "the stream is closed";
@@ -263,6 +278,9 @@ struct Stream {
     std::atomic<int> exitCode{0};
     std::mutex waitMutex;
 
+    // A sandbox's file (M6.6.2): read, written and closed through it, not the system.
+    std::shared_ptr<Channel> channel;
+
     explicit Stream(Kind k) : kind(k) {}
 
     ~Stream() { close(); }
@@ -273,6 +291,10 @@ struct Stream {
     // returns at the shutdown, one waiting for something to read sees `closed` (waitReadable).
     void close() {
         if (closed.exchange(true)) return;
+        if (channel != nullptr) {
+            channel->close();
+            return;
+        }
         if (fd < 0) return;
         if (kind == Kind::Socket) ::shutdown(fd, SHUT_RDWR);
         while (users.load() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -324,6 +346,7 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
         result.error = "the stream is closed";
         return -1;
     }
+    if (s.channel != nullptr) return s.channel->read(out, std::min<size_t>(max, 1 << 30), result.error);
     // A file has something to read at once; anything else may wait.
     if (s.kind != Stream::Kind::File && !waitReadable(s, s.isSocket() && s.readTimeout > 0 ? s.readTimeout : -1, result)) return -1;
     const size_t wanted = std::min<size_t>(max, 1 << 30);
@@ -340,6 +363,13 @@ int rawRead(Stream& s, char* out, size_t max, Outcome& result) {
 
 bool rawWrite(Stream& s, const char* data, size_t size, std::string& error) {
     Use use(s);
+    if (s.channel != nullptr) {
+        if (s.closed.load()) {
+            error = "the stream is closed";
+            return false;
+        }
+        return s.channel->write(data, size, error);
+    }
     while (size > 0) {
         if (s.closed.load()) {
             error = s.isSocket() ? "the socket is closed" : "the stream is closed";
@@ -1047,6 +1077,11 @@ std::vector<std::string> selfCommand;
 
 void setSelfCommand(std::vector<std::string> command) { selfCommand = std::move(command); }
 
+// What a sandbox has no form of yet (M6.6.2): refused there, never done on the system.
+void refuseInSandbox(VM& vm, const std::string& what) {
+    if (vm.currentHost().isSandbox()) throw vm.errorOf("IOException", what + " is not available in a sandbox yet");
+}
+
 void registerIo(VM& vm) {
 #ifndef _WIN32
     // A write to a pipe or a socket whose other end has gone is an IOException, not the end of
@@ -1065,7 +1100,18 @@ void registerIo(VM& vm) {
         const std::string path = vm.toStr(args[0], "file path");
         const std::string mode = vm.toStr(args[1], "mode");
         auto out = std::make_shared<Outcome>();
-        return vm.blocking([=] { openFile(path, mode, *out); },
+        std::shared_ptr<Host> host = vm.currentHostShared();
+        return vm.blocking([=] {
+                               if (!host->isSandbox()) {
+                                   openFile(path, mode, *out);
+                                   return;
+                               }
+                               // A sandbox's file (M6.6.2), through its channel.
+                               std::shared_ptr<Channel> channel = host->openFile(path, mode, out->error);
+                               if (channel == nullptr) return;
+                               out->made = std::make_shared<Stream>(Stream::Kind::File);
+                               out->made->channel = std::move(channel);
+                           },
                            [out](VM& vm) -> Value {
                                if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
@@ -1225,6 +1271,7 @@ void registerIo(VM& vm) {
     // spawn(command, directory, input, output, error, environment): starts a program. Gives
     // [process, its input, its output, its error output], the last three null unless "pipe".
     def("spawn", 6, 6, [](VM& vm, int, Value* args) -> Value {
+        refuseInSandbox(vm, "starting a program");
         if (!args[0].isObjType(ObjType::List) || asList(args[0])->size() == 0)
             throw vm.runtimeError(Thrown::IllegalArgumentException, "a process is started from a list: the program, then its arguments");
         Spawn spawn;
@@ -1356,6 +1403,7 @@ void registerIo(VM& vm) {
 
     // connect(host, port, timeout): a TCP connection, tried for at most `timeout` ms if given.
     def("connect", 2, 3, [](VM& vm, int argc, Value* args) -> Value {
+        refuseInSandbox(vm, "connecting to another computer");
         startNetworking(vm);
         const std::string host = vm.toStr(args[0], "host");
         const int64_t port = vm.toInt(args[1], "port");
@@ -1371,6 +1419,7 @@ void registerIo(VM& vm) {
     // listen(port, address, backlog): a socket that takes connections. Port 0 lets the system
     // choose one; with no address it listens on every one this machine has.
     def("listen", 1, 3, [](VM& vm, int argc, Value* args) -> Value {
+        refuseInSandbox(vm, "listening on a port");
         startNetworking(vm);
         const int64_t port = vm.toInt(args[0], "port");
         const std::string address = argc > 1 && !args[1].isNull() ? vm.toStr(args[1], "address") : std::string();

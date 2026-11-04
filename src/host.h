@@ -1,12 +1,24 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
 
 namespace astra {
+
+// One end of something read and written byte by byte that a sandbox keeps (M6.6.2): a file of its
+// own opened as a stream. A stream of the system's is the system's handle instead (io.cpp).
+class Channel {
+public:
+    virtual ~Channel() = default;
+    // Up to `max` bytes: how many; 0 at the end; -1 with `error` filled in.
+    virtual int read(char* out, size_t max, std::string& error) = 0;
+    virtual bool write(const char* data, size_t size, std::string& error) = 0;
+    virtual void close() = 0;
+};
 
 // What a program reaches outside itself (M6.6.2): files now; streams, processes, the network,
 // the clock and fonts as the sandbox comes. The real host is the system's (host.cpp); a
@@ -22,9 +34,9 @@ public:
 
     // ---- Files ----
 
-    // A whole file read, or written (or added to); false where it cannot be.
-    virtual bool readWhole(const std::string& path, std::string& data) = 0;
-    virtual bool writeWhole(const std::string& path, const std::string& data, bool append) = 0;
+    // A whole file read, or written (or added to); an error where it cannot be.
+    virtual std::error_code readWhole(const std::string& path, std::string& data) = 0;
+    virtual std::error_code writeWhole(const std::string& path, const std::string& data, bool append) = 0;
 
     virtual bool exists(const std::string& path) = 0;
     virtual bool isFile(const std::string& path) = 0;
@@ -65,6 +77,16 @@ public:
     // Whether its paths are Windows' (`C:\data\a.txt`, either slash between names) rather than
     // Linux's (`/data/a.txt`): what the path functions (name, parent, join) go by.
     virtual bool windowsPaths() const = 0;
+
+    // ---- Streams ----
+
+    // A file opened as a stream ("r", "w" or "a"): a sandbox's channel to it, or null with
+    // `error` where it cannot be. The real host gives none, and the stream is the system's.
+    virtual std::shared_ptr<Channel> openFile(const std::string&, const std::string&, std::string&) { return nullptr; }
+
+    // Whether it is a sandbox's: what it has no form of yet is refused there, never done on the
+    // system.
+    virtual bool isSandbox() const { return false; }
 };
 
 // The system's.

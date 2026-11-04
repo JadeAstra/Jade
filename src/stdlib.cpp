@@ -1259,7 +1259,7 @@ void registerGlobals(VM& vm) {
 }
 
 // ---- Files ----
-// Each goes to the VM's host (host.h, M6.6.2): the system's, or a sandbox's.
+// Each goes to the host of the code running (host.h, M6.6.2): the system's, or a sandbox's.
 
 // Whether a character separates the names of a path, in the host's style of paths.
 bool isSeparator(char c, bool windows) { return c == '/' || (windows && c == '\\'); }
@@ -1280,7 +1280,7 @@ size_t lastNameStart(std::string_view path, bool windows) {
 // A whole file read or written in one go. The work itself touches nothing of the VM, so it
 // can be done with the lock released, or by a worker while a task is set aside (VM::blocking).
 struct FileJob {
-    Host* host = nullptr;
+    std::shared_ptr<Host> host;
     std::string path;
     std::string data;
     std::string error;
@@ -1288,8 +1288,11 @@ struct FileJob {
     bool markIfNew = false;           // text appended in Charset.utf16: a byte order mark only where the file is empty (G53)
 };
 
+// A sandbox says why (M6.6.2); the system's message stays as it was, which says nothing more.
+std::string because(const Host& host, const std::error_code& ec) { return host.isSandbox() ? ": " + ec.message() : ""; }
+
 void readWhole(FileJob& job) {
-    if (!job.host->readWhole(job.path, job.data)) job.error = "cannot read file '" + job.path + "'";
+    if (const std::error_code ec = job.host->readWhole(job.path, job.data)) job.error = "cannot read file '" + job.path + "'" + because(*job.host, ec);
 }
 
 void writeWhole(FileJob& job, bool append) {
@@ -1297,12 +1300,12 @@ void writeWhole(FileJob& job, bool append) {
         const auto size = job.host->size(job.path);
         if (!size || *size == 0) job.data.insert(0, "\xFE\xFF", 2);
     }
-    if (!job.host->writeWhole(job.path, job.data, append)) job.error = "cannot write file '" + job.path + "'";
+    if (const std::error_code ec = job.host->writeWhole(job.path, job.data, append)) job.error = "cannot write file '" + job.path + "'" + because(*job.host, ec);
 }
 
 Value readFile(VM& vm, Value path, bool asBytes, Value charset = Value::null()) {
     auto job = std::make_shared<FileJob>();
-    job->host = vm.host;
+    job->host = vm.currentHostShared();
     job->path = vm.toStr(path, "file path");
     job->charset = charsetOf(vm, charset);
     return vm.blocking([job, asBytes] {
@@ -1320,7 +1323,7 @@ Value readFile(VM& vm, Value path, bool asBytes, Value charset = Value::null()) 
 
 Value writeFile(VM& vm, Value path, Value content, bool bytesOnly, bool append, Value charset = Value::null()) {
     auto job = std::make_shared<FileJob>();
-    job->host = vm.host;
+    job->host = vm.currentHostShared();
     job->path = vm.toStr(path, "file path");
     if (content.isObjType(ObjType::Bytes)) {
         job->data.assign(asBytes(content)->data.begin(), asBytes(content)->data.end());
@@ -1357,20 +1360,20 @@ void registerFiles(VM& vm) {
     def("writeBytes", 2, 2, [](VM& vm, int, Value* args) -> Value { return writeFile(vm, args[0], args[1], true, false); });
     def("appendBytes", 2, 2, [](VM& vm, int, Value* args) -> Value { return writeFile(vm, args[0], args[1], true, true); });
 
-    def("exists", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.host->exists(vm.toStr(args[0], "file path"))); });
-    def("isFile", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.host->isFile(vm.toStr(args[0], "file path"))); });
-    def("isDirectory", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.host->isDirectory(vm.toStr(args[0], "file path"))); });
+    def("exists", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.currentHost().exists(vm.toStr(args[0], "file path"))); });
+    def("isFile", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.currentHost().isFile(vm.toStr(args[0], "file path"))); });
+    def("isDirectory", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.currentHost().isDirectory(vm.toStr(args[0], "file path"))); });
     // Whether the path itself is a symbolic link (on Windows a junction too), whatever it leads to.
-    def("isSymbolicLink", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.host->isSymbolicLink(vm.toStr(args[0], "file path"))); });
+    def("isSymbolicLink", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(vm.currentHost().isSymbolicLink(vm.toStr(args[0], "file path"))); });
     // In bytes; 0 for a file that is not there.
     def("size", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        const auto size = vm.host->size(vm.toStr(args[0], "file path"));
+        const auto size = vm.currentHost().size(vm.toStr(args[0], "file path"));
         return Value::integer(size ? static_cast<int64_t>(*size) : 0);
     });
     // When the file was last written, in nanoseconds since the start of 1970 (G54); null if it
     // is not there.
     def("lastModified", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        const auto time = vm.host->lastModified(vm.toStr(args[0], "file path"));
+        const auto time = vm.currentHost().lastModified(vm.toStr(args[0], "file path"));
         return time ? Value::integer(*time) : Value::null();
     });
     // A file, or a directory with nothing in it. True if it was there and is gone; with
@@ -1378,14 +1381,14 @@ void registerFiles(VM& vm) {
     def("delete", 2, 2, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const std::string& path = vm.toStr(args[0], "file path");
-        const bool removed = vm.host->remove(path, ec);
+        const bool removed = vm.currentHost().remove(path, ec);
         if (ec) throw pathError(vm, "delete", path, ec);
         if (!removed && args[1].truthy()) throw vm.errorOf("IOException", "cannot delete '" + path + "': there is nothing there");
         return Value::boolean(removed);
     });
     def("deleteRecursively", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
-        const auto removed = vm.host->removeAll(vm.toStr(args[0], "file path"), ec);
+        const auto removed = vm.currentHost().removeAll(vm.toStr(args[0], "file path"), ec);
         return Value::boolean(!ec && removed > 0);
     });
     // mkdir(path, parents): the directory, and with `parents` any missing above it (D126). One
@@ -1393,8 +1396,8 @@ void registerFiles(VM& vm) {
     def("mkdir", 2, 2, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const std::string& path = vm.toStr(args[0], "file path");
-        vm.host->makeDirectory(path, args[1].truthy(), ec);
-        if (!vm.host->isDirectory(path)) throw pathError(vm, "make the directory", path, ec);
+        vm.currentHost().makeDirectory(path, args[1].truthy(), ec);
+        if (!vm.currentHost().isDirectory(path)) throw pathError(vm, "make the directory", path, ec);
         return Value::null();
     });
     // move(from, to, overwrite) (D129): an IOException where it cannot be moved, or where
@@ -1402,9 +1405,9 @@ void registerFiles(VM& vm) {
     def("move", 3, 3, [](VM& vm, int, Value* args) -> Value {
         const std::string& from = vm.toStr(args[0], "file path");
         const std::string& to = vm.toStr(args[1], "new path");
-        if (!args[2].truthy() && vm.host->exists(to))
+        if (!args[2].truthy() && vm.currentHost().exists(to))
             throw vm.errorOf("IOException", "cannot move '" + from + "' to '" + to + "': it is already there");
-        if (const std::error_code ec = vm.host->move(from, to))
+        if (const std::error_code ec = vm.currentHost().move(from, to))
             throw vm.errorOf("IOException", "cannot move '" + from + "' to '" + to + "': " + ec.message());
         return Value::null();
     });
@@ -1412,7 +1415,7 @@ void registerFiles(VM& vm) {
         std::error_code ec;
         const std::string& from = vm.toStr(args[0], "file path");
         const std::string& to = vm.toStr(args[1], "new path");
-        const bool copied = vm.host->copy(from, to, args[2].truthy(), ec);
+        const bool copied = vm.currentHost().copy(from, to, args[2].truthy(), ec);
         if (ec || !copied)
             throw vm.runtimeError(Thrown::IOException, "cannot copy '" + from + "' to '" + to + "'" + (ec ? ": " + ec.message() : ": it is already there"));
         return Value::null();
@@ -1422,7 +1425,7 @@ void registerFiles(VM& vm) {
     def("list", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::vector<std::string> names;
         const std::string& path = vm.toStr(args[0], "file path");
-        if (const std::error_code ec = vm.host->list(path, names)) throw pathError(vm, "list the directory", path, ec);
+        if (const std::error_code ec = vm.currentHost().list(path, names)) throw pathError(vm, "list the directory", path, ec);
         std::sort(names.begin(), names.end());
         ObjList* list = newList(vm);
         TempRoot keep(vm, Value::object(list));
@@ -1434,23 +1437,23 @@ void registerFiles(VM& vm) {
     def("canonical", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
         const std::string& path = vm.toStr(args[0], "file path");
-        std::string made = vm.host->canonical(path, ec);
+        std::string made = vm.currentHost().canonical(path, ec);
         if (ec) throw pathError(vm, "find", path, ec);
         return vm.str(std::move(made));
     });
     // What this program may do to it, as bits: 4 read, 2 write, 1 run; 0 if it is not there.
-    def("permissions", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(vm.host->permissions(vm.toStr(args[0], "file path"))); });
+    def("permissions", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(vm.currentHost().permissions(vm.toStr(args[0], "file path"))); });
     // Lets it be written, or not (on Windows, its read-only flag): elsewhere by its owner, as
     // Java's setWritable has it, and kept from being written by anyone.
     def("setWritable", 2, 2, [](VM& vm, int, Value* args) -> Value {
         const std::string& path = vm.toStr(args[0], "file path");
-        if (const std::error_code ec = vm.host->setWritable(path, args[1].truthy())) throw pathError(vm, "change who may write", path, ec);
+        if (const std::error_code ec = vm.currentHost().setWritable(path, args[1].truthy())) throw pathError(vm, "change who may write", path, ec);
         return Value::null();
     });
     // setLastModified(path, nanoseconds since the start of 1970).
     def("setLastModified", 2, 2, [](VM& vm, int, Value* args) -> Value {
         const std::string& path = vm.toStr(args[0], "file path");
-        if (const std::error_code ec = vm.host->setLastModified(path, vm.toInt(args[1], "time"))) throw pathError(vm, "set the time of", path, ec);
+        if (const std::error_code ec = vm.currentHost().setLastModified(path, vm.toInt(args[1], "time"))) throw pathError(vm, "set the time of", path, ec);
         return Value::null();
     });
     // A new empty directory, or file, in the temporary directory, its name starting with
@@ -1461,29 +1464,29 @@ void registerFiles(VM& vm) {
         const std::string& prefix = vm.toStr(args[0], "prefix");
         const bool directory = args[2].truthy();
         const std::string suffix = directory ? "" : vm.toStr(args[1], "suffix");
-        std::optional<std::string> made = vm.host->createTemp(prefix, suffix, directory, base, ec);
+        std::optional<std::string> made = vm.currentHost().createTemp(prefix, suffix, directory, base, ec);
         if (made) return vm.str(std::move(*made));
         if (ec) throw pathError(vm, "find", "the temporary directory", ec);
         throw vm.errorOf("IOException", std::string("cannot make a temporary ") + (directory ? "directory" : "file") + " in '" + base + "'");
     });
-    def("absolute", 1, 1, [](VM& vm, int, Value* args) -> Value { return vm.str(vm.host->absolute(vm.toStr(args[0], "file path"))); });
+    def("absolute", 1, 1, [](VM& vm, int, Value* args) -> Value { return vm.str(vm.currentHost().absolute(vm.toStr(args[0], "file path"))); });
 
     // The last name of a path, the path of the folder it is in (null if the path says none),
     // and a path with a name added, in the host's style of paths.
     def("name", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        const bool windows = vm.host->windowsPaths();
+        const bool windows = vm.currentHost().windowsPaths();
         const std::string_view path = withoutTrailingSeparators(vm.toStr(args[0], "file path"), windows);
         return vm.str(std::string(path.substr(lastNameStart(path, windows))));
     });
     def("parent", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        const bool windows = vm.host->windowsPaths();
+        const bool windows = vm.currentHost().windowsPaths();
         const std::string_view path = withoutTrailingSeparators(vm.toStr(args[0], "file path"), windows);
         const size_t at = lastNameStart(path, windows);
         if (at == 0 || at == path.size()) return Value::null();
         return vm.str(std::string(withoutTrailingSeparators(path.substr(0, at), windows)));
     });
     def("join", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        const bool windows = vm.host->windowsPaths();
+        const bool windows = vm.currentHost().windowsPaths();
         const std::string& base = vm.toStr(args[0], "file path");
         const std::string& child = vm.toStr(args[1], "file name");
         if (base.empty()) return args[1];
@@ -1491,7 +1494,7 @@ void registerFiles(VM& vm) {
         return vm.str(base + (windows ? '\\' : '/') + child);
     });
     // The separator, as the program reads it, follows the host too (Path.separator in file.astra).
-    def("separator", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.str(vm.host->windowsPaths() ? "\\" : "/"); });
+    def("separator", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.str(vm.currentHost().windowsPaths() ? "\\" : "/"); });
 
     vm.defineGlobal("__file", Value::object(file));
 }

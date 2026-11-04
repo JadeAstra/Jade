@@ -86,6 +86,10 @@ struct Context {
     const ObjTypeInfo* pendingTypeArgs = nullptr;
     Context* parent = nullptr;  // the one waiting for this one to finish or be set aside
     ObjFiber* fiber = nullptr;  // the task this is the stack of; null for a thread's own
+    // The host its code reaches (M6.6.2): a sandbox's, given by the code that started it or
+    // entered with Sandbox.run; null for the VM's own. The ones it had before each Sandbox.run.
+    std::shared_ptr<Host> host;
+    std::vector<std::shared_ptr<Host>> hostsBefore;
 
     Context(size_t stackSize, int frameLimit, bool grows = false);
     ~Context();
@@ -835,9 +839,26 @@ public:
     // Where the error of a thread { }'s job was thrown, kept for its report while nothing has
     // asked for it, by the error.
     std::unordered_map<Obj*, std::vector<std::string>> failureTraces;
-    // What the program reaches outside itself (host.h, M6.6.2): the system's, or a sandbox's.
-    // The cores of a parallel section and the workers have their root's.
-    Host* host = &realHost();
+    // What the program reaches outside itself (host.h, M6.6.2): the system's, unless a sandbox's
+    // was given (a worker's, started in one). The code running now may be in a sandbox of its
+    // own: currentHost() is what each of its operations goes to.
+    std::shared_ptr<Host> host = std::shared_ptr<Host>(&realHost(), [](Host*) {});
+    Host& currentHost() { return context_ != nullptr && context_->host ? *context_->host : *host; }
+    std::shared_ptr<Host> currentHostShared() { return context_ != nullptr && context_->host ? context_->host : host; }
+    // Sandbox.run: the code running now reaches `entered` until leaveHost.
+    void enterHost(std::shared_ptr<Host> entered) {
+        context_->hostsBefore.push_back(context_->host);
+        context_->host = std::move(entered);
+    }
+    void leaveHost() {
+        if (context_->hostsBefore.empty()) return;
+        context_->host = std::move(context_->hostsBefore.back());
+        context_->hostsBefore.pop_back();
+    }
+    // A new thread's or task's: the host of the code that starts it, if it is not the VM's own.
+    void inheritHost(Context& made) {
+        if (context_ != nullptr) made.host = context_->host;
+    }
     // Program.onUncaughtError, as the program set it: what takes the error that ends a thread,
     // or a job's nothing asked for; null while there is none.
     Value uncaughtHandler = Value::null();
@@ -1290,6 +1311,7 @@ private:
 void registerBuiltins(VM& vm);
 void registerThreads(VM& vm);  // threads.cpp: threads, locks, the event loop and tasks
 void registerIo(VM& vm);       // io.cpp: streams, processes and sockets
+void registerSandbox(VM& vm);  // sandbox.cpp: __sandbox, what Sandbox is built on (M6.6.2)
 void registerGrid(VM& vm);     // grid.cpp: what Grid<T> is built on (D155)
 void registerWorkers(VM& vm);  // worker.cpp: isolated workers
 void registerParallel(VM& vm); // parallel.cpp: parallel sections

@@ -377,9 +377,15 @@ void registerText(VM& vm) {
     });
 
     // How many fonts a file holds; 0 if it is not a font file.
-    def("countIn", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::integer(Face::count(vm.toStr(args[0], "file path"))); });
+    // A font file of the system's; in a sandbox, none yet (M6.6.2): 0 fonts, and an IOException
+    // for loading one.
+    def("countIn", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (vm.currentHost().isSandbox()) return Value::integer(0);
+        return Value::integer(Face::count(vm.toStr(args[0], "file path")));
+    });
 
     def("load", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        if (vm.currentHost().isSandbox()) throw vm.errorOf("IOException", "loading a font file is not available in a sandbox yet");
         std::string error;
         auto face = Face::load(vm.toStr(args[0], "file path"), clampInt(vm.toInt(args[1], "index")), error);
         if (face == nullptr) throw vm.errorOf("IOException", error);

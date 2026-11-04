@@ -619,12 +619,13 @@ void deliverToWorker(VM& vm, const std::string& data) {
 // ---- The worker's thread ----
 
 void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::string> image, int entry, std::vector<std::string> arguments,
-                std::function<void(VM&, AstraThrow&, const std::string&)> onThreadError) {
+                std::function<void(VM&, AstraThrow&, const std::string&)> onThreadError, std::shared_ptr<Host> host) {
     // Kept on the heap: if threads of its own are still running when the worker ends, the VM
     // is left as it is rather than taken apart under them.
     VM* vm = new VM(true);
     Program* program = new Program;
     vm->scriptArgs = std::move(arguments);
+    vm->host = std::move(host);  // in the sandbox of the code that started it, if any (M6.6.2)
     vm->workerLink = link;
     vm->onThreadError = onThreadError;
     vm->programImage = [image] { return *image; };
@@ -731,7 +732,7 @@ void registerWorkers(VM& vm) {
         if (!link->daemon) vm.jobStarted();  // the program waits for a worker that is not a daemon
 
         auto image = std::make_shared<const std::string>(vm.programImage());
-        std::thread(workerMain, link, image, std::stoi(spec.substr(1, second - 1)), vm.scriptArgs, vm.onThreadError).detach();
+        std::thread(workerMain, link, image, std::stoi(spec.substr(1, second - 1)), vm.scriptArgs, vm.onThreadError, vm.currentHostShared()).detach();
         return Value::integer(link->id);
     });
 

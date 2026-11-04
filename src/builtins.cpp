@@ -957,6 +957,7 @@ void registerBuiltins(VM& vm) {
     registerReflection(vm);
     registerThreads(vm);
     registerIo(vm);
+    registerSandbox(vm);
     registerGrid(vm);
     registerWorkers(vm);
     registerParallel(vm);
