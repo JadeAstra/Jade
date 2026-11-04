@@ -24,3 +24,9 @@ print(firstVowel("rhythm and"), firstVowel("xyz"))           // expect: a null
 
 // runCatching and LockBox.useKey.
 print(runCatching { 1 / 0 }.isFailure, runCatching { 5 }.getOrNull(), LockBox(3).useKey { it * 2 })   // expect: true 5 6
+
+// assert, with a message made only when it fails, as Kotlin writes it (8.5d).
+var made = 0
+assert(true) { made++; "never made" }
+try { assert(false) { "made ${made} times before" } } catch (e : AssertionError) { print(e.message) }   // expect: made 0 times before
+try { assert(1 > 2, "words") } catch (e : AssertionError) { print(e.message) }   // expect: words

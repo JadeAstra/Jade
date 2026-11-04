@@ -78,6 +78,17 @@ inline fun <T> checkNotNull(value : T?, lazyMessage : () -> any?) : T {
   return value
 }
 
+// Nothing when `condition` holds; otherwise an AssertionError, an Error a bare catch lets
+// through, with `message`, or with what `lazyMessage` gives, worked out only then, as Kotlin
+// writes it (8.5d): assert(total >= 0) { "total is $total" }.
+inline fun assert(condition : bool, message : string = "assertion failed") {
+  if (!condition) { throw AssertionError(message) }
+}
+// The same, the message what `lazyMessage` gives.
+inline fun assert(condition : bool, lazyMessage : () -> any?) {
+  if (!condition) { throw AssertionError("${lazyMessage()}") }
+}
+
 // The program as it runs (D184): what it was started with, and its name.
 //
 //   if (Program.arguments.contains("--verbose")) { ... }

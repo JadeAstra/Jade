@@ -572,9 +572,6 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry" id="Bytes"><code class="sig">fun Bytes(source : any) : Bytes</code><a class="anchor" href="#Bytes">#</a>
 <p>New bytes: <code>Bytes(16)</code> is sixteen zeros, <code>Bytes([1, 2, 255])</code> the numbers of a list, and <code>Bytes(other)</code> a copy of other bytes. An IllegalArgumentException for a negative size, a number outside 0 to 255, or anything else; text becomes bytes with <code>toBytes()</code>.</p>
 </div>
-<div class="entry" id="assert"><code class="sig">fun assert(condition : bool, message : string = &quot;assertion failed&quot;)</code><a class="anchor" href="#assert">#</a>
-<p>Nothing when <code>condition</code> is true; otherwise an AssertionError with <code>message</code>.</p>
-</div>
 <div class="entry" id="hash"><code class="sig">fun hash(vararg values : any?) : int</code><a class="anchor" href="#hash">#</a>
 <p>The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash: hash(1, 2) is 994, as there.</p>
 </div>
@@ -1398,6 +1395,12 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="checkNotNull-2"><code class="sig">inline fun &lt;T&gt; checkNotNull(value : T?, lazyMessage : () -&gt; any?) : T</code><a class="anchor" href="#checkNotNull-2">#</a>
 <p>The same, the IllegalStateException's message what <code>lazyMessage</code> gives.</p>
+</div>
+<div class="entry" id="assert"><code class="sig">inline fun assert(condition : bool, message : string = &quot;assertion failed&quot;)</code><a class="anchor" href="#assert">#</a>
+<p>Nothing when <code>condition</code> holds; otherwise an AssertionError, an Error a bare catch lets through, with <code>message</code>, or with what <code>lazyMessage</code> gives, worked out only then, as Kotlin writes it (8.5d): assert(total &gt;= 0) { &quot;total is $total&quot; }.</p>
+</div>
+<div class="entry" id="assert-2"><code class="sig">inline fun assert(condition : bool, lazyMessage : () -&gt; any?)</code><a class="anchor" href="#assert-2">#</a>
+<p>The same, the message what <code>lazyMessage</code> gives.</p>
 </div>
 <div class="entry" id="Program"><code class="sig">object Program</code><a class="anchor" href="#Program">#</a>
 <p>The program as it runs: what it was started with, and its name.</p>

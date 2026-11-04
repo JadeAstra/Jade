@@ -340,11 +340,6 @@ void registerGlobals(VM& vm) {
         return Value::null();
     });
 
-    vm.defineNative("assert", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
-        if (args[0].truthy()) return Value::null();
-        throw vm.runtimeError(Thrown::AssertionError, argc > 1 ? vm.stringify(args[1]) : "assertion failed");
-    });
-
     // The program's name, by default: its own file's, without .astra (Program.name, D184).
     vm.defineNative("__programName", 0, 0, [](VM& vm, int, Value*) -> Value {
         return vm.str(vm.mainFileName());

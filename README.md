@@ -2355,7 +2355,7 @@ of the library is built into the runtime and the rest is written in Astra itself
 
 **Functions:** `print(...)`, `write(...)` (no newline), `input(prompt?)`,
 `Range(end)` / `Range(start, end, step?)`,
-`assert(cond, message?)`, `clock()`, `exit(code?)`, `hash(a, b, ...)`,
+`assert(cond, message?)` or `assert(cond) { message }`, `clock()`, `exit(code?)`, `hash(a, b, ...)`,
 `Bytes(size | list)`, `with(object, lambda)`, `repeat(times) { index -> }`, `flush()`
 
 **The program:** `Program.arguments` is what it was started with, after its file's name
