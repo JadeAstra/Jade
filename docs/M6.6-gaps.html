@@ -416,7 +416,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-union-infer">
 <h3><span class="code">8.3e</span>When inference gives a union (part 8, group 3)</h3>
 <p>D40: two types with a class or interface above both give that, as before; an <code>int</code> and a <code>float</code> give <code>number</code>; with none, the union (<code>flag ? 1 : &quot;one&quot;</code>, <code>[1, &quot;one&quot;]</code>), where they used to give an unknown type. Eight tests and one line of Jade had to say <code>any</code> or test the type. A union&#39;s members are those of the nearest type above all its types, and a member not all of them have is an error saying to test which it is. A local is narrowed the other way too: after <code>if (v is string) return</code>, <code>v</code> is the rest. <code>is</code> and <code>as</code> on a whole union are errors, nothing of it being kept when running. Where one side is a type parameter or <code>unit</code> (<code>flag ? t : 1</code>), inference still gives the unknown type, which the checker does not check.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> giving <code>T | int</code> where inference now falls back to the unknown type is deferred to step 5 of the choices plan (worth doing, not urgent).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> giving <code>T | int</code> where inference now falls back to the unknown type is deferred to step 5 of the choices plan (worth doing, not urgent). (done 2026-11-04, d8ac06a)</span></div>
 </section>
 
 <section class="decision" id="p8-alias-self">
@@ -470,7 +470,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-tail-scope">
 <h3><span class="code">8.4c</span>Which calls of itself are a loop (part 8, group 4)</h3>
 <p>D29: <code>return f(...)</code>, an expression body, a branch of <code>? :</code>, what follows <code>?:</code>, and since G33 what a branch of <code>if</code> or <code>when</code> gives, in what is returned, with arguments by position. For a top-level function, an extension, a method called on its own object (bare or <code>this.</code>) that nothing overrides, and since G33 a function declared inside another and a generic one giving itself its own type parameters again. Not a call on another object of the class, nor an extension&#39;s on another receiver; not inside a try, as with Kotlin&#39;s <code>tailrec</code>; not for a function with a vararg, nor a generic one giving other type arguments. A left-out argument is worked out again from its default. The trace says <code>10,001 times</code>, counting every call it stood for.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). A call of itself on another receiver, an extension&#39;s (<code>n.next.last()</code>) or a method&#39;s that no class overrides, is to become a loop too, timed against the commit before it, as G33 found the loop instruction moves the numeric benchmark (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). A call of itself on another receiver, an extension&#39;s (<code>n.next.last()</code>) or a method&#39;s that no class overrides, is to become a loop too, timed against the commit before it, as G33 found the loop instruction moves the numeric benchmark (done 2026-11-04, 1803155).</span></div>
 </section>
 
 <section class="decision" id="p8-tail-word">
@@ -506,7 +506,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-inline-std">
 <h3><span class="code">8.4i</span>Which of the standard library&#39;s functions are inline (part 8, group 4)</h3>
 <p>D58: <code>let</code>, <code>also</code>, <code>apply</code>, <code>run</code>, <code>with</code>, <code>takeIf</code>, <code>takeUnless</code>, <code>repeat</code>, <code>use</code>, <code>buildList</code>, <code>buildMap</code>, <code>buildSet</code>, <code>buildString</code>, <code>List(size) { }</code>, <code>Lock.useKey</code> (which took the place of <code>synchronized</code> and <code>withLock</code> in group 7), and for lists, maps, sets and a map&#39;s values every function that goes through the items calling its lambda: <code>forEach</code>, <code>forEachIndexed</code>, <code>map</code>, <code>filter</code>, <code>any</code>, <code>all</code>, <code>none</code>, <code>count</code>, <code>first</code>, <code>find</code>, <code>fold</code>, <code>reduce</code>, <code>sumOf</code>, <code>maxOf</code>, <code>groupBy</code>, <code>associate</code> and the like, 137 in all. Those that keep their lambda, as a comparison (<code>sortedBy</code>), are not. Not inline yet: the lambda functions of strings and ranges (<code>forEach</code>, <code>map</code>, <code>filter</code>, <code>any</code>, <code>count</code>, <code>ifEmpty</code> and the rest), <code>require</code>, <code>check</code>, <code>requireNotNull</code>, <code>checkNotNull</code>, <code>runCatching</code> and <code>LockBox.useKey</code>, each of which makes its lambda at every call.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). Those not inline yet are to be made inline, <code>require</code> and <code>check</code> as two forms, with a message and without, in place of a lambda that may be null (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). Those not inline yet are to be made inline, <code>require</code> and <code>check</code> as two forms, with a message and without, in place of a lambda that may be null (done 2026-11-04, 679cf81).</span></div>
 </section>
 
 <section class="decision" id="p8-scope-null">
@@ -542,7 +542,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-assert-error">
 <h3><span class="code">8.5d</span>What assert and TODO throw (part 8, group 5)</h3>
 <p>Kotlin&#39;s: <code>assert</code> an <code>AssertionError</code> and <code>TODO()</code> a <code>NotImplementedError</code>, both Errors, so a bare catch lets them through, as D151 has it for what stops the program. <code>TODO()</code> is new. <code>assert</code> takes its message as a string, made even when the assertion holds; Kotlin&#39;s <code>assert(cond) { &quot;message&quot; }</code> is an error.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> <code>assert(cond) { &quot;message&quot; }</code>, the message made only when the assertion fails, is left for step 5 of the plan (worth doing, not urgent).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> <code>assert(cond) { &quot;message&quot; }</code>, the message made only when the assertion fails, is left for step 5 of the plan (worth doing, not urgent). (done 2026-11-04, ed50166)</span></div>
 </section>
 
 <section class="decision" id="p8-kept">
@@ -572,7 +572,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-use">
 <h3><span class="code">8.5i</span>What use { } takes (part 8, group 5)</h3>
 <p>D113 says anything with a <code>close()</code>. As built, an <code>AutoCloseable</code>, Kotlin&#39;s interface, which the streams, sockets and thread pools implement in place of the <code>use</code> each had; a class of someone else&#39;s is fitted to it with <code>extend</code> (D33). It is an inline function of the standard library. Since G40, an error from <code>close()</code> after one from the block is set aside for the block&#39;s, in its <code>suppressed</code>, as Java has it. <code>AutoCloseable.close()</code> throws nothing checked, so a class whose <code>close()</code> throws an IOException cannot be one (D53); it catches it in <code>close()</code>.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). <code>AutoCloseable.close</code> declaring <code>throws IOException</code> is left for step 5 of the plan, and only if <code>use</code> is checked against the real class&#39;s <code>close()</code>.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date). <code>AutoCloseable.close</code> declaring <code>throws IOException</code> is left for step 5 of the plan, and only if <code>use</code> is checked against the real class&#39;s <code>close()</code>. Left 2026-11-04: <code>use</code> is checked once, as written, and not against each class&#39;s <code>close()</code>, the condition this waited on, so <code>AutoCloseable.close</code> still throws nothing checked.</span></div>
 </section>
 
 <section class="decision" id="p8-catch-order">
@@ -698,7 +698,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-chunks-views">
 <h3><span class="code">8.7h</span>parallelChunks, and views of a list (part 8, group 7)</h3>
 <p>D96 extends <code>parallelChunks</code> from bytes to lists of values. As built, it takes any list: each core may write the positions of its part, whatever the items are, and look at no other position, which is an error saying whose it is. Bytes are not held to that: a core may read the rest of the buffer while others write it. A view from <code>splitAt</code> is made only by the standard library (its constructor takes a key no program has). Since cc711f0 the views in use never overlap: while <code>splitAt</code>&#39;s block runs, the list or view that was split is lent to its halves, and writing through it or splitting it again is an error until the block ends; a view whose block has ended is written through, split and given out no more. In a <code>parallel(...)</code> the list itself, captured, is read-only to every function, as all captured data is; while pieces hold views of it, each reads and writes it through its own views only. The same view given to two of the functions, or a list given out with a view of it, is an error. <code>sort()</code> on a view sorts that stretch in place.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> in a parallel section, reading another core&#39;s part of a bytes buffer is an error, as it is for a list, since its answer would depend on timing (to be done).</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> in a parallel section, reading another core&#39;s part of a bytes buffer is an error, as it is for a list, since its answer would depend on timing (done 2026-11-04, cb4ea3e).</span></div>
 </section>
 
 <section class="decision" id="p8-shared-blocks">
@@ -776,7 +776,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p8-process-run">
 <h3><span class="code">8.8h</span>What Process.run does (part 8, group 8)</h3>
 <p>L70 has <code>Process.run</code> take Process&#39;s arguments and give the exit code, output and error. As built, its output is always captured (there is no <code>output</code> argument); its errors are captured unless <code>error</code> says otherwise (<code>toOutput</code> puts them in the output); its input is <code>discard</code> unless given, so a program that asks for input gets none at once rather than waiting for typing nobody will do. Output and errors are read at the same time, so neither fills up while the other is read. It gives a <code>ProcessResult</code>, a data class of <code>exitCode</code>, <code>output</code> and <code>error</code>. It has no time limit: a program that never ends keeps <code>run</code> waiting.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built.</strong> A <code>timeout</code> argument comes later, with the plan&#39;s step 5 work.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built.</strong> A <code>timeout</code> argument comes later, with the plan&#39;s step 5 work. (done 2026-11-04, c2b3961)</span></div>
 </section>
 
 <section class="decision" id="p8-stream-enum">
@@ -806,7 +806,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-exact-fit">
 <h3><span class="code">8.9b</span>An exact fit beats a narrowed constant (part 8, group 9)</h3>
 <p><code>Color(255, 128, 0)</code> fits both the header, whose parts are bytes (an int constant may be taken as one), and the constructor taking ints. As built, among a function&#39;s or a class&#39;s forms one the arguments fit exactly wins over one that needs an int constant made a byte, as Java and Kotlin choose <code>f(int)</code> for <code>f(5)</code>; so the ints form is chosen. Two costs follow: a part out of range, <code>Color(300, 0, 0)</code>, is an IllegalArgumentException when the program runs, not a compile error; and every constant colour is a static call, four checks and the making of the value, each time it is reached.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> a constant <code>Color(255, 128, 0)</code> checked when compiled (300 an error there) and made once is left for later, step 5 of the M6.6 choices plan.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> a constant <code>Color(255, 128, 0)</code> checked when compiled (300 an error there) and made once is left for later, step 5 of the M6.6 choices plan. (done 2026-11-04, f3716d9, made by its header; made once as a constant is left)</span></div>
 </section>
 
 <section class="decision" id="p9-byte-int">
@@ -830,7 +830,7 @@ td.when { min-width: 9em; }
 <section class="decision" id="p9-grid">
 <h3><span class="code">8.9f</span>Details of Grid (part 8, group 9)</h3>
 <p>D155 settles <code>Grid&lt;T&gt;</code>. As built: <code>bytes</code> is a copy of the cells&#39; storage (D133 wanted it writable in <code>editPixels</code>; a copy cannot be, and writing goes through <code>grid[x, y]</code>), though it reads like a property that costs nothing, and Jade&#39;s <code>Surface.upload</code> copies an image&#39;s pixels through it; <code>toList()</code> gives the cells row by row; <code>parallelRows { rows -&gt; }</code> runs on every core with whole rows each; a grid of objects has no zero, so making one or adding rows without a <code>fill</code> throws when the program runs; a grid cannot key a map, its cells being changeable; a part of a grid by ranges takes no step.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> left for later, step 5 of the M6.6 choices plan: <code>bytes</code> becomes <code>toBytes()</code>, as it copies everything; <code>Surface.upload</code> hands over the pixels without a copy; and a grid of objects made with no <code>fill</code> is a compile error.</span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed;</strong> left for later, step 5 of the M6.6 choices plan: <code>bytes</code> becomes <code>toBytes()</code>, as it copies everything; <code>Surface.upload</code> hands over the pixels without a copy; and a grid of objects made with no <code>fill</code> is a compile error. (done 2026-11-04, c8c5ce4)</span></div>
 </section>
 
 <section class="decision" id="p9-font">
