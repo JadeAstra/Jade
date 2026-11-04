@@ -6835,6 +6835,11 @@ private:
     }
 
     void compileIncDec(const IncDecExpr& e) {
+        if (Checker::AtomicFieldOp atomic; session_.checker != nullptr && session_.checker->atomicField(e, atomic)) {
+            compileAtomicField(atomic, e);  // `c.n++` on an atomic var: += 1, in one step (8.7l)
+            emit(Op::Pop);
+            return;
+        }
         Op change = e.increment ? Op::Add : Op::Sub;
 
         switch (e.target->kind) {

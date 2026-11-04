@@ -37,6 +37,14 @@ print(body.hits, body.force)                                  // expect: 1000 50
 print(body.hits.compareAndSet(1000, 5), body.hits, body.hits.compareAndSet(1000, 6))   // expect: true 5 false
 body.hits = 0
 print(body.hits)                                              // expect: 0
+// ++ and -- on an atomic var are += 1 and -= 1, in one step (8.7l).
+(1..1000).parallelStream().forEach { n ->
+  body.hits++
+  body.hits--
+  body.hits++
+  body.force += 1.0
+}
+print(body.hits)                                              // expect: 1000
 
 // Chunks of a list: each core gets the positions of one part, and writes those.
 val xs : open List<int> = List(1000) { 0 }

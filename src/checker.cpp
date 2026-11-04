@@ -4522,6 +4522,7 @@ struct Checker::Impl {
                 return assign(static_cast<const AssignExpr&>(e));
             case ExprKind::IncDec: {
                 const auto& i = static_cast<const IncDecExpr&>(e);
+                atomicIncDec(i);
                 checkValueFieldWrite(*i.target);
                 if (FieldInfo* p = propertyAssigned(*i.target)) noteAccessor(p, true, *i.target);
                 Type t = expr(*i.target);
@@ -6602,6 +6603,26 @@ struct Checker::Impl {
         op.object = object;
         op.field = f->name;
         atomicOps.emplace(&at, op);
+    }
+
+    // `c.n++` and `c.n--` on an atomic var: the one operation += 1 and -= 1 are (8.7l).
+    std::unique_ptr<LiteralExpr> one;
+    void atomicIncDec(const IncDecExpr& i) {
+        if (i.nullSafe) return;
+        const Expr* object = nullptr;
+        FieldInfo* f = atomicFieldAt(*i.target, object);
+        if (f == nullptr || silent > 0) return;
+        if (one == nullptr) {
+            one = std::make_unique<LiteralExpr>();
+            one->type = LiteralExpr::Type::Int;
+            one->intValue = 1;
+        }
+        AtomicOp op;
+        op.kind = i.increment ? 0 : 1;
+        op.object = object;
+        op.field = f->name;
+        op.operand = one.get();
+        atomicOps[&i] = op;
     }
 
     // `x.hits += 1`, `best = max(best, v)`: noted as the one operation it is, where it is one.
