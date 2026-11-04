@@ -2279,7 +2279,8 @@ ExprPtr Parser::elvis() {
 
 // `a name b` calls a.name(b), for a function marked infix (D72), with Kotlin's precedence:
 // below arithmetic and the ranges, above ?:, `in`, `is` and comparisons, from left to right.
-// The name is on the line `a` ends on; what it is given may start the next.
+// The name is on the line `a` ends on, and what it is given starts on that line too: a word at
+// the start of a line begins something new (8.4a).
 ExprPtr Parser::infixCall() {
     ExprPtr left = range();
     for (;;) {

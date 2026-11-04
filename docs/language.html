@@ -785,7 +785,7 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>Puts <code>items</code> in before the item at <code>index</code>, from 0 to <code>size</code>; true if there were any. An IndexOutOfBoundsException for any other <code>index</code>.</p>
 </div>
 <div class="entry" id="List.get"><code class="sig">fun &lt;T&gt; List&lt;T&gt;.get(index : int) : T</code><a class="anchor" href="#List.get">#</a>
-<p>The item at <code>index</code>, from 0; unlike <code>list[i]</code>, never counted from the end. An IndexOutOfBoundsException where there is none.</p>
+<p>The item at <code>index</code>, from 0, as list[index] gives it for an int (one counted from the end is written list[^k], D146). An IndexOutOfBoundsException where there is none.</p>
 </div>
 <div class="entry" id="List.getOrNull"><code class="sig">fun &lt;T&gt; List&lt;T&gt;.getOrNull(index : int) : T?</code><a class="anchor" href="#List.getOrNull">#</a>
 <p>The item at <code>index</code>, from 0, or null where there is none, as for a negative index.</p>

@@ -220,8 +220,8 @@ external fun <T> open List<T>.addAll(items : any) : bool
 // Puts `items` in before the item at `index`, from 0 to `size`; true if there were any. An
 // IndexOutOfBoundsException for any other `index`.
 external fun <T> open List<T>.addAll(index : int, items : any) : bool
-// The item at `index`, from 0; unlike `list[i]`, never counted from the end. An
-// IndexOutOfBoundsException where there is none.
+// The item at `index`, from 0, as list[index] gives it for an int (one counted from the end is
+// written list[^k], D146). An IndexOutOfBoundsException where there is none.
 external fun <T> List<T>.get(index : int) : T
 // The item at `index`, from 0, or null where there is none, as for a negative index.
 external fun <T> List<T>.getOrNull(index : int) : T?
