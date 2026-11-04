@@ -7616,13 +7616,35 @@ struct Checker::Impl {
                 for (ClassInfo* k : keptThrown(f)) addClass(s, k);
             resolveFunc(f);
             for (size_t i = 0; i < f->params.size(); i++)
-                if (f->params[i].kind == Type::Function && inPlace(f, static_cast<int>(i))) addParam(s, {f, static_cast<int>(i)});
+                if (f->params[i].kind == Type::Function && inPlace(f, static_cast<int>(i)) && passesOn(f, static_cast<int>(i)))
+                    addParam(s, {f, static_cast<int>(i)});
             return s;
         }
         noteThrowRead(f->decl);
         auto found = thrownBy.find(f->decl);
         if (found != thrownBy.end()) s = found->second;
         return s;
+    }
+
+    // Whether what a lambda given for a parameter throws leaves the function, rather than being
+    // caught inside (`runCatching { load() }`, 8.5e): as a kept file's facts say, or as the body
+    // checked here does; for a function with no body, as it may.
+    bool passesOn(FuncInfo* f, int param) {
+        if (f->unit != nullptr && f->unit->skipBodies) return keptMark(f, param) != 'c';
+        if (f->unit == nullptr || f->isExternal || f->decl->isAbstract || f->decl->body.empty()) return true;
+        noteThrowRead(f->decl);
+        auto found = thrownBy.find(f->decl);
+        if (found == thrownBy.end()) return false;
+        const auto& params = found->second.params;
+        return std::find(params.begin(), params.end(), std::make_pair(f, param)) != params.end();
+    }
+
+    // A function-typed parameter's mark in a file's facts: '1' run in place and what it throws
+    // passed on, 'c' run in place and what it throws caught, '0' kept, '.' not a function.
+    char paramMark(FuncInfo* f, int param) {
+        if (f->params[static_cast<size_t>(param)].kind != Type::Function) return '.';
+        if (!inPlace(f, param)) return '0';
+        return passesOn(f, param) ? '1' : 'c';
     }
 
     ThrowSet constructionThrows(ClassInfo* k, int depth = 0) {
@@ -9474,6 +9496,10 @@ struct Checker::Impl {
     std::unordered_map<const FunctionDecl*, std::string> keptInPlace;
     std::unordered_set<Unit*> keptInPlaceRead;
     bool keptFact(FuncInfo* f, int param) {
+        const char mark = keptMark(f, param);
+        return mark == '1' || mark == 'c';
+    }
+    char keptMark(FuncInfo* f, int param) {
         Unit* u = f->unit;
         if (keptInPlaceRead.insert(u).second) {
             size_t i = 0;
@@ -9483,11 +9509,11 @@ struct Checker::Impl {
             });
         }
         auto found = keptInPlace.find(f->decl);
-        if (found == keptInPlace.end()) return false;
+        if (found == keptInPlace.end()) return '0';
         const std::string line = found->second.substr(0, found->second.find(kKeySeparator));
         const size_t end = line.find('!');
         const std::string marks = line.substr(0, end);
-        return static_cast<size_t>(param) < marks.size() && marks[static_cast<size_t>(param)] == '1';
+        return static_cast<size_t>(param) < marks.size() ? marks[static_cast<size_t>(param)] : '0';
     }
 
     // What a function of a file whose bodies were not checked may throw, as its kept facts
@@ -9544,8 +9570,7 @@ struct Checker::Impl {
             if (known != funcOf.end()) {
                 FuncInfo* f = known->second;
                 resolveFunc(f);
-                for (size_t p = 0; p < f->params.size(); p++)
-                    line += f->params[p].kind != Type::Function ? '.' : inPlace(f, static_cast<int>(p)) ? '1' : '0';
+                for (size_t p = 0; p < f->params.size(); p++) line += paramMark(f, static_cast<int>(p));
                 line += throwsFact(f);
                 line += keyFact(f);
             }
@@ -10360,8 +10385,7 @@ std::string Checker::summaryFacts(const std::string& fileKey) {
         c.resolveFunc(f);
         if (!f->resultWritten) facts += c.argText(c.resultOf(f));
         facts += "|";
-        for (size_t p = 0; p < f->params.size(); p++)
-            facts += f->params[p].kind != Type::Function ? '.' : c.inPlace(f, static_cast<int>(p)) ? '1' : '0';
+        for (size_t p = 0; p < f->params.size(); p++) facts += c.paramMark(f, static_cast<int>(p));
         facts += c.throwsFact(f);
         facts += c.keyFact(f);
         facts += "\n";

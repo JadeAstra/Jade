@@ -51,3 +51,17 @@ fun mistakes(flag : bool) {
   } catch (e : Error) {
   }
 }
+
+// What a lambda run in place throws leaves the function only where the function lets it out
+// (8.5e): runCatching catches it, as does a function with throws written that catches it; one
+// that calls it bare, or passes it on, lets it out.
+fun guarded(action : () -> unit) throws InterruptedException {
+  try { action() } catch (e) { }
+}
+fun bare(action : () -> unit) throws InterruptedException { action() }
+fun kept() {
+  keep { runCatching { load("e") } }
+  keep { guarded { load("f") } }          // check: this lambda may throw InterruptedException, which nothing can catch where it is called: it is kept as a () -> unit, which throws nothing checked; catch it inside the lambda (D35)
+  keep { bare { load("g") } }             // check: this lambda may throw InterruptedException | IOException, which nothing can catch where it is called: it is kept as a () -> unit, which throws nothing checked; catch it inside the lambda (D35)
+  keep { listOf(1).forEach { load("h") } }   // check: this lambda may throw IOException, which nothing can catch where it is called: it is kept as a () -> unit, which throws nothing checked; catch it inside the lambda (D35)
+}
