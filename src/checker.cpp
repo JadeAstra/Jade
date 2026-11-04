@@ -4142,6 +4142,11 @@ struct Checker::Impl {
     void accessorBody(FuncInfo* fn, const Type& stored) {
         resolveFunc(fn);
         const FunctionDecl& d = *fn->decl;
+        // As in Kotlin, a setter takes the property's type: written out, it is that type (8.3g).
+        if (d.accessor == FunctionDecl::Accessor::Set && !fn->params.empty() && stored.known() && fn->params[0].known() &&
+            !(fits(fn->params[0], stored) && fits(stored, fn->params[0])) && !d.params.empty())
+            report(d, "the setter of '" + d.name + "' takes the property's type, " + describe(stored) + ", not " + describe(fn->params[0]) +
+                          ": write set(" + d.params[0] + ")");
         FnCtx c;
         c.fn = fn;
         c.cls = fn->owner;

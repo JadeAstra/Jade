@@ -49,7 +49,7 @@ object Native {
   // The text on the clipboard ("" if it holds none).
   var clipboardText : string
     get() => __jade.clipboardGet()
-    set(text : any?) { __jade.clipboardSet("$text") }
+    set(text) { __jade.clipboardSet(text) }
 
   // For tests: a clipboard of the program's own, so that the system's is left alone.
   fun useOwnClipboard(own : bool = true) {

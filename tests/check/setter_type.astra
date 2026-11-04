@@ -1,0 +1,11 @@
+// A setter takes its property's type, as in Kotlin (8.3g): written out, it is that type.
+class Labels {
+  var name : string = ""
+    set(v : any?) { field = "$v" }          // check: the setter of 'name' takes the property's type, a string, not an any?: write set(v)
+  var count = 0
+    set(n : int) { field = n }
+  var label : string? = null
+    set(text) { field = text }
+  var size : int = 0
+    set(n : float) { field = n.toInt() }    // check: the setter of 'size' takes the property's type, an int, not a float: write set(n)
+}

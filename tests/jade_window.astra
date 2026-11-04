@@ -181,7 +181,7 @@ Native.useOwnClipboard()
 print(Native.clipboardText == "")   // expect: true
 Native.clipboardText = "copied: é 中 😀"
 print(Native.clipboardText, Native.clipboardText.size)   // expect: copied: é 中 😀 13
-Native.clipboardText = unknown(42)
+Native.clipboardText = 42.toString()
 print(Native.clipboardText)   // expect: 42
 
 // -- The clock, and what the system says of itself --
