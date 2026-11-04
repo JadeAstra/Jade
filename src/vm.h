@@ -824,9 +824,17 @@ public:
     std::shared_ptr<WorkerLink> workerLink;
     // In a worker: the object its messages are delivered to (Worker.parent).
     Value workerSelf;
-    // What the program runs as it ends, giving text for the error stream: the report of the jobs
-    // that failed with nothing asking for their errors (8.7a); null while there is none.
-    Value endReport = Value::null();
+    // The jobs that failed with nothing asking for their errors (8.7a): each job's error, the
+    // job held weakly, so that one nothing can ask any more is reported once it is collected, and
+    // the others as the program ends. `unaskedDeliver` reports one (__unaskedFailed: to
+    // Program.onUncaughtError, or as an error nobody caught); `uncaughtInJob` makes the exit
+    // code 70 once one was reported so.
+    std::unordered_map<Obj*, Value> unaskedFailures;
+    std::vector<Value> freedFailures;  // their jobs collected, to be reported on the event loop
+    Value unaskedDeliver = Value::null();
+    bool uncaughtInJob = false;
+    bool deliveryPosted = false;
+    void deliverUnasked(bool atEnd);
 
     // ---- Frozen data shared with workers (D97, worker.cpp) ----
     // The blocks outside every heap this VM holds, and what of its own frozen data was shared as
@@ -874,6 +882,8 @@ public:
 
     // Called for an error that nothing caught on a thread other than the main one.
     std::function<void(VM&, AstraThrow&, const std::string& threadName)> onThreadError;
+    // How a job's error nothing asked for is reported where the program has no handler (8.7a).
+    std::function<void(VM&, AstraThrow&)> onUnaskedError;
     // Called when exit() is used on such a thread.
     std::function<void(int code)> onThreadExit;
 

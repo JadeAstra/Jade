@@ -1,8 +1,8 @@
 // A job that fails with nothing asking for its error (by get, getOrNull, failed, onError,
-// Job.all or Job.any) is reported as the program ends, as Python reports a task's error never
-// retrieved (8.7a); the program's exit code is as it was. One asked for is not reported, nor one
-// cancelled, nor a thread's, whose thread reports it where it was thrown.
-// expect error output: A job failed, and nothing asked for its error: IllegalStateException: nobody looked
+// Job.all or Job.any) is an error nobody caught (8.7a): reported once nothing can ask, here as the
+// program ends, and the exit code is 70. One asked for is not reported, nor one cancelled, nor a
+// thread's, whose thread reports it where it was thrown.
+// expect runtime error: Uncaught IllegalStateException: nobody looked
 fun broken(text : string) : int throws IllegalStateException { throw IllegalStateException(text) }
 val lost = task { broken("nobody looked") }
 val got = task { broken("asked by get") }

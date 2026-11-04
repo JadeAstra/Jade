@@ -85,6 +85,11 @@ void reportThreadError(VM& vm, AstraThrow& thrown, const std::string& threadName
     reportUncaught(vm, thrown);
 }
 
+void reportUnaskedError(VM& vm, AstraThrow& thrown) {
+    thrown.trace.push_back("in a job that failed with nothing asking for its error");
+    reportUncaught(vm, thrown);
+}
+
 }  // namespace
 
 // Runs a loaded program to its end: the script itself, then the event loop for as long as
@@ -92,6 +97,7 @@ void reportThreadError(VM& vm, AstraThrow& thrown, const std::string& threadName
 // daemon). Returns the exit code.
 int runProgram(VM& vm, Program& program, int entry) {
     vm.onThreadError = reportThreadError;
+    vm.onUnaskedError = reportUnaskedError;
     // A worker has a VM of its own, and loads its own copy of the program from these bytes.
     vm.programImage = [&program] {
         std::ostringstream image(std::ios::binary);
@@ -104,34 +110,33 @@ int runProgram(VM& vm, Program& program, int entry) {
         std::_Exit(code);
     };
 
-    // What the program asked to have reported as it ends (VM::endReport): the jobs that failed
-    // with nothing asking for their errors (8.7a).
-    auto reportAtEnd = [&vm] {
-        if (vm.endReport.isNull()) return;
+    // As it ends, the jobs that failed with nothing asking for their errors and are still held
+    // (8.7a): each to Program.onUncaughtError, or reported as an error nobody caught, which makes
+    // the exit code 70.
+    auto reportAtEnd = [&vm](int& code) {
         try {
-            const Value text = vm.call(vm.endReport, 0, nullptr);
-            if (text.isObjType(ObjType::String) && !asString(text)->utf8().empty()) {
-                std::cout.flush();
-                std::cerr << asString(text)->utf8();
-                std::cerr.flush();
-            }
+            vm.deliverUnasked(true);
         } catch (AstraThrow& thrown) {
             reportUncaught(vm, thrown);
-        } catch (const AstraExit&) {
+            vm.uncaughtInJob = true;
+        } catch (const AstraExit& exit) {
+            code = exit.code;
+            return;
         }
+        if (code == 0 && vm.uncaughtInJob) code = kExitRuntimeError;
     };
 
     int code = 0;
     try {
         vm.runModule(entry);
         vm.runEventLoop(true);
-        reportAtEnd();
+        reportAtEnd(code);
     } catch (AstraThrow& thrown) {
         reportUncaught(vm, thrown);
         code = kExitRuntimeError;
     } catch (const AstraExit& exit) {
         code = exit.code;
-        reportAtEnd();
+        reportAtEnd(code);
     }
     // A daemon thread, or a worker still waiting in a read, cannot be left running while the
     // VM is taken apart under it: the process ends here instead.

@@ -968,9 +968,24 @@ void registerThreads(VM& vm) {
     // -- __thread: threads and locks --
     ObjClass* thread = holder(vm, "thread");
 
-    // What to run as the program ends, giving text for the error stream (VM::endReport).
-    define(vm, thread, "atEnd", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        vm.endReport = args[0];
+    // A job failed with nothing asking for its error (8.7a): the job, held weakly, its error, and
+    // what reports it once nothing can ask (VM::unaskedFailures).
+    define(vm, thread, "unasked", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        if (args[0].isObj()) vm.unaskedFailures[args[0].as.obj] = args[1];
+        vm.unaskedDeliver = args[2];
+        return Value::null();
+    });
+    // Something asked for the job's error: it is not reported.
+    define(vm, thread, "asked", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (args[0].isObj()) vm.unaskedFailures.erase(args[0].as.obj);
+        return Value::null();
+    });
+    // A job's error nothing asked for and no handler took: reported as one nobody caught, and the
+    // program's exit code is 70.
+    define(vm, thread, "reportUncaught", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        vm.uncaughtInJob = true;
+        AstraThrow thrown{args[0]};
+        if (vm.onUnaskedError) vm.onUnaskedError(vm, thrown);
         return Value::null();
     });
 

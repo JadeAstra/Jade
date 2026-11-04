@@ -140,7 +140,8 @@ class Job<T> {
   private val whenDone : open List<() -> unit> = []
   internal var interrupter : (() -> unit)? = null   // what cancel(interrupt = true) does
   // Whether anything has asked for its error: get, getOrNull, failed, onError, Job.all or
-  // Job.any. One that fails with nothing asking is reported as the program ends (8.7a).
+  // Job.any. One that fails with nothing asking is an error nobody caught (8.7a), reported once
+  // nothing can ask any more, when it is collected or as the program ends.
   private var asked = false
 
   // Whether it has finished: with a value, with an error, or cancelled.
@@ -167,18 +168,15 @@ class Job<T> {
     return fail(error)
   }
 
-  // Its error is asked for: not reported as the program ends.
+  // Its error is asked for: not reported.
   internal fun ask() {
     lock.useKey {
       if (!asked) {
         asked = true
-        if (state == 2) { __UnaskedJobs.remove(this) }
+        if (state == 2) { __thread.asked(this) }
       }
     }
   }
-  // The error it failed with, as text, for the report.
-  internal val errorText : string
-    get() => "$held"
   // With `interrupt`, the thread working on it is interrupted as well.
   fun cancel(interrupt : bool = false) : bool {
     if (!finish(3, CancellationException())) { return false }
@@ -197,7 +195,7 @@ class Job<T> {
         held = value
         then = whenDone.toList()
         whenDone.clear()
-        if (newState == 2 and !asked) { __UnaskedJobs.add(this) }
+        if (newState == 2 and !asked) { __thread.unasked(this, value, __unaskedFailed) }
         true
       }
     }
@@ -332,30 +330,15 @@ class Job<T> {
   }
 }
 
-// The jobs that failed with nothing asking for their errors, reported as the program ends, as
-// Python reports a task's error never retrieved (8.7a).
-object __UnaskedJobs {
-  private val lock = Lock()
-  private val jobs : open List<any> = []
-  private var hooked = false
-
-  fun add(job : any) {
-    lock.useKey {
-      jobs.add(job)
-      if (!hooked) {
-        hooked = true
-        __thread.atEnd({ report() })
-      }
-    }
-  }
-  fun remove(job : any) {
-    lock.useKey { jobs.removeIf { it === job } }
-  }
-  private fun report() : string {
-    val left = lock.useKey { jobs.toList() }
-    var text = ""
-    for (job in left) { text += "A job failed, and nothing asked for its error: ${(job as Job<any?>).errorText}\n" }
-    return text
+// A job's error nothing asked for, once nothing can (8.7a): to Program.onUncaughtError where the
+// program set one, and otherwise reported as an error nobody caught, which makes the program's
+// exit code 70.
+fun __unaskedFailed(error : Throwable) {
+  val handler = Program.onUncaughtError
+  if (handler != null) {
+    handler(error)
+  } else {
+    __thread.reportUncaught(error)
   }
 }
 

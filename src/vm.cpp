@@ -242,6 +242,28 @@ void VM::bundleValues(int count) {
     for (const Value& v : pairs) *sp_++ = v;
 }
 
+// The errors of failed jobs nothing asked about (8.7a): those whose jobs were collected, and as
+// the program ends every one left. Each is handed to __unaskedFailed; an error that throws is
+// reported as one nobody caught.
+void VM::deliverUnasked(bool atEnd) {
+    std::vector<Value> pending = std::move(freedFailures);
+    freedFailures.clear();
+    if (atEnd) {
+        for (const auto& [job, error] : unaskedFailures) pending.push_back(error);
+        unaskedFailures.clear();
+    }
+    if (pending.empty() || unaskedDeliver.isNull()) return;
+    TempVector keep(*this, pending);
+    for (Value error : pending) {
+        try {
+            call(unaskedDeliver, 1, &error);
+        } catch (AstraThrow& thrown) {
+            uncaughtInJob = true;
+            if (onUnaskedError) onUnaskedError(*this, thrown);
+        }
+    }
+}
+
 // A field an extend adds (D157), read: the object's value, or its starting value, made for
 // it now and kept. The table is the root's, which every core of a parallel section reads and
 // only the root collects.
@@ -8380,7 +8402,9 @@ void VM::collectGarbage() {
     }
     for (ObjFiber* fiber : waitingFibers_) markObject(fiber);
     markValue(workerSelf);
-    markValue(endReport);
+    markValue(unaskedDeliver);
+    for (const Value& error : freedFailures) markValue(error);
+    for (const auto& [job, error] : unaskedFailures) markValue(error);  // the job is held weakly
     for (const auto& worker : workerObjects) markValue(worker.second);
     for (const Value& task : loopTasks_) markValue(task);
     for (const Timer& timer : timers_) markValue(timer.task);
@@ -8429,6 +8453,23 @@ void VM::collectGarbage() {
         }
         for (auto it = extras_.begin(); it != extras_.end();)
             it = it->first->marked || it->first->immortal ? std::next(it) : extras_.erase(it);
+    }
+    // A failed job nothing asked about, now nothing can (8.7a): its error is reported on the
+    // event loop, where Astra code may run.
+    for (auto it = unaskedFailures.begin(); it != unaskedFailures.end();) {
+        if (it->first->marked || it->first->immortal) {
+            ++it;
+            continue;
+        }
+        freedFailures.push_back(it->second);
+        it = unaskedFailures.erase(it);
+    }
+    if (!freedFailures.empty() && !deliveryPosted) {
+        deliveryPosted = true;
+        postNative([](VM& vm) {
+            vm.deliveryPosted = false;
+            vm.deliverUnasked(false);
+        });
     }
 
     releaseUnreachedBlocks();
