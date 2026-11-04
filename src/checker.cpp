@@ -2507,6 +2507,10 @@ struct Checker::Impl {
             {"pop", "pop() is written removeLast(): one name for each thing (D74)"},
             {"uppercase", "uppercase() is written upper(): one name for each thing (D74)"},
             {"lowercase", "lowercase() is written lower(): one name for each thing (D74)"},
+            {"uppercaseChar", "uppercaseChar() is written upper(), which gives a char on a char: one name for each thing (D74)"},
+            {"lowercaseChar", "lowercaseChar() is written lower(), which gives a char on a char: one name for each thing (D74)"},
+            {"titlecase", "titlecase() is written upper(), which gives a char on a char: one name for each thing (D74)"},
+            {"titlecaseChar", "titlecaseChar() is written upper(), which gives a char on a char: one name for each thing (D74)"},
             {"joinToString", "joinToString() is written join(), which takes the same arguments: one name for each thing (D74)"},
             {"each", "each { } is written forEach { }: one name for each thing (D74)"},
             {"toLong", "toLong() is written toInt(): an int is 64 bits (D74)"},
@@ -3374,7 +3378,7 @@ struct Checker::Impl {
             return;
         }
         if (v.init && declared.known() && !fits(value, declared))
-            report(*v.init, "'" + v.name + "' is " + describe(declared) + "; it cannot start as " + describe(value));
+            report(*v.init, "'" + v.name + "' is " + describe(declared) + "; it cannot start as " + describe(value) + toByteAdvice(value, declared, *v.init));
         Type type = declared;
         if (!v.type.present()) {
             // A variable takes its type from its first value (D18), so one without either
@@ -4048,7 +4052,7 @@ struct Checker::Impl {
                     Type value = exprExpected(*field->init, declared);
                     if (field->type.present() && !fits(value, declared))
                         report(*field->init, "'" + field->name + "' is " + describe(declared) + "; it cannot start as " +
-                                                 describe(value));
+                                                 describe(value) + toByteAdvice(value, declared, *field->init));
                     if (!field->type.present() && !field->isConst && value.kind == Type::Null && (f->header == nullptr || !f->header->type.present()))
                         report(*field, "'" + field->name + "' starts as null, so its type must be written (" + field->name +
                                            " : Type? = null)");
@@ -4079,7 +4083,7 @@ struct Checker::Impl {
                     Type value = exprExpected(*field->init, declared);
                     if (field->type.present() && !fits(value, declared))
                         report(*field->init, "'" + field->name + "' is " + describe(declared) + "; it cannot start as " +
-                                                 describe(value));
+                                                 describe(value) + toByteAdvice(value, declared, *field->init));
                 });
             }
         }
@@ -6115,7 +6119,7 @@ struct Checker::Impl {
         if (!fits(result, target)) {
             std::string who = targetName.empty() ? "this place" : "'" + targetName + "'";
             if (a.op == TokenType::Eq)
-                report(*a.value, who + " is " + describe(target) + "; it cannot be given " + describe(result));
+                report(*a.value, who + " is " + describe(target) + "; it cannot be given " + describe(result) + toByteAdvice(result, target, *a.value));
             else if (a.op == TokenType::DotEq)
                 report(*a.value, who + " is " + describe(target) + "; '.=' would give it " + describe(result));
             else
@@ -6270,9 +6274,8 @@ struct Checker::Impl {
                     return unknownType();
                 }
                 if (ClassInfo* k = classNamed(base)) {
-                    if ((m.name == "className" || m.name == "class") && k->statics.count(m.name) == 0) {
-                        report(m, base + "." + m.name + " is written " + base + "#" + (m.name == "className" ? ".name" : "") +
-                                      ": `#` gives a class (D48)");
+                    if (const std::string advice = classAdvice(base, m.name); !advice.empty() && k->statics.count(m.name) == 0) {
+                        report(m, advice);
                         return unknownType();
                     }
                     return staticMember(k, m);
@@ -6427,6 +6430,22 @@ struct Checker::Impl {
     }
 
     // A class named by a bare name in the code (not an object, whose name is its instance).
+    // Where an int is put in a byte (8.9c): what makes it one, or "".
+    std::string toByteAdvice(const Type& value, const Type& want, const Expr& e) {
+        if (withNull(want, false).kind != Type::Byte || value.kind != Type::Int) return "";
+        if (e.kind == ExprKind::Literal) return ": a byte holds 0 to 255";
+        if (e.kind != ExprKind::Name) return ": toByte() makes an int a byte, an error past 0 to 255 (D19)";
+        return ": " + static_cast<const NameExpr&>(e).name + ".toByte() makes it one, an error past 0 to 255 (D19)";
+    }
+
+    // Kotlin's and Java's ways of asking for a class or its name (8.6k), or "".
+    static std::string classAdvice(const std::string& written, const std::string& name) {
+        if (name == "className" || name == "simpleName" || name == "qualifiedName")
+            return written + "." + name + " is written " + written + "#.name, the name of its class; " + written + "# is the class itself (D48)";
+        if (name == "class" || name == "javaClass") return written + "." + name + " is written " + written + "#, its class (D48)";
+        return "";
+    }
+
     ClassInfo* classNamed(const std::string& base) {
         if (ClassInfo* k = localClass(base)) return k->isObject ? nullptr : k;
         for (ClassInfo* c = classAround(); c != nullptr; c = c->outer) {
@@ -6466,9 +6485,45 @@ struct Checker::Impl {
             report(at, advice);
             return;
         }
+        // Java's upper-case names (8.9k): Color.WHITE is Color.white, LIGHT_GRAY lightGray.
+        if (k->unit != nullptr && k->unit->prelude && javaConstant(name)) {
+            const std::string camel = camelName(name);
+            if (hasStatic(k, camel)) {
+                report(at, k->name + "." + name + " is written " + k->name + "." + camel + ": Astra's names of members are camelCase");
+                return;
+            }
+            if (const std::string advice = preludeAdvice(k, camel); !advice.empty()) {
+                report(at, advice);
+                return;
+            }
+        }
         // Judged once the program has been read: a name the program assigns on the class
         // (`Counter.note = "kept"`) is stored there, and is one of its statics.
         if (!hasUnknownSuper(k) && silent == 0) pendingStatics.push_back(PendingStatic{unit, &at, k, name, what});
+    }
+
+    // A name in Java's spelling of a constant: capitals, with '_' between words.
+    static bool javaConstant(const std::string& name) {
+        if (name.empty() || name[0] < 'A' || name[0] > 'Z') return false;
+        for (char c : name)
+            if (c >= 'a' && c <= 'z') return false;
+        return true;
+    }
+
+    // LIGHT_GRAY as lightGray.
+    static std::string camelName(const std::string& name) {
+        std::string out;
+        bool upper = false;
+        for (char c : name) {
+            if (c == '_') {
+                upper = !out.empty();
+                continue;
+            }
+            const char lower = c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+            out += upper ? c : lower;
+            upper = false;
+        }
+        return out;
     }
 
     struct PendingStatic {
@@ -6753,7 +6808,7 @@ struct Checker::Impl {
                     const std::string io = preludeAdvice(k, name);
                     report(at, !io.empty() ? io
                                : name == "length" && (k->unit != nullptr && k->unit->prelude) ? goneAdvice(name)
-                               : name == "class" ? k->name + " has no member 'class'; the class of an object is written x# (D48)"
+                               : !classAdvice("x", name).empty() ? classAdvice("x", name)
                                                  : k->name + " has no member '" + name + "'");
                 }
             }
@@ -6762,6 +6817,8 @@ struct Checker::Impl {
                 report(at, goneAdvice(name));
             else if (name == "code" && plain.kind == Type::String)
                 report(at, "a string has no code: the code of its first character is s[0].code, and a character's 'A'.code (G21)");
+            else if (builtinDeclared(plain) && !classAdvice("x", name).empty())
+                report(at, classAdvice("x", name));
             else if ((obj.kind == Type::List || obj.kind == Type::String || obj.kind == Type::Map || obj.kind == Type::Bytes) &&
                      (name == "size" || name == "lastIndex"))
                 result = Type::of(Type::Int);
@@ -6995,6 +7052,12 @@ struct Checker::Impl {
                 b.given[p] = true;
             }
         }
+        if (!b.failed && !f->isLambda() && f->owner != nullptr && f->owner->name == "Rect" && f->owner->unit != nullptr &&
+            f->owner->unit->prelude && n == 4 && b.given[0] && b.given[1] && !b.given[2] && !b.given[3]) {
+            report(at, "Rect takes x and y first, then width and height: a rectangle at the corner is Rect(0, 0, width, height) (D180)");
+            b.missing = true;
+            return b;
+        }
         if (!b.failed && !f->isLambda()) {
             for (size_t p = 0; p < n; p++) {
                 if (b.given[p] || f->hasDefault[p] || static_cast<int>(p) == f->vararg) continue;
@@ -7112,7 +7175,8 @@ struct Checker::Impl {
                     plainWant.cls->unit->prelude && (types[i].kind == Type::Int || types[i].kind == Type::Float || types[i].kind == Type::Number))
                     report(*args.exprs[i], what + " takes a Duration for '" + param + "': a time says its unit, as 16.milliseconds or 2.seconds (D90)");
                 else
-                    report(*args.exprs[i], what + " takes " + describe(want) + " for '" + param + "', not " + describe(types[i]));
+                    report(*args.exprs[i], what + " takes " + describe(want) + " for '" + param + "', not " + describe(types[i]) +
+                                               toByteAdvice(types[i], want, *args.exprs[i]));
             }
         }
         if (envOut != nullptr) *envOut = env;
@@ -9490,11 +9554,23 @@ struct Checker::Impl {
         return t.kind == Type::Class && t.cls != nullptr && t.cls->decl != nullptr && t.cls->decl->isAnnotation ? t.cls : nullptr;
     }
 
+    // Kotlin's annotations that describe an annotation, and @OptIn and @Deprecated (8.6i): each
+    // says what to do, where the program declares no annotation of that name.
+    static std::string kotlinAnnotation(const std::string& name) {
+        if (name == "Target" || name == "Retention" || name == "MustBeDocumented")
+            return "@" + name + " tells Kotlin's compiler how an annotation is used; Astra's need no such word: delete it (D153)";
+        if (name == "Repeatable") return "@Repeatable is Kotlin's: an Astra annotation is written once on a declaration; delete it (D153)";
+        if (name == "OptIn") return "@OptIn accepts one of Kotlin's experimental APIs, and Astra has none to accept: delete it (D153)";
+        if (name == "Deprecated") return "@Deprecated comes with 1.0 (G46); until then, say so in the comment above the declaration";
+        return "";
+    }
+
     void checkAnnotations(const Annotations& written, AnnotationPlace place) {
         for (const Annotation& a : written) {
             ClassInfo* k = annotationClass(a);
             if (k == nullptr) {
-                report(a, "'" + a.name + "' is no annotation: one is declared annotation " + a.name + "(val value : T) (D153)");
+                const std::string kotlin = kotlinAnnotation(a.name);
+                report(a, !kotlin.empty() ? kotlin : "'" + a.name + "' is no annotation: one is declared annotation " + a.name + "(val value : T) (D153)");
                 continue;
             }
             expr(*a.call);  // its arguments as a call to its class takes them

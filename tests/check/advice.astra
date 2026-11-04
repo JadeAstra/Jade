@@ -1,0 +1,46 @@
+// Kotlin's and Java's ways of writing things say what Astra writes (M6.6 step 3).
+
+// Asking for a class or its name (8.6k).
+class Box(val n : int)
+val box = Box(1)
+val a1 = box.className                     // check: x.className is written x#.name, the name of its class; x# is the class itself (D48)
+val a2 = box.simpleName                    // check: x.simpleName is written x#.name, the name of its class; x# is the class itself (D48)
+val a3 = box.qualifiedName                 // check: x.qualifiedName is written x#.name, the name of its class; x# is the class itself (D48)
+val a4 = box.javaClass                     // check: x.javaClass is written x#, its class (D48)
+val a5 = Box.simpleName                    // check: Box.simpleName is written Box#.name, the name of its class; Box# is the class itself (D48)
+val a6 = 5.className                       // check: x.className is written x#.name, the name of its class; x# is the class itself (D48)
+val a7 = box#.name
+
+// A char's case (8.1c).
+val c1 = 'a'.uppercaseChar()               // check: uppercaseChar() is written upper(), which gives a char on a char: one name for each thing (D74)
+val c2 = 'A'.lowercaseChar()               // check: lowercaseChar() is written lower(), which gives a char on a char: one name for each thing (D74)
+val c3 = 'a'.titlecase()                   // check: titlecase() is written upper(), which gives a char on a char: one name for each thing (D74)
+val c4 = 'a'.titlecaseChar()               // check: titlecaseChar() is written upper(), which gives a char on a char: one name for each thing (D74)
+val c5 = 'a'.upper()
+
+// Java's upper-case names of the standard library's statics (8.9k).
+val s1 = Color.WHITE                       // check: Color.WHITE is written Color.white: Astra's names of members are camelCase
+val s2 = Color.LIGHT_GRAY                  // check: Color.LIGHT_GRAY is written Color.lightGray: Astra's names of members are camelCase
+val s3 = Font.BOLD                         // check: a font's style is said by name: Font(name, size, bold = true) (L80)
+val s4 = Color.NOPE                        // check: Color has no static member 'NOPE'
+
+// Rect takes all four numbers (D180).
+val r1 = Rect(30, 40)                      // check: Rect takes x and y first, then width and height: a rectangle at the corner is Rect(0, 0, width, height) (D180)
+val r2 = Rect(0, 0, 30, 40)
+
+// An int where a byte goes (8.9c).
+val n = 200
+val b1 : byte = n                          // check: 'b1' is a byte; it cannot start as an int: n.toByte() makes it one, an error past 0 to 255 (D19)
+fun takesByte(v : byte) {}
+val b2 = takesByte(n)                      // check: takesByte(...) takes a byte for 'v', not an int: n.toByte() makes it one, an error past 0 to 255 (D19)
+var b3 : byte = 1
+fun more() { b3 = n + 1 }                  // check: 'b3' is a byte; it cannot be given an int: toByte() makes an int a byte, an error past 0 to 255 (D19)
+val b4 : byte = n.toByte()
+
+// Kotlin's annotations (8.6i).
+@Target class Marked                       // check: @Target tells Kotlin's compiler how an annotation is used; Astra's need no such word: delete it (D153)
+@Retention annotation Kept(val v : int)    // check: @Retention tells Kotlin's compiler how an annotation is used; Astra's need no such word: delete it (D153)
+@MustBeDocumented annotation Doc(val v : int)   // check: @MustBeDocumented tells Kotlin's compiler how an annotation is used; Astra's need no such word: delete it (D153)
+@Repeatable annotation Tag(val v : int)    // check: @Repeatable is Kotlin's: an Astra annotation is written once on a declaration; delete it (D153)
+@OptIn fun early() {}                      // check: @OptIn accepts one of Kotlin's experimental APIs, and Astra has none to accept: delete it (D153)
+@Deprecated fun old() {}                   // check: @Deprecated comes with 1.0 (G46); until then, say so in the comment above the declaration

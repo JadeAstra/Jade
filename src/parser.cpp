@@ -1688,6 +1688,8 @@ std::unique_ptr<FunctionDecl> Parser::functionRest(std::string name, const Token
     parameterList(*decl, start);
     decl->returnType = optionalType();
     throwsClause(decl->throwsTypes);
+    if (!decl->throwsTypes.empty() && check(TokenType::Comma))
+        throw error(peek(), "the classes a function throws are joined with |: throws IOException | TimeoutException (D52)");
 
     decl->bodyFrom = p_;
     if (match(TokenType::Arrow)) {

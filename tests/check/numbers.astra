@@ -4,7 +4,7 @@ fun bytes() {
   val fits : byte = 255
   val over : byte = 300                    // check: 300 does not fit in a byte, which holds 0 to 255
   val n = 5
-  val asked : byte = n                     // check: 'asked' is a byte; it cannot start as an int
+  val asked : byte = n                     // check: 'asked' is a byte; it cannot start as an int: n.toByte() makes it one, an error past 0 to 255 (D19)
   var b : byte = 1
   b += 1                                   // check: 'b' is a byte; this makes it an int
   val list : List<byte> = [1, 2, 256]      // check: 256 does not fit in a byte, which holds 0 to 255

@@ -19,8 +19,8 @@ val label = "x" + clock()
 fun classes(p : Plain?, q : Plain) {
   print(p#, null#)                          // null's class is the built-in class null, as Python's NoneType (D48)
   print(q#, Plain#, Plain<int>#)            // check: Plain takes 0 type arguments, not 1
-  print(q.class)                            // check: Plain has no member 'class'; the class of an object is written x# (D48)
-  print(Plain.className)                    // check: Plain.className is written Plain#.name: `#` gives a class (D48)
+  print(q.class)                            // check: x.class is written x#, its class (D48)
+  print(Plain.className)                    // check: Plain.className is written Plain#.name, the name of its class; Plain# is the class itself (D48)
 }
 
 // A Duration written as a constant, a number and its unit (G52).
