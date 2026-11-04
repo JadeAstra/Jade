@@ -15,9 +15,18 @@
 # look for faults in the runtime, which the way a program was loaded does not change.
 #
 #   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 16 -Modes script
+#
+# -Stress runs the suite as above, then once more under each of the runtime's stress settings,
+# the way of running a script only (D163): ASTRA_COPY_READS reads a list's value items as copies
+# where they could be read in place, ASTRA_THREAD_STRESS changes threads at every safe point,
+# ASTRA_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
+# ASTRA_GC_STRESS collects at every safe point (gc.astra, which counts collections, is left out
+# of that one). Each checkpoint runs it.
+#
+#   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 24 -Stress
 
 param([string]$Astra = (Join-Path $PSScriptRoot '..\build\astra.exe'), [int]$Parallel = 1,
-      [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'))
+      [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'), [switch]$Stress)
 
 if (-not (Test-Path $Astra)) {
     Write-Host "astra.exe not found at $Astra - run build.bat first"
@@ -26,6 +35,24 @@ if (-not (Test-Path $Astra)) {
 $Astra = (Resolve-Path $Astra).Path
 # `-Modes script,cached` arrives as one string from the command line of another shell.
 $Modes = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+if ($Stress) {
+    $settings = [ordered]@{ 'copy-reads' = 'ASTRA_COPY_READS'; 'thread-stress' = 'ASTRA_THREAD_STRESS';
+                            'native-results' = 'ASTRA_CHECK_NATIVE_RESULTS'; 'gc-stress' = 'ASTRA_GC_STRESS' }
+    $failed = $false
+    Write-Host '== the suite'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Astra $Astra -Parallel $Parallel -Modes ($Modes -join ',')
+    if ($LASTEXITCODE -ne 0) { $failed = $true }
+    foreach ($name in $settings.Keys) {
+        Write-Host "== $name"
+        Set-Item "env:$($settings[$name])" '1'
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Astra $Astra -Parallel $Parallel -Modes script
+        if ($LASTEXITCODE -ne 0) { $failed = $true }
+        Remove-Item "env:$($settings[$name])"
+    }
+    if ($failed) { exit 1 }
+    exit 0
+}
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "astra-tests-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
@@ -158,6 +185,8 @@ $failures = @()
 $aloneOnly = @()
 
 $tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.astra') | Sort-Object Name)
+# gc.astra counts collections, which the GC stress setting makes at every safe point.
+if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -ne 'gc.astra' }) }
 $outcomes = @{}
 if ($Parallel -gt 1) {
     # Each test in a runspace of a pool of $Parallel, all started at once and gathered in order.
