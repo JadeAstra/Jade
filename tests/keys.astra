@@ -20,7 +20,7 @@ print(table, table is FrozenMap, table["a"] is FrozenList, seen, seen is FrozenS
 print(attempt { (hidden(frozen) as open List<any>).add(1) }, attempt { (hidden(table) as open Map<string, any>)["b"] = 2 }, attempt { (hidden(seen) as open Set<int>).add(3) })
 // expect: a frozen list cannot be changed: toOpenList() makes a copy that can be a frozen map cannot be changed: toOpenMap() makes a copy that can be a frozen set cannot be changed: toOpenSet() makes a copy that can be
 val copy = frozen.toOpenList()
-copy.add([4])
+copy.add([4].frozen())
 print(copy, copy is FrozenList, frozen.size)   // expect: [[1, 2], [3], [4]] false 2
 val typed : FrozenList<int> = [3, 1, 2].frozen()
 print(typed.sorted(), typed.map { it * 2 }, typed.first(), typed.itemType)   // expect: [1, 2, 3] [6, 2, 4] 3 int

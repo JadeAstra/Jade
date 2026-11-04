@@ -61,3 +61,26 @@ fun frozenOnes(items : FrozenList<int>, table : FrozenMap<string, int>, seen : F
   val notFrozen : FrozenList<int> = [1, 2]   // check: 'notFrozen' is a FrozenList<int>; it cannot start as an open List<int>
   print(open, notFrozen, items.size, table["a"], 1 in seen)
 }
+
+// Followed as far as == and hashCode go (8.2c): into a function of no object they call, and,
+// for a class judged, into its own overrides of what an == above it calls.
+class Tag(var n : int) {
+  op ==(other : any?) : bool => other is Tag and code(this) == code(other)
+  fun hashCode() : int => code(this)
+}
+fun code(t : Tag) : int => t.n
+val byTag = mapOf(Tag(1) to "a")             // check: a Tag cannot be a key: its == or hashCode reads the var 'n', which can change (D26)
+class Keyed(val id : int) {
+  val key : int get() => id
+  op ==(other : any?) : bool => other is Keyed and key == other.key
+  fun hashCode() : int => key
+}
+class Shifting(id : int) : Keyed(id) {
+  var shift = 0
+  override val key : int get() => id + shift
+}
+val byKeyed = mapOf(Keyed(1) to "a")
+val byShifting = mapOf(Shifting(1) to "a")   // check: a Shifting cannot be a key: its == or hashCode reads the var 'shift', which can change (D26)
+
+// frozen() freezes what it holds, and its type says so (8.2e).
+val nested = mapOf([[1, 2], [3]].frozen() to "a")

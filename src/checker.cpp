@@ -4206,6 +4206,20 @@ struct Checker::Impl {
 
     // ---- Expressions ----
 
+    // `x.frozen()` on a list, map or set: the copy freezes the lists, maps and sets inside it too,
+    // and its type says so (8.2e), FrozenList<FrozenList<int>> for [[1, 2]].frozen().
+    static bool frozenCall(const CallExpr& c) {
+        return c.args.empty() && c.callee->kind == ExprKind::Member && static_cast<const MemberExpr&>(*c.callee).name == "frozen";
+    }
+    static Type deeplyFrozen(Type t) {
+        if (t.kind == Type::List || t.kind == Type::Map || t.kind == Type::Set) {
+            t.frozen = true;
+            t.open = false;
+            for (Type& a : t.args) a = deeplyFrozen(a);
+        }
+        return t;
+    }
+
     // An expression where a type is expected: a lambda takes its parameters from it, and a
     // list or map literal its item types.
     // The types list and map literals are made as, for the compiler (M6.6 part 1).
@@ -4524,7 +4538,8 @@ struct Checker::Impl {
                 return Type::of(Type::Unit);
             }
             case ExprKind::Call: {
-                const Type made = call(static_cast<const CallExpr&>(e));
+                Type made = call(static_cast<const CallExpr&>(e));
+                if (made.frozen && frozenCall(static_cast<const CallExpr&>(e))) made = deeplyFrozen(made);
                 // A value given back by a function may be one kept in a list or an object, read
                 // where it is (M6.6 part 5): kept so where the code around may.
                 if (made.kind == Type::Class && !made.nullable && made.cls != nullptr && made.cls->isValue)
@@ -7524,6 +7539,7 @@ struct Checker::Impl {
     }
 
     void noteCallThrows(FuncInfo* f, ClassInfo* constructs, const Args& args, const Binding* b, const Node& at) {
+        noteKeyCall(f);
         ThrowScope* scope = throwHere(at);
         if (scope == nullptr) return;
         CallRecord r;
@@ -8339,14 +8355,20 @@ struct Checker::Impl {
     std::unordered_map<ClassInfo*, std::string> keyTroubles;
     std::unordered_set<ClassInfo*> keyTroubleBusy;
 
-    // The method or getter the code being checked is in, a lambda's in the one around it; null
-    // at the top level.
+    // The method, getter or function the code being checked is in, a lambda's in the one around
+    // it; null at the top level. A function of no object is followed where an == or a hashCode
+    // calls it (8.2c).
     FuncInfo* keyFactsFn() {
         for (FnCtx* c = ctx; c != nullptr; c = c->parent) {
-            if (c->fn != nullptr) return c->fn->owner != nullptr && !c->fn->isStatic ? c->fn : nullptr;
+            if (c->fn != nullptr) return !c->fn->isStatic ? c->fn : nullptr;
             if (!c->isLambda) break;
         }
         return nullptr;
+    }
+    // A call of a function of no object (`code(this)`), noted for the method it is in.
+    void noteKeyCall(FuncInfo* f) {
+        if (f == nullptr || f->owner != nullptr || silent > 0) return;
+        if (FuncInfo* in = keyFactsFn()) keyFacts[in].calls.emplace_back(f->name, f);
     }
 
     // A member of an object read or called in a method.
@@ -8400,16 +8422,34 @@ struct Checker::Impl {
     // calls: why the class cannot be a key, or empty. For a function of a file whose bodies were
     // not checked, its kept facts say (G26), as they said when it was last checked.
     std::unordered_map<std::string, std::string> keyVerdicts;  // by function and how it is asked
-    std::string keyVerdict(FuncInfo* start, const std::string& startName, bool forValue) {
-        const std::string memo = std::to_string(reinterpret_cast<uintptr_t>(start)) + (forValue ? "v" : "o") + startName;
+    // `judged`, where given, is the class being judged: what it overrides of what its ==, written
+    // above it, calls is followed too (8.2c).
+    std::string keyVerdict(FuncInfo* start, const std::string& startName, bool forValue, ClassInfo* judged = nullptr) {
+        const std::string memo = std::to_string(reinterpret_cast<uintptr_t>(start)) + (forValue ? "v" : "o") + startName + "@" +
+                                 std::to_string(reinterpret_cast<uintptr_t>(judged));
         if (auto found = keyVerdicts.find(memo); found != keyVerdicts.end()) return found->second;
         std::string why;
         std::vector<std::pair<std::string, FuncInfo*>> todo{{startName, start}};
         std::unordered_set<FuncInfo*> followed;
+        // What the judged class, or one between it and `above`, writes in place of `name`.
+        auto overriding = [&](const std::string& name, ClassInfo* above, bool property) {
+            std::vector<FuncInfo*> found;
+            for (ClassInfo* c = judged; c != nullptr && c != above; c = c->superclass) {
+                if (property) {
+                    auto field = c->fields.find(name);
+                    if (field != c->fields.end() && field->second->getterFn != nullptr) found.push_back(field->second->getterFn);
+                } else if (auto methods = c->methods.find(name); methods != c->methods.end()) {
+                    for (FuncInfo* g : methods->second) found.push_back(g);
+                }
+            }
+            return found;
+        };
         while (!todo.empty() && why.empty()) {
             const auto [name, f] = todo.back();
             todo.pop_back();
             if (!followed.insert(f).second) continue;
+            // One of no object written in C++ reads no field of one.
+            if (f->owner == nullptr && (f->decl == nullptr || f->isExternal)) continue;
             if (f->decl == nullptr || f->isExternal || f->decl->isAbstract) {
                 why = "its == or hashCode calls '" + name + "', which the checker cannot follow";
                 break;
@@ -8428,9 +8468,16 @@ struct Checker::Impl {
                     why = "its == or hashCode reads '" + read + "', " + describe(withNull(type, false)) + ", which can change";
                     break;
                 }
-            for (const auto& call : facts.calls) todo.push_back(call);
-            for (const auto& [read, property] : facts.properties)
+            for (const auto& call : facts.calls) {
+                todo.push_back(call);
+                if (judged != nullptr && call.second->owner != nullptr)
+                    for (FuncInfo* g : overriding(call.first, call.second->owner, false)) todo.emplace_back(call.first, g);
+            }
+            for (const auto& [read, property] : facts.properties) {
                 if (property->getterFn != nullptr) todo.emplace_back(read, property->getterFn);
+                if (judged != nullptr && property->owner != nullptr)
+                    for (FuncInfo* g : overriding(read, property->owner, true)) todo.emplace_back(read, g);
+            }
         }
         keyVerdicts[memo] = why;
         return why;
@@ -8465,7 +8512,7 @@ struct Checker::Impl {
             for (const char* name : {"==", "hashCode"})
                 if (auto found = own->methods.find(name); found != own->methods.end())
                     for (FuncInfo* f : found->second)
-                        if (why.empty()) why = keyVerdict(f, name, k->isValue);
+                        if (why.empty()) why = keyVerdict(f, name, k->isValue, k != own ? k : nullptr);
         } else if ((k->isData || k->isValue) && k->decl != nullptr) {
             // A data class by its header; a value type by all it holds, which goes in a map as a copy.
             std::vector<std::string> names;
