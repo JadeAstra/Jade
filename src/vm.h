@@ -815,6 +815,9 @@ public:
     std::shared_ptr<WorkerLink> workerLink;
     // In a worker: the object its messages are delivered to (Worker.parent).
     Value workerSelf;
+    // What the program runs as it ends, giving text for the error stream: the report of the jobs
+    // that failed with nothing asking for their errors (8.7a); null while there is none.
+    Value endReport = Value::null();
 
     // ---- Frozen data shared with workers (D97, worker.cpp) ----
     // The blocks outside every heap this VM holds, and what of its own frozen data was shared as

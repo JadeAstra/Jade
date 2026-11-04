@@ -52,6 +52,11 @@ class Thread {
   var isDaemon = false
   private var task : (suspend () -> any?)? = null
   private var id = 0      // 0 until it is started
+  // Given an error the thread does not catch, before it is reported: thread { }'s fails its Job.
+  internal var whenFailed : ((Throwable) -> unit)? = null
+  // thread { }'s block, which may throw what is checked: run with nothing catching it, so that
+  // its error is reported where it was thrown.
+  internal var throwingTask : (suspend () -> any? throws Exception)? = null
 
   // Thread(task) or Thread(task, name); a class that extends Thread gives none and replaces run().
   fun init(task : (suspend () -> any?)? = null, name : string? = null) {
@@ -64,6 +69,8 @@ class Thread {
   suspend fun run() {
     val work = task
     if (work != null) { work() }
+    val throwing = throwingTask
+    if (throwing != null) { __callThrowing(throwing) }
   }
 
   // Starts the thread running run(), and gives the thread itself. Starting it a second time is an
@@ -106,17 +113,13 @@ class Thread {
 // Starts a thread running the block and gives a Job of what it returns, as task { } and a
 // pool's submit { } do: then { } runs on the event loop, get() waits, cancel(interrupt = true)
 // interrupts the thread. An error the block throws fails the job, and ends the thread as any
-// thread's error does, reported.
+// thread's error does, reported where it was thrown.
 fun <T> thread(name : string? = null, daemon : bool = false, block : suspend () -> T throws Exception) : Job<T> {
   val job = Job<T>()
-  val made = Thread({
-    try {
-      job.complete(block())
-    } catch (e) {
-      job.fail(e)
-      __rethrow(e)
-    }
-  }, name)
+  val made = Thread(null, name)
+  made.throwingTask = { job.complete(block()) }
+  // The thread's report is its error asked for: not reported again as the program ends.
+  made.whenFailed = { e -> job.failReported(e) }
   made.isDaemon = daemon
   job.interrupter = { made.interrupt() }
   made.start()
@@ -135,6 +138,9 @@ class Job<T> {
   private var held : any? = null
   private val whenDone : open List<() -> unit> = []
   internal var interrupter : (() -> unit)? = null   // what cancel(interrupt = true) does
+  // Whether anything has asked for its error: get, getOrNull, failed, onError, Job.all or
+  // Job.any. One that fails with nothing asking is reported as the program ends (8.7a).
+  private var asked = false
 
   // Whether it has finished: with a value, with an error, or cancelled.
   val isDone : bool
@@ -144,13 +150,34 @@ class Job<T> {
     get() => state == 3
   // Whether it failed, or was cancelled.
   val failed : bool
-    get() => state >= 2
+    get() {
+      ask()
+      return state >= 2
+    }
 
   // Each gives whether this is what finished it: false if it was finished already.
   fun complete(value : T) : bool => finish(1, value)
   // Finishes it with `error`: get() then throws ExecutionException with `error` as its cause.
   // False if it was finished already.
   fun fail(error : Throwable) : bool => finish(2, error)
+  // As fail, for an error reported already: thread { }'s, by its thread.
+  internal fun failReported(error : Throwable) : bool {
+    ask()
+    return fail(error)
+  }
+
+  // Its error is asked for: not reported as the program ends.
+  internal fun ask() {
+    lock.useKey {
+      if (!asked) {
+        asked = true
+        if (state == 2) { __UnaskedJobs.remove(this) }
+      }
+    }
+  }
+  // The error it failed with, as text, for the report.
+  internal val errorText : string
+    get() => "$held"
   // With `interrupt`, the thread working on it is interrupted as well.
   fun cancel(interrupt : bool = false) : bool {
     if (!finish(3, CancellationException())) { return false }
@@ -169,6 +196,7 @@ class Job<T> {
         held = value
         then = whenDone.toList()
         whenDone.clear()
+        if (newState == 2 and !asked) { __UnaskedJobs.add(this) }
         true
       }
     }
@@ -186,7 +214,10 @@ class Job<T> {
   }
 
   // Its value if it has one; null if it has not, or failed.
-  fun getOrNull() : T? => state == 1 ? held as T : null
+  fun getOrNull() : T? {
+    ask()
+    return state == 1 ? held as T : null
+  }
 
   // Its value, waited for if it is not done: a thread blocks, a task on the main thread is set
   // aside. A job that failed throws ExecutionException, its error in `cause`; one that was
@@ -210,6 +241,7 @@ class Job<T> {
   }
 
   private fun outcome() : T throws ExecutionException {
+    ask()
     if (state == 2) { throw ExecutionException(held as Throwable) }
     if (state == 3) { throw CancellationException() }
     return held as T
@@ -230,6 +262,7 @@ class Job<T> {
 
   // Runs `action` with its error if it fails or is cancelled, on the event loop.
   fun onError(action : (Throwable) -> unit) : Job<T> {
+    ask()
     __loop.hold()
     onDone {
       EventLoop.post {
@@ -254,6 +287,7 @@ class Job<T> {
       val count = Lock()
       var left = jobs.size
       for (job in jobs) {
+        job.ask()
         job.onDone {
           if (job.state != 1) {
             result.fail(job.held as Throwable)
@@ -279,6 +313,7 @@ class Job<T> {
       val count = Lock()
       var failures = 0
       for (job in jobs) {
+        job.ask()
         job.onDone {
           if (job.state == 1) {
             result.complete(job.held as T)
@@ -293,6 +328,33 @@ class Job<T> {
       }
       return result
     }
+  }
+}
+
+// The jobs that failed with nothing asking for their errors, reported as the program ends, as
+// Python reports a task's error never retrieved (8.7a).
+object __UnaskedJobs {
+  private val lock = Lock()
+  private val jobs : open List<any> = []
+  private var hooked = false
+
+  fun add(job : any) {
+    lock.useKey {
+      jobs.add(job)
+      if (!hooked) {
+        hooked = true
+        __thread.atEnd({ report() })
+      }
+    }
+  }
+  fun remove(job : any) {
+    lock.useKey { jobs.removeIf { it === job } }
+  }
+  private fun report() : string {
+    val left = lock.useKey { jobs.toList() }
+    var text = ""
+    for (job in left) { text += "A job failed, and nothing asked for its error: ${(job as Job<any?>).errorText}\n" }
+    return text
   }
 }
 
@@ -584,6 +646,7 @@ class ThreadPool : AutoCloseable {
   private val lock = Lock()
   private val queue : Deck<__PoolJob> = Deck()
   private val workers : open List<Thread> = []
+  private val running : open List<Job<*>> = []         // the jobs its threads are running
   private val timed : open List<__PoolJob> = []        // jobs waiting for their time, with `due`
   private var keeper : Thread? = null                   // the thread that hands them over at their time
   private var limit : int?
@@ -673,8 +736,13 @@ class ThreadPool : AutoCloseable {
   private suspend fun work() {
     val me = Thread.currentThread()
     var going = true
+    var finished : Job<*>? = null
     while (going) {
       val next = lock.useKey {
+        if (finished != null) {
+          running.remove(finished!!)
+          finished = null
+        }
         idle += 1
         var waited = true
         try {
@@ -687,7 +755,7 @@ class ThreadPool : AutoCloseable {
           idle -= 1
         }
         val taken = queue.removeFirstOrNull()
-        if (taken == null) { workers.remove(me) }
+        if (taken == null) { workers.remove(me) } else { running.add(taken.result) }
         taken
       }
       if (next == null) {
@@ -695,6 +763,7 @@ class ThreadPool : AutoCloseable {
       } else {
         next.run()
         Thread.interrupted()      // an interrupt meant for that job is not for the next one
+        finished = next.result
       }
     }
   }
@@ -747,6 +816,9 @@ class ThreadPool : AutoCloseable {
       while (queue.isNotEmpty()) { queue.removeFirst().result.cancel() }
       for (job in timed) { job.result.cancel() }
       timed.clear()
+      // A job being run is cancelled, its thread interrupted, as one waiting is cancelled: it
+      // was stopped, not failed (8.7a).
+      for (job in running.toList()) { job.cancel(interrupt = true) }
       for (worker in workers) { worker.interrupt() }
     }
   }

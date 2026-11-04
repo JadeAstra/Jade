@@ -330,6 +330,7 @@ void registerGlobals(VM& vm) {
         thrown.value = args[0];
         throw thrown;
     });
+    vm.defineNative("__callThrowing", 1, 1, [](VM& vm, int, Value* args) -> Value { return vm.call(args[0], 0, nullptr); });
 
     vm.defineNative("assert", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
         if (args[0].truthy()) return Value::null();

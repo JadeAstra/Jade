@@ -362,6 +362,18 @@ void VM::threadMain(ThreadState* me) {
     try {
         call(me->function, 0, nullptr);
     } catch (AstraThrow& thrown) {
+        // A thread { }'s Job fails with the error first (its Thread's whenFailed), which then is
+        // reported where it was thrown, not where something caught it and threw it again (8.7a).
+        if (me->self.isObjType(ObjType::Instance)) {
+            Value whenFailed = Value::null();
+            if (asInstance(me->self)->read(intern("whenFailed"), whenFailed) && !whenFailed.isNull()) {
+                try {
+                    call(whenFailed, 1, &thrown.value);
+                } catch (AstraThrow&) {
+                    // The job is the thread's own; its error is reported below all the same.
+                }
+            }
+        }
         if (onThreadError) onThreadError(*this, thrown, me->name);
     } catch (const AstraExit& exit) {
         if (onThreadExit) onThreadExit(exit.code);
@@ -955,6 +967,12 @@ void define(VM& vm, ObjClass* on, const char* name, int minArgs, int maxArgs, Na
 void registerThreads(VM& vm) {
     // -- __thread: threads and locks --
     ObjClass* thread = holder(vm, "thread");
+
+    // What to run as the program ends, giving text for the error stream (VM::endReport).
+    define(vm, thread, "atEnd", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        vm.endReport = args[0];
+        return Value::null();
+    });
 
     define(vm, thread, "start", 4, 4, [](VM& vm, int, Value* args) -> Value {
         return Value::integer(vm.startThread(args[0], args[1], args[2].isNull() ? std::string() : vm.toStr(args[2], "thread name"), args[3].truthy()));

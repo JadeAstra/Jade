@@ -104,15 +104,34 @@ int runProgram(VM& vm, Program& program, int entry) {
         std::_Exit(code);
     };
 
+    // What the program asked to have reported as it ends (VM::endReport): the jobs that failed
+    // with nothing asking for their errors (8.7a).
+    auto reportAtEnd = [&vm] {
+        if (vm.endReport.isNull()) return;
+        try {
+            const Value text = vm.call(vm.endReport, 0, nullptr);
+            if (text.isObjType(ObjType::String) && !asString(text)->utf8().empty()) {
+                std::cout.flush();
+                std::cerr << asString(text)->utf8();
+                std::cerr.flush();
+            }
+        } catch (AstraThrow& thrown) {
+            reportUncaught(vm, thrown);
+        } catch (const AstraExit&) {
+        }
+    };
+
     int code = 0;
     try {
         vm.runModule(entry);
         vm.runEventLoop(true);
+        reportAtEnd();
     } catch (AstraThrow& thrown) {
         reportUncaught(vm, thrown);
         code = kExitRuntimeError;
     } catch (const AstraExit& exit) {
         code = exit.code;
+        reportAtEnd();
     }
     // A daemon thread, or a worker still waiting in a read, cannot be left running while the
     // VM is taken apart under it: the process ends here instead.

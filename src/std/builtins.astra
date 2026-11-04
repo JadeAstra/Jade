@@ -37,6 +37,9 @@ external fun assert(condition : bool, message : string = "assertion failed")
 // hash(1, 2) is 994, as there.
 external fun hash(vararg values : any?) : int
 external fun __hashCode(value : any?) : int
+// Runs the block with nothing catching what it throws: a thread { }'s, whose error is then
+// reported where it was thrown (8.7a).
+external fun __callThrowing(block : suspend () -> any? throws Exception) : any?
 // A time in seconds, as a float, from a clock that only goes forward: the difference between two
 // readings is the time that passed. What it counts from is not fixed.
 external fun clock() : float

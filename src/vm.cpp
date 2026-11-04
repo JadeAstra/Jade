@@ -8338,6 +8338,7 @@ void VM::collectGarbage() {
     }
     for (ObjFiber* fiber : waitingFibers_) markObject(fiber);
     markValue(workerSelf);
+    markValue(endReport);
     for (const auto& worker : workerObjects) markValue(worker.second);
     for (const Value& task : loopTasks_) markValue(task);
     for (const Timer& timer : timers_) markValue(timer.task);

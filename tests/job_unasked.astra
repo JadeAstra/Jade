@@ -1,0 +1,24 @@
+// A job that fails with nothing asking for its error (by get, getOrNull, failed, onError,
+// Job.all or Job.any) is reported as the program ends, as Python reports a task's error never
+// retrieved (8.7a); the program's exit code is as it was. One asked for is not reported, nor one
+// cancelled, nor a thread's, whose thread reports it where it was thrown.
+// expect error output: A job failed, and nothing asked for its error: IllegalStateException: nobody looked
+fun broken(text : string) : int throws IllegalStateException { throw IllegalStateException(text) }
+val lost = task { broken("nobody looked") }
+val got = task { broken("asked by get") }
+try { got.get() } catch (e : ExecutionException) { print(e.cause!!.message) }   // expect: asked by get
+val maybe = task { broken("asked by getOrNull") }
+print(maybe.getOrNull())                                      // expect: null
+val seen = task { broken("asked by failed") }
+print(seen.failed)                                            // expect: true
+val heard = task { broken("asked by onError") }.onError { print("heard:", it.message) }
+val all = Job.all([task { broken("asked by all") }])
+print(all.failed)                                             // expect: true
+val stopped = Job<int>()
+stopped.cancel()
+val pool = ThreadPool(threads = 1)
+val running = pool.submit { Thread.sleep(1.minutes) }
+Thread.sleep(20.milliseconds)
+pool.closeNow()
+print("end of the script")                                    // expect: end of the script
+// expect: heard: asked by onError
