@@ -225,7 +225,7 @@ can change, and an `==` without a `hashCode`.
 | `@Volatile`, `@Suppress(...)`, `@JvmField`, `@JvmName(...)` | delete it | an error saying so |
 | `@Synchronized fun f()` | `fun f() = lock.useKey { ... }` | |
 | `@JvmStatic` in a companion | the member in `static { }` | |
-| `kotlin.test`: `@Test`, `assertEquals` | the same, run by `astra test` | `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, `@TempDir` |
+| `kotlin.test`: `@Test`, `assertEquals` | the same, run by `astra test` | `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, `@TempDir`, `@RealHost`, `@Sandboxed` |
 
 ### What compiles but means something else
 
@@ -239,6 +239,10 @@ can change, and an `==` without a `hashCode`.
   `== Int::class`.
 - **`astra test` runs a file as a program first**: what its top level does runs before the
   tests.
+- **`astra test` runs each test in a sandbox** (M6.6.2): a test that reads a real file, starts
+  a real program or opens a real connection fails there, as none of them is in the sandbox. Set
+  up what it needs in the sandbox (files written in it, `processes.add`, `network.host`), or
+  write `@RealHost` on the test or its class. A sleep in a sandbox takes no real time.
 
 ## Concurrency (M6.6 part 8, group 7)
 

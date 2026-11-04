@@ -1,0 +1,58 @@
+// astra test in sandboxes (M6.6.2): each test in one of its own, made empty for it; @BeforeAll
+// and @AfterAll in one of the file's; the file's own code, and what is written @RealHost, on the
+// real system.
+val atTop = Sandbox.current == null
+var aroundAll = false
+
+@BeforeAll fun startAll() { aroundAll = Sandbox.current != null }
+
+@Test fun ownCode() {
+  assertTrue(atTop, "the file's own code runs on the real system")
+  assertTrue(aroundAll, "@BeforeAll runs in a sandbox")
+}
+@Test fun writes() {
+  assertTrue(Sandbox.current != null)
+  Path("/shared.txt").writeText("one test's")
+  assertEquals("/", Path.separator)
+}
+@Test fun fresh() {
+  assertFalse(Path("/shared.txt").exists(), "each test's sandbox is made empty")
+}
+@Test fun tempDir(@TempDir dir : Path) {
+  assertTrue(dir.text.startsWith("/tmp/"), "a @TempDir is in the sandbox")
+}
+@Test fun faults() {
+  Path("/data.txt").writeText("12345")
+  Sandbox.current!!.faults.add(Fault.read("/data.txt"))
+  val e = assertFailsWith<IOException> { Path("/data.txt").readText() }
+  assertEquals("cannot read file '/data.txt': the device is not ready", e.message)
+}
+@Test suspend fun sleeps() {
+  val start = clock()
+  Thread.sleep(1.hours)
+  assertEquals(3600.0, clock() - start)
+}
+@Test @RealHost fun real() { assertTrue(Sandbox.current == null) }
+@Test @Sandboxed(paths = PathStyle.windows) fun windows() {
+  assertEquals("\\", Path.separator)
+  Path("C:\\Data").mkdir()
+  assertTrue(Path("c:/data").isDirectory())
+}
+
+@RealHost
+class OnTheSystem {
+  @Test fun real() { assertTrue(Sandbox.current == null) }
+  @Test @Sandboxed fun sandboxed() { assertTrue(Sandbox.current != null) }
+}
+
+// expect:   ok    ownCode
+// expect:   ok    writes
+// expect:   ok    fresh
+// expect:   ok    tempDir
+// expect:   ok    faults
+// expect:   ok    sleeps
+// expect:   ok    real
+// expect:   ok    windows
+// expect:   ok    OnTheSystem.real
+// expect:   ok    OnTheSystem.sandboxed
+// expect: 10 tests: 10 passed, 0 failed

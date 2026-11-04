@@ -8,6 +8,15 @@
 //   @Test fun adds() { assertEquals(4, 2 + 2) }
 //   @Test @Timeout(500.milliseconds) fun quick() { ... }
 //   @Test fun writes(@TempDir dir : Path) { Path(dir, "a.txt").writeText("hi") }
+//
+// Each test runs in a sandbox of its own (M6.6.2), made empty for it, with what runs around it
+// and the object made for it: nothing it does reaches the system's files, programs or network,
+// and Sandbox.current is its sandbox, for adding faults, programs and hosts. @BeforeAll and
+// @AfterAll run in a sandbox of the file's, and the file's own code on the real system, as a
+// program's does. @RealHost runs a test, or a class's tests, on the real system instead.
+//
+//   @Test @RealHost fun realNetwork() { ... }
+//   @Test @Sandboxed(paths = PathStyle.windows) fun windowsPaths() { ... }
 
 // Makes a function, or a method of a class, a test that `astra test` runs; it passes unless it
 // throws. It takes no parameters but those written @TempDir.
@@ -31,6 +40,28 @@ annotation Timeout(val time : Duration)
 // A test's parameter that is given a Path naming a new, empty directory of its own, deleted
 // with what it holds once the test is over.
 annotation TempDir
+// Runs a test, or each test of a class with what runs around them, on the real system rather
+// than in a sandbox: for what only the real system shows, such as a real network or programs.
+annotation RealHost
+// What the sandbox of a test, or of each test of a class, is to be like: its paths, and a folder
+// of fonts, relative to the test's file, to be its installed fonts (Sandbox.run's fontsFrom);
+// "" for the system's.
+annotation Sandboxed(val paths : PathStyle = PathStyle.linux, val fontsFrom : string = "")
+
+// For astra test: a new sandbox, entered at once; __endTestSandbox leaves it.
+fun __startTestSandbox(windows : bool, fontsFrom : string?) : Sandbox {
+  val box = Sandbox(__sandbox.make(windows, -1, null, 1, fontsFrom), windows ? PathStyle.windows : PathStyle.linux)
+  __Sandboxes.add(box)
+  __sandbox.enter(box.handle)
+  return box
+}
+// For astra test: leaves the sandbox __startTestSandbox entered.
+fun __endTestSandbox(box : Sandbox) {
+  __sandbox.leave()
+  __Sandboxes.remove(box)
+}
+// For astra test: a test's @TempDir in its sandbox.
+fun __testTempDir() : Path throws IOException => Path.createTempDirectory("astra-test")
 
 // -- What a test checks, as Kotlin's: each throws an AssertionError where it does not hold --
 // Each takes a `message` too, which when it is given begins the error's text.

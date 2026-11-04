@@ -517,12 +517,14 @@ addButton(widgets)</pre></dd>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
+<li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
 <li><a href="#Rect"><code>Rect</code></a> (24)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
 <li><a href="#Sandbox"><code>Sandbox</code></a> (9)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
 <li><a href="#SandboxProcess"><code>SandboxProcess</code></a> (8)</li>
+<li><a href="#Sandboxed"><code>Sandboxed</code></a> (1)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (5)</li>
@@ -4752,6 +4754,10 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 @Test @Timeout(500.milliseconds) fun quick() { ... }
 @Test fun writes(@TempDir dir : Path) { Path(dir, &quot;a.txt&quot;).writeText(&quot;hi&quot;) }
 </pre>
+<p>Each test runs in a sandbox of its own, made empty for it, with what runs around it and the object made for it: nothing it does reaches the system's files, programs or network, and Sandbox.current is its sandbox, for adding faults, programs and hosts. @BeforeAll and @AfterAll run in a sandbox of the file's, and the file's own code on the real system, as a program's does. @RealHost runs a test, or a class's tests, on the real system instead.</p>
+<pre>@Test @RealHost fun realNetwork() { ... }
+@Test @Sandboxed(paths = PathStyle.windows) fun windowsPaths() { ... }
+</pre>
 <div class="entry" id="Test"><code class="sig">annotation Test</code><a class="anchor" href="#Test">#</a>
 <p>Makes a function, or a method of a class, a test that <code>astra test</code> runs; it passes unless it throws. It takes no parameters but those written @TempDir.</p>
 </div>
@@ -4772,6 +4778,12 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 </div>
 <div class="entry" id="TempDir"><code class="sig">annotation TempDir</code><a class="anchor" href="#TempDir">#</a>
 <p>A test's parameter that is given a Path naming a new, empty directory of its own, deleted with what it holds once the test is over.</p>
+</div>
+<div class="entry" id="RealHost"><code class="sig">annotation RealHost</code><a class="anchor" href="#RealHost">#</a>
+<p>Runs a test, or each test of a class with what runs around them, on the real system rather than in a sandbox: for what only the real system shows, such as a real network or programs.</p>
+</div>
+<div class="entry" id="Sandboxed"><code class="sig">annotation Sandboxed(val paths : PathStyle = PathStyle.linux, val fontsFrom : string = &quot;&quot;)</code><a class="anchor" href="#Sandboxed">#</a>
+<p>What the sandbox of a test, or of each test of a class, is to be like: its paths, and a folder of fonts, relative to the test's file, to be its installed fonts (Sandbox.run's fontsFrom); &quot;&quot; for the system's.</p>
 </div>
 <h4>What a test checks, as Kotlin's: each throws an AssertionError where it does not hold</h4>
 <p>Each takes a <code>message</code> too, which when it is given begins the error's text.</p>

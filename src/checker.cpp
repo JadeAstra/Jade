@@ -9778,6 +9778,11 @@ struct Checker::Impl {
                 if (onFunction && place != AnnotationPlace::Function) report(a, "@" + n + " goes on a function, for astra test (D153)");
                 if (n == "TempDir" && place != AnnotationPlace::Parameter)
                     report(a, "@TempDir goes on a test's parameter, a Path given a directory of its own (D153)");
+                if ((n == "RealHost" || n == "Sandboxed") && place != AnnotationPlace::Function && place != AnnotationPlace::Class)
+                    report(a, "@" + n + " goes on a test or a class of tests, for astra test (M6.6.2)");
+                if (n == "Sandboxed")
+                    for (const Annotation& other : written)
+                        if (other.name == "RealHost") report(a, "@Sandboxed and @RealHost are both written here: a test runs in a sandbox or on the real system");
             }
         }
     }

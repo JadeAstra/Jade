@@ -2006,6 +2006,64 @@ anew for each of its tests. The checks are Kotlin's: `assertEquals`, `assertNotE
 run as a program of its own; `astra test` says which tests failed, with what they threw and
 where, and exits with 1 if any did.
 
+Each test runs in a sandbox of its own (below), made empty for it, with what runs around it: it
+reaches none of the system's files, programs or network, its sleeps take no real time, and
+`Sandbox.current` is its sandbox. `@BeforeAll` and `@AfterAll` run in a sandbox of the file's,
+and the file's own code on the real system, as a program's does. `@RealHost` on a test or a class
+runs it on the real system instead; `@Sandboxed` says what its sandbox is to be like:
+
+```astra
+@Test fun faults() {
+  Path("/data.txt").writeText("12345")
+  Sandbox.current!!.faults.add(Fault.read("/data.txt"))
+  assertFailsWith<IOException> { Path("/data.txt").readText() }
+}
+@Test @Sandboxed(paths = PathStyle.windows, fontsFrom = "fonts") fun windows() { ... }
+@Test @RealHost fun realNetwork() { ... }
+```
+
+### Sandboxes
+
+`Sandbox.run { ... }` runs a block in a world of its own (M6.6.2), which the block's code, and
+the threads, tasks and workers it starts, reach in place of the system: nothing outside it is
+touched, and the rare failures can be made to happen on purpose. Any program may use one, for a
+test or a dry run:
+
+```astra
+Sandbox.run {
+  Path("/data").mkdir()                                  // files kept in memory
+  Path("/data/a.txt").writeText("1")
+  faults.add(Fault.list("/data", after = 0))             // the next list fails half way
+  processes.add("git") { p -> p.output.write("ok\n") }   // Process("git", ...) runs this
+  network.host("example.test", 80) { peer -> peer.send("HTTP/1.1 200 OK\r\n\r\n") }
+  Thread.sleep(5.minutes)                                // at once: its clock moves instead
+}
+val changes = Sandbox.run(copyFrom = Path("project")) { build(); files.changes() }   // a dry run
+```
+
+- **Files**: a tree in memory, with Linux's paths by default on every machine, or Windows'
+  (`paths = PathStyle.windows`, names compared without case). `copyFrom` starts it with a copy of
+  a real directory, and `files.changes()` says what was made, changed and deleted. `diskSize`
+  makes a full disk possible.
+- **Faults**: `faults.add(Fault.read(path, after = 4))` and the like make an operation fail as
+  the system's would, with its message: list, read, write, open, delete, move, copy, mkdir, any,
+  and connect for a host.
+- **Time and randomness**: its clock moves only when the program waits, jumping to the next
+  thing due, and `advance(time)` moves it by hand; its wall clock starts at 2000-01-01. Its
+  randomness starts from `seed`, 1 unless given.
+- **Programs**: only those added with `processes.add(name) { process -> ... }`, each run on a
+  thread of its own, given its arguments, environment and input, writing output and errors and
+  ending with `exitCode`, or never (`waitForever()`).
+- **The network**: a connection is to a host added with `network.host(name, port) { peer -> ... }`,
+  a far side written in Astra that can answer, reset (`peer.reset()`) or go silent
+  (`peer.waitForever()`, when a read's `readTimeout` is up at once); a `ServerSocket` listens on a
+  port of the sandbox's own, which `network.connect(port)` reaches.
+- **Fonts and the clipboard**: the system's installed fonts, or with `fontsFrom` only those of a
+  folder, so that text measures the same on every machine; a clipboard of its own.
+
+A wait for another thread with a time limit still takes real time, and a sandbox has no symbolic
+links.
+
 ### Modules
 
 **A folder is a namespace.** The files of one folder share their top-level names: a function,

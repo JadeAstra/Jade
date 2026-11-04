@@ -707,6 +707,11 @@ int shell() {
 // written @BeforeAll and @AfterAll before and after them all. A class with methods written
 // @Test is made anew for each of them, with no arguments, and its own such methods run on it;
 // its static @BeforeAll and @AfterAll methods run once. A test passes unless it throws.
+//
+// Each test, with what runs around it, runs in a sandbox of its own (M6.6.2), made empty for
+// it; @BeforeAll and @AfterAll run in one of the file's. @RealHost on a test or a class runs it
+// on the real system instead, and @Sandboxed says what its sandbox is to be like. The file's own
+// code runs on the real system, as a program's does.
 
 const Annotation* annotationNamed(const Annotations& written, const char* name) {
     for (const Annotation& a : written)
@@ -755,16 +760,33 @@ public:
             failed++;
             return;
         }
-        if (!all(top.beforeAll, Value::null(), "@BeforeAll")) return;
-        for (const FunctionDecl* test : top.tests) one(top, *test, Value::null(), nullptr);
-        for (TestGroup& group : classes) {
-            const Value cls = vm_.globalAt(session_.globalOf(path_, group.cls->name));
-            TempRoot keep(vm_, cls);
-            if (!all(group.beforeAll, cls, "@BeforeAll")) continue;
-            for (const FunctionDecl* test : group.tests) one(group, *test, cls, &top);
-            all(group.afterAll, cls, "@AfterAll");
+        // What runs around the tests, in the file's sandbox.
+        Value fileBox;
+        std::string failure;
+        if (!enter(HostChoice(), fileBox, failure)) {
+            std::cout << "  FAIL  the file's sandbox\n" << failure;
+            failed++;
+            return;
         }
-        all(top.afterAll, Value::null(), "@AfterAll");
+        TempRoot keepFileBox(vm_, fileBox);
+        if (all(top.beforeAll, Value::null(), "@BeforeAll")) {
+            for (const FunctionDecl* test : top.tests) one(top, *test, Value::null(), nullptr);
+            for (TestGroup& group : classes) {
+                const Value cls = vm_.globalAt(session_.globalOf(path_, group.cls->name));
+                TempRoot keep(vm_, cls);
+                // A class written @RealHost has its own run on the real system too.
+                const bool real = annotationNamed(group.cls->annotations, "RealHost") != nullptr;
+                Value classBox;
+                if (real) enter(choiceOf(group.cls->annotations, nullptr), classBox, failure);
+                if (all(group.beforeAll, cls, "@BeforeAll")) {
+                    for (const FunctionDecl* test : group.tests) one(group, *test, cls, &top);
+                    all(group.afterAll, cls, "@AfterAll");
+                }
+                if (real) leave(classBox);
+            }
+            all(top.afterAll, Value::null(), "@AfterAll");
+        }
+        leave(fileBox);
     }
 
 private:
@@ -831,6 +853,75 @@ private:
         return ok;
     }
 
+    // Where a test runs (M6.6.2): the test's own @RealHost or @Sandboxed, else its class's;
+    // without either, a sandbox of Linux's paths and the system's fonts.
+    struct HostChoice {
+        bool real = false;
+        bool windows = false;
+        std::string fontsFrom;  // a folder of fonts, relative to the test's file
+    };
+
+    HostChoice choiceOf(const Annotations& onTest, const ClassStmt* cls) {
+        HostChoice choice;
+        for (const Annotations* written : {&onTest, cls != nullptr ? &cls->annotations : nullptr}) {
+            if (written == nullptr) continue;
+            if (annotationNamed(*written, "RealHost") != nullptr) {
+                choice.real = true;
+                return choice;
+            }
+            const Annotation* asked = annotationNamed(*written, "Sandboxed");
+            if (asked == nullptr) continue;
+            const auto& call = static_cast<const CallExpr&>(*asked->call);
+            for (size_t i = 0; i < call.args.size(); i++) {
+                const std::string name = i < call.names.size() && !call.names[i].empty() ? call.names[i] : (i == 0 ? "paths" : "fontsFrom");
+                const Expr& arg = *call.args[i];
+                ConstValue value;
+                if (name == "paths" && arg.kind == ExprKind::Member) choice.windows = static_cast<const MemberExpr&>(arg).name == "windows";
+                if (name == "fontsFrom" && checker_.folded(arg, value) && value.kind == ConstValue::String && !value.s.empty()) {
+                    std::filesystem::path folder(std::u8string(value.s.begin(), value.s.end()));
+                    if (folder.is_relative()) folder = std::filesystem::path(std::u8string(path_.begin(), path_.end())).parent_path() / folder;
+                    const std::u8string text = folder.lexically_normal().u8string();
+                    choice.fontsFrom.assign(text.begin(), text.end());
+                }
+            }
+            return choice;
+        }
+        return choice;
+    }
+
+    // Enters where a test, or what runs around tests, runs: a new sandbox, given in `box`, or
+    // the real system, with null there. False, with `failure`, where the sandbox cannot be made.
+    bool enter(const HostChoice& choice, Value& box, std::string& failure) {
+        box = Value::null();
+        if (choice.real) {
+            vm_.enterHost(vm_.host);
+            return true;
+        }
+        const Value start = vm_.globalAt(session_.globalOf(path_, "__startTestSandbox"));
+        Value args[2] = {Value::boolean(choice.windows), choice.fontsFrom.empty() ? Value::null() : vm_.str(choice.fontsFrom)};
+        TempRoot keep(vm_, args[1]);
+        try {
+            box = vm_.call(start, 2, args);
+        } catch (AstraThrow& thrown) {
+            failure = describe(thrown);
+            return false;
+        }
+        return true;
+    }
+
+    // Leaves what enter entered, which ends a sandbox.
+    void leave(Value box) {
+        if (box.isNull()) {
+            vm_.leaveHost();
+            return;
+        }
+        TempRoot keep(vm_, box);
+        try {
+            vm_.call(vm_.globalAt(session_.globalOf(path_, "__endTestSandbox")), 1, &box);
+        } catch (AstraThrow&) {
+        }
+    }
+
     // The functions run around tests; false where one fails, which is reported.
     bool all(const std::vector<const FunctionDecl*>& fns, Value on, const char* what) {
         for (const FunctionDecl* fn : fns) {
@@ -869,12 +960,26 @@ private:
         std::string failure;
         std::vector<std::filesystem::path> made;
         std::vector<Value> args;
-        bool ok = true;
+        const HostChoice choice = choiceOf(test.annotations, group.cls);
+        Value box;
+        bool ok = enter(choice, box, failure);
+        const bool entered = ok;
+        TempRoot keepBox(vm_, box);
         for (size_t i = 0; ok && i < test.params.size(); i++) {
             if (i >= test.paramAnnotations.size() || annotationNamed(test.paramAnnotations[i], "TempDir") == nullptr) {
                 failure = "        a test takes no parameters but those written @TempDir\n";
                 ok = false;
                 break;
+            }
+            if (!choice.real) {
+                // In the sandbox: a directory of its own there, which goes with it.
+                try {
+                    args.push_back(vm_.call(vm_.globalAt(session_.globalOf(path_, "__testTempDir")), 0, nullptr));
+                } catch (AstraThrow& thrown) {
+                    failure = describe(thrown);
+                    ok = false;
+                }
+                continue;
             }
             std::error_code ec;
             std::filesystem::path dir = std::filesystem::temp_directory_path(ec) /
@@ -925,6 +1030,7 @@ private:
             ok = false;
             failure = after;
         }
+        if (entered) leave(box);
         for (const std::filesystem::path& dir : made) {
             std::error_code ec;
             std::filesystem::remove_all(dir, ec);
