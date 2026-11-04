@@ -1691,8 +1691,8 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <div class="entry member" id="Path.text"><code class="sig">val text : string</code><a class="anchor" href="#Path.text">#</a>
 <p>The path as it was made.</p>
 </div>
-<div class="entry member" id="Path.separator"><code class="sig">val separator : string</code><a class="anchor" href="#Path.separator">#</a>
-<p>What separates the names in a path on this system: &quot;\&quot; on Windows.</p>
+<div class="entry member" id="Path.separator"><code class="sig">val separator : string get()</code><a class="anchor" href="#Path.separator">#</a>
+<p>What separates the names in a path: &quot;\&quot; on Windows, and in a sandbox with Windows' paths.</p>
 </div>
 <div class="entry member" id="Path.createTempDirectory"><code class="sig">fun createTempDirectory(prefix : string = &quot;astra&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempDirectory">#</a>
 <p>A new, empty directory or file in the system's temporary directory, its name starting with <code>prefix</code>.</p>
@@ -4789,7 +4789,7 @@ loading.then { shown = it }                              // on the event loop, w
 <p>The thread written with its name: Thread(main).</p>
 </div>
 <div class="entry" id="thread"><code class="sig">fun &lt;T&gt; thread(name : string? = null, daemon : bool = false, block : suspend () -&gt; T throws Exception) : Job&lt;T&gt;</code><a class="anchor" href="#thread">#</a>
-<p>Starts a thread running the block and gives a Job of what it returns, as task { } and a pool's submit { } do: then { } runs on the event loop, get() waits, cancel(interrupt = true) interrupts the thread. An error the block throws fails the job, and ends the thread as any thread's error does, reported where it was thrown.</p>
+<p>Starts a thread running the block and gives a Job of what it returns, as task { } and a pool's submit { } do: then { } runs on the event loop, get() waits, cancel(interrupt = true) interrupts the thread. An error the block throws fails the job and ends the thread; it is the job's, as a task's is: an error nobody caught only if nothing asks for it (8.7a), and then reported with where it was thrown.</p>
 </div>
 <h3>Jobs</h3>
 <p>A result to come: from task { }, thread { }, a pool's submit { }, or made by hand, Job&lt;int&gt;(), and given its value with complete(42) or its error with fail(e).</p>

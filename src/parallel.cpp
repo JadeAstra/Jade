@@ -234,6 +234,7 @@ struct ParallelPool {
 VM::VM(VM& root, uint8_t coreId)
     : output(root.output), input(root.input), rng(std::random_device{}()), mainThread_(kThreadStackSize, kThreadMaxFrames),
       isWorker_(root.isWorker_), root_(&root), coreId_(coreId) {
+    host = root.host;  // the same files and the rest as the program it works for
     mainThread_.name = "core-" + std::to_string(coreId);
     mainThread_.id = nextThreadId_++;
     threads_.push_back(&mainThread_);

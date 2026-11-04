@@ -25,8 +25,8 @@ class Path {
   }
 
   static {
-    // What separates the names in a path on this system: "\" on Windows.
-    val separator : string = __file.separator
+    // What separates the names in a path: "\" on Windows, and in a sandbox with Windows' paths.
+    val separator : string get() => __file.separator()
 
     // A new, empty directory or file in the system's temporary directory, its name starting with
     // `prefix` (D131).
@@ -235,7 +235,7 @@ suspend fun SequenceScope<Path>.__walkBelow(directory : Path, onError : ((Path, 
 
 // What Path is built on (stdlib.cpp), declared with its types and what it throws.
 external object __file {
-  val separator : string
+  fun separator() : string
   fun read(path : string, charset : Charset = Charset.utf8) : string throws IOException
   fun write(path : string, text : string, charset : Charset = Charset.utf8) throws IOException
   fun append(path : string, text : string, charset : Charset = Charset.utf8) throws IOException

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "bytecode.h"
+#include "host.h"
 #include "value.h"
 
 namespace astra {
@@ -834,6 +835,9 @@ public:
     // Where the error of a thread { }'s job was thrown, kept for its report while nothing has
     // asked for it, by the error.
     std::unordered_map<Obj*, std::vector<std::string>> failureTraces;
+    // What the program reaches outside itself (host.h, M6.6.2): the system's, or a sandbox's.
+    // The cores of a parallel section and the workers have their root's.
+    Host* host = &realHost();
     // Program.onUncaughtError, as the program set it: what takes the error that ends a thread,
     // or a job's nothing asked for; null while there is none.
     Value uncaughtHandler = Value::null();
