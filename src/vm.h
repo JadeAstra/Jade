@@ -236,7 +236,7 @@ enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
     IllegalArgumentException, NumberFormatException, IllegalStateException, UnsupportedOperationException,
     NoSuchElementException, ConcurrentModificationException, AssertionError, StackOverflowError, OutOfMemoryError,
-    InternalError, IOException, Throwable, SocketTimeoutException, Count_
+    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, Count_
 };
 
 class VM : public KeyMethods {

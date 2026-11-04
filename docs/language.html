@@ -2723,8 +2723,8 @@ if (result.exitCode == 0) { print(result.output) }
 </pre>
 <p>The command is the program and its arguments, as separate words or one list. <code>environment</code> holds variables added to this program's own (null takes one out). input is what the program reads, a Writer; output and error what it writes, Readers; each is there when it is a pipe.</p>
 </div>
-<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (Path | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8) : ProcessResult throws IOException</code><a class="anchor" href="#Process.run">#</a>
-<p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said.</p>
+<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (Path | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8, timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException</code><a class="anchor" href="#Process.run">#</a>
+<p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said. With a <code>timeout</code>, a program that runs longer is killed, and run throws a TimeoutException (8.8h).</p>
 </div>
 <div class="entry member" id="Process.currentCommand"><code class="sig">fun currentCommand() : open List&lt;string&gt;</code><a class="anchor" href="#Process.currentCommand">#</a>
 <p>What started this program: the path of its executable and, when it is a script run by astra, the script. Process(Process.currentCommand() + [&quot;--second&quot;]) starts it again.</p>

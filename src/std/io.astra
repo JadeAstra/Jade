@@ -192,14 +192,16 @@ class Process {
   static {
     // Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments,
     // its output and errors read whatever they are said to be, and its input nothing unless
-    // said.
+    // said. With a `timeout`, a program that runs longer is killed, and run throws a
+    // TimeoutException (8.8h).
     fun run(vararg command : any, directory : (Path | string)? = null, environment : Map<string, string?>? = null,
-            input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8) : ProcessResult throws IOException {
+            input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8,
+            timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException {
       val words = __processWords(command)
       val handles : List<any?> = __io.spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
                                            "pipe", __redirect(error, "error", ">"), environment)
       if (handles[1] != null) { __io.close(handles[1] as any) }
-      val ended : List<any?> = __io.collect(handles[0], handles[2], handles[3], charset)
+      val ended : List<any?> = __io.collect(handles[0], handles[2], handles[3], charset, timeout?.waitMilliseconds)
       for k in 0..3 {
         if (k != 1 and handles[k] != null) { __io.close(handles[k] as any) }
       }
@@ -410,7 +412,7 @@ external object __io {
   fun isOpen(handle : any?) : bool
   fun spawn(command : List<string>, directory : string?, input : string, output : string, error : string,
             environment : Map<string, string?>?) : List<any?> throws IOException
-  fun collect(process : any?, output : any?, error : any?, charset : Charset) : List<any?> throws IOException
+  fun collect(process : any?, output : any?, error : any?, charset : Charset, timeout : int? = null) : List<any?> throws IOException | TimeoutException
   fun processWait(handle : any, timeout : int? = null) : int?
   fun processAlive(handle : any) : bool
   fun processKill(handle : any)

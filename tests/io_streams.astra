@@ -61,6 +61,11 @@ print(Process.run(shell("exit 3", "exit 3")).exitCode, Process.run(outAndErr, er
 val directory = Path("io streams directory")
 directory.mkdir()
 print(Process.run(shell("cd", "pwd"), directory = directory).output.trim().endsWith("io streams directory"))   // expect: true
+// A program that runs past its timeout is stopped, and run throws (8.8h).
+val slowly : List<string> = onWindows ? ["ping", "-n", "30", "127.0.0.1"] : ["sleep", "30"]
+val began = clock()
+try { Process.run(slowly, timeout = 300.milliseconds) } catch (e : TimeoutException) { print(e.message, clock() - began < 10.0) }   // expect: the program ran longer than 300 ms, and was stopped true
+print(Process.run(outAndErr, timeout = 30.seconds).output.trim())   // expect: out
 directory.delete()
 print(Process.run(shell("echo %ASTRA_TEST_VALUE%", "echo \$ASTRA_TEST_VALUE"), environment = {"ASTRA_TEST_VALUE": "from the parent"}).output.trim())   // expect: from the parent
 

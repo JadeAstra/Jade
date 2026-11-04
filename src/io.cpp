@@ -1262,14 +1262,32 @@ void registerIo(VM& vm) {
     // its error output, each to its end, at the same time (so that neither fills up while the
     // other is read), and waits for it to end. Gives [exit code, output, error], the text in
     // the character set; either stream may be null, giving "".
-    def("collect", 4, 4, [](VM& vm, int, Value* args) -> Value {
+    // collect(process, output, errors, charset, timeout?): what the program writes, read to its end,
+    // and its exit code; with a timeout in milliseconds, the program is killed when it runs
+    // longer, and a TimeoutException thrown (8.8h).
+    def("collect", 4, 5, [](VM& vm, int argc, Value* args) -> Value {
         auto process = streamOf(vm, args[0]);
         std::shared_ptr<Stream> pipes[2] = {args[1].isNull() ? nullptr : streamOf(vm, args[1]), args[2].isNull() ? nullptr : streamOf(vm, args[2])};
         const Charset cs = charsetOf(vm, args[3]);
+        const int64_t limit = argc > 4 && !args[4].isNull() ? std::max<int64_t>(vm.toInt(args[4], "timeout"), 0) : -1;
         auto out = std::make_shared<Outcome>();
         auto texts = std::make_shared<std::array<std::string, 2>>();
+        auto killed = std::make_shared<std::atomic<bool>>(false);
         return vm.blocking(
             [=] {
+                // A watch that kills the program when the time is up, which ends its pipes too.
+                std::mutex watchMutex;
+                std::condition_variable watchWake;
+                bool finished = false;
+                std::thread watch;
+                if (limit >= 0)
+                    watch = std::thread([&] {
+                        std::unique_lock<std::mutex> hold(watchMutex);
+                        if (!watchWake.wait_for(hold, std::chrono::milliseconds(limit), [&] { return finished; }) && !process->exited.load()) {
+                            killed->store(true);
+                            killProcess(*process);
+                        }
+                    });
                 std::string errors[2];
                 auto drain = [&](int k) {
                     if (pipes[k] == nullptr) return;
@@ -1288,8 +1306,18 @@ void registerIo(VM& vm) {
                 out->error = !errors[0].empty() ? errors[0] : errors[1];
                 waitProcess(*process, -1);
                 out->number = process->exitCode.load();
+                if (watch.joinable()) {
+                    {
+                        std::lock_guard<std::mutex> hold(watchMutex);
+                        finished = true;
+                    }
+                    watchWake.notify_all();
+                    watch.join();
+                }
             },
-            [out, texts](VM& vm) -> Value {
+            [out, texts, killed, limit](VM& vm) -> Value {
+                if (killed->load())
+                    throw vm.errorOf("TimeoutException", "the program ran longer than " + std::to_string(limit) + " ms, and was stopped");
                 if (!out->error.empty()) throw ioError(vm, *out);
                 ObjList* result = newList(vm);
                 TempRoot keepResult(vm, Value::object(result));
