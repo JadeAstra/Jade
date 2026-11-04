@@ -6515,8 +6515,8 @@ struct Checker::Impl {
                 return;
             }
         }
-        // Judged once the program has been read: a name the program assigns on the class
-        // (`Counter.note = "kept"`) is stored there, and is one of its statics.
+        // Judged once the program has been read, so that one the program assigns on the class
+        // anywhere (`Counter.note = "kept"`) is told to be declared (8.9k).
         if (!hasUnknownSuper(k) && silent == 0) pendingStatics.push_back(PendingStatic{unit, &at, k, name, what});
     }
 
@@ -6554,7 +6554,8 @@ struct Checker::Impl {
     std::vector<PendingStatic> pendingStatics;
     std::set<std::pair<const ClassInfo*, std::string>> assignedStatics;  // `K.name = value` anywhere
 
-    // `K.name = value`, a class's name and a name: the name is stored on the class.
+    // `K.name = value`, a class's name and a name the class does not declare: an error saying to
+    // declare it, where G57 once stored it on the class, so that a typo made a new static (8.9k).
     void noteStaticAssigned(const Expr& target) {
         if (target.kind != ExprKind::Member) return;
         const auto& m = static_cast<const MemberExpr&>(target);
@@ -6569,9 +6570,12 @@ struct Checker::Impl {
         for (const PendingStatic& p : pendingStatics) {
             bool assigned = false;
             for (const ClassInfo* c = p.cls; c != nullptr && !assigned; c = c->superclass) assigned = assignedStatics.count({c, p.name}) != 0;
-            if (assigned) continue;
             unit = p.unit;
-            report(*p.at, p.cls->name + " has no " + p.what + " '" + p.name + "'");
+            if (assigned)
+                report(*p.at, p.cls->name + " has no " + p.what + " '" + p.name + "': a static is declared in the class's static { } block, " +
+                                  "static { var " + p.name + " = ... } (8.9k)");
+            else
+                report(*p.at, p.cls->name + " has no " + p.what + " '" + p.name + "'");
         }
         pendingStatics.clear();
         unit = saved;

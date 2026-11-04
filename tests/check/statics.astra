@@ -32,6 +32,7 @@ val nothing = Event.Nothing                // check: Event has no static member 
 val extra = Base.EXTRA                     // check: Base has no static member 'EXTRA'
 val below = Derived.EXTRA + Derived.limit  // a class sees its own statics and those above it
 
-// A name assigned on a class is stored there, and is one of its statics from then on.
-Plain.note = "kept"
-val note = Plain.note
+// A name assigned on a class that does not declare it is an error saying to declare it, where
+// G57 once stored it, so that a typo made a new static (8.9k).
+Plain.note = "kept"                        // check: Plain has no static member 'note': a static is declared in the class's static { } block, static { var note = ... } (8.9k)
+val note = Plain.note                      // check: Plain has no static member 'note': a static is declared in the class's static { } block, static { var note = ... } (8.9k)

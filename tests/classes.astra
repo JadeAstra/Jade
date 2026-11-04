@@ -58,6 +58,7 @@ print(e.tag, e)                         // expect: 1 <Empty instance>
 // static members
 class Counter {
   static {
+    var made = 0
     fun create() {
       Counter.made += 1
       return Counter()
@@ -65,7 +66,6 @@ class Counter {
     fun describe() { return "made ${Counter.made}" }
   }
 }
-Counter.made = 0
 Counter.create(); Counter.create()
 print(Counter.describe(), Counter#.name) // expect: made 2 Counter
 

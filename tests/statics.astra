@@ -120,10 +120,6 @@ class Counter {
 val counter = Counter().bump().bump()
 print(counter.count, Counter.count)         // expect: 2 120
 
-// Assigning an undeclared name on a class still simply stores it.
-Counter.note = "kept"
-print(Counter.note)                         // expect: kept
-
 // In a function, with a captured variable.
 fun makeClass(start : int) {
   class Local {
