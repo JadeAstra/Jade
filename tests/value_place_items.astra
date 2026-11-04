@@ -1,0 +1,92 @@
+// An item of a list handed over where it is (D167): a for loop's item over a list, and the
+// lambda's of a list's forEach, forEachIndexed and onEach or a parallel stream's forEach, are
+// the list's item, and a change made through them changes the list. A var holds a value of its
+// own, and so does a variable given such an item.
+
+value Point(var x : int, var y : int) {
+  mutating fun translate(dx : int, dy : int) {
+    x += dx
+    y += dy
+  }
+}
+
+// A for loop's item over a list.
+val pts = [Point(1, 1), Point(2, 2)]
+for p in pts { p.translate(1, 0) }
+print(pts)                                                  // expect: [Point(x=2, y=1), Point(x=3, y=2)]
+for p in pts { p.x += 10 }
+for p in pts {
+  if (p.x > 12) { p.translate(100, 0) } else { p.y = 7 }
+}
+print(pts)                                                  // expect: [Point(x=12, y=7), Point(x=113, y=2)]
+for p in pts {
+  p.x = 0
+  print(p)
+}
+// expect: Point(x=0, y=7)
+// expect: Point(x=0, y=2)
+
+// In a function, a lambda copied in and an inline function's body alike.
+fun shift(items : List<Point>) { for p in items { p.translate(1, 1) } }
+shift(pts)
+pts.forEach { for q in pts { q.translate(1, 0) } }
+inline fun twice(f : () -> unit) {
+  f()
+  f()
+}
+twice { for p in pts { p.y += 1 } }
+print(pts)                                                  // expect: [Point(x=3, y=10), Point(x=3, y=5)]
+val grid = [[Point(1, 1)], [Point(2, 2), Point(3, 3)]]
+for row in grid { for p in row { p.translate(1, 0) } }
+grid.forEach { row -> row.forEach { it.translate(0, 1) } }
+print(grid)                                                 // expect: [[Point(x=2, y=2)], [Point(x=3, y=3), Point(x=4, y=4)]]
+val gaps : List<Point?> = [Point(1, 1), null]
+for p in gaps { p?.translate(1, 0) }
+print(gaps)                                                 // expect: [Point(x=2, y=1), null]
+
+// The forms of forEach that hand the item over.
+val row = [Point(0, 0), Point(5, 5)]
+row.forEach { it.translate(1, 0) }
+row.forEachIndexed { i, p -> if (i == 1) { p.translate(1, 0) } }
+print(row.onEach { it.y += 1 }.size, row)                   // expect: 2 [Point(x=1, y=1), Point(x=7, y=6)]
+with(row) { forEach { it.x = 0 } }
+val maybe : List<Point>? = row
+maybe?.forEach { it.y = 0 }
+row.forEach({ it.translate(2, 2) })
+row.parallelStream().forEach { it.translate(1, 1) }
+print(row)                                                  // expect: [Point(x=3, y=3), Point(x=3, y=3)]
+
+// A var takes a copy of its own before it is changed, whatever it was given.
+var copy = pts[0]
+copy.translate(100, 0)
+fun ownCopies(items : List<Point>) {
+  for p in items {
+    var r = p
+    r.translate(100, 0)
+  }
+  items.forEach {
+    var q = it
+    q.x = -1
+  }
+}
+ownCopies(pts)
+print(copy, pts)                                            // expect: Point(x=103, y=10) [Point(x=3, y=10), Point(x=3, y=5)]
+
+// A variable given an item that is changed through keeps the value as it was.
+pts.forEach {
+  val before = it
+  it.translate(1, 0)
+  print(before.x, it.x)
+}
+// expect: 3 4
+// expect: 3 4
+fun lastBefore(items : open List<Point>) : Point {
+  var kept = Point(0, 0)
+  for p in items {
+    kept = p
+    p.translate(1, 0)
+  }
+  items.removeAt(0)
+  return kept
+}
+print(lastBefore(pts), pts)                                 // expect: Point(x=4, y=5) [Point(x=5, y=5)]

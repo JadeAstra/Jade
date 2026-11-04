@@ -225,9 +225,10 @@ ol li { margin: 6px 0; }
 <li>On an item of a list of values, or a value inside an object, <code>this</code> is the value where it is: its assignments are written straight there, nothing copied.</li>
 <li>On a <code>var</code> holding a box, the method works on a copy in the scratch space, written back to the place when it returns.</li>
 <li>Calling one on a <code>val</code> or a temporary is a compile error. Inside it, <code>this</code> may not be kept (stored, returned, captured); it may call other <code>mutating</code> methods of the same value.</li>
-<li>A lambda's <code>it</code> is a place when a list of values hands it its own item and the lambda keeps nothing: <code>pts.forEach { it.move(...) }</code>, in a parallel section too, changes each item in place. Where <code>it</code> is a copy (the lambda keeps it), calling a <code>mutating</code> method on it is a compile error that says the change would be lost.</li>
+<li>A lambda's <code>it</code> is a place when a list of values hands it its own item: <code>pts.forEach { it.move(...) }</code>, <code>forEachIndexed</code> and <code>onEach</code>, and a parallel stream's <code>forEach</code>, change each item in place. Any other lambda is given a copy (<code>filter</code>'s, <code>map</code>'s, a map's or a set's <code>forEach</code>, one kept in a variable), and calling a <code>mutating</code> method on its parameter is a compile error that says the change would be lost; so is one in a lambda that holds the item and may run later (D167, 2026-11-04).</li>
+<li>A <code>for</code> loop's item over a list is the list's item in the same way: <code>for p in pts { p.move(...) }</code> changes each item (D167).</li>
 </ul>
-<p><strong>For the reader of a program:</strong> <code>var q = p; q.x = 5</code> leaves <code>p</code> as it was, where with objects both would change. Turning a class into a value type changes what such code means without an error; a type should be a value type only when that is what it is.</p>
+<p><strong>For the reader of a program:</strong> <code>var q = p; q.x = 5</code> leaves <code>p</code> as it was, where with objects both would change; so does <code>var q = it</code> in a <code>forEach</code>, and <code>val before = it</code> keeps the value as it was when <code>it</code> is then changed. Turning a class into a value type changes what such code means without an error; a type should be a value type only when that is what it is.</p>
 </section>
 
 <section class="part" id="ops">

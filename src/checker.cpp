@@ -4898,6 +4898,9 @@ struct Checker::Impl {
                 LoopCandidate& loop = loopCandidates[l->loopOf];
                 loop.uses.insert(&n);
                 if (&n == passedUse || &n == valueCallArg) loop.argUses.insert(&n);
+                handedUses[&n] = {l->loopOf, n.name};
+            } else if (l->lambdaParam && l->paramOfDecl != nullptr) {
+                handedUses[&n] = {l->paramOfDecl, n.name};
             }
             if (&n != passedUse) noteUse(*l, ParamUse::Other);
             noteConst(n, l->constant);
@@ -5298,6 +5301,12 @@ struct Checker::Impl {
     // The expressions of a value type that are places a change is made through, for the
     // compiler: it reaches the value where it is kept rather than reading a copy.
     std::unordered_set<const Expr*> valuePlaces;
+    std::unordered_set<const Expr*> handedPlaces;  // places that are an item handed over where it is (D167)
+    // A use of a variable that is an item handed over where it is, and the variables changed
+    // through as places: its loop or lambda, and its name.
+    std::unordered_map<const NameExpr*, std::pair<const void*, std::string>> handedUses;
+    std::set<std::pair<const void*, std::string>> changedHanded;
+    std::unordered_set<const ForInStmt*> changedLoops;  // for loops whose item is changed through
 
     // The value type the code being checked belongs to and may change `this` of: a mutating
     // method's, or one whose value is being made.
@@ -5361,15 +5370,19 @@ struct Checker::Impl {
     }
 
     // Whether an expression of a value type is a place that keeps a change made through it: a
-    // var local, a lambda's parameter, a var global, a var field of a place or of an object, an
-    // item of a list, or `this` in a mutating method. Noted for the compiler where it is.
+    // var local, an item handed over where it is, a var global, a var field of a place or of an
+    // object, an item of a list, or `this` in a mutating method. Noted for the compiler where it is.
     bool isPlace(const Expr& e) {
-        bool place = false;
+        bool place = false, handed = false;
         switch (e.kind) {
             case ExprKind::Name: {
                 const auto& n = static_cast<const NameExpr&>(e);
                 if (Local* l = findLocal(n.name)) {
-                    place = !l->isVal || l->lambdaParam;
+                    // A var holds a value of its own. The item of a for loop over a list, and the
+                    // lambda's of a list's forEach, are the list's item, handed over where it is
+                    // (D167); any other lambda is given a copy, which a change would be lost in.
+                    handed = l->isVal && (l->loopOf != nullptr || (l->lambdaParam && handsItemOver(l->paramOfDecl)));
+                    place = !l->isVal || handed;
                 } else if (const GlobalSym* g = meansGlobal(n) ? findGlobal(*unit, n.name) : nullptr; g != nullptr && g->var != nullptr) {
                     place = !g->var->isVal;
                 } else if (ctx != nullptr && ctx->cls != nullptr) {
@@ -5398,8 +5411,74 @@ struct Checker::Impl {
             default:
                 break;
         }
-        if (place && silent == 0) valuePlaces.insert(&e);
+        if (place && silent == 0) {
+            valuePlaces.insert(&e);
+            if (handed) {
+                handedPlaces.insert(&e);
+                // Changed from inside another lambda: one that holds the item, which is a copy,
+                // unless it is copied in where it is written (judgeCaptures).
+                std::vector<const FunctionDecl*> between = lambdasHolding(static_cast<const NameExpr&>(e).name);
+                if (!between.empty()) heldChanges.push_back(HeldChange{&e, unit, std::move(between)});
+            }
+        }
         return place;
+    }
+
+    // The lambdas between a use of a local and the code that declares it, innermost first.
+    std::vector<const FunctionDecl*> lambdasHolding(const std::string& name) {
+        std::vector<const FunctionDecl*> between;
+        size_t at = scopes.size();
+        while (at > 0 && scopes[at - 1].find(name) == scopes[at - 1].end()) at--;
+        if (at == 0) return between;
+        for (FnCtx* c = ctx; c != nullptr && c->fn == nullptr && c->placeDecl != nullptr; c = c->parent)
+            if (at - 1 < c->scopeBase) between.push_back(c->placeDecl);
+        return between;
+    }
+
+    // An item handed over where it is, changed from inside a lambda that would hold a copy of it:
+    // one not copied in where it is written, which may run once the loop has gone on (D167).
+    struct HeldChange {
+        const Expr* at;
+        Unit* unit;
+        std::vector<const FunctionDecl*> lambdas;
+    };
+    std::vector<HeldChange> heldChanges;
+    void judgeCaptures() {
+        Unit* saved = unit;
+        for (const HeldChange& h : heldChanges) {
+            bool copied = true;
+            for (const FunctionDecl* l : h.lambdas) {
+                auto site = lambdaSites.find(l);
+                copied = copied && site != lambdaSites.end() && (site->second.inPlace || copiedIn(site->second.fn, site->second.param));
+            }
+            if (copied) continue;
+            unit = h.unit;
+            const std::string& name = static_cast<const NameExpr&>(*h.at).name;
+            report(*h.at, "'" + name + "' is the list's item, but this lambda holds a copy of it, as it may run after the loop has gone " +
+                              "on: the change would be lost; make it outside the lambda, or in one given to an inline function");
+        }
+        heldChanges.clear();
+        unit = saved;
+    }
+
+    // Whether a lambda is given the items of a list where they are: a lambda literal given to a
+    // list's forEach, forEachIndexed or onEach, or to a parallel stream's forEach (D167).
+    bool handsItemOver(const FunctionDecl* d) const {
+        if (d == nullptr || !d->isLambda) return false;
+        auto site = lambdaSites.find(d);
+        return site != lambdaSites.end() && site->second.handsItem;
+    }
+
+    // Why a change through a lambda's parameter would be lost, for the error: what it is given.
+    std::string lostThrough(const Expr& object) {
+        if (object.kind != ExprKind::Name) return "";
+        const Local* l = findLocal(static_cast<const NameExpr&>(object).name);
+        if (l == nullptr || !l->lambdaParam || l->paramOfDecl == nullptr) return "";
+        auto site = lambdaSites.find(l->paramOfDecl);
+        const std::string given = site != lambdaSites.end() && site->second.fn != nullptr ? "'" + site->second.fn->name + "' gives its lambda"
+                                                                                          : "this lambda is given";
+        return ": " + given + " a copy, and only a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach, " +
+               "hand the lambda the item itself";
     }
 
     // `p.x = 4` on a value: only a var field, only through a place (M6.6 part 4); a value's
@@ -5439,10 +5518,15 @@ struct Checker::Impl {
                                    "which is called on the place that holds the value: mutating fun ...");
             return;
         }
-        if (!isPlace(*object))
-            report(target, "'" + name + "' cannot be given a new value here: this value of " + owner->name + " is kept nowhere that " +
-                               "could take the change (a var, a var field or an item of a list); make a changed copy, copy(" + name +
-                               " = ...)");
+        if (!isPlace(*object)) {
+            const std::string why = lostThrough(*object);
+            if (!why.empty())
+                report(target, "'" + name + "' cannot be given a new value here: the change would be lost" + why);
+            else
+                report(target, "'" + name + "' cannot be given a new value here: this value of " + owner->name + " is kept nowhere " +
+                                   "that could take the change (a var, a var field or an item of a list); make a changed copy, copy(" +
+                                   name + " = ...)");
+        }
         else
             notePlaceChange(*object, owner);
     }
@@ -5648,9 +5732,18 @@ struct Checker::Impl {
             return;
         }
         if (root->kind == ExprKind::Name) {
-            const Local* l = findLocal(static_cast<const NameExpr&>(*root).name);
-            if (l == nullptr || l->paramOfDecl == nullptr) return;  // a variable of its own
-            placeParams.insert({l->paramOfDecl, static_cast<const NameExpr&>(*root).name});
+            const std::string& name = static_cast<const NameExpr&>(*root).name;
+            const Local* l = findLocal(name);
+            if (l == nullptr || !l->isVal) return;  // a variable of its own
+            if (l->loopOf != nullptr) {
+                changedLoops.insert(l->loopOf);
+                changedHanded.insert({l->loopOf, name});
+            } else if (l->paramOfDecl != nullptr) {
+                placeParams.insert({l->paramOfDecl, name});
+                changedHanded.insert({l->paramOfDecl, name});
+            } else {
+                return;
+            }
         }
         const Type rootType = typeQuietly(*root);
         if (rootType.kind == Type::Class && rootType.cls != nullptr && rootType.cls->isValue) effects[effectKeyHere()].types.insert(rootType.cls);
@@ -5816,9 +5909,14 @@ struct Checker::Impl {
                 notePlaceChange(*m.object, f->owner);
                 return;
             }
-            report(at, "'" + f->name + "' is mutating: it changes the value of " + f->owner->name + " it is called on, and this one " +
-                           "is kept nowhere that could take the change (a var, a var field or an item of a list), so the change " +
-                           "would be lost");
+            const std::string why = lostThrough(*m.object);
+            if (!why.empty())
+                report(at, "'" + f->name + "' is mutating: it changes the value of " + f->owner->name + " it is called on, and the " +
+                               "change would be lost" + why);
+            else
+                report(at, "'" + f->name + "' is mutating: it changes the value of " + f->owner->name + " it is called on, and this " +
+                               "one is kept nowhere that could take the change (a var, a var field or an item of a list), so the " +
+                               "change would be lost");
         } else if (changesThis() != f->owner) {
             report(at, "'" + f->name + "' is mutating: it can be called by its bare name only from a method that is mutating too");
         }
@@ -8965,6 +9063,7 @@ struct Checker::Impl {
         }
         ctx = nullptr;
         judgeWaits();
+        judgeCaptures();
         judgeKeys();
         judgeStatics();
         judging.clear();
@@ -9852,6 +9951,7 @@ struct Checker::Impl {
         int param = -1;
         bool inPlace = false;
         NoWait noWait = CanWait;
+        bool handsItem = false;  // given the items of a list where they are (handsItemOver)
     };
     std::unordered_map<const FunctionDecl*, LambdaSite> lambdaSites;
 
@@ -9930,6 +10030,10 @@ struct Checker::Impl {
                 site.noWait = ParallelSection;
             else if (f->name == "sequence" && f->owner == nullptr)
                 site.noWait = SequenceBlock;
+            if (f->owner != nullptr ? f->owner->name == "ParallelStream" && f->name == "forEach"
+                                    : f->isExtension && f->receiver.kind == Type::List &&
+                                          (f->name == "forEach" || f->name == "forEachIndexed" || f->name == "onEach"))
+                site.handsItem = true;
         }
         lambdaSites[static_cast<const FunctionExpr&>(e).fn.get()] = site;
     }
@@ -10181,6 +10285,7 @@ void Checker::checkBodiesOf(const std::string& fileKey) {
     impl_->inPlaceKnown.clear();
     impl_->checkUnit(u);
     impl_->judgeWaits();
+    impl_->judgeCaptures();
     impl_->judgeKeys();  // keys it uses, as for the files checked at first (G26)
     impl_->judgeStatics();
 }
@@ -10560,6 +10665,13 @@ bool Checker::externalResult(const Node& call, RuntimeType& out, std::string& na
 bool Checker::addsNewValue(const Node& call) const { return impl_->newValueAdds.count(&call) != 0; }
 
 bool Checker::isValuePlace(const Expr& e) const { return impl_->valuePlaces.count(&e) != 0; }
+bool Checker::isHandedPlace(const Expr& e) const { return impl_->handedPlaces.count(&e) != 0; }
+bool Checker::changesItem(const ForInStmt& loop) const { return impl_->changedLoops.count(&loop) != 0; }
+bool Checker::keepsChangedItem(const Expr& e) const {
+    if (e.kind != ExprKind::Name) return false;
+    auto found = impl_->handedUses.find(static_cast<const NameExpr*>(&e));
+    return found != impl_->handedUses.end() && impl_->changedHanded.count(found->second) != 0;
+}
 
 bool Checker::extensionGetter(const MemberExpr& e) const { return impl_->extensionGetters.count(&e) != 0; }
 

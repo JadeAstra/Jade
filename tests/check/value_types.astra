@@ -29,3 +29,16 @@ class Plain {
 
 value Link(val n : int, val next : Link)   // check: value Link holds itself, and would have no end: make the field that holds it nullable, Link?, which keeps it in a box
 value Fine(val n : int, val next : Fine?)
+
+// A lambda's parameter is the list's item only where the function hands it over where it is
+// (D167): a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach. Any other
+// lambda is given a copy, which a change would be lost in; so is one that holds the item.
+pts.forEach { it.step() }
+pts.forEachIndexed { i, q -> q.x = i }
+for q in pts { q.step() }
+pts.filter { it.step(); true }                // check: 'step' is mutating: it changes the value of Point it is called on, and the change would be lost: 'filter' gives its lambda a copy, and only a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach, hand the lambda the item itself
+pts.map { it.x = 1 }                          // check: 'x' cannot be given a new value here: the change would be lost: 'map' gives its lambda a copy, and only a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach, hand the lambda the item itself
+mapOf("a" to p).forEach { k, v -> v.step() }  // check: 'step' is mutating: it changes the value of Point it is called on, and the change would be lost: 'forEach' gives its lambda a copy, and only a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach, hand the lambda the item itself
+val stepIt = { q : Point -> q.step() }        // check: 'step' is mutating: it changes the value of Point it is called on, and the change would be lost: this lambda is given a copy, and only a list's forEach, forEachIndexed and onEach, and a parallel stream's forEach, hand the lambda the item itself
+for q in setOf(p) { q.step() }                // check: 'step' is mutating: it changes the value of Point it is called on, and this one is kept nowhere that could take the change (a var, a var field or an item of a list), so the change would be lost
+pts.forEach { q -> val later = { q.step() } } // check: 'q' is the list's item, but this lambda holds a copy of it, as it may run after the loop has gone on: the change would be lost; make it outside the lambda, or in one given to an inline function

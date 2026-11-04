@@ -128,12 +128,15 @@ print(User("Ann", 30))                // User(name="Ann", age=30)</pre></dd>
 <pre>value Point(var x : int, var y : int)</pre></dd>
 
 <dt><code>mutating</code></dt>
-<dd>A function of a value type that may give its <code>var</code> fields new values. It is called on a place that holds the value (a <code>var</code>, a field, an item of a list), which keeps the result.
+<dd>A function of a value type that may give its <code>var</code> fields new values. It is called on a place that holds the value (a <code>var</code>, a field, an item of a list), which keeps the result. A <code>for</code> loop's item over a list is the list's item, and so is the lambda's of a list's <code>forEach</code>, <code>forEachIndexed</code> and <code>onEach</code>, and of a parallel stream's <code>forEach</code>; any other lambda, <code>filter</code>'s or <code>map</code>'s, is given a copy, and a change through it is an error saying it would be lost. A <code>var</code> holds a value of its own: <code>var q = p</code> and then changing <code>q</code> leaves <code>p</code> as it was.
 <pre>value Point(var x : int, var y : int) {
   mutating fun moveBy(dx : int, dy : int) { x += dx; y += dy }
 }
 var p = Point(1, 2)
-p.moveBy(10, 10)    // p is Point(x=11, y=12)</pre></dd>
+p.moveBy(10, 10)    // p is Point(x=11, y=12)
+val pts = [Point(0, 0), Point(5, 5)]
+for q in pts { q.moveBy(1, 0) }     // pts is [Point(x=1, y=0), Point(x=6, y=5)]
+pts.forEach { it.moveBy(0, 1) }     // pts is [Point(x=1, y=1), Point(x=6, y=6)]</pre></dd>
 
 <dt><code>enum</code></dt>
 <dd><code>enum Name { A, B }</code> is a class whose only objects are the entries listed; <code>Name.entries</code> lists them. <code>enum class</code> and <code>enum interface</code> declare a fixed set of kinds: the classes and objects that extend it, all written in its file, so that a <code>when</code> over them needs no <code>else</code>.

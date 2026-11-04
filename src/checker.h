@@ -207,6 +207,15 @@ public:
     // Whether an expression of a value type is a place a change is made through (M6.6 part 4):
     // `p` in `p.x = 4` for a var p, `pts[i]`, `obj.pos`.
     bool isValuePlace(const Expr& e) const;
+    // A place that is a list's item handed over where it is, which a change goes through to: a
+    // for loop's item over a list, or the lambda's of a list's forEach (D167). Any other variable
+    // takes a copy of its own before it is changed.
+    bool isHandedPlace(const Expr& e) const;
+    // A for loop over a list whose item is changed through: it hands the loop the item itself.
+    bool changesItem(const ForInStmt& loop) const;
+    // `val before = it`, where `it` is an item handed over that is changed through somewhere: the
+    // variable takes a copy, so that it keeps the value as it was.
+    bool keepsChangedItem(const Expr& e) const;
 
     // `5.seconds`: a read of an extension property, compiled as a call of its getter.
     bool extensionGetter(const MemberExpr& e) const;

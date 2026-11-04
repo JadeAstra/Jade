@@ -1102,8 +1102,11 @@ private:
     // (value-lists.html section 8). The lambda takes a copy first where it may change a list of
     // the item's type or keeps it (compileLambdaCopy); what it gives back goes nowhere.
     bool handsItemToLambda(const ForInStmt& s) {
-        if (inlineDepth_ == 0 || copiedDepth_ > 0 || frame_ == nullptr || fs_->owner != frame_->owner || !s.pattern.empty()) return false;
+        if (inlineDepth_ == 0 || frame_ == nullptr || fs_->owner != frame_->owner || !s.pattern.empty()) return false;
+        // As much in a lambda copied in, `rows.forEach { row -> row.forEach { it.move() } }`: a
+        // change through the item is made where it is (D167).
         if (session_.checker->loopPassesOn(s) && forEachShape(s)) return true;
+        if (copiedDepth_ > 0) return false;
         // Any other loop whose item goes only to calls and back as the function's result (filter,
         // any, count, sumOf, map, first; G15): where neither the body nor a lambda it was given may
         // change a list, and no lambda keeps the item or may give it back. What the body gives back
@@ -3251,6 +3254,9 @@ private:
                     } else if (checkAtRuntime) {
                         emitTypeCheck(type, s.name, s.type);
                     }
+                    // `val before = it`, where `it` is changed through where it is: a copy, which
+                    // keeps the value as it was (D167).
+                    if (s.init && session_.checker != nullptr && session_.checker->keepsChangedItem(*s.init)) emit(Op::OwnLocal, slotOf(slot));
                     fs_->locals[static_cast<size_t>(slot)].depth = fs_->scopeDepth;
                 }
                 break;
@@ -3941,9 +3947,12 @@ private:
         loop.label = s.label;
         fs_->loop = &loop;
         line_ = s.line;
-        // A list of values may hand the loop its items where they are (M6.6 part 4).
-        const bool inPlace = !counted && session_.checker != nullptr && (inPlaceOff() ? handsItemToLambda(s) : session_.checker->loopsInPlace(s)) &&
-                             (!copyingReads() || session_.checker->loopPassesOn(s));
+        // A list of values may hand the loop its items where they are (M6.6 part 4); it does where
+        // the body changes its item through, so that the change is made to the list's (D167).
+        const bool changesItem = !counted && session_.checker != nullptr && s.pattern.empty() && session_.checker->changesItem(s);
+        const bool inPlace = changesItem || (!counted && session_.checker != nullptr &&
+                                             (inPlaceOff() ? handsItemToLambda(s) : session_.checker->loopsInPlace(s)) &&
+                                             (!copyingReads() || session_.checker->loopPassesOn(s)));
         // Two names taking the item apart, `for ((key, value) in map)`: both parts at once, with
         // nothing made for a map's entry (D64, D73).
         const bool pair = !counted && !inPlace && s.pattern.size() == 2;
@@ -5506,6 +5515,9 @@ private:
                 VarInfo info;
                 const int local = resolveLocal(fs_, n.name, n, info);
                 if (local != -1) {
+                    // An item handed over where it is is changed there; a var first takes a copy
+                    // of its own, should it hold an item read where it is (D167).
+                    if (!session_.checker->isHandedPlace(e)) emit(Op::OwnLocal, slotOf(local));
                     emit(Op::PlaceLocal, slotOf(local));
                     return;
                 }
@@ -6929,6 +6941,12 @@ private:
                 line_ = e.line;
                 if (compound && !dotEq) emit(binaryOp(e.op));
                 emitSet(target.name, target);
+                if (!compound && session_.checker != nullptr && session_.checker->keepsChangedItem(*e.value)) {
+                    // `saved = it`, `it` changed through where it is: a copy, as a declaration takes (D167).
+                    VarInfo info;
+                    const int local = resolveLocal(fs_, target.name, target, info);
+                    if (local != -1) emit(Op::OwnLocal, slotOf(local));
+                }
                 endNullSafe(skip, 0);
                 break;
             }
