@@ -71,23 +71,28 @@ bool valuesEqual(const Value& a, const Value& b) {
     return false;
 }
 
+// A key's hash, the same in every run and on every system, as Kotlin's is (8.2d): an int is its
+// own hash, and hashCode() folds it to 32 bits as Kotlin's Long does (`5.hashCode()` is 5); a
+// float its bits, as Kotlin's Double; a bool Kotlin's 1231 or 1237. A map mixes what it is given
+// before it picks a slot (ValueMap::hashOf), so a run of ints spreads as well as ever.
 size_t hashValue(const Value& v) {
     switch (v.kind) {
         case ValueKind::Bool:
-            return v.as.b ? 11 : 7;
+            return v.as.b ? 1231 : 1237;
         case ValueKind::Int:
         case ValueKind::Byte:
-            return std::hash<int64_t>()(v.as.i);
+            return static_cast<size_t>(v.as.i);
         case ValueKind::Char:
             return hashCharacter(kEmptyStringHash, static_cast<uint32_t>(v.as.i));  // as the string of it alone
         case ValueKind::FromEnd:
-            return std::hash<int64_t>()(v.as.i) ^ 0x9e3779b97f4a7c15ULL;
+            return static_cast<size_t>(v.as.i) ^ 0x9e3779b97f4a7c15ULL;
         case ValueKind::Float: {
             // Integral floats must hash like the equal int so 1 and 1.0 are the same map key.
             double d = v.as.d;
-            if (d >= -9.2e18 && d <= 9.2e18 && std::floor(d) == d)
-                return std::hash<int64_t>()(static_cast<int64_t>(d));
-            return std::hash<double>()(d);
+            if (d >= -9.2e18 && d <= 9.2e18 && std::floor(d) == d) return static_cast<size_t>(static_cast<int64_t>(d));
+            uint64_t bits;
+            std::memcpy(&bits, &d, sizeof bits);
+            return static_cast<size_t>(bits);
         }
         case ValueKind::Obj:
             if (v.as.obj->type == ObjType::String) return asString(v)->hash;
@@ -173,7 +178,18 @@ bool valueBytesEqual(const ValueLayout& layout, const uint8_t* x, const uint8_t*
 }
 
 namespace {
-size_t mixHash(size_t seed, size_t next) { return seed ^ (next + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2)); }
+// A part's hash taken into the whole's. The part's bits are spread first, as an int is its own
+// hash: Point(1, 2) and Point(2, 1), or a run of small values, would otherwise land close.
+size_t mixHash(size_t seed, size_t next) {
+    next ^= next >> 33;
+    next *= 0xff51afd7ed558ccdULL;
+    next ^= next >> 33;
+    return seed ^ (next + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+
+// What a value's or a data object's hash starts from: its class's name, not where the class is
+// in memory, so that the hash is the same every run (8.2d).
+size_t classSeed(const ObjClass* cls) { return cls->name->hash; }
 
 size_t valueBytesHash(const ValueLayout& layout, const uint8_t* x, int depth) {
     size_t h = 23;
@@ -186,7 +202,7 @@ size_t valueBytesHash(const ValueLayout& layout, const uint8_t* x, int depth) {
                 h = mixHash(h, hashValue(Value::integer(i)));
                 break;
             }
-            case ValueField::Bool: h = mixHash(h, *p ? 11 : 7); break;
+            case ValueField::Bool: h = mixHash(h, *p ? 1231 : 1237); break;
             case ValueField::Narrow: {
                 const Value v = readNarrow(field.narrow, p);
                 h = mixHash(h, hashValue(v.isFloat() && v.as.d == 0.0 ? Value::number(0.0) : v));
@@ -270,7 +286,7 @@ bool keyItemsEqual(const KeyItem& a, const KeyItem& b, int depth) {
 
 size_t keyItemHash(const KeyItem& a, int depth) {
     if (a.cls != nullptr)
-        return mixHash(std::hash<const void*>()(a.cls), valueBytesHash(*a.cls->layout.load(std::memory_order_acquire), a.bytes, depth));
+        return mixHash(classSeed(a.cls), valueBytesHash(*a.cls->layout.load(std::memory_order_acquire), a.bytes, depth));
     return keyHash(a.value, depth + 1);
 }
 }  // namespace
@@ -393,10 +409,10 @@ size_t keyHash(const Value& v, int depth) {
         const ObjClass* cls = nullptr;
         const uint8_t* bytes = nullptr;
         if (!valueForm(v, cls, bytes)) return 0;
-        return mixHash(std::hash<const void*>()(cls), valueBytesHash(*cls->layout.load(std::memory_order_acquire), bytes, depth));
+        return mixHash(classSeed(cls), valueBytesHash(*cls->layout.load(std::memory_order_acquire), bytes, depth));
     }
     if (!hasContentKey(v) || depth >= kMaxKeyDepth || !readableHere(v)) return hashValue(v);
-    auto mix = [](size_t seed, size_t next) { return seed ^ (next + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2)); };
+    auto mix = [](size_t seed, size_t next) { return mixHash(seed, next); };
     switch (v.as.obj->type) {
         case ObjType::List: {
             size_t h = 17;
@@ -406,7 +422,7 @@ size_t keyHash(const Value& v, int depth) {
         }
         case ObjType::Range: {
             const ObjRange* r = asRange(v);
-            return mix(mix(std::hash<int64_t>()(r->start), std::hash<int64_t>()(r->end)), std::hash<int64_t>()(r->step) + (r->inclusive ? 1 : 0));
+            return mix(mix(static_cast<size_t>(r->start), static_cast<size_t>(r->end)), static_cast<size_t>(r->step) + (r->inclusive ? 1 : 0));
         }
         case ObjType::Bytes: {
             size_t h = 31;
@@ -425,11 +441,11 @@ size_t keyHash(const Value& v, int depth) {
         }
         case ObjType::Value: {
             const ObjValue* box = asValue(v);
-            return mix(std::hash<const void*>()(box->cls), valueBytesHash(*box->cls->layout.load(std::memory_order_acquire), box->data(), depth));
+            return mix(classSeed(box->cls), valueBytesHash(*box->cls->layout.load(std::memory_order_acquire), box->data(), depth));
         }
         case ObjType::Instance: {
             const ObjInstance* instance = asInstance(v);
-            size_t h = std::hash<const void*>()(instance->cls);
+            size_t h = classSeed(instance->cls);
             for (const ObjString* part : instance->cls->components) {
                 Value field;
                 h = mix(h, instance->read(part, field) ? keyHash(field, depth + 1) : 0);

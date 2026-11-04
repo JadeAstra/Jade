@@ -575,7 +575,7 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>Nothing when <code>condition</code> is true; otherwise an AssertionError with <code>message</code>.</p>
 </div>
 <div class="entry" id="hash"><code class="sig">fun hash(vararg values : any?) : int</code><a class="anchor" href="#hash">#</a>
-<p>The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash.</p>
+<p>The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash: hash(1, 2) is 994, as there.</p>
 </div>
 <div class="entry" id="clock"><code class="sig">fun clock() : float</code><a class="anchor" href="#clock">#</a>
 <p>A time in seconds, as a float, from a clock that only goes forward: the difference between two readings is the time that passed. What it counts from is not fixed.</p>
@@ -1450,7 +1450,7 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <p>Whether it is equal to <code>other</code>, as <code>==</code> says.</p>
 </div>
 <div class="entry" id="any.hashCode"><code class="sig">fun any?.hashCode() : int</code><a class="anchor" href="#any.hashCode">#</a>
-<p>Equal values give equal hashes: by what they hold for strings, numbers, frozen collections, data classes and values; an object of any other class by which object it is.</p>
+<p>Equal values give equal hashes: by what they hold for strings, numbers, frozen collections, data classes and values; an object of any other class by which object it is. The same in every run, but for such an object: an int's is Kotlin's (5.hashCode() is 5), a float's and a bool's too (8.2d).</p>
 </div>
 <div class="entry" id="any.compareTo"><code class="sig">fun any.compareTo(other : any?) : int</code><a class="anchor" href="#any.compareTo">#</a>
 <p>For a value whose class has no compareTo of its own: negative, zero or positive as it comes before, with or after <code>other</code>. Numbers go by size, strings by their characters, chars by their codes, false before true, and null before everything; other values are a ClassCastException.</p>

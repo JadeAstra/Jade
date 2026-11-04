@@ -139,7 +139,9 @@ fun any?.toString() : string => "$this"
 // Whether it is equal to `other`, as `==` says.
 fun any?.equals(other : any?) : bool => this == other
 // Equal values give equal hashes: by what they hold for strings, numbers, frozen collections,
-// data classes and values; an object of any other class by which object it is (D26).
+// data classes and values; an object of any other class by which object it is (D26). The same in
+// every run, but for such an object: an int's is Kotlin's (5.hashCode() is 5), a float's and a
+// bool's too (8.2d).
 fun any?.hashCode() : int => __hashCode(this)
 // For a value whose class has no compareTo of its own: negative, zero or positive as it comes
 // before, with or after `other`. Numbers go by size, strings by their characters, chars by their

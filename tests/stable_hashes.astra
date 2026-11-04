@@ -1,0 +1,12 @@
+// Hashes are the same in every run and on every system (8.2d): an int's is Kotlin's Long's, folded
+// to 32 bits; a float's its bits, as Kotlin's Double's, but a whole float's is the equal int's, as
+// 1 and 1.0 are one key; a bool's Kotlin's. A value's and a data object's start from the class's
+// name, not where the class is in memory.
+print(5.hashCode(), (-1).hashCode(), 0.hashCode(), int.maxValue.hashCode(), (1 << 40).hashCode())   // expect: 5 0 0 -2147483648 256
+print(1.0.hashCode(), 1.5.hashCode(), (-2.0).hashCode(), true.hashCode(), false.hashCode())   // expect: 1 1073217536 1 1231 1237
+print(hash(1, 2), hash(), hash(null), hash(1, 2) == 31 * (31 + 1) + 2)   // expect: 994 1 31 true
+
+data Pair2(val a : int, val b : string)
+value Spot(val x : int, val y : int)
+print(Pair2(1, "x").hashCode(), Spot(1, 2).hashCode(), Spot(2, 1).hashCode(), [1, 2].frozen().hashCode(), (1..3).hashCode())   // expect: -1061676496 -1601957877 -302095040 1384611411 1721601886
+print(Spot(1, 2).hashCode() == Spot(1, 2).hashCode(), setOf(Spot(1, 2), Spot(1, 2), Spot(2, 1)).size, {1: "a", 1.0: "b"})   // expect: true 2 {1: "b"}

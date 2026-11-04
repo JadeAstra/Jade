@@ -33,7 +33,8 @@ external fun __arguments() : open List<string>
 external fun __programName() : string
 // Nothing when `condition` is true; otherwise an AssertionError with `message`.
 external fun assert(condition : bool, message : string = "assertion failed")
-// The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash (D148).
+// The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash (D148):
+// hash(1, 2) is 994, as there.
 external fun hash(vararg values : any?) : int
 external fun __hashCode(value : any?) : int
 // A time in seconds, as a float, from a clock that only goes forward: the difference between two
