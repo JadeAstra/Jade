@@ -3816,7 +3816,12 @@ struct Checker::Impl {
             kept.unit = unit;
             kept.as = typed ? *expected : Type::of(Type::Function);
         }
+        // The block of taskScope { } (M6.7): what the tasks and threads it starts may throw is
+        // thrown where the scope ends, so it is counted as the block's own.
+        const bool scopeBlock = c.hasReceiver && isTaskScope(c.receiver);
+        if (scopeBlock) taskScopeBlocks.push_back(&d);
         for (const StmtPtr& s : d.body) stmt(*s);
+        if (scopeBlock) taskScopeBlocks.pop_back();
         pop();
         ctx = saved;
         if (itLambda && !noIt) {
@@ -7653,6 +7658,7 @@ struct Checker::Impl {
         std::vector<ClassInfo*> direct;
         std::vector<std::pair<FuncInfo*, int>> paramCalls;
         std::vector<CallRecord> calls;
+        std::vector<const FunctionDecl*> scoped;  // a task scope's block: the lambdas of its tasks and threads (M6.7)
         std::vector<TryRecord*> tries;
         std::vector<std::pair<TryRecord*, size_t>> rethrows;
         const Node* firstAt = nullptr;
@@ -7677,6 +7683,9 @@ struct Checker::Impl {
     std::deque<TryRecord> tryRecords;
     std::unordered_map<const void*, ThrowRoot> throwRoots;  // by a FunctionDecl, a ClassInfo, or a FnCtx's sink
     std::unordered_map<const FunctionDecl*, LambdaThrows> lambdaThrows;
+    std::vector<const FunctionDecl*> taskScopeBlocks;          // the blocks of taskScope { } being checked
+    std::vector<const CallExpr*> callsBeingChecked;            // the innermost last
+    std::unordered_set<const FunctionDecl*> scopedLambdas;     // lambdas of their tasks and threads
     std::vector<std::tuple<FuncInfo*, const Node*, Unit*>> functionValues;  // and the file using it
     std::unordered_map<const void*, ThrowSet> thrownBy;
     std::unordered_map<const TryRecord*, ThrowSet> tryBodies;
@@ -7787,6 +7796,7 @@ struct Checker::Impl {
 
     void noteCallThrows(FuncInfo* f, ClassInfo* constructs, const Args& args, const Binding* b, const Node& at) {
         noteKeyCall(f);
+        noteScopedLambdas(f, args, at);
         ThrowScope* scope = throwHere(at);
         if (scope == nullptr) return;
         CallRecord r;
@@ -7826,6 +7836,35 @@ struct Checker::Impl {
             }
         }
         scope->calls.push_back(std::move(r));
+    }
+
+    // TaskScope, the standard library's (M6.7).
+    bool isTaskScope(const Type& t) const {
+        return t.kind == Type::Class && t.cls != nullptr && t.cls->name == "TaskScope" && t.cls->unit != nullptr && t.cls->unit->prelude;
+    }
+
+    // task { } or thread { } of the scope whose block this is, called on it without naming it, or
+    // on `this` (M6.7): what the lambdas given may throw is the block's, thrown where the scope
+    // ends, and not where the call is, which no try around the call can catch. A scope reached
+    // any other way, given to a function, takes only lambdas that throw nothing checked.
+    void noteScopedLambdas(FuncInfo* f, const Args& args, const Node& at) {
+        if (f == nullptr || taskScopeBlocks.empty() || silent != 0 || keptCode()) return;
+        if (f->owner == nullptr || f->owner->name != "TaskScope" || f->owner->unit == nullptr || !f->owner->unit->prelude) return;
+        if (f->name != "task" && f->name != "thread") return;
+        if (callsBeingChecked.empty() || static_cast<const Node*>(callsBeingChecked.back()) != &at) return;
+        const CallExpr* call = callsBeingChecked.back();
+        const Expr& callee = *call->callee;
+        const bool onScope = callee.kind == ExprKind::Name ||
+                             (callee.kind == ExprKind::Member && static_cast<const MemberExpr&>(callee).object->kind == ExprKind::This);
+        if (!onScope) return;
+        auto root = throwRoots.find(taskScopeBlocks.back());
+        if (root == throwRoots.end()) return;
+        for (const ExprPtr& arg : args.exprs) {
+            if (arg->kind != ExprKind::Function) continue;
+            const FunctionDecl* lambda = static_cast<const FunctionExpr&>(*arg).fn.get();
+            scopedLambdas.insert(lambda);
+            root->second.scope->scoped.push_back(lambda);
+        }
     }
 
     void noteFunctionValue(FuncInfo* f, const Node& at) {
@@ -7994,6 +8033,10 @@ struct Checker::Impl {
         for (ClassInfo* k : s->direct) addClass(set, k);
         for (const auto& p : s->paramCalls) addParam(set, p);
         for (const CallRecord& r : s->calls) addAll(set, evalCall(r));
+        for (const FunctionDecl* lambda : s->scoped) {
+            noteThrowRead(lambda);
+            if (auto found = thrownBy.find(lambda); found != thrownBy.end()) addAll(set, found->second);
+        }
         for (const TryRecord* t : s->tries) {
             const ThrowSet body = evalScope(t->body, depth + 1);
             tryBodies[t] = body;
@@ -8103,7 +8146,7 @@ struct Checker::Impl {
             }
         }
         for (const auto& [lambda, kept] : lambdaThrows) {
-            if (passedOn.count(lambda) != 0 || judging.count(kept.unit) == 0) continue;
+            if (passedOn.count(lambda) != 0 || scopedLambdas.count(lambda) != 0 || judging.count(kept.unit) == 0) continue;
             auto found = thrownBy.find(lambda);
             if (found == thrownBy.end() || found->second.classes.empty()) continue;
             std::vector<ClassInfo*> allowed;
@@ -9132,6 +9175,11 @@ struct Checker::Impl {
     }
 
     Type call(const CallExpr& c) {
+        callsBeingChecked.push_back(&c);
+        struct Done {
+            std::vector<const CallExpr*>& calls;
+            ~Done() { calls.pop_back(); }
+        } done{callsBeingChecked};
         for (const ExprPtr& a : c.args)
             if (a->kind == ExprKind::Name) bareArguments.insert(a.get());
         if (Type changed; atomicCompareAndSet(c, changed)) return changed;
@@ -9182,13 +9230,19 @@ struct Checker::Impl {
                             return unknownType();
                         }
                     } else {
-                        std::vector<FuncInfo*> ext = findExtensions(withNull(r, false), n);
-                        if (!ext.empty()) {
-                            Type plain = withNull(r, false);
-                            return callFunctions(ext, c, n, {}, &plain);
+                        Type plain = withNull(r, false);
+                        std::vector<FuncInfo*> ext = findExtensions(plain, n);
+                        if (!ext.empty()) return callFunctions(ext, c, n, {}, &plain);
+                        // A name the object cannot have as a member is not its: it is looked for
+                        // further out, a global function or class, as anywhere (`TimeoutException()`
+                        // in a lambda run on a string).
+                        const bool notMember = plain.kind == Type::Class
+                                                   ? membersKnown(plain) && !lookupMember(plain, n, true).found()
+                                                   : builtinDeclared(plain) && !builtinMember(n) && !anyExtension(n) && fitMethods(plain, n).empty();
+                        if (!notMember) {
+                            for (const ExprPtr& a : c.args) expr(*a);
+                            return unknownType();
                         }
-                        for (const ExprPtr& a : c.args) expr(*a);
-                        return unknownType();
                     }
                 }
                 if (!x->isLambda) break;
@@ -9312,6 +9366,8 @@ struct Checker::Impl {
                     !(plain.kind == Type::Class && lookupMember(plain, m.name, true).found()) && findExtensions(plain, m.name).empty()) {
                     if (!fits(plain, *ft.receiver)) report(m, "'" + m.name + "' runs on " + describe(*ft.receiver) + ", not " + describe(plain));
                     noteUse(*l, ParamUse::Called);
+                    // What it may throw, the caller accounts for, as for block(...).
+                    if (l->paramOf != nullptr) noteParamCall(l->paramOf, l->paramIndex, c);
                     if (l->paramOf != nullptr) effects[effectKeyHere()].callsParams = true;
                     else effects[effectKeyHere()].any = true;
                     callingKnown = true;

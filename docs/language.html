@@ -539,6 +539,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Stream"><code>Stream</code></a> (1)</li>
 <li><a href="#StringBuilder"><code>StringBuilder</code></a> (24)</li>
 <li><a href="#T.use"><code>T</code></a> (7)</li>
+<li><a href="#TaskScope"><code>TaskScope</code></a> (6)</li>
 <li><a href="#TempDir"><code>TempDir</code></a> (1)</li>
 <li><a href="#Test"><code>Test</code></a> (1)</li>
 <li><a href="#TextMetrics"><code>TextMetrics</code></a> (1)</li>
@@ -4731,7 +4732,37 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <p>Runs the block and gives its value, or the error it threw, as a Result.</p>
 </div>
 <div class="entry" id="task"><code class="sig">fun &lt;T&gt; task(block : suspend () -&gt; T throws Exception) : Job&lt;T&gt;</code><a class="anchor" href="#task">#</a>
-<p>Starts a task running the block, and gives a Job of what it returns, or of the Exception it throws. Returns once the task has finished or has first set itself aside.</p>
+<p>Starts a task running the block, and gives a Job of what it returns, or of the Exception it throws. Returns once the task has finished or has first set itself aside. The job's cancel(interrupt = true) stops the task where it next waits, with a CancellationException.</p>
+</div>
+<h3>Task scopes</h3>
+<p>The tasks and threads started in a scope are its own (Kotlin's structured concurrency): the scope ends only once all of them have, and where one fails, the scope cancels the rest and throws that failure where it ends, so a try around it takes it.</p>
+<pre>val both = taskScope {
+  val page = task { fetch(pageAddress) }
+  val picture = task { fetch(pictureAddress) }
+  page.get() + picture.get()
+}
+</pre>
+<p>task { } and thread { } in the scope's block start its own; anything else that gives a Job, a pool's submit { }, joins it with add. The checker counts what their blocks may throw as thrown by the scope, where it ends.</p>
+<div class="entry" id="taskScope"><code class="sig">suspend inline fun &lt;T&gt; taskScope(block : TaskScope.() -&gt; T) : T</code><a class="anchor" href="#taskScope">#</a>
+<p>Runs <code>block</code> with a new scope, and gives what it gives, once every job of the scope has ended. Where a job fails, or the block throws, the scope cancels its other jobs (cancel(interrupt = true): a task stops where it next waits, a thread is interrupted), waits for them to end, and throws the first failure, any later ones set aside in it (suppressed). The block itself goes on until it ends. A cancelled job is no failure. Waiting, a task is set aside, a thread blocks, and the main thread runs the event loop meanwhile, so that its tasks go on.</p>
+</div>
+<div class="entry" id="TaskScope"><code class="sig">class TaskScope</code><a class="anchor" href="#TaskScope">#</a>
+<p>The jobs of a scope taskScope { } is running, and what has gone wrong with them.</p>
+</div>
+<div class="entry member" id="TaskScope.task"><code class="sig">fun &lt;T&gt; task(block : suspend () -&gt; T) : Job&lt;T&gt;</code><a class="anchor" href="#TaskScope.task">#</a>
+<p>Starts a task of the scope, as task { } does. In a scope that is cancelling, nothing is started: the job is cancelled at once.</p>
+</div>
+<div class="entry member" id="TaskScope.thread"><code class="sig">fun &lt;T&gt; thread(name : string? = null, daemon : bool = false, block : suspend () -&gt; T) : Job&lt;T&gt;</code><a class="anchor" href="#TaskScope.thread">#</a>
+<p>Starts a thread of the scope, as thread { } does; in a scope that is cancelling, none.</p>
+</div>
+<div class="entry member" id="TaskScope.add"><code class="sig">fun &lt;T&gt; add(job : Job&lt;T&gt;) : Job&lt;T&gt;</code><a class="anchor" href="#TaskScope.add">#</a>
+<p>Makes <code>job</code>, started some other way, one of the scope's: it is waited for, and cancelled with the rest, at once in a scope that is cancelling. Gives the job.</p>
+</div>
+<div class="entry member" id="TaskScope.cancel"><code class="sig">fun cancel()</code><a class="anchor" href="#TaskScope.cancel">#</a>
+<p>Cancels every job of the scope, which then throws CancellationException where it ends, unless a job failed.</p>
+</div>
+<div class="entry member" id="TaskScope.isCancelled"><code class="sig">val isCancelled : bool</code><a class="anchor" href="#TaskScope.isCancelled">#</a>
+<p>Whether the scope is cancelling its jobs: one failed, or cancel() was called.</p>
 </div>
 <div class="entry" id="suspendTask"><code class="sig">suspend fun &lt;T&gt; suspendTask(block : ((T) -&gt; unit) -&gt; unit) : T</code><a class="anchor" href="#suspendTask">#</a>
 <p>Sets the running task aside until <code>resume</code> is called, and gives what it is called with:</p>
@@ -4996,7 +5027,7 @@ loading.then { shown = it }                              // on the event loop, w
 <p>Its value if it has one; null if it has not, or failed.</p>
 </div>
 <div class="entry member" id="Job.get"><code class="sig">suspend fun get() : T throws ExecutionException</code><a class="anchor" href="#Job.get">#</a>
-<p>Its value, waited for if it is not done: a thread blocks, a task on the main thread is set aside. A job that failed throws ExecutionException, its error in <code>cause</code>; one that was cancelled throws CancellationException.</p>
+<p>Its value, waited for if it is not done: a thread blocks, a task on the main thread is set aside, and the main thread outside a task runs the event loop meanwhile, so that the tasks and timers the job may be waiting on go on. A job that failed throws ExecutionException, its error in <code>cause</code>; one that was cancelled throws CancellationException.</p>
 </div>
 <div class="entry member" id="Job.get-2"><code class="sig">suspend fun get(timeout : Duration) : T throws ExecutionException | TimeoutException</code><a class="anchor" href="#Job.get-2">#</a>
 <p>The same, waiting <code>timeout</code> at most: TimeoutException after that.</p>

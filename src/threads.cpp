@@ -722,7 +722,7 @@ bool VM::runSandboxTimer() {
     return true;
 }
 
-void VM::runEventLoop(bool wait, int64_t budgetMs) {
+void VM::runEventLoop(bool wait, int64_t budgetMs, Value until) {
     if (thread_ != &mainThread_) throw runtimeError(Thrown::IllegalStateException, "the event loop runs on the main thread only");
     // Without waiting, and with a budget: what is ready is run until the time is up, and one
     // thing at least. A timer whose task takes longer than its period is always due, so
@@ -732,6 +732,7 @@ void VM::runEventLoop(bool wait, int64_t budgetMs) {
     for (;;) {
         if (stopRequested_.load()) throw WorkerStop{};
         throwIfTimeLimitPassed();
+        if (!until.isNull() && call(until, 0, nullptr).truthy()) return;
         if (!wait && budgetMs >= 0 && ranOne && Clock::now() >= deadline) return;
         ranOne = true;
         // What a worker thread has handed over: the end of a read, say, with a task to take up.
@@ -1194,6 +1195,13 @@ void registerThreads(VM& vm) {
         vm.runEventLoop(true);
         return Value::null();
     });
+    // Runs the loop here until `done`, a function, gives true, or there is nothing left for the
+    // loop to wait for (M6.7): what a task scope on the main thread waits with.
+    define(vm, loop, "runUntil", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        TempRoot keep(vm, args[0]);
+        vm.runEventLoop(true, -1, args[0]);
+        return Value::null();
+    });
 
     // -- __task: tasks --
     ObjClass* task = holder(vm, "task");
@@ -1261,6 +1269,15 @@ void registerThreads(VM& vm) {
     define(vm, task, "wait", 1, 1, [](VM& vm, int, Value* args) -> Value {
         ObjFiber* fiber = vm.currentFiber();
         if (fiber == nullptr || args[0].as.i != fiber->waitToken) throw vm.runtimeError(Thrown::IllegalStateException, "not in the task that is to wait");
+        if (fiber->cancelPending) {
+            // Cancelled while it was running: this wait is where it stops.
+            fiber->cancelPending = false;
+            fiber->cancelledAt = fiber->waitToken;
+            fiber->resumedToken = fiber->waitToken;
+            fiber->hasEarly = false;
+            fiber->early = Value::null();
+            throw vm.errorOf("CancellationException", "the task was cancelled");
+        }
         if (fiber->hasEarly) {
             // It was answered before it got here, so there is nothing to wait for.
             fiber->hasEarly = false;
@@ -1281,6 +1298,8 @@ void registerThreads(VM& vm) {
     define(vm, task, "resume", 4, 4, [](VM& vm, int, Value* args) -> Value {
         ObjFiber* fiber = fiberArgument(vm, args[0]);
         const int64_t token = vm.toInt(args[1], "wait");
+        // A wait a cancel answered: its own answer has nowhere to go.
+        if (token == fiber->cancelledAt) return Value::null();
         // Waits are numbered as the task comes to them, and answered in that order.
         if (token <= fiber->resumedToken) throw vm.runtimeError(Thrown::IllegalStateException, "resume was called already: a task set aside is taken up again once");
         // An answer to a wait the task gave up (an error took it elsewhere, or it has ended)
@@ -1295,6 +1314,25 @@ void registerThreads(VM& vm) {
             fiber->earlyOk = args[2].truthy();
             fiber->early = args[3];
         }
+        return Value::null();
+    });
+    // Cancels a task (M6.7): one set aside at a wait goes on at once, by throwing a
+    // CancellationException there; any other throws one at its next wait. A finished task, and a
+    // sequence's generator, are left as they are.
+    define(vm, task, "cancel", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        ObjFiber* fiber = fiberArgument(vm, args[0]);
+        if (fiber->state == FiberState::Done || fiber->generator) return Value::null();
+        const bool waiting = fiber->state == FiberState::Suspended && fiber->waitingAt != 0 && fiber->waitingAt == fiber->waitToken &&
+                             fiber->waitToken > fiber->resumedToken;
+        if (!waiting) {
+            fiber->cancelPending = true;
+            return Value::null();
+        }
+        fiber->cancelledAt = fiber->waitToken;
+        fiber->resumedToken = fiber->waitToken;
+        const Value error = vm.errorOf("CancellationException", "the task was cancelled").value;
+        TempRoot keep(vm, error);
+        vm.runFiber(fiber, false, error);
         return Value::null();
     });
     // How many parameters a function takes; 1 where that cannot be told.

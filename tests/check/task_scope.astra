@@ -1,0 +1,40 @@
+// Task scopes (M6.7): what the tasks and threads of a scope may throw is thrown where the scope
+// ends, so the scope may throw it.
+
+// Thrown by a task, named by the function the scope is in.
+suspend fun reads() throws IOException {
+  taskScope { task { Path("a.txt").readText() } }
+}
+
+// Thrown by a thread, not named.
+suspend fun times() throws IOException {                          // check: 'times' may throw TimeoutException, which its throws does not name: catch it, or add it (D54)
+  taskScope { thread { throw TimeoutException() } }
+}
+
+// A try around the scope takes it.
+suspend fun caught() {
+  try {
+    taskScope { task { throw TimeoutException() } }
+  } catch (e : TimeoutException) {
+  }
+}
+
+// A try around the call that starts the task does not: the failure comes out where the scope ends.
+suspend fun notThere() throws IOException {                       // check: 'notThere' may throw TimeoutException, which its throws does not name: catch it, or add it (D54)
+  taskScope {
+    try {
+      task { throw TimeoutException() }
+    } catch (e : Exception) {
+    }
+  }
+}
+
+// A task of a task of the scope is the scope's too.
+suspend fun nested() throws IOException {
+  taskScope { task { task { Path("b.txt").readText() } } }
+}
+
+// A scope given to a function takes only lambdas that throw nothing checked.
+fun helper(scope : TaskScope) {
+  scope.task { throw TimeoutException() }                  // check: this lambda may throw TimeoutException, which nothing can catch where it is called: it is kept as a suspend () -> *, which throws nothing checked; catch it inside the lambda (D35)
+}

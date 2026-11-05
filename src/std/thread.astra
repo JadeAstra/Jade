@@ -207,6 +207,12 @@ class Job<T> {
     if (now) { action() }
   }
 
+  // Its error if it failed, asked for; null if it did not, or has not finished.
+  internal fun errorOrNull() : Throwable? {
+    ask()
+    return state == 2 ? held as Throwable : null
+  }
+
   // Its value if it has one; null if it has not, or failed.
   fun getOrNull() : T? {
     ask()
@@ -214,9 +220,11 @@ class Job<T> {
   }
 
   // Its value, waited for if it is not done: a thread blocks, a task on the main thread is set
-  // aside. A job that failed throws ExecutionException, its error in `cause`; one that was
-  // cancelled throws CancellationException.
+  // aside, and the main thread outside a task runs the event loop meanwhile (M6.7), so that the
+  // tasks and timers the job may be waiting on go on. A job that failed throws
+  // ExecutionException, its error in `cause`; one that was cancelled throws CancellationException.
   suspend fun get() : T throws ExecutionException {
+    __loopUntilDone(null)
     lock.useKey {
       while (state == 0) { lock.await(null) }
     }
@@ -226,12 +234,30 @@ class Job<T> {
   // The same, waiting `timeout` at most: TimeoutException after that.
   suspend fun get(timeout : Duration) : T throws ExecutionException | TimeoutException {
     val deadline = __deadline(timeout)
+    __loopUntilDone(deadline)
     lock.useKey {
       while (state == 0) {
         if (!lock.await(deadline)) { throw TimeoutException() }
       }
     }
     return outcome()
+  }
+
+  // On the main thread outside a task: runs the event loop until the job is done, or the clock()
+  // time `deadline`, or there is nothing left for the loop to wait for.
+  private fun __loopUntilDone(deadline : float?) {
+    if (state != 0 or __task.current() != null or !__loop.isLoopThread()) { return }
+    val self = this
+    // Whatever finishes it wakes the loop to look.
+    onDone { EventLoop.post { } }
+    var timer = -1
+    if (deadline != null) {
+      val left = Math.round((deadline - clock()) * 1000.0)
+      if (left <= 0) { return }
+      timer = __loop.timer(left, { })
+    }
+    __loop.runUntil({ self.state != 0 or (deadline != null and clock() >= deadline) })
+    if (timer >= 0) { __loop.cancel(timer) }
   }
 
   private fun outcome() : T throws ExecutionException {
@@ -412,8 +438,19 @@ class Lock {
       })
     }
     val count = __thread.letGo(this)
-    val told = __task.wait(wait) as bool
-    __thread.takeBack(this, count)
+    var told = false
+    try {
+      told = __task.wait(wait) as bool
+    } finally {
+      __thread.takeBack(this, count)
+      if (!answered) {
+        // The task was cancelled (M6.7): what was set up for its answer goes.
+        answered = true
+        if (timer >= 0) { __loop.cancel(timer) }
+        __loop.release()
+        tasks.remove(resume)
+      }
+    }
     return told
   }
 }

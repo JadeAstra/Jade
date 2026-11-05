@@ -120,6 +120,10 @@ struct ObjFiber final : Obj {
     bool hasEarly = false;        // an answer came before the task got as far as waiting
     bool earlyOk = false;
     Value early;
+    // Cancelled (M6.7): it throws a CancellationException at its next wait. The wait a cancel
+    // answered, whose own answer, when it comes, has nowhere to go.
+    bool cancelPending = false;
+    int64_t cancelledAt = 0;
 
     // Its stack starts small and grows as needed, so that many can be alive at once (D98, G50).
     explicit ObjFiber(Value function) : Obj(ObjType::Fiber), context(kStackSize, kMaxFrames, true), entry(function) {
@@ -241,7 +245,7 @@ enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
     IllegalArgumentException, NumberFormatException, IllegalStateException, UnsupportedOperationException,
     NoSuchElementException, ConcurrentModificationException, AssertionError, StackOverflowError, OutOfMemoryError,
-    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, Count_
+    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, Count_
 };
 
 class VM : public KeyMethods {
@@ -730,7 +734,9 @@ public:
     // task, no timer, no work in progress and no thread that is not a daemon.
     // Without `wait` it returns when nothing is ready, or, given a budget in milliseconds,
     // once that long has passed and at least one thing has been run.
-    void runEventLoop(bool wait, int64_t budgetMs = -1);
+    // With `until`, a function of no arguments, it returns as soon as that gives true, asked
+    // before each thing it runs and as it would wait (M6.7).
+    void runEventLoop(bool wait, int64_t budgetMs = -1, Value until = Value::null());
     // True if threads are still running, in which case the process has to end without
     // taking the VM apart under them.
     bool threadsAlive() const { return threads_.size() > 1 || pendingJobs_ > 0 || liveWorkers_ > 0; }

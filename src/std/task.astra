@@ -123,18 +123,219 @@ inline fun <T> runCatching(block : () -> T) : Result<T> {
 }
 
 // Starts a task running the block, and gives a Job of what it returns, or of the Exception it
-// throws. Returns once the task has finished or has first set itself aside.
+// throws. Returns once the task has finished or has first set itself aside. The job's
+// cancel(interrupt = true) stops the task where it next waits, with a CancellationException.
 fun <T> task(block : suspend () -> T throws Exception) : Job<T> {
   val job = Job<T>()
+  __runTask(job, block, null)
+  return job
+}
+
+// Runs `block` as a task finishing `job`, then `after` where it is given, once the job has its
+// outcome, with what the block threw: that even where the job was cancelled first.
+fun <T> __runTask(job : Job<T>, block : suspend () -> T throws Exception, after : ((Throwable?) -> unit)?) {
   val body : suspend () -> unit = {
+    val running = __task.current()
+    job.interrupter = { __task.cancel(running) }
+    var thrown : Throwable? = null
     try {
       job.complete(block())
     } catch (e) {
+      thrown = e
       job.fail(e)
+    } finally {
+      if (after != null) { after(thrown) }
     }
   }
   __task.start(body)
-  return job
+}
+
+// ---- Task scopes (M6.7) ----
+// The tasks and threads started in a scope are its own (Kotlin's structured concurrency): the
+// scope ends only once all of them have, and where one fails, the scope cancels the rest and
+// throws that failure where it ends, so a try around it takes it.
+//
+//   val both = taskScope {
+//     val page = task { fetch(pageAddress) }
+//     val picture = task { fetch(pictureAddress) }
+//     page.get() + picture.get()
+//   }
+//
+// task { } and thread { } in the scope's block start its own; anything else that gives a Job, a
+// pool's submit { }, joins it with add. The checker counts what their blocks may throw as thrown
+// by the scope, where it ends.
+
+// Runs `block` with a new scope, and gives what it gives, once every job of the scope has ended.
+// Where a job fails, or the block throws, the scope cancels its other jobs (cancel(interrupt =
+// true): a task stops where it next waits, a thread is interrupted), waits for them to end, and
+// throws the first failure, any later ones set aside in it (suppressed). The block itself goes on
+// until it ends. A cancelled job is no failure. Waiting, a task is set aside, a thread blocks,
+// and the main thread runs the event loop meanwhile, so that its tasks go on.
+suspend inline fun <T> taskScope(block : TaskScope.() -> T) : T {
+  val scope = TaskScope()
+  try {
+    return scope.block()
+  } catch (e : Throwable) {
+    scope.blockFailed(e)
+    throw e
+  } finally {
+    scope.finish()
+  }
+}
+
+// The jobs of a scope taskScope { } is running, and what has gone wrong with them.
+class TaskScope {
+  private val lock = Lock()
+  private var running = 0              // jobs started in it that have not ended
+  private var blockDone = false
+  private var first : Throwable? = null   // the first failure, which the scope throws
+  private var cancelling = false
+  private var cancelledByHand = false
+  private val jobs : open List<Job<any?>> = []
+  private val ended = Job<bool>()      // once the block and every job have ended
+  private val onMainLoop : bool
+
+  internal fun init() {
+    onMainLoop = __task.current() == null and __loop.isLoopThread()
+  }
+
+  // Starts a task of the scope, as task { } does. In a scope that is cancelling, nothing is
+  // started: the job is cancelled at once.
+  fun <T> task(block : suspend () -> T) : Job<T> {
+    val job = Job<T>()
+    if (!started(job)) { return job }
+    val self = this
+    __runTask(job, block, { thrown -> self.jobEnded(job, thrown) })
+    return job
+  }
+
+  // Starts a thread of the scope, as thread { } does; in a scope that is cancelling, none.
+  fun <T> thread(name : string? = null, daemon : bool = false, block : suspend () -> T) : Job<T> {
+    val job = Job<T>()
+    if (!started(job)) { return job }
+    val self = this
+    val made = Thread(name)
+    made.throwingTask = {
+      var thrown : Throwable? = null
+      try {
+        job.complete(block())
+      } catch (e) {
+        thrown = e
+        job.fail(e)
+      } finally {
+        self.jobEnded(job, thrown)
+      }
+    }
+    made.isDaemon = daemon
+    job.interrupter = { made.interrupt() }
+    made.start()
+    return job
+  }
+
+  // Makes `job`, started some other way, one of the scope's: it is waited for, and cancelled
+  // with the rest, at once in a scope that is cancelling. Gives the job.
+  fun <T> add(job : Job<T>) : Job<T> {
+    if (!started(job)) { return job }
+    val self = this
+    job.onDone { self.jobEnded(job, job.errorOrNull()) }
+    return job
+  }
+
+  // Cancels every job of the scope, which then throws CancellationException where it ends,
+  // unless a job failed.
+  fun cancel() {
+    lock.useKey { cancelledByHand = true }
+    cancelAll()
+  }
+
+  // Whether the scope is cancelling its jobs: one failed, or cancel() was called.
+  val isCancelled : bool
+    get() => lock.useKey { cancelling }
+
+  // A job joins the scope: false, and the job cancelled, if the scope is cancelling.
+  private fun started(job : Job<any?>) : bool {
+    job.ask()      // its error is the scope's to throw, not one nobody caught
+    val late = lock.useKey {
+      if (!cancelling) {
+        running += 1
+        jobs.add(job)
+      }
+      cancelling
+    }
+    if (late) { job.cancel(true) }
+    return !late
+  }
+
+  // A job of the scope has its outcome, and its task or thread has ended, having thrown `error`.
+  internal fun jobEnded(job : Job<any?>, error : Throwable?) {
+    noteFailure(error)
+    val all = lock.useKey {
+      running -= 1
+      jobs.remove(job)
+      blockDone and running == 0
+    }
+    if (all) { finished() }
+  }
+
+  // What the block threw, unless it is the scope's own cancellation coming back.
+  internal fun blockFailed(error : Throwable) {
+    noteFailure(error)
+  }
+
+  private fun noteFailure(error : Throwable?) {
+    if (error == null) { return }
+    val cancelNow = lock.useKey {
+      // A job stopping because the scope cancelled it is no failure.
+      val quiet = error is CancellationException or (cancelling and error is InterruptedException)
+      var now = false
+      if (!quiet) {
+        val was = first
+        if (was == null) {
+          first = error
+          now = !cancelling
+          cancelling = true
+        } else if (error !== was) {
+          was.addSuppressed(error)
+        }
+      }
+      now
+    }
+    if (cancelNow) { cancelAll() }
+  }
+
+  private fun cancelAll() {
+    val those = lock.useKey {
+      cancelling = true
+      jobs.toList()
+    }
+    for (job in those) { job.cancel(true) }
+  }
+
+  private fun finished() {
+    ended.complete(true)
+    // The main thread may be waiting in the event loop: it looks again.
+    if (onMainLoop) { EventLoop.post { } }
+  }
+
+  // The block has ended: waits for every job, then throws the first failure, if one failed.
+  internal suspend fun finish() {
+    val all = lock.useKey {
+      blockDone = true
+      running == 0
+    }
+    if (all) { finished() }
+    if (onMainLoop and !ended.isDone) {
+      val self = this
+      __loop.runUntil({ self.ended.isDone })
+    }
+    try {
+      ended.get()
+    } catch (e : ExecutionException) {
+    }
+    val failure = lock.useKey { first }
+    if (failure != null) { __rethrow(failure) }
+    if (lock.useKey { cancelledByHand }) { throw CancellationException("the task scope was cancelled") }
+  }
 }
 
 // Sets the running task aside until `resume` is called, and gives what it is called with:
@@ -177,7 +378,13 @@ fun Function.fail(error : Throwable) {
 // the event loop goes on; anywhere else the thread sleeps.
 suspend fun delay(time : Duration) {
   if (__task.current() != null and __loop.isLoopThread()) {
-    suspendTask<any?> { resume -> __loop.timer(time.waitMilliseconds, { resume(null) }) }
+    // A task cancelled meanwhile (M6.7) leaves no timer behind to keep the program going.
+    var timer = -1
+    try {
+      suspendTask<any?> { resume -> timer = __loop.timer(time.waitMilliseconds, { resume(null) }) }
+    } finally {
+      if (timer >= 0) { __loop.cancel(timer) }
+    }
   } else {
     Thread.sleep(time)
   }

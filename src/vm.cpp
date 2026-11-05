@@ -1415,7 +1415,7 @@ const std::vector<std::string>& VM::globalsFoundByName() {
         "RuntimeException", "ArithmeticException", "IndexOutOfBoundsException", "NullPointerException", "ClassCastException",
         "IllegalArgumentException", "NumberFormatException", "IllegalStateException", "UnsupportedOperationException",
         "NoSuchElementException", "ConcurrentModificationException", "AssertionError", "StackOverflowError", "OutOfMemoryError",
-        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "MapEntry"};
+        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "CancellationException", "MapEntry"};
     return names;
 }
 

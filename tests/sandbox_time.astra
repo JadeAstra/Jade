@@ -19,14 +19,15 @@ Sandbox.run {
   }
   val every = EventLoop.every(10.minutes) { }
   later.then { seconds ->
-    print("two hours on:", seconds)                           // after the script: see the end
+    print("two hours on:", seconds)                           // when the loop next runs: below
     every.cancel()
   }
 }
 
-// What a thread started in it does takes its clock too.
+// What a thread started in it does takes its clock too. The main thread runs the event loop
+// while get() waits (M6.7), so the task above finishes meanwhile.
 Sandbox.run {
-  thread { Thread.sleep(1.hours) }.get()
+  thread { Thread.sleep(1.hours) }.get()                      // expect: two hours on: 7200.0
   print(clock())                                              // expect: 3600.0
 }
 
@@ -40,4 +41,3 @@ val seeded = Sandbox.run {
 print(seeded == Sandbox.run(seed = 42) { Math.random() })     // expect: true
 
 print(clock() - wall < 5.0)                                   // expect: true
-// expect: two hours on: 7200.0

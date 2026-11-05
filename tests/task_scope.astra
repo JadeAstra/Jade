@@ -1,0 +1,136 @@
+// Task scopes (M6.7): the tasks and threads started in one are its own; it ends once they all
+// have, and throws the first failure, the others cancelled.
+
+// The values, once every job has ended; on the main thread the event loop runs meanwhile, so
+// tasks that wait go on.
+val sum = taskScope {
+  val a = task {
+    delay(20.milliseconds)
+    1
+  }
+  val b = task {
+    delay(10.milliseconds)
+    2
+  }
+  a.get() + b.get()
+}
+print(sum)                                                   // expect: 3
+
+// The scope waits for jobs nobody asked for.
+var finished = false
+taskScope {
+  task {
+    delay(30.milliseconds)
+    finished = true
+  }
+}
+print(finished)                                              // expect: true
+
+// A failure: thrown where the scope ends, as it was thrown; the job still waiting is cancelled.
+var stopped = ""
+val start = clock()
+try {
+  taskScope {
+    task {
+      try {
+        delay(60.seconds)
+      } catch (e : CancellationException) {
+        stopped = "cancelled"
+        throw e
+      }
+    }
+    task {
+      delay(10.milliseconds)
+      throw IllegalArgumentException("bad input")
+    }
+  }
+} catch (e : IllegalArgumentException) {
+  print(e.message, stopped, clock() - start < 10.0)           // expect: bad input cancelled true
+}
+
+// Threads: one fails, the other, asleep, is interrupted.
+var interrupted = false
+try {
+  taskScope {
+    thread {
+      try {
+        Thread.sleep(60.seconds)
+      } catch (e : InterruptedException) {
+        interrupted = true
+      }
+    }
+    thread {
+      Thread.sleep(20.milliseconds)
+      error("thread failed")
+    }
+  }
+} catch (e : IllegalStateException) {
+  print(e.message, interrupted)                              // expect: thread failed true
+}
+
+// Later failures are set aside in the first; once the scope is cancelling, it starts nothing.
+var startedLate = false
+try {
+  taskScope {
+    task {
+      try { delay(60.seconds) } catch (e : CancellationException) { error("second, while stopping") }
+    }
+    task { error("first") }
+    task { startedLate = true }
+  }
+} catch (e : IllegalStateException) {
+  print(e.message, e.suppressed.map { it.message }, startedLate)   // expect: first ["second, while stopping"] false
+}
+
+// The block's own failure, and the jobs then cancelled.
+var cancelledToo = false
+try {
+  taskScope {
+    task {
+      try { delay(60.seconds) } catch (e : CancellationException) { cancelledToo = true }
+    }
+    throw UnsupportedOperationException("the block failed")
+  }
+} catch (e : UnsupportedOperationException) {
+  print(e.message, cancelledToo)                              // expect: the block failed true
+}
+
+// cancel(): the jobs stop, and the scope throws CancellationException.
+try {
+  taskScope {
+    task { delay(60.seconds) }
+    task {
+      delay(10.milliseconds)
+      cancel()
+    }
+  }
+} catch (e : CancellationException) {
+  print(e.message)                                           // expect: the task scope was cancelled
+}
+
+// A job of a pool, added.
+val pool = ThreadPool(2)
+val fromPool = taskScope { add(pool.submit { 40 + 2 }).get() }
+print(fromPool)                                              // expect: 42
+pool.close()
+
+// In a task: the task is set aside while the scope waits.
+val outer = task {
+  taskScope {
+    val x = task {
+      delay(10.milliseconds)
+      "inner"
+    }
+    x.get()
+  }
+}
+outer.then { print(it) }                                     // expect: inner
+
+// A task's job cancelled with interrupt = true stops the task where it waits.
+var reached = false
+val sleeper = task {
+  delay(60.seconds)
+  reached = true
+}
+sleeper.cancel(true)
+EventLoop.after(20.milliseconds) { print(sleeper.isCancelled, reached) }   // expect: true false

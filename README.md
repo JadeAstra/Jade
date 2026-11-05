@@ -2787,9 +2787,10 @@ sockets and other programs' streams is not marked: in a task on the main thread 
 task aside while the work is done elsewhere, and anywhere else it waits on its thread.
 
 A task can be set aside anywhere in the program's own code, however many calls deep. On a
-thread that is not running a task, a suspend function simply waits on that thread; on the
-main thread outside a task it is an error when it runs, because the main thread waiting
-would stop the loop that brings the answer.
+thread that is not running a task, a suspend function simply waits on that thread. On the main
+thread outside a task, a job's `get()` and a task scope run the event loop while they wait, so
+that the tasks and timers they wait on go on; `suspendTask` there is an error when it runs,
+because the main thread waiting would stop the loop that brings the answer.
 
 **Jobs.** A `Job<T>` is a result to come, from `task`, `thread` or a pool, or made by hand as
 `Job<T>()` and given its value with `complete(value)` or `fail(error)`:
@@ -2798,8 +2799,30 @@ would stop the loop that brings the answer.
 | --- | --- |
 | reading it | `get()` (waits; throws `ExecutionException` with the error as `cause`, or `CancellationException`), `get(timeout)` (`TimeoutException`), `getOrNull()`, `isDone`, `failed`, `isCancelled` |
 | hearing of it | `then { value -> }`, `onError { error -> }`, both run on the event loop |
-| ending it | `complete(value)`, `fail(error)`, `cancel(interrupt = false)` |
+| ending it | `complete(value)`, `fail(error)`, `cancel(interrupt = false)`; with `interrupt = true` a task stops where it next waits, with a `CancellationException`, and a thread is interrupted |
 | several | `Job.all(jobs)` is a job of all their results, in order; `Job.any(jobs)` of the first to finish |
+
+**Task scopes.** The tasks and threads started in a scope are its own (Kotlin's structured
+concurrency, M6.7): the scope ends only once all of them have, and where one fails, it cancels
+the rest and throws that failure where it ends, so a `try` around it takes it.
+
+```astra
+val both = taskScope {
+  val page = task { fetch(pageAddress) }
+  val picture = task { fetch(pictureAddress) }
+  page.get() + picture.get()
+}
+```
+
+`task { }` and `thread { }` in the block start the scope's own; `add(job)` makes another job one
+of them, a pool's `submit { }`. Where a job fails or the block throws, the scope cancels the other
+jobs, waits for them, and throws the first failure as it was thrown, any later ones in its
+`suppressed`; a cancelled job is no failure, and a scope that is cancelling starts nothing more.
+The block itself goes on until it ends. `cancel()` cancels the scope by hand, which then throws a
+`CancellationException`. What a scope may throw, the checker works out: what its block throws,
+and what the blocks of its tasks and threads throw, counted where the scope ends, so that
+`taskScope { task { file.readText() } }` throws an `IOException`, and a `try` around the
+`task { }` inside does not take it.
 
 ### Sequences
 

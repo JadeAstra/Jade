@@ -251,6 +251,8 @@ can change, and an `==` without a `hashCode`.
 | Kotlin | Astra | |
 | --- | --- | --- |
 | `launch { }`, `async { }`, `startCoroutine` | `task { }` | gives a `Job<T>` of what the block returns (D81) |
+| `coroutineScope { launch { }; async { } }`, `runBlocking { }` | `taskScope { task { }; task { } }` | ends once its tasks have; throws the first failure, the rest cancelled (M6.7) |
+| `job.cancel()` of a coroutine | `job.cancel(interrupt = true)` | the task stops where it next waits, with a `CancellationException` |
 | `suspendCoroutine { c -> ... c.resume(v) }` | `suspendTask { resume -> ... resume(v) }` | `resume.fail(e)` for `resumeWithException` |
 | `delay(16)` | `delay(16.milliseconds)` | every time is a `Duration` (D90) |
 | `Thread.sleep(100)`, `join(500)` | `Thread.sleep(100.milliseconds)`, `join(timeout = 500.milliseconds)` | `kotlin.time`'s units: `.seconds`, `.minutes`... |
