@@ -28,6 +28,7 @@
 // The stack code's joined instructions (AddLocal, MulLocals and the rest) are never in run code,
 // whose instructions have their numbers: they are made R instructions, or, in a function that
 // keeps its stack code, the instructions they join (GetLocal and Add).
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -62,9 +63,9 @@ struct Family {
 
 const Family* familyOf(Op plain) {
     static const Family add{Op::RAddSS, Op::RAddSK, Op::RAddKS};
-    static const Family sub{Op::RSubSS, Op::RSubSK, Op::Count_};
+    static const Family sub{Op::RSubSS, Op::RSubSK, Op::RSubKS};
     static const Family mul{Op::RMulSS, Op::RMulSK, Op::RMulKS};
-    static const Family div{Op::RDivSS, Op::RDivSK, Op::Count_};
+    static const Family div{Op::RDivSS, Op::RDivSK, Op::RDivKS};
     static const Family mod{Op::RModSS, Op::RModSK, Op::Count_};
     static const Family lt{Op::RLtSS, Op::RLtSK, Op::Count_};
     static const Family le{Op::RLeSS, Op::RLeSK, Op::Count_};
@@ -103,9 +104,31 @@ Op jumpFormOf(Op r) {
     }
 }
 
-// An R instruction whose result goes to slot A, which a StoreLocal after it may send elsewhere.
+// An R instruction whose result goes to slot A, its first operand, which a StoreLocal after it may
+// send elsewhere; and where in it T is, the top after it.
 bool storesResult(Op r) {
-    return (r >= Op::RAddSS && r <= Op::REqSK) || r == Op::RGetProp || r == Op::RModSS || r == Op::RModSK;
+    switch (r) {
+        case Op::RGetProp:
+        case Op::RModSS:
+        case Op::RModSK:
+        case Op::RSubKS:
+        case Op::RDivKS:
+        case Op::RGetGlobal:
+        case Op::RGetIndexSS:
+        case Op::RGetIndexSK:
+        case Op::RNeg:
+        case Op::RNot: return true;
+        default: return r >= Op::RAddSS && r <= Op::REqSK;
+    }
+}
+size_t topOperand(Op r) {
+    switch (r) {
+        case Op::RGetProp:
+        case Op::RNeg:
+        case Op::RNot: return 3;  // u8 A, u8 B, u8 T
+        case Op::RGetGlobal: return 2;  // u8 A, u8 T
+        default: return 4;  // u8 A, u8 B, u8 C, u8 T
+    }
 }
 
 // An R instruction's slow way, written after the function's own code: the stack code it stands
@@ -145,6 +168,12 @@ public:
             const size_t size = instructionSize(code_, at);
             const int depth = depths_[at];
             line_ = f_.lines[at];
+            if (at == skip_) {
+                newAt_[at] = static_cast<uint32_t>(out_.size());
+                skip_ = SIZE_MAX;
+                at += size;
+                continue;
+            }
             if (depth < 0) {
                 // Never reached: copied as it is.
                 if (known) canonical();
@@ -205,6 +234,8 @@ private:
     // top, above it where a value was taken off by writing it to a local.
     int top_ = 0;
     int line_ = 0;
+    // An instruction already done, by the R instruction before it: a Pop after a SetProp.
+    size_t skip_ = SIZE_MAX;
     // The R instruction just written with nothing after it yet, its slow way the last of slows_:
     // its result may still be sent straight to a local, or its comparison joined to the jump
     // after it.
@@ -383,13 +414,28 @@ private:
         return slows_.back();
     }
     // The end of an R instruction: where its slow way's start goes, and the result in slot s.
-    void endR(Slow& slow, int s) {
+    void endR(Slow& slow, int s) { finishR(slow, true, s); }
+    // The same, with a result in slot s or none, the top then at s.
+    void finishR(Slow& slow, bool result, int s) {
         slow.place = out_.size();
         i32(0);
         slow.size = out_.size() - slow.instruction;
-        lastR_ = true;
-        stack_.push_back(Entry{});
-        top_ = s + 1;
+        lastR_ = result;
+        if (result) {
+            stack_.push_back(Entry{});
+            top_ = s + 1;
+        } else {
+            top_ = s;
+        }
+    }
+    // A value an R instruction may take by a slot: in its slot, or noted as a local's.
+    static bool inASlot(const Entry& e) { return e.kind != Entry::Constant; }
+    // The same, or a constant it names by a byte.
+    static bool byByte(const Entry& e) { return e.kind != Entry::Constant || e.index <= 255; }
+    // Whether the instruction after the one at `at` is a Pop, not jumped to.
+    bool popAfter(size_t at, size_t size) const {
+        const size_t next = at + size;
+        return next < n_ && !leader_[next] && static_cast<Op>(code_[next]) == Op::Pop;
     }
 
     // `x op y`, its result in slot s: false where no R instruction does it.
@@ -434,10 +480,12 @@ private:
         const int a = size >= 3 ? readU16(code_, at + 1) : 0;
         const int b = size >= 5 ? readU16(code_, at + 3) : 0;
         if (!notes_ && (o == Op::GetLocal || o == Op::Const || o == Op::Pop || o == Op::Dup || o == Op::GetProp || o == Op::GetOwn ||
-                        o == Op::SetLocal || o == Op::CopyLocal))
+                        o == Op::SetLocal || o == Op::CopyLocal || o == Op::SetProp || o == Op::SetOwn || o == Op::GetGlobal ||
+                        o == Op::GetUpvalue || o == Op::GetIndex || o == Op::Neg || o == Op::Not))
             return asStackCode(o, at, size);
         if (joinedOnly_ && familyOf(o) != nullptr) return asStackCode(o, at, size);
         if (!rs_ && (o == Op::StoreLocal || o == Op::JumpIfFalse)) return asStackCode(o, at, size);
+        if (joinedOnly_ && o == Op::JumpIfFalse && !lastR_) return asStackCode(o, at, size);
         switch (o) {
             case Op::GetLocal:
                 if (isCaptured(static_cast<size_t>(a))) break;
@@ -566,9 +614,115 @@ private:
                 endR(slow, s);
                 return true;
             }
-            case Op::JumpIfFalse:
+            case Op::JumpIfFalse: {
                 if (jumpIntoLast(depth, at, size)) return true;
-                break;
+                if (!inASlot(stack_.back())) break;
+                const int s = depth - 1;
+                placeBelow(s);
+                const Entry x = take(1)[0];
+                const int bOperand = operand(x, s);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                // u8 B, u8 T, i32 target, i32 slow.
+                op(Op::RJumpIfFalse);
+                u8(bOperand);
+                u8(s);
+                fixups_.emplace_back(out_.size(), static_cast<size_t>(readI32(code_, at + 1)));
+                i32(0);
+                finishR(slow, false, s);
+                return true;
+            }
+            case Op::SetProp:
+            case Op::SetOwn: {
+                const Entry obj = stack_[stack_.size() - 2], value = stack_.back();
+                if (!inASlot(obj) || !byByte(value)) break;
+                const int s = depth - 2;
+                placeBelow(s);
+                take(2);
+                const bool statement = popAfter(at, size);
+                const int objOperand = operand(obj, s), valueOperand = operand(value, s + 1);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                if (statement) {
+                    // The Pop after it, done by it: nothing left on the stack.
+                    copyInto(slow, Op::Pop, at + size, 1);
+                    skip_ = at + size;
+                }
+                // u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
+                op(isConstant(value) ? Op::RSetPropSK : Op::RSetPropSS);
+                u8(s);
+                u8(objOperand);
+                u8(valueOperand);
+                u8(statement ? s : s + 1);
+                u8(s);
+                u16(b);
+                finishR(slow, !statement, s);
+                lastR_ = false;
+                return true;
+            }
+            case Op::GetGlobal: {
+                const int s = depth;
+                placeBelow(s);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                // u8 A, u8 T, u8 S, u16 global, i32 slow.
+                op(Op::RGetGlobal);
+                u8(s);
+                u8(s + 1);
+                u8(s);
+                u16(a);
+                endR(slow, s);
+                return true;
+            }
+            case Op::GetUpvalue: {
+                const int s = depth;
+                placeBelow(s);
+                // u8 A, u8 T, u16 upvalue: nothing to go slow for.
+                op(Op::RGetUpvalue);
+                u8(s);
+                u8(s + 1);
+                u16(a);
+                stack_.push_back(Entry{});
+                top_ = s + 1;
+                return true;
+            }
+            case Op::GetIndex: {
+                const Entry obj = stack_[stack_.size() - 2], index = stack_.back();
+                if (!inASlot(obj) || !byByte(index)) break;
+                const int s = depth - 2;
+                placeBelow(s);
+                take(2);
+                const int objOperand = operand(obj, s), indexOperand = operand(index, s + 1);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow.
+                op(isConstant(index) ? Op::RGetIndexSK : Op::RGetIndexSS);
+                u8(s);
+                u8(objOperand);
+                u8(indexOperand);
+                u8(s + 1);
+                u8(s);
+                endR(slow, s);
+                return true;
+            }
+            case Op::Neg:
+            case Op::Not: {
+                if (!inASlot(stack_.back())) break;
+                const int s = depth - 1;
+                placeBelow(s);
+                const Entry x = take(1)[0];
+                const int bOperand = operand(x, s);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                // u8 A, u8 B, u8 T, u8 S, i32 slow.
+                op(o == Op::Neg ? Op::RNeg : Op::RNot);
+                u8(s);
+                u8(bOperand);
+                u8(s + 1);
+                u8(s);
+                endR(slow, s);
+                return true;
+            }
             default: break;
         }
         return asStackCode(o, at, size);
@@ -607,7 +761,7 @@ private:
         if (!storesResult(r) || out_[start + 1] != s || s != depth - 1) return false;
         out_[start + 1] = static_cast<uint8_t>(x);
         // The top after it: at s, the result having gone to x.
-        out_[r == Op::RGetProp ? start + 3 : start + 4] = static_cast<uint8_t>(s);
+        out_[start + topOperand(r)] = static_cast<uint8_t>(s);
         copyInto(slow, Op::StoreLocal, at, size);
         stack_[static_cast<size_t>(x)] = Entry{};
         stack_.pop_back();
@@ -700,6 +854,57 @@ void asItIs(FunctionProto& f) {
 
 }  // namespace
 
+// The length of the run code's instruction at `at`, and its name.
+size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
+    const Op o = static_cast<Op>(run[at]);
+    switch (o) {
+        case Op::MoveS: name = "MOVE_S"; return 3;
+        case Op::MoveK: name = "MOVE_K"; return 3;
+        case Op::SetTop: name = "SET_TOP"; return 2;
+        case Op::RGetProp: name = "R_GET_PROP"; return 11;
+        case Op::RSetPropSS: name = "R_SET_PROP_SS"; return 12;
+        case Op::RSetPropSK: name = "R_SET_PROP_SK"; return 12;
+        case Op::RGetGlobal: name = "R_GET_GLOBAL"; return 10;
+        case Op::RGetUpvalue: name = "R_GET_UPVALUE"; return 5;
+        case Op::RGetIndexSS: name = "R_GET_INDEX_SS"; return 10;
+        case Op::RGetIndexSK: name = "R_GET_INDEX_SK"; return 10;
+        case Op::RNeg: name = "R_NEG"; return 9;
+        case Op::RNot: name = "R_NOT"; return 9;
+        case Op::RJumpIfFalse: name = "R_JUMP_IF_FALSE"; return 11;
+        case Op::RModSS: name = "R_MOD_SS"; return 10;
+        case Op::RModSK: name = "R_MOD_SK"; return 10;
+        case Op::RSubKS: name = "R_SUB_KS"; return 10;
+        case Op::RDivKS: name = "R_DIV_KS"; return 10;
+        default: break;
+    }
+    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) {
+        name = opName(o);
+        return 12;
+    }
+    if (o >= Op::RAddSS && o <= Op::REqSK) {
+        name = opName(o);
+        return 10;
+    }
+    name = opName(o);
+    return instructionSize(run, at);
+}
+
+// ASTRA_DUMP_RUN=name: the run code made for each function of that name, to standard error, for
+// looking at what the translator does.
+void dump(const FunctionProto& f) {
+    static const char* const wanted = std::getenv("ASTRA_DUMP_RUN");
+    if (wanted == nullptr || f.name != wanted) return;
+    std::fprintf(stderr, "== %s: %zu bytes of stack code, %zu of run code\n", f.name.c_str(), f.code.size(), f.run.size());
+    for (size_t at = 0; at < f.run.size();) {
+        const char* name = "?";
+        const size_t size = runSize(f.run, at, name);
+        std::fprintf(stderr, "%5zu  line %-4d %-18s", at, f.runLines[at], name);
+        for (size_t i = 1; i < size && at + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + i]);
+        std::fprintf(stderr, "\n");
+        at += size;
+    }
+}
+
 void translate(FunctionProto& f, const std::vector<int>& depths) {
     if (f.chooser || f.code.empty() || depths.size() != f.code.size()) return asItIs(f);
     // The register code in full is made only with ASTRA_REGISTER_CODE set, until it runs faster
@@ -711,6 +916,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
     static const Mode mode = asked == nullptr ? Mode::Joined : std::string(asked) == "plain" ? Mode::Plain : Mode::Full;
     try {
         Translator(f, depths, mode).translate();
+        dump(f);
         return;
     } catch (const std::exception& e) {
         // Code the translator does not expect keeps its stack code, which runs as before; with
@@ -720,6 +926,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
             throw std::runtime_error(std::string("cannot translate ") + f.name + ": " + e.what());
     }
     Translator(f, depths, Mode::Plain).translate();
+    dump(f);
 }
 
 }  // namespace astra

@@ -421,6 +421,19 @@ enum class Op : uint8_t {
     // R instructions of them. Their numbers are these, which only run code has.
     RModSS = AddLocal,  // as RAddSS, floats worked out at once
     RModSK,
+    RSubKS,             // as RAddKS
+    RDivKS,
+    // u8 A, u8 B (obj), u8 C (value: a slot, or a constant for SK), u8 T, u8 S, u16 cache, i32 slow:
+    // the field the cache says, of an object in slot B, given C; slot A = C.
+    RSetPropSS,
+    RSetPropSK,
+    RGetGlobal,         // u8 A, u8 T, u8 S, u16 global, i32 slow: slot A = the global
+    RGetUpvalue,        // u8 A, u8 T, u16 upvalue: slot A = the upvalue's value
+    RGetIndexSS,        // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow: slot A = list B's item C
+    RGetIndexSK,
+    RNeg,               // u8 A, u8 B, u8 T, u8 S, i32 slow: slot A = -B
+    RNot,               // the same: slot A = !B
+    RJumpIfFalse,       // u8 B, u8 T, i32 target, i32 slow: jumps where B is false
     RunInJoined_,       // the first of those numbers not yet given to one
 };
 static_assert(static_cast<int>(Op::RunInJoined_) <= static_cast<int>(Op::EqConst) + 1, "the joined instructions' first numbers");

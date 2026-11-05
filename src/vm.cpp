@@ -5180,6 +5180,8 @@ void VM::run(int baseFrame) {
 // does not do, the operands are put where the stack would have them, from slot S, the top after
 // them, and the stack code the instruction was made from runs, put after the function's own code,
 // which then comes back. An operand is a slot, or a constant where the instruction's name says so.
+// They are read where they are, a field at a time, not copied whole: a value just written in two
+// stores is handed on by the processor to a read no wider than each, and waited for by one wider.
 #define R_S(i) base[ip[i]]
 #define R_K(i) consts[ip[i]]
 // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow.
@@ -5191,9 +5193,10 @@ void VM::run(int baseFrame) {
     }
 #define R_SLOW2(b, c, sAt, slowAt)               \
     {                                            \
+        const Value b_ = (b), c_ = (c);          \
         Value* const at_ = base + ip[sAt];       \
-        at_[0] = (b);                            \
-        at_[1] = (c);                            \
+        at_[0] = b_;                             \
+        at_[1] = c_;                             \
         sp = at_ + 2;                            \
         ip = code + operandI32(ip + (slowAt));   \
         NEXT();                                  \
@@ -5201,7 +5204,7 @@ void VM::run(int baseFrame) {
 // Two floats or two ints worked out at once.
 #define R_ARITHMETIC(name, LB, LC, op, checked)              \
     CASE(name) {                                             \
-        const Value b = LB(1), c = LC(2);                    \
+        const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
             base[ip[0]].setFloat(b.as.d op c.as.d);          \
             R_DONE()                                         \
@@ -5218,7 +5221,7 @@ void VM::run(int baseFrame) {
 // Two floats worked out at once (a division: ints have rules of their own).
 #define R_FLOAT(name, LB, LC, floatExpr)                     \
     CASE(name) {                                             \
-        const Value b = LB(1), c = LC(2);                    \
+        const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
             const double x = b.as.d, y = c.as.d;             \
             base[ip[0]].setFloat(floatExpr);                 \
@@ -5228,7 +5231,7 @@ void VM::run(int baseFrame) {
     }
 #define R_COMPARISON(name, LB, LC, cmp)                      \
     CASE(name) {                                             \
-        const Value b = LB(1), c = LC(2);                    \
+        const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
             base[ip[0]].setBool(b.as.d cmp c.as.d);          \
             R_DONE()                                         \
@@ -5243,7 +5246,7 @@ void VM::run(int baseFrame) {
 // the stack would have had B at T.
 #define R_JUMP(name, LB, LC, cmp)                            \
     CASE(name) {                                             \
-        const Value b = LB(0), c = LC(1);                    \
+        const Value &b = LB(0), &c = LC(1);                  \
         bool holds_;                                         \
         if (b.isFloat() && c.isFloat()) holds_ = b.as.d cmp c.as.d; \
         else if (b.isInt() && c.isInt()) holds_ = b.as.i cmp c.as.i; \
@@ -5576,6 +5579,17 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(RGetProp)
             ASTRA_DISPATCH_TO(RModSS)
             ASTRA_DISPATCH_TO(RModSK)
+            ASTRA_DISPATCH_TO(RSubKS)
+            ASTRA_DISPATCH_TO(RDivKS)
+            ASTRA_DISPATCH_TO(RSetPropSS)
+            ASTRA_DISPATCH_TO(RSetPropSK)
+            ASTRA_DISPATCH_TO(RGetGlobal)
+            ASTRA_DISPATCH_TO(RGetUpvalue)
+            ASTRA_DISPATCH_TO(RGetIndexSS)
+            ASTRA_DISPATCH_TO(RGetIndexSK)
+            ASTRA_DISPATCH_TO(RNeg)
+            ASTRA_DISPATCH_TO(RNot)
+            ASTRA_DISPATCH_TO(RJumpIfFalse)
 #undef ASTRA_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
@@ -7990,6 +8004,155 @@ void VM::run(int baseFrame) {
                     R_FLOAT(RDivSK, R_S, R_K, x / y)
                     R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y))
                     R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y))
+                    R_ARITHMETIC(RSubKS, R_K, R_S, -, subOverflows)
+                    R_FLOAT(RDivKS, R_K, R_S, x / y)
+                    CASE(RSetPropSS)
+                    CASE(RSetPropSK) {
+                        // SetProp's quick ways on an object of a class, as GetProp's: a field found
+                        // before, kept as its payload or as a value of a type quickly told. u8 A,
+                        // u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
+                        const Value& obj = R_S(1);
+                        const Value& given = static_cast<Op>(ip[-1]) == Op::RSetPropSK ? R_K(2) : R_S(2);
+                        if (obj.isObjType(ObjType::Instance) && caches != nullptr) {
+                            ObjInstance* instance = asInstance(obj);
+                            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+                            if (static_cast<uint32_t>(seen >> 32) == instance->shape && instance->core == coreId_) {
+                                Value* const field = reinterpret_cast<Value*>(reinterpret_cast<uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
+                                if ((seen & 0x80) != 0) {
+                                    const uint32_t bit = (seen >> 8) & 0xFF;
+                                    const ValueKind kind = static_cast<ValueKind>(seen & 3);
+                                    uint8_t* const data = instance->payloadData();
+                                    const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
+                                    if (given.kind == kind && ((seen & 0x40) == 0 || !hasOne)) {
+                                        const int64_t bits = kind == ValueKind::Bool ? (given.as.b ? 1 : 0) : given.as.i;
+                                        std::memcpy(field, &bits, 8);
+                                        if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+                                        base[ip[0]] = given;
+                                        sp = base + ip[3];
+                                        ip += 11;
+                                        NEXT();
+                                    }
+                                } else if ((seen & 2) == 0 && ((seen & 1) == 0 || field->kind == ValueKind::Undefined)) {
+                                    Value value = given;  // a byte may be widened
+                                    const uint8_t type = static_cast<uint8_t>(seen >> 8);
+                                    if (type == 0 || (type == kTypeFloat ? value.isFloat()
+                                                      : type == kTypeInt ? value.isInt()
+                                                                         : (matchesType(value, type, nullptr) || widenedByte(value, type)))) {
+                                        *field = value;
+                                        base[ip[0]] = value;
+                                        sp = base + ip[3];
+                                        ip += 11;
+                                        NEXT();
+                                    }
+                                }
+                            }
+                        }
+                        const Value objHere = obj, givenHere = given;
+                        Value* const at = base + ip[4];
+                        at[0] = objHere;
+                        at[1] = givenHere;
+                        sp = at + 2;
+                        ip = code + operandI32(ip + 7);
+                        NEXT();
+                    }
+                    CASE(RGetGlobal) {
+                        // u8 A, u8 T, u8 S, u16 global, i32 slow: a global not yet worked out (D37)
+                        // goes the slow way, to GetGlobal.
+                        if (const Value global = globals_[static_cast<size_t>(FAST_U16(3))]; global.kind != ValueKind::Undefined) {
+                            base[ip[0]] = global;
+                            sp = base + ip[1];
+                            ip += 9;
+                            NEXT();
+                        }
+                        sp = base + ip[2];
+                        ip = code + operandI32(ip + 5);
+                        NEXT();
+                    }
+                    CASE(RGetUpvalue) {
+                        base[ip[0]] = *frame->closure->upvalues[static_cast<size_t>(FAST_U16(2))]->location;
+                        sp = base + ip[1];
+                        ip += 4;
+                        NEXT();
+                    }
+                    CASE(RGetIndexSS)
+                    CASE(RGetIndexSK) {
+                        // A list's item by its position, in range, as GetIndex reads it at once.
+                        // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow.
+                        const Value& obj = R_S(1);
+                        const Value& index = static_cast<Op>(ip[-1]) == Op::RGetIndexSK ? R_K(2) : R_S(2);
+                        if (obj.isObjType(ObjType::List) && index.isInt()) {
+                            const ObjList* list = asList(obj);
+                            const uint64_t i = static_cast<uint64_t>(index.as.i);
+                            if (i < list->size() && obj.as.obj != bandObject_ && (obj.as.obj->core == coreId_ || obj.as.obj->core == 0)) {
+                                if (!list->packed()) {
+                                    base[ip[0]] = list->values()[i];
+                                    sp = base + ip[3];
+                                    ip += 9;
+                                    NEXT();
+                                }
+                                if (list->pack->store != ListStore::Items) {
+                                    base[ip[0]] = packedPlain(*list->pack, i);
+                                    sp = base + ip[3];
+                                    ip += 9;
+                                    NEXT();
+                                }
+                            }
+                        }
+                        const Value objHere = obj, indexHere = index;
+                        Value* const at = base + ip[4];
+                        at[0] = objHere;
+                        at[1] = indexHere;
+                        sp = at + 2;
+                        ip = code + operandI32(ip + 5);
+                        NEXT();
+                    }
+                    CASE(RNeg) {
+                        // u8 A, u8 B, u8 T, u8 S, i32 slow.
+                        const Value& b = R_S(1);
+                        if (b.isFloat()) {
+                            base[ip[0]].setFloat(-b.as.d);
+                            sp = base + ip[2];
+                            ip += 8;
+                            NEXT();
+                        }
+                        if (b.isInt() && b.as.i != INT64_MIN) {
+                            base[ip[0]].setInt(-b.as.i);
+                            sp = base + ip[2];
+                            ip += 8;
+                            NEXT();
+                        }
+                        base[ip[3]] = Value(b);
+                        sp = base + ip[3] + 1;
+                        ip = code + operandI32(ip + 4);
+                        NEXT();
+                    }
+                    CASE(RNot) {
+                        const Value& b = R_S(1);
+                        if (b.isBool()) {
+                            base[ip[0]].setBool(!b.as.b);
+                            sp = base + ip[2];
+                            ip += 8;
+                            NEXT();
+                        }
+                        base[ip[3]] = Value(b);
+                        sp = base + ip[3] + 1;
+                        ip = code + operandI32(ip + 4);
+                        NEXT();
+                    }
+                    CASE(RJumpIfFalse) {
+                        // u8 B, u8 T, i32 target, i32 slow: the stack would have had B at T.
+                        const Value& b = R_S(0);
+                        if (b.isBool()) {
+                            sp = base + ip[1];
+                            if (b.as.b) ip += 10;
+                            else ip = code + operandI32(ip + 2);
+                            NEXT();
+                        }
+                        base[ip[1]] = Value(b);
+                        sp = base + ip[1] + 1;
+                        ip = code + operandI32(ip + 6);
+                        NEXT();
+                    }
                     R_COMPARISON(RLtSS, R_S, R_S, <)
                     R_JUMP(RJumpLtSS, R_S, R_S, <)
                     R_COMPARISON(RLtSK, R_S, R_K, <)
@@ -8015,7 +8178,7 @@ void VM::run(int baseFrame) {
                         // field before, in an object of the same layout (M6.5 part 4): in an
                         // object, or of a value in its box, kept in the value itself, or where it
                         // is kept (a list's item). u8 A, u8 B, u8 T, u8 S, u16 cache, i32 slow.
-                        const Value obj = R_S(1);
+                        const Value& obj = R_S(1);
                         if (caches != nullptr) {
                             const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
                             Value& out = base[ip[0]];
@@ -8025,7 +8188,7 @@ void VM::run(int baseFrame) {
                                     const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
                                     if ((seen & 0x80) != 0) {
                                         // A field kept as its payload alone (M6.6 part 6).
-                                        out.kind = static_cast<ValueKind>(seen & 3);
+                                        out.setHeader(static_cast<ValueKind>(seen & 3));
                                         std::memcpy(&out.as.i, at, 8);
                                         sp = base + ip[2];
                                         ip += 10;
@@ -8075,7 +8238,7 @@ void VM::run(int baseFrame) {
                             }
                         }
                         Value* const at = base + ip[3];
-                        at[0] = obj;
+                        at[0] = Value(obj);
                         sp = at + 1;
                         ip = code + operandI32(ip + 6);
                         NEXT();

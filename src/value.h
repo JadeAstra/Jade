@@ -140,16 +140,23 @@ struct Value {
         return v;
     }
     // A value made in place, where it is to be kept: no copy through a temporary (M6.5 part 4).
+    // Its first eight bytes, the kind and what a Ref keeps, are written in one store, so that
+    // what reads them at once is handed them by the processor before the store is done (M6.7);
+    // the kind written alone would have it wait.
+    void setHeader(ValueKind k) {
+        const uint64_t header = static_cast<uint8_t>(k);
+        std::memcpy(this, &header, sizeof header);
+    }
     void setInt(int64_t i) {
-        kind = ValueKind::Int;
+        setHeader(ValueKind::Int);
         as.i = i;
     }
     void setFloat(double d) {
-        kind = ValueKind::Float;
+        setHeader(ValueKind::Float);
         as.d = d;
     }
     void setBool(bool b) {
-        kind = ValueKind::Bool;
+        setHeader(ValueKind::Bool);
         as.i = 0;
         as.b = b;
     }
