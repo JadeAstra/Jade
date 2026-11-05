@@ -100,6 +100,14 @@ enum class ValueKind : uint8_t {
     FromEnd,
 };
 
+// A small function the compiler is told to put in place: where one call alone would have an
+// instruction of the VM's set up a stack frame (instructions.inc).
+#if defined(__clang__) || defined(__GNUC__)
+#define ASTRA_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define ASTRA_ALWAYS_INLINE __forceinline
+#endif
+
 // An Astra runtime value: null, bool, 64-bit int, double, or a pointer to a heap object.
 struct Value {
     ValueKind kind;
@@ -406,6 +414,18 @@ int compareText(const ObjString* a, const ObjString* b);
 // Language-level equality without operator overloading: numbers compare by value across
 // int and float, strings by content, everything else by identity.
 bool valuesEqual(const Value& a, const Value& b);
+// Two values swapped, a half at a time, with no temporary kept in memory.
+inline void swapValues(Value& a, Value& b) {
+    uint64_t a0, a1, b0, b1;
+    std::memcpy(&a0, static_cast<const void*>(&a), 8);
+    std::memcpy(&a1, &a.as, 8);
+    std::memcpy(&b0, static_cast<const void*>(&b), 8);
+    std::memcpy(&b1, &b.as, 8);
+    std::memcpy(static_cast<void*>(&a), &b0, 8);
+    std::memcpy(&a.as, &b1, 8);
+    std::memcpy(static_cast<void*>(&b), &a0, 8);
+    std::memcpy(&b.as, &a1, 8);
+}
 size_t hashValue(const Value& v);
 
 // As keys of a map (and members of a set), lists, ranges, bytes and the objects of data
@@ -1323,7 +1343,7 @@ inline ObjClass* smallClassOf(const Value& v) { return smallClasses[v.refIndex].
 inline const uint8_t* smallBytes(const Value& v) { return reinterpret_cast<const uint8_t*>(&v.as); }
 
 // Where the bytes of what a Ref points at are; null for an item that is no longer in its list.
-inline uint8_t* refBytes(const Value& v) {
+ASTRA_ALWAYS_INLINE uint8_t* refBytes(const Value& v) {
     if (v.as.obj->type == ObjType::List) {
         const ObjList* list = static_cast<const ObjList*>(v.as.obj);
         if (list->pack == nullptr || v.refIndex >= list->pack->count) return nullptr;

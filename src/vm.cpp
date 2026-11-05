@@ -3,6 +3,7 @@
 #include "builtins.h"  // addOverflows and the like (D27)
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <cmath>
@@ -5054,7 +5055,35 @@ inline int32_t operandI32(const uint8_t* at) {
     return static_cast<int32_t>(v);
 }
 
-#if defined(__clang__) || defined(__GNUC__)
+#if ASTRA_TAIL_CALLS
+// An instruction's function (VM::tail), whose address the code holds before each instruction.
+using TailFn = ASTRA_TAIL_FN int (VM::*)(ASTRA_TAIL_PARAMS);
+static_assert(sizeof(TailFn) == kThreaded, "an instruction's function is one address");
+struct TailTable {
+    static const TailFn* get();
+};
+namespace {
+std::mutex addressing;
+
+// Writes into the run code of a function each instruction's function (D160), the first time
+// it runs; a thread that finds another doing it waits for it to be done.
+void addressCode(const FunctionProto* proto) {
+    std::lock_guard<std::mutex> hold(addressing);
+    if (proto->addressed.done.load(std::memory_order_relaxed)) return;
+    uint8_t* const run = const_cast<uint8_t*>(proto->run.data());
+    const TailFn* const table = TailTable::get();
+    for (size_t at = 0; at < proto->run.size();) {
+        const char* name = nullptr;
+        const size_t size = runSize(proto->run, at + kThreaded, name);
+        std::memcpy(run + at, &table[static_cast<size_t>(opAt(run + at + kThreaded))], sizeof(TailFn));
+        at += kThreaded + size;
+    }
+    proto->addressed.done.store(true, std::memory_order_release);
+}
+}  // namespace
+#define ADDRESS_CODE(proto) \
+    if (!(proto)->addressed.done.load(std::memory_order_acquire)) [[unlikely]] addressCode(proto)
+#elif defined(__clang__) || defined(__GNUC__)
 namespace {
 // Where each instruction's code is (D160): its label in run(), or the switch for any without
 // one. Filled the first time any thread runs the loop, as a label's address is had only there.
@@ -5102,6 +5131,17 @@ void VM::run(int baseFrame) {
     Value* base = nullptr;
     const Value* consts = nullptr;
     std::atomic<uint64_t>* caches = nullptr;
+#if ASTRA_TAIL_CALLS
+    // The instructions, functions of their own, know where this run() started: in the line of
+    // execution it runs on, which another thread's turn leaves as it was.
+    struct RunBase {
+        Context* const context;
+        const int saved;
+        RunBase(Context* c, int here) : context(c), saved(c->runBase) { context->runBase = here; }
+        ~RunBase() { context->runBase = saved; }
+    } runBase(context_, baseFrame);
+#endif
+#define RUN_BASE baseFrame
 
 #define LOAD_FRAME()                                         \
     do {                                                     \
@@ -5187,7 +5227,7 @@ void VM::run(int baseFrame) {
 
 // Each instruction's case in the loop's switch, and with Clang or GCC its label as well, which
 // the dispatch table points to (D160). MSVC, which has no computed goto, goes by the switch alone.
-#if defined(__clang__) || defined(__GNUC__)
+#if !ASTRA_TAIL_CALLS && (defined(__clang__) || defined(__GNUC__))
 #define ASTRA_GOTO_DISPATCH 1
 #define CASE(name) \
     case Op::name: \
@@ -5206,6 +5246,10 @@ void VM::run(int baseFrame) {
 // An instruction's ways out in instructions.inc, as the switch's cases have them (see there).
 #define DONE() break
 #define EXIT_RUN() return
+#define FALL_INTO(op) [[fallthrough]]
+#define HAS_COLD(op)
+#define GO_COLD(op) goto cold_##op
+#define COLD(op) cold_##op:
 #define JUMP_LABEL(l) goto l
 #define LABEL(l) l:
 // CASES(a, b, ...): CASE(a) CASE(b) ..., up to 16 (ASTRA_EXPAND for MSVC's preprocessor).
@@ -5412,7 +5456,7 @@ void VM::run(int baseFrame) {
             SAVE_IP();                                                    \
             if (binarySlow(op)) LOAD_FRAME();                             \
         }                                                                 \
-        break;                                                            \
+        DONE();                                                          \
     }
 
 #define COMPARISON(op, cmp)                                               \
@@ -5428,7 +5472,7 @@ void VM::run(int baseFrame) {
             SAVE_IP();                                                    \
             if (compareSlow(op)) LOAD_FRAME();                            \
         }                                                                 \
-        break;                                                            \
+        DONE();                                                          \
     }
 
     // An error the program may catch: the innermost handler that takes it gets it, or, with
@@ -5709,6 +5753,18 @@ void VM::run(int baseFrame) {
         try {
             LOAD_FRAME();
 
+#if ASTRA_TAIL_CALLS
+            {
+                // The first instruction's function, which calls the next one's, and so on until
+                // one returns: where run() ends. An error thrown in one comes here, as below.
+                Value* sp = sp_;
+                TailFn to_;
+                std::memcpy(&to_, ip, sizeof to_);
+                frame->ip = ip += kThreaded + kOpBytes;
+                (this->*to_)(ip, sp, base, frame, consts, caches, code);
+            }
+            return;
+#else
             // The stack's top, held in a register while the loop runs (M6.5 part 4). It is written
             // back to sp_ before each instruction, a store nothing waits on, so that every
             // instruction not given a quick way below works on sp_ as it always has; after one
@@ -5738,6 +5794,7 @@ void VM::run(int baseFrame) {
                 }
                 sp = sp_;
             }
+#endif
         } catch (AstraThrow& thrown) {
             if (!handled(thrown)) throw;
         } catch (const std::bad_alloc&) {
@@ -5752,6 +5809,164 @@ void VM::run(int baseFrame) {
         }
     }
 
+}
+
+#if ASTRA_TAIL_CALLS
+// ---- The instructions as functions (M6.7) ----
+// instructions.inc again, each instruction a function of its own: VM::tail<op>. Its ways out:
+// NEXT calls the next instruction's function as its last step, and EXIT_RUN returns, to run().
+
+#undef CASE
+#undef CASES
+#undef NEXT
+#undef DONE
+#undef EXIT_RUN
+#undef FALL_INTO
+#undef JUMP_LABEL
+#undef LABEL
+#undef RUN_BASE
+#undef R_SLOW2
+#undef R_PLAIN2
+#define ASTRA_TAIL_ARGS ip, sp, base, frame, consts, caches, code
+#define CASE(name) template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS)
+#define ASTRA_DECLARE(name) template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS);
+#define ASTRA_FORWARD(to, name) \
+    template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS) { [[clang::musttail]] return tail<Op::to>(ASTRA_TAIL_ARGS); }
+// CASES(a, b, ...): the code is a's; b and the rest go to it.
+#define ASTRA_CASES_1(a0) CASE(a0)
+#define ASTRA_CASES_2(a0, a1) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) CASE(a0)
+#define ASTRA_CASES_3(a0, a1, a2) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) CASE(a0)
+#define ASTRA_CASES_4(a0, a1, a2, a3) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) CASE(a0)
+#define ASTRA_CASES_5(a0, a1, a2, a3, a4) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) CASE(a0)
+#define ASTRA_CASES_6(a0, a1, a2, a3, a4, a5) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) CASE(a0)
+#define ASTRA_CASES_7(a0, a1, a2, a3, a4, a5, a6) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) CASE(a0)
+#define ASTRA_CASES_8(a0, a1, a2, a3, a4, a5, a6, a7) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) CASE(a0)
+#define ASTRA_CASES_9(a0, a1, a2, a3, a4, a5, a6, a7, a8) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) CASE(a0)
+#define ASTRA_CASES_10(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) CASE(a0)
+#define ASTRA_CASES_11(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) CASE(a0)
+#define ASTRA_CASES_12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) CASE(a0)
+#define ASTRA_CASES_13(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) CASE(a0)
+#define ASTRA_CASES_14(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) CASE(a0)
+#define ASTRA_CASES_15(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) ASTRA_FORWARD(a0, a14) CASE(a0)
+#define ASTRA_CASES_16(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) ASTRA_FORWARD(a0, a14) ASTRA_FORWARD(a0, a15) CASE(a0)
+#define CASES(...) ASTRA_EXPAND(ASTRA_CAT(ASTRA_CASES_, ASTRA_COUNT(__VA_ARGS__))(__VA_ARGS__))
+#define NEXT()                                                            \
+    do {                                                                  \
+        TailFn to_;                                                       \
+        std::memcpy(&to_, ip, sizeof to_);                                \
+        sp_ = sp;                                                         \
+        frame->ip = ip += kThreaded + kOpBytes;                           \
+        [[clang::musttail]] return (this->*to_)(ASTRA_TAIL_ARGS);         \
+    } while (0)
+#define DONE()     \
+    do {           \
+        sp = sp_;  \
+        NEXT();    \
+    } while (0)
+#define EXIT_RUN() return 0
+#define FALL_INTO(op) [[clang::musttail]] return tail<Op::op>(ASTRA_TAIL_ARGS)
+#undef HAS_COLD
+#undef GO_COLD
+#undef COLD
+#define HAS_COLD(op) template <> ASTRA_TAIL_FN int VM::cold<Op::op>(ASTRA_TAIL_PARAMS);
+#define GO_COLD(op) [[clang::musttail]] return cold<Op::op>(ASTRA_TAIL_ARGS)
+#define COLD(op) template <> __attribute__((noinline)) ASTRA_TAIL_FN int VM::cold<Op::op>(ASTRA_TAIL_PARAMS)
+#define RUN_BASE context_->runBase
+#define LABEL(l)
+// The instruction whose code a label of instructions.inc is in, or at the start of.
+#define ASTRA_OP_OF_getIndex GetIndex
+#define ASTRA_OP_OF_iterNext IterNext
+#define ASTRA_OP_OF_plainAdd Add
+#define ASTRA_OP_OF_plainDiv Div
+#define ASTRA_OP_OF_plainEq Eq
+#define ASTRA_OP_OF_plainGe Ge
+#define ASTRA_OP_OF_plainGt Gt
+#define ASTRA_OP_OF_plainLe Le
+#define ASTRA_OP_OF_plainLt Lt
+#define ASTRA_OP_OF_plainMod Mod
+#define ASTRA_OP_OF_plainMul Mul
+#define ASTRA_OP_OF_plainNeg Neg
+#define ASTRA_OP_OF_plainNot Not
+#define ASTRA_OP_OF_plainSub Sub
+#define JUMP_LABEL(l) [[clang::musttail]] return tail<Op::ASTRA_OP_OF_##l>(ASTRA_TAIL_ARGS)
+#define R_SLOW2(b, c, sAt, slowAt)                                                   \
+    {                                                                                \
+        slowB_ = &(b);                                                               \
+        slowC_ = &(c);                                                               \
+        [[clang::musttail]] return slowTwo<sAt, slowAt>(ASTRA_TAIL_ARGS);            \
+    }
+#define R_PLAIN2(b, c, plain)                                                        \
+    if (ip[0] == ip[4]) {                                                            \
+        slowB_ = &(b);                                                               \
+        slowC_ = &(c);                                                               \
+        [[clang::musttail]] return plainTwo<Op::ASTRA_OP_OF_##plain>(ASTRA_TAIL_ARGS); \
+    }
+
+// What is jumped into before its own code comes.
+ASTRA_DECLARE(Return)
+ASTRA_DECLARE(Add)
+ASTRA_DECLARE(Div)
+ASTRA_DECLARE(Eq)
+ASTRA_DECLARE(Ge)
+ASTRA_DECLARE(GetIndex)
+ASTRA_DECLARE(Gt)
+ASTRA_DECLARE(IterNext)
+ASTRA_DECLARE(Le)
+ASTRA_DECLARE(Lt)
+ASTRA_DECLARE(Mod)
+ASTRA_DECLARE(Mul)
+ASTRA_DECLARE(Neg)
+ASTRA_DECLARE(Not)
+ASTRA_DECLARE(Sub)
+
+template <int sAt, int slowAt>
+__attribute__((noinline)) ASTRA_TAIL_FN int VM::slowTwo(ASTRA_TAIL_PARAMS) {
+    const Value b_ = *slowB_, c_ = *slowC_;
+    Value* const at = base + ip[sAt];
+    at[0] = b_;
+    at[1] = c_;
+    sp = at + 2;
+    ip = code + operandI32(ip + slowAt);
+    NEXT();
+}
+
+template <Op plain>
+__attribute__((noinline)) ASTRA_TAIL_FN int VM::plainTwo(ASTRA_TAIL_PARAMS) {
+    const Value b_ = *slowB_, c_ = *slowC_;
+    Value* const at = base + ip[4];
+    at[0] = b_;
+    at[1] = c_;
+    sp = sp_ = at + 2;
+    ip += 9;
+    [[clang::musttail]] return tail<plain>(ASTRA_TAIL_ARGS);
+}
+
+#include "instructions.inc"
+
+// An instruction run code never has.
+template <Op op>
+ASTRA_TAIL_FN int VM::tail(ASTRA_TAIL_PARAMS) {
+    throw runtimeError(Thrown::InternalError, "invalid instruction");
+}
+
+const TailFn* TailTable::get() {
+    static const std::array<TailFn, kOpCount> table = []<size_t... I>(std::index_sequence<I...>) {
+        return std::array<TailFn, kOpCount>{{&VM::tail<static_cast<Op>(I)>...}};
+    }(std::make_index_sequence<kOpCount>{});
+    return table.data();
+}
+
+#undef CASE
+#undef ASTRA_DECLARE
+#undef ASTRA_FORWARD
+#undef NEXT
+#undef DONE
+#undef EXIT_RUN
+#undef RUN_BASE
+#undef LABEL
+#undef JUMP_LABEL
+#endif
+
 #undef LOAD_FRAME
 #undef SAVE_IP
 #undef READ_U8
@@ -5760,7 +5975,6 @@ void VM::run(int baseFrame) {
 #undef GC_SAFE_POINT
 #undef ARITHMETIC
 #undef COMPARISON
-}
 
 // What a function returns that is a Ref (M6.6 part 4): one into a list, or into an object
 // (part 5), goes no further than the function that made it, unless it is where the caller asked

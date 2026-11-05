@@ -85,6 +85,9 @@ struct Context {
     // way between them and the call, so they are its own.
     const ObjTypeInfo* pendingTypeArgs = nullptr;
     Context* parent = nullptr;  // the one waiting for this one to finish or be set aside
+    // The frame the innermost run() on this line of execution started with: where it ends. Kept
+    // here, not in the VM, as the VM's threads take turns with it (instructions.inc, M6.7).
+    int runBase = -1;
     ObjFiber* fiber = nullptr;  // the task this is the stack of; null for a thread's own
     // The host its code reaches (M6.6.2): a sandbox's, given by the code that started it or
     // entered with Sandbox.run; null for the VM's own. The ones it had before each Sandbox.run.
@@ -248,6 +251,20 @@ enum class Thrown : uint8_t {
     InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, Count_
 };
 
+// The instructions as functions (M6.7): built with Clang, each instruction of instructions.inc is
+// a function of VM that calls the next instruction's as its last step, the loop's state in
+// registers from one to the next (preserve_none, musttail); built otherwise, they are the cases
+// of run()'s switch.
+#if defined(__clang__) && !defined(ASTRA_OP_COUNTS)
+#define ASTRA_TAIL_CALLS 1
+#define ASTRA_TAIL_FN __attribute__((preserve_none, no_stack_protector))
+#define ASTRA_TAIL_PARAMS                                                                                              \
+    const uint8_t *ip, Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
+        [[maybe_unused]] const Value *consts, [[maybe_unused]] std::atomic<uint64_t> *caches, [[maybe_unused]] const uint8_t *code
+#else
+#define ASTRA_TAIL_CALLS 0
+#endif
+
 class VM : public KeyMethods {
 public:
     // `worker`: this VM is a worker's, running beside the one that started it. It has no
@@ -388,7 +405,7 @@ public:
     uint8_t* refAt(Value r, bool write);
     // The bytes of a Ref of depth 0 where this core may read them (`write`: and change them);
     // null where it may not, or the item is gone, which the slow way says (M6.6 part 4).
-    uint8_t* refQuickly(Value r, bool write) const {
+    ASTRA_ALWAYS_INLINE uint8_t* refQuickly(const Value& r, bool write) const {
         if (r.as.obj == bandObject_) {
             if (r.refIndex < bandFrom_ || r.refIndex >= bandTo_) return nullptr;
         } else if (r.as.obj->type == ObjType::Instance) {
@@ -414,6 +431,25 @@ public:
     ObjValue* newValue(ObjClass* cls);
     Value readValueField(const uint8_t* at, const ValueField& field);
     // An int, float or bool field read with no call, for the interpreter's quick paths.
+    // An int, float or bool field, with no call: for a field of another kind, false.
+    static ASTRA_ALWAYS_INLINE bool readPlain(const uint8_t* at, const ValueField& field, Value& out) {
+        switch (field.kind) {
+            case ValueField::Float: {
+                uint64_t bits;
+                std::memcpy(&bits, at, sizeof bits);
+                out.setWhole(static_cast<uint8_t>(ValueKind::Float), bits);
+                return true;
+            }
+            case ValueField::Int: {
+                uint64_t bits;
+                std::memcpy(&bits, at, sizeof bits);
+                out.setWhole(static_cast<uint8_t>(ValueKind::Int), bits);
+                return true;
+            }
+            case ValueField::Bool: out.setWhole(static_cast<uint8_t>(ValueKind::Bool), *at != 0 ? 1 : 0); return true;
+            default: return false;
+        }
+    }
     Value readPlainField(const uint8_t* at, const ValueField& field) {
         switch (field.kind) {
             case ValueField::Float: {
@@ -1089,6 +1125,21 @@ private:
     // and the lock is not handed to another thread.
     int keyCalls_ = 0;
     friend struct KeyCall;
+#if ASTRA_TAIL_CALLS
+    friend struct TailTable;
+    // Instruction `op` (instructions.inc), and an R instruction's slow ways: its two operands
+    // (left in slowB_ and slowC_) put where the stack would have them, and on to its stack code,
+    // or into stack instruction `plain`'s code.
+    template <Op op> ASTRA_TAIL_FN int tail(ASTRA_TAIL_PARAMS);
+    template <int sAt, int slowAt> ASTRA_TAIL_FN int slowTwo(ASTRA_TAIL_PARAMS);
+    template <Op plain> ASTRA_TAIL_FN int plainTwo(ASTRA_TAIL_PARAMS);
+    // An instruction's rare part (COLD in instructions.inc): a function apart, so that the part
+    // that runs makes no call. Built for Windows, a function that calls anything at all sets up
+    // its stack frame as it starts, whichever way it then goes.
+    template <Op op> ASTRA_TAIL_FN int cold(ASTRA_TAIL_PARAMS);
+    const Value* slowB_ = nullptr;
+    const Value* slowC_ = nullptr;
+#endif
     size_t liveBytes_ = 0;
     std::vector<Obj*> gray_;
     std::unordered_map<std::string_view, ObjString*> interned_;

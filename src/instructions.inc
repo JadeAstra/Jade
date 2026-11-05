@@ -6,7 +6,12 @@
 //   DONE()            on to the next, the stack's top in sp_ (the switch's break)
 //   EXIT_RUN()        out of run(), where the frame it started with returns
 //   JUMP_LABEL(l)     on in another instruction's code, at its LABEL(l)
+//   FALL_INTO(op)     on in the code of instruction op, which comes next
+//   GO_COLD(op)       on in op's rare part, COLD(op) { ... } after it (declared by HAS_COLD(op)
+//                     before the instruction): with tail calls a function of its own, so that the
+//                     part that runs makes no call and keeps no stack frame
 //   CASES(a, b, ...)  one code for several instructions, which tell which they are by opAt
+// RUN_BASE is run()'s baseFrame.
 // Included by vm.cpp only.
 
 CASE(Const) {
@@ -1238,9 +1243,14 @@ CASE(Jump) {
     ip = code + READ_I32();
     DONE();
 }
+HAS_COLD(Loop)
 CASE(Loop) {
     ip = code + READ_I32();
-    GC_SAFE_POINT();
+    if (bytesAllocated_ > nextGC_ || attention_.load(std::memory_order_relaxed)) GO_COLD(Loop);
+    DONE();
+}
+COLD(Loop) {
+    safePoint();
     DONE();
 }
 CASE(JumpIfFalse) {
@@ -1286,7 +1296,7 @@ CASE(AssertNotNull) {
     DONE();
 }
 CASE(Swap) {
-    std::swap(sp[-1], sp[-2]);
+    swapValues(sp[-1], sp[-2]);
     NEXT();
 }
 CASE(PopUnder) {
@@ -1357,14 +1367,17 @@ CASE(CallNamed) {
 }
 }
 CASE(Spread) {
+    // Its own values gone before it goes on (a call as the last step leaves none behind).
     {
-    Value added = *--sp_;
-    if (!added.isObjType(ObjType::List))
-        throw runtimeError(Thrown::IllegalArgumentException, "'*' in a call needs a list to spread, not a value of type " + typeName(added));
-    ObjList* list = asList(sp_[-1]);
-    guardRead(added);
-    const std::vector<Value> items = listCopy(asList(added));
-    listInsert(list, list->size(), items.data(), items.size());
+        {
+        Value added = *--sp_;
+        if (!added.isObjType(ObjType::List))
+            throw runtimeError(Thrown::IllegalArgumentException, "'*' in a call needs a list to spread, not a value of type " + typeName(added));
+        ObjList* list = asList(sp_[-1]);
+        guardRead(added);
+        const std::vector<Value> items = listCopy(asList(added));
+        listInsert(list, list->size(), items.data(), items.size());
+    }
     DONE();
 }
 }
@@ -1502,38 +1515,41 @@ CASE(MakeForms) {
 }
 }
 CASE(MethodForms) {
+    // Its own values gone before it goes on (a call as the last step leaves none behind).
     {
-    const FunctionProto* chooser = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
-    const int count = READ_U8();
-    if (!sp_[-count - 1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
-    ObjClass* cls = asClass(sp_[-count - 1]);
-    ObjString* methodName = intern(chooser->name);
-    std::vector<ObjClosure*> forms;
-    for (int i = count; i > 0; i--) {
-        ObjString* name = asString(sp_[-i]);
-        const Value* method = cls->methods.find(name);
-        if (method == nullptr) {
-            // A form under the method's own name: compiled where the name had one form.
-            const Value* plain = cls->methods.find(methodName);
-            if (plain != nullptr && plain->isObjType(ObjType::Closure) && !asClosure(*plain)->proto->chooser &&
-                asClosure(*plain)->proto->signature.empty())
-                method = plain;
+        {
+        const FunctionProto* chooser = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
+        const int count = READ_U8();
+        if (!sp_[-count - 1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
+        ObjClass* cls = asClass(sp_[-count - 1]);
+        ObjString* methodName = intern(chooser->name);
+        std::vector<ObjClosure*> forms;
+        for (int i = count; i > 0; i--) {
+            ObjString* name = asString(sp_[-i]);
+            const Value* method = cls->methods.find(name);
+            if (method == nullptr) {
+                // A form under the method's own name: compiled where the name had one form.
+                const Value* plain = cls->methods.find(methodName);
+                if (plain != nullptr && plain->isObjType(ObjType::Closure) && !asClosure(*plain)->proto->chooser &&
+                    asClosure(*plain)->proto->signature.empty())
+                    method = plain;
+            }
+            if (method == nullptr || !method->isObjType(ObjType::Closure)) {
+                if (cls->isAbstract) continue;  // one left to the classes below
+                throw runtimeError(Thrown::UnsupportedOperationException, "class " + cls->name->utf8() + " has no form " + name->utf8());
+            }
+            forms.push_back(asClosure(*method));
+            cls->methods.set(name, *method);
         }
-        if (method == nullptr || !method->isObjType(ObjType::Closure)) {
-            if (cls->isAbstract) continue;  // one left to the classes below
-            throw runtimeError(Thrown::UnsupportedOperationException, "class " + cls->name->utf8() + " has no form " + name->utf8());
+        sp_ -= count;
+        if (forms.size() == 1) {
+            cls->methods.set(methodName, Value::object(forms[0]));
+        } else if (!forms.empty()) {
+            ObjForms* set = alloc<ObjForms>(chooser);
+            set->forms = std::move(forms);
+            account(set->forms.size() * sizeof(ObjClosure*));
+            cls->methods.set(methodName, Value::object(set));
         }
-        forms.push_back(asClosure(*method));
-        cls->methods.set(name, *method);
-    }
-    sp_ -= count;
-    if (forms.size() == 1) {
-        cls->methods.set(methodName, Value::object(forms[0]));
-    } else if (!forms.empty()) {
-        ObjForms* set = alloc<ObjForms>(chooser);
-        set->forms = std::move(forms);
-        account(set->forms.size() * sizeof(ObjClosure*));
-        cls->methods.set(methodName, Value::object(set));
     }
     DONE();
 }
@@ -1638,7 +1654,7 @@ CASE(ReturnInit) {
         SAVE_IP();
         checkRequiredFields(asInstance(base[0]), frame->closure);
     }
-    [[fallthrough]];
+    FALL_INTO(Return);
 }
 CASE(Return) {
     {
@@ -1646,7 +1662,7 @@ CASE(Return) {
     // of the frame captured, no catch block of its own left, and its result
     // wanted (M6.5 part 4).
     if ((openUpvalues_ == nullptr || openUpvalues_->location < base) && !frame->dropResult &&
-        frameCount_ - 1 != baseFrame && (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) &&
+        frameCount_ - 1 != RUN_BASE && (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) &&
         (sp[-1].kind != ValueKind::Ref || keptAsItIs(frame))) {
         Value* const top = base;
         *top = sp[-1];
@@ -1663,7 +1679,7 @@ CASE(Return) {
     while (!handlers_.empty() && handlers_.back().frameIndex >= frameCount_) handlers_.pop_back();
     sp_ = base;
     if (!frame->dropResult) *sp_++ = result;
-    if (frameCount_ == baseFrame) EXIT_RUN();
+    if (frameCount_ == RUN_BASE) EXIT_RUN();
     LOAD_FRAME();
     DONE();
 }
@@ -1993,14 +2009,21 @@ CASE(MarkValue) {
     DONE();
 }
 }
+HAS_COLD(Numeric)
 CASE(Numeric) {
     {
-    const uint8_t which = READ_U8();
-    const Value a = sp_[-1];
-    if (which == static_cast<uint8_t>(NumericOp::ToInt) && a.isFloat() && a.as.d > -9.2e18 && a.as.d < 9.2e18) {
-        sp_[-1] = Value::integer(static_cast<int64_t>(a.as.d));  // the whole part, as toInt() gives
+    const Value& a = sp_[-1];
+    if (ip[0] == static_cast<uint8_t>(NumericOp::ToInt) && a.isFloat() && a.as.d > -9.2e18 && a.as.d < 9.2e18) {
+        sp_[-1].setInt(static_cast<int64_t>(a.as.d));  // the whole part, as toInt() gives
+        ip += 1;
         DONE();
     }
+    GO_COLD(Numeric);
+    }
+}
+COLD(Numeric) {
+    {
+    const uint8_t which = READ_U8();
     SAVE_IP();
     const int arity = numericArity(which);
     const Value result = numeric(which, sp_ - arity);
@@ -2422,35 +2445,38 @@ CASE(BuildMap) {
 }
 }
 CASE(BuildString) {
+    // Its own values gone before it goes on (a call as the last step leaves none behind).
     {
-    int count = READ_U16();
-    SAVE_IP();
-    // At the width of the widest part (D20), room made for all of it at once.
-    Characters text;
-    size_t characters = 0;
-    for (int i = 0; i < count; i++) {
-        const Value part = sp_[i - count];
-        if (part.isString()) {
-            characters += asString(part)->length;
-            text.width = std::max(text.width, asString(part)->width);
-        } else {
-            characters += 20;
+        {
+        int count = READ_U16();
+        SAVE_IP();
+        // At the width of the widest part (D20), room made for all of it at once.
+        Characters text;
+        size_t characters = 0;
+        for (int i = 0; i < count; i++) {
+            const Value part = sp_[i - count];
+            if (part.isString()) {
+                characters += asString(part)->length;
+                text.width = std::max(text.width, asString(part)->width);
+            } else {
+                characters += 20;
+            }
         }
-    }
-    text.units.reserve(characters * text.width);
-    std::string shown;
-    for (int i = 0; i < count; i++) {
-        Value part = sp_[i - count];
-        if (part.isString()) {
-            appendText(text, asString(part));
-        } else {
-            shown.clear();
-            stringifyInto(shown, part, false, 0);
-            text.appendUtf8Text(shown);
+        text.units.reserve(characters * text.width);
+        std::string shown;
+        for (int i = 0; i < count; i++) {
+            Value part = sp_[i - count];
+            if (part.isString()) {
+                appendText(text, asString(part));
+            } else {
+                shown.clear();
+                stringifyInto(shown, part, false, 0);
+                text.appendUtf8Text(shown);
+            }
         }
+        sp_ -= count;
+        *sp_++ = str(std::move(text));
     }
-    sp_ -= count;
-    *sp_++ = str(std::move(text));
     DONE();
 }
 }
@@ -2803,8 +2829,8 @@ CASE(RGetGlobal) {
     {
     // u8 A, u8 T, u8 S, u16 global, i32 slow: a global not yet worked out (D37)
     // goes the slow way, to GetGlobal.
-    if (const Value global = globals_[static_cast<size_t>(FAST_U16(3))]; global.kind != ValueKind::Undefined) {
-        base[ip[0]] = global;
+    if (const Value& global = globals_[static_cast<size_t>(FAST_U16(3))]; global.kind != ValueKind::Undefined) {
+        std::memcpy(static_cast<void*>(&base[ip[0]]), &global, sizeof(Value));
         sp = base + ip[1];
         ip += 9;
         NEXT();
@@ -2946,43 +2972,64 @@ R_COMPARISON(REqSS, R_S, R_S, ==, plainEq, true)
 R_JUMP(RJumpEqSS, R_S, R_S, ==, true)
 R_COMPARISON(REqSK, R_S, R_K, ==, plainEq, true)
 R_JUMP(RJumpEqSK, R_S, R_K, ==, true)
+HAS_COLD(RGetProp)
 CASE(RGetProp) {
-    {
-    // GetProp's quick ways, on the object in slot B, where this place found the
-    // field before, in an object of the same layout (M6.5 part 4): in an
-    // object, or of a value in its box, kept in the value itself, or where it
-    // is kept (a list's item). u8 A, u8 B, u8 T, u8 S, u16 cache, i32 slow.
+    // GetProp's quick ways, on the object in slot B, where this place found the field before, in
+    // an object of the same layout (M6.5 part 4). u8 A, u8 B, u8 T, u8 S, u16 cache, i32 slow.
+    // An object of a class, and a value where it is kept (a list's item), here; a value in its box,
+    // kept in the value itself or held in another, a string's or a list's size, and the slow way,
+    // in its rare part.
     const Value& obj = R_S(1);
-    if (caches != nullptr) {
+    if (caches != nullptr && obj.isObjType(ObjType::Instance)) {
         const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
-        Value& out = base[ip[0]];
-        if (obj.isObjType(ObjType::Instance)) {
-            const ObjInstance* instance = asInstance(obj);
-            if (static_cast<uint32_t>(seen >> 32) == instance->shape && (instance->core == 0 || instance->core == coreId_)) {
-                const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
-                if ((seen & 0x80) != 0) {
-                    // A field kept as its payload alone (M6.6 part 6).
-                    uint64_t bits;
-                    std::memcpy(&bits, at, 8);
-                    out.setWhole(seen & 3, bits);
-                    sp = base + ip[2];
-                    ip += 10;
-                    NEXT();
-                }
-                // Copied whole, in one store: see setWhole.
-                if (const ValueKind kind = reinterpret_cast<const Value*>(at)->kind; kind != ValueKind::Ref && kind != ValueKind::Undefined) {
-                    std::memcpy(static_cast<void*>(&out), at, sizeof(Value));
+        const ObjInstance* instance = asInstance(obj);
+        if (static_cast<uint32_t>(seen >> 32) == instance->shape && (instance->core == 0 || instance->core == coreId_)) {
+            Value& out = base[ip[0]];
+            const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
+            if ((seen & 0x80) != 0) {
+                // A field kept as its payload alone (M6.6 part 6).
+                uint64_t bits;
+                std::memcpy(&bits, at, 8);
+                out.setWhole(seen & 3, bits);
+                sp = base + ip[2];
+                ip += 10;
+                NEXT();
+            }
+            // Copied whole, in one store: see setWhole.
+            if (const ValueKind kind = reinterpret_cast<const Value*>(at)->kind; kind != ValueKind::Ref && kind != ValueKind::Undefined) {
+                std::memcpy(static_cast<void*>(&out), at, sizeof(Value));
+                sp = base + ip[2];
+                ip += 10;
+                NEXT();
+            }
+        }
+    } else if (caches != nullptr && obj.isRef() && obj.refDepth == 0) {
+        // A list's item, or a value kept inside an object, itself.
+        const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
+        const ObjClass* cls = refHolderClass(obj);
+        if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
+            const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+            if (const uint8_t* at = refQuickly(obj, false)) {
+                if (readPlain(at + field.offset, field, base[ip[0]])) {
                     sp = base + ip[2];
                     ip += 10;
                     NEXT();
                 }
             }
-        } else if (obj.isObjType(ObjType::Value)) {
+        }
+    }
+    GO_COLD(RGetProp);
+}
+COLD(RGetProp) {
+    const Value& obj = R_S(1);
+    if (caches != nullptr) {
+        const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
+        Value& out = base[ip[0]];
+        if (obj.isObjType(ObjType::Value)) {
             const ObjValue* box = asValue(obj);
             if (static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
                 const ValueField& field = box->cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
-                if (field.kind != ValueField::Nested) {
-                    out = readPlainField(box->data() + field.offset, field);
+                if (readPlain(box->data() + field.offset, field, out)) {
                     sp = base + ip[2];
                     ip += 10;
                     NEXT();
@@ -2992,18 +3039,18 @@ CASE(RGetProp) {
             const ObjClass* cls = smallClassOf(obj);
             if (static_cast<uint32_t>(seen >> 32) == cls->shape) {
                 const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
-                out = readPlainField(smallBytes(obj) + field.offset, field);
-                sp = base + ip[2];
-                ip += 10;
-                NEXT();
+                if (readPlain(smallBytes(obj) + field.offset, field, out)) {
+                    sp = base + ip[2];
+                    ip += 10;
+                    NEXT();
+                }
             }
         } else if (obj.isRef()) {
             const ObjClass* cls = refClassOrNull(obj);
             if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
                 const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
-                if (field.kind != ValueField::Nested) {
-                    if (const uint8_t* at = refQuickly(obj, false)) {
-                        out = readPlainField(at + field.offset, field);
+                if (const uint8_t* at = refQuickly(obj, false)) {
+                    if (readPlain(at + field.offset, field, out)) {
                         sp = base + ip[2];
                         ip += 10;
                         NEXT();
@@ -3030,7 +3077,6 @@ CASE(RGetProp) {
     sp = at + 1;
     ip = code + operandI32(ip + 6);
     NEXT();
-}
 }
 CASE(Count_) {
     throw runtimeError(Thrown::InternalError, "invalid instruction");
