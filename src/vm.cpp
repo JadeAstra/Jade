@@ -5177,6 +5177,81 @@ void VM::run(int baseFrame) {
 #define NEXT() continue
 #endif
 
+// ---- R instructions (M6.7) ----
+// An rk operand at `at`: the slot it names, or the constant.
+#define RK_AT(at) ((FAST_U16(at) & kRkConstant) != 0 ? consts[FAST_U16(at) & (kRkConstant - 1)] : base[FAST_U16(at)])
+// An R instruction whose quick way did not do: its operands where the stack would have them, from
+// slot s (`out`), the top after them, and on to the stack instruction after it, `operands` bytes on.
+#define R_SLOW1(a, operands) \
+    {                        \
+        out[0] = (a);        \
+        sp = out + 1;        \
+        ip += (operands);    \
+        NEXT();              \
+    }
+#define R_SLOW2(a, b, operands) \
+    {                           \
+        out[0] = (a);           \
+        out[1] = (b);           \
+        sp = out + 2;           \
+        ip += (operands);       \
+        NEXT();                 \
+    }
+// Two floats or two ints worked out at once, the instruction after (one byte) passed over.
+#define R_ARITHMETIC(name, op, checked)                                   \
+    CASE(name) {                                                          \
+        Value* const out = base + FAST_U16(0);                            \
+        const Value a = RK_AT(2), b = RK_AT(4);                           \
+        if (a.isFloat() && b.isFloat()) {                                 \
+            out->setFloat(a.as.d op b.as.d);                              \
+            sp = out + 1;                                                 \
+            ip += 7;                                                      \
+            NEXT();                                                       \
+        }                                                                 \
+        if (a.isInt() && b.isInt()) {                                     \
+            int64_t r_;                                                   \
+            if (!checked(a.as.i, b.as.i, r_)) {                           \
+                out->setInt(r_);                                          \
+                sp = out + 1;                                             \
+                ip += 7;                                                  \
+                NEXT();                                                   \
+            }                                                             \
+        }                                                                 \
+        R_SLOW2(a, b, 6)                                                  \
+    }
+// Two floats worked out at once (a division: ints have rules of their own).
+#define R_FLOAT(name, floatExpr)                                          \
+    CASE(name) {                                                          \
+        Value* const out = base + FAST_U16(0);                            \
+        const Value a = RK_AT(2), b = RK_AT(4);                           \
+        if (a.isFloat() && b.isFloat()) {                                 \
+            const double x = a.as.d, y = b.as.d;                          \
+            out->setFloat(floatExpr);                                     \
+            sp = out + 1;                                                 \
+            ip += 7;                                                      \
+            NEXT();                                                       \
+        }                                                                 \
+        R_SLOW2(a, b, 6)                                                  \
+    }
+#define R_COMPARISON(name, cmp)                                           \
+    CASE(name) {                                                          \
+        Value* const out = base + FAST_U16(0);                            \
+        const Value a = RK_AT(2), b = RK_AT(4);                           \
+        if (a.isFloat() && b.isFloat()) {                                 \
+            out->setBool(a.as.d cmp b.as.d);                              \
+            sp = out + 1;                                                 \
+            ip += 7;                                                      \
+            NEXT();                                                       \
+        }                                                                 \
+        if (a.isInt() && b.isInt()) {                                     \
+            out->setBool(a.as.i cmp b.as.i);                              \
+            sp = out + 1;                                                 \
+            ip += 7;                                                      \
+            NEXT();                                                       \
+        }                                                                 \
+        R_SLOW2(a, b, 6)                                                  \
+    }
+
 // Whether `v` is certainly of `type`, told at once for the types written most; false means only
 // that the full test (matchesType) has to be made.
 #define FITS_AT_ONCE(v, type) ((type) == kTypeFloat ? (v).isFloat() : (type) == kTypeInt ? (v).isInt() : (type) == kTypeBool && (v).isBool())
@@ -5545,6 +5620,25 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(Throw)
             ASTRA_DISPATCH_TO(Import)
             ASTRA_DISPATCH_TO(Count_)
+            ASTRA_DISPATCH_TO(Move)
+            ASTRA_DISPATCH_TO(SetTop)
+            ASTRA_DISPATCH_TO(RAdd)
+            ASTRA_DISPATCH_TO(RSub)
+            ASTRA_DISPATCH_TO(RMul)
+            ASTRA_DISPATCH_TO(RDiv)
+            ASTRA_DISPATCH_TO(RMod)
+            ASTRA_DISPATCH_TO(RLt)
+            ASTRA_DISPATCH_TO(RLe)
+            ASTRA_DISPATCH_TO(RGt)
+            ASTRA_DISPATCH_TO(RGe)
+            ASTRA_DISPATCH_TO(REq)
+            ASTRA_DISPATCH_TO(RNeg)
+            ASTRA_DISPATCH_TO(RNot)
+            ASTRA_DISPATCH_TO(RGetProp)
+            ASTRA_DISPATCH_TO(RSetProp)
+            ASTRA_DISPATCH_TO(RGetIndex)
+            ASTRA_DISPATCH_TO(RJumpIfFalse)
+            ASTRA_DISPATCH_TO(RReturn)
 #undef ASTRA_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
@@ -8048,6 +8142,115 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
+                    // ---- The code the VM runs (M6.7, registers.cpp) ----
+                    // An R instruction's operands name slots, or constants; the stack instruction
+                    // it stands for comes after it, whole, and runs where its quick way does not
+                    // do, its operands put where the stack would have them.
+                    CASE(Move) {
+                        base[FAST_U16(0)] = RK_AT(2);
+                        ip += 4;
+                        NEXT();
+                    }
+                    CASE(SetTop) {
+                        sp = base + FAST_U16(0);
+                        ip += 2;
+                        NEXT();
+                    }
+                    R_ARITHMETIC(RAdd, +, addOverflows)
+                    R_ARITHMETIC(RSub, -, subOverflows)
+                    R_ARITHMETIC(RMul, *, mulOverflows)
+                    R_FLOAT(RDiv, x / y)
+                    R_FLOAT(RMod, std::fmod(x, y))
+                    R_COMPARISON(RLt, <)
+                    R_COMPARISON(RLe, <=)
+                    R_COMPARISON(RGt, >)
+                    R_COMPARISON(RGe, >=)
+                    R_COMPARISON(REq, ==)
+                    CASE(RNeg) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value a = RK_AT(2);
+                        if (a.isFloat()) {
+                            out->setFloat(-a.as.d);
+                            sp = out + 1;
+                            ip += 5;
+                            NEXT();
+                        }
+                        if (a.isInt() && a.as.i != INT64_MIN) {
+                            out->setInt(-a.as.i);
+                            sp = out + 1;
+                            ip += 5;
+                            NEXT();
+                        }
+                        R_SLOW1(a, 4)
+                    }
+                    CASE(RNot) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value a = RK_AT(2);
+                        if (a.isBool()) {
+                            out->setBool(!a.as.b);
+                            sp = out + 1;
+                            ip += 5;
+                            NEXT();
+                        }
+                        R_SLOW1(a, 4)
+                    }
+                    CASE(RGetProp) {
+                        // GetProp's quick way, on an object named by the operand: where this place
+                        // found the field before, in an object of the same layout (M6.5 part 4).
+                        Value* const out = base + FAST_U16(0);
+                        const Value obj = RK_AT(2);
+                        const Op plain = static_cast<Op>(ip[4]);
+                        if (obj.isObjType(ObjType::Instance) && caches != nullptr && (plain == Op::GetProp || plain == Op::GetOwn)) {
+                            const ObjInstance* instance = asInstance(obj);
+                            const uint64_t seen = caches[FAST_U16(7)].load(std::memory_order_relaxed);
+                            if (static_cast<uint32_t>(seen >> 32) == instance->shape && (instance->core == 0 || instance->core == coreId_)) {
+                                const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
+                                if ((seen & 0x80) != 0) {
+                                    // A field kept as its payload alone (M6.6 part 6).
+                                    out->kind = static_cast<ValueKind>(seen & 3);
+                                    std::memcpy(&out->as.i, at, 8);
+                                    sp = out + 1;
+                                    ip += 9;
+                                    NEXT();
+                                }
+                                const Value field = *reinterpret_cast<const Value*>(at);
+                                if (field.kind != ValueKind::Ref && field.kind != ValueKind::Undefined) {
+                                    *out = field;
+                                    sp = out + 1;
+                                    ip += 9;
+                                    NEXT();
+                                }
+                            }
+                        }
+                        R_SLOW1(obj, 4)
+                    }
+                    CASE(RSetProp) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value obj = RK_AT(2), value = RK_AT(4);
+                        R_SLOW2(obj, value, 6)
+                    }
+                    CASE(RGetIndex) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value obj = RK_AT(2), index = RK_AT(4);
+                        R_SLOW2(obj, index, 6)
+                    }
+                    CASE(RJumpIfFalse) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value value = RK_AT(2);
+                        if (value.isBool()) {
+                            sp = out;
+                            if (!value.as.b) ip = code + FAST_I32(5);
+                            else ip += 9;
+                            NEXT();
+                        }
+                        R_SLOW1(value, 4)
+                    }
+                    CASE(RReturn) {
+                        Value* const out = base + FAST_U16(0);
+                        const Value value = RK_AT(2);
+                        R_SLOW1(value, 4)
+                    }
+                    CASE(RunEnd_)
                     CASE(Count_)
                         throw runtimeError(Thrown::InternalError, "invalid instruction");
                 }

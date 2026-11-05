@@ -382,7 +382,38 @@ enum class Op : uint8_t {
     ClassOrigin,        // u16 name                        class -> class
 
     Count_,
+
+    // ---- The code the VM runs (M6.7, registers.cpp) ----
+    // Made by the translator from the stack code as a function is loaded: never written by the
+    // compiler nor kept in a bytecode file, where the verifier takes them for unknown. A slot is
+    // one of the frame's; an rk operand is a slot, or with kRkConstant set a constant. An R
+    // instruction stands for the stack instruction after it, whole: where its quick way does not
+    // do, its operands are put where the stack would have them, from slot s up, the stack's top
+    // after them, and that instruction runs as it would have.
+    Move,          // u16 to, u16 from (rk)            slot `to` = from
+    SetTop,        // u16 depth                        the stack's top at that slot
+    RAdd,          // u16 s, u16 a (rk), u16 b (rk)    slot s = a + b, the top after it; then Add
+    RSub,          //                                  the same with Sub
+    RMul,
+    RDiv,
+    RMod,
+    RLt,           //                                  slot s = a < b; then Lt
+    RLe,
+    RGt,
+    RGe,
+    REq,
+    RNeg,          // u16 s, u16 a (rk)                slot s = -a; then Neg
+    RNot,          //                                  slot s = !a; then Not
+    RGetProp,      // u16 s, u16 obj (rk)              then GetProp, GetOwn, GetPropRef or GetOwnRef
+    RSetProp,      // u16 s, u16 obj, u16 value (rk)   then SetProp or SetOwn
+    RGetIndex,     // u16 s, u16 obj, u16 index (rk)   then GetIndex
+    RJumpIfFalse,  // u16 s, u16 value (rk)            then JumpIfFalse: the top at s either way
+    RReturn,       // u16 s, u16 value (rk)            then Return
+    RunEnd_,
 };
+static_assert(static_cast<int>(Op::RunEnd_) <= 256, "an instruction is a byte");
+// An rk operand naming a constant: the constant's index below it.
+constexpr int kRkConstant = 0x8000;
 
 // The types a variable can be declared with (`var n : int`). Any other name is a class.
 enum TypeId : uint8_t {
@@ -737,6 +768,10 @@ int shapeOperands(const std::string& shape);
 
 // The length of the instruction at `at`, its operands included.
 size_t instructionSize(const std::vector<uint8_t>& code, size_t at);
+
+// Where in an instruction a place in the code to go to is, counted from the instruction's start
+// in bytes; 0 for one that has none.
+int targetOperand(Op op);
 
 // An instruction's name, as the disassembly shows it.
 const char* opName(Op op);

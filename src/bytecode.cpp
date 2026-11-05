@@ -1951,8 +1951,8 @@ int globalOperand(Op op, int first) {
     }
 }
 
-// Where in an instruction a place in the code to go to is, counted from the instruction's
-// start in bytes; 0 for one that has none.
+}  // namespace
+
 int targetOperand(Op op) {
     switch (op) {
         case Op::Jump:
@@ -1977,6 +1977,8 @@ int targetOperand(Op op) {
         default: return 0;
     }
 }
+
+namespace {
 
 // An instruction whose first operand is the name of a member it uses.
 bool usesMemberName(Op op) {
