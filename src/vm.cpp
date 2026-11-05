@@ -4971,6 +4971,10 @@ void VM::closeUpvalues(Value* last) {
 
 // ---- Interpreter loop ----
 
+// What a GetProp place remembers where it read the size of a string or a list: no class's shape
+// is 0, so no object, value or place of one is taken for it.
+constexpr uint64_t kSeenSize = 1;
+
 #ifdef ASTRA_OP_COUNTS
 #include <intrin.h>
 // A build for finding where a program's instructions go (M6.5 part 4): how often each runs,
@@ -5244,13 +5248,13 @@ void VM::run(int baseFrame) {
         R_SLOW2(b, c, 4, 5)                                  \
     }
 // Whether `b cmp c` is told at once, into `holds`: two floats, two ints, two characters by their
-// numbers; and for ==, two booleans, two strings, or null and anything.
+// numbers; and for ==, two booleans, strings and characters, or null and anything.
 #define R_COMPARED(b, c, cmp, equality, holds)                                                           \
     ((b).isFloat() && (c).isFloat()   ? ((holds) = (b).as.d cmp (c).as.d, true)                          \
      : ((b).isInt() && (c).isInt()) || ((b).isChar() && (c).isChar()) ? ((holds) = (b).as.i cmp (c).as.i, true) \
      : !(equality)                    ? false                                                            \
      : (b).isBool() && (c).isBool()   ? ((holds) = (b).as.b == (c).as.b, true)                           \
-     : (b).isString() && (c).isString() ? ((holds) = valuesEqual((b), (c)), true)                        \
+     : ((b).isString() || (b).isChar()) && ((c).isString() || (c).isChar()) ? ((holds) = valuesEqual((b), (c)), true) \
      : (b).isNull()                   ? ((holds) = (c).isNull(), true)                                   \
                                       : false)
 #define R_COMPARISON(name, LB, LC, cmp, plain, equality)     \
@@ -5262,6 +5266,18 @@ void VM::run(int baseFrame) {
             R_DONE()                                         \
         }                                                    \
         R_PLAIN2(b, c, plain)                                \
+        R_SLOW2(b, c, 4, 5)                                  \
+    }
+// Two ints worked out at once, `ok` saying where (a shift's count in range); anything else the
+// slow way, whose stack instruction reads which it is from its own opcode.
+#define R_INTS(name, LB, LC, ok, expr)                       \
+    CASE(name) {                                             \
+        const Value &b = LB(1), &c = LC(2);                  \
+        if (b.isInt() && c.isInt() && (ok)) {                \
+            const int64_t x = b.as.i, y = c.as.i;            \
+            base[ip[0]].setInt(expr);                        \
+            R_DONE()                                         \
+        }                                                    \
         R_SLOW2(b, c, 4, 5)                                  \
     }
 // u8 B, u8 C, u8 T, i32 target, i32 slow: compares and jumps where the comparison does not hold;
@@ -5610,6 +5626,12 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(RNeg)
             ASTRA_DISPATCH_TO(RNot)
             ASTRA_DISPATCH_TO(RJumpIfFalse)
+            ASTRA_DISPATCH_TO(RShlSK)
+            ASTRA_DISPATCH_TO(RShrSK)
+            ASTRA_DISPATCH_TO(RBitAndSS)
+            ASTRA_DISPATCH_TO(RBitAndSK)
+            ASTRA_DISPATCH_TO(RBitOrSS)
+            ASTRA_DISPATCH_TO(RBitOrSK)
 #undef ASTRA_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
@@ -6123,6 +6145,18 @@ void VM::run(int baseFrame) {
                                     NEXT();
                                 }
                             }
+                        } else if (caches != nullptr && caches[FAST_U16(2)].load(std::memory_order_relaxed) == kSeenSize) {
+                            // The size of a string or a list, where this place read one before.
+                            if (sp[-1].isString()) {
+                                sp[-1] = Value::integer(static_cast<int64_t>(asString(sp[-1])->length));
+                                ip += 4;
+                                NEXT();
+                            }
+                            if (sp[-1].isObjType(ObjType::List)) {
+                                sp[-1] = Value::integer(static_cast<int64_t>(asList(sp[-1])->size()));
+                                ip += 4;
+                                NEXT();
+                            }
                         }
                         const Op getOp = static_cast<Op>(ip[-1]);
                         const bool own = getOp == Op::GetOwn || getOp == Op::GetOwnRef;
@@ -6172,6 +6206,30 @@ void VM::run(int baseFrame) {
                             if (instance->cls->hasAccessors) {
                                 // A property: its getter runs with the object as the receiver.
                                 if (const Value* getter = instance->cls->getters.find(name)) {
+                                    // One that only reads its stored field (`get() => field`, as a
+                                    // property with a setter alone has): read as that field and
+                                    // remembered so, as above, where it holds a value of its own.
+                                    // An object's class, and so its getters, is told by its shape.
+                                    if (const FieldDecl* decl = asClosure(*getter)->proto->readsField != nullptr ? instance->declOf(asClosure(*getter)->proto->readsField) : nullptr) {
+                                        if (decl->payload == FieldDecl::NoPayload) {
+                                            const Value slot = instance->fields()[decl->slot];
+                                            const uint64_t from = instance->slotsStart + static_cast<uint64_t>(decl->slot) * sizeof(Value);
+                                            if (slot.kind != ValueKind::Undefined && !slot.isRef() && !slot.isLazy()) {
+                                                sp_[-1] = slot;
+                                                if (caches != nullptr && from <= 0xFFFF)
+                                                    caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 | from << 16, std::memory_order_relaxed);
+                                                break;
+                                            }
+                                        } else if (decl->payload != FieldDecl::NarrowPayload && !(decl->tracked && !instance->payloadSet(*decl))) {
+                                            sp_[-1] = instance->payloadOf(*decl);
+                                            if (caches != nullptr)
+                                                caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 |
+                                                                        static_cast<uint64_t>(sizeof(ObjInstance) + decl->payloadOffset) << 16 |
+                                                                        static_cast<uint64_t>(decl->payloadBit) << 8 | 0x80u | decl->payloadValueKind(),
+                                                                    std::memory_order_relaxed);
+                                            break;
+                                        }
+                                    }
                                     SAVE_IP();
                                     callClosure(asClosure(*getter), 0);
                                     LOAD_FRAME();
@@ -6227,6 +6285,8 @@ void VM::run(int baseFrame) {
                                 break;
                             }
                         }
+                        if (caches != nullptr && name == names.size && (name->restricted & 1) == 0 && (obj.isString() || obj.isObjType(ObjType::List)))
+                            caches[cache].store(kSeenSize, std::memory_order_relaxed);
                         sp_[-1] = getProperty(obj, name);
                         break;
                     }
@@ -6290,6 +6350,23 @@ void VM::run(int baseFrame) {
                                     NEXT();
                                 }
                             }
+                        } else if (sp[-2].isObjType(ObjType::Value) && caches != nullptr) {
+                            // A field of a value being made, in its box (its init's `this`): found
+                            // as one of a value where it is kept, below.
+                            ObjValue* const box = asValue(sp[-2]);
+                            const uint64_t seen = caches[FAST_U16(2)].load(std::memory_order_relaxed);
+                            if (box->constructing && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
+                                const ValueField& field = box->cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                                const Value value = sp[-1];
+                                if (field.kind == ValueField::Float ? value.isFloat() : field.kind == ValueField::Int ? value.isInt() : value.isBool()) {
+                                    if (field.kind == ValueField::Bool) box->data()[field.offset] = value.as.b ? 1 : 0;
+                                    else std::memcpy(box->data() + field.offset, &value.as, 8);
+                                    sp[-2] = value;
+                                    sp--;
+                                    ip += 4;
+                                    NEXT();
+                                }
+                            }
                         } else if (sp[-2].isRef() && sp[-2].refDepth == 0 && caches != nullptr) {
                             // A var field of a value where it is kept (M6.6 part 4): only an int, a
                             // float or a bool field is remembered, which takes its own kind only.
@@ -6335,8 +6412,8 @@ void VM::run(int baseFrame) {
                                                    " cannot be assigned: it has no setter");
                         }
                         setProperty(sp_[-2], name, value);
-                        if (caches != nullptr && sp_[-2].isRef() && sp_[-2].refDepth == 0) {
-                            const ObjClass* cls = refHolderClass(sp_[-2]);
+                        if (caches != nullptr && ((sp_[-2].isRef() && sp_[-2].refDepth == 0) || sp_[-2].isObjType(ObjType::Value))) {
+                            const ObjClass* cls = sp_[-2].isRef() ? refHolderClass(sp_[-2]) : asValue(sp_[-2])->cls;
                             const Value* found = cls != nullptr ? cls->declaredIndex.find(name) : nullptr;
                             const int64_t at = found != nullptr ? found->as.i : -1;
                             const ValueField::Kind kind = at >= 0 ? cls->layout.load(std::memory_order_relaxed)->fields[static_cast<size_t>(at)].kind : ValueField::Any;
@@ -8034,6 +8111,12 @@ void VM::run(int baseFrame) {
                     R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y), plainMod)
                     R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y), plainMod)
                     R_ARITHMETIC(RSubKS, R_K, R_S, -, subOverflows, plainSub)
+                    R_INTS(RShlSK, R_S, R_K, c.as.i >= 0 && c.as.i < 64, static_cast<int64_t>(static_cast<uint64_t>(x) << y))
+                    R_INTS(RShrSK, R_S, R_K, c.as.i >= 0 && c.as.i < 64, x >> y)
+                    R_INTS(RBitAndSS, R_S, R_S, true, x & y)
+                    R_INTS(RBitAndSK, R_S, R_K, true, x & y)
+                    R_INTS(RBitOrSS, R_S, R_S, true, x | y)
+                    R_INTS(RBitOrSK, R_S, R_K, true, x | y)
                     R_FLOAT(RDivKS, R_K, R_S, x / y, plainDiv)
                     CASE(RSetPropSS)
                     CASE(RSetPropSK) {
@@ -8061,7 +8144,22 @@ void VM::run(int baseFrame) {
                                         ip += 11;
                                         NEXT();
                                     }
-                                } else if ((seen & 2) == 0 && ((seen & 1) == 0 || field->kind == ValueKind::Undefined)) {
+                                } else if ((seen & 2) != 0) {
+                                    // A value kept inside the object, given another of its type.
+                                    if (field->isRef() && field->as.obj == instance) {
+                                        const ObjClass::InlineField* inside = instance->cls->inlineFieldAt(field->refOffset);
+                                        const uint8_t* from = given.isObjType(ObjType::Value) && asValue(given)->cls == inside->cls ? asValue(given)->data()
+                                                              : given.isRef() && refClass(given) == inside->cls           ? refQuickly(given, false)
+                                                                                                                          : nullptr;
+                                        if (from != nullptr) {
+                                            std::memmove(instance->inlineData() + inside->offset, from, inside->size);
+                                            base[ip[0]] = given;
+                                            sp = base + ip[3];
+                                            ip += 11;
+                                            NEXT();
+                                        }
+                                    }
+                                } else if (((seen & 1) == 0 || field->kind == ValueKind::Undefined)) {
                                     Value value = given;  // a byte may be widened
                                     const uint8_t type = static_cast<uint8_t>(seen >> 8);
                                     if (type == 0 || (type == kTypeFloat ? value.isFloat()
@@ -8073,6 +8171,44 @@ void VM::run(int baseFrame) {
                                         ip += 11;
                                         NEXT();
                                     }
+                                }
+                            }
+                        }
+                        if (obj.isObjType(ObjType::Value) && caches != nullptr) {
+                            // A field of a value being made, in its box, as SetProp writes one.
+                            ObjValue* const box = asValue(obj);
+                            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+                            if (box->constructing && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
+                                const ValueField& field = box->cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                                if (field.kind == ValueField::Float ? given.isFloat() : field.kind == ValueField::Int ? given.isInt() : given.isBool()) {
+                                    if (field.kind == ValueField::Bool) box->data()[field.offset] = given.as.b ? 1 : 0;
+                                    else std::memcpy(box->data() + field.offset, &given.as, 8);
+                                    base[ip[0]] = given;
+                                    sp = base + ip[3];
+                                    ip += 11;
+                                    NEXT();
+                                }
+                            }
+                        }
+                        if (obj.isRef() && obj.refDepth == 0 && caches != nullptr) {
+                            // A var field of a value where it is kept (M6.6 part 4), as SetProp writes
+                            // one: an int, a float or a bool field given its own kind.
+                            const ObjClass* cls = refHolderClass(obj);
+                            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+                            if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
+                                const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                                uint8_t* const to = (field.kind == ValueField::Float ? given.isFloat()
+                                                     : field.kind == ValueField::Int ? given.isInt()
+                                                                                     : field.kind == ValueField::Bool && given.isBool())
+                                                        ? refQuickly(obj, true)
+                                                        : nullptr;
+                                if (to != nullptr) {
+                                    if (field.kind == ValueField::Bool) to[field.offset] = given.as.b ? 1 : 0;
+                                    else std::memcpy(to + field.offset, &given.as, 8);
+                                    base[ip[0]] = given;
+                                    sp = base + ip[3];
+                                    ip += 11;
+                                    NEXT();
                                 }
                             }
                         }
@@ -8281,6 +8417,19 @@ void VM::run(int baseFrame) {
                                             NEXT();
                                         }
                                     }
+                                }
+                            } else if (seen == kSeenSize) {
+                                if (obj.isString()) {
+                                    out.setInt(static_cast<int64_t>(asString(obj)->length));
+                                    sp = base + ip[2];
+                                    ip += 10;
+                                    NEXT();
+                                }
+                                if (obj.isObjType(ObjType::List)) {
+                                    out.setInt(static_cast<int64_t>(asList(obj)->size()));
+                                    sp = base + ip[2];
+                                    ip += 10;
+                                    NEXT();
                                 }
                             }
                         }

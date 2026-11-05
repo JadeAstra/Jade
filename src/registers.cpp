@@ -72,6 +72,10 @@ const Family* familyOf(Op plain) {
     static const Family gt{Op::RGtSS, Op::RGtSK, Op::Count_};
     static const Family ge{Op::RGeSS, Op::RGeSK, Op::Count_};
     static const Family eq{Op::REqSS, Op::REqSK, Op::Count_};
+    static const Family shl{Op::Count_, Op::RShlSK, Op::Count_};
+    static const Family shr{Op::Count_, Op::RShrSK, Op::Count_};
+    static const Family bitAnd{Op::RBitAndSS, Op::RBitAndSK, Op::Count_};
+    static const Family bitOr{Op::RBitOrSS, Op::RBitOrSK, Op::Count_};
     switch (plain) {
         case Op::Add: return &add;
         case Op::Sub: return &sub;
@@ -83,6 +87,10 @@ const Family* familyOf(Op plain) {
         case Op::Gt: return &gt;
         case Op::Ge: return &ge;
         case Op::Eq: return &eq;
+        case Op::Shl: return &shl;
+        case Op::Shr: return &shr;
+        case Op::BitAnd: return &bitAnd;
+        case Op::BitOr: return &bitOr;
         default: return nullptr;
     }
 }
@@ -117,7 +125,13 @@ bool storesResult(Op r) {
         case Op::RGetIndexSS:
         case Op::RGetIndexSK:
         case Op::RNeg:
-        case Op::RNot: return true;
+        case Op::RNot:
+        case Op::RShlSK:
+        case Op::RShrSK:
+        case Op::RBitAndSS:
+        case Op::RBitAndSK:
+        case Op::RBitOrSS:
+        case Op::RBitOrSK: return true;
         default: return r >= Op::RAddSS && r <= Op::REqSK;
     }
 }
@@ -450,6 +464,8 @@ private:
     bool binaryAt(Op plain, Entry x, Entry y, int s, size_t at, size_t size) {
         const Family* fam = familyOf(plain);
         if (fam == nullptr) return false;
+        // One that takes a constant second only (a shift's count): told before anything is written.
+        if (fam->ss == Op::Count_ && (!isConstant(y) || y.index > 255)) return false;
         if (isConstant(x) && (fam->ks == Op::Count_ || isConstant(y) || x.index > 255)) {
             // A constant first where none takes one: pushed where the stack would have it.
             stack_.push_back(x);
@@ -491,7 +507,8 @@ private:
                         o == Op::SetLocal || o == Op::CopyLocal || o == Op::SetProp || o == Op::SetOwn || o == Op::GetGlobal ||
                         o == Op::GetUpvalue || o == Op::GetIndex || o == Op::Neg || o == Op::Not))
             return asStackCode(o, at, size);
-        if (joinedOnly_ && familyOf(o) != nullptr) return asStackCode(o, at, size);
+        // A plain operation: an R instruction only in full; in a function keeping its stack code, never.
+        if ((joinedOnly_ || !rs_) && familyOf(o) != nullptr) return asStackCode(o, at, size);
         if (!rs_ && (o == Op::StoreLocal || o == Op::JumpIfFalse)) return asStackCode(o, at, size);
         if (joinedOnly_ && o == Op::JumpIfFalse && !lastR_) return asStackCode(o, at, size);
         switch (o) {
@@ -547,7 +564,11 @@ private:
             case Op::Le:
             case Op::Gt:
             case Op::Ge:
-            case Op::Eq: {
+            case Op::Eq:
+            case Op::Shl:
+            case Op::Shr:
+            case Op::BitAnd:
+            case Op::BitOr: {
                 const int s = depth - 2;
                 placeBelow(s);
                 const std::vector<Entry> sources = take(2);
@@ -884,6 +905,12 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::RModSK: name = "R_MOD_SK"; return 10;
         case Op::RSubKS: name = "R_SUB_KS"; return 10;
         case Op::RDivKS: name = "R_DIV_KS"; return 10;
+        case Op::RShlSK: name = "R_SHL_SK"; return 10;
+        case Op::RShrSK: name = "R_SHR_SK"; return 10;
+        case Op::RBitAndSS: name = "R_BIT_AND_SS"; return 10;
+        case Op::RBitAndSK: name = "R_BIT_AND_SK"; return 10;
+        case Op::RBitOrSS: name = "R_BIT_OR_SS"; return 10;
+        case Op::RBitOrSK: name = "R_BIT_OR_SK"; return 10;
         default: break;
     }
     if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) {

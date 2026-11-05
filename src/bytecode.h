@@ -434,6 +434,13 @@ enum class Op : uint8_t {
     RNeg,               // u8 A, u8 B, u8 T, u8 S, i32 slow: slot A = -B
     RNot,               // the same: slot A = !B
     RJumpIfFalse,       // u8 B, u8 T, i32 target, i32 slow: jumps where B is false
+    // As RAddSS and the rest, on two ints: a shift by a constant count, & and |.
+    RShlSK,
+    RShrSK,
+    RBitAndSS,
+    RBitAndSK,
+    RBitOrSS,
+    RBitOrSK,
     RunInJoined_,       // the first of those numbers not yet given to one
 };
 static_assert(static_cast<int>(Op::RunInJoined_) <= static_cast<int>(Op::EqConst) + 1, "the joined instructions' first numbers");
@@ -639,6 +646,10 @@ struct FunctionProto {
 
     // Stack slots the function needs, counted from its frame base. Filled in by verifyFunction.
     int maxStack = 0;
+    // For a function that only reads a field of its receiver and returns it, as `get() => field`
+    // does: the field's name, so that a getter of that kind is read as its field (M6.7). Filled
+    // in by verifyFunction; null for any other.
+    ObjString* readsField = nullptr;
 
     std::vector<uint8_t> code;
     std::vector<int> lines;                // source line of each byte in `code`

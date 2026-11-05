@@ -1121,6 +1121,13 @@ void verifyFunction(FunctionProto& f, const Program& program) {
     std::vector<int> depths;
     analyzeStack(f, program, false, &depths);
     translate(f, depths);
+    // A function whose whole work is `this.name`: GetLocal 0, GetProp or GetOwn, Return.
+    const std::vector<uint8_t>& c = f.code;
+    f.readsField = nullptr;
+    if (f.arity == 0 && f.upvalues.empty() && f.rights.empty() && c.size() >= 9 && c[0] == static_cast<uint8_t>(Op::GetLocal) && readU16(c, 1) == 0 &&
+        (c[3] == static_cast<uint8_t>(Op::GetProp) || c[3] == static_cast<uint8_t>(Op::GetOwn)) && c[8] == static_cast<uint8_t>(Op::Return) &&
+        static_cast<size_t>(readU16(c, 4)) < f.constants.size() && f.constants[static_cast<size_t>(readU16(c, 4))].isString())
+        f.readsField = asString(f.constants[static_cast<size_t>(readU16(c, 4))]);
 }
 
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }
