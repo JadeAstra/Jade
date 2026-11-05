@@ -432,6 +432,14 @@ private:
     static bool inASlot(const Entry& e) { return e.kind != Entry::Constant; }
     // The same, or a constant it names by a byte.
     static bool byByte(const Entry& e) { return e.kind != Entry::Constant || e.index <= 255; }
+    // Whether the instruction at `next`, not jumped to, reads a field of what the one before
+    // gives, or does past a ?. : GetProp reads a value kept in an object through to that field at
+    // once, where a GetProp as its own instruction would copy it (M6.6 part 5).
+    bool readsOn(size_t next) const {
+        if (next >= n_ || leader_[next]) return false;
+        const Op o = static_cast<Op>(code_[next]);
+        return o == Op::GetProp || o == Op::GetOwn || o == Op::GetPropRef || o == Op::GetOwnRef || o == Op::JumpIfNull;
+    }
     // Whether the instruction after the one at `at` is a Pop, not jumped to.
     bool popAfter(size_t at, size_t size) const {
         const size_t next = at + size;
@@ -598,6 +606,7 @@ private:
             case Op::GetProp:
             case Op::GetOwn: {
                 if (!noted(stack_.back()) || isConstant(stack_.back())) break;  // the stack code as it is
+                if (readsOn(at + size)) break;  // a field of its field: GetProp reads through, copying nothing
                 const int s = depth - 1;
                 placeBelow(s);
                 const Entry x = take(1)[0];

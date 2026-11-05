@@ -5201,8 +5201,20 @@ void VM::run(int baseFrame) {
         ip = code + operandI32(ip + (slowAt));   \
         NEXT();                                  \
     }
+// An R instruction whose result goes where the stack would have had it: its operands put there,
+// the instruction passed over, and the stack instruction's own way of doing it run, here.
+#define R_PLAIN2(b, c, plain)                    \
+    if (ip[0] == ip[4]) {                        \
+        const Value b_ = (b), c_ = (c);          \
+        Value* const at_ = base + ip[4];         \
+        at_[0] = b_;                             \
+        at_[1] = c_;                             \
+        sp = sp_ = at_ + 2;                      \
+        ip += 9;                                 \
+        goto plain;                              \
+    }
 // Two floats or two ints worked out at once.
-#define R_ARITHMETIC(name, LB, LC, op, checked)              \
+#define R_ARITHMETIC(name, LB, LC, op, checked, plain)       \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
@@ -5216,10 +5228,11 @@ void VM::run(int baseFrame) {
                 R_DONE()                                     \
             }                                                \
         }                                                    \
+        R_PLAIN2(b, c, plain)                                \
         R_SLOW2(b, c, 4, 5)                                  \
     }
 // Two floats worked out at once (a division: ints have rules of their own).
-#define R_FLOAT(name, LB, LC, floatExpr)                     \
+#define R_FLOAT(name, LB, LC, floatExpr, plain)              \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
@@ -5227,30 +5240,37 @@ void VM::run(int baseFrame) {
             base[ip[0]].setFloat(floatExpr);                 \
             R_DONE()                                         \
         }                                                    \
+        R_PLAIN2(b, c, plain)                                \
         R_SLOW2(b, c, 4, 5)                                  \
     }
-#define R_COMPARISON(name, LB, LC, cmp)                      \
+// Whether `b cmp c` is told at once, into `holds`: two floats, two ints, two characters by their
+// numbers; and for ==, two booleans, two strings, or null and anything.
+#define R_COMPARED(b, c, cmp, equality, holds)                                                           \
+    ((b).isFloat() && (c).isFloat()   ? ((holds) = (b).as.d cmp (c).as.d, true)                          \
+     : ((b).isInt() && (c).isInt()) || ((b).isChar() && (c).isChar()) ? ((holds) = (b).as.i cmp (c).as.i, true) \
+     : !(equality)                    ? false                                                            \
+     : (b).isBool() && (c).isBool()   ? ((holds) = (b).as.b == (c).as.b, true)                           \
+     : (b).isString() && (c).isString() ? ((holds) = valuesEqual((b), (c)), true)                        \
+     : (b).isNull()                   ? ((holds) = (c).isNull(), true)                                   \
+                                      : false)
+#define R_COMPARISON(name, LB, LC, cmp, plain, equality)     \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
-        if (b.isFloat() && c.isFloat()) {                    \
-            base[ip[0]].setBool(b.as.d cmp c.as.d);          \
+        bool holds_;                                         \
+        if (R_COMPARED(b, c, cmp, equality, holds_)) {       \
+            base[ip[0]].setBool(holds_);                     \
             R_DONE()                                         \
         }                                                    \
-        if (b.isInt() && c.isInt()) {                        \
-            base[ip[0]].setBool(b.as.i cmp c.as.i);          \
-            R_DONE()                                         \
-        }                                                    \
+        R_PLAIN2(b, c, plain)                                \
         R_SLOW2(b, c, 4, 5)                                  \
     }
 // u8 B, u8 C, u8 T, i32 target, i32 slow: compares and jumps where the comparison does not hold;
 // the stack would have had B at T.
-#define R_JUMP(name, LB, LC, cmp)                            \
+#define R_JUMP(name, LB, LC, cmp, equality)                  \
     CASE(name) {                                             \
         const Value &b = LB(0), &c = LC(1);                  \
         bool holds_;                                         \
-        if (b.isFloat() && c.isFloat()) holds_ = b.as.d cmp c.as.d; \
-        else if (b.isInt() && c.isInt()) holds_ = b.as.i cmp c.as.i; \
-        else R_SLOW2(b, c, 2, 7)                             \
+        if (!R_COMPARED(b, c, cmp, equality, holds_)) R_SLOW2(b, c, 2, 7) \
         sp = base + ip[2];                                   \
         if (holds_) ip += 11;                                \
         else ip = code + operandI32(ip + 3);                 \
@@ -6511,12 +6531,15 @@ void VM::run(int baseFrame) {
 
                     CASE(Add)
                         FAST_ARITHMETIC(sp[-2], sp[-1], +, addOverflows, sp--; NEXT())
+                    plainAdd:
                         ARITHMETIC(Op::Add, addOverflows, x + y)
                     CASE(Sub)
                         FAST_ARITHMETIC(sp[-2], sp[-1], -, subOverflows, sp--; NEXT())
+                    plainSub:
                         ARITHMETIC(Op::Sub, subOverflows, x - y)
                     CASE(Mul)
                         FAST_ARITHMETIC(sp[-2], sp[-1], *, mulOverflows, sp--; NEXT())
+                    plainMul:
                         ARITHMETIC(Op::Mul, mulOverflows, x * y)
                     CASE(StoreLocal)
                         base[READ_U16()] = *--sp;
@@ -6542,7 +6565,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
                     CASE(Div)
-                    {
+                    plainDiv: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
                             if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
@@ -6560,7 +6583,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
                     CASE(Mod)
-                    {
+                    plainMod: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
                             if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
@@ -6618,7 +6641,8 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    CASE(Neg) {
+                    CASE(Neg)
+                    plainNeg: {
                         Value a = sp_[-1];
                         if (a.isInt()) {
                             if (a.as.i == INT64_MIN) throw overflowError(Op::Sub, 0, a.as.i);  // (D27)
@@ -6637,11 +6661,12 @@ void VM::run(int baseFrame) {
                         break;
                     }
                     CASE(Not)
+                    plainNot:
                         sp[-1].setBool(!sp[-1].truthy());
                         NEXT();
 
                     CASE(Eq)
-                    {
+                    plainEq: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (const ObjClass* k = classOf(a); k != nullptr && k->methods.find(names.opEq) != nullptr) {
                             SAVE_IP();
@@ -6684,15 +6709,19 @@ void VM::run(int baseFrame) {
                     }
                     CASE(Lt)
                         FAST_COMPARISON(sp[-2], sp[-1], <, sp--; NEXT())
+                    plainLt:
                         COMPARISON(Op::Lt, <)
                     CASE(Le)
                         FAST_COMPARISON(sp[-2], sp[-1], <=, sp--; NEXT())
+                    plainLe:
                         COMPARISON(Op::Le, <=)
                     CASE(Gt)
                         FAST_COMPARISON(sp[-2], sp[-1], >, sp--; NEXT())
+                    plainGt:
                         COMPARISON(Op::Gt, >)
                     CASE(Ge)
                         FAST_COMPARISON(sp[-2], sp[-1], >=, sp--; NEXT())
+                    plainGe:
                         COMPARISON(Op::Ge, >=)
 
                     CASE(Is) {
@@ -7992,20 +8021,20 @@ void VM::run(int baseFrame) {
                         ip += 1;
                         NEXT();
                     }
-                    R_ARITHMETIC(RAddSS, R_S, R_S, +, addOverflows)
-                    R_ARITHMETIC(RAddSK, R_S, R_K, +, addOverflows)
-                    R_ARITHMETIC(RAddKS, R_K, R_S, +, addOverflows)
-                    R_ARITHMETIC(RSubSS, R_S, R_S, -, subOverflows)
-                    R_ARITHMETIC(RSubSK, R_S, R_K, -, subOverflows)
-                    R_ARITHMETIC(RMulSS, R_S, R_S, *, mulOverflows)
-                    R_ARITHMETIC(RMulSK, R_S, R_K, *, mulOverflows)
-                    R_ARITHMETIC(RMulKS, R_K, R_S, *, mulOverflows)
-                    R_FLOAT(RDivSS, R_S, R_S, x / y)
-                    R_FLOAT(RDivSK, R_S, R_K, x / y)
-                    R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y))
-                    R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y))
-                    R_ARITHMETIC(RSubKS, R_K, R_S, -, subOverflows)
-                    R_FLOAT(RDivKS, R_K, R_S, x / y)
+                    R_ARITHMETIC(RAddSS, R_S, R_S, +, addOverflows, plainAdd)
+                    R_ARITHMETIC(RAddSK, R_S, R_K, +, addOverflows, plainAdd)
+                    R_ARITHMETIC(RAddKS, R_K, R_S, +, addOverflows, plainAdd)
+                    R_ARITHMETIC(RSubSS, R_S, R_S, -, subOverflows, plainSub)
+                    R_ARITHMETIC(RSubSK, R_S, R_K, -, subOverflows, plainSub)
+                    R_ARITHMETIC(RMulSS, R_S, R_S, *, mulOverflows, plainMul)
+                    R_ARITHMETIC(RMulSK, R_S, R_K, *, mulOverflows, plainMul)
+                    R_ARITHMETIC(RMulKS, R_K, R_S, *, mulOverflows, plainMul)
+                    R_FLOAT(RDivSS, R_S, R_S, x / y, plainDiv)
+                    R_FLOAT(RDivSK, R_S, R_K, x / y, plainDiv)
+                    R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y), plainMod)
+                    R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y), plainMod)
+                    R_ARITHMETIC(RSubKS, R_K, R_S, -, subOverflows, plainSub)
+                    R_FLOAT(RDivKS, R_K, R_S, x / y, plainDiv)
                     CASE(RSetPropSS)
                     CASE(RSetPropSK) {
                         // SetProp's quick ways on an object of a class, as GetProp's: a field found
@@ -8080,6 +8109,12 @@ void VM::run(int baseFrame) {
                         // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow.
                         const Value& obj = R_S(1);
                         const Value& index = static_cast<Op>(ip[-1]) == Op::RGetIndexSK ? R_K(2) : R_S(2);
+                        if (obj.isString() && index.isInt()) {
+                            base[ip[0]] = getIndex(obj, index);
+                            sp = base + ip[3];
+                            ip += 9;
+                            NEXT();
+                        }
                         if (obj.isObjType(ObjType::List) && index.isInt()) {
                             const ObjList* list = asList(obj);
                             const uint64_t i = static_cast<uint64_t>(index.as.i);
@@ -8102,7 +8137,11 @@ void VM::run(int baseFrame) {
                         Value* const at = base + ip[4];
                         at[0] = objHere;
                         at[1] = indexHere;
-                        sp = at + 2;
+                        sp = sp_ = at + 2;
+                        if (ip[0] == ip[4]) {
+                            ip += 9;
+                            goto getIndex;
+                        }
                         ip = code + operandI32(ip + 5);
                         NEXT();
                     }
@@ -8122,7 +8161,11 @@ void VM::run(int baseFrame) {
                             NEXT();
                         }
                         base[ip[3]] = Value(b);
-                        sp = base + ip[3] + 1;
+                        sp = sp_ = base + ip[3] + 1;
+                        if (ip[0] == ip[3]) {
+                            ip += 8;
+                            goto plainNeg;
+                        }
                         ip = code + operandI32(ip + 4);
                         NEXT();
                     }
@@ -8135,7 +8178,11 @@ void VM::run(int baseFrame) {
                             NEXT();
                         }
                         base[ip[3]] = Value(b);
-                        sp = base + ip[3] + 1;
+                        sp = sp_ = base + ip[3] + 1;
+                        if (ip[0] == ip[3]) {
+                            ip += 8;
+                            goto plainNot;
+                        }
                         ip = code + operandI32(ip + 4);
                         NEXT();
                     }
@@ -8153,26 +8200,26 @@ void VM::run(int baseFrame) {
                         ip = code + operandI32(ip + 6);
                         NEXT();
                     }
-                    R_COMPARISON(RLtSS, R_S, R_S, <)
-                    R_JUMP(RJumpLtSS, R_S, R_S, <)
-                    R_COMPARISON(RLtSK, R_S, R_K, <)
-                    R_JUMP(RJumpLtSK, R_S, R_K, <)
-                    R_COMPARISON(RLeSS, R_S, R_S, <=)
-                    R_JUMP(RJumpLeSS, R_S, R_S, <=)
-                    R_COMPARISON(RLeSK, R_S, R_K, <=)
-                    R_JUMP(RJumpLeSK, R_S, R_K, <=)
-                    R_COMPARISON(RGtSS, R_S, R_S, >)
-                    R_JUMP(RJumpGtSS, R_S, R_S, >)
-                    R_COMPARISON(RGtSK, R_S, R_K, >)
-                    R_JUMP(RJumpGtSK, R_S, R_K, >)
-                    R_COMPARISON(RGeSS, R_S, R_S, >=)
-                    R_JUMP(RJumpGeSS, R_S, R_S, >=)
-                    R_COMPARISON(RGeSK, R_S, R_K, >=)
-                    R_JUMP(RJumpGeSK, R_S, R_K, >=)
-                    R_COMPARISON(REqSS, R_S, R_S, ==)
-                    R_JUMP(RJumpEqSS, R_S, R_S, ==)
-                    R_COMPARISON(REqSK, R_S, R_K, ==)
-                    R_JUMP(RJumpEqSK, R_S, R_K, ==)
+                    R_COMPARISON(RLtSS, R_S, R_S, <, plainLt, false)
+                    R_JUMP(RJumpLtSS, R_S, R_S, <, false)
+                    R_COMPARISON(RLtSK, R_S, R_K, <, plainLt, false)
+                    R_JUMP(RJumpLtSK, R_S, R_K, <, false)
+                    R_COMPARISON(RLeSS, R_S, R_S, <=, plainLe, false)
+                    R_JUMP(RJumpLeSS, R_S, R_S, <=, false)
+                    R_COMPARISON(RLeSK, R_S, R_K, <=, plainLe, false)
+                    R_JUMP(RJumpLeSK, R_S, R_K, <=, false)
+                    R_COMPARISON(RGtSS, R_S, R_S, >, plainGt, false)
+                    R_JUMP(RJumpGtSS, R_S, R_S, >, false)
+                    R_COMPARISON(RGtSK, R_S, R_K, >, plainGt, false)
+                    R_JUMP(RJumpGtSK, R_S, R_K, >, false)
+                    R_COMPARISON(RGeSS, R_S, R_S, >=, plainGe, false)
+                    R_JUMP(RJumpGeSS, R_S, R_S, >=, false)
+                    R_COMPARISON(RGeSK, R_S, R_K, >=, plainGe, false)
+                    R_JUMP(RJumpGeSK, R_S, R_K, >=, false)
+                    R_COMPARISON(REqSS, R_S, R_S, ==, plainEq, true)
+                    R_JUMP(RJumpEqSS, R_S, R_S, ==, true)
+                    R_COMPARISON(REqSK, R_S, R_K, ==, plainEq, true)
+                    R_JUMP(RJumpEqSK, R_S, R_K, ==, true)
                     CASE(RGetProp) {
                         // GetProp's quick ways, on the object in slot B, where this place found the
                         // field before, in an object of the same layout (M6.5 part 4): in an
