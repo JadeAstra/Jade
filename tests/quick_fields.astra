@@ -72,3 +72,17 @@ value Cell(val n : int, val x : float, val ok : bool, val label : string)
 var cells = []
 for (i in 0 ..< 5) { cells.add(Cell(i * 2, i / 2.0, i % 2 == 0, "c" + i)) }
 print(cells.map { it.n + " " + it.x + " " + it.ok + " " + it.label })   // expect: ["0 0.0 true c0", "2 0.5 false c1", "4 1.0 true c2", "6 1.5 false c3", "8 2.0 true c4"]
+
+// A value held in a list's item, its method run where it is: `this` is a place one value deep.
+value Extent(val w : int, val h : int) {
+  fun area() : int => w * h
+}
+value Item(val name : string, val extent : Extent)
+val items = [Item("a", Extent(2, 3)), Item("b", Extent(4, 5)), Item("c", Extent(1, 1))]
+var areas = []
+for (round in 0 ..< 2) {
+  for (i in 0 ..< items.size) { areas.add(items[i].extent.area()) }
+}
+items[1] = Item("d", Extent(10, 10))
+for (i in 0 ..< items.size) { areas.add(items[i].extent.area()) }
+print(areas)   // expect: [6, 20, 1, 6, 20, 1, 6, 100, 1]

@@ -6122,10 +6122,11 @@ void VM::run(int baseFrame) {
                                 ip += 4;
                                 NEXT();
                             }
-                        } else if (sp[-1].isRef() && sp[-1].refDepth == 0 && caches != nullptr) {
-                            // A field of a value where it is kept, an item of a list say (M6.6 part 4).
+                        } else if (sp[-1].isRef() && caches != nullptr) {
+                            // A field of a value where it is kept, an item of a list say (M6.6 part 4),
+                            // or a value held in one.
                             const Value r = sp[-1];
-                            const ObjClass* cls = refHolderClass(r);
+                            const ObjClass* cls = refClassOrNull(r);
                             const uint64_t seen = caches[FAST_U16(2)].load(std::memory_order_relaxed);
                             if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
                                 if (const uint8_t* at = refQuickly(r, false)) {
@@ -6137,7 +6138,7 @@ void VM::run(int baseFrame) {
                                             sp[-1] = read;
                                             NEXT();
                                         }
-                                        sp[-1] = Value::ref(r.as.obj, r.refIndex, static_cast<uint16_t>(r.refOffset + field.offset), 1);
+                                        sp[-1] = Value::ref(r.as.obj, r.refIndex, static_cast<uint16_t>(r.refOffset + field.offset), static_cast<uint8_t>(r.refDepth + 1));
                                     } else {
                                         sp[-1] = readPlainField(at + field.offset, field);
                                     }
@@ -6269,8 +6270,8 @@ void VM::run(int baseFrame) {
                             Value read;
                             if (refField(obj, name, read)) {
                                 sp_[-1] = read;
-                                if (caches != nullptr && obj.refDepth == 0) {
-                                    const ObjClass* cls = refHolderClass(obj);
+                                if (caches != nullptr) {
+                                    const ObjClass* cls = refClassOrNull(obj);
                                     const Value* found = cls != nullptr ? cls->declaredIndex.find(name) : nullptr;
                                     const int64_t at = found != nullptr ? found->as.i : -1;
                                     if (at >= 0 && at <= 0xFFFF)
@@ -8371,15 +8372,16 @@ void VM::run(int baseFrame) {
                                     const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
                                     if ((seen & 0x80) != 0) {
                                         // A field kept as its payload alone (M6.6 part 6).
-                                        out.setHeader(static_cast<ValueKind>(seen & 3));
-                                        std::memcpy(&out.as.i, at, 8);
+                                        uint64_t bits;
+                                        std::memcpy(&bits, at, 8);
+                                        out.setWhole(seen & 3, bits);
                                         sp = base + ip[2];
                                         ip += 10;
                                         NEXT();
                                     }
-                                    const Value field = *reinterpret_cast<const Value*>(at);
-                                    if (field.kind != ValueKind::Ref && field.kind != ValueKind::Undefined) {
-                                        out = field;
+                                    // Copied whole, in one store: see setWhole.
+                                    if (const ValueKind kind = reinterpret_cast<const Value*>(at)->kind; kind != ValueKind::Ref && kind != ValueKind::Undefined) {
+                                        std::memcpy(static_cast<void*>(&out), at, sizeof(Value));
                                         sp = base + ip[2];
                                         ip += 10;
                                         NEXT();
@@ -8405,8 +8407,8 @@ void VM::run(int baseFrame) {
                                     ip += 10;
                                     NEXT();
                                 }
-                            } else if (obj.isRef() && obj.refDepth == 0) {
-                                const ObjClass* cls = refHolderClass(obj);
+                            } else if (obj.isRef()) {
+                                const ObjClass* cls = refClassOrNull(obj);
                                 if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
                                     const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
                                     if (field.kind != ValueField::Nested) {

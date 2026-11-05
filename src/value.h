@@ -10,6 +10,9 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#if defined(__SSE2__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 #include <vector>
 
 namespace astra {
@@ -146,6 +149,17 @@ struct Value {
     void setHeader(ValueKind k) {
         const uint64_t header = static_cast<uint8_t>(k);
         std::memcpy(this, &header, sizeof header);
+    }
+    // The whole value written in one store: its first eight bytes `header`, the rest `bits`. What
+    // reads all sixteen soon after (a copy of the value) is handed them by the processor; after
+    // two stores of eight it would wait for both to be done (M6.7).
+    void setWhole(uint64_t header, uint64_t bits) {
+#if defined(__SSE2__) || defined(_M_X64)
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(this), _mm_set_epi64x(static_cast<long long>(bits), static_cast<long long>(header)));
+#else
+        std::memcpy(this, &header, sizeof header);
+        std::memcpy(&as, &bits, sizeof bits);
+#endif
     }
     void setInt(int64_t i) {
         setHeader(ValueKind::Int);
@@ -1294,6 +1308,14 @@ inline ObjClass* refHolderClass(const Value& v) {
     }
     if (v.as.obj->type == ObjType::Instance) return static_cast<const ObjInstance*>(v.as.obj)->cls->inlineFieldAt(v.refOffset)->cls;
     return static_cast<const ObjValue*>(v.as.obj)->cls;
+}
+
+// The class of what a Ref points at, at any depth, for the interpreter's quick ways: as
+// refHolderClass at depth 0, and as refClass deeper; null for a list that keeps no values now.
+inline const ObjClass* refClassOrNull(const Value& v) {
+    if (v.refDepth == 0) return refHolderClass(v);
+    if (v.as.obj->type == ObjType::List && static_cast<const ObjList*>(v.as.obj)->pack == nullptr) return nullptr;
+    return refClass(v);
 }
 
 // The class of a value kept in the value itself.
