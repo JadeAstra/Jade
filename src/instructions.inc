@@ -1105,7 +1105,20 @@ CASE(CopyLocal) {
     NEXT();
 }
 
+HAS_COLD(CheckLocal)
 CASE(CheckLocal) {
+    // A parameter of a type quickly told, here; any other in the rare part, below.
+    {
+        const Value& v = base[FAST_U16(0)];
+        const uint8_t type = ip[4];
+        if (type == kTypeInt ? v.isInt() : type == kTypeFloat ? v.isFloat() : type == kTypeBool ? v.isBool() : type == kTypeString && v.isString()) {
+            ip += 5;
+            NEXT();
+        }
+    }
+    GO_COLD(CheckLocal);
+}
+COLD(CheckLocal) {
     {
     if ((matchesType(base[FAST_U16(0)], ip[4], nullptr) || widenedByte(base[FAST_U16(0)], ip[4]))) {
         ip += 5;
@@ -1411,9 +1424,14 @@ CASE(Settle) {
 }
 }
 
+HAS_COLD(Call)
 CASE(Call) {
-    {
+    // A call of a closure that needs nothing done first, here; any other in the rare part, below.
     if (sp[-ip[0] - 1].isObjType(ObjType::Closure)) QUICK_CALL(asClosure(sp[-ip[0] - 1]), ip[0], 1)
+    GO_COLD(Call);
+}
+COLD(Call) {
+    {
     int argc = READ_U8();
     GC_SAFE_POINT();
     SAVE_IP();
@@ -1455,7 +1473,21 @@ CASE(CallSpread) {
     DONE();
 }
 }
+HAS_COLD(InvokeOwn)
 CASES(InvokeOwn, Invoke) {
+    // A method of an object's class, open to this code, called with nothing to do first, here;
+    // anything else in the rare part, below.
+    if (sp[-ip[2] - 1].isObjType(ObjType::Instance)) {
+        const ObjInstance* instance = asInstance(sp[-ip[2] - 1]);
+        const ObjString* name = asString(consts[FAST_U16(0)]);
+        if (((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn) &&
+            (instance->core == 0 || instance->core == coreId_)) {
+            if (const Value* method = instance->cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
+        }
+    }
+    GO_COLD(InvokeOwn);
+}
+COLD(InvokeOwn) {
     {
     // A method of the object's class, open to this code.
     if (sp[-ip[2] - 1].isObjType(ObjType::Instance)) {

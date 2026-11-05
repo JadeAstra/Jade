@@ -256,12 +256,15 @@ enum class Thrown : uint8_t {
 // registers from one to the next (preserve_none, musttail); built otherwise, they are the cases
 // of run()'s switch.
 #if defined(__clang__) && !defined(ASTRA_OP_COUNTS)
+#if __has_attribute(preserve_none)  // Clang 19 on
 #define ASTRA_TAIL_CALLS 1
 #define ASTRA_TAIL_FN __attribute__((preserve_none, no_stack_protector))
 #define ASTRA_TAIL_PARAMS                                                                                              \
     const uint8_t *ip, Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
         [[maybe_unused]] const Value *consts, [[maybe_unused]] std::atomic<uint64_t> *caches, [[maybe_unused]] const uint8_t *code
-#else
+#endif
+#endif
+#ifndef ASTRA_TAIL_CALLS
 #define ASTRA_TAIL_CALLS 0
 #endif
 
