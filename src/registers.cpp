@@ -943,13 +943,15 @@ void dump(const FunctionProto& f) {
 
 void translate(FunctionProto& f, const std::vector<int>& depths) {
     if (f.chooser || f.code.empty() || depths.size() != f.code.size()) return asItIs(f);
-    // The register code in full is made only with ASTRA_REGISTER_CODE set, until it runs faster
-    // than the stack code it is made from (docs/M6.7-plan.md); without it, only the joined
-    // instructions are made R instructions.
-    // ASTRA_REGISTER_CODE=plain makes every function keep its stack code, as one of more than 255
-    // slots does, for testing that.
+    // The register code in full, unless ASTRA_REGISTER_CODE says otherwise, for testing and timing
+    // the other ways (docs/M6.7-plan.md): =joined makes only the stack code's joined instructions R
+    // instructions, as the default was until part D, and =plain makes every function keep its stack
+    // code, as one of more than 255 slots does. Any other value is the default.
     static const char* const asked = std::getenv("ASTRA_REGISTER_CODE");
-    static const Mode mode = asked == nullptr ? Mode::Joined : std::string(asked) == "plain" ? Mode::Plain : Mode::Full;
+    static const Mode mode = asked == nullptr                    ? Mode::Full
+                             : std::string(asked) == "joined"    ? Mode::Joined
+                             : std::string(asked) == "plain"     ? Mode::Plain
+                                                                 : Mode::Full;
     try {
         Translator(f, depths, mode).translate();
         dump(f);
