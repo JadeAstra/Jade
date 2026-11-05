@@ -5146,9 +5146,34 @@ void VM::run(int baseFrame) {
             if (proto_->typeArgs != 0) frameDestination(frameCount_ - 1) = pendingDestination_;               \
             pendingDestination_ = Value::null();                                                              \
             LOAD_FRAME();                                                                                     \
-            continue;                                                                                         \
+            NEXT();                                                                                           \
         }                                                                                                     \
     }
+
+// Each instruction's case in the loop's switch, and with Clang or GCC its label as well, which
+// the dispatch table points to (D160). MSVC, which has no computed goto, goes by the switch alone.
+#if defined(__clang__) || defined(__GNUC__)
+#define ASTRA_GOTO_DISPATCH 1
+#define CASE(name) \
+    case Op::name: \
+    op_##name:
+#else
+#define ASTRA_GOTO_DISPATCH 0
+#define CASE(name) case Op::name:
+#endif
+
+// The end of an instruction that goes on to the next at once: with Clang or GCC, straight to the
+// next one's code from here, as the loop's head would; with MSVC, round the loop.
+#if ASTRA_GOTO_DISPATCH && !defined(ASTRA_OP_COUNTS)
+#define NEXT()                     \
+    do {                           \
+        sp_ = sp;                  \
+        frame->ip = ++ip;          \
+        goto* dispatch[ip[-1]];    \
+    } while (0)
+#else
+#define NEXT() continue
+#endif
 
 // Whether `v` is certainly of `type`, told at once for the types written most; false means only
 // that the full test (matchesType) has to be made.
@@ -5285,6 +5310,245 @@ void VM::run(int baseFrame) {
         return false;
     };
 
+#if ASTRA_GOTO_DISPATCH
+    // Where each instruction's code is (D160): its label, or the switch for any without one.
+    // Filled the first time any thread runs here, as a label's address is had only in this
+    // function.
+    static const void* dispatch[256];
+    static std::atomic<bool> dispatchMade{false};
+    if (!dispatchMade.load(std::memory_order_acquire)) {
+        static std::mutex filling;
+        std::lock_guard<std::mutex> hold(filling);
+        if (!dispatchMade.load(std::memory_order_relaxed)) {
+            for (const void*& at : dispatch) at = &&viaSwitch;
+#define ASTRA_DISPATCH_TO(name) dispatch[static_cast<size_t>(Op::name)] = &&op_##name;
+            ASTRA_DISPATCH_TO(Const)
+            ASTRA_DISPATCH_TO(Null)
+            ASTRA_DISPATCH_TO(True)
+            ASTRA_DISPATCH_TO(False)
+            ASTRA_DISPATCH_TO(Pop)
+            ASTRA_DISPATCH_TO(Dup)
+            ASTRA_DISPATCH_TO(Dup2)
+            ASTRA_DISPATCH_TO(GetLocal)
+            ASTRA_DISPATCH_TO(SetLocal)
+            ASTRA_DISPATCH_TO(GetGlobal)
+            ASTRA_DISPATCH_TO(SetGlobal)
+            ASTRA_DISPATCH_TO(DefineGlobal)
+            ASTRA_DISPATCH_TO(GetImplicit)
+            ASTRA_DISPATCH_TO(TryImplicit)
+            ASTRA_DISPATCH_TO(InvokeImplicit)
+            ASTRA_DISPATCH_TO(SetImplicit)
+            ASTRA_DISPATCH_TO(DefineTypedGlobal)
+            ASTRA_DISPATCH_TO(IndexN)
+            ASTRA_DISPATCH_TO(SetIndexN)
+            ASTRA_DISPATCH_TO(BundleValues)
+            ASTRA_DISPATCH_TO(MergeBundle)
+            ASTRA_DISPATCH_TO(DupN)
+            ASTRA_DISPATCH_TO(SettleEnum)
+            ASTRA_DISPATCH_TO(CheckParam)
+            ASTRA_DISPATCH_TO(CheckReturn)
+            ASTRA_DISPATCH_TO(CheckType)
+            ASTRA_DISPATCH_TO(GetUpvalue)
+            ASTRA_DISPATCH_TO(GetUpvalueChecked)
+            ASTRA_DISPATCH_TO(MakeType)
+            ASTRA_DISPATCH_TO(CachedType)
+            ASTRA_DISPATCH_TO(CacheType)
+            ASTRA_DISPATCH_TO(TypeCollection)
+            ASTRA_DISPATCH_TO(IsFull)
+            ASTRA_DISPATCH_TO(CastFull)
+            ASTRA_DISPATCH_TO(WithTypes)
+            ASTRA_DISPATCH_TO(FrameTypes)
+            ASTRA_DISPATCH_TO(TypeArg)
+            ASTRA_DISPATCH_TO(InstanceTypeArg)
+            ASTRA_DISPATCH_TO(SupertypeMaker)
+            ASTRA_DISPATCH_TO(CheckResult)
+            ASTRA_DISPATCH_TO(ClassOf)
+            ASTRA_DISPATCH_TO(ClassMeta)
+            ASTRA_DISPATCH_TO(AtomicField)
+            ASTRA_DISPATCH_TO(GetCaptured)
+            ASTRA_DISPATCH_TO(SetCaptured)
+            ASTRA_DISPATCH_TO(ObjectClass)
+            ASTRA_DISPATCH_TO(StoreClass)
+            ASTRA_DISPATCH_TO(Capture)
+            ASTRA_DISPATCH_TO(NewObject)
+            ASTRA_DISPATCH_TO(Unset)
+            ASTRA_DISPATCH_TO(SetUpvalue)
+            ASTRA_DISPATCH_TO(GetOwn)
+            ASTRA_DISPATCH_TO(GetProp)
+            ASTRA_DISPATCH_TO(GetOwnRef)
+            ASTRA_DISPATCH_TO(GetPropRef)
+            ASTRA_DISPATCH_TO(SetOwn)
+            ASTRA_DISPATCH_TO(SetProp)
+            ASTRA_DISPATCH_TO(GetIndexRef)
+            ASTRA_DISPATCH_TO(OwnLocal)
+            ASTRA_DISPATCH_TO(GetIndex)
+            ASTRA_DISPATCH_TO(SetIndex)
+            ASTRA_DISPATCH_TO(SetSuper)
+            ASTRA_DISPATCH_TO(GetSuper)
+            ASTRA_DISPATCH_TO(Add)
+            ASTRA_DISPATCH_TO(Sub)
+            ASTRA_DISPATCH_TO(Mul)
+            ASTRA_DISPATCH_TO(AddLocal)
+            ASTRA_DISPATCH_TO(SubLocal)
+            ASTRA_DISPATCH_TO(MulLocal)
+            ASTRA_DISPATCH_TO(DivLocal)
+            ASTRA_DISPATCH_TO(ModLocal)
+            ASTRA_DISPATCH_TO(LtLocal)
+            ASTRA_DISPATCH_TO(LeLocal)
+            ASTRA_DISPATCH_TO(GtLocal)
+            ASTRA_DISPATCH_TO(GeLocal)
+            ASTRA_DISPATCH_TO(EqLocal)
+            ASTRA_DISPATCH_TO(AddConst)
+            ASTRA_DISPATCH_TO(SubConst)
+            ASTRA_DISPATCH_TO(MulConst)
+            ASTRA_DISPATCH_TO(DivConst)
+            ASTRA_DISPATCH_TO(ModConst)
+            ASTRA_DISPATCH_TO(LtConst)
+            ASTRA_DISPATCH_TO(LeConst)
+            ASTRA_DISPATCH_TO(GtConst)
+            ASTRA_DISPATCH_TO(GeConst)
+            ASTRA_DISPATCH_TO(EqConst)
+            ASTRA_DISPATCH_TO(StoreLocal)
+            ASTRA_DISPATCH_TO(CopyLocal)
+            ASTRA_DISPATCH_TO(AddLocals)
+            ASTRA_DISPATCH_TO(SubLocals)
+            ASTRA_DISPATCH_TO(MulLocals)
+            ASTRA_DISPATCH_TO(DivLocals)
+            ASTRA_DISPATCH_TO(LtLocals)
+            ASTRA_DISPATCH_TO(LeLocals)
+            ASTRA_DISPATCH_TO(GtLocals)
+            ASTRA_DISPATCH_TO(GeLocals)
+            ASTRA_DISPATCH_TO(EqLocals)
+            ASTRA_DISPATCH_TO(CheckLocal)
+            ASTRA_DISPATCH_TO(Div)
+            ASTRA_DISPATCH_TO(Mod)
+            ASTRA_DISPATCH_TO(AddWrap)
+            ASTRA_DISPATCH_TO(SubWrap)
+            ASTRA_DISPATCH_TO(MulWrap)
+            ASTRA_DISPATCH_TO(Shl)
+            ASTRA_DISPATCH_TO(Shr)
+            ASTRA_DISPATCH_TO(Ushr)
+            ASTRA_DISPATCH_TO(BitAnd)
+            ASTRA_DISPATCH_TO(BitOr)
+            ASTRA_DISPATCH_TO(BitXor)
+            ASTRA_DISPATCH_TO(BitNot)
+            ASTRA_DISPATCH_TO(Neg)
+            ASTRA_DISPATCH_TO(Not)
+            ASTRA_DISPATCH_TO(Eq)
+            ASTRA_DISPATCH_TO(Identical)
+            ASTRA_DISPATCH_TO(Lt)
+            ASTRA_DISPATCH_TO(Le)
+            ASTRA_DISPATCH_TO(Gt)
+            ASTRA_DISPATCH_TO(Ge)
+            ASTRA_DISPATCH_TO(Is)
+            ASTRA_DISPATCH_TO(Jump)
+            ASTRA_DISPATCH_TO(Loop)
+            ASTRA_DISPATCH_TO(JumpIfFalse)
+            ASTRA_DISPATCH_TO(And)
+            ASTRA_DISPATCH_TO(Or)
+            ASTRA_DISPATCH_TO(JumpIfNull)
+            ASTRA_DISPATCH_TO(JumpIfNotNull)
+            ASTRA_DISPATCH_TO(AssertNotNull)
+            ASTRA_DISPATCH_TO(Swap)
+            ASTRA_DISPATCH_TO(PopUnder)
+            ASTRA_DISPATCH_TO(IsType)
+            ASTRA_DISPATCH_TO(Cast)
+            ASTRA_DISPATCH_TO(CastOrNull)
+            ASTRA_DISPATCH_TO(Settle)
+            ASTRA_DISPATCH_TO(Call)
+            ASTRA_DISPATCH_TO(CallNamed)
+            ASTRA_DISPATCH_TO(Spread)
+            ASTRA_DISPATCH_TO(CallSpread)
+            ASTRA_DISPATCH_TO(InvokeOwn)
+            ASTRA_DISPATCH_TO(Invoke)
+            ASTRA_DISPATCH_TO(InvokeOwnTrailing)
+            ASTRA_DISPATCH_TO(InvokeTrailing)
+            ASTRA_DISPATCH_TO(SuperInvoke)
+            ASTRA_DISPATCH_TO(SuperInvokeTrailing)
+            ASTRA_DISPATCH_TO(SuperInit)
+            ASTRA_DISPATCH_TO(Closure)
+            ASTRA_DISPATCH_TO(MakeForms)
+            ASTRA_DISPATCH_TO(MethodForms)
+            ASTRA_DISPATCH_TO(StaticForms)
+            ASTRA_DISPATCH_TO(GetIndexOr)
+            ASTRA_DISPATCH_TO(CloseUpvalue)
+            ASTRA_DISPATCH_TO(CallOn)
+            ASTRA_DISPATCH_TO(ImplicitFirst)
+            ASTRA_DISPATCH_TO(TailLoop)
+            ASTRA_DISPATCH_TO(ReturnInit)
+            ASTRA_DISPATCH_TO(Return)
+            ASTRA_DISPATCH_TO(Class)
+            ASTRA_DISPATCH_TO(Inherit)
+            ASTRA_DISPATCH_TO(ClassInit)
+            ASTRA_DISPATCH_TO(EnsureClassInit)
+            ASTRA_DISPATCH_TO(MissingArg)
+            ASTRA_DISPATCH_TO(DataField)
+            ASTRA_DISPATCH_TO(Extend)
+            ASTRA_DISPATCH_TO(Bridge)
+            ASTRA_DISPATCH_TO(BridgeMethod)
+            ASTRA_DISPATCH_TO(Lazy)
+            ASTRA_DISPATCH_TO(UnstableKey)
+            ASTRA_DISPATCH_TO(Component)
+            ASTRA_DISPATCH_TO(IterNextPair)
+            ASTRA_DISPATCH_TO(MarkInterface)
+            ASTRA_DISPATCH_TO(Extension)
+            ASTRA_DISPATCH_TO(MarkAbstract)
+            ASTRA_DISPATCH_TO(ClassOrigin)
+            ASTRA_DISPATCH_TO(MarkValue)
+            ASTRA_DISPATCH_TO(Numeric)
+            ASTRA_DISPATCH_TO(WithRefResult)
+            ASTRA_DISPATCH_TO(FieldDestination)
+            ASTRA_DISPATCH_TO(PlaceLocal)
+            ASTRA_DISPATCH_TO(PlaceUpvalue)
+            ASTRA_DISPATCH_TO(PlaceGlobal)
+            ASTRA_DISPATCH_TO(PlaceField)
+            ASTRA_DISPATCH_TO(PlaceIndex)
+            ASTRA_DISPATCH_TO(InsertNew)
+            ASTRA_DISPATCH_TO(AddNew)
+            ASTRA_DISPATCH_TO(WithDestinationAt)
+            ASTRA_DISPATCH_TO(WithFrameDestination)
+            ASTRA_DISPATCH_TO(CheckOverride)
+            ASTRA_DISPATCH_TO(Require)
+            ASTRA_DISPATCH_TO(ClassNumber)
+            ASTRA_DISPATCH_TO(MemberAccess)
+            ASTRA_DISPATCH_TO(StaticAccess)
+            ASTRA_DISPATCH_TO(FinishClass)
+            ASTRA_DISPATCH_TO(Getter)
+            ASTRA_DISPATCH_TO(Setter)
+            ASTRA_DISPATCH_TO(PendingEnum)
+            ASTRA_DISPATCH_TO(EnumNext)
+            ASTRA_DISPATCH_TO(EnumEntry)
+            ASTRA_DISPATCH_TO(EnumSeal)
+            ASTRA_DISPATCH_TO(StaticGetter)
+            ASTRA_DISPATCH_TO(StaticSetter)
+            ASTRA_DISPATCH_TO(StaticField)
+            ASTRA_DISPATCH_TO(DeclareField)
+            ASTRA_DISPATCH_TO(FieldInit)
+            ASTRA_DISPATCH_TO(Method)
+            ASTRA_DISPATCH_TO(StaticMethod)
+            ASTRA_DISPATCH_TO(BuildList)
+            ASTRA_DISPATCH_TO(TagCollection)
+            ASTRA_DISPATCH_TO(BuildMap)
+            ASTRA_DISPATCH_TO(BuildString)
+            ASTRA_DISPATCH_TO(Range)
+            ASTRA_DISPATCH_TO(FromEnd)
+            ASTRA_DISPATCH_TO(IterInit)
+            ASTRA_DISPATCH_TO(RangeLoop)
+            ASTRA_DISPATCH_TO(RangeNext)
+            ASTRA_DISPATCH_TO(DefaultArg)
+            ASTRA_DISPATCH_TO(IterNextRef)
+            ASTRA_DISPATCH_TO(IterNext)
+            ASTRA_DISPATCH_TO(TryBegin)
+            ASTRA_DISPATCH_TO(TryEnd)
+            ASTRA_DISPATCH_TO(Throw)
+            ASTRA_DISPATCH_TO(Import)
+            ASTRA_DISPATCH_TO(Count_)
+#undef ASTRA_DISPATCH_TO
+            dispatchMade.store(true, std::memory_order_release);
+        }
+    }
+#endif
+
     for (;;) {
         try {
             LOAD_FRAME();
@@ -5300,44 +5564,50 @@ void VM::run(int baseFrame) {
 #endif
                 sp_ = sp;
                 frame->ip = ++ip;
+#if ASTRA_GOTO_DISPATCH
+                // Straight to the instruction's code, through the table (D160); the compiler copies
+                // the jump to the end of each instruction, where each is predicted apart.
+                goto* dispatch[ip[-1]];
+            viaSwitch:
+#endif
                 switch (static_cast<Op>(ip[-1])) {
-                    case Op::Const:
+                    CASE(Const)
                         *sp++ = consts[READ_U16()];
-                        continue;
-                    case Op::Null:
+                        NEXT();
+                    CASE(Null)
                         *sp++ = Value::null();
-                        continue;
-                    case Op::True:
+                        NEXT();
+                    CASE(True)
                         (sp++)->setBool(true);
-                        continue;
-                    case Op::False:
+                        NEXT();
+                    CASE(False)
                         (sp++)->setBool(false);
-                        continue;
-                    case Op::Pop:
+                        NEXT();
+                    CASE(Pop)
                         sp--;
-                        continue;
-                    case Op::Dup:
+                        NEXT();
+                    CASE(Dup)
                         sp[0] = sp[-1];
                         sp++;
-                        continue;
-                    case Op::Dup2:
+                        NEXT();
+                    CASE(Dup2)
                         sp_[0] = sp_[-2];
                         sp_[1] = sp_[-1];
                         sp_ += 2;
                         break;
 
-                    case Op::GetLocal:
+                    CASE(GetLocal)
                         *sp++ = base[READ_U16()];
-                        continue;
-                    case Op::SetLocal:
+                        NEXT();
+                    CASE(SetLocal)
                         base[READ_U16()] = sp[-1];
-                        continue;
+                        NEXT();
 
-                    case Op::GetGlobal: {
+                    CASE(GetGlobal) {
                         if (const Value global = globals_[static_cast<size_t>(FAST_U16(0))]; global.kind != ValueKind::Undefined) {
                             *sp++ = global;
                             ip += 2;
-                            continue;
+                            NEXT();
                         }
                         int index = READ_U16();
                         Value value = globals_[static_cast<size_t>(index)];
@@ -5348,7 +5618,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = value;
                         break;
                     }
-                    case Op::SetGlobal: {
+                    CASE(SetGlobal) {
                         int index = READ_U16();
                         if (coreId_ != 0) throw notOwned("the variable '" + program_->globalNames[static_cast<size_t>(index)] + "' is shared");
                         Value& slot = globals_[static_cast<size_t>(index)];
@@ -5361,7 +5631,7 @@ void VM::run(int baseFrame) {
                         slot = own(sp_[-1]);
                         break;
                     }
-                    case Op::DefineGlobal: {
+                    CASE(DefineGlobal) {
                         size_t index = static_cast<size_t>(READ_U16());
                         if (coreId_ != 0) throw notOwned("'" + program_->globalNames[index] + "' is declared for the whole program");
                         globals_[index] = own(*--sp_);
@@ -5369,7 +5639,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::GetImplicit: {
+                    CASE(GetImplicit) {
                         ObjString* name = asString(consts[READ_U16()]);
                         size_t index = static_cast<size_t>(READ_U16());
                         Value receiver = implicitReceiver(frame, base, name);
@@ -5407,7 +5677,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = getProperty(receiver, name);  // a method, bound to the object
                         break;
                     }
-                    case Op::TryImplicit: {
+                    CASE(TryImplicit) {
                         ObjString* name = asString(consts[READ_U16()]);
                         int target = READ_I32();
                         Value receiver = implicitReceiver(frame, base, name);
@@ -5436,7 +5706,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = getProperty(receiver, name);
                         break;
                     }
-                    case Op::InvokeImplicit: {
+                    CASE(InvokeImplicit) {
                         ObjString* name = asString(consts[READ_U16()]);
                         size_t index = static_cast<size_t>(READ_U16());
                         int argc = READ_U8();
@@ -5455,7 +5725,7 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::SetImplicit: {
+                    CASE(SetImplicit) {
                         ObjString* name = asString(consts[READ_U16()]);
                         size_t index = static_cast<size_t>(READ_U16());
                         Value receiver = implicitReceiver(frame, base, name);
@@ -5495,7 +5765,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::DefineTypedGlobal: {
+                    CASE(DefineTypedGlobal) {
                         size_t index = static_cast<size_t>(READ_U16());
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
@@ -5507,8 +5777,8 @@ void VM::run(int baseFrame) {
                         globalTypes_[index] = TypeConstraint{type, cls};
                         break;
                     }
-                    case Op::IndexN:
-                    case Op::SetIndexN: {
+                    CASE(IndexN)
+                    CASE(SetIndexN) {
                         // `grid[x, y]` and `grid[x, y] = v` (D133): only a class's op [] takes several.
                         const bool set = static_cast<Op>(ip[-1]) == Op::SetIndexN;
                         const int count = READ_U8();
@@ -5521,24 +5791,24 @@ void VM::run(int baseFrame) {
                         LOAD_FRAME();
                         break;
                     }
-                    case Op::BundleValues:
+                    CASE(BundleValues)
                         bundleValues(READ_U8());
                         break;
-                    case Op::MergeBundle:
+                    CASE(MergeBundle)
                         mergeBundles();
                         break;
-                    case Op::DupN: {
+                    CASE(DupN) {
                         const int count = READ_U8();
                         for (int k = 0; k < count; k++) sp_[k] = sp_[k - count];
                         sp_ += count;
                         break;
                     }
-                    case Op::SettleEnum: {
+                    CASE(SettleEnum) {
                         ObjClass* cls = popTypeClass(kTypeInstance);
                         if (sp_[-1].kind == ValueKind::EnumName) sp_[-1] = settleEnumName(sp_[-1], cls);
                         break;
                     }
-                    case Op::CheckParam: {
+                    CASE(CheckParam) {
                         ObjString* parameter = asString(consts[READ_U16()]);
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
@@ -5550,10 +5820,10 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::CheckReturn: {
+                    CASE(CheckReturn) {
                         if (FITS_AT_ONCE(sp[-1], ip[0])) {
                             ip++;
-                            continue;
+                            NEXT();
                         }
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
@@ -5562,7 +5832,7 @@ void VM::run(int baseFrame) {
                                                ", but returned " + typeName(sp_[-1]));
                         break;
                     }
-                    case Op::CheckType: {
+                    CASE(CheckType) {
                         ObjString* variable = asString(consts[READ_U16()]);
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
@@ -5570,10 +5840,10 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::GetUpvalue:
+                    CASE(GetUpvalue)
                         *sp_++ = *frame->closure->upvalues[static_cast<size_t>(READ_U16())]->location;
                         break;
-                    case Op::GetUpvalueChecked: {
+                    CASE(GetUpvalueChecked) {
                         int index = READ_U16();
                         ObjString* name = asString(consts[READ_U16()]);
                         Value value = *frame->closure->upvalues[static_cast<size_t>(index)]->location;
@@ -5582,25 +5852,25 @@ void VM::run(int baseFrame) {
                         *sp_++ = value;
                         break;
                     }
-                    case Op::MakeType:
-                    case Op::CachedType:
-                    case Op::CacheType:
-                    case Op::TypeCollection:
-                    case Op::IsFull:
-                    case Op::CastFull:
-                    case Op::WithTypes:
-                    case Op::FrameTypes:
-                    case Op::TypeArg:
-                    case Op::InstanceTypeArg:
-                    case Op::SupertypeMaker:
-                    case Op::CheckResult:
-                    case Op::ClassOf:
-                    case Op::ClassMeta:
-                    case Op::AtomicField:
+                    CASE(MakeType)
+                    CASE(CachedType)
+                    CASE(CacheType)
+                    CASE(TypeCollection)
+                    CASE(IsFull)
+                    CASE(CastFull)
+                    CASE(WithTypes)
+                    CASE(FrameTypes)
+                    CASE(TypeArg)
+                    CASE(InstanceTypeArg)
+                    CASE(SupertypeMaker)
+                    CASE(CheckResult)
+                    CASE(ClassOf)
+                    CASE(ClassMeta)
+                    CASE(AtomicField)
                         ip = typeInstruction(static_cast<Op>(ip[-1]), ip, frame);
                         break;
 
-                    case Op::GetCaptured: {
+                    CASE(GetCaptured) {
                         const ObjUpvalue* cell = capturedOf(base[0], READ_U16());
                         ObjString* name = asString(consts[READ_U16()]);
                         const Value value = *cell->location;
@@ -5609,7 +5879,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = value;
                         break;
                     }
-                    case Op::SetCaptured: {
+                    CASE(SetCaptured) {
                         ObjUpvalue* cell = capturedOf(base[0], READ_U16());
                         // As SetUpvalue: a variable of the code around a section is nobody's to change there.
                         if (cell->core != coreId_) throw notOwned("a variable from outside the section is shared");
@@ -5617,7 +5887,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::ObjectClass: {
+                    CASE(ObjectClass) {
                         const int global = READ_U16();
                         const int target = READ_I32();
                         if (global != 0xFFFF) {
@@ -5629,14 +5899,14 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::StoreClass: {
+                    CASE(StoreClass) {
                         const int global = READ_U16();
                         // A core of a parallel section makes its own each time: the program's
                         // globals are not its to change.
                         if (global != 0xFFFF && coreId_ == 0) globals_[static_cast<size_t>(global)] = sp_[-1];
                         break;
                     }
-                    case Op::Capture: {
+                    CASE(Capture) {
                         const int index = READ_U16();
                         const int kind = READ_U8();
                         ObjUpvalue* cell = nullptr;
@@ -5659,7 +5929,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::object(cell);
                         break;
                     }
-                    case Op::NewObject: {
+                    CASE(NewObject) {
                         const int count = READ_U8();
                         const Value made = sp_[-count - 1];
                         if (!made.isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid anonymous object");
@@ -5672,10 +5942,10 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Unset:
+                    CASE(Unset)
                         *sp_++ = Value::undefined();
                         break;
-                    case Op::SetUpvalue: {
+                    CASE(SetUpvalue) {
                         ObjUpvalue* upvalue = frame->closure->upvalues[static_cast<size_t>(READ_U16())];
                         // A variable of the code around the section is every core's to read, and nobody's to change.
                         if (upvalue->core != coreId_) throw notOwned("a variable from outside the section is shared");
@@ -5685,10 +5955,10 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::GetOwn:
-                    case Op::GetProp:
-                    case Op::GetOwnRef:
-                    case Op::GetPropRef: {
+                    CASE(GetOwn)
+                    CASE(GetProp)
+                    CASE(GetOwnRef)
+                    CASE(GetPropRef) {
                         // Where this place has found the field before, in an object of the same
                         // layout, it is there again (M6.5 part 4): nothing else about it has
                         // changed, the right to use it included. A value kept inside the object
@@ -5705,7 +5975,7 @@ void VM::run(int baseFrame) {
                                         sp[-1].kind = static_cast<ValueKind>(seen & 3);
                                         std::memcpy(&sp[-1].as.i, reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF), 8);
                                         ip += 4;
-                                        continue;
+                                        NEXT();
                                     }
                                 }
                                 const Value field = *reinterpret_cast<const Value*>(reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
@@ -5721,12 +5991,12 @@ void VM::run(int baseFrame) {
                                         Value read;
                                         ip = readThrough(refBytes(field), &whole, next, consts, read);
                                         sp[-1] = read;
-                                        continue;
+                                        NEXT();
                                     }
                                 } else if (field.kind != ValueKind::Undefined) {
                                     sp[-1] = field;
                                     ip += 4;
-                                    continue;
+                                    NEXT();
                                 }
                             }
                         } else if (sp[-1].isObjType(ObjType::Value) && caches != nullptr) {
@@ -5743,14 +6013,14 @@ void VM::run(int baseFrame) {
                                         Value read;
                                         ip = readThrough(box->data() + field.offset, &field, ip + 4, consts, read);
                                         sp[-1] = read;
-                                        continue;
+                                        NEXT();
                                     }
                                     sp[-1] = Value::ref(sp[-1].as.obj, 0, static_cast<uint16_t>(field.offset), 1);
                                 } else {
                                     sp[-1] = readPlainField(box->data() + field.offset, field);
                                 }
                                 ip += 4;
-                                continue;
+                                NEXT();
                             }
                         } else if (sp[-1].isSmall() && caches != nullptr) {
                             // A field of a value kept in the value itself (M6.6 part 5).
@@ -5761,7 +6031,7 @@ void VM::run(int baseFrame) {
                                 const Value read = readPlainField(smallBytes(sp[-1]) + field.offset, field);
                                 sp[-1] = read;
                                 ip += 4;
-                                continue;
+                                NEXT();
                             }
                         } else if (sp[-1].isRef() && sp[-1].refDepth == 0 && caches != nullptr) {
                             // A field of a value where it is kept, an item of a list say (M6.6 part 4).
@@ -5776,14 +6046,14 @@ void VM::run(int baseFrame) {
                                             Value read;
                                             ip = readThrough(at + field.offset, &field, ip + 4, consts, read);
                                             sp[-1] = read;
-                                            continue;
+                                            NEXT();
                                         }
                                         sp[-1] = Value::ref(r.as.obj, r.refIndex, static_cast<uint16_t>(r.refOffset + field.offset), 1);
                                     } else {
                                         sp[-1] = readPlainField(at + field.offset, field);
                                     }
                                     ip += 4;
-                                    continue;
+                                    NEXT();
                                 }
                             }
                         }
@@ -5893,8 +6163,8 @@ void VM::run(int baseFrame) {
                         sp_[-1] = getProperty(obj, name);
                         break;
                     }
-                    case Op::SetOwn:
-                    case Op::SetProp: {
+                    CASE(SetOwn)
+                    CASE(SetProp) {
                         // As for GetProp: a field found before, which takes any value or one of
                         // a type that is quickly told (never one of a class type). A val (the
                         // low bit) is given its value here only while it has none, as its
@@ -5919,7 +6189,7 @@ void VM::run(int baseFrame) {
                                         sp[-2] = value;
                                         sp--;
                                         ip += 4;
-                                        continue;
+                                        NEXT();
                                     }
                                 }
                             } else if ((seen & 2) != 0) {
@@ -5936,7 +6206,7 @@ void VM::run(int baseFrame) {
                                         sp[-2] = value;
                                         sp--;
                                         ip += 4;
-                                        continue;
+                                        NEXT();
                                     }
                                 }
                             } else if (static_cast<uint32_t>(seen >> 32) == instance->shape && instance->core == coreId_ &&
@@ -5950,7 +6220,7 @@ void VM::run(int baseFrame) {
                                     sp[-2] = value;
                                     sp--;
                                     ip += 4;
-                                    continue;
+                                    NEXT();
                                 }
                             }
                         } else if (sp[-2].isRef() && sp[-2].refDepth == 0 && caches != nullptr) {
@@ -5974,7 +6244,7 @@ void VM::run(int baseFrame) {
                                     sp[-2] = value;
                                     sp--;
                                     ip += 4;
-                                    continue;
+                                    NEXT();
                                 }
                             }
                         }
@@ -6035,7 +6305,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::GetIndexRef: {
+                    CASE(GetIndexRef) {
                         if (sp_[-2].isObjType(ObjType::List) && sp_[-1].isInt()) {
                             ObjList* list = asList(sp_[-2]);
                             size_t i;
@@ -6049,12 +6319,12 @@ void VM::run(int baseFrame) {
                         }
                         goto getIndex;
                     }
-                    case Op::OwnLocal: {
+                    CASE(OwnLocal) {
                         Value& slot = base[READ_U16()];
                         if (slot.isRef()) slot = ownRef(slot);
                         break;
                     }
-                    case Op::GetIndex:
+                    CASE(GetIndex)
                     getIndex: {
                         Value index = sp_[-1], obj = sp_[-2];
                         if (classOf(obj) != nullptr) {
@@ -6103,7 +6373,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::SetIndex: {
+                    CASE(SetIndex) {
                         Value value = sp_[-1], index = sp_[-2], obj = sp_[-3];
                         if (obj.isObjType(ObjType::List) && index.isInt() && obj.as.obj->core == coreId_ && obj.as.obj->frozen == 0 &&
                             static_cast<uint64_t>(index.as.i) < asList(obj)->size()) {
@@ -6135,7 +6405,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::SetSuper: {
+                    CASE(SetSuper) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const Value super = sp_[-2];
                         CHECK_ACCESS(sp_[-3], 1, false, true);
@@ -6160,7 +6430,7 @@ void VM::run(int baseFrame) {
                         sp_[-1] = value;
                         break;
                     }
-                    case Op::GetSuper: {
+                    CASE(GetSuper) {
                         ObjString* name = asString(consts[READ_U16()]);
                         Value super = *--sp_;
                         CHECK_ACCESS(sp_[-1], 1, false, true);
@@ -6192,140 +6462,140 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Add:
-                        FAST_ARITHMETIC(sp[-2], sp[-1], +, addOverflows, sp--; continue)
+                    CASE(Add)
+                        FAST_ARITHMETIC(sp[-2], sp[-1], +, addOverflows, sp--; NEXT())
                     plainAdd:
                         ARITHMETIC(Op::Add, addOverflows, x + y)
-                    case Op::Sub:
-                        FAST_ARITHMETIC(sp[-2], sp[-1], -, subOverflows, sp--; continue)
+                    CASE(Sub)
+                        FAST_ARITHMETIC(sp[-2], sp[-1], -, subOverflows, sp--; NEXT())
                     plainSub:
                         ARITHMETIC(Op::Sub, subOverflows, x - y)
-                    case Op::Mul:
-                        FAST_ARITHMETIC(sp[-2], sp[-1], *, mulOverflows, sp--; continue)
+                    CASE(Mul)
+                        FAST_ARITHMETIC(sp[-2], sp[-1], *, mulOverflows, sp--; NEXT())
                     plainMul:
                         ARITHMETIC(Op::Mul, mulOverflows, x * y)
-                    case Op::AddLocal:
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], +, addOverflows, ip += 2; continue)
+                    CASE(AddLocal)
+                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], +, addOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(base[READ_U16()], addOverflows, x + y, plainAdd)
-                    case Op::SubLocal:
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], -, subOverflows, ip += 2; continue)
+                    CASE(SubLocal)
+                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], -, subOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(base[READ_U16()], subOverflows, x - y, plainSub)
-                    case Op::MulLocal:
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], *, mulOverflows, ip += 2; continue)
+                    CASE(MulLocal)
+                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], *, mulOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(base[READ_U16()], mulOverflows, x * y, plainMul)
-                    case Op::DivLocal:
-                        FAST_FLOAT(sp[-1], base[FAST_U16(0)], /, ip += 2; continue)
+                    CASE(DivLocal)
+                        FAST_FLOAT(sp[-1], base[FAST_U16(0)], /, ip += 2; NEXT())
                         JOINED_FLOAT(base[READ_U16()], x / y, plainDiv)
-                    case Op::ModLocal: JOINED_FLOAT(base[READ_U16()], std::fmod(x, y), plainMod)
-                    case Op::LtLocal:
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <, ip += 2; continue)
+                    CASE(ModLocal) JOINED_FLOAT(base[READ_U16()], std::fmod(x, y), plainMod)
+                    CASE(LtLocal)
+                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <, ip += 2; NEXT())
                         JOINED_COMPARISON(base[READ_U16()], <, plainLt)
-                    case Op::LeLocal:
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <=, ip += 2; continue)
+                    CASE(LeLocal)
+                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <=, ip += 2; NEXT())
                         JOINED_COMPARISON(base[READ_U16()], <=, plainLe)
-                    case Op::GtLocal:
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >, ip += 2; continue)
+                    CASE(GtLocal)
+                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >, ip += 2; NEXT())
                         JOINED_COMPARISON(base[READ_U16()], >, plainGt)
-                    case Op::GeLocal:
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >=, ip += 2; continue)
+                    CASE(GeLocal)
+                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >=, ip += 2; NEXT())
                         JOINED_COMPARISON(base[READ_U16()], >=, plainGe)
-                    case Op::EqLocal:
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], ==, ip += 2; continue)
+                    CASE(EqLocal)
+                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], ==, ip += 2; NEXT())
                         JOINED_COMPARISON(base[READ_U16()], ==, plainEq)
-                    case Op::AddConst:
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], +, addOverflows, ip += 2; continue)
+                    CASE(AddConst)
+                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], +, addOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(consts[READ_U16()], addOverflows, x + y, plainAdd)
-                    case Op::SubConst:
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], -, subOverflows, ip += 2; continue)
+                    CASE(SubConst)
+                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], -, subOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(consts[READ_U16()], subOverflows, x - y, plainSub)
-                    case Op::MulConst:
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], *, mulOverflows, ip += 2; continue)
+                    CASE(MulConst)
+                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], *, mulOverflows, ip += 2; NEXT())
                         JOINED_ARITHMETIC(consts[READ_U16()], mulOverflows, x * y, plainMul)
-                    case Op::DivConst:
-                        FAST_FLOAT(sp[-1], consts[FAST_U16(0)], /, ip += 2; continue)
+                    CASE(DivConst)
+                        FAST_FLOAT(sp[-1], consts[FAST_U16(0)], /, ip += 2; NEXT())
                         JOINED_FLOAT(consts[READ_U16()], x / y, plainDiv)
-                    case Op::ModConst: JOINED_FLOAT(consts[READ_U16()], std::fmod(x, y), plainMod)
-                    case Op::LtConst:
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <, ip += 2; continue)
+                    CASE(ModConst) JOINED_FLOAT(consts[READ_U16()], std::fmod(x, y), plainMod)
+                    CASE(LtConst)
+                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <, ip += 2; NEXT())
                         JOINED_COMPARISON(consts[READ_U16()], <, plainLt)
-                    case Op::LeConst:
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <=, ip += 2; continue)
+                    CASE(LeConst)
+                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <=, ip += 2; NEXT())
                         JOINED_COMPARISON(consts[READ_U16()], <=, plainLe)
-                    case Op::GtConst:
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >, ip += 2; continue)
+                    CASE(GtConst)
+                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >, ip += 2; NEXT())
                         JOINED_COMPARISON(consts[READ_U16()], >, plainGt)
-                    case Op::GeConst:
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >=, ip += 2; continue)
+                    CASE(GeConst)
+                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >=, ip += 2; NEXT())
                         JOINED_COMPARISON(consts[READ_U16()], >=, plainGe)
-                    case Op::EqConst:
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], ==, ip += 2; continue)
+                    CASE(EqConst)
+                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], ==, ip += 2; NEXT())
                         JOINED_COMPARISON(consts[READ_U16()], ==, plainEq)
-                    case Op::StoreLocal:
+                    CASE(StoreLocal)
                         base[READ_U16()] = *--sp;
-                        continue;
-                    case Op::CopyLocal:
+                        NEXT();
+                    CASE(CopyLocal)
                         base[FAST_U16(2)] = base[FAST_U16(0)];
                         ip += 4;
-                        continue;
-                    case Op::AddLocals:
+                        NEXT();
+                    CASE(AddLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], +, addOverflows, sp++; ip += 4; continue)
+                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], +, addOverflows, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainAdd;
-                    case Op::SubLocals:
+                    CASE(SubLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], -, subOverflows, sp++; ip += 4; continue)
+                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], -, subOverflows, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainSub;
-                    case Op::MulLocals:
+                    CASE(MulLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], *, mulOverflows, sp++; ip += 4; continue)
+                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], *, mulOverflows, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainMul;
-                    case Op::DivLocals:
+                    CASE(DivLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_FLOAT(sp[0], base[FAST_U16(2)], /, sp++; ip += 4; continue)
+                        FAST_FLOAT(sp[0], base[FAST_U16(2)], /, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainDiv;
-                    case Op::LtLocals:
+                    CASE(LtLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <, sp++; ip += 4; continue)
+                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainLt;
-                    case Op::LeLocals:
+                    CASE(LeLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <=, sp++; ip += 4; continue)
+                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <=, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainLe;
-                    case Op::GtLocals:
+                    CASE(GtLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >, sp++; ip += 4; continue)
+                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainGt;
-                    case Op::GeLocals:
+                    CASE(GeLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >=, sp++; ip += 4; continue)
+                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >=, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainGe;
-                    case Op::EqLocals:
+                    CASE(EqLocals)
                         sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], ==, sp++; ip += 4; continue)
+                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], ==, sp++; ip += 4; NEXT())
                         *sp_++ = base[READ_U16()];
                         *sp_++ = base[READ_U16()];
                         goto plainEq;
 
-                    case Op::CheckLocal: {
+                    CASE(CheckLocal) {
                         if ((matchesType(base[FAST_U16(0)], ip[4], nullptr) || widenedByte(base[FAST_U16(0)], ip[4]))) {
                             ip += 5;
-                            continue;
+                            NEXT();
                         }
                         const int slot = READ_U16();
                         ObjString* parameter = asString(consts[READ_U16()]);
@@ -6337,7 +6607,7 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::Div:
+                    CASE(Div)
                     plainDiv: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
@@ -6355,7 +6625,7 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::Mod:
+                    CASE(Mod)
                     plainMod: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
@@ -6372,9 +6642,9 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::AddWrap:
-                    case Op::SubWrap:
-                    case Op::MulWrap: {
+                    CASE(AddWrap)
+                    CASE(SubWrap)
+                    CASE(MulWrap) {
                         // `&+`, `&-` and `&*`: an int sum, difference or product that wraps around (D27).
                         const Op op = static_cast<Op>(ip[-1]);
                         const Value b = sp_[-1], a = sp_[-2];
@@ -6386,21 +6656,21 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Shl:
-                    case Op::Shr:
-                    case Op::Ushr:
+                    CASE(Shl)
+                    CASE(Shr)
+                    CASE(Ushr)
                         SAVE_IP();
                         if (shift(static_cast<Op>(ip[-1]))) LOAD_FRAME();
                         break;
 
-                    case Op::BitAnd:
-                    case Op::BitOr:
-                    case Op::BitXor:
+                    CASE(BitAnd)
+                    CASE(BitOr)
+                    CASE(BitXor)
                         SAVE_IP();
                         if (bitwise(static_cast<Op>(ip[-1]))) LOAD_FRAME();
                         break;
 
-                    case Op::BitNot: {
+                    CASE(BitNot) {
                         Value a = sp_[-1];
                         if (a.isInt() || a.isByte()) {
                             sp_[-1] = Value::integer(~a.as.i);
@@ -6414,7 +6684,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Neg: {
+                    CASE(Neg) {
                         Value a = sp_[-1];
                         if (a.isInt()) {
                             if (a.as.i == INT64_MIN) throw overflowError(Op::Sub, 0, a.as.i);  // (D27)
@@ -6432,11 +6702,11 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::Not:
+                    CASE(Not)
                         sp[-1].setBool(!sp[-1].truthy());
-                        continue;
+                        NEXT();
 
-                    case Op::Eq:
+                    CASE(Eq)
                     plainEq: {
                         Value b = sp_[-1], a = sp_[-2];
                         if (const ObjClass* k = classOf(a); k != nullptr && k->methods.find(names.opEq) != nullptr) {
@@ -6458,7 +6728,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Identical: {
+                    CASE(Identical) {
                         // The very same object. Numbers, booleans and strings have no identity
                         // apart from their value.
                         if (sp_[-1].isRef() || sp_[-2].isRef() || sp_[-1].isSmall() || sp_[-2].isSmall()) {
@@ -6478,24 +6748,24 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Lt:
-                        FAST_COMPARISON(sp[-2], sp[-1], <, sp--; continue)
+                    CASE(Lt)
+                        FAST_COMPARISON(sp[-2], sp[-1], <, sp--; NEXT())
                     plainLt:
                         COMPARISON(Op::Lt, <)
-                    case Op::Le:
-                        FAST_COMPARISON(sp[-2], sp[-1], <=, sp--; continue)
+                    CASE(Le)
+                        FAST_COMPARISON(sp[-2], sp[-1], <=, sp--; NEXT())
                     plainLe:
                         COMPARISON(Op::Le, <=)
-                    case Op::Gt:
-                        FAST_COMPARISON(sp[-2], sp[-1], >, sp--; continue)
+                    CASE(Gt)
+                        FAST_COMPARISON(sp[-2], sp[-1], >, sp--; NEXT())
                     plainGt:
                         COMPARISON(Op::Gt, >)
-                    case Op::Ge:
-                        FAST_COMPARISON(sp[-2], sp[-1], >=, sp--; continue)
+                    CASE(Ge)
+                        FAST_COMPARISON(sp[-2], sp[-1], >=, sp--; NEXT())
                     plainGe:
                         COMPARISON(Op::Ge, >=)
 
-                    case Op::Is: {
+                    CASE(Is) {
                         Value type = *--sp_;
                         if (!type.isObjType(ObjType::Class)) throw runtimeError(Thrown::ClassCastException, "right operand of 'is' must be a class");
                         Value value = sp_[-1];
@@ -6504,48 +6774,48 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Jump:
+                    CASE(Jump)
                         ip = code + READ_I32();
                         break;
-                    case Op::Loop:
+                    CASE(Loop)
                         ip = code + READ_I32();
                         GC_SAFE_POINT();
                         break;
-                    case Op::JumpIfFalse: {
+                    CASE(JumpIfFalse) {
                         int target = READ_I32();
                         if (!(*--sp).truthy()) ip = code + target;
-                        continue;
+                        NEXT();
                     }
-                    case Op::And: {
+                    CASE(And) {
                         int target = READ_I32();
                         if (!sp[-1].truthy()) ip = code + target;
                         else sp--;
-                        continue;
+                        NEXT();
                     }
-                    case Op::Or: {
+                    CASE(Or) {
                         int target = READ_I32();
                         if (sp[-1].truthy()) ip = code + target;
                         else sp--;
-                        continue;
+                        NEXT();
                     }
 
-                    case Op::JumpIfNull: {
+                    CASE(JumpIfNull) {
                         int target = READ_I32();
                         if (sp_[-1].isNull()) ip = code + target;
                         break;
                     }
-                    case Op::JumpIfNotNull: {
+                    CASE(JumpIfNotNull) {
                         int target = READ_I32();
                         if (!sp_[-1].isNull()) ip = code + target;
                         break;
                     }
-                    case Op::AssertNotNull:
+                    CASE(AssertNotNull)
                         if (sp_[-1].isNull()) throw runtimeError(Thrown::NullPointerException, "'!!' was used on a value that is null");
                         break;
-                    case Op::Swap:
+                    CASE(Swap)
                         std::swap(sp[-1], sp[-2]);
-                        continue;
-                    case Op::PopUnder: {
+                        NEXT();
+                    CASE(PopUnder) {
                         int count = READ_U16();
                         Value* first = sp_ - 1 - count;
                         closeUpvalues(first);
@@ -6553,13 +6823,13 @@ void VM::run(int baseFrame) {
                         sp_ = first + 1;
                         break;
                     }
-                    case Op::IsType: {
+                    CASE(IsType) {
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
                         sp_[-1] = Value::boolean(matchesType(sp_[-1], type, cls));
                         break;
                     }
-                    case Op::Cast: {
+                    CASE(Cast) {
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
                         if (!matchesType(sp_[-1], type, cls))
@@ -6567,13 +6837,13 @@ void VM::run(int baseFrame) {
                                                declaredTypeText(type, cls));
                         break;
                     }
-                    case Op::CastOrNull: {
+                    CASE(CastOrNull) {
                         uint8_t type = READ_U8();
                         ObjClass* cls = popTypeClass(type);
                         if (!matchesType(sp_[-1], type, cls)) sp_[-1] = Value::null();
                         break;
                     }
-                    case Op::Settle: {
+                    CASE(Settle) {
                         Value top = sp_[-1];
                         Value* target = base + READ_U16();
                         for (Value* p = sp_ - 1; p < target; p++) *p = Value::null();
@@ -6582,7 +6852,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Call: {
+                    CASE(Call) {
                         if (sp[-ip[0] - 1].isObjType(ObjType::Closure)) QUICK_CALL(asClosure(sp[-ip[0] - 1]), ip[0], 1)
                         int argc = READ_U8();
                         GC_SAFE_POINT();
@@ -6590,7 +6860,7 @@ void VM::run(int baseFrame) {
                         if (callValue(sp_[-argc - 1], argc)) LOAD_FRAME();
                         break;
                     }
-                    case Op::CallNamed: {
+                    CASE(CallNamed) {
                         int positional = READ_U8();
                         int named = READ_U8();
                         GC_SAFE_POINT();
@@ -6598,7 +6868,7 @@ void VM::run(int baseFrame) {
                         if (callNamed(positional, named)) LOAD_FRAME();
                         break;
                     }
-                    case Op::Spread: {
+                    CASE(Spread) {
                         Value added = *--sp_;
                         if (!added.isObjType(ObjType::List))
                             throw runtimeError(Thrown::IllegalArgumentException, "'*' in a call needs a list to spread, not a value of type " + typeName(added));
@@ -6608,15 +6878,15 @@ void VM::run(int baseFrame) {
                         listInsert(list, list->size(), items.data(), items.size());
                         break;
                     }
-                    case Op::CallSpread: {
+                    CASE(CallSpread) {
                         int named = READ_U8();
                         GC_SAFE_POINT();
                         SAVE_IP();
                         if (callSpread(named)) LOAD_FRAME();
                         break;
                     }
-                    case Op::InvokeOwn:
-                    case Op::Invoke: {
+                    CASE(InvokeOwn)
+                    CASE(Invoke) {
                         // A method of the object's class, open to this code.
                         if (sp[-ip[2] - 1].isObjType(ObjType::Instance)) {
                             const ObjInstance* instance = asInstance(sp[-ip[2] - 1]);
@@ -6647,8 +6917,8 @@ void VM::run(int baseFrame) {
                         if (invoke(name, argc)) LOAD_FRAME();
                         break;
                     }
-                    case Op::InvokeOwnTrailing:
-                    case Op::InvokeTrailing: {
+                    CASE(InvokeOwnTrailing)
+                    CASE(InvokeTrailing) {
                         ObjString* name = asString(consts[READ_U16()]);
                         int argc = READ_U8();
                         GC_SAFE_POINT();
@@ -6657,8 +6927,8 @@ void VM::run(int baseFrame) {
                         if (invoke(name, argc, true)) LOAD_FRAME();
                         break;
                     }
-                    case Op::SuperInvoke:
-                    case Op::SuperInvokeTrailing: {
+                    CASE(SuperInvoke)
+                    CASE(SuperInvokeTrailing) {
                         const bool trailing = static_cast<Op>(ip[-1]) == Op::SuperInvokeTrailing;
                         ObjString* name = asString(consts[READ_U16()]);
                         int argc = READ_U8();
@@ -6679,7 +6949,7 @@ void VM::run(int baseFrame) {
                         LOAD_FRAME();
                         break;
                     }
-                    case Op::SuperInit: {
+                    CASE(SuperInit) {
                         // From a generated initializer: run the superclass's init, if it has one.
                         int argc = READ_U8();
                         GC_SAFE_POINT();
@@ -6703,7 +6973,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Closure: {
+                    CASE(Closure) {
                         const FunctionProto* proto = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
                         ObjClosure* closure = alloc<ObjClosure>(proto, proto->upvalues.size());
                         if ((proto->typeArgs & kTypeArgsKept) != 0) closure->typeArgs = frameTypeArgs(frame - frames_);
@@ -6717,7 +6987,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::object(closure);
                         break;
                     }
-                    case Op::MakeForms: {
+                    CASE(MakeForms) {
                         const FunctionProto* chooser = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
                         const int count = READ_U8();
                         ObjForms* set = alloc<ObjForms>(chooser);
@@ -6730,7 +7000,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::object(set);
                         break;
                     }
-                    case Op::MethodForms: {
+                    CASE(MethodForms) {
                         const FunctionProto* chooser = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
                         const int count = READ_U8();
                         if (!sp_[-count - 1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
@@ -6765,7 +7035,7 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::StaticForms: {
+                    CASE(StaticForms) {
                         const FunctionProto* chooser = frame->closure->proto->protos[static_cast<size_t>(READ_U16())];
                         const int count = READ_U8();
                         if (!sp_[-count - 1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
@@ -6781,7 +7051,7 @@ void VM::run(int baseFrame) {
                         sp_ -= count;
                         break;
                     }
-                    case Op::GetIndexOr: {
+                    CASE(GetIndexOr) {
                         const Value start = sp_[-1], key = sp_[-2], map = sp_[-3];
                         if (!map.isObjType(ObjType::Map))
                             throw runtimeError(Thrown::IllegalArgumentException, "only a map's index takes a default, not that of a value of type " + typeName(map));
@@ -6791,11 +7061,11 @@ void VM::run(int baseFrame) {
                         sp_[-1] = found != nullptr ? *found : start;
                         break;
                     }
-                    case Op::CloseUpvalue:
+                    CASE(CloseUpvalue)
                         closeUpvalues(sp_ - 1);
                         sp_--;
                         break;
-                    case Op::CallOn: {
+                    CASE(CallOn) {
                         const int argc = READ_U8();
                         Value* const at = sp_ - argc - 2;
                         const Value callee = at[0];
@@ -6813,14 +7083,14 @@ void VM::run(int baseFrame) {
                         LOAD_FRAME();
                         break;
                     }
-                    case Op::ImplicitFirst: {
+                    CASE(ImplicitFirst) {
                         const int slot = READ_U16();
                         const int flags = READ_U8();
                         if (implicitFirstCount_ < 8) implicitFirst_[implicitFirstCount_++] = base[slot];
                         if ((flags & 1) != 0) implicitOnly_ = true;
                         break;
                     }
-                    case Op::TailLoop: {
+                    CASE(TailLoop) {
                         // The function calls itself as its last step (D29): what a closure kept of
                         // this round keeps its values, the arguments become the parameters, and it
                         // starts again in this frame.
@@ -6835,7 +7105,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::ReturnInit:
+                    CASE(ReturnInit)
                         // The object is made once its own class's initializer has returned.
                         if (base[0].isObjType(ObjType::Instance) && asInstance(base[0])->cls->init == frame->closure)
                             asInstance(base[0])->constructing = false;
@@ -6855,7 +7125,7 @@ void VM::run(int baseFrame) {
                             checkRequiredFields(asInstance(base[0]), frame->closure);
                         }
                         [[fallthrough]];
-                    case Op::Return: {
+                    CASE(Return) {
                         // Back to the caller, where there is nothing else to see to: no variable
                         // of the frame captured, no catch block of its own left, and its result
                         // wanted (M6.5 part 4).
@@ -6867,7 +7137,7 @@ void VM::run(int baseFrame) {
                             sp = top + 1;
                             frameCount_--;
                             LOAD_FRAME();
-                            continue;
+                            NEXT();
                         }
                         Value result = sp_[-1];
                         if (result.isRef()) [[unlikely]] result = returnedRef(result, frameCount_ - 1);
@@ -6882,13 +7152,13 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Class: {
+                    CASE(Class) {
                         ObjString* name = asString(consts[READ_U16()]);
                         *sp_++ = Value::object(alloc<ObjClass>(name));
                         account(256);  // rough cost of the method tables
                         break;
                     }
-                    case Op::Inherit: {
+                    CASE(Inherit) {
                         const int count = READ_U8();
                         Value sub = sp_[-1];
                         Value* types = sp_ - 1 - count;
@@ -6969,7 +7239,7 @@ void VM::run(int baseFrame) {
                         sp_ = types + 1;
                         break;
                     }
-                    case Op::ClassInit: {
+                    CASE(ClassInit) {
                         Value init = sp_[-1], cls = sp_[-2];
                         if (!cls.isObjType(ObjType::Class) || !init.isObjType(ObjType::Closure) || asClosure(init)->proto->arity != 0)
                             throw runtimeError(Thrown::InternalError, "invalid class declaration");
@@ -6977,23 +7247,23 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::EnsureClassInit:
+                    CASE(EnsureClassInit)
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         SAVE_IP();
                         ensureClassInit(asClass(sp_[-1]));
                         break;
-                    case Op::MissingArg: {
+                    CASE(MissingArg) {
                         ObjString* parameter = asString(consts[READ_U16()]);
                         throw runtimeError(Thrown::IllegalArgumentException, frame->closure->proto->name + "() is missing argument '" + parameter->utf8() + "'");
                     }
-                    case Op::DataField: {
+                    CASE(DataField) {
                         ObjString* name = asString(consts[READ_U16()]);
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->isData = true;
                         if (name->length > 0) asClass(sp_[-1])->components.push_back(name);  // "": a data class of no values
                         break;
                     }
-                    case Op::Extend: {
+                    CASE(Extend) {
                         // extend Person : Weighed (D33): the class fits the interface, and the
                         // ones above it, and has what they bring that it has not.
                         if (!sp_[-1].isObjType(ObjType::Class) || !asClass(sp_[-1])->isInterface)
@@ -7042,7 +7312,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Bridge: {
+                    CASE(Bridge) {
                         ObjString* name = asString(consts[READ_U16()]);
                         if (sp_[-2].isObjType(ObjType::TypeInfo) && extending_ != nullptr) {
                             extending_->getters.set(name, sp_[-1]);  // of a built-in type (G30)
@@ -7054,7 +7324,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::BridgeMethod: {
+                    CASE(BridgeMethod) {
                         // A fun in an extend (D186): the interface's method, for a type that has none.
                         ObjString* name = asString(consts[READ_U16()]);
                         if (sp_[-2].isObjType(ObjType::TypeInfo) && extending_ != nullptr) {
@@ -7066,24 +7336,24 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Lazy: {
+                    CASE(Lazy) {
                         if (!sp_[-1].isObjType(ObjType::Closure)) throw runtimeError(Thrown::InternalError, "invalid lazy value");
                         ObjLazy* lazy = alloc<ObjLazy>();
                         lazy->init = asClosure(sp_[-1]);
                         sp_[-1] = Value::lazy(lazy);
                         break;
                     }
-                    case Op::UnstableKey:
+                    CASE(UnstableKey)
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->unstableKey = true;
                         break;
-                    case Op::Component: {
+                    CASE(Component) {
                         const size_t index = READ_U8();
                         SAVE_IP();
                         sp_[-1] = componentOf(sp_[-1], index);
                         break;
                     }
-                    case Op::IterNextPair: {
+                    CASE(IterNextPair) {
                         const int slot = READ_U16();
                         const int target = READ_I32();
                         const Value iterator = base[slot];
@@ -7118,11 +7388,11 @@ void VM::run(int baseFrame) {
                         sp_[-1] = componentOf(item, 1);
                         break;
                     }
-                    case Op::MarkInterface:
+                    CASE(MarkInterface)
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->isInterface = true;
                         break;
-                    case Op::Extension: {
+                    CASE(Extension) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const int type = READ_U8();
                         Value function = *--sp_;
@@ -7157,24 +7427,24 @@ void VM::run(int baseFrame) {
                         hasExtensions_ = true;
                         break;
                     }
-                    case Op::MarkAbstract:
+                    CASE(MarkAbstract)
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->isAbstract = true;
                         break;
-                    case Op::ClassOrigin: {
+                    CASE(ClassOrigin) {
                         ObjString* origin = asString(consts[READ_U16()]);
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->origin = origin;
                         break;
                     }
-                    case Op::MarkValue: {
+                    CASE(MarkValue) {
                         const bool fromHeader = READ_U8() != 0;
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->isValue = true;
                         asClass(sp_[-1])->madeFromHeader = fromHeader;
                         break;
                     }
-                    case Op::Numeric: {
+                    CASE(Numeric) {
                         const uint8_t which = READ_U8();
                         const Value a = sp_[-1];
                         if (which == static_cast<uint8_t>(NumericOp::ToInt) && a.isFloat() && a.as.d > -9.2e18 && a.as.d < 9.2e18) {
@@ -7188,10 +7458,10 @@ void VM::run(int baseFrame) {
                         sp_[-1] = result;
                         break;
                     }
-                    case Op::WithRefResult:
+                    CASE(WithRefResult)
                         pendingDestination_ = Value::undefined();  // taken by a function that gives a value
                         break;
-                    case Op::FieldDestination: {
+                    CASE(FieldDestination) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const Value obj = sp_[-1];
                         Value place = Value::null();
@@ -7203,29 +7473,29 @@ void VM::run(int baseFrame) {
                         sp_[-1] = place;
                         break;
                     }
-                    case Op::PlaceLocal:
-                    case Op::PlaceUpvalue:
-                    case Op::PlaceGlobal:
-                    case Op::PlaceField:
-                    case Op::PlaceIndex:
-                    case Op::InsertNew:
+                    CASE(PlaceLocal)
+                    CASE(PlaceUpvalue)
+                    CASE(PlaceGlobal)
+                    CASE(PlaceField)
+                    CASE(PlaceIndex)
+                    CASE(InsertNew)
                         ip = placeInstruction(static_cast<Op>(ip[-1]), ip, frame);
                         break;
-                    case Op::AddNew: {
+                    CASE(AddNew) {
                         const int argc = READ_U8();
                         const int target = READ_I32();
                         if (addNew(argc)) ip = code + target;
                         break;
                     }
-                    case Op::WithDestinationAt:
+                    CASE(WithDestinationAt)
                         pendingDestination_ = sp_[-READ_U8() - 1];
                         break;
-                    case Op::WithFrameDestination:
+                    CASE(WithFrameDestination)
                         pendingDestination_ = (frame->closure->proto->typeArgs & kTakesDestination) != 0 ? frameDestination(frame - frames_)
                                                                                                        : Value::null();
                         break;
 
-                    case Op::CheckOverride: {
+                    CASE(CheckOverride) {
                         ObjString* name = asString(consts[READ_U16()]);
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         const int flags = READ_U8();
@@ -7268,13 +7538,13 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::Require: {
+                    CASE(Require) {
                         ObjString* name = asString(consts[READ_U16()]);
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         asClass(sp_[-1])->required.emplace_back(name, asClass(sp_[-1]));
                         break;
                     }
-                    case Op::ClassNumber: {
+                    CASE(ClassNumber) {
                         const int number = READ_U16();
                         const int library = READ_U16();
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
@@ -7282,7 +7552,7 @@ void VM::run(int baseFrame) {
                         asClass(sp_[-1])->library = library;
                         break;
                     }
-                    case Op::MemberAccess: {
+                    CASE(MemberAccess) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const int id = READ_U16();
                         const int flags = READ_U8();
@@ -7312,7 +7582,7 @@ void VM::run(int baseFrame) {
                         declareAccess(cls, cls->accessMarks, name, id, kind, write);
                         break;
                     }
-                    case Op::StaticAccess: {
+                    CASE(StaticAccess) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const int id = READ_U16();
                         const int flags = READ_U8();
@@ -7322,7 +7592,7 @@ void VM::run(int baseFrame) {
                         declareAccess(asClass(sp_[-1]), asClass(sp_[-1])->staticAccessMarks, name, id, kind, (flags & kAccessOfSetter) != 0);
                         break;
                     }
-                    case Op::FinishClass: {
+                    CASE(FinishClass) {
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
                         ObjClass* cls = asClass(sp_[-1]);
                         // Whether the class's own code may use every member its objects have:
@@ -7353,8 +7623,8 @@ void VM::run(int baseFrame) {
                         cls->required.clear();
                         break;
                     }
-                    case Op::Getter:
-                    case Op::Setter: {
+                    CASE(Getter)
+                    CASE(Setter) {
                         bool isGetter = static_cast<Op>(ip[-1]) == Op::Getter;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value accessor = sp_[-1], cls = sp_[-2];
@@ -7366,11 +7636,11 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::PendingEnum:
+                    CASE(PendingEnum)
                         *sp_++ = Value::enumName(asString(consts[READ_U16()]));
                         pendingEnums_++;
                         break;
-                    case Op::EnumNext: {
+                    CASE(EnumNext) {
                         ObjString* name = asString(consts[READ_U16()]);
                         const int ordinal = READ_U16();
                         if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid enum declaration");
@@ -7379,8 +7649,8 @@ void VM::run(int baseFrame) {
                         asClass(sp_[-1])->nextOrdinal = ordinal;
                         break;
                     }
-                    case Op::EnumEntry:
-                    case Op::EnumSeal: {
+                    CASE(EnumEntry)
+                    CASE(EnumSeal) {
                         const bool isEntry = static_cast<Op>(ip[-1]) == Op::EnumEntry;
                         ObjString* name = isEntry ? asString(consts[READ_U16()]) : nullptr;
                         const int ordinal = isEntry ? READ_U16() : 0;
@@ -7421,8 +7691,8 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::StaticGetter:
-                    case Op::StaticSetter: {
+                    CASE(StaticGetter)
+                    CASE(StaticSetter) {
                         bool isGetter = static_cast<Op>(ip[-1]) == Op::StaticGetter;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value accessor = sp_[-1], cls = sp_[-2];
@@ -7433,7 +7703,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::StaticField: {
+                    CASE(StaticField) {
                         ObjString* name = asString(consts[READ_U16()]);
                         int flags = READ_U16();
                         FieldDecl field;
@@ -7457,7 +7727,7 @@ void VM::run(int baseFrame) {
                         sp_ -= classTyped ? 2 : 1;
                         break;
                     }
-                    case Op::DeclareField: {
+                    CASE(DeclareField) {
                         ObjString* name = asString(consts[READ_U16()]);
                         int flags = READ_U16();
                         FieldDecl field;
@@ -7499,7 +7769,7 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::FieldInit: {
+                    CASE(FieldInit) {
                         Value closure = sp_[-1], cls = sp_[-2];
                         if (!cls.isObjType(ObjType::Class) || !closure.isObjType(ObjType::Closure) ||
                             asClosure(closure)->proto->arity != 0)
@@ -7508,8 +7778,8 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::Method:
-                    case Op::StaticMethod: {
+                    CASE(Method)
+                    CASE(StaticMethod) {
                         bool isStatic = static_cast<Op>(ip[-1]) == Op::StaticMethod;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value method = sp_[-1], cls = sp_[-2];
@@ -7525,7 +7795,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::BuildList: {
+                    CASE(BuildList) {
                         int count = READ_U16();
                         ObjList* list = alloc<ObjList>();
                         ownAll(sp_ - count, sp_);
@@ -7535,7 +7805,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::object(list);
                         break;
                     }
-                    case Op::TagCollection: {
+                    CASE(TagCollection) {
                         // A list or map literal of a type that is made once (M6.6 part 1): given
                         // it, and on past the code that makes it, the first time only.
                         const uint64_t kept = caches != nullptr ? caches[FAST_U16(0)].load(std::memory_order_acquire) : 0;
@@ -7555,7 +7825,7 @@ void VM::run(int baseFrame) {
                         ip = code + FAST_I32(2);
                         break;
                     }
-                    case Op::BuildMap: {
+                    CASE(BuildMap) {
                         int count = READ_U16();
                         ObjMap* map = alloc<ObjMap>();
                         ownAll(sp_ - 2 * count, sp_);
@@ -7566,7 +7836,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::object(map);
                         break;
                     }
-                    case Op::BuildString: {
+                    CASE(BuildString) {
                         int count = READ_U16();
                         SAVE_IP();
                         // At the width of the widest part (D20), room made for all of it at once.
@@ -7597,7 +7867,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = str(std::move(text));
                         break;
                     }
-                    case Op::Range: {
+                    CASE(Range) {
                         const int flags = READ_U8();
                         int64_t step = 1;
                         if (flags & 4) {
@@ -7617,7 +7887,7 @@ void VM::run(int baseFrame) {
                         sp_--;
                         break;
                     }
-                    case Op::FromEnd: {
+                    CASE(FromEnd) {
                         // `^k`: k from the end; ^1 is the last (D146).
                         const Value k = sp_[-1];
                         if (!k.isInt()) throw runtimeError(Thrown::ClassCastException, "^ takes an int, not " + typeName(k));
@@ -7627,11 +7897,11 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::IterInit:
+                    CASE(IterInit)
                         SAVE_IP();
                         sp_[-1] = makeIterator(sp_[-1]);
                         break;
-                    case Op::RangeLoop: {
+                    CASE(RangeLoop) {
                         const int flags = READ_U8();
                         int64_t step = 1;
                         if (flags & 4) {
@@ -7648,7 +7918,7 @@ void VM::run(int baseFrame) {
                         *sp_++ = Value::integer(step);
                         break;
                     }
-                    case Op::RangeNext: {
+                    CASE(RangeNext) {
                         Value* const counted = base + READ_U16();  // the next value, how many are left, the step
                         const int target = READ_I32();
                         if (counted[1].as.i > 0) {
@@ -7660,13 +7930,13 @@ void VM::run(int baseFrame) {
                         }
                         break;
                     }
-                    case Op::DefaultArg: {
+                    CASE(DefaultArg) {
                         int slot = READ_U16();
                         int target = READ_I32();
                         if (base[slot].kind != ValueKind::Undefined) ip = code + target;
                         break;
                     }
-                    case Op::IterNextRef: {
+                    CASE(IterNextRef) {
                         // As IterNext, but an item of a list of values is the item itself,
                         // where it is (M6.6 part 4).
                         const Value iterator = base[FAST_U16(0)];
@@ -7687,7 +7957,7 @@ void VM::run(int baseFrame) {
                         }
                         goto iterNext;
                     }
-                    case Op::IterNext:
+                    CASE(IterNext)
                     iterNext: {
                         // The next item of a list or a range.
                         if (base[FAST_U16(0)].isObjType(ObjType::Iterator)) {
@@ -7703,7 +7973,7 @@ void VM::run(int baseFrame) {
                                 } else {
                                     ip = code + FAST_I32(2);
                                 }
-                                continue;
+                                NEXT();
                             }
                             if (source->type == ObjType::List) {
                                 const ObjList* list = static_cast<const ObjList*>(source);
@@ -7715,7 +7985,7 @@ void VM::run(int baseFrame) {
                                     } else {
                                         ip = code + FAST_I32(2);
                                     }
-                                    continue;
+                                    NEXT();
                                 }
                                 // Packed ints, floats, bools or narrow items, null or not (G69): read from
                                 // the block, but where a parallel section's band says what may be read.
@@ -7726,7 +7996,7 @@ void VM::run(int baseFrame) {
                                     } else {
                                         ip = code + FAST_I32(2);
                                     }
-                                    continue;
+                                    NEXT();
                                 }
                             }
                         }
@@ -7740,15 +8010,15 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::TryBegin: {
+                    CASE(TryBegin) {
                         int target = READ_I32();
                         handlers_.push_back(Handler{frameCount_ - 1, sp_, code + target});
                         break;
                     }
-                    case Op::TryEnd:
+                    CASE(TryEnd)
                         if (!handlers_.empty() && handlers_.back().frameIndex == frameCount_ - 1) handlers_.pop_back();
                         break;
-                    case Op::Throw: {
+                    CASE(Throw) {
                         // Only a Throwable is thrown (D35).
                         const Value value = sp_[-1];
                         const ObjClass* throwable = thrownClasses_[static_cast<size_t>(Thrown::Throwable)];
@@ -7759,7 +8029,7 @@ void VM::run(int baseFrame) {
                         throw thrown;
                     }
 
-                    case Op::Import: {
+                    CASE(Import) {
                         size_t index = static_cast<size_t>(READ_U16());
                         if (loaded_[index]) {
                             *sp_++ = Value::null();
@@ -7776,7 +8046,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
 
-                    case Op::Count_:
+                    CASE(Count_)
                         throw runtimeError(Thrown::InternalError, "invalid instruction");
                 }
                 sp = sp_;

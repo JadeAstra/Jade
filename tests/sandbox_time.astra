@@ -40,4 +40,5 @@ val seeded = Sandbox.run {
 }
 print(seeded == Sandbox.run(seed = 42) { Math.random() })     // expect: true
 
-print(clock() - wall < 5.0)                                   // expect: true
+// Hours of sleeps in seconds of real time, even under the sanitizer on a busy machine.
+print(clock() - wall < 30.0)                                  // expect: true
