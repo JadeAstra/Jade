@@ -137,13 +137,17 @@ interface Iterable<T> {
 // Something to close when it is done with (D113): a stream, a socket. A class of someone
 // else's that has a close() is fitted to it with extend (D33).
 interface AutoCloseable {
-  // Lets go of what it holds; `use` calls it when its block ends.
-  fun close()
+  // Lets go of what it holds; `use` calls it when its block ends. A class's own may throw less,
+  // or nothing checked, as the streams' and the pools' do; `use` throws what that one throws
+  // (M6.7, 8.5i).
+  fun close() throws IOException
 }
 
 // Runs the block on this and closes it afterwards, however the block ends: at its end, by a
 // return, or by an exception (D113). An error from close() after one from the block is set
 // aside for the block's, which goes on (G40), as Java has it. Copied in where it is called (D59).
+// What it may throw is what the block throws and what this object's own close() throws, which
+// the checker finds from its type at each call (8.5i).
 inline fun <T : AutoCloseable, R> T.use(block : (T) -> R) : R {
   var failed : Throwable? = null
   try {
@@ -154,7 +158,8 @@ inline fun <T : AutoCloseable, R> T.use(block : (T) -> R) : R {
   } finally {
     val first = failed
     if (first == null) {
-      this.close()
+      // What this close() throws, the checker counts where use is called, from the object's type.
+      try { this.close() } catch (e : Throwable) { __rethrow(e) }
     } else {
       try { this.close() } catch (c : Throwable) { first.addSuppressed(c) }
     }

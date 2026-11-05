@@ -1,0 +1,24 @@
+// use { } and a close() that throws a checked exception (M6.7, 8.5i): AutoCloseable.close may
+// throw an IOException, and use throws what the object's own close() throws.
+class Loud(val name : string) : AutoCloseable {
+  override fun close() throws IOException { throw IOException("cannot close $name") }
+}
+
+try {
+  Loud("a").use { print("using", it.name) }                 // expect: using a
+} catch (e : IOException) {
+  print(e.message)                                          // expect: cannot close a
+}
+
+// An error from the block comes first; close's is set aside in it.
+try {
+  Loud("b").use { error("the block failed") }
+} catch (e : IllegalStateException) {
+  print(e.message, e.suppressed.map { it.message })         // expect: the block failed ["cannot close b"]
+}
+
+// A class whose close() throws nothing: no try needed.
+class Quiet : AutoCloseable {
+  override fun close() { print("closed quietly") }
+}
+Quiet().use { }                                             // expect: closed quietly

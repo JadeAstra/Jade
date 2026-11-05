@@ -1455,11 +1455,11 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <div class="entry" id="AutoCloseable"><code class="sig">interface AutoCloseable</code><a class="anchor" href="#AutoCloseable">#</a>
 <p>Something to close when it is done with: a stream, a socket. A class of someone else's that has a close() is fitted to it with extend.</p>
 </div>
-<div class="entry member" id="AutoCloseable.close"><code class="sig">fun close()</code><a class="anchor" href="#AutoCloseable.close">#</a>
-<p>Lets go of what it holds; <code>use</code> calls it when its block ends.</p>
+<div class="entry member" id="AutoCloseable.close"><code class="sig">fun close() throws IOException</code><a class="anchor" href="#AutoCloseable.close">#</a>
+<p>Lets go of what it holds; <code>use</code> calls it when its block ends. A class's own may throw less, or nothing checked, as the streams' and the pools' do; <code>use</code> throws what that one throws (M6.7, 8.5i).</p>
 </div>
 <div class="entry" id="T.use"><code class="sig">inline fun &lt;T : AutoCloseable, R&gt; T.use(block : (T) -&gt; R) : R</code><a class="anchor" href="#T.use">#</a>
-<p>Runs the block on this and closes it afterwards, however the block ends: at its end, by a return, or by an exception. An error from close() after one from the block is set aside for the block's, which goes on, as Java has it. Copied in where it is called.</p>
+<p>Runs the block on this and closes it afterwards, however the block ends: at its end, by a return, or by an exception. An error from close() after one from the block is set aside for the block's, which goes on, as Java has it. Copied in where it is called. What it may throw is what the block throws and what this object's own close() throws, which the checker finds from its type at each call (8.5i).</p>
 </div>
 <div class="entry" id="TODO"><code class="sig">fun TODO(reason : string = &quot;&quot;) : nothing</code><a class="anchor" href="#TODO">#</a>
 <p>Throws a NotImplementedError: for what is not written yet, as Kotlin's TODO().</p>

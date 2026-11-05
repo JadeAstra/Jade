@@ -1,0 +1,16 @@
+// use { } is checked against the close() of the object's own type (M6.7, 8.5i): what it may
+// throw is what the block throws and what that close() throws.
+class Quiet : AutoCloseable {
+  override fun close() { }
+}
+class Loud : AutoCloseable {
+  override fun close() throws IOException { throw IOException("cannot close") }
+}
+
+fun quiet() throws TimeoutException { Quiet().use { } }
+fun pool() throws TimeoutException { ThreadPool(1).use { } }
+fun loud() throws TimeoutException { Loud().use { } }                // check: 'loud' may throw IOException, which its throws does not name: catch it, or add it (D54)
+fun loudNamed() throws IOException { Loud().use { } }
+fun <T : AutoCloseable> anyOne(x : T) throws TimeoutException { x.use { } }   // check: 'anyOne' may throw IOException, which its throws does not name: catch it, or add it (D54)
+fun theInterface(x : AutoCloseable) throws TimeoutException { x.use { } }    // check: 'theInterface' may throw IOException, which its throws does not name: catch it, or add it (D54)
+fun direct(x : AutoCloseable) throws TimeoutException { x.close() }          // check: 'direct' may throw IOException, which its throws does not name: catch it, or add it (D54)

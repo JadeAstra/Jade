@@ -7238,6 +7238,7 @@ struct Checker::Impl {
         if (f->decl != nullptr && f->decl->isSuspend) noteWait(at, f->name, givesToSequence(f));
         if (f->decl != nullptr && f->decl->isInline && silent == 0) noteInlineCall(f, b, at);
         noteCallThrows(f, nullptr, args, &b, at);
+        if (receiver != nullptr && f->name == "use" && f->isExtension && f->unit != nullptr && f->unit->prelude) noteCloseOf(*receiver, at);
         // Named arguments and a lambda after the call, given to a C++ function, are put where the
         // form chosen has them; a parameter between them that is not given gets a null, which
         // the C++ takes as not given (`names.join(", ") { }`, `items.add(item = x)`).
@@ -7865,6 +7866,25 @@ struct Checker::Impl {
             scopedLambdas.insert(lambda);
             root->second.scope->scoped.push_back(lambda);
         }
+    }
+
+    // `x.use { }` (8.5i): what the close() of x's own type throws, which the standard library's
+    // use, written for any AutoCloseable, leaves out of its own. Through a type parameter or the
+    // interface itself, AutoCloseable.close's: an IOException.
+    void noteCloseOf(const Type& receiver, const Node& at) {
+        Type plain = withNull(receiver, false);
+        if (plain.kind == Type::TypeParam && plain.bound) plain = *plain.bound;
+        FuncInfo* close = nullptr;
+        if (plain.kind == Type::Class) {
+            for (FuncInfo* m : lookupMember(plain, "close", true).methods)
+                if (m->params.empty()) close = m;
+        }
+        if (close == nullptr) {
+            // A type fitted to AutoCloseable with extend (D33).
+            for (FuncInfo* m : fitMethods(plain, "close"))
+                if (m->params.empty()) close = m;
+        }
+        if (close != nullptr) noteCallThrows(close, nullptr, noArgs(), nullptr, at);
     }
 
     void noteFunctionValue(FuncInfo* f, const Node& at) {

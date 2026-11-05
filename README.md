@@ -1904,7 +1904,10 @@ ends: `Path(p).reader().use { it.readText() }` (D113). Where the block fails and
 fails too, the block's error goes on, with `close()`'s set aside in its `suppressed`. It is for an `AutoCloseable`, which the
 standard library's streams and sockets are; a class of someone else's that has a `close()` is
 fitted to it with `extend`. Like the other functions taking a lambda, it is copied in where it
-is called.
+is called. `AutoCloseable.close()` may throw an `IOException`, as Java's `Closeable` does, and a
+class's own `close()` may throw less: `use` throws what the block throws and what the `close()`
+of the object's own type throws (M6.7, 8.5i), so a stream's `use` needs no `try` for its
+closing, and one on any `AutoCloseable` does.
 
 ### Reflection
 
