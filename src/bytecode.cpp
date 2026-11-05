@@ -1339,7 +1339,16 @@ int shapeOperands(const std::string& shape) {
 
 const char* opName(Op op) {
     const size_t i = static_cast<size_t>(op);
-    return i < static_cast<size_t>(Op::Count_) ? kOps[i].name : "?";
+    if (i < static_cast<size_t>(Op::Count_)) return kOps[i].name;
+    // The run code's own (M6.7), in the order of the Op enum after Count_.
+    static const char* const run[] = {"MOVE_S",       "MOVE_K",       "SET_TOP",      "R_ADD_SS",     "R_ADD_SK",     "R_ADD_KS",
+                                      "R_SUB_SS",     "R_SUB_SK",     "R_MUL_SS",     "R_MUL_SK",     "R_MUL_KS",     "R_DIV_SS",
+                                      "R_DIV_SK",     "R_LT_SS",      "R_LT_SK",      "R_LE_SS",      "R_LE_SK",      "R_GT_SS",
+                                      "R_GT_SK",      "R_GE_SS",      "R_GE_SK",      "R_EQ_SS",      "R_EQ_SK",      "R_JUMP_LT_SS",
+                                      "R_JUMP_LT_SK", "R_JUMP_LE_SS", "R_JUMP_LE_SK", "R_JUMP_GT_SS", "R_JUMP_GT_SK", "R_JUMP_GE_SS",
+                                      "R_JUMP_GE_SK", "R_JUMP_EQ_SS", "R_JUMP_EQ_SK", "R_GET_PROP"};
+    const size_t r = i - static_cast<size_t>(Op::MoveS);
+    return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";
 }
 
 void disassemble(const Program& program, std::ostream& out) {

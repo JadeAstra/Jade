@@ -385,35 +385,36 @@ enum class Op : uint8_t {
 
     // ---- The code the VM runs (M6.7, registers.cpp) ----
     // Made by the translator from the stack code as a function is loaded: never written by the
-    // compiler nor kept in a bytecode file, where the verifier takes them for unknown. A slot is
-    // one of the frame's; an rk operand is a slot, or with kRkConstant set a constant. An R
-    // instruction stands for the stack instruction after it, whole: where its quick way does not
-    // do, its operands are put where the stack would have them, from slot s up, the stack's top
-    // after them, and that instruction runs as it would have.
-    Move,          // u16 to, u16 from (rk)            slot `to` = from
-    SetTop,        // u16 depth                        the stack's top at that slot
-    RAdd,          // u16 s, u16 a (rk), u16 b (rk)    slot s = a + b, the top after it; then Add
-    RSub,          //                                  the same with Sub
-    RMul,
-    RDiv,
-    RMod,
-    RLt,           //                                  slot s = a < b; then Lt
-    RLe,
-    RGt,
-    RGe,
-    REq,
-    RNeg,          // u16 s, u16 a (rk)                slot s = -a; then Neg
-    RNot,          //                                  slot s = !a; then Not
-    RGetProp,      // u16 s, u16 obj (rk)              then GetProp, GetOwn, GetPropRef or GetOwnRef
-    RSetProp,      // u16 s, u16 obj, u16 value (rk)   then SetProp or SetOwn
-    RGetIndex,     // u16 s, u16 obj, u16 index (rk)   then GetIndex
-    RJumpIfFalse,  // u16 s, u16 value (rk)            then JumpIfFalse: the top at s either way
-    RReturn,       // u16 s, u16 value (rk)            then Return
-    RunEnd_,
+    // compiler nor kept in a bytecode file, where the verifier takes them for unknown.
+    MoveS,         // u8 to, u8 from                   slot `to` = slot `from`
+    MoveK,         // u8 to, u8 constant               slot `to` = the constant
+    SetTop,        // u8 depth                         the stack's top at that slot
+    // An R instruction does what the stack code it was made from would have done, where its
+    // operands are numbers or a field is where it was found before; anywhere else it goes to its
+    // slow way, code after the function's own that puts its operands where the stack would have
+    // had them, runs that stack code, and comes back.
+    // u8 A, u8 B, u8 C, u8 T, i32 slow: slot A = B op C, B and C slots (SS), or C a constant (SK),
+    // or B one (KS); the stack's top at slot T after it.
+    RAddSS, RAddSK, RAddKS,
+    RSubSS, RSubSK,
+    RMulSS, RMulSK, RMulKS,
+    RDivSS, RDivSK,
+    RLtSS, RLtSK,
+    RLeSS, RLeSK,
+    RGtSS, RGtSK,
+    RGeSS, RGeSK,
+    REqSS, REqSK,
+    // u8 B, u8 C, u8 T, i32 target, i32 slow: a comparison and the JumpIfFalse after it, jumping
+    // to target where it does not hold; the top at T either way.
+    RJumpLtSS, RJumpLtSK,
+    RJumpLeSS, RJumpLeSK,
+    RJumpGtSS, RJumpGtSK,
+    RJumpGeSS, RJumpGeSK,
+    RJumpEqSS, RJumpEqSK,
+    // u8 A, u8 B, u8 T, u16 cache, i32 slow: slot A = the field of the object in slot B, where
+    // GetProp's cache says it is. The last: an instruction is a byte.
+    RGetProp,
 };
-static_assert(static_cast<int>(Op::RunEnd_) <= 256, "an instruction is a byte");
-// An rk operand naming a constant: the constant's index below it.
-constexpr int kRkConstant = 0x8000;
 
 // The types a variable can be declared with (`var n : int`). Any other name is a class.
 enum TypeId : uint8_t {
@@ -625,7 +626,11 @@ struct FunctionProto {
     // `rights` in its offsets. Not part of the program as it is written out.
     std::vector<uint8_t> run;
     std::vector<int> runLines;
-    std::vector<std::pair<uint32_t, uint32_t>> runRights;
+    struct RunRights {
+        uint32_t start, end;  // a range of `run`
+        uint32_t which;       // the rights it has, in `rights`
+    };
+    std::vector<RunRights> runRights;
     std::vector<DeclarationSpan> spans;    // a module's: the code of each top-level declaration
     std::vector<Value> constants;          // ints, floats and interned strings
     std::vector<FunctionProto*> protos;    // nested functions
