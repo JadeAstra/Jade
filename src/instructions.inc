@@ -441,7 +441,34 @@ CASE(SetUpvalue) {
 }
 }
 
+HAS_COLD(GetOwn)
 CASES(GetOwn, GetProp, GetOwnRef, GetPropRef) {
+    // A field of an object, where this place found it before (M6.5 part 4), kept as its payload
+    // alone or as a value (a value kept inside the object as itself only by GetPropRef and
+    // GetOwnRef), here; anything else, the quick ways included, in the rare part, below.
+    if (sp[-1].isObjType(ObjType::Instance) && caches != nullptr) {
+        const ObjInstance* instance = asInstance(sp[-1]);
+        const uint64_t seen = caches[FAST_U16(2)].load(std::memory_order_relaxed);
+        if (static_cast<uint32_t>(seen >> 32) == instance->shape && (instance->core == 0 || instance->core == coreId_)) {
+            const uint8_t* const at = reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF);
+            if ((seen & 0x80) != 0) {
+                uint64_t bits;
+                std::memcpy(&bits, at, 8);
+                sp[-1].setWhole(seen & 3, bits);
+                ip += 4;
+                NEXT();
+            }
+            if (const ValueKind kind = reinterpret_cast<const Value*>(at)->kind;
+                kind != ValueKind::Undefined && (kind != ValueKind::Ref || opAt(ip - kOpBytes) >= Op::GetPropRef)) {
+                std::memcpy(static_cast<void*>(&sp[-1]), at, sizeof(Value));
+                ip += 4;
+                NEXT();
+            }
+        }
+    }
+    GO_COLD(GetOwn);
+}
+COLD(GetOwn) {
     {
     // Where this place has found the field before, in an object of the same
     // layout, it is there again (M6.5 part 4): nothing else about it has
@@ -687,7 +714,45 @@ CASES(GetOwn, GetProp, GetOwnRef, GetPropRef) {
     DONE();
 }
 }
+HAS_COLD(SetOwn)
 CASES(SetOwn, SetProp) {
+    // A field of an object found before, kept as its payload, or a value of no declared type, an
+    // int or a float, here; anything else, the quick ways included, in the rare part, below.
+    if (sp[-2].isObjType(ObjType::Instance) && caches != nullptr) {
+        ObjInstance* instance = asInstance(sp[-2]);
+        const uint64_t seen = caches[FAST_U16(2)].load(std::memory_order_relaxed);
+        if (static_cast<uint32_t>(seen >> 32) == instance->shape && instance->core == coreId_) {
+            Value* const field = reinterpret_cast<Value*>(reinterpret_cast<uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
+            const Value& value = sp[-1];
+            if ((seen & 0x80) != 0) {
+                const uint32_t bit = (seen >> 8) & 0xFF;
+                const ValueKind kind = static_cast<ValueKind>(seen & 3);
+                uint8_t* const data = instance->payloadData();
+                const bool given = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
+                if (value.kind == kind && ((seen & 0x40) == 0 || !given)) {
+                    const int64_t bits = kind == ValueKind::Bool ? (value.as.b ? 1 : 0) : value.as.i;
+                    std::memcpy(field, &bits, 8);
+                    if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+                    std::memcpy(static_cast<void*>(&sp[-2]), &value, sizeof(Value));
+                    sp--;
+                    ip += 4;
+                    NEXT();
+                }
+            } else if ((seen & 2) == 0 && ((seen & 1) == 0 || field->kind == ValueKind::Undefined)) {
+                const uint8_t type = static_cast<uint8_t>(seen >> 8);
+                if (type == 0 || (type == kTypeFloat && value.isFloat()) || (type == kTypeInt && value.isInt())) {
+                    std::memcpy(static_cast<void*>(field), &value, sizeof(Value));
+                    std::memcpy(static_cast<void*>(&sp[-2]), &value, sizeof(Value));
+                    sp--;
+                    ip += 4;
+                    NEXT();
+                }
+            }
+        }
+    }
+    GO_COLD(SetOwn);
+}
+COLD(SetOwn) {
     {
     // As for GetProp: a field found before, which takes any value or one of
     // a type that is quickly told (never one of a class type). A val (the
@@ -1656,11 +1721,23 @@ CASE(ReturnInit) {
     }
     FALL_INTO(Return);
 }
+HAS_COLD(Return)
 CASE(Return) {
+    // Back to the caller, where there is nothing else to see to: no variable of the frame
+    // captured, no catch block of its own left, its result wanted and not a place (M6.5 part 4).
+    if ((openUpvalues_ == nullptr || openUpvalues_->location < base) && !frame->dropResult && frameCount_ - 1 != RUN_BASE &&
+        (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) && sp[-1].kind != ValueKind::Ref) {
+        std::memcpy(static_cast<void*>(base), &sp[-1], sizeof(Value));
+        sp = base + 1;
+        frameCount_--;
+        LOAD_FRAME();
+        NEXT();
+    }
+    GO_COLD(Return);
+}
+COLD(Return) {
     {
-    // Back to the caller, where there is nothing else to see to: no variable
-    // of the frame captured, no catch block of its own left, and its result
-    // wanted (M6.5 part 4).
+    // As above, a place too, where it is kept as it is.
     if ((openUpvalues_ == nullptr || openUpvalues_->location < base) && !frame->dropResult &&
         frameCount_ - 1 != RUN_BASE && (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) &&
         (sp[-1].kind != ValueKind::Ref || keptAsItIs(frame))) {
@@ -2722,7 +2799,48 @@ R_INTS(RBitAndSK, R_S, R_K, true, x & y)
 R_INTS(RBitOrSS, R_S, R_S, true, x | y)
 R_INTS(RBitOrSK, R_S, R_K, true, x | y)
 R_FLOAT(RDivKS, R_K, R_S, x / y, plainDiv)
+HAS_COLD(RSetPropSS)
 CASES(RSetPropSS, RSetPropSK) {
+    // A field of an object found before, as SetProp's own part, here; anything else in the rare
+    // part, below. u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
+    {
+        const Value& obj = R_S(1);
+        const Value& given = opAt(ip - kOpBytes) == Op::RSetPropSK ? R_K(2) : R_S(2);
+        if (obj.isObjType(ObjType::Instance) && caches != nullptr) {
+            ObjInstance* instance = asInstance(obj);
+            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+            if (static_cast<uint32_t>(seen >> 32) == instance->shape && instance->core == coreId_) {
+                Value* const field = reinterpret_cast<Value*>(reinterpret_cast<uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
+                if ((seen & 0x80) != 0) {
+                    const uint32_t bit = (seen >> 8) & 0xFF;
+                    const ValueKind kind = static_cast<ValueKind>(seen & 3);
+                    uint8_t* const data = instance->payloadData();
+                    const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
+                    if (given.kind == kind && ((seen & 0x40) == 0 || !hasOne)) {
+                        const int64_t bits = kind == ValueKind::Bool ? (given.as.b ? 1 : 0) : given.as.i;
+                        std::memcpy(field, &bits, 8);
+                        if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+                        std::memcpy(static_cast<void*>(&base[ip[0]]), &given, sizeof(Value));
+                        sp = base + ip[3];
+                        ip += 11;
+                        NEXT();
+                    }
+                } else if ((seen & 2) == 0 && ((seen & 1) == 0 || field->kind == ValueKind::Undefined)) {
+                    const uint8_t type = static_cast<uint8_t>(seen >> 8);
+                    if (type == 0 || (type == kTypeFloat && given.isFloat()) || (type == kTypeInt && given.isInt())) {
+                        std::memcpy(static_cast<void*>(field), &given, sizeof(Value));
+                        std::memcpy(static_cast<void*>(&base[ip[0]]), &given, sizeof(Value));
+                        sp = base + ip[3];
+                        ip += 11;
+                        NEXT();
+                    }
+                }
+            }
+        }
+    }
+    GO_COLD(RSetPropSS);
+}
+COLD(RSetPropSS) {
     {
     // SetProp's quick ways on an object of a class, as GetProp's: a field found
     // before, kept as its payload or as a value of a type quickly told. u8 A,

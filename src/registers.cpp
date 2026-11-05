@@ -988,9 +988,12 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     }
     f.run = std::move(run);
     f.runLines = std::move(lines);
+    if (writeRunAddresses != nullptr) writeRunAddresses(f);
 }
 
 }  // namespace
+
+void (*writeRunAddresses)(FunctionProto& f) = nullptr;
 
 // The length of the run code's instruction whose opcode is at `at`, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {

@@ -5063,26 +5063,21 @@ struct TailTable {
     static const TailFn* get();
 };
 namespace {
-std::mutex addressing;
-
-// Writes into the run code of a function each instruction's function (D160), the first time
-// it runs; a thread that finds another doing it waits for it to be done.
-void addressCode(const FunctionProto* proto) {
-    std::lock_guard<std::mutex> hold(addressing);
-    if (proto->addressed.done.load(std::memory_order_relaxed)) return;
-    uint8_t* const run = const_cast<uint8_t*>(proto->run.data());
+// Writes into run code each instruction's function (D160), as the code is made: the functions,
+// unlike run()'s labels, are known before anything runs, so nothing is left to the loop.
+void addressCode(FunctionProto& f) {
     const TailFn* const table = TailTable::get();
-    for (size_t at = 0; at < proto->run.size();) {
+    for (size_t at = 0; at < f.run.size();) {
         const char* name = nullptr;
-        const size_t size = runSize(proto->run, at + kThreaded, name);
-        std::memcpy(run + at, &table[static_cast<size_t>(opAt(run + at + kThreaded))], sizeof(TailFn));
+        const size_t size = runSize(f.run, at + kThreaded, name);
+        std::memcpy(f.run.data() + at, &table[static_cast<size_t>(opAt(f.run.data() + at + kThreaded))], sizeof(TailFn));
         at += kThreaded + size;
     }
-    proto->addressed.done.store(true, std::memory_order_release);
+    f.addressed.done.store(true, std::memory_order_release);
 }
+const bool addressesWritten = (writeRunAddresses = &addressCode, true);
 }  // namespace
-#define ADDRESS_CODE(proto) \
-    if (!(proto)->addressed.done.load(std::memory_order_acquire)) [[unlikely]] addressCode(proto)
+#define ADDRESS_CODE(proto)
 #elif defined(__clang__) || defined(__GNUC__)
 namespace {
 // Where each instruction's code is (D160): its label in run(), or the switch for any without

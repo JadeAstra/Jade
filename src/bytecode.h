@@ -791,6 +791,9 @@ inline Op opAt(const uint8_t* at) { return static_cast<Op>(at[0] | at[1] << 8); 
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name);
 // The bytes of a stack code instruction's operands.
 size_t operandBytes(Op op);
+// Where the VM's instructions are functions (vm.cpp, M6.7), what writes each one's address into
+// run code as it is made; null where they are known only once the VM runs.
+extern void (*writeRunAddresses)(FunctionProto& f);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,
