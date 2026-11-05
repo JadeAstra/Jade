@@ -332,7 +332,7 @@ FunctionProto* Program::newProto() {
 // stack depth it runs at. With `partial` the function is still being compiled: jumps that
 // have no target yet are passed over, and the answer is the depth at which the code written
 // so far ends, or -1 if nothing reaches that point.
-static int analyzeStack(FunctionProto& f, const Program& program, bool partial) {
+static int analyzeStack(FunctionProto& f, const Program& program, bool partial, std::vector<int>* depths = nullptr) {
     auto fail = [&](const std::string& why) {
         throw std::runtime_error("invalid bytecode in " + f.name + ": " + why);
     };
@@ -1093,6 +1093,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial) 
         }
     }
 
+    if (depths != nullptr) *depths = depthAt;
     if (!partial) {
         f.maxStack = maxDepth;
         if (static_cast<uint32_t>(caches) > f.cacheCount) {
@@ -1117,7 +1118,9 @@ void verifyFunction(FunctionProto& f, const Program& program) {
                 if (entry[i] >= program.globalNames.size() && !(i == 0 && entry[i] == kNoGlobal))
                     throw std::runtime_error("invalid bytecode: a class's supertypes name no global");
     }
-    analyzeStack(f, program, false);
+    std::vector<int> depths;
+    analyzeStack(f, program, false, &depths);
+    translate(f, depths);
 }
 
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }

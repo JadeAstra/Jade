@@ -1288,9 +1288,11 @@ bool VM::accessDeniedAt(Value target, const ObjString* name, const FunctionProto
 
 // Whether a range of `proto` around `ip` lets its code use the member.
 bool VM::rightsAllow(Value target, const ObjString* name, const FunctionProto* proto, const uint8_t* ip, bool write) const {
-    const uint32_t at = static_cast<uint32_t>(ip - proto->code.data());
-    for (const FunctionProto::Rights& r : proto->rights)
-        if (r.start < at && at <= r.end && !accessDeniedTo(target, name, &r.ids, write)) return true;
+    const uint32_t at = static_cast<uint32_t>(ip - proto->run.data());
+    for (size_t i = 0; i < proto->rights.size(); i++) {
+        const auto [start, end] = proto->runRights[i];
+        if (start < at && at <= end && !accessDeniedTo(target, name, &proto->rights[i].ids, write)) return true;
+    }
     return false;
 }
 
@@ -1451,9 +1453,9 @@ std::vector<std::string> VM::captureTrace() const {
         }
         const CallFrame& f = frames_[static_cast<size_t>(i)];
         const FunctionProto* p = f.closure->proto;
-        size_t offset = static_cast<size_t>(f.ip - p->code.data());
+        size_t offset = static_cast<size_t>(f.ip - p->run.data());
         if (offset > 0) offset--;
-        std::string line = "at " + p->name + " (" + p->source + ":" + std::to_string(p->lines[offset]) + ")";
+        std::string line = "at " + p->name + " (" + p->source + ":" + std::to_string(p->runLines[offset]) + ")";
         if (f.repeats > 0) {
             // In place of the frames a call of itself as its last step saved (D29).
             std::string count = std::to_string(static_cast<uint64_t>(f.repeats) + 1);
@@ -1823,7 +1825,7 @@ void VM::callClosure(ObjClosure* closure, int argc, bool packed) {
         if ((proto->typeArgs & kTakesDestination) != 0) frameDestination(frameCount_ - 1) = pendingDestination_;
     }
     pendingDestination_ = Value::null();
-    frame.ip = proto->code.data();
+    frame.ip = proto->run.data();
     frame.base = base;
 }
 
@@ -5074,7 +5076,7 @@ void VM::run(int baseFrame) {
         frame = &frames_[static_cast<size_t>(frameCount_ - 1)]; \
         ip = frame->ip;                                      \
         base = frame->base;                                  \
-        code = frame->closure->proto->code.data();           \
+        code = frame->closure->proto->run.data();            \
         consts = frame->closure->proto->constants.data();    \
         caches = frame->closure->proto->caches.get();        \
     } while (0)
@@ -5140,7 +5142,7 @@ void VM::run(int baseFrame) {
             CallFrame& next_ = frames_[static_cast<size_t>(frameCount_++)];                                   \
             next_.dropResult = false; next_.repeats = 0;                                                                         \
             next_.closure = quick_;                                                                           \
-            next_.ip = proto_->code.data();                                                                   \
+            next_.ip = proto_->run.data();                                                                    \
             next_.base = base_;                                                                               \
             /* Where its result goes, for a function that takes it; for any other, none (M6.6 part 4). */  \
             if (proto_->typeArgs != 0) frameDestination(frameCount_ - 1) = pendingDestination_;               \
@@ -8174,7 +8176,7 @@ const uint8_t* VM::placeInstruction(Op op, const uint8_t* ip, CallFrame* frame) 
             const int argc = *ip;
             const int target = operandI32(ip + 1);
             ip += 5;
-            if (insertNew(argc & 0x7F, (argc & 0x80) != 0)) ip = frame->closure->proto->code.data() + target;
+            if (insertNew(argc & 0x7F, (argc & 0x80) != 0)) ip = frame->closure->proto->run.data() + target;
             break;
         }
         default:
@@ -8236,7 +8238,7 @@ __declspec(noinline)
 __attribute__((noinline))
 #endif
 const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
-    const uint8_t* const code = frame->closure->proto->code.data();
+    const uint8_t* const code = frame->closure->proto->run.data();
     const Value* const consts = frame->closure->proto->constants.data();
     std::atomic<uint64_t>* const caches = frame->closure->proto->caches.get();
     switch (op) {

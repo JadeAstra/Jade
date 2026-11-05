@@ -43,6 +43,7 @@ add_library(astra_core OBJECT
   src/io.cpp
   src/host.cpp
   src/sandbox.cpp
+  src/registers.cpp
   src/charset.cpp
   src/grid.cpp
   src/worker.cpp

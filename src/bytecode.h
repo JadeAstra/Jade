@@ -588,6 +588,13 @@ struct FunctionProto {
 
     std::vector<uint8_t> code;
     std::vector<int> lines;                // source line of each byte in `code`
+
+    // The code the VM runs (M6.7): made from `code` by translate (registers.cpp) when the
+    // verifier has passed it; with the source line of each of its bytes, and the ranges of
+    // `rights` in its offsets. Not part of the program as it is written out.
+    std::vector<uint8_t> run;
+    std::vector<int> runLines;
+    std::vector<std::pair<uint32_t, uint32_t>> runRights;
     std::vector<DeclarationSpan> spans;    // a module's: the code of each top-level declaration
     std::vector<Value> constants;          // ints, floats and interned strings
     std::vector<FunctionProto*> protos;    // nested functions
@@ -686,6 +693,10 @@ struct FunctionProto {
 
 // Reads a description kept apart into the function, and verifies it; nothing for one read.
 void loadDeferred(FunctionProto& f);
+
+// Makes the code the VM runs from `f`'s code, given the stack's depth before each of its
+// instructions (-1 where none is reached): registers.cpp (M6.7).
+void translate(FunctionProto& f, const std::vector<int>& depths);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,
