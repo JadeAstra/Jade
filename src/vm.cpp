@@ -5058,7 +5058,21 @@ inline int32_t operandI32(const uint8_t* at) {
 #if ASTRA_TAIL_CALLS
 // An instruction's function (VM::tail), whose address the code holds before each instruction.
 using TailFn = ASTRA_TAIL_FN int (VM::*)(ASTRA_TAIL_PARAMS);
-static_assert(sizeof(TailFn) == kThreaded, "an instruction's function is one address");
+// The code keeps a function's address, kThreaded bytes. Microsoft's C++ has a member function's
+// pointer be that alone; the Itanium C++ of Linux and macOS, that and how far to move `this`,
+// which for these, functions of VM itself and none virtual, is always 0 (TailTable::get checks).
+static_assert(sizeof(TailFn) == kThreaded || sizeof(TailFn) == 2 * kThreaded, "an instruction's function is one address, or two words");
+ASTRA_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
+    TailFn f;
+    if constexpr (sizeof(TailFn) == kThreaded) {
+        std::memcpy(&f, at, sizeof f);
+    } else {
+        uintptr_t parts[2] = {0, 0};
+        std::memcpy(&parts[0], at, sizeof(uintptr_t));
+        std::memcpy(&f, parts, sizeof f);
+    }
+    return f;
+}
 struct TailTable {
     static const TailFn* get();
 };
@@ -5070,7 +5084,7 @@ void addressCode(FunctionProto& f) {
     for (size_t at = 0; at < f.run.size();) {
         const char* name = nullptr;
         const size_t size = runSize(f.run, at + kThreaded, name);
-        std::memcpy(f.run.data() + at, &table[static_cast<size_t>(opAt(f.run.data() + at + kThreaded))], sizeof(TailFn));
+        std::memcpy(f.run.data() + at, &table[static_cast<size_t>(opAt(f.run.data() + at + kThreaded))], kThreaded);
         at += kThreaded + size;
     }
     f.addressed.done.store(true, std::memory_order_release);
@@ -5753,8 +5767,7 @@ void VM::run(int baseFrame) {
                 // The first instruction's function, which calls the next one's, and so on until
                 // one returns: where run() ends. An error thrown in one comes here, as below.
                 Value* sp = sp_;
-                TailFn to_;
-                std::memcpy(&to_, ip, sizeof to_);
+                const TailFn to_ = tailAt(ip);
                 frame->ip = ip += kThreaded + kOpBytes;
                 (this->*to_)(ip, sp, base, frame, consts, caches, code);
             }
@@ -5847,8 +5860,7 @@ void VM::run(int baseFrame) {
 #define CASES(...) ASTRA_EXPAND(ASTRA_CAT(ASTRA_CASES_, ASTRA_COUNT(__VA_ARGS__))(__VA_ARGS__))
 #define NEXT()                                                            \
     do {                                                                  \
-        TailFn to_;                                                       \
-        std::memcpy(&to_, ip, sizeof to_);                                \
+        const TailFn to_ = tailAt(ip);                                    \
         sp_ = sp;                                                         \
         frame->ip = ip += kThreaded + kOpBytes;                           \
         [[clang::musttail]] return (this->*to_)(ASTRA_TAIL_ARGS);         \
@@ -5946,7 +5958,15 @@ ASTRA_TAIL_FN int VM::tail(ASTRA_TAIL_PARAMS) {
 
 const TailFn* TailTable::get() {
     static const std::array<TailFn, kOpCount> table = []<size_t... I>(std::index_sequence<I...>) {
-        return std::array<TailFn, kOpCount>{{&VM::tail<static_cast<Op>(I)>...}};
+        std::array<TailFn, kOpCount> made{{&VM::tail<static_cast<Op>(I)>...}};
+        if constexpr (sizeof(TailFn) == 2 * kThreaded) {
+            for (const TailFn& f : made) {
+                uintptr_t parts[2];
+                std::memcpy(parts, &f, sizeof parts);
+                if (parts[1] != 0 || (parts[0] & 1) != 0) throw std::logic_error("an instruction's function is not one address");
+            }
+        }
+        return made;
     }(std::make_index_sequence<kOpCount>{});
     return table.data();
 }
