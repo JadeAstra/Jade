@@ -412,9 +412,18 @@ enum class Op : uint8_t {
     RJumpGeSS, RJumpGeSK,
     RJumpEqSS, RJumpEqSK,
     // u8 A, u8 B, u8 T, u16 cache, i32 slow: slot A = the field of the object in slot B, where
-    // GetProp's cache says it is. The last: an instruction is a byte.
+    // GetProp's cache says it is. The last of the numbers after the stack code's: an instruction is
+    // a byte.
     RGetProp,
+
+    // ---- More of the run code's, in the numbers of the stack code's joined instructions ----
+    // AddLocal to EqConst and AddLocals to EqLocals never appear in run code: the translator makes
+    // R instructions of them. Their numbers are these, which only run code has.
+    RModSS = AddLocal,  // as RAddSS, floats worked out at once
+    RModSK,
+    RunInJoined_,       // the first of those numbers not yet given to one
 };
+static_assert(static_cast<int>(Op::RunInJoined_) <= static_cast<int>(Op::EqConst) + 1, "the joined instructions' first numbers");
 
 // The types a variable can be declared with (`var n : int`). Any other name is a class.
 enum TypeId : uint8_t {

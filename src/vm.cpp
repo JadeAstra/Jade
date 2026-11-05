@@ -5306,59 +5306,6 @@ void VM::run(int baseFrame) {
         break;                                                            \
     }
 
-// The joined instructions (M6.5 part 4): `right` is the local or constant the second one names.
-// Two floats or two ints are worked out here; anything else is pushed, and goes the way of the
-// plain instruction at `plain`.
-#define JOINED_ARITHMETIC(right, checked, floatExpr, plain)           \
-    {                                                                 \
-        Value b = (right), a = sp_[-1];                               \
-        int64_t sum_;                                                 \
-        if (a.isFloat() && b.isFloat()) {                             \
-            double x = a.as.d, y = b.as.d;                            \
-            sp_[-1].setFloat(floatExpr);                              \
-            (void)0;                                                  \
-        } else if (a.isInt() && b.isInt() && !checked(a.as.i, b.as.i, sum_)) { \
-            sp_[-1].kind = ValueKind::Int;                            \
-            sp_[-1].as.i = sum_;                                      \
-        } else {                                                      \
-            *sp_++ = b;                                               \
-            goto plain;                                               \
-        }                                                             \
-        break;                                                        \
-    }
-
-// The same where only floats are worked out here (a division: ints have rules of their own).
-#define JOINED_FLOAT(right, floatExpr, plain)                         \
-    {                                                                 \
-        Value b = (right), a = sp_[-1];                               \
-        if (a.isFloat() && b.isFloat()) {                             \
-            double x = a.as.d, y = b.as.d;                            \
-            sp_[-1].setFloat(floatExpr);                              \
-            (void)0;                                                  \
-        } else {                                                      \
-            *sp_++ = b;                                               \
-            goto plain;                                               \
-        }                                                             \
-        break;                                                        \
-    }
-
-#define JOINED_COMPARISON(right, cmp, plain)                          \
-    {                                                                 \
-        Value b = (right), a = sp_[-1];                               \
-        if (a.isFloat() && b.isFloat()) {                             \
-            sp_[-1].kind = ValueKind::Bool;                           \
-            sp_[-1].as.b = a.as.d cmp b.as.d;                         \
-        } else if (a.isInt() && b.isInt()) {                          \
-            sp_[-1].kind = ValueKind::Bool;                           \
-            sp_[-1].as.b = a.as.i cmp b.as.i;                         \
-        } else {                                                      \
-            *sp_++ = b;                                               \
-            goto plain;                                               \
-        }                                                             \
-        break;                                                        \
-    }
-
-
 #define COMPARISON(op, cmp)                                               \
     {                                                                     \
         Value b = sp_[-1], a = sp_[-2];                                   \
@@ -5467,37 +5414,8 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(Add)
             ASTRA_DISPATCH_TO(Sub)
             ASTRA_DISPATCH_TO(Mul)
-            ASTRA_DISPATCH_TO(AddLocal)
-            ASTRA_DISPATCH_TO(SubLocal)
-            ASTRA_DISPATCH_TO(MulLocal)
-            ASTRA_DISPATCH_TO(DivLocal)
-            ASTRA_DISPATCH_TO(ModLocal)
-            ASTRA_DISPATCH_TO(LtLocal)
-            ASTRA_DISPATCH_TO(LeLocal)
-            ASTRA_DISPATCH_TO(GtLocal)
-            ASTRA_DISPATCH_TO(GeLocal)
-            ASTRA_DISPATCH_TO(EqLocal)
-            ASTRA_DISPATCH_TO(AddConst)
-            ASTRA_DISPATCH_TO(SubConst)
-            ASTRA_DISPATCH_TO(MulConst)
-            ASTRA_DISPATCH_TO(DivConst)
-            ASTRA_DISPATCH_TO(ModConst)
-            ASTRA_DISPATCH_TO(LtConst)
-            ASTRA_DISPATCH_TO(LeConst)
-            ASTRA_DISPATCH_TO(GtConst)
-            ASTRA_DISPATCH_TO(GeConst)
-            ASTRA_DISPATCH_TO(EqConst)
             ASTRA_DISPATCH_TO(StoreLocal)
             ASTRA_DISPATCH_TO(CopyLocal)
-            ASTRA_DISPATCH_TO(AddLocals)
-            ASTRA_DISPATCH_TO(SubLocals)
-            ASTRA_DISPATCH_TO(MulLocals)
-            ASTRA_DISPATCH_TO(DivLocals)
-            ASTRA_DISPATCH_TO(LtLocals)
-            ASTRA_DISPATCH_TO(LeLocals)
-            ASTRA_DISPATCH_TO(GtLocals)
-            ASTRA_DISPATCH_TO(GeLocals)
-            ASTRA_DISPATCH_TO(EqLocals)
             ASTRA_DISPATCH_TO(CheckLocal)
             ASTRA_DISPATCH_TO(Div)
             ASTRA_DISPATCH_TO(Mod)
@@ -5656,6 +5574,8 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(RJumpEqSS)
             ASTRA_DISPATCH_TO(RJumpEqSK)
             ASTRA_DISPATCH_TO(RGetProp)
+            ASTRA_DISPATCH_TO(RModSS)
+            ASTRA_DISPATCH_TO(RModSK)
 #undef ASTRA_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
@@ -6577,72 +6497,13 @@ void VM::run(int baseFrame) {
 
                     CASE(Add)
                         FAST_ARITHMETIC(sp[-2], sp[-1], +, addOverflows, sp--; NEXT())
-                    plainAdd:
                         ARITHMETIC(Op::Add, addOverflows, x + y)
                     CASE(Sub)
                         FAST_ARITHMETIC(sp[-2], sp[-1], -, subOverflows, sp--; NEXT())
-                    plainSub:
                         ARITHMETIC(Op::Sub, subOverflows, x - y)
                     CASE(Mul)
                         FAST_ARITHMETIC(sp[-2], sp[-1], *, mulOverflows, sp--; NEXT())
-                    plainMul:
                         ARITHMETIC(Op::Mul, mulOverflows, x * y)
-                    CASE(AddLocal)
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], +, addOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(base[READ_U16()], addOverflows, x + y, plainAdd)
-                    CASE(SubLocal)
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], -, subOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(base[READ_U16()], subOverflows, x - y, plainSub)
-                    CASE(MulLocal)
-                        FAST_ARITHMETIC(sp[-1], base[FAST_U16(0)], *, mulOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(base[READ_U16()], mulOverflows, x * y, plainMul)
-                    CASE(DivLocal)
-                        FAST_FLOAT(sp[-1], base[FAST_U16(0)], /, ip += 2; NEXT())
-                        JOINED_FLOAT(base[READ_U16()], x / y, plainDiv)
-                    CASE(ModLocal) JOINED_FLOAT(base[READ_U16()], std::fmod(x, y), plainMod)
-                    CASE(LtLocal)
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <, ip += 2; NEXT())
-                        JOINED_COMPARISON(base[READ_U16()], <, plainLt)
-                    CASE(LeLocal)
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], <=, ip += 2; NEXT())
-                        JOINED_COMPARISON(base[READ_U16()], <=, plainLe)
-                    CASE(GtLocal)
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >, ip += 2; NEXT())
-                        JOINED_COMPARISON(base[READ_U16()], >, plainGt)
-                    CASE(GeLocal)
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], >=, ip += 2; NEXT())
-                        JOINED_COMPARISON(base[READ_U16()], >=, plainGe)
-                    CASE(EqLocal)
-                        FAST_COMPARISON(sp[-1], base[FAST_U16(0)], ==, ip += 2; NEXT())
-                        JOINED_COMPARISON(base[READ_U16()], ==, plainEq)
-                    CASE(AddConst)
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], +, addOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(consts[READ_U16()], addOverflows, x + y, plainAdd)
-                    CASE(SubConst)
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], -, subOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(consts[READ_U16()], subOverflows, x - y, plainSub)
-                    CASE(MulConst)
-                        FAST_ARITHMETIC(sp[-1], consts[FAST_U16(0)], *, mulOverflows, ip += 2; NEXT())
-                        JOINED_ARITHMETIC(consts[READ_U16()], mulOverflows, x * y, plainMul)
-                    CASE(DivConst)
-                        FAST_FLOAT(sp[-1], consts[FAST_U16(0)], /, ip += 2; NEXT())
-                        JOINED_FLOAT(consts[READ_U16()], x / y, plainDiv)
-                    CASE(ModConst) JOINED_FLOAT(consts[READ_U16()], std::fmod(x, y), plainMod)
-                    CASE(LtConst)
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <, ip += 2; NEXT())
-                        JOINED_COMPARISON(consts[READ_U16()], <, plainLt)
-                    CASE(LeConst)
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], <=, ip += 2; NEXT())
-                        JOINED_COMPARISON(consts[READ_U16()], <=, plainLe)
-                    CASE(GtConst)
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >, ip += 2; NEXT())
-                        JOINED_COMPARISON(consts[READ_U16()], >, plainGt)
-                    CASE(GeConst)
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], >=, ip += 2; NEXT())
-                        JOINED_COMPARISON(consts[READ_U16()], >=, plainGe)
-                    CASE(EqConst)
-                        FAST_COMPARISON(sp[-1], consts[FAST_U16(0)], ==, ip += 2; NEXT())
-                        JOINED_COMPARISON(consts[READ_U16()], ==, plainEq)
                     CASE(StoreLocal)
                         base[READ_U16()] = *--sp;
                         NEXT();
@@ -6650,60 +6511,6 @@ void VM::run(int baseFrame) {
                         base[FAST_U16(2)] = base[FAST_U16(0)];
                         ip += 4;
                         NEXT();
-                    CASE(AddLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], +, addOverflows, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainAdd;
-                    CASE(SubLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], -, subOverflows, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainSub;
-                    CASE(MulLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_ARITHMETIC(sp[0], base[FAST_U16(2)], *, mulOverflows, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainMul;
-                    CASE(DivLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_FLOAT(sp[0], base[FAST_U16(2)], /, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainDiv;
-                    CASE(LtLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainLt;
-                    CASE(LeLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], <=, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainLe;
-                    CASE(GtLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainGt;
-                    CASE(GeLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], >=, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainGe;
-                    CASE(EqLocals)
-                        sp[0] = base[FAST_U16(0)];
-                        FAST_COMPARISON(sp[0], base[FAST_U16(2)], ==, sp++; ip += 4; NEXT())
-                        *sp_++ = base[READ_U16()];
-                        *sp_++ = base[READ_U16()];
-                        goto plainEq;
 
                     CASE(CheckLocal) {
                         if ((matchesType(base[FAST_U16(0)], ip[4], nullptr) || widenedByte(base[FAST_U16(0)], ip[4]))) {
@@ -6721,7 +6528,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
                     CASE(Div)
-                    plainDiv: {
+                    {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
                             if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
@@ -6739,7 +6546,7 @@ void VM::run(int baseFrame) {
                         break;
                     }
                     CASE(Mod)
-                    plainMod: {
+                    {
                         Value b = sp_[-1], a = sp_[-2];
                         if (a.isInt() && b.isInt()) {
                             if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
@@ -6820,7 +6627,7 @@ void VM::run(int baseFrame) {
                         NEXT();
 
                     CASE(Eq)
-                    plainEq: {
+                    {
                         Value b = sp_[-1], a = sp_[-2];
                         if (const ObjClass* k = classOf(a); k != nullptr && k->methods.find(names.opEq) != nullptr) {
                             SAVE_IP();
@@ -6863,19 +6670,15 @@ void VM::run(int baseFrame) {
                     }
                     CASE(Lt)
                         FAST_COMPARISON(sp[-2], sp[-1], <, sp--; NEXT())
-                    plainLt:
                         COMPARISON(Op::Lt, <)
                     CASE(Le)
                         FAST_COMPARISON(sp[-2], sp[-1], <=, sp--; NEXT())
-                    plainLe:
                         COMPARISON(Op::Le, <=)
                     CASE(Gt)
                         FAST_COMPARISON(sp[-2], sp[-1], >, sp--; NEXT())
-                    plainGt:
                         COMPARISON(Op::Gt, >)
                     CASE(Ge)
                         FAST_COMPARISON(sp[-2], sp[-1], >=, sp--; NEXT())
-                    plainGe:
                         COMPARISON(Op::Ge, >=)
 
                     CASE(Is) {
@@ -8185,6 +7988,8 @@ void VM::run(int baseFrame) {
                     R_ARITHMETIC(RMulKS, R_K, R_S, *, mulOverflows)
                     R_FLOAT(RDivSS, R_S, R_S, x / y)
                     R_FLOAT(RDivSK, R_S, R_K, x / y)
+                    R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y))
+                    R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y))
                     R_COMPARISON(RLtSS, R_S, R_S, <)
                     R_JUMP(RJumpLtSS, R_S, R_S, <)
                     R_COMPARISON(RLtSK, R_S, R_K, <)

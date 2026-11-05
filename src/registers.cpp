@@ -24,6 +24,10 @@
 //
 // Slots and constants are named by a byte: a function needing more than 255 slots keeps its stack
 // code, and a constant past the 255th is pushed as the stack code had it.
+//
+// The stack code's joined instructions (AddLocal, MulLocals and the rest) are never in run code,
+// whose instructions have their numbers: they are made R instructions, or, in a function that
+// keeps its stack code, the instructions they join (GetLocal and Add).
 #include <cstdlib>
 #include <stdexcept>
 
@@ -61,6 +65,7 @@ const Family* familyOf(Op plain) {
     static const Family sub{Op::RSubSS, Op::RSubSK, Op::Count_};
     static const Family mul{Op::RMulSS, Op::RMulSK, Op::RMulKS};
     static const Family div{Op::RDivSS, Op::RDivSK, Op::Count_};
+    static const Family mod{Op::RModSS, Op::RModSK, Op::Count_};
     static const Family lt{Op::RLtSS, Op::RLtSK, Op::Count_};
     static const Family le{Op::RLeSS, Op::RLeSK, Op::Count_};
     static const Family gt{Op::RGtSS, Op::RGtSK, Op::Count_};
@@ -71,6 +76,7 @@ const Family* familyOf(Op plain) {
         case Op::Sub: return &sub;
         case Op::Mul: return &mul;
         case Op::Div: return &div;
+        case Op::Mod: return &mod;
         case Op::Lt: return &lt;
         case Op::Le: return &le;
         case Op::Gt: return &gt;
@@ -99,7 +105,7 @@ Op jumpFormOf(Op r) {
 
 // An R instruction whose result goes to slot A, which a StoreLocal after it may send elsewhere.
 bool storesResult(Op r) {
-    return (r >= Op::RAddSS && r <= Op::REqSK) || r == Op::RGetProp;
+    return (r >= Op::RAddSS && r <= Op::REqSK) || r == Op::RGetProp || r == Op::RModSS || r == Op::RModSK;
 }
 
 // An R instruction's slow way, written after the function's own code: the stack code it stands
@@ -116,12 +122,20 @@ struct Slow {
     size_t old = 0;  // the stack instruction's offset in the stack code, for the rights there
 };
 
+// How much the translator does.
+enum class Mode {
+    Full,     // values noted, and R instructions wherever they do
+    Joined,   // R instructions only for the stack code's joined instructions, nothing noted
+    Plain,    // the stack code as it is, its joined instructions as the instructions they join
+};
+
 class Translator {
 public:
-    Translator(FunctionProto& f, const std::vector<int>& depths) : f_(f), code_(f.code), depths_(depths), n_(f.code.size()) {}
+    Translator(FunctionProto& f, const std::vector<int>& depths, Mode mode)
+        : f_(f), code_(f.code), depths_(depths), n_(f.code.size()), notes_(mode == Mode::Full), rs_(mode != Mode::Plain), joinedOnly_(mode == Mode::Joined) {}
 
     void translate() {
-        if (f_.maxStack > 255) fail("more than 255 slots");
+        if (rs_ && f_.maxStack > 255) fail("more than 255 slots");
         findLeaders();
         findCaptured();
         newAt_.assign(n_ + 1, 0);
@@ -177,6 +191,9 @@ private:
     const std::vector<uint8_t>& code_;
     const std::vector<int>& depths_;
     const size_t n_;
+    const bool notes_;       // whether values pushed are noted
+    const bool rs_;          // whether R instructions are made
+    const bool joinedOnly_;  // only of the stack code's joined instructions
     std::vector<bool> leader_, start_, captured_;
     std::vector<uint8_t> out_;
     std::vector<int> outLines_;
@@ -416,6 +433,11 @@ private:
         const Op o = static_cast<Op>(code_[at]);
         const int a = size >= 3 ? readU16(code_, at + 1) : 0;
         const int b = size >= 5 ? readU16(code_, at + 3) : 0;
+        if (!notes_ && (o == Op::GetLocal || o == Op::Const || o == Op::Pop || o == Op::Dup || o == Op::GetProp || o == Op::GetOwn ||
+                        o == Op::SetLocal || o == Op::CopyLocal))
+            return asStackCode(o, at, size);
+        if (joinedOnly_ && familyOf(o) != nullptr) return asStackCode(o, at, size);
+        if (!rs_ && (o == Op::StoreLocal || o == Op::JumpIfFalse)) return asStackCode(o, at, size);
         switch (o) {
             case Op::GetLocal:
                 if (isCaptured(static_cast<size_t>(a))) break;
@@ -441,6 +463,7 @@ private:
                 return true;
             case Op::StoreLocal:
                 if (storeIntoLast(a, depth, at, size)) return true;
+                if (!notes_) break;
                 [[fallthrough]];
             case Op::SetLocal: {
                 if (a > 255) break;
@@ -463,6 +486,7 @@ private:
             case Op::Sub:
             case Op::Mul:
             case Op::Div:
+            case Op::Mod:
             case Op::Lt:
             case Op::Le:
             case Op::Gt:
@@ -480,6 +504,7 @@ private:
             case Op::SubLocal:
             case Op::MulLocal:
             case Op::DivLocal:
+            case Op::ModLocal:
             case Op::LtLocal:
             case Op::LeLocal:
             case Op::GtLocal:
@@ -488,14 +513,14 @@ private:
                 const int s = depth - 1;
                 placeBelow(s);
                 const Entry x = take(1)[0];
-                if (binaryAt(plainOf(o), x, localEntry(a), s, at, 1)) return true;
-                stack_.push_back(x);
-                break;
+                if (rs_ && binaryAt(plainOf(o), x, localEntry(a), s, at, 1)) return true;
+                return expanded(plainOf(o), x, localEntry(a), s);
             }
             case Op::AddConst:
             case Op::SubConst:
             case Op::MulConst:
             case Op::DivConst:
+            case Op::ModConst:
             case Op::LtConst:
             case Op::LeConst:
             case Op::GtConst:
@@ -504,9 +529,8 @@ private:
                 const int s = depth - 1;
                 placeBelow(s);
                 const Entry x = take(1)[0];
-                if (binaryAt(plainOf(o), x, constantEntry(a), s, at, 1)) return true;
-                stack_.push_back(x);
-                break;
+                if (rs_ && binaryAt(plainOf(o), x, constantEntry(a), s, at, 1)) return true;
+                return expanded(plainOf(o), x, constantEntry(a), s);
             }
             case Op::AddLocals:
             case Op::SubLocals:
@@ -520,8 +544,8 @@ private:
                 const int s = depth;
                 const Entry x = localEntry(a), y = localEntry(b);
                 placeBelow(s);
-                if (binaryAt(plainOf(o), x, y, s, at, 1)) return true;
-                break;
+                if (rs_ && binaryAt(plainOf(o), x, y, s, at, 1)) return true;
+                return expanded(plainOf(o), x, y, s);
             }
             case Op::GetProp:
             case Op::GetOwn: {
@@ -547,12 +571,28 @@ private:
                 break;
             default: break;
         }
-        // Any other: the stack as the stack code has it, and the instruction as it is.
+        return asStackCode(o, at, size);
+    }
+
+    // The stack as the stack code has it, and the instruction as it is.
+    bool asStackCode(Op o, size_t at, size_t size) {
         canonical();
         copy(at, size);
         const size_t next = at + size;
         if (terminal(o) || next >= n_ || depths_[next] < 0) return false;
         reset(depths_[next]);
+        return true;
+    }
+
+    // A joined instruction as the instructions it joins: `x op y`, x at slot s, y pushed after it.
+    bool expanded(Op plain, Entry x, Entry y, int s) {
+        stack_.push_back(x);
+        stack_.push_back(y);
+        canonical();
+        op(plain);
+        stack_.resize(stack_.size() - 2);
+        stack_.push_back(Entry{});
+        top_ = s + 1;
         return true;
     }
 
@@ -627,6 +667,7 @@ private:
             case Op::SubLocal: case Op::SubConst: case Op::SubLocals: return Op::Sub;
             case Op::MulLocal: case Op::MulConst: case Op::MulLocals: return Op::Mul;
             case Op::DivLocal: case Op::DivConst: case Op::DivLocals: return Op::Div;
+            case Op::ModLocal: case Op::ModConst: return Op::Mod;
             case Op::LtLocal: case Op::LtConst: case Op::LtLocals: return Op::Lt;
             case Op::LeLocal: case Op::LeConst: case Op::LeLocals: return Op::Le;
             case Op::GtLocal: case Op::GtConst: case Op::GtLocals: return Op::Gt;
@@ -660,20 +701,25 @@ void asItIs(FunctionProto& f) {
 }  // namespace
 
 void translate(FunctionProto& f, const std::vector<int>& depths) {
-    // The register code is made only with ASTRA_REGISTER_CODE set, until it runs faster than the
-    // stack code it is made from (docs/M6.7-plan.md); without it, the VM runs the stack code.
-    static const bool registers = std::getenv("ASTRA_REGISTER_CODE") != nullptr;
-    if (!registers || f.chooser || f.code.empty() || depths.size() != f.code.size()) return asItIs(f);
+    if (f.chooser || f.code.empty() || depths.size() != f.code.size()) return asItIs(f);
+    // The register code in full is made only with ASTRA_REGISTER_CODE set, until it runs faster
+    // than the stack code it is made from (docs/M6.7-plan.md); without it, only the joined
+    // instructions are made R instructions.
+    // ASTRA_REGISTER_CODE=plain makes every function keep its stack code, as one of more than 255
+    // slots does, for testing that.
+    static const char* const asked = std::getenv("ASTRA_REGISTER_CODE");
+    static const Mode mode = asked == nullptr ? Mode::Joined : std::string(asked) == "plain" ? Mode::Plain : Mode::Full;
     try {
-        Translator(f, depths).translate();
+        Translator(f, depths, mode).translate();
+        return;
     } catch (const std::exception& e) {
         // Code the translator does not expect keeps its stack code, which runs as before; with
         // ASTRA_TRANSLATE_STRICT set, a test of the translator, it is an error. A function needing
         // more than 255 slots keeps its stack code either way.
         if (std::getenv("ASTRA_TRANSLATE_STRICT") != nullptr && f.maxStack <= 255)
             throw std::runtime_error(std::string("cannot translate ") + f.name + ": " + e.what());
-        asItIs(f);
     }
+    Translator(f, depths, Mode::Plain).translate();
 }
 
 }  // namespace astra
