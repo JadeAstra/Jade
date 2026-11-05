@@ -189,11 +189,11 @@ public:
                 continue;
             }
             if (depth < 0) {
-                // Never reached: copied as it is.
+                // Never reached: left out. (Copied, a joined instruction in it would be read as the
+                // R instruction of the same number by what reads the run code through, D160.)
                 if (known) canonical();
                 known = false;
                 newAt_[at] = static_cast<uint32_t>(out_.size());
-                copy(at, size);
                 at += size;
                 continue;
             }
@@ -882,9 +882,100 @@ void asItIs(FunctionProto& f) {
     for (size_t i = 0; i < f.rights.size(); i++) f.runRights.push_back({f.rights[i].start, f.rights[i].end, static_cast<uint32_t>(i)});
 }
 
+// Where in a run instruction (counted from its opcode) offsets in the code are: the place it
+// jumps to and the start of its slow way, as many as it has, 0 for none.
+struct CodeOffsets {
+    int first = 0, second = 0;
+};
+CodeOffsets codeOffsets(Op o) {
+    switch (o) {
+        case Op::MoveS:
+        case Op::MoveK:
+        case Op::SetTop:
+        case Op::RGetUpvalue: return {};
+        case Op::RGetProp: return {7};
+        case Op::RSetPropSS:
+        case Op::RSetPropSK: return {8};
+        case Op::RGetGlobal:
+        case Op::RGetIndexSS:
+        case Op::RGetIndexSK: return {6};
+        case Op::RNeg:
+        case Op::RNot: return {5};
+        case Op::RJumpIfFalse: return {3, 7};
+        case Op::RModSS:
+        case Op::RModSK:
+        case Op::RSubKS:
+        case Op::RDivKS:
+        case Op::RShlSK:
+        case Op::RShrSK:
+        case Op::RBitAndSS:
+        case Op::RBitAndSK:
+        case Op::RBitOrSS:
+        case Op::RBitOrSK: return {6};
+        default: break;
+    }
+    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return {4, 8};
+    if (o >= Op::RAddSS && o <= Op::REqSK) return {6};
+    return {targetOperand(o)};
+}
+
+// The code made, given kThreaded bytes before each instruction (D160): every offset in it, in its
+// instructions, its line table and its rights, moved to where that instruction now starts.
+void threadCode(FunctionProto& f) {
+    const std::vector<uint8_t>& old = f.run;
+    std::vector<uint32_t> moved(old.size() + 1, UINT32_MAX);  // an instruction's start, now
+    size_t now = 0;
+    for (size_t at = 0; at < old.size();) {
+        moved[at] = static_cast<uint32_t>(now);
+        const char* name = nullptr;
+        const size_t size = runSize(old, at, name);
+        now += kThreaded + size;
+        at += size;
+        if (at > old.size()) throw std::runtime_error("an instruction runs past the code's end");
+    }
+    moved[old.size()] = static_cast<uint32_t>(now);
+    auto where = [&](uint32_t offset) -> uint32_t {
+        if (offset > old.size() || moved[offset] == UINT32_MAX) throw std::runtime_error("an offset into an instruction");
+        return moved[offset];
+    };
+    std::vector<uint8_t> run;
+    std::vector<int> lines;
+    run.reserve(moved[old.size()]);
+    lines.reserve(run.capacity());
+    for (size_t at = 0; at < old.size();) {
+        const char* name = nullptr;
+        const size_t size = runSize(old, at, name);
+        const size_t start = run.size();
+        for (size_t i = 0; i < kThreaded; i++) {
+            run.push_back(0);
+            lines.push_back(f.runLines[at]);
+        }
+        for (size_t i = 0; i < size; i++) {
+            run.push_back(old[at + i]);
+            lines.push_back(f.runLines[at + i]);
+        }
+        const CodeOffsets offsets = codeOffsets(static_cast<Op>(old[at]));
+        for (const int place : {offsets.first, offsets.second}) {
+            if (place == 0) continue;
+            if (static_cast<size_t>(place) + 4 > size) throw std::runtime_error("an offset past its instruction");
+            int32_t target;
+            std::memcpy(&target, &old[at + static_cast<size_t>(place)], 4);
+            const int32_t there = static_cast<int32_t>(where(static_cast<uint32_t>(target)));
+            std::memcpy(&run[start + kThreaded + static_cast<size_t>(place)], &there, 4);
+        }
+        at += size;
+    }
+    for (FunctionProto::RunRights& r : f.runRights) {
+        r.start = where(r.start);
+        r.end = where(r.end);
+    }
+    f.run = std::move(run);
+    f.runLines = std::move(lines);
+}
+
 }  // namespace
 
-// The length of the run code's instruction at `at`, and its name.
+// The length of the run code's instruction whose opcode is at `at`, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
     const Op o = static_cast<Op>(run[at]);
     switch (o) {
@@ -931,18 +1022,22 @@ void dump(const FunctionProto& f) {
     static const char* const wanted = std::getenv("ASTRA_DUMP_RUN");
     if (wanted == nullptr || f.name != wanted) return;
     std::fprintf(stderr, "== %s: %zu bytes of stack code, %zu of run code\n", f.name.c_str(), f.code.size(), f.run.size());
-    for (size_t at = 0; at < f.run.size();) {
+    for (size_t at = 0; at + kThreaded < f.run.size();) {
         const char* name = "?";
-        const size_t size = runSize(f.run, at, name);
+        const size_t size = runSize(f.run, at + kThreaded, name);
         std::fprintf(stderr, "%5zu  line %-4d %-18s", at, f.runLines[at], name);
-        for (size_t i = 1; i < size && at + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + i]);
+        for (size_t i = 1; i < size && at + kThreaded + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + kThreaded + i]);
         std::fprintf(stderr, "\n");
-        at += size;
+        at += kThreaded + size;
     }
 }
 
 void translate(FunctionProto& f, const std::vector<int>& depths) {
-    if (f.chooser || f.code.empty() || depths.size() != f.code.size()) return asItIs(f);
+    if (f.chooser || f.code.empty() || depths.size() != f.code.size()) {
+        asItIs(f);
+        threadCode(f);
+        return;
+    }
     // The register code in full, unless ASTRA_REGISTER_CODE says otherwise, for testing and timing
     // the other ways (docs/M6.7-plan.md): =joined makes only the stack code's joined instructions R
     // instructions, as the default was until part D, and =plain makes every function keep its stack
@@ -954,6 +1049,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
                                                                  : Mode::Full;
     try {
         Translator(f, depths, mode).translate();
+        threadCode(f);
         dump(f);
         return;
     } catch (const std::exception& e) {
@@ -964,6 +1060,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
             throw std::runtime_error(std::string("cannot translate ") + f.name + ": " + e.what());
     }
     Translator(f, depths, Mode::Plain).translate();
+    threadCode(f);
     dump(f);
 }
 

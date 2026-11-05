@@ -656,8 +656,22 @@ struct FunctionProto {
 
     // The code the VM runs (M6.7): made from `code` by translate (registers.cpp) when the
     // verifier has passed it; with the source line of each of its bytes, and the ranges of
-    // `rights` in its offsets. Not part of the program as it is written out.
+    // `rights` in its offsets. Not part of the program as it is written out. Each instruction
+    // is kThreaded bytes, then its opcode and its operands: built with Clang or GCC, those bytes
+    // hold the address of its code in the VM's loop, written the first time the VM runs the
+    // function (`addressed`), so that each instruction goes on to the next through one load
+    // (D160); built with MSVC they are not used.
     std::vector<uint8_t> run;
+    struct Addressed {
+        std::atomic<bool> done{false};
+        Addressed() = default;
+        Addressed(Addressed&& other) noexcept : done(other.done.load()) {}  // a function read later is moved in
+        Addressed& operator=(Addressed&& other) noexcept {
+            done.store(other.done.load());
+            return *this;
+        }
+    };
+    mutable Addressed addressed;
     std::vector<int> runLines;
     struct RunRights {
         uint32_t start, end;  // a range of `run`
@@ -766,6 +780,13 @@ void loadDeferred(FunctionProto& f);
 // Makes the code the VM runs from `f`'s code, given the stack's depth before each of its
 // instructions (-1 where none is reached): registers.cpp (M6.7).
 void translate(FunctionProto& f, const std::vector<int>& depths);
+// The bytes before each opcode of the code the VM runs, which hold where its code is (D160).
+// (Each instruction starting at a multiple of them, so that they never span two cache lines,
+// was measured 1% to 4% slower: the code is larger, and each instruction rounds its end up.)
+constexpr size_t kThreaded = 8;
+// The length of the instruction of run code whose opcode is at `at` (kThreaded bytes after its
+// start), not counting those bytes, and its name.
+size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,

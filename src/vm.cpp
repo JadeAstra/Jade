@@ -2950,15 +2950,15 @@ void VM::writeValueField(uint8_t* at, const ValueField& field, const ObjClass* o
 inline int operandU16(const uint8_t* at);  // below, with the interpreter
 
 // A value held in another, read with one of its own fields at once, as in `s.pref.width`: the
-// instruction after (a GetProp or GetOwn at `next`) is done here as well, and the field read
+// instruction after (a GetProp or GetOwn starting at `next`) is done here as well, and the field read
 // where it is, with no copy made of the value that holds it. `at` is where `field` is, a
 // Nested one. Gives where the next instruction to run is, and the value read in `out`; a copy
 // of the held value where the instruction after is not such a read.
 const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out) {
     for (;;) {
-        const Op op = static_cast<Op>(*next);
+        const Op op = static_cast<Op>(next[kThreaded]);
         if (op != Op::GetProp && op != Op::GetOwn && op != Op::GetPropRef && op != Op::GetOwnRef) break;
-        const ObjString* name = asString(consts[operandU16(next + 1)]);
+        const ObjString* name = asString(consts[operandU16(next + kThreaded + 1)]);
         // A name some class keeps from being read, and this value's class among them: whether it
         // may be read is told by the instruction itself. (One only kept from being assigned, as a
         // `private set` width elsewhere is, or kept by other classes only, is read here.)
@@ -2966,7 +2966,7 @@ const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const
         const Value* index = field->cls->declaredIndex.find(name);
         if (index == nullptr) break;
         const ValueField& inner = layoutOf(field->cls).fields[static_cast<size_t>(index->as.i)];
-        next += 5;  // the instruction and its two operands
+        next += kThreaded + 5;  // the instruction and its two operands
         if (inner.kind != ValueField::Nested) {
             out = readValueField(at + inner.offset, inner);
             return next;
@@ -5053,6 +5053,35 @@ inline int32_t operandI32(const uint8_t* at) {
     return static_cast<int32_t>(v);
 }
 
+#if defined(__clang__) || defined(__GNUC__)
+namespace {
+// Where each instruction's code is (D160): its label in run(), or the switch for any without
+// one. Filled the first time any thread runs the loop, as a label's address is had only there.
+const void* dispatch[256];
+std::mutex addressing;
+
+// Writes into the run code of a function the address of each instruction's code (D160), the
+// first time the loop runs it; a thread that finds another doing it waits for it to be done.
+void addressCode(const FunctionProto* proto) {
+    std::lock_guard<std::mutex> hold(addressing);
+    if (proto->addressed.done.load(std::memory_order_relaxed)) return;
+    uint8_t* const run = const_cast<uint8_t*>(proto->run.data());
+    for (size_t at = 0; at < proto->run.size();) {
+        const char* name = nullptr;
+        const size_t size = runSize(proto->run, at + kThreaded, name);
+        const void* const to = dispatch[run[at + kThreaded]];
+        std::memcpy(run + at, &to, sizeof to);
+        at += kThreaded + size;
+    }
+    proto->addressed.done.store(true, std::memory_order_release);
+}
+}  // namespace
+#define ADDRESS_CODE(proto) \
+    if (!(proto)->addressed.done.load(std::memory_order_acquire)) [[unlikely]] addressCode(proto)
+#else
+#define ADDRESS_CODE(proto)
+#endif
+
 // Its start is kept on a 64-byte line in the Clang build, which the benchmarks are timed with:
 // how fast it runs depends on where its jumps fall, and code growing elsewhere in the program
 // moved it otherwise (numeric 14% slower for an unrelated change, G42).
@@ -5079,6 +5108,7 @@ void VM::run(int baseFrame) {
         ip = frame->ip;                                      \
         base = frame->base;                                  \
         code = frame->closure->proto->run.data();            \
+        ADDRESS_CODE(frame->closure->proto);                 \
         consts = frame->closure->proto->constants.data();    \
         caches = frame->closure->proto->caches.get();        \
     } while (0)
@@ -5166,14 +5196,23 @@ void VM::run(int baseFrame) {
 #define CASE(name) case Op::name:
 #endif
 
+// Nothing, but different at each place it is written, so that the compiler does not merge the
+// ends of instructions into one: each instruction's own jump to the next is predicted apart from
+// the others' (D160), which is what makes going on from each instruction pay. (With the address
+// read from the code, clang merged them, and numeric was 10% slower than with the table.)
+#define ASTRA_APART() asm volatile("" ::"i"(__COUNTER__))
+
 // The end of an instruction that goes on to the next at once: with Clang or GCC, straight to the
 // next one's code from here, as the loop's head would; with MSVC, round the loop.
 #if ASTRA_GOTO_DISPATCH && !defined(ASTRA_OP_COUNTS)
-#define NEXT()                     \
-    do {                           \
-        sp_ = sp;                  \
-        frame->ip = ++ip;          \
-        goto* dispatch[ip[-1]];    \
+#define NEXT()                                \
+    do {                                      \
+        sp_ = sp;                             \
+        const void* to_;                      \
+        std::memcpy(&to_, ip, sizeof to_);    \
+        frame->ip = ip += kThreaded + 1;      \
+        ASTRA_APART();                        \
+        goto* to_;                            \
     } while (0)
 #else
 #define NEXT() continue
@@ -5376,10 +5415,7 @@ void VM::run(int baseFrame) {
     };
 
 #if ASTRA_GOTO_DISPATCH
-    // Where each instruction's code is (D160): its label, or the switch for any without one.
-    // Filled the first time any thread runs here, as a label's address is had only in this
-    // function.
-    static const void* dispatch[256];
+    // The table of where each instruction's code is, above, filled the first time.
     static std::atomic<bool> dispatchMade{false};
     if (!dispatchMade.load(std::memory_order_acquire)) {
         static std::mutex filling;
@@ -5649,15 +5685,22 @@ void VM::run(int baseFrame) {
             Value* sp = sp_;
             for (;;) {
 #ifdef ASTRA_OP_COUNTS
-                countOp(*ip);
+                countOp(ip[kThreaded]);
 #endif
                 sp_ = sp;
-                frame->ip = ++ip;
 #if ASTRA_GOTO_DISPATCH
-                // Straight to the instruction's code, through the table (D160); the compiler copies
-                // the jump to the end of each instruction, where each is predicted apart.
-                goto* dispatch[ip[-1]];
+                {
+                    // Straight to the instruction's code, its address in the code (D160); the
+                    // compiler copies the jump to the end of each instruction, where each is
+                    // predicted apart.
+                    const void* to_;
+                    std::memcpy(&to_, ip, sizeof to_);
+                    frame->ip = ip += kThreaded + 1;
+                    goto* to_;
+                }
             viaSwitch:
+#else
+                frame->ip = ip += kThreaded + 1;
 #endif
                 switch (static_cast<Op>(ip[-1])) {
                     CASE(Const)
@@ -6072,8 +6115,8 @@ void VM::run(int baseFrame) {
                                     // A value kept inside the object, read through at once with
                                     // the fields read from it next (`comp.bounds.width`); also
                                     // past a `?.`, the value being there (`comp.damage?.width`, G16).
-                                    const uint8_t* next = static_cast<Op>(ip[4]) == Op::JumpIfNull ? ip + 4 + 1 + 4 : ip + 4;
-                                    if (const Op after = static_cast<Op>(*next); after == Op::GetProp || after == Op::GetOwn) {
+                                    const uint8_t* next = static_cast<Op>(ip[4 + kThreaded]) == Op::JumpIfNull ? ip + 4 + kThreaded + 1 + 4 : ip + 4;
+                                    if (const Op after = static_cast<Op>(next[kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
                                         ValueField whole;
                                         whole.kind = ValueField::Nested;
                                         whole.cls = refClass(field);
@@ -6098,7 +6141,7 @@ void VM::run(int baseFrame) {
                                     // A value held in this one: read through at once with the
                                     // fields read from it next (`sizes.pref.width`), or where it
                                     // is in the box, which never changes.
-                                    if (const Op after = static_cast<Op>(ip[4]); after == Op::GetProp || after == Op::GetOwn) {
+                                    if (const Op after = static_cast<Op>(ip[4 + kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
                                         Value read;
                                         ip = readThrough(box->data() + field.offset, &field, ip + 4, consts, read);
                                         sp[-1] = read;
@@ -6132,7 +6175,7 @@ void VM::run(int baseFrame) {
                                 if (const uint8_t* at = refQuickly(r, false)) {
                                     const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
                                     if (field.kind == ValueField::Nested) {
-                                        if (const Op after = static_cast<Op>(ip[4]); after == Op::GetProp || after == Op::GetOwn) {
+                                        if (const Op after = static_cast<Op>(ip[4 + kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
                                             Value read;
                                             ip = readThrough(at + field.offset, &field, ip + 4, consts, read);
                                             sp[-1] = read;
@@ -6174,7 +6217,7 @@ void VM::run(int baseFrame) {
                                 if (slot.isRef() && getOp < Op::GetPropRef) {
                                     // A value kept inside the object, read on a copy; or read
                                     // through at once with the fields read from it next.
-                                    if (const Op after = static_cast<Op>(*ip); after == Op::GetProp || after == Op::GetOwn ||
+                                    if (const Op after = static_cast<Op>(ip[kThreaded]); after == Op::GetProp || after == Op::GetOwn ||
                                                                                  after == Op::GetPropRef || after == Op::GetOwnRef) {
                                         ValueField whole;
                                         whole.kind = ValueField::Nested;
