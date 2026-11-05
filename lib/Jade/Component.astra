@@ -25,10 +25,15 @@ class Component {
   val size : Size
     get() => bounds.size
 
-  // What the content last said of its size, kept inside the component (M6.6 part 7).
+  // What the content last said of its size, kept inside the component (M6.6 part 7) until the
+  // component is invalidated, the toolkit's look changes (Jade.renderGeneration) or text is
+  // measured for another screen (Jade.layoutScale). It is kept apart from the picture painted,
+  // which some components never keep (one with a caret inside it, one too big): their sizes were
+  // asked for again each time, up to eight times a layout for each level of grids they were in.
   private var sizesCache = Sizes(Size(0, 0), Size(0, 0), Size(0, 0))
   private var sizesValid = false
   private var sizesGen = -1
+  private var sizesScale : Number = 0
 
   private var cacheStyle : Style? = null
   private var cache : Surface? = null          // a Surface holding the content as last painted
@@ -56,10 +61,12 @@ class Component {
 
   private fun sizes() : Sizes {
     val gen = Jade.renderGeneration
-    if (sizesValid and sizesGen == gen and !cacheDirty) { return sizesCache }
+    val scale = Jade.layoutScale
+    if (sizesValid and sizesGen == gen and sizesScale == scale) { return sizesCache }
     sizesCache = content.sizes()   // built where it is kept
     sizesValid = true
     sizesGen = gen
+    sizesScale = scale
     return sizesCache
   }
   internal fun invalidateSizes() {
@@ -114,12 +121,13 @@ class Component {
 
   // ---- Painting ----
 
-  // Says that it has to be painted again: it and everything it is in.
+  // Says that it has to be painted again, and asked for its sizes again: it and everything it is in.
   fun invalidate() {
     Jade.requestRepaint()
     var c : Component? = this
     while (c != null) {
       c.cacheDirty = true
+      c.sizesValid = false
       c = c.parent
     }
   }
