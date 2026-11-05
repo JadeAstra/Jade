@@ -1319,6 +1319,10 @@ void disassembleFunction(const FunctionProto& f, const Program& program, std::os
 
 }  // namespace
 
+size_t operandBytes(Op op) {
+    return op < Op::Count_ ? operandSize(kOps[static_cast<size_t>(op)].operand) : 0;
+}
+
 size_t instructionSize(const std::vector<uint8_t>& code, size_t at) {
     const uint8_t raw = code[at];
     return raw < static_cast<uint8_t>(Op::Count_) ? 1 + operandSize(kOps[raw].operand) : 1;
@@ -1353,7 +1357,11 @@ const char* opName(Op op) {
                                       "R_DIV_SK",     "R_LT_SS",      "R_LT_SK",      "R_LE_SS",      "R_LE_SK",      "R_GT_SS",
                                       "R_GT_SK",      "R_GE_SS",      "R_GE_SK",      "R_EQ_SS",      "R_EQ_SK",      "R_JUMP_LT_SS",
                                       "R_JUMP_LT_SK", "R_JUMP_LE_SS", "R_JUMP_LE_SK", "R_JUMP_GT_SS", "R_JUMP_GT_SK", "R_JUMP_GE_SS",
-                                      "R_JUMP_GE_SK", "R_JUMP_EQ_SS", "R_JUMP_EQ_SK", "R_GET_PROP"};
+                                      "R_JUMP_GE_SK", "R_JUMP_EQ_SS", "R_JUMP_EQ_SK", "R_GET_PROP",   "R_MOD_SS",     "R_MOD_SK",
+                                      "R_SUB_KS",     "R_DIV_KS",     "R_SET_PROP_SS", "R_SET_PROP_SK", "R_GET_GLOBAL", "R_GET_UPVALUE",
+                                      "R_GET_INDEX_SS", "R_GET_INDEX_SK", "R_NEG",     "R_NOT",        "R_JUMP_IF_FALSE", "R_SHL_SK",
+                                      "R_SHR_SK",     "R_BIT_AND_SS", "R_BIT_AND_SK", "R_BIT_OR_SS",  "R_BIT_OR_SK"};
+    static_assert(sizeof(run) / sizeof(run[0]) == kOpCount - static_cast<size_t>(Op::MoveS), "a name for each");
     const size_t r = i - static_cast<size_t>(Op::MoveS);
     return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";
 }

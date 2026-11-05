@@ -323,8 +323,12 @@ private:
     }
     void op(Op o) {
         lastR_ = false;
-        byte(static_cast<int>(o));
+        byte(static_cast<int>(o) & 0xFF);
+        byte(static_cast<int>(o) >> 8);
     }
+    Op opAt(size_t start) const { return astra::opAt(&out_[start]); }
+    // Where operand k (from 1) of the instruction written at `start` is.
+    static size_t operandAt(size_t start, int k) { return start + kOpBytes - 1 + static_cast<size_t>(k); }
     void putI32(size_t place, int32_t v) {
         const uint32_t u = static_cast<uint32_t>(v);
         for (int i = 0; i < 4; i++) out_[place + static_cast<size_t>(i)] = static_cast<uint8_t>(u >> (8 * i));
@@ -333,17 +337,19 @@ private:
     void copy(size_t at, size_t size) {
         lastR_ = false;
         const size_t start = out_.size();
-        for (size_t i = 0; i < size; i++) byte(code_[at + i]);
+        op(static_cast<Op>(code_[at]));
+        for (size_t i = 1; i < size; i++) byte(code_[at + i]);
         const int t = targetOperand(static_cast<Op>(code_[at]));
-        if (t != 0) fixups_.emplace_back(start + static_cast<size_t>(t), static_cast<size_t>(readI32(code_, at + static_cast<size_t>(t))));
+        if (t != 0) fixups_.emplace_back(operandAt(start, t), static_cast<size_t>(readI32(code_, at + static_cast<size_t>(t))));
     }
     // The same into a slow way's stack code, as instruction `plain` with the operands of the one at `at`.
     void copyInto(Slow& slow, Op plain, size_t at, size_t size) {
         const size_t start = slow.code.size();
-        slow.code.push_back(static_cast<uint8_t>(plain));
+        slow.code.push_back(static_cast<uint8_t>(static_cast<int>(plain) & 0xFF));
+        slow.code.push_back(static_cast<uint8_t>(static_cast<int>(plain) >> 8));
         for (size_t i = 1; i < size; i++) slow.code.push_back(code_[at + i]);
         const int t = targetOperand(plain);
-        if (t != 0) slow.targets.emplace_back(start + static_cast<size_t>(t), static_cast<size_t>(readI32(code_, at + static_cast<size_t>(t))));
+        if (t != 0) slow.targets.emplace_back(operandAt(start, t), static_cast<size_t>(readI32(code_, at + static_cast<size_t>(t))));
     }
 
     // ---- The stack as the translator sees it ----
@@ -786,12 +792,12 @@ private:
         if (!lastR_ || x > 255 || noted(stack_.back())) return false;
         Slow& slow = slows_.back();
         const size_t start = slow.instruction;
-        const Op r = static_cast<Op>(out_[start]);
+        const Op r = opAt(start);
         const int s = slow.s;
-        if (!storesResult(r) || out_[start + 1] != s || s != depth - 1) return false;
-        out_[start + 1] = static_cast<uint8_t>(x);
+        if (!storesResult(r) || out_[operandAt(start, 1)] != s || s != depth - 1) return false;
+        out_[operandAt(start, 1)] = static_cast<uint8_t>(x);
         // The top after it: at s, the result having gone to x.
-        out_[start + topOperand(r)] = static_cast<uint8_t>(s);
+        out_[operandAt(start, topOperand(r))] = static_cast<uint8_t>(s);
         copyInto(slow, Op::StoreLocal, at, size);
         stack_[static_cast<size_t>(x)] = Entry{};
         stack_.pop_back();
@@ -803,11 +809,11 @@ private:
         if (!lastR_) return false;
         Slow& slow = slows_.back();
         const size_t start = slow.instruction;
-        const Op jumping = jumpFormOf(static_cast<Op>(out_[start]));
+        const Op jumping = jumpFormOf(opAt(start));
         if (jumping == Op::Count_) return false;
         const int s = slow.s;
-        if (out_[start + 1] != s || s != depth - 1) return false;
-        const int bOperand = out_[start + 2], cOperand = out_[start + 3];
+        if (out_[operandAt(start, 1)] != s || s != depth - 1) return false;
+        const int bOperand = out_[operandAt(start, 2)], cOperand = out_[operandAt(start, 3)];
         out_.resize(start);
         outLines_.resize(start);
         // u8 B, u8 C, u8 T, i32 where it jumps, i32 its slow way.
@@ -882,10 +888,10 @@ void asItIs(FunctionProto& f) {
     for (size_t i = 0; i < f.rights.size(); i++) f.runRights.push_back({f.rights[i].start, f.rights[i].end, static_cast<uint32_t>(i)});
 }
 
-// Where in a run instruction (counted from its opcode) offsets in the code are: the place it
-// jumps to and the start of its slow way, as many as it has, 0 for none.
+// Where in an instruction's operands (counted from the first) offsets in the code are: the place
+// it jumps to and the start of its slow way, as many as it has, -1 for none.
 struct CodeOffsets {
-    int first = 0, second = 0;
+    int first = -1, second = -1;
 };
 CodeOffsets codeOffsets(Op o) {
     switch (o) {
@@ -893,15 +899,15 @@ CodeOffsets codeOffsets(Op o) {
         case Op::MoveK:
         case Op::SetTop:
         case Op::RGetUpvalue: return {};
-        case Op::RGetProp: return {7};
+        case Op::RGetProp: return {6};
         case Op::RSetPropSS:
-        case Op::RSetPropSK: return {8};
+        case Op::RSetPropSK: return {7};
         case Op::RGetGlobal:
         case Op::RGetIndexSS:
-        case Op::RGetIndexSK: return {6};
+        case Op::RGetIndexSK: return {5};
         case Op::RNeg:
-        case Op::RNot: return {5};
-        case Op::RJumpIfFalse: return {3, 7};
+        case Op::RNot: return {4};
+        case Op::RJumpIfFalse: return {2, 6};
         case Op::RModSS:
         case Op::RModSK:
         case Op::RSubKS:
@@ -911,25 +917,32 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
-        case Op::RBitOrSK: return {6};
+        case Op::RBitOrSK: return {5};
         default: break;
     }
-    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return {4, 8};
-    if (o >= Op::RAddSS && o <= Op::REqSK) return {6};
-    return {targetOperand(o)};
+    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return {3, 7};
+    if (o >= Op::RAddSS && o <= Op::REqSK) return {5};
+    const int t = targetOperand(o);
+    return {t - 1};
 }
 
 // The code made, given kThreaded bytes before each instruction (D160): every offset in it, in its
-// instructions, its line table and its rights, moved to where that instruction now starts.
-void threadCode(FunctionProto& f) {
+// instructions, its line table and its rights, moved to where that instruction now starts. The
+// code given has opcodes of `opBytes` (the translator's, kOpBytes; the stack code kept as it is,
+// a byte), the code made of kOpBytes.
+void threadCode(FunctionProto& f, size_t opBytes) {
     const std::vector<uint8_t>& old = f.run;
+    auto opOf = [&](size_t at) { return opBytes == 1 ? static_cast<Op>(old[at]) : astra::opAt(&old[at]); };
+    auto sizeOf = [&](size_t at) {
+        const char* name = nullptr;
+        return opBytes == 1 ? instructionSize(old, at) : runSize(old, at, name);
+    };
     std::vector<uint32_t> moved(old.size() + 1, UINT32_MAX);  // an instruction's start, now
     size_t now = 0;
     for (size_t at = 0; at < old.size();) {
         moved[at] = static_cast<uint32_t>(now);
-        const char* name = nullptr;
-        const size_t size = runSize(old, at, name);
-        now += kThreaded + size;
+        const size_t size = sizeOf(at);
+        now += kThreaded + kOpBytes + size - opBytes;
         at += size;
         if (at > old.size()) throw std::runtime_error("an instruction runs past the code's end");
     }
@@ -943,25 +956,29 @@ void threadCode(FunctionProto& f) {
     run.reserve(moved[old.size()]);
     lines.reserve(run.capacity());
     for (size_t at = 0; at < old.size();) {
-        const char* name = nullptr;
-        const size_t size = runSize(old, at, name);
-        const size_t start = run.size();
+        const size_t size = sizeOf(at);
+        const Op o = opOf(at);
+        const size_t operands = run.size() + kThreaded + kOpBytes;  // where its operands are, now
         for (size_t i = 0; i < kThreaded; i++) {
             run.push_back(0);
             lines.push_back(f.runLines[at]);
         }
-        for (size_t i = 0; i < size; i++) {
+        run.push_back(static_cast<uint8_t>(static_cast<int>(o) & 0xFF));
+        run.push_back(static_cast<uint8_t>(static_cast<int>(o) >> 8));
+        lines.push_back(f.runLines[at]);
+        lines.push_back(f.runLines[at]);
+        for (size_t i = opBytes; i < size; i++) {
             run.push_back(old[at + i]);
             lines.push_back(f.runLines[at + i]);
         }
-        const CodeOffsets offsets = codeOffsets(static_cast<Op>(old[at]));
+        const CodeOffsets offsets = codeOffsets(o);
         for (const int place : {offsets.first, offsets.second}) {
-            if (place == 0) continue;
-            if (static_cast<size_t>(place) + 4 > size) throw std::runtime_error("an offset past its instruction");
+            if (place < 0) continue;
+            if (opBytes + static_cast<size_t>(place) + 4 > size) throw std::runtime_error("an offset past its instruction");
             int32_t target;
-            std::memcpy(&target, &old[at + static_cast<size_t>(place)], 4);
+            std::memcpy(&target, &old[at + opBytes + static_cast<size_t>(place)], 4);
             const int32_t there = static_cast<int32_t>(where(static_cast<uint32_t>(target)));
-            std::memcpy(&run[start + kThreaded + static_cast<size_t>(place)], &there, 4);
+            std::memcpy(&run[operands + static_cast<size_t>(place)], &there, 4);
         }
         at += size;
     }
@@ -977,43 +994,38 @@ void threadCode(FunctionProto& f) {
 
 // The length of the run code's instruction whose opcode is at `at`, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
-    const Op o = static_cast<Op>(run[at]);
+    const Op o = astra::opAt(&run[at]);
+    name = opName(o);
     switch (o) {
-        case Op::MoveS: name = "MOVE_S"; return 3;
-        case Op::MoveK: name = "MOVE_K"; return 3;
-        case Op::SetTop: name = "SET_TOP"; return 2;
-        case Op::RGetProp: name = "R_GET_PROP"; return 11;
-        case Op::RSetPropSS: name = "R_SET_PROP_SS"; return 12;
-        case Op::RSetPropSK: name = "R_SET_PROP_SK"; return 12;
-        case Op::RGetGlobal: name = "R_GET_GLOBAL"; return 10;
-        case Op::RGetUpvalue: name = "R_GET_UPVALUE"; return 5;
-        case Op::RGetIndexSS: name = "R_GET_INDEX_SS"; return 10;
-        case Op::RGetIndexSK: name = "R_GET_INDEX_SK"; return 10;
-        case Op::RNeg: name = "R_NEG"; return 9;
-        case Op::RNot: name = "R_NOT"; return 9;
-        case Op::RJumpIfFalse: name = "R_JUMP_IF_FALSE"; return 11;
-        case Op::RModSS: name = "R_MOD_SS"; return 10;
-        case Op::RModSK: name = "R_MOD_SK"; return 10;
-        case Op::RSubKS: name = "R_SUB_KS"; return 10;
-        case Op::RDivKS: name = "R_DIV_KS"; return 10;
-        case Op::RShlSK: name = "R_SHL_SK"; return 10;
-        case Op::RShrSK: name = "R_SHR_SK"; return 10;
-        case Op::RBitAndSS: name = "R_BIT_AND_SS"; return 10;
-        case Op::RBitAndSK: name = "R_BIT_AND_SK"; return 10;
-        case Op::RBitOrSS: name = "R_BIT_OR_SS"; return 10;
-        case Op::RBitOrSK: name = "R_BIT_OR_SK"; return 10;
+        case Op::MoveS:
+        case Op::MoveK: return kOpBytes + 2;
+        case Op::SetTop: return kOpBytes + 1;
+        case Op::RGetProp: return kOpBytes + 10;
+        case Op::RSetPropSS:
+        case Op::RSetPropSK: return kOpBytes + 11;
+        case Op::RGetUpvalue: return kOpBytes + 4;
+        case Op::RNeg:
+        case Op::RNot: return kOpBytes + 8;
+        case Op::RJumpIfFalse: return kOpBytes + 10;
+        case Op::RGetGlobal:
+        case Op::RGetIndexSS:
+        case Op::RGetIndexSK:
+        case Op::RModSS:
+        case Op::RModSK:
+        case Op::RSubKS:
+        case Op::RDivKS:
+        case Op::RShlSK:
+        case Op::RShrSK:
+        case Op::RBitAndSS:
+        case Op::RBitAndSK:
+        case Op::RBitOrSS:
+        case Op::RBitOrSK: return kOpBytes + 9;
         default: break;
     }
-    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) {
-        name = opName(o);
-        return 12;
-    }
-    if (o >= Op::RAddSS && o <= Op::REqSK) {
-        name = opName(o);
-        return 10;
-    }
-    name = opName(o);
-    return instructionSize(run, at);
+    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return kOpBytes + 11;
+    if (o >= Op::RAddSS && o <= Op::REqSK) return kOpBytes + 9;
+    if (o >= Op::Count_) throw std::runtime_error("an instruction the run code does not have");
+    return kOpBytes + operandBytes(o);
 }
 
 // ASTRA_DUMP_RUN=name: the run code made for each function of that name, to standard error, for
@@ -1026,7 +1038,7 @@ void dump(const FunctionProto& f) {
         const char* name = "?";
         const size_t size = runSize(f.run, at + kThreaded, name);
         std::fprintf(stderr, "%5zu  line %-4d %-18s", at, f.runLines[at], name);
-        for (size_t i = 1; i < size && at + kThreaded + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + kThreaded + i]);
+        for (size_t i = kOpBytes; i < size && at + kThreaded + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + kThreaded + i]);
         std::fprintf(stderr, "\n");
         at += kThreaded + size;
     }
@@ -1035,7 +1047,7 @@ void dump(const FunctionProto& f) {
 void translate(FunctionProto& f, const std::vector<int>& depths) {
     if (f.chooser || f.code.empty() || depths.size() != f.code.size()) {
         asItIs(f);
-        threadCode(f);
+        threadCode(f, 1);
         return;
     }
     // The register code in full, unless ASTRA_REGISTER_CODE says otherwise, for testing and timing
@@ -1049,7 +1061,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
                                                                  : Mode::Full;
     try {
         Translator(f, depths, mode).translate();
-        threadCode(f);
+        threadCode(f, kOpBytes);
         dump(f);
         return;
     } catch (const std::exception& e) {
@@ -1060,7 +1072,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
             throw std::runtime_error(std::string("cannot translate ") + f.name + ": " + e.what());
     }
     Translator(f, depths, Mode::Plain).translate();
-    threadCode(f);
+    threadCode(f, kOpBytes);
     dump(f);
 }
 

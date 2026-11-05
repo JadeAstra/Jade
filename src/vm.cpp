@@ -2956,9 +2956,9 @@ inline int operandU16(const uint8_t* at);  // below, with the interpreter
 // of the held value where the instruction after is not such a read.
 const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out) {
     for (;;) {
-        const Op op = static_cast<Op>(next[kThreaded]);
+        const Op op = opAt(next + kThreaded);
         if (op != Op::GetProp && op != Op::GetOwn && op != Op::GetPropRef && op != Op::GetOwnRef) break;
-        const ObjString* name = asString(consts[operandU16(next + kThreaded + 1)]);
+        const ObjString* name = asString(consts[operandU16(next + kThreaded + kOpBytes)]);
         // A name some class keeps from being read, and this value's class among them: whether it
         // may be read is told by the instruction itself. (One only kept from being assigned, as a
         // `private set` width elsewhere is, or kept by other classes only, is read here.)
@@ -2966,7 +2966,7 @@ const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const
         const Value* index = field->cls->declaredIndex.find(name);
         if (index == nullptr) break;
         const ValueField& inner = layoutOf(field->cls).fields[static_cast<size_t>(index->as.i)];
-        next += kThreaded + 5;  // the instruction and its two operands
+        next += kThreaded + kOpBytes + 4;  // the instruction and its two operands
         if (inner.kind != ValueField::Nested) {
             out = readValueField(at + inner.offset, inner);
             return next;
@@ -4981,15 +4981,15 @@ constexpr uint64_t kSeenSize = 1;
 // and each pair one after the other, shown when the program ends.
 namespace {
 struct OpCounts {
-    uint64_t single[256] = {};
-    uint64_t pairs[256][256] = {};
-    uint64_t cycles[256] = {};  // the processor's clock from each instruction to the next, by the first
+    uint64_t single[kOpCount] = {};
+    uint64_t pairs[kOpCount][kOpCount] = {};
+    uint64_t cycles[kOpCount] = {};  // the processor's clock from each instruction to the next, by the first
     uint64_t lastTime = 0;
-    int last = 255;
+    int last = static_cast<int>(kOpCount);
     ~OpCounts() {
         uint64_t allCycles = 0;
         std::vector<std::pair<uint64_t, std::string>> slow;
-        for (int i = 0; i < 256; i++) {
+        for (int i = 0; i < static_cast<int>(kOpCount); i++) {
             allCycles += cycles[i];
             if (cycles[i] != 0) slow.emplace_back(cycles[i], opName(static_cast<Op>(i)));
         }
@@ -4997,14 +4997,14 @@ struct OpCounts {
         std::fprintf(stderr, "time, by instruction (with what it calls):\n");
         for (size_t i = 0; i < slow.size() && i < 25; i++) {
             int op = 0;
-            while (op < 255 && slow[i].second != opName(static_cast<Op>(op))) op++;
+            while (op < static_cast<int>(kOpCount) - 1 && slow[i].second != opName(static_cast<Op>(op))) op++;
             std::fprintf(stderr, "  %-22s %5.1f%%  %8.1f cycles each\n", slow[i].second.c_str(),
                          100.0 * static_cast<double>(slow[i].first) / static_cast<double>(allCycles),
                          static_cast<double>(slow[i].first) / static_cast<double>(single[op] == 0 ? 1 : single[op]));
         }
         uint64_t total = 0;
         std::vector<std::pair<uint64_t, std::string>> rows;
-        for (int i = 0; i < 256; i++) {
+        for (int i = 0; i < static_cast<int>(kOpCount); i++) {
             total += single[i];
             if (single[i] != 0) rows.emplace_back(single[i], opName(static_cast<Op>(i)));
         }
@@ -5014,8 +5014,8 @@ struct OpCounts {
             std::fprintf(stderr, "  %-22s %12llu  %5.1f%%\n", rows[i].second.c_str(), static_cast<unsigned long long>(rows[i].first),
                          100.0 * static_cast<double>(rows[i].first) / static_cast<double>(total));
         std::vector<std::pair<uint64_t, std::string>> twos;
-        for (int a = 0; a < 256; a++)
-            for (int b = 0; b < 256; b++)
+        for (int a = 0; a < static_cast<int>(kOpCount); a++)
+            for (int b = 0; b < static_cast<int>(kOpCount); b++)
                 if (pairs[a][b] != 0)
                     twos.emplace_back(pairs[a][b], std::string(opName(static_cast<Op>(a))) + " " + opName(static_cast<Op>(b)));
         std::sort(twos.rbegin(), twos.rend());
@@ -5026,12 +5026,13 @@ struct OpCounts {
     }
 };
 OpCounts opCounts;
-inline void countOp(uint8_t op) {
+inline void countOp(Op which) {
+    const size_t op = static_cast<size_t>(which);
     const uint64_t now = __rdtsc();
-    if (opCounts.last != 255) opCounts.cycles[opCounts.last] += now - opCounts.lastTime;
+    if (opCounts.last != static_cast<int>(kOpCount)) opCounts.cycles[opCounts.last] += now - opCounts.lastTime;
     opCounts.lastTime = now;
     opCounts.single[op]++;
-    if (opCounts.last != 255) opCounts.pairs[opCounts.last][op]++;
+    if (opCounts.last != static_cast<int>(kOpCount)) opCounts.pairs[opCounts.last][op]++;
     opCounts.last = op;
 }
 }  // namespace
@@ -5057,7 +5058,7 @@ inline int32_t operandI32(const uint8_t* at) {
 namespace {
 // Where each instruction's code is (D160): its label in run(), or the switch for any without
 // one. Filled the first time any thread runs the loop, as a label's address is had only there.
-const void* dispatch[256];
+const void* dispatch[kOpCount];
 std::mutex addressing;
 
 // Writes into the run code of a function the address of each instruction's code (D160), the
@@ -5069,7 +5070,7 @@ void addressCode(const FunctionProto* proto) {
     for (size_t at = 0; at < proto->run.size();) {
         const char* name = nullptr;
         const size_t size = runSize(proto->run, at + kThreaded, name);
-        const void* const to = dispatch[run[at + kThreaded]];
+        const void* const to = dispatch[static_cast<size_t>(opAt(run + at + kThreaded))];
         std::memcpy(run + at, &to, sizeof to);
         at += kThreaded + size;
     }
@@ -5210,7 +5211,7 @@ void VM::run(int baseFrame) {
         sp_ = sp;                             \
         const void* to_;                      \
         std::memcpy(&to_, ip, sizeof to_);    \
-        frame->ip = ip += kThreaded + 1;      \
+        frame->ip = ip += kThreaded + kOpBytes;      \
         ASTRA_APART();                        \
         goto* to_;                            \
     } while (0)
@@ -5685,7 +5686,7 @@ void VM::run(int baseFrame) {
             Value* sp = sp_;
             for (;;) {
 #ifdef ASTRA_OP_COUNTS
-                countOp(ip[kThreaded]);
+                countOp(opAt(ip + kThreaded));
 #endif
                 sp_ = sp;
 #if ASTRA_GOTO_DISPATCH
@@ -5695,14 +5696,14 @@ void VM::run(int baseFrame) {
                     // predicted apart.
                     const void* to_;
                     std::memcpy(&to_, ip, sizeof to_);
-                    frame->ip = ip += kThreaded + 1;
+                    frame->ip = ip += kThreaded + kOpBytes;
                     goto* to_;
                 }
             viaSwitch:
 #else
-                frame->ip = ip += kThreaded + 1;
+                frame->ip = ip += kThreaded + kOpBytes;
 #endif
-                switch (static_cast<Op>(ip[-1])) {
+                switch (opAt(ip - kOpBytes)) {
                     CASE(Const)
                         *sp++ = consts[READ_U16()];
                         NEXT();
@@ -5912,7 +5913,7 @@ void VM::run(int baseFrame) {
                     CASE(IndexN)
                     CASE(SetIndexN) {
                         // `grid[x, y]` and `grid[x, y] = v` (D133): only a class's op [] takes several.
-                        const bool set = static_cast<Op>(ip[-1]) == Op::SetIndexN;
+                        const bool set = opAt(ip - kOpBytes) == Op::SetIndexN;
                         const int count = READ_U8();
                         const Value obj = sp_[-count - 1 - (set ? 1 : 0)];
                         if (classOf(obj) == nullptr)
@@ -5999,7 +6000,7 @@ void VM::run(int baseFrame) {
                     CASE(ClassOf)
                     CASE(ClassMeta)
                     CASE(AtomicField)
-                        ip = typeInstruction(static_cast<Op>(ip[-1]), ip, frame);
+                        ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
                         break;
 
                     CASE(GetCaptured) {
@@ -6111,12 +6112,12 @@ void VM::run(int baseFrame) {
                                     }
                                 }
                                 const Value field = *reinterpret_cast<const Value*>(reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
-                                if (field.kind == ValueKind::Ref && static_cast<Op>(ip[-1]) < Op::GetPropRef) {
+                                if (field.kind == ValueKind::Ref && opAt(ip - kOpBytes) < Op::GetPropRef) {
                                     // A value kept inside the object, read through at once with
                                     // the fields read from it next (`comp.bounds.width`); also
                                     // past a `?.`, the value being there (`comp.damage?.width`, G16).
-                                    const uint8_t* next = static_cast<Op>(ip[4 + kThreaded]) == Op::JumpIfNull ? ip + 4 + kThreaded + 1 + 4 : ip + 4;
-                                    if (const Op after = static_cast<Op>(next[kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
+                                    const uint8_t* next = opAt(ip + 4 + kThreaded) == Op::JumpIfNull ? ip + 4 + kThreaded + kOpBytes + 4 : ip + 4;
+                                    if (const Op after = opAt(next + kThreaded); after == Op::GetProp || after == Op::GetOwn) {
                                         ValueField whole;
                                         whole.kind = ValueField::Nested;
                                         whole.cls = refClass(field);
@@ -6141,7 +6142,7 @@ void VM::run(int baseFrame) {
                                     // A value held in this one: read through at once with the
                                     // fields read from it next (`sizes.pref.width`), or where it
                                     // is in the box, which never changes.
-                                    if (const Op after = static_cast<Op>(ip[4 + kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
+                                    if (const Op after = opAt(ip + 4 + kThreaded); after == Op::GetProp || after == Op::GetOwn) {
                                         Value read;
                                         ip = readThrough(box->data() + field.offset, &field, ip + 4, consts, read);
                                         sp[-1] = read;
@@ -6175,7 +6176,7 @@ void VM::run(int baseFrame) {
                                 if (const uint8_t* at = refQuickly(r, false)) {
                                     const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
                                     if (field.kind == ValueField::Nested) {
-                                        if (const Op after = static_cast<Op>(ip[4 + kThreaded]); after == Op::GetProp || after == Op::GetOwn) {
+                                        if (const Op after = opAt(ip + 4 + kThreaded); after == Op::GetProp || after == Op::GetOwn) {
                                             Value read;
                                             ip = readThrough(at + field.offset, &field, ip + 4, consts, read);
                                             sp[-1] = read;
@@ -6202,7 +6203,7 @@ void VM::run(int baseFrame) {
                                 NEXT();
                             }
                         }
-                        const Op getOp = static_cast<Op>(ip[-1]);
+                        const Op getOp = opAt(ip - kOpBytes);
                         const bool own = getOp == Op::GetOwn || getOp == Op::GetOwnRef;
                         ObjString* name = asString(consts[READ_U16()]);
                         const int cache = READ_U16();
@@ -6217,7 +6218,7 @@ void VM::run(int baseFrame) {
                                 if (slot.isRef() && getOp < Op::GetPropRef) {
                                     // A value kept inside the object, read on a copy; or read
                                     // through at once with the fields read from it next.
-                                    if (const Op after = static_cast<Op>(ip[kThreaded]); after == Op::GetProp || after == Op::GetOwn ||
+                                    if (const Op after = opAt(ip + kThreaded); after == Op::GetProp || after == Op::GetOwn ||
                                                                                  after == Op::GetPropRef || after == Op::GetOwnRef) {
                                         ValueField whole;
                                         whole.kind = ValueField::Nested;
@@ -6436,7 +6437,7 @@ void VM::run(int baseFrame) {
                                 }
                             }
                         }
-                        const bool own = static_cast<Op>(ip[-1]) == Op::SetOwn;
+                        const bool own = opAt(ip - kOpBytes) == Op::SetOwn;
                         ObjString* name = asString(consts[READ_U16()]);
                         const int cache = READ_U16();
                         Value value = sp_[-1];
@@ -6724,7 +6725,7 @@ void VM::run(int baseFrame) {
                     CASE(SubWrap)
                     CASE(MulWrap) {
                         // `&+`, `&-` and `&*`: an int sum, difference or product that wraps around (D27).
-                        const Op op = static_cast<Op>(ip[-1]);
+                        const Op op = opAt(ip - kOpBytes);
                         const Value b = sp_[-1], a = sp_[-2];
                         if (!a.isInt() || !b.isInt())
                             throw runtimeError(Thrown::ArithmeticException, std::string(op == Op::AddWrap ? "&+" : op == Op::SubWrap ? "&-" : "&*") +
@@ -6738,14 +6739,14 @@ void VM::run(int baseFrame) {
                     CASE(Shr)
                     CASE(Ushr)
                         SAVE_IP();
-                        if (shift(static_cast<Op>(ip[-1]))) LOAD_FRAME();
+                        if (shift(opAt(ip - kOpBytes))) LOAD_FRAME();
                         break;
 
                     CASE(BitAnd)
                     CASE(BitOr)
                     CASE(BitXor)
                         SAVE_IP();
-                        if (bitwise(static_cast<Op>(ip[-1]))) LOAD_FRAME();
+                        if (bitwise(opAt(ip - kOpBytes))) LOAD_FRAME();
                         break;
 
                     CASE(BitNot) {
@@ -6971,7 +6972,7 @@ void VM::run(int baseFrame) {
                         if (sp[-ip[2] - 1].isObjType(ObjType::Instance)) {
                             const ObjInstance* instance = asInstance(sp[-ip[2] - 1]);
                             const ObjString* name = asString(consts[FAST_U16(0)]);
-                            if (((name->restricted & 1) == 0 || static_cast<Op>(ip[-1]) == Op::InvokeOwn) &&
+                            if (((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn) &&
                                 (instance->core == 0 || instance->core == coreId_)) {
                                 if (const Value* method = instance->cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
                             }
@@ -6979,21 +6980,21 @@ void VM::run(int baseFrame) {
                             // A method of a small value's type, run on the value itself (M6.6 part 5).
                             const ObjClass* cls = smallClassOf(sp[-ip[2] - 1]);
                             const ObjString* name = asString(consts[FAST_U16(0)]);
-                            if ((name->restricted & 1) == 0 || static_cast<Op>(ip[-1]) == Op::InvokeOwn)
+                            if ((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn)
                                 if (const Value* method = cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
                         } else if (sp[-ip[2] - 1].isObjType(ObjType::Value)) {
                             // A method of a value's type (M6.6 part 2): a value never changes, so
                             // any core may run one on it.
                             const ObjValue* box = asValue(sp[-ip[2] - 1]);
                             const ObjString* name = asString(consts[FAST_U16(0)]);
-                            if ((name->restricted & 1) == 0 || static_cast<Op>(ip[-1]) == Op::InvokeOwn)
+                            if ((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn)
                                 if (const Value* method = box->cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
                         }
                         ObjString* name = asString(consts[READ_U16()]);
                         int argc = READ_U8();
                         GC_SAFE_POINT();
                         SAVE_IP();
-                        CHECK_ACCESS(sp_[-argc - 1], 1, false, static_cast<Op>(ip[-4]) != Op::InvokeOwn);
+                        CHECK_ACCESS(sp_[-argc - 1], 1, false, opAt(ip - 3 - kOpBytes) != Op::InvokeOwn);
                         if (invoke(name, argc)) LOAD_FRAME();
                         break;
                     }
@@ -7003,13 +7004,13 @@ void VM::run(int baseFrame) {
                         int argc = READ_U8();
                         GC_SAFE_POINT();
                         SAVE_IP();
-                        CHECK_ACCESS(sp_[-argc - 1], 1, false, static_cast<Op>(ip[-4]) != Op::InvokeOwnTrailing);
+                        CHECK_ACCESS(sp_[-argc - 1], 1, false, opAt(ip - 3 - kOpBytes) != Op::InvokeOwnTrailing);
                         if (invoke(name, argc, true)) LOAD_FRAME();
                         break;
                     }
                     CASE(SuperInvoke)
                     CASE(SuperInvokeTrailing) {
-                        const bool trailing = static_cast<Op>(ip[-1]) == Op::SuperInvokeTrailing;
+                        const bool trailing = opAt(ip - kOpBytes) == Op::SuperInvokeTrailing;
                         ObjString* name = asString(consts[READ_U16()]);
                         int argc = READ_U8();
                         GC_SAFE_POINT();
@@ -7559,7 +7560,7 @@ void VM::run(int baseFrame) {
                     CASE(PlaceField)
                     CASE(PlaceIndex)
                     CASE(InsertNew)
-                        ip = placeInstruction(static_cast<Op>(ip[-1]), ip, frame);
+                        ip = placeInstruction(opAt(ip - kOpBytes), ip, frame);
                         break;
                     CASE(AddNew) {
                         const int argc = READ_U8();
@@ -7705,7 +7706,7 @@ void VM::run(int baseFrame) {
                     }
                     CASE(Getter)
                     CASE(Setter) {
-                        bool isGetter = static_cast<Op>(ip[-1]) == Op::Getter;
+                        bool isGetter = opAt(ip - kOpBytes) == Op::Getter;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value accessor = sp_[-1], cls = sp_[-2];
                         if (!cls.isObjType(ObjType::Class) || !accessor.isObjType(ObjType::Closure) ||
@@ -7731,7 +7732,7 @@ void VM::run(int baseFrame) {
                     }
                     CASE(EnumEntry)
                     CASE(EnumSeal) {
-                        const bool isEntry = static_cast<Op>(ip[-1]) == Op::EnumEntry;
+                        const bool isEntry = opAt(ip - kOpBytes) == Op::EnumEntry;
                         ObjString* name = isEntry ? asString(consts[READ_U16()]) : nullptr;
                         const int ordinal = isEntry ? READ_U16() : 0;
                         Value target = sp_[isEntry ? -2 : -1];
@@ -7773,7 +7774,7 @@ void VM::run(int baseFrame) {
                     }
                     CASE(StaticGetter)
                     CASE(StaticSetter) {
-                        bool isGetter = static_cast<Op>(ip[-1]) == Op::StaticGetter;
+                        bool isGetter = opAt(ip - kOpBytes) == Op::StaticGetter;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value accessor = sp_[-1], cls = sp_[-2];
                         if (!cls.isObjType(ObjType::Class) || !accessor.isObjType(ObjType::Closure) ||
@@ -7860,7 +7861,7 @@ void VM::run(int baseFrame) {
                     }
                     CASE(Method)
                     CASE(StaticMethod) {
-                        bool isStatic = static_cast<Op>(ip[-1]) == Op::StaticMethod;
+                        bool isStatic = opAt(ip - kOpBytes) == Op::StaticMethod;
                         ObjString* name = asString(consts[READ_U16()]);
                         Value method = sp_[-1], cls = sp_[-2];
                         if (!cls.isObjType(ObjType::Class) || !method.isObjType(ObjType::Closure))
@@ -8168,7 +8169,7 @@ void VM::run(int baseFrame) {
                         // before, kept as its payload or as a value of a type quickly told. u8 A,
                         // u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
                         const Value& obj = R_S(1);
-                        const Value& given = static_cast<Op>(ip[-1]) == Op::RSetPropSK ? R_K(2) : R_S(2);
+                        const Value& given = opAt(ip - kOpBytes) == Op::RSetPropSK ? R_K(2) : R_S(2);
                         if (obj.isObjType(ObjType::Instance) && caches != nullptr) {
                             ObjInstance* instance = asInstance(obj);
                             const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
@@ -8288,7 +8289,7 @@ void VM::run(int baseFrame) {
                         // A list's item by its position, in range, as GetIndex reads it at once.
                         // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow.
                         const Value& obj = R_S(1);
-                        const Value& index = static_cast<Op>(ip[-1]) == Op::RGetIndexSK ? R_K(2) : R_S(2);
+                        const Value& index = opAt(ip - kOpBytes) == Op::RGetIndexSK ? R_K(2) : R_S(2);
                         if (obj.isString() && index.isInt()) {
                             base[ip[0]] = getIndex(obj, index);
                             sp = base + ip[3];

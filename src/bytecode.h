@@ -16,7 +16,7 @@ class Program;
 
 // Instruction set of the Astra VM. Operands are little-endian: u8, u16, or i32 (absolute
 // jump targets within the function).
-enum class Op : uint8_t {
+enum class Op : uint16_t {
     Const,         // u16 constant                  -> value
     Null,
     True,
@@ -412,14 +412,9 @@ enum class Op : uint8_t {
     RJumpGeSS, RJumpGeSK,
     RJumpEqSS, RJumpEqSK,
     // u8 A, u8 B, u8 T, u16 cache, i32 slow: slot A = the field of the object in slot B, where
-    // GetProp's cache says it is. The last of the numbers after the stack code's: an instruction is
-    // a byte.
+    // GetProp's cache says it is.
     RGetProp,
-
-    // ---- More of the run code's, in the numbers of the stack code's joined instructions ----
-    // AddLocal to EqConst and AddLocals to EqLocals never appear in run code: the translator makes
-    // R instructions of them. Their numbers are these, which only run code has.
-    RModSS = AddLocal,  // as RAddSS, floats worked out at once
+    RModSS,             // as RAddSS, floats worked out at once
     RModSK,
     RSubKS,             // as RAddKS
     RDivKS,
@@ -441,9 +436,11 @@ enum class Op : uint8_t {
     RBitAndSK,
     RBitOrSS,
     RBitOrSK,
-    RunInJoined_,       // the first of those numbers not yet given to one
+    RunCount_,          // how many instructions there are, the run code's included
 };
-static_assert(static_cast<int>(Op::RunInJoined_) <= static_cast<int>(Op::EqConst) + 1, "the joined instructions' first numbers");
+// The stack code's instructions are a byte each; the run code's, two (kOpBytes).
+static_assert(static_cast<int>(Op::Count_) <= 256, "a stack code instruction is a byte");
+constexpr size_t kOpCount = static_cast<size_t>(Op::RunCount_);
 
 // The types a variable can be declared with (`var n : int`). Any other name is a class.
 enum TypeId : uint8_t {
@@ -657,7 +654,7 @@ struct FunctionProto {
     // The code the VM runs (M6.7): made from `code` by translate (registers.cpp) when the
     // verifier has passed it; with the source line of each of its bytes, and the ranges of
     // `rights` in its offsets. Not part of the program as it is written out. Each instruction
-    // is kThreaded bytes, then its opcode and its operands: built with Clang or GCC, those bytes
+    // is kThreaded bytes, then its opcode (kOpBytes) and its operands: built with Clang or GCC, those bytes
     // hold the address of its code in the VM's loop, written the first time the VM runs the
     // function (`addressed`), so that each instruction goes on to the next through one load
     // (D160); built with MSVC they are not used.
@@ -784,9 +781,16 @@ void translate(FunctionProto& f, const std::vector<int>& depths);
 // (Each instruction starting at a multiple of them, so that they never span two cache lines,
 // was measured 1% to 4% slower: the code is larger, and each instruction rounds its end up.)
 constexpr size_t kThreaded = 8;
+// The bytes of a run code instruction's opcode, little-endian: the run code has more instructions
+// than a byte numbers (the stack code's and its own R instructions), and threaded, its opcode is
+// not what takes it to its code, so a byte more costs little (measured in M6.7).
+constexpr size_t kOpBytes = 2;
+inline Op opAt(const uint8_t* at) { return static_cast<Op>(at[0] | at[1] << 8); }
 // The length of the instruction of run code whose opcode is at `at` (kThreaded bytes after its
 // start), not counting those bytes, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name);
+// The bytes of a stack code instruction's operands.
+size_t operandBytes(Op op);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,
