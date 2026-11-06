@@ -229,20 +229,39 @@ Value VM::classDescription(ObjClass* cls, const ObjTypeInfo* own, int which) {
 
 // A property's getter and setter run, as `obj.name` and `obj.name = value` run them.
 // Op::BundleValues (D143): bundle name1 .. nameN -> name1 value1 .. nameN valueN, each value
-// the bundle's for that name. Kept out of the instruction loop, as it builds a list.
+// the bundle's for that name. Kept out of the instruction loop.
+//
+// A bundle's names are made from the program's constants, as the names asked are, and every
+// constant string is one object (VM::intern); and they are asked in the order the bundle keeps
+// them, most often. So each is looked for first where the one before it was found, by its
+// address, and only then looked up (G58). The pairs are written over the names from the last
+// down: the pair for name k starts at slot 2k - 1 (the bundle's slot for the first), never
+// below the names not yet read.
 void VM::bundleValues(int count) {
     Value* asked = sp_ - count;
     const Value bundle = asked[-1];
     if (!bundle.isObjType(ObjType::Map)) throw runtimeError(Thrown::ClassCastException, "expected a bundle of named arguments");
-    std::vector<Value> pairs;
-    pairs.reserve(static_cast<size_t>(count) * 2);
-    for (int k = 0; k < count; k++) {
-        const Value* found = asMap(bundle)->map.find(asked[k]);
-        pairs.push_back(asked[k]);
-        pairs.push_back(found != nullptr ? *found : Value::null());
+    const ValueMap& map = asMap(bundle)->map;
+    const std::vector<ValueMap::Entry>& entries = map.entries();
+    Value* const out = asked - 1;
+    // Read from the last name down, so the first looked for is the bundle's last entry, and each
+    // after it the entry before the one found.
+    size_t at = entries.size() - 1;  // past every entry (wrapped) where there are none
+    for (int k = count - 1; k >= 0; k--) {
+        const Value name = asked[k];
+        size_t index = at;
+        if (!(at < entries.size() && entries[at].live && name.isObj() && entries[at].key.isObj() && entries[at].key.as.obj == name.as.obj)) {
+            const Value* found = map.find(name);
+            index = found != nullptr ? static_cast<size_t>(reinterpret_cast<const ValueMap::Entry*>(
+                                                               reinterpret_cast<const char*>(found) - offsetof(ValueMap::Entry, value)) -
+                                                           entries.data())
+                                     : entries.size();
+        }
+        out[2 * k] = name;
+        out[2 * k + 1] = index < entries.size() ? entries[index].value : Value::null();
+        at = index - 1;
     }
-    sp_ = asked - 1;
-    for (const Value& v : pairs) *sp_++ = v;
+    sp_ = out + 2 * count;
 }
 
 // The errors of failed jobs nothing asked about (8.7a): those whose jobs were collected, and as

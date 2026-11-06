@@ -29,3 +29,12 @@ fun describe(size : int, bold : bool = false) : string => "int $size"
 fun describe(size : string, bold : bool = false) : string => "string $size"
 print(describe(...params(size = 3)), describe(...params(size = "big", bold = true)))   // expect: int 3 string big
 print(shade + params(alpha = 40), shade.copy(red = 1))   // expect: params(red = 10, green = 20, blue = 30, alpha = 40) params(red = 1, green = 20, blue = 30)
+
+// -- Read by where each name is in the bundle, whatever order it was made in (G58) --
+fun box(w : int = 0, h : int = 0, d : int = 0, label : string = "") : string => "$label:${w}x${h}x$d"
+val backwards = params(label = "b", d = 3, h = 2, w = 1)
+val mixed = params(h = 5, w = 4) + params(d = 6, w = 7)
+var made = ""
+for (i in 0 ..< 3) { made = made + box(...backwards) + " " + box(...mixed, h = i) + " " }
+print(made.trim())   // expect: b:1x2x3 :7x0x6 b:1x2x3 :7x1x6 b:1x2x3 :7x2x6
+print(box(...backwards, w = 9, label = "c"), box(...params(d = 1), ...params(w = 2)))   // expect: c:9x2x3 :2x0x1
