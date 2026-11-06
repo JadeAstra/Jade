@@ -331,6 +331,8 @@ public:
     // initializer; with `captures`, an anonymous object that keeps them (Op::NewObject).
     // Returns whether a frame was pushed.
     bool construct(ObjClass* cls, int argc, bool packed, const Value* captures = nullptr, uint16_t captureCount = 0);
+    // An anonymous object made with the `count` captured cells on the stack's top (NewObject).
+    bool constructObject(ObjClass* cls, int count);
 
     // ---- Lists (M6.6 part 3): see "Lists" in vm.cpp ----
     ListStore storeFor(const ObjTypeInfo* item, uint32_t& width, ObjClass*& itemClass);

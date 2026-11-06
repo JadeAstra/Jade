@@ -1,0 +1,36 @@
+// An anonymous object whose field is of a class type, made in a function whose variables it
+// captures (M8): the first object of its class works out its fields' types, which ran code over
+// the captured variables while they waited on the stack, so the object got whatever that code
+// left there ("cannot call a value of type string"), and a collection then could lose them.
+
+class Thing(val name : string)
+interface Painter {
+  var owner : Thing?
+  fun paint(x : int) : string
+}
+
+fun painter(label : string, f : (int) -> string) : Painter => object : Painter {
+  override var owner : Thing? = null
+  override fun paint(x : int) : string => label + ": " + f(x)
+}
+print(painter("first") { "got $it" }.paint(1))   // expect: first: got 1
+print(painter("second") { "twice ${it * 2}" }.paint(2))   // expect: second: twice 4
+
+// Several captured, of several kinds, with fields of class types given values.
+fun many(a : int, b : string, f : (int) -> int) : Painter {
+  val c = [a, a + 1]
+  return object : Painter {
+    override var owner : Thing? = Thing(b)
+    val other : Thing = Thing("other")
+    override fun paint(x : int) : string => "${owner?.name} ${other.name} ${f(x)} $b $c"
+  }
+}
+print(many(3, "b", { it + 10 }).paint(5))   // expect: b other 15 b [3, 4]
+
+// Many made, with the collector running between them.
+var total = 0
+for (i in 0 ..< 2000) {
+  val p = painter("n$i") { "${it + i}" }
+  total += p.paint(i).size
+}
+print(total > 0)   // expect: true

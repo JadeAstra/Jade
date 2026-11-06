@@ -418,9 +418,7 @@ CASE(NewObject) {
     ObjClass* cls = asClass(made);
     SAVE_IP();
     if (cls->staticInit != nullptr) ensureClassInit(cls);  // with the captures still on the stack
-    // The captures stay just above the stack's top until the object has them.
-    sp_ -= count;
-    if (construct(cls, 0, false, sp_, static_cast<uint16_t>(count))) LOAD_FRAME();
+    if (constructObject(cls, count)) LOAD_FRAME();
     DONE();
 }
 }

@@ -4067,6 +4067,16 @@ Value VM::withPlace(const CallFrame* frame, int place) {
     return Value::ref(at, 0, 0, 0);
 }
 
+// The captures are kept aside until the object has them: making it may run code that uses the
+// stack above its top (its fields' types, worked out for the first object of its class), which
+// would overwrite them there, and the collector looks at the stack only below its top.
+bool VM::constructObject(ObjClass* cls, int count) {
+    std::vector<Value> captured(sp_ - count, sp_);
+    TempVector keep(*this, captured);
+    sp_ -= count;
+    return construct(cls, 0, false, captured.data(), static_cast<uint16_t>(count));
+}
+
 bool VM::construct(ObjClass* cls, int argc, bool packed, const Value* captures, uint16_t captureCount) {
     if (cls->staticInit != nullptr) ensureClassInit(cls);  // an enum has its entries by now
     if (cls->isAbstract)
