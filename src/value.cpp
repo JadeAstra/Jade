@@ -44,6 +44,11 @@ bool valuesEqual(const Value& a, const Value& b) {
                 const ObjClass* cls = smallClassOf(a);
                 return valueBytesEqual(*cls->layout.load(std::memory_order_acquire), smallBytes(a), smallBytes(b), 0);
             }
+            case ValueKind::EnumName:
+                return sameText(asString(a), asString(b));
+            case ValueKind::Ref:
+                // Callers make boxes of these first; here, where they are is all that is compared.
+                return a.as.obj == b.as.obj && a.refIndex == b.refIndex && a.refOffset == b.refOffset && a.refDepth == b.refDepth;
             case ValueKind::Obj:
                 if (a.as.obj == b.as.obj) return true;
                 if (a.as.obj->type == ObjType::String && b.as.obj->type == ObjType::String) {

@@ -536,10 +536,10 @@ struct Checker::Impl {
         const ExtendStmt* stmt = nullptr;
         Unit* unit = nullptr;
         int resolved = 0;  // 0 not yet, 1 resolved, 2 being resolved
-        std::vector<ClassInfo*> types;
+        std::vector<ClassInfo*> types{};
         // For each type that is no class, the built-in type it is (G30): string, List<int>, List
         // for every list; unknown where it is neither, or is written as no extend takes it.
-        std::vector<Type> builtins;
+        std::vector<Type> builtins{};
         ClassInfo* iface = nullptr;
         // The fields it adds (D157), as the fields of a class of their own that each type it
         // extends reaches as it reaches an interface, where the extend is in reach; null if none.
@@ -3453,6 +3453,11 @@ struct Checker::Impl {
             case StmtKind::Extend:
                 checkExtend(static_cast<const ExtendStmt&>(s));
                 break;
+            case StmtKind::TypeAlias:
+                // A file's are gathered with its classes; one anywhere else would name nothing.
+                if (!(ctx != nullptr && ctx->topLevel && scopes.size() <= 1))
+                    report(s, "a name for a type is declared at the top of a file, where all of the file sees it (D41)");
+                break;
             case StmtKind::Class: {
                 if (ctx != nullptr && ctx->topLevel && scopes.size() <= 1) break;  // a file's class: already gathered
                 const auto& cs = static_cast<const ClassStmt&>(s);
@@ -6028,7 +6033,7 @@ struct Checker::Impl {
         // pts[i] only (G10): the statement it is in, where that alone decides (not in a lambda),
         // and the loops it is in within its function, the innermost first.
         const void* statement = nullptr;
-        std::vector<const void*> loops;
+        std::vector<const void*> loops{};
     };
     std::unordered_map<const IndexExpr*, IndexCandidate> indexCandidates;
 

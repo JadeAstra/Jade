@@ -656,6 +656,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                 case Op::Neg:
                 case Op::Not:
                 case Op::BitNot:
+                case Op::FromEnd:
                 case Op::IterInit:
                     pops = pushes = 1;
                     break;
@@ -1137,7 +1138,9 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                     pops = id == kTypeInstance ? 2 : 1;
                     break;
                 }
-                case Op::Count_:
+                default:
+                    // Count_, and the run code's instructions, which stack code never holds; and
+                    // so, refused, a stack code instruction this list has been left without.
                     fail("unknown opcode");
             }
 
@@ -1513,7 +1516,7 @@ enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 
 
 struct Writer {
     std::ostream& out;
-    std::unordered_map<const FileReach*, uint32_t> reaches;  // those written already, by their place
+    std::unordered_map<const FileReach*, uint32_t> reaches{};  // those written already, by their place
 
     void u8(uint8_t v) { out.put(static_cast<char>(v)); }
     void u16(uint16_t v) {
@@ -1669,7 +1672,7 @@ struct Reader {
     Program& program;
     VM& vm;
     size_t pos = 0;
-    std::vector<const FileReach*> reaches;  // as they were written
+    std::vector<const FileReach*> reaches{};  // as they were written
     bool defer = false;                     // a class's description left to be read when asked for
 
     [[noreturn]] void corrupt() { throw std::runtime_error("corrupt or truncated bytecode file"); }

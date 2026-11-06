@@ -30,7 +30,7 @@ struct AstraThrow {
     Value value;
 
     // Call stack at the throw site, innermost first. Only captured when nothing will catch it.
-    std::vector<std::string> trace;
+    std::vector<std::string> trace{};
     bool hasTrace = false;
 };
 
@@ -266,7 +266,7 @@ enum class Thrown : uint8_t {
 #define ASTRA_TAIL_CALLS 1
 #define ASTRA_TAIL_FN __attribute__((preserve_none, no_stack_protector))
 #define ASTRA_TAIL_PARAMS                                                                                              \
-    const uint8_t *ip, Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
+    [[maybe_unused]] const uint8_t *ip, [[maybe_unused]] Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
         [[maybe_unused]] const Value *consts, [[maybe_unused]] std::atomic<uint64_t> *caches, [[maybe_unused]] const uint8_t *code
 #endif
 #endif
@@ -274,7 +274,7 @@ enum class Thrown : uint8_t {
 #define ASTRA_TAIL_CALLS 0
 #endif
 
-class VM : public KeyMethods {
+class VM final : public KeyMethods {
 public:
     // `worker`: this VM is a worker's, running beside the one that started it. It has no
     // windows: what belongs to the one user interface stays with the main program.
@@ -1489,11 +1489,11 @@ private:
     void collectGarbage();
     void markValue(const Value& v) {
         if (v.kind == ValueKind::Obj) markObject(v.as.obj);  // a Small holds no object
-        else if (v.kind == ValueKind::Ref) v.as.obj->type == ObjType::Places ? markPlace(v) : markObject(v.as.obj);
+        else if (v.kind == ValueKind::Ref) v.as.obj->type == ObjType::Places ? markPlace(static_cast<const ObjPlace*>(v.as.obj)) : markObject(v.as.obj);
         else if (v.kind == ValueKind::Undefined && v.as.obj != nullptr) markObject(v.as.obj);  // a lazy one's ObjLazy
     }
     void markObject(Obj* obj);
-    void markPlace(const Value& r);
+    void markPlace(const ObjPlace* place);  // what a frame's place holds (D149)
     void markTable(const Table& table);
     void blacken(Obj* obj);
     void sweep();

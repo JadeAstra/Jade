@@ -1744,6 +1744,7 @@ std::string VM::typeName(Value v) const {
         case ValueKind::FromEnd: return "Index";
         case ValueKind::Float: return "float";
         case ValueKind::Undefined: return "undefined";
+        case ValueKind::EnumName:  // the bare name it holds, a string
         case ValueKind::Obj: break;
     }
     switch (v.as.obj->type) {
@@ -1763,7 +1764,9 @@ std::string VM::typeName(Value v) const {
         case ObjType::Fiber: return "task";
         case ObjType::Resource: return static_cast<const ObjResource*>(v.as.obj)->kind;
         case ObjType::Upvalue:
-        case ObjType::Iterator: return "internal";
+        case ObjType::Iterator:
+        case ObjType::Lazy:
+        case ObjType::Places: return "internal";
         case ObjType::TypeInfo: return "Type";
     }
     return "unknown";
@@ -4708,7 +4711,7 @@ bool VM::compareSlow(Op op) {
             return false;
         }
     }
-    if (a.isString() && b.isString() || (a.isChar() && b.isChar()) || numbers) {
+    if ((a.isString() && b.isString()) || (a.isChar() && b.isChar()) || numbers) {
         bool result = op == Op::Lt ? order < 0 : op == Op::Le ? order <= 0 : op == Op::Gt ? order > 0 : order >= 0;
         sp_[-2] = Value::boolean(result);
         sp_--;
@@ -6876,6 +6879,9 @@ void VM::stringifyInto(std::string& out, Value v, bool quote, int depth) {
             return;
         case ValueKind::FromEnd: out += "^" + std::to_string(v.as.i); return;
         case ValueKind::Undefined: out += "undefined"; return;
+        case ValueKind::Ref:
+        case ValueKind::Small:     // made boxes above
+        case ValueKind::EnumName:  // the bare name it holds, a string
         case ValueKind::Obj: break;
     }
 
@@ -7068,6 +7074,8 @@ void VM::stringifyInto(std::string& out, Value v, bool quote, int depth) {
 
         case ObjType::Upvalue:
         case ObjType::Iterator:
+        case ObjType::Lazy:
+        case ObjType::Places:
             out += "<internal>";
             return;
 
@@ -7199,8 +7207,7 @@ void VM::markContext(const Context& context) {
 
 // What the value in a frame's place holds of other objects (D149), where its type's layout says:
 // marked through each Ref to it, as the places themselves are no collected object.
-void VM::markPlace(const Value& r) {
-    const ObjPlace* place = static_cast<const ObjPlace*>(r.as.obj);
+void VM::markPlace(const ObjPlace* place) {
     ObjClass* cls = place->cls;
     if (cls == nullptr) return;
     markObject(cls);
@@ -7255,6 +7262,11 @@ void VM::blacken(Obj* obj) {
             markItems(list);
             break;
         }
+        case ObjType::Places:
+            // Kept in its line's arena, not the heap: markValue reaches its values through a
+            // reference into it, and nothing else marks one, but what it holds is marked here too.
+            markPlace(static_cast<const ObjPlace*>(obj));
+            break;
         case ObjType::Lazy: {
             ObjLazy* lazy = static_cast<ObjLazy*>(obj);
             liveBytes_ += sizeof(ObjLazy);

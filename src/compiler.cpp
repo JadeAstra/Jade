@@ -127,10 +127,10 @@ struct LoopState {
     int tryDepth;
     size_t localCount;  // the function's locals when the body starts; break/continue discard the rest
     int baseSlot;       // and the stack slot the body's first variable gets
-    std::vector<int> breakJumps;
-    std::string label;               // `outer@ for ...`
+    std::vector<int> breakJumps{};
+    std::string label{};               // `outer@ for ...`
     bool continueForward = false;    // do-while: `continue` goes on to the test, further down
-    std::vector<int> continueJumps;
+    std::vector<int> continueJumps{};
     int owner = 0;                   // whose code the loop is (D59): break and continue reach their own
 };
 
@@ -262,22 +262,22 @@ struct ClassState {
 
     // For names written bare inside the class: what it declares itself, how to reach the
     // class object, and the function the declaration is written in.
-    std::unordered_set<std::string> members;  // fields, methods and properties of each object
-    std::unordered_set<std::string> statics;
-    std::unordered_map<std::string, TypeSpec> fieldTypes;   // declared types of its fields, static ones included
-    std::string storage;
-    std::string qualified;                    // `Outer.Inner` for a class declared inside another
+    std::unordered_set<std::string> members{};  // fields, methods and properties of each object
+    std::unordered_set<std::string> statics{};
+    std::unordered_map<std::string, TypeSpec> fieldTypes{};   // declared types of its fields, static ones included
+    std::string storage{};
+    std::string qualified{};                    // `Outer.Inner` for a class declared inside another
     const ClassState* outer = nullptr;        // the class this one is declared inside, if any
     FunctionState* definedIn = nullptr;
     bool inStaticInit = false;  // the value of a static field is being compiled
     bool isEnum = false;
     bool isValue = false;  // a value type (M6.6 part 2)
-    std::vector<std::string> typeParams;  // a generic class's, which each of its objects keeps (M6.6 part 1)
+    std::vector<std::string> typeParams{};  // a generic class's, which each of its objects keeps (M6.6 part 1)
 
     // Fields whose initial values the generated initializer assigns, after the header's
     // entries, so that such a value can be worked out from them. The value may be null.
-    std::vector<std::pair<const VarStmt*, const Expr*>> initializedByInit;
-    std::vector<size_t> initializedIndex;  // where each of those stands among the class's fields
+    std::vector<std::pair<const VarStmt*, const Expr*>> initializedByInit{};
+    std::vector<size_t> initializedIndex{};  // where each of those stands among the class's fields
 
     // Set when the class declares fields and has no superclass: its fields are then exactly
     // the declared ones, so assigning to any other name through `this` is a compile error.

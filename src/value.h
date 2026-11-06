@@ -853,8 +853,8 @@ struct NativeMethod {
     // What its parameters are called, for the methods that take arguments by name
     // (`text.contains("a", ignoreCase = true)`); empty for the rest. The longest form's, and
     // every form's, for a method declared in several (`add(item)`, `add(index, item)`).
-    std::vector<std::string> params;
-    std::vector<std::vector<std::string>> forms;
+    std::vector<std::string> params{};
+    std::vector<std::vector<std::string>> forms{};
     // It changes the value it is called on: in a parallel section, a core's own only.
     bool mutates = false;
     // It copies a value of a value type it is given at once, so it may be given one where it is
