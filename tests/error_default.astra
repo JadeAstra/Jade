@@ -1,4 +1,6 @@
-// In a class header, entries with default values have to come after the ones without.
+// An entry of a class header without a default may follow one with, as a parameter of a
+// function may: a call has to give it, by name or as a lambda after it.
 print("never runs")
 class Point(val x : int = 0, val y : int)
-// expect compile error: error_default.astra:3:34: error: 'y' has no default value but follows an entry that has one; entries with defaults must come last
+val p = Point(3)
+// expect compile error: error_default.astra:5:14: error: Point(...) needs a value for 'y'

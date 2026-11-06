@@ -4890,9 +4890,18 @@ private:
         for (size_t i = 0; i < s.header.size(); i++) {
             const HeaderParam& param = s.header[i];
             if (!param.defaultValue) {
-                if (sawDefault)
-                    throw error(param, "'" + param.name + "' has no default value but follows an entry that has one; " +
-                                           "entries with defaults must come last");
+                if (sawDefault) {
+                    // One without a default after one with, as a function may have (M7:
+                    // `MenuItem(label, enabled = true, ..., onClick)`): given by name or as a
+                    // lambda after the call, and an error if it has no value then.
+                    line_ = param.line;
+                    emit(Op::DefaultArg, static_cast<int>(i + 1));
+                    int toPassed = here();
+                    emitI32(0);
+                    emit(Op::MissingArg, stringConstant(param.name));
+                    patchJump(toPassed);
+                    continue;
+                }
                 requiredArgs++;
                 continue;
             }

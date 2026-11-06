@@ -1,0 +1,11 @@
+// An entry without a default after ones with (M7): given by name, or as a lambda after the call.
+class Item(val label : string, val enabled : bool = true, val accelerator : string? = null, val onClick : () -> unit)
+val a = Item("A") { print("chose a") }
+a.onClick()                              // expect: chose a
+val b = Item("B", false) { print("chose b") }
+print(b.label, b.enabled, b.accelerator) // expect: B false null
+b.onClick()                              // expect: chose b
+val c = Item("C", accelerator = "Ctrl+C", onClick = { print("chose c") })
+c.onClick()                              // expect: chose c
+class Point(val x : int = 0, val y : int)
+print(Point(y = 4).x, Point(1, 2).y)     // expect: 0 2

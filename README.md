@@ -1019,9 +1019,12 @@ Config("example.org")         // example.org, 8080
 Config("example.org", 443)
 ```
 
-Entries with defaults come after those without. A default is computed afresh for each object
-that needs it, and may use the entries before it (`val height : Number = width`). To skip an
-earlier entry, pass the later one by name: `Config(port = 21)`.
+A default is computed afresh for each object that needs it, and may use the entries before
+it (`val height : Number = width`). To skip an earlier entry, pass the later one by name:
+`Config(port = 21)`. As with a function, an entry without a default may follow one with: it
+is then given by name or as a lambda after the call, `MenuItem("New") { save() }` for
+`class MenuItem(val label : string, val enabled : bool = true, val onClick : () -> unit)`,
+and a call that gives it nothing is an error.
 
 A class that needs more than that writes `fun init(...)`. The header's fields are then plain
 declarations that `init` has to assign (a default there is just the field's initial value),
