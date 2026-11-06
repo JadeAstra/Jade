@@ -44,7 +44,8 @@ print(s.get(), n.get(), s is Holder<string>, n is Holder<int>, n is Holder<strin
 fun fixed() : Holder<int> => object : Holder<int> {
   override fun get() : int => 7
 }
-print(fixed()# == fixed()#, wrap(1)# == wrap(2)#)   // expect: true false
+// Made once for each set of type arguments where it names a type parameter (G66).
+print(fixed()# == fixed()#, wrap(1)# == wrap(2)#, wrap(1)# == wrap("a")#, wrap("a")# == wrap("b")#)   // expect: true true false true
 
 // From a lambda and from a generic function declared inside another (G1).
 fun <T> viaLambda(x : T) : Holder<T> {
@@ -75,3 +76,22 @@ val first = {
   }
 }
 print(first().name(), {object: 1, other: 2})   // expect: first {"object": 1, "other": 2}
+
+// Through a lambda and a generic function declared inside another, the classes kept for each
+// set of type arguments stay apart; each object keeps its own variables.
+fun <T> pair(x : T) : string {
+  fun <U> inner(y : U) : Holder<U> => object : Holder<U> {
+    override fun get() : U => y
+  }
+  val a = inner(1)
+  val b = inner(2)
+  val c = inner(x)
+  return "${a# == b#} ${a# == c#} ${c is Holder<T>} ${a.get()} ${b.get()} ${c.get()}"
+}
+print(pair("t"), pair(5), pair(true))   // expect: true false true 1 2 t true true true 1 2 5 true false true 1 2 true
+print(viaLambda(1)# == viaLambda(2)#, viaLambda(1)# == viaLambda("s")#, viaLambda(4).get())   // expect: true false 4
+val hs : open List<Holder<int>> = []
+for (i in 0 ..< 1000) { hs.add(wrap(i)) }
+var total = 0
+for (h in hs) { total += h.get() }
+print(total, hs[0]# == hs[999]#, hs[5] is Holder<int>)   // expect: 499500 true true

@@ -158,6 +158,9 @@ struct ObjectBuild {
     // Making the class itself uses a variable of the code around (a class declared there as
     // its supertype, say): it is made every time instead of once.
     bool usesOuter = false;
+    // It uses only the type parameters of the code around: it is made once for each set of
+    // type arguments (G66).
+    bool usesOuterTypes = false;
 
     struct Capture {
         uint8_t kind;  // as Op::Capture: 0 a local, 1 an upvalue, 2 a capture, 3 the superclass
@@ -2696,7 +2699,7 @@ private:
             for (ObjectBuild* build = objectBuild_; build != nullptr; build = build->outer)
                 for (FunctionState* around = build->boundary; around != nullptr; around = around->enclosing)
                     if (around == place.owner) {
-                        build->usesOuter = true;
+                        build->usesOuterTypes = true;
                         break;
                     }
             emit(Op::TypeArg);
@@ -2908,7 +2911,7 @@ private:
         for (ObjectBuild* build = objectBuild_; build != nullptr; build = build->outer)
             for (FunctionState* around = build->boundary; around != nullptr; around = around->enclosing)
                 if (around == owner) {
-                    build->usesOuter = true;
+                    build->usesOuterTypes = true;
                     break;
                 }
         line_ = at.line;
@@ -6627,6 +6630,10 @@ private:
                 code()[static_cast<size_t>(skip) - 1] = 0xFF;
                 code()[static_cast<size_t>(keptAt)] = 0xFF;
                 code()[static_cast<size_t>(keptAt) + 1] = 0xFF;
+            } else if (build.usesOuterTypes) {
+                // Made from the type arguments of the code around: kept for each set of them.
+                code()[static_cast<size_t>(skip) - 3] = static_cast<uint8_t>(Op::ObjectClassTyped);
+                code()[static_cast<size_t>(keptAt) - 1] = static_cast<uint8_t>(Op::StoreClassTyped);
             }
         }
 

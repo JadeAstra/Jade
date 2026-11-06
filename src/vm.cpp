@@ -5982,6 +5982,8 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(SetCaptured)
             ASTRA_DISPATCH_TO(ObjectClass)
             ASTRA_DISPATCH_TO(StoreClass)
+            ASTRA_DISPATCH_TO(ObjectClassTyped)
+            ASTRA_DISPATCH_TO(StoreClassTyped)
             ASTRA_DISPATCH_TO(Capture)
             ASTRA_DISPATCH_TO(NewObject)
             ASTRA_DISPATCH_TO(Unset)
@@ -6645,6 +6647,26 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
         case Op::FrameTypes:
             pendingTypeArgs_ = frameTypeArgs(frame - frames_);
             break;
+        case Op::ObjectClassTyped: {
+            // An anonymous object's class made with the type arguments the frame has, made
+            // before (G66). A core of a parallel section makes its own each time, as StoreClass.
+            const int global = (ip += 2, operandU16(ip - 2));
+            const int target = (ip += 4, operandI32(ip - 4));
+            if (coreId_ == 0) {
+                const auto found = typedClasses_.find(typedClassKey(global, frameTypeArgs(frame - frames_)));
+                if (found != typedClasses_.end()) {
+                    *sp_++ = Value::object(found->second);
+                    ip = code + target;
+                }
+            }
+            break;
+        }
+        case Op::StoreClassTyped: {
+            const int global = (ip += 2, operandU16(ip - 2));
+            if (coreId_ == 0 && sp_[-1].isObjType(ObjType::Class))
+                typedClasses_[typedClassKey(global, frameTypeArgs(frame - frames_))] = asClass(sp_[-1]);
+            break;
+        }
         case Op::CachedType: {
             const int cache = (ip += 2, operandU16(ip - 2));
             const int target = (ip += 4, operandI32(ip - 4));
@@ -7052,6 +7074,7 @@ void VM::collectGarbage() {
     markObject(context_->fiber);
     markValue(pendingDestination_);
     for (ObjClass* cls : smallKept_) markObject(cls);
+    for (const auto& [key, cls] : typedClasses_) markObject(cls);
     // ...and every other one that a thread is in the middle of: the contexts under the
     // running one, and those of the threads that are waiting for the lock or blocked.
     for (const ThreadState* thread : threads_) {

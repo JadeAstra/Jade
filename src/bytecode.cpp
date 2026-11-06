@@ -183,6 +183,8 @@ const OpInfo kOps[] = {
     {"COPY_LOCAL", Operand::U16U16},
     {"OBJECT_CLASS", Operand::U16I32},
     {"STORE_CLASS", Operand::U16},
+    {"OBJECT_CLASS_TYPED", Operand::U16I32},
+    {"STORE_CLASS_TYPED", Operand::U16},
     {"CAPTURE", Operand::U16U8},
     {"NEW_OBJECT", Operand::U8},
     {"GET_CAPTURED", Operand::U16U16},
@@ -722,11 +724,13 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                     pops = pushes = 1;
                     break;
                 case Op::ObjectClass:
+                case Op::ObjectClassTyped:
                     if (a >= static_cast<int>(program.globalNames.size()) && a != 0xFFFF) fail("global out of range");
                     flow(b, depth + 1);
                     maxDepth = std::max(maxDepth, depth + 1);
                     break;
                 case Op::StoreClass:
+                case Op::StoreClassTyped:
                     if (a >= static_cast<int>(program.globalNames.size()) && a != 0xFFFF) fail("global out of range");
                     pops = pushes = 1;
                     break;
@@ -1339,6 +1343,7 @@ void disassembleFunction(const FunctionProto& f, const Program& program, std::os
                 out << " argc=" << (a & 0x7F) << ((a & 0x80) != 0 ? " gives true" : "") << " -> " << b;
                 break;
             case Op::ObjectClass:
+            case Op::ObjectClassTyped:
                 out << " " << a << " -> " << b;
                 break;
             case Op::Capture:
@@ -1501,7 +1506,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 29;
+const uint8_t kFormatVersion = 30;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1923,6 +1928,8 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm) {
             case Op::DefineTypedGlobal: first(r.global); break;
             case Op::ObjectClass:
             case Op::StoreClass:
+            case Op::ObjectClassTyped:
+            case Op::StoreClassTyped:
                 if (readU16(code, ip + 1) != 0xFFFF) first(r.global);  // 0xFFFF: kept nowhere
                 break;
             case Op::GetImplicit:
@@ -2051,7 +2058,9 @@ int globalOperand(Op op, int first) {
         case Op::DefineGlobal:
         case Op::DefineTypedGlobal: return 1;
         case Op::ObjectClass:
-        case Op::StoreClass: return first == 0xFFFF ? 0 : 1;
+        case Op::StoreClass:
+        case Op::ObjectClassTyped:
+        case Op::StoreClassTyped: return first == 0xFFFF ? 0 : 1;
         case Op::GetImplicit:
         case Op::SetImplicit:
         case Op::InvokeImplicit: return 2;
@@ -2074,6 +2083,7 @@ int targetOperand(Op op) {
         case Op::AddNew:
         case Op::InsertNew: return 2;
         case Op::ObjectClass:
+        case Op::ObjectClassTyped:
         case Op::CachedType:
         case Op::TagCollection:
         case Op::RangeNext:

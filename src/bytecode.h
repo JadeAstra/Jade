@@ -252,13 +252,17 @@ enum class Op : uint16_t {
 
     // An anonymous object (`object : Shape { ... }`), its class made once (M6.5 part 4).
     // ObjectClass pushes the class kept in the global and jumps over the code that makes it,
-    // which StoreClass ends by keeping it there (0xFFFF: never kept, made every time). Then
+    // which StoreClass ends by keeping it there (0xFFFF: never kept, made every time). A class
+    // made with the type parameters of the code around it is kept by ObjectClassTyped and
+    // StoreClassTyped instead, one for each set of type arguments the frame has (G66). Then
     // the variables of the code around that its members use are pushed, each by Capture
     // (kind 0 a local, 1 an upvalue, 2 a capture of the object this code runs on, 3 the
     // superclass of the class `index` slots down), and NewObject makes the object with them.
     // Its members reach them with GetCaptured and SetCaptured, on the object they run on.
     ObjectClass,        // u16 global, i32 target          -> [class, at target]
     StoreClass,         // u16 global                      class -> class
+    ObjectClassTyped,   // u16 global, i32 target          -> [class, at target]
+    StoreClassTyped,    // u16 global                      class -> class
     Capture,            // u16 index, u8 kind              -> captured variable
     NewObject,          // u8 count                        class captured... -> object (runs its init)
     GetCaptured,        // u16 capture, u16 name           -> value  (throws if it has no value yet)

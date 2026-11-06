@@ -439,6 +439,13 @@ public:
     std::unordered_map<const ObjTypeInfo*, uint16_t> valueTypeNumbers_;
     uint16_t nextValueType_ = 1;
     std::vector<ObjClass*> smallKept_;  // the small value types this VM numbered, kept alive
+    // The classes of anonymous objects made with type parameters of the code around them (G66),
+    // by the global that names the object and the type arguments of the frame that made it:
+    // types are made once each and never freed, so their address tells them apart.
+    std::unordered_map<uint64_t, ObjClass*> typedClasses_;
+    static uint64_t typedClassKey(int global, const ObjTypeInfo* types) {
+        return static_cast<uint64_t>(global) << 48 ^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(types));
+    }
     Value ownRef(Value v);
     void ownAll(Value* from, Value* to) {
         for (Value* at = from; at < to; at++)

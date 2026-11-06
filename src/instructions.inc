@@ -962,6 +962,10 @@ CASE(KeepLocal) {
     DONE();
 }
 }
+CASES(ObjectClassTyped, StoreClassTyped) {  // G66
+    ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
+    DONE();
+}
 CASE(TypeSlots) {
     ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
     DONE();
