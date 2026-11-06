@@ -1553,6 +1553,13 @@ COLD(InvokeOwn) {
         const ObjString* name = asString(consts[FAST_U16(0)]);
         if ((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn)
             if (const Value* method = box->cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
+    } else if (sp[-ip[2] - 1].isRef()) {
+        // A method of the type of a value where it is kept, an item of a list say, run on it
+        // there (G9): a mutating one changes it in its place.
+        const ObjClass* cls = refClassOrNull(sp[-ip[2] - 1]);
+        const ObjString* name = asString(consts[FAST_U16(0)]);
+        if (cls != nullptr && ((name->restricted & 1) == 0 || opAt(ip - kOpBytes) == Op::InvokeOwn))
+            if (const Value* method = cls->methods.find(name)) QUICK_CALL(asClosure(*method), ip[2], 3)
     }
     ObjString* name = asString(consts[READ_U16()]);
     int argc = READ_U8();
@@ -2203,7 +2210,25 @@ CASE(FieldDestination) {
     DONE();
 }
 }
-CASES(PlaceLocal, PlaceUpvalue, PlaceGlobal, PlaceField, PlaceIndex, InsertNew) {
+HAS_COLD(PlaceLocal)
+CASE(PlaceLocal) {
+    {
+        // A variable holding an item of a list, or a value inside an object, where it is (a for
+        // loop's over a list of values): its place is that, here (G9); anything else below.
+        const Value& slot = base[FAST_U16(0)];
+        if (slot.kind == ValueKind::Ref && (slot.as.obj->type == ObjType::List || slot.as.obj->type == ObjType::Instance)) {
+            *sp++ = slot;
+            ip += 2;
+            NEXT();
+        }
+    }
+    GO_COLD(PlaceLocal);
+}
+COLD(PlaceLocal) {
+    ip = placeInstruction(opAt(ip - kOpBytes), ip, frame);
+    DONE();
+}
+CASES(PlaceUpvalue, PlaceGlobal, PlaceField, PlaceIndex, InsertNew) {
     ip = placeInstruction(opAt(ip - kOpBytes), ip, frame);
     DONE();
 }
@@ -2912,6 +2937,28 @@ CASES(RSetPropSS, RSetPropSK) {
                     }
                 }
             }
+        } else if (obj.isRef() && obj.refDepth == 0 && caches != nullptr) {
+            // A var field of a value where it is kept (M6.6 part 4), an item of a list say: an
+            // int, a float or a bool field given its own kind, here too, as a method changing
+            // the items of a list writes them (G9).
+            const ObjClass* cls = refHolderClass(obj);
+            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+            if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
+                const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                uint8_t* const to = (field.kind == ValueField::Float ? given.isFloat()
+                                     : field.kind == ValueField::Int ? given.isInt()
+                                                                     : field.kind == ValueField::Bool && given.isBool())
+                                        ? refQuickly(obj, true)
+                                        : nullptr;
+                if (to != nullptr) {
+                    if (field.kind == ValueField::Bool) to[field.offset] = given.as.b ? 1 : 0;
+                    else std::memcpy(to + field.offset, &given.as, 8);
+                    base[ip[0]] = given;
+                    sp = base + ip[3];
+                    ip += 11;
+                    NEXT();
+                }
+            }
         }
     }
     GO_COLD(RSetPropSS);
@@ -2981,28 +3028,6 @@ COLD(RSetPropSS) {
             if (field.kind == ValueField::Float ? given.isFloat() : field.kind == ValueField::Int ? given.isInt() : given.isBool()) {
                 if (field.kind == ValueField::Bool) box->data()[field.offset] = given.as.b ? 1 : 0;
                 else std::memcpy(box->data() + field.offset, &given.as, 8);
-                base[ip[0]] = given;
-                sp = base + ip[3];
-                ip += 11;
-                NEXT();
-            }
-        }
-    }
-    if (obj.isRef() && obj.refDepth == 0 && caches != nullptr) {
-        // A var field of a value where it is kept (M6.6 part 4), as SetProp writes
-        // one: an int, a float or a bool field given its own kind.
-        const ObjClass* cls = refHolderClass(obj);
-        const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
-        if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
-            const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
-            uint8_t* const to = (field.kind == ValueField::Float ? given.isFloat()
-                                 : field.kind == ValueField::Int ? given.isInt()
-                                                                 : field.kind == ValueField::Bool && given.isBool())
-                                    ? refQuickly(obj, true)
-                                    : nullptr;
-            if (to != nullptr) {
-                if (field.kind == ValueField::Bool) to[field.offset] = given.as.b ? 1 : 0;
-                else std::memcpy(to + field.offset, &given.as, 8);
                 base[ip[0]] = given;
                 sp = base + ip[3];
                 ip += 11;
