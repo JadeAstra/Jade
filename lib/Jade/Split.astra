@@ -1,0 +1,164 @@
+// Two components side by side, or one above the other, with a divider between that can be
+// dragged. (JadeUI: Split.kt.)
+
+private const divider = 6
+
+// Two components beside each other (`vertical`: one above the other), sharing the room by
+// `ratio`, the first's share; dragging the divider changes it. Each keeps at least its least
+// size while there is room for both.
+class Split : Content, Container, CursorProvider {
+  override var owner : Component? = null
+  val first : Component
+  val second : Component
+
+  // One above the other, in place of side by side.
+  var vertical = false
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // The first's share of the room, from 0 to 1.
+  var ratio = 0.5
+    private set
+  // Whether the divider is held: then the split takes every drag and the release.
+  internal var draggingDivider = false
+    private set
+  private var grab = 0                   // where on the divider the drag began
+  private var lastW = 0
+  private var lastH = 0
+
+  fun init(first : Component, second : Component, vertical : bool = false, ratio : float = 0.5) {
+    this.first = first
+    this.second = second
+    this.vertical = vertical
+    this.ratio = ratio.coerceIn(0.0, 1.0)
+  }
+
+  override fun sizes() : Sizes {
+    val fMin = first.minSize()
+    val sMin = second.minSize()
+    val fPref = first.prefSize()
+    val sPref = second.prefSize()
+    val most = Size(int.maxValue, int.maxValue)
+    if (!vertical) {
+      return Sizes(Size(fMin.width + sMin.width + divider, Math.max(fMin.height, sMin.height)),
+                   Size(fPref.width + sPref.width + divider, Math.max(fPref.height, sPref.height)), most)
+    }
+    return Sizes(Size(Math.max(fMin.width, sMin.width), fMin.height + sMin.height + divider),
+                 Size(Math.max(fPref.width, sPref.width), fPref.height + sPref.height + divider), most)
+  }
+
+  private fun clampFirst(v : int, avail : int, fMin : int, sMin : int) : int {
+    val lo = Math.min(fMin, avail)
+    val hi = Math.max(avail - sMin, lo)
+    return v.coerceIn(lo, hi)
+  }
+
+  // ---- As a container ----
+
+  override fun layoutChildren(width : int, height : int) {
+    lastW = width
+    lastH = height
+    if (!vertical) {
+      val avail = Math.max(width - divider, 0)
+      val firstW = clampFirst((avail * ratio).toInt(), avail, first.minSize().width, second.minSize().width)
+      first.layout(firstW, height)
+      first.bounds = Rect(0, 0, firstW, height)
+      second.layout(avail - firstW, height)
+      second.bounds = Rect(firstW + divider, 0, avail - firstW, height)
+    } else {
+      val avail = Math.max(height - divider, 0)
+      val firstH = clampFirst((avail * ratio).toInt(), avail, first.minSize().height, second.minSize().height)
+      first.layout(width, firstH)
+      first.bounds = Rect(0, 0, width, firstH)
+      second.layout(width, avail - firstH)
+      second.bounds = Rect(0, firstH + divider, width, avail - firstH)
+    }
+  }
+  override fun shownChildren() : List<Component> => [first, second]
+  override fun childAtPoint(px : int, py : int) : PositionalChild? {
+    if (draggingDivider) { return null }  // a held divider takes everything until it is let go
+    for (child in [first, second]) {
+      if (child.visible and child.bounds.contains(px, py)) { return PositionalChild(child, child.bounds.x, child.bounds.y) }
+    }
+    return null
+  }
+
+  private fun dividerStart() : int => !vertical ? first.bounds.width : first.bounds.height
+  private fun onDivider(x : int, y : int) : bool {
+    val d = dividerStart()
+    val at = !vertical ? x : y
+    return at >= d and at < d + divider
+  }
+
+  override fun cursorAt(x : int, y : int) : CursorKind {
+    if (draggingDivider or onDivider(x, y)) { return !vertical ? CursorKind.resizeH : CursorKind.resizeV }
+    return CursorKind.default
+  }
+
+  // ---- Painting ----
+
+  override fun paint(canvas : Canvas) {
+    paintChild(canvas, first)
+    paintChild(canvas, second)
+    val d = dividerStart()
+    canvas.color = Palette.headerBg
+    if (!vertical) { canvas.fillRect(d, 0, divider, canvas.height) } else { canvas.fillRect(0, d, canvas.width, divider) }
+    canvas.color = Palette.border
+    if (!vertical) {
+      canvas.drawLine(d, 0, d, canvas.height)
+      canvas.drawLine(d + divider - 1, 0, d + divider - 1, canvas.height)
+      canvas.color = Palette.line(0xA0A0A0)
+      val cy = canvas.height / 2
+      for (i in -1 .. 1) { canvas.fillOval(d + divider / 2 - 1, cy + i * 4 - 1, 2, 2) }
+    } else {
+      canvas.drawLine(0, d, canvas.width, d)
+      canvas.drawLine(0, d + divider - 1, canvas.width, d + divider - 1)
+      canvas.color = Palette.line(0xA0A0A0)
+      val cx = canvas.width / 2
+      for (i in -1 .. 1) { canvas.fillOval(cx + i * 4 - 1, d + divider / 2 - 1, 2, 2) }
+    }
+  }
+
+  private fun paintChild(canvas : Canvas, c : Component) {
+    if (!c.visible) { return }
+    val b = c.bounds
+    if (b.width <= 0 or b.height <= 0) { return }
+    val sub = canvas.sub(b.x, b.y, b.width, b.height)
+    try {
+      c.paintInto(sub)
+    } finally {
+      sub.dispose()
+    }
+  }
+
+  // ---- The divider ----
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      if (onDivider(event.x, event.y)) {
+        draggingDivider = true
+        grab = (!vertical ? event.x : event.y) - dividerStart()
+      }
+    } else if (event is Event.Drag) {
+      if (draggingDivider) {
+        if (!vertical) {
+          val avail = Math.max(lastW - divider, 1)
+          ratio = clampFirst(event.x - grab, avail, first.minSize().width, second.minSize().width).toFloat() / avail
+        } else {
+          val avail = Math.max(lastH - divider, 1)
+          ratio = clampFirst(event.y - grab, avail, first.minSize().height, second.minSize().height).toFloat() / avail
+        }
+        layoutChildren(lastW, lastH)
+        owner?.invalidate()               // its kept picture shows the children where they were
+      }
+    } else if (event is Event.Release) {
+      draggingDivider = false
+    }
+  }
+}
+
+// Two components side by side, or one above the other with `vertical`, the first taking
+// `ratio` of the room.
+fun split(first : Component, second : Component, vertical : bool = false, ratio : float = 0.5) : Component =>
+  Component(Split(first, second, vertical, ratio))
