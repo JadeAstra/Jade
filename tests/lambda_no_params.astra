@@ -1,0 +1,25 @@
+// `{ -> value }`: a lambda that says it takes nothing, as Kotlin writes it. It means what
+// `{ value }` means, except that it has no `it` and takes no argument.
+
+val f = { -> 42 }
+print(f())   // expect: 42
+
+val g : () -> string = { -> "hi" }
+print(g())   // expect: hi
+
+var n = 0
+val h = { ->
+  n += 1
+  n * 10
+}
+print(h(), h())   // expect: 10 20
+
+fun run(action : () -> unit) { action() }
+run { -> print("ran") }   // expect: ran
+
+class Button(val onClick : () -> unit)
+val b = Button(onClick = { -> print("clicked") })
+b.onClick()   // expect: clicked
+
+val empty = { -> }
+print(empty() == {}())   // expect: true

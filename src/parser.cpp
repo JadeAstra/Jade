@@ -3108,6 +3108,8 @@ ExprPtr Parser::lambdaLiteral(const Token& open, bool hasParams) {
         } while (match(TokenType::Comma));
         if (!decl->paramPatterns.empty()) decl->paramPatterns.resize(decl->params.size());
         expect(TokenType::ThinArrow, "'->' after the lambda's parameters");
+    } else if (match(TokenType::ThinArrow)) {
+        // `{ -> value }`: an empty list, said; the lambda takes nothing, and has no `it`.
     } else {
         // No parameter list: the lambda takes nothing, or one value that it calls `it`.
         addParam(open, "it");

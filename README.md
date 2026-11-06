@@ -848,6 +848,7 @@ expression:
 ```astra
 val add = { a, b -> a + b }
 val double = { it * 2 }              // with no parameter list, the one argument is called `it`
+val answer = { -> 42 }               // an empty list, said: takes nothing, and has no `it`
 val nothing = {}                     // does nothing; the empty map is written {:}
 
 [1, 2, 3].map { it * 2 }             // after a call, the lambda is its last argument
