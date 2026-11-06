@@ -30,6 +30,10 @@ object Jade {
   // What was typed into dialogs closed without finishing, by what they were about.
   val drafts = Drafts()
 
+  // The dialogs for choosing files: the system's once a window is shown, one that cancels
+  // everything before that and in tests.
+  var fileDialog : FileDialog = NoFileDialog()
+
   // Goes up whenever something happened that may have changed how any widget looks. A
   // widget's kept picture is good only for the number it was painted at.
   var renderGeneration = 0

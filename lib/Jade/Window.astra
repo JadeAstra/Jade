@@ -30,7 +30,7 @@ class Window {
   val initialWidth : int
   val initialHeight : int
   val exitOnClose : bool
-  val menuBar : any?
+  val menuBar : MenuBar?
   val onClose : () -> unit
   val onFilesDropped : (List<Path>) -> unit
   val onFilesDroppedAt : ((List<Path>, int, int) -> bool)?
@@ -55,7 +55,7 @@ class Window {
   //
   // A window with no owner ends the program when it is closed, and one with an owner does
   // not, unless `exitOnClose` says otherwise.
-  fun init(root : Component, title : string = "Jade", initialWidth : int = 900, initialHeight : int = 640, exitOnClose : bool? = null, menuBar : any? = null,
+  fun init(root : Component, title : string = "Jade", initialWidth : int = 900, initialHeight : int = 640, exitOnClose : bool? = null, menuBar : MenuBar? = null,
            onClose : () -> unit = {}, onFilesDropped : (List<Path>) -> unit = {}, onFilesDroppedAt : ((List<Path>, int, int) -> bool)? = null,
            icons : List<Image>? = null, onFront : () -> unit = {}, owner : Window? = null, focus : Component? = null, dialog : bool = false,
            sizeToContent : bool = false, centerOnOwner : bool = false, resizable : bool = true, keyFilter : ((Event.KeyPress, Component?) -> bool)? = null) {

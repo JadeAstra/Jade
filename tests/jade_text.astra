@@ -287,3 +287,65 @@ same("taken back", drafts.keys.size, 2)
 same("told of each change", told, [1, 2, 1, 0, 2])
 yes("Jade keeps them", Jade.drafts is Drafts)
 print("Clipboard, Drafts:", checks, "checks,", failed)   // expect: Clipboard, Drafts: 10 checks, []
+
+// -- ChromeTest: the menu model and the file dialogs, with no window --
+
+checks = 0
+// menuBarModelHoldsItemsChecksSeparatorsAndSubmenus
+var clicked = false
+var wrapped = true
+val bar = MenuBar([
+  Menu("File", [
+    MenuItem("New", accelerator = "Ctrl+N") { clicked = true },
+    Separator,
+    Menu("Recent", [MenuItem("a.txt") {}]),
+  ]),
+  Menu("View", [CheckItem("Wrap", true) { wrapped = it }]),
+])
+same("menus", bar.menus.size, 2)
+val file = bar.menus[0]
+same("label", file.label, "File")
+same("entries", file.entries.size, 3)
+val newItem = file.entries[0] as MenuItem
+same("accelerator", newItem.accelerator, "Ctrl+N")
+newItem.onClick()
+yes("chosen", clicked)
+yes("a separator", file.entries[1] === Separator)
+same("a menu within", (file.entries[2] as Menu).label, "Recent")
+val check = bar.menus[1].entries[0] as CheckItem
+check.toggle()
+same("turned off", [check.checked, wrapped], [false, false])
+check.toggle()
+same("and on again (JadeUI's could not be)", [check.checked, wrapped], [true, true])
+// An item enabled by a test made each time.
+var canRevert = false
+val revert = MenuItem("Revert", enabledFn = { canRevert }) {}
+yes("not now", !revert.isEnabled)
+canRevert = true
+yes("now", revert.isEnabled)
+yes("enabled alone", !MenuItem("Off", false) {}.isEnabled)
+
+// defaultFileDialogCancels
+val got = []
+val none = NoFileDialog()
+none.open { got.add(it) }
+none.save { got.add(it) }
+none.chooseDirectory { got.add(it) }
+same("every one cancels", got, [null, null, null])
+same("no folder to start in", none.startDir, null)
+
+// fileDialogIsPluggableViaJadeUi, with a fake written as JadeUI's tests write them: its
+// overrides leave the defaults to the interface.
+class Fake : FileDialog {
+  override fun open(title : string, filters : List<FileFilter>, onResult : (string?) -> unit) { onResult("/tmp/opened.txt") }
+  override fun save(title : string, suggestedName : string, filters : List<FileFilter>, onResult : (string?) -> unit) { onResult("/tmp/saved.txt") }
+  override fun chooseDirectory(title : string, onResult : (string?) -> unit) { onResult("/tmp") }
+}
+Jade.fileDialog = Fake()
+var opened : string? = null
+var savedTo : string? = null
+Jade.fileDialog.open { opened = it }
+Jade.fileDialog.save(filters = [FileFilter("Text", ["txt"])]) { savedTo = it }
+same("the program's own", [opened, savedTo], ["/tmp/opened.txt", "/tmp/saved.txt"])
+Jade.fileDialog = NoFileDialog()
+print("ChromeTest:", checks, "checks,", failed)   // expect: ChromeTest: 15 checks, []
