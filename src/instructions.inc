@@ -644,8 +644,11 @@ COLD(GetOwn) {
                     if (decl->payload == FieldDecl::NoPayload) {
                         const Value slot = instance->fields()[decl->slot];
                         const uint64_t from = instance->slotsStart + static_cast<uint64_t>(decl->slot) * sizeof(Value);
-                        if (slot.kind != ValueKind::Undefined && !slot.isRef() && !slot.isLazy()) {
-                            sp_[-1] = slot;
+                        if (slot.kind != ValueKind::Undefined && !slot.isLazy()) {
+                            // A value kept inside the object: where it is, to GetPropRef and
+                            // GetOwnRef, as a field is read; a copy to the others, as the
+                            // getter would give.
+                            sp_[-1] = slot.isRef() && getOp < Op::GetPropRef ? ownRef(slot) : slot;
                             if (caches != nullptr && from <= 0xFFFF)
                                 caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 | from << 16, std::memory_order_relaxed);
                             DONE();

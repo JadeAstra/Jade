@@ -1,0 +1,42 @@
+// A property with a setter alone, holding a value: its getter only reads the stored field, so
+// it is read where it is, as a field is (no copy made to hand it back), and a copy taken
+// from it is still its own.
+value Edges(var left : int, var top : int, var right : int, var bottom : int)
+
+class Pane(val name : string) {
+  var changes = 0
+  var edges : Edges = Edges(0, 0, 0, 0)
+    set(value) {
+      field = value
+      changes += 1
+    }
+  fun width() : int => edges.left + edges.right
+  fun described() : string => describe(edges)
+}
+
+fun describe(e : Edges) : string => "${e.left},${e.top},${e.right},${e.bottom}"
+
+val p = Pane("p")
+p.edges = Edges(1, 2, 3, 4)
+var total = 0
+for (i in 0 ..< 1000) { total += p.width() + p.edges.top }
+print(total, p.described(), p.changes)   // expect: 6000 1,2,3,4 1
+
+// A copy taken out, then the property given another: the copy keeps what it had.
+var kept = p.edges
+p.edges = Edges(9, 9, 9, 9)
+kept.left = 5
+print(describe(kept), p.described(), p.changes)   // expect: 5,2,3,4 9,9,9,9 2
+
+// A subclass whose getter does more is still asked.
+class Doubled(name : string) : Pane(name) {
+  override var edges : Edges = Edges(0, 0, 0, 0)
+    get() => Edges(field.left * 2, field.top * 2, field.right * 2, field.bottom * 2)
+}
+val panes : List<Pane> = [Pane("a"), Doubled("b")]
+for (q in panes) { q.edges = Edges(1, 1, 1, 1) }
+var widths = ""
+for (r in 0 ..< 3) {
+  for (q in panes) { widths = widths + "${q.width()} " }
+}
+print(widths.trim(), panes[1].described())   // expect: 2 4 2 4 2 4 2,2,2,2
