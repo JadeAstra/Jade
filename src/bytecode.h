@@ -399,6 +399,8 @@ enum class Op : uint16_t {
     WithPlace,          // u8 place                        ->
     KeepLocal,          // u16 slot                        ->
     KeepTop,            //                                 value -> value (a copy, where in a place)
+    // A class whose fields' types depend on its type arguments (G4): the function that gives them.
+    FieldTypesMaker,    //                                 class function -> class  (ObjClass::fieldTypesMaker)
 
     Count_,
 
@@ -552,6 +554,10 @@ const uint8_t kTypeNullable = 0x80;  // `type?`: null is allowed as well
 const uint8_t kTypeMask = 0x7F;
 // Never the type of a value: the type arguments of a call, kept as one type (M6.6 part 1).
 const uint8_t kTypeArguments = 0x7F;
+// Never the type of a value either: in the pattern of a field's type, the type parameter `id -
+// kTypeHole` of the class declaring it, the class's own type arguments put in its place (G4).
+const uint8_t kTypeHole = 0x60;
+const uint8_t kTypeHoles = 16;
 // FunctionProto::typeArgs.
 const uint8_t kTypeArgsOwn = 1;
 const uint8_t kTypeArgsKept = 2;

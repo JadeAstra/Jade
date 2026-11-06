@@ -166,6 +166,8 @@ ObjTypeInfo* VM::typeOfValue(const Value& v) {
     if (ObjClass* cls = classOf(v)) {
         if (v.isObjType(ObjType::Instance))
             if (const ObjTypeInfo* own = asInstance(v)->type()) return const_cast<ObjTypeInfo*>(own);
+        if (cls->isValue)
+            if (const ObjTypeInfo* kept = recordedType(v)) return const_cast<ObjTypeInfo*>(kept);  // G4
         return typeOf(kTypeInstance, false, cls, {});
     }
     auto plain = [&](uint8_t id) { return typeOf(id, false, nullptr, {}); };
@@ -532,6 +534,9 @@ std::string VM::valueTypeText(const Value& v) const {
     if (v.isObjType(ObjType::List) && asList(v)->type != nullptr) return typeInfoText(asList(v)->type);
     if (v.isObjType(ObjType::Map) && asMap(v)->type != nullptr) return typeInfoText(asMap(v)->type);
     if (v.isObjType(ObjType::Instance) && asInstance(v)->type() != nullptr) return typeInfoText(asInstance(v)->type());
+    // A value of a generic value type, with the type arguments it keeps in a box or itself (G4).
+    if (v.isObjType(ObjType::Value) && asValue(v)->type != nullptr) return typeInfoText(asValue(v)->type);
+    if (v.isSmall() && smallType(v) != nullptr) return typeInfoText(smallType(v));
     return typeName(v);
 }
 
@@ -554,6 +559,149 @@ const std::vector<ObjTypeInfo*>& VM::supertypesOf(ObjClass* cls, const ObjTypeIn
     }
     std::lock_guard<std::mutex> hold(root.internMutex_);
     return cls->supertypesMade.emplace(own, std::move(made)).first->second;
+}
+
+const std::vector<ObjTypeInfo*>& VM::fieldTypesOf(ObjClass* cls, const ObjTypeInfo* own) {
+    static const std::vector<ObjTypeInfo*> none;
+    if (cls->patternsState.load(std::memory_order_acquire) != 2) return none;
+    VM& root = root_ != nullptr ? *root_ : *this;  // what every core has made, kept once
+    {
+        std::lock_guard<std::mutex> hold(root.internMutex_);
+        auto found = cls->fieldTypesMade.find(own);
+        if (found != cls->fieldTypesMade.end()) return found->second;
+    }
+    // Made outside the lock, which making a type takes; two cores may make the same types, which
+    // are interned: the first kept is kept.
+    std::vector<ObjTypeInfo*> made(cls->fieldPatterns.size(), nullptr);
+    for (size_t i = 0; i < made.size(); i++)
+        if (cls->fieldPatterns[i] != nullptr) made[i] = substituted(cls->fieldPatterns[i], own);
+    std::lock_guard<std::mutex> hold(root.internMutex_);
+    return cls->fieldTypesMade.emplace(own, std::move(made)).first->second;
+}
+
+ObjTypeInfo* VM::substituted(ObjTypeInfo* pattern, const ObjTypeInfo* own) {
+    if (pattern->id >= kTypeHole && pattern->id < kTypeHole + kTypeHoles) {
+        ObjTypeInfo* given = typeArgument(own, pattern->id - kTypeHole);
+        if (!pattern->nullable || given->nullable) return given;
+        return typeOf(given->id, true, given->cls, given->args);
+    }
+    if (pattern->args.empty()) return pattern;
+    std::vector<ObjTypeInfo*> args;
+    bool changed = false;
+    for (ObjTypeInfo* arg : pattern->args) {
+        args.push_back(substituted(arg, own));
+        changed = changed || args.back() != arg;
+    }
+    return changed ? typeOf(pattern->id, pattern->nullable, pattern->cls, args) : pattern;
+}
+
+// The patterns of a class's fields' types (ObjClass::fieldTypesMaker): its maker run once, given
+// stand-ins for the class's type arguments, at a point where the program may run, as the first
+// object or value of the class is made. A core that finds another making them goes on without.
+void VM::makeFieldPatterns(ObjClass* cls) {
+    uint8_t notMade = 0;
+    if (!cls->patternsState.compare_exchange_strong(notMade, 1, std::memory_order_acq_rel)) return;
+    std::vector<ObjTypeInfo*> holes;
+    for (uint8_t i = 0; i < kTypeHoles; i++) holes.push_back(typeOf(static_cast<uint8_t>(kTypeHole + i), false, nullptr, {}));
+    // What the call about to be made was given is put back for it.
+    const ObjTypeInfo* const savedTypeArgs = pendingTypeArgs_;
+    const Value savedDestination = pendingDestination_;
+    TempRoot keepDestination(*this, savedDestination);
+    pendingDestination_ = Value::null();
+    pendingTypeArgs_ = typeOf(kTypeArguments, false, nullptr, holes);
+    std::vector<ObjTypeInfo*> made(cls->declared.size(), nullptr);
+    const Value given = call(Value::object(cls->fieldTypesMaker), 0, nullptr);
+    pendingTypeArgs_ = savedTypeArgs;
+    pendingDestination_ = savedDestination;
+    if (given.isObjType(ObjType::List) && asList(given)->pack == nullptr) {
+        const std::vector<Value>& pairs = asList(given)->values();
+        for (size_t i = 0; i + 1 < pairs.size(); i += 2) {
+            const Value name = pairs[i], type = pairs[i + 1];
+            if (!name.isString() || !type.isObjType(ObjType::TypeInfo)) continue;
+            if (const Value* at = cls->declaredIndex.find(asString(name))) made[static_cast<size_t>(at->as.i)] = static_cast<ObjTypeInfo*>(type.as.obj);
+        }
+    }
+    cls->fieldPatterns = std::move(made);
+    cls->patternsState.store(2, std::memory_order_release);
+}
+
+uint16_t VM::valueTypeNumber(const ObjTypeInfo* type) {
+    if (type == nullptr) return 0;
+    VM& root = root_ != nullptr ? *root_ : *this;
+    std::lock_guard<std::mutex> hold(root.internMutex_);
+    if (root.valueTypeTable_ == nullptr) root.valueTypeTable_.reset(new std::atomic<const ObjTypeInfo*>[65536]());
+    auto found = root.valueTypeNumbers_.find(type);
+    if (found != root.valueTypeNumbers_.end()) return found->second;
+    if (root.nextValueType_ == 0) return 0;  // every number given out
+    const uint16_t number = root.nextValueType_++;
+    root.valueTypeTable_[number].store(type, std::memory_order_release);
+    root.valueTypeNumbers_.emplace(type, number);
+    return number;
+}
+
+const ObjTypeInfo* VM::recordedType(const Value& v) {
+    switch (v.kind) {
+        case ValueKind::Small: return smallType(v);
+        case ValueKind::Ref: return refType(v);
+        case ValueKind::Obj: return v.as.obj->type == ObjType::Value ? asValue(v)->type : nullptr;
+        default: return nullptr;
+    }
+}
+
+const ObjTypeInfo* VM::refType(const Value& r) {
+    const ObjTypeInfo* type = nullptr;
+    ObjClass* cls = nullptr;
+    uint32_t base = 0;
+    switch (r.as.obj->type) {
+        case ObjType::List: {
+            // An item of a list: the type the list was made to hold, its own where it is the item's
+            // class, wider or not (a Pair<int, int> in a List<Pair<Number, Number>>).
+            const ObjList* list = static_cast<const ObjList*>(r.as.obj);
+            if (list->pack == nullptr) return nullptr;
+            cls = list->pack->itemClass;
+            if (list->type != nullptr && list->type->args.size() == 1 && list->type->args[0]->cls == cls) type = list->type->args[0];
+            break;
+        }
+        case ObjType::Instance: {
+            // A value kept inside an object: its field's declared type, made for the object's own.
+            ObjInstance* instance = static_cast<ObjInstance*>(r.as.obj);
+            const ObjClass::InlineField* field = instance->cls->inlineFieldAt(r.refOffset);
+            cls = field->cls;
+            base = field->offset;
+            type = fieldTypeOf(instance->cls, instance->type(), field->declared);
+            break;
+        }
+        case ObjType::Places: {
+            const ObjPlace* place = static_cast<const ObjPlace*>(r.as.obj);
+            cls = place->cls;
+            type = place->type;
+            break;
+        }
+        default: {
+            const ObjValue* box = static_cast<const ObjValue*>(r.as.obj);
+            cls = box->cls;
+            type = box->type;
+            break;
+        }
+    }
+    // A value held in it, `refDepth` deep: its field's declared type, made for the one holding it.
+    for (int d = 0; d < r.refDepth && cls != nullptr; d++) {
+        const ValueLayout* layout = cls->layout.load(std::memory_order_acquire);
+        ObjClass* inner = nullptr;
+        for (size_t i = 0; i < layout->fields.size(); i++) {
+            const ValueField& field = layout->fields[i];
+            if (field.kind != ValueField::Nested) continue;
+            const uint32_t start = base + field.offset;
+            if (r.refOffset >= start && r.refOffset < start + field.cls->layout.load(std::memory_order_acquire)->size) {
+                type = fieldTypeOf(cls, type, i);
+                inner = field.cls;
+                base = start;
+                break;
+            }
+        }
+        cls = inner;
+    }
+    return type != nullptr && type->cls == cls ? type : nullptr;
 }
 
 const ObjTypeInfo* VM::typeAs(ObjClass* cls, const ObjTypeInfo* own, const ObjClass* target) {
@@ -611,7 +759,9 @@ bool VM::fitsType(const Value& v, const ObjTypeInfo* type) {
         const ObjClass* const cls = classOf(v);
         if (cls == nullptr) return builtinFitsClass(v, type->cls);  // a built-in value an extend fits (G30)
         if (!cls->isSubclassOf(type->cls)) return false;
-        if (type->args.empty() || !v.isObjType(ObjType::Instance)) return true;  // a value keeps no type arguments yet
+        if (type->args.empty()) return true;
+        if (cls->isValue) return cls != type->cls || valueFits(v, const_cast<ObjClass*>(cls), type);
+        if (!v.isObjType(ObjType::Instance)) return true;
         // An object made without its type arguments takes any; one of a subclass is seen as
         // the class it extends.
         ObjInstance* instance = asInstance(v);
@@ -631,6 +781,56 @@ bool VM::fitsType(const Value& v, const ObjTypeInfo* type) {
     for (size_t i = 0; i < made->args.size(); i++)
         if (!isSubtype(made->args[i], type->args[i])) return false;
     return true;
+}
+
+bool VM::valueFits(const Value& v, ObjClass* cls, const ObjTypeInfo* type) {
+    const ObjTypeInfo* kept = recordedType(v);
+    if (kept != nullptr && kept->args.size() != type->args.size()) kept = nullptr;
+    bool wider = false;
+    for (size_t i = 0; i < type->args.size(); i++) {
+        const ObjTypeInfo* asked = type->args[i];
+        const ObjTypeInfo* has = kept != nullptr ? kept->args[i] : nullptr;
+        if (has != nullptr && isSubtype(has, asked)) continue;
+        // Wider than asked, or not known: what the value holds says. Neither within the other: no
+        // value is of both (an Id<User> is never an Id<Order>).
+        if (has != nullptr && !isSubtype(asked, has)) return false;
+        wider = true;
+    }
+    if (!wider || cls->fieldTypesMaker == nullptr) return true;
+    // The fields declared with type arguments, each against its type made for those asked.
+    const Value held = v;  // a small value's bytes are in it
+    const uint8_t* bytes = held.kind == ValueKind::Small ? smallBytes(held)
+                           : held.kind == ValueKind::Ref ? refBytes(held)
+                           : held.isObjType(ObjType::Value) ? asValue(held)->data()
+                                                            : nullptr;
+    if (bytes == nullptr) return false;
+    const ValueLayout& layout = layoutOf(cls);
+    const std::vector<ObjTypeInfo*>& fields = fieldTypesOf(cls, typeOf(kTypeInstance, false, cls, type->args));
+    TempRoot keep(*this, v);
+    for (size_t i = 0; i < fields.size() && i < layout.fields.size(); i++) {
+        if (fields[i] == nullptr) continue;
+        const Value field = readValueField(bytes + layout.fields[i].offset, layout.fields[i], fields[i]);
+        TempRoot keepField(*this, field);
+        if (!fitsType(field, fields[i])) return false;
+    }
+    return true;
+}
+
+Value VM::retyped(const Value& v, const ObjTypeInfo* type) {
+    if (v.kind == ValueKind::Small) {
+        Value made = v;
+        made.refOffset = valueTypeNumber(type);
+        return made;
+    }
+    const Value boxed = v.kind == ValueKind::Ref ? ownRef(v) : v;
+    if (!boxed.isObjType(ObjType::Value)) return v;
+    ObjValue* from = asValue(boxed);
+    if (from->type == type) return boxed;
+    TempRoot keep(*this, boxed);
+    ObjValue* box = newValue(from->cls);
+    std::memcpy(box->data(), from->data(), layoutOf(from->cls).size);
+    box->type = type;
+    return Value::object(box);
 }
 
 ObjString* VM::intern(std::string_view s) {
@@ -2865,7 +3065,7 @@ ObjValue* VM::newValue(ObjClass* cls) {
 }
 
 // The value of a field kept at `at` in a value's layout.
-Value VM::readValueField(const uint8_t* at, const ValueField& field) {
+Value VM::readValueField(const uint8_t* at, const ValueField& field, const ObjTypeInfo* type) {
     switch (field.kind) {
         case ValueField::Int: {
             int64_t i;
@@ -2890,10 +3090,12 @@ Value VM::readValueField(const uint8_t* at, const ValueField& field) {
             return v;
         }
         case ValueField::Nested: {
-            if (field.cls->smallId != 0) return smallFrom(field.cls, at, field.cls->layout.load(std::memory_order_relaxed)->size);
+            if (type != nullptr && type->cls != field.cls) type = nullptr;
+            if (field.cls->smallId != 0) return smallFrom(field.cls, at, field.cls->layout.load(std::memory_order_relaxed)->size, type);
             // A value held in another, read on its own: a box of its own, a copy (M6.6 part 2).
             ObjValue* box = newValue(field.cls);
             std::memcpy(box->data(), at, layoutOf(field.cls).size);
+            box->type = type;
             return Value::object(box);
         }
     }
@@ -2997,7 +3199,7 @@ void VM::setValueField(ObjValue* box, ObjString* name, Value value) {
     const int64_t index = valueFieldIndex(box, name);
     if (index < 0)
         throw runtimeError(Thrown::UnsupportedOperationException, box->cls->name->utf8() + " has no field '" + name->utf8() + "'; fields must be declared in it with val or var");
-    if (!box->constructing)
+    if (!box->valueOpen)
         throw runtimeError(Thrown::IllegalStateException, "'" + name->utf8() + "' of value " + box->cls->name->utf8() +
                            " cannot be given a new value: a value never changes once it is made");
     const ValueField& field = layoutOf(box->cls).fields[static_cast<size_t>(index)];
@@ -3128,9 +3330,13 @@ Value VM::packedGet(ObjList* list, size_t i) {
         case ListStore::Bools: return Value::boolean(*at != 0);
         case ListStore::Narrow: return readNarrow(list->pack->narrow, at);
         case ListStore::Items: {
-            if (list->pack->itemClass->smallId != 0) return smallFrom(list->pack->itemClass, at, list->pack->width);
+            const ObjTypeInfo* type = list->type != nullptr && list->type->args.size() == 1 && list->type->args[0]->cls == list->pack->itemClass
+                                          ? list->type->args[0]
+                                          : nullptr;
+            if (list->pack->itemClass->smallId != 0) return smallFrom(list->pack->itemClass, at, list->pack->width, type);
             ObjValue* box = newValue(list->pack->itemClass);
             std::memcpy(box->data(), at, list->pack->width);
+            box->type = type;
             return Value::object(box);
         }
         default: return Value::null();
@@ -3316,13 +3522,16 @@ void VM::listSwap(ObjList* list, size_t i, size_t j) {
 // straight from the arguments, with no initializer run. Where the result goes, if `dest` is such
 // a place and still there (value-lists.html section 7), every argument worked out before any of
 // the old value is written over; otherwise in a box of its own. The result in place of the call.
-void VM::makeFromHeader(ObjClass* cls, int argc, Value dest) {
+void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* made) {
     const ValueLayout& layout = layoutOf(cls);
     Value* const args = sp_ - argc;
     if (dest.isRef() && dest.as.obj->type == ObjType::Places && dest.refDepth == 0 && layout.size <= ObjPlace::kBytes) {
-        // A frame's place (D149), empty or holding a value of this type: it takes this one.
+        // A frame's place (D149), empty or holding a value of this type: it takes this one, and
+        // keeps its type arguments (G4). A list's item, or a value inside an object, has its
+        // container's.
         ObjPlace* place = static_cast<ObjPlace*>(dest.as.obj);
         if (place->cls == nullptr) place->cls = cls;
+        if (place->cls == cls) place->type = made;
     }
     if (dest.isRef() && refClass(dest) == cls && refBytes(dest) != nullptr) {
         uint8_t small[256];
@@ -3347,10 +3556,11 @@ void VM::makeFromHeader(ObjClass* cls, int argc, Value dest) {
             writeValueField(bytes + field.offset, field, cls, args[k]);
         }
         sp_ = args;
-        sp_[-1] = smallFrom(cls, bytes, sizeof bytes);
+        sp_[-1] = smallFrom(cls, bytes, sizeof bytes, made);
         return;
     }
     ObjValue* box = newValue(cls);
+    box->type = made;
     sp_[-argc - 1] = Value::object(box);  // kept where the collector sees it
     for (int k = 0; k < argc; k++) {
         const ValueField& field = layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
@@ -3402,7 +3612,7 @@ void VM::layInline(ObjClass* cls) {
         if ((at + 7) / 8 * 8 + layout->size > kMaxValueBytes) continue;
         at = (at + 7) / 8 * 8;
         offsets[i] = static_cast<int32_t>(at);
-        fields.push_back({at, layout->size, type});
+        fields.push_back({at, layout->size, type, static_cast<uint32_t>(i)});
         at += layout->size;
     }
     std::lock_guard<std::mutex> hold(root.internMutex_);
@@ -3502,6 +3712,7 @@ bool VM::addNew(int argc) {
     if (list->store() != ListStore::Items || list->pack->itemClass != cls || !cls->madeFromHeader ||
         static_cast<size_t>(argc) != cls->components.size())
         return false;
+    needPatterns(cls);  // the first of its class: its fields' types (G4)
     guardWrite(list);
     if (cls->staticInit != nullptr) ensureClassInit(cls);
     const ValueLayout& layout = layoutOf(cls);
@@ -3577,8 +3788,10 @@ void VM::markItems(ObjList* list) {
 Value VM::ownRef(Value r) {
     const uint8_t* at = refAt(r, false);
     ObjClass* cls = refClass(r);
+    const ObjTypeInfo* type = refType(r);
     ObjValue* box = newValue(cls);
     std::memcpy(box->data(), at, layoutOf(cls).size);
+    box->type = type;
     return Value::object(box);
 }
 
@@ -3586,6 +3799,7 @@ Value VM::boxSmall(Value v) {
     ObjClass* cls = smallClassOf(v);
     ObjValue* box = newValue(cls);
     std::memcpy(box->data(), smallBytes(v), layoutOf(cls).size);
+    box->type = smallType(v);
     return Value::object(box);
 }
 
@@ -3602,7 +3816,7 @@ uint8_t* VM::refAt(Value r, bool write) {
         else guardRead(r.as.obj);
     } else if (write) {
         if (r.as.obj->type == ObjType::List) guardWrite(r.as.obj);
-        else if (!static_cast<ObjValue*>(r.as.obj)->constructing)
+        else if (!r.as.obj->valueOpen)
             throw runtimeError(Thrown::UnsupportedOperationException, "a value of " + refClass(r)->name->utf8() + " cannot be changed there: a value never changes "
                                "where others may see it; change it through the place that holds it");
     }
@@ -3651,7 +3865,8 @@ Value VM::placeIn(Value& slot) {
     // variable or field alone (`val q = p; p.x = 5` leaves q as it was).
     ObjValue* fresh = newValue(asValue(kept)->cls);
     std::memcpy(fresh->data(), asValue(kept)->data(), layoutOf(fresh->cls).size);
-    fresh->constructing = true;  // may be written, through the place
+    fresh->type = asValue(kept)->type;
+    fresh->valueOpen = true;  // may be written, through the place
     slot = Value::object(fresh);
     return Value::ref(fresh, 0, 0, 0);
 }
@@ -3687,9 +3902,11 @@ void VM::setPlace(const CallFrame* frame, Value& slot, Value value, int place) {
         slot = value;
         return;
     }
+    const ObjTypeInfo* type = recordedType(value);
     uint8_t* to = at->data();
     if (to != from) std::memmove(to, from, layoutOf(cls).size);
     at->cls = cls;
+    at->type = type;
     slot = Value::ref(at, 0, 0, 0);
 }
 
@@ -3699,6 +3916,7 @@ Value VM::withPlace(const CallFrame* frame, int place) {
     ObjPlace* const at = placeOf(frame, place);
     if (at == nullptr) return Value::null();
     at->cls = nullptr;
+    at->type = nullptr;
     return Value::ref(at, 0, 0, 0);
 }
 
@@ -3713,27 +3931,32 @@ bool VM::construct(ObjClass* cls, int argc, bool packed, const Value* captures, 
                            "() cannot make another");
     // A generic class's type arguments, given by WithTypes: the object keeps its type.
     const ObjTypeInfo* typeArgs = std::exchange(pendingTypeArgs_, nullptr);
+    needPatterns(cls);  // the first of its class: its fields' types (G4)
     if (cls->isValue) {
         const Value dest = std::exchange(pendingDestination_, Value::null());
+        // Its class with the type arguments it was made with (`Pair<int, string>(1, "s")`, or
+        // worked out by the checker), which it keeps (G4).
+        const ObjTypeInfo* made = typeArgs != nullptr && !typeArgs->args.empty() ? typeMadeOf(cls, typeArgs) : nullptr;
         // Every argument given: none left out by a call by name (`Insets(top = 1, right = 2)`),
         // which the initializer gives its default.
         bool allGiven = cls->madeFromHeader && static_cast<size_t>(argc) == cls->components.size() && !packed;
         for (int k = 0; allGiven && k < argc; k++) allGiven = sp_[-argc + k].kind != ValueKind::Undefined;
         if (allGiven) {
-            makeFromHeader(cls, argc, dest);
+            makeFromHeader(cls, argc, dest, made);
             return false;
         }
         // A value, in a box (M6.6 part 2): its fields are given their values, and then it never
         // changes. (A generic value type's type arguments are not kept yet.)
         ObjValue* box = newValue(cls);
+        box->type = made;
         sp_[-argc - 1] = Value::object(box);
-        box->constructing = true;
+        box->valueOpen = true;
         for (size_t i = 0; i < cls->fieldInits.size(); i++) callWithReceiver(Value::object(box), cls->fieldInits[i]);
         if (cls->init != nullptr) {
             callClosure(cls->init, argc, packed);
             return true;
         }
-        box->constructing = false;
+        box->valueOpen = false;
         if (argc != 0) throw runtimeError(Thrown::IllegalArgumentException, cls->name->utf8() + "() takes no arguments but got " + std::to_string(argc));
         return false;
     }
@@ -6097,10 +6320,12 @@ Value VM::returnedRef(Value result, ptrdiff_t frameIndex) {
             ObjClass* cls = refClass(result);
             if (cls != nullptr && layoutOf(cls).size <= ObjPlace::kBytes) {
                 ObjPlace* place = static_cast<ObjPlace*>(dest.as.obj);
+                const ObjTypeInfo* type = recordedType(result);
                 uint8_t* to = refBytes(dest);
                 const uint8_t* from = refAt(result, false);
                 if (to != from) std::memmove(to, from, layoutOf(cls).size);
                 place->cls = cls;
+                place->type = type;
                 return dest;
             }
         }
@@ -6414,6 +6639,12 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
             sp_--;
             break;
         }
+        case Op::FieldTypesMaker: {
+            if (!sp_[-2].isObjType(ObjType::Class) || !sp_[-1].isObjType(ObjType::Closure)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
+            asClass(sp_[-2])->fieldTypesMaker = asClosure(sp_[-1]);
+            sp_--;
+            break;
+        }
         case Op::CastFull: {
             const bool safe = (*ip++) != 0;
             if (!sp_[-1].isObjType(ObjType::TypeInfo)) throw runtimeError(Thrown::InternalError, "invalid type");
@@ -6424,6 +6655,15 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
                     throw runtimeError(Thrown::ClassCastException, "cannot cast a value of type " + valueTypeText(sp_[-2]) + " to " + typeInfoText(type));
                 }
                 sp_[-2] = Value::null();
+            } else if (type->id == kTypeInstance && !type->args.empty() && type->cls != nullptr && type->cls->isValue && classOf(sp_[-2]) == type->cls) {
+                // A value seen as of narrower type arguments than it keeps is a copy that keeps
+                // those, which nothing can undo behind it (G4).
+                const ObjTypeInfo* kept = recordedType(sp_[-2]);
+                const ObjTypeInfo* as = type->nullable ? typeOf(kTypeInstance, false, type->cls, type->args) : type;
+                if (kept != as && !(kept != nullptr && isSubtype(kept, as))) {
+                    frame->ip = ip;
+                    sp_[-2] = retyped(sp_[-2], as);
+                }
             }
             sp_--;
             break;
@@ -6927,6 +7167,7 @@ void VM::blacken(Obj* obj) {
             markObject(cls->super);
             markObject(cls->init);
             for (ObjClosure* maker : cls->supertypeMakers) markObject(maker);
+            markObject(cls->fieldTypesMaker);  // G4
             markObject(cls->meta[0]);
             markObject(cls->meta[1]);
             for (const auto& described : cls->described)

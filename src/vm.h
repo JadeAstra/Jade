@@ -367,7 +367,16 @@ public:
     void markItems(ObjList* list);
     bool addNew(int argc);
     bool insertNew(int argc, bool givesTrue);
-    void makeFromHeader(ObjClass* cls, int argc, Value dest);
+    void makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* made = nullptr);
+    // `cls` with the type arguments `args` (a kTypeArguments type), as a type: found again in
+    // ObjTypeInfo::madeAs where the last one asked was of the same class.
+    const ObjTypeInfo* typeMadeOf(ObjClass* cls, const ObjTypeInfo* args) {
+        ObjTypeInfo* known = args->madeAs.load(std::memory_order_acquire);
+        if (known != nullptr && known->cls == cls) return known;
+        ObjTypeInfo* made = typeOf(kTypeInstance, false, cls, args->args);
+        const_cast<ObjTypeInfo*>(args)->madeAs.store(made, std::memory_order_release);
+        return made;
+    }
     void layInline(ObjClass* cls);
     void layFields(ObjClass* cls);
     void fieldAdded(ObjClass* cls, size_t index);
@@ -397,12 +406,35 @@ public:
         for (Value* at = from; at < to; at++)
             if (at->kind == ValueKind::Ref || at->kind == ValueKind::Small) *at = boxed(*at);
     }
-    // A value made of a small value type's bytes, kept in the value itself.
-    static Value smallFrom(const ObjClass* cls, const uint8_t* bytes, size_t size) {
+    // A value made of a small value type's bytes, kept in the value itself, with its class with
+    // its type arguments where known (G4).
+    Value smallFrom(const ObjClass* cls, const uint8_t* bytes, size_t size, const ObjTypeInfo* type = nullptr) {
         uint64_t bits = 0;
         std::memcpy(&bits, bytes, size);
-        return Value::inSlot(cls->smallId, bits);
+        Value made = Value::inSlot(cls->smallId, bits);
+        if (type != nullptr) made.refOffset = valueTypeNumber(type);
+        return made;
     }
+
+    // ---- A generic value type's type arguments (G4) ----
+    // What a value of a value type says it is: its class with its type arguments (`Pair<int,
+    // string>`); null where it says nothing more than its class. A box and a frame's place keep
+    // it beside the class; a small value, by a number of this VM's in its slot's `refOffset`,
+    // which a small value does not otherwise use; an item of a list, or a value kept inside an
+    // object, takes it from the list's or the field's declared type.
+    const ObjTypeInfo* recordedType(const Value& v);
+    const ObjTypeInfo* refType(const Value& r);
+    // The number of `type` among this VM's (its root's), given out the first time: 0 for null,
+    // and for any once all 65,535 are given out.
+    uint16_t valueTypeNumber(const ObjTypeInfo* type);
+    const ObjTypeInfo* smallType(const Value& v) const {
+        if (v.refOffset == 0) return nullptr;
+        const VM& root = root_ != nullptr ? *root_ : *this;
+        return root.valueTypeTable_[v.refOffset].load(std::memory_order_acquire);
+    }
+    std::unique_ptr<std::atomic<const ObjTypeInfo*>[]> valueTypeTable_;
+    std::unordered_map<const ObjTypeInfo*, uint16_t> valueTypeNumbers_;
+    uint16_t nextValueType_ = 1;
     std::vector<ObjClass*> smallKept_;  // the small value types this VM numbered, kept alive
     Value ownRef(Value v);
     void ownAll(Value* from, Value* to) {
@@ -421,7 +453,7 @@ public:
             if (write ? r.as.obj->core != coreId_
                       : (r.as.obj->core != 0 && r.as.obj->core != coreId_ && (readable_ == nullptr || !readable_->test(r.as.obj->core))))
                 return nullptr;
-        } else if (write && (r.as.obj->type == ObjType::List ? r.as.obj->core != coreId_ : !static_cast<const ObjValue*>(r.as.obj)->constructing)) {
+        } else if (write && (r.as.obj->type == ObjType::List ? r.as.obj->core != coreId_ : !r.as.obj->valueOpen)) {
             return nullptr;
         }
         return refBytes(r);
@@ -471,7 +503,16 @@ public:
     const ValueLayout& layoutOf(ObjClass* cls);
     [[noreturn]] void valueTooBig(const ObjClass* cls, uint32_t size);
     ObjValue* newValue(ObjClass* cls);
-    Value readValueField(const uint8_t* at, const ValueField& field);
+    // A field of a value, read on its own; one of a value type is given `type` (G4), the
+    // field's declared type made for the value holding it, where it is known.
+    Value readValueField(const uint8_t* at, const ValueField& field, const ObjTypeInfo* type = nullptr);
+    // Whether a value of value type `cls` fits `type`, written with type arguments (G4): by the
+    // type arguments it keeps, and where those are wider than asked or not known, by what its
+    // fields declared with them hold.
+    bool valueFits(const Value& v, ObjClass* cls, const ObjTypeInfo* type);
+    // A copy of a value of a value type that keeps `type` as its type arguments: what a cast to a
+    // type narrower than the one it keeps gives (G4).
+    Value retyped(const Value& v, const ObjTypeInfo* type);
     // An int, float or bool field read with no call, for the interpreter's quick paths.
     // An int, float or bool field, with no call: for a field of another kind, false.
     static ASTRA_ALWAYS_INLINE bool readPlain(const uint8_t* at, const ValueField& field, Value& out) {
@@ -617,6 +658,21 @@ public:
     const ObjTypeInfo* typeAs(ObjClass* cls, const ObjTypeInfo* own, const ObjClass* target);
     // The supertypes of `cls` written with type arguments, made for `own` (ObjClass::supertypeMakers).
     const std::vector<ObjTypeInfo*>& supertypesOf(ObjClass* cls, const ObjTypeInfo* own);
+    // The types of the fields of `cls` that depend on its type arguments, or hold a value of a
+    // generic value type, for `own` (null: made without type arguments), by declared index;
+    // null for any other field, and all of them before the class's patterns are made (G4,
+    // ObjClass::fieldTypesMaker). Runs nothing of the program: only types are made.
+    const std::vector<ObjTypeInfo*>& fieldTypesOf(ObjClass* cls, const ObjTypeInfo* own);
+    void makeFieldPatterns(ObjClass* cls);
+    ObjTypeInfo* substituted(ObjTypeInfo* pattern, const ObjTypeInfo* own);
+    void needPatterns(ObjClass* cls) {
+        if (cls->fieldTypesMaker != nullptr && cls->patternsState.load(std::memory_order_acquire) == 0) makeFieldPatterns(cls);
+    }
+    const ObjTypeInfo* fieldTypeOf(ObjClass* cls, const ObjTypeInfo* own, size_t declared) {
+        if (cls->fieldTypesMaker == nullptr) return nullptr;
+        const std::vector<ObjTypeInfo*>& types = fieldTypesOf(cls, own);
+        return declared < types.size() ? types[declared] : nullptr;
+    }
     // What type a value is, as the program writes it: `List<string>` for a list made to hold strings.
     std::string valueTypeText(const Value& v) const;
     // Runs one of the instructions of types (MakeType to InstanceTypeArg); gives where the next one is.

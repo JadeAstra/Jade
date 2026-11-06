@@ -572,6 +572,7 @@ public:
         if (key < 0 && !cls.isExternal)
             if (const GlobalName* object = findGlobal(cls.isObject ? "(object " + cls.name + ")" : cls.name, cls, true)) key = object->slot;
         emitClassMetas(cls, cls.name, key);
+        emitFieldTypesMakers(cls, cls.name);
     }
 
     // The global a top-level class is reached by, for noteDeclaration: the class, or for an
@@ -3606,6 +3607,7 @@ private:
                 const auto& cls = static_cast<const ClassStmt&>(stmt);
                 compileClass(cls);
                 emitClassMetas(cls, cls.name, -1);
+                emitFieldTypesMakers(cls, cls.name);
                 break;
             }
 
@@ -5674,6 +5676,65 @@ private:
         emitBuildList(count, Node{});
     }
 
+    // Whether a type says anything a value's type arguments are made of (G4): a type parameter,
+    // or type arguments of its own. One inside a function type says nothing: no value of a
+    // function keeps the types it was written with.
+    static bool namesTypeArguments(const RuntimeType& t) {
+        if (t.kind == RuntimeType::TypeParam || !t.args.empty()) return t.kind != RuntimeType::Function;
+        return false;
+    }
+
+    // For a class whose fields' types depend on its type arguments (a value type's `val first :
+    // A`), or hold a value of a generic value type (`var id : Id<User>`): a function that gives
+    // each such field's name and its type, made from the class's own type arguments, which it is
+    // given as a generic function is (G4, ObjClass::fieldTypesMaker). The types are the checker's,
+    // made as reflection makes them. Then the same for the classes inside it.
+    void emitFieldTypesMakers(const ClassStmt& s, const std::string& bound, bool anonymous = false) {
+        if (s.isExternal || session_.checker == nullptr) return;
+        ReflectedClass r;
+        if (session_.checker->reflected(s, r)) {
+            std::vector<const ReflectedMember*> typed;
+            for (const ReflectedMember& field : r.fields)
+                if (s.isValue ? namesTypeArguments(field.type)
+                              : field.type.kind == RuntimeType::Class && field.type.value && !field.type.args.empty())
+                    typed.push_back(&field);
+            if (!typed.empty()) {
+                const std::string storage = anonymous || !s.isObject ? bound : "(object " + bound + ")";
+                FunctionState state;
+                state.enclosing = fs_;
+                state.kind = FunctionKind::StaticMethod;  // reaching no type parameters but the class's
+                state.proto = newProto();
+                state.proto->name = s.name + " (field types)";
+                state.proto->source = file_;
+                state.proto->typeArgs = kTypeArgsOwn;
+                state.scopeDepth = 1;
+                for (const TypeParam& p : s.typeParams) state.typeParams.push_back(p.name);
+                state.add(Local{"", 1, VarInfo{}});
+                InlineBlock* const outerInline = inline_;
+                inline_ = nullptr;
+                fs_ = &state;
+                for (const ReflectedMember* field : typed) {
+                    line_ = s.line;
+                    emit(Op::Const, stringConstant(field->name));
+                    emitMetaType(field->type, s);
+                }
+                emitBuildList(2 * typed.size(), s);
+                emit(Op::Return);
+                finish(state);
+                fs_ = state.enclosing;
+                inline_ = outerInline;
+                line_ = s.line;
+                const int index = static_cast<int>(fs_->proto->protos.size());
+                fs_->proto->protos.push_back(state.proto);
+                emitGet(storage, s);
+                emit(Op::Closure, index);
+                emit(Op::FieldTypesMaker);
+                emit(Op::Pop);
+            }
+        }
+        for (const auto& inner : s.nested) emitFieldTypesMakers(*inner, bound + "." + inner->name);
+    }
+
     // Gives a class the functions describing it (compileMeta), at the top of the script for a
     // class set up ahead, each kept in a built program only where reflection reaches it (D50):
     // `key` the global of the top-level declaration it is part of. Then the same for the classes
@@ -6533,6 +6594,7 @@ private:
         }
         compileClass(cls, bound);
         emitClassMetas(cls, bound, -1, true);  // what it declares, listed by reflection (G43)
+        emitFieldTypesMakers(cls, bound, true);
         objectBuild_ = build.outer;
         line_ = cls.line;
         if (skip >= 0) {

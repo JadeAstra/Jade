@@ -255,6 +255,7 @@ const OpInfo kOps[] = {
     {"WITH_PLACE", Operand::U8},
     {"KEEP_LOCAL", Operand::U16},
     {"KEEP_TOP", Operand::None},
+    {"FIELD_TYPES_MAKER", Operand::None},
 };
 
 const char* const kTypeNames[] = {"", "int", "float", "Number", "string", "bool", "List", "Map", "Range", "Function", "Bytes", "Type", "",
@@ -835,6 +836,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                     break;
                 case Op::InstanceTypeArg:
                 case Op::SupertypeMaker:
+                case Op::FieldTypesMaker:
                     pops = 2;
                     pushes = 1;
                     break;
@@ -1494,7 +1496,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 28;
+const uint8_t kFormatVersion = 29;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };

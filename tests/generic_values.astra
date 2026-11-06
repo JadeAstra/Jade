@@ -1,0 +1,61 @@
+// A generic value type keeps its type arguments when the program runs (M6.7 step 7, G4): `is`
+// and `as` go by them, refined by what the value holds where they are wider than asked; a cast
+// to narrower ones gives a copy that keeps those; reflection shows them; == and keys do not look
+// at them.
+
+value Two<A, B>(val a : A, val b : B)
+value Box<T>(val item : T)
+value Pair<A, B>(val first : A, val second : B)
+value Wrap<T>(val inner : Pair<T, T>)
+class Holder<T>(var p : Pair<T, string>)
+
+// Made with them written, or worked out by the checker.
+val t : any = Two<int, string>(1, "s")
+print(t is Two<int, string>, t is Two<string, string>, t is Two<Number, string>, t#)   // expect: true false true Two<int, string>
+print(t as? Two<string, string>)   // expect: null
+try { print(t as Two<string, string>) } catch (e : ClassCastException) { print(e.message) }   // expect: cannot cast a value of type Two<int, string> to Two<string, string>
+val inferred : any = Two(2.5, true)
+print(inferred is Two<float, bool>, inferred is Two<int, bool>, inferred#)   // expect: true false Two<float, bool>
+
+// Wider than asked: what the fields hold says; a cast gives a copy that keeps the narrower.
+val wide : any = Two<any, any>(1, 2)
+print(wide is Two<int, int>, wide is Two<string, int>, wide#)   // expect: true false Two<any, any>
+val narrowed = wide as Two<int, int>
+print(narrowed#, wide#)   // expect: Two<int, int> Two<any, any>
+
+// Small enough to be kept in the value itself, and null where the argument may be null.
+val boxed : any = listOf(Box<int>(1), Box<int>(2))[0]
+print(boxed is Box<int>, boxed is Box<string>, boxed#)   // expect: true false Box<int>
+val maybe : any = Box<int?>(null)
+print(maybe is Box<int?>, maybe is Box<int>)   // expect: true false
+
+// In a list declared wider: the list's type arguments, refined by what each holds.
+val numbers : List<Pair<Number, Number>> = [Pair(1, 2), Pair(1.5, 2)]
+val n0 : any = numbers[0]
+val n1 : any = numbers[1]
+print(n0#, n0 is Pair<int, int>, n1 is Pair<int, int>, n1 is Pair<float, int>)   // expect: Pair<Number, Number> true false true
+
+// Inside an object: the field's declared type, made for the object's own type arguments.
+val holder = Holder<int>(Pair(3, "x"))
+val held : any = holder.p
+print(held#, held is Pair<int, string>, held is Pair<string, string>)   // expect: Pair<int, string> true false
+
+// Held inside another value: its field's type, made for the one holding it.
+val wrapped : any = Wrap(Pair(1, 2))
+print(wrapped#, wrapped is Wrap<int>, wrapped is Wrap<string>)   // expect: Wrap<int> true false
+val inner : any = (wrapped as Wrap<int>).inner
+print(inner#, inner is Pair<int, int>)   // expect: Pair<int, int> true
+
+// In a frame's place, made by generic code.
+fun <T> twice(x : T) : Pair<T, T> {
+  val made = Pair(x, x)
+  return made
+}
+val tw : any = twice("s")
+print(tw#, tw is Pair<string, string>, tw is Pair<int, int>)   // expect: Pair<string, string> true false
+
+// == and keys do not look at the type arguments.
+val a : any = Pair<any, any>(1, 2)
+val b : any = Pair<int, int>(1, 2)
+val keyed : Map<any, string> = mapOf(a to "x")
+print(a == b, keyed[b], a.hashCode() == b.hashCode())   // expect: true x true

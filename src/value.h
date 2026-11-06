@@ -63,6 +63,10 @@ struct Obj {
     // A list lent to the views of a splitAt (or parallelSort) while its block runs: it is split
     // again only through those views, so that no two views of it overlap (D96).
     bool lent = false;
+    // A value's box, or a frame's place (ObjValue, ObjPlace), that may be written: a box from
+    // being made until its initializer has returned, a place always. Here, in what is left of
+    // the header, so that a box keeps its type beside its class at no cost in bytes (G4).
+    bool valueOpen = false;
 
     explicit Obj(ObjType t) : type(t) {}
     virtual ~Obj() = default;
@@ -979,6 +983,17 @@ struct ObjClass final : Obj {
     // given as a generic function is; and what they made, by the type of this class they were
     // made for (null for an object made without one), in VM::supertypesOf.
     std::vector<ObjClosure*> supertypeMakers;
+    // For a class whose fields' types depend on its type arguments, or hold a value of a generic
+    // value type (G4): a function that gives each such field's name and its type, made from the
+    // class's own type arguments. It is run once, as the first object or value of the class is
+    // made (VM::makeFieldPatterns), given stand-ins for them (kTypeHole), and what it gives is
+    // kept as each field's pattern, by declared index; the types for any type arguments are made
+    // of those without running anything (VM::fieldTypesOf), and kept by the type they are for.
+    // `patternsState`: 0 not made, 1 being made, 2 made.
+    ObjClosure* fieldTypesMaker = nullptr;
+    std::vector<ObjTypeInfo*> fieldPatterns;
+    std::atomic<uint8_t> patternsState{0};
+    std::unordered_map<const ObjTypeInfo*, std::vector<ObjTypeInfo*>> fieldTypesMade;
 
     // What reflection reads of the class (D38): the nested functions describing its fields (0)
     // and its methods and constructors (1), given by Op::ClassMeta, each made a function the
@@ -1028,6 +1043,7 @@ struct ObjClass final : Obj {
         uint32_t offset;
         uint32_t size;
         ObjClass* cls;
+        uint32_t declared;  // which of the class's `declared` it is
     };
     std::vector<InlineField> inlineFields;
     uint32_t inlineSlots = 0;
@@ -1122,6 +1138,9 @@ struct ObjTypeInfo final : Obj {
     // For a List type: whether a list of it keeps its items packed (M6.6 part 3), worked out the
     // first time one is made; every core works out the same.
     std::atomic<int8_t> packs{-1};
+    // For the type arguments of a call (kTypeArguments): the class type last made of them, as a
+    // value made with them keeps (G4), which each place that makes one finds here again.
+    std::atomic<ObjTypeInfo*> madeAs{nullptr};
     ObjTypeInfo(uint8_t i, bool n, ObjClass* c, std::vector<ObjTypeInfo*> a)
         : Obj(ObjType::TypeInfo), id(i), nullable(n), cls(c), args(std::move(a)) {}
 };
@@ -1278,7 +1297,9 @@ static_assert(sizeof(ObjInstance) % alignof(Value) == 0, "an object's fields fol
 // may be shared: `val b = a` copies the reference.
 struct ObjValue final : Obj {
     ObjClass* const cls;
-    bool constructing = false;  // from being made until its initializer has returned
+    // Its class with its type arguments, `Pair<int, string>` (G4); null for a value of a class
+    // with none, or made where they were not known. Obj::valueOpen says whether it may be written.
+    const ObjTypeInfo* type = nullptr;
 
     explicit ObjValue(ObjClass* c) : Obj(ObjType::Value), cls(c) {}
 
@@ -1301,9 +1322,12 @@ static_assert(sizeof(ObjValue) % alignof(Value) == 0, "a value's fields follow i
 struct ObjPlace final : Obj {
     static constexpr uint32_t kBytes = 64;  // the largest value kept in a place
     ObjClass* cls = nullptr;                // as a box's: what it holds; null while it holds nothing
-    const bool constructing = true;         // as a box's being made: always open to change
+    const ObjTypeInfo* type = nullptr;      // as a box's: its class with its type arguments (G4)
 
-    ObjPlace() : Obj(ObjType::Places) { immortal = true; }
+    ObjPlace() : Obj(ObjType::Places) {
+        immortal = true;
+        valueOpen = true;  // always open to change
+    }
     ObjPlace(const ObjPlace&) = delete;
     ObjPlace& operator=(const ObjPlace&) = delete;
     uint8_t* data() { return reinterpret_cast<uint8_t*>(this + 1); }

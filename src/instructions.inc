@@ -336,7 +336,7 @@ CASE(GetUpvalueChecked) {
     DONE();
 }
 }
-CASES(MakeType, CachedType, CacheType, TypeCollection, IsFull, CastFull, WithTypes, FrameTypes, TypeArg, InstanceTypeArg, SupertypeMaker, CheckResult, ClassOf, ClassMeta, AtomicField) {
+CASES(MakeType, CachedType, CacheType, TypeCollection, IsFull, CastFull, WithTypes, FrameTypes, TypeArg, InstanceTypeArg, SupertypeMaker, CheckResult, ClassOf, ClassMeta, AtomicField, FieldTypesMaker) {
     ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
     DONE();
 }
@@ -817,7 +817,7 @@ COLD(SetOwn) {
         // as one of a value where it is kept, below.
         ObjValue* const box = asValue(sp[-2]);
         const uint64_t seen = caches[FAST_U16(2)].load(std::memory_order_relaxed);
-        if (box->constructing && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
+        if (box->valueOpen && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
             const ValueField& field = box->cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
             const Value value = sp[-1];
             if (field.kind == ValueField::Float ? value.isFloat() : field.kind == ValueField::Int ? value.isInt() : value.isBool()) {
@@ -1775,10 +1775,10 @@ CASE(ReturnInit) {
         asInstance(base[0])->constructing = false;
     else if (base[0].isObjType(ObjType::Value) && asValue(base[0])->cls->init == frame->closure) {
         ObjValue* box = asValue(base[0]);
-        box->constructing = false;  // and from now on never changes
+        box->valueOpen = false;  // and from now on never changes
         if (box->cls->smallId != 0) {
             // Small: given back in the value itself (M6.6 part 5).
-            const Value made = smallFrom(box->cls, box->data(), box->cls->layout.load(std::memory_order_relaxed)->size);
+            const Value made = smallFrom(box->cls, box->data(), box->cls->layout.load(std::memory_order_relaxed)->size, box->type);
             if (sp[-1].kind == ValueKind::Obj && sp[-1].as.obj == box) sp[-1] = made;
             base[0] = made;
         }
@@ -2969,7 +2969,7 @@ COLD(RSetPropSS) {
         // A field of a value being made, in its box, as SetProp writes one.
         ObjValue* const box = asValue(obj);
         const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
-        if (box->constructing && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
+        if (box->valueOpen && static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
             const ValueField& field = box->cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
             if (field.kind == ValueField::Float ? given.isFloat() : field.kind == ValueField::Int ? given.isInt() : given.isBool()) {
                 if (field.kind == ValueField::Bool) box->data()[field.offset] = given.as.b ? 1 : 0;
