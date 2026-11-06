@@ -9,16 +9,16 @@ import Jade.*
 
 fun leaf(i : int) => label("x").preferredSize(Size(20 + i % 7, 10 + i % 3)).minimumSize(Size(10, 8))
 
-fun tree(depth : int, seed : int) : GridPane {
+fun gridTree(depth : int, seed : int) : GridPane {
   val g = GridPane()
   for (k in 0 ..< 4) {
-    val child = depth == 0 ? leaf(seed * 4 + k) : Component(tree(depth - 1, seed * 4 + k))
+    val child = depth == 0 ? leaf(seed * 4 + k) : Component(gridTree(depth - 1, seed * 4 + k))
     g.add(child, row = k / 2, col = k % 2)
   }
   return g
 }
 
-val root = tree(2, 1)
+val root = gridTree(2, 1)
 val started = clock()
 for (pass in 0 ..< 1000) {
   Jade.invalidateRenderCaches()

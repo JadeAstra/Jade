@@ -6,7 +6,7 @@ the window's timed behaviour (tooltips, the blinking caret, hold-to-repeat). It 
 examples' `Launcher.kt` ported close to line for line: the acceptance test for "painless"
 (gui-plan.md, section 7). Version 0.7.0 when it is done.
 
-Written 2026-11-06 from a reading of every Kotlin file involved, against `lib/Jade` as M6
+Built 2026-11-06, version 0.7.0; what was built is in gui-plan.md, section 6.4. Written 2026-11-06 from a reading of every Kotlin file involved, against `lib/Jade` as M6
 and M6.7 left it.
 
 ## What is ported

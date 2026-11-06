@@ -1408,9 +1408,9 @@ the system's double-click time, hover with the leaving widget told, the pointer'
 the wheel with its Shift rule, who has the keyboard after a press, `FocusAware`, Tab and
 Shift+Tab, named keys, typed text, the edit commands by the layout's letter, the key
 filter, the back and forward buttons, files dropped, and when the kept pictures are
-thrown away. Waiting for M7, with the things they act on: the screen (menu bar, popups,
-drop-downs, context menus, accelerators), tooltips, the blinking caret, hold-to-repeat,
-and raw input for 3D views.
+thrown away. Added in M7 (section 6.4): the screen (menu bar, popups, drop-downs, context
+menus, accelerators), tooltips, the blinking caret and hold-to-repeat. Raw input for 3D
+views waits for M11.
 
 **How a window is drawn.** A request for a repaint marks the window's loop dirty and posts
 one task to the event loop, however many requests come before it runs; that task plans the
@@ -1494,6 +1494,110 @@ passing, in `tests/jade_grid.astra`, `jade_paint.astra` and `jade_loop.astra`. T
 policy has a test of its own, `jade_host.astra`, since JadeUI's are written against GLFW.
 `examples/widgets.astra` is the grid of labels and buttons in a real window; a click
 posted to it by a script pressed its button.
+
+### 6.4 As built in M7
+
+The rest of the root package that apps build with is ported, in `lib/Jade`, from the plan in
+`docs/M7-plan.md`:
+
+| Astra | From | Holds |
+| --- | --- | --- |
+| `TextNav.astra` | `TextNav.kt` | `TextNav`, `DragSelector`, `CaretGeometry`, `CaretKeys` |
+| `Text.astra` | `Text.kt` | `TextEditable`, `StyleRun`, `TextLink`, `SharedTextModel` (undo, style runs, inline objects' places), `TextField`, `textField()` |
+| `TextArea.astra` | `TextArea.kt`, `HScrollBar.kt` | `TextArea`, `textArea()`, and its horizontal bar |
+| `Scroll.astra` | `Scroll.kt` | `Scroll`, `scroll()`, `ScrollAware`, `Pinnable` |
+| `Split.astra`, `Tabs.astra` | `Split.kt`, `Tabs.kt` | `Split`, `split()`; `Tabs`, `Tabs.Tab`, `tabs()` |
+| `Controls.astra` | `Controls.kt` | `CheckBox`, `RadioGroup`, `RadioButton`, `Slider`, `ProgressBar`, `ListBox`, `Toggle`, `HoldRepeat`, `Spinner`, and their builders |
+| `Collections.astra` | `Collections.kt` | `TreeNode`, `Tree`, `Table`, `tree()`, `table()` |
+| `Combo.astra` | `Combo.kt` | `ComboBox`, `comboBox()` |
+| `Screen.astra` | `Screen.kt` | `Screen`, `screen()`, the menu bar's view, the menus' lists, popups, tips, accelerators |
+| `Chrome.astra` | `Chrome.kt`, the part M7 needs | `MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`, `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
+| `Drafts.astra` | `Drafts.kt` | `Drafts` (`Jade.drafts`) |
+| `Block.astra` | `Block.kt`, `Doc.kt` | `Block`, `block()`, `Doc`, `doc()` |
+| `Window.astra` | the GLFW surface's timing | tips, the caret's blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, `SystemClipboard` |
+
+`examples/launcher.astra` is the examples' `Launcher.kt`, close to line for line: the four
+rows of fields, the menus, the file dialogs and the widget tabs of M7 (Controls, Editor,
+Items, Tree, Table, Split, Blocks, Doc). The tabs of later milestones are one line each
+(`"Code" to later("M9")`), replaced as their milestones come. `--snapshot=<dir>` saves a
+picture of each working tab.
+
+**Containers.** What JadeUI asks of a container through a chain of `is` tests (lay out its
+children, the ones it shows, the ones it holds without showing, the child under a point, the
+wheel) is one internal interface, `Container`, so a new container is one class, not a change
+in `Component`. A scroll and a screen keep no picture of their own.
+
+**Every window has a screen.** A window's root is shown inside a `Screen`, with the menu bar
+if the window has one, so menus, drop-down lists, context menus and tips open in any window.
+`host.screen` is it; `host.shownTree` is still the root the program gave. All of these are
+drawn inside the window, as in JadeUI: no native popups.
+
+**Time.** The host's `tick(now)` does what is due: the caret blinks each 500 ms (and shows,
+solid, when it moves), a tip shows 600 ms after the pointer rests, and a held arrow repeats.
+A window on the screen keeps one timer on the event loop for whichever is due first, and none
+when nothing is; a hidden window keeps none, and a test calls `tick` with times of its own.
+
+**Speed.** The text widgets are where an interpreter is slowest, so the model keeps what a
+view would otherwise work out again: a revision number, the starts of lines per revision, and
+a log of edits from which a text area updates the widths of only the lines an edit touched.
+A caret's places on a row come from one `Font.offsets` call, and rows are found by search.
+Typing in a text area of 1.15 million characters takes 10 ms a key unwrapped and 16 ms
+wrapped (it took 43 to 56 ms before the edit log). Lists, trees and tables paint only the
+rows in view. A kept picture is refused by its side as well as its area, so a tall list never
+asks for a surface larger than the graphics card's limit. One loss, found in the full check
+and waiting for the user as G70 (`docs/outstanding6.7.html`): a widget whose `sizes()` calls a
+callback (Tabs asks its `dirty`) makes every component copy the size it reads, so Jade's
+layout benchmark is 11% slower than in 0.6.7.
+
+**Differences from the Kotlin, to be known when porting.**
+
+- A `CheckItem` keeps its state: choosing it turns `checked` over (`toggle()`) and the tick
+  is drawn from it. JadeUI's tick is fixed when the item is made. (The user's choice.)
+- A context menu, drop-down or submenu that would cross the window's right or bottom edge
+  opens to the left of or above where it was asked for, so all of it shows. (The user's
+  choice.)
+- `FileDialog` has the forms that call back (`open`, `save` with an `onResult`); the forms
+  that wait come with the dialogs of M8.
+- A selection's two ends are a value of their own, not a range, as an Astra range does not
+  keep its ends reversed.
+- A document gives a block that wraps (`HeightForWidth`) its height at the document's
+  width; JadeUI's takes the block's preferred height.
+- `Block.activeChildIsEditor()` and `editorModelForTest()` are not carried over: they are
+  test helpers inside JadeUI's module. A test finds the editor as a `TextArea` among the
+  block's components.
+- The Launcher opens 1,120 units wide, the width of its row of twenty tabs; JadeUI's opens
+  640 wide and cuts its own right side off. Its combo boxes say the name chosen, not its
+  index.
+
+**Language changes made for the port**, each asked for and agreed: an override that leaves
+out a default inherits the overridden one, and may give its own; a class header, like a
+function, may have an entry without a default after entries with defaults. Found and fixed on
+the way: a built program left out an unused class but kept its inner enum's setup; a byte in
+an int range was not found; a block run on an object looked for its members after the
+program's names, and a bare `block()` inside a class ran on nothing.
+
+**Tests carried over** from JadeUI, with their names, in `tests/jade_text.astra`,
+`jade_textfield.astra`, `jade_scroll.astra`, `jade_textarea.astra`, `jade_containers.astra`,
+`jade_controls.astra`, `jade_tables.astra`, `jade_screen.astra` and `jade_blocks.astra`:
+`TextNavParityTest`, `ChromeTest`, `MirroredTextTest`, `EditingTest`, `DeferredTest`,
+`FocusAfterPressTest`, `ScrollTest`, `ScrollRepaintTest`, `NestedScrollTest`,
+`WheelRoutingTest`, `WindowPositionScrollTest`, `ElideTest`, `TextAreaTest`,
+`CaretRectTest`, `TextAreaLinksTest`, `TextAreaCurrentLineTest`, `TextAreaHScrollTest`,
+`TextAreaLargeTextTest`, `SplitTest`, `JadeTabsChromeTest`, `ToolbarChromeTest`,
+`ContainerCacheTest`, `LayoutPassTest`, `LayoutRequestTest`, `ControlsTest`,
+`CollectionsTest`, `ContentInvalidationTest`, `InvalidateLayoutTest`, `FirstClickTest`,
+`TableActivateTest`, `TableColumnWidthTest`, `TablePerformanceTest`, `ComboTest`,
+`ScreenMenuTest`, `ScreenPopupTest`, `ScreenGeometryTest`, `AcceleratorTest`,
+`MultiHostHookTest`, `ScreenTipTest`, `BlockTest` and `DocTest`, with the GLFW surface's
+and the hidden application's tests of menus, accelerators and cursors. The timing has a test
+of its own, `jade_timing.astra`. What waits, with the milestone it waits for: a block whose
+view takes input (the HTML view, M10), the document views (`DocView`, `ProseView`, M10), the
+sheet and its formula bar (M10), the math block (M10), and inline objects in text (M10).
+
+**Left for later.** An input method's composition shown in place (committed text arrives;
+JadeUI has none either). Undo keeps a whole copy of the text per step, up to 200, as JadeUI
+does. Combining marks and right-to-left text get carets as good as the text engine's first
+part allows, until its second part.
 
 ## 7. Order of work
 
@@ -2304,7 +2408,8 @@ undo, selection), `Scroll`, `HScrollBar`, `Split`, `Tabs`, `Controls` (check box
 slider, progress, list, toggle, spinner), `Collections` (tree, table), `Combo`, `Screen`
 (menu bar, popups, context menus, tooltips, accelerators), `Chrome` types, `Drafts`,
 clipboard. Ends with the examples' `Launcher.kt` ported with its widget tabs, close to line
-for line; that file is the acceptance test for "painless".
+for line; that file is the acceptance test for "painless". Built 2026-11-06, version 0.7.0:
+section 6.4.
 
 **M8. Owned windows and dialogs.** The dialog-side settings of `Window` (owner, first focus,
 size to content, centre on owner, key filter), `DialogSession` and the eight
