@@ -2280,6 +2280,21 @@ takes it, with how `task { }`, `thread { }` and pools stand to scopes settled wi
 `use { }` checked against each class's own `close()`, so that `AutoCloseable.close` may declare
 `throws IOException` (M6.6 choice 8.5i).
 
+Built 2026-11-04 to 11-05 (the order, what was decided along the way and each part's numbers
+are in [M6.7-plan.md](M6.7-plan.md)): task scopes and `use { }` (steps 1 and 2); instructions that
+name a frame's slots, made from the stack code as a function is loaded, and joined for common
+pairs; the code threaded, then, built with Clang 19 or later, each instruction a function of its
+own that calls the next as its last step, the loop's state in registers (MSVC, which cannot be
+made to do so for certain, keeps the switch: tried and measured, 2026-11-05); arithmetic chosen by
+type where the checker knows both sides (step 5); values in variables, and values made as
+arguments, kept in places of their frame's, not in boxes (step 6: D149, as places beside the
+stack rather than consecutive slots, which comes to the same for the program); and G4 as
+decided, phantom type parameters included (step 7). Not built: frame slots that keep only a
+payload (no timing shows the store they would save), G20, G58 and G66 (none shows in the
+timings). Against the build M6.7 started from, the same Clang build, best of five: `numeric`
+60% faster, `particles` 55%, `calls` 44%, `fields` 40%, `layout_values` 38%, `bounce_values` 33%,
+`colors_values` and `layout_cached_values` 30% to 31%, the rest 7% (`strings`) to 29% faster.
+
 **M7. Core, part two.** `Text.kt`, `TextNav.kt`, `TextArea.kt` (text model, field, area,
 undo, selection), `Scroll`, `HScrollBar`, `Split`, `Tabs`, `Controls` (check box, radio,
 slider, progress, list, toggle, spinner), `Collections` (tree, table), `Combo`, `Screen`
