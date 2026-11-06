@@ -11,6 +11,8 @@ fun describe(m : any?) : string {
     return "a Course of ${c.students.size}, ${c.students#}"
   }
   if (m is Point) { return "a Point here" }
+  if (m is Id<Student>) { return "an Id<Student> here" }
+  if (m is Id<Course>) { return "an Id<Course> here" }
   return "something else"
 }
 Worker.parent!!.onMessage = { message ->

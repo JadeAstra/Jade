@@ -243,6 +243,7 @@ std::string layoutSignature(VM& vm, ObjClass* cls) {
 // type holding no objects (whose block would hold pointers into this side's heap).
 bool plainBlock(VM& vm, const ObjList* list) {
     if (list->pack->store != ListStore::Items) return true;
+    if (list->pack->typeSlot != 0) return false;  // each item's type beside it, this side's (G4): sent item by item
     const ValueLayout& layout = vm.layoutOf(list->pack->itemClass);
     return layout.objects.empty() && layout.values.empty();
 }
@@ -364,6 +365,8 @@ void encode(VM& vm, Value v, std::string& out, int depth) {
                                                                         " is of a class declared inside a function, which the other side has no way to make: declare it at the top level of a file both sides import");
         out += kData;
         putClass(vm, out, cls);
+        // A value's type arguments, found again on the other side (G4).
+        encodeType(vm, cls->isValue ? vm.recordedType(v) : nullptr, out, 0);
         putSize(out, cls->components.size());
         for (ObjString* field : cls->components) encode(vm, vm.memberGet(v, field), out, depth + 1);
     } else if (v.isObjType(ObjType::Map)) {
@@ -562,6 +565,7 @@ Value decodePacked(VM& vm, Reader& in) {
 Value decodeData(VM& vm, Reader& in) {
     std::string name;
     ObjClass* cls = takeClass(vm, in, name);
+    const ObjTypeInfo* type = decodeType(vm, in, 0);
     const uint32_t count = in.raw<uint32_t>();
     std::vector<Value> values;
     TempVector keep(vm, values);
@@ -569,7 +573,10 @@ Value decodeData(VM& vm, Reader& in) {
     if (cls == nullptr || !cls->isData || cls->components.size() != count)
         throw vm.runtimeError(Thrown::IllegalArgumentException, "a message holds a " + name + ", and this side has none: import the file that declares " + name +
                                                                      " on both sides");
-    return vm.call(Value::object(cls), static_cast<int>(values.size()), values.data());
+    const Value made = vm.call(Value::object(cls), static_cast<int>(values.size()), values.data());
+    // Made again by its constructor, then given the type arguments it was sent with (G4).
+    if (type != nullptr && cls->isValue && type->cls == cls && !type->args.empty()) return vm.retyped(made, type);
+    return made;
 }
 
 // `post(bytes, handOver = true)` (D97): the buffer moved into the message, the sender's left
