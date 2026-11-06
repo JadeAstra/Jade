@@ -1,0 +1,140 @@
+// A choice of one of a list, shown as one line with a chevron that opens the list. (JadeUI: Combo.kt.)
+
+private const comboPad = 6
+private const arrowBox = 18
+
+// One of `items`, shown in a line with a chevron: a press opens the list below it (the window's
+// screen does that, through DropdownProvider), the up and down keys choose the one before or
+// after. An editable one has a field to type in beside the chevron, and only the chevron opens
+// the list.
+class ComboBox : Content, DropdownProvider, TextEditable {
+  override var owner : Component? = null
+  var editable : bool
+  var onSelect : (int) -> unit
+
+  var items : List<string> = []
+    set(value) {
+      field = value
+      if (selected >= value.size) { selected = value.size - 1 }
+      owner?.invalidateLayout()
+    }
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+  // The one chosen, or -1.
+  var selected = -1
+    private set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  private val editor : TextField
+  private val editorComp : Component
+  private var lastWidth = 0
+
+  fun init(items : List<string>, selected : int = 0, editable : bool = false, onSelect : (int) -> unit = {}, font : Font = defaultFont) {
+    this.items = items
+    this.selected = selected.coerceIn(-1, items.size - 1)
+    this.editable = editable
+    this.onSelect = onSelect
+    this.font = font
+    this.editor = TextField(SharedTextModel(items.getOrNull(this.selected) ?: ""), font)
+    this.editorComp = Component(editor)
+  }
+
+  private fun effW() : int => lastWidth > 0 ? lastWidth : sizes().pref.width
+
+  override val model : SharedTextModel
+    get() => editor.model
+
+  // What it shows: the text typed, in an editable one; else the item chosen.
+  fun text() : string => editable ? editor.model.text : items.getOrNull(selected) ?: ""
+
+  override val dropdownItems : List<string>
+    get() => items
+  override val dropdownSelected : int
+    get() => selected
+  override fun isDropdownTrigger(x : int, y : int) : bool => !editable or x >= effW() - arrowBox
+
+  // Shows the item at `index` (-1 for none) without telling onSelect: a program setting it.
+  fun show(index : int) {
+    val i = index.coerceIn(-1, items.size - 1)
+    if (i == selected) { return }
+    selected = i
+    if (editable) { editor.model.setText(items.getOrNull(i) ?: "") }
+  }
+
+  // The item at `index` chosen from the list: shown, and onSelect told.
+  override fun dropdownChoose(index : int) {
+    if (index < 0 or index >= items.size) { return }
+    selected = index
+    if (editable) { editor.model.setText(items[index]) }
+    onSelect(index)
+  }
+
+  override fun sizes() : Sizes {
+    val fm = metrics(font)
+    var textW = 0
+    for (item in items) { textW = Math.max(textW, fm.stringWidth(item)) }
+    val w = textW + comboPad * 2 + arrowBox
+    val h = fm.height + comboPad
+    return Sizes(Size(w, h), Size(w, h), Size(int.maxValue, h))
+  }
+
+  private fun drawChevron(canvas : Canvas, cx : int, cy : int) {
+    canvas.color = Palette.fg(0x505050)
+    for (dy in 0 .. 1) {
+      canvas.drawLine(cx - 4, cy - 2 + dy, cx, cy + 2 + dy)
+      canvas.drawLine(cx + 4, cy - 2 + dy, cx, cy + 2 + dy)
+    }
+  }
+
+  override fun paint(canvas : Canvas) {
+    lastWidth = canvas.width
+    val fm = canvas.measure("", font)
+    val arrowX = canvas.width - arrowBox
+    val style = styleOf(this)
+    if (editable) {
+      val tw = Math.max(arrowX, 0)       // the field takes the room left of the chevron
+      editorComp.layout(tw, canvas.height)
+      val sub = canvas.sub(0, 0, tw, canvas.height)
+      try {
+        editorComp.paintInto(sub)
+      } finally {
+        sub.dispose()
+      }
+      canvas.color = style.background ?: Palette.surface
+      canvas.fillRect(arrowX, 0, arrowBox, canvas.height)
+      canvas.color = Palette.border
+      canvas.drawRect(arrowX, 0, arrowBox - 1, canvas.height - 1)
+    } else {
+      canvas.color = style.background ?: Palette.surface
+      canvas.fillRect(0, 0, canvas.width, canvas.height)
+      canvas.color = Palette.border
+      canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+      canvas.font = font
+      canvas.color = style.foreground ?: Palette.ink
+      // Cut short at the chevron, so that a long item does not run over it.
+      val room = Math.max(arrowX - comboPad * 2, 0)
+      canvas.drawString(elide(text(), font, room), comboPad, (canvas.height - fm.height) / 2 + fm.ascent)
+      canvas.color = Palette.border
+      canvas.drawLine(arrowX, 0, arrowX, canvas.height)
+    }
+    drawChevron(canvas, arrowX + arrowBox / 2, canvas.height / 2)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.KeyPress and (event.key == Key.up or event.key == Key.down)) {
+      if (event.key == Key.up and selected > 0) { dropdownChoose(selected - 1) }
+      if (event.key == Key.down and selected < items.size - 1) { dropdownChoose(selected + 1) }
+      return
+    }
+    if (editable) { editorComp.dispatch(event) }   // the field takes the rest
+  }
+}
+
+// A combo box of `items`, the one at `selected` shown; with `editable` a field to type in.
+fun comboBox(items : List<string>, selected : int = 0, editable : bool = false, onSelect : (int) -> unit = {}) : Component =>
+  Component(ComboBox(items, selected, editable, onSelect))
