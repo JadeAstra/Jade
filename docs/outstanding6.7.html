@@ -92,7 +92,7 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (five)</li>
+<li><a href="#decide">Waiting for the user</a> (four)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (fifteen)</li>
@@ -107,8 +107,7 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>The question</th><th class="when">Recommended</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-next">M7</td><td>The next milestone, Core part two (text model, text field and area, scrolling, split, tabs, the controls, tree and table, combo, screen), waits for the go-ahead: one milestone at a time.</td><td class="when">Start it after the full check below</td></tr>
-<tr><td class="part" id="o-verify">Check</td><td>The commits after 0.6.7 (024e060, 314b2d8, ab74fd6, ae8644c, ce625aa, 5acea61, 00bc14c, 7994428 and the merging of these pages) have had only the Clang Windows build and its suite. Still owed: the MSVC build, ASan, the GC and thread stress settings, the C++ results check, and Linux (Clang 21 and GCC). They change the bytecode format, the collector's marking and the verifier, and some touch files that broke the Linux build before. The version is still 0.6.7.</td><td class="when">Run it before M7 starts</td></tr>
+<tr><td class="part" id="o-next">M7</td><td>The next milestone, Core part two (text model, text field and area, scrolling, split, tabs, the controls, tree and table, combo, screen), waits for the go-ahead: one milestone at a time.</td><td class="when">Ready: the full check after 0.6.7 passed on 2026-11-06 (e3f903a)</td></tr>
 <tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
 <tr><td class="part" id="o-clang">Windows build</td><td>Which compiler the Windows release is built with. MSVC cannot be made to do tail calls for certain (tried and removed, 2026-11-05), so its build keeps the switch: 3.3 times as long on <code>numeric</code>, about twice on <code>calls</code>, <code>fields</code> and <code>particles</code>, 25% faster on <code>points_values</code>.</td><td class="when">Ship the clang-cl build</td></tr>
 <tr><td class="part" id="o-pgo">MSVC PGO</td><td>Profile-guided optimisation for the MSVC build, offered for after M6.7, should the MSVC build stay in use.</td><td class="when">Only if MSVC is kept</td></tr>
