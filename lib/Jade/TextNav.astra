@@ -1,0 +1,224 @@
+// How a caret moves through text, written once for every text widget: the text model (and with
+// it the field and the area) and, later, prose. Pure functions of a text: no state, no widget,
+// no layout. What a word is, where Ctrl+Right lands, what a double click on punctuation selects:
+// one answer everywhere. Moving by rows on the screen depends on how a widget lays text out, so
+// it is asked of the widget (CaretGeometry). (JadeUI: TextNav.kt.)
+
+object TextNav {
+  // Letters, digits and the underscore make words.
+  fun isWordChar(c : char) : bool => c.isLetterOrDigit() or c == '_'
+
+  // The start of the next word at or after `from`: past the rest of this word, then the gap.
+  fun nextWordBoundary(text : string, from : int) : int {
+    val size = text.size
+    var j = from.coerceIn(0, size)
+    while (j < size and isWordChar(text[j])) { j += 1 }
+    while (j < size and !isWordChar(text[j])) { j += 1 }
+    return j
+  }
+
+  // The start of the word behind the caret at `from`: back over the gap, then the word.
+  fun prevWordBoundary(text : string, from : int) : int {
+    var j = from.coerceIn(0, text.size)
+    while (j > 0 and !isWordChar(text[j - 1])) { j -= 1 }
+    while (j > 0 and isWordChar(text[j - 1])) { j -= 1 }
+    return j
+  }
+
+  // Where the run of one kind (word characters, or the others) round `index` starts, and where
+  // it ends (after its last character). A double click on punctuation or spaces selects that
+  // run rather than nothing.
+  fun wordBoundsAt(text : string, index : int) : Pair<int, int> {
+    val size = text.size
+    if (size == 0) { return 0 to 0 }
+    val at = index.coerceIn(0, size - 1)
+    val word = isWordChar(text[at])
+    var start = at
+    var end = at + 1
+    while (start > 0 and isWordChar(text[start - 1]) == word) { start -= 1 }
+    while (end < size and isWordChar(text[end]) == word) { end += 1 }
+    return start to end
+  }
+
+  // Where the line holding `index` starts.
+  fun lineStart(text : string, index : int) : int {
+    val before = text.lastIndexOf('\n', index.coerceIn(0, text.size) - 1)
+    return before < 0 ? 0 : before + 1
+  }
+
+  // Where the line holding `index` ends: at its newline, or at the end of the text.
+  fun lineEnd(text : string, index : int) : int {
+    val at = text.indexOf('\n', index.coerceIn(0, text.size))
+    return at < 0 ? text.size : at
+  }
+
+  // Which line, from 0, holds `index`.
+  fun lineOf(text : string, index : int) : int {
+    val end = index.coerceIn(0, text.size)
+    var line = 0
+    var at = text.indexOf('\n')
+    while (at >= 0 and at < end) {
+      line += 1
+      at = text.indexOf('\n', at + 1)
+    }
+    return line
+  }
+
+  // How many lines the text has: at least one.
+  fun lineCount(text : string) : int {
+    var n = 1
+    var at = text.indexOf('\n')
+    while (at >= 0) {
+      n += 1
+      at = text.indexOf('\n', at + 1)
+    }
+    return n
+  }
+
+  // How far into its line `index` is.
+  fun columnOf(text : string, index : int) : int => index.coerceIn(0, text.size) - lineStart(text, index)
+
+  // The place at a line and column, kept within that line; the last line if there are fewer.
+  fun offsetAt(text : string, line : int, column : int) : int {
+    var start = 0
+    var l = 0
+    while (l < line) {
+      val nl = text.indexOf('\n', start)
+      if (nl < 0) { break }               // fewer lines than asked for: the last one
+      start = nl + 1
+      l += 1
+    }
+    val nl = text.indexOf('\n', start)
+    val end = nl < 0 ? text.size : nl
+    return (start + column.coerceAtLeast(0)).coerceIn(start, end)
+  }
+}
+
+// What a mouse selection does, for every text widget: a press chooses what a drag snaps to by
+// the number of clicks (characters, words, lines) and remembers the range it started with; each
+// drag reaches out from whichever end of that range the pointer is past, so a word double
+// clicked stays whole however far back the drag goes. `lineBoundsAt` says what a line is for a
+// triple click (a row on the screen when wrapped, a line of the text when not).
+class DragSelector(private val text : () -> string, private val lineBoundsAt : (int) -> Range) {
+  // What a drag snaps to.
+  enum Granularity { char, word, line }
+
+  private var mode = Granularity.char
+  private var anchorStart = 0
+  private var anchorEnd = 0
+
+  // What the drag now snaps to.
+  val granularity : Granularity
+    get() => mode
+
+  // A press at `offset` with `clicks` clicks. Gives the selection to make, or null where the
+  // widget only moves its caret (selecting to it, with Shift).
+  fun press(offset : int, clicks : int, shift : bool) : Range? {
+    if (shift) {                          // Shift and a click: the selection grows from where it was
+      mode = Granularity.char
+      return null
+    }
+    if (clicks >= 3) {                    // a fourth click stays on lines
+      mode = Granularity.line
+      val line = lineBoundsAt(offset)
+      anchorStart = line.start
+      anchorEnd = line.end
+      return anchorStart..anchorEnd
+    }
+    if (clicks == 2) {
+      mode = Granularity.word
+      val (s, e) = TextNav.wordBoundsAt(text(), offset)
+      anchorStart = s
+      anchorEnd = e
+      return s..e
+    }
+    mode = Granularity.char
+    anchorStart = offset
+    anchorEnd = offset
+    return null
+  }
+
+  // The selection when the pointer is dragged to `offset`. Its start comes after its end when
+  // the drag goes back past where it began: `start` and `end` say which way, the caret at `end`.
+  fun drag(offset : int) : Range {
+    if (mode == Granularity.char) { return anchorStart..offset }
+    if (mode == Granularity.word) {
+      val t = text()
+      if (offset >= anchorEnd) { return anchorStart..TextNav.wordBoundsAt(t, offset).second }
+      if (offset < anchorStart) { return anchorEnd..TextNav.wordBoundsAt(t, offset).first }
+      return anchorStart..anchorEnd
+    }
+    if (offset >= anchorEnd) { return anchorStart..lineBoundsAt(offset).end }
+    if (offset < anchorStart) { return anchorEnd..lineBoundsAt(offset).start }
+    return anchorStart..anchorEnd
+  }
+}
+
+// How a widget lays its text out, for what cannot be worked out from the text alone: moving a
+// row up or down on the screen, and where the row shown starts and ends. A field, a wrapped area
+// and a paragraph answer differently; the keys built on the answers (CaretKeys) are written once.
+interface CaretGeometry {
+  // Where the row on the screen holding `offset` starts (its line's start, if lines don't wrap).
+  fun rowStart(offset : int) : int
+  // Where it ends.
+  fun rowEnd(offset : int) : int
+  // The place one row above (delta -1) or below (+1) `offset`, as near the same x as it can.
+  // `sticky` is the x (or column) kept from the last move up or down, or -1 to take it from
+  // `offset`. `offset` itself when there is no such row.
+  fun rowNeighbour(offset : int, delta : int, sticky : int) : int
+  // The x (or column, as the widget likes) to keep for moves up and down from `offset`.
+  fun stickyFor(offset : int) : int
+  // Rows in a page, for Page Up and Page Down.
+  fun pageRows() : int => 1
+}
+
+// The keys that move a caret, written once for every text widget: left and right (by character,
+// or by word with Ctrl), Home and End (of the row, or of the text with Ctrl), up and down, Page
+// Up and Page Down. Widgets keep their own editing keys; this only moves the caret. It keeps the
+// x a run of moves up and down started from, so that passing a short line does not pull the
+// caret left for good; any other key forgets it.
+class CaretKeys(private val text : () -> string, private val geometry : CaretGeometry, private val caret : () -> int,
+                private val moveTo : (int, bool) -> unit) {
+  private var sticky = -1                // the x or column kept for up and down; -1: from the caret
+
+  // Forgets the x kept for up and down: after an edit, a click, a character typed.
+  fun clearSticky() {
+    sticky = -1
+  }
+
+  // Moves the caret if `key` is one that does. True if it was.
+  fun handle(key : Key, shift : bool, ctrl : bool) : bool {
+    val t = text()
+    val at = caret()
+    if (key == Key.left) {
+      clearSticky()
+      moveTo(ctrl ? TextNav.prevWordBoundary(t, at) : at - 1, shift)
+    } else if (key == Key.right) {
+      clearSticky()
+      moveTo(ctrl ? TextNav.nextWordBoundary(t, at) : at + 1, shift)
+    } else if (key == Key.home) {
+      clearSticky()
+      moveTo(ctrl ? 0 : geometry.rowStart(at), shift)   // the row shown, as up and down see it
+    } else if (key == Key.end) {
+      clearSticky()
+      moveTo(ctrl ? t.size : geometry.rowEnd(at), shift)
+    } else if (key == Key.up) {
+      moveByRows(-1, shift)
+    } else if (key == Key.down) {
+      moveByRows(1, shift)
+    } else if (key == Key.pageUp) {
+      moveByRows(-geometry.pageRows(), shift)
+    } else if (key == Key.pageDown) {
+      moveByRows(geometry.pageRows(), shift)
+    } else {
+      return false
+    }
+    return true
+  }
+
+  private fun moveByRows(delta : int, shift : bool) {
+    val at = caret()
+    if (sticky < 0) { sticky = geometry.stickyFor(at) }
+    moveTo(geometry.rowNeighbour(at, delta, sticky), shift)   // the x is kept for the next one
+  }
+}
