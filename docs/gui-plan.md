@@ -1556,8 +1556,8 @@ judged by its expression where nothing runs between the read and its use.
 - A context menu, drop-down or submenu that would cross the window's right or bottom edge
   opens to the left of or above where it was asked for, so all of it shows. (The user's
   choice.)
-- `FileDialog` has the forms that call back (`open`, `save` with an `onResult`); the forms
-  that wait come with the dialogs of M8.
+- `FileDialog` has the forms that call back (`open`, `save` with an `onResult`); JadeUI's
+  forms that wait are not carried over (5.6), with the dialogs' in M8.
 - A selection's two ends are a value of their own, not a range, as an Astra range does not
   keep its ends reversed.
 - A document gives a block that wraps (`HeightForWidth`) its height at the document's
@@ -2416,9 +2416,13 @@ section 6.4.
 size to content, centre on owner, key filter), `DialogSession` and the eight
 dialogs, async file dialogs (N2), then `chart`. Ends with **JadeMem's gui module ported**,
 its three background samplers running as threads: it is the smallest real app and uses
-exactly this much.
+exactly this much. Planned in `docs/M8-plan.md` (2026-11-06), which adds, at the user's
+choice, what JadeMem turned out to need: its `core` and `native` modules too, Astra calling
+functions in DLLs (foreign functions), `treemap` and `Regex` (N5) brought forward from M9,
+and the line width, arcs and wedges of N3.
 
-**M9. Self-contained packages.** `code`, `hex`, `text`, `treemap`, `map`, and `Regex` (N5).
+**M9. Self-contained packages.** `code`, `hex`, `text`, `map` (`treemap` and `Regex` went to
+M8).
 
 **M10. Documents.** N3, then `svg` and `icons`, `math`, `css` / `html` / `doc`, `sheet`,
 `image`. This is more than half of the library by line count and is what Snips needs.
