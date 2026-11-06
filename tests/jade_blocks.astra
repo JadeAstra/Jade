@@ -222,5 +222,16 @@ fun blocksAddedAndRemoved() {
   same("the old ones gone", d.find("z"), null)
 }
 blocksAddedAndRemoved()
-print("DocTest:", checks, "checks,", failed)   // expect: DocTest: 38 checks, []
+
+// Mine: text that wraps is as tall as its lines at the document's width.
+fun wrappingTextIsAsTallAsItsLines() {
+  val words = wrappedLabel("one two three four five six seven eight nine ten eleven twelve thirteen fourteen")
+  val d = doc([words])
+  d.layout(1000, 400)
+  val wide = words.bounds.height
+  d.layout(120, 400)
+  yes("taller when narrow: ${words.bounds.height} against $wide", words.bounds.height > wide * 2)
+}
+wrappingTextIsAsTallAsItsLines()
+print("DocTest:", checks, "checks,", failed)   // expect: DocTest: 39 checks, []
 print("done")   // expect: done

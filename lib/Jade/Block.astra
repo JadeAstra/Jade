@@ -246,7 +246,8 @@ fun block(source : string, label : string, onEdit : (string) -> unit = {}, view 
 private const docPad = 12
 private const docGap = 10
 
-// Blocks one under another, each as tall as it likes and as wide as the document, on white.
+// Blocks one under another, each as wide as the document and as tall as it likes at that width
+// (text that wraps is as tall as its lines), on white.
 class Doc : Content, Container {
   override var owner : Component? = null
   private val blockList : open List<Component> = []
@@ -277,14 +278,21 @@ class Doc : Content, Container {
     Jade.requestLayout()
   }
 
-  private fun blockHeight(b : Component) : int => Math.max(b.prefSize().height, 24)
+  private var lastWidth = 0
+
+  private fun blockHeight(b : Component, width : int) : int {
+    val c = b.content
+    val h = c is HeightForWidth and width > 0 ? c.heightForWidth(width) : b.prefSize().height
+    return Math.max(h, 24)
+  }
 
   override fun layoutChildren(width : int, height : int) {
     val w = Math.max(width - docPad * 2, 1)
+    lastWidth = w
     var y = docPad
     for (b in blockList) {
       if (b.visible) {
-        val h = blockHeight(b)
+        val h = blockHeight(b, w)
         b.layout(w, h)
         b.bounds = Rect(docPad, y, w, h)
         y += h + docGap
@@ -304,7 +312,7 @@ class Doc : Content, Container {
     var w = 0
     for (b in blockList) {
       if (b.visible) {
-        h += blockHeight(b) + docGap
+        h += blockHeight(b, lastWidth) + docGap
         w = Math.max(w, b.prefSize().width)
       }
     }
