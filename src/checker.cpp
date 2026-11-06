@@ -10445,7 +10445,15 @@ struct Checker::Impl {
             case TokenType::GtEq: {
                 int order;
                 if (ints) order = a.i < b.i ? -1 : a.i > b.i ? 1 : 0;
-                else if (numbers) order = asDouble(a) < asDouble(b) ? -1 : asDouble(a) > asDouble(b) ? 1 : 0;
+                else if (numbers) {
+                    // Compared as they are, not by an order: a NaN is neither less, greater nor
+                    // equal, so all four are false, as when the program works them out.
+                    const double l = asDouble(a), r = asDouble(b);
+                    if (e.op == TokenType::Lt) return constBool(l < r);
+                    if (e.op == TokenType::LtEq) return constBool(l <= r);
+                    if (e.op == TokenType::Gt) return constBool(l > r);
+                    return constBool(l >= r);
+                }
                 else if (a.kind == ConstValue::String && b.kind == ConstValue::String) order = a.s.compare(b.s);
                 else return ConstValue{};
                 if (e.op == TokenType::Lt) return constBool(order < 0);
