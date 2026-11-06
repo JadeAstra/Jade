@@ -1,0 +1,21 @@
+// An object's narrow fields (a byte, a storage width, a char, G20), read and written in loops,
+// as the instructions remember them; a value that does not fit is still an error, and a val is
+// still given its value once.
+class W(var b : byte, var n : int32, var u : uint16, var f : float32, var c : char) {
+  val fixed : int16 = 7
+}
+val w = W(1, 2, 3, 1.5, 'a')
+for (i in 0 ..< 3) {
+  w.b = (w.b + 1).toByte()
+  w.n = w.n * 1000
+  w.u = w.u + 1
+  w.f = w.f * 2.0
+  w.c = 'b'
+}
+print(w.b, w.n, w.u, w.f, w.c, w.fixed)   // expect: 4 2000000000 6 12.0 b 7
+for (i in 0 ..< 2) {
+  try { w.n = w.n * 1000 } catch (e : Exception) { print(e#.name) }   // expect: ClassCastException
+}
+// expect: ClassCastException
+try { w.u = -1 } catch (e : Exception) { print(e#.name) }   // expect: ClassCastException
+print(w.n, w.u)   // expect: 2000000000 6

@@ -506,6 +506,36 @@ public:
     const ValueLayout& layoutOf(ObjClass* cls);
     [[noreturn]] void valueTooBig(const ObjClass* cls, uint32_t size);
     ObjValue* newValue(ObjClass* cls);
+    // An object's narrow field (a byte, a char, a storage width, G20), remembered by a place that
+    // reads or writes it: where its payload is, its bit, whether it is a val or tracked, and what
+    // it keeps, under its class's shape with the top bit set, which no shape has. So the quick ways,
+    // which read 8 bytes of a payload, never take it; the rare ones read and write it at once.
+    static constexpr uint32_t kNarrowShape = 0x80000000u;
+    static uint64_t narrowEntry(uint32_t shape, const FieldDecl& d) {
+        return static_cast<uint64_t>(shape | kNarrowShape) << 32 | static_cast<uint64_t>(sizeof(ObjInstance) + d.payloadOffset) << 16 |
+               static_cast<uint64_t>(d.payloadBit) << 8 | (d.isVal ? 0x40u : 0u) | (d.tracked ? 0x20u : 0u) | static_cast<uint64_t>(d.narrow);
+    }
+    bool narrowRead(const Value& obj, uint64_t seen, Value& out) const {
+        if ((seen >> 63) == 0 || !obj.isObjType(ObjType::Instance)) return false;
+        const ObjInstance* instance = asInstance(obj);
+        if (static_cast<uint32_t>(seen >> 32) != (instance->shape | kNarrowShape) || (instance->core != 0 && instance->core != coreId_)) return false;
+        out = readNarrow(static_cast<Narrow>(seen & 7), reinterpret_cast<const uint8_t*>(instance) + ((seen >> 16) & 0xFFFF));
+        return true;
+    }
+    // A val's is given only once, the general way.
+    bool narrowWrite(const Value& obj, uint64_t seen, Value value) {
+        if ((seen >> 63) == 0 || (seen & 0x40) != 0 || !obj.isObjType(ObjType::Instance)) return false;
+        ObjInstance* instance = asInstance(obj);
+        const Narrow narrow = static_cast<Narrow>(seen & 7);
+        if (static_cast<uint32_t>(seen >> 32) != (instance->shape | kNarrowShape) || instance->core != coreId_ || !fitsNarrow(narrow, value)) return false;
+        if (narrow == Narrow::Byte && value.isInt()) value = Value::byte(static_cast<uint8_t>(value.as.i));
+        writeNarrow(narrow, reinterpret_cast<uint8_t*>(instance) + ((seen >> 16) & 0xFFFF), value);
+        if ((seen & 0x20) != 0) {
+            const uint32_t bit = (seen >> 8) & 0xFF;
+            instance->payloadData()[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+        }
+        return true;
+    }
     // RGetPath's rare way (G14): the path of fields read worked out from where it starts, kept in
     // its cache and read; false where it cannot be told so (the stack code reads it then).
     bool resolvePath(const Value& obj, const uint8_t* ip, const Value* consts, std::atomic<uint64_t>* caches, Value& out);

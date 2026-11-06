@@ -470,6 +470,11 @@ CASES(GetOwn, GetProp, GetOwnRef, GetPropRef) {
 }
 COLD(GetOwn) {
     {
+    // An object's narrow field found before (G20).
+    if (caches != nullptr && narrowRead(sp[-1], caches[FAST_U16(2)].load(std::memory_order_relaxed), sp[-1])) {
+        ip += 4;
+        NEXT();
+    }
     // Where this place has found the field before, in an object of the same
     // layout, it is there again (M6.5 part 4): nothing else about it has
     // changed, the right to use it included. A value kept inside the object
@@ -624,6 +629,8 @@ COLD(GetOwn) {
                                         static_cast<uint64_t>(sizeof(ObjInstance) + decl->payloadOffset) << 16 |
                                         static_cast<uint64_t>(decl->payloadBit) << 8 | 0x80u | decl->payloadValueKind(),
                                     std::memory_order_relaxed);
+            else if (caches != nullptr && sizeof(ObjInstance) + decl->payloadOffset <= 0xFFFF)
+                caches[cache].store(narrowEntry(instance->shape, *decl), std::memory_order_relaxed);  // G20
             DONE();
         }
         if (instance->cls->hasAccessors) {
@@ -754,6 +761,13 @@ CASES(SetOwn, SetProp) {
 }
 COLD(SetOwn) {
     {
+    // An object's narrow field found before, given a value that fits it (G20).
+    if (caches != nullptr && narrowWrite(sp[-2], caches[FAST_U16(2)].load(std::memory_order_relaxed), sp[-1])) {
+        sp[-2] = sp[-1];
+        sp--;
+        ip += 4;
+        NEXT();
+    }
     // As for GetProp: a field found before, which takes any value or one of
     // a type that is quickly told (never one of a class type). A val (the
     // low bit) is given its value here only while it has none, as its
@@ -886,8 +900,11 @@ COLD(SetOwn) {
         const ObjInstance* instance = asInstance(sp_[-2]);
         const FieldDecl* decl = instance->declOf(name);
         const int64_t at = decl != nullptr && decl->payload == FieldDecl::NoPayload ? decl->slot : -1;
-        if (decl != nullptr && decl->payload != FieldDecl::NoPayload && decl->payload != FieldDecl::NarrowPayload &&
-            !(decl->isVal && decl->overrides)) {
+        if (decl != nullptr && decl->payload == FieldDecl::NarrowPayload && !decl->isVal &&
+            sizeof(ObjInstance) + decl->payloadOffset <= 0xFFFF) {
+            caches[cache].store(narrowEntry(instance->shape, *decl), std::memory_order_relaxed);  // G20
+        } else if (decl != nullptr && decl->payload != FieldDecl::NoPayload && decl->payload != FieldDecl::NarrowPayload &&
+                   !(decl->isVal && decl->overrides)) {
             // A payload (M6.6 part 6): its offset, its bit and its kind.
             caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 |
                                     static_cast<uint64_t>(sizeof(ObjInstance) + decl->payloadOffset) << 16 |
@@ -2970,6 +2987,12 @@ COLD(RSetPropSS) {
     // u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
     const Value& obj = R_S(1);
     const Value& given = opAt(ip - kOpBytes) == Op::RSetPropSK ? R_K(2) : R_S(2);
+    if (caches != nullptr && narrowWrite(obj, caches[FAST_U16(5)].load(std::memory_order_relaxed), given)) {  // G20
+        base[ip[0]] = given;
+        sp = base + ip[3];
+        ip += 11;
+        NEXT();
+    }
     if (obj.isObjType(ObjType::Instance) && caches != nullptr) {
         ObjInstance* instance = asInstance(obj);
         const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
@@ -3306,6 +3329,11 @@ COLD(RGetProp) {
     if (caches != nullptr) {
         const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
         Value& out = base[ip[0]];
+        if (narrowRead(obj, seen, out)) {  // an object's narrow field (G20)
+            sp = base + ip[2];
+            ip += 10;
+            NEXT();
+        }
         if (obj.isObjType(ObjType::Value)) {
             const ObjValue* box = asValue(obj);
             if (static_cast<uint32_t>(seen >> 32) == box->cls->shape) {
