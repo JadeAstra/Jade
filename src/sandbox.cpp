@@ -1,6 +1,6 @@
 // A sandbox's host (M6.6.2): files kept in memory, faults that make their rare failures happen,
 // and nothing of the system reached. What `Sandbox` in the standard library (sandbox.astra) is
-// built on; see docs/M6.6.2-sandbox-plan.md.
+// built on; see the M6.6.2 plan, in docs/plans-and-gaps6.7.html.
 #include "sandbox.h"
 
 #include <algorithm>
