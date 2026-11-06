@@ -413,7 +413,7 @@ class Component {
   // pressing one leaves the keyboard where it was.
   fun takesKeys() : bool {
     val c = content
-    return c is TextEditable or c is DropdownProvider or c is FocusTarget
+    return c is TextEditable or c is ListBox or c is Tree or c is Table or c is DropdownProvider or c is FocusTarget
   }
 
   // The text it edits, or null if it edits none.

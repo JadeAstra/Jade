@@ -1,0 +1,638 @@
+// The small controls: a check box, radio buttons, a slider, a progress bar, a list, a toggle
+// and a spinner. (JadeUI: Controls.kt.)
+
+private const pad2 = 4
+private const gap = 6
+private const ctrlBox = 15               // odd, so that the box has a middle pixel and what is in it is centred
+private const thumbSize = 12
+private const arrowW = 16
+private const initialDelayNs = 400000000 // before a held arrow starts repeating
+private const repeatNs = 60000000        // then about sixteen times a second
+
+private fun trackColor() : Color => Palette.line(0xCCCCCC)
+
+// The label of a check box or a radio button, centred beside its box.
+private fun drawControlLabel(canvas : Canvas, content : Content, label : string, font : Font) {
+  canvas.font = font
+  val style = styleOf(content)
+  canvas.color = style.enabled ? style.foreground ?: Palette.ink : Palette.disabled
+  val m = canvas.measure(label, font)
+  canvas.drawString(label, pad2 + ctrlBox + gap, (canvas.height - m.height) / 2 + m.ascent)
+}
+
+private fun controlSizes(label : string, font : Font) : Sizes {
+  val fm = metrics(font)
+  val h = Math.max(ctrlBox, fm.height) + pad2 * 2
+  val pref = Size(ctrlBox + gap + fm.stringWidth(label) + pad2 * 2, h)
+  return Sizes(pref, pref, Size(int.maxValue, h))
+}
+
+// A box with a tick and a label; a click turns it over and tells onChange.
+class CheckBox : Content {
+  override var owner : Component? = null
+  var onChange : (bool) -> unit
+  var label : string = ""
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+  var checked = false
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  fun init(label : string, checked : bool = false, onChange : (bool) -> unit = {}, font : Font = defaultFont) {
+    this.label = label
+    this.checked = checked
+    this.onChange = onChange
+    this.font = font
+  }
+
+  override fun sizes() : Sizes => controlSizes(label, font)
+
+  override fun paint(canvas : Canvas) {
+    val bx = pad2
+    val by = (canvas.height - ctrlBox) / 2
+    canvas.color = Palette.surface
+    canvas.fillRect(bx, by, ctrlBox, ctrlBox)
+    canvas.color = checked ? Palette.accent : Palette.border
+    canvas.drawRect(bx, by, ctrlBox - 1, ctrlBox - 1)
+    if (checked) {                        // a tick in the middle, drawn twice for a stroke of 2
+      canvas.color = Palette.accent
+      for (dy in 0 .. 1) {
+        canvas.drawLine(bx + 3, by + 8 - dy, bx + 6, by + 11 - dy)
+        canvas.drawLine(bx + 6, by + 11 - dy, bx + 11, by + 4 - dy)
+      }
+    }
+    drawControlLabel(canvas, this, label, font)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      checked = !checked
+      onChange(checked)
+    }
+  }
+}
+
+// Which of a set of radio buttons is on (its value), and who hears when it changes.
+class RadioGroup {
+  var selected : int
+    private set
+  private val listeners : open List<(int) -> unit> = []
+
+  fun init(selected : int = -1) {
+    this.selected = selected
+  }
+
+  fun onChange(listener : (int) -> unit) {
+    listeners.add(listener)
+  }
+  // Turns on the button of `value`, and tells the listeners.
+  fun select(value : int) {
+    if (selected == value) { return }
+    selected = value
+    for (l in listeners.toList()) { l(value) }
+  }
+}
+
+// One of a set of buttons of which one is on: a click turns this one on in its group.
+class RadioButton : Content {
+  override var owner : Component? = null
+  val value : int
+  val group : RadioGroup
+  var label : string = ""
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+
+  fun init(label : string, value : int, group : RadioGroup, font : Font = defaultFont) {
+    this.label = label
+    this.value = value
+    this.group = group
+    this.font = font
+    group.onChange { owner?.invalidate() }   // another button of the group turned on
+  }
+
+  override fun sizes() : Sizes => controlSizes(label, font)
+
+  override fun paint(canvas : Canvas) {
+    val on = group.selected == value
+    val bx = pad2
+    val by = (canvas.height - ctrlBox) / 2
+    canvas.color = Palette.surface
+    canvas.fillOval(bx, by, ctrlBox, ctrlBox)
+    canvas.color = on ? Palette.accent : Palette.border
+    canvas.drawOval(bx, by, ctrlBox, ctrlBox)  // the same box as the fill: ring, disc and dot share a middle
+    if (on) {
+      val dot = 7
+      val off = (ctrlBox - dot) / 2
+      canvas.color = Palette.accent
+      canvas.fillOval(bx + off, by + off, dot, dot)
+    }
+    drawControlLabel(canvas, this, label, font)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) { group.select(value) }
+  }
+}
+
+// A thumb on a track, from 0 to 1: a click or a drag puts it under the pointer and tells onChange.
+class Slider : Content {
+  override var owner : Component? = null
+  var onChange : (float) -> unit
+  // Where the thumb is, from 0 to 1. Set by a program, it shows at once (JadeUI's shows at the next input).
+  var value = 0.0
+    set(v) {
+      field = v.coerceIn(0.0, 1.0)
+      owner?.invalidate()
+    }
+  private var lastWidth = 0
+
+  fun init(value : float = 0.0, onChange : (float) -> unit = {}) {
+    this.value = value
+    this.onChange = onChange
+  }
+
+  private fun effW() : int => lastWidth > 0 ? lastWidth : sizes().pref.width
+
+  override fun sizes() : Sizes => Sizes(Size(60, 24), Size(140, 24), Size(int.maxValue, 24))
+
+  override fun paint(canvas : Canvas) {
+    lastWidth = canvas.width
+    val cy = canvas.height / 2
+    val x0 = pad2 + thumbSize / 2
+    val span = Math.max(canvas.width - pad2 - thumbSize / 2 - x0, 1)
+    val thumbX = x0 + (value * span).toInt()
+    canvas.color = trackColor()
+    canvas.fillRect(x0, cy - 1, span, 3)
+    canvas.color = Palette.accent
+    canvas.fillRect(x0, cy - 1, Math.max(thumbX - x0, 0), 3)
+    canvas.fillOval(thumbX - thumbSize / 2, cy - thumbSize / 2, thumbSize, thumbSize)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      setFromX(event.x)
+    } else if (event is Event.Drag) {
+      setFromX(event.x)
+    }
+  }
+
+  private fun setFromX(x : int) {
+    val x0 = pad2 + thumbSize / 2
+    val span = Math.max(effW() - pad2 - thumbSize / 2 - x0, 1)
+    value = (x - x0).toFloat() / span
+    onChange(value)
+  }
+}
+
+// A bar filled to `value`, from 0 to 1.
+class ProgressBar : Content {
+  override var owner : Component? = null
+  // How full it is. Set by a program, it shows at once.
+  var value = 0.0
+    set(v) {
+      field = v.coerceIn(0.0, 1.0)
+      owner?.invalidate()
+    }
+
+  fun init(value : float = 0.0) {
+    this.value = value
+  }
+
+  override fun sizes() : Sizes => Sizes(Size(60, 16), Size(140, 16), Size(int.maxValue, 16))
+
+  override fun paint(canvas : Canvas) {
+    canvas.color = trackColor()
+    canvas.fillRoundRect(0, 0, canvas.width - 1, canvas.height - 1, 8, 8)
+    val fillW = (value * (canvas.width - 1)).toInt()
+    if (fillW > 0) {
+      canvas.color = Palette.accent
+      canvas.fillRoundRect(0, 0, fillW, canvas.height - 1, 8, 8)
+    }
+    canvas.color = Palette.border
+    canvas.drawRoundRect(0, 0, canvas.width - 1, canvas.height - 1, 8, 8)
+  }
+}
+
+// A list of lines to choose one of: a click or the arrow keys choose (onSelect), a click or Enter
+// acts on it (onActivate). With onReorder set, a row can be dragged to another place. A row can
+// be greyed (`muted`), and the list can have a heading line.
+class ListBox : Content, Bordered, ScrollAware, ContextMenuProvider {
+  override var owner : Component? = null
+  var onSelect : (int) -> unit
+  var font : Font
+  // The menu for a right click on a row.
+  var contextMenuFor : ((int) -> List<MenuItem>)? = null
+  private var contextRow = -1            // the row a right click last landed on
+
+  var items : List<string> = []
+    set(value) {
+      field = value
+      if (selected >= value.size) { selected = value.size - 1 }
+      owner?.invalidateLayout()
+    }
+  var selected = -1
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // The rows shown grey and slanted (ones out of reach now, say).
+  var muted : (int) -> bool = { false }
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // A heading line above the rows, or null.
+  var header : string? = null
+    set(value) {
+      field = value
+      owner?.invalidateLayout()
+    }
+  // Told when a row is dragged from one place to another.
+  var onReorder : ((int, int) -> unit)? = null
+  // Told when a row is clicked or Enter is pressed on it.
+  var onActivate : ((int) -> unit)? = null
+
+  private var dragFrom = -1              // the row a drag to reorder began on
+  private var dropSlot = -1              // where it would go (0 to the number of rows), -1 none
+  private var pendingReveal : Range? = null
+
+  fun init(items : List<string>, selected : int = -1, onSelect : (int) -> unit = {}, font : Font = defaultFont) {
+    this.items = items
+    this.selected = selected
+    this.onSelect = onSelect
+    this.font = font
+  }
+
+  override fun contextMenu() : List<MenuItem> {
+    val f = contextMenuFor
+    return contextRow >= 0 and contextRow < items.size and f != null ? f(contextRow) : []
+  }
+
+  override fun viewportHeight(px : int) {}
+  override fun viewportWidth(px : int) {}
+  override fun consumeReveal() : Range? {
+    val r = pendingReveal
+    pendingReveal = null
+    return r
+  }
+  private fun revealSelected() {
+    if (selected < 0) { return }
+    val rowH = rowHeight()
+    val top = 1 + rowsTop() + selected * rowH
+    pendingReveal = top .. top + rowH
+    Jade.requestLayout()                  // the scroll round it takes it at the next layout
+  }
+
+  private fun rowHeight() : int => metrics(font).height + pad2
+  private fun rowsTop() : int => header != null ? rowHeight() : 0
+
+  // The widest line, kept until the lines, the font or the scale change (M7: JadeUI measures
+  // every line each time its size is asked for).
+  private var widest = 0
+  private var widestItems : List<string>? = null
+  private var widestHeader : string? = null
+  private var widestFont : Font? = null
+  private var widestScale : Number = 0
+  private fun widestLine() : int {
+    val scale = Jade.layoutScale
+    if (widestItems === items and widestHeader == header and widestFont === font and widestScale == scale) { return widest }
+    val fm = metrics(font)
+    var w = header != null ? fm.stringWidth(header!!) : 0
+    for (item in items) { w = Math.max(w, fm.stringWidth(item)) }
+    widest = w
+    widestItems = items
+    widestHeader = header
+    widestFont = font
+    widestScale = scale
+    return w
+  }
+
+  override fun sizes() : Sizes {
+    val fm = metrics(font)
+    val rowH = fm.height + pad2
+    val w = widestLine() + pad2 * 2 + 2
+    val h = rowH * Math.max(items.size, 1) + 2 + rowsTop()
+    return Sizes(Size(fm.charWidth('m') * 4, rowH + 2), Size(w, h), Size(int.maxValue, int.maxValue))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val fm = canvas.measure("", font)
+    val rowH = fm.height + pad2
+    canvas.color = Palette.surface
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.font = font
+    val style = styleOf(this)
+    val head = header
+    if (head != null) {
+      canvas.color = Palette.disabled
+      canvas.font = font.copy(italic = true)
+      canvas.drawString(head, pad2 + 1, 1 + pad2 / 2 + fm.ascent)
+      canvas.color = Palette.border
+      canvas.fillRect(1, rowH, canvas.width - 2, 1)
+      canvas.font = font
+    }
+    // Only the rows the canvas shows (M7: JadeUI draws every row, every time).
+    val vis = canvas.visibleBounds
+    val top = 1 + rowsTop()
+    val first = Math.max((vis.y - top) / rowH, 0)
+    val last = Math.min((vis.y + vis.height - top) / rowH + 1, items.size - 1)
+    for (i in first .. last) {
+      val y = top + i * rowH
+      if (i == selected) {
+        canvas.color = Palette.selection
+        canvas.fillRect(1, y, canvas.width - 2, rowH)
+      }
+      val mute = muted(i)
+      canvas.color = mute ? Palette.disabled : style.foreground ?: Palette.ink
+      canvas.font = mute ? font.copy(italic = true) : font
+      canvas.drawString(items[i], pad2 + 1, y + pad2 / 2 + fm.ascent)
+    }
+    if (dropSlot >= 0 and dropSlot <= items.size) {
+      canvas.color = Palette.accent
+      canvas.fillRect(1, Math.min(top + dropSlot * rowH - 1, canvas.height - 2), canvas.width - 2, 2)
+    }
+    if (style.framed) {
+      canvas.color = Palette.border
+      canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+    }
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      val row = rowAt(event.y)
+      if (row >= 0 and row < items.size) {
+        selected = row
+        onSelect(row)
+        onActivate?.invoke(row)
+        if (onReorder != null) { dragFrom = row }
+      }
+    } else if (event is Event.Context) {
+      val row = rowAt(event.y)
+      contextRow = row >= 0 and row < items.size ? row : -1
+      if (contextRow >= 0) {
+        selected = contextRow
+        onSelect(contextRow)
+      }
+    } else if (event is Event.Drag) {
+      if (dragFrom >= 0) {
+        dropSlot = slotAt(event.y)
+        owner?.invalidate()
+      }
+    } else if (event is Event.Release) {
+      if (dragFrom >= 0 and dropSlot >= 0) {
+        val to = (dragFrom < dropSlot ? dropSlot - 1 : dropSlot).coerceIn(0, items.size - 1)
+        if (to != dragFrom) { onReorder?.invoke(dragFrom, to) }
+      }
+      dragFrom = -1
+      dropSlot = -1
+      owner?.invalidate()
+    } else if (event is Event.KeyPress) {
+      if (event.key == Key.up) {
+        if (selected > 0) {
+          selected -= 1
+          onSelect(selected)
+          revealSelected()
+        }
+      } else if (event.key == Key.down) {
+        if (selected < items.size - 1) {
+          selected += 1
+          onSelect(selected)
+          revealSelected()
+        }
+      } else if (event.key == Key.enter) {
+        if (selected >= 0 and selected < items.size) { onActivate?.invoke(selected) }
+      }
+    }
+  }
+
+  private fun slotAt(y : int) : int => ((y - 1 - rowsTop() + rowHeight() / 2) / rowHeight()).coerceIn(0, items.size)
+  private fun rowAt(y : int) : int {
+    val off = y - 1 - rowsTop()
+    return off < 0 ? -1 : off / rowHeight()
+  }
+}
+
+// A switch, on or off: a click turns it over and tells onChange.
+class Toggle : Content {
+  override var owner : Component? = null
+  var onChange : (bool) -> unit
+  // Set by a program, it shows at once.
+  var checked = false
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  fun init(checked : bool = false, onChange : (bool) -> unit = {}) {
+    this.checked = checked
+    this.onChange = onChange
+  }
+
+  override fun sizes() : Sizes => Sizes(Size(40, 22), Size(40, 22), Size(40, 22))
+
+  override fun paint(canvas : Canvas) {
+    val w = canvas.width
+    val trackH = 16
+    val ty = (canvas.height - trackH) / 2
+    canvas.color = checked ? Palette.accent : trackColor()
+    canvas.fillRoundRect(0, ty, w - 1, trackH, trackH, trackH)
+    val knob = trackH - 4
+    canvas.color = Color.white
+    canvas.fillOval(checked ? w - knob - 3 : 3, ty + 2, knob, knob)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      checked = !checked
+      onChange(checked)
+    }
+  }
+}
+
+// Something that does a thing again and again while it is pressed and held (a spinner's
+// arrow): the window calls onHold every frame while the press lasts, with the time in
+// nanoseconds, and onReleaseHold when it ends.
+interface HoldRepeat {
+  fun onHold(nowNanos : int)
+  fun onReleaseHold()
+}
+
+// A whole number in a field with arrows beside it: an arrow steps it (held, it repeats after a
+// moment), the up and down keys step it, and a number typed is taken on Enter or when the field
+// loses the keyboard. Only digits (and a minus, where the number may be below 0) can be typed.
+class Spinner : Content, HoldRepeat, TextEditable {
+  override var owner : Component? = null
+  var step : int
+  var onChange : (int) -> unit
+  var min : int = int.minValue
+    set(v) {
+      field = v
+      value = value.coerceIn(min, max)
+      owner?.invalidateLayout()
+    }
+  var max : int = int.maxValue
+    set(v) {
+      field = v
+      value = value.coerceIn(min, max)
+      owner?.invalidateLayout()
+    }
+  var font : Font = defaultFont
+    set(v) {
+      field = v
+      owner?.invalidateLayout()
+    }
+  var value = 0
+    private set
+
+  private val input : TextField
+  private val fieldComp : Component
+  override val model : SharedTextModel
+    get() => input.model
+
+  private var w = 0
+  private var h = 0
+  private var heldDir = 0
+  private var pendingDelay = false
+  private var nextRepeatNs = 0
+  private var wasFocused = false
+
+  fun init(value : int = 0, min : int = int.minValue, max : int = int.maxValue, step : int = 1, onChange : (int) -> unit = {},
+           font : Font = defaultFont) {
+    this.min = min
+    this.max = max
+    this.step = step
+    this.onChange = onChange
+    this.font = font
+    this.value = value.coerceIn(min, max)
+    this.input = TextField(SharedTextModel(this.value.toString()), font, 3)
+    this.fieldComp = Component(input)
+    input.onCommit = { commit() }         // Enter takes what was typed
+    input.model.addListener {             // and so does the field losing the keyboard
+      val f = input.model.focused
+      if (wasFocused and !f) { commit() }
+      wasFocused = f
+    }
+  }
+
+  private fun effW() : int => w > 0 ? w : sizes().pref.width
+
+  override fun sizes() : Sizes {
+    val fp = fieldComp.prefSize()
+    val pref = Size(fp.width + arrowW, fp.height)
+    return Sizes(pref, pref, Size(int.maxValue, fp.height))
+  }
+
+  override fun paint(canvas : Canvas) {
+    w = canvas.width
+    h = canvas.height
+    val fieldW = Math.max(w - arrowW, 1)
+    fieldComp.layout(fieldW, h)
+    val sub = canvas.sub(0, 0, fieldW, h)
+    try {
+      fieldComp.paintInto(sub)
+    } finally {
+      sub.dispose()
+    }
+    val ax = w - arrowW
+    canvas.color = Palette.surface
+    canvas.fillRect(ax + 1, 1, arrowW - 2, h - 2)
+    canvas.color = Palette.border
+    canvas.drawLine(ax, 0, ax, h)
+    canvas.drawRect(ax, 0, arrowW - 1, h - 1)
+    val cx = ax + arrowW / 2
+    val upY = h / 4
+    val dnY = h * 3 / 4
+    canvas.color = Palette.ink
+    canvas.drawLine(cx - 3, upY + 2, cx, upY - 2)
+    canvas.drawLine(cx, upY - 2, cx + 3, upY + 2)
+    canvas.drawLine(cx - 3, dnY - 2, cx, dnY + 2)
+    canvas.drawLine(cx, dnY + 2, cx + 3, dnY - 2)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      if (event.x >= effW() - arrowW) {   // an arrow: a step, and repeating if held
+        heldDir = event.y < h / 2 ? step : -step
+        pendingDelay = true
+        setValue(value + heldDir)
+      } else {
+        fieldComp.dispatch(event)         // the field: the caret, a selection
+      }
+    } else if (event is Event.Drag) {
+      if (heldDir == 0) { fieldComp.dispatch(event) }
+    } else if (event is Event.KeyType) {
+      if (accepts(event.text)) { fieldComp.dispatch(event) }
+    } else if (event is Event.KeyPress) {
+      if (event.key == Key.up) {
+        setValue(value + step)
+      } else if (event.key == Key.down) {
+        setValue(value - step)
+      } else {
+        fieldComp.dispatch(event)         // the caret's keys, Backspace, Enter
+      }
+    } else {
+      fieldComp.dispatch(event)
+    }
+  }
+
+  override fun onHold(nowNanos : int) {
+    if (heldDir == 0) { return }
+    if (pendingDelay) {
+      nextRepeatNs = nowNanos + initialDelayNs
+      pendingDelay = false
+      return
+    }
+    if (nowNanos >= nextRepeatNs) {
+      setValue(value + heldDir)
+      nextRepeatNs = nowNanos + repeatNs
+    }
+  }
+  override fun onReleaseHold() {
+    heldDir = 0
+    pendingDelay = false
+  }
+
+  private fun accepts(text : string) : bool =>
+    text.size == 1 and (text[0].isDigit() or (text[0] == '-' and min < 0 and !input.model.text.contains("-")))
+
+  private fun commit() {
+    val parsed = input.model.text.trim().toIntOrNull()
+    if (parsed != null) { setValue(parsed) } else { input.model.setText(value.toString()) }
+  }
+
+  private fun setValue(v : int) {
+    val nv = v.coerceIn(min, max)
+    value = nv
+    owner?.invalidate()
+    if (input.model.text != nv.toString()) { input.model.setText(nv.toString()) }
+    input.markCommitted()                 // so that a later Escape goes back to this value
+    onChange(nv)
+  }
+}
+
+fun checkBox(label : string, checked : bool = false, onChange : (bool) -> unit = {}) : Component =>
+  Component(CheckBox(label, checked, onChange))
+fun radioButton(label : string, value : int, group : RadioGroup) : Component => Component(RadioButton(label, value, group))
+fun slider(value : float = 0.0, onChange : (float) -> unit = {}) : Component => Component(Slider(value, onChange))
+fun progressBar(value : float = 0.0) : Component => Component(ProgressBar(value))
+fun listBox(items : List<string>, selected : int = -1, onSelect : (int) -> unit = {}) : Component =>
+  Component(ListBox(items, selected, onSelect))
+fun toggle(checked : bool = false, onChange : (bool) -> unit = {}) : Component => Component(Toggle(checked, onChange))
+fun spinner(value : int = 0, min : int = 0, max : int = 100, step : int = 1, onChange : (int) -> unit = {}) : Component =>
+  Component(Spinner(value, min, max, step, onChange))

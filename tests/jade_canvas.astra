@@ -227,37 +227,37 @@ image.editPixels { px ->
   }
 }
 image[0, 0] = Color.clear                                 // one clear pixel
-val table = stage(40, 30)
-val tc = table.canvas()
+val board = stage(40, 30)
+val tc = board.canvas()
 tc.draw(image, 5, 5)
-val tp = table.toImage()
+val tp = board.toImage()
 print(tp[5, 5] == white, tp[6, 5] == Color.red, tp[9, 10] == Color.blue, tp[12, 10] == Color.blue, tp[13, 10] == white, tp.inkBox(white))   // expect: true true true true true Rect(5, 5, 8 x 6)
 // Scaled, and see-through.
 tc.draw(image, 20, 10, 16, 12)
 tc.draw(image, 5, 20, 8, 6, 0.5)
-val tq = table.toImage()
+val tq = board.toImage()
 print(tq[22, 13] == Color.red, tq[34, 20] == Color.blue, Math.abs(tq[7, 22].green - 128) <= 1, tq[7, 22].red == 255)   // expect: true true true true
 // A pixel set afterwards shows the next time the image is drawn.
 image[7, 5] = Color.green
 tc.draw(image, 5, 5)
-print(table.toImage()[12, 10] == Color.green)   // expect: true
+print(board.toImage()[12, 10] == Color.green)   // expect: true
 // So does what its own canvas draws, in memory.
 val imageCanvas = image.canvas()
 imageCanvas.color = Color.black
 imageCanvas.fillRect(1, 1, 2, 2)
 tc.draw(image, 5, 5)
-print(table.toImage()[6, 6] == black, table.toImage()[8, 8] == Color.red)   // expect: true true
+print(board.toImage()[6, 6] == black, board.toImage()[8, 8] == Color.red)   // expect: true true
 // And what the parts of its canvas draw on several cores at once (G64).
 image.canvas().split(1, 3).parallelStream().forEach { it.color = Color.green; it.fillRect(0, 0, 8, 6) }
 tc.draw(image, 5, 5)
-print(table.toImage()[5, 5] == Color.green, table.toImage()[12, 10] == Color.green)   // expect: true true
+print(board.toImage()[5, 5] == Color.green, board.toImage()[12, 10] == Color.green)   // expect: true true
 // Two threads drawing on it at once, a column at a time: every column reaches the card.
 val left = Thread { for (x in 0..<4) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.red; c.fillRect(0, 0, 1, 6) } }.start()
 val right = Thread { for (x in 4..<8) { val c = image.canvas().sub(x, 0, 1, 6); c.color = Color.blue; c.fillRect(0, 0, 1, 6) } }.start()
 left.join()
 right.join()
 tc.draw(image, 5, 5)
-print(table.toImage().crop(5, 5, 8, 6) == image)   // expect: true
+print(board.toImage().crop(5, 5, 8, 6) == image)   // expect: true
 // Drawn on with a canvas, and its pixels read again: each side follows the other.
 val drawn = Image(10, 10, Color.black)
 print(drawn[3, 3] == black)   // expect: true
