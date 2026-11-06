@@ -1,0 +1,548 @@
+// What a window shows: its content under a menu bar, and over them the menus, drop-down lists
+// and context menus that are open, and a tip. All of it is drawn in the window, last. (JadeUI:
+// Screen.kt.)
+
+private val menuFont = Font(Font.sansSerif, 13)
+private const menuPad = 12
+private const sepH = 7
+
+private fun menuBg() : Color => Palette.bg(0xFAFAFA)
+private fun menuBorder() : Color => Palette.line(0xB0B4B8)
+private fun menuFg() : Color => Palette.fg(0x1C1E21)
+private fun menuMuted() : Color => Palette.fg(0x7A8086)
+private fun menuDisabled() : Color => Palette.fg(0xB0B0B0)
+private fun barBg() : Color => Palette.bg(0xECEEF0)
+private fun menuSel() : Color => Palette.bg(0xD3E2F7)
+
+// The entries of a menu, dropped below its title or beside its parent, or a context menu or a
+// drop-down list: the row under the pointer lit, a click choosing it.
+internal class MenuList : Content {
+  override var owner : Component? = null
+  private val entries : List<MenuEntry>
+  private val onClose : () -> unit
+  private val onOpenSub : (Menu, int) -> unit
+  private val font : Font
+  private var hoverRow = -1
+
+  fun init(entries : List<MenuEntry>, onClose : () -> unit, onOpenSub : (Menu, int) -> unit = { m, y -> }, font : Font = menuFont) {
+    this.entries = entries
+    this.onClose = onClose
+    this.onOpenSub = onOpenSub
+    this.font = font
+  }
+
+  private fun fm() : TextUnits => metrics(font)
+  private fun rowH(e : MenuEntry) : int => e === Separator ? sepH : fm().height + 8
+
+  // Where the row of an entry with this label is, as wide as the list; null if there is none.
+  internal fun rowBounds(label : string, width : int) : Rect? {
+    var yy = 2
+    for (e in entries) {
+      val h = rowH(e)
+      val name = e is MenuItem ? e.label : e is CheckItem ? e.label : e is Menu ? e.label : null
+      if (name == label) { return Rect(0, yy, width, h) }
+      yy += h
+    }
+    return null
+  }
+
+  private fun rowAt(y : int) : int {
+    var yy = 2
+    for (i in 0 ..< entries.size) {
+      val h = rowH(entries[i])
+      if (y >= yy and y < yy + h) { return i }
+      yy += h
+    }
+    return -1
+  }
+
+  private fun labelOf(e : MenuEntry) : string {
+    if (e is MenuItem) { return e.label }
+    if (e is CheckItem) { return (e.checked ? "✓ " : "    ") + e.label }
+    if (e is Menu) { return e.label }
+    return ""
+  }
+  private fun accelOf(e : MenuEntry) : string? => e is MenuItem ? e.accelerator : e is CheckItem ? e.accelerator : null
+  private fun enabledOf(e : MenuEntry) : bool => e is MenuItem ? e.isEnabled : e is CheckItem ? e.enabled : true
+
+  override fun sizes() : Sizes {
+    var w = entries.isEmpty() ? 40 : 0
+    var h = 4
+    for (e in entries) {
+      val a = accelOf(e)
+      w = Math.max(w, fm().stringWidth(labelOf(e)) + (a != null ? fm().stringWidth(a) + 24 : 0))
+      h += rowH(e)
+    }
+    val size = Size(w + menuPad * 2 + 20, h)
+    return Sizes(size, size, size)
+  }
+
+  override fun paint(canvas : Canvas) {
+    canvas.color = menuBg()
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.color = menuBorder()
+    canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+    val units = fm()
+    var y = 2
+    for (idx in 0 ..< entries.size) {
+      val e = entries[idx]
+      val h = rowH(e)
+      // The row under the pointer lights, if it is one that can be chosen.
+      if (idx == hoverRow and e !== Separator and enabledOf(e)) {
+        canvas.color = menuSel()
+        canvas.fillRect(1, y, canvas.width - 2, h)
+      }
+      if (e === Separator) {
+        canvas.color = menuBorder()
+        canvas.drawLine(menuPad, y + h / 2, canvas.width - menuPad, y + h / 2)
+      } else {
+        val enabled = enabledOf(e)
+        val baseY = y + (h - units.height) / 2 + units.ascent
+        canvas.font = font
+        canvas.color = enabled ? menuFg() : menuDisabled()
+        canvas.drawString(labelOf(e), menuPad, baseY)
+        val a = accelOf(e)
+        if (a != null) {
+          canvas.color = enabled ? menuMuted() : menuDisabled()
+          canvas.drawString(a, canvas.width - menuPad - units.stringWidth(a), baseY)
+        }
+        if (e is Menu) {
+          canvas.color = menuMuted()
+          canvas.drawString("▸", canvas.width - menuPad - units.stringWidth("▸"), baseY)
+        }
+      }
+      y += h
+    }
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Hover) {
+      val r = event.x < 0 ? -1 : rowAt(event.y)
+      if (r != hoverRow) {
+        hoverRow = r
+        owner?.invalidate()
+      }
+    } else if (event is Event.Click) {
+      var y = 2
+      for (e in entries) {
+        val h = rowH(e)
+        if (event.y >= y and event.y < y + h) {
+          if (e is MenuItem) {
+            if (e.isEnabled) {
+              e.onClick()
+              onClose()
+            }
+          } else if (e is CheckItem) {
+            if (e.enabled) {
+              e.toggle()                  // its tick turned over, and it told
+              onClose()
+            }
+          } else if (e is Menu) {
+            onOpenSub(e, y)
+          }
+          return
+        }
+        y += h
+      }
+    }
+  }
+}
+
+// A window's menu bar: the titles of its menus in a row. A click on one opens its menu.
+class MenuBarView : Content {
+  override var owner : Component? = null
+  var bar : MenuBar
+  var font : Font
+  internal var openIndex = -1
+  internal var onTitleClick : (int, int) -> unit = { i, x -> }
+
+  fun init(bar : MenuBar, font : Font = menuFont) {
+    this.bar = bar
+    this.font = font
+  }
+
+  private fun fm() : TextUnits => metrics(font)
+  internal fun height() : int => fm().height + 8
+  private fun titleW(m : Menu) : int => fm().stringWidth(m.label) + menuPad * 2
+
+  internal fun titleIndexAt(x : int) : int {
+    var xx = 0
+    for (i in 0 ..< bar.menus.size) {
+      val tw = titleW(bar.menus[i])
+      if (x >= xx and x < xx + tw) { return i }
+      xx += tw
+    }
+    return -1
+  }
+  internal fun titleLeftOf(i : int) : int {
+    var xx = 0
+    for (j in 0 ..< i) { xx += titleW(bar.menus[j]) }
+    return xx
+  }
+  internal fun titleWidthOf(i : int) : int => titleW(bar.menus[i])
+
+  override fun sizes() : Sizes {
+    var w = 0
+    for (m in bar.menus) { w += titleW(m) }
+    val h = height()
+    return Sizes(Size(w, h), Size(w, h), Size(int.maxValue, h))
+  }
+
+  // The titles are never lit, on hover or while their menu is open: the menu below says which.
+  override fun paint(canvas : Canvas) {
+    canvas.color = barBg()
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.color = menuBorder()
+    canvas.drawLine(0, canvas.height - 1, canvas.width, canvas.height - 1)
+    var x = 0
+    for (m in bar.menus) {
+      canvas.font = font
+      canvas.color = menuFg()
+      canvas.drawString(m.label, x + menuPad, (canvas.height - fm().height) / 2 + fm().ascent)
+      x += titleW(m)
+    }
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      val i = titleIndexAt(event.x)
+      if (i >= 0) { onTitleClick(i, titleLeftOf(i)) }
+    }
+  }
+}
+
+// The kinds of popup, for where one goes when it would cross the window's edge.
+private const plainPopup = 0
+private const contextPopup = 1
+private const subPopup = 2
+private const dropdownPopup = 3
+
+// A window's root: the content under a menu bar (if there is one), and over them the popups that
+// are open (a menu, a context menu, a drop-down list, a program's own) and a tip. While a popup
+// is open the screen takes every event: a click in it reaches it, one on the bar changes menu,
+// one anywhere else closes it. A popup is kept inside the window (M7, the user's choice: JadeUI
+// lets one near the right or bottom edge be cut off): a context menu opens to the left of or
+// above the pointer, a menu within a menu on the left of its parent, a drop-down list moves up.
+class Screen : Content, Container {
+  override var owner : Component? = null
+  val content : Component
+  internal val menuBarComp : Component?
+
+  // One open popup: where it was asked for, how wide it is at least, and its kind.
+  internal class Popup(val comp : Component, val x : int, val y : int, val minW : int = 0, val kind : int = 0, val parentX : int = 0)
+  internal val popups : open List<Popup> = []
+  internal var tip : Popup? = null
+  internal var barH = 0
+  private var lastW = 0
+  private var lastH = 0
+
+  fun init(content : Component, menuBar : MenuBarView? = null) {
+    this.content = content
+    this.menuBarComp = menuBar != null ? Component(menuBar) : null
+    menuBar?.onTitleClick = { i, leftX -> toggleMenu(i, leftX) }
+  }
+
+  private fun menuBarView() : MenuBarView? {
+    val c = menuBarComp?.content
+    return c is MenuBarView ? c : null
+  }
+
+  // Puts another menu bar's menus in the bar.
+  fun setMenuBar(bar : MenuBar) {
+    val v = menuBarView()
+    if (v == null) { return }
+    v.bar = bar
+    closeAll()                            // a menu open belongs to the old bar
+    owner?.invalidate()
+  }
+
+  // Where a menu's title is in the bar; null if there is none of that label.
+  fun menuTitleBounds(label : string) : Rect? {
+    val v = menuBarView()
+    val at = menuBarComp?.bounds
+    if (v == null or at == null) { return null }
+    val i = v.bar.menus.indexOfFirst { it.label == label }
+    if (i < 0) { return null }
+    return Rect(at.x + v.titleLeftOf(i), at.y, v.titleWidthOf(i), v.height())
+  }
+
+  // Where the entry of this label is in the topmost open popup that has one; null if none has.
+  fun popupItemBounds(label : string) : Rect? {
+    for (p in popups.reversed()) {
+      val list = p.comp.content
+      if (list is MenuList) {
+        val r = list.rowBounds(label, p.comp.bounds.width)
+        if (r != null) { return Rect(p.comp.bounds.x + r.x, p.comp.bounds.y + r.y, r.width, r.height) }
+      }
+    }
+    return null
+  }
+
+  fun popupContains(x : int, y : int) : bool => popups.any { it.comp.bounds.contains(x, y) }
+  fun topPopupIsContextMenu() : bool => popups.lastOrNull()?.kind == contextPopup
+
+  private fun toggleMenu(i : int, leftX : int) {
+    val mb = menuBarView()
+    if (mb == null) { return }
+    if (mb.openIndex == i and popups.isNotEmpty()) {
+      closeAll()
+      return
+    }
+    closeAll()
+    mb.openIndex = i
+    addPopup(Component(MenuList(mb.bar.menus[i].entries, { closeAll() }, { sub, sy -> openSub(sub, sy) })), leftX, barH, 0, plainPopup)
+  }
+
+  private fun openSub(sub : Menu, sy : int) {
+    val p = popups.lastOrNull()
+    if (p == null) { return }
+    val b = p.comp.bounds
+    addPopup(Component(MenuList(sub.entries, { closeAll() })), b.x + b.width, b.y + sy, 0, subPopup, b.x)
+  }
+
+  private fun addPopup(comp : Component, x : int, y : int, minW : int, kind : int, parentX : int = 0) {
+    val p = Popup(comp, x, y, minW, kind, parentX)
+    place(p)
+    popups.add(p)
+    owner?.attachChildren()               // a popup is a new part of the tree: given its parent, then laid out
+    Jade.requestLayout()
+  }
+
+  // Opens a component of the program's as a popup at (x, y).
+  fun openPopup(comp : Component, x : int, y : int) {
+    addPopup(comp, x, y, 0, plainPopup)
+  }
+
+  // Opens a context menu at the pointer.
+  fun openContextMenu(items : List<MenuItem>, x : int, y : int) {
+    if (items.isEmpty()) { return }
+    closeAll()
+    addPopup(Component(MenuList(items, { closeAll() })), x, y, 0, contextPopup)
+  }
+
+  // Opens a list to choose one of `items` from, the one `selected` ticked, at (x, y) and at least
+  // `minWidth` wide (a drop-down as wide as its combo box): onChoose is told the one chosen.
+  fun openDropdownMenu(items : List<string>, selected : int, x : int, y : int, minWidth : int = 0, onChoose : (int) -> unit) {
+    if (items.isEmpty()) { return }
+    closeAll()
+    val entries = []
+    for (i in 0 ..< items.size) {
+      val index = i
+      entries.add(CheckItem(items[i], i == selected) { onChoose(index) })
+    }
+    addPopup(Component(MenuList(entries, { closeAll() })), x, y, minWidth, dropdownPopup)
+  }
+
+  fun hasPopup() : bool => popups.isNotEmpty()
+
+  // Shows a tip: over everything, but it takes no events.
+  fun showTip(comp : Component, x : int, y : int) {
+    val p = Popup(comp, x, y)
+    place(p)
+    tip = p
+    owner?.attachChildren()
+    Jade.requestLayout()
+  }
+  fun clearTip() {
+    if (tip == null) { return }
+    tip = null
+    owner?.attachChildren()
+    Jade.requestLayout()
+  }
+
+  fun menuBarHeight() : int => barH
+
+  // Takes the program's requests for popups and tips (Jade.onOverlayNeeded, Jade.onTipNeeded).
+  fun serveOverlays() {
+    Jade.onOverlayNeeded { comp, x, y ->
+      closeAll()                          // one at a time: an old list must not stay under a new one
+      if (comp != null) { openPopup(comp, x, y) }
+    }
+    Jade.onTipNeeded { comp, x, y ->
+      if (comp != null) { showTip(comp, x, y) } else { clearTip() }
+    }
+  }
+
+  // Closes every popup.
+  fun closeAll() {
+    popups.clear()
+    menuBarView()?.openIndex = -1
+    owner?.attachChildren()
+    Jade.requestLayout()
+  }
+
+  // Chooses the menu item (or check item) whose accelerator is `chord` ("Ctrl+S"), closing any
+  // menu open. False if no item has it.
+  fun triggerAccelerator(chord : string) : bool {
+    val bar = menuBarView()?.bar
+    if (bar == null) { return false }
+    val want = normalizeChord(chord)
+    var hit : MenuEntry? = null
+    for (m in bar.menus) {
+      if (hit == null) { hit = findAccel(m.entries, want) }
+    }
+    if (hit == null) { return false }
+    closeAll()
+    if (hit is MenuItem) {
+      if (hit.isEnabled) { hit.onClick() }
+    } else if (hit is CheckItem) {
+      if (hit.enabled) { hit.toggle() }
+    }
+    return true
+  }
+
+  private fun findAccel(entries : List<MenuEntry>, want : string) : MenuEntry? {
+    for (e in entries) {
+      if (e is Menu) {
+        val inner = findAccel(e.entries, want)
+        if (inner != null) { return inner }
+      } else {
+        val a = e is MenuItem ? e.accelerator : e is CheckItem ? e.accelerator : null
+        if (a != null and normalizeChord(a) == want) { return e }
+      }
+    }
+    return null
+  }
+
+  // Lays a popup out where it was asked for, kept inside the window.
+  private fun place(p : Popup) {
+    val ps = p.comp.prefSize()
+    val w = Math.max(ps.width, p.minW)
+    val h = ps.height
+    var x = p.x
+    var y = p.y
+    if (lastW > 0 and x + w > lastW) {
+      x = p.kind == contextPopup ? x - w : p.kind == subPopup ? p.parentX - w : lastW - w
+    }
+    if (lastH > 0 and y + h > lastH) {
+      y = p.kind == contextPopup ? y - h : lastH - h
+    }
+    x = Math.max(x, 0)
+    y = Math.max(y, 0)
+    p.comp.layout(w, h)
+    p.comp.bounds = Rect(x, y, w, h)
+  }
+
+  // ---- As a container ----
+
+  override fun layoutChildren(width : int, height : int) {
+    lastW = width
+    lastH = height
+    val mbv = menuBarView()
+    barH = mbv != null ? mbv.height() : 0
+    val mb = menuBarComp
+    if (mb != null) {
+      mb.layout(width, barH)
+      mb.bounds = Rect(0, 0, width, barH)
+    }
+    val ch = Math.max(height - barH, 0)
+    content.layout(width, ch)
+    content.bounds = Rect(0, barH, width, ch)
+    for (p in popups) { place(p) }
+    val t = tip
+    if (t != null) { place(t) }
+  }
+
+  // Events reach the bar, the content, the popups and the tip; finding things too.
+  override fun shownChildren() : List<Component> {
+    val out = []
+    val mb = menuBarComp
+    if (mb != null) { out.add(mb) }
+    out.add(content)
+    for (p in popups) { out.add(p.comp) }
+    val t = tip
+    if (t != null) { out.add(t.comp) }
+    return out
+  }
+
+  // While a popup is open the screen takes every event itself (to send it into the popup, or close
+  // it on a click outside); else the bar or the content, by where the point is.
+  override fun childAtPoint(px : int, py : int) : PositionalChild? {
+    if (popups.isNotEmpty()) { return null }
+    val mb = menuBarComp
+    if (mb != null and py < barH) { return PositionalChild(mb, 0, 0) }
+    return PositionalChild(content, content.bounds.x, content.bounds.y)
+  }
+
+  // Its popups come and go without its content changing: no picture of it is kept.
+  override fun keepsPicture() : bool => false
+
+  override fun sizes() : Sizes {
+    val mbv = menuBarView()
+    val extra = mbv != null ? mbv.height() : 0
+    val min = content.minSize()
+    val pref = content.prefSize()
+    return Sizes(Size(min.width, min.height + extra), Size(pref.width, pref.height + extra), Size(int.maxValue, int.maxValue))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val mb = menuBarComp
+    if (mb != null) { paintPart(canvas, mb, Rect(0, 0, canvas.width, barH)) }
+    paintPart(canvas, content, Rect(0, barH, canvas.width, Math.max(canvas.height - barH, 0)))
+    paintOverlayLayer(canvas)
+  }
+
+  private fun paintPart(canvas : Canvas, c : Component, b : Rect) {
+    if (b.width <= 0 or b.height <= 0) { return }
+    val s = canvas.sub(b.x, b.y, b.width, b.height)
+    try {
+      c.paintInto(s)
+    } finally {
+      s.dispose()
+    }
+  }
+
+  internal fun hasOverlayLayer() : bool => popups.isNotEmpty() or tip != null
+
+  // The popups, then the tip over all of them.
+  internal fun paintOverlayLayer(canvas : Canvas) {
+    for (p in popups) { paintPart(canvas, p.comp, p.comp.bounds) }
+    val t = tip
+    if (t != null) { paintPart(canvas, t.comp, t.comp.bounds) }
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      val p = popups.lastOrNull()
+      val mb = menuBarComp
+      if (p != null and p.comp.bounds.contains(event.x, event.y)) {
+        p.comp.dispatch(Event.Click(event.x - p.comp.bounds.x, event.y - p.comp.bounds.y, event.clicks, event.shift, event.ctrl))
+      } else if (mb != null and event.y < barH) {
+        mb.dispatch(event)                // another title
+      } else {
+        closeAll()
+      }
+    } else if (event is Event.Hover) {
+      // While a popup is open the screen takes every event, so the pointer is followed by hand:
+      // over the bar another title's menu opens; over the popup its row lights.
+      val mbv = menuBarView()
+      val p = popups.lastOrNull()
+      if (mbv != null and event.y >= 0 and event.y < barH) {
+        val i = mbv.titleIndexAt(event.x)
+        if (i >= 0 and i != mbv.openIndex) { toggleMenu(i, mbv.titleLeftOf(i)) }
+      } else if (p != null and p.comp.bounds.contains(event.x, event.y)) {
+        p.comp.dispatch(Event.Hover(event.x - p.comp.bounds.x, event.y - p.comp.bounds.y))
+      } else if (p != null) {
+        p.comp.dispatch(Event.Hover(-1, -1))
+      }
+    } else if (event is Event.KeyPress) {
+      if (event.key == Key.escape) { closeAll() } else { content.dispatch(event) }
+    } else if (event is Event.KeyType or event is Event.Shortcut) {
+      content.dispatch(event)
+    }
+  }
+}
+
+// "Ctrl+Shift+S" in one form: lower case, the keys before the last sorted, and Cmd, Meta and
+// Shortcut taken as Ctrl.
+internal fun normalizeChord(chord : string) : string {
+  val parts = chord.split("+").map { it.trim().lower() }.filter { it.isNotEmpty() }
+  if (parts.isEmpty()) { return "" }
+  val key = parts[parts.size - 1]
+  val mods = parts.dropLast(1).map { it == "meta" or it == "cmd" or it == "command" or it == "shortcut" ? "ctrl" : it }
+  return (mods.distinct().sorted() + [key]).join("+")
+}
+
+// A window's root: `content` under the menu bar of `menuBar`, if there is one.
+fun screen(content : Component, menuBar : MenuBar? = null) : Component =>
+  Component(Screen(content, menuBar != null ? MenuBarView(menuBar) : null))

@@ -219,6 +219,24 @@ class WindowHost : WindowHandle {
   private var lastScale = 0.0
   private var disposed = false
 
+  // What happens in time (M7): the caret's blink, a tip after the pointer rests, a held arrow
+  // repeating. Each is kept as when it is next due, in nanoseconds, and tick(now) does what is
+  // due by then. A window on the screen keeps one timer for the soonest, given up when it
+  // closes (a timer keeps a program running); a hidden window (a test's) keeps none, and the test
+  // calls tick with a time of its own.
+  private var nextBlinkAt = 0
+  private var lastCaret = -1
+  private var lastTextLen = -1
+  private var lastAwareGen = -1
+  private var tipDueAt = -1
+  private var tipComp : Component? = null
+  private var tipText : string? = null
+  private var tipX = 0
+  private var tipY = 0
+  private var tipShown = false
+  private var timer : Timer? = null
+  private var windowFocused = true
+
   // The keyboard.
   private var focusedComponent : Component? = null
   private var focusedAware : FocusAware? = null
@@ -249,7 +267,7 @@ class WindowHost : WindowHandle {
   fun init(window : Window, hidden : bool, scale : Number?) {
     this.window = window
     this.hidden = hidden
-    this.tree = window.root
+    this.tree = wrapped(window.root)
     this.clicks = hidden ? ClickCounter() : ClickCounter(Native.doubleClickTime * 1000000)
 
     var width = window.initialWidth
@@ -270,6 +288,24 @@ class WindowHost : WindowHandle {
     frameHook = { scheduleFrame() }
     themeHook = { requestRepaint() }
   }
+
+  // Every window's root is shown in a Screen, menu bar or not, so that menus, drop-down lists,
+  // context menus and tips open in any window; a root that is a screen already is used as it is.
+  private var screenOf : Screen? = null
+  private fun wrapped(root : Component) : Component {
+    val c = root.content
+    if (c is Screen) {
+      screenOf = c
+      return root
+    }
+    val bar = window.menuBar
+    val s = Screen(root, bar != null ? MenuBarView(bar) : null)
+    screenOf = s
+    return Component(s)
+  }
+  // The window's screen.
+  val screen : Screen
+    get() => screenOf!!
 
   // Text is measured for this window's screen from here on. If that is another scale than
   // the last thing measured for, what widgets asked for is asked again.
@@ -320,6 +356,9 @@ class WindowHost : WindowHandle {
   // What the window in front owns of the toolkit's shared things.
   private fun takeGlobals() {
     Jade.scheduler = { delay, task -> EventLoop.after(delay, task) }
+    frontWindowHost = this
+    if (!hidden and !(Jade.clipboard is SystemClipboard)) { Jade.clipboard = SystemClipboard() }
+    screen.serveOverlays()               // the program's popups and tips open in the window in front
     Jade.onFocusRequested { comp ->
       setKeyboardFocus(true)
       ensureLayout()
@@ -334,8 +373,9 @@ class WindowHost : WindowHandle {
     get() => focusedComponent
   val cursor : CursorKind
     get() => currentCursor
+  // The window's root, as the program gave it (shown in the window's screen).
   val shownTree : Component
-    get() => tree
+    get() => screen.content
 
   // ---- The handle ----
 
@@ -355,7 +395,8 @@ class WindowHost : WindowHandle {
     native.setSize(pref.width, pref.height)
   }
   override fun rootChanged(root : Component) {
-    tree = root
+    tree = wrapped(root)
+    if (frontWindowHost === this) { screen.serveOverlays() }
     captured = null
     rightCaptured = null
     lastHovered = null
@@ -370,6 +411,8 @@ class WindowHost : WindowHandle {
     disposed = true
     updateTextFocus(null)
     Jade.removeRepaintHook(repaintHook)
+    timer?.cancel()
+    timer = null
     Jade.removeLayoutHook(layoutHook)
     Jade.removeFrameNeededHook(frameHook)
     Palette.removeThemeHook(themeHook)
@@ -401,6 +444,9 @@ class WindowHost : WindowHandle {
   // the window's picture up to date before it looks at it.
   fun frame() {
     if (disposed or !native.isOpen) { return }
+    val now = Native.nanoTime()
+    if (advance(now)) { loop.markDirty() }
+    armTimer(now)
     if (Jade.wantsFrames) {
       Jade.runFrameHooks(Native.nanoTime())
       EventLoop.after(16.milliseconds) { scheduleFrame() }   // an animation: another frame after this one
@@ -425,6 +471,130 @@ class WindowHost : WindowHandle {
     tree.paintInto(onto)
     loop.drawn(plan, w, h)
     native.present()
+  }
+
+  // ---- What happens in time ----
+
+  // Does what is due by `now` (nanoseconds, as Native.nanoTime gives): a held arrow repeats, the
+  // caret blinks (or shows, solid, if it has moved), a tip whose time has come shows. A test of a
+  // hidden window calls it with times of its own; on the screen the window's timer does.
+  fun tick(now : int) {
+    if (disposed) { return }
+    if (advance(now)) {
+      loop.markDirty()
+      scheduleFrame()
+    }
+    armTimer(now)
+  }
+
+  private fun advance(now : int) : bool {
+    var changed = false
+    val cap = captured
+    val held = cap?.component?.content
+    if (cap != null and held is HoldRepeat) {
+      held.onHold(now)
+      cap.component.invalidate()
+      changed = true
+    }
+    // A caret that has moved shows, solid, and blinks again from now.
+    val m = focusedTextModel
+    if (m != null and (m.caret != lastCaret or m.length != lastTextLen)) {
+      lastCaret = m.caret
+      lastTextLen = m.length
+      m.showCaret()
+      nextBlinkAt = now + caretBlinkNs
+      changed = true
+    }
+    val aw = focusedAware
+    if (aw != null) {
+      val gen = aw.caretGeneration()
+      if (gen != lastAwareGen) {
+        lastAwareGen = gen
+        aw.showCaretSolid()
+        nextBlinkAt = now + caretBlinkNs
+        changed = true
+      }
+    }
+    if (blinking() and now >= nextBlinkAt) {
+      nextBlinkAt = now + caretBlinkNs
+      if (m != null and m.focused) {
+        m.toggleCaret()
+        changed = true
+      }
+      if (aw != null and aw.blinkCaret()) { changed = true }
+    }
+    if (tipDueAt >= 0 and now >= tipDueAt) {
+      showDueTip()
+      changed = true
+    }
+    return changed
+  }
+
+  private fun blinking() : bool => windowFocused and ((focusedTextModel?.focused ?: false) or focusedAware != null)
+
+  // One timer, for whatever is due soonest; none when nothing is, and none in a hidden window.
+  private fun armTimer(now : int) {
+    if (hidden or disposed) { return }
+    var next = -1
+    val held = captured?.component?.content
+    if (held is HoldRepeat) { next = now + holdFrameNs }
+    if (blinking() and (next < 0 or nextBlinkAt < next)) { next = nextBlinkAt }
+    if (tipDueAt >= 0 and (next < 0 or tipDueAt < next)) { next = tipDueAt }
+    timer?.cancel()
+    timer = null
+    if (next < 0) { return }
+    val ms = Math.max((next - now + 999999) / 1000000, 1)
+    timer = EventLoop.after(Duration(ms * 1000000)) {
+      timer = null
+      tick(Native.nanoTime())
+    }
+  }
+
+  // The pointer is over `leaf`: its tip (the content's for the place, or the component's) shows
+  // after the pointer has rested there a while, below and right of it.
+  private fun updateTooltip(leaf : Component?, x : int, y : int, localX : int, localY : int) {
+    var text : string? = null
+    if (leaf != null) {
+      val c = leaf.content
+      text = (c is TooltipProvider ? c.tooltipAt(localX, localY) : null) ?: leaf.tooltip
+    }
+    if (leaf === tipComp and text == tipText) { return }
+    tipComp = leaf
+    tipText = text
+    clearTipCard()
+    tipDueAt = text == null ? -1 : Native.nanoTime() + tooltipDelayNs
+    tipX = x
+    tipY = y
+    armTimer(Native.nanoTime())
+  }
+
+  private fun showDueTip() {
+    tipDueAt = -1
+    val text = tipText
+    if (text == null) { return }
+    val card = Component(TipCard(text))
+    val ps = card.prefSize()
+    // Below and right of the pointer, kept inside the window: a tip cut off is no use.
+    val x = Math.max(Math.min(tipX, native.width - ps.width), 0)
+    val below = tipY + 22
+    val y = below + ps.height <= native.height ? below : Math.max(tipY - ps.height - 4, 0)
+    screen.showTip(card, x, y)
+    tipShown = true
+  }
+
+  private fun clearTipCard() {
+    if (tipShown) {
+      screen.clearTip()
+      tipShown = false
+      loop.markDirty()
+    }
+  }
+
+  private fun hideTooltip() {
+    tipDueAt = -1
+    tipComp = null
+    tipText = null
+    clearTipCard()
   }
 
   // The window's picture as it now is.
@@ -528,10 +698,31 @@ class WindowHost : WindowHandle {
       loop.markDirty()
       return
     }
+    hideTooltip()
+    val left = button == PointerButton.left
+    // A popup is open: a left press in it chooses, a left press outside a menu or a drop-down is
+    // the screen's (another title, or closing it, and nothing else); anything else closes it and
+    // goes on to what is under it, so a click outside a context menu still lands.
+    val sc = screen
+    if (sc.hasPopup()) {
+      ensureLayout()
+      if (left and (sc.popupContains(x, y) or !sc.topPopupIsContextMenu())) {
+        tree.dispatch(Event.Click(x, y, clickCount, m.shift, m.ctrl))
+        return
+      }
+      sc.closeAll()
+    }
     ensureLayout()
     val target = tree.componentPathAt(x, y)
     focusedComponent = focusAfterPress(focusedComponent, target, x, y)    // only onto what takes keys
     updateTextFocus(focusedComponent)
+    // A press on a drop-down's trigger opens its list below it, at least as wide as it.
+    val dropdown = target?.component?.content
+    if (left and target != null and dropdown is DropdownProvider and dropdown.isDropdownTrigger(x - target.offsetX, y - target.offsetY)) {
+      sc.openDropdownMenu(dropdown.dropdownItems, dropdown.dropdownSelected, target.offsetX, target.offsetY + target.component.bounds.height,
+                          target.component.bounds.width) { dropdown.dropdownChoose(it) }
+      return
+    }
     if (button == PointerButton.left) {
       captured = target
       if (target != null) {
@@ -551,12 +742,17 @@ class WindowHost : WindowHandle {
       val rc = rightCaptured
       if (rc == null) { return }
       if (rightMoved) { rc.component.dispatch(Event.Context(x - rc.offsetX, y - rc.offsetY, true)) }
+      // The context menu opens where the button is let go.
+      val provider = rc.component.content
+      if (provider is ContextMenuProvider) { screen.openContextMenu(provider.contextMenu(), x, y) }
       rightCaptured = null
       return
     }
     if (button == PointerButton.left) {
       val cap = captured
       if (cap == null) { return }
+      val held = cap.component.content
+      if (held is HoldRepeat) { held.onReleaseHold() }
       cap.component.dispatch(Event.Release(x - cap.offsetX, y - cap.offsetY, m.shift))
       captured = null
     }
@@ -570,6 +766,7 @@ class WindowHost : WindowHandle {
     Jade.shortcutDown = ctrlHeld
     setCursor(cursorFor(path, mx, my))
     tree.dispatch(Event.Hover(mx, my, shiftHeld, ctrlHeld))
+    updateTooltip(hovered, mx, my, mx - (path?.offsetX ?: 0), my - (path?.offsetY ?: 0))
     if (hovered !== lastHovered) {
       val was = lastHovered
       if (was != null) {
@@ -582,6 +779,7 @@ class WindowHost : WindowHandle {
   }
 
   private fun pointerLeft() {
+    hideTooltip()
     pointerInside = false
     lastPointer = null
     noteInput()
@@ -642,6 +840,21 @@ class WindowHost : WindowHandle {
       "numpadEnter": Key.enter, "escape": Key.escape, "tab": Key.tab, "f2": Key.f2, "f5": Key.f5, "f10": Key.f10, "f11": Key.f11
     }
     private fun keyFor(key : KeyCode) : Key? => WindowHost.namedKeys[key.name]
+    // The keys as a menu writes its accelerator ("Ctrl+Shift+S", "F5"); null for a key alone that
+    // is typing.
+    private fun accelChordFor(key : KeyCode, letter : string?, m : Modifiers) : string? {
+      val name = key.name
+      val fn = name.size >= 2 and name.size <= 3 and name[0] == 'f' and name[1].isDigit() ? name.upper() : null
+      val main = fn ?: letter
+      if (main == null) { return null }
+      val parts = []
+      if (m.shortcut) { parts.add("Ctrl") }
+      if (m.shift) { parts.add("Shift") }
+      if (m.alt) { parts.add("Alt") }
+      if (parts.isEmpty() and fn == null) { return null }
+      parts.add(main)
+      return parts.join("+")
+    }
     private val navKeys = [KeyCode.left, KeyCode.right, KeyCode.up, KeyCode.down, KeyCode.home, KeyCode.end, KeyCode.pageUp, KeyCode.pageDown]
     private fun isNavKey(key : KeyCode) : bool => WindowHost.navKeys.contains(key)
     // What a key does with Ctrl held: by the letter the keyboard's layout gives it.
@@ -703,6 +916,20 @@ class WindowHost : WindowHandle {
         return
       }
     }
+    // The menus' accelerators, after the edit keys so that Ctrl+C reaches the widget with the
+    // keyboard; a function key works on its own.
+    val chord = WindowHost.accelChordFor(key, letter, m)
+    if (chord != null and screen.triggerAccelerator(chord)) {
+      noteInput()
+      consumedKeys.add(key)
+      return
+    }
+    if (key == KeyCode.escape and screen.hasPopup()) {
+      screen.closeAll()
+      noteInput()
+      consumedKeys.add(key)
+      return
+    }
     noteInput(false, false, WindowHost.isNavKey(key))
     consumedKeys.add(key)
     if (key == KeyCode.tab) {
@@ -741,6 +968,8 @@ class WindowHost : WindowHandle {
   }
 
   private fun windowFocus(focused : bool) {
+    windowFocused = focused
+    if (!focused) { hideTooltip() }
     if (focused) {
       takeGlobals()
       return
@@ -810,3 +1039,54 @@ class WindowHost : WindowHandle {
     return Rect(c.offsetX - 2, c.offsetY - 2, b.width + 4, b.height + 4)
   }
 }
+
+// The window that last came to the front: the one that takes the program's popups and tips.
+private var frontWindowHost : WindowHost? = null
+
+private const caretBlinkNs = 500000000      // the caret shows and hides each half second
+private const tooltipDelayNs = 600000000    // a tip shows once the pointer has rested this long
+private const holdFrameNs = 16000000        // a held arrow is told this often
+
+// A tip: its text on a small bordered card, in the theme's colours.
+internal class TipCard(val text : string) : Content {
+  override var owner : Component? = null
+  private val font = Font(Font.sansSerif, 12)
+
+  override fun sizes() : Sizes {
+    val fm = metrics(font)
+    val d = Size(fm.stringWidth(text) + 10, fm.height + 8)
+    return Sizes(d, d, d)
+  }
+
+  override fun paint(canvas : Canvas) {
+    canvas.color = Palette.bg(0xFFFFE8)
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.color = Palette.border
+    canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+    canvas.font = font
+    canvas.color = Palette.ink
+    val m = canvas.measure(text, font)
+    canvas.drawString(text, 5, (canvas.height - m.height) / 2 + m.ascent)
+  }
+}
+
+// The system's clipboard, for Jade.clipboard once a window is shown: plain text goes to the
+// system; the last copy is kept with its colours and pictures, and a paste of the same text
+// gets them back (another program's copy has none).
+class SystemClipboard : Clipboard {
+  private var last : StyledText? = null
+
+  override fun copy(content : StyledText) {
+    last = content
+    Native.clipboardText = content.plainText()
+  }
+
+  override fun paste() : StyledText? {
+    val text = Native.clipboardText
+    val kept = last
+    if (kept != null and kept.plainText() == text) { return kept }
+    if (text.isEmpty()) { return null }
+    return StyledText(text)
+  }
+}
+
