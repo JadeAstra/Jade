@@ -807,7 +807,8 @@ void registerRangeMethods(VM& vm) {
     });
 
     vm.defineMethod(T, "contains", 1, 1, [](VM&, Value self, int, Value* args) -> Value {
-        return Value::boolean(args[0].isInt() && asRange(self)->contains(args[0].as.i));
+        // A byte is the number it holds (M7: `color.alpha in 1..254` was always false).
+        return Value::boolean((args[0].isInt() || args[0].isByte()) && asRange(self)->contains(args[0].as.i));
     });
 }
 

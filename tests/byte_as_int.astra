@@ -34,3 +34,7 @@ print(total, (orange.red + orange.green) / 2, Math.max(orange.red, orange.green)
 // -- A value type made with a name for one part and the default for another --
 value Spot(val x : int = 1, val y : int = 2, val label : string = "spot")
 print(Spot(y = 5), Spot(label = "here"), Spot(3), Spot())   // expect: Spot(x=1, y=5, label="spot") Spot(x=1, y=2, label="here") Spot(x=3, y=2, label="spot") Spot(x=1, y=2, label="spot")
+
+// A byte in a range of ints is the number it holds (M7: it was never in one).
+val alpha : byte = 90
+print(alpha in 1 .. 254, alpha in 1 ..< 90, alpha !in 100 .. 200)   // expect: true false true
