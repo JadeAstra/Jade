@@ -358,10 +358,9 @@ fun treeSelectsAndNavigatesWithKeys() {
 }
 treeSelectsAndNavigatesWithKeys()
 
-// tableSelectsRowOnClickBelowHeader: waits for Table.
-// tableCellEditsOnDoubleClickAndCommits: waits for Table.
-// tableCellEditCancelsOnEscape: waits for Table.
-// collectionsAreTabFocusable: waits for Table; the tree's half of it here.
+// tableSelectsRowOnClickBelowHeader, tableCellEditsOnDoubleClickAndCommits,
+//   tableCellEditCancelsOnEscape: in tests/jade_tables.astra.
+// collectionsAreTabFocusable: the tree's half of it here, the table's in tests/jade_tables.astra.
 fun collectionsAreTabFocusable() {
   val ui = grid { row { cell(tree([TreeNode("x")]).withId("tree")) } }
   same("the tree takes the keyboard", ui.focusables().map { it.id }, ["tree"])
@@ -446,7 +445,7 @@ expandingATreeReachesTheComponent()
 
 // aHiddenRowFilterReachesTheComponent: waits for the sheet (Sheet).
 // aLabelsTextReachesTheComponent: not a list or a tree (a label's).
-// replacingAComboSItemsReachesTheComponentAndReclampsSelection: waits for ComboBox.
+// replacingAComboSItemsReachesTheComponentAndReclampsSelection: in tests/jade_tables.astra.
 // shrinkingASheetReclampsItsSelection: waits for the sheet (Sheet).
 // mathResultsReachTheComponent: waits for the math block (MathBlock).
 print("ContentInvalidationTest:", checks, "checks,", failed)   // expect: ContentInvalidationTest: 73 checks, []
@@ -467,8 +466,8 @@ fun layoutsAskedFor(body : () -> unit) : int {
 }
 
 // changing a label's text, a label's font, a button's caption: not a list or a tree.
-// replacing a table's rows requests a layout: waits for Table.
-// replacing a combo's items requests a layout: waits for ComboBox.
+// replacing a table's rows requests a layout: in tests/jade_tables.astra.
+// replacing a combo's items requests a layout: in tests/jade_tables.astra.
 
 // expanding a tree requests a layout
 same("opening a tree asks for one layout", layoutsAskedFor {
@@ -477,7 +476,7 @@ same("opening a tree asks for one layout", layoutsAskedFor {
   tree.expandAll()
 }, 1)
 
-// a paint-only change does not request a layout: the check box's half; the table's waits for Table.
+// a paint-only change does not request a layout: the check box's half; the table's in tests/jade_tables.astra.
 same("ticking a check box asks for no layout", layoutsAskedFor {
   val check = CheckBox("same width either way")
   Component(check)
@@ -501,5 +500,5 @@ fun clickingTheSpinnerTextBeforeAnyPaintDoesNotStepTheValue() {
 }
 clickingTheSpinnerTextBeforeAnyPaintDoesNotStepTheValue()
 
-// theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint: waits for ComboBox.
+// theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint: in tests/jade_tables.astra.
 print("FirstClickTest:", checks, "checks,", failed)   // expect: FirstClickTest: 76 checks, []

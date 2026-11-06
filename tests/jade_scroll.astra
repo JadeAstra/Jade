@@ -114,10 +114,9 @@ fun borderedChildFrameStaysPinnedToViewportWhileScrolling() {
 }
 borderedChildFrameStaysPinnedToViewportWhileScrolling()
 
-// keyboardSelectionScrollsListRowIntoView: waits for ListBox (listBox).
-// aManualScrollCancelsAPendingRevealSoTheViewDoesNotSnapBack: waits for ListBox; a child of the
-//   test's own cannot stand in, as ScrollAware is internal to Jade.
-// keyboardSelectionScrollsTableRowIntoView: waits for Table.
+// keyboardSelectionScrollsListRowIntoView, aManualScrollCancelsAPendingRevealSoTheViewDoesNotSnapBack:
+//   in tests/jade_controls.astra, with the list box.
+// keyboardSelectionScrollsTableRowIntoView: in tests/jade_tables.astra, with the table.
 
 // hitTestAndFindRecurseThroughScroll: finding by id and by a point go into the view's child.
 fun hitTestAndFindRecurseThroughScroll() {
@@ -161,10 +160,9 @@ fun theWheelReachesAViewportInsideAGrid() {
 }
 theWheelReachesAViewportInsideAGrid()
 
-// the wheel reaches a viewport inside a split: waits for Split.
-// the wheel reaches a viewport inside a tab: waits for Tabs.
-// the wheel reaches a viewport inside a screen: waits for the Screen.
-// the wheel reaches a viewport through a whole application tree: waits for the Screen, Tabs and Split.
+// the wheel reaches a viewport inside a split, inside a tab: in tests/jade_containers.astra.
+// the wheel reaches a viewport inside a screen, through a whole application tree: in
+//   tests/jade_screen.astra.
 
 // scrolling up again returns to the top and stops there
 fun scrollingUpAgainReturnsToTheTopAndStopsThere() {
@@ -207,7 +205,7 @@ fun theWheelChangesThePictureWithoutACacheFlush() {
 }
 theWheelChangesThePictureWithoutACacheFlush()
 
-// it works through the nesting a real window has: waits for the Screen, Tabs and Split.
+// it works through the nesting a real window has: in tests/jade_screen.astra.
 
 // dragging the scrollbar also repaints
 fun draggingTheScrollbarAlsoRepaints() {
@@ -227,7 +225,7 @@ fun draggingTheScrollbarAlsoRepaints() {
 }
 draggingTheScrollbarAlsoRepaints()
 
-// rows revealed by scrolling are actually drawn: waits for Table.
+// rows revealed by scrolling are actually drawn: in tests/jade_tables.astra.
 
 // a scroll that cannot move does not dirty anything: at the top already, a turn of the wheel
 // upward asks for no repaint.

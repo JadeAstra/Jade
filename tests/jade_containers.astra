@@ -228,7 +228,7 @@ fun aLayoutPassPlacesSplitPanesInsideAGridCell() {
 }
 aLayoutPassPlacesSplitPanesInsideAGridCell()
 
-// aLayoutPassPlacesDocumentBlocksInsideAGridCell: waits for the document view (DocView).
+// aLayoutPassPlacesDocumentBlocksInsideAGridCell: waits for the document view (DocView, M10).
 print("LayoutPassTest:", checks, "checks,", failed)   // expect: LayoutPassTest: 42 checks, []
 
 // -- LayoutRequestTest --
@@ -245,8 +245,8 @@ fun layoutsCausedBy(action : () -> unit) : int {
   return n
 }
 
-// replacingTheBlocksAsksForALayout: waits for the document view (DocView).
-// openingAndClosingAPopupAsksForALayout: waits for the Screen and its menus.
+// replacingTheBlocksAsksForALayout: waits for the document view (DocView, M10).
+// openingAndClosingAPopupAsksForALayout: in tests/jade_screen.astra.
 
 // addingAndRemovingATabAsksForALayout
 fun addingAndRemovingATabAsksForALayout() {
@@ -552,11 +552,10 @@ fun theWheelReachesAViewportInsideATab() {
 }
 theWheelReachesAViewportInsideATab()
 
-// the wheel reaches a viewport inside a screen: waits for the Screen.
-// the wheel reaches a viewport through a whole application tree: waits for the Screen and its
-//   menu bar (screen > grid > tabs > split > scroll).
+// the wheel reaches a viewport inside a screen, through a whole application tree: in
+//   tests/jade_screen.astra.
 print("WheelRoutingTest:", checks, "checks,", failed)   // expect: WheelRoutingTest: 80 checks, []
 
 // -- ScrollRepaintTest --
-// it works through the nesting a real window has: waits for the Screen (screen > grid > tabs >
-//   split > scroll); tests/jade_scroll.astra has the rest but the table's.
+// it works through the nesting a real window has: in tests/jade_screen.astra; the rest is in
+//   tests/jade_scroll.astra, and the table's in tests/jade_tables.astra.
