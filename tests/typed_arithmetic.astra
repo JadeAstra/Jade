@@ -1,0 +1,53 @@
+// Arithmetic and comparisons whose operands the checker knows to be two ints or two floats run
+// as instructions that test nothing of them (M6.7 step 5, D178): they give what the others do,
+// at the edges too. Each is in a loop, so that it runs as the register code makes it.
+
+// Ints: their sum, difference and product, an overflow still an error (D27).
+var ints = []
+for (i in 0 ..< 3) {
+  val a = 7 + i
+  val b = 3
+  ints.add(a + b)
+  ints.add(a - b)
+  ints.add(a * b)
+  ints.add(a < b)
+  ints.add(a == 8)
+  ints.add(b >= a)
+}
+print(ints)   // expect: [10, 4, 21, false, false, false, 11, 5, 24, false, true, false, 12, 6, 27, false, false, false]
+var big = int.maxValue - 2
+for (i in 0 ..< 3) {
+  try { big += 1 } catch (e : ArithmeticException) { print("overflow at", i) }   // expect: overflow at 2
+}
+try {
+  for (i in 0 ..< 2) { val m = int.maxValue; print(m * 2) }
+} catch (e : ArithmeticException) { print(e.message) }   // expect: 9223372036854775807 * 2 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &* for an answer that wraps around
+
+// Floats: -0.0, infinities and NaN as the general way gives them.
+var floats = []
+fun made(x : float) : float => x / x
+val nan = made(0.0)   // made when the program runs: not worked out when it is compiled
+for (i in 0 ..< 2) {
+  val z = -0.0
+  val x = 1.5 * i
+  floats.add(z == 0.0)
+  floats.add(nan == nan)
+  floats.add(nan < 1.0)
+  floats.add(nan >= 1.0)
+  floats.add(1.0 / z)
+  floats.add(x - 1.5)
+  floats.add(x * x)
+  floats.add(x / 2.0)
+}
+print(floats)   // expect: [true, false, false, false, -inf, -1.5, 0.0, 0.0, true, false, false, false, -inf, 0.0, 2.25, 0.75]
+
+// A float and an int stay the general way; an int that may be null is typed once the checker
+// knows it is not; an int divided stays the general way, with its own rules.
+var mixed = []
+var maybe : int? = 4
+for (i in 0 ..< 3) {
+  mixed.add(2.0 * i)
+  if (maybe != null) { mixed.add(maybe + i) }
+  mixed.add(i / 2)
+}
+print(mixed)   // expect: [0.0, 4, 0, 2.0, 5, 0, 4.0, 6, 1]

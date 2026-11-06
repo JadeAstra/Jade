@@ -5418,6 +5418,39 @@ void VM::run(int baseFrame) {
 
 // Whether `v` is certainly of `type`, told at once for the types written most; false means only
 // that the full test (matchesType) has to be made.
+// On operands the checker knows (M6.7 step 5), testing nothing of them: two ints, whose
+// overflow alone goes the slow way (which says so); two floats; a comparison of either, and one
+// with the JumpIfFalse after it.
+#define R_INT_ARITHMETIC(name, LB, LC, op, checked, plain)   \
+    CASE(name) {                                             \
+        const Value &b = LB(1), &c = LC(2);                  \
+        int64_t r_;                                          \
+        if (!checked(b.as.i, c.as.i, r_)) {                  \
+            base[ip[0]].setInt(r_);                          \
+            R_DONE()                                         \
+        }                                                    \
+        R_PLAIN2(b, c, plain)                                \
+        R_SLOW2(b, c, 4, 5)                                  \
+    }
+#define R_FLOAT_ARITHMETIC(name, LB, LC, op)                 \
+    CASE(name) {                                             \
+        base[ip[0]].setFloat(LB(1).as.d op LC(2).as.d);      \
+        R_DONE()                                             \
+    }
+#define R_TYPED_COMPARISON(name, LB, LC, part, cmp)          \
+    CASE(name) {                                             \
+        base[ip[0]].setBool(LB(1).as.part cmp LC(2).as.part); \
+        R_DONE()                                             \
+    }
+#define R_TYPED_JUMP(name, LB, LC, part, cmp)                \
+    CASE(name) {                                             \
+        const bool holds_ = LB(0).as.part cmp LC(1).as.part; \
+        sp = base + ip[2];                                   \
+        if (holds_) ip += 11;                                \
+        else ip = code + operandI32(ip + 3);                 \
+        NEXT();                                              \
+    }
+
 #define FITS_AT_ONCE(v, type) ((type) == kTypeFloat ? (v).isFloat() : (type) == kTypeInt ? (v).isInt() : (type) == kTypeBool && (v).isBool())
 
 // Two operands, `a` kept where it is, on the stack's top held in a register: two floats or two

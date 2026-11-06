@@ -4510,6 +4510,14 @@ struct Checker::Impl {
 
     // Int constants kept as bytes where a byte goes (D19): `val b : byte = 200`.
     std::unordered_map<const Expr*, uint8_t> byteConstants;
+    // What numericKind gives: 1 two ints, 2 two floats, 0 anything else; an expression checked
+    // more than once with other kinds (in generic code) gets 0.
+    std::unordered_map<const Expr*, uint8_t> numericKinds;
+    void noteNumeric(const Expr& at, const Type& l, const Type& r) {
+        const uint8_t kind = l.nullable || r.nullable ? 0 : l.kind == Type::Int && r.kind == Type::Int ? 1 : l.kind == Type::Float && r.kind == Type::Float ? 2 : 0;
+        auto [found, made] = numericKinds.emplace(&at, kind);
+        if (!made && found->second != kind) found->second = 0;
+    }
 
     // Whether `e` is made of int literals alone, as `200` and `0x80 | 1` are: a literal that
     // fits is a byte where a byte goes, and a name, even a constant's, is the int it is (D19).
@@ -5348,6 +5356,19 @@ struct Checker::Impl {
         } else {
             l = expr(*b.left);
             if (!(equality && bareEntry(*b.right, l, r))) r = expr(*b.right);
+        }
+        switch (op) {
+            case TokenType::Plus:
+            case TokenType::Minus:
+            case TokenType::Star:
+            case TokenType::Slash:
+            case TokenType::Lt:
+            case TokenType::LtEq:
+            case TokenType::Gt:
+            case TokenType::GtEq:
+            case TokenType::EqEq:
+            case TokenType::BangEq: noteNumeric(b, l, r); break;
+            default: break;
         }
         // Two bundles added: the names of both, the right one's winning (D143).
         if (op == TokenType::Plus && withNull(l, false).kind == Type::Bundle && withNull(r, false).kind == Type::Bundle) {
@@ -6235,6 +6256,7 @@ struct Checker::Impl {
             if (target.nullable && safeChain(*a.target)) target = withNull(target, false);
             if (!nullablePlace(*a.target, target, opText(op) + "=", a.nullSafe, a)) target = withNull(target, false);
             else return Type::of(Type::Unit);
+            if (op == TokenType::Plus || op == TokenType::Minus || op == TokenType::Star || op == TokenType::Slash) noteNumeric(a, target, value);
             const Type left = target.kind == Type::Byte ? Type::of(Type::Int) : readType(target);
             const Type right = value.kind == Type::Byte ? Type::of(Type::Int) : value;
             if (op == TokenType::Plus && (target.kind == Type::String || value.kind == Type::String)) result = Type::of(Type::String);
@@ -10740,6 +10762,11 @@ Checker::Checker() : impl_(std::make_unique<Impl>()) {}
 const std::vector<int>* Checker::argumentOrder(const CallExpr& call) const {
     auto found = impl_->argumentOrders.find(&call);
     return found == impl_->argumentOrders.end() ? nullptr : &found->second;
+}
+
+uint8_t Checker::numericKind(const Expr& e) const {
+    auto found = impl_->numericKinds.find(&e);
+    return found == impl_->numericKinds.end() ? 0 : found->second;
 }
 
 bool Checker::byteAt(const Expr& e, uint8_t& out) const {

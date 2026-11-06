@@ -381,6 +381,11 @@ enum class Op : uint16_t {
     // library's, is made; the program's own have none, and give Program.name.
     ClassOrigin,        // u16 name                        class -> class
 
+    // Arithmetic and comparisons whose operands the checker knows (M6.7 step 5, D178): two ints
+    // (I) or two floats (F). In the stack code they run as Add and the rest do; the register code
+    // has R instructions for them that test nothing of their operands.
+    AddI, SubI, MulI, LtI, LeI, GtI, GeI, EqI, AddF, SubF, MulF, DivF, LtF, LeF, GtF, GeF, EqF,
+
     Count_,
 
     // ---- The code the VM runs (M6.7, registers.cpp) ----
@@ -436,6 +441,19 @@ enum class Op : uint16_t {
     RBitAndSK,
     RBitOrSS,
     RBitOrSK,
+    // On operands of the kinds the checker knows (M6.7 step 5): as RAddSS, RLtSS and RJumpLtSS,
+    // testing nothing; an int's overflow alone goes the slow way.
+    RAddISS, RAddISK, RAddIKS, RSubISS, RSubISK, RSubIKS,
+    RMulISS, RMulISK, RMulIKS, RAddFSS, RAddFSK, RAddFKS,
+    RSubFSS, RSubFSK, RSubFKS, RMulFSS, RMulFSK, RMulFKS,
+    RDivFSS, RDivFSK, RDivFKS, RLtISS, RLtISK, RLeISS,
+    RLeISK, RGtISS, RGtISK, RGeISS, RGeISK, REqISS,
+    REqISK, RLtFSS, RLtFSK, RLeFSS, RLeFSK, RGtFSS,
+    RGtFSK, RGeFSS, RGeFSK, REqFSS, REqFSK, RJumpLtISS,
+    RJumpLtISK, RJumpLeISS, RJumpLeISK, RJumpGtISS, RJumpGtISK, RJumpGeISS,
+    RJumpGeISK, RJumpEqISS, RJumpEqISK, RJumpLtFSS, RJumpLtFSK, RJumpLeFSS,
+    RJumpLeFSK, RJumpGtFSS, RJumpGtFSK, RJumpGeFSS, RJumpGeFSK, RJumpEqFSS,
+    RJumpEqFSK,
     RunCount_,          // how many instructions there are, the run code's included
 };
 // The stack code's instructions are a byte each; the run code's, two (kOpBytes).

@@ -233,6 +233,23 @@ const OpInfo kOps[] = {
     {"FRAME_TYPES", Operand::None},
     {"INSERT_NEW", Operand::U8I32},
     {"CLASS_ORIGIN", Operand::U16},
+    {"ADD_I", Operand::None},
+    {"SUB_I", Operand::None},
+    {"MUL_I", Operand::None},
+    {"LT_I", Operand::None},
+    {"LE_I", Operand::None},
+    {"GT_I", Operand::None},
+    {"GE_I", Operand::None},
+    {"EQ_I", Operand::None},
+    {"ADD_F", Operand::None},
+    {"SUB_F", Operand::None},
+    {"MUL_F", Operand::None},
+    {"DIV_F", Operand::None},
+    {"LT_F", Operand::None},
+    {"LE_F", Operand::None},
+    {"GT_F", Operand::None},
+    {"GE_F", Operand::None},
+    {"EQ_F", Operand::None},
 };
 
 const char* const kTypeNames[] = {"", "int", "float", "Number", "string", "bool", "List", "Map", "Range", "Function", "Bytes", "Type", "",
@@ -581,6 +598,23 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                     pushes = 1;
                     break;
                 case Op::GetIndex:
+                case Op::AddI:
+                case Op::SubI:
+                case Op::MulI:
+                case Op::LtI:
+                case Op::LeI:
+                case Op::GtI:
+                case Op::GeI:
+                case Op::EqI:
+                case Op::AddF:
+                case Op::SubF:
+                case Op::MulF:
+                case Op::DivF:
+                case Op::LtF:
+                case Op::LeF:
+                case Op::GtF:
+                case Op::GeF:
+                case Op::EqF:
                 case Op::Add:
                 case Op::Sub:
                 case Op::Mul:
@@ -1360,7 +1394,20 @@ const char* opName(Op op) {
                                       "R_JUMP_GE_SK", "R_JUMP_EQ_SS", "R_JUMP_EQ_SK", "R_GET_PROP",   "R_MOD_SS",     "R_MOD_SK",
                                       "R_SUB_KS",     "R_DIV_KS",     "R_SET_PROP_SS", "R_SET_PROP_SK", "R_GET_GLOBAL", "R_GET_UPVALUE",
                                       "R_GET_INDEX_SS", "R_GET_INDEX_SK", "R_NEG",     "R_NOT",        "R_JUMP_IF_FALSE", "R_SHL_SK",
-                                      "R_SHR_SK",     "R_BIT_AND_SS", "R_BIT_AND_SK", "R_BIT_OR_SS",  "R_BIT_OR_SK"};
+                                      "R_SHR_SK",     "R_BIT_AND_SS", "R_BIT_AND_SK", "R_BIT_OR_SS",  "R_BIT_OR_SK",
+                                      "R_ADD_I_SS", "R_ADD_I_SK", "R_ADD_I_KS", "R_SUB_I_SS", "R_SUB_I_SK",
+                                      "R_SUB_I_KS", "R_MUL_I_SS", "R_MUL_I_SK", "R_MUL_I_KS", "R_ADD_F_SS",
+                                      "R_ADD_F_SK", "R_ADD_F_KS", "R_SUB_F_SS", "R_SUB_F_SK", "R_SUB_F_KS",
+                                      "R_MUL_F_SS", "R_MUL_F_SK", "R_MUL_F_KS", "R_DIV_F_SS", "R_DIV_F_SK",
+                                      "R_DIV_F_KS", "R_LT_I_SS", "R_LT_I_SK", "R_LE_I_SS", "R_LE_I_SK",
+                                      "R_GT_I_SS", "R_GT_I_SK", "R_GE_I_SS", "R_GE_I_SK", "R_EQ_I_SS",
+                                      "R_EQ_I_SK", "R_LT_F_SS", "R_LT_F_SK", "R_LE_F_SS", "R_LE_F_SK",
+                                      "R_GT_F_SS", "R_GT_F_SK", "R_GE_F_SS", "R_GE_F_SK", "R_EQ_F_SS",
+                                      "R_EQ_F_SK", "R_JUMP_LT_I_SS", "R_JUMP_LT_I_SK", "R_JUMP_LE_I_SS", "R_JUMP_LE_I_SK",
+                                      "R_JUMP_GT_I_SS", "R_JUMP_GT_I_SK", "R_JUMP_GE_I_SS", "R_JUMP_GE_I_SK", "R_JUMP_EQ_I_SS",
+                                      "R_JUMP_EQ_I_SK", "R_JUMP_LT_F_SS", "R_JUMP_LT_F_SK", "R_JUMP_LE_F_SS", "R_JUMP_LE_F_SK",
+                                      "R_JUMP_GT_F_SS", "R_JUMP_GT_F_SK", "R_JUMP_GE_F_SS", "R_JUMP_GE_F_SK", "R_JUMP_EQ_F_SS",
+                                      "R_JUMP_EQ_F_SK"};
     static_assert(sizeof(run) / sizeof(run[0]) == kOpCount - static_cast<size_t>(Op::MoveS), "a name for each");
     const size_t r = i - static_cast<size_t>(Op::MoveS);
     return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";

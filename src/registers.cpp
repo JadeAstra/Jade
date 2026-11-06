@@ -76,6 +76,24 @@ const Family* familyOf(Op plain) {
     static const Family shr{Op::Count_, Op::RShrSK, Op::Count_};
     static const Family bitAnd{Op::RBitAndSS, Op::RBitAndSK, Op::Count_};
     static const Family bitOr{Op::RBitOrSS, Op::RBitOrSK, Op::Count_};
+    // On operands the checker knows (M6.7 step 5).
+    static const Family typedAddI{Op::RAddISS, Op::RAddISK, Op::RAddIKS};
+    static const Family typedSubI{Op::RSubISS, Op::RSubISK, Op::RSubIKS};
+    static const Family typedMulI{Op::RMulISS, Op::RMulISK, Op::RMulIKS};
+    static const Family typedAddF{Op::RAddFSS, Op::RAddFSK, Op::RAddFKS};
+    static const Family typedSubF{Op::RSubFSS, Op::RSubFSK, Op::RSubFKS};
+    static const Family typedMulF{Op::RMulFSS, Op::RMulFSK, Op::RMulFKS};
+    static const Family typedDivF{Op::RDivFSS, Op::RDivFSK, Op::RDivFKS};
+    static const Family typedLtI{Op::RLtISS, Op::RLtISK, Op::Count_};
+    static const Family typedLeI{Op::RLeISS, Op::RLeISK, Op::Count_};
+    static const Family typedGtI{Op::RGtISS, Op::RGtISK, Op::Count_};
+    static const Family typedGeI{Op::RGeISS, Op::RGeISK, Op::Count_};
+    static const Family typedEqI{Op::REqISS, Op::REqISK, Op::Count_};
+    static const Family typedLtF{Op::RLtFSS, Op::RLtFSK, Op::Count_};
+    static const Family typedLeF{Op::RLeFSS, Op::RLeFSK, Op::Count_};
+    static const Family typedGtF{Op::RGtFSS, Op::RGtFSK, Op::Count_};
+    static const Family typedGeF{Op::RGeFSS, Op::RGeFSK, Op::Count_};
+    static const Family typedEqF{Op::REqFSS, Op::REqFSK, Op::Count_};
     switch (plain) {
         case Op::Add: return &add;
         case Op::Sub: return &sub;
@@ -91,6 +109,23 @@ const Family* familyOf(Op plain) {
         case Op::Shr: return &shr;
         case Op::BitAnd: return &bitAnd;
         case Op::BitOr: return &bitOr;
+        case Op::AddI: return &typedAddI;
+        case Op::SubI: return &typedSubI;
+        case Op::MulI: return &typedMulI;
+        case Op::AddF: return &typedAddF;
+        case Op::SubF: return &typedSubF;
+        case Op::MulF: return &typedMulF;
+        case Op::DivF: return &typedDivF;
+        case Op::LtI: return &typedLtI;
+        case Op::LeI: return &typedLeI;
+        case Op::GtI: return &typedGtI;
+        case Op::GeI: return &typedGeI;
+        case Op::EqI: return &typedEqI;
+        case Op::LtF: return &typedLtF;
+        case Op::LeF: return &typedLeF;
+        case Op::GtF: return &typedGtF;
+        case Op::GeF: return &typedGeF;
+        case Op::EqF: return &typedEqF;
         default: return nullptr;
     }
 }
@@ -108,7 +143,11 @@ Op jumpFormOf(Op r) {
         case Op::RGeSK: return Op::RJumpGeSK;
         case Op::REqSS: return Op::RJumpEqSS;
         case Op::REqSK: return Op::RJumpEqSK;
-        default: return Op::Count_;
+        default:
+            // Those on operands the checker knows, in the same order as their jumps.
+            if (r >= Op::RLtISS && r <= Op::REqFSK)
+                return static_cast<Op>(static_cast<int>(Op::RJumpLtISS) + (static_cast<int>(r) - static_cast<int>(Op::RLtISS)));
+            return Op::Count_;
     }
 }
 
@@ -132,7 +171,7 @@ bool storesResult(Op r) {
         case Op::RBitAndSK:
         case Op::RBitOrSS:
         case Op::RBitOrSK: return true;
-        default: return r >= Op::RAddSS && r <= Op::REqSK;
+        default: return (r >= Op::RAddSS && r <= Op::REqSK) || (r >= Op::RAddISS && r <= Op::REqFSK);
     }
 }
 size_t topOperand(Op r) {
@@ -574,7 +613,25 @@ private:
             case Op::Shl:
             case Op::Shr:
             case Op::BitAnd:
-            case Op::BitOr: {
+            case Op::BitOr:
+            case Op::AddI:
+            case Op::SubI:
+            case Op::MulI:
+            case Op::LtI:
+            case Op::LeI:
+            case Op::GtI:
+            case Op::GeI:
+            case Op::EqI:
+            case Op::AddF:
+            case Op::SubF:
+            case Op::MulF:
+            case Op::DivF:
+            case Op::LtF:
+            case Op::LeF:
+            case Op::GtF:
+            case Op::GeF:
+            case Op::EqF:
+            {
                 const int s = depth - 2;
                 placeBelow(s);
                 const std::vector<Entry> sources = take(2);
@@ -920,8 +977,8 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RBitOrSK: return {5};
         default: break;
     }
-    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return {3, 7};
-    if (o >= Op::RAddSS && o <= Op::REqSK) return {5};
+    if ((o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) || (o >= Op::RJumpLtISS && o <= Op::RJumpEqFSK)) return {3, 7};
+    if ((o >= Op::RAddSS && o <= Op::REqSK) || (o >= Op::RAddISS && o <= Op::REqFSK)) return {5};
     const int t = targetOperand(o);
     return {t - 1};
 }
@@ -1025,8 +1082,8 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::RBitOrSK: return kOpBytes + 9;
         default: break;
     }
-    if (o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) return kOpBytes + 11;
-    if (o >= Op::RAddSS && o <= Op::REqSK) return kOpBytes + 9;
+    if ((o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) || (o >= Op::RJumpLtISS && o <= Op::RJumpEqFSK)) return kOpBytes + 11;
+    if ((o >= Op::RAddSS && o <= Op::REqSK) || (o >= Op::RAddISS && o <= Op::REqFSK)) return kOpBytes + 9;
     if (o >= Op::Count_) throw std::runtime_error("an instruction the run code does not have");
     return kOpBytes + operandBytes(o);
 }

@@ -133,6 +133,9 @@ public:
     bool folded(const Expr& e, ConstValue& out);
     // Whether `e` is an int constant given where a byte goes, and which byte (D19).
     bool byteAt(const Expr& e, uint8_t& out) const;
+    // For arithmetic or a comparison (`a + b`, `a < b`, `n += 1`): 1 where its operands are always
+    // two ints, 2 where always two floats, 0 for anything else (M6.7 step 5).
+    uint8_t numericKind(const Expr& e) const;
     // For a call of a C++ function with named arguments or a lambda after it: the argument
     // each parameter takes in turn (-1 for one not given, passed as null); null otherwise.
     const std::vector<int>* argumentOrder(const CallExpr& call) const;

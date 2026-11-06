@@ -5738,6 +5738,40 @@ private:
             throw error(at, "cannot use 'super' in a class that has no superclass");
     }
 
+    // `op` for operands the checker knows to be two ints or two floats (M6.7 step 5): an
+    // instruction that says so, which the register code tests nothing of.
+    Op typedOp(Op op, const Expr& at) const {
+        const uint8_t kind = session_.checker != nullptr ? session_.checker->numericKind(at) : 0;
+        if (kind == 1) {
+            switch (op) {
+                case Op::Add: return Op::AddI;
+                case Op::Sub: return Op::SubI;
+                case Op::Mul: return Op::MulI;
+                case Op::Lt: return Op::LtI;
+                case Op::Le: return Op::LeI;
+                case Op::Gt: return Op::GtI;
+                case Op::Ge: return Op::GeI;
+                case Op::Eq: return Op::EqI;
+                default: return op;
+            }
+        }
+        if (kind == 2) {
+            switch (op) {
+                case Op::Add: return Op::AddF;
+                case Op::Sub: return Op::SubF;
+                case Op::Mul: return Op::MulF;
+                case Op::Div: return Op::DivF;
+                case Op::Lt: return Op::LtF;
+                case Op::Le: return Op::LeF;
+                case Op::Gt: return Op::GtF;
+                case Op::Ge: return Op::GeF;
+                case Op::Eq: return Op::EqF;
+                default: return op;
+            }
+        }
+        return op;
+    }
+
     static Op binaryOp(TokenType type) {
         switch (type) {
             case TokenType::Plus:
@@ -6049,7 +6083,7 @@ private:
                     compileExpr(*e.right);
                 }
                 line_ = e.line;
-                emit(binaryOp(e.op));
+                emit(typedOp(binaryOp(e.op), e));
                 if (e.op == TokenType::BangEq || e.op == TokenType::BangEqEq) emit(Op::Not);
                 break;
             }
@@ -7067,7 +7101,7 @@ private:
                 if (compound) compileExpr(*e.value);
                 else compileExprFor(*e.value, declaredTypeOf(target.name));
                 line_ = e.line;
-                if (compound && !dotEq) emit(binaryOp(e.op));
+                if (compound && !dotEq) emit(typedOp(binaryOp(e.op), e));
                 emitSet(target.name, target);
                 if (!compound && session_.checker != nullptr && session_.checker->keepsChangedItem(*e.value)) {
                     // `saved = it`, `it` changed through where it is: a copy, as a declaration takes (D167).
@@ -7104,7 +7138,7 @@ private:
                 if (compound) compileExpr(*e.value);
                 else compileExprFor(*e.value, declaredTypeOf(*e.target));
                 line_ = e.line;
-                if (compound && !dotEq) emit(binaryOp(e.op));
+                if (compound && !dotEq) emit(typedOp(binaryOp(e.op), e));
                 emit(own ? Op::SetOwn : Op::SetProp, stringConstant(target.name));
                 endNullSafe(skip, 1);
                 if (toEnd >= 0) patchJump(toEnd);
@@ -7129,7 +7163,7 @@ private:
                 const int skip = beginNullSafe(compound && e.nullSafe);
                 compileExpr(*e.value);
                 line_ = e.line;
-                if (compound && !dotEq) emit(binaryOp(e.op));
+                if (compound && !dotEq) emit(typedOp(binaryOp(e.op), e));
                 emitSetIndex(target);
                 endNullSafe(skip, 2 + static_cast<int>(target.more.size()));
                 break;

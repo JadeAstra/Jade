@@ -1080,17 +1080,17 @@ CASE(GetSuper) {
 }
 }
 
-CASE(Add) {
+CASES(Add, AddI, AddF) {
     FAST_ARITHMETIC(sp[-2], sp[-1], +, addOverflows, sp--; NEXT())
 LABEL(plainAdd)
     ARITHMETIC(Op::Add, addOverflows, x + y)
 }
-CASE(Sub) {
+CASES(Sub, SubI, SubF) {
     FAST_ARITHMETIC(sp[-2], sp[-1], -, subOverflows, sp--; NEXT())
 LABEL(plainSub)
     ARITHMETIC(Op::Sub, subOverflows, x - y)
 }
-CASE(Mul) {
+CASES(Mul, MulI, MulF) {
     FAST_ARITHMETIC(sp[-2], sp[-1], *, mulOverflows, sp--; NEXT())
 LABEL(plainMul)
     ARITHMETIC(Op::Mul, mulOverflows, x * y)
@@ -1135,7 +1135,7 @@ COLD(CheckLocal) {
     DONE();
 }
 }
-CASE(Div) {
+CASES(Div, DivF) {
 LABEL(plainDiv) {
     Value b = sp_[-1], a = sp_[-2];
     if (a.isInt() && b.isInt()) {
@@ -1240,7 +1240,7 @@ LABEL(plainNot)
     NEXT();
 }
 
-CASE(Eq) {
+CASES(Eq, EqI, EqF) {
 LABEL(plainEq) {
     Value b = sp_[-1], a = sp_[-2];
     if (const ObjClass* k = classOf(a); k != nullptr && k->methods.find(names.opEq) != nullptr) {
@@ -1285,22 +1285,22 @@ CASE(Identical) {
     DONE();
 }
 }
-CASE(Lt) {
+CASES(Lt, LtI, LtF) {
     FAST_COMPARISON(sp[-2], sp[-1], <, sp--; NEXT())
 LABEL(plainLt)
     COMPARISON(Op::Lt, <)
 }
-CASE(Le) {
+CASES(Le, LeI, LeF) {
     FAST_COMPARISON(sp[-2], sp[-1], <=, sp--; NEXT())
 LABEL(plainLe)
     COMPARISON(Op::Le, <=)
 }
-CASE(Gt) {
+CASES(Gt, GtI, GtF) {
     FAST_COMPARISON(sp[-2], sp[-1], >, sp--; NEXT())
 LABEL(plainGt)
     COMPARISON(Op::Gt, >)
 }
-CASE(Ge) {
+CASES(Ge, GeI, GeF) {
     FAST_COMPARISON(sp[-2], sp[-1], >=, sp--; NEXT())
 LABEL(plainGe)
     COMPARISON(Op::Ge, >=)
@@ -3122,6 +3122,68 @@ R_COMPARISON(REqSS, R_S, R_S, ==, plainEq, true)
 R_JUMP(RJumpEqSS, R_S, R_S, ==, true)
 R_COMPARISON(REqSK, R_S, R_K, ==, plainEq, true)
 R_JUMP(RJumpEqSK, R_S, R_K, ==, true)
+// On operands the checker knows (M6.7 step 5): nothing of them tested.
+R_INT_ARITHMETIC(RAddISS, R_S, R_S, +, addOverflows, plainAdd)
+R_INT_ARITHMETIC(RAddISK, R_S, R_K, +, addOverflows, plainAdd)
+R_INT_ARITHMETIC(RAddIKS, R_K, R_S, +, addOverflows, plainAdd)
+R_INT_ARITHMETIC(RSubISS, R_S, R_S, -, subOverflows, plainSub)
+R_INT_ARITHMETIC(RSubISK, R_S, R_K, -, subOverflows, plainSub)
+R_INT_ARITHMETIC(RSubIKS, R_K, R_S, -, subOverflows, plainSub)
+R_INT_ARITHMETIC(RMulISS, R_S, R_S, *, mulOverflows, plainMul)
+R_INT_ARITHMETIC(RMulISK, R_S, R_K, *, mulOverflows, plainMul)
+R_INT_ARITHMETIC(RMulIKS, R_K, R_S, *, mulOverflows, plainMul)
+R_FLOAT_ARITHMETIC(RAddFSS, R_S, R_S, +)
+R_FLOAT_ARITHMETIC(RAddFSK, R_S, R_K, +)
+R_FLOAT_ARITHMETIC(RAddFKS, R_K, R_S, +)
+R_FLOAT_ARITHMETIC(RSubFSS, R_S, R_S, -)
+R_FLOAT_ARITHMETIC(RSubFSK, R_S, R_K, -)
+R_FLOAT_ARITHMETIC(RSubFKS, R_K, R_S, -)
+R_FLOAT_ARITHMETIC(RMulFSS, R_S, R_S, *)
+R_FLOAT_ARITHMETIC(RMulFSK, R_S, R_K, *)
+R_FLOAT_ARITHMETIC(RMulFKS, R_K, R_S, *)
+R_FLOAT_ARITHMETIC(RDivFSS, R_S, R_S, /)
+R_FLOAT_ARITHMETIC(RDivFSK, R_S, R_K, /)
+R_FLOAT_ARITHMETIC(RDivFKS, R_K, R_S, /)
+R_TYPED_COMPARISON(RLtISS, R_S, R_S, i, <)
+R_TYPED_JUMP(RJumpLtISS, R_S, R_S, i, <)
+R_TYPED_COMPARISON(RLtISK, R_S, R_K, i, <)
+R_TYPED_JUMP(RJumpLtISK, R_S, R_K, i, <)
+R_TYPED_COMPARISON(RLeISS, R_S, R_S, i, <=)
+R_TYPED_JUMP(RJumpLeISS, R_S, R_S, i, <=)
+R_TYPED_COMPARISON(RLeISK, R_S, R_K, i, <=)
+R_TYPED_JUMP(RJumpLeISK, R_S, R_K, i, <=)
+R_TYPED_COMPARISON(RGtISS, R_S, R_S, i, >)
+R_TYPED_JUMP(RJumpGtISS, R_S, R_S, i, >)
+R_TYPED_COMPARISON(RGtISK, R_S, R_K, i, >)
+R_TYPED_JUMP(RJumpGtISK, R_S, R_K, i, >)
+R_TYPED_COMPARISON(RGeISS, R_S, R_S, i, >=)
+R_TYPED_JUMP(RJumpGeISS, R_S, R_S, i, >=)
+R_TYPED_COMPARISON(RGeISK, R_S, R_K, i, >=)
+R_TYPED_JUMP(RJumpGeISK, R_S, R_K, i, >=)
+R_TYPED_COMPARISON(REqISS, R_S, R_S, i, ==)
+R_TYPED_JUMP(RJumpEqISS, R_S, R_S, i, ==)
+R_TYPED_COMPARISON(REqISK, R_S, R_K, i, ==)
+R_TYPED_JUMP(RJumpEqISK, R_S, R_K, i, ==)
+R_TYPED_COMPARISON(RLtFSS, R_S, R_S, d, <)
+R_TYPED_JUMP(RJumpLtFSS, R_S, R_S, d, <)
+R_TYPED_COMPARISON(RLtFSK, R_S, R_K, d, <)
+R_TYPED_JUMP(RJumpLtFSK, R_S, R_K, d, <)
+R_TYPED_COMPARISON(RLeFSS, R_S, R_S, d, <=)
+R_TYPED_JUMP(RJumpLeFSS, R_S, R_S, d, <=)
+R_TYPED_COMPARISON(RLeFSK, R_S, R_K, d, <=)
+R_TYPED_JUMP(RJumpLeFSK, R_S, R_K, d, <=)
+R_TYPED_COMPARISON(RGtFSS, R_S, R_S, d, >)
+R_TYPED_JUMP(RJumpGtFSS, R_S, R_S, d, >)
+R_TYPED_COMPARISON(RGtFSK, R_S, R_K, d, >)
+R_TYPED_JUMP(RJumpGtFSK, R_S, R_K, d, >)
+R_TYPED_COMPARISON(RGeFSS, R_S, R_S, d, >=)
+R_TYPED_JUMP(RJumpGeFSS, R_S, R_S, d, >=)
+R_TYPED_COMPARISON(RGeFSK, R_S, R_K, d, >=)
+R_TYPED_JUMP(RJumpGeFSK, R_S, R_K, d, >=)
+R_TYPED_COMPARISON(REqFSS, R_S, R_S, d, ==)
+R_TYPED_JUMP(RJumpEqFSS, R_S, R_S, d, ==)
+R_TYPED_COMPARISON(REqFSK, R_S, R_K, d, ==)
+R_TYPED_JUMP(RJumpEqFSK, R_S, R_K, d, ==)
 HAS_COLD(RGetProp)
 CASE(RGetProp) {
     // GetProp's quick ways, on the object in slot B, where this place found the field before, in
