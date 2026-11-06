@@ -1324,6 +1324,7 @@ private:
     // `block(obj, x)` or `obj.block(x)` for one run on an object.
     bool compileBoundCall(const CallExpr& e) {
         if (frame_ == nullptr || fs_->owner != frame_->owner || e.namedCount != 0 || e.hasSpread) return false;
+        if (session_.checker != nullptr && session_.checker->callsOnThis(e)) return false;
         const Expr* receiver = nullptr;
         std::vector<const Expr*> args;
         const BoundLambda* b = nullptr;
@@ -1352,6 +1353,16 @@ private:
     // `block(obj, x)` and `obj.block(x)` for a function value run on an object (D58).
     bool compileCallOn(const CallExpr& e) {
         if (session_.checker == nullptr || e.namedCount != 0 || e.hasSpread) return false;
+        if (session_.checker->callsOnThis(e)) {
+            // `block()` run on the object this code runs on (M7).
+            compileExpr(*e.callee);
+            emitGet("this", e);
+            for (const ExprPtr& a : e.args) compileExpr(*a);
+            line_ = e.line;
+            emit(Op::CallOn);
+            emitByte(static_cast<int>(e.args.size()));
+            return true;
+        }
         if (e.callee->kind == ExprKind::Name && session_.checker->callsOnObject(e) && !e.args.empty()) {
             compileExpr(*e.callee);
             for (const ExprPtr& a : e.args) compileExpr(*a);

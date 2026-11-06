@@ -922,7 +922,10 @@ fun Box.twice() : int => this@twice.n * 2              // an extension's receive
 ```
 
 A value of a function type run on an object, `Panel.() -> unit`, is called on one as Kotlin
-has it: `block(panel)` or `panel.block()`.
+has it: `block(panel)` or `panel.block()`, or `block()` alone where the code runs on a Panel
+(in a Panel's method, or in a block run on one). Inside a block run on an object, a bare name is
+that object's member first, then a member of the class the code is written in, then a name of
+the program's.
 
 Every value has `let`, `also`, `apply`, `run`, `takeIf` and `takeUnless`, and `with(x) { }`
 runs a block on `x`:

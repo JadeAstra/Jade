@@ -1,0 +1,34 @@
+// Inside a block that runs on something else, a bare name is that thing's member, else the
+// member of the class the code is written in, and only then a top-level name (M7: the class's
+// member was looked for on the block's receiver, so a top-level function of the same name won).
+fun helper() : int => 1
+fun named() : string => "top level"
+class Inner(val own : int) {
+  fun go(f : Inner.() -> int) : int => f()
+  fun say(f : Inner.() -> string) : string => f()
+}
+class Box {
+  val helper = 2
+  val field = 30
+  fun named() : string => "the class's"
+  fun get() : int => Inner(100).go { helper + field + own }
+  fun call() : string => Inner(0).say { named() }
+}
+print(Box().get(), Box().call(), helper())   // expect: 132 the class's 1
+
+// A block run on an object, called bare where the code runs on one of its type, runs on that
+// object, as Kotlin has it (M7: it ran on nothing).
+class Counter(var n : int) {
+  fun twice(step : Counter.() -> unit) {
+    step()
+    step()
+  }
+  fun add(by : int, step : Counter.(int) -> unit) {
+    step(by)
+  }
+}
+val k = Counter(1)
+k.twice { n *= 3 }
+k.add(4) { by -> n += by }
+print(k.n)   // expect: 13
+

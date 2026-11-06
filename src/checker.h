@@ -312,6 +312,8 @@ public:
     // `block(obj, ...)` and `obj.block(...)`: a function value of a type run on an object,
     // called on one (D58).
     bool callsOnObject(const CallExpr& call) const;
+    // `block()` of a value run on an object, where the code runs on one of its type: run on that (M7).
+    bool callsOnThis(const CallExpr& call) const;
     bool memberLocalCall(const CallExpr& call) const;
     // `a downTo b` or `r step n`, the standard library's (D72): which of them.
     bool rangeWord(const CallExpr& call, std::string& which) const;

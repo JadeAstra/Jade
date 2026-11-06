@@ -5176,7 +5176,12 @@ struct Checker::Impl {
         if (ctx != nullptr && ctx->cls != nullptr) {
             if (!ctx->isStatic) {
                 // The object as a test narrowed it, if one did (`when (this) { is Sub -> its own field }`).
-                const Type self = thisType();
+                // Inside a block that runs on something else (`grid { ... }`), `this` is that, already
+                // looked through above: the class's own members are next (M7: they were looked for on
+                // the block's receiver, so a top-level function of the same name won).
+                bool receiverBetween = false;
+                for (FnCtx* c = ctx; c != nullptr && c->isLambda; c = c->parent) receiverBetween = receiverBetween || c->hasReceiver;
+                const Type self = receiverBetween ? selfType(ctx->cls) : thisType();
                 Member m = lookupMember(self.kind == Type::Class && !self.nullable ? self : selfType(ctx->cls), n.name);
                 noteKeyMember(m, n.name);
                 if (m.field) {
@@ -8426,7 +8431,7 @@ struct Checker::Impl {
 
     // ---- Inline functions (D59) ----
 
-    std::unordered_set<const CallExpr*> onObjectCalls, memberLocalCalls;
+    std::unordered_set<const CallExpr*> onObjectCalls, memberLocalCalls, onThisCalls;
     struct InlineCallFact {
         FuncInfo* fn = nullptr;
         std::vector<int> paramOf;
@@ -9643,6 +9648,23 @@ struct Checker::Impl {
             }
             if (silent == 0) onObjectCalls.insert(&c);
             return t.result ? *t.result : unknownType();
+        }
+        // `block()` where the code runs on an object of the type the block runs on: run on that
+        // object, as Kotlin has it (M7: the call was taken, and the block then ran on nothing).
+        if (t.kind == Type::Function && t.receiver && t.knownParams && !c.hasSpread && c.namedCount == 0 &&
+            c.args.size() == t.args.size()) {
+            const Type self = thisType();
+            const std::string called = name.empty() ? std::string("block") : name;
+            if (self.kind == Type::Class && fits(self, *t.receiver)) {
+                if (silent == 0) onThisCalls.insert(&c);
+            } else if (self.known()) {
+                report(c, who + " runs on " + describe(*t.receiver) + ", and this is " + describe(self) + ": give it one, " + called +
+                              "(obj, ...) or obj." + called + "(...)");
+            } else if (ctx == nullptr || ctx->cls == nullptr) {
+                report(c, who + " runs on " + describe(*t.receiver) + ": give it one, " + called + "(obj, ...) or obj." + called + "(...)");
+            } else if (silent == 0) {
+                onThisCalls.insert(&c);         // this is not known well enough to say; it is given, and checked as it runs
+            }
         }
         if (t.kind == Type::Function && t.knownParams && !c.hasSpread && c.namedCount == 0) {
             size_t least = t.required < 0 ? t.args.size() : static_cast<size_t>(t.required);
@@ -11181,6 +11203,7 @@ bool Checker::rangeWord(const CallExpr& call, std::string& which) const {
 }
 
 bool Checker::callsOnObject(const CallExpr& call) const { return impl_->onObjectCalls.count(&call) != 0; }
+bool Checker::callsOnThis(const CallExpr& call) const { return impl_->onThisCalls.count(&call) != 0; }
 bool Checker::memberLocalCall(const CallExpr& call) const { return impl_->memberLocalCalls.count(&call) != 0; }
 
 namespace {
