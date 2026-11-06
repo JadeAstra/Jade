@@ -36,7 +36,7 @@ canvas.setColor(c)                // check: the colour is a property: canvas.col
 // -- Sizes and rectangles: value types --
 var s = Size(1, 2)
 s.setSize(3, 4)                   // check: a Size is a value: write size = Size(width, height), or set size.width where it is kept (L82)
-print(Rect(0, 0, 1, 1).bounds)    // check: a Rect is its own bounds: the call goes (L84)
+print(Rect(0, 0, 1, 1).getBounds())   // check: a Rect is its own bounds: the call goes (L84)
 
 // -- A grid's new rows are a new grid: one left unused is a mistake (D155) --
 var g = Grid<int>(2, 2)

@@ -17,8 +17,9 @@ data TextMetrics(val width : int, val ascent : int, val descent : int, val heigh
 //
 // What is drawn is given in units; a canvas has `scale` pixels to the unit. fillRect(x, y, w, h)
 // covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in
-// Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. A canvas
-// for a part of another (sub, clipped) draws only inside it.
+// Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. Outlines
+// and lines are `lineWidth` units thick, 1 to begin with (M8). A canvas for a part of another
+// (sub, clipped) draws only inside it.
 //
 // This class holds what every kind has (its size, scale, place, clip, colour and font); each kind
 // draws the shapes, the text and the pictures, in its own pixels.
@@ -46,6 +47,11 @@ abstract class Canvas {
   var color : Color = Color.black
   // The font that text is drawn in: Dialog at 12 to begin with.
   var font : Font = Font("Dialog", 12)
+  // How thick outlines and lines are, in units: 1 to begin with, as Java's BasicStroke(w) sets
+  // it. A wider one spreads around the one-unit line, its larger half to the right and below, so
+  // that whole numbers keep straight lines on whole pixels; lines through several points (a
+  // polyline, a polygon's outline) join round where they meet.
+  var lineWidth : Number = 1
 
   fun init(width : int, height : int, scale : Number, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) {
     this.width = width
@@ -87,6 +93,7 @@ abstract class Canvas {
     val made = another(width, height, left, top, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
+    made.lineWidth = lineWidth
     return made
   }
 
@@ -99,6 +106,7 @@ abstract class Canvas {
     val made = another(width, height, originX, originY, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
+    made.lineWidth = lineWidth
     return made
   }
 
@@ -133,22 +141,39 @@ abstract class Canvas {
   abstract fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null)
   // Fills the polygon whose corners are those points.
   abstract fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null)
+  // Fills a slice of the oval in the rectangle, as Java's fillArc: from `startAngle` degrees
+  // through `arcAngle` more, 0 at three o'clock and counter-clockwise (M8).
+  fun fillArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number) {
+    arcShape(x, y, w, h, startAngle, arcAngle, ArcKind.pie, true)
+  }
+  // The curve of that part of the oval's outline, as Java's drawArc: as drawOval draws it, one
+  // line width thick.
+  fun drawArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number) {
+    arcShape(x, y, w, h, startAngle, arcAngle, ArcKind.open, false)
+  }
+  // What fillArc, drawArc and an Arc ask of each kind of canvas: the part of the oval from
+  // `start` through `extent` degrees, filled as fillOval fills (a slice for a pie, the arc and
+  // its chord otherwise) or its outline drawn as drawOval draws (the curve, and the chord or the
+  // two lines to the middle).
+  protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)
 
-  // A shape's outline: a Rect's or an Oval's, or a Line (D106); an IllegalArgumentException for
-  // any other shape.
+  // A shape's outline: a Rect's, an Oval's or an Arc's, or a Line (D106); an
+  // IllegalArgumentException for any other shape.
   fun draw(shape : Shape) {
     if (shape is Rect) { drawRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { drawOval(shape.x, shape.y, shape.width, shape.height) }
+    else if (shape is Arc) { arcShape(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, false) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
-    else { throw IllegalArgumentException("a canvas draws a Rect, an Oval or a Line, not $shape") }
+    else { throw IllegalArgumentException("a canvas draws a Rect, an Oval, an Arc or a Line, not $shape") }
   }
-  // The whole of a shape: a Rect or an Oval filled, a Line drawn; an IllegalArgumentException for
-  // any other shape.
+  // The whole of a shape: a Rect, an Oval or an Arc filled, a Line drawn; an
+  // IllegalArgumentException for any other shape.
   fun fill(shape : Shape) {
     if (shape is Rect) { fillRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { fillOval(shape.x, shape.y, shape.width, shape.height) }
+    else if (shape is Arc) { arcShape(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, true) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
-    else { throw IllegalArgumentException("a canvas fills a Rect, an Oval or a Line, not $shape") }
+    else { throw IllegalArgumentException("a canvas fills a Rect, an Oval, an Arc or a Line, not $shape") }
   }
 
   // -- Text --
@@ -194,7 +219,7 @@ abstract class Canvas {
 // file and saves as one (Java's BufferedImage, D122).
 //
 //   val image = Image(200, 100, Color.white)
-//   image.canvas().fill(Oval(20, 20, 60, 60))
+//   image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
 //   image[10, 10] = Color.red                     one pixel; get, set and getOrNull too
 //   image.editPixels { pixels -> pixels[3, 4] = Color.blue }    many at once, a Grid<Color>
 //   image.save(Path("out.png"))
@@ -431,7 +456,7 @@ class ImageCanvas : Canvas {
   // The rectangle's outline, one unit thick, covering `w` + 1 by `h` + 1 units; nothing when `w` or
   // `h` is below 0.
   override fun drawRect(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasDrawRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
+    __text.canvasDrawRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, lineWidth)
     drawn()
   }
   // Makes the pixels of the rectangle clear, all four bytes 0, its edges on whole pixels, inside
@@ -442,45 +467,51 @@ class ImageCanvas : Canvas {
   }
   // Fills a rectangle with rounded corners, smooth at its edges, laid over what is there.
   override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
-    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, true)
+    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, true, lineWidth)
     drawn()
   }
   // The outline of a rectangle with rounded corners, one unit thick.
   override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
-    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, false)
+    __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, false, lineWidth)
     drawn()
   }
   // Fills the oval inside the rectangle, smooth at its edge, laid over what is there.
   override fun fillOval(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, true)
+    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, true, lineWidth)
     drawn()
   }
   // The outline of the oval inside the rectangle, one unit thick, covering `w` + 1 by `h` + 1 units.
   override fun drawOval(x : Number, y : Number, w : Number, h : Number) {
-    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, false)
+    __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, false, lineWidth)
     drawn()
   }
   // A line one unit thick with square ends: one across or up and down sits on whole pixels, a
   // slanted one has smooth edges.
   override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
-    __text.canvasLine(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x1, y1, x2, y2)
+    __text.canvasLine(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x1, y1, x2, y2, lineWidth)
     drawn()
   }
   // Lines through the first `n` points, or all of them, left open; `n` is cut down to the shorter
   // list, and fewer than 2 points draw nothing.
   override fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, false)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, false, lineWidth)
     drawn()
   }
   // Lines through the first `n` points, or all of them, closed back to the first; fewer than 2
   // points draw nothing.
   override fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, true)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, true, lineWidth)
     drawn()
   }
   // Fills the polygon through the first `n` points, or all of them; fewer than 2 draw nothing.
   override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, true, true)
+    __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, true, true, lineWidth)
+    drawn()
+  }
+  // A part of the oval, filled or its outline drawn, smooth at its edges.
+  protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
+    __text.canvasArc(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, start, extent,
+                     kind.ordinal, fill, lineWidth)
     drawn()
   }
   // Draws `text` in the canvas's font and colour, its baseline at `y`, and gives the width it took,

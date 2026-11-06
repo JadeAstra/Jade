@@ -19,6 +19,7 @@
 #include "../vm.h"
 #include "engine.h"
 #include "fonts.h"
+#include "shapes.h"
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
@@ -313,19 +314,25 @@ inline double edgeX(const Target& t, double x) { return std::round(t.originX + x
 inline double edgeY(const Target& t, double y) { return std::round(t.originY + y * t.scale); }
 // How thick a line of one unit is, in whole pixels.
 inline double thickness(const Target& t) { return std::max(1.0, std::round(t.scale)); }
+// How thick a line of the canvas's lineWidth is, in whole pixels (M8): at least one.
+inline double strokePixels(const Target& t, double units) { return std::max(1.0, std::round(units * t.scale)); }
 
-// A line one unit thick through the middles of the pixels at its two ends, with square ends, as
-// Java draws it; across and up and down it is on whole pixels.
-void linePath(const Target& t, text::Path& p, double x1, double y1, double x2, double y2) {
-    const double w = thickness(t);
+// A line `w` pixels thick (one unit by default) through the middles of the pixels at its two
+// ends, with square ends, as Java draws it; across and up and down it is on whole pixels. A
+// wider one spreads around the one-unit line, its larger half to the right and below.
+void linePath(const Target& t, text::Path& p, double x1, double y1, double x2, double y2, double w = 0) {
+    const double unit = thickness(t);
+    if (w <= 0) w = unit;
+    const text::Spread spread = text::spreadOf(w, unit);
     if (y1 == y2 || x1 == x2) {
-        const double l = edgeX(t, std::min(x1, x2)), r = edgeX(t, std::max(x1, x2)) + w;
-        const double tp = edgeY(t, std::min(y1, y2)), b = edgeY(t, std::max(y1, y2)) + w;
+        const double l = edgeX(t, std::min(x1, x2)) - spread.before, r = edgeX(t, std::max(x1, x2)) + unit + spread.after;
+        const double tp = edgeY(t, std::min(y1, y2)) - spread.before, b = edgeY(t, std::max(y1, y2)) + unit + spread.after;
         rectPath(p, l, tp, r, b);
         return;
     }
-    const double ax = t.originX + (x1 + 0.5) * t.scale, ay = t.originY + (y1 + 0.5) * t.scale;
-    const double bx = t.originX + (x2 + 0.5) * t.scale, by = t.originY + (y2 + 0.5) * t.scale;
+    const double shift = (spread.after - spread.before) / 2;
+    const double ax = t.originX + (x1 + 0.5) * t.scale + shift, ay = t.originY + (y1 + 0.5) * t.scale + shift;
+    const double bx = t.originX + (x2 + 0.5) * t.scale + shift, by = t.originY + (y2 + 0.5) * t.scale + shift;
     const double dx = bx - ax, dy = by - ay, length = std::sqrt(dx * dx + dy * dy);
     const double ux = dx / length * w / 2, uy = dy / length * w / 2;  // along, half the thickness
     auto f = [](double v) { return static_cast<float>(v); };
@@ -755,12 +762,14 @@ void registerText(VM& vm) {
         fillPath(t, p, engineColor(vm, args[10]));
         return Value::null();
     });
-    def("canvasDrawRect", 15, 15, [](VM& vm, int, Value* args) -> Value {
+    def("canvasDrawRect", 16, 16, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         const double x = num(vm, args[11]), y = num(vm, args[12]), w = num(vm, args[13]), h = num(vm, args[14]);
         if (w < 0 || h < 0) return Value::null();
-        const double line = thickness(t);
-        const double l = edgeX(t, x), tp = edgeY(t, y), r = edgeX(t, x + w) + line, b = edgeY(t, y + h) + line;
+        const double unit = thickness(t), line = strokePixels(t, num(vm, args[15]));
+        const text::Spread spread = text::spreadOf(line, unit);
+        const double l = edgeX(t, x) - spread.before, tp = edgeY(t, y) - spread.before;
+        const double r = edgeX(t, x + w) + unit + spread.after, b = edgeY(t, y + h) + unit + spread.after;
         text::Path p;
         rectPath(p, l, tp, r, b);
         if (r - l > 2 * line && b - tp > 2 * line) rectPath(p, l + line, tp + line, r - line, b - line, true);
@@ -777,8 +786,8 @@ void registerText(VM& vm) {
             if (r > l) std::memset(t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(l)) * 4, 0, static_cast<size_t>(r - l) * 4);
         return Value::null();
     });
-    // roundRect(target..., colour, x, y, w, h, arcW, arcH, fill)
-    def("canvasRoundRect", 18, 18, [](VM& vm, int, Value* args) -> Value {
+    // roundRect(target..., colour, x, y, w, h, arcW, arcH, fill, lineWidth)
+    def("canvasRoundRect", 19, 19, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         const double x = num(vm, args[11]), y = num(vm, args[12]), w = num(vm, args[13]), h = num(vm, args[14]);
         const double rx = px(t, num(vm, args[15])) / 2, ry = px(t, num(vm, args[16])) / 2;
@@ -786,17 +795,19 @@ void registerText(VM& vm) {
         if (args[17].truthy()) {
             roundPath(p, t.originX + px(t, x), t.originY + px(t, y), t.originX + px(t, x + w), t.originY + px(t, y + h), rx, ry);
         } else {
-            const double line = thickness(t);
-            const double l = t.originX + px(t, x), tp = t.originY + px(t, y), r = t.originX + px(t, x + w) + line, b = t.originY + px(t, y + h) + line;
+            const double unit = thickness(t), line = strokePixels(t, num(vm, args[18]));
+            const text::Spread spread = text::spreadOf(line, unit);
+            const double l = t.originX + px(t, x) - spread.before, tp = t.originY + px(t, y) - spread.before;
+            const double r = t.originX + px(t, x + w) + unit + spread.after, b = t.originY + px(t, y + h) + unit + spread.after;
             roundPath(p, l, tp, r, b, rx + line / 2, ry + line / 2);
-            roundPath(p, l + line, tp + line, r - line, b - line, rx - line / 2, ry - line / 2, true);
+            if (r - l > 2 * line && b - tp > 2 * line) roundPath(p, l + line, tp + line, r - line, b - line, std::max(0.0, rx - line / 2), std::max(0.0, ry - line / 2), true);
         }
         fillPath(t, p, engineColor(vm, args[10]));
         return Value::null();
     });
-    // oval(target..., colour, x, y, w, h, fill): the oval inside the rectangle; an outline one
-    // unit thick, covering w + 1 by h + 1.
-    def("canvasOval", 16, 16, [](VM& vm, int, Value* args) -> Value {
+    // oval(target..., colour, x, y, w, h, fill, lineWidth): the oval inside the rectangle; an
+    // outline one unit thick covers w + 1 by h + 1, a wider one spreads around that.
+    def("canvasOval", 17, 17, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         const double x = num(vm, args[11]), y = num(vm, args[12]), w = num(vm, args[13]), h = num(vm, args[14]);
         text::Path p;
@@ -804,24 +815,27 @@ void registerText(VM& vm) {
             const double l = t.originX + px(t, x), tp = t.originY + px(t, y), r = t.originX + px(t, x + w), b = t.originY + px(t, y + h);
             roundPath(p, l, tp, r, b, (r - l) / 2, (b - tp) / 2);
         } else {
-            const double line = thickness(t);
-            const double l = t.originX + px(t, x), tp = t.originY + px(t, y), r = t.originX + px(t, x + w) + line, b = t.originY + px(t, y + h) + line;
+            const double unit = thickness(t), line = strokePixels(t, num(vm, args[16]));
+            const text::Spread spread = text::spreadOf(line, unit);
+            const double l = t.originX + px(t, x) - spread.before, tp = t.originY + px(t, y) - spread.before;
+            const double r = t.originX + px(t, x + w) + unit + spread.after, b = t.originY + px(t, y + h) + unit + spread.after;
             roundPath(p, l, tp, r, b, (r - l) / 2, (b - tp) / 2);
             if (r - l > 2 * line && b - tp > 2 * line) roundPath(p, l + line, tp + line, r - line, b - line, (r - l) / 2 - line, (b - tp) / 2 - line, true);
         }
         fillPath(t, p, engineColor(vm, args[10]));
         return Value::null();
     });
-    // line(target..., colour, x1, y1, x2, y2)
-    def("canvasLine", 15, 15, [](VM& vm, int, Value* args) -> Value {
+    // line(target..., colour, x1, y1, x2, y2, lineWidth)
+    def("canvasLine", 16, 16, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         text::Path p;
-        linePath(t, p, num(vm, args[11]), num(vm, args[12]), num(vm, args[13]), num(vm, args[14]));
+        linePath(t, p, num(vm, args[11]), num(vm, args[12]), num(vm, args[13]), num(vm, args[14]), strokePixels(t, num(vm, args[15])));
         fillPath(t, p, engineColor(vm, args[10]));
         return Value::null();
     });
-    // polygon(target..., colour, xs, ys, n, fill, closed): filled, or its sides drawn as lines.
-    def("canvasPolygon", 16, 16, [](VM& vm, int, Value* args) -> Value {
+    // polygon(target..., colour, xs, ys, n, fill, closed, lineWidth): filled, or its sides drawn
+    // as lines.
+    def("canvasPolygon", 17, 17, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         if (!args[11].isObjType(ObjType::List) || !args[12].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::ClassCastException, "a polygon's points are two lists");
         ObjList* xs = asList(args[11]);
@@ -842,12 +856,49 @@ void registerText(VM& vm) {
             fillPath(t, p, engineColor(vm, args[10]));
             return Value::null();
         }
+        const double unit = thickness(t), width = strokePixels(t, num(vm, args[16]));
+        if (width > unit) {
+            // Wider than a unit: one shape of bands and round joins, so that where the lines
+            // meet is covered once, through the middles of the points' pixels as a line is.
+            const text::Spread spread = text::spreadOf(width, unit);
+            const double shift = (spread.after - spread.before) / 2;
+            std::vector<double> points;
+            for (int64_t i = 0; i < n; i++) {
+                points.push_back(t.originX + (at(xs, i) + 0.5) * t.scale + shift);
+                points.push_back(t.originY + (at(ys, i) + 0.5) * t.scale + shift);
+            }
+            text::polylineStroke(p, points, args[15].truthy(), width);
+            fillPath(t, p, engineColor(vm, args[10]));
+            return Value::null();
+        }
         const int64_t sides = args[15].truthy() ? n : n - 1;
         for (int64_t i = 0; i < sides; i++) {
             text::Path line;
             linePath(t, line, at(xs, i), at(ys, i), at(xs, (i + 1) % n), at(ys, (i + 1) % n));
             fillPath(t, line, engineColor(vm, args[10]));
         }
+        return Value::null();
+    });
+    // arc(target..., colour, x, y, w, h, start, extent, kind, fill, lineWidth): an arc of the oval
+    // in the rectangle (M8), filled as fillOval fills (a wedge for a pie, the arc and its chord
+    // otherwise) or its outline drawn as drawOval draws, `lineWidth` units across.
+    def("canvasArc", 20, 20, [](VM& vm, int, Value* args) -> Value {
+        const Target t = targetOf(vm, args);
+        const double x = num(vm, args[11]), y = num(vm, args[12]), w = num(vm, args[13]), h = num(vm, args[14]);
+        const double start = num(vm, args[15]), extent = num(vm, args[16]);
+        const auto kind = static_cast<text::ArcKind>(std::clamp<int64_t>(vm.toInt(args[17], "kind"), 0, 2));
+        const double l = t.originX + px(t, x), tp = t.originY + px(t, y), r = t.originX + px(t, x + w), b = t.originY + px(t, y + h);
+        text::Path p;
+        if (args[18].truthy()) {
+            text::arcFill(p, l, tp, r, b, start, extent, kind);
+        } else {
+            // On the line drawOval's outline runs along: half a unit in from its outer edge.
+            const double unit = thickness(t), line = strokePixels(t, num(vm, args[19]));
+            const text::Spread spread = text::spreadOf(line, unit);
+            const double middle = unit / 2 + (spread.after - spread.before) / 2;
+            text::arcStroke(p, l + middle, tp + middle, r + middle, b + middle, start, extent, kind, line);
+        }
+        fillPath(t, p, engineColor(vm, args[10]));
         return Value::null();
     });
     // text(target..., colour, font, text, x, baseline): the width it took, in pixels.
@@ -1004,7 +1055,8 @@ void registerText(VM& vm) {
     // change nothing a program can see (the engine's tables have locks of their own, held for an
     // instant); and drawing on a canvas, which says itself what it may draw on (mayDraw).
     vm.markNotParallel("__text", {"width", "charWidth", "faceGlyph", "find", "faceInfo", "font", "fontInfo", "canvasFillRect", "canvasDrawRect",
-                                  "canvasClear", "canvasRoundRect", "canvasOval", "canvasLine", "canvasPolygon", "canvasText", "canvasPicture"});
+                                  "canvasClear", "canvasRoundRect", "canvasOval", "canvasLine", "canvasPolygon", "canvasArc", "canvasText",
+                                  "canvasPicture"});
 }
 
 }  // namespace astra

@@ -2949,7 +2949,6 @@ struct Checker::Impl {
             {"setSize", "a Size is a value: write size = Size(width, height), or set size.width where it is kept (L82)"},
         };
         static const std::unordered_map<std::string, std::string> rect = {
-            {"bounds", "a Rect is its own bounds: the call goes (L84)"},
             {"getBounds", "a Rect is its own bounds: the call goes (L84)"},
             {"getX", "a Rect's corner is rect.x and rect.y"},
             {"getY", "a Rect's corner is rect.x and rect.y"},

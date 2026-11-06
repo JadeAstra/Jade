@@ -1,0 +1,183 @@
+// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// Arcs, wedges and line widths on a canvas (M8): the shapes say where they are and what they
+// hold as Java's do (the answers below are Java 23's Arc2D and Ellipse2D), and the image's
+// canvas and the graphics card's draw them alike, as thick as lineWidth says.
+import Jade.*
+
+// -- The shapes, against Java --
+
+val points = [[50.0, 10.0], [90.0, 50.0], [80.0, 80.0], [20.0, 80.0], [50.0, 50.0], [10.0, 50.0], [70.0, 30.0], [50.0, 95.0], [30.0, 25.0],
+              [60.0, 40.0]]
+fun inside(s : Shape, half : bool = false) : string => points.map { p -> s.contains(half ? p[0] / 2 : p[0], half ? p[1] / 2 : p[1]) ? "1" : "0" }.join("")
+fun boundsOf(s : Shape) : string {
+  val b = s.bounds
+  return "${b.x} ${b.y} ${b.width} ${b.height}"
+}
+val arcs = [Arc(0.0, 0.0, 100.0, 100.0, 90.0, -120.0, ArcKind.pie), Arc(0.0, 0.0, 100.0, 100.0, -30.0, -100.0, ArcKind.pie),
+            Arc(0.0, 0.0, 100.0, 100.0, 30.0, 120.0, ArcKind.chord), Arc(0.0, 0.0, 100.0, 100.0, 0.0, 270.0, ArcKind.open),
+            Arc(10.0, 20.0, 80.0, 40.0, 45.0, 200.0, ArcKind.chord), Arc(10.0, 20.0, 80.0, 40.0, 200.0, -400.0, ArcKind.pie)]
+for (a in arcs) { print(a.kind, inside(a), "bounds", boundsOf(a)) }
+// expect: pie 1100101001 bounds 0 0 100 100
+// expect: pie 0010000100 bounds 0 0 100 100
+// expect: chord 1000000000 bounds 0 0 100 100
+// expect: open 1101111111 bounds 0 0 100 100
+// expect: chord 0000001010 bounds 10 20 80 40
+// expect: pie 0000101011 bounds 10 20 80 40
+val oval = Oval(10.5, 20.25, 30.0, 10.0)
+print("oval", inside(oval, true), "bounds", boundsOf(oval))   // expect: oval 0000100000 bounds 10 20 31 11
+print(Rect(1, 2, 3, 4).bounds, Rect(1, 2, 3, 4).contains(3.5, 5.9), Rect(1, 2, 3, 4).contains(4.0, 2.0), Rect(1, 2, 3, 4).contains(2, 3))   // expect: Rect(1, 2, 3 x 4) true false true
+print(Line(0.0, 0.0, 3.5, -2.0).bounds, Line(0.0, 0.0, 3.0, 3.0).contains(1.0, 1.0))   // expect: Rect(0, -2, 4 x 2) false
+print(Arc(0.0, 0.0, 10.0, 10.0, 0.0, 90.0, ArcKind.pie), Arc(0.0, 0.0, 10.0, 10.0, 0.0, 90.0).kind)   // expect: Arc(0.0, 0.0, 10.0 x 10.0, 0.0 + 90.0, pie) open
+print(Arc(0.0, 0.0, 10.0, 10.0, 0.0, 90.0).containsAngle(45.0), Arc(0.0, 0.0, 10.0, 10.0, 0.0, -90.0).containsAngle(-45.0), Arc(0.0, 0.0, 10.0, 10.0, 350.0, 20.0).containsAngle(5.0))   // expect: true true true
+
+// -- Drawing: the image's canvas and the card's --
+
+// A canvas on an image in memory, and one on a hidden window's surface, given the same scene;
+// their pictures, to be compared.
+fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
+  val image = Image(120 * scale, 100 * scale, Color.white)
+  scene(image.canvasAt(120, 100, scale))
+  Jade.windowOpener = HiddenWindowOpener(scale)
+  val w = Window(Component(object : Content {
+    override var owner : Component? = null
+    override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))
+    override fun paint(canvas : Canvas) {
+      canvas.color = Color.white
+      canvas.fillRect(0, 0, 120, 100)
+      scene(canvas)
+    }
+  }), "Arcs", 120, 100)
+  w.show()
+  val host = w.handle as WindowHost
+  host.frame()
+  val card = host.snapshot()
+  w.close()
+  return [image, card]
+}
+// The pixels dark enough to count as drawn, in a rectangle of pixels.
+fun ink(image : Image, x0 : int, y0 : int, x1 : int, y1 : int) : int {
+  var n = 0
+  for (y in y0 ..< y1) {
+    for (x in x0 ..< x1) {
+      val c = image[x, y]
+      if (c.red.toInt() + c.green.toInt() + c.blue.toInt() < 384) { n += 1 }
+    }
+  }
+  return n
+}
+// How many pixels the two pictures differ in by much.
+fun differing(a : Image, b : Image) : int {
+  var n = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      val p = a[x, y]
+      val q = b[x, y]
+      if (Math.abs(p.red.toInt() - q.red.toInt()) + Math.abs(p.green.toInt() - q.green.toInt()) + Math.abs(p.blue.toInt() - q.blue.toInt()) > 60) { n += 1 }
+    }
+  }
+  return n
+}
+
+// A line across, at widths 1 to 4: as many rows of pixels as units, the extra ones below.
+for (scale in [1, 2]) {
+  val pics = pictures(scale) { c ->
+    c.color = Color.black
+    for (k in 1 .. 4) {
+      c.lineWidth = k
+      c.drawLine(10, 10 * k, 50, 10 * k)
+    }
+  }
+  for (p in pics) {
+    val rows = (1 .. 4).map { k -> (0 ..< 100 * scale).toList().count { y -> p[30 * scale, y].red.toInt() < 128 and y >= (10 * k - 4) * scale and y <= (10 * k + 4) * scale } }
+    val firstRow = (0 ..< 100 * scale).toList().first { y -> p[30 * scale, y].red.toInt() < 128 }
+    print("scale $scale rows", rows, "first", firstRow)
+  }
+}
+// expect: scale 1 rows [1, 2, 3, 4] first 10
+// expect: scale 1 rows [1, 2, 3, 4] first 10
+// expect: scale 2 rows [2, 4, 6, 8] first 20
+// expect: scale 2 rows [2, 4, 6, 8] first 20
+
+// A rectangle's outline three wide: it covers w + 1 by h + 1 grown by one each way, and its
+// middle is clear.
+val rects = pictures(1) { c ->
+  c.color = Color.black
+  c.lineWidth = 3
+  c.drawRect(20, 20, 40, 30)
+}
+for (p in rects) { print(ink(p, 0, 0, 120, 100), ink(p, 23, 23, 58, 48), p[19, 19].red.toInt() < 128, p[18, 18].red.toInt() < 128) }
+// expect: 420 0 true false
+// expect: 420 0 true false
+
+// Wedges: a quarter of a disc covers a quarter of its area, and the parts of a pie cover the
+// whole disc once, with nothing left over and nothing twice.
+val wedges = pictures(1) { c ->
+  c.color = Color.black
+  c.fillArc(10, 10, 80, 80, 0, 90)
+}
+for (p in wedges) {
+  val n = ink(p, 0, 0, 120, 100)
+  print(Math.abs(n - 1257) < 30, ink(p, 50, 10, 90, 50) == n)
+}
+// expect: true true
+// expect: true true
+val pie = pictures(1) { c ->
+  val shares = [0.0, 70.0, 160.0, 200.0, 290.0, 360.0]
+  for (i in 0 ..< 5) {
+    c.color = i % 2 == 0 ? Color(0, 0, 0) : Color(40, 40, 40)
+    c.fill(Arc(10.0, 10.0, 80.0, 80.0, shares[i], shares[i + 1] - shares[i], ArcKind.pie))
+  }
+}
+for (p in pie) { print(Math.abs(ink(p, 0, 0, 120, 100) - 5027) < 60) }
+// expect: true
+// expect: true
+
+// A thick polyline is one shape: drawn in a see-through colour, where its lines meet is no
+// darker than the rest of it.
+val joins = pictures(1) { c ->
+  c.color = Color(0, 0, 0, 128)
+  c.lineWidth = 6
+  c.drawPolyline([10, 60, 110], [20, 80, 20])
+}
+for (p in joins) {
+  val middle = p[60, 78]
+  val along = p[35, 50]
+  print(Math.abs(middle.red.toInt() - along.red.toInt()) < 12)
+}
+// expect: true
+// expect: true
+
+// Every kind of arc, filled and drawn, at widths 1 and 3, at scales 1 and 2: the two canvases
+// agree but for a few pixels at edges.
+for (scale in [1, 2]) {
+  val pics = pictures(scale) { c ->
+    c.color = Color(0x20, 0x60, 0xC0)
+    c.fill(Arc(5.0, 5.0, 50.0, 50.0, 90.0, -120.0, ArcKind.pie))
+    c.fill(Arc(60.0, 5.0, 50.0, 30.0, 30.0, 120.0, ArcKind.chord))
+    c.color = Color.black
+    for (w in [1, 3]) {
+      c.lineWidth = w
+      c.draw(Arc(5.0 + w * 10, 50.0, 40.0, 40.0, 0.0, 270.0, ArcKind.open))
+      c.draw(Arc(60.0, 40.0 + w * 5, 50.0, 30.0, 200.0, -140.0, ArcKind.pie))
+      c.drawArc(70, 60, 40, 30, 45, 360)
+    }
+  }
+  print("scale $scale differ", differing(pics[0], pics[1]) < 20 * scale * scale, ink(pics[0], 0, 0, 120 * scale, 100 * scale) > 1000 * scale * scale)
+}
+// expect: scale 1 differ true true
+// expect: scale 2 differ true true
+
+// A part of a canvas draws as thick as the canvas it came from; a recording keeps arcs with
+// their width.
+val image = Image(40, 40, Color.white)
+val c = image.canvas()
+c.lineWidth = 5
+print(c.sub(0, 0, 10, 10).lineWidth, c.clipped(0, 0, 5, 5).lineWidth)   // expect: 5 5
+val ops : open List<DrawOp> = []
+val rec = RecordingCanvas(100, 100, ops)
+rec.lineWidth = 2
+rec.color = Color.red
+rec.drawArc(1, 2, 30, 40, 10, 80)
+rec.fill(Arc(0.0, 0.0, 10.0, 10.0, 0.0, 45.0, ArcKind.pie))
+print(ops)
+// expect: [Arc(x=1, y=2, w=30, h=40, start=10, extent=80, kind=open, fill=false, color=Color(255, 0, 0), lineWidth=2), Arc(x=0.0, y=0.0, w=10.0, h=10.0, start=0.0, extent=45.0, kind=pie, fill=true, color=Color(255, 0, 0), lineWidth=2)]

@@ -438,6 +438,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#A.to"><code>A</code></a> (1)</li>
 <li><a href="#AfterAll"><code>AfterAll</code></a> (1)</li>
 <li><a href="#AfterTest"><code>AfterTest</code></a> (1)</li>
+<li><a href="#Arc"><code>Arc</code></a> (5)</li>
+<li><a href="#ArcKind"><code>ArcKind</code></a> (1)</li>
 <li><a href="#ArithmeticException"><code>ArithmeticException</code></a> (1)</li>
 <li><a href="#AssertionError"><code>AssertionError</code></a> (1)</li>
 <li><a href="#Atomic"><code>Atomic</code></a> (10)</li>
@@ -446,7 +448,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#Bytes.size"><code>Bytes</code></a> (21)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
-<li><a href="#Canvas"><code>Canvas</code></a> (38)</li>
+<li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
 <li><a href="#Channel"><code>Channel</code></a> (10)</li>
 <li><a href="#Charset"><code>Charset</code></a> (1)</li>
@@ -477,7 +479,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
 <li><a href="#Image"><code>Image</code></a> (23)</li>
-<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (17)</li>
+<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
 <li><a href="#Index.of"><code>Index</code></a> (3)</li>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
 <li><a href="#IndexedValue"><code>IndexedValue</code></a> (1)</li>
@@ -490,7 +492,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Iterator"><code>Iterator</code></a> (3)</li>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
-<li><a href="#Line"><code>Line</code></a> (2)</li>
+<li><a href="#Line"><code>Line</code></a> (4)</li>
 <li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
@@ -512,7 +514,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Number.roundToInt"><code>Number</code></a> (8)</li>
 <li><a href="#NumberFormatException"><code>NumberFormatException</code></a> (1)</li>
 <li><a href="#OutOfMemoryError"><code>OutOfMemoryError</code></a> (1)</li>
-<li><a href="#Oval"><code>Oval</code></a> (2)</li>
+<li><a href="#Oval"><code>Oval</code></a> (4)</li>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
@@ -528,7 +530,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
-<li><a href="#Rect"><code>Rect</code></a> (24)</li>
+<li><a href="#Rect"><code>Rect</code></a> (26)</li>
 <li><a href="#Regex"><code>Regex</code></a> (19)</li>
 <li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
@@ -541,7 +543,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (5)</li>
 <li><a href="#Set.size"><code>Set</code></a> (78)</li>
-<li><a href="#Shape"><code>Shape</code></a> (1)</li>
+<li><a href="#Shape"><code>Shape</code></a> (3)</li>
 <li><a href="#SharedMap"><code>SharedMap</code></a> (12)</li>
 <li><a href="#SharedSet"><code>SharedSet</code></a> (7)</li>
 <li><a href="#Size"><code>Size</code></a> (3)</li>
@@ -2259,7 +2261,13 @@ Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGB
 <p>The insets as text: &quot;Insets(top=1, left=2, bottom=3, right=4)&quot;.</p>
 </div>
 <div class="entry" id="Shape"><code class="sig">interface Shape</code><a class="anchor" href="#Shape">#</a>
-<p>What a canvas draws as a shape, carrying its own place: canvas.draw(shape) its outline, canvas.fill(shape) the whole of it.</p>
+<p>What a canvas draws as a shape, carrying its own place: canvas.draw(shape) its outline, canvas.fill(shape) the whole of it. As Java's shapes, each says where it is and whether a point is inside it, which is how a chart finds what the pointer is over.</p>
+</div>
+<div class="entry member" id="Shape.bounds"><code class="sig">val bounds : Rect</code><a class="anchor" href="#Shape.bounds">#</a>
+<p>The smallest rectangle of whole units that holds the whole shape.</p>
+</div>
+<div class="entry member" id="Shape.contains"><code class="sig">fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Shape.contains">#</a>
+<p>Whether the point (<code>px</code>, <code>py</code>) is inside the shape, as Java's contains says it.</p>
 </div>
 <div class="entry" id="Rect"><code class="sig">value Rect(var x : int, var y : int, var width : int, var height : int) : Shape</code><a class="anchor" href="#Rect">#</a>
 <p>A rectangle: its top left corner and its size, always all four.</p>
@@ -2291,16 +2299,22 @@ Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGB
 <div class="entry member" id="Rect.centerY"><code class="sig">val centerY : float</code><a class="anchor" href="#Rect.centerY">#</a>
 <p>The middle down, <code>y + height / 2.0</code>.</p>
 </div>
+<div class="entry member" id="Rect.bounds"><code class="sig">override val bounds : Rect</code><a class="anchor" href="#Rect.bounds">#</a>
+<p>The rectangle itself, as a shape's bounds.</p>
+</div>
 <div class="entry member" id="Rect.contains"><code class="sig">fun contains(px : int, py : int) : bool</code><a class="anchor" href="#Rect.contains">#</a>
 <p>Whether the point <code>px</code>, <code>py</code> is inside: on the left or the top edge it is, on the right or the bottom edge it is not. An empty rectangle holds no point.</p>
 </div>
-<div class="entry member" id="Rect.contains-2"><code class="sig">fun contains(p : Point) : bool</code><a class="anchor" href="#Rect.contains-2">#</a>
+<div class="entry member" id="Rect.contains-2"><code class="sig">override fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Rect.contains-2">#</a>
+<p>The same for a point anywhere, not only on whole units.</p>
+</div>
+<div class="entry member" id="Rect.contains-3"><code class="sig">fun contains(p : Point) : bool</code><a class="anchor" href="#Rect.contains-3">#</a>
 <p>Whether the point <code>p</code> is inside, as for contains(p.x, p.y).</p>
 </div>
-<div class="entry member" id="Rect.contains-3"><code class="sig">fun contains(rx : int, ry : int, w : int, h : int) : bool</code><a class="anchor" href="#Rect.contains-3">#</a>
+<div class="entry member" id="Rect.contains-4"><code class="sig">fun contains(rx : int, ry : int, w : int, h : int) : bool</code><a class="anchor" href="#Rect.contains-4">#</a>
 <p>Whether the whole of the rectangle <code>w</code> by <code>h</code> at <code>rx</code>, <code>ry</code> is inside; never when either rectangle is empty.</p>
 </div>
-<div class="entry member" id="Rect.contains-4"><code class="sig">fun contains(r : Rect) : bool</code><a class="anchor" href="#Rect.contains-4">#</a>
+<div class="entry member" id="Rect.contains-5"><code class="sig">fun contains(r : Rect) : bool</code><a class="anchor" href="#Rect.contains-5">#</a>
 <p>Whether the whole of the rectangle <code>r</code> is inside; never when either rectangle is empty.</p>
 </div>
 <div class="entry member" id="Rect.intersects"><code class="sig">fun intersects(other : Rect) : bool</code><a class="anchor" href="#Rect.intersects">#</a>
@@ -2336,14 +2350,44 @@ Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGB
 <div class="entry" id="Oval"><code class="sig">value Oval(val x : float, val y : float, val width : float, val height : float) : Shape</code><a class="anchor" href="#Oval">#</a>
 <p>An oval filling a rectangle.</p>
 </div>
+<div class="entry member" id="Oval.bounds"><code class="sig">override val bounds : Rect</code><a class="anchor" href="#Oval.bounds">#</a>
+<p>The rectangle it fills, out to whole units.</p>
+</div>
+<div class="entry member" id="Oval.contains"><code class="sig">override fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Oval.contains">#</a>
+<p>Whether the point is inside the oval (on its edge it is not), as Java's Ellipse2D says.</p>
+</div>
 <div class="entry member" id="Oval.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Oval.toString">#</a>
 <p>The oval as text, by the rectangle it fills: &quot;Oval(1.0, 2.0, 3.0 x 4.5)&quot;.</p>
 </div>
 <div class="entry" id="Line"><code class="sig">value Line(val x1 : float, val y1 : float, val x2 : float, val y2 : float) : Shape</code><a class="anchor" href="#Line">#</a>
 <p>A straight line from one point to another.</p>
 </div>
+<div class="entry member" id="Line.bounds"><code class="sig">override val bounds : Rect</code><a class="anchor" href="#Line.bounds">#</a>
+<p>The rectangle from one end to the other, out to whole units.</p>
+</div>
+<div class="entry member" id="Line.contains"><code class="sig">override fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Line.contains">#</a>
+<p>Never: a line has no inside, as in Java.</p>
+</div>
 <div class="entry member" id="Line.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Line.toString">#</a>
 <p>The line as text: &quot;Line(1.0, 2.0 to 3.0, 4.0)&quot;.</p>
+</div>
+<div class="entry" id="ArcKind"><code class="sig">enum ArcKind</code><a class="anchor" href="#ArcKind">#</a>
+<p>How an Arc is closed, as Java's Arc2D: the curve alone, a straight line from its end back to its start, or lines from both ends to the middle (a slice of a pie).</p>
+</div>
+<div class="entry" id="Arc"><code class="sig">value Arc(val x : float, val y : float, val width : float, val height : float, val start : float, val extent : float, val kind : ArcKind = ArcKind.open) : Shape</code><a class="anchor" href="#Arc">#</a>
+<p>A part of the oval filling a rectangle, as Java's Arc2D: from <code>start</code> degrees through <code>extent</code> more, 0 at three o'clock and counter-clockwise (an extent below 0 goes clockwise); on an oval 45 always points at the rectangle's top right corner. canvas.fill(arc) fills it (an open arc as a chord), canvas.draw(arc) draws its outline.</p>
+</div>
+<div class="entry member" id="Arc.bounds"><code class="sig">override val bounds : Rect</code><a class="anchor" href="#Arc.bounds">#</a>
+<p>The rectangle of the oval it is part of, out to whole units, as Java's Arc2D.getBounds() gives it.</p>
+</div>
+<div class="entry member" id="Arc.containsAngle"><code class="sig">fun containsAngle(degrees : float) : bool</code><a class="anchor" href="#Arc.containsAngle">#</a>
+<p>Whether an angle, in degrees, is inside the arc's sweep (its start included, its end not).</p>
+</div>
+<div class="entry member" id="Arc.contains"><code class="sig">override fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Arc.contains">#</a>
+<p>Whether the point is inside the arc's shape, as Java's Arc2D says: inside the oval, and in the sweep for a pie, on the arc's side of its chord otherwise.</p>
+</div>
+<div class="entry member" id="Arc.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Arc.toString">#</a>
+<p>The arc as text: &quot;Arc(0.0, 0.0, 10.0 x 10.0, 90.0 + 180.0, pie)&quot;.</p>
 </div>
 <div class="entry" id="Drawable"><code class="sig">interface Drawable</code><a class="anchor" href="#Drawable">#</a>
 <p>What a canvas draws as a picture: an Image in memory, a Jade Surface on the graphics card. Its size is in units.</p>
@@ -2466,7 +2510,7 @@ canvas.draw(photo, 100, 10)                   a picture, an Image or a Surface
 canvas.font = Font(&quot;Segoe UI&quot;, 14)
 canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 </pre>
-<p>What is drawn is given in units; a canvas has <code>scale</code> pixels to the unit. fillRect(x, y, w, h) covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. A canvas for a part of another (sub, clipped) draws only inside it.</p>
+<p>What is drawn is given in units; a canvas has <code>scale</code> pixels to the unit. fillRect(x, y, w, h) covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. Outlines and lines are <code>lineWidth</code> units thick, 1 to begin with. A canvas for a part of another (sub, clipped) draws only inside it.</p>
 <p>This class holds what every kind has (its size, scale, place, clip, colour and font); each kind draws the shapes, the text and the pictures, in its own pixels.</p>
 </div>
 <div class="entry member" id="Canvas.width"><code class="sig">val width : int</code><a class="anchor" href="#Canvas.width">#</a>
@@ -2501,6 +2545,9 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 </div>
 <div class="entry member" id="Canvas.font"><code class="sig">var font : Font</code><a class="anchor" href="#Canvas.font">#</a>
 <p>The font that text is drawn in: Dialog at 12 to begin with.</p>
+</div>
+<div class="entry member" id="Canvas.lineWidth"><code class="sig">var lineWidth : Number</code><a class="anchor" href="#Canvas.lineWidth">#</a>
+<p>How thick outlines and lines are, in units: 1 to begin with, as Java's BasicStroke(w) sets it. A wider one spreads around the one-unit line, its larger half to the right and below, so that whole numbers keep straight lines on whole pixels; lines through several points (a polyline, a polygon's outline) join round where they meet.</p>
 </div>
 <div class="entry member" id="Canvas.deviceScaleX"><code class="sig">val deviceScaleX : float</code><a class="anchor" href="#Canvas.deviceScaleX">#</a>
 <p>How many pixels there are to a unit.</p>
@@ -2553,11 +2600,20 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry member" id="Canvas.fillPolygon"><code class="sig">abstract fun fillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.fillPolygon">#</a>
 <p>Fills the polygon whose corners are those points.</p>
 </div>
+<div class="entry member" id="Canvas.fillArc"><code class="sig">fun fillArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number)</code><a class="anchor" href="#Canvas.fillArc">#</a>
+<p>Fills a slice of the oval in the rectangle, as Java's fillArc: from <code>startAngle</code> degrees through <code>arcAngle</code> more, 0 at three o'clock and counter-clockwise.</p>
+</div>
+<div class="entry member" id="Canvas.drawArc"><code class="sig">fun drawArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number)</code><a class="anchor" href="#Canvas.drawArc">#</a>
+<p>The curve of that part of the oval's outline, as Java's drawArc: as drawOval draws it, one line width thick.</p>
+</div>
+<div class="entry member" id="Canvas.arcShape"><code class="sig">protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)</code><a class="anchor" href="#Canvas.arcShape">#</a>
+<p>What fillArc, drawArc and an Arc ask of each kind of canvas: the part of the oval from <code>start</code> through <code>extent</code> degrees, filled as fillOval fills (a slice for a pie, the arc and its chord otherwise) or its outline drawn as drawOval draws (the curve, and the chord or the two lines to the middle).</p>
+</div>
 <div class="entry member" id="Canvas.draw"><code class="sig">fun draw(shape : Shape)</code><a class="anchor" href="#Canvas.draw">#</a>
-<p>A shape's outline: a Rect's or an Oval's, or a Line; an IllegalArgumentException for any other shape.</p>
+<p>A shape's outline: a Rect's, an Oval's or an Arc's, or a Line; an IllegalArgumentException for any other shape.</p>
 </div>
 <div class="entry member" id="Canvas.fill"><code class="sig">fun fill(shape : Shape)</code><a class="anchor" href="#Canvas.fill">#</a>
-<p>The whole of a shape: a Rect or an Oval filled, a Line drawn; an IllegalArgumentException for any other shape.</p>
+<p>The whole of a shape: a Rect, an Oval or an Arc filled, a Line drawn; an IllegalArgumentException for any other shape.</p>
 </div>
 <div class="entry member" id="Canvas.drawString"><code class="sig">abstract fun drawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#Canvas.drawString">#</a>
 <p>Text in the canvas's font and colour, starting at x with its baseline at y: letters sit on that row and tails hang below it. Gives the width it took, in units.</p>
@@ -2583,7 +2639,7 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry" id="Image"><code class="sig">class Image : Drawable</code><a class="anchor" href="#Image">#</a>
 <p>A picture in memory: <code>width</code> by <code>height</code> pixels, each a Color that may be see-through. What a program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a PNG file and saves as one (Java's BufferedImage, D122).</p>
 <pre>val image = Image(200, 100, Color.white)
-image.canvas().fill(Oval(20, 20, 60, 60))
+image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
 image[10, 10] = Color.red                     one pixel; get, set and getOrNull too
 image.editPixels { pixels -&gt; pixels[3, 4] = Color.blue }    many at once, a Grid&lt;Color&gt;
 image.save(Path(&quot;out.png&quot;))
@@ -2700,6 +2756,9 @@ image.save(Path(&quot;out.png&quot;))
 </div>
 <div class="entry member" id="ImageCanvas.fillPolygon"><code class="sig">override fun fillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#ImageCanvas.fillPolygon">#</a>
 <p>Fills the polygon through the first <code>n</code> points, or all of them; fewer than 2 draw nothing.</p>
+</div>
+<div class="entry member" id="ImageCanvas.arcShape"><code class="sig">protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)</code><a class="anchor" href="#ImageCanvas.arcShape">#</a>
+<p>A part of the oval, filled or its outline drawn, smooth at its edges.</p>
 </div>
 <div class="entry member" id="ImageCanvas.drawString"><code class="sig">override fun drawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#ImageCanvas.drawString">#</a>
 <p>Draws <code>text</code> in the canvas's font and colour, its baseline at <code>y</code>, and gives the width it took, in units rounded up.</p>

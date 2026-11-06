@@ -66,6 +66,7 @@ add_library(astra_window OBJECT
   src/text/system.cpp
   src/text/fonts.cpp
   src/text/engine.cpp
+  src/text/shapes.cpp
   src/text/api.cpp
   src/image/png.cpp
 )

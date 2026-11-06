@@ -155,6 +155,7 @@ class NativeCanvas : Canvas {
   private val target : any
   private var sentColor : Color? = null
   private var sentFont : Font? = null
+  private var sentLineWidth : Number? = null
 
   fun init(target : any, width : int, height : int, scale : Number, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) {
     super.init(width, height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom)
@@ -172,10 +173,15 @@ class NativeCanvas : Canvas {
       __jade.target(target, originX, originY, scale, clipLeft, clipTop, clipRight, clipBottom)
       sentColor = null
       sentFont = null
+      sentLineWidth = null
     }
     if (sentColor != color) {
       __jade.color(color.argb)
       sentColor = color
+    }
+    if (sentLineWidth != lineWidth) {
+      __jade.lineWidth(lineWidth)
+      sentLineWidth = lineWidth
     }
   }
 
@@ -222,6 +228,11 @@ class NativeCanvas : Canvas {
   override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
     use()
     __jade.polygon(xs, ys, n ?: xs.size, true, true)
+  }
+
+  protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
+    use()
+    __jade.arc(x, y, w, h, start, extent, kind.ordinal, fill)
   }
 
   override fun drawString(text : string, x : Number, y : Number) : int {

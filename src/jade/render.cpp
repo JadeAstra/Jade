@@ -499,6 +499,16 @@ void Renderer::line(float x1, float y1, float x2, float y2, float width, uint32_
 
 void Renderer::polygon(const std::vector<float>& points, uint32_t rgba) {
     if (points.size() < 6) return;
+    text::Path path;
+    path.moveTo(points[0], points[1]);
+    for (size_t i = 2; i + 1 < points.size(); i += 2) path.lineTo(points[i], points[i + 1]);
+    path.close();
+    shape(path, rgba);
+}
+
+void Renderer::shape(const text::Path& downward, uint32_t rgba) {
+    const std::vector<float>& points = downward.points;
+    if (points.size() < 6) return;
     float minX = points[0], minY = points[1], maxX = minX, maxY = minY;
     for (size_t i = 0; i + 1 < points.size(); i += 2) {
         minX = std::min(minX, points[i]);
@@ -520,6 +530,7 @@ void Renderer::polygon(const std::vector<float>& points, uint32_t rgba) {
         mix(std::lround((points[i] - originX) * 16));
         mix(std::lround((points[i + 1] - originY) * 16));
     }
+    for (uint8_t verb : downward.verbs) mix(verb);
     mix(static_cast<int64_t>(points.size()));
 
     AtlasEntry entry;
@@ -530,11 +541,12 @@ void Renderer::polygon(const std::vector<float>& points, uint32_t rgba) {
     if (known != shapes_.end()) {
         entry = known->second;
     } else {
-        text::Path path;  // the rasteriser has y growing upwards
-        path.moveTo(points[0] - originX, -(points[1] - originY));
-        for (size_t i = 2; i + 1 < points.size(); i += 2) path.lineTo(points[i] - originX, -(points[i + 1] - originY));
-        path.close();
-        const text::GlyphImage image = text::rasterize(path);
+        text::Path path = downward;  // the rasteriser has y growing upwards
+        for (size_t i = 0; i + 1 < path.points.size(); i += 2) {
+            path.points[i] -= originX;
+            path.points[i + 1] = -(path.points[i + 1] - originY);
+        }
+        const text::GlyphImage image = text::rasterize(path, text::kShapeFineness);
         if (image.empty()) return;
         if (small) {
             entry = store(image);

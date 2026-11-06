@@ -2375,17 +2375,18 @@ canvas, with the meanings they have in Java:
 
 | | |
 | --- | --- |
-| `color`, `font` | a `Color` and a `Font`, for what is drawn next |
+| `color`, `font`, `lineWidth` | a `Color`, a `Font` and how thick outlines and lines are (1 unit to begin with, as Java's `BasicStroke(w)`), for what is drawn next |
 | `fillRect(x, y, w, h)` | covers `w` by `h` units |
-| `drawRect(x, y, w, h)` | an outline one unit thick, covering `w + 1` by `h + 1` |
+| `drawRect(x, y, w, h)` | an outline one unit thick, covering `w + 1` by `h + 1`; a wider one spreads around that, its larger half to the right and below |
 | `fillRoundRect`, `drawRoundRect(x, y, w, h, arcW, arcH)` | corners rounded by an arc that wide and high |
 | `fillOval`, `drawOval(x, y, w, h)` | the oval that fits the box |
 | `drawLine(x1, y1, x2, y2)` | both ends covered |
-| `drawPolyline`, `drawPolygon`, `fillPolygon(xs, ys, n = xs.size)` | through the points of two lists |
+| `drawPolyline`, `drawPolygon`, `fillPolygon(xs, ys, n = xs.size)` | through the points of two lists; wide lines join round, each pixel covered once |
+| `fillArc`, `drawArc(x, y, w, h, startAngle, arcAngle)` | a slice of the oval, or the curve of its outline, as Java's: degrees, 0 at three o'clock, counter-clockwise |
 | `drawString(text, x, y)` | starting at `x` with the baseline at `y`; returns the width |
 | `draw(picture, x, y)`, `draw(picture, x, y, w, h, alpha = 1.0)` | an `Image` or a `Surface`, at its size or scaled, as see-through as `alpha` |
 | `drawPart(picture, sx, sy, sw, sh, x, y, w, h)` | a part of one, given in its own pixels |
-| `draw(shape)`, `fill(shape)` | a `Rect`, an `Oval` or a `Line` |
+| `draw(shape)`, `fill(shape)` | a `Rect`, an `Oval`, an `Arc` or a `Line` |
 | `clearRect(x, y, w, h)` | makes pixels clear again |
 | `measure(text, font = this.font)` | a `TextMetrics`: `width`, `ascent`, `descent`, `height` |
 | `sub(x, y, width, height)` | a canvas for a part: its (0, 0) is at (x, y), and nothing it draws lands outside |
@@ -3299,8 +3300,11 @@ with no allocation and compared by its parts:
 too, as is **`Rect(x, y, width, height)`**: `location`, `size`, `minX`, `maxX`, `centerX` and the
 rest, `isEmpty`, `contains`, `intersects`, `intersection`, `union`, and the mutating
 `translate`, `grow`, `setBounds`, `setLocation` and `setSize`, which change the one they are
-called on where it is kept. A `Rect`, an `Oval(x, y, width, height)` and a `Line(x1, y1, x2,
-y2)` are each a `Shape`, which a canvas draws and fills: `canvas.fill(Oval(...))`.
+called on where it is kept. A `Rect`, an `Oval(x, y, width, height)`, an `Arc(x, y, width,
+height, start, extent, kind)` (Java's `Arc2D`: `ArcKind.open`, `chord` or `pie`) and a
+`Line(x1, y1, x2, y2)` are each a `Shape`, which a canvas draws and fills:
+`canvas.fill(Oval(...))`. As Java's shapes, each has `bounds` (a `Rect` of whole units) and
+`contains(x, y)`, with Java's answers, which is how a chart finds what the pointer is over.
 
 ### The canvas
 

@@ -21,6 +21,7 @@
 #include "../vm.h"
 #include "platform.h"
 #include "render.h"
+#include "../text/shapes.h"
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
@@ -67,6 +68,7 @@ struct State {
     int originX = 0, originY = 0;
     double scale = 1;
     uint32_t color = 0x000000FF;
+    double lineWidth = 1;  // how thick outlines and lines are, in units (M8)
     std::shared_ptr<text::Font> font;
 
     // For tests: a clipboard of the program's own, so that the system's is left alone.
@@ -137,6 +139,8 @@ uint32_t colorOf(VM& vm, Value v) {
 int dx(double x) { return state().originX + static_cast<int>(std::lround(x * state().scale)); }
 int dy(double y) { return state().originY + static_cast<int>(std::lround(y * state().scale)); }
 int thickness() { return std::max(1, static_cast<int>(std::lround(state().scale))); }
+// How thick a line of the canvas's lineWidth is, in whole pixels: at least one.
+int strokePixels() { return std::max(1, static_cast<int>(std::lround(state().lineWidth * state().scale))); }
 double num(VM& vm, Value v) { return vm.toNumber(v, "number"); }
 
 // ---- Events ----
@@ -708,6 +712,11 @@ void registerJade(VM& vm) {
         state().font = textFontOf(vm, handle);
         return Value::null();
     });
+    // lineWidth(units): how thick the outlines and lines that follow are.
+    def("lineWidth", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        state().lineWidth = num(vm, args[0]);
+        return Value::null();
+    });
     def("flush", 0, 0, [](VM& vm, int, Value*) -> Value {
         need(vm).flush();
         return Value::null();
@@ -731,8 +740,12 @@ void registerJade(VM& vm) {
         Renderer& r = need(vm);
         const double x = num(vm, args[0]), y = num(vm, args[1]), w = num(vm, args[2]), h = num(vm, args[3]);
         if (w < 0 || h < 0) return Value::null();
-        const float t = static_cast<float>(thickness());
-        const float left = static_cast<float>(dx(x)), top = static_cast<float>(dy(y)), right = static_cast<float>(dx(x + w)), bottom = static_cast<float>(dy(y + h));
+        // A wider outline spreads around the one-unit one, its larger half to the right and below.
+        const float t = static_cast<float>(strokePixels());
+        const text::Spread spread = text::spreadOf(t, thickness());
+        const float before = static_cast<float>(spread.before);
+        const float left = static_cast<float>(dx(x)) - before, top = static_cast<float>(dy(y)) - before;
+        const float right = static_cast<float>(dx(x + w)) - before, bottom = static_cast<float>(dy(y + h)) - before;
         r.fillRect(left, top, right + t, top + t, state().color);
         r.fillRect(left, bottom, right + t, bottom + t, state().color);
         r.fillRect(left, top + t, left + t, bottom, state().color);
@@ -745,9 +758,11 @@ void registerJade(VM& vm) {
         const double x = num(vm, args[0]), y = num(vm, args[1]), w = num(vm, args[2]), h = num(vm, args[3]);
         const float radius = static_cast<float>(std::min(num(vm, args[4]), num(vm, args[5])) / 2 * state().scale);
         const float left = static_cast<float>(dx(x)), top = static_cast<float>(dy(y)), right = static_cast<float>(dx(x + w)), bottom = static_cast<float>(dy(y + h));
-        const float t = static_cast<float>(thickness());
+        const float t = static_cast<float>(strokePixels()), unit = static_cast<float>(thickness());
+        const text::Spread spread = text::spreadOf(t, unit);
+        const float before = static_cast<float>(spread.before), after = static_cast<float>(spread.after);
         if (args[6].truthy()) r.roundRect(left, top, right, bottom, radius, 0, state().color);
-        else r.roundRect(left, top, right + t, bottom + t, radius + t / 2, t, state().color);
+        else r.roundRect(left - before, top - before, right + unit + after, bottom + unit + after, radius + t / 2, t, state().color);
         return Value::null();
     });
     // oval(x, y, w, h, fill)
@@ -755,23 +770,27 @@ void registerJade(VM& vm) {
         Renderer& r = need(vm);
         const double x = num(vm, args[0]), y = num(vm, args[1]), w = num(vm, args[2]), h = num(vm, args[3]);
         const float left = static_cast<float>(dx(x)), top = static_cast<float>(dy(y)), right = static_cast<float>(dx(x + w)), bottom = static_cast<float>(dy(y + h));
-        const float t = static_cast<float>(thickness());
+        const float t = static_cast<float>(strokePixels()), unit = static_cast<float>(thickness());
+        const text::Spread spread = text::spreadOf(t, unit);
+        const float before = static_cast<float>(spread.before), after = static_cast<float>(spread.after);
         if (args[4].truthy()) r.oval(left, top, right, bottom, 0, state().color);
-        else r.oval(left, top, right + t, bottom + t, t, state().color);
+        else r.oval(left - before, top - before, right + unit + after, bottom + unit + after, t, state().color);
         return Value::null();
     });
     // A line one unit thick from one point to another, both covered.
     def("line", 4, 4, [](VM& vm, int, Value* args) -> Value {
         Renderer& r = need(vm);
         const double x1 = num(vm, args[0]), y1 = num(vm, args[1]), x2 = num(vm, args[2]), y2 = num(vm, args[3]);
-        const int t = thickness();
+        const int unit = thickness(), t = strokePixels();
+        const text::Spread spread = text::spreadOf(t, unit);
         const int ax = dx(x1), ay = dy(y1), bx = dx(x2), by = dy(y2);
         if (ax == bx || ay == by) {
             // Straight across or straight down: whole pixels, with nothing to smooth.
-            r.fillRect(static_cast<float>(std::min(ax, bx)), static_cast<float>(std::min(ay, by)), static_cast<float>(std::max(ax, bx) + t),
-                       static_cast<float>(std::max(ay, by) + t), state().color);
+            const float before = static_cast<float>(spread.before), after = static_cast<float>(spread.after);
+            r.fillRect(static_cast<float>(std::min(ax, bx)) - before, static_cast<float>(std::min(ay, by)) - before,
+                       static_cast<float>(std::max(ax, bx) + unit) + after, static_cast<float>(std::max(ay, by) + unit) + after, state().color);
         } else {
-            const float middle = static_cast<float>(t - 1) / 2;
+            const float middle = static_cast<float>(unit - 1) / 2 + static_cast<float>(spread.after - spread.before) / 2;
             r.line(static_cast<float>(ax) + middle, static_cast<float>(ay) + middle, static_cast<float>(bx) + middle, static_cast<float>(by) + middle,
                    static_cast<float>(t), state().color);
         }
@@ -795,6 +814,20 @@ void registerJade(VM& vm) {
             r.polygon(points, state().color);
             return Value::null();
         }
+        if (strokePixels() > thickness()) {
+            // Wider than a unit: one shape of bands and round joins, as the image canvas draws it.
+            const text::Spread spread = text::spreadOf(strokePixels(), thickness());
+            const double shift = (spread.after - spread.before) / 2;
+            std::vector<double> points;
+            for (size_t i = 0; i < count; i++) {
+                points.push_back(state().originX + (num(vm, xs[i]) + 0.5) * state().scale + shift);
+                points.push_back(state().originY + (num(vm, ys[i]) + 0.5) * state().scale + shift);
+            }
+            text::Path path;
+            text::polylineStroke(path, points, args[4].truthy(), strokePixels());
+            r.shape(path, state().color);
+            return Value::null();
+        }
         const int t = thickness();
         const float middle = static_cast<float>(t - 1) / 2;
         const size_t segments = args[4].truthy() ? count : count - 1;
@@ -808,6 +841,28 @@ void registerJade(VM& vm) {
                 r.line(static_cast<float>(ax) + middle, static_cast<float>(ay) + middle, static_cast<float>(bx) + middle, static_cast<float>(by) + middle,
                        static_cast<float>(t), state().color);
         }
+        return Value::null();
+    });
+    // arc(x, y, w, h, start, extent, kind, fill): an arc of the oval in the rectangle (M8), filled
+    // as oval fills (a wedge for a pie, the arc and its chord otherwise) or its outline drawn as
+    // an oval's, the line width across. Rasterised once, and kept by its look, as a polygon is.
+    def("arc", 8, 8, [](VM& vm, int, Value* args) -> Value {
+        Renderer& r = need(vm);
+        const double x = num(vm, args[0]), y = num(vm, args[1]), w = num(vm, args[2]), h = num(vm, args[3]);
+        const double start = num(vm, args[4]), extent = num(vm, args[5]);
+        const auto kind = static_cast<text::ArcKind>(std::clamp<int64_t>(vm.toInt(args[6], "kind"), 0, 2));
+        const double s = state().scale;
+        const double l = state().originX + x * s, t = state().originY + y * s, right = state().originX + (x + w) * s, b = state().originY + (y + h) * s;
+        text::Path path;
+        if (args[7].truthy()) {
+            text::arcFill(path, l, t, right, b, start, extent, kind);
+        } else {
+            const double unit = thickness(), line = strokePixels();
+            const text::Spread spread = text::spreadOf(line, unit);
+            const double middle = unit / 2 + (spread.after - spread.before) / 2;
+            text::arcStroke(path, l + middle, t + middle, right + middle, b + middle, start, extent, kind, line);
+        }
+        r.shape(path, state().color);
         return Value::null();
     });
     // text(string, x, y): at x with its baseline at y, in the font and colour set. Its width in device pixels.

@@ -14,6 +14,9 @@ interface DrawOp {
   data Oval(val x : Number, val y : Number, val w : Number, val h : Number, val fill : bool, val color : Color) : DrawOp
   data Line(val x1 : Number, val y1 : Number, val x2 : Number, val y2 : Number, val color : Color) : DrawOp
   data Poly(val xs : List<Number>, val ys : List<Number>, val closed : bool, val fill : bool, val color : Color) : DrawOp
+  // A part of an oval (M8): fillArc, drawArc, or an Arc filled or drawn, with the line width.
+  data Arc(val x : Number, val y : Number, val w : Number, val h : Number, val start : Number, val extent : Number, val kind : ArcKind, val fill : bool,
+           val color : Color, val lineWidth : Number) : DrawOp
   data Text(val text : string, val x : Number, val y : Number, val color : Color, val font : Font) : DrawOp
   data Image(val x : Number, val y : Number, val w : Number, val h : Number) : DrawOp
   data Clear(val x : Number, val y : Number, val w : Number, val h : Number) : DrawOp
@@ -76,6 +79,9 @@ class RecordingCanvas : Canvas {
   }
   override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
     ops.add(poly(xs, ys, n, true, true))
+  }
+  protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
+    ops.add(DrawOp.Arc(x + originX, y + originY, w, h, start, extent, kind, fill, color, lineWidth))
   }
   override fun drawString(text : string, x : Number, y : Number) : int {
     ops.add(DrawOp.Text(text, x + originX, y + originY, color, font))
