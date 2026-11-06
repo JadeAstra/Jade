@@ -2019,6 +2019,47 @@ struct Checker::Impl {
             f->resultState = 2;
         }
         ctx = savedCtx;
+        inheritDefaults(f);
+    }
+
+    // An override that leaves out a parameter's default takes the one of what it overrides,
+    // as in Kotlin (M7; the user's choice: writing one of its own is still allowed, and wins).
+    // The default is worked out in the override, so the parameters before it must have the
+    // names they have above (overridesMarked says so where they do not).
+    std::unordered_map<const FunctionDecl*, std::vector<const Expr*>> inheritedDefaults;
+    std::unordered_set<const FunctionDecl*> defaultsRenamed;
+    void inheritDefaults(FuncInfo* f) {
+        const FunctionDecl* d = f->decl;
+        if (d == nullptr || !d->isOverride || d->isStatic || f->owner == nullptr || d->accessor != FunctionDecl::Accessor::None ||
+            d->name == "init")
+            return;
+        bool missing = false;
+        for (size_t i = 0; i < f->hasDefault.size(); i++) missing = missing || (!f->hasDefault[i] && static_cast<int>(i) != f->vararg);
+        if (!missing) return;
+        FuncInfo* above = nullptr;
+        for (FuncInfo* g : formsAbove(f->owner, d->name))
+            if (above == nullptr && g->decl != nullptr && sameForm(f, g)) above = g;
+        if (above == nullptr) return;
+        std::vector<const Expr*> taken(f->hasDefault.size(), nullptr);
+        bool any = false;
+        for (size_t i = 0; i < f->hasDefault.size() && i < above->hasDefault.size(); i++) {
+            if (f->hasDefault[i] || !above->hasDefault[i]) continue;
+            const Expr* e = defaultOf(above, i);
+            if (e == nullptr) continue;
+            taken[i] = e;
+            f->hasDefault[i] = true;
+            any = true;
+            for (size_t j = 0; j < i; j++)
+                if (j < above->decl->params.size() && d->params[j] != above->decl->params[j]) defaultsRenamed.insert(d);
+        }
+        if (any) inheritedDefaults[d] = std::move(taken);
+    }
+    // The default of parameter `i` of `f`: its own, or the one it took from above.
+    const Expr* defaultOf(FuncInfo* f, size_t i) {
+        resolveFunc(f);
+        if (i < f->decl->paramDefaults.size() && f->decl->paramDefaults[i] != nullptr) return f->decl->paramDefaults[i].get();
+        auto found = inheritedDefaults.find(f->decl);
+        return found != inheritedDefaults.end() && i < found->second.size() ? found->second[i] : nullptr;
     }
 
     // The generated initializer of a class with a header, as a function.
@@ -2294,6 +2335,11 @@ struct Checker::Impl {
             if (m->isOverride) {
                 if (above.empty() && m->name != "toString" && m->name != "==")
                     report(*m, "'" + m->name + "' in class " + k->name + " is marked override, but there is nothing of that name for it to replace");
+                resolveFunc(known->second);
+                if (defaultsRenamed.count(m.get()) != 0)
+                    report(*m, "'" + m->name + "' in class " + k->name + " takes a default it leaves out from what it overrides, which is " +
+                                   "worked out with the parameters before it, and they have other names here: give them the names they " +
+                                   "have there, or write the default");
                 continue;
             }
             FuncInfo* same = nullptr;
@@ -11499,6 +11545,10 @@ bool Checker::loopPassesOn(const ForInStmt& loop) const {
     return found != impl_->loopCandidates.end() && found->second.uses.size() == 1 && found->second.argUses.size() == 1;
 }
 std::vector<int> Checker::paramsOwned(const FunctionDecl& fn) const { return impl_->paramsOwned(fn); }
+const Expr* Checker::inheritedDefault(const FunctionDecl& fn, size_t i) const {
+    auto found = impl_->inheritedDefaults.find(&fn);
+    return found != impl_->inheritedDefaults.end() && i < found->second.size() ? found->second[i] : nullptr;
+}
 bool Checker::keepsOutside(const FunctionDecl& lambda) const { return impl_->keepingLambdas.count(&lambda) != 0; }
 
 // For a loop of an inline function's own body that hands its items to the lambdas it was given (G15).

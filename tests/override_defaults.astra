@@ -1,0 +1,45 @@
+// An override that leaves out a parameter's default takes the one of what it overrides, as in
+// Kotlin (M7); one that writes its own keeps it.
+
+interface Dialog {
+  fun open(title : string = "Open", filters : List<string> = [], onResult : (string?) -> unit)
+}
+class Quiet : Dialog {
+  override fun open(title : string, filters : List<string>, onResult : (string?) -> unit) { onResult("$title ${filters.size}") }
+}
+val d : Dialog = Quiet()
+d.open { print(it) }                     // expect: Open 0
+Quiet().open { print(it) }               // expect: Open 0
+d.open("Pick") { print(it) }             // expect: Pick 0
+Quiet().open(filters = ["a", "b"]) { print(it) }   // expect: Open 2
+
+// From a superclass, down a chain of overrides that write none.
+abstract class Shape {
+  abstract fun describe(scale : int = 2, unit : string = "cm") : string
+}
+class Square(val side : int) : Shape() {
+  override fun describe(scale : int, unit : string) : string => "${side * scale}$unit"
+}
+class Tile(side : int) : Square(side) {
+  override fun describe(scale : int, unit : string) : string => "tile " + super.describe(scale, unit)
+}
+val shapes : List<Shape> = [Square(3), Tile(4)]
+print(shapes.map { it.describe() })      // expect: ["6cm", "tile 8cm"]
+print(Tile(5).describe(unit = "mm"))     // expect: tile 10mm
+
+// A default that uses a parameter before it, and the object, worked out in the override.
+class Counter(val base : int) {
+  fun step(by : int, limit : int = by * 10 + base) : int => Math.min(by, limit)
+}
+class Wide(base : int) : Counter(base) {
+  override fun step(by : int, limit : int) : int => limit
+}
+print(Wide(1).step(3), Wide(2).step(5, 7))   // expect: 31 7
+
+// An override that writes its own keeps it, whatever the call goes through.
+class Loud : Dialog {
+  override fun open(title : string = "OPEN", filters : List<string>, onResult : (string?) -> unit) { onResult(title) }
+}
+val loud : Dialog = Loud()
+loud.open { print(it) }                  // expect: OPEN
+Loud().open { print(it) }                // expect: OPEN

@@ -1287,6 +1287,12 @@ class Square(val side : int) : Shape("square") {
   `override fun next() : int` is an error for `fun next() : T` in `class Gen<T> : Source<T>`,
   and `List<int>` for `List<U>`, since code that calls through the type above gets what it
   put in that place.
+- An override that leaves out a parameter's default value takes the one of the method it
+  overrides, as Kotlin's does: `override fun open(title : string, onResult : (string?) -> unit)`
+  under `fun open(title : string = "Open", onResult : ...)` is called as `open { }` through
+  either type. The default is worked out in the override, so the parameters before it keep
+  the names they have above (it is an error where they do not). An override may also write a
+  default of its own, which is then the one used, whatever the call goes through.
 - `init { }` blocks run when an object is made, after the header's entries are set, in order
   with the initial values of the fields around them. A class has either such blocks or a
   hand-written `fun init`, not both.

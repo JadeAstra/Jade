@@ -329,6 +329,9 @@ public:
     bool loopsInPlace(const ForInStmt& loop) const;
     bool loopPassesOn(const ForInStmt& loop) const;  // its variable's one use is to be passed on
     std::vector<int> paramsOwned(const FunctionDecl& fn) const;
+    // The default an override takes for parameter `i` from what it overrides, where it writes
+    // none of its own; null where there is none to take.
+    const Expr* inheritedDefault(const FunctionDecl& fn, size_t i) const;
     // Whether a lambda gives a value to a variable of the code around it (`saved = it`).
     bool keepsOutside(const FunctionDecl& lambda) const;
     // An inline function's own loop that may read its items where they are and hand them to the

@@ -5391,6 +5391,8 @@ private:
         bool sawDefault = false;
         for (size_t i = 0; i < decl.params.size(); i++) {
             const Expr* defaultValue = decl.paramDefaults[i].get();
+            // An override that writes no default takes the one of what it overrides (M7).
+            if (defaultValue == nullptr && session_.checker != nullptr) defaultValue = session_.checker->inheritedDefault(decl, i);
             if (static_cast<int>(i) == decl.varargIndex) {
                 // Always given a list by the call, and what follows it is passed by name.
                 sawDefault = true;
