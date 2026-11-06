@@ -473,6 +473,11 @@ enum class Op : uint16_t {
     RJumpGeISK, RJumpEqISS, RJumpEqISK, RJumpLtFSS, RJumpLtFSK, RJumpLeFSS,
     RJumpLeFSK, RJumpGtFSS, RJumpGtFSK, RJumpGeFSS, RJumpGeFSK, RJumpEqFSS,
     RJumpEqFSK,
+    // `node.sizes.pref.width` (G14): two or three fields read through values held in one another,
+    // the last a plain one, as one instruction. Its cache keeps, for the class last seen, where
+    // the last field is: read there at once, with nothing looked up on the way. u8 A, u8 B, u8 T,
+    // u8 S, u16 cache, u8 hops, u16 name x3, i32 slow.
+    RGetPath,
     RunCount_,          // how many instructions there are, the run code's included
 };
 // The stack code's instructions are a byte each; the run code's, two (kOpBytes).

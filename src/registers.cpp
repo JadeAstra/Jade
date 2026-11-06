@@ -156,6 +156,7 @@ Op jumpFormOf(Op r) {
 bool storesResult(Op r) {
     switch (r) {
         case Op::RGetProp:
+        case Op::RGetPath:
         case Op::RModSS:
         case Op::RModSK:
         case Op::RSubKS:
@@ -177,6 +178,7 @@ bool storesResult(Op r) {
 size_t topOperand(Op r) {
     switch (r) {
         case Op::RGetProp:
+        case Op::RGetPath:
         case Op::RNeg:
         case Op::RNot: return 3;  // u8 A, u8 B, u8 T
         case Op::RGetGlobal: return 2;  // u8 A, u8 T
@@ -227,6 +229,12 @@ public:
                 at += size;
                 continue;
             }
+            if (at < skipUntil_) {
+                // Read through by the RGetPath before it.
+                newAt_[at] = static_cast<uint32_t>(out_.size());
+                at += size;
+                continue;
+            }
             if (depth < 0) {
                 // Never reached: left out. (Copied, a joined instruction in it would be read as the
                 // R instruction of the same number by what reads the run code through, D160.)
@@ -266,6 +274,11 @@ public:
         }
         f_.run = std::move(out_);
         f_.runLines = std::move(outLines_);
+        if (pathCaches_ != 0) {
+            // The caches the RGetPaths were given, after the stack code's, all empty yet.
+            f_.cacheCount += pathCaches_;
+            f_.caches.reset(new std::atomic<uint64_t>[f_.cacheCount]());
+        }
     }
 
 private:
@@ -289,6 +302,10 @@ private:
     int line_ = 0;
     // An instruction already done, by the R instruction before it: a Pop after a SetProp.
     size_t skip_ = SIZE_MAX;
+    // And all those before this, read through by an RGetPath (G14); and the caches RGetPaths
+    // were given, after the stack code's.
+    size_t skipUntil_ = 0;
+    uint32_t pathCaches_ = 0;
     // The R instruction just written with nothing after it yet, its slow way the last of slows_:
     // its result may still be sent straight to a local, or its comparison joined to the jump
     // after it.
@@ -499,6 +516,45 @@ private:
         const Op o = static_cast<Op>(code_[next]);
         return o == Op::GetProp || o == Op::GetOwn || o == Op::GetPropRef || o == Op::GetOwnRef || o == Op::JumpIfNull;
     }
+    // `a.b.c` or `a.b.c.d` from the instruction at `at`, a GetPropRef: two or three fields read
+    // through values held in one another, the last a plain one, as one RGetPath, its slow way the
+    // stack code of all of them (G14). Only from a GetPropRef, which the checker gives a value kept
+    // inside an object: through objects (`a.next.value`) the path could never be kept, and each
+    // read would try first. False where the code is not that.
+    bool pathAt(size_t at, size_t size, int depth) {
+        if (!notes_ || !rs_ || stack_.empty() || !noted(stack_.back()) || isConstant(stack_.back()) || depth - 1 > 255) return false;
+        std::vector<std::pair<size_t, size_t>> steps{{at, size}};
+        size_t next = at + size;
+        while (steps.size() < 3 && next < n_ && !leader_[next]) {
+            const Op o = static_cast<Op>(code_[next]);
+            if (o != Op::GetProp && o != Op::GetOwn && o != Op::GetPropRef && o != Op::GetOwnRef) break;
+            const size_t stepSize = instructionSize(code_, next);
+            steps.emplace_back(next, stepSize);
+            next += stepSize;
+        }
+        if (steps.size() < 2 || readsOn(next)) return false;  // one alone, or longer: as it is
+        const Op last = static_cast<Op>(code_[steps.back().first]);
+        if (last != Op::GetProp && last != Op::GetOwn) return false;
+        if (f_.cacheCount + pathCaches_ >= 0xFFFF) return false;
+        const int s = depth - 1;
+        placeBelow(s);
+        const Entry x = take(1)[0];
+        const int bOperand = operand(x, s);
+        Slow& slow = newSlow(s, at);
+        for (const auto& [stepAt, stepSize] : steps) copyInto(slow, static_cast<Op>(code_[stepAt]), stepAt, stepSize);
+        op(Op::RGetPath);
+        u8(s);
+        u8(bOperand);
+        u8(s + 1);
+        u8(s);
+        u16(static_cast<int>(f_.cacheCount + pathCaches_++));
+        u8(static_cast<int>(steps.size()));
+        for (size_t k = 0; k < 3; k++) u16(k < steps.size() ? readU16(code_, steps[k].first + 1) : 0);
+        endR(slow, s);
+        skipUntil_ = next;
+        return true;
+    }
+
     // Whether the instruction after the one at `at` is a Pop, not jumped to.
     bool popAfter(size_t at, size_t size) const {
         const size_t next = at + size;
@@ -689,6 +745,10 @@ private:
                 if (rs_ && binaryAt(plainOf(o), x, y, s, at, 1)) return true;
                 return expanded(plainOf(o), x, y, s);
             }
+            case Op::GetPropRef:
+            case Op::GetOwnRef:
+                if (pathAt(at, size, depth)) return true;
+                break;
             case Op::GetProp:
             case Op::GetOwn: {
                 if (!noted(stack_.back()) || isConstant(stack_.back())) break;  // the stack code as it is
@@ -959,6 +1019,7 @@ CodeOffsets codeOffsets(Op o) {
         case Op::SetTop:
         case Op::RGetUpvalue: return {};
         case Op::RGetProp: return {6};
+        case Op::RGetPath: return {13};
         case Op::RSetPropSS:
         case Op::RSetPropSK: return {7};
         case Op::RGetGlobal:
@@ -1063,6 +1124,7 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::MoveK: return kOpBytes + 2;
         case Op::SetTop: return kOpBytes + 1;
         case Op::RGetProp: return kOpBytes + 10;
+        case Op::RGetPath: return kOpBytes + 17;
         case Op::RSetPropSS:
         case Op::RSetPropSK: return kOpBytes + 11;
         case Op::RGetUpvalue: return kOpBytes + 4;

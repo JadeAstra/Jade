@@ -3359,6 +3359,56 @@ COLD(RGetProp) {
     ip = code + operandI32(ip + 6);
     NEXT();
 }
+HAS_COLD(RGetPath)
+CASE(RGetPath) {
+    // `node.sizes.pref.width` (G14): from an object of the class last seen, or a value where it
+    // is kept, the last field read where its cache says, here; anything else in the rare part.
+    // u8 A, u8 B, u8 T, u8 S, u16 cache, u8 hops, u16 name x3, i32 slow.
+    {
+        const Value& obj = base[ip[1]];
+        const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
+        if (obj.isObjType(ObjType::Instance)) {
+            ObjInstance* const instance = asInstance(obj);
+            if ((seen & 1) != 0 && static_cast<uint32_t>(seen >> 32) == instance->shape && (instance->core == 0 || instance->core == coreId_)) {
+                const Value* const slot = reinterpret_cast<const Value*>(reinterpret_cast<const uint8_t*>(instance) + ((seen >> 3) & 0x1FFF) * 8);
+                if (slot->kind == ValueKind::Ref && slot->as.obj == instance) {
+                    readPathField(instance->inlineData() + ((seen >> 16) & 0xFFFF), seen, base[ip[0]]);
+                    sp = base + ip[2];
+                    ip += 17;
+                    NEXT();
+                }
+            }
+        } else if (obj.isRef() && obj.refDepth == 0 && (seen & 1) == 0) {
+            const ObjClass* const cls = refHolderClass(obj);
+            if (cls != nullptr && static_cast<uint32_t>(seen >> 32) == cls->shape) {
+                if (const uint8_t* at = refQuickly(obj, false)) {
+                    readPathField(at + ((seen >> 16) & 0xFFFF), seen, base[ip[0]]);
+                    sp = base + ip[2];
+                    ip += 17;
+                    NEXT();
+                }
+            }
+        }
+    }
+    GO_COLD(RGetPath);
+}
+COLD(RGetPath) {
+    {
+    const Value obj = base[ip[1]];
+    Value read;
+    if (resolvePath(obj, ip, consts, caches, read)) {
+        base[ip[0]] = read;
+        sp = base + ip[2];
+        ip += 17;
+        NEXT();
+    }
+    Value* const at = base + ip[3];
+    at[0] = obj;
+    sp = at + 1;
+    ip = code + operandI32(ip + 13);
+    NEXT();
+}
+}
 CASE(Count_) {
     throw runtimeError(Thrown::InternalError, "invalid instruction");
 }

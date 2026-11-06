@@ -506,6 +506,17 @@ public:
     const ValueLayout& layoutOf(ObjClass* cls);
     [[noreturn]] void valueTooBig(const ObjClass* cls, uint32_t size);
     ObjValue* newValue(ObjClass* cls);
+    // RGetPath's rare way (G14): the path of fields read worked out from where it starts, kept in
+    // its cache and read; false where it cannot be told so (the stack code reads it then).
+    bool resolvePath(const Value& obj, const uint8_t* ip, const Value* consts, std::atomic<uint64_t>* caches, Value& out);
+    // A plain field at `at`, of the kind an RGetPath's cache says, given whole.
+    static ASTRA_ALWAYS_INLINE void readPathField(const uint8_t* at, uint64_t seen, Value& out) {
+        uint64_t bits = 0;
+        const uint64_t kind = (seen >> 1) & 3;
+        if (kind == 2) bits = *at != 0 ? 1 : 0;
+        else std::memcpy(&bits, at, sizeof bits);
+        out.setWhole(static_cast<uint8_t>(kind == 0 ? ValueKind::Int : kind == 1 ? ValueKind::Float : ValueKind::Bool), bits);
+    }
     // A field of a value, read on its own; one of a value type is given `type` (G4), the
     // field's declared type made for the value holding it, where it is known.
     Value readValueField(const uint8_t* at, const ValueField& field, const ObjTypeInfo* type = nullptr);

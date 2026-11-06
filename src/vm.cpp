@@ -3091,6 +3091,64 @@ ObjValue* VM::newValue(ObjClass* cls) {
 }
 
 // The value of a field kept at `at` in a value's layout.
+// The cache an RGetPath keeps: the class's shape (bits 32 to 63), where the last field's bytes are
+// (16 to 31: in the object's values, or from where the Ref points), where the object keeps its
+// first field's place (3 to 15, in 8-byte steps), the last field's kind (1 and 2: int, float,
+// bool), and whether it starts from an object (0).
+bool VM::resolvePath(const Value& obj, const uint8_t* ip, const Value* consts, std::atomic<uint64_t>* caches, Value& out) {
+    const int hops = ip[6];
+    auto u16At = [&](int at) { return static_cast<size_t>(ip[at] | ip[at + 1] << 8); };
+    auto nameAt = [&](int k) { return asString(consts[u16At(7 + 2 * k)]); };
+    for (int k = 0; k < hops; k++)
+        if ((nameAt(k)->restricted & 1) != 0) return false;  // a name with rules on who reads it: the stack code's way
+    ObjClass* cls = nullptr;
+    const uint8_t* bytes = nullptr;
+    uint32_t offset = 0, slotOffset = 0, shape = 0;
+    uint64_t form = 0;
+    int k = 0;
+    if (obj.isObjType(ObjType::Instance)) {
+        ObjInstance* instance = asInstance(obj);
+        if (instance->core != 0 && instance->core != coreId_) return false;
+        const FieldDecl* decl = instance->declOf(nameAt(0));
+        if (decl == nullptr || decl->inlineOffset < 0 || decl->payload != FieldDecl::NoPayload || decl->slot < 0) return false;
+        const Value& slot = instance->fields()[decl->slot];
+        if (slot.kind != ValueKind::Ref || slot.as.obj != instance) return false;  // null, or a box: not inside it
+        cls = instance->cls->inlineFieldAt(static_cast<uint32_t>(decl->inlineOffset))->cls;
+        bytes = instance->inlineData();
+        offset = static_cast<uint32_t>(decl->inlineOffset);
+        slotOffset = static_cast<uint32_t>(reinterpret_cast<const uint8_t*>(&slot) - reinterpret_cast<const uint8_t*>(instance));
+        shape = instance->shape;
+        form = 1;
+        k = 1;
+    } else if (obj.isRef() && obj.refDepth == 0) {
+        cls = refHolderClass(obj);
+        if (cls == nullptr) return false;
+        bytes = refQuickly(obj, false);
+        if (bytes == nullptr) return false;
+        shape = cls->shape;
+    } else {
+        return false;
+    }
+    for (; k < hops; k++) {
+        const Value* index = cls->declaredIndex.find(nameAt(k));
+        if (index == nullptr) return false;
+        const ValueField& field = layoutOf(cls).fields[static_cast<size_t>(index->as.i)];
+        offset += field.offset;
+        if (k < hops - 1) {
+            if (field.kind != ValueField::Nested) return false;
+            cls = field.cls;
+            continue;
+        }
+        const uint64_t kind = field.kind == ValueField::Int ? 0 : field.kind == ValueField::Float ? 1 : field.kind == ValueField::Bool ? 2 : 3;
+        if (kind == 3 || offset > 0xFFFF || slotOffset % 8 != 0 || slotOffset / 8 > 0x1FFF) return false;
+        const uint64_t seen = static_cast<uint64_t>(shape) << 32 | static_cast<uint64_t>(offset) << 16 | static_cast<uint64_t>(slotOffset / 8) << 3 | kind << 1 | form;
+        caches[u16At(4)].store(seen, std::memory_order_relaxed);
+        readPathField(bytes + offset, seen, out);
+        return true;
+    }
+    return false;
+}
+
 Value VM::readValueField(const uint8_t* at, const ValueField& field, const ObjTypeInfo* type) {
     switch (field.kind) {
         case ValueField::Int: {
