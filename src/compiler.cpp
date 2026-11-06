@@ -593,7 +593,10 @@ public:
     // initial values and entries. Such a class is left out of a built program that never reaches
     // it, though that would be done where it is written; any other is kept.
     bool quietToMake(const ClassStmt& cls) const {
-        if (!cls.nested.empty()) return false;
+        // The classes declared inside it are set up with it (an object among them is made
+        // where it is first used, which this does not follow).
+        for (const auto& inner : cls.nested)
+            if (inner->isObject || !quietToMake(*inner)) return false;
         if (cls.isObject || cls.isEnum) {
             if (!cls.supertypes.empty() || !cls.initBlocks.empty() || cls.hasHeader) return false;
             for (const auto& method : cls.methods)
