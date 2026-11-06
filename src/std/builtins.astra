@@ -31,6 +31,9 @@ external fun Range(first : int, end : int = 0, step : int = 1) : Range
 external fun Bytes(source : any) : Bytes
 external fun __arguments() : open List<string>
 external fun __programName() : string
+external fun __environment() : Map<string, string>
+external fun __processId() : int
+external fun __hostName() : string
 // The hash of several values together, wrapping at 32 bits inside, as Java's Objects.hash (D148):
 // hash(1, 2) is 994, as there.
 external fun hash(vararg values : any?) : int
@@ -417,8 +420,8 @@ external fun Bytes.fill(value : byte) : Bytes
 external fun Bytes.indexOf(value : byte) : int
 // True when a byte equal to `value` is there, given as a byte or an int; false for anything else.
 external fun Bytes.contains(value : any?) : bool
-// 16- and 32-bit numbers kept in the bytes (D19), at a position, the least significant byte
-// first unless bigEndian; read as an int, a float for float32.
+// 16-, 32- and 64-bit numbers kept in the bytes (D19), at a position, the least significant
+// byte first unless bigEndian; read as an int, a float for float32 and float64.
 // int16 reads the signed 16-bit number at `at`, from -32768 to 32767. Each of these reads and
 // writes is an IndexOutOfBoundsException where the number would run past the end.
 external fun Bytes.int16(at : int, bigEndian : bool = false) : int
@@ -430,6 +433,11 @@ external fun Bytes.int32(at : int, bigEndian : bool = false) : int
 external fun Bytes.uint32(at : int, bigEndian : bool = false) : int
 // The 32-bit float at `at`.
 external fun Bytes.float32(at : int, bigEndian : bool = false) : float
+// The signed 64-bit number at `at`: any int. (An unsigned one past 2^63 reads as negative, as
+// in Kotlin's Long.)
+external fun Bytes.int64(at : int, bigEndian : bool = false) : int
+// The 64-bit float at `at`.
+external fun Bytes.float64(at : int, bigEndian : bool = false) : float
 // Writes `value` as a signed 16-bit number at `at`, and gives the bytes themselves. An
 // ArithmeticException where it is outside -32768 to 32767.
 external fun Bytes.putInt16(at : int, value : int, bigEndian : bool = false) : Bytes
@@ -445,6 +453,10 @@ external fun Bytes.putUint32(at : int, value : int, bigEndian : bool = false) : 
 // Writes `value` as a 32-bit float at `at`, as near as one can hold it, and gives the bytes
 // themselves.
 external fun Bytes.putFloat32(at : int, value : Number, bigEndian : bool = false) : Bytes
+// Writes `value` as a signed 64-bit number at `at`, and gives the bytes themselves.
+external fun Bytes.putInt64(at : int, value : int, bigEndian : bool = false) : Bytes
+// Writes `value` as a 64-bit float at `at`, and gives the bytes themselves.
+external fun Bytes.putFloat64(at : int, value : Number, bigEndian : bool = false) : Bytes
 
 // -- Positions --
 

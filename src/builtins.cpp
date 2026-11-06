@@ -11,6 +11,8 @@
 #include <sys/sysinfo.h>
 #endif
 #ifndef _WIN32
+#include <unistd.h>
+extern char** environ;
 #include <locale.h>
 #include <wctype.h>
 #ifdef __APPLE__
@@ -23,6 +25,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -55,6 +58,17 @@ void VM::checkRoomFor(uint64_t bytes) {
     }();
     if (bytes > limit) throw outOfMemory();
 }
+
+#ifdef _WIN32
+// UTF-16 from Windows as UTF-8.
+static std::string wideToUtf8(const std::wstring& wide) {
+    if (wide.empty()) return std::string();
+    const int size = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(static_cast<size_t>(size > 0 ? size : 0), '\0');
+    if (size > 0) WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), size, nullptr, nullptr);
+    return utf8;
+}
+#endif
 
 // ---- Helpers (declared in builtins.h; stdlib.cpp uses them too) ----
 
@@ -315,6 +329,29 @@ void registerGlobals(VM& vm) {
         return Value::integer(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
     });
 
+    // How many seconds the system's time zone is ahead of UTC at a moment, given in seconds
+    // since the start of 1970 (LocalDateTime, M8); summer time included. A sandbox is in UTC.
+    vm.defineNative("__localOffset", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (vm.currentHost().isSandbox()) return Value::integer(0);
+        const time_t t = static_cast<time_t>(vm.toInt(args[0], "seconds"));
+        std::tm local{};
+#ifdef _WIN32
+        if (localtime_s(&local, &t) != 0) return Value::integer(0);  // before 1970 or past 3000: taken as UTC
+#else
+        if (localtime_r(&t, &local) == nullptr) return Value::integer(0);
+#endif
+        // The local date and time as if they were UTC, less the moment itself (days_from_civil).
+        const int64_t year = local.tm_year + 1900 - (local.tm_mon < 2 ? 1 : 0);
+        const int64_t era = (year >= 0 ? year : year - 399) / 400;
+        const int64_t yoe = year - era * 400;
+        const int64_t month = local.tm_mon + 1;
+        const int64_t doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + local.tm_mday - 1;
+        const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        const int64_t days = era * 146097 + doe - 719468;
+        const int64_t civil = days * 86400 + local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec;
+        return Value::integer(civil - static_cast<int64_t>(t));
+    });
+
     vm.defineNative("Range", 1, 3, [](VM& vm, int argc, Value* args) -> Value {
         int64_t start = 0, end, step = 1;
         if (argc == 1) {
@@ -354,6 +391,65 @@ void registerGlobals(VM& vm) {
         std::vector<Value> items;
         for (const std::string& arg : vm.scriptArgs) items.push_back(vm.str(arg));
         return Value::object(newList(vm, std::move(items)));
+    });
+
+    // The environment the program was started with, as a map from each variable's name to its
+    // value (Program.environment, M8); in a sandbox, none, so that a test sees the same
+    // everywhere.
+    vm.defineNative("__environment", 0, 0, [](VM& vm, int, Value*) -> Value {
+        ObjMap* made = vm.alloc<ObjMap>();
+        TempRoot keep(vm, Value::object(made));
+        if (vm.currentHost().isSandbox()) return Value::object(made);
+#ifdef _WIN32
+        wchar_t* block = GetEnvironmentStringsW();
+        if (block != nullptr) {
+            for (const wchar_t* at = block; *at != L'\0'; at += wcslen(at) + 1) {
+                const std::wstring entry(at);
+                const size_t eq = entry.find(L'=', 1);  // "=C:=C:\\": a drive's folder, its name starting with '='
+                if (eq == std::wstring::npos || entry[0] == L'=') continue;
+                const Value name = vm.str(wideToUtf8(entry.substr(0, eq)));
+                TempRoot keepName(vm, name);
+                made->map.set(name, vm.str(wideToUtf8(entry.substr(eq + 1))));
+            }
+            FreeEnvironmentStringsW(block);
+        }
+#else
+        for (char** at = environ; *at != nullptr; at++) {
+            const std::string entry(*at);
+            const size_t eq = entry.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            const Value name = vm.str(entry.substr(0, eq));
+            TempRoot keepName(vm, name);
+            made->map.set(name, vm.str(entry.substr(eq + 1)));
+        }
+#endif
+        vm.account(made->map.size() * 2 * sizeof(Value));
+        return Value::object(made);
+    });
+    // The program's own process id (Program.processId); 1 in a sandbox.
+    vm.defineNative("__processId", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (vm.currentHost().isSandbox()) return Value::integer(1);
+#ifdef _WIN32
+        return Value::integer(static_cast<int64_t>(GetCurrentProcessId()));
+#else
+        return Value::integer(static_cast<int64_t>(getpid()));
+#endif
+    });
+    // The computer's name on the network (Program.hostName); "sandbox" in a sandbox.
+    vm.defineNative("__hostName", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (vm.currentHost().isSandbox()) return vm.str("sandbox");
+#ifdef _WIN32
+        wchar_t name[256];
+        DWORD size = 256;
+        if (GetComputerNameExW(ComputerNameDnsHostname, name, &size)) return vm.str(wideToUtf8(std::wstring(name, size)));
+        size = 256;
+        if (GetComputerNameW(name, &size)) return vm.str(wideToUtf8(std::wstring(name, size)));
+        return vm.str("localhost");
+#else
+        char name[256] = {};
+        if (gethostname(name, sizeof name - 1) == 0) return vm.str(name);
+        return vm.str("localhost");
+#endif
     });
 
     vm.defineNative("exit", 0, 1, [](VM& vm, int argc, Value* args) -> Value {
@@ -849,13 +945,17 @@ template <size_t Size, Kind kind>
 Value readNumber(VM& vm, Value self, int argc, Value* args) {
     const std::vector<uint8_t>& data = asBytes(self)->data;
     const uint64_t bits = readBinary(data, binaryAt(vm, data, args[0], Size), Size, argc > 1 && args[1].truthy());
-    if constexpr (kind == Kind::Float) {
+    if constexpr (kind == Kind::Float && Size == 8) {
+        double d;
+        std::memcpy(&d, &bits, sizeof d);
+        return Value::number(d);
+    } else if constexpr (kind == Kind::Float) {
         float f;
         const uint32_t word = static_cast<uint32_t>(bits);
         std::memcpy(&f, &word, sizeof f);
         return Value::number(f);
     } else if constexpr (kind == Kind::Signed) {
-        return Value::integer(Size == 2 ? static_cast<int16_t>(bits) : static_cast<int32_t>(bits));
+        return Value::integer(Size == 2 ? static_cast<int16_t>(bits) : Size == 4 ? static_cast<int32_t>(bits) : static_cast<int64_t>(bits));
     } else {
         return Value::integer(static_cast<int64_t>(bits));
     }
@@ -866,7 +966,12 @@ Value writeNumber(VM& vm, Value self, int argc, Value* args) {
     std::vector<uint8_t>& data = asBytes(self)->data;
     const size_t at = binaryAt(vm, data, args[0], Size);
     uint64_t bits;
-    if constexpr (kind == Kind::Float) {
+    if constexpr (kind == Kind::Float && Size == 8) {
+        const double d = vm.toNumber(args[1], "number");
+        std::memcpy(&bits, &d, sizeof bits);
+    } else if constexpr (kind == Kind::Signed && Size == 8) {
+        bits = static_cast<uint64_t>(vm.toInt(args[1], "number"));  // every int fits
+    } else if constexpr (kind == Kind::Float) {
         const float f = static_cast<float>(vm.toNumber(args[1], "number"));
         uint32_t word;
         std::memcpy(&word, &f, sizeof word);
@@ -944,18 +1049,22 @@ void registerBytes(VM& vm) {
     });
 
 
-    // 16- and 32-bit numbers in the bytes (D19, L0): read as an int (a float for float32) and
+    // 16-, 32- and 64-bit numbers in the bytes (D19, L0; 64-bit since M8): read as an int (a float for float32) and
     // written, each at a position, least significant byte first unless `bigEndian`.
     vm.defineMethod(T, "int16", 1, 2, readNumber<2, Kind::Signed>);
     vm.defineMethod(T, "uint16", 1, 2, readNumber<2, Kind::Unsigned>);
     vm.defineMethod(T, "int32", 1, 2, readNumber<4, Kind::Signed>);
     vm.defineMethod(T, "uint32", 1, 2, readNumber<4, Kind::Unsigned>);
     vm.defineMethod(T, "float32", 1, 2, readNumber<4, Kind::Float>);
+    vm.defineMethod(T, "int64", 1, 2, readNumber<8, Kind::Signed>);
+    vm.defineMethod(T, "float64", 1, 2, readNumber<8, Kind::Float>);
     vm.defineMethod(T, "putInt16", 2, 3, writeNumber<2, Kind::Signed>);
     vm.defineMethod(T, "putUint16", 2, 3, writeNumber<2, Kind::Unsigned>);
     vm.defineMethod(T, "putInt32", 2, 3, writeNumber<4, Kind::Signed>);
     vm.defineMethod(T, "putUint32", 2, 3, writeNumber<4, Kind::Unsigned>);
     vm.defineMethod(T, "putFloat32", 2, 3, writeNumber<4, Kind::Float>);
+    vm.defineMethod(T, "putInt64", 2, 3, writeNumber<8, Kind::Signed>);
+    vm.defineMethod(T, "putFloat64", 2, 3, writeNumber<8, Kind::Float>);
 
     // Text as bytes, in UTF-8 or the character set given (D127).
     vm.defineMethod(BuiltinType::String, "toBytes", 0, 1, [](VM& vm, Value self, int argc, Value* args) -> Value {

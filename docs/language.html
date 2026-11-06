@@ -415,6 +415,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-image-astra">image.astra</a></li>
 <li><a href="#file-io-astra">io.astra</a></li>
 <li><a href="#file-list-astra">list.astra</a></li>
+<li><a href="#file-localtime-astra">localtime.astra</a></li>
 <li><a href="#file-map-astra">map.astra</a></li>
 <li><a href="#file-parallel-astra">parallel.astra</a></li>
 <li><a href="#file-range-astra">range.astra</a></li>
@@ -442,7 +443,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#AutoCloseable"><code>AutoCloseable</code></a> (2)</li>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
-<li><a href="#Bytes.size"><code>Bytes</code></a> (17)</li>
+<li><a href="#Bytes.size"><code>Bytes</code></a> (21)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (38)</li>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
@@ -457,6 +458,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
 <li><a href="#Duration"><code>Duration</code></a> (25)</li>
+<li><a href="#Environment"><code>Environment</code></a> (8)</li>
 <li><a href="#Error"><code>Error</code></a> (1)</li>
 <li><a href="#EventLoop"><code>EventLoop</code></a> (6)</li>
 <li><a href="#Exception"><code>Exception</code></a> (1)</li>
@@ -479,7 +481,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
 <li><a href="#IndexedValue"><code>IndexedValue</code></a> (1)</li>
 <li><a href="#Insets"><code>Insets</code></a> (2)</li>
-<li><a href="#Instant"><code>Instant</code></a> (16)</li>
+<li><a href="#Instant"><code>Instant</code></a> (17)</li>
 <li><a href="#InternalError"><code>InternalError</code></a> (1)</li>
 <li><a href="#InterruptedException"><code>InterruptedException</code></a> (1)</li>
 <li><a href="#InvocationTargetException"><code>InvocationTargetException</code></a> (1)</li>
@@ -490,6 +492,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#Line"><code>Line</code></a> (2)</li>
 <li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
+<li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
+<li><a href="#LocalDateTime"><code>LocalDateTime</code></a> (14)</li>
+<li><a href="#LocalTime"><code>LocalTime</code></a> (9)</li>
 <li><a href="#Lock"><code>Lock</code></a> (2)</li>
 <li><a href="#LockBox"><code>LockBox</code></a> (2)</li>
 <li><a href="#Map.size"><code>Map</code></a> (58)</li>
@@ -507,13 +512,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
-<li><a href="#Path"><code>Path</code></a> (45)</li>
+<li><a href="#Path"><code>Path</code></a> (49)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
-<li><a href="#Program"><code>Program</code></a> (4)</li>
+<li><a href="#Program"><code>Program</code></a> (7)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
@@ -1051,7 +1056,7 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>True when a byte equal to <code>value</code> is there, given as a byte or an int; false for anything else.</p>
 </div>
 <div class="entry" id="Bytes.int16"><code class="sig">fun Bytes.int16(at : int, bigEndian : bool = false) : int</code><a class="anchor" href="#Bytes.int16">#</a>
-<p>16- and 32-bit numbers kept in the bytes, at a position, the least significant byte first unless bigEndian; read as an int, a float for float32. int16 reads the signed 16-bit number at <code>at</code>, from -32768 to 32767. Each of these reads and writes is an IndexOutOfBoundsException where the number would run past the end.</p>
+<p>16-, 32- and 64-bit numbers kept in the bytes, at a position, the least significant byte first unless bigEndian; read as an int, a float for float32 and float64. int16 reads the signed 16-bit number at <code>at</code>, from -32768 to 32767. Each of these reads and writes is an IndexOutOfBoundsException where the number would run past the end.</p>
 </div>
 <div class="entry" id="Bytes.uint16"><code class="sig">fun Bytes.uint16(at : int, bigEndian : bool = false) : int</code><a class="anchor" href="#Bytes.uint16">#</a>
 <p>The unsigned 16-bit number at <code>at</code>, from 0 to 65535.</p>
@@ -1064,6 +1069,12 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="Bytes.float32"><code class="sig">fun Bytes.float32(at : int, bigEndian : bool = false) : float</code><a class="anchor" href="#Bytes.float32">#</a>
 <p>The 32-bit float at <code>at</code>.</p>
+</div>
+<div class="entry" id="Bytes.int64"><code class="sig">fun Bytes.int64(at : int, bigEndian : bool = false) : int</code><a class="anchor" href="#Bytes.int64">#</a>
+<p>The signed 64-bit number at <code>at</code>: any int. (An unsigned one past 2^63 reads as negative, as in Kotlin's Long.)</p>
+</div>
+<div class="entry" id="Bytes.float64"><code class="sig">fun Bytes.float64(at : int, bigEndian : bool = false) : float</code><a class="anchor" href="#Bytes.float64">#</a>
+<p>The 64-bit float at <code>at</code>.</p>
 </div>
 <div class="entry" id="Bytes.putInt16"><code class="sig">fun Bytes.putInt16(at : int, value : int, bigEndian : bool = false) : Bytes</code><a class="anchor" href="#Bytes.putInt16">#</a>
 <p>Writes <code>value</code> as a signed 16-bit number at <code>at</code>, and gives the bytes themselves. An ArithmeticException where it is outside -32768 to 32767.</p>
@@ -1079,6 +1090,12 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="Bytes.putFloat32"><code class="sig">fun Bytes.putFloat32(at : int, value : Number, bigEndian : bool = false) : Bytes</code><a class="anchor" href="#Bytes.putFloat32">#</a>
 <p>Writes <code>value</code> as a 32-bit float at <code>at</code>, as near as one can hold it, and gives the bytes themselves.</p>
+</div>
+<div class="entry" id="Bytes.putInt64"><code class="sig">fun Bytes.putInt64(at : int, value : int, bigEndian : bool = false) : Bytes</code><a class="anchor" href="#Bytes.putInt64">#</a>
+<p>Writes <code>value</code> as a signed 64-bit number at <code>at</code>, and gives the bytes themselves.</p>
+</div>
+<div class="entry" id="Bytes.putFloat64"><code class="sig">fun Bytes.putFloat64(at : int, value : Number, bigEndian : bool = false) : Bytes</code><a class="anchor" href="#Bytes.putFloat64">#</a>
+<p>Writes <code>value</code> as a 64-bit float at <code>at</code>, and gives the bytes themselves.</p>
 </div>
 <h4>Positions</h4>
 <div class="entry" id="Index.of"><code class="sig">fun Index.of(size : int) : int</code><a class="anchor" href="#Index.of">#</a>
@@ -1429,10 +1446,43 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <div class="entry member" id="Program.name"><code class="sig">var name : string</code><a class="anchor" href="#Program.name">#</a>
 <p>Its name: its own file's, without .astra (&quot;bank&quot; for bank.astra), unless set otherwise. It is the origin of the classes the program declares (Class.origin); set it before it is used.</p>
 </div>
+<div class="entry member" id="Program.environment"><code class="sig">val environment : Environment</code><a class="anchor" href="#Program.environment">#</a>
+<p>The environment it was started with, read once: Program.environment[&quot;LOCALAPPDATA&quot;] is that variable's value, or null where it is not set. In a sandbox there are none.</p>
+</div>
+<div class="entry member" id="Program.processId"><code class="sig">val processId : int</code><a class="anchor" href="#Program.processId">#</a>
+<p>Its own process id, as the system knows it (1 in a sandbox).</p>
+</div>
+<div class="entry member" id="Program.hostName"><code class="sig">val hostName : string</code><a class="anchor" href="#Program.hostName">#</a>
+<p>The computer's name on the network (&quot;sandbox&quot; in a sandbox).</p>
+</div>
 <div class="entry member" id="Program.onUncaughtError"><code class="sig">var onUncaughtError : ((Throwable) -&gt; unit)?</code><a class="anchor" href="#Program.onUncaughtError">#</a>
 <p>What takes an error nobody caught outside the script itself: the one that ends a thread, on that thread as it ends, and a job's that failed with nothing asking for it (by get, then, onError and the like), once nothing can: when the job is collected, or as the program ends (8.7a). Without one, each is reported as an error nobody caught, the program goes on, and its exit code is 70 when it ends.</p>
 <pre>Program.onUncaughtError = { error -&gt; log.write(&quot;lost: $error&quot;) }
 </pre>
+</div>
+<div class="entry" id="Environment"><code class="sig">class Environment</code><a class="anchor" href="#Environment">#</a>
+<p>The environment variables a program was started with (Program.environment): read like a map, each name giving its value or null. On Windows a name is the same whatever its case, as the system has it (SystemRoot, SYSTEMROOT); elsewhere case counts.</p>
+</div>
+<div class="entry member" id="Environment.[]"><code class="sig">op [](name : string) : string?</code><a class="anchor" href="#Environment.[]">#</a>
+<p>The variable's value: environment[&quot;TEMP&quot;]; null where it is not set.</p>
+</div>
+<div class="entry member" id="Environment.get"><code class="sig">fun get(name : string) : string?</code><a class="anchor" href="#Environment.get">#</a>
+<p>The variable's value, as [] gives it.</p>
+</div>
+<div class="entry member" id="Environment.containsKey"><code class="sig">fun containsKey(name : string) : bool</code><a class="anchor" href="#Environment.containsKey">#</a>
+<p>Whether the variable is set.</p>
+</div>
+<div class="entry member" id="Environment.names"><code class="sig">val names : List&lt;string&gt;</code><a class="anchor" href="#Environment.names">#</a>
+<p>The names, as the system spells them.</p>
+</div>
+<div class="entry member" id="Environment.size"><code class="sig">val size : int</code><a class="anchor" href="#Environment.size">#</a>
+<p>How many variables there are.</p>
+</div>
+<div class="entry member" id="Environment.toMap"><code class="sig">fun toMap() : Map&lt;string, string&gt;</code><a class="anchor" href="#Environment.toMap">#</a>
+<p>Every variable, as a map whose names are as the system spells them.</p>
+</div>
+<div class="entry member" id="Environment.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Environment.toString">#</a>
+<p>Environment(42 variables): the values are left out, as some hold what should not be shown.</p>
 </div>
 <div class="entry" id="error"><code class="sig">fun error(message : any?) : nothing</code><a class="anchor" href="#error">#</a>
 <p>Throws an IllegalStateException with <code>message</code> as its text: error(&quot;no such user $name&quot;).</p>
@@ -1715,6 +1765,9 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <div class="entry member" id="Path.createTempFile"><code class="sig">fun createTempFile(prefix : string = &quot;astra&quot;, suffix : string = &quot;.tmp&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempFile">#</a>
 <p>A new, empty file in the system's temporary directory, named <code>prefix</code>, a number, then <code>suffix</code>, as astra240932127838.tmp; no other program gets the same one. An IOException where none can be made.</p>
 </div>
+<div class="entry member" id="Path.roots"><code class="sig">fun roots() : List&lt;Path&gt;</code><a class="anchor" href="#Path.roots">#</a>
+<p>The tops of the file system: each drive on Windows (C:\, D:\), / elsewhere.</p>
+</div>
 <div class="entry member" id="Path.name"><code class="sig">val name : string</code><a class="anchor" href="#Path.name">#</a>
 <p>The last name in the path: Path(&quot;a/b.txt&quot;).name is &quot;b.txt&quot;.</p>
 </div>
@@ -1755,7 +1808,7 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists; elsewhere, one marked so (or a directory that may be entered).</p>
 </div>
 <div class="entry member" id="Path.size"><code class="sig">fun size() : int</code><a class="anchor" href="#Path.size">#</a>
-<p>The size in bytes, and when it was last written in milliseconds since the start of 1970. Both are 0 for a file that is not there.</p>
+<p>The size in bytes; 0 for a file that is not there.</p>
 </div>
 <div class="entry member" id="Path.lastModified"><code class="sig">fun lastModified() : Instant?</code><a class="anchor" href="#Path.lastModified">#</a>
 <p>When it was last written; null where nothing is there.</p>
@@ -1768,6 +1821,15 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 </div>
 <div class="entry member" id="Path.walk"><code class="sig">fun walk(onError : ((Path, IOException) -&gt; unit)? = null) : Sequence&lt;Path&gt;</code><a class="anchor" href="#Path.walk">#</a>
 <p>Every path below this directory, each directory before what is in it, read as it goes. A symbolic link is given but not gone into, as Java's Files.walk does (8.8a): one to a directory above would go round for ever. A directory it cannot read, this one too, is an UncheckedIOException where the walk comes to it, the IOException its cause, as Java's Files.walk throws; with <code>onError</code>, that is given the directory and the IOException, and the walk goes on past it.</p>
+</div>
+<div class="entry member" id="Path.totalSpace"><code class="sig">val totalSpace : int</code><a class="anchor" href="#Path.totalSpace">#</a>
+<p>The room on the volume it is on, in bytes, as Java's File gives it: all of it, what is free, and what is free to this program (less, where the system keeps some back or the user has a quota). An IOException where the path is on no volume there is.</p>
+</div>
+<div class="entry member" id="Path.freeSpace"><code class="sig">val freeSpace : int</code><a class="anchor" href="#Path.freeSpace">#</a>
+<p>What is free on its volume, in bytes.</p>
+</div>
+<div class="entry member" id="Path.usableSpace"><code class="sig">val usableSpace : int</code><a class="anchor" href="#Path.usableSpace">#</a>
+<p>What is free on its volume to this program, in bytes.</p>
 </div>
 <div class="entry member" id="Path.readText"><code class="sig">fun readText(charset : Charset = Charset.utf8) : string throws IOException</code><a class="anchor" href="#Path.readText">#</a>
 <p>The whole file as text in <code>charset</code>; an IOException where it cannot be read, as when it is not there or is a directory.</p>
@@ -3204,6 +3266,129 @@ while (true) {
 </div>
 <div class="entry" id="List.removeIf"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.removeIf(predicate : (T) -&gt; bool) : bool</code><a class="anchor" href="#List.removeIf">#</a>
 <p>Removes from the list the items for which <code>predicate</code> is true, as removeAll(predicate); true if anything was removed.</p>
+</div>
+</section>
+<section class="file" id="file-localtime-astra">
+<h2>localtime.astra</h2>
+<h3>Dates and times where the program runs</h3>
+<p>A date, a time of day, and the two together, as a calendar and a clock show them in the system's time zone, named and written as java.time and kotlinx-datetime have them:</p>
+<pre>val stamp = LocalDateTime.now().format(&quot;yyyyMMdd-HHmmss&quot;)     // 20261106-143005
+print(LocalTime.now().copy(nanosecond = 0))                    // 14:30:05
+val local = path.lastModified()!!.toLocalDateTime()
+</pre>
+<p>None of them is a moment by itself: toInstant() makes one in the system's zone. A sandbox's zone is UTC.</p>
+<div class="entry" id="LocalDate"><code class="sig">value LocalDate(val year : int, val month : int, val dayOfMonth : int)</code><a class="anchor" href="#LocalDate">#</a>
+<p>A day in the calendar: its year, its month (1 to 12) and its day of the month (from 1).</p>
+</div>
+<div class="entry member" id="LocalDate.dayOfWeek"><code class="sig">val dayOfWeek : int</code><a class="anchor" href="#LocalDate.dayOfWeek">#</a>
+<p>The day of the week, 1 for Monday to 7 for Sunday, as ISO 8601 numbers them.</p>
+</div>
+<div class="entry member" id="LocalDate.dayOfYear"><code class="sig">val dayOfYear : int</code><a class="anchor" href="#LocalDate.dayOfYear">#</a>
+<p>The day of the year, from 1.</p>
+</div>
+<div class="entry member" id="LocalDate.&lt;"><code class="sig">op &lt;(other : LocalDate) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalDate) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDate) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalDate.&lt;">#</a>
+<p>Whether this date comes before <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDate.&lt;="><code class="sig">op &lt;=(other : LocalDate) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&lt;=">#</a>
+<p>Whether this date comes before <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalDate.&gt;"><code class="sig">op &gt;(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&gt;">#</a>
+<p>Whether this date comes after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDate.&gt;="><code class="sig">op &gt;=(other : LocalDate) : bool</code><a class="anchor" href="#LocalDate.&gt;=">#</a>
+<p>Whether this date comes after <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalDate.compareTo"><code class="sig">fun compareTo(other : LocalDate) : int</code><a class="anchor" href="#LocalDate.compareTo">#</a>
+<p>Negative, zero or positive as this comes before, with or after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDate.format"><code class="sig">fun format(pattern : string) : string</code><a class="anchor" href="#LocalDate.format">#</a>
+<p>The date written with Java's pattern letters (see LocalDateTime.format).</p>
+</div>
+<div class="entry member" id="LocalDate.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#LocalDate.toString">#</a>
+<p>2026-11-06, as ISO 8601 writes it.</p>
+</div>
+<div class="entry member" id="LocalDate.now"><code class="sig">fun now() : LocalDate</code><a class="anchor" href="#LocalDate.now">#</a>
+<p>Today, in the system's time zone.</p>
+</div>
+<div class="entry" id="LocalTime"><code class="sig">value LocalTime(val hour : int, val minute : int, val second : int = 0, val nanosecond : int = 0)</code><a class="anchor" href="#LocalTime">#</a>
+<p>A time of day: its hour (0 to 23), minute, second and the nanoseconds past that second.</p>
+</div>
+<div class="entry member" id="LocalTime.&lt;"><code class="sig">op &lt;(other : LocalTime) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalTime) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalTime.&lt;">#</a>
+<p>Whether this time comes before <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalTime.&lt;="><code class="sig">op &lt;=(other : LocalTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&lt;=">#</a>
+<p>Whether this time comes before <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalTime.&gt;"><code class="sig">op &gt;(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&gt;">#</a>
+<p>Whether this time comes after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalTime.&gt;="><code class="sig">op &gt;=(other : LocalTime) : bool</code><a class="anchor" href="#LocalTime.&gt;=">#</a>
+<p>Whether this time comes after <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalTime.compareTo"><code class="sig">fun compareTo(other : LocalTime) : int</code><a class="anchor" href="#LocalTime.compareTo">#</a>
+<p>Negative, zero or positive as this comes before, with or after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalTime.format"><code class="sig">fun format(pattern : string) : string</code><a class="anchor" href="#LocalTime.format">#</a>
+<p>The time written with Java's pattern letters (see LocalDateTime.format).</p>
+</div>
+<div class="entry member" id="LocalTime.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#LocalTime.toString">#</a>
+<p>As Java writes it: 14:30, 14:30:05, or 14:30:05.250 with the fraction in 3, 6 or 9 digits; the seconds only where they or the fraction are not zero.</p>
+</div>
+<div class="entry member" id="LocalTime.now"><code class="sig">fun now() : LocalTime</code><a class="anchor" href="#LocalTime.now">#</a>
+<p>The time of day now, in the system's time zone.</p>
+</div>
+<div class="entry" id="LocalDateTime"><code class="sig">value LocalDateTime(val year : int, val month : int, val dayOfMonth : int, val hour : int, val minute : int, val second : int = 0, val nanosecond : int = 0)</code><a class="anchor" href="#LocalDateTime">#</a>
+<p>A date and a time of day together.</p>
+</div>
+<div class="entry member" id="LocalDateTime.date"><code class="sig">val date : LocalDate</code><a class="anchor" href="#LocalDateTime.date">#</a>
+<p>Its date alone.</p>
+</div>
+<div class="entry member" id="LocalDateTime.time"><code class="sig">val time : LocalTime</code><a class="anchor" href="#LocalDateTime.time">#</a>
+<p>Its time of day alone.</p>
+</div>
+<div class="entry member" id="LocalDateTime.dayOfWeek"><code class="sig">val dayOfWeek : int</code><a class="anchor" href="#LocalDateTime.dayOfWeek">#</a>
+<p>The day of the week, 1 for Monday to 7 for Sunday.</p>
+</div>
+<div class="entry member" id="LocalDateTime.dayOfYear"><code class="sig">val dayOfYear : int</code><a class="anchor" href="#LocalDateTime.dayOfYear">#</a>
+<p>The day of the year, from 1.</p>
+</div>
+<div class="entry member" id="LocalDateTime.&lt;"><code class="sig">op &lt;(other : LocalDateTime) : bool =&gt; compareTo(other) &lt; 0  op &lt;=(other : LocalDateTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDateTime) : bool =&gt; compareTo(other) &gt; 0</code><a class="anchor" href="#LocalDateTime.&lt;">#</a>
+<p>Whether this date and time comes before <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDateTime.&lt;="><code class="sig">op &lt;=(other : LocalDateTime) : bool =&gt; compareTo(other) &lt;= 0  op &gt;(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&lt;=">#</a>
+<p>Whether this date and time comes before <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalDateTime.&gt;"><code class="sig">op &gt;(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&gt;">#</a>
+<p>Whether this date and time comes after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDateTime.&gt;="><code class="sig">op &gt;=(other : LocalDateTime) : bool</code><a class="anchor" href="#LocalDateTime.&gt;=">#</a>
+<p>Whether this date and time comes after <code>other</code> or is the same.</p>
+</div>
+<div class="entry member" id="LocalDateTime.compareTo"><code class="sig">fun compareTo(other : LocalDateTime) : int</code><a class="anchor" href="#LocalDateTime.compareTo">#</a>
+<p>Negative, zero or positive as this comes before, with or after <code>other</code>.</p>
+</div>
+<div class="entry member" id="LocalDateTime.toInstant"><code class="sig">fun toInstant() : Instant</code><a class="anchor" href="#LocalDateTime.toInstant">#</a>
+<p>The moment it is in the system's time zone. A time the clocks skip when summer time starts is taken as the moment an hour later; one they pass twice, as the first.</p>
+</div>
+<div class="entry member" id="LocalDateTime.format"><code class="sig">fun format(pattern : string) : string</code><a class="anchor" href="#LocalDateTime.format">#</a>
+<p>Written with Java's pattern letters, as DateTimeFormatter.ofPattern takes them:</p>
+<pre>yyyy, yy  the year (uuuu the same)       M, MM, MMM, MMMM  the month: 3, 03, Mar, March
+d, dd     the day of the month           D  the day of the year
+E, EEEE   the day of the week: Mon, Monday
+H, HH     the hour, 0 to 23              h, hh  the hour, 1 to 12, with a for AM or PM
+m, mm     the minute                     s, ss  the second
+S...      the fraction of the second, as many digits as letters
+</pre>
+<p>Text in single quotes is written as it is ('' is a quote), and so is anything not a letter. Any other letter is an IllegalArgumentException.</p>
+</div>
+<div class="entry member" id="LocalDateTime.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#LocalDateTime.toString">#</a>
+<p>2026-11-06T14:30:05, as ISO 8601 and Java write it (the time as LocalTime writes it).</p>
+</div>
+<div class="entry member" id="LocalDateTime.now"><code class="sig">fun now() : LocalDateTime</code><a class="anchor" href="#LocalDateTime.now">#</a>
+<p>The date and time now, in the system's time zone.</p>
+</div>
+<div class="entry" id="Instant.toLocalDateTime"><code class="sig">fun Instant.toLocalDateTime() : LocalDateTime</code><a class="anchor" href="#Instant.toLocalDateTime">#</a>
+<p>The date and time this moment is in the system's time zone.</p>
 </div>
 </section>
 <section class="file" id="file-map-astra">

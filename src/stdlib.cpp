@@ -1376,6 +1376,40 @@ void registerFiles(VM& vm) {
         const auto time = vm.currentHost().lastModified(vm.toStr(args[0], "file path"));
         return time ? Value::integer(*time) : Value::null();
     });
+    // The room on the volume a path is on, in bytes: [total, free, free to this program] (M8). A
+    // sandbox has no volumes yet, and refuses.
+    def("space", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const std::string& path = vm.toStr(args[0], "file path");
+        if (vm.currentHost().isSandbox())
+            throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox has no volumes to ask the space of");
+        std::error_code ec;
+        const std::filesystem::space_info room = std::filesystem::space(std::filesystem::u8path(path), ec);
+        if (ec) throw pathError(vm, "find the space of", path, ec);
+        std::vector<Value> items{Value::integer(static_cast<int64_t>(room.capacity)), Value::integer(static_cast<int64_t>(room.free)),
+                                 Value::integer(static_cast<int64_t>(room.available))};
+        return Value::object(newList(vm, std::move(items)));
+    });
+    // The tops of the file system: each drive's on Windows ("C:\\"), "/" elsewhere (M8).
+    def("roots", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (vm.currentHost().isSandbox())
+            throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox has no volumes to list");
+        std::vector<std::string> roots;
+#ifdef _WIN32
+        wchar_t buffer[512];
+        const DWORD length = GetLogicalDriveStringsW(511, buffer);
+        for (const wchar_t* at = buffer; length > 0 && length < 512 && *at != L'\0'; at += wcslen(at) + 1) {
+            std::string root;
+            for (const wchar_t* c = at; *c != L'\0'; c++) root.push_back(static_cast<char>(*c));  // "C:\": ASCII
+            roots.push_back(root);
+        }
+#else
+        roots.push_back("/");
+#endif
+        TempRoot keep(vm, Value::object(newList(vm, {})));
+        ObjList* list = asList(keep.get());
+        for (const std::string& root : roots) list->values().push_back(vm.str(root));
+        return keep.get();
+    });
     // A file, or a directory with nothing in it. True if it was there and is gone; with
     // `mustExist`, an IOException where it was not there or could not go.
     def("delete", 2, 2, [](VM& vm, int, Value* args) -> Value {

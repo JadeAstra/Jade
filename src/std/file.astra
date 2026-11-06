@@ -35,6 +35,9 @@ class Path {
     // `suffix`, as astra240932127838.tmp; no other program gets the same one. An IOException
     // where none can be made.
     fun createTempFile(prefix : string = "astra", suffix : string = ".tmp") : Path throws IOException => Path(__file.createTemp(prefix, suffix, false))
+
+    // The tops of the file system: each drive on Windows (C:\, D:\), / elsewhere (M8).
+    fun roots() : List<Path> => __file.roots().map { Path(it) }
   }
 
   // -- What the path says --
@@ -94,8 +97,7 @@ class Path {
   // elsewhere, one marked so (or a directory that may be entered).
   fun isExecutable() : bool => (__file.permissions(text) & 1) != 0
 
-  // The size in bytes, and when it was last written in milliseconds since the start of 1970.
-  // Both are 0 for a file that is not there.
+  // The size in bytes; 0 for a file that is not there.
   fun size() : int => __file.size(text)
   // When it was last written (G54); null where nothing is there.
   fun lastModified() : Instant? {
@@ -124,6 +126,18 @@ class Path {
     val top = this
     return sequence { __walkBelow(top, onError) }
   }
+
+  // The room on the volume it is on, in bytes, as Java's File gives it (M8): all of it, what is
+  // free, and what is free to this program (less, where the system keeps some back or the user
+  // has a quota). An IOException where the path is on no volume there is.
+  val totalSpace : int
+    get() throws IOException => __file.space(text)[0]
+  // What is free on its volume, in bytes.
+  val freeSpace : int
+    get() throws IOException => __file.space(text)[1]
+  // What is free on its volume to this program, in bytes.
+  val usableSpace : int
+    get() throws IOException => __file.space(text)[2]
 
   // -- Reading and writing --
   // Each call reads or writes the whole file.
@@ -263,4 +277,6 @@ external object __file {
   fun name(path : string) : string
   fun parent(path : string) : string?
   fun join(base : string, child : string) : string
+  fun space(path : string) : List<int> throws IOException
+  fun roots() : List<string>
 }

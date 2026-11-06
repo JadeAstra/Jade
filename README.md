@@ -261,6 +261,7 @@ fits needs neither: `val b : byte = 200`, `c[0] = 7`.
 c[0] = (c[0] + 1).toByte()           // c[0] + 1 is an int
 c.int16(0)   c.uint32(4, bigEndian = true)   c.float32(8)       // 16- and 32-bit numbers in the bytes
 c.putInt32(4, -5)   c.putUint16(0, 65535, bigEndian = true)     // and written
+c.int64(0)   c.putFloat64(8, 2.5)                                 // 64-bit ones too
 ```
 
 ### Keywords as names
@@ -2440,7 +2441,11 @@ of the library is built into the runtime and the rest is written in Astra itself
 **The program:** `Program.arguments` is what it was started with, after its file's name
 (`["--fast", "in.txt"]` for `astra bank.astra --fast in.txt`). `Program.name` is its name: its
 file's, without `.astra` (`"bank"`), unless the program sets it (`Program.name = "Bank"` at
-the start). `args()` is now `Program.arguments` (D184).
+the start). `args()` is now `Program.arguments` (D184). `Program.environment["LOCALAPPDATA"]`
+is an environment variable's value, or null where it is not set (on Windows, whatever the
+case of its name, as the system has it); `Program.processId` is its own process id and
+`Program.hostName` the computer's name. In a sandbox there are no variables, the id is 1 and
+the computer is called `sandbox`.
 
 **Checks:** `require(condition) { message }`, `check(condition) { message }`,
 `requireNotNull(value)`, `checkNotNull(value)` and `error(message)` throw an
@@ -2707,6 +2712,7 @@ for file in Path("src").walk() { if (file.extension == "astra") { print(file.tex
 | A piece at a time | `reader()`, `writer(append?)` |
 | Changing | `mkdir(parents = true)`, `delete()`, `deleteIfExists()`, `deleteRecursively()`, `moveTo(path, overwrite?)`, `copyTo(path, overwrite?)`, `setWritable(b)`, `setLastModified(ms)` |
 | New | `Path.createTempDirectory(prefix)`, `Path.createTempFile(prefix, suffix)` |
+| Volumes | `Path.roots()` (each drive on Windows, `/` elsewhere), `totalSpace`, `freeSpace`, `usableSpace` (bytes on the volume a path is on) |
 
 Each text call reads and writes UTF-8, or the character set given: `Charset.utf8`, `latin1`,
 `ascii`, `utf16le`, `utf16be`, `utf16`, `windows1252` or `latin9` (`path.readText(Charset.latin1)`,
@@ -2752,6 +2758,13 @@ add, subtract, multiply and divide, compare and sort, read back as `inMillisecon
 `inSeconds` and the rest (or `inWholeMilliseconds`), and print as Kotlin prints them: `1.5s`,
 `1m 30s`, `16ms`. `Thread.sleep(100)` is a compile error that says to write
 `100.milliseconds`.
+
+**Moments and calendars.** An `Instant` is a moment (`Instant.now()`, `path.lastModified()`),
+kept in UTC. `LocalDate`, `LocalTime` and `LocalDateTime` are a day, a time of day and the two
+together as the system's time zone shows them, named and written as java.time has them:
+`LocalDateTime.now().format("yyyyMMdd-HHmmss")` with Java's pattern letters, `instant.toLocalDateTime()`
+and `local.toInstant()`, `LocalTime.now().copy(nanosecond = 0)` printing `14:30:05`. A sandbox's
+zone is UTC.
 
 ### Tasks
 

@@ -1,0 +1,45 @@
+// Dates and times where the program runs (M8): LocalDate, LocalTime and LocalDateTime, as
+// java.time writes and formats them, and moments turned into them in the system's time zone
+// and back.
+
+val t = LocalDateTime(2026, 11, 6, 14, 30, 5, 250000000)
+print(t)   // expect: 2026-11-06T14:30:05.250
+print(t.date, t.time)   // expect: 2026-11-06 14:30:05.250
+print(t.dayOfWeek, t.dayOfYear)   // expect: 5 310
+print(LocalDate(2024, 2, 29).dayOfWeek, LocalDate(2024, 12, 31).dayOfYear, LocalDate(1969, 12, 31).dayOfWeek)   // expect: 4 366 3
+
+// As Java writes them: the seconds only where they or a fraction are not zero.
+print(LocalTime(14, 30), LocalTime(14, 30, 5), LocalTime(9, 5, 0, 120000), LocalTime(0, 0, 0, 7))   // expect: 14:30 14:30:05 09:05:00.000120 00:00:00.000000007
+print(LocalDateTime(2026, 1, 2, 3, 4))   // expect: 2026-01-02T03:04
+
+// Formatting with Java's pattern letters.
+print(t.format("yyyyMMdd-HHmmss"))   // expect: 20261106-143005
+print(t.format("EEE, d MMM yyyy 'at' h:mm a"))   // expect: Fri, 6 Nov 2026 at 2:30 PM
+print(t.format("EEEE dd MMMM yy HH:mm:ss.SSS 'o''clock'"))   // expect: Friday 06 November 26 14:30:05.250 o'clock
+print(t.format("D/M/uuuu S SS SSSSSSSSSS ''"))   // expect: 310/11/2026 2 25 2500000000 '
+print(LocalDateTime(2026, 1, 1, 0, 5).format("hh:mm a"), LocalDateTime(2026, 1, 1, 12, 0).format("h a"))   // expect: 12:05 AM 12 PM
+print(LocalDate(2026, 3, 9).format("dd.MM.yyyy"), LocalTime(7, 8, 9).format("HH-mm-ss"))   // expect: 09.03.2026 07-08-09
+
+// What is not a date or time, or not a pattern, is refused.
+try { LocalDate(2025, 2, 29) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: not a day in the calendar: 2025-2-29
+try { LocalTime(24, 0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: not a time of day: 24:0:0.0
+try { LocalDate(2025, 2, 1).format("HH") } catch (e : IllegalArgumentException) { print(e.message) }   // expect: 'H' in 'HH' asks for a time, and this is a date alone
+try { LocalTime(1, 2).format("yyyy") } catch (e : IllegalArgumentException) { print(e.message) }   // expect: 'y' in 'yyyy' asks for a date, and this is a time of day alone
+try { t.format("yyyy-QQ") } catch (e : IllegalArgumentException) { print(e.message) }   // expect: 'Q' is not a pattern letter of a date or time (in 'yyyy-QQ'); put text in single quotes
+try { t.format("'open") } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a quote is not closed in the pattern ''open'
+
+// Comparing, and copies with a part changed.
+print(LocalDate(2026, 1, 1) < LocalDate(2026, 1, 2), LocalTime(1, 0) > LocalTime(0, 59), t <= t)   // expect: true true true
+print(t.copy(nanosecond = 0), t.time.copy(second = 0))   // expect: 2026-11-06T14:30:05 14:30:00.250
+
+// Now, and a moment and back, in the system's zone.
+val now = LocalDateTime.now()
+print(now.toInstant().toLocalDateTime() == now)   // expect: true
+print((Instant.now() - now.toInstant()).inSeconds < 5.0)   // expect: true
+print(LocalDate.now() == now.date or LocalDate.now() > now.date)   // expect: true
+
+// A sandbox's zone is UTC, so its moments read the same everywhere.
+Sandbox.run {
+  print(Instant.parse("2025-07-01T09:00:00Z").toLocalDateTime())   // expect: 2025-07-01T09:00
+  print(LocalDateTime(2025, 7, 1, 9, 0).toInstant())   // expect: 2025-07-01T09:00:00Z
+}

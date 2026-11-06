@@ -1,0 +1,250 @@
+// ---- Dates and times where the program runs (M8) ----
+// A date, a time of day, and the two together, as a calendar and a clock show them in the
+// system's time zone, named and written as java.time and kotlinx-datetime have them:
+//
+//   val stamp = LocalDateTime.now().format("yyyyMMdd-HHmmss")     // 20261106-143005
+//   print(LocalTime.now().copy(nanosecond = 0))                    // 14:30:05
+//   val local = path.lastModified()!!.toLocalDateTime()
+//
+// None of them is a moment by itself: toInstant() makes one in the system's zone. A sandbox's
+// zone is UTC.
+
+// A day in the calendar: its year, its month (1 to 12) and its day of the month (from 1).
+value LocalDate(val year : int, val month : int, val dayOfMonth : int) {
+  init {
+    if (month < 1 or month > 12 or dayOfMonth < 1 or dayOfMonth > __monthDays(year, month)) {
+      throw IllegalArgumentException("not a day in the calendar: $year-$month-$dayOfMonth")
+    }
+  }
+
+  // The day of the week, 1 for Monday to 7 for Sunday, as ISO 8601 numbers them.
+  val dayOfWeek : int
+    get() => __floorMod(__civilDays(year, month, dayOfMonth) + 3, 7) + 1
+  // The day of the year, from 1.
+  val dayOfYear : int
+    get() => __civilDays(year, month, dayOfMonth) - __civilDays(year, 1, 1) + 1
+
+  // Whether this date comes before `other`.
+  op <(other : LocalDate) : bool => compareTo(other) < 0
+  // Whether this date comes before `other` or is the same.
+  op <=(other : LocalDate) : bool => compareTo(other) <= 0
+  // Whether this date comes after `other`.
+  op >(other : LocalDate) : bool => compareTo(other) > 0
+  // Whether this date comes after `other` or is the same.
+  op >=(other : LocalDate) : bool => compareTo(other) >= 0
+  // Negative, zero or positive as this comes before, with or after `other`.
+  fun compareTo(other : LocalDate) : int {
+    val a = __civilDays(year, month, dayOfMonth)
+    val b = __civilDays(other.year, other.month, other.dayOfMonth)
+    return a < b ? -1 : a > b ? 1 : 0
+  }
+
+  // The date written with Java's pattern letters (see LocalDateTime.format).
+  fun format(pattern : string) : string => __formatLocal(pattern, year, month, dayOfMonth, -1, 0, 0, 0)
+  // 2026-11-06, as ISO 8601 writes it.
+  fun toString() : string => __isoDate(year, month, dayOfMonth)
+
+  static {
+    // Today, in the system's time zone.
+    fun now() : LocalDate => LocalDateTime.now().date
+  }
+}
+
+// A time of day: its hour (0 to 23), minute, second and the nanoseconds past that second.
+value LocalTime(val hour : int, val minute : int, val second : int = 0, val nanosecond : int = 0) {
+  init {
+    if (hour < 0 or hour > 23 or minute < 0 or minute > 59 or second < 0 or second > 59 or nanosecond < 0 or nanosecond > 999999999) {
+      throw IllegalArgumentException("not a time of day: $hour:$minute:$second.$nanosecond")
+    }
+  }
+
+  // Whether this time comes before `other`.
+  op <(other : LocalTime) : bool => compareTo(other) < 0
+  // Whether this time comes before `other` or is the same.
+  op <=(other : LocalTime) : bool => compareTo(other) <= 0
+  // Whether this time comes after `other`.
+  op >(other : LocalTime) : bool => compareTo(other) > 0
+  // Whether this time comes after `other` or is the same.
+  op >=(other : LocalTime) : bool => compareTo(other) >= 0
+  // Negative, zero or positive as this comes before, with or after `other`.
+  fun compareTo(other : LocalTime) : int {
+    val a = __timeNanos(hour, minute, second, nanosecond)
+    val b = __timeNanos(other.hour, other.minute, other.second, other.nanosecond)
+    return a < b ? -1 : a > b ? 1 : 0
+  }
+
+  // The time written with Java's pattern letters (see LocalDateTime.format).
+  fun format(pattern : string) : string => __formatLocal(pattern, 0, 0, 0, hour, minute, second, nanosecond, hasDate = false)
+  // As Java writes it: 14:30, 14:30:05, or 14:30:05.250 with the fraction in 3, 6 or 9 digits;
+  // the seconds only where they or the fraction are not zero.
+  fun toString() : string => __isoTime(hour, minute, second, nanosecond)
+
+  static {
+    // The time of day now, in the system's time zone.
+    fun now() : LocalTime => LocalDateTime.now().time
+  }
+}
+
+// A date and a time of day together.
+value LocalDateTime(val year : int, val month : int, val dayOfMonth : int, val hour : int, val minute : int, val second : int = 0,
+                    val nanosecond : int = 0) {
+  init {
+    LocalDate(year, month, dayOfMonth)
+    LocalTime(hour, minute, second, nanosecond)
+  }
+
+  // Its date alone.
+  val date : LocalDate
+    get() => LocalDate(year, month, dayOfMonth)
+  // Its time of day alone.
+  val time : LocalTime
+    get() => LocalTime(hour, minute, second, nanosecond)
+  // The day of the week, 1 for Monday to 7 for Sunday.
+  val dayOfWeek : int
+    get() => date.dayOfWeek
+  // The day of the year, from 1.
+  val dayOfYear : int
+    get() => date.dayOfYear
+
+  // Whether this date and time comes before `other`.
+  op <(other : LocalDateTime) : bool => compareTo(other) < 0
+  // Whether this date and time comes before `other` or is the same.
+  op <=(other : LocalDateTime) : bool => compareTo(other) <= 0
+  // Whether this date and time comes after `other`.
+  op >(other : LocalDateTime) : bool => compareTo(other) > 0
+  // Whether this date and time comes after `other` or is the same.
+  op >=(other : LocalDateTime) : bool => compareTo(other) >= 0
+  // Negative, zero or positive as this comes before, with or after `other`.
+  fun compareTo(other : LocalDateTime) : int {
+    val d = date.compareTo(other.date)
+    return d != 0 ? d : time.compareTo(other.time)
+  }
+
+  // The moment it is in the system's time zone. A time the clocks skip when summer time
+  // starts is taken as the moment an hour later; one they pass twice, as the first.
+  fun toInstant() : Instant {
+    val asUtc = (__civilDays(year, month, dayOfMonth) * 86400 + hour * 3600 + minute * 60 + second)
+    var seconds = asUtc - __localOffset(asUtc)
+    seconds = asUtc - __localOffset(seconds)
+    return Instant.fromEpochSeconds(seconds, nanosecond)
+  }
+
+  // Written with Java's pattern letters, as DateTimeFormatter.ofPattern takes them:
+  //   yyyy, yy  the year (uuuu the same)       M, MM, MMM, MMMM  the month: 3, 03, Mar, March
+  //   d, dd     the day of the month           D  the day of the year
+  //   E, EEEE   the day of the week: Mon, Monday
+  //   H, HH     the hour, 0 to 23              h, hh  the hour, 1 to 12, with a for AM or PM
+  //   m, mm     the minute                     s, ss  the second
+  //   S...      the fraction of the second, as many digits as letters
+  // Text in single quotes is written as it is ('' is a quote), and so is anything not a letter.
+  // Any other letter is an IllegalArgumentException.
+  fun format(pattern : string) : string => __formatLocal(pattern, year, month, dayOfMonth, hour, minute, second, nanosecond)
+  // 2026-11-06T14:30:05, as ISO 8601 and Java write it (the time as LocalTime writes it).
+  fun toString() : string => __isoDate(year, month, dayOfMonth) + "T" + __isoTime(hour, minute, second, nanosecond)
+
+  static {
+    // The date and time now, in the system's time zone.
+    fun now() : LocalDateTime => Instant.now().toLocalDateTime()
+  }
+}
+
+// The date and time this moment is in the system's time zone.
+fun Instant.toLocalDateTime() : LocalDateTime {
+  val seconds = epochSeconds
+  val nanos = epochNanoseconds - seconds * 1000000000
+  val local = seconds + __localOffset(seconds)
+  val days = __floorDiv(local, 86400)
+  val ofDay = local - days * 86400
+  val d = __civilDate(days)
+  return LocalDateTime(d[0], d[1], d[2], ofDay / 3600, ofDay / 60 % 60, ofDay % 60, nanos)
+}
+
+// How many seconds the system's time zone is ahead of UTC at a moment (seconds since 1970).
+external fun __localOffset(epochSeconds : int) : int
+
+fun __floorMod(a : int, b : int) : int => a - __floorDiv(a, b) * b
+fun __timeNanos(hour : int, minute : int, second : int, nanos : int) : int => ((hour * 60 + minute) * 60 + second) * 1000000000 + nanos
+
+fun __isoDate(year : int, month : int, day : int) : string => __digits(year, 4) + "-" + __digits(month, 2) + "-" + __digits(day, 2)
+
+fun __isoTime(hour : int, minute : int, second : int, nanos : int) : string {
+  var text = __digits(hour, 2) + ":" + __digits(minute, 2)
+  if (second != 0 or nanos != 0) { text += ":" + __digits(second, 2) }
+  if (nanos != 0) {
+    text += "." + (nanos % 1000000 == 0 ? __digits(nanos / 1000000, 3) : nanos % 1000 == 0 ? __digits(nanos / 1000, 6) : __digits(nanos, 9))
+  }
+  return text
+}
+
+val __monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+                    "December"]
+val __dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+// A date and time written by a pattern of Java's letters; hour -1 means there is no time, and
+// hasDate false that there is no date, so that a letter asking for what is not there is refused.
+fun __formatLocal(pattern : string, year : int, month : int, day : int, hour : int, minute : int, second : int, nanos : int,
+                  hasDate : bool = true) : string {
+  val out = StringBuilder()
+  val hasTime = hour >= 0
+  var i = 0
+  while (i < pattern.size) {
+    val c = pattern[i]
+    if (c == '\'') {
+      // Quoted text, '' inside it or alone a quote.
+      if (i + 1 < pattern.size and pattern[i + 1] == '\'') {
+        out.append("'")
+        i += 2
+        continue
+      }
+      i += 1
+      while (i < pattern.size) {
+        if (pattern[i] == '\'') {
+          if (i + 1 < pattern.size and pattern[i + 1] == '\'') {
+            out.append("'")
+            i += 2
+            continue
+          }
+          break
+        }
+        out.append(pattern[i])
+        i += 1
+      }
+      if (i >= pattern.size) { throw IllegalArgumentException("a quote is not closed in the pattern '$pattern'") }
+      i += 1
+      continue
+    }
+    if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'))) {
+      out.append(c)
+      i += 1
+      continue
+    }
+    var n = 1
+    while (i + n < pattern.size and pattern[i + n] == c) { n += 1 }
+    i += n
+    val dateLetter = c == 'y' or c == 'u' or c == 'M' or c == 'L' or c == 'd' or c == 'D' or c == 'E'
+    val timeLetter = c == 'H' or c == 'h' or c == 'm' or c == 's' or c == 'S' or c == 'a'
+    if (dateLetter and !hasDate) { throw IllegalArgumentException("'$c' in '$pattern' asks for a date, and this is a time of day alone") }
+    if (timeLetter and !hasTime) { throw IllegalArgumentException("'$c' in '$pattern' asks for a time, and this is a date alone") }
+    when (c) {
+      'y', 'u' -> out.append(n == 2 ? __digits(__floorMod(year, 100), 2) : __digits(year, n))
+      'M', 'L' -> out.append(n >= 4 ? __monthNames[month - 1] : n == 3 ? __monthNames[month - 1][0..<3] : __digits(month, n))
+      'd' -> out.append(__digits(day, n))
+      'D' -> out.append(__digits(__civilDays(year, month, day) - __civilDays(year, 1, 1) + 1, n))
+      'E' -> {
+        val name = __dayNames[__floorMod(__civilDays(year, month, day) + 3, 7)]
+        out.append(n >= 4 ? name : name[0..<3])
+      }
+      'H' -> out.append(__digits(hour, n))
+      'h' -> out.append(__digits(hour % 12 == 0 ? 12 : hour % 12, n))
+      'a' -> out.append(hour < 12 ? "AM" : "PM")
+      'm' -> out.append(__digits(minute, n))
+      's' -> out.append(__digits(second, n))
+      'S' -> {
+        val nine = __digits(nanos, 9)
+        out.append(n <= 9 ? nine[0..<n] : nine + "0".repeat(n - 9))
+      }
+      else -> throw IllegalArgumentException("'$c' is not a pattern letter of a date or time (in '$pattern'); put text in single quotes")
+    }
+  }
+  return out.toString()
+}

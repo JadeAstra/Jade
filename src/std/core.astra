@@ -101,6 +101,22 @@ object Program {
   // Its name: its own file's, without .astra ("bank" for bank.astra), unless set otherwise. It
   // is the origin of the classes the program declares (Class.origin); set it before it is used.
   var name : string = __programName()
+  // The environment it was started with, read once: Program.environment["LOCALAPPDATA"] is
+  // that variable's value, or null where it is not set. In a sandbox there are none.
+  val environment : Environment
+    get() {
+      if (Sandbox.current != null) { return Environment(__environment()) }   // a sandbox's own: none
+      val known = systemEnvironment ?: Environment(__environment())
+      systemEnvironment = known
+      return known
+    }
+  private var systemEnvironment : Environment? = null
+  // Its own process id, as the system knows it (1 in a sandbox).
+  val processId : int
+    get() => __processId()
+  // The computer's name on the network ("sandbox" in a sandbox).
+  val hostName : string
+    get() => __hostName()
   // What takes an error nobody caught outside the script itself: the one that ends a thread, on
   // that thread as it ends, and a job's that failed with nothing asking for it (by get, then,
   // onError and the like), once nothing can: when the job is collected, or as the program ends
@@ -112,6 +128,39 @@ object Program {
       field = handler
       __thread.uncaughtHandler(handler)
     }
+}
+
+// The environment variables a program was started with (Program.environment): read like a
+// map, each name giving its value or null. On Windows a name is the same whatever its case, as
+// the system has it (SystemRoot, SYSTEMROOT); elsewhere case counts.
+class Environment {
+  private val vars : Map<string, string>
+  private val folded : Map<string, string>?     // on Windows: each name in capitals, and its value
+
+  internal fun init(vars : Map<string, string>) {
+    this.vars = vars
+    this.folded = __file.separator() == "\\" ? vars.mapKeys { it.key.upper() } : null
+  }
+
+  // The variable's value: environment["TEMP"]; null where it is not set.
+  op [](name : string) : string? => get(name)
+  // The variable's value, as [] gives it.
+  fun get(name : string) : string? {
+    val f = folded
+    return f != null ? f[name.upper()] : vars[name]
+  }
+  // Whether the variable is set.
+  fun containsKey(name : string) : bool => get(name) != null
+  // The names, as the system spells them.
+  val names : List<string>
+    get() => vars.keys.toList()
+  // How many variables there are.
+  val size : int
+    get() => vars.size
+  // Every variable, as a map whose names are as the system spells them.
+  fun toMap() : Map<string, string> => vars
+  // Environment(42 variables): the values are left out, as some hold what should not be shown.
+  override fun toString() : string => "Environment(${vars.size} variables)"
 }
 
 // Throws an IllegalStateException with `message` as its text: error("no such user $name").
