@@ -2294,6 +2294,10 @@ payload (no timing shows the store they would save), G20, G58 and G66 (none show
 timings). Against the build M6.7 started from, the same Clang build, best of five: `numeric`
 60% faster, `particles` 55%, `calls` 44%, `fields` 40%, `layout_values` 38%, `bounce_values` 33%,
 `colors_values` and `layout_cached_values` 30% to 31%, the rest 7% (`strings`) to 29% faster.
+After M6.7 (2026-11-06), on 0.6.7: G14, G20 and G66 built, G9 and G58 in part (each measured in
+M6.7-gaps.html), and a getter that only reads its stored field reads a value kept inside the
+object where it is (`jade_layout`'s boxes from 41,478 to 478). Against 0.6.7, best of five:
+`bounce_values` 10% faster, `layout_cached_values` 8%, `layout_values` 4%, the rest within 3%.
 
 **M7. Core, part two.** `Text.kt`, `TextNav.kt`, `TextArea.kt` (text model, field, area,
 undo, selection), `Scroll`, `HScrollBar`, `Split`, `Tabs`, `Controls` (check box, radio,
