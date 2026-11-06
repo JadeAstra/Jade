@@ -222,6 +222,7 @@ class WindowHost : WindowHandle {
   // The keyboard.
   private var focusedComponent : Component? = null
   private var focusedAware : FocusAware? = null
+  private var focusedTextModel : SharedTextModel? = null
   private var keyboardFocus = true
   private var shiftHeld = false
   private var ctrlHeld = false
@@ -765,10 +766,17 @@ class WindowHost : WindowHandle {
     updateTextFocus(comp)
   }
 
-  // Tells the content that has the keyboard, and the one that had it.
+  // Tells the content that has the keyboard, and the one that had it; and the text it edits, so
+  // that it and every field showing the same text show the caret.
   private fun updateTextFocus(comp : Component?) {
     val c = keyboardFocus ? comp : null
     val content = c?.content
+    val model = content is TextEditable ? content.model : null
+    if (model !== focusedTextModel) {
+      focusedTextModel?.setFocused(false)
+      focusedTextModel = model
+      if (model != null) { model.setFocused(true) }
+    }
     val aware = content is FocusAware ? content : null
     if (aware !== focusedAware) {
       focusedAware?.setFocused(false)

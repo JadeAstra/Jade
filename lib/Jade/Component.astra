@@ -408,10 +408,18 @@ class Component {
 
   // ---- The keyboard ----
 
-  // Whether it is something the keyboard can belong to.
+  // Whether it is something the keyboard can belong to: what Tab moves between, and what a press
+  // may give the keyboard to. A button, a tab strip, a label or a scroll bar is not, so that
+  // pressing one leaves the keyboard where it was.
   fun takesKeys() : bool {
     val c = content
-    return c is DropdownProvider or c is FocusTarget
+    return c is TextEditable or c is DropdownProvider or c is FocusTarget
+  }
+
+  // The text it edits, or null if it edits none.
+  internal fun textModel() : SharedTextModel? {
+    val c = content
+    return c is TextEditable ? c.model : null
   }
 
   // The components in it that take the keyboard, in the order Tab goes through them.
@@ -505,6 +513,10 @@ fun label(text : string) : Component => Component(Label(text))
 
 fun button(text : string, onClick : () -> unit = {}) : Component => Component(Button(text, onClick))
 
+// A text field, with a text of its own or showing a model it shares with others.
+fun textField(text : string = "") : Component => Component(TextField(SharedTextModel(text)))
+fun textField(model : SharedTextModel) : Component => Component(TextField(model))
+
 // A grid built by a block that runs on it:
 //
 //   grid {
@@ -522,10 +534,12 @@ fun grid(id : string? = null, build : GridPane.() -> unit) : Component {
 
 // ---- Who gets the keyboard ----
 
-// The component Tab moves to from `current`, among those that take the keyboard.
+// The component Tab moves to from `current`, among those that take the keyboard, passing over
+// the fields that show the same text as it (moving to one would change nothing).
 fun nextFocus(focusables : List<Component>, current : Component?, forward : bool) : Component? {
   val size = focusables.size
   if (size == 0) { return null }
+  val currentModel = current?.textModel()
   var n = -1
   for (i in 0..<size) {
     if (focusables[i] === current) { n = i }
@@ -534,7 +548,7 @@ fun nextFocus(focusables : List<Component>, current : Component?, forward : bool
     n = forward ? n + 1 : n - 1
     val candidate = focusables[((n % size) + size) % size]
     if (candidate === current) { break }                 // all the way round
-    return candidate
+    if (currentModel == null or candidate.textModel() !== currentModel) { return candidate }
   }
   return current
 }

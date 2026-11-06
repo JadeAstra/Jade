@@ -15,8 +15,8 @@ interface TextEditable {
 data StyleRun(val start : int, val end : int, val color : Color)
 
 // What a name in a text links to, found by holding Shift over it: the characters to underline
-// (`range`, its end after the last), a card saying what it is (or null), and what following it
-// does (`open`, on Shift and a click). The program says what a name means.
+// (`range`, from the first to the last), a card saying what it is (or null), and what following
+// it does (`open`, on Shift and a click). The program says what a name means.
 class TextLink(val range : Range, val card : Component?, val open : () -> unit)
 
 // Finds the link at a place in a text, or null where nothing there links anywhere.
@@ -546,4 +546,442 @@ class SharedTextModel {
       ns < ne ? StyleRun(ns, ne, r.color) : null   // a run deleted whole goes
     }
   }
+}
+
+// ---- A field of one line ----
+
+private const pad = 4
+
+// A field of one line of text to edit, showing a SharedTextModel: two fields given the same
+// model mirror each other as it changes, caret and selection too. A click places the caret, a
+// drag selects (by words after a double click, everything after a triple), keys move it and
+// edit, Shift selects as it moves; Enter commits and Escape goes back to what was committed.
+class TextField : Content, ContextMenuProvider, TextEditable, CursorProvider, OverlayContent {
+  override var owner : Component? = null
+  override val model : SharedTextModel
+
+  // The font, and how many characters wide it likes to be; both change its size.
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var columns : int = 12
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  // Told as the pointer moves over it: the place in the text under it (-1 once it has left, or
+  // past the end of the text) and where the pointer is. A program shows a card for the name
+  // under the pointer with it.
+  var onHover : ((int, int, int) -> unit)? = null
+
+  // What names in it link to (TextLink). With it set, holding Shift over a name that links
+  // somewhere underlines it and tells onLinkHover; Shift and a click follows it, in place of
+  // selecting to there as Shift and a click does elsewhere.
+  var links : TextLinks? = null
+  // The link under the pointer while Shift is held, or null when there is none now, and where the
+  // pointer is: the program shows the link's card.
+  var onLinkHover : ((TextLink?, int, int) -> unit)? = null
+  // The link underlined now, if any.
+  var hoveredLink : TextLink? = null
+    private set
+
+  // Told on Enter with the text committed, and on Escape with the text gone back to.
+  var onCommit : (string) -> unit = {}
+  var onRevert : (string) -> unit = {}
+
+  // Keeps the selection and a caret that does not blink showing in dimmer colours while
+  // another widget has the keyboard: a formula bar's, so the place still shows while cells
+  // are pointed at.
+  var persistentHighlight = false
+
+  private var committed : string
+  private var wasFocusedForBaseline = false
+
+  private var scrollX = 0               // each field scrolls on its own, mirrors of other widths too
+  private var lastWidth = 0             // the width last painted, for a drag at its edges
+  // Where the text was painted, for the caret and the selection, drawn over it every frame.
+  private var pTx = 0
+  private var pH = 0
+  private var pW = 0
+  private var pBaseY = 0
+
+  // What the text last painted was: a change to it (not to the caret or the selection, which
+  // are painted afresh every frame) means painting it again and asking its size again.
+  private var seenRevision = -1
+  private var seenRuns : List<StyleRun> = []
+
+  // Mouse selection and the caret's keys, as every text widget has them (TextNav): a field is
+  // one row the length of its text, with nothing above or below.
+  private val dragSelect : DragSelector
+  private val caretKeys : CaretKeys
+
+  fun init(model : SharedTextModel = SharedTextModel(), font : Font = defaultFont, columns : int = 12) {
+    this.model = model
+    this.font = font
+    this.columns = columns
+    this.committed = model.text
+    this.dragSelect = DragSelector({ model.text }, { 0..model.length })
+    this.caretKeys = CaretKeys({ model.text }, FieldRow(model), { model.caret }, { offset, extend -> model.moveCaret(offset, extend) })
+    seenRevision = model.revision
+    seenRuns = model.styleRuns
+    model.addListener { modelChanged() }
+  }
+
+  private fun modelChanged() {
+    // What Escape goes back to is the text as the field got the keyboard, not as it was made.
+    val focused = model.focused
+    if (focused and !wasFocusedForBaseline) { committed = model.text }
+    wasFocusedForBaseline = focused
+    // A change from anywhere (a mirror, a program's setText) shows, as the field's own typing does.
+    if (model.revision != seenRevision or model.styleRuns !== seenRuns) {
+      seenRevision = model.revision
+      seenRuns = model.styleRuns
+      owner?.invalidate()
+    } else {
+      Jade.requestRepaint()             // the caret or the selection: drawn afresh every frame
+    }
+  }
+
+  override fun cursorAt(x : int, y : int) : CursorKind => CursorKind.text
+
+  // Takes the text as it is as what Escape goes back to.
+  fun markCommitted() {
+    committed = model.text
+  }
+  // Commits: what Escape goes back to is the text now, and onCommit is told.
+  fun commit() {
+    committed = model.text
+    onCommit(committed)
+  }
+  // Goes back to the text last committed, and tells onRevert.
+  fun revert() {
+    if (model.text != committed) { model.setText(committed) }
+    onRevert(committed)
+  }
+
+  // ---- Pictures among the words ----
+
+  // A picture among the words shows as a box (the pictures themselves come with M10), no
+  // taller than the line.
+  private fun objectWidth() : int => Math.max(1, Math.min(24, objectMaxHeight()))
+  private fun objectMaxHeight() : int => (pH > 0 ? pH : metrics(font).height + pad * 2) - pad * 2
+
+  // How wide the text is up to `end`, each picture as wide as its box, the rest measured by `measure`.
+  private fun widthTo(text : string, end : int, measure : (string) -> int) : int {
+    val e = end.coerceIn(0, text.size)
+    if (text.indexOf(objectChar) < 0) { return measure(text[0..<e]) }
+    var w = 0
+    var from = 0
+    var at = text.indexOf(objectChar)
+    while (at >= 0 and at < e) {
+      w += measure(text[from..<at]) + objectWidth()
+      from = at + 1
+      at = text.indexOf(objectChar, from)
+    }
+    return w + measure(text[from..<e])
+  }
+
+  // Draws the characters from `from` up to `to` at x0 on baseY, each in its colour, a picture as its box.
+  private fun drawSpan(canvas : Canvas, text : string, from : int, to : int, x0 : int, baseY : int, colorOf : (int) -> Color) {
+    var x = x0
+    var i = from
+    while (i < to) {
+      if (text[i] == objectChar) {
+        val w = objectWidth()
+        placeholderObject(canvas, x, baseY - w, w, w)
+        x += w
+        i += 1
+        continue
+      }
+      val col = colorOf(i)
+      var j = i + 1
+      while (j < to and text[j] != objectChar and colorOf(j) == col) { j += 1 }
+      val seg = text[i..<j]
+      canvas.color = col
+      canvas.drawString(seg, x, baseY)
+      x += canvas.measure(seg, font).width
+      i = j
+    }
+  }
+
+  // ---- Where each place in the text is, for the pointer ----
+
+  // The x of the caret before each character and after the last, in layout units at the layout
+  // scale, measured in one call for each stretch between pictures and kept until the text, the
+  // font or the scale changes (M7: JadeUI measures the text before each place, one by one, at
+  // each click).
+  private var xs : List<int> = [0]
+  private var xsRevision = -1
+  private var xsFont : Font? = null
+  private var xsScale : Number = 0
+  private fun caretXs() : List<int> {
+    val scale = Jade.layoutScale
+    if (xsRevision == model.revision and xsFont === font and xsScale == scale) { return xs }
+    val fm = metrics(font)
+    val text = model.text
+    var made : List<int> = []
+    if (text.indexOf(objectChar) < 0) {
+      made = fm.offsets(text)
+    } else {
+      val all = [0]
+      var base = 0
+      var from = 0
+      while (from <= text.size) {
+        val at = text.indexOf(objectChar, from)
+        val end = at < 0 ? text.size : at
+        val part = fm.offsets(text[from..<end])
+        for (k in 1 ..< part.size) { all.add(base + part[k]) }
+        base += part[part.size - 1]
+        if (at < 0) { break }
+        base += objectWidth()
+        all.add(base)
+        from = at + 1
+      }
+      made = all
+    }
+    xs = made
+    xsRevision = model.revision
+    xsFont = font
+    xsScale = scale
+    return xs
+  }
+
+  // The place in the text whose caret is nearest to x.
+  private fun indexAtX(x : int) : int {
+    val places = caretXs()
+    val local = x - pad + scrollX
+    var lo = 0
+    var hi = places.size - 1
+    while (lo < hi) {                     // the first place at or after `local`
+      val mid = (lo + hi) / 2
+      if (places[mid] < local) { lo = mid + 1 } else { hi = mid }
+    }
+    if (lo > 0 and local - places[lo - 1] <= places[lo] - local) { return lo - 1 }
+    return lo
+  }
+
+  // The same, but -1 past the end of the text, so that a card for the last word does not stay
+  // over the room after it.
+  private fun hoverIndexAtX(x : int) : int {
+    val places = caretXs()
+    val local = x - pad + scrollX
+    if (local < 0 or local > places[places.size - 1]) { return -1 }
+    return indexAtX(x)
+  }
+
+  private fun setHoveredLink(link : TextLink?, x : int, y : int) {
+    if (link === hoveredLink and link == null) { return }
+    hoveredLink = link
+    onLinkHover?.invoke(link, x, y)
+    owner?.invalidate()
+  }
+
+  // ---- Size and painting ----
+
+  override fun sizes() : Sizes {
+    val fm = metrics(font)
+    val m = fm.charWidth('m')
+    val places = caretXs()
+    val w = Math.max(m * columns, places[places.size - 1]) + pad * 2
+    val h = fm.height + pad * 2
+    return Sizes(Size(m * 2 + pad * 2, h), Size(w, h), Size(int.maxValue, h))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val width = canvas.width
+    val height = canvas.height
+    lastWidth = width
+    val style = styleOf(this)
+    canvas.color = style.background ?: Palette.surface
+    canvas.fillRect(0, 0, width, height)
+    canvas.color = Palette.border
+    canvas.drawRect(0, 0, width - 1, height - 1)
+    canvas.font = font
+    val text = model.text
+    val fm = canvas.measure("", font)
+    pH = height
+    val m = { s : string -> canvas.measure(s, font).width }
+    // The line sits low enough to carry its tallest picture; with none, in the middle as text alone is.
+    val tallest = model.objectTags.isEmpty() ? 0 : objectWidth()
+    val baseY = Math.max((height - fm.height) / 2 + fm.ascent, Math.min(pad + tallest, height - pad - fm.descent))
+    // Scrolled so that the caret (which every mirror shares) shows in this field's width.
+    val visible = Math.max(width - pad * 2, 1)
+    val caretPx = widthTo(text, model.caret, m)
+    if (caretPx - scrollX > visible) { scrollX = caretPx - visible }
+    if (caretPx - scrollX < 0) { scrollX = caretPx }
+    // Never past the end of the text, so that a field grown wide enough is scrolled back.
+    scrollX = scrollX.coerceIn(0, Math.max(widthTo(text, text.size, m) - visible, 0))
+    val tx = pad - scrollX
+    pTx = tx
+    pW = width
+    pBaseY = baseY
+    val defaultColor = style.foreground ?: Palette.ink
+    val runs = model.styleRuns
+    if (runs.isEmpty() and text.indexOf(objectChar) < 0) {
+      canvas.color = defaultColor
+      canvas.drawString(text, tx, baseY)
+    } else {
+      // In runs of one colour, in the one font, so that the caret and the selection fall where measured.
+      drawSpan(canvas, text, 0, text.size, tx, baseY, { colorAt(runs, it, text.size, defaultColor) })
+    }
+  }
+
+  // The caret and the selection, drawn over the kept picture of the text every frame, so that a
+  // move or a blink never paints the text again. If the caret has gone out of the field's width,
+  // the text is painted again, scrolled to it.
+  override fun paintOverlay(canvas : Canvas) {
+    val text = model.text
+    val m = { s : string -> canvas.measure(s, font).width }
+    // A link under the pointer with Shift held is underlined whether or not the field has the keyboard.
+    val link = hoveredLink
+    if (link != null) {
+      val s = link.range.start.coerceIn(0, text.size)
+      val e = (link.range.end + 1).coerceIn(s, text.size)
+      val x1 = pTx + widthTo(text, s, m)
+      val x2 = pTx + widthTo(text, e, m)
+      canvas.color = Palette.fg(0x2D6CDF)
+      canvas.fillRect(x1, pBaseY + 2, Math.max(1, x2 - x1), 1)
+    }
+    if (!model.focused and !persistentHighlight) { return }
+    if (model.hasSelection) {
+      val sx = pTx + widthTo(text, model.selectionStart, m)
+      val ex = pTx + widthTo(text, model.selectionEnd, m)
+      canvas.color = model.focused ? Palette.selection : Palette.bg(0xD5D5D5)
+      canvas.fillRect(sx, pad, ex - sx, pH - pad * 2)
+      // The highlight covers the kept text, so the selected characters are drawn again over it.
+      val selectedText = Palette.fg(0x111827)
+      canvas.color = selectedText
+      canvas.font = font
+      if (text.indexOf(objectChar) >= 0) {
+        drawSpan(canvas, text, model.selectionStart, model.selectionEnd, sx, pBaseY, { selectedText })
+      } else {
+        canvas.drawString(text[model.selectionStart..<model.selectionEnd], sx, pBaseY)
+      }
+    }
+    val caretPx = widthTo(text, model.caret, m)
+    // A caret kept showing for another widget follows caretVisible too, so that it can blink in
+    // step with the caret it stands for.
+    if (model.caretVisible) {
+      canvas.color = model.focused ? Palette.ink : Palette.fg(0x909090)
+      canvas.fillRect(pTx + caretPx, pad, 1, pH - pad * 2)
+    }
+    val visible = Math.max(pW - pad * 2, 1)
+    val rel = caretPx - (pad - pTx)
+    if (rel > visible or rel < 0) { owner?.invalidate() }
+  }
+
+  // ---- Events ----
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      // Shift and a click on an underlined name follows it, and leaves the selection.
+      val link = hoveredLink
+      if (link != null and event.shift and hoverIndexAtX(event.x) in link.range) {
+        setHoveredLink(null, event.x, event.y)
+        link.open()
+        return
+      }
+      val idx = indexAtX(event.x)
+      caretKeys.clearSticky()
+      val range = dragSelect.press(idx, event.clicks, event.shift)
+      if (range == null) { model.moveCaret(idx, event.shift) } else { model.select(range.start, range.end) }
+    } else if (event is Event.Drag) {
+      var idx = indexAtX(event.x)
+      if (event.x >= lastWidth - pad and idx < model.length) { idx += 1 }   // at the right edge it scrolls on
+      if (event.x < pad and idx > 0) { idx -= 1 }                         // and at the left
+      val r = dragSelect.drag(idx)
+      if (dragSelect.granularity == DragSelector.Granularity.char) {
+        model.moveCaret(r.end, true)
+      } else {
+        model.select(r.start, r.end)
+      }
+    } else if (event is Event.KeyType) {
+      caretKeys.clearSticky()
+      model.insert(event.text)
+    } else if (event is Event.KeyPress) {
+      if (caretKeys.handle(event.key, event.shift, event.ctrl)) { return }
+      if (event.key == Key.backspace) {
+        model.deleteBackward()
+      } else if (event.key == Key.delete) {
+        model.deleteForward()
+      } else if (event.key == Key.enter) {
+        commit()
+      } else if (event.key == Key.escape) {
+        revert()
+      }                                   // Tab: the window moves the keyboard on
+    } else if (event is Event.Shortcut) {
+      val c = event.command
+      if (c == EditCommand.undo) {
+        model.undo()
+      } else if (c == EditCommand.redo) {
+        model.redo()
+      } else if (c == EditCommand.copy) {
+        copy()
+      } else if (c == EditCommand.cut) {
+        cut()
+      } else if (c == EditCommand.paste or c == EditCommand.pasteSeparate) {
+        paste()
+      } else if (c == EditCommand.selectAll) {
+        model.selectAll()
+      }                                   // the grid's chords and completion are not a field's
+    } else if (event is Event.Context) {
+      // The right button: a press inside the selection keeps it; elsewhere, or a drag, moves the caret.
+      val idx = indexAtX(event.x)
+      if (event.drag or idx < model.selectionStart or idx >= model.selectionEnd) { model.moveCaret(idx) }
+    } else if (event is Event.Hover) {
+      val idx = event.x < 0 or event.y < 0 ? -1 : hoverIndexAtX(event.x)
+      // Shift over a name that links somewhere underlines it; anything else takes the underline away.
+      val find = links
+      val link = event.shift and idx >= 0 and find != null ? find(model.text, idx) : null
+      setHoveredLink(link, event.x, event.y)
+      // A link's card is the one showing; the ordinary hover would replace it.
+      if (link == null) { onHover?.invoke(idx, event.x, event.y) }
+    }
+  }
+
+  // ---- The clipboard ----
+
+  private fun copy() {
+    if (model.hasSelection) { Jade.clipboard.copy(model.styledSelection()) }
+  }
+  private fun cut() {
+    if (model.hasSelection) {
+      Jade.clipboard.copy(model.styledSelection())
+      model.deleteBackward()
+    }
+  }
+  // Paste, its colours with it; a field's one line takes a space for each line break, so that the
+  // colours still fall on their characters.
+  private fun paste() {
+    val c = Jade.clipboard.paste()
+    if (c == null) { return }
+    if (c.text.isEmpty()) { return }
+    model.insertStyled(c.text.replace('\n', ' ').replace('\r', ' '), c.runs)
+  }
+
+  override fun contextMenu() : List<MenuItem> => [
+    MenuItem("Cut", model.hasSelection) { cut() },
+    MenuItem("Copy", model.hasSelection) { copy() },
+    MenuItem("Paste", Jade.clipboard.paste() != null) { paste() },
+    MenuItem("Select All", model.length > 0) { model.selectAll() },
+  ]
+}
+
+// A field is one row, the length of its text, with none above or below.
+private class FieldRow(val model : SharedTextModel) : CaretGeometry {
+  override fun rowStart(offset : int) : int => 0
+  override fun rowEnd(offset : int) : int => model.length
+  override fun rowNeighbour(offset : int, delta : int, sticky : int) : int => offset
+  override fun stickyFor(offset : int) : int => offset
+}
+
+// A picture among words that cannot be drawn: a grey box, so that the text round it still reads.
+internal fun placeholderObject(canvas : Canvas, x : int, y : int, w : int, h : int) {
+  canvas.color = Color(0xE8, 0xE8, 0xE8)
+  canvas.fillRect(x, y, w, h)
+  canvas.color = Color(0xB0, 0xB0, 0xB0)
+  canvas.drawRect(x, y, w - 1, h - 1)
 }

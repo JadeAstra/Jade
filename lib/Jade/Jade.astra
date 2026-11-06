@@ -193,6 +193,7 @@ object Jade {
       return
     }
     val c = comp.content
+    if (c is TextEditable) { c.model.setFocused(true) }   // with no window, told as a window would tell it
     if (c is FocusAware) { c.setFocused(true) }
   }
 
