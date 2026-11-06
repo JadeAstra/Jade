@@ -36,8 +36,12 @@ const uint16_t kWindows1252High[32] = {
     0,      0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0,      0x017E, 0x0178};
 
 // ISO-8859-15, Latin-9: Latin-1 with eight places given other characters, the euro among them.
-const std::pair<uint8_t, uint16_t> kLatin9[8] = {{0xA4, 0x20AC}, {0xA6, 0x0160}, {0xA8, 0x0161}, {0xB4, 0x017D},
-                                                 {0xB8, 0x017E}, {0xBC, 0x0152}, {0xBD, 0x0153}, {0xBE, 0x0178}};
+struct Latin9Place {
+    uint8_t first;    // the byte
+    uint16_t second;  // the character it is
+};
+const Latin9Place kLatin9[8] = {{0xA4, 0x20AC}, {0xA6, 0x0160}, {0xA8, 0x0161}, {0xB4, 0x017D},
+                                {0xB8, 0x017E}, {0xBC, 0x0152}, {0xBD, 0x0153}, {0xBE, 0x0178}};
 
 // The character a byte is in a set of one byte a character; 0xFFFD for one it has none for.
 uint32_t singleByte(uint8_t b, Charset cs) {

@@ -2301,7 +2301,7 @@ ExprPtr Parser::infixCall() {
         call->callee = std::move(member);
         call->args.push_back(range());
         call->names.resize(1);
-        call->spread.resize(1, 0);
+        call->spread.push_back(0);
         call->isInfix = true;
         left = std::move(call);
     }

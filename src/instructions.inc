@@ -741,7 +741,7 @@ CASES(SetOwn, SetProp) {
                 const bool given = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
                 if (value.kind == kind && ((seen & 0x40) == 0 || !given)) {
                     const int64_t bits = kind == ValueKind::Bool ? (value.as.b ? 1 : 0) : value.as.i;
-                    std::memcpy(field, &bits, 8);
+                    std::memcpy(static_cast<void*>(field), &bits, 8);  // its payload alone
                     if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
                     std::memcpy(static_cast<void*>(&sp[-2]), &value, sizeof(Value));
                     sp--;
@@ -2943,7 +2943,7 @@ CASES(RSetPropSS, RSetPropSK) {
                     const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
                     if (given.kind == kind && ((seen & 0x40) == 0 || !hasOne)) {
                         const int64_t bits = kind == ValueKind::Bool ? (given.as.b ? 1 : 0) : given.as.i;
-                        std::memcpy(field, &bits, 8);
+                        std::memcpy(static_cast<void*>(field), &bits, 8);  // its payload alone
                         if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
                         std::memcpy(static_cast<void*>(&base[ip[0]]), &given, sizeof(Value));
                         sp = base + ip[3];
@@ -3012,7 +3012,7 @@ COLD(RSetPropSS) {
                 const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
                 if (given.kind == kind && ((seen & 0x40) == 0 || !hasOne)) {
                     const int64_t bits = kind == ValueKind::Bool ? (given.as.b ? 1 : 0) : given.as.i;
-                    std::memcpy(field, &bits, 8);
+                    std::memcpy(static_cast<void*>(field), &bits, 8);  // its payload alone
                     if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
                     base[ip[0]] = given;
                     sp = base + ip[3];

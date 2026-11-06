@@ -523,7 +523,10 @@ enum TypeId : uint8_t {
 
 // For a frozen collection's type, the type it is a kind of (FrozenList, List); any other as it is.
 inline uint8_t unfrozenTypeId(uint8_t id) {
-    return id == kTypeFrozenList ? kTypeList : id == kTypeFrozenMap ? kTypeMap : id == kTypeFrozenSet ? kTypeSet : id;
+    return id == kTypeFrozenList  ? static_cast<uint8_t>(kTypeList)
+           : id == kTypeFrozenMap ? static_cast<uint8_t>(kTypeMap)
+           : id == kTypeFrozenSet ? static_cast<uint8_t>(kTypeSet)
+                                  : id;
 }
 // For a list's, map's or set's type, its frozen kind; 0 for any other.
 inline uint8_t frozenTypeId(uint8_t id) {

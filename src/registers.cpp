@@ -175,7 +175,7 @@ bool storesResult(Op r) {
         default: return (r >= Op::RAddSS && r <= Op::REqSK) || (r >= Op::RAddISS && r <= Op::REqFSK);
     }
 }
-size_t topOperand(Op r) {
+int topOperand(Op r) {
     switch (r) {
         case Op::RGetProp:
         case Op::RGetPath:

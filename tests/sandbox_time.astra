@@ -11,6 +11,7 @@ Sandbox.run {
 }
 
 // A timer's delay, in a task on the event loop: the clock jumps to it when nothing else is ready.
+val heard = Job<bool>()  // given once the loop has run what hears of the task, below
 Sandbox.run {
   val start = clock()
   val later = task {
@@ -21,13 +22,19 @@ Sandbox.run {
   later.then { seconds ->
     print("two hours on:", seconds)                           // when the loop next runs: below
     every.cancel()
+    heard.complete(true)
   }
 }
 
 // What a thread started in it does takes its clock too. The main thread runs the event loop
-// while get() waits (M6.7), so the task above finishes meanwhile.
+// while get() waits (M6.7), so the task above finishes meanwhile. The thread waits for that
+// too: its hour of sleep takes no real time, and it could otherwise end before get() waits, and
+// the task be heard of only as the program ends.
 Sandbox.run {
-  thread { Thread.sleep(1.hours) }.get()                      // expect: two hours on: 7200.0
+  thread {
+    Thread.sleep(1.hours)
+    heard.get()
+  }.get()                                                     // expect: two hours on: 7200.0
   print(clock())                                              // expect: 3600.0
 }
 

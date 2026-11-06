@@ -1094,7 +1094,7 @@ private:
         frame.owner = ++nextOwner_;
         if (std::vector<RuntimeType> args; session_.checker->typeArguments(e, args))
             for (size_t i = 0; i < fn.typeParams.size() && i < args.size(); i++)
-                if (RuntimeType given = args[i]; fromCall(given)) frame.typeArgs[fn.typeParams[i].name] = given;
+                if (RuntimeType typeArg = args[i]; fromCall(typeArg)) frame.typeArgs[fn.typeParams[i].name] = typeArg;
         inlineBodies_.insert(frame.owner);
         frame.finallyAtEntry = fs_->finally;
         frame.tryDepth = fs_->tryDepth;
@@ -1138,14 +1138,14 @@ private:
         // own where it may change such lists (G35); the list a vararg gathers, of the type its
         // parameter is declared with (G25).
         for (int param : session_.checker->paramsOwned(fn)) {
-            VarInfo info;
-            const int slot = static_cast<size_t>(param) < n && !bound[static_cast<size_t>(param)] ? resolveLocal(fs_, fn.params[static_cast<size_t>(param)], fn, info) : -1;
+            VarInfo owned;
+            const int slot = static_cast<size_t>(param) < n && !bound[static_cast<size_t>(param)] ? resolveLocal(fs_, fn.params[static_cast<size_t>(param)], fn, owned) : -1;
             if (slot >= 0) emit(Op::OwnLocal, slotOf(slot));
         }
         if (receiver >= 0 && session_.checker->ownsThis(fn)) emit(Op::OwnLocal, slotOf(receiver));
         if (RuntimeType gathered; fn.varargIndex >= 0 && session_.checker->varargListType(fn, gathered)) {
-            VarInfo info;
-            const int slot = resolveLocal(fs_, fn.params[static_cast<size_t>(fn.varargIndex)], fn, info);
+            VarInfo vararg;
+            const int slot = resolveLocal(fs_, fn.params[static_cast<size_t>(fn.varargIndex)], fn, vararg);
             if (slot >= 0) {
                 emit(Op::GetLocal, slotOf(slot));
                 emitTag(gathered, fn);
@@ -5083,12 +5083,13 @@ private:
                 RuntimeType inferred;
                 if (session_.checker->inferredFieldType(f, inferred)) {
                     // A char, a byte or a storage width kept narrow, as when its type is written (G18).
-                    flags = inferred.storage != 0                  ? inferred.storage
-                            : inferred.kind == RuntimeType::Int   ? kTypeInt
-                            : inferred.kind == RuntimeType::Float ? kTypeFloat
-                            : inferred.kind == RuntimeType::Char  ? kTypeChar
-                            : inferred.kind == RuntimeType::Byte  ? kTypeByte
-                                                                  : kTypeBool;
+                    if (inferred.storage != 0) flags = inferred.storage;
+                    else
+                        flags = inferred.kind == RuntimeType::Int     ? kTypeInt
+                                : inferred.kind == RuntimeType::Float ? kTypeFloat
+                                : inferred.kind == RuntimeType::Char  ? kTypeChar
+                                : inferred.kind == RuntimeType::Byte  ? kTypeByte
+                                                                      : kTypeBool;
                 } else if (session_.checker->inferredValueFieldType(f, inferred)) {
                     // `var bounds = other.bounds`: a value type's, as the checker works it out,
                     // so that the object can keep it inside itself (G16).

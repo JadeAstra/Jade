@@ -1092,7 +1092,7 @@ void registerSetMethods(VM& vm) {
         ObjSet* set = vm.newSet(item != nullptr ? vm.typeOf(kTypeSet, false, nullptr, {item}) : nullptr);
         TempRoot keep(vm, Value::object(set));
         if (argc > 0 && !args[0].isNull())
-            for (const Value& item : vm.itemsOf(args[0], "Set()")) vm.setAdd(set, item);
+            for (const Value& value : vm.itemsOf(args[0], "Set()")) vm.setAdd(set, value);
         return Value::object(set);
     });
     vm.defineMethod(T, "add", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {

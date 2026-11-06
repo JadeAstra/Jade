@@ -5800,7 +5800,7 @@ void VM::run(int baseFrame) {
 #define R_COMPARISON(name, LB, LC, cmp, plain, equality)     \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
-        bool holds_;                                         \
+        bool holds_ = false;                                 \
         if (R_COMPARED(b, c, cmp, equality, holds_)) {       \
             base[ip[0]].setBool(holds_);                     \
             R_DONE()                                         \
@@ -5825,7 +5825,7 @@ void VM::run(int baseFrame) {
 #define R_JUMP(name, LB, LC, cmp, equality)                  \
     CASE(name) {                                             \
         const Value &b = LB(0), &c = LC(1);                  \
-        bool holds_;                                         \
+        bool holds_ = false;                                 \
         if (!R_COMPARED(b, c, cmp, equality, holds_)) R_SLOW2(b, c, 2, 7) \
         sp = base + ip[2];                                   \
         if (holds_) ip += 11;                                \
@@ -6204,6 +6204,93 @@ void VM::run(int baseFrame) {
             ASTRA_DISPATCH_TO(RBitAndSK)
             ASTRA_DISPATCH_TO(RBitOrSS)
             ASTRA_DISPATCH_TO(RBitOrSK)
+            // Since M6.7 step 5: typed arithmetic, places, type slots, RGetPath (G14).
+            ASTRA_DISPATCH_TO(AddI)
+            ASTRA_DISPATCH_TO(SubI)
+            ASTRA_DISPATCH_TO(MulI)
+            ASTRA_DISPATCH_TO(DivF)
+            ASTRA_DISPATCH_TO(AddF)
+            ASTRA_DISPATCH_TO(SubF)
+            ASTRA_DISPATCH_TO(MulF)
+            ASTRA_DISPATCH_TO(LtI)
+            ASTRA_DISPATCH_TO(LeI)
+            ASTRA_DISPATCH_TO(GtI)
+            ASTRA_DISPATCH_TO(GeI)
+            ASTRA_DISPATCH_TO(EqI)
+            ASTRA_DISPATCH_TO(LtF)
+            ASTRA_DISPATCH_TO(LeF)
+            ASTRA_DISPATCH_TO(GtF)
+            ASTRA_DISPATCH_TO(GeF)
+            ASTRA_DISPATCH_TO(EqF)
+            ASTRA_DISPATCH_TO(EnterPlaces)
+            ASTRA_DISPATCH_TO(SetPlace)
+            ASTRA_DISPATCH_TO(WithPlace)
+            ASTRA_DISPATCH_TO(KeepLocal)
+            ASTRA_DISPATCH_TO(KeepTop)
+            ASTRA_DISPATCH_TO(FieldTypesMaker)
+            ASTRA_DISPATCH_TO(TypeSlots)
+            ASTRA_DISPATCH_TO(RGetPath)
+            ASTRA_DISPATCH_TO(RAddISS)
+            ASTRA_DISPATCH_TO(RAddISK)
+            ASTRA_DISPATCH_TO(RAddIKS)
+            ASTRA_DISPATCH_TO(RSubISS)
+            ASTRA_DISPATCH_TO(RSubISK)
+            ASTRA_DISPATCH_TO(RSubIKS)
+            ASTRA_DISPATCH_TO(RMulISS)
+            ASTRA_DISPATCH_TO(RMulISK)
+            ASTRA_DISPATCH_TO(RMulIKS)
+            ASTRA_DISPATCH_TO(RAddFSS)
+            ASTRA_DISPATCH_TO(RAddFSK)
+            ASTRA_DISPATCH_TO(RAddFKS)
+            ASTRA_DISPATCH_TO(RSubFSS)
+            ASTRA_DISPATCH_TO(RSubFSK)
+            ASTRA_DISPATCH_TO(RSubFKS)
+            ASTRA_DISPATCH_TO(RMulFSS)
+            ASTRA_DISPATCH_TO(RMulFSK)
+            ASTRA_DISPATCH_TO(RMulFKS)
+            ASTRA_DISPATCH_TO(RDivFSS)
+            ASTRA_DISPATCH_TO(RDivFSK)
+            ASTRA_DISPATCH_TO(RDivFKS)
+            ASTRA_DISPATCH_TO(RLtISS)
+            ASTRA_DISPATCH_TO(RLtISK)
+            ASTRA_DISPATCH_TO(RLeISS)
+            ASTRA_DISPATCH_TO(RLeISK)
+            ASTRA_DISPATCH_TO(RGtISS)
+            ASTRA_DISPATCH_TO(RGtISK)
+            ASTRA_DISPATCH_TO(RGeISS)
+            ASTRA_DISPATCH_TO(RGeISK)
+            ASTRA_DISPATCH_TO(REqISS)
+            ASTRA_DISPATCH_TO(REqISK)
+            ASTRA_DISPATCH_TO(RLtFSS)
+            ASTRA_DISPATCH_TO(RLtFSK)
+            ASTRA_DISPATCH_TO(RLeFSS)
+            ASTRA_DISPATCH_TO(RLeFSK)
+            ASTRA_DISPATCH_TO(RGtFSS)
+            ASTRA_DISPATCH_TO(RGtFSK)
+            ASTRA_DISPATCH_TO(RGeFSS)
+            ASTRA_DISPATCH_TO(RGeFSK)
+            ASTRA_DISPATCH_TO(REqFSS)
+            ASTRA_DISPATCH_TO(REqFSK)
+            ASTRA_DISPATCH_TO(RJumpLtISS)
+            ASTRA_DISPATCH_TO(RJumpLtISK)
+            ASTRA_DISPATCH_TO(RJumpLeISS)
+            ASTRA_DISPATCH_TO(RJumpLeISK)
+            ASTRA_DISPATCH_TO(RJumpGtISS)
+            ASTRA_DISPATCH_TO(RJumpGtISK)
+            ASTRA_DISPATCH_TO(RJumpGeISS)
+            ASTRA_DISPATCH_TO(RJumpGeISK)
+            ASTRA_DISPATCH_TO(RJumpEqISS)
+            ASTRA_DISPATCH_TO(RJumpEqISK)
+            ASTRA_DISPATCH_TO(RJumpLtFSS)
+            ASTRA_DISPATCH_TO(RJumpLtFSK)
+            ASTRA_DISPATCH_TO(RJumpLeFSS)
+            ASTRA_DISPATCH_TO(RJumpLeFSK)
+            ASTRA_DISPATCH_TO(RJumpGtFSS)
+            ASTRA_DISPATCH_TO(RJumpGtFSK)
+            ASTRA_DISPATCH_TO(RJumpGeFSS)
+            ASTRA_DISPATCH_TO(RJumpGeFSK)
+            ASTRA_DISPATCH_TO(RJumpEqFSS)
+            ASTRA_DISPATCH_TO(RJumpEqFSK)
 #undef ASTRA_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
@@ -6251,6 +6338,10 @@ void VM::run(int baseFrame) {
 #endif
                 switch (opAt(ip - kOpBytes)) {
 #include "instructions.inc"
+                    default:
+                        // The stack code's own instructions (AddLocals and the rest), which the run
+                        // code never holds (registers.cpp).
+                        throw runtimeError(Thrown::InternalError, "invalid instruction");
                 }
                 sp = sp_;
             }
