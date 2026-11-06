@@ -67,7 +67,7 @@ void unreserve(void* at, size_t bytes) {
 #endif
 }
 
-const size_t kFrameBytes = sizeof(CallFrame) + sizeof(const ObjTypeInfo*) + sizeof(Value);
+const size_t kFrameBytes = sizeof(CallFrame) + sizeof(const ObjTypeInfo*) + sizeof(Value) + sizeof(uint32_t);
 
 // Stacks that grow, of tasks that have finished, kept to be used again (G50): reserving and
 // letting go of one is two calls to the system each, which a program making many small tasks
@@ -141,7 +141,8 @@ bool Context::grow(const Value* top, int wanted) {
     if (wanted > frameLimit) {
         const int limit = std::min(std::max(frameLimit * 2, wanted), maxFrames);
         if (limit < wanted) return false;
-        // The frames, their type arguments after all of them, and their destinations after those.
+        // The frames, their type arguments after all of them, their destinations after those, and
+        // where their places end (D149) after those.
         char* base = reinterpret_cast<char*>(frames);
         const size_t count = static_cast<size_t>(maxFrames);
         if (!commit(base, base + static_cast<size_t>(limit) * sizeof(CallFrame))) return false;
@@ -149,6 +150,8 @@ bool Context::grow(const Value* top, int wanted) {
         if (!commit(types, types + static_cast<size_t>(limit) * sizeof(const ObjTypeInfo*))) return false;
         char* places = types + count * sizeof(const ObjTypeInfo*);
         if (!commit(places, places + static_cast<size_t>(limit) * sizeof(Value))) return false;
+        char* ends = places + count * sizeof(Value);
+        if (!commit(ends, ends + static_cast<size_t>(limit) * sizeof(uint32_t))) return false;
         frameLimit = limit;
     }
     return true;
@@ -164,6 +167,8 @@ bool VM::growContext(const Value* top, int frames) {
 Context::~Context() { release(); }
 
 void Context::release() {
+    delete places;
+    places = nullptr;
     if (growable) {
         bool kept = false;
         if (stack != nullptr && static_cast<size_t>(stackReserveEnd - stack) == ObjFiber::kStackSize && maxFrames == ObjFiber::kMaxFrames &&

@@ -250,6 +250,11 @@ const OpInfo kOps[] = {
     {"GT_F", Operand::None},
     {"GE_F", Operand::None},
     {"EQ_F", Operand::None},
+    {"ENTER_PLACES", Operand::U8},
+    {"SET_PLACE", Operand::U16U8},
+    {"WITH_PLACE", Operand::U8},
+    {"KEEP_LOCAL", Operand::U16},
+    {"KEEP_TOP", Operand::None},
 };
 
 const char* const kTypeNames[] = {"", "int", "float", "Number", "string", "bool", "List", "Map", "Range", "Function", "Bytes", "Type", "",
@@ -402,6 +407,11 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
         if (static_cast<size_t>(index) >= f.constants.size() || !f.constants[index].isString())
             fail("name operand is not a string constant");
     };
+
+    // The places a function's frame has (D149): given by its first instruction, where it has any.
+    int places = 0;
+    if (n >= 2 && code[0] == static_cast<uint8_t>(Op::EnterPlaces)) places = code[1];
+    if ((places != 0) != ((f.typeArgs & kHasPlaces) != 0)) fail("places that do not match the function's");
 
     depthAt[0] = 1 + f.arity;
     work.push_back(0);
@@ -784,7 +794,22 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                     pushes = 1;
                     break;
                 case Op::OwnLocal:
+                case Op::KeepLocal:
                     if (a >= depth) fail("local slot out of range");
+                    break;
+                case Op::EnterPlaces:
+                    if (ip != 0 || a != places) fail("places given anywhere but where a function starts");
+                    break;
+                case Op::SetPlace:
+                    if (a >= depth) fail("local slot out of range");
+                    if (b >= places) fail("place out of range");
+                    pops = pushes = 1;
+                    break;
+                case Op::WithPlace:
+                    if (a >= places) fail("place out of range");
+                    break;
+                case Op::KeepTop:
+                    pops = pushes = 1;
                     break;
                 case Op::WithDestinationAt:
                     if (depth < a + 1) fail("stack underflow");
@@ -1155,13 +1180,18 @@ void verifyFunction(FunctionProto& f, const Program& program) {
     std::vector<int> depths;
     analyzeStack(f, program, false, &depths);
     translate(f, depths);
-    // A function whose whole work is `this.name`: GetLocal 0, GetProp or GetOwn, Return.
-    const std::vector<uint8_t>& c = f.code;
+    // A function whose whole work is `this.name`: GetLocal 0, GetProp or GetOwn, Return, after
+    // the places it gives its frame, which are none (D149).
+    const std::vector<uint8_t>& whole = f.code;
     f.readsField = nullptr;
-    if (f.arity == 0 && f.upvalues.empty() && f.rights.empty() && c.size() >= 9 && c[0] == static_cast<uint8_t>(Op::GetLocal) && readU16(c, 1) == 0 &&
+    const size_t from = whole.size() >= 2 && whole[0] == static_cast<uint8_t>(Op::EnterPlaces) && whole[1] == 0 ? 2 : 0;
+    const uint8_t* c = whole.data() + from;
+    const size_t size = whole.size() - from;
+    auto u16 = [&](size_t at) { return static_cast<size_t>(c[at] | (c[at + 1] << 8)); };
+    if (f.arity == 0 && f.upvalues.empty() && f.rights.empty() && size >= 9 && c[0] == static_cast<uint8_t>(Op::GetLocal) && u16(1) == 0 &&
         (c[3] == static_cast<uint8_t>(Op::GetProp) || c[3] == static_cast<uint8_t>(Op::GetOwn)) && c[8] == static_cast<uint8_t>(Op::Return) &&
-        static_cast<size_t>(readU16(c, 4)) < f.constants.size() && f.constants[static_cast<size_t>(readU16(c, 4))].isString())
-        f.readsField = asString(f.constants[static_cast<size_t>(readU16(c, 4))]);
+        u16(4) < f.constants.size() && f.constants[u16(4)].isString())
+        f.readsField = asString(f.constants[u16(4)]);
 }
 
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }
@@ -1464,7 +1494,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 27;
+const uint8_t kFormatVersion = 28;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1679,7 +1709,7 @@ struct Reader {
         f->varargIndex = static_cast<int>(vararg) - 1;
         f->classParams = u64();
         f->typeArgs = u8();
-        if ((f->typeArgs & ~(kTypeArgsOwn | kTypeArgsKept | kTakesDestination)) != 0) corrupt();
+        if ((f->typeArgs & ~(kTypeArgsOwn | kTypeArgsKept | kTakesDestination | kHasPlaces)) != 0) corrupt();
         f->typeArgBase = u8();
         uint32_t paramCount = count(4);
         for (uint32_t i = 0; i < paramCount; i++) f->paramNames.push_back(vm.intern(str()));

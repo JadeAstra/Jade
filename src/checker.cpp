@@ -298,6 +298,8 @@ struct Local {
     FieldInfo* constant = nullptr;
     // A val with a value, whose reads are folded where the value is constant.
     const VarStmt* val = nullptr;
+    // A variable of a value type whose value its frame keeps in a place of its own (D149).
+    const VarStmt* place = nullptr;
     // A lambda's parameter: a place, where a list of values hands the lambda its own item
     // (M6.6 part 4, value-lists.html section 8).
     bool lambdaParam = false;
@@ -3269,6 +3271,7 @@ struct Checker::Impl {
     // throw): a region (G10). Those that do (if, loops, try, blocks) are made of such regions.
     void stmt(const Stmt& s) {
         if (s.kind == StmtKind::Expr || s.kind == StmtKind::Var || s.kind == StmtKind::Return || s.kind == StmtKind::Throw) {
+            if (s.kind == StmtKind::Expr && silent == 0) statementTops[&s] = static_cast<const ExprStmt&>(s).expr.get();
             RegionScope region(*this, &s, Region::Statement);
             stmtItself(s);
             return;
@@ -3498,7 +3501,10 @@ struct Checker::Impl {
         if (v.isLazy && ctx != nullptr) ctx->noWait = wasWait;
         if (!v.pattern.empty()) {
             std::vector<Type> parts = partsOf(value, v.pattern.size());
-            for (size_t i = 0; i < v.pattern.size(); i++) declareLocal(v.pattern[i], parts[i], v.isVal);
+            for (size_t i = 0; i < v.pattern.size(); i++) {
+                declareLocal(v.pattern[i], parts[i], v.isVal);
+                if (!global && valueClass(parts[i]) && silent == 0) keptStores.insert(&v);
+            }
             return;
         }
         if (v.init && declared.known() && !fits(value, declared))
@@ -3522,6 +3528,12 @@ struct Checker::Impl {
             }
         }
         declareLocal(v.name, type, v.isVal);
+        if (!global && !v.isLazy && !v.isConst && valueClass(type)) {
+            if (silent == 0) placeLocals.insert(&v);
+            scopes.back()[v.name].place = &v;
+        } else if (!global && v.init && valueClass(value) && silent == 0) {
+            keptStores.insert(&v);
+        }
         if (global && v.isConst)
             if (const GlobalSym* g = findGlobal(*unit, v.name); g != nullptr) scopes.back()[v.name].constant = g->var;
         if (v.isVal && !v.isConst && v.init) scopes.back()[v.name].val = &v;
@@ -5093,6 +5105,7 @@ struct Checker::Impl {
                 handedUses[&n] = {l->paramOfDecl, n.name};
             }
             if (&n != passedUse) noteUse(*l, ParamUse::Other);
+            if (l->place != nullptr && silent == 0) placeReads[&n] = {statementHere(), l->place};
             noteConst(n, l->constant);
             if (l->val != nullptr && silent == 0) valUses[&n] = l->val;
             return localType(n.name, *l);
@@ -5912,6 +5925,7 @@ struct Checker::Impl {
     // A change made through a place: one that is an item of a list, or may be (a parameter, or
     // `this` in a mutating method), changes a list of its type.
     void notePlaceChange(const Expr& place, ClassInfo* type) {
+        if (const VarStmt* local = placeLocalOf(place)) notePlaceLocalChange(local, changing);
         const Expr* root = &place;
         while (root->kind == ExprKind::Member) {
             // Through a field of an object, the change is to a value kept inside it (M6.6 part 5).
@@ -6036,6 +6050,56 @@ struct Checker::Impl {
     std::unordered_set<const FunctionDecl*> valueLambdas;      // lambdas that give a value of a value type
     std::unordered_set<const FunctionDecl*> givingLambdas;     // lambdas that may give one, an item where it is perhaps
     std::unordered_set<const AssignExpr*> builtInPlace;        // `pts[i] = f(...)`, f giving the list's item type
+
+    // ---- Values in variables (M6.7 step 6, D149) ----
+    // A local variable of a value type keeps its value in a place of its frame's, and holds a Ref
+    // to it: reading it reads that place. Its frame alone changes it, a statement at a time, so a
+    // Ref read from it holds while its statement runs, unless the statement changes the variable
+    // inside it (`f(p, p.bump())`): there, a read takes a copy. Any variable with no place of its
+    // own that is given a value of a value type takes a copy too, as the place may change or be
+    // another variable's once its own has gone.
+    std::unordered_set<const VarStmt*> placeLocals;
+    std::unordered_set<const Node*> keptStores;
+    std::unordered_map<const Node*, std::pair<const void*, const VarStmt*>> placeReads;  // the statement, the variable
+    std::set<std::pair<const void*, const VarStmt*>> changedInside;                      // a statement changes it inside
+    std::unordered_map<const void*, const Expr*> statementTops;                           // what an expression statement is
+
+    bool valueClass(const Type& t) const {
+        const Type plain = withNull(t, false);
+        return plain.kind == Type::Class && plain.cls != nullptr && plain.cls->isValue;
+    }
+    // The innermost statement being checked.
+    const void* statementHere() const {
+        for (auto r = regions.rbegin(); r != regions.rend(); ++r)
+            if (r->kind == Region::Statement) return r->key;
+        return nullptr;
+    }
+    // Variable `place` changed by `change`: for every statement around it but the one it is the
+    // whole of, in the variable's own code, it changes the variable inside.
+    void notePlaceLocalChange(const VarStmt* place, const Node* change) {
+        if (silent > 0) return;
+        const void* fn = effectKey();
+        bool innermost = true;
+        for (auto r = regions.rbegin(); r != regions.rend(); ++r) {
+            if (r->kind != Region::Statement) continue;
+            if (innermost && r->fn == fn) {
+                innermost = false;
+                auto top = statementTops.find(r->key);
+                if (top != statementTops.end() && static_cast<const Node*>(top->second) == change) continue;
+            }
+            innermost = false;
+            changedInside.insert({r->key, place});
+        }
+    }
+    // The variable a change through `place` reaches, where it is a local kept in a place.
+    const VarStmt* placeLocalOf(const Expr& place) {
+        const Expr* root = &place;
+        while (root->kind == ExprKind::Member) root = static_cast<const MemberExpr&>(*root).object.get();
+        if (root->kind != ExprKind::Name) return nullptr;
+        const Local* l = findLocal(static_cast<const NameExpr&>(*root).name);
+        return l != nullptr ? l->place : nullptr;
+    }
+    const Node* changing = nullptr;  // the assignment or call a change through a place is made by
     std::set<std::pair<const FunctionDecl*, std::string>> placeParams;  // parameters changed through as places
 
     void noteValueParam(const FunctionDecl& d, int index, const Type& t) {
@@ -6110,7 +6174,10 @@ struct Checker::Impl {
         if (call->callee->kind == ExprKind::Member) {
             const auto& m = static_cast<const MemberExpr&>(*call->callee);
             if (isPlace(*m.object)) {
+                const Node* saved = changing;
+                changing = call;
                 notePlaceChange(*m.object, f->owner);
+                changing = saved;
                 return;
             }
             const std::string why = lostThrough(*m.object);
@@ -6159,6 +6226,12 @@ struct Checker::Impl {
             ~Restore() { at = saved; }
         } restore{assignedOnly, assignedOnly};
         if (a.op == TokenType::Eq) assignedOnly = a.target.get();
+        struct Changing {
+            const Node*& at;
+            const Node* saved;
+            ~Changing() { at = saved; }
+        } changingNow{changing, changing};
+        changing = &a;
         if (a.target->kind == ExprKind::Index) {
             const Type list = typeQuietly(*static_cast<const IndexExpr&>(*a.target).object);
             noteListChange(list);
@@ -6231,6 +6304,8 @@ struct Checker::Impl {
         } else {
             value = exprExpected(*a.value, a.op == TokenType::Eq ? target : unknownType());
         }
+        if (local != nullptr && local->place != nullptr) notePlaceLocalChange(local->place, &a);
+        else if (local != nullptr && valueClass(value) && silent == 0) keptStores.insert(&a);
         if (local != nullptr) {
             forget(targetName);
             // `next = Dog("Fido")`: from here on it is that value, not null.
@@ -11229,6 +11304,12 @@ bool Checker::externalResult(const Node& call, RuntimeType& out, std::string& na
 bool Checker::addsNewValue(const Node& call) const { return impl_->newValueAdds.count(&call) != 0; }
 
 bool Checker::isValuePlace(const Expr& e) const { return impl_->valuePlaces.count(&e) != 0; }
+bool Checker::placeLocal(const VarStmt& v) const { return impl_->placeLocals.count(&v) != 0; }
+bool Checker::keepsPlace(const Node& store) const { return impl_->keptStores.count(&store) != 0; }
+bool Checker::copiesPlaceRead(const Node& read) const {
+    auto found = impl_->placeReads.find(&read);
+    return found != impl_->placeReads.end() && impl_->changedInside.count(found->second) != 0;
+}
 bool Checker::isHandedPlace(const Expr& e) const { return impl_->handedPlaces.count(&e) != 0; }
 bool Checker::changesItem(const ForInStmt& loop) const { return impl_->changedLoops.count(&loop) != 0; }
 bool Checker::keepsChangedItem(const Expr& e) const {

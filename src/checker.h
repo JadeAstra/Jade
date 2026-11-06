@@ -210,6 +210,13 @@ public:
     // Whether an expression of a value type is a place a change is made through (M6.6 part 4):
     // `p` in `p.x = 4` for a var p, `pts[i]`, `obj.pos`.
     bool isValuePlace(const Expr& e) const;
+    // Values in variables (M6.7 step 6, D149): a local of a value type that keeps its value in a
+    // place of its frame's; a store into a variable with no place of its own of a value that may
+    // be in one, which keeps a copy; a read of a variable with a place that takes a copy, its
+    // statement changing the variable inside it.
+    bool placeLocal(const VarStmt& v) const;
+    bool keepsPlace(const Node& store) const;
+    bool copiesPlaceRead(const Node& read) const;
     // A place that is a list's item handed over where it is, which a change goes through to: a
     // for loop's item over a list, or the lambda's of a list's forEach (D167). Any other variable
     // takes a copy of its own before it is changed.

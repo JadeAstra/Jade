@@ -386,6 +386,20 @@ enum class Op : uint16_t {
     // has R instructions for them that test nothing of their operands.
     AddI, SubI, MulI, LtI, LeI, GtI, GeI, EqI, AddF, SubF, MulF, DivF, LtF, LeF, GtF, GeF, EqF,
 
+    // Values of value types in a frame's places, not in boxes (M6.7 step 6, D149; ObjPlaces).
+    // EnterPlaces, a function's first instruction, gives its frame `count` places; one with none
+    // has it with 0, which the translator leaves out. SetPlace gives a variable that has a place
+    // the value on top: copied into its place, the variable a Ref to it (a value too large for a
+    // place, or a frame given none, is kept as SetLocal keeps it). WithPlace, right before a call,
+    // empties a place for the call to make its result in, as WithDestinationAt gives one. KeepLocal:
+    // a variable with no place of its own keeps a copy of a value in one of the frame's, which may
+    // change or be reused.
+    EnterPlaces,        // u8 count                        ->
+    SetPlace,           // u16 slot, u8 place              value -> value
+    WithPlace,          // u8 place                        ->
+    KeepLocal,          // u16 slot                        ->
+    KeepTop,            //                                 value -> value (a copy, where in a place)
+
     Count_,
 
     // ---- The code the VM runs (M6.7, registers.cpp) ----
@@ -543,6 +557,9 @@ const uint8_t kTypeArgsOwn = 1;
 const uint8_t kTypeArgsKept = 2;
 // A function that gives a value of a value type, given where its result goes (M6.6 part 4).
 const uint8_t kTakesDestination = 4;
+// A function whose frame has places for its variables' values (M6.7 step 6): EnterPlaces gave it
+// some, and CallFrame::placesEnd says where they end.
+const uint8_t kHasPlaces = 8;
 
 // What Op::Numeric works out (M6.6 part 6), each as the standard library's function does.
 enum class NumericOp : uint8_t {

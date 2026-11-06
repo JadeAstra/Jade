@@ -28,6 +28,7 @@ enum class ObjType : uint8_t {
     Value,     // a value of a value type, in a box (ObjValue)
     Set,       // a set, or a live view of a map's keys or entries (ObjSet)
     Lazy,      // what a lazy field, static or global works its value out with (ObjLazy, D37)
+    Places,    // where a frame keeps the value of one of its variables (ObjPlace, D149)
 };
 
 // The core of an image's pixels while a parallel section draws on it in parts (G64): no piece's,
@@ -1289,6 +1290,55 @@ struct ObjValue final : Obj {
     const uint8_t* data() const { return reinterpret_cast<const uint8_t*>(this + 1); }
 };
 static_assert(sizeof(ObjValue) % alignof(Value) == 0, "a value's fields follow it");
+
+// Where a frame keeps the value of one of its variables of a value type (M6.7 step 6, D149), so
+// that `val r = Rectangle(...)` makes no box: the variable holds a Ref to it, on its stack and
+// nowhere else, and what keeps the value longer takes a copy (VM::own), as of an item of a list.
+// Laid out as a box is, with room after it for kBytes of the value: to the interpreter, a Ref to
+// a place is a Ref to a box being made, read and written with no test of which it is. Not one
+// of the collected objects: the places are made once for a line of execution (PlaceArena) and
+// live as long as it. What a value in one holds is marked through the Refs to it (VM::markValue).
+struct ObjPlace final : Obj {
+    static constexpr uint32_t kBytes = 64;  // the largest value kept in a place
+    ObjClass* cls = nullptr;                // as a box's: what it holds; null while it holds nothing
+    const bool constructing = true;         // as a box's being made: always open to change
+
+    ObjPlace() : Obj(ObjType::Places) { immortal = true; }
+    ObjPlace(const ObjPlace&) = delete;
+    ObjPlace& operator=(const ObjPlace&) = delete;
+    uint8_t* data() { return reinterpret_cast<uint8_t*>(this + 1); }
+    const uint8_t* data() const { return reinterpret_cast<const uint8_t*>(this + 1); }
+};
+static_assert(sizeof(ObjPlace) == sizeof(ObjValue), "a place is laid out as a box is");
+
+// The places of the frames of one line of execution, made when the first of them needs one and
+// never moved. A frame whose function has variables kept in places takes a run of them as it
+// starts, above those of the frames under it (EnterPlaces), and gives them back as it ends.
+struct PlaceArena {
+    static constexpr uint32_t kStride = sizeof(ObjPlace) + ObjPlace::kBytes;
+    static constexpr uint32_t kCount = 3072;
+    static constexpr uint32_t kNone = 0x80000000u;  // VM::framePlacesEnd: the frame got none
+
+    uint8_t* const memory;
+
+    PlaceArena() : memory(static_cast<uint8_t*>(::operator new(size_t{kCount} * kStride))) {
+        for (uint32_t i = 0; i < kCount; i++) new (memory + size_t{i} * kStride) ObjPlace();
+    }
+    ~PlaceArena() {
+        for (uint32_t i = 0; i < kCount; i++) at(i)->~ObjPlace();
+        ::operator delete(memory);
+    }
+    PlaceArena(const PlaceArena&) = delete;
+    PlaceArena& operator=(const PlaceArena&) = delete;
+
+    ObjPlace* at(uint32_t i) const { return reinterpret_cast<ObjPlace*>(memory + size_t{i} * kStride); }
+    // Which place `obj` is, or kCount for an object that is none of these.
+    uint32_t indexOf(const Obj* obj) const {
+        const uint8_t* at = reinterpret_cast<const uint8_t*>(obj);
+        if (at < memory || at >= memory + size_t{kCount} * kStride) return kCount;
+        return static_cast<uint32_t>(static_cast<size_t>(at - memory) / kStride);
+    }
+};
 
 // The value type of what a Ref points at: the holder's item type, and from there `refDepth`
 // values in, the one whose place `refOffset` is in.

@@ -83,6 +83,8 @@ struct Local {
     int owner = 0;
     // Another name for a slot a local already has, which takes no slot of its own.
     bool alias = false;
+    // The frame's place its value is kept in (M6.7 step 6, D149); -1 for none.
+    int place = -1;
 };
 
 // What an initializer is certain to evaluate to: a TypeId, kStaticNull, or 0 if only
@@ -201,6 +203,11 @@ struct FunctionState {
 
     std::vector<Local> locals;
     int slotTop = 0;  // the slot the next local will get
+    // Its frame's places (D149): where EnterPlaces's count is, -1 for a function given none;
+    // how many it has; and how many a statement has in use for a call's result.
+    int placesOperand = -1;
+    int placeCount = 0;
+    int placeTemps = 0;
     std::map<std::pair<int, uint64_t>, int> constantIndex;
     int owner = 0;    // whose code is being compiled in it now (Local::owner)
 
@@ -336,6 +343,7 @@ public:
         state.add(Local{"", 0, VarInfo{}});
         fs_ = &state;
         shared_ = false;
+        beginPlaces();
     }
 
     void continueScript(FunctionState& state) {
@@ -1372,6 +1380,50 @@ private:
         }
     }
 
+    // ---- Values in variables (M6.7 step 6, D149) ----
+
+    // A function's first instruction: the places its frame is given, as many as its variables
+    // turn out to need (newPlace). With none, the translator leaves it out.
+    void beginPlaces() {
+        emit(Op::EnterPlaces);
+        fs_->placesOperand = static_cast<int>(code().size());
+        emitByte(0);
+        here();
+    }
+    // A place for a variable, or for a statement's call to make its result in: one no variable in
+    // scope and no call in progress has; -1 where the function keeps none or has run out.
+    int newPlace() {
+        if (fs_->placesOperand < 0) return -1;
+        int top = 0;
+        for (const Local& l : fs_->locals)
+            if (l.place >= top) top = l.place + 1;
+        const int place = top + fs_->placeTemps;
+        if (place >= 0xFF) return -1;
+        if (place + 1 > fs_->placeCount) {
+            // Written as it grows: the code is looked through before the function is done.
+            fs_->placeCount = place + 1;
+            code()[static_cast<size_t>(fs_->placesOperand)] = static_cast<uint8_t>(fs_->placeCount);
+            fs_->proto->typeArgs |= kHasPlaces;
+        }
+        return place;
+    }
+    int placeOf(int local) const { return fs_->locals[static_cast<size_t>(local)].place; }
+    // `call` compiled to make its result in place `place` (Op::WithPlace).
+    const CallExpr* placeCall_ = nullptr;
+    int placeCallPlace_ = -1;
+    void compileIntoPlace(const Expr& call, int place, const TypeSpec& type) {
+        const CallExpr* savedTail = tailCall_;
+        const CallExpr* savedCall = placeCall_;
+        const int savedPlace = placeCallPlace_;
+        tailCall_ = nullptr;
+        placeCall_ = static_cast<const CallExpr*>(&call);
+        placeCallPlace_ = place;
+        compileExprFor(call, type);
+        tailCall_ = savedTail;
+        placeCall_ = savedCall;
+        placeCallPlace_ = savedPlace;
+    }
+
     // ---- Emission ----
 
     std::vector<uint8_t>& code() { return fs_->proto->code; }
@@ -2259,6 +2311,16 @@ private:
     // Compiles an argument of a call. A bare name that means nothing here is passed on as a
     // name, for the parameter it reaches to settle.
     void compileArg(const Expr& expr) {
+        // A value made as an argument (`Sizes(Size(1, 2), ...)`) is made in a place of the
+        // statement's (D149), which the function called reads it in, with no box.
+        if (expr.kind == ExprKind::Call && session_.checker != nullptr && session_.checker->constructsValue(static_cast<const CallExpr&>(expr))) {
+            const int temp = newPlace();
+            if (temp >= 0) {
+                fs_->placeTemps++;
+                compileIntoPlace(expr, temp, TypeSpec{});
+                return;
+            }
+        }
         if (expr.kind != ExprKind::Name || kindName(expr) != nullptr || isKnownName(static_cast<const NameExpr&>(expr).name)) return compileExpr(expr);
         const std::string& name = static_cast<const NameExpr&>(expr).name;
         line_ = expr.line;
@@ -2388,6 +2450,8 @@ private:
         if (local != -1) {
             noteMakingUses(beforeObject(local));
             emit(Op::GetLocal, slotOf(local));
+            // Its statement changes it inside: a copy, which keeps the value as it was read (D149).
+            if (placeOf(local) >= 0 && session_.checker != nullptr && session_.checker->copiesPlaceRead(at)) emit(Op::KeepTop);
             return;
         }
 
@@ -2469,6 +2533,11 @@ private:
             if (info.isVal) throw error(at, "cannot assign to val '" + name + "'");
             noteMakingUses(beforeObject(local));
             emitTypeCheck(info.type, name, at);
+            if (placeOf(local) >= 0) {
+                emit(Op::SetPlace, slotOf(local));
+                emitByte(placeOf(local));
+                return;
+            }
             emit(Op::SetLocal, slotOf(local));
             return;
         }
@@ -2783,7 +2852,10 @@ private:
     // arguments. `above` is how many slots the call takes, the callee or object and the arguments;
     // -1 where that is not so simply told.
     void emitCallPrelude(const CallExpr& call, int above) {
-        if (&call == tailCall_) {
+        if (&call == placeCall_) {
+            emit(Op::WithPlace);
+            emitByte(placeCallPlace_);
+        } else if (&call == tailCall_) {
             emit(Op::WithFrameDestination);
         } else if (&call == destinationCall_ && above >= 0 && above <= 0xFF) {
             emit(Op::WithDestinationAt);
@@ -3222,7 +3294,15 @@ private:
         for (const StmtPtr& stmt : statements) compileStmt(*stmt);
     }
 
+    // The places a statement takes for the values it makes as arguments (D149) are its own until
+    // it ends: by then every call given one has returned.
     void compileStmt(const Stmt& stmt) {
+        const int temps = fs_->placeTemps;
+        compileStmtItself(stmt);
+        fs_->placeTemps = temps;
+    }
+
+    void compileStmtItself(const Stmt& stmt) {
         line_ = stmt.line;
         const bool inExpression = std::exchange(jumpInExpression_, false);
         switch (stmt.kind) {
@@ -3277,11 +3357,16 @@ private:
                     }
                 } else {
                     int slot = addLocal(s.name, s.isVal, s, false, type);
+                    // A value of a value type, kept in a place of the frame's (D149): a call's
+                    // result made there.
+                    const int place = session_.checker != nullptr && session_.checker->placeLocal(s) ? newPlace() : -1;
+                    fs_->locals[static_cast<size_t>(slot)].place = place;  // taken now: its value's own calls take others
                     size_t codeMark = code().size();
                     fs_->barrier = static_cast<int>(codeMark);  // compiled again from here, it may be
                     size_t protoMark = fs_->proto->protos.size();
                     size_t breakMark = fs_->loop != nullptr ? fs_->loop->breakJumps.size() : 0;
-                    if (s.init) compileExprFor(*s.init, type);
+                    if (s.init && place >= 0 && s.init->kind == ExprKind::Call) compileIntoPlace(*s.init, place, type);
+                    else if (s.init) compileExprFor(*s.init, type);
                     else emit(Op::Null);
                     line_ = s.line;
 
@@ -3313,6 +3398,12 @@ private:
                     // `val before = it`, where `it` is changed through where it is: a copy, which
                     // keeps the value as it was (D167).
                     if (s.init && session_.checker != nullptr && session_.checker->keepsChangedItem(*s.init)) emit(Op::OwnLocal, slotOf(slot));
+                    if (place >= 0) {
+                        emit(Op::SetPlace, slotOf(slot));
+                        emitByte(place);
+                    } else if (session_.checker != nullptr && session_.checker->keepsPlace(s)) {
+                        emit(Op::KeepLocal, slotOf(slot));
+                    }
                     fs_->locals[static_cast<size_t>(slot)].depth = fs_->scopeDepth;
                 }
                 break;
@@ -3752,7 +3843,10 @@ private:
             return;
         }
         int whole = addLocal("(taken apart)", true, s, true);
+        const size_t before = fs_->locals.size();
         declareParts(s.pattern, whole, s.isVal, s);
+        if (session_.checker != nullptr && session_.checker->keepsPlace(s))
+            for (size_t i = before; i < fs_->locals.size(); i++) emit(Op::KeepLocal, fs_->locals[i].slot);
     }
 
     // Declares a local for each name of a pattern, from the parts of the local `whole`.
@@ -4311,11 +4405,15 @@ private:
             emit(Op::Pop);
         }
         if (s.isValue) {
-            // Made from its header alone: no fields of the body, no init of its own and no init
-            // blocks, so that a value can be made by writing its arguments where it goes.
+            // Made from its header alone: no fields of the body that keep a value (a property worked
+            // out by its getter keeps none), no init of its own and no init blocks, so that a value
+            // can be made by writing its arguments where it goes.
             bool ownInit = false;
             for (const auto& method : s.methods) ownInit = ownInit || (!method->isStatic && method->name == "init");
-            const bool headerAlone = !ownInit && s.initBlocks.empty() && s.fields.size() == s.headerFieldCount;
+            bool bodyKeeps = false;
+            for (size_t i = s.headerFieldCount; i < s.fields.size(); i++)
+                bodyKeeps = bodyKeeps || s.fields[i]->init != nullptr || s.fields[i]->getter == nullptr;
+            const bool headerAlone = !ownInit && s.initBlocks.empty() && !bodyKeeps;
             emitGet(storage, s);
             emit(Op::MarkValue);
             emitByte(headerAlone ? 1 : 0);
@@ -5274,6 +5372,7 @@ private:
 
         fs_ = &state;
         line_ = decl.line;
+        beginPlaces();
 
         // Parameters with a default value are optional, so they have to come last. Each default
         // is computed here if the caller left the argument out.
@@ -7098,11 +7197,28 @@ private:
                 }
                 if (compound) emitGet(target.name, target);
                 const int skip = beginNullSafe(compound && e.nullSafe);
-                if (compound) compileExpr(*e.value);
-                else compileExprFor(*e.value, declaredTypeOf(target.name));
+                VarInfo targetInfo;
+                const int targetLocal = !compound ? resolveLocal(fs_, target.name, target, targetInfo) : -1;
+                // `p = f(...)` of a variable kept in a place (D149): the result made in a place of
+                // the statement's own, then copied into the variable's, which f may still read.
+                const int temp = targetLocal >= 0 && placeOf(targetLocal) >= 0 && e.value->kind == ExprKind::Call ? newPlace() : -1;
+                if (temp >= 0) {
+                    fs_->placeTemps++;
+                    compileIntoPlace(*e.value, temp, declaredTypeOf(target.name));
+                    fs_->placeTemps--;
+                } else if (compound) {
+                    compileExpr(*e.value);
+                } else {
+                    compileExprFor(*e.value, declaredTypeOf(target.name));
+                }
                 line_ = e.line;
                 if (compound && !dotEq) emit(typedOp(binaryOp(e.op), e));
                 emitSet(target.name, target);
+                if (session_.checker != nullptr && session_.checker->keepsPlace(e)) {
+                    VarInfo info;
+                    const int local = resolveLocal(fs_, target.name, target, info);
+                    if (local != -1) emit(Op::KeepLocal, slotOf(local));
+                }
                 if (!compound && session_.checker != nullptr && session_.checker->keepsChangedItem(*e.value)) {
                     // `saved = it`, `it` changed through where it is: a copy, as a declaration takes (D167).
                     VarInfo info;

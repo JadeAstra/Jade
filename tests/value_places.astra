@@ -1,68 +1,117 @@
-// Changing a value through its place (M6.6 part 4, value-lists.html section 8): a var field of a
-// value is given a new value through the place that holds the value, by assignment or by a
-// mutating method. An item of a list of values is changed where it is; a variable or field
-// that holds a value gets one of its own, so nothing else that held the same value sees it.
+// Values of value types kept in their frame's places, not in boxes (M6.7 step 6, D149): what a
+// program sees is as it was with boxes. A variable holds a copy of its own; a statement that
+// changes a variable inside it reads the variable as it was; what keeps a value longer than its
+// frame, or a variable with no place of its own, takes a copy.
 
-value Point(var x : int, var y : int) {
-    mutating fun move(dx : int, dy : int) {
-        x += dx
-        y += dy
-    }
-    mutating fun reset() { move(-x, -y) }
-    fun moved(dx : int) : Point => copy(x = x + dx)
+value R(var x : int, var y : int, var w : int, var h : int) {
+  mutating fun grow() { w += 1; h += 1 }
+  fun moved(d : int) : R => R(x + d, y + d, w, h)
+  val area : int
+    get() => w * h
 }
-value Line(var from : Point, var to : Point)
+value S(val min : Size, val pref : Size, val max : Size)
+value Named(val name : string, val n : int)
+fun make(i : int) : R => R(i, i, 10, 20)
+fun show(a : R, b : R) : string => "$a $b"
 
-// A variable: `val q = p` keeps what p was.
-var p = Point(1, 2)
-val q = p
-p.x = 10
-p.y += 5
-p.move(1, 1)
-print(p, q)   // expect: Point(x=11, y=8) Point(x=1, y=2)
+// In a place: read, changed through it, given again; `val q = r` keeps its own copy.
+var r = make(1)
+r.x = 5
+r.grow()
+r = r.moved(2)
+val q = r
+r.x = 100
+print(q, r)   // expect: R(x=7, y=3, w=11, h=21) R(x=100, y=3, w=11, h=21)
 
-// Items of a list of values, where they are; each part of `pts[next()]` worked out once.
-val pts : List<Point> = [Point(0, 0), Point(1, 1)]
-pts[1].x = 7
-pts[0].move(3, 4)
-pts[1].y++
-var calls = 0
-fun next() : int {
-    calls += 1
-    return 1
+// A statement that changes the variable inside it: the first argument is as it was read.
+print(show(r, r.also { r.grow() }))   // expect: R(x=100, y=3, w=11, h=21) R(x=100, y=3, w=11, h=21)
+print(r.w)   // expect: 12
+
+// One place for a variable declared in a loop, a million times over.
+var sum = 0
+for (i in 0 ..< 1000000) {
+  val m = make(i)
+  sum += m.x + m.w
 }
-pts[next()].x += 100
-print(pts, calls)   // expect: [Point(x=3, y=4), Point(x=107, y=2)] 1
+print(sum)   // expect: 500009500000
+// A variable with no place of its own keeps its copy as the place changes.
+var keep : any = r
+r.x = 7
+print(keep, r)   // expect: R(x=100, y=3, w=12, h=22) R(x=7, y=3, w=12, h=22)
 
-// Values in values, in a variable and in a list.
-var line = Line(Point(0, 0), Point(5, 5))
-line.to.x = 9
-line.from.move(1, 2)
-print(line)   // expect: Line(from=Point(x=1, y=2), to=Point(x=9, y=5))
-val lines : List<Line> = [Line(Point(1, 1), Point(2, 2))]
-lines[0].to.y = 20
-lines[0].from.reset()
-print(lines)   // expect: [Line(from=Point(x=0, y=0), to=Point(x=2, y=20))]
+// Taken apart: the parts are copies.
+var whole = S(Size(1, 2), Size(3, 4), Size(5, 6))
+val (lo, mid, hi) = whole
+whole = S(Size(0, 0), Size(0, 0), Size(0, 0))
+print(lo, mid, hi, whole.pref)   // expect: Size(1 x 2) Size(3 x 4) Size(5 x 6) Size(0 x 0)
 
-// A var field of an object, and a value read from it before.
-class Holder(var at : Point)
-val h = Holder(Point(3, 3))
-val before = h.at
-h.at.x = 30
-h.at.move(1, 1)
-print(h.at, before)   // expect: Point(x=31, y=4) Point(x=3, y=3)
+// Made as arguments, each in a place of the statement's, read where they are by the call.
+val s = S(Size(1, 2), Size(3, 4), Size(5, 6))
+print(s.min.width + s.pref.height + s.max.width, s)   // expect: 10 S(min=Size(1 x 2), pref=Size(3 x 4), max=Size(5 x 6))
 
-// A changed copy, and a value read from a list kept as it was.
-val first = pts[0]
-pts[0].reset()
-print(first, pts[0], pts[1].moved(1))   // expect: Point(x=3, y=4) Point(x=0, y=0) Point(x=108, y=2)
+// Captured by a lambda, which changes it from its own frame: a function given it meanwhile
+// sees it as it was given.
+var c = make(3)
+fun look(given : R, change : () -> unit) : string {
+  change()
+  return "$given"
+}
+print(look(c, { c.x = 99 }), c.x)   // expect: R(x=3, y=3, w=10, h=20) 99
+val f = { c.grow(); c }
+print(f(), c)   // expect: R(x=99, y=3, w=11, h=21) R(x=99, y=3, w=11, h=21)
 
-// A global, and a variable a lambda holds.
-var counter = Point(0, 0)
-fun tick() { counter.x += 1 }
-tick()
-tick()
-var captured = Point(5, 5)
-val shift = { captured.move(1, 0) }
-shift()
-print(counter, captured)   // expect: Point(x=2, y=0) Point(x=6, y=5)
+// Given back from where it is kept: a copy, whether the caller has a place for it or not.
+fun built() : R {
+  var t = make(9)
+  t.grow()
+  return t
+}
+val p = built()
+print(p, built().area, listOf(built(), built()).size)   // expect: R(x=9, y=9, w=11, h=21) 231 2
+
+// Kept in a list, a map, a field and a sequence: copies, the variable changed after.
+class Holder { var kept = R(0, 0, 0, 0) }
+val holder = Holder()
+var v = make(4)
+val list = [v]
+val map = {"v": v}
+holder.kept = v
+val seq = sequence { yield(v); v.x = 50; yield(v) }.toList()
+v.x = 40
+print(list[0].x, map["v"]!!.x, holder.kept.x, seq[0].x, seq[1].x, v.x)   // expect: 4 4 4 4 50 40
+
+// A value holding an object, kept in a place while the collector runs (garbage made meanwhile).
+var named = Named("first", 1)
+for (i in 0 ..< 3) {
+  val made = Named("name " + i, i)
+  var junk = 0
+  for (k in 0 ..< 20000) { junk += ("x" + k).size }
+  if (i == 2) { named = made }
+}
+print(named, named.name.size)   // expect: Named(name="name 2", n=2) 6
+
+// A value too large for a place is kept in a box, as before.
+value Big(val a : int, val b : int, val c : int, val d : int, val e : int, val f : int, val g : int, val h : int, val i : int)
+var big = Big(1, 2, 3, 4, 5, 6, 7, 8, 9)
+val big2 = big
+big = Big(9, 8, 7, 6, 5, 4, 3, 2, 1)
+print(big2.a, big.a)   // expect: 1 9
+
+// Deep enough to use every place there is: the frames past them keep boxes.
+fun deep(n : int) : int {
+  val here = R(n, n, 1, 1)
+  if (n == 0) { return here.x }
+  return deep(n - 1) + here.x
+}
+print(deep(5000))   // expect: 12502500
+
+// On another thread, with places of its own.
+val job = thread {
+  var total = 0
+  for (i in 0 ..< 1000) {
+    val m = make(i)
+    total += m.w
+  }
+  total
+}
+print(job.get())   // expect: 10000

@@ -49,6 +49,10 @@ struct CallFrame {
     // How many times the function has started again, calling itself as its last step (D29).
     uint32_t repeats;
 };
+// Kept at 32 bytes: where in its line's places a frame's end (D149) is beside the frames, with
+// their type arguments and destinations (VM::framePlacesEnd), as each frame's `ip` is written at
+// every instruction and its place against the stack's is felt in every loop.
+static_assert(sizeof(CallFrame) == 32, "a frame is four words");
 // The type arguments a frame's generic function was called with (M6.6 part 1) are kept beside
 // the frames, not in them, which stay small for the calls that have none: VM::frameTypeArgs.
 
@@ -89,6 +93,8 @@ struct Context {
     // here, not in the VM, as the VM's threads take turns with it (instructions.inc, M6.7).
     int runBase = -1;
     ObjFiber* fiber = nullptr;  // the task this is the stack of; null for a thread's own
+    // Where its frames keep values in their variables (D149): made when the first needs it.
+    PlaceArena* places = nullptr;
     // The host its code reaches (M6.6.2): a sandbox's, given by the code that started it or
     // entered with Sandbox.run; null for the VM's own. The ones it had before each Sandbox.run.
     std::shared_ptr<Host> host;
@@ -427,6 +433,39 @@ public:
     // writable, in `slot`, and a Ref to it (M6.6 part 4).
     Value placeIn(Value& slot);
 
+    // ---- Values in a frame's places (M6.7 step 6, D149; ObjPlace) ----
+    // Where the places of frame `index` start: where those of the nearest frame under it that
+    // has places end.
+    uint32_t placesStart(ptrdiff_t index) const {
+        for (ptrdiff_t below = index - 1; below >= 0; below--)
+            if ((frames_[below].closure->proto->typeArgs & kHasPlaces) != 0) return framePlacesEnd(below) & ~PlaceArena::kNone;
+        return 0;
+    }
+    // Place `place` of `frame`; null where the frame has no places.
+    ObjPlace* placeOf(const CallFrame* frame, int place) const {
+        const uint32_t end = framePlacesEnd(frame - frames_);
+        if ((end & PlaceArena::kNone) != 0) return nullptr;
+        return context_->places->at(end - static_cast<uint32_t>(place) - 1);
+    }
+    void enterPlaces(CallFrame* frame, int count);
+    void setPlace(const CallFrame* frame, Value& slot, Value value, int place);
+    Value withPlace(const CallFrame* frame, int place);
+    // Whether `result` is where the caller of `frame` asked for it to be made.
+    bool madeAsAsked(const CallFrame* frame, const Value& result) {
+        if ((frame->closure->proto->typeArgs & kTakesDestination) == 0) return false;
+        const Value& dest = frameDestination(frame - frames_);
+        return dest.kind == ValueKind::Ref && dest.as.obj == result.as.obj && dest.refIndex == result.refIndex &&
+               dest.refOffset == result.refOffset && dest.refDepth == result.refDepth;
+    }
+    // Whether a Ref into the places is to one of the running frame's own.
+    bool ownPlace(const Value& r) const {
+        const ptrdiff_t index = frameCount_ - 1;
+        const uint32_t end = framePlacesEnd(index);
+        if ((frames_[index].closure->proto->typeArgs & kHasPlaces) == 0 || (end & PlaceArena::kNone) != 0) return false;
+        const uint32_t at = context_->places->indexOf(r.as.obj);
+        return at < end && at >= placesStart(index);
+    }
+
     // ---- Value types (M6.6 part 2) ----
     ObjClass* fieldClass(FieldDecl& field);
     const ValueLayout& layoutOf(ObjClass* cls);
@@ -609,6 +648,15 @@ public:
     Value& frameDestination(ptrdiff_t index) {
         return reinterpret_cast<Value*>(reinterpret_cast<const ObjTypeInfo**>(frames_ + maxFrames_) + maxFrames_)[index];
     }
+    // Of a function with places (kHasPlaces), set by its EnterPlaces: where in its line's
+    // PlaceArena the places of frame `index` end, their first just above the end of those of the
+    // frames under it; with PlaceArena::kNone added where there was no room, and it has none
+    // (D149). In the block of the frames, after the destinations.
+    uint32_t& framePlacesEnd(ptrdiff_t index) {
+        return reinterpret_cast<uint32_t*>(reinterpret_cast<Value*>(reinterpret_cast<const ObjTypeInfo**>(frames_ + maxFrames_) + maxFrames_) +
+                                           maxFrames_)[index];
+    }
+    uint32_t framePlacesEnd(ptrdiff_t index) const { return const_cast<VM*>(this)->framePlacesEnd(index); }
     Value pendingDestination_;  // given by WithDestination to the call that follows
     // Type argument `i` of what is in `args` (a frame's, or an object's type), or `any` where
     // that is not known.
@@ -1321,10 +1369,12 @@ private:
 
     void collectGarbage();
     void markValue(const Value& v) {
-        if (v.kind == ValueKind::Obj || v.kind == ValueKind::Ref) markObject(v.as.obj);  // a Small holds no object
+        if (v.kind == ValueKind::Obj) markObject(v.as.obj);  // a Small holds no object
+        else if (v.kind == ValueKind::Ref) v.as.obj->type == ObjType::Places ? markPlace(v) : markObject(v.as.obj);
         else if (v.kind == ValueKind::Undefined && v.as.obj != nullptr) markObject(v.as.obj);  // a lazy one's ObjLazy
     }
     void markObject(Obj* obj);
+    void markPlace(const Value& r);
     void markTable(const Table& table);
     void blacken(Obj* obj);
     void sweep();

@@ -548,6 +548,8 @@ private:
         const Op o = static_cast<Op>(code_[at]);
         const int a = size >= 3 ? readU16(code_, at + 1) : 0;
         const int b = size >= 5 ? readU16(code_, at + 3) : 0;
+        // A function's places, where it has none to give (D149): nothing to run.
+        if (o == Op::EnterPlaces && code_[at + 1] == 0) return true;
         if (!notes_ && (o == Op::GetLocal || o == Op::Const || o == Op::Pop || o == Op::Dup || o == Op::GetProp || o == Op::GetOwn ||
                         o == Op::SetLocal || o == Op::CopyLocal || o == Op::SetProp || o == Op::SetOwn || o == Op::GetGlobal ||
                         o == Op::GetUpvalue || o == Op::GetIndex || o == Op::Neg || o == Op::Not))

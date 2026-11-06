@@ -930,10 +930,47 @@ CASE(GetIndexRef) {
 }
 CASE(OwnLocal) {
     {
+    // A Ref to a frame's place is the variable's own value already (D149), and stays.
     Value& slot = base[READ_U16()];
-    if (slot.isRef()) slot = ownRef(slot);
+    if (slot.isRef() && slot.as.obj->type != ObjType::Places) slot = ownRef(slot);
     DONE();
 }
+}
+CASE(KeepLocal) {
+    {
+    // A variable with no place of its own keeps a copy of a value in one of the frame's (D149).
+    Value& slot = base[READ_U16()];
+    if (slot.isRef() && slot.as.obj->type == ObjType::Places) slot = ownRef(slot);
+    DONE();
+}
+}
+CASE(KeepTop) {
+    if (sp_[-1].isRef() && sp_[-1].as.obj->type == ObjType::Places) sp_[-1] = ownRef(sp_[-1]);
+    DONE();
+}
+CASE(EnterPlaces) {
+    {
+    const int count = READ_U8();
+    if (count != 0) enterPlaces(frame, count);
+    DONE();
+}
+}
+CASE(SetPlace) {
+    {
+    const int slot = READ_U16();
+    const int place = READ_U8();
+    // Made in its place already (WithPlace), as a call given one usually does: only held.
+    const Value value = sp_[-1];
+    if (value.kind == ValueKind::Ref && value.as.obj == placeOf(frame, place) && value.refDepth == 0 && value.refOffset == 0)
+        base[slot] = value;
+    else
+        setPlace(frame, base[slot], value, place);
+    DONE();
+}
+}
+CASE(WithPlace) {
+    pendingDestination_ = withPlace(frame, READ_U8());
+    DONE();
 }
 CASE(GetIndex) {
 LABEL(getIndex) {
@@ -1772,7 +1809,7 @@ COLD(Return) {
     // As above, a place too, where it is kept as it is.
     if ((openUpvalues_ == nullptr || openUpvalues_->location < base) && !frame->dropResult &&
         frameCount_ - 1 != RUN_BASE && (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) &&
-        (sp[-1].kind != ValueKind::Ref || keptAsItIs(frame))) {
+        (sp[-1].kind != ValueKind::Ref || (keptAsItIs(frame) && sp[-1].as.obj->type != ObjType::Places) || madeAsAsked(frame, sp[-1]))) {
         Value* const top = base;
         *top = sp[-1];
         sp = top + 1;

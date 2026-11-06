@@ -1953,6 +1953,7 @@ bool VM::callValue(Value callee, int argc, bool packed) {
                 nativeBase_ = sp_ - argc - 1;
                 pendingTypeArgs_ = nullptr;
                 if (!method->takesPlaces) boxAll(sp_ - argc, sp_);
+                pendingDestination_ = Value::null();  // the C++ makes its result where it likes, and calls nothing with this
                 Value result = method->fn(*this, bound->receiver, argc, sp_ - argc);
                 sp_ -= argc + 1;
                 *sp_++ = result;
@@ -2370,6 +2371,7 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
     pendingTypeArgs_ = nullptr;
     if (!method->takesPlaces) boxAll(sp_ - argc, sp_);
     receiver = boxed(receiver);
+    pendingDestination_ = Value::null();  // the C++ makes its result where it likes, and calls nothing with this
     Value result = method->fn(*this, receiver, argc, sp_ - argc);
     sp_ -= argc + 1;
     *sp_++ = result;
@@ -3317,6 +3319,11 @@ void VM::listSwap(ObjList* list, size_t i, size_t j) {
 void VM::makeFromHeader(ObjClass* cls, int argc, Value dest) {
     const ValueLayout& layout = layoutOf(cls);
     Value* const args = sp_ - argc;
+    if (dest.isRef() && dest.as.obj->type == ObjType::Places && dest.refDepth == 0 && layout.size <= ObjPlace::kBytes) {
+        // A frame's place (D149), empty or holding a value of this type: it takes this one.
+        ObjPlace* place = static_cast<ObjPlace*>(dest.as.obj);
+        if (place->cls == nullptr) place->cls = cls;
+    }
     if (dest.isRef() && refClass(dest) == cls && refBytes(dest) != nullptr) {
         uint8_t small[256];
         std::vector<uint8_t> large;
@@ -3630,7 +3637,10 @@ void VM::setRefField(Value r, ObjString* name, Value value) {
 }
 
 Value VM::placeIn(Value& slot) {
-    if (slot.isRef() && slot.as.obj->type != ObjType::Value) return slot;  // where it is already: in a list or an object
+    // Where it is already: in a list, an object or one of this frame's places. A place of a frame
+    // under it, reached through a variable a lambda shares, is copied as a box is: it may be read
+    // where it is by that frame's calls in progress, which see it as it was.
+    if (slot.isRef() && slot.as.obj->type != ObjType::Value && (slot.as.obj->type != ObjType::Places || ownPlace(slot))) return slot;
     const Value kept = boxed(slot);
     // Null, for `p?.move()` to pass by: what is changed through it reports a change to null.
     if (kept.isNull()) return kept;
@@ -3644,6 +3654,52 @@ Value VM::placeIn(Value& slot) {
     fresh->constructing = true;  // may be written, through the place
     slot = Value::object(fresh);
     return Value::ref(fresh, 0, 0, 0);
+}
+
+// ---- Values in a frame's places (M6.7 step 6, D149) ----
+
+// EnterPlaces: `count` places for the frame, above those of the frames under it; none where
+// there is no room left, and its variables keep boxes, as before.
+void VM::enterPlaces(CallFrame* frame, int count) {
+    if (context_->places == nullptr) context_->places = new PlaceArena();
+    const uint32_t start = placesStart(frame - frames_);
+    const uint32_t end = start + static_cast<uint32_t>(count);
+    framePlacesEnd(frame - frames_) = end <= PlaceArena::kCount ? end : start | PlaceArena::kNone;
+}
+
+// SetPlace: a variable with place `place` given `value`. A value of a value type, in a box or
+// where it is kept, is copied into the place, and the variable holds a Ref to it; anything else,
+// and a value too large for a place, is held as SetLocal holds it.
+void VM::setPlace(const CallFrame* frame, Value& slot, Value value, int place) {
+    ObjPlace* const at = placeOf(frame, place);
+    ObjClass* cls = nullptr;
+    const uint8_t* from = nullptr;
+    if (at != nullptr) {
+        if (value.isRef()) {
+            cls = refClass(value);
+            if (cls != nullptr) from = refAt(value, false);
+        } else if (value.isObjType(ObjType::Value)) {
+            cls = asValue(value)->cls;
+            from = asValue(value)->data();
+        }
+    }
+    if (cls == nullptr || layoutOf(cls).size > ObjPlace::kBytes) {
+        slot = value;
+        return;
+    }
+    uint8_t* to = at->data();
+    if (to != from) std::memmove(to, from, layoutOf(cls).size);
+    at->cls = cls;
+    slot = Value::ref(at, 0, 0, 0);
+}
+
+// WithPlace: place `place`, emptied, for the call about to be made to make its result in; null
+// where the frame has no places, and the call makes a box.
+Value VM::withPlace(const CallFrame* frame, int place) {
+    ObjPlace* const at = placeOf(frame, place);
+    if (at == nullptr) return Value::null();
+    at->cls = nullptr;
+    return Value::ref(at, 0, 0, 0);
 }
 
 bool VM::construct(ObjClass* cls, int argc, bool packed, const Value* captures, uint16_t captureCount) {
@@ -5217,7 +5273,7 @@ void VM::run(int baseFrame) {
         const FunctionProto* const proto_ = quick_->proto;                                                    \
         Value* const base_ = sp - (argc) - 1;                                                                 \
         if ((argc) == proto_->arity && !proto_->chooser && proto_->varargIndex < 0 && pendingEnums_ == 0 &&   \
-            (proto_->typeArgs & ~kTakesDestination) == 0 &&                                                   \
+            (proto_->typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 &&                                    \
             frameCount_ < frameLimit_ && stackEnd_ - base_ >= proto_->maxStack && bytesAllocated_ <= nextGC_ &&\
             !attention_.load(std::memory_order_relaxed)) {                                                    \
             frame->ip = ip + (size);                                                                          \
@@ -6033,6 +6089,25 @@ __declspec(noinline)
 __attribute__((noinline))
 #endif
 Value VM::returnedRef(Value result, ptrdiff_t frameIndex) {
+    // Given a place of the caller's for its result (D149): a value where it is, in a list, an
+    // object or a place, copied into it, with no box made.
+    if ((frames_[frameIndex].closure->proto->typeArgs & kTakesDestination) != 0) {
+        const Value dest = frameDestination(frameIndex);
+        if (dest.isRef() && dest.as.obj->type == ObjType::Places && dest.refDepth == 0) {
+            ObjClass* cls = refClass(result);
+            if (cls != nullptr && layoutOf(cls).size <= ObjPlace::kBytes) {
+                ObjPlace* place = static_cast<ObjPlace*>(dest.as.obj);
+                uint8_t* to = refBytes(dest);
+                const uint8_t* from = refAt(result, false);
+                if (to != from) std::memmove(to, from, layoutOf(cls).size);
+                place->cls = cls;
+                return dest;
+            }
+        }
+    }
+    // A value in a place given back with nowhere said for it to go: a box, as the place may be the
+    // frame's own, given back as it returns.
+    if (result.as.obj->type == ObjType::Places) return ownRef(result);
     if ((frames_[frameIndex].closure->proto->typeArgs & kTakesDestination) != 0) {
         const Value& dest = frameDestination(frameIndex);
         if (dest.kind == ValueKind::Undefined) return result;  // the caller keeps it as it is (Op::WithRefResult)
@@ -6709,6 +6784,28 @@ void VM::markContext(const Context& context) {
     }
     for (ObjUpvalue* upvalue = context.openUpvalues; upvalue != nullptr; upvalue = upvalue->nextOpen) markObject(upvalue);
     markObject(context.fiber);
+}
+
+// What the value in a frame's place holds of other objects (D149), where its type's layout says:
+// marked through each Ref to it, as the places themselves are no collected object.
+void VM::markPlace(const Value& r) {
+    const ObjPlace* place = static_cast<const ObjPlace*>(r.as.obj);
+    ObjClass* cls = place->cls;
+    if (cls == nullptr) return;
+    markObject(cls);
+    const ValueLayout* layout = cls->layout.load(std::memory_order_acquire);
+    if (layout == nullptr) return;
+    const uint8_t* data = place->data();
+    for (uint32_t offset : layout->objects) {
+        Obj* held;
+        std::memcpy(&held, data + offset, sizeof held);
+        markObject(held);
+    }
+    for (uint32_t offset : layout->values) {
+        Value held;
+        std::memcpy(&held, data + offset, sizeof held);
+        markValue(held);
+    }
 }
 
 void VM::markObject(Obj* obj) {
