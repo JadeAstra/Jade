@@ -2603,6 +2603,16 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
             const DeclarationSpan& span = module->spans[i];
             if (span.kind == DeclarationSpan::Global) {
                 reach.spansOf[span.key].emplace_back(module, i);
+                // Any other global it defines needs it as well: the classes declared inside a
+                // class are made in its span (M7: an enum inside a class nothing used was left
+                // out with it, and the code that sets the enum up was not).
+                const std::vector<uint8_t>& code = module->code;
+                for (size_t at = span.start; at < span.end && at < code.size(); at += instructionSize(code, at)) {
+                    const Op op = static_cast<Op>(code[at]);
+                    if (op != Op::DefineGlobal && op != Op::DefineTypedGlobal) continue;
+                    const int slot = code[at + 1] | (code[at + 2] << 8);
+                    if (slot != span.key) reach.spansOf[slot].emplace_back(module, i);
+                }
             } else if (span.kind == DeclarationSpan::Reflect || span.kind == DeclarationSpan::ReflectMethods) {
                 reach.metaSpans.emplace_back(module, i);
             } else if (span.key < module->constants.size() && module->constants[span.key].isString()) {

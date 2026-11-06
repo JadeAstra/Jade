@@ -1,0 +1,23 @@
+// A class nothing uses, with an enum or a class declared inside it, is left out of a built
+// program whole; the suite runs this built as well (M7: the enum's setting up was kept without
+// the class, and failed). One whose inner class has values worked out by code is kept.
+fun noisy() : int {
+  print("worked out")
+  return 3
+}
+class Unused(val n : int) {
+  enum Mode { a, b }
+  private var mode = Mode.a
+}
+class Kept {   // expect: worked out
+  class Inner {
+    static {
+      val three = noisy()
+    }
+  }
+}
+class Used {
+  enum Kind { x, y }
+  val k = Kind.y
+}
+print(Used().k)   // expect: y
