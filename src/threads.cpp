@@ -148,9 +148,9 @@ bool Context::grow(const Value* top, int wanted) {
         if (!commit(base, base + static_cast<size_t>(limit) * sizeof(CallFrame))) return false;
         char* types = base + count * sizeof(CallFrame);
         if (!commit(types, types + static_cast<size_t>(limit) * sizeof(const ObjTypeInfo*))) return false;
-        char* places = types + count * sizeof(const ObjTypeInfo*);
-        if (!commit(places, places + static_cast<size_t>(limit) * sizeof(Value))) return false;
-        char* ends = places + count * sizeof(Value);
+        char* destinations = types + count * sizeof(const ObjTypeInfo*);
+        if (!commit(destinations, destinations + static_cast<size_t>(limit) * sizeof(Value))) return false;
+        char* ends = destinations + count * sizeof(Value);
         if (!commit(ends, ends + static_cast<size_t>(limit) * sizeof(uint32_t))) return false;
         frameLimit = limit;
     }

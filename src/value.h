@@ -1005,8 +1005,10 @@ struct ObjClass final : Obj {
     // declared index (from TypeSlots). G4.
     uint8_t phantomParams = 0;
     std::vector<uint32_t> typeSlotted;
-    bool typeSlottedAt(size_t declaredIndex) const {
-        return std::find(typeSlotted.begin(), typeSlotted.end(), static_cast<uint32_t>(declaredIndex)) != typeSlotted.end();
+    bool typeSlottedAt(size_t field) const {
+        for (uint32_t slotted : typeSlotted)
+            if (slotted == field) return true;
+        return false;
     }
     std::vector<ObjTypeInfo*> fieldPatterns;
     std::atomic<uint8_t> patternsState{0};

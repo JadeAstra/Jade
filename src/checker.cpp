@@ -5925,7 +5925,7 @@ struct Checker::Impl {
     // A change made through a place: one that is an item of a list, or may be (a parameter, or
     // `this` in a mutating method), changes a list of its type.
     void notePlaceChange(const Expr& place, ClassInfo* type) {
-        if (const VarStmt* local = placeLocalOf(place)) notePlaceLocalChange(local, changing);
+        if (const VarStmt* local = placeLocalOf(place)) notePlaceLocalChange(local, changeAt);
         const Expr* root = &place;
         while (root->kind == ExprKind::Member) {
             // Through a field of an object, the change is to a value kept inside it (M6.6 part 5).
@@ -6099,7 +6099,7 @@ struct Checker::Impl {
         const Local* l = findLocal(static_cast<const NameExpr&>(*root).name);
         return l != nullptr ? l->place : nullptr;
     }
-    const Node* changing = nullptr;  // the assignment or call a change through a place is made by
+    const Node* changeAt = nullptr;  // the assignment or call a change through a place is made by
     std::set<std::pair<const FunctionDecl*, std::string>> placeParams;  // parameters changed through as places
 
     void noteValueParam(const FunctionDecl& d, int index, const Type& t) {
@@ -6174,10 +6174,10 @@ struct Checker::Impl {
         if (call->callee->kind == ExprKind::Member) {
             const auto& m = static_cast<const MemberExpr&>(*call->callee);
             if (isPlace(*m.object)) {
-                const Node* saved = changing;
-                changing = call;
+                const Node* saved = changeAt;
+                changeAt = call;
                 notePlaceChange(*m.object, f->owner);
-                changing = saved;
+                changeAt = saved;
                 return;
             }
             const std::string why = lostThrough(*m.object);
@@ -6230,8 +6230,8 @@ struct Checker::Impl {
             const Node*& at;
             const Node* saved;
             ~Changing() { at = saved; }
-        } changingNow{changing, changing};
-        changing = &a;
+        } changingNow{changeAt, changeAt};
+        changeAt = &a;
         if (a.target->kind == ExprKind::Index) {
             const Type list = typeQuietly(*static_cast<const IndexExpr&>(*a.target).object);
             noteListChange(list);

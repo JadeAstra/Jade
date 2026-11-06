@@ -6698,13 +6698,13 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
             break;
         }
         case Op::TypeSlots: {
-            const std::string& names = asString(consts[(ip += 2, operandU16(ip - 2))])->utf8();
+            const std::string& slotted = asString(consts[(ip += 2, operandU16(ip - 2))])->utf8();
             if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
             ObjClass* cls = asClass(sp_[-1]);
-            for (size_t from = 0; from < names.size();) {
-                const size_t end = names.find('\n', from);
+            for (size_t from = 0; from < slotted.size();) {
+                const size_t end = slotted.find('\n', from);
                 if (end == std::string::npos) break;
-                if (const Value* at = cls->declaredIndex.find(intern(std::string_view(names).substr(from, end - from))))
+                if (const Value* at = cls->declaredIndex.find(intern(std::string_view(slotted).substr(from, end - from))))
                     cls->typeSlotted.push_back(static_cast<uint32_t>(at->as.i));
                 from = end + 1;
             }
