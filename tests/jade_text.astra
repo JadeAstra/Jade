@@ -184,22 +184,22 @@ same("listeners", heard, [3, 4])
 
 // A compound edit is one step to undo, however many edits are in it, and one inside another
 // is part of it.
-val block = SharedTextModel("a\nb\nc")
-block.compoundEdit {
-  block.moveCaret(0)
-  block.insert("  ")
-  block.compoundEdit {
-    block.moveCaret(4)
-    block.insert("  ")
+val indented = SharedTextModel("a\nb\nc")
+indented.compoundEdit {
+  indented.moveCaret(0)
+  indented.insert("  ")
+  indented.compoundEdit {
+    indented.moveCaret(4)
+    indented.insert("  ")
   }
-  block.moveCaret(8)
-  block.insert("  ")
+  indented.moveCaret(8)
+  indented.insert("  ")
 }
-same("indented", block.text, "  a\n  b\n  c")
-block.undo()
-same("undone at once", block.text, "a\nb\nc")
-yes("and nothing more to undo", !block.canUndo)
-yes("but something to redo", block.canRedo)
+same("indented", indented.text, "  a\n  b\n  c")
+indented.undo()
+same("undone at once", indented.text, "a\nb\nc")
+yes("and nothing more to undo", !indented.canUndo)
+yes("but something to redo", indented.canRedo)
 
 // Deleting forwards and backwards merge too, and a selection replaced is a step of its own.
 val del = SharedTextModel("abcdef")

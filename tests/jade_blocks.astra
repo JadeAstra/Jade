@@ -1,0 +1,226 @@
+// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// Blocks and documents: a block's header and view, its Edit/Done toggle swapping the view for its
+// source and making the view again, a click on the view choosing the block, a chromeless block,
+// and a document of blocks one under another that Tab, find and clicks reach into. These are
+// JadeUI's own tests (BlockTest, DocTest), carried over with their names. BlockTest's
+// aBodyThatTakesInputGetsClicksAndKeys waits for the HTML view, a later milestone.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts a component draws.
+fun labelTexts(comp : Component, w : int, h : int) : List<string> =>
+  comp.record(w, h).filter { it is DrawOp.Text }.map { (it as DrawOp.Text).text }
+
+// The text area a block shows while its source is being edited, or null while it shows its view
+// (the block's own record of it is internal to Jade).
+fun editorOf(comp : Component) : TextArea? {
+  for (d in comp.descendants()) {
+    val c = d.content
+    if (c is TextArea) { return c }
+  }
+  return null
+}
+
+// -- BlockTest --
+
+// showsLabelAndRenderedBodyThenTogglesToEditor: the view until Edit, then the source.
+fun showsLabelAndRenderedBodyThenTogglesToEditor() {
+  var rendered = 0
+  val blk = Block("hello", "Body", view = { s ->
+    rendered += 1
+    label("view:$s")
+  })
+  val comp = Component(blk)
+  comp.layout(300, 160)
+  val texts = labelTexts(comp, 300, 160)
+  yes("header label shown: $texts", texts.contains("Body"))
+  yes("edit toggle shown", texts.contains("Edit"))
+  yes("rendered body shown", texts.contains("view:hello"))
+  comp.dispatch(Event.Click(300 - 12, 12))         // the Edit toggle, at the header's right
+  comp.layout(300, 160)
+  yes("toggled to Done", labelTexts(comp, 300, 160).contains("Done"))
+  yes("body is now the source editor", editorOf(comp) != null)
+}
+showsLabelAndRenderedBodyThenTogglesToEditor()
+
+// commitReRendersAndFiresOnEdit: Done makes the view again and tells onEdit.
+fun commitReRendersAndFiresOnEdit() {
+  var committed : string? = null
+  val blk = Block("a", "B", view = { s -> label("v:$s") }, onEdit = { committed = it })
+  val comp = Component(blk)
+  comp.layout(240, 140)
+  comp.record(240, 140)
+  comp.dispatch(Event.Click(240 - 12, 12))         // Edit
+  editorOf(comp)!!.model.setText("b")            // as if a new source were typed
+  comp.dispatch(Event.Click(240 - 12, 12))         // Done
+  same("onEdit told", committed, "b")
+  same("the source", blk.source, "b")
+  comp.layout(240, 140)
+  yes("made again from the new source", labelTexts(comp, 240, 140).contains("v:b"))
+}
+commitReRendersAndFiresOnEdit()
+
+// A view that would take any click that reached it, as a chart or a picture would.
+class Greedy : Content {
+  override var owner : Component? = null
+  var clicks = 0
+  override fun sizes() : Sizes => Sizes(Size(80, 80), Size(80, 80), Size(80, 80))
+  override fun paint(canvas : Canvas) {}
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) { clicks += 1 }
+  }
+}
+
+// clickingTheRenderedBodyFiresOnSelectNotTheBodyChild: the view is a preview, not something to
+// click in; a click on it chooses the block.
+fun clickingTheRenderedBodyFiresOnSelectNotTheBodyChild() {
+  var selected : string? = null
+  val greedy = Greedy()
+  val blk = Block("markup", "SVG", view = { Component(greedy) }, onSelect = { selected = it })
+  val comp = Component(blk)
+  comp.layout(200, 120)
+  comp.record(200, 120)
+  comp.dispatch(Event.Click(40, 60))               // well inside the view
+  same("a click on the view chooses the block", selected, "markup")
+  same("the view did not take the click", greedy.clicks, 0)
+}
+clickingTheRenderedBodyFiresOnSelectNotTheBodyChild()
+
+// clickingTheBodyWhileEditingReachesTheEditor: while editing, a click places the caret.
+fun clickingTheBodyWhileEditingReachesTheEditor() {
+  val blk = Block("abc", "L", view = { s -> label("v:$s") })
+  val comp = Component(blk)
+  comp.layout(200, 120)
+  comp.record(200, 120)
+  comp.dispatch(Event.Click(200 - 12, 12))         // Edit
+  yes("editing", editorOf(comp) != null)
+  comp.layout(200, 120)
+  comp.dispatch(Event.Click(30, 30))               // after "abc" on the editor's first line
+  yes("still editing: the click reached the editor", editorOf(comp) != null)
+  same("the caret placed", editorOf(comp)!!.model.caret, 3)
+}
+clickingTheBodyWhileEditingReachesTheEditor()
+
+// chromelessBlockHasNoHeaderAndDoubleClickActivates: no header, so a double click is the way in.
+fun chromelessBlockHasNoHeaderAndDoubleClickActivates() {
+  var selected = 0
+  var activated = 0
+  val blk = Block("=draw()", "SVG", view = { s -> label("v:$s") }, chromeless = true)
+  blk.onSelect = { selected += 1 }
+  blk.onActivate = { activated += 1 }
+  val comp = Component(blk)
+  comp.layout(200, 120)
+  val texts = labelTexts(comp, 200, 120)
+  yes("no header label or Edit button: $texts", !texts.contains("Edit") and !texts.contains("SVG"))
+  yes("the view fills the block", texts.contains("v:=draw()"))
+  comp.dispatch(Event.Click(20, 10))               // a single click anywhere chooses it
+  same("chosen", selected, 1)
+  same("not acted on", activated, 0)
+  comp.dispatch(Event.Click(20, 10, clicks = 2))   // a double click acts on it
+  same("double click activates", activated, 1)
+}
+chromelessBlockHasNoHeaderAndDoubleClickActivates()
+
+// bodyChildIsHitTestableAndFocusable: what makes a live widget in a block usable at all.
+fun bodyChildIsHitTestableAndFocusable() {
+  val field = textField(SharedTextModel("x")).withId("f")
+  val blk = block("s", "L") { field }
+  blk.layout(200, 120)
+  same("find goes into the body", blk.find("f")?.id, "f")
+  same("Tab reaches the body", blk.focusables().map { it.id }, ["f"])
+}
+bodyChildIsHitTestableAndFocusable()
+print("BlockTest:", checks, "checks,", failed)   // expect: BlockTest: 20 checks, []
+
+// -- Mine: what JadeUI's tests leave out --
+
+// A block's source changed from outside shows at once; a refresh makes the view again.
+fun setSourceAndRefreshMakeTheViewAgain() {
+  var made = 0
+  val blk = Block("one", "L", view = { s ->
+    made += 1
+    label(s)
+  })
+  val comp = Component(blk)
+  comp.layout(200, 100)
+  blk.setSource("two")
+  comp.layout(200, 100)
+  yes("setSource shows the new source", labelTexts(comp, 200, 100).contains("two"))
+  val before = made
+  blk.refresh()
+  same("refresh makes the view again", made, before + 1)
+  blk.keepSource("three")
+  same("keepSource keeps the view", made, before + 1)
+  same("but takes the source", blk.source, "three")
+  blk.setError("bad")
+  yes("an error shows", labelTexts(comp, 200, 100).contains("bad"))
+  blk.setSource("four")
+  yes("a new source clears it", !labelTexts(comp, 200, 100).contains("bad"))
+}
+setSourceAndRefreshMakeTheViewAgain()
+
+// A block's height at a width is its header's and the view's.
+fun heightForWidthAddsTheHeader() {
+  val blk = Block("x", "L", view = { Component(Greedy()) })
+  same("header and view", blk.heightForWidth(300), 24 + 80)
+  val bare = Block("x", "L", view = { Component(Greedy()) }, chromeless = true)
+  same("no header", bare.heightForWidth(300), 80)
+}
+heightForWidthAddsTheHeader()
+print("Mine:", checks, "checks,", failed)   // expect: Mine: 28 checks, []
+
+// -- DocTest --
+
+// stacksBlocksTopToBottom
+fun stacksBlocksTopToBottom() {
+  val a = label("A").withId("a")
+  val b = textField(SharedTextModel("b")).withId("b")
+  val c = label("C").withId("c")
+  val d = doc([a, b, c])
+  d.layout(400, 600)
+  yes("stacked in order", a.bounds.y < b.bounds.y and b.bounds.y < c.bounds.y)
+  yes("a has a size", a.bounds.height > 0 and a.bounds.width > 0)
+}
+stacksBlocksTopToBottom()
+
+// blocksAreHitTestableFocusableAndFindable: Tab, find and clicks all reach into a document.
+fun blocksAreHitTestableFocusableAndFindable() {
+  val f1 = textField(SharedTextModel("one")).withId("f1")
+  val f2 = textField(SharedTextModel("two")).withId("f2")
+  val d = doc([f1, f2])
+  d.layout(400, 400)
+  same("focus order top to bottom", d.focusables().map { it.id }, ["f1", "f2"])
+  same("find goes into blocks", d.find("f2")?.id, "f2")
+  same("clicks go to the block", d.componentAt(f2.bounds.x + 3, f2.bounds.y + 3)?.id, "f2")
+}
+blocksAreHitTestableFocusableAndFindable()
+
+// Mine: adding, removing and replacing blocks.
+fun blocksAddedAndRemoved() {
+  val d = doc([label("A").withId("a")])
+  val dc = d.content as Doc
+  dc.add(label("B").withId("b"))
+  dc.add(label("Z").withId("z"), 0)
+  same("in order", dc.blocks.map { it.id }, ["z", "a", "b"])
+  d.layout(400, 300)
+  yes("the first above the second", d.find("z")!!.bounds.y < d.find("a")!!.bounds.y)
+  dc.removeAt(1)
+  dc.removeAt(9)                                   // out of range: nothing
+  same("one removed", dc.blocks.map { it.id }, ["z", "b"])
+  dc.setBlocks([label("Q").withId("q")])
+  same("replaced", dc.blocks.map { it.id }, ["q"])
+  same("the old ones gone", d.find("z"), null)
+}
+blocksAddedAndRemoved()
+print("DocTest:", checks, "checks,", failed)   // expect: DocTest: 38 checks, []
+print("done")   // expect: done
