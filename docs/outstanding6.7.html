@@ -92,11 +92,11 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (five)</li>
+<li><a href="#decide">Waiting for the user</a> (four)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (fifteen)</li>
-<li><a href="#m7">Left from M7</a> (seven)</li>
+<li><a href="#m7">Left from M7</a> (six)</li>
 <li><a href="#sandbox">The sandbox: what was left out</a> (eleven)</li>
 <li><a href="#speed">Speed: leads, measurements and limits</a> (ten)</li>
 <li><a href="#cautions">Standing cautions</a> (four)</li>
@@ -108,8 +108,7 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>The question</th><th class="when">Recommended</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-next">M8</td><td>The next milestone, Owned windows and dialogs (the dialog side of <code>Window</code>, <code>DialogSession</code> and the eight dialogs, the file dialogs that wait, then charts, ending with JadeMem's gui module), waits for the go-ahead: one milestone at a time. M7 is built (version 0.7.0, gui-plan.md section 6.4).</td><td class="when">Ready: the full check of 0.7.0 passed on 2026-11-06 (MSVC every way and the four stress settings, Clang, ASan, ASan+GC, Linux Clang 21 and GCC); benchmarks level with 0.6.7 but <a href="#o-g70">G70</a></td></tr>
-<tr><td class="part" id="o-g70">G70</td><td>A field of a value type is read in place only where nothing the function calls may change a list of that type. A call of a method counts every class&#39;s version of it, and a call of a function value (a callback the program gave) counts as one that may change anything. So one widget whose <code>sizes()</code> calls a callback makes every <code>Component.prefSize()</code> and <code>minSize()</code> copy the size it reads: Tabs&#39; <code>sizes()</code> asks its <code>dirty</code> callback, and <code>bench/jade_layout</code> went from 0.51 to 0.57 s (11%) when Tabs was added, with no Tabs in it; with that one call taken out it is 0.51 again. Ways out: judge the read by its expression where the value does not outlive it (as G10 does for list items), or let a callback&#39;s type say it changes no lists. Apps will have many widgets that call callbacks, so the cost grows with the library.</td><td class="when">Fix it before M8: the first way, judged by the expression</td></tr>
+<tr><td class="part" id="o-next">M8</td><td>The next milestone, Owned windows and dialogs (the dialog side of <code>Window</code>, <code>DialogSession</code> and the eight dialogs, the file dialogs that wait, then charts, ending with JadeMem's gui module), waits for the go-ahead: one milestone at a time. M7 is built (version 0.7.0, gui-plan.md section 6.4).</td><td class="when">Ready: the full check of 0.7.0 passed on 2026-11-06 (MSVC every way and the four stress settings, Clang, ASan, ASan+GC, Linux Clang 21 and GCC); benchmarks level with 0.6.7 once G70 was built (below)</td></tr>
 <tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
 <tr><td class="part" id="o-clang">Windows build</td><td>Which compiler the Windows release is built with. MSVC cannot be made to do tail calls for certain (tried and removed, 2026-11-05), so its build keeps the switch: 3.3 times as long on <code>numeric</code>, about twice on <code>calls</code>, <code>fields</code> and <code>particles</code>, 25% faster on <code>points_values</code>.</td><td class="when">Ship the clang-cl build</td></tr>
 <tr><td class="part" id="o-pgo">MSVC PGO</td><td>Profile-guided optimisation for the MSVC build, offered for after M6.7, should the MSVC build stay in use.</td><td class="when">Only if MSVC is kept</td></tr>
@@ -161,11 +160,10 @@ pre code { background: none; padding: 0; }
 </tbody></table></div>
 
 <h2 id="m7">Left from M7</h2>
-<p>Found or left while M7 was built (2026-11-06); what M7 ported is in gui-plan.md, section 6.4.</p>
+<p>Found or left while M7 was built (2026-11-06); what M7 ported is in gui-plan.md, section 6.4. Two found in its full check were built after 0.7.0 at the user's word: <strong id="o-g70">G70</strong>, a field of a value type read where it is when nothing runs between the read and its use (a field of it read at once, or the field given back, either side of <code>?:</code> included), which brought <code>jade_layout</code> back from 0.57 to 0.51 s, level with 0.6.7; and Kotlin's <code>{ -&gt; value }</code>, a lambda that takes nothing.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-m7-lambda">Lambdas</td><td>Kotlin's <code>{ -&gt; expr }</code>, a lambda that says it takes nothing, is refused; <code>{ expr }</code> means the same. A ported line has to drop the arrow.</td><td class="when">A language gap, for the user</td></tr>
 <tr><td class="part" id="o-m7-hash">Strings</td><td>A string is hashed whole when it is made: a slice of 334,000 characters takes 0.35 ms more than it would if the hash waited until a map asked for it. A speed lead, not measured in a program yet.</td><td class="when">When a program shows it</td></tr>
 <tr><td class="part" id="o-m7-table">Table layout</td><td>JadeUI's limit for a long table's layout (<code>TablePerformanceTest</code>) is easily met but says little: <code>Component.layout</code> lays out containers only, so the table's own work is not in the time.</td><td class="when">A better measure, if tables are slow in an app</td></tr>
 <tr><td class="part" id="o-m7-waits">Tests</td><td>JadeUI's tests that wait for later parts: a block whose view takes input (the HTML view), the document views (<code>DocView</code>, <code>ProseView</code>), the sheet and its formula bar, the math block, inline objects in text.</td><td class="when">M10</td></tr>

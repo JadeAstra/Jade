@@ -3623,7 +3623,7 @@ struct Checker::Impl {
         Type value = r.value ? (checked ? exprExpected(*r.value, ctx->expected) : expr(*r.value)) : Type::of(Type::Unit);
         // `return cached`: the field is given back at once, and is copied on the way unless the
         // caller keeps it where it is (M6.6 part 5).
-        if (r.value && (r.value->kind == ExprKind::Member || r.value->kind == ExprKind::Name)) readAtOnce.insert(r.value.get());
+        if (r.value) noteGivenBack(*r.value);
         if (!r.label.empty()) return;  // return@name leaves a lambda
         if (ctx->isLambda && !r.implicit) return;  // a bare return in an inlined lambda leaves the function around it
         if (ctx->returns != nullptr) {
@@ -6176,7 +6176,23 @@ struct Checker::Impl {
         return field.cls;
     }
     std::unordered_map<const Node*, IndexCandidate> fieldCandidates;
-    std::unordered_set<const Node*> readAtOnce;  // calls whose value is read at once, by a field of it
+    std::unordered_set<const Node*> readAtOnce;  // reads whose value is used at once, nothing run in between
+    // What a return gives back: a field read is given back at once, and so is either side of
+    // `a ?: b` or `c ? a : b` given back, as nothing runs between the read and the return (G70:
+    // `override ?: sizes().pref` keeps the override where it is, whatever sizes() may do).
+    void noteGivenBack(const Expr& e) {
+        if (e.kind == ExprKind::Member || e.kind == ExprKind::Name) {
+            readAtOnce.insert(&e);
+        } else if (e.kind == ExprKind::Elvis) {
+            const auto& el = static_cast<const ElvisExpr&>(e);
+            noteGivenBack(*el.left);
+            noteGivenBack(*el.right);
+        } else if (e.kind == ExprKind::Ternary) {
+            const auto& t = static_cast<const TernaryExpr&>(e);
+            noteGivenBack(*t.then);
+            noteGivenBack(*t.otherwise);
+        }
+    }
     bool readsFieldInPlace(const Node& at) {
         if (readAtOnce.count(&at) != 0) return true;
         auto found = fieldCandidates.find(&at);
@@ -6576,8 +6592,12 @@ struct Checker::Impl {
                 if (!m.safe) noteLockedRead(f, m, m.object.get());
                 if (ClassInfo* t = insideObject(obj.cls, fieldType(f))) fieldCandidates[&m] = IndexCandidate{effectKey(), t};
                 // `node.sizes().pref`: what the call gives is read at once, with nothing run in
-                // between, so it may be where the function found it (M6.6 part 5).
-                if (obj.cls->isValue && m.object->kind == ExprKind::Call) readAtOnce.insert(m.object.get());
+                // between, so it may be where the function found it (M6.6 part 5). So is a field
+                // read for a field of its own (`e.insets.left`), whatever the function around may
+                // run before or after (G70); not through a getter, which runs code on it.
+                if (obj.cls->isValue && f->getterFn == nullptr &&
+                    (m.object->kind == ExprKind::Call || m.object->kind == ExprKind::Member || m.object->kind == ExprKind::Name))
+                    readAtOnce.insert(m.object.get());
             }
         }
         return result;

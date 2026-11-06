@@ -1544,10 +1544,10 @@ A caret's places on a row come from one `Font.offsets` call, and rows are found 
 Typing in a text area of 1.15 million characters takes 10 ms a key unwrapped and 16 ms
 wrapped (it took 43 to 56 ms before the edit log). Lists, trees and tables paint only the
 rows in view. A kept picture is refused by its side as well as its area, so a tall list never
-asks for a surface larger than the graphics card's limit. One loss, found in the full check
-and waiting for the user as G70 (`docs/outstanding6.7.html`): a widget whose `sizes()` calls a
-callback (Tabs asks its `dirty`) makes every component copy the size it reads, so Jade's
-layout benchmark is 11% slower than in 0.6.7.
+asks for a surface larger than the graphics card's limit. One loss found in the full check is
+mended (G70): a widget whose `sizes()` called a callback (Tabs asks its `dirty`) made every
+component copy the size it read, 11% on Jade's layout benchmark, until a field read was
+judged by its expression where nothing runs between the read and its use.
 
 **Differences from the Kotlin, to be known when porting.**
 
@@ -1571,7 +1571,8 @@ layout benchmark is 11% slower than in 0.6.7.
 
 **Language changes made for the port**, each asked for and agreed: an override that leaves
 out a default inherits the overridden one, and may give its own; a class header, like a
-function, may have an entry without a default after entries with defaults. Found and fixed on
+function, may have an entry without a default after entries with defaults; and Kotlin's
+`{ -> value }`, a lambda that takes nothing and has no `it` (after 0.7.0). Found and fixed on
 the way: a built program left out an unused class but kept its inner enum's setup; a byte in
 an int range was not found; a block run on an object looked for its members after the
 program's names, and a bare `block()` inside a class ran on nothing.

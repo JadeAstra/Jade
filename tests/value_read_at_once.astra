@@ -1,0 +1,77 @@
+// A field of a value type read where it is in an object, judged by the expression it is in
+// (G70): read for a field of its own (`box.p.x`), or given back by a return, either side of
+// `a ?: b` or `c ? a : b` included, nothing runs between the read and its use, so whatever else
+// the function calls cannot reach it. What is given back is a copy, and a getter of the value
+// works on a copy, as before.
+
+value P(var x : int, var y : int) {
+  // Reads the box's point again from inside, after changing it: a copy of its own sees the old.
+  val sum : int
+    get() {
+      box.p = P(100, 100)
+      return x + y
+    }
+}
+
+class Box {
+  var p = P(1, 2)
+  var spare : P? = null
+  var flag = true
+
+  // A callback the program gives: as far as the checker knows, it may change anything.
+  var hook : () -> unit = {}
+
+  fun pointOrMade() : P => spare ?: made()
+  fun made() : P {
+    hook()
+    spare = P(7, 7)
+    return P(3, 4)
+  }
+  fun either() : P => flag ? p : P(0, 0)
+  fun xPlusHook() : int {
+    val a = p.x
+    hook()
+    return a + p.x
+  }
+  fun hookThenX() : int {
+    hook()
+    return p.x
+  }
+}
+
+val box = Box()
+
+// `spare ?: made()`: spare is null, so made() runs and changes it; what is given back is made()'s.
+val first = box.pointOrMade()
+print(first, box.spare)   // expect: P(x=3, y=4) P(x=7, y=7)
+// Now spare is there and is given back; changing it afterwards leaves the copy given back.
+val second = box.pointOrMade()
+box.spare = P(8, 8)
+print(second, box.spare)   // expect: P(x=7, y=7) P(x=8, y=8)
+
+// `flag ? p : P(0, 0)`: the field given back is a copy.
+val got = box.either()
+box.p = P(5, 6)
+print(got, box.p)   // expect: P(x=1, y=2) P(x=5, y=6)
+box.flag = false
+print(box.either())   // expect: P(x=0, y=0)
+
+// A field of the field, read at once, with a callback around it that changes the field.
+box.hook = { box.p = P(box.p.x * 10, 0) }
+print(box.xPlusHook(), box.p)   // expect: 55 P(x=50, y=0)
+print(box.hookThenX(), box.p)   // expect: 500 P(x=500, y=0)
+
+// Through a getter the value is a copy, so changing the box's point inside it changes nothing it reads.
+box.p = P(1, 2)
+print(box.p.sum, box.p)   // expect: 3 P(x=100, y=100)
+
+// A path of fields, read where it is in a loop that calls the callback each time.
+class Holder(var box : Box)
+val h = Holder(Box())
+var total = 0
+h.box.hook = { h.box.p = P(h.box.p.x + 1, h.box.p.y) }
+for (i in 0 ..< 3) {
+  total += h.box.p.x
+  h.box.hook()
+}
+print(total, h.box.p.x)   // expect: 6 4
