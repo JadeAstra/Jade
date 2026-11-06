@@ -23,6 +23,13 @@ object Jade {
   // Whether the key that commands go with (Ctrl) is held: a link shows a hand only then.
   var shortcutDown = false
 
+  // Where copy, cut and paste go: the system's clipboard once a window is shown, one kept in
+  // memory before that and in tests.
+  var clipboard : Clipboard = MemoryClipboard()
+
+  // What was typed into dialogs closed without finishing, by what they were about.
+  val drafts = Drafts()
+
   // Goes up whenever something happened that may have changed how any widget looks. A
   // widget's kept picture is good only for the number it was painted at.
   var renderGeneration = 0

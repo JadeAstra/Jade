@@ -1,0 +1,28 @@
+// What a program's frame is made of besides its widgets: the clipboard (and, from step 4 of
+// M7, menus and file dialogs). (JadeUI: the first part of Chrome.kt.)
+
+// What is copied: the text, its colours (runs counted from the text's start), and the pictures
+// among it: `objects` the tags of its object characters in order, `data` each tag's picture
+// (its file's bytes) so that another document can take it in, and `picture` a picture alone
+// (one copied, or one copied in another program).
+class StyledText(val text : string, val runs : List<StyleRun> = [], val objects : List<string> = [],
+                 val data : Map<string, Bytes> = {:}, val picture : Bytes? = null) {
+  // The text as other programs get it: without the pictures' object characters.
+  fun plainText() : string => text.replace(objectChar.toString(), "")
+}
+
+// Where copy, cut and paste put and take: Jade.clipboard. A window puts in the system's
+// clipboard; with none, one kept in memory.
+interface Clipboard {
+  fun copy(content : StyledText)
+  fun paste() : StyledText?
+}
+
+// A clipboard kept in memory: the one there is with no window, and in tests.
+class MemoryClipboard : Clipboard {
+  private var content : StyledText? = null
+  override fun copy(content : StyledText) {
+    this.content = content
+  }
+  override fun paste() : StyledText? => content
+}

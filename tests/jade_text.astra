@@ -90,3 +90,200 @@ same("places past either end are kept in", [TextNav.lineStart(text, -5), TextNav
 // Characters beyond the first plane count as one, as everywhere in Astra.
 same("an emoji is one character", TextNav.nextWordBoundary("ab 😀 cd", 0), 5)
 print("TextNav:", checks, "checks,", failed)   // expect: TextNav: 32 checks, []
+
+// -- The text model: MirroredTextTest and EditingTest's tests of the model alone --
+
+checks = 0
+// selectWordAtSelectsTheContiguousWord
+val words = SharedTextModel("hello world foo")
+words.selectWordAt(7)
+same("the word round the place", words.text[words.selectionStart..<words.selectionEnd], "world")
+// moveCaretByWordJumpsWordStarts
+val m = SharedTextModel("hello world foo")
+m.moveCaret(0)
+m.moveCaretWord(true)
+same("to the start of 'world'", m.caret, 6)
+m.moveCaretWord(true)
+same("to the start of 'foo'", m.caret, 12)
+m.moveCaretWord(false)
+same("back to 'world'", m.caret, 6)
+// styleRunsGrowWhenTypingInsideThem
+val typed = SharedTextModel("type")
+typed.setStyleRuns([StyleRun(0, 4, Color.blue)])
+typed.moveCaret(2)
+typed.insert("aaa")
+same("typed inside", typed.text, "tyaaape")
+same("the run grows with it", typed.styleRuns, [StyleRun(0, 7, Color.blue)])
+// styleRunsShrinkOnDelete
+val cut = SharedTextModel("hello world")
+cut.setStyleRuns([StyleRun(6, 11, Color.red)])
+cut.select(0, 6)
+cut.deleteBackward()
+same("deleted before it", cut.text, "world")
+same("the run moves back", cut.styleRuns, [StyleRun(0, 5, Color.red)])
+// undoRedoCoalescesTyping
+val u = SharedTextModel("")
+u.insert("a")
+u.insert("b")
+u.insert("c")
+same("typed", u.text, "abc")
+u.undo()
+same("undone as one", u.text, "")
+u.redo()
+same("redone", u.text, "abc")
+// caretMoveBreaksUndoCoalescing
+val v = SharedTextModel("")
+v.insert("a")
+v.moveCaret(0)
+v.insert("b")
+same("two steps", v.text, "ba")
+v.undo()
+same("the second undone", v.text, "a")
+v.undo()
+same("then the first", v.text, "")
+// TextNavParityTest: doubleClickingPunctuation... and wordAndLineRulesAreOneImplementation
+same("the ', ' run in the model", SharedTextModel("alpha, beta").wordBoundsAt(5), 5 to 7)
+val lines = "one two\nthree four"
+val lm = SharedTextModel(lines)
+same("the model's lines are TextNav's", [lm.lineStart(10), lm.lineEnd(2), lm.lineOf(10), lm.columnOf(10), lm.lineCount, lm.offsetAt(1, 2)],
+     [TextNav.lineStart(lines, 10), TextNav.lineEnd(lines, 2), TextNav.lineOf(lines, 10), TextNav.columnOf(lines, 10), TextNav.lineCount(lines), TextNav.offsetAt(lines, 1, 2)])
+print("the model, as JadeUI tests it:", checks, "checks,", failed)   // expect: the model, as JadeUI tests it: 16 checks, []
+
+// -- The model, further --
+
+checks = 0
+// Its lines are found from starts kept per revision; they agree with TextNav everywhere, and
+// after edits.
+val many = SharedTextModel("a\n\nbb\nccc\n")
+var agree = true
+for (round in 0 ..< 3) {
+  val t = many.text
+  for (i in -1 .. t.size + 1) {
+    if (many.lineOf(i) != TextNav.lineOf(t, i)) { agree = false }
+  }
+  for (line in -1 .. 7) {
+    for (col in [-1, 0, 2, 9]) {
+      if (many.offsetAt(line, col) != TextNav.offsetAt(t, line, col)) { agree = false }
+    }
+  }
+  if (many.lineCount != TextNav.lineCount(t)) { agree = false }
+  many.moveCaret(2)
+  many.insert("x\ny")
+}
+yes("lines agree with TextNav before and after edits", agree)
+
+// Listeners hear of every change, and stop when taken off.
+val heard = []
+val listener = { heard.add(lm.caret) }
+lm.addListener(listener)
+lm.moveCaret(3)
+lm.insert("!")
+lm.removeListener(listener)
+lm.moveCaret(0)
+same("listeners", heard, [3, 4])
+
+// A compound edit is one step to undo, however many edits are in it, and one inside another
+// is part of it.
+val block = SharedTextModel("a\nb\nc")
+block.compoundEdit {
+  block.moveCaret(0)
+  block.insert("  ")
+  block.compoundEdit {
+    block.moveCaret(4)
+    block.insert("  ")
+  }
+  block.moveCaret(8)
+  block.insert("  ")
+}
+same("indented", block.text, "  a\n  b\n  c")
+block.undo()
+same("undone at once", block.text, "a\nb\nc")
+yes("and nothing more to undo", !block.canUndo)
+yes("but something to redo", block.canRedo)
+
+// Deleting forwards and backwards merge too, and a selection replaced is a step of its own.
+val del = SharedTextModel("abcdef")
+del.moveCaret(3)
+del.deleteForward()
+del.deleteForward()
+same("deleted forwards", del.text, "abcf")
+del.select(0, 1)
+del.insert("Z")
+same("a selection typed over", del.text, "Zbcf")
+del.undo()
+same("the selection back", del.text, "abcf")
+del.undo()
+same("both deletions back at once", del.text, "abcdef")
+
+// At most 200 steps are kept.
+val long = SharedTextModel("")
+for (i in 0 ..< 250) {
+  long.insert("x")
+  long.moveCaret(long.length)            // each its own step
+}
+var steps = 0
+while (long.canUndo) {
+  long.undo()
+  steps += 1
+}
+same("steps kept", steps, 200)
+same("the oldest are gone", long.length, 50)
+
+// The revision goes up with the text, not with the caret.
+val rev = SharedTextModel("abc")
+// (revision is the toolkit's own: a program outside it cannot read it)
+try { print(rev.revision) } catch (e) { print(e.message) }   // expect: 'revision' is internal in class SharedTextModel: only code of the library it belongs to can use it
+
+// Pictures among the words: their tags stay in step through every edit.
+val pics = SharedTextModel("ab")
+pics.moveCaret(1)
+pics.insertObject("one.png")
+pics.moveCaret(pics.length)
+pics.insertObject("two.png")
+same("object characters", [pics.length, pics.objectAt(1), pics.objectAt(3), pics.objectAt(0)], [4, "one.png", "two.png", null])
+same("tags in a stretch", pics.objectsIn(0, 4), ["one.png", "two.png"])
+pics.select(1, 3)
+val copied = pics.styledSelection()
+same("a copy has its tags", [copied.text.size, copied.objects, copied.plainText()], [2, ["one.png"], "b"])
+pics.deleteBackward()
+same("deleting a picture drops its tag", [pics.text, pics.objectTags], ["a￼", ["two.png"]])
+pics.undo()
+same("undo brings it back", pics.objectTags, ["one.png", "two.png"])
+pics.moveCaret(0)
+pics.insert("typed ￼ text")
+same("typing brings no picture in", pics.objectTags.size, 2)
+yes("nor its character", pics.text.startsWith("typed  text"))
+pics.setText("x￼y￼z", ["only.png"])
+same("a text given more object characters than tags keeps those it has tags for", [pics.text, pics.objectTags], ["x￼yz", ["only.png"]])
+pics.moveCaret(1)
+pics.insertRich("[￼]", [StyleRun(0, 1, Color.red)], ["in.png"])
+same("pasted with its picture and colour", [pics.text, pics.objectTags, pics.styleRuns], ["x[￼]￼yz", ["in.png", "only.png"], [StyleRun(1, 2, Color.red)]])
+print("the model, further:", checks, "checks,", failed)   // expect: the model, further: 21 checks, []
+
+// -- The clipboard and drafts --
+
+checks = 0
+yes("a clipboard kept in memory to begin with", Jade.clipboard is MemoryClipboard)
+val clip = MemoryClipboard()
+same("nothing on it", clip.paste(), null)
+clip.copy(StyledText("hi", [StyleRun(0, 2, Color.red)]))
+same("what was copied", clip.paste()!!.text, "hi")
+val drafts = Drafts()
+val told = []
+drafts.onChange { told.add(drafts.keys.size) }
+drafts.put("rename:layer:4", {"name": "Sky"})
+drafts.put("find", {"what": "x"})
+same("a draft", drafts["rename:layer:4"], {"name": "Sky"})
+same("by get", drafts.get("find"), {"what": "x"})
+same("keys oldest first", drafts.keys, setOf("rename:layer:4", "find"))
+val saved = drafts.exportAll()
+drafts.remove("find")
+drafts.remove("nothing")                 // nothing to drop: no one told
+same("dropped", drafts["find"], null)
+drafts.clear()
+drafts.clear()
+drafts.importAll(saved)
+same("taken back", drafts.keys.size, 2)
+same("told of each change", told, [1, 2, 1, 0, 2])
+yes("Jade keeps them", Jade.drafts is Drafts)
+print("Clipboard, Drafts:", checks, "checks,", failed)   // expect: Clipboard, Drafts: 10 checks, []

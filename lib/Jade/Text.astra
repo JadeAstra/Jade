@@ -1,0 +1,549 @@
+// Text that is edited: the document a text field or area shows (SharedTextModel), with its caret,
+// selection, undo, coloured runs and the pictures among its words. (JadeUI: Text.kt.)
+
+// The character that stands for a picture among the words of a text (an inline object): the
+// k-th of them in a text shows the k-th of the model's objectTags. Unicode's own for it, U+FFFC.
+internal const objectChar = '￼'
+
+// A widget that edits a SharedTextModel: the window gives it the keyboard and the caret.
+interface TextEditable {
+  val model : SharedTextModel
+}
+
+// A colour over the characters from `start` up to `end` of a text, kept on the model so that
+// every view of it shows the same. A later run wins where two cover a character.
+data StyleRun(val start : int, val end : int, val color : Color)
+
+// What a name in a text links to, found by holding Shift over it: the characters to underline
+// (`range`, its end after the last), a card saying what it is (or null), and what following it
+// does (`open`, on Shift and a click). The program says what a name means.
+class TextLink(val range : Range, val card : Component?, val open : () -> unit)
+
+// Finds the link at a place in a text, or null where nothing there links anywhere.
+type TextLinks = (string, int) -> TextLink?
+
+// The colour of the character at `index` under `runs` (the last run over it wins), or `default`.
+internal fun colorAt(runs : List<StyleRun>, index : int, textLength : int, default : Color) : Color {
+  var c = default
+  for (r in runs) {
+    if (r.start >= 0 and r.end <= textLength and index >= r.start and index < r.end) { c = r.color }
+  }
+  return c
+}
+
+private const maxUndoHistory = 200
+private const typing = "typing"         // what a run of characters typed one at a time merges under
+private const deleting = "deleting"     // and a run of single deletions
+
+// A text being edited, with its caret and its selection, which any number of views show at once:
+// a field and another field (or an area) given the same model mirror each other, an edit, a move
+// of the caret or a selection in one showing in all, the caret too. Listeners hear of every change.
+class SharedTextModel {
+  // The text, kept whole: an edit makes a new one, which costs what moving the characters after
+  // it would, and reading it costs nothing.
+  private var content : string
+
+  // Where the caret is, from 0 to the text's size.
+  var caret : int
+    private set
+  // Where the selection started: it runs between the anchor and the caret.
+  var anchor : int
+    private set
+
+  // Goes up with every change to the text (not to the caret or the selection), so that a view
+  // can tell the text changed without comparing it (M7; JadeUI compares).
+  internal var revision = 0
+    private set
+
+  private val listeners : open List<() -> unit> = []
+
+  fun init(text : string = "") {
+    this.content = text
+    this.caret = text.size
+    this.anchor = text.size
+  }
+
+  val text : string
+    get() => content
+  val length : int
+    get() => content.size
+  val selectionStart : int
+    get() => Math.min(anchor, caret)
+  val selectionEnd : int
+    get() => Math.max(anchor, caret)
+  val hasSelection : bool
+    get() => anchor != caret
+
+  fun addListener(listener : () -> unit) {
+    listeners.add(listener)
+  }
+  fun removeListener(listener : () -> unit) {
+    listeners.remove(listener)
+  }
+  private fun changed() {
+    for (l in listeners.toList()) { l() }
+  }
+  // The text itself was changed.
+  private fun edited(value : string) {
+    content = value
+    revision += 1
+  }
+
+  // Gives it a new text, and with it the tags of its pictures (inline objects): the k-th
+  // object character of `value` shows the k-th of `objects`. Object characters past the tags
+  // given are dropped: a picture with nothing to show is not kept as a blank. Undone as one.
+  fun setText(value : string, objects : List<string> = []) {
+    recordEdit(null)
+    val (t, o) = reconcile(value, objects)
+    edited(t)
+    objectTags = o
+    caret = t.size
+    anchor = caret
+    changed()
+  }
+
+  // ---- Pictures among the words ----
+
+  // The tags of the text's pictures, in order: the k-th object character shows the k-th. Kept in
+  // step with the text through every edit. Text typed or pasted never brings one (an object
+  // character in it is dropped); only insertObject and insertRich do.
+  var objectTags : List<string> = []
+    private set
+
+  // The tag of the picture at `index`, or null where the character there is not one.
+  fun objectAt(index : int) : string? {
+    if (index < 0 or index >= content.size or content[index] != objectChar) { return null }
+    return objectTags.getOrNull(objectsBefore(index))
+  }
+
+  // Puts the picture `tag` at the caret, in place of any selection. Undone as one.
+  fun insertObject(tag : string) {
+    recordEdit(null)
+    deleteSelection()
+    val at = caret
+    val k = objectsBefore(at)
+    edited(content[0..<at] + objectChar + content[at..])
+    val tags = objectTags.toOpenList()
+    tags.add(Math.min(k, tags.size), tag)
+    objectTags = tags
+    shiftRunsForInsert(at, 1)
+    caret = at + 1
+    anchor = caret
+    changed()
+  }
+
+  // How many pictures come before `index`. The text holds as many object characters as there
+  // are tags (no other way brings one in), so with none there is nothing to count.
+  private fun objectsBefore(index : int) : int {
+    if (objectTags.isEmpty()) { return 0 }
+    val end = Math.min(index, content.size)
+    var k = 0
+    var at = content.indexOf(objectChar)
+    while (at >= 0 and at < end) {
+      k += 1
+      at = content.indexOf(objectChar, at + 1)
+    }
+    return k
+  }
+
+  // `s` without object characters: what typing and pasting may bring in.
+  private fun plain(s : string) : string => s.indexOf(objectChar) < 0 ? s : s.replace(objectChar.toString(), "")
+
+  // `value` with only as many object characters as there are `objects`, and the tags it uses.
+  private fun reconcile(value : string, objects : List<string>) : Pair<string, List<string>> {
+    val n = value.count { it == objectChar }
+    if (n <= objects.size) { return value to objects.take(n) }
+    val kept = StringBuilder()
+    var k = 0
+    for (ch in value) {
+      if (ch != objectChar) {
+        kept.append(ch)
+      } else if (k < objects.size) {
+        kept.append(ch)
+        k += 1
+      }
+    }
+    return kept.toString() to objects
+  }
+
+  // The tags of the pictures from `from` up to `to`, in order.
+  fun objectsIn(from : int, to : int) : List<string> {
+    if (objectTags.isEmpty()) { return [] }
+    var k = objectsBefore(from)
+    val out = []
+    val end = Math.min(to, content.size)
+    var at = content.indexOf(objectChar, Math.max(from, 0))
+    while (at >= 0 and at < end) {
+      val tag = objectTags.getOrNull(k)
+      if (tag != null) { out.add(tag) }
+      k += 1
+      at = content.indexOf(objectChar, at + 1)
+    }
+    return out
+  }
+
+  // ---- The caret and the selection ----
+
+  // Moves the caret to `index`; with `extendSelection` the anchor stays (Shift and a move).
+  fun moveCaret(index : int, extendSelection : bool = false) {
+    caret = index.coerceIn(0, content.size)
+    if (!extendSelection) { anchor = caret }
+    mergeToken = null                    // a move ends a run of typing merged into one undo
+    changed()
+  }
+
+  // Moves the caret a word left or right (Ctrl and an arrow), selecting with `extendSelection`.
+  fun moveCaretWord(forward : bool, extendSelection : bool = false) {
+    moveCaret(forward ? TextNav.nextWordBoundary(content, caret) : TextNav.prevWordBoundary(content, caret), extendSelection)
+  }
+
+  fun select(start : int, end : int) {
+    anchor = start.coerceIn(0, content.size)
+    caret = end.coerceIn(0, content.size)
+    mergeToken = null
+    changed()
+  }
+
+  fun selectAll() {
+    anchor = 0
+    caret = content.size
+    mergeToken = null
+    changed()
+  }
+
+  // What is selected; empty when nothing is.
+  fun selectedText() : string => hasSelection ? content[selectionStart..<selectionEnd] : ""
+
+  // The selection with its colours (the runs cut to it and counted from its start) and its
+  // pictures' tags.
+  fun styledSelection() : StyledText {
+    if (!hasSelection) { return StyledText("") }
+    val s = selectionStart
+    val e = selectionEnd
+    val runs = styleRuns.mapNotNull { r ->
+      val ns = Math.max(r.start, s) - s
+      val ne = Math.min(r.end, e) - s
+      ns < ne ? StyleRun(ns, ne, r.color) : null
+    }
+    return StyledText(content[s..<e], runs, objectsIn(s, e))
+  }
+
+  // Puts `s` at the caret, in place of any selection, with the tags of its pictures (the k-th
+  // object character of `s` the k-th; those past the tags given are dropped) and its colours,
+  // counted from its start. Undone as one.
+  fun insertRich(s0 : string, runs : List<StyleRun>, objects : List<string>) {
+    val (s, tags) = reconcile(s0, objects)
+    recordEdit(null)
+    deleteSelection()
+    val at = caret
+    val k = objectsBefore(at)
+    edited(content[0..<at] + s + content[at..])
+    if (tags.isNotEmpty()) {
+      val all = objectTags.toOpenList()
+      all.addAll(Math.min(k, all.size), tags)
+      objectTags = all
+    }
+    shiftRunsForInsert(at, s.size)
+    if (runs.isNotEmpty()) { styleRuns = styleRuns + runs.map { StyleRun(it.start + at, it.end + at, it.color) } }
+    caret = at + s.size
+    anchor = caret
+    changed()
+  }
+
+  // Puts `s` at the caret, in place of any selection, with its colours (counted from its start).
+  fun insertStyled(s0 : string, runs : List<StyleRun>) {
+    val s = plain(s0)
+    recordEdit(null)
+    deleteSelection()
+    val at = caret
+    edited(content[0..<at] + s + content[at..])
+    shiftRunsForInsert(at, s.size)
+    if (runs.isNotEmpty()) { styleRuns = styleRuns + runs.map { StyleRun(it.start + at, it.end + at, it.color) } }
+    caret = at + s.size
+    anchor = caret
+    changed()
+  }
+
+  // ---- Lines (for views of several) ----
+
+  // Where each line starts, made once for each revision of the text (M7): finding a line is
+  // then a search, not a walk through the text before it.
+  private var starts : List<int> = [0]
+  private var startsRevision = -1
+  internal fun lineStarts() : List<int> {
+    if (startsRevision != revision) {
+      val found = [0]
+      var at = content.indexOf('\n')
+      while (at >= 0) {
+        found.add(at + 1)
+        at = content.indexOf('\n', at + 1)
+      }
+      starts = found
+      startsRevision = revision
+    }
+    return starts
+  }
+
+  // How many lines it has: one more than its newlines.
+  val lineCount : int
+    get() => lineStarts().size
+
+  // Which line, from 0, holds `index`.
+  fun lineOf(index : int) : int {
+    val s = lineStarts()
+    val at = index.coerceIn(0, content.size)
+    var lo = 0
+    var hi = s.size - 1
+    while (lo < hi) {                    // the last line starting at or before `at`
+      val mid = (lo + hi + 1) / 2
+      if (s[mid] <= at) { lo = mid } else { hi = mid - 1 }
+    }
+    return lo
+  }
+
+  // Where the line holding `index` starts, and where it ends (at its newline or the text's end).
+  fun lineStart(index : int) : int => TextNav.lineStart(content, index)
+  fun lineEnd(index : int) : int => TextNav.lineEnd(content, index)
+  // How far into its line `index` is.
+  fun columnOf(index : int) : int => TextNav.columnOf(content, index)
+  // The place at a line and column, kept within that line.
+  fun offsetAt(line : int, column : int) : int {
+    val s = lineStarts()
+    if (line >= s.size) { return TextNav.offsetAt(content, line, column) }
+    val start = s[Math.max(line, 0)]
+    return (start + column.coerceAtLeast(0)).coerceIn(start, TextNav.lineEnd(content, start))
+  }
+  // The run of one kind (word characters or the others) round `index`: where it starts and ends.
+  fun wordBoundsAt(index : int) : Pair<int, int> => TextNav.wordBoundsAt(content, index)
+
+  // Selects the run of one kind round `index`: what a double click does.
+  fun selectWordAt(index : int) {
+    val (s, e) = wordBoundsAt(index)
+    anchor = s
+    caret = e
+    mergeToken = null
+    changed()
+  }
+
+  // ---- The caret's blink, shared by every view so that they blink together ----
+
+  var caretVisible = true
+    private set
+  // Whether a view of it has the keyboard; the caret shows only then.
+  var focused = false
+    private set
+
+  // Shows or hides the caret: what the blink does.
+  fun toggleCaret() {
+    caretVisible = !caretVisible
+    changed()
+  }
+  // Shows the caret: the window does this while the caret moves, so it never blinks out then.
+  fun showCaret() {
+    if (!caretVisible) {
+      caretVisible = true
+      changed()
+    }
+  }
+  // Shows or hides the caret, to match another editor's blink.
+  fun setCaretVisible(value : bool) {
+    if (caretVisible != value) {
+      caretVisible = value
+      changed()
+    }
+  }
+  // Says that a view of it has the keyboard, or no longer: the caret shows, and may blink.
+  fun setFocused(value : bool) {
+    if (focused == value) { return }
+    focused = value
+    if (value) { caretVisible = true }
+    changed()
+  }
+
+  // ---- Colours ----
+
+  // The coloured runs over the text (a lexer's, say), shown the same in every view.
+  var styleRuns : List<StyleRun> = []
+    private set
+
+  // Puts new runs in place of the old: what a program's lexer calls after each edit.
+  fun setStyleRuns(runs : List<StyleRun>) {
+    styleRuns = runs.toList()
+    changed()
+  }
+
+  // ---- Editing ----
+
+  // Puts `s` at the caret, in place of any selection. Characters typed one at a time are undone
+  // together.
+  fun insert(s0 : string) {
+    val s = plain(s0)
+    if (s.isEmpty() and s0.isNotEmpty()) { return }
+    recordEdit(s.size == 1 and !hasSelection ? typing : null)
+    deleteSelection()
+    val at = caret
+    edited(content[0..<at] + s + content[at..])
+    shiftRunsForInsert(at, s.size)
+    caret = at + s.size
+    anchor = caret
+    changed()
+  }
+
+  // Backspace: the selection, or the character before the caret.
+  fun deleteBackward() {
+    if (hasSelection) {
+      recordEdit(null)
+      deleteSelection()
+      changed()
+      return
+    }
+    if (caret > 0) {
+      recordEdit(deleting)
+      val c = caret
+      dropObjects(c - 1, c)
+      edited(content[0..<c - 1] + content[c..])
+      shiftRunsForDelete(c - 1, c)
+      caret = c - 1
+      anchor = caret
+      changed()
+    }
+  }
+
+  // Delete: the selection, or the character after the caret.
+  fun deleteForward() {
+    if (hasSelection) {
+      recordEdit(null)
+      deleteSelection()
+      changed()
+      return
+    }
+    if (caret < content.size) {
+      recordEdit(deleting)
+      val c = caret
+      dropObjects(c, c + 1)
+      edited(content[0..<c] + content[c + 1..])
+      shiftRunsForDelete(c, c + 1)
+      changed()
+    }
+  }
+
+  // ---- Undo and redo ----
+
+  // A whole copy of the text and all that goes with it, at each step (as JadeUI keeps).
+  private class Edit(val text : string, val caret : int, val anchor : int, val runs : List<StyleRun>, val objects : List<string>)
+  private val undos : open List<Edit> = []
+  private val redos : open List<Edit> = []
+  private var mergeToken : string? = null
+  private var inCompound = false
+
+  // Runs `block`'s edits as one step to undo (indenting several lines, say).
+  fun compoundEdit(block : () -> unit) {
+    if (inCompound) {
+      block()
+      return
+    }
+    recordEdit(null)                     // the one step for all of it
+    inCompound = true
+    try {
+      block()
+    } finally {
+      inCompound = false
+    }
+  }
+
+  val canUndo : bool
+    get() => undos.isNotEmpty()
+  val canRedo : bool
+    get() => redos.isNotEmpty()
+
+  private fun snapshot() : Edit => Edit(content, caret, anchor, styleRuns, objectTags)
+
+  // Keeps a step to undo before a change; changes one after another under the same `merge`
+  // make one step.
+  private fun recordEdit(merge : string?) {
+    if (inCompound) { return }           // the compound edit around it kept one already
+    if (!(merge != null and merge == mergeToken and undos.isNotEmpty())) {
+      undos.add(snapshot())
+      while (undos.size > maxUndoHistory) { undos.removeAt(0) }
+    }
+    redos.clear()
+    mergeToken = merge
+  }
+
+  fun undo() {
+    val prev = undos.removeLastOrNull()
+    if (prev == null) { return }
+    redos.add(snapshot())
+    restore(prev)
+  }
+
+  fun redo() {
+    val next = redos.removeLastOrNull()
+    if (next == null) { return }
+    undos.add(snapshot())
+    restore(next)
+  }
+
+  private fun restore(e : Edit) {
+    edited(e.text)
+    caret = e.caret
+    anchor = e.anchor
+    styleRuns = e.runs
+    objectTags = e.objects
+    mergeToken = null
+    changed()
+  }
+
+  private fun deleteSelection() {
+    if (!hasSelection) { return }
+    val s = selectionStart
+    val e = selectionEnd
+    dropObjects(s, e)
+    edited(content[0..<s] + content[e..])
+    shiftRunsForDelete(s, e)
+    caret = s
+    anchor = s
+  }
+
+  // Takes out the tags of the pictures from `from` up to `to`, which are about to be deleted.
+  private fun dropObjects(from : int, to : int) {
+    if (objectTags.isEmpty()) { return }
+    val k = objectsBefore(from)
+    var n = 0
+    val end = Math.min(to, content.size)
+    var at = content.indexOf(objectChar, from)
+    while (at >= 0 and at < end) {
+      n += 1
+      at = content.indexOf(objectChar, at + 1)
+    }
+    if (n > 0) {
+      val tags = objectTags.toOpenList()
+      for (i in 0 ..< n) {
+        if (k < tags.size) { tags.removeAt(k) }
+      }
+      objectTags = tags
+    }
+  }
+
+  // The colours stay with their characters through edits: typing inside a coloured word makes
+  // the run longer, deleting makes it shorter (a program may still put new runs in place).
+  private fun shiftRunsForInsert(at : int, len : int) {
+    if (styleRuns.isEmpty() or len == 0) { return }
+    styleRuns = styleRuns.map { r ->
+      at <= r.start ? StyleRun(r.start + len, r.end + len, r.color)   // before it: moved on
+        : at <= r.end ? StyleRun(r.start, r.end + len, r.color)       // inside or at its end: longer
+        : r
+    }
+  }
+
+  private fun shiftRunsForDelete(from : int, to : int) {
+    if (styleRuns.isEmpty() or to <= from) { return }
+    val del = to - from
+    val adjust = { p : int -> p <= from ? p : p <= to ? from : p - del }
+    styleRuns = styleRuns.mapNotNull { r ->
+      val ns = adjust(r.start)
+      val ne = adjust(r.end)
+      ns < ne ? StyleRun(ns, ne, r.color) : null   // a run deleted whole goes
+    }
+  }
+}
