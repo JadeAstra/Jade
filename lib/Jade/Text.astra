@@ -32,6 +32,10 @@ internal fun colorAt(runs : List<StyleRun>, index : int, textLength : int, defau
 }
 
 private const maxUndoHistory = 200
+
+// One edit of a text: the revision it made, how many characters at the text's start it left as they
+// were, and how many at its end.
+internal value TextEdit(val revision : int, val kept : int, val keptEnd : int)
 private const typing = "typing"         // what a run of characters typed one at a time merges under
 private const deleting = "deleting"     // and a run of single deletions
 
@@ -83,10 +87,34 @@ class SharedTextModel {
   private fun changed() {
     for (l in listeners.toList()) { l() }
   }
-  // The text itself was changed.
-  private fun edited(value : string) {
+  // The text itself was changed: from `start` the part up to `oldEnd` became the part up to
+  // `newEnd`, all else as it was.
+  private fun edited(value : string, start : int, oldEnd : int, newEnd : int) {
+    val before = content.size
     content = value
     revision += 1
+    edits.add(TextEdit(revision, start, before - oldEnd))
+    if (edits.size > 16) { edits.removeAt(0) }
+  }
+
+  // The last few edits, so that a view can redo only what they touched (M7): for each, the
+  // revision it made, how much of the text before it stayed at its start, and how much at its end.
+  private val edits : open List<TextEdit> = []
+
+  // What changed since `since` (a revision the text had), as one stretch: how many characters at
+  // the start and how many at the end are as they were; null if too much has happened since to tell.
+  internal fun changeSince(since : int) : Pair<int, int>? {
+    if (since == revision) { return 0 to 0 }
+    if (edits.isEmpty() or edits[0].revision > since + 1) { return null }
+    var kept = int.maxValue
+    var keptEnd = int.maxValue
+    for (e in edits) {
+      if (e.revision > since) {
+        kept = Math.min(kept, e.kept)
+        keptEnd = Math.min(keptEnd, e.keptEnd)
+      }
+    }
+    return kept to keptEnd
   }
 
   // Gives it a new text, and with it the tags of its pictures (inline objects): the k-th
@@ -95,7 +123,7 @@ class SharedTextModel {
   fun setText(value : string, objects : List<string> = []) {
     recordEdit(null)
     val (t, o) = reconcile(value, objects)
-    edited(t)
+    edited(t, 0, content.size, t.size)
     objectTags = o
     caret = t.size
     anchor = caret
@@ -122,7 +150,7 @@ class SharedTextModel {
     deleteSelection()
     val at = caret
     val k = objectsBefore(at)
-    edited(content[0..<at] + objectChar + content[at..])
+    edited(content[0..<at] + objectChar + content[at..], at, at, at + 1)
     val tags = objectTags.toOpenList()
     tags.add(Math.min(k, tags.size), tag)
     objectTags = tags
@@ -237,7 +265,7 @@ class SharedTextModel {
     deleteSelection()
     val at = caret
     val k = objectsBefore(at)
-    edited(content[0..<at] + s + content[at..])
+    edited(content[0..<at] + s + content[at..], at, at, at + s.size)
     if (tags.isNotEmpty()) {
       val all = objectTags.toOpenList()
       all.addAll(Math.min(k, all.size), tags)
@@ -256,7 +284,7 @@ class SharedTextModel {
     recordEdit(null)
     deleteSelection()
     val at = caret
-    edited(content[0..<at] + s + content[at..])
+    edited(content[0..<at] + s + content[at..], at, at, at + s.size)
     shiftRunsForInsert(at, s.size)
     if (runs.isNotEmpty()) { styleRuns = styleRuns + runs.map { StyleRun(it.start + at, it.end + at, it.color) } }
     caret = at + s.size
@@ -382,7 +410,7 @@ class SharedTextModel {
     recordEdit(s.size == 1 and !hasSelection ? typing : null)
     deleteSelection()
     val at = caret
-    edited(content[0..<at] + s + content[at..])
+    edited(content[0..<at] + s + content[at..], at, at, at + s.size)
     shiftRunsForInsert(at, s.size)
     caret = at + s.size
     anchor = caret
@@ -401,7 +429,7 @@ class SharedTextModel {
       recordEdit(deleting)
       val c = caret
       dropObjects(c - 1, c)
-      edited(content[0..<c - 1] + content[c..])
+      edited(content[0..<c - 1] + content[c..], c - 1, c, c - 1)
       shiftRunsForDelete(c - 1, c)
       caret = c - 1
       anchor = caret
@@ -421,7 +449,7 @@ class SharedTextModel {
       recordEdit(deleting)
       val c = caret
       dropObjects(c, c + 1)
-      edited(content[0..<c] + content[c + 1..])
+      edited(content[0..<c] + content[c + 1..], c, c + 1, c)
       shiftRunsForDelete(c, c + 1)
       changed()
     }
@@ -485,7 +513,7 @@ class SharedTextModel {
   }
 
   private fun restore(e : Edit) {
-    edited(e.text)
+    edited(e.text, 0, content.size, e.text.size)
     caret = e.caret
     anchor = e.anchor
     styleRuns = e.runs
@@ -499,7 +527,7 @@ class SharedTextModel {
     val s = selectionStart
     val e = selectionEnd
     dropObjects(s, e)
-    edited(content[0..<s] + content[e..])
+    edited(content[0..<s] + content[e..], s, e, s)
     shiftRunsForDelete(s, e)
     caret = s
     anchor = s

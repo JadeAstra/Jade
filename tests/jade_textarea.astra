@@ -1,0 +1,699 @@
+// windows only: it paints, which is on Windows only so far (G56)
+// The text area: lines and columns, the caret by rows and pages, indenting blocks, a read-only
+// area, where the caret is drawn, links under Shift, the debugger's band and status strip, the
+// bar along the bottom for long lines, and a large text drawing only what shows. JadeUI's own
+// tests (TextAreaTest, CaretRectTest, TextAreaLinksTest, TextAreaCurrentLineTest,
+// TextAreaHScrollTest, TextAreaLargeTextTest, the area's legs of TextNavParityTest and
+// NestedScrollTest as JadeUI wrote it, with text areas), carried over with their names. The
+// area's bookkeeping (wrapCount, statusH, contentWidth, pageRows, the bar's height) and the
+// view's (maxScrollY, innerW) are internal to Jade: where JadeUI reads them, these read what
+// shows instead.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts and the rectangles a component draws.
+fun texts(ops : List<DrawOp>) : List<DrawOp.Text> => ops.filter { it is DrawOp.Text }.map { it as DrawOp.Text }
+fun rects(ops : List<DrawOp>) : List<DrawOp.Rect> => ops.filter { it is DrawOp.Rect }.map { it as DrawOp.Rect }
+
+// Lines "<prefix>0" to "<prefix>(n - 1)", or from 1 with `from`.
+fun numbered(prefix : string, from : int, until : int) : string {
+  val out = []
+  for (i in from ..< until) { out.add("$prefix$i") }
+  return out.join("\n")
+}
+
+// -- TextAreaTest --
+
+// tabInsertsAnIndentAndShiftTabOutdentsTheLine
+fun tabInsertsAnIndentAndShiftTabOutdentsTheLine() {
+  val m = SharedTextModel("hello")
+  val c = Component(TextArea(m))
+  c.record(400, 100)
+  m.moveCaret(0)
+  c.dispatch(Event.KeyPress(Key.tab))
+  same("plain Tab inserts one indent at the caret", m.text, "\thello")
+  c.dispatch(Event.KeyPress(Key.tab, true))
+  same("Shift+Tab with no selection outdents the caret's line", m.text, "hello")
+}
+tabInsertsAnIndentAndShiftTabOutdentsTheLine()
+
+// tabIndentsAndOutdentsEverySelectedLine
+fun tabIndentsAndOutdentsEverySelectedLine() {
+  val m = SharedTextModel("a\nb")
+  val c = Component(TextArea(m))
+  c.record(400, 100)
+  m.select(0, m.length)
+  c.dispatch(Event.KeyPress(Key.tab))
+  same("Tab indents every selected line", m.text, "\ta\n\tb")
+  m.select(0, m.length)
+  c.dispatch(Event.KeyPress(Key.tab, true))
+  same("Shift+Tab outdents them", m.text, "a\nb")
+}
+tabIndentsAndOutdentsEverySelectedLine()
+
+// hoveringPastTheEndOfALineReportsNoWord
+fun hoveringPastTheEndOfALineReportsNoWord() {
+  val area = TextArea(SharedTextModel("return False"))
+  val comp = Component(area)
+  comp.record(600, 100)
+  var offset = -99
+  area.onHover = { o, x, y -> offset = o }
+  comp.dispatch(Event.Hover(30, 8))                  // over the text
+  yes("hovering the text reports a real offset (was $offset)", offset >= 0)
+  comp.dispatch(Event.Hover(500, 8))                 // far past the end of the line
+  same("hovering past the line's end reports no word", offset, -1)
+  comp.dispatch(Event.Hover(30, 400))                // below all the text
+  same("hovering below the text reports no word", offset, -1)
+}
+hoveringPastTheEndOfALineReportsNoWord()
+
+// lineColumnGeometry
+fun lineColumnGeometry() {
+  val m = SharedTextModel("ab\ncde\nf")              // a0 b1 \n2 c3 d4 e5 \n6 f7
+  same("lineCount", m.lineCount, 3)
+  same("lineOf(1)", m.lineOf(1), 0)
+  same("lineOf(3)", m.lineOf(3), 1)
+  same("lineOf(7)", m.lineOf(7), 2)
+  same("'c' is column 0 of line 1", m.columnOf(3), 0)
+  same("'e' is column 2 of line 1", m.columnOf(5), 2)
+  same("lineStart(5)", m.lineStart(5), 3)
+  same("line 1 ends at the newline", m.lineEnd(5), 6)
+  same("offsetAt(1, 0)", m.offsetAt(1, 0), 3)
+  same("offsetAt(1, 2)", m.offsetAt(1, 2), 5)
+  same("the column clamps to the line end", m.offsetAt(1, 10), 6)
+}
+lineColumnGeometry()
+
+// enterInsertsNewline
+fun enterInsertsNewline() {
+  val m = SharedTextModel("ab")
+  val area = Component(TextArea(m))
+  m.moveCaret(1)
+  area.dispatch(Event.KeyPress(Key.enter))
+  same("split", m.text, "a\nb")
+  same("the caret just after the newline", m.caret, 2)
+}
+enterInsertsNewline()
+
+// upDownPreserveColumnAcrossLines
+fun upDownPreserveColumnAcrossLines() {
+  val m = SharedTextModel("hello\nhi\nworld")        // \n at 5 and 8
+  val area = Component(TextArea(m))
+  m.moveCaret(4)                                     // line 0, column 4 ("hell|o")
+  area.dispatch(Event.KeyPress(Key.down))
+  same("'hi' is shorter: its end", m.caret, 8)
+  area.dispatch(Event.KeyPress(Key.down))
+  same("column 4 again on 'world'", m.caret, 13)
+  area.dispatch(Event.KeyPress(Key.up))
+  same("and up", m.caret, 8)
+}
+upDownPreserveColumnAcrossLines()
+
+// pageDownAndUpMoveByViewportPage
+fun pageDownAndUpMoveByViewportPage() {
+  val m = SharedTextModel(numbered("L", 0, 100))
+  val areaComp = Component(TextArea(m))
+  scroll(areaComp).layout(300, 160)                  // gives the area its view's height
+  m.moveCaret(0)
+  areaComp.dispatch(Event.KeyPress(Key.pageDown))
+  val page = m.lineOf(m.caret)
+  yes("page down moved to line $page", page in 2 .. 99)
+  areaComp.dispatch(Event.KeyPress(Key.pageDown))
+  same("two pages", m.lineOf(m.caret), page * 2)
+  areaComp.dispatch(Event.KeyPress(Key.pageUp))
+  same("and one back", m.lineOf(m.caret), page)
+}
+pageDownAndUpMoveByViewportPage()
+
+// caretFollowScrollRevealsCaretOnKeyNav
+fun caretFollowScrollRevealsCaretOnKeyNav() {
+  val m = SharedTextModel(numbered("L", 0, 100))
+  val areaComp = Component(TextArea(m))
+  val sc = scroll(areaComp)
+  sc.layout(300, 120)
+  same("at the top", (sc.content as Scroll).scrollY, 0)
+  m.moveCaret(m.length)                              // moved by the program (to the bottom)
+  areaComp.dispatch(Event.KeyPress(Key.end))         // a key asks for the reveal
+  sc.layout(300, 120)                                // which the view takes
+  yes("the view should follow the caret down", (sc.content as Scroll).scrollY > 0)
+}
+caretFollowScrollRevealsCaretOnKeyNav()
+
+// longLineScrollsHorizontallyToKeepCaretOnScreen
+fun longLineScrollsHorizontallyToKeepCaretOnScreen() {
+  val m = SharedTextModel("x".repeat(200))           // one line far wider than the view
+  m.setFocused(true)
+  m.moveCaret(m.length)                              // the caret at the far right
+  val width = 120
+  val ops = Component(TextArea(m)).record(width, 40)
+  val caret = rects(ops).firstOrNull { it.fill and it.w == 1 }
+  yes("caret x=${caret?.x} is off-screen (width $width)", caret != null and caret.x >= 0 and caret.x <= width)
+}
+longLineScrollsHorizontallyToKeepCaretOnScreen()
+
+// textAreaRendersStyleRunColors
+fun textAreaRendersStyleRunColors() {
+  val m = SharedTextModel("hello")
+  m.setStyleRuns([StyleRun(0, 3, Color.red)])
+  val ops = texts(Component(TextArea(m)).record(200, 40))
+  yes("'hel' in red: $ops", ops.any { it.text == "hel" and it.color == Color.red })
+  yes("'lo' not in red: $ops", ops.any { it.text.contains("lo") and it.color != Color.red })
+}
+textAreaRendersStyleRunColors()
+
+// softWrapDrawsLongLineOnMultipleRows
+fun softWrapDrawsLongLineOnMultipleRows() {
+  val m = SharedTextModel("alpha bravo charlie delta echo foxtrot golf hotel india")
+  val area = TextArea(m)
+  area.wrap = true
+  m.setFocused(true)
+  val ys = texts(Component(area).record(90, 300)).map { it.y }.toSet()
+  yes("a long line should soft-wrap onto several rows, got ${ys.size}", ys.size >= 2)
+}
+softWrapDrawsLongLineOnMultipleRows()
+
+// tabIndentsSelectedLinesAsOneUndoStep
+fun tabIndentsSelectedLinesAsOneUndoStep() {
+  val m = SharedTextModel("aaa\nbbb\nccc")
+  val area = Component(TextArea(m))
+  m.select(1, 5)                                     // over the first two lines
+  area.dispatch(Event.KeyPress(Key.tab))
+  same("both lines indented", m.text, "\taaa\n\tbbb\nccc")
+  m.undo()
+  same("one undo takes the whole indent back", m.text, "aaa\nbbb\nccc")
+}
+tabIndentsSelectedLinesAsOneUndoStep()
+
+// shiftTabOutdentsSelectedLines
+fun shiftTabOutdentsSelectedLines() {
+  val m = SharedTextModel("\taaa\n\tbbb")
+  val area = Component(TextArea(m))
+  m.selectAll()
+  area.dispatch(Event.KeyPress(Key.tab, shift = true))
+  same("outdented", m.text, "aaa\nbbb")
+}
+shiftTabOutdentsSelectedLines()
+
+// homeAndEndGoToLineBounds
+fun homeAndEndGoToLineBounds() {
+  val m = SharedTextModel("hello\nworld")
+  val area = Component(TextArea(m))
+  m.moveCaret(8)                                     // "wo|rld" on line 1
+  area.dispatch(Event.KeyPress(Key.home))
+  same("the start of line 1", m.caret, 6)
+  area.dispatch(Event.KeyPress(Key.end))
+  same("the end of line 1", m.caret, 11)
+  area.dispatch(Event.KeyPress(Key.home, ctrl = true))
+  same("Ctrl+Home: the start of the text", m.caret, 0)
+}
+homeAndEndGoToLineBounds()
+
+// aReadOnlyAreaSelectsAndCopiesButCannotBeChanged
+fun aReadOnlyAreaSelectsAndCopiesButCannotBeChanged() {
+  val m = SharedTextModel("keep this")
+  val area = TextArea(m)
+  area.readOnly = true
+  val c = Component(area)
+  c.record(400, 100)
+  Jade.clipboard = MemoryClipboard()
+  c.dispatch(Event.KeyType("x"))
+  for (k in [Key.backspace, Key.delete, Key.enter, Key.tab]) { c.dispatch(Event.KeyPress(k)) }
+  c.dispatch(Event.Shortcut(EditCommand.selectAll))
+  c.dispatch(Event.Shortcut(EditCommand.cut))
+  Jade.clipboard.copy(StyledText("pasted"))
+  c.dispatch(Event.Shortcut(EditCommand.paste))
+  c.dispatch(Event.Shortcut(EditCommand.undo))
+  same("unchanged", m.text, "keep this")
+  c.dispatch(Event.Shortcut(EditCommand.selectAll))
+  c.dispatch(Event.Shortcut(EditCommand.copy))
+  same("but it copies", Jade.clipboard.paste()?.text, "keep this")
+  same("its menu", area.contextMenu().map { it.label }, ["Copy", "Select All"])
+}
+aReadOnlyAreaSelectsAndCopiesButCannotBeChanged()
+Jade.clipboard = MemoryClipboard()
+print("TextAreaTest:", checks, "checks,", failed)   // expect: TextAreaTest: 41 checks, []
+
+// -- CaretRectTest --
+
+checks = 0
+// An area laid out and painted, which is where the caret's place comes from.
+fun painted(text : string) : TextArea {
+  val a = TextArea(SharedTextModel(text))
+  Component(a).record(400, 300)
+  return a
+}
+
+// anUnpaintedAreaReportsNothingRatherThanGuessing
+same("no layout yet, so no honest answer", TextArea(SharedTextModel("hi")).caretRect(), null)
+
+// theCaretOnTheFirstLineSitsAtTheTop
+fun theCaretOnTheFirstLineSitsAtTheTop() {
+  val a = painted("hello")
+  a.model.moveCaret(0)
+  val r = a.caretRect()!!
+  yes("a real line height", r[2] > 0)
+  same("stable", a.caretRect()!![1], r[1])
+}
+theCaretOnTheFirstLineSitsAtTheTop()
+
+// movingAlongALineMovesTheCaretRight
+fun movingAlongALineMovesTheCaretRight() {
+  val a = painted("hello")
+  a.model.moveCaret(0)
+  val x0 = a.caretRect()!![0]
+  a.model.moveCaret(4)
+  yes("further along the line is further right", a.caretRect()!![0] > x0)
+}
+movingAlongALineMovesTheCaretRight()
+
+// movingToTheNextLineMovesTheCaretDown
+fun movingToTheNextLineMovesTheCaretDown() {
+  val a = TextArea(SharedTextModel("one\ntwo"))
+  val c = Component(a)
+  c.record(400, 300)
+  a.model.moveCaret(0)
+  val y0 = a.caretRect()!![1]
+  a.model.moveCaret(5)                               // inside "two"
+  c.record(400, 300)                                 // painted again, so that the rows are the latest
+  val r = a.caretRect()!!
+  yes("the second line is lower: $y0 -> ${r[1]}", r[1] > y0)
+  same("by one line's height exactly", r[1], y0 + r[2])
+}
+movingToTheNextLineMovesTheCaretDown()
+
+// theCaretAtTheStartOfALineIsAtItsLeftEdge
+fun theCaretAtTheStartOfALineIsAtItsLeftEdge() {
+  val a = TextArea(SharedTextModel("one\ntwo"))
+  val c = Component(a)
+  c.record(400, 300)
+  a.model.moveCaret(0)
+  val left = a.caretRect()!![0]
+  a.model.moveCaret(4)                               // the start of "two"
+  c.record(400, 300)
+  same("both line starts share an x", a.caretRect()!![0], left)
+}
+theCaretAtTheStartOfALineIsAtItsLeftEdge()
+print("CaretRectTest:", checks, "checks,", failed)   // expect: CaretRectTest: 7 checks, []
+
+// -- TextAreaLinksTest --
+
+checks = 0
+val linkText = "x = 1\ny = S2.draw()"
+val s2 = linkText.indexOf("S2")
+
+// An area whose only link is S2 on the second line, and how often it has been followed.
+class LinkArea {
+  val a : TextArea
+  val c : Component
+  var opened = 0
+  fun init() {
+    a = TextArea(SharedTextModel(linkText))
+    val self = this
+    a.links = { t, off -> off in s2 .. s2 + 1 ? TextLink(s2 .. s2 + 1, null) { self.opened += 1 } : null }
+    c = Component(a)
+    c.record(400, 120)
+  }
+  // The local point over character i (the middle of its line).
+  fun pointAt(i : int) : Pair<int, int> {
+    a.model.moveCaret(i)
+    val r = a.caretRect()!!
+    return (r[0] + 2) to (r[1] + r[2] / 2)
+  }
+}
+
+// shiftHoverUnderlinesTheLinkOnItsLine
+fun shiftHoverUnderlinesTheLinkOnItsLine() {
+  val la = LinkArea()
+  val (x, y) = la.pointAt(s2)
+  la.c.dispatch(Event.Hover(x, y))
+  same("no Shift, no link", la.a.hoveredLink, null)
+  la.c.dispatch(Event.Hover(x, y, shift = true))
+  same("the link under it", la.a.hoveredLink?.range, s2 .. s2 + 1)
+  val underline = rects(la.c.record(400, 120)).filter { it.fill and it.h == 1 and it.color == Color(0x2D, 0x6C, 0xDF) }
+  same("one underline: $underline", underline.size, 1)
+  yes("on the second line, under the name", underline.size == 1 and underline[0].y > y - 2)
+}
+shiftHoverUnderlinesTheLinkOnItsLine()
+
+// shiftClickFollowsTheLinkWithoutSelecting
+fun shiftClickFollowsTheLinkWithoutSelecting() {
+  val la = LinkArea()
+  val (x, y) = la.pointAt(s2)
+  la.a.model.moveCaret(0)
+  la.c.dispatch(Event.Hover(x, y, shift = true))
+  la.c.dispatch(Event.Click(x, y, shift = true))
+  same("followed", la.opened, 1)
+  yes("and nothing selected", !la.a.model.hasSelection)
+}
+shiftClickFollowsTheLinkWithoutSelecting()
+print("TextAreaLinksTest:", checks, "checks,", failed)   // expect: TextAreaLinksTest: 6 checks, []
+
+// -- TextAreaCurrentLineTest --
+
+checks = 0
+fun laidOut(text : string) : TextArea {
+  val a = TextArea(SharedTextModel(text))
+  Component(a).layout(300, 200)
+  return a
+}
+// The see-through yellow bands behind the current line (as JadeUI writes it: its port found that
+// a byte was never in a range of ints, which is mended).
+fun bands(ops : List<DrawOp>) : List<DrawOp.Rect> =>
+  rects(ops).filter { it.fill and it.color.alpha in 1 .. 254 and it.color.red == 255 and it.color.green == 214 }
+
+// theCurrentLineHasABandBehindIt
+fun theCurrentLineHasABandBehindIt() {
+  val a = TextArea(SharedTextModel("one\ntwo\nthree"))
+  val c = Component(a)
+  c.layout(300, 200)
+  same("none until a line is current", bands(c.record(300, 200)).size, 0)
+  a.currentLine = 1
+  val b = bands(c.record(300, 200))
+  same("one band", b.size, 1)
+  a.currentLine = 0
+  val first = bands(c.record(300, 200))
+  same("one band on the first line", first.size, 1)
+  same("the second row, right under the first", b[0].y, first[0].y + first[0].h)
+  a.currentLine = 9
+  same("a line past the end marks nothing", bands(c.record(300, 200)).size, 0)
+}
+theCurrentLineHasABandBehindIt()
+
+// aWrappedLineIsMarkedWhole
+fun aWrappedLineIsMarkedWhole() {
+  val a = TextArea(SharedTextModel("short\n" + "word ".repeat(40)))
+  val c = Component(a)
+  c.layout(300, 200)
+  a.wrap = true
+  a.currentLine = 1
+  yes("every row of the wrapped line", bands(c.record(300, 200)).size > 1)
+}
+aWrappedLineIsMarkedWhole()
+
+// theStatusStripTakesARowPerLine
+fun theStatusStripTakesARowPerLine() {
+  val a = TextArea(SharedTextModel("x"))
+  val c = Component(a)
+  c.layout(300, 200)
+  a.statusText = "one"
+  val one = a.sizes().pref.height
+  a.statusText = "one\ntwo\nthree"
+  yes("taller for more lines", a.sizes().pref.height > one)
+  val drawn = texts(c.record(300, 200)).map { it.text }
+  yes("$drawn", drawn.contains("one") and drawn.contains("two") and drawn.contains("three"))
+}
+theStatusStripTakesARowPerLine()
+print("TextAreaCurrentLineTest:", checks, "checks,", failed)   // expect: TextAreaCurrentLineTest: 8 checks, []
+
+// -- TextAreaHScrollTest --
+// JadeUI reads HScrollBar.HEIGHT; the bar is internal to Jade here, so its height (8) is written out.
+
+checks = 0
+val barHeight = 8
+val long = "parts.append('<svg viewBox=\"0 0 ' + str(w) + ' ' + str(h) + '\" xmlns=\"http://www.w3.org/2000/svg\">') # and more"
+
+fun hArea() : TextArea {
+  val a = TextArea(SharedTextModel("start\n$long\nend"))
+  val c = Component(a)
+  c.layout(300, 120)
+  c.record(300, 120)
+  return a
+}
+// Where the long line's first word is drawn: left of 0 once scrolled.
+fun partsX(c : Component) : Number => texts(c.record(300, 120)).first { it.text.startsWith("parts") }.x
+
+// theThumbDragsAndTheViewStaysWhereItWasDragged
+fun theThumbDragsAndTheViewStaysWhereItWasDragged() {
+  val a = hArea()
+  val c = a.owner!!
+  a.model.moveCaret(0, extendSelection = false)
+  val x0 = partsX(c)
+  val barY = 120 - 4
+  c.dispatch(Event.Click(10, barY))
+  same("a press on the bar is not a click in the text", a.model.caret, 0)
+  c.dispatch(Event.Drag(200, barY))
+  c.dispatch(Event.Release(200, barY))
+  val x1 = partsX(c)
+  yes("scrolled: $x0 -> $x1", x1 < x0 - 100)
+  same("painted again, it stays: not snapped back to the caret", partsX(c), x1)
+  c.dispatch(Event.Click(5, barY))                   // the track left of the thumb
+  yes("a press beside the thumb pages back", partsX(c) > x1)
+}
+theThumbDragsAndTheViewStaysWhereItWasDragged()
+
+// theCaretsBlinkLeavesADraggedViewWhereItIs
+fun theCaretsBlinkLeavesADraggedViewWhereItIs() {
+  val a = hArea()
+  val c = a.owner!!
+  a.model.setFocused(true)
+  a.model.moveCaret(0, extendSelection = false)
+  partsX(c)
+  val barY = 120 - 4
+  c.dispatch(Event.Click(10, barY))
+  c.dispatch(Event.Drag(150, barY))
+  val x1 = partsX(c)
+  a.model.toggleCaret()
+  same("a blink mid-drag", partsX(c), x1)
+  c.dispatch(Event.Drag(200, barY))
+  c.dispatch(Event.Release(200, barY))
+  val x2 = partsX(c)
+  yes("dragged on: $x1 -> $x2", x2 < x1)
+  a.model.toggleCaret()
+  a.model.setStyleRuns([])
+  same("a blink or a restyle after it", partsX(c), x2)
+  a.model.insert("x")                                // an edit at the caret: the view goes to it again
+  yes("typing brings the caret back into view", partsX(c) > x2)
+}
+theCaretsBlinkLeavesADraggedViewWhereItIs()
+
+// theWheelSidewaysScrollsItAndUpAndDownIsLeftAlone
+fun theWheelSidewaysScrollsItAndUpAndDownIsLeftAlone() {
+  val a = hArea()
+  val c = a.owner!!
+  val x0 = partsX(c)
+  yes("up and down is the enclosing view's", !a.wheel(Event.Wheel(50, 50, 40)))
+  yes("sideways is the area's", a.wheel(Event.Wheel(50, 50, 0, deltaX = 80)))
+  same("moved by the swipe", partsX(c), x0 - 80)
+  yes("Shift and the wheel is sideways too", a.wheel(Event.Wheel(50, 50, 40, shift = true)))
+  same("moved by the wheel", partsX(c), x0 - 120)
+}
+theWheelSidewaysScrollsItAndUpAndDownIsLeftAlone()
+
+// theBarIsDrawnOnlyWhenThereIsMoreToSee
+fun bars(text : string) : List<DrawOp.Rect> {
+  val c = Component(TextArea(SharedTextModel(text)))
+  c.layout(300, 120)
+  return rects(c.record(300, 120)).filter { it.y == 120 - barHeight and it.h == barHeight }
+}
+same("a track and a thumb", bars("start\n$long\nend").size, 2)
+yes("no bar when the lines fit", bars("start\nshort\nend").isEmpty())
+
+// theBarShowsTheArrow
+fun theBarShowsTheArrow() {
+  val a = hArea()
+  same("over the bar", a.cursorAt(50, 120 - 4), CursorKind.default)
+  same("over the text", a.cursorAt(50, 30), CursorKind.text)
+}
+theBarShowsTheArrow()
+
+// theThumbDarkensUnderThePointer
+fun theThumbDarkensUnderThePointer() {
+  val c = hArea().owner!!
+  val barY = 120 - 4
+  val thumbColor = { rects(c.record(300, 120)).filter { it.y == 120 - barHeight }.last().color }
+  val rest = thumbColor()
+  c.dispatch(Event.Hover(250, barY))                 // the bar, right of the thumb
+  val bar = thumbColor()
+  c.dispatch(Event.Hover(10, barY))                  // the thumb
+  val thumb = thumbColor()
+  yes("rest $rest, over the bar $bar, over the thumb $thumb", bar != rest and thumb != bar and thumb != rest)
+  c.dispatch(Event.Click(10, barY))
+  c.dispatch(Event.Hover(10, 30))
+  same("held while dragged, wherever the pointer is", thumbColor(), thumb)
+  c.dispatch(Event.Release(10, 30))
+  c.dispatch(Event.Hover(-1, -1))
+  same("and as it was once the pointer has left", thumbColor(), rest)
+}
+theThumbDarkensUnderThePointer()
+
+// theBlockMakesRoomForTheBarOnlyWhenItHasOne
+fun theBlockMakesRoomForTheBarOnlyWhenItHasOne() {
+  val a = hArea()
+  val fits = TextArea(SharedTextModel("start\nshort\nend"))
+  same("room for the bar", a.heightForWidth(300), fits.heightForWidth(300) + barHeight)
+  same("wide enough, no bar", fits.heightForWidth(3000), a.heightForWidth(3000))
+}
+theBlockMakesRoomForTheBarOnlyWhenItHasOne()
+
+// inADocumentTheWheelSidewaysScrollsTheBlock: waits for the document view (JadeDocView).
+print("TextAreaHScrollTest:", checks, "checks,", failed)   // expect: TextAreaHScrollTest: 22 checks, []
+
+// -- TextAreaLargeTextTest --
+
+checks = 0
+val lineCount = 5000
+val bigText = numbered("line ", 0, lineCount)
+fun shownTexts(ops : List<DrawOp>) : List<string> => texts(ops).map { it.text }
+
+// onlyTheRowsInTheViewportAreDrawn
+fun onlyTheRowsInTheViewportAreDrawn() {
+  val m = SharedTextModel(bigText)
+  val sc = scroll(Component(TextArea(m)))
+  val top = shownTexts(sc.record(400, 200))
+  yes("the first screenful is drawn", top.contains("line 0"))
+  yes("a screenful of rows, not all $lineCount: ${top.size}", top.count { it.startsWith("line ") } < 40)
+  yes("the last line is far below the view", !top.contains("line 4999"))
+  (sc.content as Scroll).scrollTo(int.maxValue)
+  val bottom = shownTexts(sc.record(400, 200))
+  yes("scrolled to the end, the last line is drawn", bottom.contains("line 4999"))
+  yes("and the first is not", !bottom.contains("line 0"))
+  yes("still a screenful: ${bottom.size}", bottom.count { it.startsWith("line ") } < 40)
+}
+onlyTheRowsInTheViewportAreDrawn()
+
+// highlightedTextIsCulledToo
+fun highlightedTextIsCulledToo() {
+  val m = SharedTextModel(bigText)
+  val runs = []
+  for (i in 0 ..< lineCount) {
+    val s = Math.max(m.text.indexOf("line $i\n"), 0)
+    runs.add(StyleRun(s, s + 4, Color.red))
+  }
+  m.setStyleRuns(runs)
+  val sc = scroll(Component(TextArea(m)))
+  val ops = texts(sc.record(400, 200))
+  yes("the run's colour is drawn", ops.any { it.text == "line" and it.color == Color.red })
+  yes("two pieces a row, a screenful of rows: ${ops.size}", ops.size < 80)
+}
+highlightedTextIsCulledToo()
+
+// aWholeSelectionShadesOnlyTheRowsOnScreen
+fun aWholeSelectionShadesOnlyTheRowsOnScreen() {
+  val m = SharedTextModel(bigText)
+  m.setFocused(true)
+  m.select(0, m.length)
+  val sc = scroll(Component(TextArea(m)))
+  val shaded = rects(sc.record(400, 200)).count { it.fill and it.color.alpha == 0x88 }
+  yes("a screenful of selected rows: $shaded", shaded in 1 ..< 40)
+}
+aWholeSelectionShadesOnlyTheRowsOnScreen()
+
+// squigglesAreDrawnOnlyOnScreen
+fun squigglesAreDrawnOnlyOnScreen() {
+  val m = SharedTextModel(bigText)
+  val area = TextArea(m)
+  area.squiggles = [0 ..< m.length]
+  val sc = scroll(Component(area))
+  val zig = sc.record(400, 200).count { it is DrawOp.Line }
+  yes("zigzags on a screenful of rows only: $zig", zig in 1 ..< 40 * 40)
+}
+squigglesAreDrawnOnlyOnScreen()
+
+// visibleBoundsIsTheCanvasWithinItsClips: JadeUI's live canvas is an AwtCanvas on a picture; here a Surface's.
+fun visibleBoundsIsTheCanvasWithinItsClips() {
+  val rec = RecordingCanvas(400, 200, [])
+  same("the whole canvas", rec.visibleBounds, Rect(0, 0, 400, 200))
+  // A child moved up by 300 inside it: the part showing is its y 300 to 500.
+  val child = rec.sub(0, -300, 400, 5000)
+  same("the child's part showing", child.visibleBounds, Rect(0, 300, 400, 200))
+  same("clips nest", child.sub(0, 250, 400, 150).visibleBounds, Rect(0, 50, 400, 100))
+  val live = Surface(400, 200).canvas()
+  same("a live canvas: its clip", live.sub(0, -300, 400, 5000).visibleBounds, Rect(0, 300, 400, 200))
+}
+visibleBoundsIsTheCanvasWithinItsClips()
+print("TextAreaLargeTextTest:", checks, "checks,", failed)   // expect: TextAreaLargeTextTest: 14 checks, []
+
+// -- TextNavParityTest: the area's legs (the field's are in jade_textfield; prose waits for the prose view) --
+
+checks = 0
+// The same document, driven through an area; where its caret ends.
+fun inArea(text : string, drive : ((Event) -> unit) -> unit) : int {
+  val areaModel = SharedTextModel(text)
+  val area = Component(TextArea(areaModel))
+  area.layout(600, 200)
+  areaModel.setFocused(true)
+  drive { area.dispatch(it) }
+  return areaModel.caret
+}
+
+// ctrlRightLandsOnTheStartOfTheNextWordEverywhere
+same("Ctrl+Right from the start goes to the start of 'beta' in the area", inArea("alpha beta gamma") { dispatch ->
+  dispatch(Event.KeyPress(Key.home))                 // the model starts its caret at the end
+  dispatch(Event.KeyPress(Key.right, ctrl = true))
+}, 6)
+
+// ctrlLeftLandsOnTheStartOfTheWordBehindEverywhere
+same("Ctrl+Left from the end goes to the start of 'gamma' in the area", inArea("alpha beta gamma") { dispatch ->
+  dispatch(Event.KeyPress(Key.end))
+  dispatch(Event.KeyPress(Key.left, ctrl = true))
+}, 11)
+
+// ctrlRightStepsWordByWordTheSameWayEverywhere
+same("two Ctrl+Rights reach the start of 'gamma' in the area", inArea("alpha beta gamma") { dispatch ->
+  dispatch(Event.KeyPress(Key.home))
+  for (i in 0 ..< 2) { dispatch(Event.KeyPress(Key.right, ctrl = true)) }
+}, 11)
+
+// movingUpThroughAShortLineKeepsTheColumnEverywhere: the area end to end (the part on CaretKeys
+// with a stub geometry is not the area's).
+same("the text area restores column 8 on the third line", inArea("aaaaaaaaaa\nbb\ncccccccccc") { dispatch ->
+  dispatch(Event.KeyPress(Key.home))
+  for (i in 0 ..< 8) { dispatch(Event.KeyPress(Key.right)) }
+  dispatch(Event.KeyPress(Key.down))                 // onto the short line, which cannot hold column 8
+  dispatch(Event.KeyPress(Key.down))                 // and on to the long line again
+}, 22)
+
+// homeGoesToTheStartOfTheVisualRowEverywhere
+same("Home returns to the start of the row in the area", inArea("hello world") { dispatch ->
+  dispatch(Event.KeyPress(Key.end))
+  dispatch(Event.KeyPress(Key.home))
+}, 0)
+print("TextNavParityTest, the area:", checks, "checks,", failed)   // expect: TextNavParityTest, the area: 5 checks, []
+
+// -- NestedScrollTest, as JadeUI wrote it: with text areas (jade_scroll has it with grids) --
+// JadeUI reads the outer view's maxScrollY, internal here: that the outer can move is seen from
+// its child being taller than it.
+
+checks = 0
+fun tallText(lines : int) : Component => Component(TextArea(SharedTextModel(numbered("line ", 1, lines + 1))))
+
+// theInnerViewportScrollsNotTheOuter
+fun theInnerViewportScrollsNotTheOuter() {
+  val inner = Scroll(tallText(200))
+  val outer = Scroll(Component(inner).preferredSize(Size(200, 400)))
+  val root = Component(outer)
+  root.layout(300, 200)
+  yes("precondition: the outer view can move too", outer.child.bounds.height > outer.viewportHeight)
+  root.dispatch(Event.Wheel(50, 50, 40))
+  yes("the inner view moved", inner.scrollY > 0)
+  same("the outer view did not steal the wheel", outer.scrollY, 0)
+}
+theInnerViewportScrollsNotTheOuter()
+
+// theOuterViewportTakesOverWhenTheInnerCannotMove: JadeUI puts the two side by side in a
+// JadeSplit (not built yet); here in a grid of two equal columns.
+fun theOuterViewportTakesOverWhenTheInnerCannotMove() {
+  val inner = Scroll(label("short"))                // nothing to move
+  val outer = Scroll(Component(TextArea(SharedTextModel(numbered("l", 1, 201)))))
+  val root = grid {
+    row {
+      cell(Component(inner), fill = Fill.both, weightX = 1.0, weightY = 1.0)
+      cell(Component(outer), fill = Fill.both, weightX = 1.0, weightY = 1.0)
+    }
+  }
+  root.layout(400, 200)
+  root.dispatch(Event.Wheel(350, 50, 40))
+  yes("the view under the pointer that can move moved", outer.scrollY > 0)
+}
+theOuterViewportTakesOverWhenTheInnerCannotMove()
+print("NestedScrollTest:", checks, "checks,", failed)   // expect: NestedScrollTest: 4 checks, []
