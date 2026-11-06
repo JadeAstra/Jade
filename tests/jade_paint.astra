@@ -275,3 +275,21 @@ val font = Font(Font.sansSerif, 12)
 val long = "a text that is too long for the room it has"
 val cut = elide(long, font, 100)
 print(elide("short", font, 500), cut.endsWith("…"), font.width(cut) <= 100, cut.size < long.size, elide(long, font, 0) == "", elide(long, font, 3) == "")   // expect: short true true true true true
+
+// A component taller than the graphics card's largest picture paints straight onto the canvas
+// instead of keeping a picture of itself, which it could not have (M7): a long list in a
+// scroll is such a one.
+class Stripes : Content {
+  override var owner : Component? = null
+  override fun sizes() : Sizes => Sizes(Size(10, 10), Size(10, 10), Size(10, 10))
+  override fun paint(canvas : Canvas) {
+    canvas.color = Color.red
+    canvas.fillRect(0, 0, 20, 20)
+  }
+}
+val largest = Surface.largestSide()
+print(largest >= 1024 and largest <= 16384)   // expect: true
+val tall = Component(Stripes())
+val small = Surface(40, 40)
+tall.paintInto(small.canvasAt(40, largest + 100, 1))
+print(small.toImage()[5, 5] == Color.red)   // expect: true

@@ -10,7 +10,7 @@
 //     row { cell(button("OK") { save() }, colSpan = 2, anchor = Anchor.east) }
 //   }
 
-class GridPane : Content {
+class GridPane : Content, Container {
   override var owner : Component? = null
 
   // Room kept free around the cells, and between one column or row and the next.
@@ -168,6 +168,14 @@ class GridPane : Content {
   }
 
   // The component at a point: the last one added, if several overlap.
+  // As a container (Component asks it).
+  override fun layoutChildren(width : int, height : int) => layout(width, height)
+  override fun shownChildren() : List<Component> => cells.map { it.component }
+  override fun childAtPoint(px : int, py : int) : PositionalChild? {
+    val hit = childAt(px, py)
+    return hit == null ? null : PositionalChild(hit, hit.bounds.x, hit.bounds.y)
+  }
+
   fun childAt(x : int, y : int) : Component? {
     val found = effective().cells.lastOrNull { it.component.visible and it.component.bounds.contains(x, y) }
     return found?.component

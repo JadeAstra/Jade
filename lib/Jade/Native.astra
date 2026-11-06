@@ -101,6 +101,10 @@ class Surface : Drawable, ToImage {
   }
 
   static {
+    // The most device pixels a surface can have each way, on the graphics card in use: from
+    // 1,024 to 16,384. Asking for more is an error.
+    fun largestSide() : int => __jade.surfaceLargestSide()
+
     // A surface holding an Image, pixel for pixel.
     fun of(image : Image) : Surface {
       val made = Surface(image.width, image.height)

@@ -618,6 +618,7 @@ void registerJade(VM& vm) {
         vm.account(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
         return Value::object(vm.alloc<ObjResource>("surface", id, &Renderer::releaseLater));
     });
+    def("surfaceLargestSide", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::integer(need(vm).maxSurfaceSize()); });
     def("surfaceDispose", 1, 1, [](VM& vm, int, Value* args) -> Value {
         need(vm).destroySurface(surfaceOf(vm, args[0]));
         return Value::null();

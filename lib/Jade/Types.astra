@@ -246,6 +246,14 @@ internal class TextUnits {
 
   private fun units(device : int) : int => scale == 1 ? device : Math.ceil(device / scale.toFloat()).toInt()
   fun stringWidth(text : string) : int => units(font.width(text, scale))
+  fun charWidth(c : char) : int => units(font.width(c, scale))
+  // Where the caret goes before each character of a text and after the last (size + 1 numbers),
+  // measured in one call: what hit-testing and a selection's ends need (M7). Each is the width
+  // of the text before it, as stringWidth would give.
+  fun offsets(text : string) : List<int> {
+    val device = font.offsets(text, scale)
+    return scale == 1 ? device : device.map { units(it) }
+  }
 }
 
 // A text cut short with "…" so that it fits a width; the whole text if it fits as it is.

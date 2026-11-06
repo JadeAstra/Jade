@@ -82,9 +82,13 @@ class Component {
   // its content paints in.
   var paintStyle = Style(null, null, true)
 
+  // Whether it draws its own frame: a container that frames it instead (a scroll, round a list)
+  // says no, so that the frame stays where the container is while the content moves (M7).
+  internal var framed = true
+
   // The style this component gives its content by itself, and within one handed down:
   // what it sets wins, what it leaves is the one handed down, and being disabled is passed on.
-  fun style() : Style => Style(background, foreground, enabled)
+  fun style() : Style => Style(background, foreground, enabled, framed)
 
   // ---- The tree ----
 
@@ -137,7 +141,13 @@ class Component {
     Jade.requestLayout()
   }
 
-  private fun cacheable() : bool => overlayDescendants == 0
+  // A container keeps no picture of itself while something in it draws afresh every frame,
+  // nor ever when what it shows moves without it changing (a scroll, the screen).
+  private fun cacheable() : bool {
+    val c = content
+    if (c is Container and !c.keepsPicture()) { return false }
+    return overlayDescendants == 0
+  }
 
   // Paints the component on a canvas of its own size, in its own style, which its content
   // reads as paintStyle (D132). On a canvas of the graphics card a picture of the content is
@@ -162,7 +172,7 @@ class Component {
     val sy = canvas.deviceScaleY
     val pw = Math.max(1, Math.round(w * sx).toInt())
     val ph = Math.max(1, Math.round(h * sy).toInt())
-    if (pw * ph > maxCachePixels) {
+    if (pw * ph > maxCachePixels or pw > Surface.largestSide() or ph > Surface.largestSide()) {
       cache = null                       // one kept from when it was smaller
       cacheDirty = true
       content.paint(canvas)
@@ -227,17 +237,19 @@ class Component {
   fun layout(width : int, height : int) {
     bounds = Rect(0, 0, width, height)
     val c = content
-    if (c is GridPane) { c.layout(width, height) }
+    if (c is Container) { c.layoutChildren(width, height) }
   }
 
   // The components its content shows, and all the ones it holds (which for some containers
   // is more: the tabs that are not in front).
   fun childComponents() : List<Component> {
     val c = content
-    if (c is GridPane) { return c.cells.map { it.component } }
-    return []
+    return c is Container ? c.shownChildren() : []
   }
-  fun structuralChildren() : List<Component> => childComponents()
+  fun structuralChildren() : List<Component> {
+    val c = content
+    return c is Container ? c.heldChildren() : []
+  }
 
   // ---- Pictures of it ----
 
@@ -296,11 +308,7 @@ class Component {
   // null if the point is the component's own.
   private fun positionalChild(px : int, py : int) : PositionalChild? {
     val c = content
-    if (c is GridPane) {
-      val hit = c.childAt(px, py)
-      if (hit != null) { return PositionalChild(hit, hit.bounds.x, hit.bounds.y) }
-    }
-    return null
+    return c is Container ? c.childAtPoint(px, py) : null
   }
 
   // Hands an event to whatever it is for: an event with a position goes down to the
@@ -352,8 +360,9 @@ class Component {
     if (hit != null) {
       if (hit.child.dispatchWheel(event.copy(x = event.x - hit.offsetX, y = event.y - hit.offsetY))) { return true }
     }
+    val c = content
+    if (c is Container) { return c.takeWheel(event) }   // a viewport, if it could move
     if (hit == null) {
-      val c = content
       if (c is WheelTarget) { return c.wheel(event) }
       c.onEvent(event)                   // a leaf may still want it
     }
@@ -453,6 +462,9 @@ class Component {
     while (c != null) {
       x += c.bounds.x
       y += c.bounds.y
+      // A container that draws what it holds moved (a scroll) has that left out of the bounds.
+      val holder = c.parent?.content
+      if (holder is Container) { y -= holder.childShiftY() }
       c = c.parent
     }
     return Point(x, y)
@@ -462,6 +474,27 @@ class Component {
 }
 
 internal class PositionalChild(val child : Component, val offsetX : int, val offsetY : int)
+
+// A content that holds components of its own (M7): a grid, a scroll, a split, tabs, the
+// screen. The toolkit asks it how to lay them out, which it shows and which a point falls on,
+// rather than testing for each kind of container, as JadeUI does.
+internal interface Container {
+  // Places what it holds within its own width and height.
+  fun layoutChildren(width : int, height : int)
+  // What it shows: where events, the keyboard and finding things go.
+  fun shownChildren() : List<Component>
+  // All it holds, shown or not: what is given it as a parent. More than it shows for some
+  // (the tabs not in front).
+  fun heldChildren() : List<Component> => shownChildren()
+  // The child a point falls on and where its corner is; null if the point is its own.
+  fun childAtPoint(px : int, py : int) : PositionalChild?
+  // Whether a picture of it may be kept: not when what it shows moves without it changing.
+  fun keepsPicture() : bool => true
+  // How far up it draws its children from where their bounds put them (a scroll's offset).
+  fun childShiftY() : int => 0
+  // The wheel, when none of its children took it: true if it used it (a viewport that moved).
+  fun takeWheel(event : Event.Wheel) : bool => false
+}
 
 // A component and where its corner is in the tree it was found in.
 class CapturedTarget(val component : Component, val offsetX : int, val offsetY : int)

@@ -51,9 +51,8 @@ Only the Clang Windows build is checked step by step; the full check comes at th
    on pointer moves; `takesKeys`, `cacheable` (a scroll and a screen keep no picture),
    `windowPosition` through a scroll, and a way for a container to hand a child the `framed`
    style. A kept picture is refused by its side as well as its area (the GPU's texture
-   limit), so a tall list never asks for a surface it cannot have. `TextUnits.charWidth`.
-   And a language bug found in the reading: `range.first` without brackets gives the
-   function, not the number, which the README says it gives.
+   limit), so a tall list never asks for a surface it cannot have. `TextUnits.charWidth`
+   and `offsets`.
 2. **`TextNav`**, with a value type for a selection's two ends in place of Kotlin's reversed
    ranges, which an Astra range does not keep. Tests: the word and line rules of
    `TextNavParityTest`.
