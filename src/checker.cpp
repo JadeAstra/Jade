@@ -6295,6 +6295,9 @@ struct Checker::Impl {
             effects[effectKeyHere()].types.insert(inside);
             if (a.op == TokenType::Eq && a.value->kind == ExprKind::Call && silent == 0) builtInPlace.insert(&a);
         }
+        // What is needed of the variable, taken before the value is checked: a block in it opens
+        // scopes, which may move the one `local` is in.
+        const VarStmt* const targetPlace = local != nullptr ? local->place : nullptr;
         Type value;
         if (a.op == TokenType::DotEq) {
             // `target .= member`: the member asked of the target as it is (D156).
@@ -6304,7 +6307,7 @@ struct Checker::Impl {
         } else {
             value = exprExpected(*a.value, a.op == TokenType::Eq ? target : unknownType());
         }
-        if (local != nullptr && local->place != nullptr) notePlaceLocalChange(local->place, &a);
+        if (targetPlace != nullptr) notePlaceLocalChange(targetPlace, &a);
         else if (local != nullptr && valueClass(value) && silent == 0) keptStores.insert(&a);
         if (local != nullptr) {
             forget(targetName);
