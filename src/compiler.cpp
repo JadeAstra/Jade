@@ -4417,8 +4417,10 @@ private:
                 bodyKeeps = bodyKeeps || s.fields[i]->init != nullptr || s.fields[i]->getter == nullptr;
             const bool headerAlone = !ownInit && s.initBlocks.empty() && !bodyKeeps;
             emitGet(storage, s);
+            // Its phantom type parameters, which no field shows (G4), the first seven of them.
+            const uint32_t phantom = session_.checker != nullptr ? session_.checker->phantomParams(s) : 0;
             emit(Op::MarkValue);
-            emitByte(headerAlone ? 1 : 0);
+            emitByte((headerAlone ? 1 : 0) | static_cast<int>((phantom & 0x7F) << 1));
             emit(Op::Pop);
         }
         // A library's class says which library (Class.origin): the standard library's "astra", another's
@@ -5691,6 +5693,22 @@ private:
     // made as reflection makes them. Then the same for the classes inside it.
     void emitFieldTypesMakers(const ClassStmt& s, const std::string& bound, bool anonymous = false) {
         if (s.isExternal || session_.checker == nullptr) return;
+        // The fields that keep the type of a value whose phantom type parameters their declared
+        // type says too little of (`var id : Id<any>`), in a slot beside it.
+        const std::vector<std::string> slotted = session_.checker->typeSlottedFields(s);
+        if (!slotted.empty()) {
+            std::string names;
+            for (const std::string& name : slotted) {
+                std::string stored = name;
+                for (const auto& field : s.fields)
+                    if (field->name == name) stored = storedName(*field);
+                names += stored + "\n";
+            }
+            line_ = s.line;
+            emitGet(anonymous || !s.isObject ? bound : "(object " + bound + ")", s);
+            emit(Op::TypeSlots, stringConstant(names));
+            emit(Op::Pop);
+        }
         ReflectedClass r;
         if (session_.checker->reflected(s, r)) {
             std::vector<const ReflectedMember*> typed;

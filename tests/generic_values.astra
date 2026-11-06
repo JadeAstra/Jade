@@ -59,3 +59,32 @@ val a : any = Pair<any, any>(1, 2)
 val b : any = Pair<int, int>(1, 2)
 val keyed : Map<any, string> = mapOf(a to "x")
 print(a == b, keyed[b], a.hashCode() == b.hashCode())   // expect: true x true
+
+// A phantom type parameter, which no field shows, is kept too: by the value itself, and beside it
+// where it is kept in a container declared wider than it (a hidden slot, option B).
+class User
+class Order
+value Id<T>(val raw : int)
+value Tag<T>(val a : int, val b : int, val c : int)
+val user : any = Id<User>(7)
+print(user is Id<User>, user is Id<Order>, user#, Id<User>(7) == Id<Order>(7))   // expect: true false Id<User> true
+val ids : open List<Id<any>> = []
+ids.add(Id<User>(1))
+ids.add(Id<Order>(2))
+val id0 : any = ids[0]
+val id1 : any = ids[1]
+print(id0 is Id<User>, id0 is Id<Order>, id1 is Id<Order>, id0#, id1#)   // expect: true false true Id<User> Id<Order>
+val users : List<Id<User>> = [Id(3)]
+val user0 : any = users[0]
+print(user0 is Id<User>, user0 is Id<Order>)   // expect: true false
+class Keep { var tag : Tag<any> = Tag<User>(1, 2, 3) }
+val keep = Keep()
+val tag0 : any = keep.tag
+keep.tag = Tag<Order>(4, 5, 6)
+val tag1 : any = keep.tag
+print(tag0 is Tag<User>, tag0 is Tag<Order>, tag1 is Tag<Order>, tag1#)   // expect: true false true Tag<Order>
+value Both(val first : Id<any>, val second : Tag<any>)
+val both = Both(Id<User>(1), Tag<Order>(1, 2, 3))
+val bothFirst : any = both.first
+val bothSecond : any = both.second
+print(bothFirst is Id<User>, bothFirst is Id<Order>, bothSecond is Tag<Order>, bothSecond is Tag<User>)   // expect: true false true false

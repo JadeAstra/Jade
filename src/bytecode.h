@@ -192,7 +192,7 @@ enum class Op : uint16_t {
     // and 0 stands for every value.
     Extension,          // u16 name, u8 type               [class] closure ->
     MarkAbstract,       //                                 class -> class
-    MarkValue,          // u8 made from its header alone   class -> class  (a value type, M6.6 part 2)
+    MarkValue,          // u8 flags                        class -> class  (a value type, M6.6 part 2): bit 0 made from its header alone; bits 1-7 its phantom type parameters (G4)
     // A member written `override` has to have something to take the place of.
     CheckOverride,      // u16 name, u8 flags              class -> class  (1: written override; 2: a field or property)
     // Invoke, where the last argument is a lambda written after the call: it goes to the last
@@ -401,6 +401,9 @@ enum class Op : uint16_t {
     KeepTop,            //                                 value -> value (a copy, where in a place)
     // A class whose fields' types depend on its type arguments (G4): the function that gives them.
     FieldTypesMaker,    //                                 class function -> class  (ObjClass::fieldTypesMaker)
+    // The fields of a class that keep a value of a generic value type declared wider than its
+    // phantom type parameters can be, beside which they keep its own (G4): their names, one to a line.
+    TypeSlots,          // u16 names                       class -> class
 
     Count_,
 

@@ -412,7 +412,10 @@ public:
         uint64_t bits = 0;
         std::memcpy(&bits, bytes, size);
         Value made = Value::inSlot(cls->smallId, bits);
-        if (type != nullptr) made.refOffset = valueTypeNumber(type);
+        if (type != nullptr && !type->args.empty()) {  // a type with no arguments says no more than the class
+            const uint16_t known = type->valueNumber.load(std::memory_order_acquire);
+            made.refOffset = known != 0 ? known : valueTypeNumber(type);
+        }
         return made;
     }
 
@@ -563,7 +566,9 @@ public:
     Value valueField(const ObjValue* box, size_t index);
     void setValueField(ObjValue* box, ObjString* name, Value value);
     bool valuesSame(const ObjValue* a, const ObjValue* b, int depth);
-    const uint8_t* readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out);
+    // `type`: what the value at `at` is, where known, for one read whole (G4).
+    const uint8_t* readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out,
+                               const ObjTypeInfo* type = nullptr);
     // Capture `k` of the object a member of an anonymous class runs on, checked.
     ObjUpvalue* capturedOf(Value receiver, int k);
     ObjUpvalue* receiverUpvalue(const CallFrame* frame, const Value* base, uint16_t entry) const;
@@ -664,6 +669,16 @@ public:
     // ObjClass::fieldTypesMaker). Runs nothing of the program: only types are made.
     const std::vector<ObjTypeInfo*>& fieldTypesOf(ObjClass* cls, const ObjTypeInfo* own);
     void makeFieldPatterns(ObjClass* cls);
+    // Whether a container whose declared type for its values is `declared` keeps each value's
+    // own type beside it: where `declared` says too little of a phantom type parameter (G4).
+    static bool keepsItemTypes(const ObjTypeInfo* declared);
+    // Writes a value's type into the slot at `at` (a pointer, null for none).
+    static void writeTypeSlot(uint8_t* at, const ObjTypeInfo* type) { std::memcpy(at, &type, sizeof type); }
+    static const ObjTypeInfo* readTypeSlot(const uint8_t* at) {
+        const ObjTypeInfo* type;
+        std::memcpy(&type, at, sizeof type);
+        return type;
+    }
     ObjTypeInfo* substituted(ObjTypeInfo* pattern, const ObjTypeInfo* own);
     void needPatterns(ObjClass* cls) {
         if (cls->fieldTypesMaker != nullptr && cls->patternsState.load(std::memory_order_acquire) == 0) makeFieldPatterns(cls);

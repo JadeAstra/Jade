@@ -11129,6 +11129,67 @@ bool Checker::rangeWord(const CallExpr& call, std::string& which) const {
 bool Checker::callsOnObject(const CallExpr& call) const { return impl_->onObjectCalls.count(&call) != 0; }
 bool Checker::memberLocalCall(const CallExpr& call) const { return impl_->memberLocalCalls.count(&call) != 0; }
 
+namespace {
+// Whether a type shows type parameter `param`: anywhere in it, but in a function type, whose
+// values keep no type of what they take or give.
+bool showsParam(const Type& t, const std::string& param) {
+    if (t.kind == Type::Function) return false;
+    if (t.kind == Type::TypeParam && t.name == param) return true;
+    for (const Type& arg : t.args)
+        if (showsParam(arg, param)) return true;
+    return false;
+}
+
+// An argument written for a phantom type parameter that says less than what a value may keep:
+// any, Number, a union, an interface or an abstract class, or one not known.
+bool wideArgument(const Type& t) {
+    switch (t.kind) {
+        case Type::Unknown:
+        case Type::Any:
+        case Type::Number:
+        case Type::Union: return true;
+        case Type::Class: return t.cls == nullptr || t.cls->isInterface || t.cls->isAbstract;
+        default: return false;
+    }
+}
+}  // namespace
+
+uint32_t Checker::phantomParams(const ClassStmt& cls) {
+    auto found = impl_->classOf.find(&cls);
+    if (found == impl_->classOf.end() || !found->second->isValue) return 0;
+    ClassInfo* k = found->second;
+    uint32_t mask = 0;
+    for (size_t i = 0; i < k->typeParams.size() && i < 31; i++) {
+        bool shown = false;
+        for (const auto& [name, field] : k->fields) {
+            if (field->decl != nullptr && field->decl->getter && !field->decl->init) continue;  // keeps nothing
+            if (showsParam(impl_->fieldType(field), k->typeParams[i])) {
+                shown = true;
+                break;
+            }
+        }
+        if (!shown) mask |= 1u << i;
+    }
+    return mask;
+}
+
+std::vector<std::string> Checker::typeSlottedFields(const ClassStmt& cls) {
+    std::vector<std::string> slotted;
+    auto found = impl_->classOf.find(&cls);
+    if (found == impl_->classOf.end()) return slotted;
+    for (const auto& [name, field] : found->second->fields) {
+        if (field->decl != nullptr && field->decl->getter && !field->decl->init) continue;
+        const Type t = withNull(impl_->fieldType(field), false);
+        if (t.kind != Type::Class || t.cls == nullptr || !t.cls->isValue || t.cls->decl == nullptr) continue;
+        const uint32_t phantom = phantomParams(*t.cls->decl);
+        if (phantom == 0) continue;
+        bool wide = t.args.empty();  // written without its type arguments: any
+        for (size_t i = 0; i < t.args.size() && i < 31 && !wide; i++) wide = ((phantom >> i) & 1) != 0 && wideArgument(t.args[i]);
+        if (wide) slotted.push_back(name);
+    }
+    return slotted;
+}
+
 bool Checker::reflected(const ClassStmt& cls, ReflectedClass& out) {
     auto found = impl_->classOf.find(&cls);
     if (found == impl_->classOf.end()) return false;

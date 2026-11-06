@@ -256,6 +256,7 @@ const OpInfo kOps[] = {
     {"KEEP_LOCAL", Operand::U16},
     {"KEEP_TOP", Operand::None},
     {"FIELD_TYPES_MAKER", Operand::None},
+    {"TYPE_SLOTS", Operand::U16},
 };
 
 const char* const kTypeNames[] = {"", "int", "float", "Number", "string", "bool", "List", "Map", "Range", "Function", "Bytes", "Type", "",
@@ -881,6 +882,10 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                 case Op::EnsureClassInit:
                 case Op::MarkAbstract:
                 case Op::MarkValue:
+                    pops = pushes = 1;
+                    break;
+                case Op::TypeSlots:
+                    requireName(a);
                     pops = pushes = 1;
                     break;
                 case Op::ClassOrigin:

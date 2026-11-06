@@ -683,6 +683,12 @@ struct PackedItems {
     ListStore store = ListStore::Values;
     bool nullable = false;          // with a bit per item for null (List<int?>, List<Point?>)
     uint32_t width = 0;             // the bytes an item takes
+    // A list declared wider than its items' phantom type parameters can be (List<Id<any>>, G4):
+    // where in each item the type it keeps is, 8 bytes after its value; 0 for none.
+    uint32_t typeSlot = 0;
+    // The type the list was made to hold, where it is a generic value type's with type
+    // arguments, which an item read on its own keeps (G4); null for any other.
+    const ObjTypeInfo* itemType = nullptr;
     size_t count = 0;               // the items
     ObjClass* itemClass = nullptr;  // ListStore::Items: the value type
     Narrow narrow = Narrow::None;   // ListStore::Narrow: what each item is
@@ -916,6 +922,9 @@ struct ValueField {
     Kind kind = Any;
     astra::Narrow narrow = astra::Narrow::None;  // Narrow: what it keeps
     uint8_t type = 0;           // as FieldDecl::type, for the check of a value stored there
+    // Nested: where after `offset` its value's type is kept, beside it, for a field declared wider
+    // than its phantom type parameters can be (G4); 0 for none.
+    uint32_t typeSlot = 0;
     ObjClass* cls = nullptr;    // the class a class-typed field is declared with; for Nested, the value type
 };
 
@@ -991,6 +1000,14 @@ struct ObjClass final : Obj {
     // of those without running anything (VM::fieldTypesOf), and kept by the type they are for.
     // `patternsState`: 0 not made, 1 being made, 2 made.
     ObjClosure* fieldTypesMaker = nullptr;
+    // A value type's phantom type parameters, which no field shows, bit i for parameter i (from
+    // MarkValue); and, of any class, the fields that keep their value's type beside it, by
+    // declared index (from TypeSlots). G4.
+    uint8_t phantomParams = 0;
+    std::vector<uint32_t> typeSlotted;
+    bool typeSlottedAt(size_t declaredIndex) const {
+        return std::find(typeSlotted.begin(), typeSlotted.end(), static_cast<uint32_t>(declaredIndex)) != typeSlotted.end();
+    }
     std::vector<ObjTypeInfo*> fieldPatterns;
     std::atomic<uint8_t> patternsState{0};
     std::unordered_map<const ObjTypeInfo*, std::vector<ObjTypeInfo*>> fieldTypesMade;
@@ -1044,6 +1061,7 @@ struct ObjClass final : Obj {
         uint32_t size;
         ObjClass* cls;
         uint32_t declared;  // which of the class's `declared` it is
+        uint32_t typeSlot;  // where its value's type is kept, after `offset` (TypeSlots, G4); 0 for none
     };
     std::vector<InlineField> inlineFields;
     uint32_t inlineSlots = 0;
@@ -1141,6 +1159,8 @@ struct ObjTypeInfo final : Obj {
     // For the type arguments of a call (kTypeArguments): the class type last made of them, as a
     // value made with them keeps (G4), which each place that makes one finds here again.
     std::atomic<ObjTypeInfo*> madeAs{nullptr};
+    // For a class's type: its number among those small values keep (VM::valueTypeNumber), once given.
+    std::atomic<uint16_t> valueNumber{0};
     ObjTypeInfo(uint8_t i, bool n, ObjClass* c, std::vector<ObjTypeInfo*> a)
         : Obj(ObjType::TypeInfo), id(i), nullable(n), cls(c), args(std::move(a)) {}
 };

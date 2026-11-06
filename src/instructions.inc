@@ -901,7 +901,8 @@ COLD(SetOwn) {
                 caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 | from << 16 |
                                         static_cast<uint64_t>(field.type) << 8 | (field.isVal ? 1u : 0u),
                                     std::memory_order_relaxed);
-            else if (field.inlineOffset >= 0 && instance->inlined && !field.isVal)
+            else if (field.inlineOffset >= 0 && instance->inlined && !field.isVal &&
+                     instance->cls->inlineFieldAt(static_cast<uint32_t>(field.inlineOffset))->typeSlot == 0)  // one keeping its type goes this way (G4)
                 caches[cache].store(static_cast<uint64_t>(instance->shape) << 32 | from << 16 | 2u,
                                     std::memory_order_relaxed);  // kept inside the object (the second bit)
         }
@@ -943,6 +944,10 @@ CASE(KeepLocal) {
     if (slot.isRef() && slot.as.obj->type == ObjType::Places) slot = ownRef(slot);
     DONE();
 }
+}
+CASE(TypeSlots) {
+    ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
+    DONE();
 }
 CASE(KeepTop) {
     if (sp_[-1].isRef() && sp_[-1].as.obj->type == ObjType::Places) sp_[-1] = ownRef(sp_[-1]);
@@ -1010,8 +1015,9 @@ LABEL(getIndex) {
             ValueField whole;
             whole.kind = ValueField::Nested;
             whole.cls = list->pack->itemClass;
+            whole.typeSlot = list->pack->typeSlot;  // the type it keeps beside it, or the list's (G4)
             Value read;
-            ip = readThrough(itemAt(list, i), &whole, ip, consts, read);
+            ip = readThrough(itemAt(list, i), &whole, ip, consts, read, list->pack->itemType);
             sp_[-2] = read;
             sp_--;
             DONE();
@@ -2148,10 +2154,11 @@ CASE(ClassOrigin) {
 }
 CASE(MarkValue) {
     {
-    const bool fromHeader = READ_U8() != 0;
+    const int flags = READ_U8();
     if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
     asClass(sp_[-1])->isValue = true;
-    asClass(sp_[-1])->madeFromHeader = fromHeader;
+    asClass(sp_[-1])->madeFromHeader = (flags & 1) != 0;
+    asClass(sp_[-1])->phantomParams = static_cast<uint8_t>(flags >> 1);  // G4
     DONE();
 }
 }

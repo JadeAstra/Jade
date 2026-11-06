@@ -579,6 +579,18 @@ const std::vector<ObjTypeInfo*>& VM::fieldTypesOf(ObjClass* cls, const ObjTypeIn
     return cls->fieldTypesMade.emplace(own, std::move(made)).first->second;
 }
 
+bool VM::keepsItemTypes(const ObjTypeInfo* declared) {
+    if (declared == nullptr || declared->id != kTypeInstance || declared->cls == nullptr || declared->cls->phantomParams == 0) return false;
+    if (declared->args.empty()) return true;  // written without its type arguments: any
+    for (size_t i = 0; i < declared->args.size() && i < 7; i++) {
+        if (((declared->cls->phantomParams >> i) & 1) == 0) continue;
+        const ObjTypeInfo* arg = declared->args[i];
+        if (arg->id == 0 || arg->id == kTypeNumber || (arg->id == kTypeInstance && arg->cls != nullptr && (arg->cls->isInterface || arg->cls->isAbstract)))
+            return true;
+    }
+    return false;
+}
+
 ObjTypeInfo* VM::substituted(ObjTypeInfo* pattern, const ObjTypeInfo* own) {
     if (pattern->id >= kTypeHole && pattern->id < kTypeHole + kTypeHoles) {
         ObjTypeInfo* given = typeArgument(own, pattern->id - kTypeHole);
@@ -636,6 +648,7 @@ uint16_t VM::valueTypeNumber(const ObjTypeInfo* type) {
     const uint16_t number = root.nextValueType_++;
     root.valueTypeTable_[number].store(type, std::memory_order_release);
     root.valueTypeNumbers_.emplace(type, number);
+    const_cast<ObjTypeInfo*>(type)->valueNumber.store(number, std::memory_order_release);  // a type is one VM's, and the number its
     return number;
 }
 
@@ -660,6 +673,9 @@ const ObjTypeInfo* VM::refType(const Value& r) {
             if (list->pack == nullptr) return nullptr;
             cls = list->pack->itemClass;
             if (list->type != nullptr && list->type->args.size() == 1 && list->type->args[0]->cls == cls) type = list->type->args[0];
+            if (list->pack->typeSlot != 0 && r.refIndex < list->pack->count)
+                if (const ObjTypeInfo* kept = readTypeSlot(list->pack->block.data() + static_cast<size_t>(r.refIndex) * list->pack->width + list->pack->typeSlot))
+                    type = kept;
             break;
         }
         case ObjType::Instance: {
@@ -669,6 +685,8 @@ const ObjTypeInfo* VM::refType(const Value& r) {
             cls = field->cls;
             base = field->offset;
             type = fieldTypeOf(instance->cls, instance->type(), field->declared);
+            if (field->typeSlot != 0)
+                if (const ObjTypeInfo* kept = readTypeSlot(instance->inlineData() + field->offset + field->typeSlot)) type = kept;
             break;
         }
         case ObjType::Places: {
@@ -694,6 +712,11 @@ const ObjTypeInfo* VM::refType(const Value& r) {
             const uint32_t start = base + field.offset;
             if (r.refOffset >= start && r.refOffset < start + field.cls->layout.load(std::memory_order_acquire)->size) {
                 type = fieldTypeOf(cls, type, i);
+                if (field.typeSlot != 0) {
+                    // The type this field keeps beside its value, where its bytes are.
+                    if (const uint8_t* bytes = refBytes(Value::ref(r.as.obj, r.refIndex, static_cast<uint16_t>(start), 0)))
+                        if (const ObjTypeInfo* kept = readTypeSlot(bytes + field.typeSlot)) type = kept;
+                }
                 inner = field.cls;
                 base = start;
                 break;
@@ -2981,6 +3004,9 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
         } else if (id == kTypeInstance) {
             field.cls = fieldClass(declared);
             field.kind = !nullable && field.cls->isValue ? ValueField::Nested : ValueField::Object;
+            // Declared wider than its phantom type parameters can be: its type kept after it (G4).
+            if (field.kind == ValueField::Nested && cls->typeSlottedAt(static_cast<size_t>(&declared - cls->declared.data())))
+                field.typeSlot = (layoutOf(field.cls).size + 7) / 8 * 8;
         } else if (id == kTypeString || id == kTypeList || id == kTypeMap || id == kTypeRange || id == kTypeBytes ||
                    id == kTypeFunction || id == kTypeType || id == kTypeSet || id == kTypeFrozenList || id == kTypeFrozenMap || id == kTypeFrozenSet ||
                    id == kTypeValues) {
@@ -3003,7 +3029,7 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
                 break;
             case ValueField::Nested: {
                 const ValueLayout& inner = layoutOf(field.cls);
-                field.offset = place(inner.size, inner.align);
+                field.offset = field.typeSlot != 0 ? place(field.typeSlot + 8, std::max<uint32_t>(inner.align, 8)) : place(inner.size, inner.align);
                 for (uint32_t offset : inner.objects) made->objects.push_back(field.offset + offset);
                 for (uint32_t offset : inner.values) made->values.push_back(field.offset + offset);
                 break;
@@ -3090,6 +3116,8 @@ Value VM::readValueField(const uint8_t* at, const ValueField& field, const ObjTy
             return v;
         }
         case ValueField::Nested: {
+            if (field.typeSlot != 0)
+                if (const ObjTypeInfo* kept = readTypeSlot(at + field.typeSlot)) type = kept;  // G4
             if (type != nullptr && type->cls != field.cls) type = nullptr;
             if (field.cls->smallId != 0) return smallFrom(field.cls, at, field.cls->layout.load(std::memory_order_relaxed)->size, type);
             // A value held in another, read on its own: a box of its own, a copy (M6.6 part 2).
@@ -3127,6 +3155,7 @@ void VM::writeValueField(uint8_t* at, const ValueField& field, const ObjClass* o
     if (field.type != 0 && !(value.isNull() && (field.type & kTypeNullable) != 0) && (!matchesType(value, field.type, field.cls) && !widenedByte(value, field.type)))
         throw runtimeError(Thrown::ClassCastException, "cannot assign a value of type " + typeName(value) + " to field '" + field.name->utf8() + "' of " +
                            owner->name->utf8() + ", which is declared as " + declaredTypeText(field.type, field.cls));
+    if (field.kind == ValueField::Nested && field.typeSlot != 0) writeTypeSlot(at + field.typeSlot, recordedType(value));  // G4
     if (value.isRef() && field.kind == ValueField::Nested) {
         std::memmove(at, refAt(value, false), layoutOf(field.cls).size);  // the same bytes, perhaps
         return;
@@ -3159,7 +3188,8 @@ inline int operandU16(const uint8_t* at);  // below, with the interpreter
 // where it is, with no copy made of the value that holds it. `at` is where `field` is, a
 // Nested one. Gives where the next instruction to run is, and the value read in `out`; a copy
 // of the held value where the instruction after is not such a read.
-const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out) {
+const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const uint8_t* next, const Value* consts, Value& out,
+                                const ObjTypeInfo* type) {
     for (;;) {
         const Op op = opAt(next + kThreaded);
         if (op != Op::GetProp && op != Op::GetOwn && op != Op::GetPropRef && op != Op::GetOwnRef) break;
@@ -3178,8 +3208,9 @@ const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const
         }
         at += inner.offset;
         field = &inner;
+        type = nullptr;  // a value held in another: the one given was the other's
     }
-    out = readValueField(at, *field);
+    out = readValueField(at, *field, type);
     return next;
 }
 
@@ -3297,8 +3328,15 @@ void VM::typeList(ObjList* list, ObjTypeInfo* type) {
     list->values().shrink_to_fit();
     list->pack = std::make_unique<PackedItems>();
     list->pack->store = store;
+    if (store == ListStore::Items && keepsItemTypes(type->args[0])) {
+        // Declared wider than its items' phantom type parameters can be: each item's type kept
+        // after it (G4).
+        list->pack->typeSlot = (width + 7) / 8 * 8;
+        width = list->pack->typeSlot + 8;
+    }
     list->pack->width = width;
     list->pack->itemClass = itemClass;
+    if (store == ListStore::Items && !type->args[0]->args.empty() && type->args[0]->cls == itemClass) list->pack->itemType = type->args[0];
     list->pack->narrow = store == ListStore::Narrow ? narrowOf(type->args[0]->id) : Narrow::None;
     list->pack->nullable = type->args[0]->nullable;
     list->pack->count = 0;
@@ -3333,9 +3371,12 @@ Value VM::packedGet(ObjList* list, size_t i) {
             const ObjTypeInfo* type = list->type != nullptr && list->type->args.size() == 1 && list->type->args[0]->cls == list->pack->itemClass
                                           ? list->type->args[0]
                                           : nullptr;
-            if (list->pack->itemClass->smallId != 0) return smallFrom(list->pack->itemClass, at, list->pack->width, type);
+            if (list->pack->typeSlot != 0)
+                if (const ObjTypeInfo* kept = readTypeSlot(at + list->pack->typeSlot)) type = kept;
+            const uint32_t size = list->pack->typeSlot != 0 ? list->pack->typeSlot : list->pack->width;
+            if (list->pack->itemClass->smallId != 0) return smallFrom(list->pack->itemClass, at, layoutOf(list->pack->itemClass).size, type);
             ObjValue* box = newValue(list->pack->itemClass);
-            std::memcpy(box->data(), at, list->pack->width);
+            std::memcpy(box->data(), at, std::min<uint32_t>(size, layoutOf(list->pack->itemClass).size));
             box->type = type;
             return Value::object(box);
         }
@@ -3385,6 +3426,12 @@ void VM::writeItem(ObjList* list, size_t i, Value v) {
         case ListStore::Bools: *at = v.as.b ? 1 : 0; break;
         case ListStore::Narrow: writeNarrow(list->pack->narrow, at, v); break;
         case ListStore::Items:
+            if (list->pack->typeSlot != 0) {
+                const ObjTypeInfo* type = recordedType(v);
+                std::memmove(at, v.isRef() ? refAt(v, false) : v.isSmall() ? smallBytes(v) : asValue(v)->data(), layoutOf(list->pack->itemClass).size);
+                writeTypeSlot(at + list->pack->typeSlot, type);
+                break;
+            }
             std::memmove(at, v.isRef() ? refAt(v, false) : v.isSmall() ? smallBytes(v) : asValue(v)->data(), list->pack->width);
             break;
         default: break;
@@ -3471,6 +3518,8 @@ ObjList* VM::listLike(const ObjList* like) {
         list->pack = std::make_unique<PackedItems>();
         list->pack->store = like->pack->store;
         list->pack->width = like->pack->width;
+        list->pack->typeSlot = like->pack->typeSlot;
+        list->pack->itemType = like->pack->itemType;
         list->pack->itemClass = like->pack->itemClass;
         list->pack->narrow = like->pack->narrow;   // what each item of a narrow list is
         list->pack->nullable = like->pack->nullable;
@@ -3544,6 +3593,12 @@ void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* 
             writeValueField(item + field.offset, field, cls, args[k]);
         }
         std::memcpy(at, item, layout.size);
+        // Where the place keeps its value's type beside it: this one's (G4).
+        if (dest.refDepth == 0 && dest.as.obj->type == ObjType::List && static_cast<ObjList*>(dest.as.obj)->pack->typeSlot != 0)
+            writeTypeSlot(at + static_cast<ObjList*>(dest.as.obj)->pack->typeSlot, made);
+        else if (dest.refDepth == 0 && dest.as.obj->type == ObjType::Instance)
+            if (const ObjClass::InlineField* inside = static_cast<ObjInstance*>(dest.as.obj)->cls->inlineFieldAt(dest.refOffset); inside->typeSlot != 0)
+                writeTypeSlot(at + inside->typeSlot, made);
         sp_ = args;
         sp_[-1] = dest;
         return;
@@ -3612,8 +3667,10 @@ void VM::layInline(ObjClass* cls) {
         if ((at + 7) / 8 * 8 + layout->size > kMaxValueBytes) continue;
         at = (at + 7) / 8 * 8;
         offsets[i] = static_cast<int32_t>(at);
-        fields.push_back({at, layout->size, type, static_cast<uint32_t>(i)});
-        at += layout->size;
+        // Declared wider than its phantom type parameters can be: its type kept after it (G4).
+        const uint32_t typeSlot = cls->typeSlottedAt(i) ? (layout->size + 7) / 8 * 8 : 0;
+        fields.push_back({at, layout->size, type, static_cast<uint32_t>(i), typeSlot});
+        at += typeSlot != 0 ? typeSlot + 8 : layout->size;
     }
     std::lock_guard<std::mutex> hold(root.internMutex_);
     if (cls->inlineLaid.load(std::memory_order_acquire)) return;
@@ -4247,6 +4304,7 @@ void VM::setProperty(Value obj, ObjString* name, Value value) {
                 ValueField whole;
                 whole.kind = ValueField::Nested;
                 whole.cls = instance->cls->inlineFieldAt(offset)->cls;
+                whole.typeSlot = instance->cls->inlineFieldAt(offset)->typeSlot;  // its type kept beside it, where it is (G4)
                 writeValueField(instance->inlineData() + offset, whole, instance->cls, value);
                 instance->fields()[at] = Value::ref(instance, 0, static_cast<uint16_t>(offset), 0);
                 return;
@@ -6637,6 +6695,19 @@ const uint8_t* VM::typeInstruction(Op op, const uint8_t* ip, CallFrame* frame) {
             if (!sp_[-2].isObjType(ObjType::Class) || !sp_[-1].isObjType(ObjType::Closure)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
             asClass(sp_[-2])->supertypeMakers.push_back(asClosure(sp_[-1]));
             sp_--;
+            break;
+        }
+        case Op::TypeSlots: {
+            const std::string& names = asString(consts[(ip += 2, operandU16(ip - 2))])->utf8();
+            if (!sp_[-1].isObjType(ObjType::Class)) throw runtimeError(Thrown::InternalError, "invalid class declaration");
+            ObjClass* cls = asClass(sp_[-1]);
+            for (size_t from = 0; from < names.size();) {
+                const size_t end = names.find('\n', from);
+                if (end == std::string::npos) break;
+                if (const Value* at = cls->declaredIndex.find(intern(std::string_view(names).substr(from, end - from))))
+                    cls->typeSlotted.push_back(static_cast<uint32_t>(at->as.i));
+                from = end + 1;
+            }
             break;
         }
         case Op::FieldTypesMaker: {

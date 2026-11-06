@@ -259,6 +259,12 @@ public:
     bool asksNoMethods(const MemberExpr& m) const;
     // A class's own members, as reflection lists them (D38); false where the class is not known.
     bool reflected(const ClassStmt& cls, ReflectedClass& out);
+    // A generic value type's type arguments when the program runs (G4). The type parameters of a
+    // value type that no field of it shows (a function type shows none): bit i for parameter i.
+    // And the fields of a class that keep a value of such a type declared wider than what such a
+    // parameter can be (`var id : Id<any>`), which keep the value's own beside it.
+    uint32_t phantomParams(const ClassStmt& cls);
+    std::vector<std::string> typeSlottedFields(const ClassStmt& cls);
 
     // Where an item of a list of values is read where it is, not copied (M6.6 part 4,
     // value-lists.html section 6): `pts[i]`, a for loop's variable; and the parameters, and
