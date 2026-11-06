@@ -1,0 +1,214 @@
+// Regular expressions against Java: each case of regex_cases.txt (a pattern, its options, a
+// text) run as Kotlin's Regex runs it on the JVM, Java 23's answers written beside it as the
+// expected output. Made by a script from the cases and java.util.regex: the matches one after
+// another as findAll finds them (each with its groups, positions by character), whether the
+// whole text matches, the pieces split gives, and replace with "<$0>". A pattern Java refuses
+// is refused here too, at the same place.
+
+fun show(s : string) : string {
+  val out = StringBuilder()
+  for (c in s) {
+    if (c == '\n') { out.append("\\n") } else if (c == '\r') { out.append("\\r") } else if (c == '\t') { out.append("\\t") }
+    else if (c == '\\') { out.append("\\\\") }
+    else if (c.code < 0x20 or c.code == 0x2028 or c.code == 0x85) { out.append("\\u{" + c.code.toString(16) + "}") }
+    else { out.append(c) }
+  }
+  return out.toString()
+}
+
+fun check(k : int, pattern : string, flags : string, input : string) {
+  val options = []
+  if (flags.contains("i")) { options.add(RegexOption.ignoreCase) }
+  if (flags.contains("m")) { options.add(RegexOption.multiline) }
+  if (flags.contains("s")) { options.add(RegexOption.dotMatchesAll) }
+  if (flags.contains("x")) { options.add(RegexOption.comments) }
+  if (flags.contains("d")) { options.add(RegexOption.unixLines) }
+  if (flags.contains("l")) { options.add(RegexOption.literal) }
+  var re : Regex? = null
+  try {
+    re = Regex(pattern, options.toSet())
+  } catch (e : PatternSyntaxException) {
+    print("#$k error ${e.index}")
+    return
+  }
+  val r = re!!
+  val out = StringBuilder("#$k find")
+  var count = 0
+  for (m in r.findAll(input)) {
+    if (count == 50) { break }
+    count += 1
+    out.append(" [${m.range.start}-${m.range.end + 1}")
+    for (g in 1 ..< m.groups.size) {
+      val group = m.groups[g]
+      out.append(group == null ? " _" : " ${group.range.start}-${group.range.end + 1}")
+    }
+    out.append("]")
+  }
+  out.append(" | matches=${r.matches(input)} | split=")
+  for (part in r.split(input)) { out.append("<" + show(part) + ">") }
+  out.append(" | replace=" + show(r.replace(input, "<\$0>")))
+  print(out.toString())
+}
+
+check(1, "abc", "", "xxabcxxabc")   // expect: #1 find [2-5] [7-10] | matches=false | split=<xx><xx><> | replace=xx<abc>xx<abc>
+check(2, "a|b|c", "", "zzcba")   // expect: #2 find [2-3] [3-4] [4-5] | matches=false | split=<zz><><><> | replace=zz<c><b><a>
+check(3, "\\d+", "", "a1b22c333")   // expect: #3 find [1-2] [3-5] [6-9] | matches=false | split=<a><b><c><> | replace=a<1>b<22>c<333>
+check(4, "\\d+", "", "no digits")   // expect: #4 find | matches=false | split=<no digits> | replace=no digits
+check(5, "\\w+", "", "hello, world_1 2")   // expect: #5 find [0-5] [7-14] [15-16] | matches=false | split=<><, >< ><> | replace=<hello>, <world_1> <2>
+check(6, "\\s+", "", "a  b\tc\nd")   // expect: #6 find [1-3] [4-5] [6-7] | matches=false | split=<a><b><c><d> | replace=a<  >b<\t>c<\n>d
+check(7, "[a-z]+", "", "Hello World")   // expect: #7 find [1-5] [7-11] | matches=false | split=<H>< W><> | replace=H<ello> W<orld>
+check(8, "[^a-z]+", "", "Hello World")   // expect: #8 find [0-1] [5-7] | matches=false | split=<><ello><orld> | replace=<H>ello< W>orld
+check(9, "[a-z&&[^aeiou]]+", "", "programming")   // expect: #9 find [0-2] [3-5] [6-8] [9-11] | matches=false | split=<><o><a><i><> | replace=<pr>o<gr>a<mm>i<ng>
+check(10, "[a-z&&[def]]", "", "abcdefg")   // expect: #10 find [3-4] [4-5] [5-6] | matches=false | split=<abc><><><g> | replace=abc<d><e><f>g
+check(11, "[\\w&&\\D]+", "", "ab12cd")   // expect: #11 find [0-2] [4-6] | matches=false | split=<><12><> | replace=<ab>12<cd>
+check(12, "[]a]+", "", "x]a]y")   // expect: #12 find [1-4] | matches=false | split=<x><y> | replace=x<]a]>y
+check(13, "[^]a]+", "", "]]xyz]")   // expect: #13 find [2-5] | matches=false | split=<]]><]> | replace=]]<xyz>]
+check(14, "[-a]+", "", "a-b-")   // expect: #14 find [0-2] [3-4] | matches=false | split=<><b><> | replace=<a->b<->
+check(15, "[a-]+", "", "x-a-")   // expect: #15 find [1-4] | matches=false | split=<x><> | replace=x<-a->
+check(16, "[\\[\\]]+", "", "x[]y")   // expect: #16 find [1-3] | matches=false | split=<x><y> | replace=x<[]>y
+check(17, "[\\Q-]\\E]+", "", "a-]b")   // expect: #17 find [1-3] | matches=false | split=<a><b> | replace=a<-]>b
+check(18, "x[a-c[x-z]]y", "", "xby xzy xqy")   // expect: #18 find [0-3] [4-7] | matches=false | split=<>< >< xqy> | replace=<xby> <xzy> xqy
+check(19, ".", "", "a\nb")   // expect: #19 find [0-1] [2-3] | matches=false | split=<><\n><> | replace=<a>\n<b>
+check(20, ".", "s", "a\nb")   // expect: #20 find [0-1] [1-2] [2-3] | matches=false | split=<><><><> | replace=<a><\n><b>
+check(21, ".+", "", "ab\ncd")   // expect: #21 find [0-2] [3-5] | matches=false | split=<><\n><> | replace=<ab>\n<cd>
+check(22, ".+", "s", "ab\ncd")   // expect: #22 find [0-5] | matches=true | split=<><> | replace=<ab\ncd>
+check(23, "^a", "m", "a\nab\nba")   // expect: #23 find [0-1] [2-3] | matches=false | split=<><\n><b\nba> | replace=<a>\n<a>b\nba
+check(24, "a\$", "m", "a\nba\nab")   // expect: #24 find [0-1] [3-4] | matches=false | split=<><\nb><\nab> | replace=<a>\nb<a>\nab
+check(25, "^", "", "abc")   // expect: #25 find [0-0] | matches=false | split=<><abc> | replace=<>abc
+check(26, "^", "m", "a\nb\n")   // expect: #26 find [0-0] [2-2] | matches=false | split=<><a\n><b\n> | replace=<>a\n<>b\n
+check(27, "\$", "m", "a\nb\n")   // expect: #27 find [1-1] [3-3] [4-4] | matches=false | split=<a><\nb><\n><> | replace=a<>\nb<>\n<>
+check(28, "\$", "", "abc\n")   // expect: #28 find [3-3] [4-4] | matches=false | split=<abc><\n><> | replace=abc<>\n<>
+check(29, "\$", "", "abc\r\n")   // expect: #29 find [3-3] [5-5] | matches=false | split=<abc><\r\n><> | replace=abc<>\r\n<>
+check(30, "a\$", "", "a\n\n")   // expect: #30 find | matches=false | split=<a\n\n> | replace=a\n\n
+check(31, "^.*\$", "m", "one\r\ntwo\rthree\u{2028}four")   // expect: #31 find [0-3] [5-8] [9-14] [15-19] | matches=false | split=<><\r\n><\r><\u{2028}><> | replace=<one>\r\n<two>\r<three>\u{2028}<four>
+check(32, "\\bcat\\b", "", "cat concat cat. bobcat")   // expect: #32 find [0-3] [11-14] | matches=false | split=<>< concat ><. bobcat> | replace=<cat> concat <cat>. bobcat
+check(33, "\\Bcat\\B", "", "concatenate cat")   // expect: #33 find [3-6] | matches=false | split=<con><enate cat> | replace=con<cat>enate cat
+check(34, "\\Aab", "", "abab")   // expect: #34 find [0-2] | matches=false | split=<><ab> | replace=<ab>ab
+check(35, "ab\\z", "", "abab")   // expect: #35 find [2-4] | matches=false | split=<ab><> | replace=ab<ab>
+check(36, "ab\\Z", "", "abab\n")   // expect: #36 find [2-4] | matches=false | split=<ab><\n> | replace=ab<ab>\n
+check(37, "(a)(b)?(c)", "", "ac abc")   // expect: #37 find [0-2 0-1 _ 1-2] [3-6 3-4 4-5 5-6] | matches=false | split=<>< ><> | replace=<ac> <abc>
+check(38, "(?<year>\\d{4})-(?<m>\\d\\d)", "", "on 2026-11-06 and 1999-01-31")   // expect: #38 find [3-10 3-7 8-10] [18-25 18-22 23-25] | matches=false | split=<on ><-06 and ><-31> | replace=on <2026-11>-06 and <1999-01>-31
+check(39, "(a|ab)(c|bcd)(d*)", "", "abcd")   // expect: #39 find [0-4 0-1 1-4 4-4] | matches=true | split=<><> | replace=<abcd>
+check(40, "(a*)*", "", "b")   // expect: #40 find [0-0 0-0] [1-1 1-1] | matches=false | split=<><b><> | replace=<>b<>
+check(41, "(a*)+", "", "b")   // expect: #41 find [0-0 0-0] [1-1 1-1] | matches=false | split=<><b><> | replace=<>b<>
+check(42, "(a?)*", "", "aa")   // expect: #42 find [0-2 2-2] [2-2 2-2] | matches=true | split=<><><> | replace=<aa><>
+check(43, "(a|b)*c", "", "ababc")   // expect: #43 find [0-5 3-4] | matches=true | split=<><> | replace=<ababc>
+check(44, "a*?b", "", "aaab")   // expect: #44 find [0-4] | matches=true | split=<><> | replace=<aaab>
+check(45, "a+?", "", "aaa")   // expect: #45 find [0-1] [1-2] [2-3] | matches=true | split=<><><><> | replace=<a><a><a>
+check(46, "a{2}", "", "aaaaa")   // expect: #46 find [0-2] [2-4] | matches=false | split=<><><a> | replace=<aa><aa>a
+check(47, "a{2,}", "", "aaaaa")   // expect: #47 find [0-5] | matches=true | split=<><> | replace=<aaaaa>
+check(48, "a{2,3}", "", "aaaaaaa")   // expect: #48 find [0-3] [3-6] | matches=false | split=<><><a> | replace=<aaa><aaa>a
+check(49, "a{2,3}?", "", "aaaaaaa")   // expect: #49 find [0-2] [2-4] [4-6] | matches=false | split=<><><><a> | replace=<aa><aa><aa>a
+check(50, "a{0}", "", "abc")   // expect: #50 find [0-0] [1-1] [2-2] [3-3] | matches=false | split=<><a><b><c><> | replace=<>a<>b<>c<>
+check(51, "x*+x", "", "xxx")   // expect: #51 find | matches=false | split=<xxx> | replace=xxx
+check(52, "a++b", "", "aaab")   // expect: #52 find [0-4] | matches=true | split=<><> | replace=<aaab>
+check(53, "(?>a|ab)c", "", "abc")   // expect: #53 find | matches=false | split=<abc> | replace=abc
+check(54, "(?>ab|a)c", "", "abc")   // expect: #54 find [0-3] | matches=true | split=<><> | replace=<abc>
+check(55, "(\\w)\\1", "", "hello aabb")   // expect: #55 find [2-4 2-3] [6-8 6-7] [8-10 8-9] | matches=false | split=<he><o ><><> | replace=he<ll>o <aa><bb>
+check(56, "(?<c>\\w)\\k<c>", "", "hello aabb")   // expect: #56 find [2-4 2-3] [6-8 6-7] [8-10 8-9] | matches=false | split=<he><o ><><> | replace=he<ll>o <aa><bb>
+check(57, "(a)|\\1", "", "ab")   // expect: #57 find [0-1 0-1] | matches=false | split=<><b> | replace=<a>b
+check(58, "(a)\\2", "", "aa")   // expect: #58 find | matches=false | split=<aa> | replace=aa
+check(59, "(?i)abc", "", "xABCx AbC")   // expect: #59 find [1-4] [6-9] | matches=false | split=<x><x ><> | replace=x<ABC>x <AbC>
+check(60, "abc", "i", "xABCx AbC")   // expect: #60 find [1-4] [6-9] | matches=false | split=<x><x ><> | replace=x<ABC>x <AbC>
+check(61, "(?i:a)b", "", "Ab AB ab")   // expect: #61 find [0-2] [6-8] | matches=false | split=<>< AB ><> | replace=<Ab> AB <ab>
+check(62, "a(?i)b", "", "aB Ab")   // expect: #62 find [0-2] | matches=false | split=<>< Ab> | replace=<aB> Ab
+check(63, "(?i)straße", "", "STRASSE strasse STRAßE")   // expect: #63 find [16-22] | matches=false | split=<STRASSE strasse ><> | replace=STRASSE strasse <STRAßE>
+check(64, "(?i)[a-c]+", "", "xABCabcx")   // expect: #64 find [1-7] | matches=false | split=<x><x> | replace=x<ABCabc>x
+check(65, "(?i)σ", "", "Σ σ ς")   // expect: #65 find [2-3] | matches=false | split=<Σ >< ς> | replace=Σ <σ> ς
+check(66, "ǅ", "i", "Ǆ ǆ ǅ")   // expect: #66 find [0-1] [2-3] [4-5] | matches=false | split=<>< >< ><> | replace=<Ǆ> <ǆ> <ǅ>
+check(67, "\\p{Lu}+", "", "Hello WORLD Émile")   // expect: #67 find [0-1] [6-11] [12-13] | matches=false | split=<><ello >< ><mile> | replace=<H>ello <WORLD> <É>mile
+check(68, "\\p{Ll}+", "", "Hello WORLD émile")   // expect: #68 find [1-5] [12-17] | matches=false | split=<H>< WORLD ><> | replace=H<ello> WORLD <émile>
+check(69, "\\p{L}+", "", "ünïcödé 123 日本語")   // expect: #69 find [0-7] [12-15] | matches=false | split=<>< 123 ><> | replace=<ünïcödé> 123 <日本語>
+check(70, "\\P{L}+", "", "ab12-cd")   // expect: #70 find [2-5] | matches=false | split=<ab><cd> | replace=ab<12->cd
+check(71, "\\pL+", "", "ab12cd")   // expect: #71 find [0-2] [4-6] | matches=false | split=<><12><> | replace=<ab>12<cd>
+check(72, "\\p{IsAlphabetic}+", "", "abc日本 12")   // expect: #72 find [0-5] | matches=false | split=<>< 12> | replace=<abc日本> 12
+check(73, "\\p{Alpha}+", "", "abcé")   // expect: #73 find [0-3] | matches=false | split=<><é> | replace=<abc>é
+check(74, "\\p{Punct}+", "", "a!@#b")   // expect: #74 find [1-4] | matches=false | split=<a><b> | replace=a<!@#>b
+check(75, "\\p{Digit}+", "", "a12b٣")   // expect: #75 find [1-3] | matches=false | split=<a><b٣> | replace=a<12>b٣
+check(76, "\\p{javaLowerCase}+", "", "aBc")   // expect: #76 find [0-1] [2-3] | matches=false | split=<><B><> | replace=<a>B<c>
+check(77, "\\p{XDigit}+", "", "0x1fG")   // expect: #77 find [0-1] [2-4] | matches=false | split=<><x><G> | replace=<0>x<1f>G
+check(78, "\\h+", "", "a \t b")   // expect: #78 find [1-4] | matches=false | split=<a><b> | replace=a< \t >b
+check(79, "\\v+", "", "a\n\u{b}b")   // expect: #79 find [1-3] | matches=false | split=<a><b> | replace=a<\n\u{b}>b
+check(80, "\\R", "", "a\r\nb\nc\rd")   // expect: #80 find [1-3] [4-5] [6-7] | matches=false | split=<a><b><c><d> | replace=a<\r\n>b<\n>c<\r>d
+check(81, "\\R+", "", "a\r\n\r\nb")   // expect: #81 find [1-5] | matches=false | split=<a><b> | replace=a<\r\n\r\n>b
+check(82, "\\x41B\\x{43}\\0101\\t", "", "ABCA\t")   // expect: #82 find [0-5] | matches=true | split=<><> | replace=<ABCA\t>
+check(83, "\\cA", "", "x\u{1}x")   // expect: #83 find [1-2] | matches=false | split=<x><x> | replace=x<\u{1}>x
+check(84, "\\Q.*+\\E", "", "a.*+b")   // expect: #84 find [1-4] | matches=false | split=<a><b> | replace=a<.*+>b
+check(85, "\\Q.*+", "", "a.*+b")   // expect: #85 find [1-4] | matches=false | split=<a><b> | replace=a<.*+>b
+check(86, "a\\.b", "", "a.b axb")   // expect: #86 find [0-3] | matches=false | split=<>< axb> | replace=<a.b> axb
+check(87, "\\\$\\^", "", "\$^")   // expect: #87 find [0-2] | matches=true | split=<><> | replace=<$^>
+check(88, "(?=a)", "", "bab")   // expect: #88 find [1-1] | matches=false | split=<b><ab> | replace=b<>ab
+check(89, "a(?=b)", "", "ab ac")   // expect: #89 find [0-1] | matches=false | split=<><b ac> | replace=<a>b ac
+check(90, "a(?!b)", "", "ab ac")   // expect: #90 find [3-4] | matches=false | split=<ab ><c> | replace=ab <a>c
+check(91, "(?<=a)b", "", "ab cb")   // expect: #91 find [1-2] | matches=false | split=<a>< cb> | replace=a<b> cb
+check(92, "(?<!a)b", "", "ab cb")   // expect: #92 find [4-5] | matches=false | split=<ab c><> | replace=ab c<b>
+check(93, "(?<=ab|c)d", "", "abd cd xd")   // expect: #93 find [2-3] [5-6] | matches=false | split=<ab>< c>< xd> | replace=ab<d> c<d> xd
+check(94, "(?<=a{1,3})b", "", "aab b")   // expect: #94 find [2-3] | matches=false | split=<aa>< b> | replace=aa<b> b
+check(95, "(?<=\\d{2})x", "", "1x 12x")   // expect: #95 find [5-6] | matches=false | split=<1x 12><> | replace=1x 12<x>
+check(96, "q(?=u)i", "", "quit qi")   // expect: #96 find | matches=false | split=<quit qi> | replace=quit qi
+check(97, "(?x) a b c # comment", "", "abc")   // expect: #97 find [0-3] | matches=true | split=<><> | replace=<abc>
+check(98, "(?x)[ a b ]+", "", "ab ab")   // expect: #98 find [0-2] [3-5] | matches=false | split=<>< ><> | replace=<ab> <ab>
+check(99, "a", "x", "a")   // expect: #99 find [0-1] | matches=true | split=<><> | replace=<a>
+check(100, "# ab", "x", "ab")   // expect: #100 find [0-0] [1-1] [2-2] | matches=false | split=<><a><b><> | replace=<>a<>b<>
+check(101, "", "x", "abc")   // expect: #101 find [0-0] [1-1] [2-2] [3-3] | matches=false | split=<><a><b><c><> | replace=<>a<>b<>c<>
+check(102, "", "", "abc")   // expect: #102 find [0-0] [1-1] [2-2] [3-3] | matches=false | split=<><a><b><c><> | replace=<>a<>b<>c<>
+check(103, "()", "", "ab")   // expect: #103 find [0-0 0-0] [1-1 1-1] [2-2 2-2] | matches=false | split=<><a><b><> | replace=<>a<>b<>
+check(104, "(|a)", "", "ab")   // expect: #104 find [0-0 0-0] [1-1 1-1] [2-2 2-2] | matches=false | split=<><a><b><> | replace=<>a<>b<>
+check(105, "a|", "", "ab")   // expect: #105 find [0-1] [1-1] [2-2] | matches=false | split=<><><b><> | replace=<a><>b<>
+check(106, "|a", "", "ab")   // expect: #106 find [0-0] [1-1] [2-2] | matches=false | split=<><a><b><> | replace=<>a<>b<>
+check(107, "(?:a|b)+", "", "abba")   // expect: #107 find [0-4] | matches=true | split=<><> | replace=<abba>
+check(108, "[\\d\\s]+", "", "1 2 3x")   // expect: #108 find [0-5] | matches=false | split=<><x> | replace=<1 2 3>x
+check(109, "[^\\s]+", "", "a b")   // expect: #109 find [0-1] [2-3] | matches=false | split=<>< ><> | replace=<a> <b>
+check(110, "[\\S]+", "", "a b")   // expect: #110 find [0-1] [2-3] | matches=false | split=<>< ><> | replace=<a> <b>
+check(111, "\\D\\W\\S", "", "a b")   // expect: #111 find [0-3] | matches=true | split=<><> | replace=<a b>
+check(112, "[a-cx-z]+", "", "abcxyzd")   // expect: #112 find [0-6] | matches=false | split=<><d> | replace=<abcxyz>d
+check(113, "[A-C]+", "", "ABCD")   // expect: #113 find [0-3] | matches=false | split=<><D> | replace=<ABC>D
+check(114, "[\\x{1F600}-\\x{1F64F}]+", "", "x😀😃y")   // expect: #114 find [1-3] | matches=false | split=<x><y> | replace=x<😀😃>y
+check(115, "😀+", "", "x😀😀y")   // expect: #115 find [1-3] | matches=false | split=<x><y> | replace=x<😀😀>y
+check(116, ".", "", "😀")   // expect: #116 find [0-1] | matches=true | split=<><> | replace=<😀>
+check(117, "[^a]", "", "😀")   // expect: #117 find [0-1] | matches=true | split=<><> | replace=<😀>
+check(118, "😀", "", "x😀")   // expect: #118 find [1-2] | matches=false | split=<x><> | replace=x<😀>
+check(119, "a.c", "s", "a\nc")   // expect: #119 find [0-3] | matches=true | split=<><> | replace=<a\nc>
+check(120, "a.c", "d", "a\rc")   // expect: #120 find [0-3] | matches=true | split=<><> | replace=<a\rc>
+check(121, "a\$", "d", "a\r\n")   // expect: #121 find | matches=false | split=<a\r\n> | replace=a\r\n
+check(122, "^b", "md", "a\rb\nb")   // expect: #122 find [4-5] | matches=false | split=<a\rb\n><> | replace=a\rb\n<b>
+check(123, "(\\d+)-(\\d+)", "", "10-20 30-40")   // expect: #123 find [0-5 0-2 3-5] [6-11 6-8 9-11] | matches=false | split=<>< ><> | replace=<10-20> <30-40>
+check(124, "(?<a>x)|(?<b>y)", "", "y")   // expect: #124 find [0-1 _ 0-1] | matches=true | split=<><> | replace=<y>
+check(125, "(?:(a)|b)+", "", "ab")   // expect: #125 find [0-2 0-1] | matches=true | split=<><> | replace=<ab>
+check(126, "(a)+", "", "aaa")   // expect: #126 find [0-3 2-3] | matches=true | split=<><> | replace=<aaa>
+check(127, "(a|(b))+", "", "ab")   // expect: #127 find [0-2 1-2 1-2] | matches=true | split=<><> | replace=<ab>
+check(128, "((a)|b)+", "", "ab")   // expect: #128 find [0-2 1-2 0-1] | matches=true | split=<><> | replace=<ab>
+check(129, "(?i)\\Qab\\E", "", "AB")   // expect: #129 find [0-2] | matches=true | split=<><> | replace=<AB>
+check(130, "a**", "", "aaa")   // expect: #130 error 2
+check(131, "(abc", "", "abc")   // expect: #131 error 4
+check(132, "abc)", "", "abc")   // expect: #132 error 2
+check(133, "[abc", "", "abc")   // expect: #133 error 3
+check(134, "a{2,1}", "", "aa")   // expect: #134 error 5
+check(135, "*a", "", "a")   // expect: #135 error 0
+check(136, "a{", "", "a{")   // expect: #136 error 2
+check(137, "\\k<nope>", "", "x")   // expect: #137 error 7
+check(138, "(?<n>a)(?<n>b)", "", "ab")   // expect: #138 error 11
+check(139, "(?<=a+)b", "", "ab")   // expect: #139 find [1-2] | matches=false | split=<a><> | replace=a<b>
+check(140, "\\y", "", "y")   // expect: #140 error 1
+check(141, "\\", "", "x")   // expect: #141 error 1
+check(142, "[z-a]", "", "x")   // expect: #142 error 3
+check(143, "(?Q)a", "", "a")   // expect: #143 error 2
+check(144, "a{1000}", "", "a")   // expect: #144 find | matches=false | split=<a> | replace=a
+check(145, "^(a+)+\$", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaab")   // expect: #145 find | matches=false | split=<aaaaaaaaaaaaaaaaaaaaaaaaaaaab> | replace=aaaaaaaaaaaaaaaaaaaaaaaaaaaab
+check(146, "(x+x+)+y", "", "xxxxxxxxxxxxxxxxxxxxy")   // expect: #146 find [0-21 0-20] | matches=true | split=<><> | replace=<xxxxxxxxxxxxxxxxxxxxy>
+check(147, "\\b", "", "ab cd")   // expect: #147 find [0-0] [2-2] [3-3] [5-5] | matches=false | split=<><ab>< ><cd><> | replace=<>ab<> <>cd<>
+check(148, "\\B", "", "ab")   // expect: #148 find [1-1] | matches=false | split=<a><b> | replace=a<>b
+check(149, "a\\b", "", "a_ a-")   // expect: #149 find [3-4] | matches=false | split=<a_ ><-> | replace=a_ <a>-
+check(150, "é\\b", "", "é a")   // expect: #150 find | matches=false | split=<é a> | replace=é a
+check(151, "[\\w&&[^\\d]]", "", "a1")   // expect: #151 find [0-1] | matches=false | split=<><1> | replace=<a>1
+check(152, "[a-z&&b-y&&[^c]]+", "", "abcdz")   // expect: #152 find [1-2] [3-4] | matches=false | split=<a><c><z> | replace=a<b>c<d>z
+check(153, "(?m)^\\s*\$", "", "a\n\n  \nb")   // expect: #153 find [2-5] | matches=false | split=<a\n><\nb> | replace=a\n<\n  >\nb
+check(154, "(?s).*", "", "a\nb")   // expect: #154 find [0-3] [3-3] | matches=true | split=<><><> | replace=<a\nb><>
+check(155, "(?-i)a", "i", "A a")   // expect: #155 find [2-3] | matches=false | split=<A ><> | replace=A <a>
+check(156, "(?i-m)^a", "m", "b\nA")   // expect: #156 find | matches=false | split=<b\nA> | replace=b\nA
+check(157, ".*", "", "")   // expect: #157 find [0-0] | matches=true | split=<><> | replace=<>
+check(158, "a*", "", "")   // expect: #158 find [0-0] | matches=true | split=<><> | replace=<>
+check(159, "\\b\\w", "", "hi there")   // expect: #159 find [0-1] [3-4] | matches=false | split=<><i ><here> | replace=<h>i <t>here
+check(160, "(?<![\\w])\\w+", "", "hi there")   // expect: #160 find [0-2] [3-8] | matches=false | split=<>< ><> | replace=<hi> <there>
+check(161, "(a)(?:b)(c)", "", "abc")   // expect: #161 find [0-3 0-1 2-3] | matches=true | split=<><> | replace=<abc>
+check(162, "(?<x1>a)(?<y2>b)", "", "ab")   // expect: #162 find [0-2 0-1 1-2] | matches=true | split=<><> | replace=<ab>

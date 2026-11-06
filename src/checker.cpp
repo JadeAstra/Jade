@@ -2571,6 +2571,17 @@ struct Checker::Impl {
         return false;
     }
 
+    // Whether a function's first parameter is declared as a class (not a built-in type).
+    bool classFirstParameter(FuncInfo* f) {
+        if (f->decl == nullptr || f->decl->params.empty()) return false;
+        const std::string& written = f->decl->paramTypes.empty() ? std::string() : f->decl->paramTypes[0].name;
+        if (written.empty()) return false;
+        const char* builtins[] = {"string", "int", "float", "bool", "char", "byte", "any", "List", "Map", "Set", "Range", "Bytes", "Number"};
+        for (const char* b : builtins)
+            if (written == b) return false;
+        return written[0] >= 'A' && written[0] <= 'Z';
+    }
+
     // The extension functions of that name that apply to a value of type `t`: for a built-in
     // type, its own methods (in C++) first, as when the program runs.
     std::vector<FuncInfo*> findExtensions(const Type& t, const std::string& name) {
@@ -2578,7 +2589,19 @@ struct Checker::Impl {
             auto type = builtinMethods.find(key);
             if (type == builtinMethods.end()) continue;
             auto found = type->second.find(name);
-            if (found != type->second.end()) return found->second;
+            if (found == type->second.end()) continue;
+            // Beside the built-in forms, the standard library's own forms of the name whose first
+            // parameter is an object of a class ("text".replace(regex, ...), M8): the built-in
+            // methods take built-in values only, which is how the running program tells them apart.
+            std::vector<FuncInfo*> forms = found->second;
+            auto more = extensions.find(key);
+            if (more != extensions.end()) {
+                auto same = more->second.find(name);
+                if (same != more->second.end())
+                    for (FuncInfo* f : same->second)
+                        if (f->unit != nullptr && f->unit->prelude && classFirstParameter(f)) forms.push_back(f);
+            }
+            return forms;
         }
         auto in = [&](const std::string& key) -> const std::vector<FuncInfo*>* {
             auto e = extensions.find(key);

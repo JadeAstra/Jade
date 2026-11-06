@@ -70,6 +70,11 @@ class ClassCastException(message : string? = null, cause : Throwable? = null) : 
 class IllegalArgumentException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // Text that is not the number asked of it.
 class NumberFormatException(message : string? = null, cause : Throwable? = null) : IllegalArgumentException(message, cause)
+// A pattern that is no regular expression (Regex): what is wrong, the pattern, and where in it
+// (-1 where no one place is to blame). Its message is Java's, the pattern under it and a ^ at
+// the place.
+class PatternSyntaxException(val description : string, val pattern : string, val index : int)
+    : IllegalArgumentException(description + (index >= 0 ? " near index $index" : "") + "\n" + pattern + (index >= 0 ? "\n" + " ".repeat(index) + "^" : ""))
 // Something done at a time it cannot be; check() and error().
 class IllegalStateException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // Something a value does not do: changing what is frozen, a member it has not.

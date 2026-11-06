@@ -2582,6 +2582,16 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
     }
 
     const NativeMethod* method = findNativeMethod(receiver, name);
+    // An object of a class as the first argument: the standard library's form in Astra beside
+    // the built-in one ("text".replace(regex, ...), M8), as the built-in methods take built-in
+    // values only.
+    if (method != nullptr && argc >= 1 && sp_[-argc].isObjType(ObjType::Instance)) {
+        if (const Value* extension = findExtension(receiver, name)) {
+            if (trailing) callTrailing(asClosure(*extension), argc);
+            else callClosure(asClosure(*extension), argc);
+            return true;
+        }
+    }
     if (method == nullptr) {
         if (const Value* extension = findExtension(receiver, name)) {
             if (trailing) callTrailing(asClosure(*extension), argc);

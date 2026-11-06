@@ -420,6 +420,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-parallel-astra">parallel.astra</a></li>
 <li><a href="#file-range-astra">range.astra</a></li>
 <li><a href="#file-reflect-astra">reflect.astra</a></li>
+<li><a href="#file-regex-astra">regex.astra</a></li>
 <li><a href="#file-sandbox-astra">sandbox.astra</a></li>
 <li><a href="#file-sequence-astra">sequence.astra</a></li>
 <li><a href="#file-set-astra">set.astra</a></li>
@@ -499,6 +500,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#LockBox"><code>LockBox</code></a> (2)</li>
 <li><a href="#Map.size"><code>Map</code></a> (58)</li>
 <li><a href="#MapEntry"><code>MapEntry</code></a> (2)</li>
+<li><a href="#MatchGroup"><code>MatchGroup</code></a> (1)</li>
+<li><a href="#MatchGroupCollection"><code>MatchGroupCollection</code></a> (7)</li>
+<li><a href="#MatchResult"><code>MatchResult</code></a> (8)</li>
 <li><a href="#Math"><code>Math</code></a> (36)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
 <li><a href="#Network"><code>Network</code></a> (3)</li>
@@ -514,6 +518,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
 <li><a href="#Path"><code>Path</code></a> (49)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
+<li><a href="#PatternSyntaxException"><code>PatternSyntaxException</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
@@ -524,6 +529,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
 <li><a href="#Rect"><code>Rect</code></a> (24)</li>
+<li><a href="#Regex"><code>Regex</code></a> (19)</li>
+<li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
 <li><a href="#Sandbox"><code>Sandbox</code></a> (9)</li>
@@ -568,7 +575,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#char.code"><code>char</code></a> (11)</li>
 <li><a href="#float.coerceIn"><code>float</code></a> (16)</li>
 <li><a href="#int.char"><code>int</code></a> (30)</li>
-<li><a href="#string.size"><code>string</code></a> (102)</li>
+<li><a href="#string.size"><code>string</code></a> (109)</li>
 </ul>
 <section class="file" id="file-builtins-astra">
 <h2>builtins.astra</h2>
@@ -1702,6 +1709,9 @@ Exception: everything else, which a bare `catch (e)` catches.
 </div>
 <div class="entry" id="NumberFormatException"><code class="sig">class NumberFormatException(message : string? = null, cause : Throwable? = null) : IllegalArgumentException(message, cause)</code><a class="anchor" href="#NumberFormatException">#</a>
 <p>Text that is not the number asked of it.</p>
+</div>
+<div class="entry" id="PatternSyntaxException"><code class="sig">class PatternSyntaxException(val description : string, val pattern : string, val index : int)</code><a class="anchor" href="#PatternSyntaxException">#</a>
+<p>A pattern that is no regular expression (Regex): what is wrong, the pattern, and where in it (-1 where no one place is to blame). Its message is Java's, the pattern under it and a ^ at the place.</p>
 </div>
 <div class="entry" id="IllegalStateException"><code class="sig">class IllegalStateException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)</code><a class="anchor" href="#IllegalStateException">#</a>
 <p>Something done at a time it cannot be; check() and error().</p>
@@ -3981,6 +3991,148 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry member" id="Constructor.toString"><code class="sig">fun toString() : string</code><a class="anchor" href="#Constructor.toString">#</a>
 <p>The class's name and its parameters, as &quot;Box(item : int, count : int)&quot;.</p>
+</div>
+</section>
+<section class="file" id="file-regex-astra">
+<h2>regex.astra</h2>
+<h3>Regular expressions (N5, M8)</h3>
+<p>Patterns in Java's syntax, matched by character (code point), with Kotlin's Regex around them, its names and its meaning:</p>
+<pre>val date = Regex(&quot;(?&lt;year&gt;\\d{4})-(\\d\\d)-(\\d\\d)&quot;)
+val m = date.find(&quot;due 2026-11-06, paid&quot;) ?: return
+print(m.value, m.groupValues[2], m.groups[&quot;year&quot;]?.value, m.range)   // 2026-11-06 11 2026 4..13
+&quot;a1b22c333&quot;.split(Regex(&quot;\\d+&quot;))                                      // [a, b, c, ]
+&quot;John Smith&quot;.replace(Regex(&quot;(\\w+) (\\w+)&quot;), &quot;$2, $1&quot;)                // Smith, John
+for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
+</pre>
+<p>The syntax is Java's: classes ([a-z&amp;&amp;[^aeiou]], \d, \w, \s, \p{Lu}, \p{IsAlphabetic}), groups (capturing, (?:...), named (?&lt;name&gt;...)), alternation, greedy, lazy and possessive repeats (*, *?, *+, {2,5}), anchors (^, $, \b, \A, \z, \Z, \G), look-ahead and look-behind, atomic groups, back references (\1, \k&lt;name&gt;), inline options ((?i), (?m:...)), \Q...\E. \d, \w, \s and \b are ASCII, as in Java and Kotlin; \p{L} and the other Unicode classes go by the system's tables of characters (as char.isLetter() does) until the text engine has Unicode data of its own. A pattern that is no regular expression is a PatternSyntaxException.</p>
+<div class="entry" id="RegexOption"><code class="sig">enum RegexOption(internal val bit : int)</code><a class="anchor" href="#RegexOption">#</a>
+<p>How a pattern is read, as Kotlin's RegexOption.</p>
+</div>
+<div class="entry" id="Regex"><code class="sig">class Regex</code><a class="anchor" href="#Regex">#</a>
+<p>A compiled pattern.</p>
+</div>
+<div class="entry member" id="Regex.pattern"><code class="sig">val pattern : string</code><a class="anchor" href="#Regex.pattern">#</a>
+<p>The pattern as it was given.</p>
+</div>
+<div class="entry member" id="Regex.options"><code class="sig">val options : Set&lt;RegexOption&gt;</code><a class="anchor" href="#Regex.options">#</a>
+<p>The options it was given.</p>
+</div>
+<div class="entry member" id="Regex.matches"><code class="sig">fun matches(input : string) : bool</code><a class="anchor" href="#Regex.matches">#</a>
+<p>Whether the whole of <code>input</code> matches.</p>
+</div>
+<div class="entry member" id="Regex.matchesAt"><code class="sig">fun matchesAt(input : string, index : int) : bool</code><a class="anchor" href="#Regex.matchesAt">#</a>
+<p>Whether a match starts at <code>index</code> in <code>input</code>.</p>
+</div>
+<div class="entry member" id="Regex.containsMatchIn"><code class="sig">fun containsMatchIn(input : string) : bool</code><a class="anchor" href="#Regex.containsMatchIn">#</a>
+<p>Whether the pattern matches somewhere in <code>input</code>.</p>
+</div>
+<div class="entry member" id="Regex.find"><code class="sig">fun find(input : string, startIndex : int = 0) : MatchResult?</code><a class="anchor" href="#Regex.find">#</a>
+<p>The first match at or after <code>startIndex</code>, or null.</p>
+</div>
+<div class="entry member" id="Regex.findAll"><code class="sig">fun findAll(input : string, startIndex : int = 0) : Sequence&lt;MatchResult&gt;</code><a class="anchor" href="#Regex.findAll">#</a>
+<p>Every match, one after another, from <code>startIndex</code>; after a match of nothing the next is looked for one character on.</p>
+</div>
+<div class="entry member" id="Regex.matchEntire"><code class="sig">fun matchEntire(input : string) : MatchResult?</code><a class="anchor" href="#Regex.matchEntire">#</a>
+<p>The match of the whole of <code>input</code>, or null.</p>
+</div>
+<div class="entry member" id="Regex.matchAt"><code class="sig">fun matchAt(input : string, index : int) : MatchResult?</code><a class="anchor" href="#Regex.matchAt">#</a>
+<p>The match that starts at <code>index</code>, or null.</p>
+</div>
+<div class="entry member" id="Regex.replace"><code class="sig">fun replace(input : string, replacement : string) : string</code><a class="anchor" href="#Regex.replace">#</a>
+<p>Every match replaced by <code>replacement</code>, in which $1 is a group's text, ${name} a named group's, and \$ a dollar sign (Regex.escapeReplacement makes text that means itself).</p>
+</div>
+<div class="entry member" id="Regex.replace-2"><code class="sig">fun replace(input : string, transform : (MatchResult) -&gt; string) : string</code><a class="anchor" href="#Regex.replace-2">#</a>
+<p>Every match replaced by what <code>transform</code> makes of it.</p>
+</div>
+<div class="entry member" id="Regex.replaceFirst"><code class="sig">fun replaceFirst(input : string, replacement : string) : string</code><a class="anchor" href="#Regex.replaceFirst">#</a>
+<p>The first match replaced by <code>replacement</code> ($1 and the rest as in replace).</p>
+</div>
+<div class="entry member" id="Regex.split"><code class="sig">fun split(input : string, limit : int = 0) : List&lt;string&gt;</code><a class="anchor" href="#Regex.split">#</a>
+<p>The pieces of <code>input</code> between the matches, the empty ones kept; up to <code>limit</code> of them (0 for as many as there are), the last holding the rest.</p>
+</div>
+<div class="entry member" id="Regex.splitToSequence"><code class="sig">fun splitToSequence(input : string, limit : int = 0) : Sequence&lt;string&gt;</code><a class="anchor" href="#Regex.splitToSequence">#</a>
+<p>The pieces, as a sequence.</p>
+</div>
+<div class="entry member" id="Regex.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Regex.toString">#</a>
+<p>The pattern.</p>
+</div>
+<div class="entry member" id="Regex.escape"><code class="sig">fun escape(literal : string) : string</code><a class="anchor" href="#Regex.escape">#</a>
+<p>A pattern that matches <code>literal</code> as it is: \Q...\E around it, as Java's Pattern.quote.</p>
+</div>
+<div class="entry member" id="Regex.escapeReplacement"><code class="sig">fun escapeReplacement(literal : string) : string</code><a class="anchor" href="#Regex.escapeReplacement">#</a>
+<p>A replacement that puts <code>literal</code> in as it is: each \ and $ escaped.</p>
+</div>
+<div class="entry member" id="Regex.fromLiteral"><code class="sig">fun fromLiteral(literal : string) : Regex</code><a class="anchor" href="#Regex.fromLiteral">#</a>
+<p>A Regex that finds <code>literal</code> as it is.</p>
+</div>
+<div class="entry" id="MatchResult"><code class="sig">class MatchResult</code><a class="anchor" href="#MatchResult">#</a>
+<p>A match: where it is, what it is, and each group's.</p>
+</div>
+<div class="entry member" id="MatchResult.range"><code class="sig">val range : Range</code><a class="anchor" href="#MatchResult.range">#</a>
+<p>Where it is in the input, its last character included (4..13); start..start-1 for a match of nothing.</p>
+</div>
+<div class="entry member" id="MatchResult.value"><code class="sig">val value : string</code><a class="anchor" href="#MatchResult.value">#</a>
+<p>What it matched.</p>
+</div>
+<div class="entry member" id="MatchResult.groupValues"><code class="sig">val groupValues : List&lt;string&gt;</code><a class="anchor" href="#MatchResult.groupValues">#</a>
+<p>The whole match, then each group's text, &quot;&quot; for a group that took no part.</p>
+</div>
+<div class="entry member" id="MatchResult.groups"><code class="sig">val groups : MatchGroupCollection</code><a class="anchor" href="#MatchResult.groups">#</a>
+<p>Each group, by number (0 the whole match) or by name: groups[1]?.value, groups[&quot;year&quot;].</p>
+</div>
+<div class="entry member" id="MatchResult.destructured"><code class="sig">val destructured : List&lt;string&gt;</code><a class="anchor" href="#MatchResult.destructured">#</a>
+<p>The groups' texts without the whole match, to take apart: val (year, month) = m.destructured.</p>
+</div>
+<div class="entry member" id="MatchResult.next"><code class="sig">fun next() : MatchResult?</code><a class="anchor" href="#MatchResult.next">#</a>
+<p>The next match after this one, or null: looked for from where this one ends, or one character on after a match of nothing.</p>
+</div>
+<div class="entry member" id="MatchResult.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#MatchResult.toString">#</a>
+<p>MatchResult(value=2026-11-06, range=4..13).</p>
+</div>
+<div class="entry" id="MatchGroup"><code class="sig">data MatchGroup(val value : string, val range : Range)</code><a class="anchor" href="#MatchGroup">#</a>
+<p>A group of a match: what it matched and where.</p>
+</div>
+<div class="entry" id="MatchGroupCollection"><code class="sig">class MatchGroupCollection</code><a class="anchor" href="#MatchGroupCollection">#</a>
+<p>The groups of a match, by number or by name.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.size"><code class="sig">val size : int</code><a class="anchor" href="#MatchGroupCollection.size">#</a>
+<p>How many groups there are, the whole match counted.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.[]"><code class="sig">op [](index : int) : MatchGroup?</code><a class="anchor" href="#MatchGroupCollection.[]">#</a>
+<p>Group <code>index</code> (0 for the whole match), or null where it took no part in the match.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.[]-2"><code class="sig">op [](name : string) : MatchGroup?</code><a class="anchor" href="#MatchGroupCollection.[]-2">#</a>
+<p>The group of that name, or null where it took no part; an IllegalArgumentException for a name the pattern does not have.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.get"><code class="sig">fun get(index : int) : MatchGroup?</code><a class="anchor" href="#MatchGroupCollection.get">#</a>
+<p>Group <code>index</code>, as [] gives it.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.get-2"><code class="sig">fun get(name : string) : MatchGroup?</code><a class="anchor" href="#MatchGroupCollection.get-2">#</a>
+<p>The group of that name, as [] gives it.</p>
+</div>
+<div class="entry member" id="MatchGroupCollection.toList"><code class="sig">fun toList() : List&lt;MatchGroup?&gt;</code><a class="anchor" href="#MatchGroupCollection.toList">#</a>
+<p>Every group, in order, null for one that took no part.</p>
+</div>
+<div class="entry" id="string.toRegex"><code class="sig">fun string.toRegex(options : (RegexOption | Set&lt;RegexOption&gt;)? = null) : Regex</code><a class="anchor" href="#string.toRegex">#</a>
+<p>The text as a Regex: &quot;\\d+&quot;.toRegex().</p>
+</div>
+<div class="entry" id="string.matches"><code class="sig">fun string.matches(regex : Regex) : bool</code><a class="anchor" href="#string.matches">#</a>
+<p>Whether the whole text matches <code>regex</code>.</p>
+</div>
+<div class="entry" id="string.contains"><code class="sig">fun string.contains(regex : Regex) : bool</code><a class="anchor" href="#string.contains">#</a>
+<p>Whether <code>regex</code> matches somewhere in the text.</p>
+</div>
+<div class="entry" id="string.replace"><code class="sig">fun string.replace(regex : Regex, replacement : string) : string</code><a class="anchor" href="#string.replace">#</a>
+<p>The text with every match of <code>regex</code> replaced ($1 and the rest as in Regex.replace).</p>
+</div>
+<div class="entry" id="string.replace-2"><code class="sig">fun string.replace(regex : Regex, transform : (MatchResult) -&gt; string) : string</code><a class="anchor" href="#string.replace-2">#</a>
+<p>The text with every match of <code>regex</code> replaced by what <code>transform</code> makes of it.</p>
+</div>
+<div class="entry" id="string.replaceFirst"><code class="sig">fun string.replaceFirst(regex : Regex, replacement : string) : string</code><a class="anchor" href="#string.replaceFirst">#</a>
+<p>The text with the first match of <code>regex</code> replaced.</p>
+</div>
+<div class="entry" id="string.split"><code class="sig">fun string.split(regex : Regex, limit : int = 0) : List&lt;string&gt;</code><a class="anchor" href="#string.split">#</a>
+<p>The pieces of the text between the matches of <code>regex</code>, as Regex.split.</p>
 </div>
 </section>
 <section class="file" id="file-sandbox-astra">

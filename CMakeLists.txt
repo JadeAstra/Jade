@@ -46,6 +46,8 @@ add_library(astra_core OBJECT
   src/registers.cpp
   src/charset.cpp
   src/grid.cpp
+  src/regex.cpp
+  src/regex_api.cpp
   src/worker.cpp
   src/parallel.cpp
   src/run.cpp

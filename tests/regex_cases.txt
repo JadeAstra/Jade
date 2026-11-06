@@ -1,0 +1,162 @@
+abc		xxabcxxabc
+a|b|c		zzcba
+\d+		a1b22c333
+\d+		no digits
+\w+		hello, world_1 2
+\s+		a  b\tc\nd
+[a-z]+		Hello World
+[^a-z]+		Hello World
+[a-z&&[^aeiou]]+		programming
+[a-z&&[def]]		abcdefg
+[\w&&\D]+		ab12cd
+[]a]+		x]a]y
+[^]a]+		]]xyz]
+[-a]+		a-b-
+[a-]+		x-a-
+[\[\]]+		x[]y
+[\Q-]\E]+		a-]b
+x[a-c[x-z]]y		xby xzy xqy
+.		a\nb
+.	s	a\nb
+.+		ab\ncd
+.+	s	ab\ncd
+^a	m	a\nab\nba
+a$	m	a\nba\nab
+^		abc
+^	m	a\nb\n
+$	m	a\nb\n
+$		abc\n
+$		abc\r\n
+a$		a\n\n
+^.*$	m	one\r\ntwo\rthree\u{2028}four
+\bcat\b		cat concat cat. bobcat
+\Bcat\B		concatenate cat
+\Aab		abab
+ab\z		abab
+ab\Z		abab\n
+(a)(b)?(c)		ac abc
+(?<year>\d{4})-(?<m>\d\d)		on 2026-11-06 and 1999-01-31
+(a|ab)(c|bcd)(d*)		abcd
+(a*)*		b
+(a*)+		b
+(a?)*		aa
+(a|b)*c		ababc
+a*?b		aaab
+a+?		aaa
+a{2}		aaaaa
+a{2,}		aaaaa
+a{2,3}		aaaaaaa
+a{2,3}?		aaaaaaa
+a{0}		abc
+x*+x		xxx
+a++b		aaab
+(?>a|ab)c		abc
+(?>ab|a)c		abc
+(\w)\1		hello aabb
+(?<c>\w)\k<c>		hello aabb
+(a)|\1		ab
+(a)\2		aa
+(?i)abc		xABCx AbC
+abc	i	xABCx AbC
+(?i:a)b		Ab AB ab
+a(?i)b		aB Ab
+(?i)straße		STRASSE strasse STRAßE
+(?i)[a-c]+		xABCabcx
+(?i)σ		Σ σ ς
+ǅ	i	Ǆ ǆ ǅ
+\p{Lu}+		Hello WORLD Émile
+\p{Ll}+		Hello WORLD émile
+\p{L}+		ünïcödé 123 日本語
+\P{L}+		ab12-cd
+\pL+		ab12cd
+\p{IsAlphabetic}+		abc日本 12
+\p{Alpha}+		abcé
+\p{Punct}+		a!@#b
+\p{Digit}+		a12b٣
+\p{javaLowerCase}+		aBc
+\p{XDigit}+		0x1fG
+\h+		a \t\u{a0}b
+\v+		a\n\u{b}b
+\R		a\r\nb\nc\rd
+\R+		a\r\n\r\nb
+\x41B\x{43}\0101\t		ABCA\t
+\cA		x\u{1}x
+\Q.*+\E		a.*+b
+\Q.*+		a.*+b
+a\.b		a.b axb
+\$\^		$^
+(?=a)		bab
+a(?=b)		ab ac
+a(?!b)		ab ac
+(?<=a)b		ab cb
+(?<!a)b		ab cb
+(?<=ab|c)d		abd cd xd
+(?<=a{1,3})b		aab b
+(?<=\d{2})x		1x 12x
+q(?=u)i		quit qi
+(?x) a b c # comment		abc
+(?x)[ a b ]+		ab ab
+a	x	a
+# ab	x	ab
+	x	abc
+		abc
+()		ab
+(|a)		ab
+a|		ab
+|a		ab
+(?:a|b)+		abba
+[\d\s]+		1 2 3x
+[^\s]+		a b
+[\S]+		a b
+\D\W\S		a b
+[a-cx-z]+		abcxyzd
+[A-C]+		ABCD
+[\x{1F600}-\x{1F64F}]+		x😀😃y
+😀+		x😀😀y
+.		😀
+[^a]		😀
+😀		x😀
+a.c	s	a\nc
+a.c	d	a\rc
+a$	d	a\r\n
+^b	md	a\rb\nb
+(\d+)-(\d+)		10-20 30-40
+(?<a>x)|(?<b>y)		y
+(?:(a)|b)+		ab
+(a)+		aaa
+(a|(b))+		ab
+((a)|b)+		ab
+(?i)\Qab\E		AB
+a**		aaa
+(abc		abc
+abc)		abc
+[abc		abc
+a{2,1}		aa
+*a		a
+a{		a{
+\k<nope>		x
+(?<n>a)(?<n>b)		ab
+(?<=a+)b		ab
+\y		y
+\		x
+[z-a]		x
+(?Q)a		a
+a{1000}		a
+^(a+)+$		aaaaaaaaaaaaaaaaaaaaaaaaaaaab
+(x+x+)+y		xxxxxxxxxxxxxxxxxxxxy
+\b		ab cd
+\B		ab
+a\b		a_ a-
+é\b		é a
+[\w&&[^\d]]		a1
+[a-z&&b-y&&[^c]]+		abcdz
+(?m)^\s*$		a\n\n  \nb
+(?s).*		a\nb
+(?-i)a	i	A a
+(?i-m)^a	m	b\nA
+.*		
+a*		
+\b\w		hi there
+(?<![\w])\w+		hi there
+(a)(?:b)(c)		abc
+(?<x1>a)(?<y2>b)		ab

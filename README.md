@@ -2535,6 +2535,48 @@ val line = buildString { append("x = "); append(x) }    // the same in one expre
 `append`, `appendLine`, `insert(i, x)`, `deleteAt(i)`, `deleteRange(from, to)`, `setLength(n)`,
 `reverse()`, `clear()`, `size`, `sb[i]`, `sb[2..<5]`, `isEmpty()`, `toString()`.
 
+### Regular expressions
+
+`Regex` is Kotlin's, over patterns in Java's syntax with Java's meaning (M8): what a Kotlin
+program writes runs the same, and gives the same matches.
+
+```astra
+val date = Regex("(?<year>\\d{4})-(\\d\\d)-(\\d\\d)")
+val m = date.find("due 2026-11-06, paid") ?: return
+print(m.value, m.range, m.groups["year"]?.value)        // 2026-11-06 4..13 2026
+val (year, month, day) = m.destructured
+"a1b22c333".split(Regex("\\d+"))                          // [a, b, c, ]
+"John Smith".replace(Regex("(\\w+) (\\w+)"), "\$2, \$1")    // Smith, John
+Regex("\\d+").replace("a1b22") { "<${it.value.size}>" }   // a<1>b<2>
+for (word in Regex("\\w+").findAll(text)) { print(word.value) }
+```
+
+| | |
+| --- | --- |
+| Making one | `Regex(pattern)`, `Regex(pattern, RegexOption.ignoreCase)` or a set of options, `"\\d+".toRegex()`, `Regex.fromLiteral(text)`, `Regex.escape(text)`, `Regex.escapeReplacement(text)` |
+| Options | `ignoreCase` (every letter, as Kotlin's; an inline `(?i)` is ASCII alone, as in Java, unless `(?iu)`), `multiline`, `dotMatchesAll`, `comments`, `literal`, `unixLines` |
+| Asking | `matches(s)`, `matchesAt(s, i)`, `containsMatchIn(s)`, `find(s, from?)`, `findAll(s, from?)` (a sequence), `matchEntire(s)`, `matchAt(s, i)` |
+| Changing | `replace(s, replacement)` with `$1`, `${name}` and `\$`; `replace(s) { match -> text }`; `replaceFirst(s, replacement)`; `split(s, limit?)` (empty pieces kept, as Kotlin's), `splitToSequence` |
+| A match | `value`, `range`, `groupValues`, `groups[1]` and `groups["name"]` (a `MatchGroup` with `value` and `range`, or null for a group that took no part), `destructured`, `next()` |
+| On a string | `s.matches(re)`, `s.contains(re)`, `s.replace(re, ...)`, `s.replaceFirst(re, ...)`, `s.split(re)` |
+
+The patterns have Java's classes (`[a-z&&[^aeiou]]`, `\d`, `\w`, `\s`, `\p{Lu}`,
+`\p{IsAlphabetic}`, POSIX `\p{Punct}`), groups (capturing, `(?:...)`, named), alternation,
+greedy, lazy and possessive repeats, anchors (`^ $ \b \A \z \Z \G`), look-ahead and
+look-behind, atomic groups, back references, inline options and `\Q...\E`. Positions are in
+characters, so an emoji is one. `\d`, `\w`, `\s` and `\b` are ASCII, as in Java; `\p{L}` and
+the other Unicode classes go by the system's tables, as `char.isLetter()` does, until the text
+engine has Unicode data of its own. Not yet: scripts and blocks (`\p{IsLatin}`,
+`\p{InGreek}`), `\X` and `RegexOption.canonEq`, which need that data. A pattern that is no
+pattern is a `PatternSyntaxException` (an `IllegalArgumentException`) with Java's message.
+
+The engine is C++ (`src/regex.cpp`): a pattern is compiled once into a small program, run by
+backtracking on a stack of its own, so a long text cannot overflow the C++ stack. Where the
+outcome from a branch point at a position cannot depend on anything else, a failure there is
+remembered, so patterns such as `(a+)+$` that take exponential time in a simple engine answer
+at once, as Java's do. `tests/regex_java.astra` checks 162 patterns against what Java 23
+answers.
+
 ### Lists
 
 `size`, `lastIndex` and `indices` are read without brackets. A list you make is open, yours to

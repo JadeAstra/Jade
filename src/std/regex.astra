@@ -1,0 +1,232 @@
+// ---- Regular expressions (N5, M8) ----
+// Patterns in Java's syntax, matched by character (code point), with Kotlin's Regex around
+// them, its names and its meaning:
+//
+//   val date = Regex("(?<year>\\d{4})-(\\d\\d)-(\\d\\d)")
+//   val m = date.find("due 2026-11-06, paid") ?: return
+//   print(m.value, m.groupValues[2], m.groups["year"]?.value, m.range)   // 2026-11-06 11 2026 4..13
+//   "a1b22c333".split(Regex("\\d+"))                                      // [a, b, c, ]
+//   "John Smith".replace(Regex("(\\w+) (\\w+)"), "$2, $1")                // Smith, John
+//   for (word in Regex("\\w+").findAll(text)) { ... }
+//
+// The syntax is Java's: classes ([a-z&&[^aeiou]], \d, \w, \s, \p{Lu}, \p{IsAlphabetic}),
+// groups (capturing, (?:...), named (?<name>...)), alternation, greedy, lazy and possessive
+// repeats (*, *?, *+, {2,5}), anchors (^, $, \b, \A, \z, \Z, \G), look-ahead and look-behind,
+// atomic groups, back references (\1, \k<name>), inline options ((?i), (?m:...)), \Q...\E.
+// \d, \w, \s and \b are ASCII, as in Java and Kotlin; \p{L} and the other Unicode classes go by
+// the system's tables of characters (as char.isLetter() does) until the text engine has Unicode
+// data of its own. A pattern that is no regular expression is a PatternSyntaxException.
+
+// How a pattern is read, as Kotlin's RegexOption.
+enum RegexOption(internal val bit : int) {
+  // Letters match their other case too, in all of Unicode (Kotlin always adds UNICODE_CASE;
+  // an inline (?i) in the pattern is ASCII alone, as in Java, unless (?iu)).
+  ignoreCase(65),
+  // ^ and $ match at the start and end of each line, not only of the input.
+  multiline(2),
+  // The pattern is text to find, every character meaning itself.
+  literal(16),
+  // Only \n ends a line, for ., ^ and $.
+  unixLines(32),
+  // Whitespace and # comments to the end of a line are left out of the pattern.
+  comments(8),
+  // . matches a line terminator too.
+  dotMatchesAll(4),
+  // Characters compared by their canonical decomposition: not available yet (it needs Unicode
+  // data); a Regex given it is an UnsupportedOperationException.
+  canonEq(0)
+}
+
+// A compiled pattern.
+class Regex {
+  // The pattern as it was given.
+  val pattern : string
+  // The options it was given.
+  val options : Set<RegexOption>
+  private val compiled : any
+
+  // Regex(pattern), or with an option or a set of them: Regex("^a", RegexOption.multiline).
+  fun init(pattern : string, options : (RegexOption | Set<RegexOption>)? = null) {
+    this.pattern = pattern
+    this.options = options == null ? setOf() : options is RegexOption ? setOf(options) : options as Set<RegexOption>
+    if (this.options.contains(RegexOption.canonEq)) {
+      throw UnsupportedOperationException("RegexOption.canonEq waits for the text engine's Unicode data")
+    }
+    var bits = 0
+    for (o in this.options) { bits = bits | o.bit }
+    val made = __regex.compile(pattern, bits)
+    if (made is List) { throw PatternSyntaxException(made[0] as string, pattern, made[1] as int) }
+    this.compiled = made
+  }
+
+  // Whether the whole of `input` matches.
+  fun matches(input : string) : bool => __regex.find(compiled, input, 0, 2) != null
+  // Whether a match starts at `index` in `input`.
+  fun matchesAt(input : string, index : int) : bool => __regex.find(compiled, input, index, 1) != null
+  // Whether the pattern matches somewhere in `input`.
+  fun containsMatchIn(input : string) : bool => __regex.find(compiled, input, 0, 0) != null
+
+  // The first match at or after `startIndex`, or null.
+  fun find(input : string, startIndex : int = 0) : MatchResult? => made(input, __regex.find(compiled, input, startIndex, 0))
+  // Every match, one after another, from `startIndex`; after a match of nothing the next is
+  // looked for one character on.
+  fun findAll(input : string, startIndex : int = 0) : Sequence<MatchResult> {
+    val first = find(input, startIndex)
+    return generateSequence(first) { it.next() }
+  }
+  // The match of the whole of `input`, or null.
+  fun matchEntire(input : string) : MatchResult? => made(input, __regex.find(compiled, input, 0, 2))
+  // The match that starts at `index`, or null.
+  fun matchAt(input : string, index : int) : MatchResult? => made(input, __regex.find(compiled, input, index, 1))
+
+  // Every match replaced by `replacement`, in which $1 is a group's text, ${name} a named
+  // group's, and \$ a dollar sign (Regex.escapeReplacement makes text that means itself).
+  fun replace(input : string, replacement : string) : string => __regex.replace(compiled, input, replacement, false)
+  // Every match replaced by what `transform` makes of it.
+  fun replace(input : string, transform : (MatchResult) -> string) : string {
+    var match = find(input)
+    if (match == null) { return input }
+    val out = StringBuilder()
+    var last = 0
+    while (match != null) {
+      val found = match
+      out.append(input[last..<found.range.start])
+      out.append(transform(found))
+      last = found.range.end + 1
+      if (last >= input.size) { break }
+      match = found.next()
+    }
+    if (last < input.size) { out.append(input[last..]) }
+    return out.toString()
+  }
+  // The first match replaced by `replacement` ($1 and the rest as in replace).
+  fun replaceFirst(input : string, replacement : string) : string => __regex.replace(compiled, input, replacement, true)
+
+  // The pieces of `input` between the matches, the empty ones kept; up to `limit` of them (0
+  // for as many as there are), the last holding the rest.
+  fun split(input : string, limit : int = 0) : List<string> => __regex.split(compiled, input, limit)
+  // The pieces, as a sequence.
+  fun splitToSequence(input : string, limit : int = 0) : Sequence<string> => split(input, limit).asSequence()
+
+  // The pattern.
+  override fun toString() : string => pattern
+
+  private fun made(input : string, spans : List<int>?) : MatchResult? => spans == null ? null : MatchResult(this, input, spans, __regex.groupNames(compiled))
+
+  static {
+    // A pattern that matches `literal` as it is: \Q...\E around it, as Java's Pattern.quote.
+    fun escape(literal : string) : string {
+      if (!literal.contains("\\E")) { return "\\Q" + literal + "\\E" }
+      return "\\Q" + literal.replace("\\E", "\\E\\\\E\\Q") + "\\E"
+    }
+    // A replacement that puts `literal` in as it is: each \ and $ escaped.
+    fun escapeReplacement(literal : string) : string => literal.replace("\\", "\\\\").replace("$", "\\$")
+    // A Regex that finds `literal` as it is.
+    fun fromLiteral(literal : string) : Regex => Regex(literal, RegexOption.literal)
+  }
+}
+
+// A match: where it is, what it is, and each group's.
+class MatchResult {
+  private val regex : Regex
+  private val input : string
+  private val spans : List<int>
+  private val names : Map<string, int>
+
+  internal fun init(regex : Regex, input : string, spans : List<int>, names : Map<string, int>) {
+    this.regex = regex
+    this.input = input
+    this.spans = spans
+    this.names = names
+  }
+
+  // Where it is in the input, its last character included (4..13); start..start-1 for a match
+  // of nothing.
+  val range : Range
+    get() => spans[0] .. spans[1] - 1
+  // What it matched.
+  val value : string
+    get() => input[spans[0] ..< spans[1]]
+  // The whole match, then each group's text, "" for a group that took no part.
+  val groupValues : List<string>
+    get() => (0 ..< spans.size / 2).map { spans[2 * it] < 0 ? "" : input[spans[2 * it] ..< spans[2 * it + 1]] }
+  // Each group, by number (0 the whole match) or by name: groups[1]?.value, groups["year"].
+  val groups : MatchGroupCollection
+    get() => MatchGroupCollection(input, spans, names)
+  // The groups' texts without the whole match, to take apart: val (year, month) = m.destructured.
+  val destructured : List<string>
+    get() => groupValues.drop(1)
+
+  // The next match after this one, or null: looked for from where this one ends, or one
+  // character on after a match of nothing.
+  fun next() : MatchResult? {
+    val nextIndex = spans[1] + (spans[1] == spans[0] ? 1 : 0)
+    return nextIndex <= input.size ? regex.find(input, nextIndex) : null
+  }
+
+  // MatchResult(value=2026-11-06, range=4..13).
+  override fun toString() : string => "MatchResult(value=$value, range=$range)"
+}
+
+// A group of a match: what it matched and where.
+data MatchGroup(val value : string, val range : Range)
+
+// The groups of a match, by number or by name.
+class MatchGroupCollection {
+  private val input : string
+  private val spans : List<int>
+  private val names : Map<string, int>
+
+  internal fun init(input : string, spans : List<int>, names : Map<string, int>) {
+    this.input = input
+    this.spans = spans
+    this.names = names
+  }
+
+  // How many groups there are, the whole match counted.
+  val size : int
+    get() => spans.size / 2
+  // Group `index` (0 for the whole match), or null where it took no part in the match.
+  op [](index : int) : MatchGroup? => get(index)
+  // The group of that name, or null where it took no part; an IllegalArgumentException for a
+  // name the pattern does not have.
+  op [](name : string) : MatchGroup? => get(name)
+  // Group `index`, as [] gives it.
+  fun get(index : int) : MatchGroup? {
+    if (index < 0 or index >= size) { throw IndexOutOfBoundsException("No group $index") }
+    val start = spans[2 * index]
+    return start < 0 ? null : MatchGroup(input[start ..< spans[2 * index + 1]], start .. spans[2 * index + 1] - 1)
+  }
+  // The group of that name, as [] gives it.
+  fun get(name : string) : MatchGroup? {
+    val index = names[name]
+    if (index == null) { throw IllegalArgumentException("No group with name <$name>") }
+    return get(index)
+  }
+  // Every group, in order, null for one that took no part.
+  fun toList() : List<MatchGroup?> => (0 ..< size).map { get(it) }
+}
+
+// The text as a Regex: "\\d+".toRegex().
+fun string.toRegex(options : (RegexOption | Set<RegexOption>)? = null) : Regex => Regex(this, options)
+// Whether the whole text matches `regex`.
+fun string.matches(regex : Regex) : bool => regex.matches(this)
+// Whether `regex` matches somewhere in the text.
+fun string.contains(regex : Regex) : bool => regex.containsMatchIn(this)
+// The text with every match of `regex` replaced ($1 and the rest as in Regex.replace).
+fun string.replace(regex : Regex, replacement : string) : string => regex.replace(this, replacement)
+// The text with every match of `regex` replaced by what `transform` makes of it.
+fun string.replace(regex : Regex, transform : (MatchResult) -> string) : string => regex.replace(this, transform)
+// The text with the first match of `regex` replaced.
+fun string.replaceFirst(regex : Regex, replacement : string) : string => regex.replaceFirst(this, replacement)
+// The pieces of the text between the matches of `regex`, as Regex.split.
+fun string.split(regex : Regex, limit : int = 0) : List<string> => regex.split(this, limit)
+
+external object __regex {
+  fun compile(pattern : string, options : int) : any
+  fun groupCount(pattern : any) : int
+  fun groupNames(pattern : any) : Map<string, int>
+  fun find(pattern : any, text : string, from : int, mode : int) : List<int>?
+  fun replace(pattern : any, text : string, replacement : string, firstOnly : bool) : string
+  fun split(pattern : any, text : string, limit : int) : List<string>
+}
