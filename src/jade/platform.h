@@ -108,6 +108,9 @@ public:
     virtual void setResizable(bool resizable) = 0;
     virtual void toFront() = 0;
     virtual void requestAttention() = 0;
+    // Gives the window to another owner (null for none): the system destroys owned windows with
+    // their owner, so those of a window closing are handed on first.
+    virtual void setOwner(PlatformWindow* owner) = 0;
     virtual double scale() const = 0;
     virtual bool focused() const = 0;
     // Pictures for the title bar and the task bar: red, green, blue, alpha, four bytes a pixel.

@@ -536,6 +536,13 @@ void registerJade(VM& vm) {
     def("windowIsOpen", 1, 1, [](VM& vm, int, Value* args) -> Value {
         return Value::boolean(state().windows.count(vm.toInt32(args[0], "window")) != 0);
     });
+    // windowOwner(window, owner or 0): the window given to another owner, or to none.
+    def("windowOwner", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        PlatformWindow* owner = nullptr;
+        if (vm.toInt(args[1], "owner") != 0) owner = windowOf(vm, args[1]).native.get();
+        windowOf(vm, args[0]).native->setOwner(owner);
+        return Value::null();
+    });
     def("windowTitle", 2, 2, [](VM& vm, int, Value* args) -> Value {
         windowOf(vm, args[0]).native->setTitle(vm.toStr(args[1], "title"));
         return Value::null();

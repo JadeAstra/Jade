@@ -386,6 +386,11 @@ class NativeWindow {
   fun toFront() {
     __jade.windowToFront(id)
   }
+  // Gives the window to another owner, or to none: it stays in front of its owner, and goes when
+  // its owner goes.
+  fun setOwner(owner : NativeWindow?) {
+    __jade.windowOwner(id, owner == null ? 0 : owner.id)
+  }
   // Flashes its place in the task bar.
   fun requestAttention() {
     __jade.windowAttention(id)

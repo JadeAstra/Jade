@@ -42,7 +42,9 @@ class Window {
   val onFilesDroppedAt : ((List<Path>, int, int) -> bool)?
   val icons : List<Image>
   val onFront : () -> unit
-  val owner : Window?
+  // The window this one belongs to; when that one closes first, its owner (or none).
+  var owner : Window?
+    internal set
   val focus : Component?
   val dialog : bool
   val sizeToContent : bool
@@ -324,6 +326,7 @@ class WindowHost : WindowHandle {
 
   // Connects the window to the toolkit and the system, draws its first frame and shows it.
   fun start() {
+    openHosts.add(this)
     Jade.onRepaintNeeded(repaintHook)
     Jade.onLayoutNeeded(layoutHook)
     Jade.onFrameNeeded(frameHook)
@@ -418,6 +421,17 @@ class WindowHost : WindowHandle {
   override fun close() {
     if (disposed) { return }
     disposed = true
+    openHosts.remove(this)
+    // The windows this one owns pass to its owner, or to none, before the system would destroy
+    // them with it.
+    val up = window.owner
+    val upHost = up?.handle
+    for (h in openHosts.toList()) {
+      if (h.window.owner === window) {
+        h.window.owner = up
+        h.native.setOwner(upHost is WindowHost ? upHost.native : null)
+      }
+    }
     updateTextFocus(null)
     Jade.removeRepaintHook(repaintHook)
     timer?.cancel()
@@ -432,6 +446,8 @@ class WindowHost : WindowHandle {
       val back = window.owner?.handle
       if (back is WindowHost and !back.disposed) {
         back.takeGlobals()
+        // The keyboard goes back to the owner, as it came from there.
+        if (!back.hidden) { back.native.toFront() }
       } else {
         frontWindowHost = null
         Jade.frontWindow = null
@@ -1061,6 +1077,8 @@ class WindowHost : WindowHandle {
 
 // The window that last came to the front: the one that takes the program's popups and tips.
 private var frontWindowHost : WindowHost? = null
+// The windows open, in the order they opened.
+private val openHosts : open List<WindowHost> = []
 
 private const caretBlinkNs = 500000000      // the caret shows and hides each half second
 private const tooltipDelayNs = 600000000    // a tip shows once the pointer has rested this long

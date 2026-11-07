@@ -254,6 +254,11 @@ public:
         SetForegroundWindow(hwnd);
     }
     void requestAttention() override { FlashWindow(hwnd, TRUE); }
+    void setOwner(PlatformWindow* owner) override {
+        // The owner of a top-level window is kept where a child keeps its parent.
+        HWND to = owner != nullptr ? static_cast<WinWindow*>(owner)->hwnd : nullptr;
+        SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(to));
+    }
     double scale() const override { return fixedScale > 0 ? fixedScale : GetDpiForWindow(hwnd) / 96.0; }
     bool focused() const override { return GetFocus() == hwnd; }
 
