@@ -3566,9 +3566,14 @@ private:
                 std::vector<int> modules;
                 Namespace* imported = session_.importModule(s.path, directory_, file_, s, modules);
                 line_ = s.line;
-                for (int module : modules) {
-                    emit(Op::Import, module);
-                    emit(Op::Pop);
+                // A file importing its own folder runs nothing: the folder is being run already, and
+                // its files' code run from here, before what is set up ahead for them, found its
+                // classes not yet made (M8).
+                if (imported != ns_ || session_.units_.count(fileKey_) == 0) {
+                    for (int module : modules) {
+                        emit(Op::Import, module);
+                        emit(Op::Pop);
+                    }
                 }
                 // From here on this file reaches what it imported by the import's name, and with
                 // .* by bare names as well. A file of its own folder shares its names anyway.
@@ -8653,6 +8658,15 @@ void CompilerSession::loadFolder(const std::string& folder, const std::string& d
     noteFolder(folder, paths);
     if (paths.empty())
         throw CompileError(file, at.line, at.col, "the folder '" + displayPath + "' has no .astra files to import");
+
+    // Loaded as a folder already: the same modules, the one set up ahead for them all among them.
+    // Each import of a folder runs that one first, wherever it is, as the code of an importer kept
+    // compiled may be put back in a program where it is the folder's first importer (M8: given the
+    // files alone, a folder reached first through a kept importer had none of its names made).
+    if (auto loaded = units_.find(fileKeyOf(paths.front())); loaded != units_.end()) {
+        modules.insert(modules.end(), loaded->second->begin(), loaded->second->end());
+        return;
+    }
 
     std::vector<Unit> units;
     for (const fs::path& path : paths) {

@@ -387,6 +387,18 @@ $scenarios = @(
                       'main.astra' = "import bank.*`nval byAccount : open Map<Account, string> = {:}`nbyAccount[Account(5, 1)] = `"first`"`nprint(byAccount.size)" }; Out = '1' },
         @{ Files = @{ 'bank\helpers.astra' = "object Helpers {`n  fun same(a : Account, b : Account) : bool => a.balance == b.balance`n}" }
            Error = "main.astra:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)" }) },
+    # M8: a folder reached first through an importer kept compiled, where the importer was
+    # compiled after the folder had been loaded by another: the folder's names are made all the same.
+    @{ Name = 'a folder first reached through a kept importer'; Steps = @(
+        @{ Files = @{ 'lower\l.astra' = "enum Kind { a, b }`nfun low() : string => `"low `${Kind.b}`""
+                      'upper\u.astra' = "import `"../lower`".*`nfun up() : string => `"up `" + low()"
+                      'main.astra' = "import lower.*`nimport upper.*`nprint(up())" }; Out = 'up low b' },
+        @{ Files = @{ 'main.astra' = "import upper.*`nprint(up())" }; Out = 'up low b' }) },
+    # M8: a file importing its own folder runs nothing, so that the folder's classes are made first.
+    @{ Name = 'a file imports its own folder'; Steps = @(
+        @{ Files = @{ 'lib\a.astra' = "class R {`n  static { val k = 3 }`n}"
+                      'lib\p.astra' = "import `"../lib`".*`nfun p() : int => R.k"
+                      'main.astra' = "import lib.*`nprint(R.k + p())" }; Out = '6' }) },
     @{ Name = 'a constant changes in an imported file'; Steps = @(
         @{ Files = @{ 'lib.astra' = 'const limit = 10'; 'main.astra' = "import lib.*`nfun twice() : int => limit * 2`nprint(twice())" }; Out = '20' },
         @{ Files = @{ 'lib.astra' = 'const limit = 11' }; Out = '22' }) }
