@@ -1,0 +1,39 @@
+// A method of a generic class or interface is overridden with the type arguments the class below
+// gives it: in a class of Base<int>, `show(s : int)` takes the place of Base's `show(s : S)`.
+
+abstract class Base<S> {
+  abstract fun show(s : S) : string
+  fun run(s : S) : string => show(s)
+}
+class Ints : Base<int>() {
+  override fun show(s : int) : string => "int $s"
+}
+print(Ints().run(5))                       // expect: int 5
+
+// A generic class below a generic one, its type parameter inside the argument.
+class Lists<T> : Base<List<T>>() {
+  override fun show(s : List<T>) : string => "list of ${s.size}"
+}
+print(Lists<string>().run(["a", "b"]))     // expect: list of 2
+
+// An interface's method, called through the interface.
+interface Handle<S> {
+  fun update(spec : S) : string
+  fun twice(spec : S) : string => update(spec) + update(spec)
+}
+class Texts : Handle<string> {
+  override fun update(spec : string) : string => "<$spec>"
+}
+val h : Handle<string> = Texts()
+print(h.update("x"))                       // expect: <x>
+print(h.twice("y"))                        // expect: <y><y>
+
+// A second form of the class's own beside the one it overrides.
+class Both : Base<int>() {
+  override fun show(s : int) : string => "int $s"
+  fun show(s : string) : string => "string $s"
+}
+val b = Both()
+print(b.run(3))                            // expect: int 3
+print(b.show("z"))                         // expect: string z
+print(b.show(4))                           // expect: int 4

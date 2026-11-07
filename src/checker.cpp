@@ -2255,21 +2255,43 @@ struct Checker::Impl {
         if (!m.methodEnvs.empty()) m.env = m.methodEnvs[0];
     }
 
+    // Whether two parameter types are the same, a type not written (or not known) anywhere in
+    // either matching anything there: List<*> is alike to List<T>.
+    bool alike(const Type& x, const Type& y) const {
+        if (x.unknown() || y.unknown()) return true;
+        if (x.kind != y.kind || x.cls != y.cls || x.args.size() != y.args.size() || x.nullable != y.nullable) return argText(x) == argText(y);
+        if (x.args.empty() && !x.result && !y.result) return argText(x) == argText(y);
+        for (size_t i = 0; i < x.args.size(); i++)
+            if (!alike(x.args[i], y.args[i])) return false;
+        if ((x.result != nullptr) != (y.result != nullptr)) return false;
+        if (x.result && !alike(*x.result, *y.result)) return false;
+        if ((x.receiver != nullptr) != (y.receiver != nullptr)) return false;
+        if (x.receiver && !alike(*x.receiver, *y.receiver)) return false;
+        return x.frozen == y.frozen && x.suspend == y.suspend && x.knownParams == y.knownParams;
+    }
+
     // Whether one method takes the place of another: as many parameters, a vararg in the same
     // place, and each parameter of the same type, or of a type not written in either; their own
-    // type parameters by their places.
+    // type parameters by their places. A method of a generic class or interface is read as the
+    // class below gives its type parameters: in a class of Base<int>, `show(s : int)` takes the
+    // place of Base's `show(s : S)`.
     bool sameForm(FuncInfo* a, FuncInfo* b) {
         resolveFunc(a);
         resolveFunc(b);
         if (a->params.size() != b->params.size() || a->vararg != b->vararg) return false;
         // Two declared in one class are two forms unless they are written alike.
         if (a->owner != nullptr && a->owner == b->owner) return signatureOf(a, {}) == signatureOf(b, {});
+        auto seenFrom = [&](FuncInfo* below, FuncInfo* above) {
+            if (below->owner == nullptr || above->owner == nullptr || above->owner->typeParams.empty()) return Env{};
+            return envOf(asSuper(selfType(below->owner), above->owner));
+        };
+        const Env aClass = seenFrom(b, a), bClass = seenFrom(a, b);
         const Env aPlaces = byPlace(a), bPlaces = byPlace(b);
         for (size_t i = 0; i < a->params.size(); i++) {
-            const Type x = subst(static_cast<int>(i) == a->vararg ? a->varargItem : a->params[i], aPlaces);
-            const Type y = subst(static_cast<int>(i) == b->vararg ? b->varargItem : b->params[i], bPlaces);
+            const Type x = subst(subst(static_cast<int>(i) == a->vararg ? a->varargItem : a->params[i], aClass), aPlaces);
+            const Type y = subst(subst(static_cast<int>(i) == b->vararg ? b->varargItem : b->params[i], bClass), bPlaces);
             if (x.unknown() || y.unknown()) continue;
-            if (argText(x) != argText(y)) return false;
+            if (!alike(x, y)) return false;
         }
         return true;
     }
