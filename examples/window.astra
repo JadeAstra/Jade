@@ -1,4 +1,4 @@
-// A window drawn by Jade's native layer: shapes and text drawn with OpenGL, and the raw
+// A window drawn by Topaz's native layer: shapes and text drawn with OpenGL, and the raw
 // events the window receives, echoed as they arrive.
 //
 //   astra examples/window.astra             opens the window; close it to end
@@ -7,7 +7,7 @@
 //
 // Move the pointer, click, turn the wheel, type, drop a file on it, resize it: each event
 // is printed and shown in the window. Escape closes it.
-import Jade.*
+import Topaz.*
 
 val events = []          // the last few events, newest last
 var pointerX = 320
@@ -33,7 +33,7 @@ fun paint(canvas : Canvas) {
 
   canvas.color = ink
   canvas.font = title
-  canvas.drawString("Jade's native layer", 20, 36)
+  canvas.drawString("Topaz's native layer", 20, 36)
   canvas.font = body
   canvas.color = faint
   canvas.drawString("${w} by ${h} units, ${canvas.deviceScaleX} pixels to the unit. 中文, Ελληνικά and 😀 come from other fonts.", 20, 58)
@@ -115,7 +115,7 @@ if (arguments.contains("picture")) {
   surface.save("window.png")
   print("drew ${surface.width} by ${surface.height} with ${Native.describe()}; saved as window.png")
 } else {
-  val window = NativeWindow("Jade's native layer", 640, 420)
+  val window = NativeWindow("Topaz's native layer", 640, 420)
   window.setLimits(360, 300)
 
   fun redraw() {

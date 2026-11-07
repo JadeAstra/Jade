@@ -2,7 +2,7 @@
 #   a first run, nothing cached, checked and compiled in under half a second;
 #   a second run with nothing changed in under 20 ms on top of astra.exe starting;
 #   a run after a one-line change inside a function in under 100 ms.
-# The program they are measured on is the standard library, Jade, the examples and the tests
+# The program they are measured on is the standard library, Topaz, the examples and the tests
 # (some 20,000 lines), each test and example in a folder of its own so that their names do not
 # meet, imported by one main file. It is compiled, not run (ASTRA_TIMES=compile).
 #
@@ -38,7 +38,7 @@ for ($i = 0; $i -lt $sources.Count; $i++) {
 }
 $mainFile = Join-Path $root 'main.astra'
 [IO.File]::WriteAllText($mainFile, ($main -join "`n") + "`nprint(""ready"")`n")
-foreach ($dir in (Join-Path $PSScriptRoot '..\src\std'), (Join-Path $PSScriptRoot '..\lib\Jade')) {
+foreach ($dir in (Join-Path $PSScriptRoot '..\src\std'), (Join-Path $PSScriptRoot '..\lib\Topaz')) {
     $lines += @(Get-ChildItem (Join-Path $dir '*.astra') | ForEach-Object { @(Get-Content $_.FullName).Count } | Measure-Object -Sum).Sum
 }
 
@@ -88,7 +88,7 @@ $edit = Best {
 }
 [IO.File]::WriteAllText($file, $original)
 
-"program: $($sources.Count) tests and examples, the standard library and Jade, $lines lines"
+"program: $($sources.Count) tests and examples, the standard library and Topaz, $lines lines"
 "astra.exe starting:      {0,7:N1} ms" -f $start.Ms
 "first run:               {0,7:N1} ms  (budget 500)    {1}" -f $first.Ms, $first.Text
 "second run, unchanged:   {0,7:N1} ms  (budget 20 on top of astra.exe starting: {2:N1})    {1}" -f $second.Ms, $second.Text, $second.Work

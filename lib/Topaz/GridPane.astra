@@ -1,0 +1,375 @@
+// A grid of cells: the one layout of the toolkit. Each column is as wide as the widest
+// thing in it would like and each row as high as its highest; room left over goes to the
+// columns and rows that have a weight; a widget fills its cell or sits in it by its anchor.
+// A cell can span several columns or rows. (JadeUI: JadeGrid.kt.)
+//
+//   grid {
+//     insets = Insets(8, 8, 8, 8)
+//     hgap = 6
+//     row { cell(label("Name:")); cell(nameField, fill = Fill.horizontal, weightX = 1.0) }
+//     row { cell(button("OK") { save() }, colSpan = 2, anchor = Anchor.east) }
+//   }
+
+class GridPane : Content, Container {
+  override var owner : Component? = null
+
+  // Room kept free around the cells, and between one column or row and the next.
+  var insets : Insets = Insets(0, 0, 0, 0)
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var hgap : int = 0
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var vgap : int = 0
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  // A name for the grid, under which a layout written for it outside the program is found.
+  var viewId : string? = null
+    set(value) {
+      field = value
+      if (value != null) { Topaz.register(value, this) }
+    }
+
+  // One widget's place in the grid.
+  class Cell(val component : Component, val row : int, val col : int, val rowSpan : int, val colSpan : int, val fill : Fill, val anchor : Anchor, val weightX : float, val weightY : float)
+
+  private val cellList : open List<Cell> = []
+  private val occupied : open Set<int> = setOf()
+  private var builderRow = 0
+
+  fun init(insets : Insets? = null, hgap : int = 0, vgap : int = 0) {
+    this.insets = insets ?: Insets(0, 0, 0, 0)
+    this.hgap = hgap
+    this.vgap = vgap
+  }
+
+  val cells : List<Cell>
+    get() => cellList
+  val children : List<Component>
+    get() => cellList.map { it.component }
+
+  // Puts a component at a row and a column, counted from 0.
+  fun add(component : Component, row : int, col : int, rowSpan : int = 1, colSpan : int = 1, fill : Fill = Fill.none, anchor : Anchor = Anchor.center, weightX : float = 0.0, weightY : float = 0.0) : Component {
+    require(rowSpan >= 1 and colSpan >= 1) { "spans must be at least 1 (got $rowSpan x $colSpan)" }
+    cellList.add(Cell(component, row, col, rowSpan, colSpan, fill, anchor, weightX, weightY))
+    for (r in row..<row + rowSpan) {
+      for (c in col..<col + colSpan) { occupied.add(GridPane.key(r, c)) }
+    }
+    builderRow = Math.max(builderRow, row + 1)
+    owner?.attachChildren()
+    Topaz.requestLayout()
+    owner?.invalidate()
+    return component
+  }
+
+  fun remove(component : Component) {
+    if (cellList.removeAll { it.component === component }) {
+      occupied.clear()
+      for (cell in cellList) {
+        for (r in cell.row..<cell.row + cell.rowSpan) {
+          for (k in cell.col..<cell.col + cell.colSpan) { occupied.add(GridPane.key(r, k)) }
+        }
+      }
+      owner?.attachChildren()
+      Topaz.requestLayout()
+      owner?.invalidate()
+    }
+  }
+
+  // The next row, its cells given one after another by a block.
+  fun row(build : RowScope.() -> unit) {
+    val r = builderRow
+    RowScope(this, r).apply(build)
+    builderRow = r + 1
+  }
+
+  // What the block of row { } runs on. Its fields are private, so that in the block `grid`
+  // is still the function grid() and `row` the grid's own row { }.
+  class RowScope(private val grid : GridPane, private val row : int) {
+    private var col = 0
+
+    // The next cell of the row. It goes in the first column that is free: one taken by a
+    // cell from a row above that spans down is passed over.
+    fun cell(component : Component, rowSpan : int = 1, colSpan : int = 1, fill : Fill = Fill.none, anchor : Anchor = Anchor.center, weightX : float = 0.0, weightY : float = 0.0) : Component {
+      while (grid.isOccupied(row, col)) { col += 1 }
+      grid.add(component, row, col, rowSpan, colSpan, fill, anchor, weightX, weightY)
+      col += colSpan
+      return component
+    }
+  }
+
+  fun isOccupied(row : int, col : int) : bool => occupied.contains(GridPane.key(row, col))
+
+  // A layout written for the grid outside the program takes the place of the one built
+  // here. (Those files are read from a later milestone on; until then there is none.)
+  fun invalidateOverride() {}
+  private fun effective() : ResolvedLayout => ResolvedLayout(cellList, insets, hgap, vgap)
+  internal fun effectiveComponents() : List<Component> => effective().cells.map { it.component }
+
+  override fun sizes() : Sizes {
+    val e = effective()
+    val nc = GridPane.numCols(e.cells)
+    val nr = GridPane.numRows(e.cells)
+    if (nc == 0 or nr == 0) {
+      val edge = Size(e.insets.left + e.insets.right, e.insets.top + e.insets.bottom)
+      return Sizes(edge, edge, Size(int.maxValue, int.maxValue))
+    }
+    val t = tracks(e.cells, e.hgap, e.vgap, nc, nr)
+    val edgeW = e.insets.left + e.insets.right
+    val edgeH = e.insets.top + e.insets.bottom
+    val prefW = t.colPref.sum() + e.hgap * (nc - 1) + edgeW
+    val prefH = t.rowPref.sum() + e.vgap * (nr - 1) + edgeH
+    val minW = t.colMin.sum() + e.hgap * (nc - 1) + edgeW
+    val minH = t.rowMin.sum() + e.vgap * (nr - 1) + edgeH
+    val maxW = GridPane.trackMaxSum(t.colMax, e.hgap, edgeW)
+    val maxH = GridPane.trackMaxSum(t.rowMax, e.vgap, edgeH)
+    return Sizes(Size(minW, minH), Size(prefW, prefH), Size(maxW, maxH))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val e = effective()
+    for (cell in e.cells) {
+      val comp = cell.component
+      if (!comp.visible) { continue }
+      val b = comp.bounds
+      if (b.width <= 0 or b.height <= 0) { continue }
+      val cg = canvas.sub(b.x, b.y, b.width, b.height)
+      try {
+        comp.paintInto(cg)
+      } finally {
+        cg.dispose()
+      }
+    }
+  }
+
+  // Places every cell's component in a grid of this size.
+  fun layout(width : int, height : int) {
+    val e = effective()
+    val nc = GridPane.numCols(e.cells)
+    val nr = GridPane.numRows(e.cells)
+    if (nc == 0 or nr == 0) { return }
+    val t = tracks(e.cells, e.hgap, e.vgap, nc, nr)
+    val availW = width - e.insets.left - e.insets.right - e.hgap * (nc - 1)
+    val availH = height - e.insets.top - e.insets.bottom - e.vgap * (nr - 1)
+    val colSize = GridPane.resolveSizes(t.colPref, t.colMin, t.colW, availW)
+    val rowSize = GridPane.resolveSizes(t.rowPref, t.rowMin, t.rowWt, availH)
+    val colPos = GridPane.positions(colSize, e.insets.left, e.hgap)
+    val rowPos = GridPane.positions(rowSize, e.insets.top, e.vgap)
+    for (cell in e.cells) {
+      place(cell, colPos[cell.col], rowPos[cell.row], GridPane.spanSize(colSize, cell.col, cell.colSpan, e.hgap), GridPane.spanSize(rowSize, cell.row, cell.rowSpan, e.vgap))
+    }
+  }
+
+  // The component at a point: the last one added, if several overlap.
+  // As a container (Component asks it).
+  override fun layoutChildren(width : int, height : int) => layout(width, height)
+  override fun shownChildren() : List<Component> => cells.map { it.component }
+  override fun childAtPoint(px : int, py : int) : PositionalChild? {
+    val hit = childAt(px, py)
+    return hit == null ? null : PositionalChild(hit, hit.bounds.x, hit.bounds.y)
+  }
+
+  fun childAt(x : int, y : int) : Component? {
+    val found = effective().cells.lastOrNull { it.component.visible and it.component.bounds.contains(x, y) }
+    return found?.component
+  }
+
+  // What each column and row would like, needs at least and may have at most, and its
+  // weight. A cell in one column or row sets them outright; one that spans several then
+  // spreads whatever it still lacks over the ones it covers.
+  private fun tracks(cells : List<Cell>, hgap : int, vgap : int, nc : int, nr : int) : Tracks {
+    val t = Tracks(nc, nr)
+    for (cell in cells) {
+      if (!cell.component.visible) { continue }
+      val p = cell.component.prefSize()
+      val m = cell.component.minSize()
+      val x = cell.component.maxSize()
+      if (cell.colSpan == 1) {
+        val c = cell.col
+        t.colPref[c] = Math.max(t.colPref[c], p.width)
+        t.colMin[c] = Math.max(t.colMin[c], m.width)
+        t.colMax[c] = Math.max(t.colMax[c], x.width)
+        t.colW[c] = Math.max(t.colW[c], cell.weightX)
+      }
+      if (cell.rowSpan == 1) {
+        val r = cell.row
+        t.rowPref[r] = Math.max(t.rowPref[r], p.height)
+        t.rowMin[r] = Math.max(t.rowMin[r], m.height)
+        t.rowMax[r] = Math.max(t.rowMax[r], x.height)
+        t.rowWt[r] = Math.max(t.rowWt[r], cell.weightY)
+      }
+    }
+    for (cell in cells) {
+      if (!cell.component.visible) { continue }
+      val p = cell.component.prefSize()
+      val m = cell.component.minSize()
+      if (cell.colSpan > 1) {
+        GridPane.distributeDeficit(t.colPref, cell.col, cell.colSpan, hgap, p.width, t.colW)
+        GridPane.distributeDeficit(t.colMin, cell.col, cell.colSpan, hgap, m.width, t.colW)
+        GridPane.spreadWeight(t.colW, cell.col, cell.colSpan, cell.weightX)
+      }
+      if (cell.rowSpan > 1) {
+        GridPane.distributeDeficit(t.rowPref, cell.row, cell.rowSpan, vgap, p.height, t.rowWt)
+        GridPane.distributeDeficit(t.rowMin, cell.row, cell.rowSpan, vgap, m.height, t.rowWt)
+        GridPane.spreadWeight(t.rowWt, cell.row, cell.rowSpan, cell.weightY)
+      }
+    }
+    return t
+  }
+
+  // Gives a component its size and place in the room its cell has.
+  private fun place(cell : Cell, cx : int, cy : int, cw : int, ch : int) {
+    val comp = cell.component
+    val pref = comp.prefSize()
+    val min = comp.minSize()
+    val max = comp.maxSize()
+    val wide = cell.fill == Fill.horizontal or cell.fill == Fill.both
+    val high = cell.fill == Fill.vertical or cell.fill == Fill.both
+    val w = wide ? Math.max(Math.min(cw, max.width), Math.min(min.width, cw)) : Math.min(pref.width, cw)
+    val h = high ? Math.max(Math.min(ch, max.height), Math.min(min.height, ch)) : Math.min(pref.height, ch)
+    comp.layout(w, h)
+    comp.bounds = Rect(cx + GridPane.anchorOffsetX(cell.anchor, cw - w), cy + GridPane.anchorOffsetY(cell.anchor, ch - h), w, h)
+  }
+
+  class Tracks(nc : int, nr : int) {
+    val colPref = List(nc) { 0 }
+    val colMin = List(nc) { 0 }
+    val colMax = List(nc) { 0 }
+    val colW = List(nc) { 0.0 }
+    val rowPref = List(nr) { 0 }
+    val rowMin = List(nr) { 0 }
+    val rowMax = List(nr) { 0 }
+    val rowWt = List(nr) { 0.0 }
+  }
+
+  static {
+    fun key(row : int, col : int) : int => row * 100000 + col
+    fun numCols(cells : List<Cell>) : int => cells.maxOfOrNull { it.col + it.colSpan } ?: 0
+    fun numRows(cells : List<Cell>) : int => cells.maxOfOrNull { it.row + it.rowSpan } ?: 0
+    // The most the tracks may be together; no limit if any of them has none.
+    fun trackMaxSum(maxes : List<int>, gap : int, edge : int) : int {
+      var sum = edge + gap * Math.max(maxes.size - 1, 0)
+      for (m in maxes) {
+        if (m <= 0 or m >= int.maxValue - sum) { return int.maxValue }
+        sum += m
+      }
+      return sum
+    }
+    fun positions(sizes : List<int>, start : int, gap : int) : List<int> {
+      val pos : open List<int> = []
+      var x = start
+      for (size in sizes) {
+        pos.add(x)
+        x += size + gap
+      }
+      return pos
+    }
+    fun spanSize(sizes : List<int>, start : int, span : int, gap : int) : int {
+      var s = gap * (span - 1)
+      for (i in start..<start + span) { s += sizes[i] }
+      return s
+    }
+    fun distributeDeficit(arr : open List<int>, start : int, span : int, gap : int, need : int, weight : open List<float>) {
+      var cur = gap * (span - 1)
+      for (i in start..<start + span) { cur += arr[i] }
+      if (need > cur) { GridPane.distribute(arr, start, span, need - cur, weight) }
+    }
+    // Shares an amount among some tracks: by weight if any has one, evenly if none has.
+    fun distribute(arr : open List<int>, start : int, span : int, amount : int, weight : open List<float>) {
+      var wsum = 0.0
+      for (i in start..<start + span) { wsum += weight[i] }
+      if (wsum > 0.0) {
+        var used = 0
+        var last = start
+        for (i in start..<start + span) {
+          if (weight[i] > 0.0) {
+            val add = (amount * (weight[i] / wsum)).toInt()
+            arr[i] += add
+            used += add
+            last = i
+          }
+        }
+        arr[last] += amount - used
+      } else {
+        val each = amount / span
+        for (i in start..<start + span) { arr[i] += each }
+        arr[start + span - 1] += amount % span
+      }
+    }
+    // A weight given to a cell that spans tracks none of which has one is shared among them.
+    fun spreadWeight(weight : open List<float>, start : int, span : int, w : float) {
+      if (w <= 0.0) { return }
+      for (i in start..<start + span) {
+        if (weight[i] > 0.0) { return }
+      }
+      val per = w / span
+      for (i in start..<start + span) { weight[i] = per }
+    }
+    // The size of each track for the room there is: room to spare goes to the weighted
+    // ones, and too little is taken from each by how much it can give up.
+    fun resolveSizes(pref : List<int>, min : List<int>, weight : open List<float>, available : int) : List<int> {
+      val n = pref.size
+      val sizes = pref.toList()
+      val extra = available - pref.sum()
+      if (extra > 0) {
+        val wsum = weight.sum()
+        if (wsum > 0.0) {
+          var used = 0
+          var last = -1
+          for (i in 0..<n) {
+            if (weight[i] > 0.0) {
+              val add = (extra * (weight[i] / wsum)).toInt()
+              sizes[i] += add
+              used += add
+              last = i
+            }
+          }
+          if (last >= 0) { sizes[last] += extra - used }
+        }
+      } else if (extra < 0) {
+        var deficit = -extra
+        val slack = List(n) { pref[it] - min[it] }
+        val slackSum = slack.sum()
+        if (slackSum > 0) {
+          var used = 0
+          for (i in 0..<n) {
+            val take = Math.min(slack[i], (deficit * slack[i]) / slackSum)
+            sizes[i] -= take
+            used += take
+          }
+          deficit -= used
+          var i = 0
+          while (deficit > 0 and i < n) {
+            val take = Math.min(deficit, sizes[i] - min[i])
+            if (take > 0) {
+              sizes[i] -= take
+              deficit -= take
+            }
+            i += 1
+          }
+        }
+      }
+      return sizes
+    }
+    fun anchorOffsetX(anchor : Anchor, extra : int) : int {
+      if (anchor == Anchor.west or anchor == Anchor.northwest or anchor == Anchor.southwest) { return 0 }
+      if (anchor == Anchor.east or anchor == Anchor.northeast or anchor == Anchor.southeast) { return extra }
+      return extra / 2
+    }
+    fun anchorOffsetY(anchor : Anchor, extra : int) : int {
+      if (anchor == Anchor.north or anchor == Anchor.northwest or anchor == Anchor.northeast) { return 0 }
+      if (anchor == Anchor.south or anchor == Anchor.southwest or anchor == Anchor.southeast) { return extra }
+      return extra / 2
+    }
+  }
+}
+
+// The cells a grid is laid out by: its own, or a layout written for it outside the program.
+internal class ResolvedLayout(val cells : List<GridPane.Cell>, val insets : Insets, val hgap : int, val vgap : int)

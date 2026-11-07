@@ -215,7 +215,7 @@ Temperature.fromFahrenheit(212.0).celsius    // 100.0</pre></dd>
 }</pre></dd>
 
 <dt><code>private</code>, <code>protected</code>, <code>internal</code>, <code>public</code></dt>
-<dd>Who may use a declaration. <code>private</code>: a member only its class's code, a top-level declaration only its file. <code>protected</code>: that, and code written in a subclass, on objects of that subclass. <code>internal</code>: code of the same library (a program is one library; so is Jade). <code>public</code> is accepted and changes nothing: everything else is open to everyone.</dd>
+<dd>Who may use a declaration. <code>private</code>: a member only its class's code, a top-level declaration only its file. <code>protected</code>: that, and code written in a subclass, on objects of that subclass. <code>internal</code>: code of the same library (a program is one library; so is Topaz). <code>public</code> is accepted and changes nothing: everything else is open to everyone.</dd>
 
 <dt><code>lateinit</code></dt>
 <dd>A <code>var</code> field given its value after the object is made. Reading it before that is an error.</dd>
@@ -2536,7 +2536,7 @@ Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGB
 <p>The arc as text: &quot;Arc(0.0, 0.0, 10.0 x 10.0, 90.0 + 180.0, pie)&quot;.</p>
 </div>
 <div class="entry" id="Drawable"><code class="sig">interface Drawable</code><a class="anchor" href="#Drawable">#</a>
-<p>What a canvas draws as a picture: an Image in memory, a Jade Surface on the graphics card. Its size is in units.</p>
+<p>What a canvas draws as a picture: an Image in memory, a Topaz Surface on the graphics card. Its size is in units.</p>
 </div>
 <div class="entry member" id="Drawable.width"><code class="sig">val width : int</code><a class="anchor" href="#Drawable.width">#</a>
 <p>The picture's width, in units (an Image's are its pixels).</p>
@@ -2647,7 +2647,7 @@ walls .= appendRows(2)                                  two rows more, a new gri
 <p>What a text takes up in a font, in units.</p>
 </div>
 <div class="entry" id="Canvas"><code class="sig">abstract class Canvas</code><a class="anchor" href="#Canvas">#</a>
-<p>What everything is drawn on: an Image's canvas in memory (ImageCanvas, below), and in Jade a window's or a Surface's on the graphics card, or one that records what it is asked to draw. All have the same calls:</p>
+<p>What everything is drawn on: an Image's canvas in memory (ImageCanvas, below), and in Topaz a window's or a Surface's on the graphics card, or one that records what it is asked to draw. All have the same calls:</p>
 <pre>val canvas = image.canvas()
 canvas.color = Color.white
 canvas.fillRect(0, 0, canvas.width, canvas.height)
@@ -2790,7 +2790,7 @@ image[10, 10] = Color.red                     one pixel; get, set and getOrNull 
 image.editPixels { pixels -&gt; pixels[3, 4] = Color.blue }    many at once, a Grid&lt;Color&gt;
 image.save(Path(&quot;out.png&quot;))
 </pre>
-<p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Jade keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed. Threads may draw on one image together: each shape, text or picture is drawn whole before another thread draws, and the copy on the card misses none of them. In a parallel section a piece draws on an image it made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).</p>
+<p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Topaz keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed. Threads may draw on one image together: each shape, text or picture is drawn whole before another thread draws, and the copy on the card misses none of them. In a parallel section a piece draws on an image it made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).</p>
 </div>
 <div class="entry member" id="Image.width"><code class="sig">override val width : int</code><a class="anchor" href="#Image.width">#</a>
 <p>Its width, in pixels.</p>
@@ -2916,7 +2916,7 @@ image.save(Path(&quot;out.png&quot;))
 <p>Draws the part of the picture's pixels into the rectangle, smoothly when it is made larger or smaller; <code>alpha</code> is kept from 0.0 to 1.0, and nothing is drawn at 0 or for an empty part.</p>
 </div>
 <div class="entry" id="ToImage"><code class="sig">interface ToImage</code><a class="anchor" href="#ToImage">#</a>
-<p>A picture kept somewhere other than in memory that can give its pixels as an Image: a Jade Surface, from the graphics card.</p>
+<p>A picture kept somewhere other than in memory that can give its pixels as an Image: a Topaz Surface, from the graphics card.</p>
 </div>
 <div class="entry member" id="ToImage.toImage"><code class="sig">fun toImage() : Image</code><a class="anchor" href="#ToImage.toImage">#</a>
 <p>Its pixels, as a new Image: a Surface's at its size in pixels.</p>
@@ -4042,7 +4042,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>The class's name, or a built-in type's: &quot;Circle&quot;, &quot;int&quot;, &quot;List&quot;.</p>
 </div>
 <div class="entry member" id="Class.origin"><code class="sig">val origin : string</code><a class="anchor" href="#Class.origin">#</a>
-<p>Where it comes from: &quot;astra&quot; for a built-in type and the standard library's classes, a library's name for its classes (&quot;Jade&quot;), and the program's name (Program.name) for the program's own.</p>
+<p>Where it comes from: &quot;astra&quot; for a built-in type and the standard library's classes, a library's name for its classes (&quot;Topaz&quot;), and the program's name (Program.name) for the program's own.</p>
 </div>
 <div class="entry member" id="Class.superclass"><code class="sig">val superclass : Class?</code><a class="anchor" href="#Class.superclass">#</a>
 <p>The class it extends, with the type arguments it gives it; null where it extends none.</p>

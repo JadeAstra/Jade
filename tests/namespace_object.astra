@@ -1,4 +1,4 @@
-// A library can hold an object of its own name, as Jade does. What the library has a name
+// A library can hold an object of its own name, as Topaz does. What the library has a name
 // for is the library's; anything else is looked for on the object.
 import NsText.*
 

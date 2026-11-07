@@ -9,6 +9,6 @@
 namespace astra {
 
 void registerText(VM&) { std::abort(); }
-void registerJade(VM&) { std::abort(); }
+void registerTopaz(VM&) { std::abort(); }
 
 }  // namespace astra

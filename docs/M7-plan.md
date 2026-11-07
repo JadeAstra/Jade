@@ -6,13 +6,13 @@ the window's timed behaviour (tooltips, the blinking caret, hold-to-repeat). It 
 examples' `Launcher.kt` ported close to line for line: the acceptance test for "painless"
 (gui-plan.md, section 7). Version 0.7.0 when it is done.
 
-Built 2026-11-06, version 0.7.0; what was built is in gui-plan.md, section 6.4. Written 2026-11-06 from a reading of every Kotlin file involved, against `lib/Jade` as M6
+Built 2026-11-06, version 0.7.0; what was built is in gui-plan.md, section 6.4. Written 2026-11-06 from a reading of every Kotlin file involved, against `lib/Topaz` as M6
 and M6.7 left it.
 
 ## What is ported
 
 About 5,000 lines of Kotlin, into roughly the same number of lines of Astra, beside the
-3,300 Jade has now.
+3,300 Topaz has now.
 
 | Kotlin | Lines | Astra | Holds |
 | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ About 5,000 lines of Kotlin, into roughly the same number of lines of Astra, bes
 | `Combo.kt` | 151 | `Combo.astra` | `ComboBox` |
 | `Screen.kt` | 476 | `Screen.astra` | `Screen`, `screen()`, the menu bar's view, popups, tips, accelerators |
 | `Chrome.kt`, part | 140 of 934 | `Chrome.astra` | the menu model (`MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`), `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
-| `Drafts.kt` | 64 | `Drafts.astra` | `Drafts` (`Jade.drafts`) |
+| `Drafts.kt` | 64 | `Drafts.astra` | `Drafts` (`Topaz.drafts`) |
 | `Block.kt`, `Doc.kt` | 316 | `Block.astra` | if chosen (below) |
 | the GLFW surface's timing | | `Window.astra` | tooltips after 600 ms, the caret's 500 ms blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, the system clipboard |
 
@@ -58,7 +58,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
    `TextNavParityTest`.
 3. **The text model**: `SharedTextModel` with its undo (the same merging of typing and of
    deleting, `compoundEdit`), style runs kept in step with edits, inline objects' places;
-   `StyledText`, `Clipboard`, `MemoryClipboard`, `Jade.clipboard`; `Drafts`, `Jade.drafts`.
+   `StyledText`, `Clipboard`, `MemoryClipboard`, `Topaz.clipboard`; `Drafts`, `Topaz.drafts`.
    Two things JadeUI does not have, for speed: a revision number, so a view knows the text
    changed without comparing it, and the starts of lines kept per revision, so finding a line
    is a search, not a walk. Tests: the model's half of `MirroredTextTest` and `EditingTest`,
@@ -93,7 +93,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
     accelerators after the edit keys; `Window.menuBar` typed. Tests: `ScreenMenuTest`,
     `ScreenPopupTest`, `ScreenGeometryTest`, `AcceleratorTest`, `MultiHostHookTest`, the
     menu cases of the wheel and repaint tests, and the GLFW backend's menu and accelerator
-    tests rewritten for `jade_host.astra`.
+    tests rewritten for `topaz_host.astra`.
 12. **The window's timed behaviour**: tooltips, the caret's blink, hold-to-repeat, each one
     timer set again as needed and cancelled when the window closes or loses focus (a running
     timer keeps a program alive); the system clipboard (plain text to the system, the last

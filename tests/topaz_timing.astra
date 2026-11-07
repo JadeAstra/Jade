@@ -1,0 +1,130 @@
+// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// What a window does in time: a tip after the pointer has rested, the caret's blink, and a held
+// arrow repeating. A hidden window keeps no timer, so these call the host's tick with times of
+// their own, as JadeUI's tests drive its frame clock.
+import Topaz.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+Topaz.windowOpener = HiddenWindowOpener()
+val none = Modifiers()
+const ms = 1000000
+
+// A window of a field, a button with a tip and a spinner.
+class App {
+  val field = textField("hello")
+  val tipped = button("Tip me").tooltip("A tip")
+  val spin = spinner(5)
+  val window = Window(grid {
+    row {
+      cell(field)
+      cell(tipped)
+      cell(spin)
+    }
+  }, "Timing", 400, 100)
+  val host : WindowHost
+
+  fun init() {
+    window.show()
+    host = window.handle as WindowHost
+    host.frame()
+  }
+  fun texts() : List<string> =>
+    host.screen.owner!!.record(400, 100).filter { it is DrawOp.Text }.map { (it as DrawOp.Text).text }
+  fun move(x : int, y : int) { host.send(RawInput.PointerMove(x, y, 0, 0, setOf(), none)) }
+  fun press(x : int, y : int) { host.send(RawInput.PointerDown(x, y, PointerButton.left, none)) }
+  fun release(x : int, y : int) { host.send(RawInput.PointerUp(x, y, PointerButton.left, none)) }
+}
+
+// A tip shows once the pointer has rested on it a while, and goes when the pointer leaves.
+fun aTipShowsAfterARestAndGoesOnLeaving() {
+  val app = App()
+  val at = app.tipped.windowPosition()
+  app.move(at.x + 5, at.y + 5)
+  val start = Native.nanoTime()
+  yes("no tip at once", !app.texts().contains("A tip"))
+  app.host.tick(start + 100 * ms)
+  yes("nor after a tenth of a second", !app.texts().contains("A tip"))
+  app.host.tick(start + 1000 * ms)
+  yes("the tip after a second", app.texts().contains("A tip"))
+  app.move(1, 90)
+  yes("gone when the pointer leaves", !app.texts().contains("A tip"))
+  // and a press puts it away too
+  app.move(at.x + 5, at.y + 5)
+  app.host.tick(Native.nanoTime() + 1000 * ms)
+  yes("back on resting again", app.texts().contains("A tip"))
+  app.press(at.x + 5, at.y + 5)
+  app.release(at.x + 5, at.y + 5)
+  yes("gone on a press", !app.texts().contains("A tip"))
+  app.window.close()
+}
+aTipShowsAfterARestAndGoesOnLeaving()
+
+// The caret blinks each half second, and shows, solid, when it moves.
+fun theCaretBlinksAndShowsWhenItMoves() {
+  val app = App()
+  val at = app.field.windowPosition()
+  app.press(at.x + 5, at.y + 5)
+  app.release(at.x + 5, at.y + 5)
+  val m = (app.field.content as TextField).model
+  yes("the field has the keyboard", m.focused)
+  val t0 = Native.nanoTime()
+  app.host.tick(t0)
+  same("shown at first", m.caretVisible, true)
+  app.host.tick(t0 + 200 * ms)
+  same("still shown before half a second", m.caretVisible, true)
+  app.host.tick(t0 + 600 * ms)
+  same("hidden after half a second", m.caretVisible, false)
+  app.host.tick(t0 + 1200 * ms)
+  same("shown again after another", m.caretVisible, true)
+  app.host.tick(t0 + 1800 * ms)
+  same("hidden again", m.caretVisible, false)
+  m.moveCaret(1)
+  app.host.tick(t0 + 1900 * ms)
+  same("shown at once when it moves", m.caretVisible, true)
+  app.window.close()
+}
+theCaretBlinksAndShowsWhenItMoves()
+
+// A spinner's arrow held down goes on counting until it is let go.
+fun aHeldArrowRepeatsUntilLetGo() {
+  val app = App()
+  val at = app.spin.windowPosition()
+  val x = at.x + app.spin.bounds.width - 4
+  val y = at.y + 2
+  val sp = app.spin.content as Spinner
+  app.press(x, y)
+  val pressed = sp.value
+  same("one step on the press", pressed, 6)
+  val t1 = Native.nanoTime()
+  for (i in 0 ..< 10) { app.host.tick(t1 + i * 100 * ms) }
+  yes("more steps while held: ${sp.value}", sp.value > pressed)
+  app.release(x, y)
+  val let = sp.value
+  for (i in 10 ..< 20) { app.host.tick(t1 + i * 100 * ms) }
+  same("no more once let go", sp.value, let)
+  app.window.close()
+}
+aHeldArrowRepeatsUntilLetGo()
+
+// A hidden window leaves the program's clipboard as it is; one on the screen gives it the system's.
+fun aHiddenWindowKeepsTheClipboard() {
+  val mine = MemoryClipboard()
+  Topaz.clipboard = mine
+  val app = App()
+  yes("the program's clipboard kept", Topaz.clipboard === mine)
+  app.window.close()
+}
+aHiddenWindowKeepsTheClipboard()
+
+print("Timing:", checks, "checks,", failed)   // expect: Timing: 17 checks, []
+print("done")   // expect: done

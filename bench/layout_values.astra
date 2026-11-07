@@ -1,4 +1,4 @@
-// Jade's layout, as its grid does it (M6.6 part 2): every component gives a Sizes of three
+// Topaz's layout, as its grid does it (M6.6 part 2): every component gives a Sizes of three
 // Dimensions, a container reads its Insets, works out its tracks and places each child in a
 // Rectangle. With the geometry as value types; layout_classes.astra is the same with classes.
 

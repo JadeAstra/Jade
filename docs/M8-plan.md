@@ -6,7 +6,7 @@ is done.
 
 Written 2026-11-06 from a reading of JadeUI's `dialogs` and `chart` packages, the dialog half
 of `Chrome.kt`, the `treemap` package, the GLFW backend's dialogs, and JadeMem's three modules,
-against `lib/Jade` as M7 left it.
+against `lib/Topaz` as M7 left it.
 
 ## What M8 holds
 
@@ -26,11 +26,11 @@ API. Four pieces were added for it, at the user's choice (2026-11-06):
 
 | Kotlin | Lines | Astra | Holds |
 | --- | --- | --- | --- |
-| `dialogs/*.kt` | 1,401 | `lib/Jade/Dialogs/` | `DialogSession`, the ten sessions behind the eight dialogs, `JadeDialogs` |
+| `dialogs/*.kt` | 1,401 | `lib/Topaz/Dialogs/` | `DialogSession`, the ten sessions behind the eight dialogs, `JadeDialogs` |
 | `Chrome.kt`, the dialog half | 840 | `Chrome.astra`, `Dialogs/` | the dialog interfaces, their specs and results, `DialogHandle`, the `No…` dialogs |
-| `sheet/Completion.kt`, part | 107 | `lib/Jade/Completion.astra` | `CompletionPopup`, `Completer`: the value-and-format prompt completes |
-| `chart/*.kt` | 774 | `lib/Jade/Chart/` | `ChartData`, `ChartSeries`, `ChartRenderer`, `ChartView`, the builders |
-| `treemap/*.kt` | 552 | `lib/Jade/Treemap/` | `TreemapNode`, the layout, `TreemapView` |
+| `sheet/Completion.kt`, part | 107 | `lib/Topaz/Completion.astra` | `CompletionPopup`, `Completer`: the value-and-format prompt completes |
+| `chart/*.kt` | 774 | `lib/Topaz/Chart/` | `ChartData`, `ChartSeries`, `ChartRenderer`, `ChartView`, the builders |
+| `treemap/*.kt` | 552 | `lib/Topaz/Treemap/` | `TreemapNode`, the layout, `TreemapView` |
 | the GLFW file dialogs | 160 | `Window.astra`, C++ | `SystemFileDialog`, on Windows' own dialogs |
 | JadeMem `native` | 2,106 | JadeMem `native/` | through Astra's foreign functions |
 | JadeMem `core` | 2,689 | JadeMem `core/` | sampling, attribution, drill-downs, the guard, reports |
@@ -40,7 +40,7 @@ About 1,650 lines of JadeUI's tests carry over (dialogs, charts, treemap), and a
 JadeMem's (its `core` tests on its fake system, its `ViewTest`, `RecorderTest`).
 
 **Where JadeMem goes.** Its own repository, `D:\Projects\JadeMem`, beside JadeGen, with one
-folder per Kotlin module (`native`, `core`, `gui`) and its tests, built with `astra build`. Jade
+folder per Kotlin module (`native`, `core`, `gui`) and its tests, built with `astra build`. Topaz
 and Astra stay in this repository.
 
 ## Order
@@ -80,7 +80,7 @@ build is checked step by step; the full check (MSVC, ASan, stress, Linux) comes 
    built.
 5. **File dialogs** (N2): Windows' own Open, Save and Choose Folder dialogs, through
    `IFileOpenDialog`/`IFileSaveDialog`, on a thread of their own, the answer brought back on
-   the window's thread; installed as `Jade.fileDialog` when a window is shown, as the clipboard
+   the window's thread; installed as `Topaz.fileDialog` when a window is shown, as the clipboard
    is. Filters and the starting folder as JadeUI passes them. Tests answer from a script, as the
    GLFW backend's hidden mode does (`ScriptedFileDialog`).
 
@@ -89,8 +89,8 @@ build is checked step by step; the full check (MSVC, ASan, stress, Linux) comes 
 6. **`DialogSession`** and the windows it opens: one per key (asked again, the open one comes
    forward and is updated), drafts kept on cancel and offered again, fields followed while
    untouched and offered when touched ("Use it" / "Keep mine"), detaching from a subject that
-   went away, Enter and Escape by the key filter, `Jade.openDialogs()` and
-   `Jade.closeAllDialogs()`. A dialog's owner is the window in front (`Jade.frontWindow`),
+   went away, Enter and Escape by the key filter, `Topaz.openDialogs()` and
+   `Topaz.closeAllDialogs()`. A dialog's owner is the window in front (`Topaz.frontWindow`),
    which a program may give instead. What the window still lacks for dialogs: owned windows
    passing to their owner's owner when it closes first, and the keyboard going back to the
    owner when a dialog closes.

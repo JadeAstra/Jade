@@ -42,8 +42,8 @@ print(Font(Font.monospaced, 12).typeface.isMonospace, Font("Dialog", 12).family 
 print(font.lineHeight == font.ascent + font.descent + font.leading, font.ascent > font.descent, font.width("") == 0, font.width("Hello") == font.offsets("Hello").last())   // expect: true true true true
 print(font.copy(size = 26.0).width("Hello") > font.width("Hello"), font.copy(bold = false).width("Hello") < font.width("Hello"), font.width("Hello", 2) > font.width("Hello"))   // expect: true true true
 
-// On a dense screen a font is measured in the screen's own pixels, given the scale (L81); Jade
-// lays text out from these, rounded up to whole units (jade_host checks that).
+// On a dense screen a font is measured in the screen's own pixels, given the scale (L81); Topaz
+// lays text out from these, rounded up to whole units (topaz_host checks that).
 val line = "The quick brown fox jumps over the lazy dog"
 for (scale in [1.25, 1.5, 2, 3]) {
   val device = font.width(line, scale)

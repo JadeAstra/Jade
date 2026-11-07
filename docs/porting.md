@@ -94,7 +94,7 @@ overflows, a char compared with a string literal of another length.
   `items[^1]`. A slice past the end is an error too; `take(n)` and `drop(n)` take as many as
   there are.
 - **A class's own `==` and `hashCode` decide map keys.** An object of such a class finds the
-  entry of an equal one, where before it was a key as itself (Jade's `Color(255, 0, 0)` finds
+  entry of an equal one, where before it was a key as itself (Topaz's `Color(255, 0, 0)` finds
   the entry of `Color.red`).
 - **A key cannot change.** A mutable list, map, set or `Bytes` used as a key, a data class with
   a `var`, or a class whose `==` or `hashCode` reads a `var` field, is refused: by the compiler
@@ -366,7 +366,7 @@ to write, and so are Java's members of a file, a stream, a process and a socket 
 names otherwise (`parentFile`, `absolutePath`, `listFiles`, `mkdirs`, `renameTo`, `toFile`,
 `inputStream`, `destroy`, `soTimeout` and the rest) and `toByteArray`.
 
-## Graphics and Jade (M6.6 part 8, group 9)
+## Graphics and Topaz (M6.6 part 8, group 9)
 
 ### What to write instead
 

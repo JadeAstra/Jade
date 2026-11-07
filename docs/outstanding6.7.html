@@ -162,7 +162,7 @@ pre code { background: none; padding: 0; }
 </tbody></table></div>
 
 <h2 id="m7">Left from M7</h2>
-<p>Found or left while M7 was built (2026-11-06); what M7 ported is in gui-plan.md, section 6.4. Two found in its full check were built after 0.7.0 at the user's word: <strong id="o-g70">G70</strong>, a field of a value type read where it is when nothing runs between the read and its use (a field of it read at once, or the field given back, either side of <code>?:</code> included), which brought <code>jade_layout</code> back from 0.57 to 0.51 s, level with 0.6.7; and Kotlin's <code>{ -&gt; value }</code>, a lambda that takes nothing.</p>
+<p>Found or left while M7 was built (2026-11-06); what M7 ported is in gui-plan.md, section 6.4. Two found in its full check were built after 0.7.0 at the user's word: <strong id="o-g70">G70</strong>, a field of a value type read where it is when nothing runs between the read and its use (a field of it read at once, or the field given back, either side of <code>?:</code> included), which brought <code>topaz_layout</code> back from 0.57 to 0.51 s, level with 0.6.7; and Kotlin's <code>{ -&gt; value }</code>, a lambda that takes nothing.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
@@ -190,7 +190,7 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-m8-check">astra check</td><td><code>astra check</code> on one file of a folder does not see the folder's other files; checking the program that imports the folder does.</td><td class="when">-</td></tr>
 <tr><td class="part" id="o-m8-ffi">Foreign functions</td><td>Floats as arguments and results; JadeMem's are all whole numbers and pointers.</td><td class="when">When a program needs them</td></tr>
 <tr><td class="part" id="o-m8-dialogs">File dialogs</td><td>Linux has no one system dialog; <code>NoFileDialog</code> there.</td><td class="when">A milestone that takes Linux up</td></tr>
-<tr><td class="part" id="o-m8-svg">Image dialog</td><td>Previews a picture file; SVG markup is previewed once Jade draws SVG.</td><td class="when">M10</td></tr>
+<tr><td class="part" id="o-m8-svg">Image dialog</td><td>Previews a picture file; SVG markup is previewed once Topaz draws SVG.</td><td class="when">M10</td></tr>
 <tr><td class="part" id="o-m8-mft">JadeMem</td><td>Reading the NTFS file table parses about a million records in 3.4 s, on all cores; a drive of five million files would take some 12 to 17 s past its reading. The disk walk, where the table cannot be read, waits on the folder listing above.</td><td class="when">Timed elevated on this machine</td></tr>
 </tbody></table></div>
 

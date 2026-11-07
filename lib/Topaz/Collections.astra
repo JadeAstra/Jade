@@ -1,0 +1,515 @@
+// A tree of nodes to open and close, and a table. (JadeUI: Collections.kt.)
+
+private const cpad = 4
+private const indent = 16
+
+// A node of a tree: its label and the nodes under it.
+class TreeNode(val label : string, val children : List<TreeNode> = [])
+
+// A tree of nodes, each with a box to open or close it (Ctrl and a click on the box opens or
+// closes all under it too); a click on a label chooses it (onSelect), and the keys move up and
+// down, open (right, Enter) and close (left).
+class Tree : Content, Bordered, ScrollAware {
+  override var owner : Component? = null
+  val roots : List<TreeNode>
+  var onSelect : (TreeNode) -> unit
+  var font : Font
+
+  private val expanded : open Map<TreeNode, bool> = {:}
+  // The node chosen; its row is shown so.
+  var selected : TreeNode? = null
+    private set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  private var pendingReveal : Range? = null
+
+  fun init(roots : List<TreeNode>, onSelect : (TreeNode) -> unit = {}, font : Font = defaultFont) {
+    this.roots = roots
+    this.onSelect = onSelect
+    this.font = font
+  }
+
+  override fun viewportHeight(px : int) {}
+  override fun viewportWidth(px : int) {}
+  override fun consumeReveal() : Range? {
+    val r = pendingReveal
+    pendingReveal = null
+    return r
+  }
+  private fun revealSelected() {
+    val idx = rowOf(selected)
+    if (idx < 0) { return }
+    val rowH = rowHeight()
+    val top = 1 + idx * rowH
+    pendingReveal = top .. top + rowH
+    Topaz.requestLayout()
+  }
+
+  private fun isExpanded(n : TreeNode) : bool => expanded[n] == true
+  private fun opened() {
+    shape += 1
+    owner?.invalidateLayout()
+  }
+  private fun toggle(n : TreeNode) {
+    expanded[n] = !isExpanded(n)
+    opened()
+  }
+  private fun rowHeight() : int => metrics(font).height + cpad
+
+  // Opens every node that has nodes under it.
+  fun expandAll() {
+    walkAll(roots)
+    opened()
+  }
+  private fun walkAll(nodes : List<TreeNode>) {
+    for (n in nodes) {
+      if (n.children.isNotEmpty()) {
+        expanded[n] = true
+        walkAll(n.children)
+      }
+    }
+  }
+  // Closes every node.
+  fun collapseAll() {
+    expanded.clear()
+    opened()
+  }
+  private fun setSubtreeExpanded(node : TreeNode, value : bool) {
+    if (node.children.isEmpty()) { return }
+    expanded[node] = value
+    for (c in node.children) { setSubtreeExpanded(c, value) }
+  }
+
+  // The rows shown, each a node and how deep it is, kept until a node opens or closes (M7:
+  // JadeUI makes them again for each size, paint, click and key).
+  private var shape = 0
+  private var rowsShape = -1
+  private var rowNodes : List<TreeNode> = []
+  private var rowDepths : List<int> = []
+  private fun visibleRows() {
+    if (rowsShape == shape) { return }
+    val nodes = []
+    val depths = []
+    addRows(roots, 0, nodes, depths)
+    rowNodes = nodes
+    rowDepths = depths
+    rowsShape = shape
+  }
+  private fun addRows(nodes : List<TreeNode>, depth : int, out : open List<TreeNode>, depths : open List<int>) {
+    for (n in nodes) {
+      out.add(n)
+      depths.add(depth)
+      if (n.children.isNotEmpty() and isExpanded(n)) { addRows(n.children, depth + 1, out, depths) }
+    }
+  }
+  private fun rowOf(node : TreeNode?) : int {
+    if (node == null) { return -1 }
+    visibleRows()
+    for (i in 0 ..< rowNodes.size) {
+      if (rowNodes[i] === node) { return i }
+    }
+    return -1
+  }
+
+  // The widest row, kept with the rows, for the font and scale it was measured at.
+  private var widest = 0
+  private var widestShape = -1
+  private var widestFont : Font? = null
+  private var widestScale : Number = 0
+  private fun widestRow() : int {
+    visibleRows()
+    val scale = Topaz.layoutScale
+    if (widestShape == rowsShape and widestFont === font and widestScale == scale) { return widest }
+    val fm = metrics(font)
+    var w = 0
+    for (i in 0 ..< rowNodes.size) { w = Math.max(w, rowDepths[i] * indent + fm.stringWidth(rowNodes[i].label)) }
+    widest = w
+    widestShape = rowsShape
+    widestFont = font
+    widestScale = scale
+    return w
+  }
+
+  override fun sizes() : Sizes {
+    val rowH = metrics(font).height + cpad
+    visibleRows()
+    val w = widestRow() + indent + cpad * 2
+    val h = rowH * Math.max(rowNodes.size, 1) + 2
+    return Sizes(Size(80, rowH + 2), Size(w, h), Size(int.maxValue, int.maxValue))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val fm = canvas.measure("", font)
+    val rowH = fm.height + cpad
+    canvas.color = Palette.surface
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.font = font
+    visibleRows()
+    // Only the rows the canvas shows.
+    val vis = canvas.visibleBounds
+    val first = Math.max((vis.y - 1) / rowH, 0)
+    val last = Math.min((vis.y + vis.height - 1) / rowH + 1, rowNodes.size - 1)
+    for (i in first .. last) {
+      val node = rowNodes[i]
+      val y = 1 + i * rowH
+      if (node === selected) {
+        canvas.color = Palette.selection
+        canvas.fillRect(1, y, canvas.width - 2, rowH)
+      }
+      val ix = cpad + rowDepths[i] * indent
+      if (node.children.isNotEmpty()) {   // a box with + or −
+        val bs = 9
+        val by = y + (rowH - bs) / 2
+        canvas.color = Palette.border
+        canvas.drawRect(ix, by, bs, bs)
+        canvas.color = Palette.ink
+        canvas.drawLine(ix + 2, by + bs / 2, ix + bs - 2, by + bs / 2)
+        if (!isExpanded(node)) { canvas.drawLine(ix + bs / 2, by + 2, ix + bs / 2, by + bs - 2) }
+      }
+      canvas.color = Palette.ink
+      canvas.drawString(node.label, ix + indent, y + cpad / 2 + fm.ascent)
+    }
+    if (styleOf(this).framed) {
+      canvas.color = Palette.border
+      canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+    }
+  }
+
+  private fun choose(node : TreeNode) {
+    selected = node
+    onSelect(node)
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      visibleRows()
+      val row = (event.y - 1) / rowHeight()
+      if (event.y >= 1 and row >= 0 and row < rowNodes.size) {
+        val node = rowNodes[row]
+        val ix = cpad + rowDepths[row] * indent
+        if (node.children.isNotEmpty() and event.x >= ix and event.x < ix + indent) {
+          if (event.ctrl) {
+            setSubtreeExpanded(node, !isExpanded(node))
+            opened()
+          } else {
+            toggle(node)
+          }
+        } else {
+          choose(node)
+        }
+      }
+    } else if (event is Event.KeyPress) {
+      visibleRows()
+      val idx = rowOf(selected)
+      val sel = selected
+      if (event.key == Key.up) {
+        val to = idx < 0 ? 0 : idx - 1
+        if (to >= 0 and to < rowNodes.size) {
+          choose(rowNodes[to])
+          revealSelected()
+        }
+      } else if (event.key == Key.down) {
+        val to = idx < 0 ? 0 : idx + 1
+        if (to >= 0 and to < rowNodes.size) {
+          choose(rowNodes[to])
+          revealSelected()
+        }
+      } else if (event.key == Key.right) {
+        if (sel != null and sel.children.isNotEmpty() and !isExpanded(sel)) { toggle(sel) }
+      } else if (event.key == Key.left) {
+        if (sel != null and isExpanded(sel)) { toggle(sel) }
+      } else if (event.key == Key.enter) {
+        if (sel != null and sel.children.isNotEmpty()) { toggle(sel) }
+      }
+    }
+  }
+}
+
+// A tree of `roots`, telling onSelect of the node chosen.
+fun tree(roots : List<TreeNode>, onSelect : (TreeNode) -> unit = {}) : Component => Component(Tree(roots, onSelect))
+
+// ---- A table ----
+
+// Rows of cells under a row of column headings: a click chooses a row (onSelect), a double click
+// or Enter acts on it (onActivate), or, in an editable table, edits the cell in a field over it
+// (Enter keeps the edit and tells onEdit, Escape drops it, a click elsewhere keeps it). A column is
+// as wide as its widest cell, up to maxColumnWidth; longer cells end in "…".
+class Table : Content, Bordered, ScrollAware {
+  override var owner : Component? = null
+  var editable : bool
+  var onSelect : (int) -> unit
+  var onEdit : (int, int, string) -> unit
+  var onActivate : (int) -> unit
+  var font : Font
+
+  // The column headings.
+  var columns : List<string> = []
+    set(value) {
+      field = value
+      stopEdit()
+      widthsKept = null
+      owner?.invalidateLayout()
+    }
+  // The rows, each a list of its cells. setRows puts new ones in.
+  val rows : open List<open List<string>> = []
+
+  var selected = -1
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  // The widest a column is made, so that one long cell does not push the rest away.
+  var maxColumnWidth = 260
+    set(value) {
+      field = value
+      widthsKept = null
+      owner?.invalidateLayout()
+    }
+
+  private var pendingReveal : Range? = null
+  private val editor : TextField
+  private val editorComp : Component
+  private var editRow = -1
+  private var editCol = -1
+
+  fun init(columns : List<string>, rows : List<List<string>>, selected : int = -1, editable : bool = false, onSelect : (int) -> unit = {},
+           onEdit : (int, int, string) -> unit = { r, c, v -> }, onActivate : (int) -> unit = {}, font : Font = defaultFont) {
+    this.columns = columns
+    for (row in rows) { this.rows.add(row.toOpenList()) }
+    this.selected = selected
+    this.editable = editable
+    this.onSelect = onSelect
+    this.onEdit = onEdit
+    this.onActivate = onActivate
+    this.font = font
+    this.editor = TextField(SharedTextModel(), font)
+    this.editorComp = Component(editor)
+    editor.onCommit = { commitEdit() }
+  }
+
+  // Puts new rows in place of all the rows.
+  fun setRows(newRows : List<List<string>>) {
+    rows.clear()
+    for (row in newRows) { rows.add(row.toOpenList()) }
+    widthsKept = null
+    stopEdit()
+    if (selected >= rows.size) { selected = rows.size - 1 }
+    owner?.invalidateLayout()
+  }
+
+  override fun viewportHeight(px : int) {}
+  override fun viewportWidth(px : int) {}
+  override fun consumeReveal() : Range? {
+    val r = pendingReveal
+    pendingReveal = null
+    return r
+  }
+  private fun revealSelected() {
+    if (selected < 0) { return }
+    val rowH = rowHeight()
+    val top = rowH * (selected + 1)       // after the headings
+    pendingReveal = top .. top + rowH
+    Topaz.requestLayout()
+  }
+
+  private fun rowHeight() : int => metrics(font).height + cpad
+
+  // Each column's width, the widest cell in it measured: every cell of the table, so kept until
+  // the rows, the columns, the cap, the font or the scale change.
+  private var widthsKept : List<int>? = null
+  private var widthsFont : Font? = null
+  private var widthsScale : Number = 0
+  private fun columnWidths() : List<int> {
+    val scale = Topaz.layoutScale
+    val kept = widthsKept
+    if (kept != null and widthsFont === font and widthsScale == scale) { return kept }
+    val fm = metrics(font)
+    val widths = []
+    for (c in 0 ..< columns.size) {
+      var w = fm.stringWidth(columns[c])
+      for (row in rows) { w = Math.max(w, fm.stringWidth(row.getOrElse(c) { "" })) }
+      widths.add(Math.min(w, maxColumnWidth) + cpad * 2)
+    }
+    widthsKept = widths
+    widthsFont = font
+    widthsScale = scale
+    return widths
+  }
+  private fun columnEdges() : List<int> {
+    val xs = [0]
+    for (w in columnWidths()) { xs.add(xs[xs.size - 1] + w) }
+    return xs
+  }
+
+  private fun cellAt(x : int, y : int) : Pair<int, int> {
+    val rowH = rowHeight()
+    if (y < rowH) { return -1 to -1 }
+    val r = (y - rowH) / rowH
+    if (r < 0 or r >= rows.size) { return -1 to -1 }
+    val xs = columnEdges()
+    var c = -1
+    for (i in 0 ..< columns.size) {
+      if (c < 0 and x >= xs[i] and x < xs[i + 1]) { c = i }
+    }
+    return r to c
+  }
+
+  override fun sizes() : Sizes {
+    val rowH = rowHeight()
+    val w = columnWidths().sum() + 2
+    val h = rowH * (rows.size + 1) + 2
+    return Sizes(Size(w, rowH * 2), Size(w, h), Size(int.maxValue, int.maxValue))
+  }
+
+  override fun paint(canvas : Canvas) {
+    val fm = canvas.measure("", font)
+    val rowH = fm.height + cpad
+    val widths = columnWidths()
+    canvas.color = Palette.surface
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+    canvas.font = font
+    canvas.color = Palette.headerBg
+    canvas.fillRect(0, 0, canvas.width, rowH)
+    var hx = 0
+    for (c in 0 ..< columns.size) {
+      canvas.color = Palette.ink
+      canvas.drawString(elide(columns[c], font, widths[c] - cpad * 2), hx + cpad, cpad / 2 + fm.ascent)
+      hx += widths[c]
+      canvas.color = Palette.border
+      canvas.drawLine(hx, 0, hx, canvas.height)
+    }
+    canvas.color = Palette.border
+    canvas.drawLine(0, rowH, canvas.width, rowH)
+    // Only the rows the canvas shows: a long table in a scroll shows a screenful of them.
+    val vis = canvas.visibleBounds
+    val first = Math.max((vis.y - rowH) / rowH - 1, 0)
+    val last = Math.min((vis.y + vis.height) / rowH + 1, rows.size - 1)
+    for (r in first .. last) {
+      val row = rows[r]
+      val y = rowH + r * rowH
+      if (r == selected) {
+        canvas.color = Palette.selection
+        canvas.fillRect(1, y, canvas.width - 2, rowH)
+      }
+      var cx = 0
+      for (c in 0 ..< columns.size) {
+        if (!(r == editRow and c == editCol)) {   // the field covers the cell being edited
+          canvas.color = Palette.ink
+          canvas.drawString(elide(row.getOrElse(c) { "" }, font, widths[c] - cpad * 2), cx + cpad, y + cpad / 2 + fm.ascent)
+        }
+        cx += widths[c]
+      }
+    }
+    if (editRow >= 0) {
+      val xs = columnEdges()
+      val cx = xs[editCol]
+      val cy = rowH + editRow * rowH
+      val cw = xs[editCol + 1] - cx
+      editorComp.layout(cw, rowH)
+      val sub = canvas.sub(cx, cy, cw, rowH)
+      try {
+        editorComp.paintInto(sub)
+      } finally {
+        sub.dispose()
+      }
+    }
+    if (styleOf(this).framed) {
+      canvas.color = Palette.border
+      canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)
+    }
+  }
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Click) {
+      if (editRow >= 0) {
+        val (er, ec) = cellAt(event.x, event.y)
+        if (er == editRow and ec == editCol) {   // a click in the field
+          forwardMouse(event)
+          return
+        }
+        commitEdit()                      // a click elsewhere keeps the edit
+      }
+      val (r, c) = cellAt(event.x, event.y)
+      if (r >= 0) {
+        selected = r
+        onSelect(r)
+        // A double click acts on the row: an editable table edits the cell.
+        if (event.clicks >= 2) {
+          if (editable and c >= 0) { startEdit(r, c) } else { onActivate(r) }
+        }
+      }
+    } else if (event is Event.Drag) {
+      if (editRow >= 0) { forwardMouse(event) }
+    } else if (event is Event.KeyType) {
+      if (editRow >= 0) { editorComp.dispatch(event) }
+    } else if (event is Event.KeyPress) {
+      if (editRow >= 0) {
+        if (event.key == Key.escape) { stopEdit() } else { editorComp.dispatch(event) }   // Enter keeps it
+      } else if (event.key == Key.up) {
+        if (selected > 0) {
+          selected -= 1
+          onSelect(selected)
+          revealSelected()
+        }
+      } else if (event.key == Key.down) {
+        if (selected < rows.size - 1) {
+          selected += 1
+          onSelect(selected)
+          revealSelected()
+        }
+      } else if (event.key == Key.enter) {
+        if (selected >= 0) {
+          if (editable) { startEdit(selected, 0) } else { onActivate(selected) }
+        }
+      }
+    } else if (editRow >= 0) {
+      editorComp.dispatch(event)
+    }
+  }
+
+  private fun forwardMouse(event : Event) {
+    val rowH = rowHeight()
+    val ox = columnEdges()[editCol]
+    val oy = rowH + editRow * rowH
+    if (event is Event.Click) {
+      editorComp.dispatch(Event.Click(event.x - ox, event.y - oy, event.clicks, event.shift, event.ctrl))
+    } else if (event is Event.Drag) {
+      editorComp.dispatch(Event.Drag(event.x - ox, event.y - oy))
+    }
+  }
+
+  private fun startEdit(r : int, c : int) {
+    editRow = r
+    editCol = c
+    editor.model.setText(rows[r].getOrElse(c) { "" })
+    editor.model.selectAll()
+    editor.model.setFocused(true)
+    owner?.invalidate()
+  }
+
+  private fun commitEdit() {
+    if (editRow >= 0) {
+      val r = editRow
+      val c = editCol
+      while (rows[r].size <= c) { rows[r].add("") }
+      rows[r][c] = editor.model.text
+      widthsKept = null
+      onEdit(r, c, editor.model.text)
+    }
+    stopEdit()
+  }
+
+  private fun stopEdit() {
+    if (editRow < 0) { return }
+    editor.model.setFocused(false)
+    editRow = -1
+    editCol = -1
+    owner?.invalidateLayout()
+  }
+}
+
+// A table of `columns` and `rows`; with `editable` a double click edits a cell, telling onEdit.
+fun table(columns : List<string>, rows : List<List<string>>, editable : bool = false, onEdit : (int, int, string) -> unit = { r, c, v -> },
+          onSelect : (int) -> unit = {}) : Component => Component(Table(columns, rows, editable = editable, onSelect = onSelect, onEdit = onEdit))

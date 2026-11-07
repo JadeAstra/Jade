@@ -789,9 +789,9 @@ private:
     std::string fileKey_;
     struct Import {
         Namespace* ns;
-        std::string alias;  // what its names are written after: jade.Name, or ui.Name after `as ui`
+        std::string alias;  // what its names are written after: topaz.Name, or ui.Name after `as ui`
         std::string path;   // as written, for messages
-        bool all;           // `import jade.*`: its names can be written bare
+        bool all;           // `import topaz.*`: its names can be written bare
     };
     std::vector<Import> imports_;
     const std::string homeFile_;  // the file compiled, whatever code is copied into it
@@ -1803,7 +1803,7 @@ private:
 
     // Whether `name` is a built-in that only the standard library's own source may use, and
     // the libraries that come with Astra (the lib folder beside it), which are written on
-    // such built-ins: Jade on __jade.
+    // such built-ins: Topaz on __topaz.
     bool libraryOnly(const std::string& name) const {
         return name.size() > 2 && name[0] == '_' && name[1] == '_' && ns_ != session_.builtins_ && ns_->library == "<program>" &&
                session_.vm_.hasBuiltin(name);
@@ -1973,7 +1973,7 @@ private:
         return entry.slot;
     }
 
-    // Whether `name` (jade, jade.chart, ui) is what an import's contents are reached by, with
+    // Whether `name` (topaz, topaz.chart, ui) is what an import's contents are reached by, with
     // no variable or member called like its first part in the way.
     const Import* aliasOf(const std::string& name) const {
         for (const Import& import : imports_) {
@@ -2006,7 +2006,7 @@ private:
         return aliasOf(dotted);
     }
 
-    // For a dotted name such as jade.chart.Axis: the import its longest leading part names, and
+    // For a dotted name such as topaz.chart.Axis: the import its longest leading part names, and
     // where the rest begins (the position of the dot after that part).
     const Import* aliasPrefix(const std::string& dotted, size_t& dot) const {
         for (size_t at = dotted.rfind('.'); at != std::string::npos && at > 0; at = dotted.rfind('.', at - 1)) {
@@ -2032,8 +2032,8 @@ private:
     }
 
     // Whether `object.member` names something of an import. A library may hold a value called
-    // like itself (the library Jade and its object Jade): `Jade.Button` is then the library's
-    // class, and `Jade.theme`, which the library has no name for, a member of the object.
+    // like itself (the library Topaz and its object Topaz): `Topaz.Button` is then the library's
+    // class, and `Topaz.theme`, which the library has no name for, a member of the object.
     const GlobalName* importedMember(const Expr& object, const std::string& member, const Node& at) const {
         const Import* import = aliasOf(object);
         if (import == nullptr) return nullptr;
@@ -2438,7 +2438,7 @@ private:
         size_t dot = name.find('.');
         size_t afterImport = 0;
         if (const Import* import = aliasPrefix(name, afterImport)) {
-            // jade.Block: a name of an import, by the import's own name.
+            // topaz.Block: a name of an import, by the import's own name.
             dot = afterImport;
             size_t next = name.find('.', dot + 1);
             emit(Op::GetGlobal, aliasedName(*import, name.substr(dot + 1, next == std::string::npos ? next : next - dot - 1), at)->slot);
@@ -8221,8 +8221,8 @@ int CompilerSession::compileSource(const std::string& source, const std::string&
 }
 
 // The namespace of a folder, made the first time it is asked for. A folder under one of the
-// library directories belongs to the library named by the first folder below it (lib/jade and
-// lib/jade/chart are both "jade"); every other folder is part of the program.
+// library directories belongs to the library named by the first folder below it (lib/topaz and
+// lib/topaz/chart are both "topaz"); every other folder is part of the program.
 Namespace* CompilerSession::namespaceOf(const std::string& directory) {
     std::string key = directory;
     std::error_code ec;

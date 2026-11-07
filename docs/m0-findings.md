@@ -104,7 +104,7 @@ namespaces exist. Both recommendations were accepted:
 
 1. **Importing a folder loads every `.astra` file directly in it**, once, as one unit, so that
    its files see each other whatever order they are in. This is what a Kotlin package is, and
-   it is what `import "jade"` has to mean.
+   it is what `import "topaz"` has to mean.
 2. **Importing a file loads that file only**, into the namespace of the folder it is in. A
    script with `import "helpers"` beside it therefore shares names with `helpers.astra`
    exactly as today, and the other scripts in that folder are not touched.

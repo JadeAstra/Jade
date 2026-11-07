@@ -378,13 +378,13 @@ balls.parallelStream().replaceAll { it.moved(width, height, steps) }   // each c
 <h2>16. Building it, in steps</h2>
 <p>Each step works and is measured on its own. All of it is M6.6.</p>
 <ol>
-<li><strong>Value types as boxes.</strong> <code>value</code>, fixed layout, equality, printing, <code>copy</code>. Needs M6.5's types and the fixed field layouts of its part 4. Measured: Jade's layout with <code>Dimension</code>, <code>Rectangle</code>, <code>Point</code> and <code>Insets</code> as values.</li>
+<li><strong>Value types as boxes.</strong> <code>value</code>, fixed layout, equality, printing, <code>copy</code>. Needs M6.5's types and the fixed field layouts of its part 4. Measured: Topaz's layout with <code>Dimension</code>, <code>Rectangle</code>, <code>Point</code> and <code>Insets</code> as values.</li>
 <li><strong>Lists of values, copying on every read that leaves its expression.</strong> The storage kinds, the operations, the sort through positions, references into lists within an expression, the thread-switch scan, the check in generic code, and constructor calls and <code>copy</code> stored straight into items (section 7, rule b). Measured: a million points built, summed, sorted, walked.</li>
 <li><strong>The compiler's analyses.</strong> Parameters that do not keep, functions that change lists, locals that go nowhere. Checked with the copy-every-read stress setting. Measured: a million particles updated and drawn for a hundred frames, with no copy made.</li>
 <li><strong>Results built where they go</strong> (section 7, rule a): the hidden destination, the scratch space, the new forms of call and return. Measured: the bounce example on every core, returning moved balls, with no allocation in a frame.</li>
 <li><strong>Changing through a place</strong> (section 8): field assignment through places, <code>mutating</code> methods, <code>it</code> as a place. Measured: the bounce example with its <code>move</code> unchanged.</li>
 <li><strong>Small values in place</strong> (section 4). Measured: a <code>Color</code>-heavy drawing loop, with no box made.</li>
-<li><strong>Values inside their objects</strong> (section 4), with the analysis of which functions assign which fields. Measured: Jade's layout, with <code>bounds</code> and the cached <code>Sizes</code> inside their components.</li>
+<li><strong>Values inside their objects</strong> (section 4), with the analysis of which functions assign which fields. Measured: Topaz's layout, with <code>bounds</code> and the cached <code>Sizes</code> inside their components.</li>
 <li><strong>Copies of generic functions per layout</strong> (section 10), for the standard library's list functions first. Measured: <code>map</code>, <code>filter</code>, <code>sumOf</code> and <code>sort</code> on a list of points, with and without.</li>
 </ol>
 </section>

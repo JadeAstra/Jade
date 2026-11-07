@@ -1,7 +1,7 @@
 // A supertype given unit or nothing as a type argument (`Base<string, unit>`): the type is made
 // when the program runs where the class's type arguments are needed, as checking a C++
 // function's result against a type parameter does (ASTRA_CHECK_NATIVE_RESULTS); unit and
-// nothing name no class there, and were looked for as one (M8, Jade's FindSession).
+// nothing name no class there, and were looked for as one (M8, Topaz's FindSession).
 class Base<S, R>(val spec : S) {
   var last : R? = null
   fun answer(value : R?) : string {

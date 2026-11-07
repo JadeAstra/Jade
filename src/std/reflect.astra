@@ -43,7 +43,7 @@ class Class(internal val type : Type, internal val asker : any? = null) {
     get() => __typeName(type)
 
   // Where it comes from (D184): "astra" for a built-in type and the standard library's classes, a
-  // library's name for its classes ("Jade"), and the program's name (Program.name) for the
+  // library's name for its classes ("Topaz"), and the program's name (Program.name) for the
   // program's own.
   val origin : string
     get() => __typeOrigin(type) ?: Program.name

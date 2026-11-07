@@ -1,6 +1,6 @@
 // A sandbox's fonts and clipboard (M6.6.2 step 6): the system's fonts, or only those of a folder
 // it is given, so that text measures the same on every machine; and a clipboard of its own.
-import Jade.*
+import Topaz.*
 
 // The machine's own sans-serif, whatever it is, as the one font of a folder.
 val usual = Font("SansSerif", 14).typeface

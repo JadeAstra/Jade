@@ -21,7 +21,7 @@
 // compiler worked out for itself which functions may wait (L7 in docs/language-choices.html),
 // it could check that none of them is called where waiting is impossible: in a sort's
 // comparison, a getter or toString().
-import Jade.*
+import Topaz.*
 
 // ---- What is on the screen ----
 

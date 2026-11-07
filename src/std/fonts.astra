@@ -284,7 +284,7 @@ class Font {
     return "Font($name, $size$style" + (weightAsked == null ? ")" : ", weight $weightAsked)")
   }
 
-  // The text engine's font at a scale, made once for each scale it is asked at (D125). Jade's
+  // The text engine's font at a scale, made once for each scale it is asked at (D125). Topaz's
   // native layer is handed the Font and asks for it. A piece of a parallel section drawing with
   // a font it shares (a part of a split canvas, say) keeps nothing in it: one not made yet is
   // made each time, which the engine finds again at once.

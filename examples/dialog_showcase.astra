@@ -1,8 +1,8 @@
-// Every Jade dialog, and the program doing things while one is open: JadeUI's DialogShowcase,
+// Every Topaz dialog, and the program doing things while one is open: JadeUI's DialogShowcase,
 // which the Launcher's Dialogs tab and its Dialogs and While Open menus are made from. (JadeUI's
-// blocking rename is not here: Jade's dialogs answer through onResult only; and the image dialog's
+// blocking rename is not here: Topaz's dialogs answer through onResult only; and the image dialog's
 // preview of SVG comes with SVG, in M10.)
-import Jade.*
+import Topaz.*
 
 // The dialogs and the cases; `report` is told each answer.
 class DialogShowcase(private val report : (string) -> unit) {
@@ -37,7 +37,7 @@ class DialogShowcase(private val report : (string) -> unit) {
   // Renames `name`; or, when its dialog is open, brings that one forward (the same key).
   private fun renameLayer(name : string) {
     renaming = name
-    rename = Jade.inputDialog.prompt(renameSpec(name)) { answer ->
+    rename = Topaz.inputDialog.prompt(renameSpec(name)) { answer ->
       val target = renaming
       val i = target == null ? -1 : layers.items.indexOf(target)
       if (answer != null and i >= 0) {
@@ -53,28 +53,28 @@ class DialogShowcase(private val report : (string) -> unit) {
 
   // The Dialogs menu: an item for each dialog.
   fun dialogsMenu() : Menu => Menu("Dialogs", [
-    MenuItem("Prompt...", onClick = { Jade.inputDialog.prompt(PromptSpec("Name", "What should the new document be called?", "Untitled")) { status("Prompt: $it") } }),
+    MenuItem("Prompt...", onClick = { Topaz.inputDialog.prompt(PromptSpec("Name", "What should the new document be called?", "Untitled")) { status("Prompt: $it") } }),
     MenuItem("Multi-line, live...", onClick = {
-      Jade.inputDialog.prompt(PromptSpec("Notes", initial = "Type here;\nevery key reaches the app.", multiline = true,
+      Topaz.inputDialog.prompt(PromptSpec("Notes", initial = "Type here;\nevery key reaches the app.", multiline = true,
                                          onChange = { status("Live: ${it.size} characters") })) { status("Notes: ${it?.size ?: "closed"}") }
     }),
     MenuItem("Value and format...", onClick = {
-      Jade.inputDialog.promptValueAndFormat(ValueFormatSpec("Cell B2", "=SUM(A1:A4)", "#bg=yellow", formatNote = "B1",
+      Topaz.inputDialog.promptValueAndFormat(ValueFormatSpec("Cell B2", "=SUM(A1:A4)", "#bg=yellow", formatNote = "B1",
                                                             formatNames = ["bg", "fg", "bold", "italic"])) { status("Value and format: $it") }
     }),
     MenuItem("Choice...", onClick = {
-      Jade.choiceDialog.choose(ChoiceSpec("Paste Picture", "A picture called “map.png” is already in this document.", ["Replace It", "Keep Both", "Skip"])) {
+      Topaz.choiceDialog.choose(ChoiceSpec("Paste Picture", "A picture called “map.png” is already in this document.", ["Replace It", "Keep Both", "Skip"])) {
         status("Choice: $it")
       }
     }),
     MenuItem("Pick and name...", onClick = {
-      Jade.choiceDialog.pick(PickSpec("New Document", "Kind:", ["Text", "Table", "Chart", "Picture"], 0, "Name:", "Untitled")) {
+      Topaz.choiceDialog.pick(PickSpec("New Document", "Kind:", ["Text", "Table", "Chart", "Picture"], 0, "Name:", "Untitled")) {
         status("Pick: ${it?.index} ${it?.name}")
       }
     }),
     MenuItem("Checklist...", onClick = {
       val values = (1 .. 30).toList().map { "Value $it" }
-      Jade.checklistDialog.check(ChecklistSpec("Filter Column", "Show the rows whose value is:", values, values.take(5).toSet())) {
+      Topaz.checklistDialog.check(ChecklistSpec("Filter Column", "Show the rows whose value is:", values, values.take(5).toSet())) {
         status("Checklist: ${it?.size ?: "closed"}")
       }
     }),
@@ -83,30 +83,30 @@ class DialogShowcase(private val report : (string) -> unit) {
                    FormKind("pie", "Pie chart", [FormField("range", "Data:", pickable = true), FormField("labels", "Labels:")])]
       val spec = FormSpec("Chart", kinds, "bar", {"range": "A1:A4"})
       spec.draftKey = "chart:demo"
-      Jade.formDialog.edit(spec) { status("Form: ${it?.kind} ${it?.values} pick=${it?.pick}") }
+      Topaz.formDialog.edit(spec) { status("Form: ${it?.kind} ${it?.values} pick=${it?.pick}") }
     }),
     MenuItem("Options...", onClick = {
-      Jade.optionsDialog.show(OptionsSpec("Table of Contents", [ChoiceOption("depth", "Levels:", ["1", "2", "3"], 1), CheckOption("numbers", "Page numbers", true)],
+      Topaz.optionsDialog.show(OptionsSpec("Table of Contents", [ChoiceOption("depth", "Levels:", ["1", "2", "3"], 1), CheckOption("numbers", "Page numbers", true)],
                                           actions = ["Update", "Remove"], message = "The table of contents at the top of the document.")) {
         status("Options: ${it?.values} ${it?.action}")
       }
     }),
     MenuItem("Insert image...", onClick = {
-      Jade.imageDialog.choose(ImageSpec({ src, v -> preview(src, v) })) { status("Image: ${it?.source} ${it?.value?.take(40)}") }
+      Topaz.imageDialog.choose(ImageSpec({ src, v -> preview(src, v) })) { status("Image: ${it?.source} ${it?.value?.take(40)}") }
     }),
     MenuItem("Find...", onClick = {
-      Jade.findDialog.show(FindSpec(initialQuery = "jade", onFindNext = { status("Find next: $it") }, onClosed = { status("Find closed") }))
+      Topaz.findDialog.show(FindSpec(initialQuery = "topaz", onFindNext = { status("Find next: $it") }, onClosed = { status("Find closed") }))
     }),
     MenuItem("Replace...", onClick = {
-      Jade.findDialog.show(FindSpec(showReplace = true, initialQuery = "jade", onFindNext = { status("Find next: $it") },
+      Topaz.findDialog.show(FindSpec(showReplace = true, initialQuery = "topaz", onFindNext = { status("Find next: $it") },
                                     onReplace = { q, w -> status("Replace $q with $w") }, onReplaceAll = { q, w -> status("Replace all $q with $w") },
                                     options = [FindOption("Match case"), FindOption("In formulas too", replaceOnly = true)]))
     }),
     MenuItem("Source window...", onClick = {
-      Jade.sourceWindow.show(SourceSpec("block-1", "Block 1 source", "<p>Edit me: the app sees every key.</p>", { status("Source: ${it.size} characters") }))
+      Topaz.sourceWindow.show(SourceSpec("block-1", "Block 1 source", "<p>Edit me: the app sees every key.</p>", { status("Source: ${it.size} characters") }))
     }),
-    MenuItem("Open a file...", onClick = { Jade.fileDialog.open("Open", textFilters) { status("File: $it") } }),
-    MenuItem("Save a file...", onClick = { Jade.fileDialog.save("Save As", "notes.txt", textFilters) { status("Save to: $it") } })
+    MenuItem("Open a file...", onClick = { Topaz.fileDialog.open("Open", textFilters) { status("File: $it") } }),
+    MenuItem("Save a file...", onClick = { Topaz.fileDialog.save("Save As", "notes.txt", textFilters) { status("Save to: $it") } })
   ])
 
   // The cases: the program changing, deleting, asking again for and closing what a dialog is about.
@@ -147,10 +147,10 @@ class DialogShowcase(private val report : (string) -> unit) {
     }),
     MenuItem("...close it from the app (draft kept)", onClick = { rename?.close() }),
     Separator,
-    MenuItem("Show drafts", onClick = { status("Drafts: ${Jade.drafts.keys} open: ${Jade.openDialogs().map { it.key }}") }),
+    MenuItem("Show drafts", onClick = { status("Drafts: ${Topaz.drafts.keys} open: ${Topaz.openDialogs().map { it.key }}") }),
     MenuItem("Open a second window", onClick = {
       val content = grid {
-        row { cell(label("A window of Jade content beside the main one.")) }
+        row { cell(label("A window of Topaz content beside the main one.")) }
         row { cell(textField("Its own text field")) }
       }
       Window(content, "Second window", 420, 160, exitOnClose = false).show()
@@ -162,11 +162,11 @@ class DialogShowcase(private val report : (string) -> unit) {
       c.fillRoundRect(0, 0, 160, 100, 24, 24)
       c.color = Color(0xF2C037)
       c.fillOval(50, 20, 60, 60)
-      Jade.clipboard.copy(StyledText("", picture = img.toPng()))
+      Topaz.clipboard.copy(StyledText("", picture = img.toPng()))
       status("Copied a 160x100 picture - paste it here or in another application")
     }),
     MenuItem("Paste a picture", onClick = {
-      val p = Jade.clipboard.paste()
+      val p = Topaz.clipboard.paste()
       val bytes = p?.picture
       var img : Image? = null
       if (bytes != null) {
@@ -181,7 +181,7 @@ class DialogShowcase(private val report : (string) -> unit) {
     })
   ])
 
-  // What the image dialog shows: a picture file read; SVG markup is drawn once Jade has SVG (M10).
+  // What the image dialog shows: a picture file read; SVG markup is drawn once Topaz has SVG (M10).
   private fun preview(src : ImageSource, v : string) : Image? {
     if (src != ImageSource.file) { return null }
     try {

@@ -1,11 +1,11 @@
-// The first widgets of Jade: a grid of labels and buttons in a window.
+// The first widgets of Topaz: a grid of labels and buttons in a window.
 //
 //   astra examples/widgets.astra
 //
 // The window's layout is one grid. Columns are as wide as the widest thing in them; the
 // column with a weight takes the room that is left when the window is made wider, and the
 // last row takes what is left of the height. Nothing is placed by hand.
-import Jade.*
+import Topaz.*
 
 var count = 0
 val counter = label("Pressed 0 times")
@@ -64,5 +64,5 @@ tint()
   tint()
 }
 
-val window = Window(root, "Jade: labels and buttons", 520, 260)
+val window = Window(root, "Topaz: labels and buttons", 520, 260)
 window.show()

@@ -1,0 +1,1101 @@
+// A text of many lines to edit, as a code editor or a notes box has: wrapped to its width or
+// scrolled sideways, its caret moved by rows, its lines indented as blocks. (JadeUI: TextArea.kt,
+// and HScrollBar.kt, which only it uses so far.)
+
+private const tabWidth = 4               // columns a tab shows as
+private const areaPad = 4
+private const tabIndent = "\t"           // Tab puts in a tab character
+private val statusFont = Font(Font.sansSerif, 11)
+
+// Where a row on the screen starts and ends in the text (its end not included): a line of the
+// text when lines do not wrap, a part of one when they do.
+internal value TextRow(val start : int, val end : int)
+
+// A text of many lines to edit, showing a SharedTextModel (which a field or another area may
+// show too). Lines go down, the caret moves by characters, rows and pages, Enter starts a line,
+// a selection may cross lines. With `wrap` off a long line scrolls sideways, following the caret,
+// with a bar under it; with it on, lines wrap at spaces to the width and the caret moves by the
+// rows shown. It is as tall as its lines, so it scrolls in a scroll() round it.
+class TextArea : Content, ScrollAware, ContextMenuProvider, TextEditable, Bordered, CursorProvider, OverlayContent, EdgeEscape,
+                 TabAware, WheelTarget, HeightForWidth {
+  override var owner : Component? = null
+  override val model : SharedTextModel
+
+  // Each of these changes its size, and the font and wrapping its rows too.
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var rows : int = 6
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var columns : int = 30
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Wraps long lines to the width, in place of scrolling them sideways.
+  var wrap = false
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  // Told as the pointer moves over it: the place in the text under it (-1 once it has left, or
+  // over no text) and where the pointer is: for a card about the name under it.
+  var onHover : ((int, int, int) -> unit)? = null
+  // What names in it link to, as on a TextField: Shift over one underlines it and tells
+  // onLinkHover; Shift and a click follows it.
+  var links : TextLinks? = null
+  var onLinkHover : ((TextLink?, int, int) -> unit)? = null
+  var hoveredLink : TextLink? = null
+    private set
+  // Told when a click moves the caret: something kept at where the caret was (a list of
+  // completions) no longer belongs there.
+  var onCaretClick : (() -> unit)? = null
+
+  // Characters to underline with a red zigzag (what an error is about). Drawn with the text, not
+  // the caret, so that it stays when the area loses the keyboard.
+  var squiggles : List<Range> = []
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // A small tag in the top right corner (a block's id, its language); none when empty.
+  var cornerLabel = ""
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Whether it takes the toolkit's theme (Palette) for what its style leaves: not for text that
+  // is a document's (a code block), which keeps a light look whatever the theme is.
+  var themed = true
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Colours that win over its style's, when set: a dark code block on a light page.
+  var backgroundOverride : Color? = null
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var foregroundOverride : Color? = null
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // A strip along its bottom saying what the text in it is (what a script defines), or with
+  // statusIsError the whole error, in red. A row for each line of it.
+  var statusText = ""
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  var statusIsError = false
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // The line (from 0) a debugger is stopped on, drawn as a band behind it; -1 for none.
+  var currentLine = -1
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Text that can be read, selected and copied but not changed: typing, the edit keys, cut,
+  // paste, undo and redo are refused, and the menu has only Copy and Select All.
+  var readOnly = false
+
+  override var onEscape : ((bool) -> bool)? = null
+  // First say over a key, before the area: true takes it. A list of completions open needs the
+  // keys the area uses (up, down, Enter, Tab, Escape) while it shows.
+  var onKeyIntercept : ((Event.KeyPress) -> bool)? = null
+  // Ctrl and Space reached it: a completer the program attached is asked; with none, nothing.
+  var onComplete : (() -> unit)? = null
+
+  // Where it was painted, for the caret and the selection drawn over the kept picture.
+  private var pTx = 0
+  private var pLineH = 0
+  private var pW = 0
+  private var pRows : List<TextRow> = []
+
+  private var viewportPx = 0             // the height of the scroll round it, for Page Up and Down
+  private var viewportWpx = 0            // and its width, for the height when wrapped
+  private var pendingReveal = false
+  private var scrollX = 0                // sideways, unwrapped only
+  private var lastWidth = 0
+  private var lastHeight = 0
+  // The caret, text and width the sideways scroll last followed: it follows the caret when one of
+  // them changes, not at every paint, or a scroll by the bar or the wheel went straight back.
+  private var followedCaret = -1
+  private var followedRev = -1
+  private var followedWidth = -1
+
+  private var seenRevision = -1
+  private var seenRuns : List<StyleRun> = []
+  private var lastLines = 1
+
+  private val hbar : HScrollBar
+  private val dragSelect : DragSelector
+  private val caretKeys : CaretKeys
+
+  fun init(model : SharedTextModel = SharedTextModel(), font : Font = defaultFont, rows : int = 6, columns : int = 30) {
+    this.model = model
+    this.font = font
+    this.rows = rows
+    this.columns = columns
+    val area = this
+    this.hbar = HScrollBar(object : HScrollBar.Host {
+      override val viewW : int
+        get() => area.lastWidth
+      override val viewH : int
+        get() => area.lastHeight
+      override val contentW : int
+        get() => area.contentWidth(area.lastWidth)
+      override var hScroll : int
+        get() => area.scrollX
+        set(value) {
+          area.scrollX = value
+          area.owner?.invalidate()
+        }
+      override val pageW : int
+        get() => Math.max(area.lastWidth - areaPad * 2, 1)
+      override val barBottom : int
+        get() => area.lastHeight - area.statusH()
+      override fun repaint() {
+        area.owner?.invalidate()
+      }
+    })
+    this.dragSelect = DragSelector({ model.text }, { model.lineStart(it)..model.lineEnd(it) })
+    this.caretKeys = CaretKeys({ model.text }, AreaRows(this), { model.caret }, { offset, extend -> model.moveCaret(offset, extend) })
+    seenRevision = model.revision
+    seenRuns = model.styleRuns
+    lastLines = model.lineCount
+    model.addListener { modelChanged() }
+  }
+
+  private fun modelChanged() {
+    // An area as tall as its lines changes size with their number: what it is in lays out again.
+    if (model.lineCount != lastLines) {
+      lastLines = model.lineCount
+      Topaz.requestLayout()
+    }
+    // A change from anywhere shows; only the caret or the selection is drawn afresh every frame
+    // without painting the text again.
+    if (model.revision != seenRevision or model.styleRuns !== seenRuns) {
+      seenRevision = model.revision
+      seenRuns = model.styleRuns
+      owner?.invalidate()
+    } else {
+      Topaz.requestRepaint()
+    }
+  }
+
+  // Keeps the caret in view: the scroll round it takes it at the next layout.
+  private fun revealCaret() {
+    pendingReveal = true
+    Topaz.requestLayout()
+  }
+
+  override fun acceptsTab() : bool => true       // Tab indents here, rather than moving on
+
+  // A text cursor over the text; the arrow over the bar, which is no place for a caret.
+  override fun cursorAt(x : int, y : int) : CursorKind => !wrap and hbar.over(x, y) ? CursorKind.default : CursorKind.text
+
+  // ---- Measuring ----
+
+  // How wide each line is, kept and, after an edit, measured again only where the edit was: the
+  // model says how much at the text's start and end it left as it was (M7: JadeUI walks every
+  // character of the text, measuring it, at each edit). A tab is as wide as four spaces.
+  private var lineW : List<int> = []
+  private var lineWStarts : List<int> = []
+  private var lineWLength = 0
+  private var lineWRevision = -1
+  private var lineWFont : Font? = null
+  private var lineWScale : Number = 0
+
+  // The last line starting at or before `pos`, of the lines starting at `starts`.
+  private fun lineIn(starts : List<int>, pos : int) : int {
+    var lo = 0
+    var hi = starts.size - 1
+    while (lo < hi) {
+      val mid = (lo + hi + 1) / 2
+      if (starts[mid] <= pos) { lo = mid } else { hi = mid - 1 }
+    }
+    return lo
+  }
+
+  private fun measureLine(fm : TextUnits, text : string, starts : List<int>, i : int) : int {
+    val end = i + 1 < starts.size ? starts[i + 1] - 1 : text.size
+    return fm.stringWidth(shown(text[starts[i]..<end]))
+  }
+
+  private fun lineWidths() : List<int> {
+    val scale = Topaz.layoutScale
+    if (lineWRevision == model.revision and lineWFont === font and lineWScale == scale) { return lineW }
+    val fm = metrics(font)
+    val text = model.text
+    val starts = model.lineStarts()
+    val change = lineWRevision >= 0 and lineWFont === font and lineWScale == scale ? model.changeSince(lineWRevision) : null
+    if (change == null) {
+      val all = []
+      for (i in 0 ..< starts.size) { all.add(measureLine(fm, text, starts, i)) }
+      lineW = all
+    } else {
+      // The lines from the one the change starts in to the one it ends in, then those after as they were.
+      val (kept, keptEnd) = change
+      val first = lineIn(lineWStarts, kept)
+      val oldLast = lineIn(lineWStarts, Math.max(lineWLength - keptEnd, kept))
+      val newLast = lineIn(starts, Math.max(text.size - keptEnd, kept))
+      val mid = []
+      for (i in first .. newLast) { mid.add(measureLine(fm, text, starts, i)) }
+      lineW = lineW[0..<first] + mid + lineW[oldLast + 1..]
+    }
+    lineWStarts = starts
+    lineWLength = text.size
+    lineWRevision = model.revision
+    lineWFont = font
+    lineWScale = scale
+    return lineW
+  }
+
+  // Where the caret goes in the text from `a` to `b` (within one line), from the x of `a`: one
+  // measuring call, kept for the last stretch asked about, which is most often the row clicked or
+  // moved along again.
+  private var placesA = -1
+  private var placesB = -1
+  private var placesRevision = -1
+  private var placesFont : Font? = null
+  private var placesScale : Number = 0
+  private var placesKept : List<int> = [0]
+  private fun placesIn(a : int, b : int) : List<int> {
+    val scale = Topaz.layoutScale
+    if (a == placesA and b == placesB and placesRevision == model.revision and placesFont === font and placesScale == scale) { return placesKept }
+    val fm = metrics(font)
+    val part = model.text[a..<b]
+    var xs = fm.offsets(part)
+    if (part.indexOf('\t') >= 0) {
+      // A tab as four spaces: everything after it moves on by the difference.
+      val tabW = fm.charWidth(' ') * tabWidth
+      val moved = [0]
+      var extra = 0
+      for (i in 0 ..< part.size) {
+        if (part[i] == '\t') { extra += tabW - (xs[i + 1] - xs[i]) }
+        moved.add(xs[i + 1] + extra)
+      }
+      xs = moved
+    }
+    placesA = a
+    placesB = b
+    placesRevision = model.revision
+    placesFont = font
+    placesScale = scale
+    placesKept = xs
+    return xs
+  }
+
+  // ---- Rows ----
+
+  // The rows, kept for each width asked at (one frame asks at the scroll's width and at the
+  // canvas's), until the text, the wrapping or the font changes.
+  private val rowsByWidth : open Map<int, List<TextRow>> = {:}
+  private var rowsRevision = -1
+  private var rowsWrap = false
+  private var rowsFont : Font? = null
+  private var rowsScale : Number = 0
+
+  // How many times the rows were worked out afresh: a test asks, as working them out each frame
+  // in place of each edit would be slow.
+  internal var wrapCount = 0
+    private set
+
+  private fun dropRowsIfStale() {
+    val scale = Topaz.layoutScale
+    if (rowsRevision == model.revision and rowsWrap == wrap and rowsFont === font and rowsScale == scale) { return }
+    rowsByWidth.clear()
+    rowsRevision = model.revision
+    rowsWrap = wrap
+    rowsFont = font
+    rowsScale = scale
+  }
+
+  private fun rowsAt(width : int) : List<TextRow> {
+    dropRowsIfStale()
+    val kept = rowsByWidth[width]
+    if (kept != null) { return kept }
+    wrapCount += 1
+    val made = wrap ? wrappedRows(width) : logicalRows()
+    rowsByWidth[width] = made
+    return made
+  }
+
+  // The widest line, for how far it scrolls sideways.
+  private fun maxRowWidth(width : int, rowRanges : List<TextRow>) : int {
+    val widths = lineWidths()
+    return widths.isEmpty() ? 0 : widths.max()
+  }
+
+  private fun logicalRows() : List<TextRow> {
+    val starts = model.lineStarts()
+    val out = []
+    val n = starts.size
+    for (i in 0 ..< n) { out.add(TextRow(starts[i], i + 1 < n ? starts[i + 1] - 1 : model.length)) }
+    return out
+  }
+
+  // Each line wrapped where a row would be too wide: at the last space or tab that fits, or in
+  // the middle of a word too long for a row. A line that fits is one row, known from its width;
+  // in one that does not, where each row overflows is found by halving its caret places.
+  private fun wrappedRows(width : int) : List<TextRow> {
+    val avail = Math.max(width - areaPad * 2, 1)
+    val text = model.text
+    val widths = lineWidths()
+    val out = []
+    val lines = logicalRows()
+    for (li in 0 ..< lines.size) {
+      val line = lines[li]
+      if (widths[li] <= avail or line.end - line.start <= 1) {
+        out.add(line)
+        continue
+      }
+      val xs = placesIn(line.start, line.end)
+      val base = line.start
+      var s = line.start
+      val end = line.end
+      while (xs[end - base] - xs[s - base] > avail and end - s > 1) {
+        // The first place past which the row from s is too wide.
+        var lo = s + 1
+        var hi = end
+        while (lo < hi) {
+          val mid = (lo + hi) / 2
+          if (xs[mid - base] - xs[s - base] > avail) { hi = mid } else { lo = mid + 1 }
+        }
+        // A character alone too wide still goes on the row.
+        val over = Math.max(lo - 1, s + 1)
+        // The last space or tab before it; else the row ends where it overflows.
+        val space = Math.max(text.lastIndexOf(' ', over - 1), text.lastIndexOf('\t', over - 1))
+        val breakAt = space >= s ? space + 1 : over
+        out.add(TextRow(s, breakAt))
+        s = breakAt
+      }
+      out.add(TextRow(s, end))
+    }
+    return out
+  }
+
+  // How wide the text from `a` to `b` of one row is.
+  private fun widthIn(row : TextRow, a : int, b : int) : int {
+    val xs = placesIn(row.start, row.end)
+    return xs[b - row.start] - xs[a - row.start]
+  }
+
+  // The last row starting at or before `offset` (so the caret at a wrap shows on the next row).
+  private fun findRow(rowRanges : List<TextRow>, offset : int) : int {
+    var lo = 0
+    var hi = rowRanges.size - 1
+    while (lo < hi) {
+      val mid = (lo + hi + 1) / 2
+      if (rowRanges[mid].start <= offset) { lo = mid } else { hi = mid - 1 }
+    }
+    return lo
+  }
+
+  // The rows the canvas shows (its visibleBounds): the only ones painted. The area is as tall as
+  // all its lines and the scroll shows a screenful, so painting every line every frame made a
+  // large text take seconds a frame.
+  private fun shownRows(canvas : Canvas, rowRanges : List<TextRow>, lineH : int) : Range {
+    if (rowRanges.isEmpty() or lineH <= 0) { return 0 ..< 0 }
+    val vis = canvas.visibleBounds
+    if (vis.width <= 0 or vis.height <= 0) { return 0 ..< 0 }
+    val first = Math.max((vis.y - areaPad) / lineH - 1, 0)
+    val last = Math.min((vis.y + vis.height - areaPad) / lineH + 1, rowRanges.size - 1)
+    return first .. last
+  }
+
+  // ---- Size ----
+
+  // How wide the text is laid out at `width`, with its padding; 0 when it wraps (it never scrolls sideways then).
+  internal fun contentWidth(width : int) : int => wrap or width <= 0 ? 0 : maxRowWidth(width, rowsAt(width)) + areaPad * 2
+  // The room the bar takes at `width`: its height when the lines are wider than that.
+  private fun barH(width : int) : int => !wrap and width > 0 and contentWidth(width) > width ? HScrollBar.height : 0
+
+  // As tall as its lines at `width`, and the bar when they are wider than that.
+  override fun heightForWidth(width : int) : int {
+    val lineH = metrics(font).height
+    val rowCount = wrap ? rowsAt(Math.max(width, 1)).size : Math.max(rows, model.lineCount)
+    return lineH * rowCount + areaPad * 2 + statusH() + barH(width)
+  }
+
+  // The wheel sideways moves long lines; up and down is the scroll round it.
+  override fun wheel(event : Event.Wheel) : bool => !wrap and hbar.wheel(event)
+
+  override fun viewportHeight(px : int) {
+    viewportPx = px
+  }
+  override fun viewportWidth(px : int) {
+    viewportWpx = px
+  }
+  override fun consumeReveal() : Range? {
+    if (!pendingReveal) { return null }
+    pendingReveal = false
+    val lineH = metrics(font).height
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    val y = areaPad + findRow(rr, model.caret) * lineH
+    return y .. y + lineH
+  }
+
+  override fun sizes() : Sizes {
+    val fm = metrics(font)
+    val lineH = fm.height
+    val m = fm.charWidth('m')
+    val rowCount = wrap and viewportWpx > 0 ? rowsAt(viewportWpx).size : Math.max(rows, model.lineCount)
+    // The status strip is inside the area, so the area is that much taller.
+    val prefH = lineH * rowCount + areaPad * 2 + statusH() + barH(lastWidth)
+    return Sizes(Size(m * 4 + areaPad * 2, lineH + areaPad * 2 + statusH()), Size(m * columns + areaPad * 2, prefH), Size(int.maxValue, int.maxValue))
+  }
+
+  // The strip's height: a row for each line of statusText, or none.
+  internal fun statusH() : int => statusText.isEmpty() ? 0 : metrics(statusFont).height * statusText.lines().size + 4
+
+  // ---- Painting ----
+
+  // A tab drawn as four spaces (the model keeps the tab).
+  private fun shown(s : string) : string => s.indexOf('\t') >= 0 ? s.replace("\t", " ".repeat(tabWidth)) : s
+
+  override fun paint(canvas : Canvas) {
+    val width = canvas.width
+    val height = canvas.height
+    val style = styleOf(this)
+    canvas.color = backgroundOverride ?: style.background ?: (themed ? Palette.surface : Color.white)
+    canvas.fillRect(0, 0, width, height)
+    if (style.framed) {
+      canvas.color = Palette.border
+      canvas.drawRect(0, 0, width - 1, height - 1)
+    }
+    canvas.font = font
+    lastWidth = width
+    lastHeight = height
+    val fm = canvas.measure("", font)
+    val lineH = fm.height
+    val text = model.text
+    val rowRanges = rowsAt(width)
+
+    if (!wrap) {
+      // Sideways, following the caret when it, the text or the width has changed.
+      val visibleW = Math.max(width - areaPad * 2, 1)
+      if (model.caret != followedCaret or model.revision != followedRev or width != followedWidth) {
+        followedCaret = model.caret
+        followedRev = model.revision
+        followedWidth = width
+        val caretRow = rowRanges[findRow(rowRanges, model.caret)]
+        val caretPx = canvas.measure(shown(text[caretRow.start..<model.caret]), font).width
+        if (caretPx - scrollX > visibleW) { scrollX = caretPx - visibleW }
+        if (caretPx - scrollX < 0) { scrollX = caretPx }
+      }
+      scrollX = scrollX.coerceIn(0, Math.max(maxRowWidth(width, rowRanges) - visibleW, 0))
+    } else {
+      scrollX = 0
+    }
+    val tx = areaPad - scrollX
+    pTx = tx
+    pLineH = lineH
+    pW = width
+    pRows = rowRanges
+
+    paintCurrentLine(canvas, text, rowRanges, lineH)
+    val defaultColor = foregroundOverride ?: style.foreground ?: (themed ? Palette.ink : Color(0x1A, 0x24, 0x20))
+    val runs = model.styleRuns
+    val textLen = text.size
+    for (i in shownRows(canvas, rowRanges, lineH)) {
+      val r = rowRanges[i]
+      val baseY = areaPad + i * lineH + fm.ascent
+      if (runs.isEmpty()) {
+        canvas.color = defaultColor
+        canvas.drawString(shown(text[r.start..<r.end]), tx, baseY)
+      } else {
+        // Only the runs that touch this row: a coloured file has one for every word.
+        val rowRuns = runs.filter { it.start < r.end and it.end > r.start }
+        var j = r.start
+        var x = tx
+        while (j < r.end) {
+          val col = colorAt(rowRuns, j, textLen, defaultColor)
+          var k = j + 1
+          while (k < r.end and colorAt(rowRuns, k, textLen, defaultColor) == col) { k += 1 }
+          val seg = shown(text[j..<k])
+          canvas.color = col
+          canvas.drawString(seg, x, baseY)
+          x += canvas.measure(seg, font).width
+          j = k
+        }
+      }
+    }
+    paintSquiggles(canvas, text, rowRanges, tx, lineH, fm.ascent)
+    // The corner tag, on a light badge so that it reads over the text under it.
+    if (cornerLabel.isNotEmpty()) {
+      val lm = canvas.measure(cornerLabel, font)
+      val bw = lm.width + 8
+      val bx = width - bw - 3
+      canvas.color = Palette.bg(0xECEFF2, themed)
+      canvas.fillRoundRect(bx, 2, bw, fm.height, 5, 5)
+      canvas.color = Palette.fg(0x6B727B, themed)
+      canvas.drawString(cornerLabel, bx + 4, 2 + fm.ascent)
+    }
+    // The bar's track and thumb are see-through, so that they read on a light block or a dark one.
+    if (!wrap) { hbar.paint(canvas, height - statusH(), Color(128, 128, 128, 40), Color(128, 128, 128, 150)) }
+    paintStatus(canvas)
+  }
+
+  private fun paintStatus(canvas : Canvas) {
+    if (statusText.isEmpty()) { return }
+    val fm = metrics(statusFont)
+    val h = statusH()
+    val y = canvas.height - h
+    canvas.color = statusIsError ? Palette.bg(0xFDECEC, themed) : Palette.bg(0xF2F5F7, themed)
+    canvas.fillRect(0, y, canvas.width, h)
+    canvas.color = statusIsError ? Palette.fg(0xB32727, themed) : Palette.fg(0x555D66, themed)
+    canvas.font = statusFont
+    var k = 0
+    for (line in statusText.lines()) {
+      canvas.drawString(line, areaPad, y + 2 + fm.ascent + k * fm.height)
+      k += 1
+    }
+  }
+
+  private fun paintCurrentLine(canvas : Canvas, text : string, rowRanges : List<TextRow>, lineH : int) {
+    if (currentLine < 0) { return }
+    val starts = model.lineStarts()
+    if (currentLine >= starts.size) { return }
+    val start = starts[currentLine]
+    val end = TextNav.lineEnd(text, start)
+    canvas.color = Color(255, 214, 0, 90)    // see-through, so that it reads on a light or a dark block
+    // The line's rows: its first, and each wrapped row that starts before its end.
+    for (i in shownRows(canvas, rowRanges, lineH)) {
+      val r = rowRanges[i]
+      if (r.start == start or (r.start >= start and r.start < end)) { canvas.fillRect(0, areaPad + i * lineH, canvas.width, lineH) }
+    }
+  }
+
+  private fun paintSquiggles(canvas : Canvas, text : string, rowRanges : List<TextRow>, tx : int, lineH : int, ascent : int) {
+    if (squiggles.isEmpty()) { return }
+    canvas.color = Palette.fg(0xCC3333)
+    val shownRange = shownRows(canvas, rowRanges, lineH)
+    for (range in squiggles) {
+      for (i in shownRange) {
+        val r = rowRanges[i]
+        val a = Math.max(range.start, r.start)
+        val b = Math.min(range.end + 1, r.end)
+        if (a >= b) { continue }            // not on this row
+        val x1 = tx + canvas.measure(shown(text[r.start..<a]), font).width
+        val x2 = tx + canvas.measure(shown(text[r.start..<b]), font).width
+        var x = x1
+        val y = areaPad + i * lineH + ascent + 2
+        while (x < x2) {
+          canvas.drawLine(x, y, x + 2, y - 2)
+          canvas.drawLine(x + 2, y - 2, x + 4, y)
+          x += 4
+        }
+      }
+    }
+  }
+
+  // The caret and the selection, drawn over the kept picture of the text every frame, with the
+  // rows of the last paint. If the caret has gone out sideways, the text is painted again, scrolled to it.
+  override fun paintOverlay(canvas : Canvas) {
+    paintLinkUnderline(canvas)
+    if (!model.focused) { return }
+    val rowRanges = pRows
+    if (rowRanges.isEmpty()) { return }
+    val text = model.text
+    val caretRow = findRow(rowRanges, model.caret)
+    val caretPx = canvas.measure(shown(text[rowRanges[caretRow].start..<model.caret]), font).width
+    if (model.hasSelection) {
+      val s = model.selectionStart
+      val e = model.selectionEnd
+      // See-through, so that the coloured text under it still shows.
+      val sel = Palette.selection
+      canvas.color = Color(sel.red, sel.green, sel.blue, 0x88)
+      for (i in shownRows(canvas, rowRanges, pLineH)) {
+        val r = rowRanges[i]
+        if (e > r.start and s <= r.end) {
+          val a = Math.max(s, r.start)
+          val x1 = pTx + canvas.measure(shown(text[r.start..<a]), font).width
+          val x2 = e > r.end ? pW - areaPad : pTx + canvas.measure(shown(text[r.start..<Math.min(e, r.end)]), font).width
+          canvas.fillRect(x1, areaPad + i * pLineH, Math.max(1, x2 - x1), pLineH)
+        }
+      }
+    }
+    if (model.caretVisible) {
+      canvas.color = foregroundOverride ?: (themed ? Palette.ink : Color(0x1A, 0x24, 0x20))
+      canvas.fillRect(pTx + caretPx, areaPad + caretRow * pLineH, 1, pLineH)
+    }
+    if (!wrap) {
+      val visibleW = Math.max(pW - areaPad * 2, 1)
+      val rel = caretPx - (areaPad - pTx)
+      if (rel > visibleW or rel < 0) { owner?.invalidate() }
+    }
+  }
+
+  // The link under the pointer with Shift held, underlined row by row, keyboard or not.
+  private fun paintLinkUnderline(canvas : Canvas) {
+    val link = hoveredLink
+    if (link == null) { return }
+    val rowRanges = pRows
+    if (rowRanges.isEmpty() or pLineH == 0) { return }
+    val text = model.text
+    val s = link.range.start.coerceIn(0, text.size)
+    val e = (link.range.end + 1).coerceIn(s, text.size)
+    canvas.color = Palette.fg(0x2D6CDF)
+    for (i in shownRows(canvas, rowRanges, pLineH)) {
+      val r = rowRanges[i]
+      val a = Math.max(s, r.start)
+      val b = Math.min(e, r.end)
+      if (a >= b) { continue }
+      val x1 = pTx + canvas.measure(shown(text[r.start..<a]), font).width
+      val x2 = pTx + canvas.measure(shown(text[r.start..<b]), font).width
+      canvas.fillRect(x1, areaPad + (i + 1) * pLineH - 2, Math.max(1, x2 - x1), 1)
+    }
+  }
+
+  // Where the caret is in the area, as [x, y, height], for a list of completions to open under
+  // it; null before it has been painted.
+  fun caretRect() : List<int>? {
+    if (pRows.isEmpty() or pLineH == 0) { return null }
+    // The rows of the text now, at the width last painted: it may have changed since (a list of
+    // completions opens as the text is typed, before the area is painted again).
+    val rowRanges = rowsAt(pW)
+    val row = findRow(rowRanges, model.caret)
+    val start = rowRanges[row].start
+    return [pTx + widthIn(rowRanges[row], start, Math.max(model.caret, start)), areaPad + row * pLineH, pLineH]
+  }
+
+  // ---- Events ----
+
+  private fun writes(event : Event) : bool {
+    if (event is Event.KeyType) { return true }
+    if (event is Event.KeyPress) { return event.key == Key.backspace or event.key == Key.delete or event.key == Key.enter or event.key == Key.tab }
+    if (event is Event.Shortcut) {
+      val c = event.command
+      return c == EditCommand.undo or c == EditCommand.redo or c == EditCommand.cut or c == EditCommand.paste or c == EditCommand.complete
+    }
+    return false
+  }
+
+  private fun setHoveredLink(link : TextLink?, x : int, y : int) {
+    if (link == null and hoveredLink == null) { return }
+    hoveredLink = link
+    onLinkHover?.invoke(link, x, y)
+    owner?.invalidate()
+  }
+
+  override fun onEvent(event : Event) {
+    if (readOnly and writes(event)) { return }
+    if (event is Event.Click) {
+      if (!wrap and hbar.press(event.x, event.y)) { return }
+      // Shift and a click on an underlined name follows it, and leaves the selection.
+      val link = hoveredLink
+      if (link != null and event.shift and hoverIndexAt(event.x, event.y) in link.range) {
+        setHoveredLink(null, event.x, event.y)
+        link.open()
+        return
+      }
+      val idx = indexAt(event.x, event.y)
+      caretKeys.clearSticky()
+      val range = dragSelect.press(idx, event.clicks, event.shift)
+      if (range == null) { model.moveCaret(idx, event.shift) } else { model.select(range.start, range.end) }
+      onCaretClick?.invoke()
+    } else if (event is Event.Drag) {
+      if (hbar.drag(event.x)) { return }
+      var idx = indexAt(event.x, event.y)
+      if (!wrap) {
+        // At the edges it scrolls on, within the line.
+        if (event.x >= lastWidth - areaPad and idx < model.lineEnd(idx)) { idx += 1 }
+        if (event.x < areaPad and idx > model.lineStart(idx)) { idx -= 1 }
+      }
+      val r = dragSelect.drag(idx)
+      if (dragSelect.granularity == DragSelector.Granularity.char) {
+        model.moveCaret(r.end, true)
+      } else {
+        model.select(r.start, r.end)
+      }
+    } else if (event is Event.KeyType) {
+      model.insert(event.text)
+      caretKeys.clearSticky()
+      revealCaret()
+    } else if (event is Event.KeyPress) {
+      handleKey(event)
+    } else if (event is Event.Release) {
+      hbar.release()
+    } else if (event is Event.Shortcut) {
+      val c = event.command
+      if (c == EditCommand.undo) {
+        model.undo()
+      } else if (c == EditCommand.redo) {
+        model.redo()
+      } else if (c == EditCommand.copy) {
+        copy()
+      } else if (c == EditCommand.cut) {
+        cut()
+      } else if (c == EditCommand.paste or c == EditCommand.pasteSeparate) {
+        paste()                           // text has no pictures: a plain paste
+      } else if (c == EditCommand.selectAll) {
+        model.selectAll()
+      } else if (c == EditCommand.complete) {
+        onComplete?.invoke()
+      }
+      revealCaret()
+    } else if (event is Event.Context) {
+      // A right drag moves the caret; a press keeps a selection it lands in.
+      val idx = indexAt(event.x, event.y)
+      if (event.drag or idx < model.selectionStart or idx >= model.selectionEnd) { model.moveCaret(idx) }
+    } else if (event is Event.Hover) {
+      hbar.hover(event.x, event.y)
+      // Over the bar is over no text.
+      val idx = event.x < 0 or event.y < 0 or hbar.over(event.x, event.y) ? -1 : hoverIndexAt(event.x, event.y)
+      val find = links
+      val link = event.shift and idx >= 0 and find != null ? find(model.text, idx) : null
+      setHoveredLink(link, event.x, event.y)
+      if (link == null) { onHover?.invoke(idx, event.x, event.y) }
+    }
+  }
+
+  private fun handleKey(e : Event.KeyPress) {
+    val intercept = onKeyIntercept
+    if (intercept != null and intercept(e)) { return }
+    revealCaret()                         // any key brings the caret back into view
+    val caretBefore = model.caret
+    if (caretKeys.handle(e.key, e.shift, e.ctrl)) {
+      // A move that could not move the caret is at an edge: handed to what the area is in (the
+      // next block of a document), or it would be a trap. Not with Shift: that is selecting.
+      val movement = e.key == Key.up or e.key == Key.down or e.key == Key.left or e.key == Key.right
+      if (movement and model.caret == caretBefore and !e.shift) { onEscape?.invoke(e.key == Key.up or e.key == Key.left) }
+      return
+    }
+    caretKeys.clearSticky()
+    if (e.key == Key.backspace) {
+      model.deleteBackward()
+    } else if (e.key == Key.delete) {
+      model.deleteForward()
+    } else if (e.key == Key.enter) {
+      model.insert("\n")
+    } else if (e.key == Key.tab) {
+      if (model.hasSelection) {
+        if (e.shift) { outdentSelection() } else { indentSelection() }
+      } else if (e.shift) {
+        outdentCurrentLine()
+      } else {
+        model.insert(tabIndent)
+      }
+    } else if (e.key == Key.escape) {
+      // Leaves the block for the text below, or above when it is the last.
+      val escape = onEscape
+      if (escape != null and !escape(false)) { escape(true) }
+    }
+  }
+
+  // The lines the selection touches (not a last one it only starts).
+  private fun touchedLines() : Range {
+    val first = model.lineOf(model.selectionStart)
+    var last = model.lineOf(model.selectionEnd)
+    if (last > first and model.lineStart(model.selectionEnd) == model.selectionEnd) { last -= 1 }
+    return first .. last
+  }
+
+  private fun indentSelection() {
+    val lines = touchedLines()
+    model.compoundEdit {
+      for (ln in lines.reversed()) {      // from the bottom, so that the places above stay put
+        model.moveCaret(model.offsetAt(ln, 0))
+        model.insert(tabIndent)
+      }
+    }
+    model.select(model.offsetAt(lines.start, 0), model.lineEnd(model.offsetAt(lines.end, 0)))
+  }
+
+  // How many characters of indent start at `start`: a tab, or up to four spaces.
+  private fun indentAt(start : int) : int {
+    val text = model.text
+    if (start < text.size and text[start] == '\t') { return 1 }
+    var n = 0
+    while (n < tabWidth and start + n < text.size and text[start + n] == ' ') { n += 1 }
+    return n
+  }
+
+  private fun outdentSelection() {
+    val lines = touchedLines()
+    model.compoundEdit {
+      for (ln in lines.reversed()) {
+        val start = model.offsetAt(ln, 0)
+        val remove = indentAt(start)
+        if (remove > 0) {
+          model.moveCaret(start)
+          for (k in 0 ..< remove) { model.deleteForward() }
+        }
+      }
+    }
+    model.select(model.offsetAt(lines.start, 0), model.lineEnd(model.offsetAt(lines.end, 0)))
+  }
+
+  // Shift and Tab with nothing selected: one indent off the caret's line, the caret staying on its character.
+  private fun outdentCurrentLine() {
+    val start = model.offsetAt(model.lineOf(model.caret), 0)
+    val remove = indentAt(start)
+    if (remove == 0) { return }
+    val caret = model.caret
+    model.compoundEdit {
+      model.moveCaret(start)
+      for (k in 0 ..< remove) { model.deleteForward() }
+    }
+    model.moveCaret(Math.max(caret - remove, start))
+  }
+
+  private fun copy() {
+    if (model.hasSelection) { Topaz.clipboard.copy(model.styledSelection()) }
+  }
+  private fun cut() {
+    if (model.hasSelection) {
+      Topaz.clipboard.copy(model.styledSelection())
+      model.deleteBackward()
+    }
+  }
+  private fun paste() {
+    val c = Topaz.clipboard.paste()
+    if (c == null) { return }
+    model.insertStyled(c.text, c.runs)   // lines and all
+  }
+
+  override fun contextMenu() : List<MenuItem> {
+    val items = []
+    if (!readOnly) { items.add(MenuItem("Cut", model.hasSelection) { cut() }) }
+    items.add(MenuItem("Copy", model.hasSelection) { copy() })
+    if (!readOnly) { items.add(MenuItem("Paste", Topaz.clipboard.paste() != null) { paste() }) }
+    items.add(MenuItem("Select All", model.length > 0) { model.selectAll() })
+    return items
+  }
+
+  // Arrowed into from a block next to it: the caret at its start (from above) or end (from below), shown.
+  override fun enterFromEdge(fromTop : bool) {
+    model.moveCaret(fromTop ? 0 : model.length)
+    revealCaret()
+    owner?.invalidate()
+  }
+
+  // ---- Where the pointer is in the text ----
+
+  // Rows in a page: those that show, or `rows` before the first layout.
+  internal fun pageRows() : int {
+    val lineH = metrics(font).height
+    return Math.max(viewportPx > 0 ? viewportPx / lineH : rows, 1)
+  }
+  internal fun rowStartOf(offset : int) : int {
+    if (!wrap) { return model.lineStart(offset) }
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    return rr[findRow(rr, offset)].start
+  }
+  internal fun rowEndOf(offset : int) : int {
+    if (!wrap) { return model.lineEnd(offset) }
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    return rr[findRow(rr, offset)].end
+  }
+  // Unwrapped, up and down keep the column; wrapped, the x.
+  internal fun stickyFor(offset : int) : int {
+    if (!wrap) { return model.columnOf(offset) }
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    val row = rr[findRow(rr, offset)]
+    return widthIn(row, row.start, offset)
+  }
+  internal fun rowNeighbour(offset : int, delta : int, sticky : int) : int {
+    if (!wrap) {
+      val target = (model.lineOf(offset) + delta).coerceIn(0, model.lineCount - 1)
+      return model.offsetAt(target, sticky)
+    }
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    val target = (findRow(rr, offset) + delta).coerceIn(0, rr.size - 1)
+    return nearestOffsetInRow(rr[target], sticky)
+  }
+
+  // The place nearest to the point (x, y) in the area.
+  private fun indexAt(x : int, y : int) : int {
+    val lineH = metrics(font).height
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    val row = ((y - areaPad) / lineH).coerceIn(0, rr.size - 1)
+    return nearestOffsetInRow(rr[row], x - areaPad + (wrap ? 0 : scrollX))
+  }
+
+  // The same for hovering, but -1 above or below the text or past the end of a line, so that a
+  // card for a line's last word does not stay over the room after it.
+  private fun hoverIndexAt(x : int, y : int) : int {
+    val lineH = metrics(font).height
+    val rr = rowsAt(Math.max(lastWidth, 1))
+    if (y < areaPad) { return -1 }
+    val rowIdx = (y - areaPad) / lineH
+    if (rowIdx < 0 or rowIdx >= rr.size) { return -1 }
+    val row = rr[rowIdx]
+    val local = x - areaPad + (wrap ? 0 : scrollX)
+    if (local < 0 or local > widthIn(row, row.start, row.end)) { return -1 }
+    return nearestOffsetInRow(row, local)
+  }
+
+  // The place in a row whose x is nearest to `x`: found by halving, the widths measured already.
+  private fun nearestOffsetInRow(row : TextRow, x : int) : int {
+    val xs = placesIn(row.start, row.end)
+    var lo = 0
+    var hi = xs.size - 1
+    while (lo < hi) {                     // the first place at or past x
+      val mid = (lo + hi) / 2
+      if (xs[mid] < x) { lo = mid + 1 } else { hi = mid }
+    }
+    if (lo > 0 and x - xs[lo - 1] <= xs[lo] - x) { return row.start + lo - 1 }
+    return row.start + lo
+  }
+}
+
+// How an area lays its text out, for the keys that move its caret by rows.
+private class AreaRows(val area : TextArea) : CaretGeometry {
+  override fun rowStart(offset : int) : int => area.rowStartOf(offset)
+  override fun rowEnd(offset : int) : int => area.rowEndOf(offset)
+  override fun pageRows() : int => area.pageRows()
+  override fun stickyFor(offset : int) : int => area.stickyFor(offset)
+  override fun rowNeighbour(offset : int, delta : int, sticky : int) : int => area.rowNeighbour(offset, delta, sticky)
+}
+
+// A text area with a text of its own, or showing a model it shares with others.
+fun textArea(text : string = "") : Component => Component(TextArea(SharedTextModel(text)))
+fun textArea(model : SharedTextModel) : Component => Component(TextArea(model))
+
+// ---- A bar along the bottom, for what is wider than it is shown ----
+
+// The bar a widget draws along its bottom when what it shows is wider than it: its thumb
+// dragged, its track pressed to move a page, the wheel sideways (a swipe, or Shift with the
+// wheel). The text area has one; the table and the sheet will share it.
+internal class HScrollBar {
+  // What the bar moves.
+  interface Host {
+    // The width shown and the height the bar runs along the bottom of, as last painted.
+    val viewW : int
+    val viewH : int
+    // How wide what is shown is.
+    val contentW : int
+    // How far it is moved; set to move it (kept within reach already).
+    var hScroll : int
+    // How far a press on the track moves.
+    val pageW : int
+    // Where the bar's bottom is: the widget's, or above a strip of its own.
+    val barBottom : int
+      get() => viewH
+    // Draw the widget again: the bar looks different (the pointer over it, held).
+    fun repaint()
+  }
+
+  static {
+    // The bar's height.
+    const height = 8
+  }
+
+  private val host : Host
+  private var overBar = false
+  private var overThumb = false
+  private var grab = -1                  // where the thumb was pressed, from its left, while dragged
+
+  fun init(host : Host) {
+    this.host = host
+  }
+
+  private fun maxScroll() : int => Math.max(host.contentW - host.viewW, 0)
+
+  // Whether there is more than fits, so that the bar is drawn.
+  fun shown(viewW : int) : bool => viewW > 0 and host.contentW > viewW
+
+  // The thumb's x and width, or null when everything fits.
+  fun thumb(viewW : int) : Pair<int, int>? {
+    if (!shown(viewW)) { return null }
+    val thumbW = (viewW * viewW / host.contentW).coerceIn(24, viewW)
+    val travel = viewW - thumbW
+    val most = Math.max(host.contentW - viewW, 0)
+    val thumbX = most <= 0 ? 0 : host.hScroll * travel / most
+    return thumbX to thumbW
+  }
+
+  // Draws the bar at the bottom of the canvas, darker under the pointer and darker still over
+  // the thumb or while it is held, so that it reads as something to take hold of.
+  fun paint(canvas : Canvas, bottom : int, track : Color, thumbColor : Color) {
+    val t = thumb(canvas.width)
+    if (t == null) { return }
+    val (x, w) = t
+    val y = bottom - HScrollBar.height
+    canvas.color = track
+    canvas.fillRect(0, y, canvas.width, HScrollBar.height)
+    canvas.color = grab >= 0 or overThumb ? thumbColor.darker().darker() : overBar ? thumbColor.darker() : thumbColor
+    canvas.fillRect(x, y, w, HScrollBar.height)
+  }
+
+  // Whether (x, y) is on the bar: the widget shows an arrow there.
+  fun over(x : int, y : int) : bool =>
+    thumb(host.viewW) != null and x >= 0 and x < host.viewW and y >= host.barBottom - HScrollBar.height and y < host.barBottom
+
+  // The pointer moved to (x, y) (less than 0: it has gone): the bar's look follows it.
+  fun hover(x : int, y : int) {
+    val bar = x >= 0 and y >= 0 and over(x, y)
+    var onThumb = false
+    if (bar) {
+      val t = thumb(host.viewW)
+      if (t != null) { onThumb = x >= t.first and x < t.first + t.second }
+    }
+    if (bar == overBar and onThumb == overThumb) { return }
+    overBar = bar
+    overThumb = onThumb
+    host.repaint()
+  }
+
+  // A press at (x, y): on the thumb it starts a drag, beside it it moves a page. False off the bar.
+  fun press(x : int, y : int) : bool {
+    val t = thumb(host.viewW)
+    if (t == null) { return false }
+    if (y < host.barBottom - HScrollBar.height or y >= host.barBottom) { return false }
+    val (thumbX, thumbW) = t
+    if (x < thumbX) {
+      scrollTo(host.hScroll - host.pageW)
+    } else if (x >= thumbX + thumbW) {
+      scrollTo(host.hScroll + host.pageW)
+    } else {
+      grab = x - thumbX
+      host.repaint()
+    }
+    return true
+  }
+
+  // A drag to x: the thumb follows, and what is shown with it. False when no thumb is held.
+  fun drag(x : int) : bool {
+    if (grab < 0) { return false }
+    val t = thumb(host.viewW)
+    if (t == null) { return true }
+    val travel = Math.max(host.viewW - t.second, 1)
+    scrollTo((x - grab) * maxScroll() / travel)
+    return true
+  }
+
+  // The end of a drag. False when there was none.
+  fun release() : bool {
+    if (grab < 0) { return false }
+    grab = -1
+    host.repaint()
+    return true
+  }
+
+  // The wheel sideways (a swipe's deltaX, or Shift with the wheel) moves it; true when it did. Up
+  // and down is not the bar's, or a widget under the pointer would keep the wheel from the page.
+  fun wheel(event : Event.Wheel) : bool {
+    val dx = event.deltaX != 0 ? event.deltaX : event.shift ? event.deltaY : 0
+    if (dx == 0 or maxScroll() <= 0) { return false }
+    scrollTo(host.hScroll + dx)
+    return true
+  }
+
+  private fun scrollTo(x : int) {
+    val next = x.coerceIn(0, maxScroll())
+    if (next != host.hScroll) { host.hScroll = next }
+  }
+}

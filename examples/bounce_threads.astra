@@ -8,7 +8,7 @@
 //
 // bounce.astra is the same thing in one loop, and bounce_workers.astra with the
 // moving done on other cores.
-import Jade.*
+import Topaz.*
 
 val startingBalls = 50000
 val threadCount = 4

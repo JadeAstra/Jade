@@ -1,4 +1,4 @@
-// Jade's layout with what each component measures kept, as Jade keeps it (M6.6 part 5): a
+// Topaz's layout with what each component measures kept, as Topaz keeps it (M6.6 part 5): a
 // component's Sizes are worked out again only after the tree is marked changed, every fourth
 // pass here, and read from where they are kept the other times. With the geometry as classes;
 // layout_cached_values.astra is the same with value types, kept inside their components.

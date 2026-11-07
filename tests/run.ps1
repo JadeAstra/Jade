@@ -21,7 +21,7 @@
 # where they could be read in place, ASTRA_THREAD_STRESS changes threads at every safe point,
 # ASTRA_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
 # ASTRA_GC_STRESS collects at every safe point (gc.astra, which counts collections, and
-# jade_treemap_big.astra, which times a big layout, are left out of that one). Each checkpoint runs it.
+# topaz_treemap_big.astra, which times a big layout, are left out of that one). Each checkpoint runs it.
 #
 #   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 24 -Stress
 
@@ -186,8 +186,8 @@ $aloneOnly = @()
 
 $tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.astra') | Sort-Object Name)
 # Left out under the GC stress setting, which collects at every safe point: gc.astra counts
-# collections, and jade_treemap_big.astra's 200,000 nodes would take hours.
-if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.astra', 'jade_treemap_big.astra') }) }
+# collections, and topaz_treemap_big.astra's 200,000 nodes would take hours.
+if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.astra', 'topaz_treemap_big.astra') }) }
 $outcomes = @{}
 if ($Parallel -gt 1) {
     # Each test in a runspace of a pool of $Parallel, all started at once and gathered in order.
@@ -275,7 +275,7 @@ foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'testing\*.astra') | So
     if ($null -eq $result) { $passed++ } else { $failures += "$($test.Name) [astra test]`n    $result" }
 }
 
-# The standard library, Jade and the examples pass the checker as they are (M6.5): `astra check
+# The standard library, Topaz and the examples pass the checker as they are (M6.5): `astra check
 # --std` checks the standard library's bodies too, which are otherwise put back unchecked.
 $checked = @((Join-Path $PSScriptRoot 'basics.astra') + '|--std')
 $examples = Join-Path $PSScriptRoot '..\examples'  # not there when the tests are copied elsewhere

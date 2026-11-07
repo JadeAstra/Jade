@@ -212,7 +212,7 @@ def main():
             else:
                 failures.append("%s [astra test]\n    %s" % (name, result))
 
-        # The standard library, Jade and the examples pass the checker as they are.
+        # The standard library, Topaz and the examples pass the checker as they are.
         checked = [(os.path.join(HERE, "basics.astra"), "--std")]
         examples = os.path.join(HERE, "..", "examples")
         if os.path.isdir(examples):

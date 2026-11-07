@@ -2,7 +2,7 @@
 // Arcs, wedges and line widths on a canvas (M8): the shapes say where they are and what they
 // hold as Java's do (the answers below are Java 23's Arc2D and Ellipse2D), and the image's
 // canvas and the graphics card's draw them alike, as thick as lineWidth says.
-import Jade.*
+import Topaz.*
 
 // -- The shapes, against Java --
 
@@ -37,7 +37,7 @@ print(Arc(0.0, 0.0, 10.0, 10.0, 0.0, 90.0).containsAngle(45.0), Arc(0.0, 0.0, 10
 fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
   val image = Image(120 * scale, 100 * scale, Color.white)
   scene(image.canvasAt(120, 100, scale))
-  Jade.windowOpener = HiddenWindowOpener(scale)
+  Topaz.windowOpener = HiddenWindowOpener(scale)
   val w = Window(Component(object : Content {
     override var owner : Component? = null
     override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))

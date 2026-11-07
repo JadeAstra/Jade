@@ -21,7 +21,7 @@ JADELIB-UI PUBLIC API INVENTORY
 ## 1. Root package files (`com.jadelib.ui`)
 
 Already read by you, one line each:
-- **Jade.kt** — `Sizes`, `Style`, enums `Fill`/`Anchor`/`Key`/`EditCommand`/`CursorKind`, `JadeEvent` (Click, KeyType, KeyPress, Drag, Release, Wheel, Shortcut, Context, Hover), capability interfaces (`JadeContent`, `FocusTarget`, `FocusHolder`, `FocusAware`, `TabAware`, `CursorProvider`, `TooltipProvider`, `OverlayContent`, `HeightForWidth`, `OwnedContent`, `BandAware`, `DropdownProvider`, `EdgeEscape`, `TypesInPlace`), object `Palette`, `elide(text, font, maxWidth)`.
+- **Topaz.kt** — `Sizes`, `Style`, enums `Fill`/`Anchor`/`Key`/`EditCommand`/`CursorKind`, `JadeEvent` (Click, KeyType, KeyPress, Drag, Release, Wheel, Shortcut, Context, Hover), capability interfaces (`JadeContent`, `FocusTarget`, `FocusHolder`, `FocusAware`, `TabAware`, `CursorProvider`, `TooltipProvider`, `OverlayContent`, `HeightForWidth`, `OwnedContent`, `BandAware`, `DropdownProvider`, `EdgeEscape`, `TypesInPlace`), object `Palette`, `elide(text, font, maxWidth)`.
 - **JadeComponent.kt** — class `JadeComponent(content)`, factories `label`/`button`/`swing`/`textField`×2/`grid`, the `JadeComponent.*` extensions (layout, renderFrame, renderToImage×2, renderInto, record, dispatch, click, drag, componentAt, cursorAt, componentPathAt, focusables, takesKeys, descendants, find, windowPosition), `List<JadeComponent>.nextFocus`, `focusAfterPress`, `WheelTarget`, `DragTarget`, `CapturedTarget` (internal ctor).
 - **Canvas.kt** — `TextMetrics`, interface `JadeCanvas`, sealed `DrawOp` (Rect, RoundRect, Oval, Line, Poly, Text, Image), `RecordingCanvas` (internal ctor), internal `AwtCanvas`.
 - **Host.kt** — `JadeHost`, `JadeHostSpec`, `JadeHostProvider`, `jadeHost(...)`, internal `HostProviders`.
@@ -634,7 +634,7 @@ Root also depends back on four of these, so the dependency graph has cycles:
 - `Overrides.kt` (`JadeUi`) uses `dialogs.JadeDialogs`.
 
 ### dialogs (1401 lines; Choices 203, DialogSession 382, Forms 312, JadeDialogs 113, Panels 171, Prompts 220)
-The Jade-drawn default implementations of every `JadeUi` dialog slot, each a modeless window opened through `JadeUi.windowOpener`. Depends on root (heavily) and `sheet` (Completer, CompletionPopup, FormatCompletion).
+The Topaz-drawn default implementations of every `JadeUi` dialog slot, each a modeless window opened through `JadeUi.windowOpener`. Depends on root (heavily) and `sheet` (Completer, CompletionPopup, FormatCompletion).
 
 The only public declaration in the package:
 ```

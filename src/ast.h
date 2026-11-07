@@ -527,11 +527,11 @@ struct WhenExpr : Expr {
 struct ImportStmt : Stmt {
     std::string path;
 
-    // The name its contents are reached by: `jade.Button` after `import jade`, `ui.Button`
-    // after `import jade as ui`. Empty when the path gives no usable name.
+    // The name its contents are reached by: `topaz.Button` after `import topaz`, `ui.Button`
+    // after `import topaz as ui`. Empty when the path gives no usable name.
     std::string alias;
 
-    // `import jade.*`: its names can be written bare as well.
+    // `import topaz.*`: its names can be written bare as well.
     bool all = false;
     ImportStmt() : Stmt(StmtKind::Import) {}
 };

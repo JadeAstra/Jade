@@ -1,5 +1,5 @@
 // Spike: blocks that run on an object (receiver lambdas), and the layout DSL they are for.
-// The classes here stand in for jade's; the last part is the examples' Launcher, as it would port.
+// The classes here stand in for topaz's; the last part is the examples' Launcher, as it would port.
 
 class Insets(val top : int, val left : int, val bottom : int, val right : int) {
   fun toString() => "Insets(${this.top}, ${this.left}, ${this.bottom}, ${this.right})"

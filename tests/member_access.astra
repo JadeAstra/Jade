@@ -366,7 +366,7 @@ tell { Tally.count = 9 }                  // expect: 'count' cannot be assigned 
 // ---- internal: the library ----
 
 // A program is one library, so its own code uses what it marks internal. (A member of a
-// class of Jade marked so is kept from the program: tests/jade_grid.astra.)
+// class of Topaz marked so is kept from the program: tests/topaz_grid.astra.)
 class Shared {
   internal val token = "token"
   internal fun hand() => token
