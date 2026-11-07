@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Outstanding after M7</title>
+<title>Outstanding after M8</title>
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
@@ -86,17 +86,18 @@ pre code { background: none; padding: 0; }
 </head>
 <body>
 <main>
-<h1>Outstanding after M7</h1>
-<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it. Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps6.7.html">plans-and-gaps6.7.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.md">gui-plan.md</a>.</p>
+<h1>Outstanding after M8</h1>
+<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it, and brought up to date after M8 (version 0.8.0) on 2026-11-07. Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps6.7.html">plans-and-gaps6.7.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.md">gui-plan.md</a>.</p>
 
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (four)</li>
+<li><a href="#decide">Waiting for the user</a> (seven)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
-<li><a href="#deferred">Language and library work left for later</a> (fifteen)</li>
+<li><a href="#deferred">Language and library work left for later</a> (thirteen)</li>
 <li><a href="#m7">Left from M7</a> (six)</li>
+<li><a href="#m8">Left from M8</a> (eleven)</li>
 <li><a href="#sandbox">The sandbox: what was left out</a> (eleven)</li>
 <li><a href="#speed">Speed: leads, measurements and limits</a> (ten)</li>
 <li><a href="#cautions">Standing cautions</a> (four)</li>
@@ -108,7 +109,10 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>The question</th><th class="when">Recommended</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-next">M8</td><td>The next milestone, Owned windows and dialogs (the dialog side of <code>Window</code>, <code>DialogSession</code> and the eight dialogs, the file dialogs that wait, then charts, ending with JadeMem's gui module), waits for the go-ahead: one milestone at a time. M7 is built (version 0.7.0, gui-plan.md section 6.4).</td><td class="when">Ready: the full check of 0.7.0 passed on 2026-11-06 (MSVC every way and the four stress settings, Clang, ASan, ASan+GC, Linux Clang 21 and GCC); benchmarks level with 0.6.7 once G70 was built (below)</td></tr>
+<tr><td class="part" id="o-next">M9</td><td>The next milestone waits for the go-ahead: one milestone at a time. M8 is built (version 0.8.0, gui-plan.md section 6.5): the dialogs, charts, the treemap and JadeMem.</td><td class="when">Ready once M8 is accepted</td></tr>
+<tr><td class="part" id="o-plus">The + of collections</td><td>What <code>+</code> means between a collection and an item is written down nowhere, and it is not one thing: <code>list + "text"</code> joins them as text (Kotlin adds the item), <code>[1] + 2</code> is accepted by the checker and fails as it runs, and <code>set + "y"</code> is typed as text but runs as a set. JadeMem uses <code>plus(item)</code>.</td><td class="when">Kotlin's: a collection and an item make the collection with the item</td></tr>
+<tr><td class="part" id="o-std-m8">New std names</td><td>Three things JadeMem met that need names in the standard library: a folder's listing with each file's kind, size and time (JadeMem's disk walk is about four times slower than Java's, which lists a folder with its files' attributes); writing to standard error; and an error's stack as text (8.5b), which JadeMem's log wants.</td><td class="when">The listing first: it is the measured one</td></tr>
+<tr><td class="part" id="o-elevated">JadeMem elevated</td><td>JadeMem has been run unelevated only. The elevated paths (the pool tag table read elevated, real ETW sessions, the raw read of a volume's file table) follow the Kotlin's layouts and were checked against made-up data, not this machine.</td><td class="when">A run as administrator, beside the Kotlin JadeMem</td></tr>
 <tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
 <tr><td class="part" id="o-clang">Windows build</td><td>Which compiler the Windows release is built with. MSVC cannot be made to do tail calls for certain (tried and removed, 2026-11-05), so its build keeps the switch: 3.3 times as long on <code>numeric</code>, about twice on <code>calls</code>, <code>fields</code> and <code>particles</code>, 25% faster on <code>points_values</code>.</td><td class="when">Ship the clang-cl build</td></tr>
 <tr><td class="part" id="o-pgo">MSVC PGO</td><td>Profile-guided optimisation for the MSVC build, offered for after M6.7, should the MSVC build stay in use.</td><td class="when">Only if MSVC is kept</td></tr>
@@ -142,7 +146,6 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">Choice</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-81e"><a href="plans-and-gaps6.7.html#m66g-p8-byte-order">8.1e</a></td><td><code>Bytes</code> has 16- and 32-bit reads and writes and <code>float32</code>, but no <code>int64</code> or <code>float64</code>, nor their put forms.</td><td class="when">-</td></tr>
 <tr><td class="part" id="o-83a"><a href="plans-and-gaps6.7.html#m66g-p8-lateinit">8.3a</a></td><td>Kotlin's <code>::x.isInitialized</code> has no form.</td><td class="when">When a ported program needs it</td></tr>
 <tr><td class="part" id="o-83d"><a href="plans-and-gaps6.7.html#m66g-p8-kind-names">8.3d</a></td><td>An enum entry given bare as an argument is settled as the program runs (it travels as a name and the parameter settles it), not when compiling, as kinds are.</td><td class="when">-</td></tr>
 <tr><td class="part" id="o-83f"><a href="plans-and-gaps6.7.html#m66g-p8-alias-self">8.3f</a></td><td>A type that refers to itself is checked one level down only (shown as <code>List&lt;*&gt;</code> inside), not all the way down.</td><td class="when">-</td></tr>
@@ -156,7 +159,6 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-89b"><a href="plans-and-gaps6.7.html#m66g-p9-exact-fit">8.9b</a></td><td>A constant colour such as <code>Color(255, 128, 0)</code> is checked when compiling but made each time it is reached, not made once as a constant.</td><td class="when">Left for now by the user's choice</td></tr>
 <tr><td class="part" id="o-d175"><a href="plans-and-gaps6.7.html#m66g-d175">D175</a></td><td>A generic function compiled once for every layout of its type arguments.</td><td class="when">When a measurement asks for it</td></tr>
 <tr><td class="part" id="o-d181">D181</td><td>Sendable classes for workers (gui-plan.md, section 8, step 2).</td><td class="when">When a program needs it</td></tr>
-<tr><td class="part" id="o-jademem">JadeMem</td><td>How JadeMem's sampling is done (gui-plan.md, section 8).</td><td class="when">M8</td></tr>
 </tbody></table></div>
 
 <h2 id="m7">Left from M7</h2>
@@ -170,6 +172,24 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-m7-ime">Input methods</td><td>Text being composed by an input method is not shown in place; committed text arrives. JadeUI has none either.</td><td class="when">-</td></tr>
 <tr><td class="part" id="o-m7-undo">Undo</td><td>Keeps a whole copy of the text per step, up to 200, as JadeUI does.</td><td class="when">If a timing or a large text asks for differences</td></tr>
 <tr><td class="part" id="o-m7-carets">Carets</td><td>Combining marks and right-to-left text get carets as good as the text engine's first part allows.</td><td class="when">The text engine's second part</td></tr>
+</tbody></table></div>
+
+<h2 id="m8">Left from M8</h2>
+<p>Found or left while M8 was built (2026-11-06 and 07); what it ported is in gui-plan.md, section 6.5. Found and fixed on the way, each with its own commit: an override of a generic class's method with its type argument filled in, the type of <code>f.invoke(args)</code>, a text area's caret after an edit, a lambda after a call into a <code>vararg</code>, a folder imported again (and one importing itself), two threads waiting on one lock waking each other without end, timed jobs in a test's sandbox, a sandbox's volume space, an anonymous object's captures, and a field overriding an interface's property.</p>
+<div class="table"><table>
+<thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
+<tbody>
+<tr><td class="part" id="o-m8-nested">Objects</td><td>A class or an object nested in an <code>object</code> cannot be reached by its full name (<code>Store.Box(1)</code>, <code>Outer.Inner.size</code>): the checker takes the object as a value. Inside it, the bare name works; nested in a class, the full name works.</td><td class="when">A fix: checker and the look-up on an object's instance</td></tr>
+<tr><td class="part" id="o-m8-header">Classes</td><td>A header <code>val</code> with a default, set again in the class's own <code>init</code>, is refused only as the program runs ("cannot assign to val field"); the checker could say so.</td><td class="when">A fix in the checker</td></tr>
+<tr><td class="part" id="o-m8-parallel">Parallel sections</td><td>An object used for the first time inside a parallel section sometimes fails, about one run in six: "this O is another core's item in this parallel section". Made before the section, it does not.</td><td class="when">A fix: objects made under the section's own rule</td></tr>
+<tr><td class="part" id="o-m8-smartcast">Smart casts</td><td>No smart cast after <code>e!!.n</code>: the next <code>e.n</code> is still of a value that may be null; nor after <code>assertNotNull(e)</code>.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-m8-small">Kotlin's small forms</td><td>Not there, worked round in the port: <code>catch (e : A | B)</code>, <code>trim(char)</code> and <code>trimEnd { }</code>, <code>split(..., limit = n)</code>, a top-level <code>val</code> with a getter, a second <code>init</code> (one each), an <code>if</code> that gives a value, and a lambda straight after <code>-&gt;</code> in a <code>when</code> (it reads as a block).</td><td class="when">Each when a program asks</td></tr>
+<tr><td class="part" id="o-m8-os">Program</td><td>No property says which system the program runs on; JadeMem asks <code>Path.separator</code>.</td><td class="when">With the std names above</td></tr>
+<tr><td class="part" id="o-m8-check">astra check</td><td><code>astra check</code> on one file of a folder does not see the folder's other files; checking the program that imports the folder does.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-m8-ffi">Foreign functions</td><td>Floats as arguments and results; JadeMem's are all whole numbers and pointers.</td><td class="when">When a program needs them</td></tr>
+<tr><td class="part" id="o-m8-dialogs">File dialogs</td><td>Linux has no one system dialog; <code>NoFileDialog</code> there.</td><td class="when">A milestone that takes Linux up</td></tr>
+<tr><td class="part" id="o-m8-svg">Image dialog</td><td>Previews a picture file; SVG markup is previewed once Jade draws SVG.</td><td class="when">M10</td></tr>
+<tr><td class="part" id="o-m8-mft">JadeMem</td><td>Reading the NTFS file table parses about a million records in 3.4 s, on all cores; a drive of five million files would take some 12 to 17 s past its reading. The disk walk, where the table cannot be read, waits on the folder listing above.</td><td class="when">Timed elevated on this machine</td></tr>
 </tbody></table></div>
 
 <h2 id="sandbox">The sandbox: what was left out</h2>

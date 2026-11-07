@@ -1600,6 +1600,77 @@ JadeUI has none either). Undo keeps a whole copy of the text per step, up to 200
 does. Combining marks and right-to-left text get carets as good as the text engine's first
 part allows, until its second part.
 
+### 6.5 As built in M8
+
+M8 ported JadeUI's dialogs, its charts and its treemap, and with them JadeMem, the smallest of
+the programs built on JadeUI, from the plan in `docs/M8-plan.md`. In `lib/Jade`:
+
+| Astra | From | Holds |
+| --- | --- | --- |
+| `Dialogs.astra` | `JadeDialogs.kt`, `DialogSession.kt` | the specs and results of every dialog, `DialogHandle`, the dialog interfaces and their `No...` forms, `DialogSession`, `Dialogs` |
+| `Prompts.astra` | `Prompts.kt` | the text prompt (one line or several, live, Make static, links) and the value-and-format editor |
+| `Completion.astra` | `sheet/Completion.kt`, `FormatCompletion` | `Completer`, `CompletionPopup`, `FormatCompletion` |
+| `Choices.astra` | `Choices.kt` | choose, pick, the checklist |
+| `Forms.astra` | `Forms.kt` | forms of several kinds, options with actions, the image dialog and its preview |
+| `Panels.astra` | `Panels.kt` | the find and replace panel, the source window |
+| `Chart.astra` | `chart/ChartRenderer.kt`, `ChartView.kt` | `ChartData`, `ChartSeries`, `ChartType`, `ChartPoint`, `ChartHit`, `ChartLayout`, `ChartRenderer`, `ChartView`, `chartView`, `barChart`, `lineChart`, `pieChart` |
+| `Treemap.astra` | `treemap/*.kt` | `TreemapNode`, `TreemapTile`, `Treemap` (squarified), `TreemapRenderer` (cushions), `TreemapView`, `treemap` |
+| `Window.astra` | the GLFW backend's dialogs | `SystemFileDialog` (the system's, on a thread of its own), `ScriptedFileDialog`, `NoWindowOpener`; owned windows passed on to the owner's owner |
+
+Below them, in Astra: `Program.environment`, `processId` and `hostName`; `LocalDate`,
+`LocalTime`, `LocalDateTime` with Java's patterns; a volume's roots and space; `Regex` (a C++
+engine checked against Java on 162 cases); the canvas's line width, arcs and wedges, and
+shapes that say where they are; foreign functions (`Library`, `Memory`, `CType`, `Foreign`),
+whole numbers and pointers only; and the system's file dialogs on Windows.
+
+**JadeMem** is in its own repository, `D:\Projects\JadeMem`, one folder for each Kotlin
+module (`Core`, `Native`, `Gui`) and `JadeMem.astra` to start it; `PORTING.md` there says how
+Kotlin became Astra. Its 264 tests are the Kotlin's (core 179, gui 62 with `ViewTest`, native
+23). Native is Astra's foreign functions over `ntdll`, `kernel32`, `advapi32`, `pdh` and
+`psapi`, and reads the NTFS file table itself; its figures agree with `systeminfo`.
+
+**Speed.** A chart draws on the window's canvas each time it is shown, which keeps it sharp at
+any scale of the screen (JadeUI drew it into an image at layout size). A treemap's cushions are
+worked out for every pixel, in C++ behind `TreemapRenderer.render`: 1,400 by 900 in 23 ms. The
+treemap's layout of 200,000 nodes stays under the test's two seconds. JadeMem's attribution
+scan of every driver image searches each image on all cores (1.4 s for 460 images). An idle
+pool with a timed job (JadeMem's sampler) no longer spins a core (fixed in Astra's locks).
+
+**Differences from the Kotlin, to be known when porting.**
+
+- Only the dialogs that answer through `onResult` are carried over; the forms that wait for an
+  answer are not (5.6). Of `BlockingDialogsTest`, the five tests of the other forms are.
+- `CompletionPopup` has one `init`, taking a `Display`; JadeUI's second constructor (an anchor)
+  is `overlayAt(anchor)`, as an Astra class has one `init`.
+- JadeUI's small faults, mended: a checklist's draft keeps an item holding a line break; the
+  image dialog makes what its listeners compare with before the listeners; switching the find
+  panel between Find and Replace does not tell the program it closed. The options dialog's
+  actions are disabled with its OK while its subject is gone, as in JadeUI: an action answers
+  as OK does.
+- A chart is drawn on the canvas, not shown as an image; the treemap's labels likewise.
+- Values on charts are formatted as Kotlin's `String.format` does (half up, from the digits
+  `print` shows), which is now how Astra's `format` works everywhere.
+- The Launcher's Dialogs tab and its Dialogs and While Open menus are JadeUI's
+  `DialogShowcase` (`examples/dialog_showcase.astra`), without the blocking rename; the image
+  dialog previews a file only until Jade draws SVG (M10).
+
+**Found and fixed in Astra on the way**, each with its own commit and test: an override of a
+generic class's method with its type argument filled in was refused; `f.invoke(args)` had no
+type; a `TextArea` read its old rows for the caret's place; a lambda after a call did not go
+into a `vararg`; a folder imported again did not run what sets it up, so an importer kept in
+the cache could leave a folder's names unmade, and a file importing its own folder ran it too
+early; two threads waiting on one lock woke each other without end; a test's sandbox never
+let timed jobs come due; a sandbox's volume space threw what it does not declare; an anonymous
+object lost what it captured; a field did not override an interface's property with accessors.
+
+**Left open**, in the outstanding list: a class or object nested in an `object` cannot be
+reached by its full name; the checker does not see a header `val` with a default assigned
+again in `init`; an object first used inside a parallel section can fail; no smart cast after
+`!!`; no `catch (e : A | B)`, `trim(char)` or `split(limit)`; and, needing new names in the
+standard library, a folder's listing with each file's attributes (JadeMem's disk walk is about
+four times slower than Java's without it), output to standard error, and an error's stack as
+text. What `+` means between a collection and an item is a language question for the user.
+
 ## 7. Order of work
 
 The work goes one milestone at a time. A milestone is built, tested and shown, and the next
