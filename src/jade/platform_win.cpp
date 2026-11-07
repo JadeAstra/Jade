@@ -9,7 +9,9 @@
 #include "gl.h"  // brings in windows.h
 
 #include <delayimp.h>
+#include <objbase.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -504,6 +506,9 @@ public:
     }
     void wake() override { PostThreadMessageW(thread, WM_NULL, 0, 0); }
 
+    bool chooseFile(int kind, const std::string& title, const std::vector<std::pair<std::string, std::string>>& filters, const std::string& startDir,
+                    const std::string& name, PlatformWindow* owner, std::string& path, std::string& error) override;
+
     std::string clipboardText() override {
         std::string text;
         if (!OpenClipboard(helper)) return text;
@@ -552,6 +557,88 @@ WinWindow::~WinWindow() {
 }
 
 bool WinWindow::makeCurrent() { return platform.current(dc); }
+
+// The system's file dialog (IFileOpenDialog, IFileSaveDialog), on this thread: COM is set up
+// for it here, as the thread may be any (M8).
+bool WinPlatform::chooseFile(int kind, const std::string& title, const std::vector<std::pair<std::string, std::string>>& filters, const std::string& startDir,
+                             const std::string& name, PlatformWindow* owner, std::string& path, std::string& error) {
+    const HRESULT started = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool ours = SUCCEEDED(started);  // S_FALSE too: set up before, and counted again
+    auto fail = [&](const char* what, HRESULT hr) {
+        char code[16];
+        std::snprintf(code, sizeof code, "0x%08lX", static_cast<unsigned long>(hr));
+        error = std::string(what) + " (" + code + ")";
+        return false;
+    };
+    bool chosen = false;
+    {
+        IFileDialog* dialog = nullptr;
+        const HRESULT made = kind == 1 ? CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(reinterpret_cast<IFileSaveDialog**>(&dialog)))
+                                       : CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(reinterpret_cast<IFileOpenDialog**>(&dialog)));
+        if (FAILED(made)) {
+            if (ours) CoUninitialize();
+            return fail("cannot make the system's file dialog", made);
+        }
+        FILEOPENDIALOGOPTIONS options = 0;
+        dialog->GetOptions(&options);
+        options |= FOS_FORCEFILESYSTEM;
+        if (kind == 0) options |= FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
+        if (kind == 1) options |= FOS_OVERWRITEPROMPT | FOS_PATHMUSTEXIST;
+        if (kind == 2) options |= FOS_PICKFOLDERS;
+        dialog->SetOptions(options);
+        if (!title.empty()) dialog->SetTitle(widen(title).c_str());
+        // The filters, kept while the dialog is up.
+        std::vector<std::wstring> texts;
+        texts.reserve(filters.size() * 2);
+        std::vector<COMDLG_FILTERSPEC> specs;
+        for (const auto& [what, pattern] : filters) {
+            texts.push_back(widen(what));
+            texts.push_back(widen(pattern));
+        }
+        for (size_t i = 0; i < filters.size(); i++) specs.push_back(COMDLG_FILTERSPEC{texts[2 * i].c_str(), texts[2 * i + 1].c_str()});
+        if (kind != 2 && !specs.empty()) {
+            dialog->SetFileTypes(static_cast<UINT>(specs.size()), specs.data());
+            dialog->SetFileTypeIndex(1);
+            // A name typed without an extension gets the first filter's first one, when saving.
+            const std::string& first = filters[0].second;
+            const size_t dot = first.find("*.");
+            if (kind == 1 && dot != std::string::npos) {
+                std::string ext = first.substr(dot + 2, first.find(';') == std::string::npos ? std::string::npos : first.find(';') - dot - 2);
+                if (!ext.empty() && ext.find('*') == std::string::npos) dialog->SetDefaultExtension(widen(ext).c_str());
+            }
+        }
+        if (!startDir.empty()) {
+            IShellItem* folder = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(widen(startDir).c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
+                dialog->SetFolder(folder);
+                folder->Release();
+            }
+        }
+        if (kind == 1 && !name.empty()) dialog->SetFileName(widen(name).c_str());
+        HWND parent = nullptr;
+        if (owner != nullptr) parent = static_cast<WinWindow*>(owner)->hwnd;
+        const HRESULT shown = dialog->Show(parent);
+        if (SUCCEEDED(shown)) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&item))) {
+                PWSTR chosenPath = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &chosenPath))) {
+                    path = narrow(chosenPath, static_cast<int>(wcslen(chosenPath)));
+                    CoTaskMemFree(chosenPath);
+                    chosen = true;
+                }
+                item->Release();
+            }
+        } else if (shown != HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+            dialog->Release();
+            if (ours) CoUninitialize();
+            return fail("the system's file dialog failed", shown);
+        }
+        dialog->Release();
+    }
+    if (ours) CoUninitialize();
+    return chosen;
+}
 
 LRESULT CALLBACK WinPlatform::windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (thePlatform != nullptr) {

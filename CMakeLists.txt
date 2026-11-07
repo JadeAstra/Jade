@@ -103,7 +103,7 @@ foreach(part astra astra_core astra_window astra_compiler astra_proof astra_proo
 endforeach()
 if(WIN32)
   foreach(linked astra astra_proof astra_proof_plain)
-    target_link_libraries(${linked} PRIVATE opengl32 ws2_32 shell32)
+    target_link_libraries(${linked} PRIVATE opengl32 ws2_32 shell32 ole32)
   endforeach()
   # __HrLoadAllImportsForDll, which the native layer calls whether or not the program
   # delay-loads OpenGL (only astra does, below).
@@ -130,7 +130,7 @@ if(MSVC)
   # (__HrLoadAllImportsForDll): lld-link's stub for a first call can lose the second float
   # argument (src/jade/platform_win.cpp, WinPlatform::start).
   target_link_libraries(astra PRIVATE delayimp)
-  target_link_options(astra PRIVATE /DELAYLOAD:opengl32.dll /DELAYLOAD:shell32.dll)
+  target_link_options(astra PRIVATE /DELAYLOAD:opengl32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:ole32.dll)
 else()
   foreach(part astra astra_core astra_window astra_compiler astra_proof astra_proof_plain)
     target_compile_options(${part} PRIVATE -Wall -Wextra)

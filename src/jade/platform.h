@@ -154,6 +154,14 @@ public:
     virtual std::string clipboardText() = 0;
     virtual void setClipboardText(const std::string& text) = 0;
 
+    // The system's dialog for a file to open (kind 0), to save to (1), or a folder (2), shown
+    // and waited for on the calling thread, which need not be the one pumping events; in front
+    // of `owner` (may be null). `filters` are (what they are, "*.txt;*.md") pairs; `startDir` and
+    // `name` may be empty. True with `path` set when something was chosen, false when the
+    // dialog was cancelled; false with `error` set when it could not be shown (M8).
+    virtual bool chooseFile(int kind, const std::string& title, const std::vector<std::pair<std::string, std::string>>& filters,
+                            const std::string& startDir, const std::string& name, PlatformWindow* owner, std::string& path, std::string& error) = 0;
+
     // How long, in milliseconds, two presses may be apart and still be a double click.
     virtual int doubleClickTime() = 0;
     // The scale of the main screen.

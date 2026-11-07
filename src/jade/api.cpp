@@ -402,6 +402,42 @@ void registerJade(VM& vm) {
     def("doubleClickTime", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::integer(need(vm).platform().doubleClickTime()); });
     def("screenScale", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::number(need(vm).platform().screenScale()); });
 
+    // chooseFile(kind, title, filters, startDir, name, window): the system's dialog for a file
+    // to open (0), to save to (1) or a folder (2), waited for here with the program's other
+    // threads going on (it is called on a thread of its own, SystemFileDialog in Window.astra);
+    // in front of the window with that number, or none for 0. The path chosen, or null.
+    def("chooseFile", 6, 6, [](VM& vm, int, Value* args) -> Value {
+        if (vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox shows no file dialogs");
+        const int64_t kind = vm.toInt(args[0], "kind");
+        const std::string title = vm.toStr(args[1], "title");
+        std::vector<std::pair<std::string, std::string>> filters;
+        if (args[2].isObjType(ObjType::List)) {
+            for (const Value& f : vm.listCopy(asList(args[2]))) {
+                if (!f.isObjType(ObjType::List)) continue;
+                const std::vector<Value> pair = vm.listCopy(asList(f));
+                if (pair.size() == 2) filters.push_back({vm.toStr(pair[0], "filter"), vm.toStr(pair[1], "filter")});
+            }
+        }
+        const std::string startDir = args[3].isNull() ? std::string() : vm.toStr(args[3], "folder");
+        const std::string name = args[4].isNull() ? std::string() : vm.toStr(args[4], "name");
+        PlatformWindow* owner = nullptr;
+        if (!args[5].isNull()) {
+            auto found = state().windows.find(static_cast<int>(vm.toInt(args[5], "window")));
+            if (found != state().windows.end()) owner = found->second.native.get();
+        }
+        std::string error;
+        Platform* platform = Platform::get(error);
+        if (platform == nullptr) throw vm.errorOf("IOException", "no file dialog: " + error);
+        std::string path;
+        bool chosen;
+        {
+            LockReleased waiting(vm);
+            chosen = platform->chooseFile(static_cast<int>(kind), title, filters, startDir, name, owner, path, error);
+        }
+        if (!error.empty()) throw vm.errorOf("IOException", error);
+        return chosen ? vm.str(std::move(path)) : Value::null();
+    });
+
     def("clipboardOwn", 1, 1, [](VM&, int, Value* args) -> Value {
         state().ownClipboard = args[0].truthy();
         return Value::null();

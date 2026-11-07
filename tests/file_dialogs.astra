@@ -1,0 +1,42 @@
+// windows only: it opens a window, which is on Windows only so far (G56)
+// File dialogs (N2, M8): before any window the file dialog cancels everything; a window on the
+// screen installs the system's (SystemFileDialog, shown by hand: it cannot be answered here), a
+// hidden one leaves what there is; a scripted one answers from its list and keeps what it was
+// asked; and a sandbox shows none.
+import Jade.*
+
+print(Jade.fileDialog is NoFileDialog)   // expect: true
+Jade.fileDialog.open("Open", []) { print("before any window:", it) }   // expect: before any window: null
+
+Jade.windowOpener = HiddenWindowOpener()
+val w = Window(label("x"), "Hidden", 100, 50)
+w.show()
+print(Jade.fileDialog is NoFileDialog)   // expect: true
+w.close()
+
+// A scripted dialog: the answers in order, then null; and what each was asked.
+val script = ScriptedFileDialog()
+script.answers.addAll(["C:\\data\\a.txt", null])
+Jade.fileDialog = script
+val text = [FileFilter("Text files", ["*.txt", "*.md"])]
+Jade.fileDialog.open("Open a note", text) { print("open:", it) }   // expect: open: C:\data\a.txt
+Jade.fileDialog.save("Save As", "untitled.txt", text) { print("save:", it) }   // expect: save: null
+Jade.fileDialog.chooseDirectory("Pick") { print("folder:", it) }   // expect: folder: null
+print(script.asked.map { "${it.kind} ${it.title} ${it.suggestedName}" })   // expect: ["open Open a note null", "save Save As untitled.txt", "folder Pick null"]
+print(script.asked[0].filters[0].extensions)   // expect: ["*.txt", "*.md"]
+
+// A window shown for real puts the system's in place, unless the program has its own.
+Jade.fileDialog = NoFileDialog()
+val system = SystemFileDialog()
+system.startDir = "C:\\no\\such\\folder\\here"
+print(system.startDir, system.lastError)   // expect: C:\no\such\folder\here null
+
+// In a sandbox the system's dialog answers null, and says why.
+var answered = "not yet"
+Sandbox.run {
+  system.open("Open", []) { answered = "$it" }
+}
+EventLoop.after(2.seconds) {
+  print("in a sandbox:", answered, system.lastError?.message)
+}
+// expect: in a sandbox: null a sandbox shows no file dialogs

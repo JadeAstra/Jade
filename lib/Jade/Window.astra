@@ -358,6 +358,8 @@ class WindowHost : WindowHandle {
     Jade.scheduler = { delay, task -> EventLoop.after(delay, task) }
     frontWindowHost = this
     if (!hidden and !(Jade.clipboard is SystemClipboard)) { Jade.clipboard = SystemClipboard() }
+    // The system's file dialogs, unless the program has given its own.
+    if (!hidden and Jade.fileDialog is NoFileDialog) { Jade.fileDialog = SystemFileDialog() }
     screen.serveOverlays()               // the program's popups and tips open in the window in front
     Jade.onFocusRequested { comp ->
       setKeyboardFocus(true)
@@ -1073,6 +1075,75 @@ internal class TipCard(val text : string) : Content {
 // The system's clipboard, for Jade.clipboard once a window is shown: plain text goes to the
 // system; the last copy is kept with its colours and pictures, and a paste of the same text
 // gets them back (another program's copy has none).
+// The system's dialogs for a file to open or save to, or a folder, for Jade.fileDialog once a
+// window is shown (M8): each is shown on a thread of its own while the program goes on, in front
+// of the window in front, and what was chosen (or null) goes to onResult on the window's thread.
+// The folder it opens in is startDir where that is still a folder. A dialog the system cannot
+// show answers null, as a cancelled one does, and says why in lastError.
+class SystemFileDialog : FileDialog {
+  override var startDir : string? = null
+  // Why the last dialog could not be shown, or null if it was.
+  var lastError : Throwable? = null
+
+  override fun open(title : string, filters : List<FileFilter>, onResult : (string?) -> unit) {
+    ask(0, title, filters, null, onResult)
+  }
+  override fun save(title : string, suggestedName : string, filters : List<FileFilter>, onResult : (string?) -> unit) {
+    ask(1, title, filters, suggestedName.isEmpty() ? null : suggestedName, onResult)
+  }
+  override fun chooseDirectory(title : string, onResult : (string?) -> unit) {
+    ask(2, title, [], null, onResult)
+  }
+
+  private fun ask(kind : int, title : string, filters : List<FileFilter>, name : string?, onResult : (string?) -> unit) {
+    val dir = startDir
+    val start : string? = dir != null and Path(dir).isDirectory() ? dir : null
+    val window : int? = frontWindowHost?.native?.id
+    val specs = filters.map { [it.description, it.extensions.join(";")] }
+    thread {
+      var chosen : string? = null
+      var failure : Throwable? = null
+      try {
+        chosen = __jade.chooseFile(kind, title, specs, start, name, window) as string?
+      } catch (e : Throwable) {
+        failure = e
+      }
+      EventLoop.post {
+        lastError = failure
+        onResult(chosen)
+      }
+    }
+  }
+}
+
+// A file dialog that answers from a script, for tests (as JadeUI's hidden mode has it): each
+// dialog takes the next of `answers` (null when there are none left, as if cancelled), at
+// once, and is kept in `asked`.
+class ScriptedFileDialog : FileDialog {
+  override var startDir : string? = null
+  // What the next dialogs answer, in order.
+  val answers : open List<string?> = []
+  // What was asked: the kind ("open", "save", "folder"), the title, and the name suggested.
+  val asked : open List<FileAsk> = []
+
+  override fun open(title : string, filters : List<FileFilter>, onResult : (string?) -> unit) {
+    onResult(next(FileAsk("open", title, null, filters)))
+  }
+  override fun save(title : string, suggestedName : string, filters : List<FileFilter>, onResult : (string?) -> unit) {
+    onResult(next(FileAsk("save", title, suggestedName, filters)))
+  }
+  override fun chooseDirectory(title : string, onResult : (string?) -> unit) {
+    onResult(next(FileAsk("folder", title, null, [])))
+  }
+  private fun next(ask : FileAsk) : string? {
+    asked.add(ask)
+    return answers.isEmpty() ? null : answers.removeAt(0)
+  }
+}
+
+// One file dialog asked of a ScriptedFileDialog.
+data FileAsk(val kind : string, val title : string, val suggestedName : string?, val filters : List<FileFilter>)
+
 class SystemClipboard : Clipboard {
   private var last : StyledText? = null
 

@@ -2366,6 +2366,15 @@ case, which is what a shortcut wants: Ctrl+Z is the key whose letter is `"Z"`. `
 `Native.doubleClickTime`, `Native.screenScale`, `Native.nanoTime()`, and
 `Native.isAvailable` and `Native.problem()` for a machine with no OpenGL to draw with.
 
+**File dialogs.** `Jade.fileDialog.open(title, filters) { path -> }`, `save(title,
+suggestedName, filters) { }` and `chooseDirectory(title) { }` return at once and give the path
+chosen, or null, to the lambda later. Before any window, and with hidden windows, the file
+dialog cancels everything; a window on the screen puts the system's in place
+(`SystemFileDialog`: Windows' own dialogs, shown on a thread of their own while the program
+goes on, in front of the window in front, opening in `startDir` where that is a folder).
+`ScriptedFileDialog` answers from a list and keeps what it was asked, for tests. Linux has no
+system dialog yet.
+
 ### The canvas
 
 `window.canvas()`, `surface.canvas()` and `image.canvas()` give a canvas: the standard
