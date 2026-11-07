@@ -44,12 +44,7 @@ print(Treemap.layout(TreemapNode("root", 1001, [deep, leaf("big", 1000)]), Rect(
 print(Treemap.layout(TreemapNode("root", 100, [leaf("empty", 0), leaf("real", 100), leaf("odd", -5)]), Rect(0, 0, 200, 100)).map { it.node.label })   // expect: ["real"]
 // An empty tree, or an empty area, lays out to nothing.
 print(Treemap.layout(TreemapNode("root", 0), Rect(0, 0, 100, 100)).isEmpty(), Treemap.layout(weightsTree([1, 2]), Rect(0, 0, 0, 0)).isEmpty())   // expect: true true
-// A big tree (200,000 files, an ordinary disk) lays out fast enough to use.
-val dirs = (1 .. 400).toList().map { d -> TreemapNode("d$d", 500 * 500, (1 .. 500).toList().map { leaf("f$it", 500) }) }
-val started = Instant.now()
-val all = Treemap.layout(TreemapNode("root", dirs.map { it.weight }.sum(), dirs), Rect(0, 0, 1400, 900))
-val took = Instant.now() - started
-print(all.isNotEmpty(), took < 2.seconds)   // expect: true true
+// A big tree's speed is in jade_treemap_big.astra.
 
 print("-- the cushions")   // expect: -- the cushions
 val two = Treemap.layout(TreemapNode("root", 100, [TreemapNode("dir", 60, [leaf("a", 40), leaf("b", 20)]), leaf("c", 40)]), Rect(0, 0, 200, 100))

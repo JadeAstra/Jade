@@ -20,8 +20,8 @@
 # the way of running a script only (D163): ASTRA_COPY_READS reads a list's value items as copies
 # where they could be read in place, ASTRA_THREAD_STRESS changes threads at every safe point,
 # ASTRA_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
-# ASTRA_GC_STRESS collects at every safe point (gc.astra, which counts collections, is left out
-# of that one). Each checkpoint runs it.
+# ASTRA_GC_STRESS collects at every safe point (gc.astra, which counts collections, and
+# jade_treemap_big.astra, which times a big layout, are left out of that one). Each checkpoint runs it.
 #
 #   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 24 -Stress
 
@@ -185,8 +185,9 @@ $failures = @()
 $aloneOnly = @()
 
 $tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.astra') | Sort-Object Name)
-# gc.astra counts collections, which the GC stress setting makes at every safe point.
-if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -ne 'gc.astra' }) }
+# Left out under the GC stress setting, which collects at every safe point: gc.astra counts
+# collections, and jade_treemap_big.astra's 200,000 nodes would take hours.
+if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.astra', 'jade_treemap_big.astra') }) }
 $outcomes = @{}
 if ($Parallel -gt 1) {
     # Each test in a runspace of a pool of $Parallel, all started at once and gathered in order.
