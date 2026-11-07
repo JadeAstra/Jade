@@ -4597,23 +4597,144 @@ void VM::setIndex(Value obj, Value index, Value value) {
 
 // ---- Operators (the cases the interpreter loop does not handle inline) ----
 
+namespace {
+
+// The item type of a collection's type (`int` of `List<int>`), or null where its items may be
+// anything: no type, or `any`.
+const ObjTypeInfo* itemTypeOf(const ObjTypeInfo* collection) {
+    if (collection == nullptr || collection->args.empty() || collection->args[0] == nullptr || collection->args[0]->id == 0) return nullptr;
+    return collection->args[0];
+}
+
+}  // namespace
+
+bool VM::addsMany(const ObjTypeInfo* itemType, Value right) {
+    const bool collection = right.isObjType(ObjType::List) || right.isObjType(ObjType::Set) || right.isObjType(ObjType::Range);
+    return collection && !(itemType != nullptr && fitsType(right, itemType));
+}
+
+JadeThrow VM::notAnItem(const char* kind, const ObjTypeInfo* type, const ObjTypeInfo* itemType, Value item) {
+    return runtimeError(Thrown::ClassCastException, std::string("'+' adds to a ") + (type != nullptr ? typeInfoText(type) : kind) + " an item of type " +
+                                                        typeInfoText(itemType) + ", or the items of a collection of them; not " + typeName(item));
+}
+
+ObjList* VM::listPlus(ObjList* left, Value right) {
+    const ObjTypeInfo* itemType = itemTypeOf(left->type);
+    if (!addsMany(itemType, right)) {
+        if (itemType != nullptr && !fitsType(right, itemType)) throw notAnItem("List", left->type, itemType, right);
+        ObjList* made = listLike(left);
+        TempRoot keep(*this, Value::object(made));
+        listCopyRange(made, left, 0, left->size());
+        listAdd(made, right);
+        return made;
+    }
+    if (right.isObjType(ObjType::List)) {
+        ObjList* other = asList(right);
+        ObjList* joined;
+        if (!left->packed() && !other->packed()) {
+            // Two lists of 16-byte values, as most are: their items one after the other.
+            joined = alloc<ObjList>();
+            std::vector<Value>& items = joined->values();
+            items.reserve(left->size() + other->size());
+            items.insert(items.end(), left->values().begin(), left->values().end());
+            items.insert(items.end(), other->values().begin(), other->values().end());
+            account(items.size() * sizeof(Value));
+            if (left->type == other->type) joined->type = left->type;
+        } else if (left->type != nullptr && left->type == other->type) {
+            // Two lists of one type: one of that type, packed as they are.
+            joined = listLike(left);
+            listCopyRange(joined, left, 0, left->size());
+            listCopyRange(joined, other, 0, other->size());
+        } else {
+            joined = alloc<ObjList>();
+            std::vector<Value>& items = joined->values();
+            items = listCopy(left);
+            const std::vector<Value> more = listCopy(other);
+            items.insert(items.end(), more.begin(), more.end());
+            account(items.size() * sizeof(Value));
+        }
+        return joined;
+    }
+    // A set's items or a range's numbers, after the list's own.
+    const std::vector<Value> more = itemsOf(right, "list +");
+    TempVector keepMore(*this, more);
+    for (const Value& item : more)
+        if (itemType != nullptr && !fitsType(item, itemType)) throw notAnItem("List", left->type, itemType, item);
+    ObjList* made = listLike(left);
+    TempRoot keep(*this, Value::object(made));
+    listCopyRange(made, left, 0, left->size());
+    for (const Value& item : more) listAdd(made, item);
+    return made;
+}
+
+ObjMap* VM::mapPlus(ObjMap* left, Value right) {
+    std::vector<Value> entries;  // key, value, key, value...
+    TempVector keepEntries(*this, entries);
+    const ObjClass* cls = classOf(right);
+    if (right.isObjType(ObjType::Map)) {
+        for (const ValueMap::Entry& e : asMap(right)->map.entries())
+            if (e.live) {
+                entries.push_back(e.key);
+                entries.push_back(e.value);
+            }
+    } else if (cls != nullptr && cls->name->utf8() == "Pair" && cls->origin != nullptr && cls->origin->utf8() == "jade") {
+        entries.push_back(componentOf(right, 0));
+        entries.push_back(componentOf(right, 1));
+    } else {
+        throw runtimeError(Thrown::UnsupportedOperationException, "'+' adds to a map a Pair (key to value) or the entries of another map; not " + typeName(right));
+    }
+    if (left->type != nullptr && left->type->args.size() == 2) {
+        for (size_t i = 0; i < entries.size(); i++) {
+            const ObjTypeInfo* wanted = left->type->args[i % 2];
+            if (wanted != nullptr && wanted->id != 0 && !fitsType(entries[i], wanted))
+                throw runtimeError(Thrown::ClassCastException, "'+' adds to a " + typeInfoText(left->type) + (i % 2 == 0 ? " keys" : " values") + " of type " +
+                                                                   typeInfoText(wanted) + "; not " + typeName(entries[i]));
+        }
+    }
+    ObjMap* made = alloc<ObjMap>();
+    made->type = left->type;
+    made->map = left->map;
+    TempRoot keep(*this, Value::object(made));
+    for (size_t i = 0; i + 1 < entries.size(); i += 2) made->map.set(own(entries[i]), own(entries[i + 1]));
+    account(64 * made->map.size());
+    return made;
+}
+
 bool VM::binarySlow(Op op) {
     Value a = sp_[-2], b = sp_[-1];
     guardRead(a);
     guardRead(b);
     ObjString* symbol = opNames_[static_cast<int>(op)];
 
+    // A collection + an item is a new collection of the same kind with the item added, and + a
+    // collection, with its items added, as in Kotlin (the user, 2026-11-07). Which the right side
+    // is goes by the left one's item type, as Kotlin's overloads go by it: a List<List<int>> + a
+    // list adds the list as one item. A collection on the left comes before text, so
+    // ["a"] + "text" is ["a", "text"]; "text" + a list is still text.
+    if (op == Op::Add && a.isObjType(ObjType::List)) {
+        sp_[-2] = Value::object(listPlus(asList(a), b));
+        sp_--;
+        return false;
+    }
+    if (op == Op::Add && a.isObjType(ObjType::Map)) {
+        sp_[-2] = Value::object(mapPlus(asMap(a), b));
+        sp_--;
+        return false;
+    }
     // set + x and set - x: a new set, with x or without it, or with or without what a list, a
     // range or another set holds.
     if (a.isObjType(ObjType::Set) && (op == Op::Add || op == Op::Sub)) {
         const ObjSet* from = asSet(a);
+        const ObjTypeInfo* itemType = itemTypeOf(from->type);
+        if (op == Op::Add && !addsMany(itemType, b) && itemType != nullptr && !fitsType(b, itemType))
+            throw notAnItem("Set", from->type, itemType, b);
         ObjSet* made = newSet(from->type);
         TempRoot keep(*this, Value::object(made));
         for (const Value& item : setItems(from)) setAdd(made, item);
-        const bool many = b.isObjType(ObjType::List) || b.isObjType(ObjType::Set) || b.isObjType(ObjType::Range);
-        const std::vector<Value> others = many ? itemsOf(b, "set + and -") : std::vector<Value>{b};
+        const std::vector<Value> others = addsMany(itemType, b) ? itemsOf(b, "set + and -") : std::vector<Value>{b};
         TempVector keepOthers(*this, others);
         for (const Value& item : others) {
+            if (op == Op::Add && itemType != nullptr && !fitsType(item, itemType)) throw notAnItem("Set", from->type, itemType, item);
             if (op == Op::Add) setAdd(made, item);
             else setRemove(made, item);
         }
@@ -4691,36 +4812,6 @@ bool VM::binarySlow(Op op) {
             joined->data = asBytes(a)->data;
             joined->data.insert(joined->data.end(), asBytes(b)->data.begin(), asBytes(b)->data.end());
             account(joined->data.size());
-            sp_[-2] = Value::object(joined);
-            sp_--;
-            return false;
-        }
-        if (a.isObjType(ObjType::List) && b.isObjType(ObjType::List)) {
-            ObjList* left = asList(a);
-            ObjList* right = asList(b);
-            ObjList* joined;
-            if (!left->packed() && !right->packed()) {
-                // Two lists of 16-byte values, as most are: their items one after the other.
-                joined = alloc<ObjList>();
-                std::vector<Value>& items = joined->values();
-                items.reserve(left->size() + right->size());
-                items.insert(items.end(), left->values().begin(), left->values().end());
-                items.insert(items.end(), right->values().begin(), right->values().end());
-                account(items.size() * sizeof(Value));
-                if (left->type == right->type) joined->type = left->type;
-            } else if (left->type != nullptr && left->type == right->type) {
-                // Two lists of one type: one of that type, packed as they are.
-                joined = listLike(left);
-                listCopyRange(joined, left, 0, left->size());
-                listCopyRange(joined, right, 0, right->size());
-            } else {
-                joined = alloc<ObjList>();
-                std::vector<Value>& items = joined->values();
-                items = listCopy(left);
-                const std::vector<Value> more = listCopy(right);
-                items.insert(items.end(), more.begin(), more.end());
-                account(items.size() * sizeof(Value));
-            }
             sp_[-2] = Value::object(joined);
             sp_--;
             return false;

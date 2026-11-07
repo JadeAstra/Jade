@@ -5524,6 +5524,9 @@ struct Checker::Impl {
         }
         const bool comparison = op == TokenType::Lt || op == TokenType::LtEq || op == TokenType::Gt || op == TokenType::GtEq;
         if (l.kind == Type::Nothing || r.kind == Type::Nothing) return Type::of(Type::Nothing);
+        // A collection on the left is added to before text is joined: ["a"] + "text" is a list.
+        if (op == TokenType::Plus && !l.nullable && (l.kind == Type::List || l.kind == Type::Set || l.kind == Type::Map))
+            return collectionPlus(b, l, r);
         if (op == TokenType::Plus && ((l.kind == Type::String && !l.nullable) || (r.kind == Type::String && !r.nullable)))
             return Type::of(Type::String);
         if (l.unknown() || r.unknown() || l.kind == Type::TypeParam || r.kind == Type::TypeParam)
@@ -5557,12 +5560,10 @@ struct Checker::Impl {
             case TokenType::Slash:
             case TokenType::Percent:
                 if (isNumeric(l) && isNumeric(r)) return arithmetic(l, r);
-                // A new list or set, its maker's to change (D32).
-                if (op == TokenType::Plus && l.kind == Type::List && r.kind == Type::List) return made(common(withNull(l, false), withNull(r, false)));
-                // set + x and set - x: a new set, with or without x, or what a collection holds.
-                if ((op == TokenType::Plus || op == TokenType::Minus) && l.kind == Type::Set) return made(l);
-                if (op == TokenType::Plus && (l.kind == Type::List || l.kind == Type::Map || l.kind == Type::Bytes))
-                    return unknownType();
+                // set - x: a new set without x, or without what a collection holds; its maker's to
+                // change (D32). (set + x is collectionPlus's.)
+                if (op == TokenType::Minus && l.kind == Type::Set) return made(l);
+                if (op == TokenType::Plus && l.kind == Type::Bytes) return unknownType();
                 if (op == TokenType::Star && l.kind == Type::String && r.kind == Type::Int) return Type::of(Type::String);
                 report(b, "'" + opText(op) + "' cannot be used on " + describe(l) + " and " + describe(r));
                 return unknownType();
@@ -5590,6 +5591,46 @@ struct Checker::Impl {
             default:
                 return unknownType();
         }
+    }
+
+    // `+` on a list, a set or a map, as in Kotlin (the user, 2026-11-07): a new one of the same
+    // kind, its maker's to change (D32), with an item of its item type added, or the items of a
+    // collection of them; a map with a Pair's entry, or another map's entries. Which the right
+    // side is goes by the left one's item type, as Kotlin's overloads go by it: a List<List<int>>
+    // + a List<int> adds the list as one item. The VM decides the same way (VM::listPlus).
+    Type collectionPlus(const BinaryExpr& b, const Type& left, const Type& r) {
+        const Type l = withNull(left, false);
+        if (l.kind == Type::Map) {
+            if (r.unknown() || l.args.size() != 2) return made(l);
+            const Type& key = l.args[0];
+            const Type& value = l.args[1];
+            if (r.kind == Type::Map && !r.nullable && r.args.size() == 2) {
+                if (!fits(r.args[0], key) || !fits(r.args[1], value))
+                    report(b, "'+' adds to " + describe(l) + " the entries of another map of " + describe(key) + " to " + describe(value) + "; this is " + describe(r));
+                return made(l);
+            }
+            if (r.kind == Type::Class && !r.nullable && r.cls != nullptr && r.cls->name == "Pair" && r.args.size() == 2) {
+                if (!fits(r.args[0], key) || !fits(r.args[1], value))
+                    report(b, "'+' adds to " + describe(l) + " a Pair of " + describe(key) + " and " + describe(value) + " (key to value); this is " + describe(r));
+                return made(l);
+            }
+            report(b, "'+' adds to " + describe(l) + " a Pair (key to value) or the entries of another map; this is " + describe(r));
+            return made(l);
+        }
+        const Type item = l.args.empty() ? unknownType() : l.args[0];
+        const bool collection = !r.nullable && (r.kind == Type::List || r.kind == Type::Set || r.kind == Type::Range);
+        const bool many = collection && !(!item.unknown() && item.kind != Type::Any && fits(r, item));
+        if (many) {
+            const Type theirs = r.kind == Type::Range ? Type::of(Type::Int) : r.args.empty() ? unknownType() : r.args[0];
+            if (!fits(theirs, item))
+                report(b, "'+' adds to " + describe(l) + " " + describe(item) + ", or the items of a collection of them; this is " + describe(r));
+            // Two lists: a list of what both hold, as before.
+            if (l.kind == Type::List && r.kind == Type::List) return made(common(l, withNull(r, false)));
+            return made(l);
+        }
+        if (!fits(r, item))
+            report(b, "'+' adds to " + describe(l) + " " + describe(item) + ", or the items of a collection of them; this is " + describe(r));
+        return made(l);
     }
 
     // `char + char` is a string, `char +- int` a char, `char - char` an int, `int +- char` an

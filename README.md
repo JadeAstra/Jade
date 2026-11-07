@@ -2605,6 +2605,13 @@ collections").
 | A value | `sum()`, `sumOf { }`, `average()`, `max()`, `min()`, `maxOrNull()`, `minOrNull()`, `maxOf { }`, `minOf { }`, `maxBy { }`, `minBy { }`, `maxByOrNull { }`, `minByOrNull { }`, `fold(initial) { acc, item -> }`, `reduce { acc, item -> }`, `join(separator?, prefix?, postfix?, limit?, truncated?) { }` |
 | A map or set | `associate { key to value }`, `associateBy { }`, `associateWith { }`, `groupBy { }`, `toMap()` (of pairs), `toSet()` |
 
+**`+` on a collection** makes a new one, as in Kotlin: `xs + x` is the list with `x` added,
+`xs + ys` with the items of `ys` (a list, a set or a range), and the same for a set; `map + (k to v)`
+is the map with that entry, and `map + other` with the other's entries, which win. Which `+`
+means goes by the left one's item type, so a `List<List<int>>` + `[2, 3]` adds the list as one
+item. A collection on the left comes before text: `["a"] + "b"` is `["a", "b"]`, while
+`"b" + ["a"]` is the text `b["a"]`. `var xs = [1]; xs += 2` makes the new list and keeps it.
+
 `get`, `set`, `xs[i]` and a slice are errors for a position outside the list, and `getOrNull`
 gives `null` for one; `xs[^1]` is the last item. `first()` and `max()` are errors on an empty list where `firstOrNull()` and
 `maxOrNull()` give `null`. `sort` is stable.

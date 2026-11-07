@@ -1,0 +1,48 @@
+// `+` on a collection (the user, 2026-11-07, as in Kotlin): a new collection of the same kind with
+// an item added, or with the items of another collection; a map with a Pair's entry or another
+// map's entries. The left one is never changed, and what is made is its maker's to change (D32).
+
+// A list and an item, and a list and the items of a list, a set or a range.
+val nums = [1, 2]
+print(nums + 3, nums + [3, 4], nums + setOf(5), nums + (6 ..< 8))   // expect: [1, 2, 3] [1, 2, 3, 4] [1, 2, 5] [1, 2, 6, 7]
+print(nums)   // expect: [1, 2]
+val more = nums + 3
+more.add(9)
+print(more)   // expect: [1, 2, 3, 9]
+
+// A collection on the left is added to before text is joined; text on the left is still text.
+print(["a"] + "text", "text" + ["a"])   // expect: ["a", "text"] text["a"]
+val words : List<string> = ["a"] + "b"
+print(words.size)   // expect: 2
+
+// Which the right side is goes by the left one's item type: a list of lists takes a list as one
+// item, and a list of anything takes a list's items, as Kotlin's overloads choose.
+val nested : List<List<int>> = [[1]]
+print(nested + [2, 3])   // expect: [[1], [2, 3]]
+val anything : List<any> = [1]
+print(anything + [2, 3], anything + "x")   // expect: [1, 2, 3] [1, "x"]
+
+// A set, as before: an item, or the items of a collection.
+print(setOf("x") + "y", setOf(1) + listOf(2, 3), setOf(1, 2) - 1)   // expect: {"x", "y"} {1, 2, 3} {2}
+
+// A map and a pair, or another map, whose entries win.
+val ages = {"ann": 30}
+print(ages + ("bob" to 41), ages + {"bob": 41, "ann": 31}, ages)   // expect: {"ann": 30, "bob": 41} {"ann": 31, "bob": 41} {"ann": 30}
+
+// var += makes a new collection and keeps it.
+var grown = [1]
+grown += 2
+grown += [3, 4]
+print(grown)   // expect: [1, 2, 3, 4]
+
+// A packed list (of ints) stays one, and a typed list keeps its type.
+val packed : List<int> = [1, 2, 3]
+print((packed + 4).sum(), (packed + 4) is List<int>)   // expect: 10 true
+
+// What does not fit is an error as the program runs, where the checker could not see it.
+val unknown : any = [1, 2]
+try {
+  print((unknown as List<any>) + "x")
+} catch (e : ClassCastException) {
+  print(e.message)   // expect: '+' adds to a List<int> an item of type int, or the items of a collection of them; not string
+}

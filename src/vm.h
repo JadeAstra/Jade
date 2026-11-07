@@ -366,6 +366,16 @@ public:
     void listClear(ObjList* list);
     std::vector<Value> listCopy(ObjList* list);
     ObjList* listLike(const ObjList* like);
+    // `+` on a collection (the user, 2026-11-07, as in Kotlin): a new one with an item added, or
+    // with the items of another collection; a map with a Pair's entry or another map's entries.
+    ObjList* listPlus(ObjList* left, Value right);
+    ObjMap* mapPlus(ObjMap* left, Value right);
+    // Whether `right`, added to a collection of items of `itemType` (null: of anything), is a
+    // collection whose items are added, rather than one item: a list, a set or a range that is
+    // not itself an item of that type.
+    bool addsMany(const ObjTypeInfo* itemType, Value right);
+    // The error for an item that is not of a collection's item type.
+    JadeThrow notAnItem(const char* kind, const ObjTypeInfo* type, const ObjTypeInfo* itemType, Value item);
     void listCopyRange(ObjList* to, const ObjList* from, size_t start, size_t count);
     void listSwap(ObjList* list, size_t i, size_t j);
     void markItems(ObjList* list);

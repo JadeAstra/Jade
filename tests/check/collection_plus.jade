@@ -1,0 +1,22 @@
+// `+` on a collection, as the checker sees it (the user, 2026-11-07, as in Kotlin): the type made
+// is the collection's, and what is not one of its items, or a collection of them, is reported.
+
+val names = ["a"]
+val more : List<string> = names + "b"
+val joined : List<string> = names + ["c", "d"]
+val text : string = names + "b"              // check: 'text' is a string; it cannot start as an open List<string>
+val wrong = names + 3                          // check: '+' adds to an open List<string> a string, or the items of a collection of them; this is an int
+val wrongItems = names + [1, 2]                // check: '+' adds to an open List<string> a string, or the items of a collection of them; this is an open List<int>
+
+val nested : List<List<int>> = [[1]]
+val deeper : List<List<int>> = nested + [2, 3]
+
+val tags = setOf("x")
+val tagged : Set<string> = tags + "y"
+val wrongTag = tags + 1                        // check: '+' adds to an open Set<string> a string, or the items of a collection of them; this is an int
+
+val ages = {"ann": 30}
+val older : Map<string, int> = ages + ("bob" to 41)
+val merged : Map<string, int> = ages + {"cy": 9}
+val badPair = ages + ("bob" to "x")            // check: '+' adds to an open Map<string, int> a Pair of a string and an int (key to value); this is a Pair<string, string>
+val notEntry = ages + 5                        // check: '+' adds to an open Map<string, int> a Pair (key to value) or the entries of another map; this is an int

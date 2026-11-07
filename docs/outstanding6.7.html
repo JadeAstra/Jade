@@ -92,7 +92,7 @@ pre code { background: none; padding: 0; }
 <nav>
 <h2>Contents</h2>
 <ul>
-<li><a href="#decide">Waiting for the user</a> (seven)</li>
+<li><a href="#decide">Waiting for the user</a> (six)</li>
 <li><a href="#gaps">Gaps built in part, or not built</a> (four)</li>
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (thirteen)</li>
@@ -110,7 +110,6 @@ pre code { background: none; padding: 0; }
 <thead><tr><th class="part">What</th><th>The question</th><th class="when">Recommended</th></tr></thead>
 <tbody>
 <tr><td class="part" id="o-next">M9</td><td>The next milestone waits for the go-ahead: one milestone at a time. M8 is built (version 0.8.0, gui-plan.md section 6.5): the dialogs, charts, the treemap and JadeMem.</td><td class="when">Ready once M8 is accepted</td></tr>
-<tr><td class="part" id="o-plus">The + of collections</td><td>What <code>+</code> means between a collection and an item is written down nowhere, and it is not one thing: <code>list + "text"</code> joins them as text (Kotlin adds the item), <code>[1] + 2</code> is accepted by the checker and fails as it runs, and <code>set + "y"</code> is typed as text but runs as a set. JadeMem uses <code>plus(item)</code>.</td><td class="when">Kotlin's: a collection and an item make the collection with the item</td></tr>
 <tr><td class="part" id="o-std-m8">New std names</td><td>Three things JadeMem met that need names in the standard library: a folder's listing with each file's kind, size and time (JadeMem's disk walk is about four times slower than Java's, which lists a folder with its files' attributes); writing to standard error; and an error's stack as text (8.5b), which JadeMem's log wants.</td><td class="when">The listing first: it is the measured one</td></tr>
 <tr><td class="part" id="o-elevated">JadeMem elevated</td><td>JadeMem has been run unelevated only. The elevated paths (the pool tag table read elevated, real ETW sessions, the raw read of a volume's file table) follow the Kotlin's layouts and were checked against made-up data, not this machine.</td><td class="when">A run as administrator, beside the Kotlin JadeMem</td></tr>
 <tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
