@@ -97,7 +97,7 @@ pre code { background: none; padding: 0; }
 <li><a href="#text">Text fixes promised and not made</a> (six)</li>
 <li><a href="#deferred">Language and library work left for later</a> (thirteen)</li>
 <li><a href="#m7">Left from M7</a> (six)</li>
-<li><a href="#m8">Left from M8</a> (eleven)</li>
+<li><a href="#m8">Left from M8</a> (twelve)</li>
 <li><a href="#sandbox">The sandbox: what was left out</a> (eleven)</li>
 <li><a href="#speed">Speed: leads, measurements and limits</a> (ten)</li>
 <li><a href="#cautions">Standing cautions</a> (four)</li>
@@ -183,6 +183,7 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-m8-header">Classes</td><td>A header <code>val</code> with a default, set again in the class's own <code>init</code>, is refused only as the program runs ("cannot assign to val field"); the checker could say so.</td><td class="when">A fix in the checker</td></tr>
 <tr><td class="part" id="o-m8-parallel">Parallel sections</td><td>An object used for the first time inside a parallel section sometimes fails, about one run in six: "this O is another core's item in this parallel section". Made before the section, it does not.</td><td class="when">A fix: objects made under the section's own rule</td></tr>
 <tr><td class="part" id="o-m8-smartcast">Smart casts</td><td>No smart cast after <code>e!!.n</code>: the next <code>e.n</code> is still of a value that may be null; nor after <code>assertNotNull(e)</code>.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-m8-nothing">nothing?</td><td>Where a class's type argument is <code>nothing</code>, a parameter typed <code>R?</code> refuses <code>null</code> ("takes nothing, not null"): <code>nothing?</code> is read as <code>nothing</code>, though in Kotlin it is the type of <code>null</code>.</td><td class="when">A fix in the checker</td></tr>
 <tr><td class="part" id="o-m8-small">Kotlin's small forms</td><td>Not there, worked round in the port: <code>catch (e : A | B)</code>, <code>trim(char)</code> and <code>trimEnd { }</code>, <code>split(..., limit = n)</code>, a top-level <code>val</code> with a getter, a second <code>init</code> (one each), an <code>if</code> that gives a value, and a lambda straight after <code>-&gt;</code> in a <code>when</code> (it reads as a block).</td><td class="when">Each when a program asks</td></tr>
 <tr><td class="part" id="o-m8-os">Program</td><td>No property says which system the program runs on; JadeMem asks <code>Path.separator</code>.</td><td class="when">With the std names above</td></tr>
 <tr><td class="part" id="o-m8-check">astra check</td><td><code>astra check</code> on one file of a folder does not see the folder's other files; checking the program that imports the folder does.</td><td class="when">-</td></tr>
