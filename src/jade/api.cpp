@@ -674,6 +674,92 @@ void registerJade(VM& vm) {
         jade::Surface& s = surfaceNeeded(vm, need(vm), args[0]);
         return pairOf(vm, {Value::integer(s.width), Value::integer(s.height)});
     });
+    // cushions(width, height, background, tiles, paints): a treemap's cushions (van Wijk and van de
+    // Wetering, 1999), the pixels of TreemapRenderer.render. `tiles` is x, y, width, height and
+    // depth for each tile, parents before children: each adds a parabolic bump over its own
+    // rectangle, lower the deeper it is. `paints` is a tile's index and its colour (0xRRGGBB), in
+    // the order they are painted: each pixel of that tile lit from up and to the left over the
+    // bumps there. Red, green, blue and alpha, four bytes each, top row first; the rest is the
+    // background. In C++ as it is worked out for every pixel of the map, several times over.
+    def("cushions", 5, 5, [](VM& vm, int, Value* args) -> Value {
+        const int64_t w = vm.toInt(args[0], "width"), h = vm.toInt(args[1], "height");
+        if (w <= 0 || h <= 0 || w > 32768 || h > 32768)
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "a treemap of " + std::to_string(w) + " by " + std::to_string(h) + " pixels");
+        const uint32_t background = static_cast<uint32_t>(vm.toInt(args[2], "background"));
+        if (!args[3].isObjType(ObjType::List) || !args[4].isObjType(ObjType::List))
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "cushions takes the tiles and the paints as lists of numbers");
+        const std::vector<Value> tiles = vm.listCopy(asList(args[3]));
+        const std::vector<Value> paints = vm.listCopy(asList(args[4]));
+        const size_t width = static_cast<size_t>(w), height = static_cast<size_t>(h), n = width * height;
+        // The surface, kept as the sums of each bump's derivative along x and along y: for x, the
+        // slope is 2 * x1 * x + x2 at each pixel.
+        std::vector<double> x1(n), x2(n), y1(n), y2(n);
+        constexpr double kHeight = 0.55, kScaleDown = 0.75;
+        auto tile = [&](size_t i, int64_t& tx, int64_t& ty, int64_t& tw, int64_t& th, int64_t& depth) {
+            tx = vm.toInt(tiles[i * 5], "tile");
+            ty = vm.toInt(tiles[i * 5 + 1], "tile");
+            tw = vm.toInt(tiles[i * 5 + 2], "tile");
+            th = vm.toInt(tiles[i * 5 + 3], "tile");
+            depth = vm.toInt(tiles[i * 5 + 4], "tile");
+        };
+        auto clampTo = [](int64_t v, int64_t hi) { return static_cast<size_t>(std::clamp<int64_t>(v, 0, hi)); };
+        const size_t count = tiles.size() / 5;
+        for (size_t t = 0; t < count; t++) {
+            int64_t tx, ty, tw, th, depth;
+            tile(t, tx, ty, tw, th, depth);
+            if (tw <= 0 || th <= 0) continue;
+            const double bump = kHeight * std::pow(kScaleDown, static_cast<double>(depth));
+            // d/dv of 4h (v - lo)(hi - v) / (hi - lo), in the running sums, along each axis.
+            const double slopeX = 4.0 * bump / static_cast<double>(tw), slopeY = 4.0 * bump / static_cast<double>(th);
+            const double ax = -slopeX, bx = slopeX * static_cast<double>(2 * tx + tw);
+            const double ay = -slopeY, by = slopeY * static_cast<double>(2 * ty + th);
+            const size_t c0 = clampTo(tx, w), c1 = clampTo(tx + tw, w), r0 = clampTo(ty, h), r1 = clampTo(ty + th, h);
+            for (size_t y = r0; y < r1; y++) {
+                for (size_t x = c0, i = y * width + c0; x < c1; x++, i++) {
+                    x1[i] += ax;
+                    x2[i] += bx;
+                    y1[i] += ay;
+                    y2[i] += by;
+                }
+            }
+        }
+        // Lit from up and to the left; mostly ambient, so that the colour (what the map shows)
+        // survives the shading, and summing to 1, so that a cushion's top is the colour itself.
+        constexpr double kLightX = -0.09759, kLightY = -0.19518, kLightZ = 0.97590, kAmbient = 0.58, kDiffuse = 0.42;
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        std::vector<uint8_t>& out = made->data;
+        out.resize(n * 4);
+        for (size_t i = 0; i < n; i++) {
+            out[i * 4] = static_cast<uint8_t>(background >> 16);
+            out[i * 4 + 1] = static_cast<uint8_t>(background >> 8);
+            out[i * 4 + 2] = static_cast<uint8_t>(background);
+            out[i * 4 + 3] = 0xFF;
+        }
+        auto shade = [](double channel, double light) { return static_cast<uint8_t>(std::clamp(static_cast<int>(channel * light), 0, 255)); };
+        for (size_t p = 0; p + 1 < paints.size(); p += 2) {
+            const int64_t index = vm.toInt(paints[p], "tile");
+            if (index < 0 || static_cast<size_t>(index) >= count) continue;
+            int64_t tx, ty, tw, th, depth;
+            tile(static_cast<size_t>(index), tx, ty, tw, th, depth);
+            const uint32_t color = static_cast<uint32_t>(vm.toInt(paints[p + 1], "colour"));
+            const double r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+            const size_t c0 = clampTo(tx, w), c1 = clampTo(tx + tw, w), r0 = clampTo(ty, h), r1 = clampTo(ty + th, h);
+            for (size_t y = r0; y < r1; y++) {
+                for (size_t x = c0, i = y * width + c0; x < c1; x++, i++) {
+                    const double nx = -(2.0 * x1[i] * (static_cast<double>(x) + 0.5) + x2[i]);
+                    const double ny = -(2.0 * y1[i] * (static_cast<double>(y) + 0.5) + y2[i]);
+                    double cosine = (kLightX * nx + kLightY * ny + kLightZ) / std::sqrt(nx * nx + ny * ny + 1.0);
+                    if (cosine < 0.0) cosine = 0.0;
+                    const double light = kAmbient + kDiffuse * cosine;
+                    out[i * 4] = shade(r, light);
+                    out[i * 4 + 1] = shade(g, light);
+                    out[i * 4 + 2] = shade(b, light);
+                }
+            }
+        }
+        vm.account(out.size());
+        return Value::object(made);
+    });
     // The pixels: red, green, blue, alpha, four bytes each, top row first.
     def("surfaceRead", 1, 1, [](VM& vm, int, Value* args) -> Value {
         Renderer& r = need(vm);
