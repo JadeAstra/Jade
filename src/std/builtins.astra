@@ -195,6 +195,8 @@ external fun string.toFloatOrNull() : float?
 // `%[n$][flags][width][.precision]kind`. The kinds are d (a whole number), x X o (in hex or
 // octal), f e E g G (a fraction), s S (anything, as print shows it), c (a character), b (true
 // or false), `%%` and `%n`; the flags `-` (to the left), `0`, `+`, a space, and `,` (thousands).
+// A fraction is rounded half up from the digits print shows ("%.1f" of 0.35 is 0.4), and %g keeps
+// its zeros ("%.4g" of 1.0 is 1.000), as Kotlin writes them.
 // An IllegalArgumentException for a bad item or too few values.
 //   "%d items, %.2f each".format(3, 1.5)   // "3 items, 1.50 each"
 external fun string.format(vararg values : any?) : string

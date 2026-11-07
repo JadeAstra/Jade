@@ -225,6 +225,133 @@ std::string grouped(const std::string& digits) {
     return out;
 }
 
+// A fraction as Java's Formatter writes it (f, e and g): from the shortest digits that give the
+// number back, as print shows it, rounded half up. So "%.1f" of 0.35 is 0.4 and "%.4g" of 12345
+// is 1.235e+04, where C's printf, working from the exact binary value and rounding halves to
+// even, gives 0.3 and 1.234e+04. `magnitude` is not negative, and finite.
+namespace {
+
+// The digits of `magnitude` and where the point goes: magnitude = d.ddd x 10^exponent. Zero is
+// "0" with exponent 0.
+void shortestDigits(double magnitude, std::string& digits, int& exponent) {
+    digits.clear();
+    exponent = 0;
+    if (magnitude == 0) {
+        digits = "0";
+        return;
+    }
+    char buffer[64];
+    auto result = std::to_chars(buffer, buffer + sizeof(buffer), magnitude, std::chars_format::scientific);
+    // Java writes at least two digits, the closer two: 4.9e-324 where the shortest is 5e-324.
+    if (std::string_view(buffer, static_cast<size_t>(result.ptr - buffer)).find('.') == std::string_view::npos)
+        result = std::to_chars(buffer, buffer + sizeof(buffer), magnitude, std::chars_format::scientific, 1);
+    const std::string text(buffer, result.ptr);
+    const size_t e = text.find('e');
+    for (size_t i = 0; i < e; i++)
+        if (text[i] != '.') digits += text[i];
+    exponent = std::stoi(text.substr(e + 1));
+}
+
+// `digits` kept to `keep` of them (the rest dropped, the last kept rounded half up by the first
+// dropped), `exponent` moved on when 9s carry; zeros added when `keep` is more. A `keep` of 0 or
+// less leaves "0" (or "1" a place up, when what is dropped rounds up to it).
+void roundDigits(std::string& digits, int& exponent, int keep) {
+    if (keep < 0) {
+        digits = "0";
+        return;
+    }
+    if (keep == 0) {
+        if (digits[0] >= '5' && digits != "0") {
+            digits = "1";
+            exponent += 1;
+        } else {
+            digits = "0";
+        }
+        return;
+    }
+    if (static_cast<int>(digits.size()) <= keep) {
+        digits.append(static_cast<size_t>(keep) - digits.size(), '0');
+        return;
+    }
+    const bool up = digits[static_cast<size_t>(keep)] >= '5';
+    digits.resize(static_cast<size_t>(keep));
+    if (!up) return;
+    int i = keep - 1;
+    while (i >= 0 && digits[static_cast<size_t>(i)] == '9') digits[static_cast<size_t>(i--)] = '0';
+    if (i >= 0) {
+        digits[static_cast<size_t>(i)]++;
+    } else {
+        digits.insert(digits.begin(), '1');
+        digits.pop_back();
+        exponent += 1;
+    }
+}
+
+// `magnitude` with `places` digits after the point.
+std::string javaFixed(double magnitude, int places) {
+    std::string digits;
+    int exponent = 0;
+    shortestDigits(magnitude, digits, exponent);
+    const bool zero = digits == "0";
+    roundDigits(digits, exponent, zero ? 0 : exponent + 1 + places);
+    if (zero || digits == "0") return places > 0 ? "0." + std::string(static_cast<size_t>(places), '0') : "0";
+    // digits now hold the number down to the last place: exponent + 1 whole digits before them.
+    const int whole = exponent + 1;
+    std::string out;
+    if (whole <= 0) {
+        out = "0";
+        std::string fraction = std::string(static_cast<size_t>(-whole), '0') + digits;
+        fraction.resize(static_cast<size_t>(places), '0');
+        if (places > 0) out += "." + fraction;
+        return out;
+    }
+    // A carry (99999.5 to 100000) can leave fewer digits than whole places.
+    if (static_cast<int>(digits.size()) < whole) digits.append(static_cast<size_t>(whole) - digits.size(), '0');
+    out = digits.substr(0, static_cast<size_t>(whole));
+    if (places > 0) {
+        std::string fraction = digits.substr(static_cast<size_t>(whole));
+        fraction.resize(static_cast<size_t>(places), '0');
+        out += "." + fraction;
+    }
+    return out;
+}
+
+// `magnitude` as d.ddd with `places` digits after the point, and e+05.
+std::string javaScientific(double magnitude, int places, bool upper) {
+    std::string digits;
+    int exponent = 0;
+    shortestDigits(magnitude, digits, exponent);
+    if (digits != "0") roundDigits(digits, exponent, places + 1);
+    else digits.assign(static_cast<size_t>(places) + 1, '0');
+    std::string out = digits.substr(0, 1);
+    if (places > 0) out += "." + digits.substr(1);
+    const int shown = std::abs(exponent);
+    out += upper ? "E" : "e";
+    out += exponent < 0 ? "-" : "+";
+    if (shown < 10) out += "0";
+    out += std::to_string(shown);
+    return out;
+}
+
+// %g: `precision` significant digits; fixed when the number, so rounded, is at least 10^-4 and
+// below 10^precision, else scientific. Trailing zeros are kept, as Java keeps them.
+std::string javaGeneral(double magnitude, int precision, bool upper, bool& fixed) {
+    if (precision == 0) precision = 1;
+    fixed = true;
+    if (magnitude == 0) return javaFixed(0, precision - 1);
+    std::string digits;
+    int exponent = 0;
+    shortestDigits(magnitude, digits, exponent);
+    roundDigits(digits, exponent, precision);
+    if (exponent < -4 || exponent >= precision) {
+        fixed = false;
+        return javaScientific(magnitude, precision - 1, upper);
+    }
+    return javaFixed(magnitude, precision - 1 - exponent);
+}
+
+} // namespace
+
 // "%d items, %.2f each".format(3, 1.5): the patterns of Kotlin's (Java's) String.format.
 //   %[index$][flags][width][.precision]conversion
 // Flags: - left-justify, 0 pad with zeros, + always a sign, space for a plus sign, and
@@ -332,13 +459,12 @@ std::string formatText(VM& vm, const std::string& pattern, int argc, const Value
                     zero = false;
                     break;
                 }
-                const char spec[] = {'%', '.', '*', conversion, '\0'};
                 const int digits = precision < 0 ? 6 : std::min(precision, 340);
-                const int needed = std::snprintf(nullptr, 0, spec, digits, std::fabs(d));
-                body.resize(static_cast<size_t>(needed) + 1);
-                std::snprintf(body.data(), body.size(), spec, digits, std::fabs(d));
-                body.resize(static_cast<size_t>(needed));
-                if (comma && conversion == 'f') {
+                bool fixed = conversion == 'f';
+                if (conversion == 'f') body = javaFixed(std::fabs(d), digits);
+                else if (conversion == 'e' || conversion == 'E') body = javaScientific(std::fabs(d), digits, conversion == 'E');
+                else body = javaGeneral(std::fabs(d), digits, conversion == 'G', fixed);
+                if (comma && fixed) {
                     const size_t point = body.find('.');
                     body = grouped(body.substr(0, point)) + (point == std::string::npos ? "" : body.substr(point));
                 }

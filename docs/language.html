@@ -784,7 +784,7 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>The number the text spells, or null where it is not one.</p>
 </div>
 <div class="entry" id="string.format"><code class="sig">fun string.format(vararg values : any?) : string</code><a class="anchor" href="#string.format">#</a>
-<p>The text with each <code>%</code> item in it replaced by the next of <code>values</code>, as Kotlin's String.format: <code>%[n$][flags][width][.precision]kind</code>. The kinds are d (a whole number), x X o (in hex or octal), f e E g G (a fraction), s S (anything, as print shows it), c (a character), b (true or false), <code>%%</code> and <code>%n</code>; the flags <code>-</code> (to the left), <code>0</code>, <code>+</code>, a space, and <code>,</code> (thousands). An IllegalArgumentException for a bad item or too few values.</p>
+<p>The text with each <code>%</code> item in it replaced by the next of <code>values</code>, as Kotlin's String.format: <code>%[n$][flags][width][.precision]kind</code>. The kinds are d (a whole number), x X o (in hex or octal), f e E g G (a fraction), s S (anything, as print shows it), c (a character), b (true or false), <code>%%</code> and <code>%n</code>; the flags <code>-</code> (to the left), <code>0</code>, <code>+</code>, a space, and <code>,</code> (thousands). A fraction is rounded half up from the digits print shows (&quot;%.1f&quot; of 0.35 is 0.4), and %g keeps its zeros (&quot;%.4g&quot; of 1.0 is 1.000), as Kotlin writes them. An IllegalArgumentException for a bad item or too few values.</p>
 <pre>&quot;%d items, %.2f each&quot;.format(3, 1.5)   // &quot;3 items, 1.50 each&quot;
 </pre>
 </div>
