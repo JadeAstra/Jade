@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# The suite on Linux and macOS (G56), as tests/run.ps1 runs it on Windows: every tests/*.astra
+# The suite on Linux and macOS (G56), as tests/run.ps1 runs it on Windows: every tests/*.jade
 # file run the ways asked for, with what its comments expect,
 #
 #   // expect: <line>                  the next line of standard output
@@ -7,14 +7,14 @@
 #   // expect compile error: <text>    compilation fails (exit code 65) and reports <text>
 #   // expect error output: <text>     the program finishes normally, having reported <text>
 #
-# then tests/check (`astra check`), tests/testing (`astra test`), tests/shell (the shell), the
+# then tests/check (`jade check`), tests/testing (`jade test`), tests/shell (the shell), the
 # standard library and the examples checked whole, and the standard library described.
 #
 # A test that only means something on Windows says so in a line `// windows only: <why>`, and
-# is passed over here, counted apart. A program built with `astra build --exe` is Windows's only
+# is passed over here, counted apart. A program built with `jade build --exe` is Windows's only
 # so far, so the ways are script, cached, units and compiled.
 #
-#   python3 tests/run.py --astra build/linux/astra --parallel 16 --ways script
+#   python3 tests/run.py --jade build/linux/jade --parallel 16 --ways script
 
 import argparse
 import concurrent.futures
@@ -29,11 +29,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ALL_WAYS = ["script", "cached", "units", "compiled"]
 
 
-def run_astra(astra, args, directory, cache, stdin=None, timeout=600):
+def run_jade(jade, args, directory, cache, stdin=None, timeout=600):
     env = dict(os.environ)
-    env["ASTRA_CACHE"] = cache
+    env["JADE_CACHE"] = cache
     try:
-        done = subprocess.run([astra] + args, cwd=directory, env=env, input=stdin, capture_output=True, timeout=timeout)
+        done = subprocess.run([jade] + args, cwd=directory, env=env, input=stdin, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"lines": [], "error": "timed out after %d s" % timeout, "code": -1}
     out = done.stdout.decode("utf-8", "replace")
@@ -73,7 +73,7 @@ def windows_only(text):
     return marker(text, r"// windows only: (.*)$")
 
 
-def test_one(path, astra, directory, ways):
+def test_one(path, jade, directory, ways):
     os.makedirs(directory, exist_ok=True)
     cache = os.path.join(directory, "cache")
     name = os.path.splitext(os.path.basename(path))[0]
@@ -81,51 +81,51 @@ def test_one(path, astra, directory, ways):
     expected = [m.group(1) for m in re.finditer(r"// expect: ?(.*)$", text, re.M)]
     runtime_error = marker(text, r"// expect runtime error: (.*)$")
     compile_error = marker(text, r"// expect compile error: (.*)$")
-    bytecode = os.path.join(directory, name + ".astc")
+    bytecode = os.path.join(directory, name + ".jc")
     results = {}
     if compile_error:
         if "script" in ways:
-            results["script"] = compare(run_astra(astra, [path], directory, cache), [], compile_error, 65)
+            results["script"] = compare(run_jade(jade, [path], directory, cache), [], compile_error, 65)
         if "compiled" in ways:
-            results["compiled"] = compare(run_astra(astra, ["build", path, "-o", bytecode], directory, cache), [], compile_error, 65)
+            results["compiled"] = compare(run_jade(jade, ["build", path, "-o", bytecode], directory, cache), [], compile_error, 65)
         return results
     error_text = runtime_error or marker(text, r"// expect error output: (.*)$")
     exit_code = 70 if runtime_error else 0
     if {"script", "cached", "units"} & set(ways):
-        first = compare(run_astra(astra, [path], directory, cache), expected, error_text, exit_code)
+        first = compare(run_jade(jade, [path], directory, cache), expected, error_text, exit_code)
         if "script" in ways:
             results["script"] = first
     if "cached" in ways:
-        results["cached"] = compare(run_astra(astra, [path], directory, cache), expected, error_text, exit_code)
+        results["cached"] = compare(run_jade(jade, [path], directory, cache), expected, error_text, exit_code)
     if "units" in ways:
         if os.path.isdir(cache):
             for kept in os.listdir(cache):
                 if kept.endswith(".program"):
                     os.remove(os.path.join(cache, kept))
-        results["units"] = compare(run_astra(astra, [path], directory, cache), expected, error_text, exit_code)
+        results["units"] = compare(run_jade(jade, [path], directory, cache), expected, error_text, exit_code)
     if "compiled" in ways:
-        build = run_astra(astra, ["build", path, "-o", bytecode], directory, cache)
+        build = run_jade(jade, ["build", path, "-o", bytecode], directory, cache)
         if build["code"] != 0:
             results["compiled"] = "build failed: " + build["error"].strip()
         else:
-            results["compiled"] = compare(run_astra(astra, [bytecode], directory, cache), expected, error_text, exit_code)
+            results["compiled"] = compare(run_jade(jade, [bytecode], directory, cache), expected, error_text, exit_code)
     return results
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--astra", required=True)
+    parser.add_argument("--jade", required=True)
     parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--ways", default=",".join(ALL_WAYS))
     parser.add_argument("--only", default="", help="the tests to run, by name, comma-separated")
     options = parser.parse_args()
-    astra = os.path.abspath(options.astra)
+    jade = os.path.abspath(options.jade)
     ways = [w.strip() for w in options.ways.split(",") if w.strip()]
     only = set(n.strip() for n in options.only.split(",") if n.strip())
-    tmp = tempfile.mkdtemp(prefix="astra-tests-")
+    tmp = tempfile.mkdtemp(prefix="jade-tests-")
     passed, skipped, failures, alone_only = 0, [], [], []
 
-    tests = sorted(p for p in (os.path.join(HERE, n) for n in os.listdir(HERE)) if p.endswith(".astra"))
+    tests = sorted(p for p in (os.path.join(HERE, n) for n in os.listdir(HERE)) if p.endswith(".jade"))
     if only:
         tests = [t for t in tests if os.path.splitext(os.path.basename(t))[0] in only]
     runnable = []
@@ -137,7 +137,7 @@ def main():
             runnable.append(test)
 
     def one(test, suffix=""):
-        return test_one(test, astra, os.path.join(tmp, os.path.splitext(os.path.basename(test))[0] + suffix), ways)
+        return test_one(test, jade, os.path.join(tmp, os.path.splitext(os.path.basename(test))[0] + suffix), ways)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, options.parallel)) as pool:
         outcomes = dict(zip(runnable, pool.map(one, runnable)))
@@ -160,7 +160,7 @@ def main():
         # The type checker: a line ending in `// check: <message>` is reported with that message.
         check_dir = os.path.join(HERE, "check")
         for name in sorted(os.listdir(check_dir)):
-            if not name.endswith(".astra"):
+            if not name.endswith(".jade"):
                 continue
             path = os.path.join(check_dir, name)
             text = read(path)
@@ -172,7 +172,7 @@ def main():
                 found = re.search(r"// check: (.*)$", line)
                 if found:
                     wanted.add("%d: %s" % (number, found.group(1).rstrip()))
-            run = run_astra(astra, ["check", path], tmp, cache)
+            run = run_jade(jade, ["check", path], tmp, cache)
             problems, found_keys = [], set()
             for line in run["lines"]:
                 m = re.match(r"^[^:]+:(\d+):\d+: error: (.*)$", line)
@@ -192,10 +192,10 @@ def main():
             else:
                 passed += 1
 
-        # `astra test`: its `// expect:` lines are what it prints after the line naming the file.
+        # `jade test`: its `// expect:` lines are what it prints after the line naming the file.
         testing_dir = os.path.join(HERE, "testing")
         for name in sorted(os.listdir(testing_dir)):
-            if not name.endswith(".astra"):
+            if not name.endswith(".jade"):
                 continue
             path = os.path.join(testing_dir, name)
             text = read(path)
@@ -203,22 +203,22 @@ def main():
                 skipped.append("testing/%s: %s" % (name, windows_only(text)))
                 continue
             expected = [m.group(1) for m in re.finditer(r"// expect: ?(.*)$", text, re.M)]
-            run = run_astra(astra, ["test", path], tmp, cache)
+            run = run_jade(jade, ["test", path], tmp, cache)
             run["lines"] = run["lines"][1:]
             code = 1 if any(re.match(r"^\s*FAIL", e) for e in expected) else 0
             result = compare(run, expected, "", code)
             if result is None:
                 passed += 1
             else:
-                failures.append("%s [astra test]\n    %s" % (name, result))
+                failures.append("%s [jade test]\n    %s" % (name, result))
 
         # The standard library, Topaz and the examples pass the checker as they are.
-        checked = [(os.path.join(HERE, "basics.astra"), "--std")]
+        checked = [(os.path.join(HERE, "basics.jade"), "--std")]
         examples = os.path.join(HERE, "..", "examples")
         if os.path.isdir(examples):
-            checked += [(os.path.join(examples, n), None) for n in sorted(os.listdir(examples)) if n.endswith(".astra")]
+            checked += [(os.path.join(examples, n), None) for n in sorted(os.listdir(examples)) if n.endswith(".jade")]
         for path, flag in checked:
-            run = run_astra(astra, ["check"] + ([flag] if flag else []) + [path], tmp, cache)
+            run = run_jade(jade, ["check"] + ([flag] if flag else []) + [path], tmp, cache)
             if run["code"] == 0:
                 passed += 1
             else:
@@ -227,13 +227,13 @@ def main():
         # Every public declaration of the standard library is described.
         std = os.path.join(HERE, "..", "src", "std")
         if os.path.isdir(std):
-            files = sorted(os.path.join(std, n) for n in os.listdir(std) if n.endswith(".astra"))
-            run = run_astra(astra, ["doc", "--missing"] + files, tmp, cache)
+            files = sorted(os.path.join(std, n) for n in os.listdir(std) if n.endswith(".jade"))
+            run = run_jade(jade, ["doc", "--missing"] + files, tmp, cache)
             undescribed = [l for l in run["lines"] if l]
             if run["code"] == 0 and not undescribed:
                 passed += 1
             else:
-                failures.append("the standard library described [astra doc --missing]\n    " + "\n    ".join(undescribed + [run["error"]]))
+                failures.append("the standard library described [jade doc --missing]\n    " + "\n    ".join(undescribed + [run["error"]]))
 
         # The shell: each tests/shell/*.shell file typed into it.
         shell_dir = os.path.join(HERE, "shell")
@@ -243,7 +243,7 @@ def main():
             text = read(os.path.join(shell_dir, name))
             want_out = [m.group(1) for m in re.finditer(r"(?m)^// expect: (.*?)\r?$", text)]
             want_err = [m.group(1) for m in re.finditer(r"(?m)^// expect error: (.*?)\r?$", text)]
-            run = run_astra(astra, [], tmp, cache, stdin=text.encode("utf-8"))
+            run = run_jade(jade, [], tmp, cache, stdin=text.encode("utf-8"))
             got_out = [l.rstrip() for l in run["lines"] if l != ""]
             got_err = [l.rstrip() for l in re.split(r"\r?\n", run["error"]) if l != ""]
             problem = None

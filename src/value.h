@@ -15,7 +15,7 @@
 #endif
 #include <vector>
 
-namespace astra {
+namespace jade {
 
 class VM;
 struct FunctionProto;
@@ -108,12 +108,12 @@ enum class ValueKind : uint8_t {
 // A small function the compiler is told to put in place: where one call alone would have an
 // instruction of the VM's set up a stack frame (instructions.inc).
 #if defined(__clang__) || defined(__GNUC__)
-#define ASTRA_ALWAYS_INLINE inline __attribute__((always_inline))
+#define JADE_ALWAYS_INLINE inline __attribute__((always_inline))
 #else
-#define ASTRA_ALWAYS_INLINE __forceinline
+#define JADE_ALWAYS_INLINE __forceinline
 #endif
 
-// An Astra runtime value: null, bool, 64-bit int, double, or a pointer to a heap object.
+// An Jade runtime value: null, bool, 64-bit int, double, or a pointer to a heap object.
 struct Value {
     ValueKind kind;
     uint8_t refDepth;    // a Ref: how many values deep in the item it is (0: the item itself)
@@ -501,7 +501,7 @@ private:
     void grow();
 };
 
-// Insertion-ordered hash map from Value to Value: the storage behind Astra maps and sets.
+// Insertion-ordered hash map from Value to Value: the storage behind Jade maps and sets.
 // Built as Python's dict is: the entries in the order they came, and beside them an index of
 // open slots, each holding an entry's place. Each entry keeps its key's hash, so the index
 // grows and is rebuilt from what it keeps: a key's hashCode runs once as it goes in and once
@@ -840,7 +840,7 @@ struct ObjNative final : Obj {
     // False for a function that waits, or works on something there is one of for the whole
     // program: it is not called from a parallel section.
     bool parallelSafe = true;
-    // What its parameters are called, from its declaration (src/std/builtins.astra), for a
+    // What its parameters are called, from its declaration (src/std/builtins.jade), for a
     // call that names them; empty for one that takes none by name.
     std::vector<std::string> params;
     ObjNative(std::string n, int min, int max, NativeFn f)
@@ -922,7 +922,7 @@ struct ValueField {
     ObjString* name = nullptr;
     uint32_t offset = 0;
     Kind kind = Any;
-    astra::Narrow narrow = astra::Narrow::None;  // Narrow: what it keeps
+    jade::Narrow narrow = jade::Narrow::None;  // Narrow: what it keeps
     uint8_t type = 0;           // as FieldDecl::type, for the check of a value stored there
     // Nested: where after `offset` its value's type is kept, beside it, for a field declared wider
     // than its phantom type parameters can be (G4); 0 for none.
@@ -945,7 +945,7 @@ extern std::atomic<ObjClass*> smallClasses[kMaxSmallClasses];
 
 struct ObjClass final : Obj {
     ObjString* const name;
-    ObjString* origin = nullptr;  // the library it comes from ("astra", "Topaz"); null for the program's own
+    ObjString* origin = nullptr;  // the library it comes from ("jade", "Topaz"); null for the program's own
 
     // The layout of the class's fields, as a number: an object made now has its fields where
     // `declared` says, and is marked with this. A place in the code that has found a field
@@ -1441,7 +1441,7 @@ inline ObjClass* smallClassOf(const Value& v) { return smallClasses[v.refIndex].
 inline const uint8_t* smallBytes(const Value& v) { return reinterpret_cast<const uint8_t*>(&v.as); }
 
 // Where the bytes of what a Ref points at are; null for an item that is no longer in its list.
-ASTRA_ALWAYS_INLINE uint8_t* refBytes(const Value& v) {
+JADE_ALWAYS_INLINE uint8_t* refBytes(const Value& v) {
     if (v.as.obj->type == ObjType::List) {
         const ObjList* list = static_cast<const ObjList*>(v.as.obj);
         if (list->pack == nullptr || v.refIndex >= list->pack->count) return nullptr;
@@ -1499,4 +1499,4 @@ inline ObjBoundMethod* asBoundMethod(const Value& v) { return static_cast<ObjBou
 inline ObjBoundNative* asBoundNative(const Value& v) { return static_cast<ObjBoundNative*>(v.as.obj); }
 inline ObjIterator* asIterator(const Value& v) { return static_cast<ObjIterator*>(v.as.obj); }
 
-}  // namespace astra
+}  // namespace jade

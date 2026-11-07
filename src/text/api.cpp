@@ -1,5 +1,5 @@
-// The text engine and pictures as Astra programs see them: the built-in __text, which
-// src/std/fonts.astra is written on.
+// The text engine and pictures as Jade programs see them: the built-in __text, which
+// src/std/fonts.jade is written on.
 //
 // Fonts are known to a program by number. A font file once read stays read, and a font at a
 // size keeps the pictures of its glyphs, for as long as the program runs: there are only as
@@ -23,7 +23,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -1059,4 +1059,4 @@ void registerText(VM& vm) {
                                   "canvasPicture"});
 }
 
-}  // namespace astra
+}  // namespace jade

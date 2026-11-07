@@ -28,7 +28,7 @@
 #include <wctype.h>
 #endif
 
-namespace astra::regex {
+namespace jade::regex {
 
 // ---- What a character is ----
 
@@ -828,7 +828,7 @@ private:
         }
         if (auto f = categories.find(rest); f != categories.end()) return f->second;
         if (name == "all") return Pred::Any;
-        fail("Unknown character property name {" + name + "}: Astra knows Java's POSIX and java classes, the general categories, and IsAlphabetic, "
+        fail("Unknown character property name {" + name + "}: Jade knows Java's POSIX and java classes, the general categories, and IsAlphabetic, "
              "IsLetter and the like; scripts and blocks (IsLatin, InGreek) wait for the text engine's Unicode data",
              static_cast<int>(at));
     }
@@ -1717,4 +1717,4 @@ bool Pattern::match(const ObjString* text, size_t from, Mode mode, std::vector<i
     return false;
 }
 
-}  // namespace astra::regex
+}  // namespace jade::regex

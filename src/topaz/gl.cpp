@@ -9,7 +9,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::topaz {
+namespace jade::topaz {
 
 GlApi gl = {};
 
@@ -52,7 +52,7 @@ bool loadGl(void* (*find)(const char* name), const char*& missing) {
     fetch(gl.CheckFramebufferStatus, "glCheckFramebufferStatus");
     fetch(gl.DeleteFramebuffers, "glDeleteFramebuffers");
     fetch(gl.BlendFuncSeparate, "glBlendFuncSeparate");
-#ifdef ASTRA_GL_TABLE_1_1
+#ifdef JADE_GL_TABLE_1_1
     fetch(gl.PixelStorei, "glPixelStorei");
     fetch(gl.TexImage2D, "glTexImage2D");
     fetch(gl.TexSubImage2D, "glTexSubImage2D");
@@ -105,4 +105,4 @@ Key keyNamed(const std::string& name) {
     return Key::Unknown;
 }
 
-}  // namespace astra::topaz
+}  // namespace jade::topaz

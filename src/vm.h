@@ -23,10 +23,10 @@
 #include "host.h"
 #include "value.h"
 
-namespace astra {
+namespace jade {
 
-// A value thrown by an Astra program (or a runtime error) travelling up the host stack.
-struct AstraThrow {
+// A value thrown by an Jade program (or a runtime error) travelling up the host stack.
+struct JadeThrow {
     Value value;
 
     // Call stack at the throw site, innermost first. Only captured when nothing will catch it.
@@ -35,7 +35,7 @@ struct AstraThrow {
 };
 
 // Raised by the exit() builtin.
-struct AstraExit {
+struct JadeExit {
     int code;
 };
 
@@ -148,7 +148,7 @@ inline ObjFiber* asFiber(const Value& v) { return static_cast<ObjFiber*>(v.as.ob
 struct FiberSuspend {};
 
 // Thrown at a safe point in a worker that has been told to stop. Like FiberSuspend it is not
-// an Astra error: no catch block sees it, and it ends whatever the worker was doing.
+// an Jade error: no catch block sees it, and it ends whatever the worker was doing.
 struct WorkerStop {};
 
 struct WorkerLink;    // worker.cpp: what a worker and the program that started it share
@@ -157,7 +157,7 @@ struct ParallelSection;
 struct ParallelPiece;
 struct SharedBlock;   // worker.cpp: frozen data shared with workers, outside every heap (D97)
 
-// One operating-system thread that runs Astra code.
+// One operating-system thread that runs Jade code.
 struct ThreadState {
     Context base;
     Context* current;  // the innermost context running on this thread
@@ -248,7 +248,7 @@ struct Names {
 
 enum class BuiltinType { String, List, Map, Range, Bytes, Number, Char, Byte, Index, Set, Count_ };
 
-// The classes of what the VM throws (D35), Java's, declared in src/std/errors.astra; and
+// The classes of what the VM throws (D35), Java's, declared in src/std/errors.jade; and
 // Throwable, the root, which is all that `throw` takes.
 enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
@@ -261,17 +261,17 @@ enum class Thrown : uint8_t {
 // a function of VM that calls the next instruction's as its last step, the loop's state in
 // registers from one to the next (preserve_none, musttail); built otherwise, they are the cases
 // of run()'s switch.
-#if defined(__clang__) && !defined(ASTRA_OP_COUNTS)
+#if defined(__clang__) && !defined(JADE_OP_COUNTS)
 #if __has_attribute(preserve_none)  // Clang 19 on
-#define ASTRA_TAIL_CALLS 1
-#define ASTRA_TAIL_FN __attribute__((preserve_none, no_stack_protector))
-#define ASTRA_TAIL_PARAMS                                                                                              \
+#define JADE_TAIL_CALLS 1
+#define JADE_TAIL_FN __attribute__((preserve_none, no_stack_protector))
+#define JADE_TAIL_PARAMS                                                                                              \
     [[maybe_unused]] const uint8_t *ip, [[maybe_unused]] Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
         [[maybe_unused]] const Value *consts, [[maybe_unused]] std::atomic<uint64_t> *caches, [[maybe_unused]] const uint8_t *code
 #endif
 #endif
-#ifndef ASTRA_TAIL_CALLS
-#define ASTRA_TAIL_CALLS 0
+#ifndef JADE_TAIL_CALLS
+#define JADE_TAIL_CALLS 0
 #endif
 
 class VM final : public KeyMethods {
@@ -292,16 +292,16 @@ public:
     // Allocates a garbage-collected object. Collection only ever runs at safe points inside
     // the interpreter loop (calls and loop back-edges), never here, so a native function may
     // hold raw object pointers freely until it calls back into the VM.
-#ifdef ASTRA_OP_COUNTS
+#ifdef JADE_OP_COUNTS
     // In the build that counts instructions: every object made, shown when the program ends.
     static std::atomic<uint64_t> objectsMade;
-#define ASTRA_COUNT_OBJECT() objectsMade.fetch_add(1, std::memory_order_relaxed)
+#define JADE_COUNT_OBJECT() objectsMade.fetch_add(1, std::memory_order_relaxed)
 #else
-#define ASTRA_COUNT_OBJECT() ((void)0)
+#define JADE_COUNT_OBJECT() ((void)0)
 #endif
     template <class T, class... A>
     T* alloc(A&&... args) {
-        ASTRA_COUNT_OBJECT();
+        JADE_COUNT_OBJECT();
         T* obj = new T(std::forward<A>(args)...);
         obj->core = coreId_;  // what a core makes is its own until the section is over
         obj->next = objects_;
@@ -314,7 +314,7 @@ public:
     // value yet (M6.5 part 4).
     ObjInstance* newInstance(ObjClass* cls, uint16_t captures = 0, bool typed = false) {
         if (!cls->fieldsLaid.load(std::memory_order_acquire)) layFields(cls);
-        ASTRA_COUNT_OBJECT();
+        JADE_COUNT_OBJECT();
         const uint32_t count = cls->slotCount;
         // Its payloads before its slots (M6.6 part 6), the values kept inside it after (part 5).
         const bool withValues = cls->inlineLaid.load(std::memory_order_acquire) && !cls->inlineFields.empty();
@@ -352,7 +352,7 @@ public:
     std::vector<Value> setItems(const ObjSet* set);
     // Every item of a list, a range, a set, a string, bytes or a map (its entries).
     std::vector<Value> itemsOf(Value from, const char* what);
-    AstraThrow viewChanged(const ObjSet* view);
+    JadeThrow viewChanged(const ObjSet* view);
     uint8_t* itemAt(ObjList* list, size_t i);
     // Item `i` of a list, `i` already checked against its size: a value type's item copied into a box.
     Value listGet(ObjList* list, size_t i) { return !list->packed() ? list->values()[i] : packedGet(list, i); }
@@ -460,7 +460,7 @@ public:
     uint8_t* refAt(Value r, bool write);
     // The bytes of a Ref of depth 0 where this core may read them (`write`: and change them);
     // null where it may not, or the item is gone, which the slow way says (M6.6 part 4).
-    ASTRA_ALWAYS_INLINE uint8_t* refQuickly(const Value& r, bool write) const {
+    JADE_ALWAYS_INLINE uint8_t* refQuickly(const Value& r, bool write) const {
         if (r.as.obj == bandObject_) {
             if (r.refIndex < bandFrom_ || r.refIndex >= bandTo_) return nullptr;
         } else if (r.as.obj->type == ObjType::Instance) {
@@ -551,7 +551,7 @@ public:
     // its cache and read; false where it cannot be told so (the stack code reads it then).
     bool resolvePath(const Value& obj, const uint8_t* ip, const Value* consts, std::atomic<uint64_t>* caches, Value& out);
     // A plain field at `at`, of the kind an RGetPath's cache says, given whole.
-    static ASTRA_ALWAYS_INLINE void readPathField(const uint8_t* at, uint64_t seen, Value& out) {
+    static JADE_ALWAYS_INLINE void readPathField(const uint8_t* at, uint64_t seen, Value& out) {
         uint64_t bits = 0;
         const uint64_t kind = (seen >> 1) & 3;
         if (kind == 2) bits = *at != 0 ? 1 : 0;
@@ -570,7 +570,7 @@ public:
     Value retyped(const Value& v, const ObjTypeInfo* type);
     // An int, float or bool field read with no call, for the interpreter's quick paths.
     // An int, float or bool field, with no call: for a field of another kind, false.
-    static ASTRA_ALWAYS_INLINE bool readPlain(const uint8_t* at, const ValueField& field, Value& out) {
+    static JADE_ALWAYS_INLINE bool readPlain(const uint8_t* at, const ValueField& field, Value& out) {
         switch (field.kind) {
             case ValueField::Float: {
                 uint64_t bits;
@@ -608,9 +608,9 @@ public:
     std::string storageMismatch(Narrow narrow, Value v);
     // Positions and slices (D146, D147).
     bool position(Value index, size_t size, size_t& out, const char* what);
-    AstraThrow outOfRange(const char* what, Value index, size_t size);
+    JadeThrow outOfRange(const char* what, Value index, size_t size);
     void sliceBounds(const ObjRange* range, size_t size, size_t& begin, size_t& end);
-    AstraThrow rangeFromEnd(const ObjRange* range, const std::string& use);
+    JadeThrow rangeFromEnd(const ObjRange* range, const std::string& use);
     // An int given where a storage width it does not fit is declared: an error saying so, with
     // `where` after it. Returns normally for anything else.
     void checkRange(uint8_t type, Value v, const std::string& where);
@@ -676,7 +676,7 @@ public:
     // Calls `callee` with type arguments, as a generic function or class is called.
     Value callWithTypes(Value callee, const std::vector<ObjTypeInfo*>& typeArgs, int argc, const Value* args);
 
-    // ---- astra test (D153) ----
+    // ---- jade test (D153) ----
     Value globalAt(int slot) const {
         return slot >= 0 && static_cast<size_t>(slot) < globals_.size() ? globals_[static_cast<size_t>(slot)] : Value::null();
     }
@@ -808,10 +808,10 @@ public:
     // Makes `program` current. May be called again after the program has grown (shell).
     void load(Program& program);
 
-    // Runs a module's top-level code and returns its result. Throws AstraThrow or AstraExit.
+    // Runs a module's top-level code and returns its result. Throws JadeThrow or JadeExit.
     Value runModule(int index);
 
-    // Calls an Astra value from native code. Anything the caller holds that is not on the VM
+    // Calls an Jade value from native code. Anything the caller holds that is not on the VM
     // stack must be protected with TempRoot / TempVector across this call.
     Value call(Value callee, int argc, const Value* args);
 
@@ -825,17 +825,17 @@ public:
 
     // ---- Helpers for native code ----
 
-    AstraThrow runtimeError(const std::string& message);  // a RuntimeException
-    AstraThrow runtimeError(Thrown kind, const std::string& message);
+    JadeThrow runtimeError(const std::string& message);  // a RuntimeException
+    JadeThrow runtimeError(Thrown kind, const std::string& message);
     // An error of a class the standard library declares (IOException, say), by its name.
-    AstraThrow errorOf(const char* className, const std::string& message);
+    JadeThrow errorOf(const char* className, const std::string& message);
     // The globals the VM itself finds by name: kept in a built program whether or not its code
     // names them (M6.5 part 5). errorOf takes no other name.
     static const std::vector<std::string>& globalsFoundByName();
     // The member names the VM and the built-in functions look up themselves (the names table,
     // and a few more): an extension function of one of them is kept in a built program.
     std::vector<std::string> membersFoundByName() const;
-    AstraThrow outOfMemory();
+    JadeThrow outOfMemory();
     void checkRoomFor(uint64_t bytes);
     std::string stringify(Value v);  // as print() shows it
     std::string repr(Value v);       // with strings quoted
@@ -880,7 +880,7 @@ public:
     std::istream* input;
     std::vector<std::string> scriptArgs;
     int mainModule_ = -1;  // the program's own file's module (Program.name)
-    // That file's name without its folder and .astra: "bank" for bank.astra; "program" if none.
+    // That file's name without its folder and .jade: "bank" for bank.jade; "program" if none.
     std::string mainFileName() const;
     // The interfaces extends fitted a built-in type to (G30), for reflection: those that hold for
     // every value of the type as written (List<int>#: List's and List<int>'s).
@@ -898,7 +898,7 @@ public:
 
     // ---- Threads, the event loop and tasks (threads.cpp) ----
     //
-    // Threads share one heap, and one of them runs Astra code at a time: whichever holds the
+    // Threads share one heap, and one of them runs Jade code at a time: whichever holds the
     // lock. A thread gives the lock up at a safe point when another has waited long enough,
     // and around anything that blocks.
 
@@ -964,7 +964,7 @@ public:
     void (*loopWait)(int64_t) = nullptr;
 
     // ---- Parallel sections (parallel.cpp) ----
-    // Several cores running Astra code on the same objects at the same time. Each core has a
+    // Several cores running Jade code on the same objects at the same time. Each core has a
     // VM of its own for the interpreter's working state, and they share the heap of the VM
     // that started the section, which waits meanwhile with its lock held. What keeps them
     // apart is ownership (Obj::core): a core looks only into what is shared or its own, and
@@ -1010,7 +1010,7 @@ public:
     // Op::Numeric's work (builtins.cpp, beside Math's functions): the result of `which` on
     // `args`, one value or two.
     Value numeric(uint8_t which, const Value* args);
-    AstraThrow overflowError(Op op, int64_t a, int64_t b);
+    JadeThrow overflowError(Op op, int64_t a, int64_t b);
     void markNotParallel(const std::string& global, std::initializer_list<const char*> except = {});
 
     // Runs `function` on every item of `source` (a list, a range, anything a loop takes), the
@@ -1103,7 +1103,7 @@ public:
     // gets a WorkerStop at its next safe point.
     void requestStop();
 
-    // For a built-in function that ends by calling an Astra function: sets that call going
+    // For a built-in function that ends by calling an Jade function: sets that call going
     // in its own place, so that the function runs as part of the program rather than inside
     // the built-in (where it could not be set aside). The built-in returns what this returns.
     // `receiver` becomes the object the function runs on.
@@ -1129,9 +1129,9 @@ public:
     Value blocking(std::function<void()> work, std::function<Value(VM&)> finish);
 
     // Called for an error that nothing caught on a thread other than the main one.
-    std::function<void(VM&, AstraThrow&, const std::string& threadName)> onThreadError;
+    std::function<void(VM&, JadeThrow&, const std::string& threadName)> onThreadError;
     // How a job's error nothing asked for is reported where the program has no handler (8.7a).
-    std::function<void(VM&, AstraThrow&)> onUnaskedError;
+    std::function<void(VM&, JadeThrow&)> onUnaskedError;
     // Called when exit() is used on such a thread.
     std::function<void(int code)> onThreadExit;
 
@@ -1178,7 +1178,7 @@ private:
     uint64_t lockSwitches_ = 0;
     std::atomic<int> lockWaiters_{0};
     std::atomic<bool> attention_{false};  // a safe point has something to do besides collecting
-    bool threadStress_ = false;           // ASTRA_THREAD_STRESS: change threads at every safe point
+    bool threadStress_ = false;           // JADE_THREAD_STRESS: change threads at every safe point
     void safePoint();
     void yieldLock();
     void threadMain(ThreadState* thread);
@@ -1236,8 +1236,8 @@ private:
     // its own part too, which no other core is writing.
     const Obj* bandObject_ = nullptr;
     size_t bandFrom_ = 0, bandTo_ = 0;
-    AstraThrow outsideBand(size_t i) const;
-    AstraThrow wholeBand() const;
+    JadeThrow outsideBand(size_t i) const;
+    JadeThrow wholeBand() const;
     // A built-in function or method given the list of values a section is over, which would
     // read every core's items: refused, but for one that reads none of them.
     void guardBand(Value v, const std::string& method = "") const {
@@ -1246,9 +1246,9 @@ private:
     }
     void refreshFromRoot();
     void adoptObjects(VM& core);
-    AstraThrow otherCores(const Obj* obj) const;
-    AstraThrow notOwned(const Obj* obj) const;
-    AstraThrow notOwned(const std::string& what) const;
+    JadeThrow otherCores(const Obj* obj) const;
+    JadeThrow notOwned(const Obj* obj) const;
+    JadeThrow notOwned(const std::string& what) const;
     void guardNative(const Value* args, int argc) const {
         for (int i = 0; i < argc; i++) {
             guardRead(args[i]);
@@ -1293,24 +1293,24 @@ private:
     Obj* objects_ = nullptr;
     size_t bytesAllocated_ = 0;
     size_t nextGC_ = kMinHeap;
-    bool gcStress_ = false;  // ASTRA_GC_STRESS: collect at every safe point, to expose rooting bugs
+    bool gcStress_ = false;  // JADE_GC_STRESS: collect at every safe point, to expose rooting bugs
     // A class's own == or hashCode running for a map or a set (D26): the C++ around it holds
     // objects nothing roots (a map being built, its entries), so meanwhile nothing is collected
     // and the lock is not handed to another thread.
     int keyCalls_ = 0;
     friend struct KeyCall;
-#if ASTRA_TAIL_CALLS
+#if JADE_TAIL_CALLS
     friend struct TailTable;
     // Instruction `op` (instructions.inc), and an R instruction's slow ways: its two operands
     // (left in slowB_ and slowC_) put where the stack would have them, and on to its stack code,
     // or into stack instruction `plain`'s code.
-    template <Op op> ASTRA_TAIL_FN int tail(ASTRA_TAIL_PARAMS);
-    template <int sAt, int slowAt> ASTRA_TAIL_FN int slowTwo(ASTRA_TAIL_PARAMS);
-    template <Op plain> ASTRA_TAIL_FN int plainTwo(ASTRA_TAIL_PARAMS);
+    template <Op op> JADE_TAIL_FN int tail(JADE_TAIL_PARAMS);
+    template <int sAt, int slowAt> JADE_TAIL_FN int slowTwo(JADE_TAIL_PARAMS);
+    template <Op plain> JADE_TAIL_FN int plainTwo(JADE_TAIL_PARAMS);
     // An instruction's rare part (COLD in instructions.inc): a function apart, so that the part
     // that runs makes no call. Built for Windows, a function that calls anything at all sets up
     // its stack frame as it starts, whichever way it then goes.
-    template <Op op> ASTRA_TAIL_FN int cold(ASTRA_TAIL_PARAMS);
+    template <Op op> JADE_TAIL_FN int cold(JADE_TAIL_PARAMS);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif
@@ -1355,7 +1355,7 @@ private:
     // Bare names passed as arguments that may be enum entries (ValueKind::EnumName), not yet
     // settled. While there are none, calls need not look for them.
     int pendingEnums_ = 0;
-    AstraThrow unsettledName(Value pending);
+    JadeThrow unsettledName(Value pending);
     void rejectPendingNames(const Value* args, int argc);
     Value settleEnumName(Value pending, const ObjClass* type);
     bool callSpread(int named);
@@ -1381,8 +1381,8 @@ private:
     bool memberDeniedTo(const ObjClass* cls, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const;
     bool rightsAllow(Value target, const ObjString* name, const FunctionProto* proto, const uint8_t* ip, bool write) const;
     bool accessDeniedAt(Value target, const ObjString* name, const FunctionProto* proto, bool write, const uint8_t* ip) const;
-    AstraThrow accessError(Value target, const ObjString* name, const FunctionProto* proto);
-    AstraThrow undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global);
+    JadeThrow accessError(Value target, const ObjString* name, const FunctionProto* proto);
+    JadeThrow undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global);
     void ensureClassInit(ObjClass* cls);
 
 public:
@@ -1476,7 +1476,7 @@ private:
     static bool widenedByte(Value& v, uint8_t type);
     ObjClass* popTypeClass(uint8_t type);
     std::string declaredTypeText(uint8_t type, const ObjClass* cls) const;
-    AstraThrow typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v);
+    JadeThrow typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v);
     const NativeMethod* findNativeMethod(Value receiver, const ObjString* name) const;
     Value makeIterator(Value iterable);
     bool iteratorNext(ObjIterator* it, Value& out);
@@ -1561,4 +1561,4 @@ void setSelfCommand(std::vector<std::string> command);
 // The native layer of the Topaz library (lib/Topaz): windows, events and drawing. topaz/api.cpp.
 void registerTopaz(VM& vm);
 
-}  // namespace astra
+}  // namespace jade

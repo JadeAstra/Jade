@@ -17,7 +17,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::text {
+namespace jade::text {
 
 namespace {
 
@@ -190,4 +190,4 @@ std::vector<std::string> fallbackFamilies() {
 #endif
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

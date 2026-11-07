@@ -7,7 +7,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::text {
+namespace jade::text {
 
 namespace {
 
@@ -597,4 +597,4 @@ GlyphImage ColorTables::render(const Face& face, int glyph, const Coords& coords
     return image;
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

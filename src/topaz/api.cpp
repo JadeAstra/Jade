@@ -25,7 +25,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra {
+namespace jade {
 
 std::shared_ptr<text::Font> textFontOf(VM& vm, Value v);  // text/api.cpp
 
@@ -55,7 +55,7 @@ struct State {
     // An error raised by the program while it was being told of an event. It cannot leave
     // through the window system's own code, so it is kept and raised again once we are out.
     bool hasThrow = false, hasExit = false;
-    AstraThrow pendingThrow;
+    JadeThrow pendingThrow;
     int exitCode = 0;
     bool pumping = false;
     bool idling = false;
@@ -149,13 +149,13 @@ Value done(Value result = Value::null()) {
     if (state().pumping) return result;  // raised once the window system's code has been left
     if (state().hasThrow) {
         state().hasThrow = false;
-        AstraThrow thrown = state().pendingThrow;
-        state().pendingThrow = AstraThrow();
+        JadeThrow thrown = state().pendingThrow;
+        state().pendingThrow = JadeThrow();
         throw thrown;
     }
     if (state().hasExit) {
         state().hasExit = false;
-        throw AstraExit{state().exitCode};
+        throw JadeExit{state().exitCode};
     }
     return result;
 }
@@ -171,10 +171,10 @@ void dispatch(int window, const char* kind, int64_t x = 0, int64_t y = 0, int64_
     args[1] = Value::object(vm.intern(kind));
     try {
         vm.call(state().dispatcher, static_cast<int>(args.size()), args.data());
-    } catch (AstraThrow& thrown) {
+    } catch (JadeThrow& thrown) {
         state().pendingThrow = thrown;
         state().hasThrow = true;
-    } catch (AstraExit& exit) {
+    } catch (JadeExit& exit) {
         state().exitCode = exit.code;
         state().hasExit = true;
     }
@@ -248,13 +248,13 @@ void deliver(int id, const RawEvent& e) {
 void raisePending() {
     if (state().hasThrow) {
         state().hasThrow = false;
-        AstraThrow thrown = state().pendingThrow;
-        state().pendingThrow = AstraThrow();
+        JadeThrow thrown = state().pendingThrow;
+        state().pendingThrow = JadeThrow();
         throw thrown;
     }
     if (state().hasExit) {
         state().hasExit = false;
-        throw AstraExit{state().exitCode};
+        throw JadeExit{state().exitCode};
     }
 }
 
@@ -292,10 +292,10 @@ void idle() {
     } reset;
     try {
         vm.runEventLoop(false, 2);
-    } catch (AstraThrow& thrown) {
+    } catch (JadeThrow& thrown) {
         state().pendingThrow = thrown;
         state().hasThrow = true;
-    } catch (AstraExit& exit) {
+    } catch (JadeExit& exit) {
         state().exitCode = exit.code;
         state().hasExit = true;
     }
@@ -404,7 +404,7 @@ void registerTopaz(VM& vm) {
 
     // chooseFile(kind, title, filters, startDir, name, window): the system's dialog for a file
     // to open (0), to save to (1) or a folder (2), waited for here with the program's other
-    // threads going on (it is called on a thread of its own, SystemFileDialog in Window.astra);
+    // threads going on (it is called on a thread of its own, SystemFileDialog in Window.jade);
     // in front of the window with that number, or none for 0. The path chosen, or null.
     def("chooseFile", 6, 6, [](VM& vm, int, Value* args) -> Value {
         if (vm.currentHost().isSandbox()) throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox shows no file dialogs");
@@ -1026,4 +1026,4 @@ void registerTopaz(VM& vm) {
     vm.markNotParallel("__topaz", {"nanos"});
 }
 
-}  // namespace astra
+}  // namespace jade

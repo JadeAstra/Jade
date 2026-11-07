@@ -8,7 +8,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::topaz {
+namespace jade::topaz {
 
 namespace {
 
@@ -725,4 +725,4 @@ bool Renderer::present(int id, PlatformWindow& window) {
     return true;
 }
 
-}  // namespace astra::topaz
+}  // namespace jade::topaz

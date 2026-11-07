@@ -1,5 +1,5 @@
 build/
-*.astc
+*.jc
 *.exe
 .vs/
 spikes/m0/out/

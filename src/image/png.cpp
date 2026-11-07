@@ -9,7 +9,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::image {
+namespace jade::image {
 
 uint32_t crc32(const uint8_t* data, size_t size, uint32_t crc) {
     static const std::array<uint32_t, 256> table = [] {
@@ -573,4 +573,4 @@ bool decodePng(const uint8_t* data, size_t size, std::vector<uint8_t>& rgba, int
     return true;
 }
 
-}  // namespace astra::image
+}  // namespace jade::image

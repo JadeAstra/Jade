@@ -11,7 +11,7 @@
 
 #include "face.h"
 
-namespace astra::text {
+namespace jade::text {
 
 // How an arc is closed, as Java's Arc2D: OPEN (the curve alone), CHORD (a straight line from its
 // end back to its start), PIE (lines from both ends to the middle of the ellipse).
@@ -38,4 +38,4 @@ void arcStroke(Path& p, double l, double t, double r, double b, double start, do
 // joins, closed back to the first point or not: one shape, each pixel covered once.
 void polylineStroke(Path& p, const std::vector<double>& xy, bool closed, double width);
 
-}  // namespace astra::text
+}  // namespace jade::text

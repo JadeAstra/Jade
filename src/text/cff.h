@@ -15,7 +15,7 @@
 
 #include "face.h"
 
-namespace astra::text {
+namespace jade::text {
 
 struct CffFont {
     // False, with `error` saying why, if the table cannot be used.
@@ -59,4 +59,4 @@ private:
     bool run(Run& state, size_t start, size_t end, int depth) const;
 };
 
-}  // namespace astra::text
+}  // namespace jade::text

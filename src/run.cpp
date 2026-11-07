@@ -1,4 +1,4 @@
-// Running a compiled program to its end: all of the astra executable a built program uses
+// Running a compiled program to its end: all of the jade executable a built program uses
 // (M6.5 part 5). See run.h.
 
 #include "run.h"
@@ -16,7 +16,7 @@
 #include <windows.h>
 #endif
 
-namespace astra {
+namespace jade {
 
 bool runningBundledProgram = false;
 std::chrono::steady_clock::time_point executableStarted;
@@ -55,7 +55,7 @@ void reportFatal(const std::string& report) {
 #endif
 }
 
-void reportUncaught(VM& vm, AstraThrow& thrown) {
+void reportUncaught(VM& vm, JadeThrow& thrown) {
     std::cout.flush();
 
     std::string text;
@@ -63,7 +63,7 @@ void reportUncaught(VM& vm, AstraThrow& thrown) {
         // Error objects describe themselves ("Error: message"); anything else thrown is shown as a value.
         text = thrown.value.isObjType(ObjType::Instance) ? vm.stringify(thrown.value)
                                                          : "exception: " + vm.stringify(thrown.value);
-    } catch (const AstraThrow&) {
+    } catch (const JadeThrow&) {
         text = "exception (its toString() failed)";
     }
 
@@ -72,7 +72,7 @@ void reportUncaught(VM& vm, AstraThrow& thrown) {
     // The errors set aside for it on the way (G40), as Java shows them.
     try {
         for (const Value& aside : vm.setAsideOf(thrown.value)) report += "  Suppressed: " + vm.stringify(aside) + "\n";
-    } catch (const AstraThrow&) {
+    } catch (const JadeThrow&) {
         report += "  Suppressed: (its toString() failed)\n";
     }
     reportFatal(report);
@@ -80,12 +80,12 @@ void reportUncaught(VM& vm, AstraThrow& thrown) {
 
 namespace {
 
-void reportThreadError(VM& vm, AstraThrow& thrown, const std::string& threadName) {
+void reportThreadError(VM& vm, JadeThrow& thrown, const std::string& threadName) {
     thrown.trace.push_back("in thread " + threadName);
     reportUncaught(vm, thrown);
 }
 
-void reportUnaskedError(VM& vm, AstraThrow& thrown) {
+void reportUnaskedError(VM& vm, JadeThrow& thrown) {
     thrown.trace.push_back("in a job that failed with nothing asking for its error");
     reportUncaught(vm, thrown);
 }
@@ -116,10 +116,10 @@ int runProgram(VM& vm, Program& program, int entry) {
     auto reportAtEnd = [&vm](int& code) {
         try {
             vm.deliverUnasked(true);
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             reportUncaught(vm, thrown);
             vm.uncaughtReported = true;
-        } catch (const AstraExit& exit) {
+        } catch (const JadeExit& exit) {
             code = exit.code;
             return;
         }
@@ -131,10 +131,10 @@ int runProgram(VM& vm, Program& program, int entry) {
         vm.runModule(entry);
         vm.runEventLoop(true);
         reportAtEnd(code);
-    } catch (AstraThrow& thrown) {
+    } catch (JadeThrow& thrown) {
         reportUncaught(vm, thrown);
         code = kExitRuntimeError;
-    } catch (const AstraExit& exit) {
+    } catch (const JadeExit& exit) {
         code = exit.code;
         reportAtEnd(code);
     }
@@ -229,7 +229,7 @@ bool windowCodePresent() {
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
     const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
     for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
-        if (std::memcmp(section->Name, ".astraj", 8) == 0) return section->SizeOfRawData != 0;
+        if (std::strncmp(reinterpret_cast<const char*>(section->Name), ".jadet", IMAGE_SIZEOF_SHORT_NAME) == 0) return section->SizeOfRawData != 0;
 #endif
     return true;
 }
@@ -252,15 +252,15 @@ int startExecutable(int argc, char** argv, int (*command)(const std::vector<std:
         } else if (command != nullptr) {
             code = command(args);
         } else {
-            reportFatal("astra: this executable holds no program and no astra command\n");
+            reportFatal("jade: this executable holds no program and no jade command\n");
             code = kExitUsage;
         }
     } catch (const std::exception& e) {
-        reportFatal(std::string("astra: internal error: ") + e.what() + "\n");
+        reportFatal(std::string("jade: internal error: ") + e.what() + "\n");
         code = kExitRuntimeError;
     }
     std::cout.flush();
     return code;
 }
 
-}  // namespace astra
+}  // namespace jade

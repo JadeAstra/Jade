@@ -1,0 +1,124 @@
+// A member that takes the place of one from above, or supplies what an interface or an abstract
+// class asks for, says override; one that says it must have something to replace. Found when the
+// program is checked (before, only when the class was made). Each `// check:` names a report
+// expected on its line. tests/override_required.jade has the cases that are right.
+
+class Base(val id : int) {
+  var size = 1
+  val label
+    get() => "base $id"
+  fun greet() => "hello"
+}
+interface Shape {
+  val name : string
+  fun area()
+  fun describe() => "$name of area ${area()}"
+}
+abstract class Tool { abstract fun use() }
+class Animal {
+  var legs : int = 4
+}
+
+// Methods.
+class A1 : Base(1) { fun greet() => "hi" }                 // check: 'greet' in class A1 takes the place of the one it inherits; write override in front of it
+class A2 : Base(1) { override fun gret() => "hi" }         // check: 'gret' in class A2 is marked override, but there is nothing of that name for it to replace
+
+// Fields and properties, the header's fields included.
+class B1 : Base(1) { var size = 2 }                        // check: 'size' in class B1 takes the place of the one it inherits; write override in front of it
+class B2 : Base(1) { val label get() => "b" }              // check: 'label' in class B2 takes the place of the one it inherits; write override in front of it
+class B3(override val weight : int) : Base(1)              // check: 'weight' in class B3 is marked override, but there is nothing of that name for it to replace
+class Clash : Animal { var legs : int = 2 }                // check: 'legs' in class Clash takes the place of the one it inherits; write override in front of it
+
+// What an interface or an abstract class asks for, and what comes with an interface.
+class C1 : Shape { val name = "c"; override fun area() => 1 }                    // check: 'name' in class C1 is what interface Shape asks for; write override in front of it
+class C2 : Shape { override val name = "c"; fun area() => 1 }                    // check: 'area' in class C2 is what interface Shape asks for; write override in front of it
+class C3(override val name : string) : Shape { override fun area() => 1; fun describe() => "mine" }   // check: 'describe' in class C3 takes the place of the one it inherits; write override in front of it
+class D1 : Tool { fun use() => 1 }                         // check: 'use' in class D1 is what abstract class Tool asks for; write override in front of it
+
+// Inside a function, as anywhere.
+fun make() {
+  class Wrong : Tool {
+    override fun use() => 0
+    override fun aera() => 0                               // check: 'aera' in class Wrong is marked override, but there is nothing of that name for it to replace
+  }
+}
+
+// An override gives what the one above gives, or less: a narrower type, a subclass, a throw.
+interface Measured {
+  fun size() : float
+  fun parent() : Measured?
+  val label : string
+  var count : int?
+}
+class Ruler : Measured {
+  override fun size() : string => "long"                   // check: 'size' gives a string, where what it overrides (Measured.size()) gives a float: code that calls it through Measured counts on that
+  override fun parent() : Ruler => Ruler()
+  override val label : int = 1                             // check: 'label' is an int, where Measured.label, which it overrides, is a string: code that reads it through Measured counts on that
+  override var count : int = 0                             // check: 'count' is an int, where Measured.count, which it overrides, is a var of an int?: a var is overridden with its own type, as it may be written through either
+}
+class Tape : Measured {
+  override fun size() : float => throw IllegalStateException("unmeasured")
+  override fun parent() : Measured? => null
+  override val label = "tape"
+  override var count : int? = null
+}
+class Base2 {
+  fun weight() : int => 1
+}
+class Heavy : Base2() {
+  override fun weight() : float => 2.0                     // check: 'weight' gives a float, where what it overrides (Base2.weight()) gives an int: code that calls it through Base2 counts on that
+}
+interface Source<T> {
+  fun next() : T
+}
+class Numbers : Source<int> {
+  override fun next() : string => "1"                      // check: 'next' gives a string, where what it overrides (Source.next()) gives an int: code that calls it through Source counts on that
+}
+class Echo<T>(val item : T) : Source<T> {
+  override fun next() : T => item
+}
+enum Level : Measured {
+  Low;
+  override fun size() : int? => null                       // check: 'size' gives an int?, where what it overrides (Measured.size()) gives a float: code that calls it through Measured counts on that
+  override fun parent() : Measured? => null
+  override val label = "low"
+  override var count : int? = null
+}
+// A type parameter fits anything while its generic is checked, but code that calls through
+// the type above gets what it put there: where a type parameter is asked for, it is given.
+interface Taker {
+  fun <U> take(x : U) : U
+  fun <U> all(xs : List<U>) : List<U>
+  fun <A, B> pair(a : A, b : B) : string
+}
+class Wrong : Taker {
+  override fun <V> take(x : V) : int => 1                  // check: 'take' gives an int, where what it overrides (Taker.take(x : V)) gives a V: code that calls it through Taker counts on that
+  override fun <V> all(xs : List<V>) : List<int> => [1]    // check: 'all' gives a List<int>, where what it overrides (Taker.all(xs : List<V>)) gives a List<V>: code that calls it through Taker counts on that
+  override fun <A, B> pair(a : B, b : A) : string => ""    // check: 'pair' is written override, but no form above has its parameters (Taker.pair(a : A, b : B)); give it those, or make it a form of its own without override
+}
+class Kept : Taker {
+  override fun <V> take(x : V) : V => x
+  override fun <V> all(xs : List<V>) : List<V> => xs
+  override fun <B, A> pair(a : B, b : A) : string => ""
+}
+class Carrier<E>(val items : List<E>) : Source<E> {
+  override fun next() : int => 1                           // check: 'next' gives an int, where what it overrides (Source.next()) gives an E: code that calls it through Source counts on that
+}
+interface Held<T> {
+  val held : T
+}
+class Holder<E> : Held<E> {
+  override val held : int = 1                              // check: 'held' is an int, where Held.held, which it overrides, is an E: code that reads it through Held counts on that
+}
+class Sub3 : Base3 {
+  fun <V> grab(x : V) : V => x                             // check: 'grab' in class Sub3 takes the place of the one it inherits; write override in front of it
+}
+class Base3 {
+  fun <U> grab(x : U) : U => x
+}
+
+// A generic class's or interface's method, as the class below gives its type parameters (M8).
+abstract class Shown<S> { abstract fun show(s : S) : string }
+interface Updated<S> { fun update(spec : S) }
+class ShowsInt : Shown<int>() { fun show(s : int) : string => "$s" }      // check: 'show' in class ShowsInt is what abstract class Shown asks for; write override in front of it
+class UpdatesText : Updated<string> { override fun update(spec : int) {} } // check: 'update' is written override, but no form above has its parameters (Updated.update(spec : S)); give it those, or make it a form of its own without override

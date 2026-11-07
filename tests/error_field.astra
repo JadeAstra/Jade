@@ -1,6 +1,0 @@
-// A field's initial value that can never fit its type is rejected before the program runs.
-print("never runs")
-class Player {
-  var score : int = "zero"
-}
-// expect compile error: error_field.astra:4:21: error: 'score' is an int; it cannot start as a string

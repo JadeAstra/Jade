@@ -1,0 +1,8 @@
+// A call passing a list with * is followed for what it may throw, as any call is (G34).
+fun total(vararg parts : int) : int {
+  if (parts.isEmpty()) { throw IOException("nothing to add") }
+  return parts.sum()
+}
+val nums = [1, 2]
+val summed : () -> int = { total(*nums) }
+// expect compile error: error_spread_throws_kept.jade:7:26: error: this lambda may throw IOException, which nothing can catch where it is called: it is kept as a () -> int, which throws nothing checked; catch it inside the lambda (D35)

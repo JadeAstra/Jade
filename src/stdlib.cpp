@@ -1,6 +1,6 @@
 // The native part of the standard library's Kotlin names: what is called often enough to
-// matter, and what Astra code cannot do for itself (reading a file, formatting a number,
-// telling a letter from a digit). The rest is written in Astra, in src/std/*.astra.
+// matter, and what Jade code cannot do for itself (reading a file, formatting a number,
+// telling a letter from a digit). The rest is written in Jade, in src/std/*.jade.
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -27,7 +27,7 @@
 #include "host.h"
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -731,15 +731,15 @@ void registerStringMethods(VM& vm) {
         return vm.str(formatText(vm, asString(self)->utf8(), argc, args));
     });
 
-#define ASTRA_CHARACTER_TEST(NAME, WHICH)                                              \
+#define JADE_CHARACTER_TEST(NAME, WHICH)                                              \
     vm.defineMethod(T, NAME, 0, 0, [](VM&, Value self, int, Value*) -> Value {          \
         return Value::boolean(charactersAre(asString(self)->utf8(), CharacterClass::WHICH)); \
     })
-    ASTRA_CHARACTER_TEST("isAlpha", Letter);
-    ASTRA_CHARACTER_TEST("isDigit", Digit);
-    ASTRA_CHARACTER_TEST("isAlnum", LetterOrDigit);
-    ASTRA_CHARACTER_TEST("isSpace", Whitespace);
-#undef ASTRA_CHARACTER_TEST
+    JADE_CHARACTER_TEST("isAlpha", Letter);
+    JADE_CHARACTER_TEST("isDigit", Digit);
+    JADE_CHARACTER_TEST("isAlnum", LetterOrDigit);
+    JADE_CHARACTER_TEST("isSpace", Whitespace);
+#undef JADE_CHARACTER_TEST
     vm.defineMethod(T, "isUpper", 0, 0, [](VM&, Value self, int, Value*) -> Value { return Value::boolean(casedAre(asString(self)->utf8(), true)); });
     vm.defineMethod(T, "isLower", 0, 0, [](VM&, Value self, int, Value*) -> Value { return Value::boolean(casedAre(asString(self)->utf8(), false)); });
 }
@@ -973,10 +973,10 @@ void registerByteMethods(VM& vm) {
     vm.defineMethod(BuiltinType::Byte, "toInt", 0, 0, [](VM&, Value self, int, Value*) -> Value { return Value::integer(self.as.i); });
 }
 
-// Int.maxValue and the like. Astra has one whole-number type and one for fractions; the
+// Int.maxValue and the like. Jade has one whole-number type and one for fractions; the
 // four names are Kotlin's, so that a limit means the same number as it does there.
 void registerNumberConstants(VM&) {
-    // Astra's are `int.maxValue` and the like, which the compiler writes in place (D76); Kotlin's
+    // Jade's are `int.maxValue` and the like, which the compiler writes in place (D76); Kotlin's
     // holders, Int, Long, Double and Float, are errors saying so.
 }
 
@@ -990,7 +990,7 @@ bool exactIndex(Value index, size_t size, size_t& out) {
     return true;
 }
 
-AstraThrow outOfRange(VM& vm, const char* what, Value index, size_t size) {
+JadeThrow outOfRange(VM& vm, const char* what, Value index, size_t size) {
     return vm.runtimeError(Thrown::IndexOutOfBoundsException, std::string(what) + ": index " + vm.stringify(index) + " is out of range (size " + std::to_string(size) + ")");
 }
 
@@ -1202,7 +1202,7 @@ void registerListMethods(VM& vm) {
 
 // ---- Maps ----
 
-// A set's own (M6.6 part 8); what a set does besides is in set.astra. A view of a map's keys
+// A set's own (M6.6 part 8); what a set does besides is in set.jade. A view of a map's keys
 // or entries (D77) takes all that only reads.
 void registerSetMethods(VM& vm) {
     const BuiltinType T = BuiltinType::Set;
@@ -1467,11 +1467,11 @@ Value writeFile(VM& vm, Value path, Value content, bool bytesOnly, bool append, 
 }
 
 // An IOException for something done to a path, with what the system said.
-AstraThrow pathError(VM& vm, const std::string& what, const std::string& path, const std::error_code& ec) {
+JadeThrow pathError(VM& vm, const std::string& what, const std::string& path, const std::error_code& ec) {
     return vm.errorOf("IOException", "cannot " + what + " '" + path + "'" + (ec ? ": " + ec.message() : ""));
 }
 
-// What the Path class (src/std/file.astra) is built on. The name starts with two
+// What the Path class (src/std/file.jade) is built on. The name starts with two
 // underscores, which only the standard library's own source can use.
 void registerFiles(VM& vm) {
     ObjClass* file = vm.alloc<ObjClass>(vm.intern("Path"));
@@ -1653,7 +1653,7 @@ void registerFiles(VM& vm) {
         if (isSeparator(base.back(), windows)) return vm.str(base + child);
         return vm.str(base + (windows ? '\\' : '/') + child);
     });
-    // The separator, as the program reads it, follows the host too (Path.separator in file.astra).
+    // The separator, as the program reads it, follows the host too (Path.separator in file.jade).
     def("separator", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.str(vm.currentHost().windowsPaths() ? "\\" : "/"); });
 
     vm.defineGlobal("__file", Value::object(file));
@@ -1677,4 +1677,4 @@ void registerStdlib(VM& vm) {
     registerFiles(vm);
 }
 
-}  // namespace astra
+}  // namespace jade

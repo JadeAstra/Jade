@@ -9,7 +9,7 @@
 #include <cstring>
 #include <functional>
 
-namespace astra {
+namespace jade {
 
 std::atomic<ObjClass*> smallClasses[kMaxSmallClasses];
 
@@ -1062,4 +1062,4 @@ bool ObjRange::contains(int64_t i) const {
     return offset % magnitude == 0;
 }
 
-}  // namespace astra
+}  // namespace jade

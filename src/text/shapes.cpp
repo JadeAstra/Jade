@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace astra::text {
+namespace jade::text {
 
 namespace {
 
@@ -156,4 +156,4 @@ void polylineStroke(Path& p, const std::vector<double>& xy, bool closed, double 
     for (size_t i = closed ? 0 : 1; i < (closed ? n : n - 1); i++) addPiece(p, disc(xy[2 * i], xy[2 * i + 1], h));
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

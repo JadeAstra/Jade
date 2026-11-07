@@ -1,4 +1,4 @@
-# Plan: Topaz, Astra's GUI library, based on JadeUI
+# Plan: Topaz, Jade's GUI library, based on JadeUI
 
 Status: agreed plan, every decision settled (section 8). Work proceeds one milestone at a
 time (section 7). M0, the two spikes, is done and accepted; what it found is in
@@ -16,15 +16,15 @@ were added at the end.
 
 ## 1. Goal and ground rules
 
-Give Astra a GUI library with the same API as JadeUI (`jadelib-ui`): every public function
+Give Jade a GUI library with the same API as JadeUI (`jadelib-ui`): every public function
 and parameter keeps its name, order and default, and every class keeps its name without the
 `Topaz` prefix (`JadeCanvas` is `Canvas`), so that an app written against JadeUI in Kotlin is
 ported by translating syntax, not by redesigning its UI code. The deliberate differences are
 listed in section 6.
 
-In Astra the library is called **Topaz** (`import Topaz`, or `import Topaz.*` for bare names). "JadeUI" in this document always
+In Jade the library is called **Topaz** (`import Topaz`, or `import Topaz.*` for bare names). "JadeUI" in this document always
 means the Kotlin original. Sections that describe the Kotlin library use its names
-(`JadeComponent`); sections about Astra use Topaz's (`Component`).
+(`JadeComponent`); sections about Jade use Topaz's (`Component`).
 
 The names, the user's (chosen 2026-11-03, taken up 2026-11-07):
 
@@ -34,27 +34,31 @@ The names, the user's (chosen 2026-11-03, taken up 2026-11-07):
 | The window and graphics library | Topaz |
 | The game engine | Carnelian (not built yet) |
 
-- The library is written in Astra.
+Until 2026-11-07 the language was called Astra (its files `.astra`, its program `astra.exe`), and
+Topaz was called Jade; this document, the code and the commits since then use the new names
+throughout, and only the commits before say the old ones.
+
+- The library is written in Jade.
 - C++ is used only for what a script cannot do: windows, input, drawing, text, images,
   clipboard, file dialogs.
 - Whatever is done in C++ is open to every program (the user, 2026-10-17): each piece has an
-  Astra API of its own, as public as any library's, so programs and other libraries get the
+  Jade API of its own, as public as any library's, so programs and other libraries get the
   same speed the library that needed it gets. The text engine, PNG, the software drawing
   engine, cryptography, and M13's physics, spatial grid and vector maths are each usable on
   their own, never only from inside the one library that asked for them. Raw built-ins
-  (`__text`, `__topaz`) stay internal; the public face is ordinary Astra types. As long as
+  (`__text`, `__topaz`) stay internal; the public face is ordinary Jade types. As long as
   opening it does not cost the library that uses it its speed: the public API adds no copy,
-  check or extra call on the path Astra's own libraries take (they may use the same API, or a
+  check or extra call on the path Jade's own libraries take (they may use the same API, or a
   faster internal one where the public one must check more), and a piece whose fast path
   depends on staying inside (the text engine's glyph caches, the renderer's batches) shows
   what it can without giving that up.
-- No Kotlin and no JVM anywhere in Astra. JadeUI is the specification, not a dependency.
-- Astra being a good language comes before porting Kotlin easily (the user, 2026-10-17). Porting is done
-  once, but Astra's speed, stability and readability matter for every program ever written in it,
-  so they come first. The porting question is whether Astra can do
+- No Kotlin and no JVM anywhere in Jade. JadeUI is the specification, not a dependency.
+- Jade being a good language comes before porting Kotlin easily (the user, 2026-10-17). Porting is done
+  once, but Jade's speed, stability and readability matter for every program ever written in it,
+  so they come first. The porting question is whether Jade can do
   what the code does as well or better, not whether the code compiles unchanged.
-- Astra stays self-contained (the user, 2026-10-17): `astra something.astra` runs with nothing else
-  installed, and a built program needs no `astra.exe`, sources or `lib`. No milestone may require
+- Jade stays self-contained (the user, 2026-10-17): `jade something.jade` runs with nothing else
+  installed, and a built program needs no `jade.exe`, sources or `lib`. No milestone may require
   more; M14's native code stays an option beside built programs that need no C++ compiler.
 
 The full list of names to match is in [jadeui-api-inventory.md](jadeui-api-inventory.md)
@@ -103,16 +107,16 @@ Three apps depend on it today:
 | JadeGen | 7,400 lines | the above plus text area, custom contents, markdown/HTML view, raw input, and an OpenGL view |
 | Snips | 38,100 lines | nearly everything: documents, spreadsheet, code, math, SVG, charts, maps, hex, large text |
 
-## 3. Architecture for Astra
+## 3. Architecture for Jade
 
 ```
-app.astra
+app.jade
    │  same calls as the Kotlin app: grid { row { cell(label("Name:")) } }, Window(root).show()
    ▼
-Topaz (Astra)            components, layout, widgets, text editing, menus, dialogs,
+Topaz (Jade)            components, layout, widgets, text editing, menus, dialogs,
    │                    and the host policy that both Kotlin backends duplicate, written once
    ▼
-compat (Astra)          the JDK names the API exposes: Color, Font, Dimension, Rectangle, Insets,
+compat (Jade)          the JDK names the API exposes: Color, Font, Dimension, Rectangle, Insets,
    │                    Point, BufferedImage, File; and Kotlin's collection and string names
    ▼
 native layer (C++)      windows and raw events, a 2D canvas with offscreen surfaces, text
@@ -121,28 +125,28 @@ native layer (C++)      windows and raw events, a 2D canvas with offscreen surfa
 
 Decisions built into this shape:
 
-1. **The host policy moves into Astra.** The native layer delivers raw events (pointer,
+1. **The host policy moves into Jade.** The native layer delivers raw events (pointer,
    wheel, key down/up with physical key and layout letter, text, focus, resize, scale change,
    close request, file drop) and nothing else. A window is a `Window`, the one
    class that replaces JadeUI's `JadeHost`, `JadeWindow` and `WindowSpec` (section 6.1). The Kotlin
-   backends' own host classes are not part of Topaz under any name: nothing in Astra is called
+   backends' own host classes are not part of Topaz under any name: nothing in Jade is called
    after GLFW or JavaFX.
 2. **The native canvas mirrors `Canvas`** (JadeUI's `JadeCanvas`) and adds persistent offscreen surfaces, because
    the per-component paint cache and the retained window buffer both depend on them.
 3. **One UI thread, in a runtime that has threads.** Layout, painting and input all run on
    the thread that runs the event loop, as in JadeUI. Caret blink, tooltip delay, hold-repeat
    and scheduled tasks are polled against a clock in the Kotlin frame function; here they are
-   timers on that loop. Astra itself gains threads and async I/O (section 5.5), so an app
+   timers on that loop. Jade itself gains threads and async I/O (section 5.5), so an app
    does its slow work off the UI thread, as the Kotlin apps do, and hands the result back
    through `Topaz.scheduler`. The native layer must repaint from inside the resize callback
    (Windows runs a modal loop while a window is being resized), and runs file dialogs and
    image decoding on worker threads, delivering their results on the loop.
-4. **The old `gui` library is no longer supported and is removed.** Topaz is Astra's only GUI
+4. **The old `gui` library is no longer supported and is removed.** Topaz is Jade's only GUI
    library. The old one receives no fixes from now on, and its files leave the tree in M5,
    when Topaz's native layer replaces its backend:
-   - `lib/gui.astra` and `src/gui.cpp`, with the references to them in `CMakeLists.txt`,
+   - `lib/gui.jade` and `src/gui.cpp`, with the references to them in `CMakeLists.txt`,
      `src/builtins.cpp`, `src/compiler.cpp`, `src/main.cpp` and `src/vm.h`;
-   - the five `examples/gui_*.astra` and `tests/gui_widgets.astra`;
+   - the five `examples/gui_*.jade` and `tests/gui_widgets.jade`;
    - the GUI section of the README.
 
    Only its own examples and test were ever written against it, so nothing is kept for
@@ -210,7 +214,7 @@ and Apple has deprecated OpenGL there, where it still works but is frozen at an 
 | **N1** core | Windows with an OpenGL context: create hidden, show, title, size and position, min/max size, resizable, owner window, icons, bring to front, close. Raw events as listed above, plus pointer leave and the OS double-click time. Nine cursor shapes, hidden and locked pointer. One-shot wake timer and a nanosecond clock. Surfaces: the window's retained picture and offscreen textures, clear to transparent, redraw a dirty rectangle. Canvas: colour with alpha, font (family, size, bold, italic), the `Canvas` operations, a translate-and-clip stack, a scale for HiDPI, image draw scaled and with constant alpha. Text: Topaz's own engine (below) and the glyph atlas; width, ascent, descent, height, per-character width; three logical families. Plain-text clipboard. Save a surface as PNG and read a pixel (for tests). | root package, dialogs, sheet, hex, code, text, map, most of doc |
 | **N2** services | Async open/save/folder dialogs. Image decode (PNG, JPEG, GIF, BMP) and PNG encode. Clipboard HTML and images. Installed font families. OS dark-mode query. Request attention. | dialogs, image view, CSS fonts |
 | **N3** vector stack | Paths with lines, quadratic and cubic curves, turned into triangles; stroke width, caps, joins, dashes; arcs and pie sectors; linear and radial gradients; affine transform stack; clip to a shape (stencil); image draws through a transform with nearest/bilinear/bicubic; `Clear` composite; Gaussian blur; whole-image pixel arrays. OpenGL provides none of this ready-made: it is written, or taken from a small library such as NanoVG, when M10 is reached. | svg, toolbar icons, chart (partly), math, image editing, HTML effects |
-| **N4** 3D view | The layering of an app's own OpenGL drawing between the interface and its popups, with the state set up and restored around it; and OpenGL bindings for Astra, so that an app can issue the calls. The context and the layering come with the window; the bindings are the large part. | `GlView`, so JadeGen |
+| **N4** 3D view | The layering of an app's own OpenGL drawing between the interface and its popups, with the state set up and restored around it; and OpenGL bindings for Jade, so that an app can issue the calls. The context and the layering come with the window; the bindings are the large part. | `GlView`, so JadeGen |
 | **N5** parsing | A `Regex` class and an XML reader. | CSS, Markdown, HTML, code highlighting, SVG, `.ovr` overrides |
 | **R** runtime | Not GUI: threads, locks, the event loop, and file, process and socket I/O (section 5.5). The window loop in N1 is this loop. | every app's background work; the large-text view; image loading |
 
@@ -346,7 +350,7 @@ ligatures, so a text's width is the sum of its characters' widths in every font.
 nearest whole pixel and what lies between is stretched to fit; nothing moves sideways and
 nothing below the baseline moves. It is on unless a font is made without it.
 
-**To Astra** the engine is `Fonts`, `Typeface`, `TextFont` and `Picture` (README, "Fonts,
+**To Jade** the engine is `Fonts`, `Typeface`, `TextFont` and `Picture` (README, "Fonts,
 text and pictures"), names of the engine's own. Topaz's `Font`, `FontMetrics`, `Color` and
 `BufferedImage` are written on them in M5, and M5's canvas takes glyph pictures from the
 same engine into its atlas. A `Picture`'s pixels are an ordinary `bytes` value.
@@ -368,7 +372,7 @@ of 1.5.
   is installed here, and the one found on the machine is a test font of a single letter
   that the fonttools project carries. Its outlines at the places that project's own tests
   name come out to the coordinates those tests expect, exactly, as do those of the
-  TrueType variable font beside it (13 axes). Neither font is in Astra's tests.
+  TrueType variable font beside it (13 axes). Neither font is in Jade's tests.
 - `sbix`, Apple's picture format, is written to the specification and has not met a font:
   none is on this machine. `CBDT` was tried against Noto Color Emoji, which a program
   installed here carries, but that font is not in the tests since Windows does not have it.
@@ -384,7 +388,7 @@ of 1.5.
 #### As built in M5
 
 Tier N1 is built, in `src/topaz` (about 2,700 lines of C++) and `lib/Topaz` (three files of
-Astra), and the old `gui` library is gone with its backend, examples and test (section 3,
+Jade), and the old `gui` library is gone with its backend, examples and test (section 3,
 point 4).
 
 **The parts.** `platform.h` is the interface that is written once for each system: a window
@@ -392,10 +396,10 @@ with an OpenGL context, the events it receives, cursors, the clipboard, waiting.
 is the one for Windows, written directly against Win32 and WGL. `render` draws: one shader
 program, shapes sent to the card as one small record each (76 bytes) and drawn instanced,
 the two glyph atlases (coverage, and colour for emoji), and surfaces. `api.cpp` is the
-built-in `__topaz`, where layout units become device pixels. In `lib/Topaz`: `Native.astra`
-(`NativeWindow`, `Surface`, `NativeCanvas`, `Native`), `Input.astra` (`RawInput`, `KeyCode`,
+built-in `__topaz`, where layout units become device pixels. In `lib/Topaz`: `Native.jade`
+(`NativeWindow`, `Surface`, `NativeCanvas`, `Native`), `Input.jade` (`RawInput`, `KeyCode`,
 `PointerButton`, `Modifiers`, `CursorKind`, `CursorMode`, ported from JadeUI's own types)
-and `Awt.astra` (the JDK's names).
+and `Awt.jade` (the JDK's names).
 
 **Where it differs from what this section said.**
 
@@ -428,9 +432,9 @@ and `Awt.astra` (the JDK's names).
 - **`BufferedImage` is in two places**, memory and the card, each brought up to date from
   the other when it is asked for after the other changed. Its `createGraphics()` comes with
   tier N3; until then `canvas()` gives the toolkit's canvas on it.
-- **The libraries that come with Astra may use the hidden built-ins** (`__topaz`, `__text`):
+- **The libraries that come with Jade may use the hidden built-ins** (`__topaz`, `__text`):
   the rule that kept them to the standard library now lets in the `lib` folder beside
-  `astra.exe`, and nothing else.
+  `jade.exe`, and nothing else.
 
 **To be known when porting.** As the key of a map, a `Color`, a `Font` or a `Rectangle` is
 itself and not its value: the one such map in JadeUI's root package, the cache of font
@@ -473,18 +477,18 @@ surface, synthetic raw events fed through the same path as real ones, an in-memo
 and scripted file-dialog answers. That is the equivalent of the hidden test mode in the
 Kotlin GLFW backend, under names of Topaz's own, and it is what lets the Kotlin tests be ported.
 
-## 5. What Astra is missing
+## 5. What Jade is missing
 
 Counts are occurrences in JadeUI's main sources (22,400 lines of code without comments) and
 in app code (the examples plus JadeGen, 7,500 lines), from a regex census. "Today" was checked
-by running each construct through the current `astra.exe`.
+by running each construct through the current `jade.exe`.
 
 ### 5.1 Needed for the API to have the same shape
 
 Without these the port cannot keep the names and call syntax; there is no workaround that
 leaves app code looking the same.
 
-| Feature | Library | Apps | Astra today | What is needed |
+| Feature | Library | Apps | Jade today | What is needed |
 | --- | --- | --- | --- | --- |
 | Interfaces | 56 declared, 140 classes with 2+ supertypes | every custom widget | none; single inheritance only | `interface` with abstract and default methods and properties; a class may implement several; `x is SomeInterface` works, including for marker interfaces such as `FocusTarget`. The whole capability system (`content is OverlayContent`) rests on this. |
 | Enums | 22 | 2 | none | `enum Fill { none, horizontal, ... }`, with `name`, `ordinal`, `entries`, and optional fields and methods. An entry can be written by its bare name wherever its enum is expected. Described below the table. |
@@ -503,14 +507,14 @@ leaves app code looking the same.
 | Casts and tests | `as?` 90, `!is`, `in` / `!in` 888, `===` 83 | 71 / – / 272 / 5 | `is` only | `as?`, `as`, `!is`, `in`, `!in`, `===`, `!==`. |
 | `when` | 295 | 81 | none | With a subject, `is` branches, several values per branch, `else`. |
 | `finally` | 60 | 18 | none | `try { child.paintInto(c) } finally { c.dispose() }` is how every container paints. |
-| Data classes | 48 | 12 | header classes compare by identity | `data Point(val x : int, val y : int)`: a class whose header fields give it a generated `==`, `copy(...)`, `toString()` and destructuring. Kotlin writes `data class`; Astra writes `data` alone and the porter deletes the word `class`. `data` is special only at the start of such a declaration, so it stays usable as a variable name. `Component` decides whether a cached image is still valid with `cacheStyle == st`, and routing uses `event.copy(x = lx, y = ly)`. |
+| Data classes | 48 | 12 | header classes compare by identity | `data Point(val x : int, val y : int)`: a class whose header fields give it a generated `==`, `copy(...)`, `toString()` and destructuring. Kotlin writes `data class`; Jade writes `data` alone and the porter deletes the word `class`. `data` is special only at the start of such a declaration, so it stays usable as a variable name. `Component` decides whether a cached image is still valid with `cacheStyle == st`, and routing uses `event.copy(x = lx, y = ly)`. |
 | A property and a method with one name | `tooltip`, `background`, `foreground` on `Component` | fluent calls everywhere | not possible | `c.tooltip` reads the field and `c.tooltip("text")` calls the method. |
 | Namespaces and visibility | 2,037 `private`, 182 `internal`; 75 files in 17 packages | 751; Snips has 15 packages | one global namespace, where redeclaring a class or function silently replaces it for everyone | One namespace per folder, with `private`, `internal` and public names. Described below the table. |
 | Type syntax | every signature | every signature | simple names and `?` only | Accept type arguments and function types in annotations: `list<string>`, `map<string, int>`, `(int) -> bool`. Checking can stay shallow: `list`, `map`, `function`. The built-in names stay lowercase; the porter rewrites `Int`, `String`, `List`. |
 
 **Enums.** An enum is a type with a fixed set of values:
 
-```astra
+```jade
 enum Way { up, down, left, right }
 
 var t : Way = up        // t can only be one of the four, so the name is enough
@@ -590,19 +594,19 @@ What it gives the port: JadeUI's 17 packages become 17 folders with their `priva
 
 How files are loaded:
 
-- **Importing a folder loads every `.astra` file directly in it**, once, as one unit, so its
+- **Importing a folder loads every `.jade` file directly in it**, once, as one unit, so its
   files see each other whatever order they are in. This is what `import Topaz` does.
 - **Importing a file loads that file only**, into the namespace of the folder it is in. A
-  script with `import helpers` beside it shares names with `helpers.astra` exactly as
+  script with `import helpers` beside it shares names with `helpers.jade` exactly as
   today, and the other scripts in that folder are not touched.
 
 **Static members.** Kotlin has no `static`; what belongs to a class rather than to one object
 goes in a `companion object { ... }` inside it. JadeUI and the three apps have 111 of them.
 None implements an interface, has a name or is passed around as a value: every one is a plain
-holder of constants and functions. Astra therefore gets statics, not companions, in a form
+holder of constants and functions. Jade therefore gets statics, not companions, in a form
 that takes a companion's body as it stands:
 
-```astra
+```jade
 class Grid {
   static {
     val maxTrack = 100000
@@ -630,9 +634,9 @@ class Grid {
 
 Porting a companion is then one edit: `companion object {` becomes `static {`.
 
-**`return` in a lambda.** Astra follows Kotlin's rule, which has three cases:
+**`return` in a lambda.** Jade follows Kotlin's rule, which has three cases:
 
-```astra
+```jade
 fun find(id) {
   for child in children { child.find(id)?.let { return it } }    // leaves find()
   return null
@@ -649,7 +653,7 @@ val area = fun(w, h) { return w * h }                            // leaves the a
   one-line lambdas across the library and the apps, 147 are of this kind.
 - In any other lambda literal a bare `return` is a compile error that points to
   `return@label`. Kotlin permits it there only when the receiving function is `inline`,
-  which Astra has no notion of; the porter turns those few (a `forEach` with an early exit)
+  which Jade has no notion of; the porter turns those few (a `forEach` with an early exit)
   into a `for` loop.
 - `return@label` leaves just the lambda, with a value if one is given. The label is the name
   of the function the lambda is passed to, or one written before the lambda (`name@ { ... }`).
@@ -660,7 +664,7 @@ val area = fun(w, h) { return w * h }                            // leaves the a
   so in that form it is always the scope function. Classes may still declare methods with
   these names and call them with ordinary arguments: `panel.apply(item)`, `stepper.run(block)`.
   The library and the apps declare 25 such methods (`run` and `apply`), and all but two are
-  unaffected. The two take a lone lambda and are called as `x.run { ... }`, which Astra
+  unaffected. The two take a lone lambda and are called as `x.run { ... }`, which Jade
   would read as the scope function: `FxThread.run(block)` in JadeMem and
   `SnippyRunner.run(body)` in Snips. The porter renames them or calls them with parentheses.
 
@@ -702,21 +706,21 @@ Decisions for this section (2026-10-12). They are built as a second part of M1.
 
 ### 5.3 The same text means something different
 
-These are the dangerous ones: the Kotlin line is accepted by Astra, or nearly, and does
+These are the dangerous ones: the Kotlin line is accepted by Jade, or nearly, and does
 something else.
 
-| Kotlin | Astra today | Consequence | Outcome |
+| Kotlin | Jade today | Consequence | Outcome |
 | --- | --- | --- | --- |
-| `0..n` includes `n`; `0 until n` excludes it | `0..n` excludes `n`; `0..=n` includes it | Every `..` loop ported unchanged is one short, silently. 102 in the library, 23 in apps. | **Astra changes.** `..` includes its end; `..<` and `until` exclude it. `..=` then says the same as `..` and is removed. Existing Astra code is updated in the same change. |
-| `a and b`, `a or b` are bitwise (`shl`, `xor` too) | `and` / `or` are the logical operators | `flags and 0xFF` evaluates to `0xFF` instead of masking. 78 in the library, 249 in apps. | **Astra keeps its meaning.** The porter's rule: `&&` → `and`, `\|\|` → `or`, and Kotlin's `and` `or` `xor` `shl` `shr` → `&` `\|` `^` `<<` `>>`. A `shl` or `xor` nearby is the warning sign. |
+| `0..n` includes `n`; `0 until n` excludes it | `0..n` excludes `n`; `0..=n` includes it | Every `..` loop ported unchanged is one short, silently. 102 in the library, 23 in apps. | **Jade changes.** `..` includes its end; `..<` and `until` exclude it. `..=` then says the same as `..` and is removed. Existing Jade code is updated in the same change. |
+| `a and b`, `a or b` are bitwise (`shl`, `xor` too) | `and` / `or` are the logical operators | `flags and 0xFF` evaluates to `0xFF` instead of masking. 78 in the library, 249 in apps. | **Jade keeps its meaning.** The porter's rule: `&&` → `and`, `\|\|` → `or`, and Kotlin's `and` `or` `xor` `shl` `shr` → `&` `\|` `^` `<<` `>>`. A `shl` or `xor` nearby is the warning sign. |
 | `return` in a lambda leaves the enclosing function | `return` in `fun(x) { }` leaves the lambda | Early exits inside a lambda change meaning. | **Kotlin's rule** (5.1, scope functions): the common case ports as written and the rest is a compile error, never a silent change. |
 | A lambda's value is its last expression | a block body returns `null` unless it says `return` | `list.map { it * 2 }` would produce nulls. | Lambda literals give their last expression (5.1). `fun(x) { ... }` is unchanged. |
-| `==` compares lists and data classes by content | lists and objects compare by identity | Cache checks and change detection never match. | **Astra changes.** `==` on lists, maps and sets compares their contents, element by element and recursively, with the depth guard that printing a self-containing list already has. `contains`, `indexOf` and `remove` on a list find an element the same way. Data classes compare by content too (5.1). `===` and `!==` compare identity. One difference remains: Kotlin's arrays compare by identity, and in Astra they are lists, so an array `==` in ported code compares contents. Topaz's own tests rely on this decision: 211 of the Kotlin test assertions compare a result with an expected list. |
+| `==` compares lists and data classes by content | lists and objects compare by identity | Cache checks and change detection never match. | **Jade changes.** `==` on lists, maps and sets compares their contents, element by element and recursively, with the depth guard that printing a self-containing list already has. `contains`, `indexOf` and `remove` on a list find an element the same way. Data classes compare by content too (5.1). `===` and `!==` compare identity. One difference remains: Kotlin's arrays compare by identity, and in Jade they are lists, so an array `==` in ported code compares contents. Topaz's own tests rely on this decision: 211 of the Kotlin test assertions compare a result with an expected list. |
 | `'a'` is a `Char` with arithmetic (`'A' + c`) | `'a'` is a string | 400 char literals in the library. | Stays a one-character string, with character helpers (5.4). The porter rewrites arithmetic on characters. |
-| String indexes are UTF-16 units | `length`, indexing and `slice` count bytes | Caret positions, selection and word movement break on any non-ASCII text. | **Astra changes.** Strings are counted and indexed by character (code point) (5.4). That matches Kotlin for all text except characters outside the basic plane, mainly emoji, which Kotlin counts as two units and Astra as one. |
-| `{}` is an empty lambda (the default of most callbacks) | `{}` is an empty map | `onClick: () -> Unit = {}` appears in almost every factory. | **Astra changes.** `{}` is the empty lambda and the empty map is written `{:}`. Map literals with entries, `{ "k": v }`, are unchanged. The five `{}` maps in existing Astra code are rewritten in the same change. |
+| String indexes are UTF-16 units | `length`, indexing and `slice` count bytes | Caret positions, selection and word movement break on any non-ASCII text. | **Jade changes.** Strings are counted and indexed by character (code point) (5.4). That matches Kotlin for all text except characters outside the basic plane, mainly emoji, which Kotlin counts as two units and Jade as one. |
+| `{}` is an empty lambda (the default of most callbacks) | `{}` is an empty map | `onClick: () -> Unit = {}` appears in almost every factory. | **Jade changes.** `{}` is the empty lambda and the empty map is written `{:}`. Map literals with entries, `{ "k": v }`, are unchanged. The five `{}` maps in existing Jade code are rewritten in the same change. |
 | `Int` is 32 bits | `int` is 64 bits | `Int.MAX_VALUE` means "unbounded" in `Sizes`; packed ARGB values are negative in Kotlin. | Stays 64 bits. Named constants for the limits; colour packing is checked by hand. |
-| A `Byte` runs from -128 to 127 | (no byte type) | Code that tests a byte's sign, or stores a negative one, behaves differently. | **Astra's `bytes` holds 0 to 255.** Kotlin's usual `b.toInt() and 0xFF` gives the same answer either way and can lose its mask. A sign test (`b < 0`) is rewritten by hand as `b >= 128`. |
+| A `Byte` runs from -128 to 127 | (no byte type) | Code that tests a byte's sign, or stores a negative one, behaves differently. | **Jade's `bytes` holds 0 to 255.** Kotlin's usual `b.toInt() and 0xFF` gives the same answer either way and can lose its mask. A sign test (`b < 0`) is rewritten by hand as `b >= 128`. |
 | `x ?: y` replaces only null | `x or y` also replaces `false` | A `Boolean?` setting loses its `false`. | `?:` is added (5.1), so the Kotlin line ports as written. |
 
 ### 5.4 Standard library and runtime
@@ -725,12 +729,12 @@ something else.
 | --- | --- | --- |
 | Strings | everything that edits text: 146 `substring`-style calls and 63 pieces of index arithmetic in the library, 435 and 131 in the apps | Counted and indexed by character (code point), not byte. Described below the table. Kotlin's names: `substring`, `lowercase`, `uppercase`, `isEmpty`, `isBlank`, `lines`, `take`, `drop`, `padStart`, `toInt`, `toIntOrNull`, `toDouble`, `format`. Character tests: letter, digit, whitespace. `StringBuilder` or fast `+=`. |
 | Bytes | `ByteArray` 8 times in the library (hex view, clipboard pictures), 86 in the apps | A `bytes` type for binary data, now that a string is text only. Described below the table. |
-| Lists and maps | 1,538 collection calls in the library, 728 in apps | Kotlin's names beside Astra's: `add`, `addAll`, `size`, `isEmpty`, `first`, `last`, `firstOrNull`, `any`, `all`, `none`, `forEach`, `forEachIndexed`, `mapNotNull`, `sumOf`, `maxOf`, `sortedBy`, `joinToString`, `indexOfFirst`, `getOrPut`, `getOrNull`, `subList`, `reversed`, `distinct`, `zip`, and so on; `listOf`, `mutableListOf`, `mapOf`, `emptyList`. |
+| Lists and maps | 1,538 collection calls in the library, 728 in apps | Kotlin's names beside Jade's: `add`, `addAll`, `size`, `isEmpty`, `first`, `last`, `firstOrNull`, `any`, `all`, `none`, `forEach`, `forEachIndexed`, `mapNotNull`, `sumOf`, `maxOf`, `sortedBy`, `joinToString`, `indexOfFirst`, `getOrPut`, `getOrNull`, `subList`, `reversed`, `distinct`, `zip`, and so on; `listOf`, `mutableListOf`, `mapOf`, `emptyList`. |
 | Sets and deques | 113 / 16 | A set type; a deque or efficient removal at the front. |
 | Structural map keys | `HashMap<Pair<Int, Role>, Color>` in `Palette`, and elsewhere | Maps and sets that key a data class such as `Pair` by its contents; 17 places in the library and the apps use one. A list is a key by its contents too (see "As built in M2" below). |
 | Numbers | `coerceIn`, `coerceAtLeast`, `coerceAtMost` (very common), `Int.MAX_VALUE`, `roundToInt` | Helpers and constants. |
 | `Regex` | 63 | Native class (N5). |
-| Files | `java.io.File` is in the public API (`onFilesDropped: (List<File>) -> Unit`, `largeTextView(file)`) | A `File(path)` object with `name`, `path`, `exists()`, `readText()`. Astra's built-in `File` is a holder of static functions under the same name, so it has to grow into this. |
+| Files | `java.io.File` is in the public API (`onFilesDropped: (List<File>) -> Unit`, `largeTextView(file)`) | A `File(path)` object with `name`, `path`, `exists()`, `readText()`. Jade's built-in `File` is a holder of static functions under the same name, so it has to grow into this. |
 | Namespaces | 75 files, 330 public classes | One per folder (5.1). `import Topaz` gives the root package, `import Topaz.Chart` a sub-package. |
 | Threads and async I/O | 1 thread in the core; every app runs background work | Section 5.5. |
 
@@ -746,7 +750,7 @@ character is one Unicode code point:
 - `s[i]` and a `for` loop give one character at a time, as a one-character string, so
   `for c in s` loops `s.length` times.
 - **Where it differs from Kotlin:** a character outside the basic plane, mainly emoji, is
-  two units to Kotlin (a surrogate pair) and one character to Astra. Ordinary index
+  two units to Kotlin (a surrogate pair) and one character to Jade. Ordinary index
   arithmetic is the better for it, since it can no longer land between the two halves. Code
   that handles the halves by hand is rewritten: 5 places in the library, all in the HTML
   entity decoder, and 27 in Snips.
@@ -778,13 +782,13 @@ own, `bytes`, standing where Kotlin has `ByteArray`:
 **As built in M2 (2026-10-12).** What was settled while building it, and what is left to the
 porter:
 
-- **Where the library lives.** What Astra code can do for itself is written in Astra, as
-  extension functions and classes in `src/std/*.astra`, packed into `astra.exe` and loaded
+- **Where the library lives.** What Jade code can do for itself is written in Jade, as
+  extension functions and classes in `src/std/*.jade`, packed into `jade.exe` and loaded
   before every program: the collection and string helpers, `Set`, `Deck` (`Deque` until D183), `StringBuilder`,
   `File`. They run as fast as the native ones (a `forEach` over a million items takes what
   the native `each` takes), and unlike a native method that calls back into a lambda they
   will be able to suspend (5.5). Native are the methods called most (`add`, `first`, `get`,
-  `coerceIn`), and what Astra cannot do: reading files, `format`, telling letters from digits.
+  `coerceIn`), and what Jade cannot do: reading files, `format`, telling letters from digits.
 - **Map keys.** A list, a range, `bytes` and a data object are keys by what they hold; any
   other object is a key as itself. That settles the question left open above: a list may be
   a key, and an equal list finds the entry. A set tells its items apart the same way.
@@ -815,17 +819,17 @@ porter:
 - **The math functions stay in `Math`** (decided 2026-10-12): there is no bare `min`, `max`,
   `abs` or `sqrt`. The porter writes `Math.min(a, b)` for Kotlin's `min(a, b)`, and so on
   for the rest of `kotlin.math` (or `minOf`, `maxOf`, `absoluteValue`).
-- **Left to the porter**, because the names would not be Astra's: `println` is `print` and Kotlin's `print` is `write`; arrays are lists
+- **Left to the porter**, because the names would not be Jade's: `println` is `print` and Kotlin's `print` is `write`; arrays are lists
   (`IntArray(n)` is `List(n) { 0 }`); a `Comparator` is a function of two values;
   `filterIsInstance<T>()` is `filter { it is T }`; a sequence is a list; and the bit
   operations `shl`, `and`, `xor` are the operators `<<`, `&`, `^`.
 - `Regex` is still to come (N5).
-- A compiled `.astc` now carries the Astra-written library, about 85 KB, where it was a few
+- A compiled `.jc` now carries the Jade-written library, about 85 KB, where it was a few
   hundred bytes for a small program. A built `.exe` is 0.18 MB larger than before.
 
 ### 5.5 Threads and async I/O
 
-Astra has neither today. JadeUI itself barely needs them: one UI thread does everything and
+Jade has neither today. JadeUI itself barely needs them: one UI thread does everything and
 the core starts a single background thread, to index a large text file. The apps are the
 reason:
 
@@ -842,11 +846,11 @@ What is added, in dependency order:
    frames, error handlers, open upvalues, native temporaries). Threads, suspending functions
    and workers all stand on this.
 2. **Threads.** Real operating-system threads sharing one heap, with one of them running
-   Astra code at a time. They switch at the points where the collector may already run (calls
+   Jade code at a time. They switch at the points where the collector may already run (calls
    and loop back-edges) and whenever one blocks in native code. So:
    - objects are shared between threads as in Kotlin, and thread code ports as written;
    - a race can give a wrong answer but cannot corrupt memory or crash the VM;
-   - Astra code does not run faster on several cores. The parallelism is in native work that
+   - Jade code does not run faster on several cores. The parallelism is in native work that
      runs outside the lock: I/O, system calls, image decoding.
 
    Surface: `Thread(function, name)` with `start()`, `join()` and `isDaemon`;
@@ -887,10 +891,10 @@ What is added, in dependency order:
    - Called on the UI thread outside a flow, it blocks the UI, as it would in Kotlin.
 
    Underneath, worker threads make the blocking calls.
-6. **Isolated workers.** A worker is a second Astra VM on its own thread, with its own heap
+6. **Isolated workers.** A worker is a second Jade VM on its own thread, with its own heap
    and its own lock. It shares nothing with the program that started it; the two exchange
    messages, which are copied. Workers are what threads are not:
-   - Astra code in a worker really runs on another core, at the same time as the main
+   - Jade code in a worker really runs on another core, at the same time as the main
      program.
    - A worker can be killed outright, however stuck it is, because nothing else depends on
      its memory.
@@ -906,11 +910,11 @@ What is added, in dependency order:
    the first real use would be Snips' evaluator, which is self-contained, takes values and
    returns a value, and wants a hard kill for a script that never reaches a checkpoint.
 
-7. **Parallel sections** (added 2026-10-13; milestone M3.5). Several cores running Astra code
+7. **Parallel sections** (added 2026-10-13; milestone M3.5). Several cores running Jade code
    on the same objects at the same time, for the one shape of work where that is safe: many
    items, each worked on by itself.
 
-   ```astra
+   ```jade
    balls.parallelStream().forEach { it.move(width, height, steps) }
    val totals = orders.parallelStream().map { priceOf(it) }.toList()
    ```
@@ -980,11 +984,11 @@ What is added, in dependency order:
      0.04 ms, so a section pays from about 300 quick items. Dealing the items out and taking
      them back is done by the one waiting thread, which is what keeps quick items from
      gaining more.
-   - **The bounce example is one line different** (`gui_bounce_parallel.astra`) and, as
+   - **The bounce example is one line different** (`gui_bounce_parallel.jade`) and, as
      foreseen, no smoother: 37 frames a second at 5000 balls either way.
    - **The stress setting named in the milestone was a mistake**: running every `forEach`
      of the library as a section would refuse the many lambdas that change a variable, as
-     it should. Instead `ASTRA_CORES` sets the number of cores, and the section tests are
+     it should. Instead `JADE_CORES` sets the number of cores, and the section tests are
      run with 1, 2, 3, 7 and all of them, under the sanitizer.
    - **What there is no tool for**: nothing on Windows finds two cores touching the same
      memory, so the rule was checked by going through every instruction and every built-in
@@ -1011,9 +1015,9 @@ were brought forward. What was settled while building it:
   calls and their catch blocks. Each thread has one and each flow has one. The interpreter
   keeps working through members of the VM, as before, and a context's state is moved in and
   out when it starts and stops running, so the instruction loop is no slower for it.
-- **The lock.** One thread runs Astra code at a time. A thread that has waited 5 ms asks the
+- **The lock.** One thread runs Jade code at a time. A thread that has waited 5 ms asks the
   one running to give way, which it does at its next safe point; a thread that blocks lets
-  go at once. `ASTRA_THREAD_STRESS=1` changes threads at every safe point. A list or a map is
+  go at once. `JADE_THREAD_STRESS=1` changes threads at every safe point. A list or a map is
   never seen half changed, and the `Atomic...` classes need no lock of their own: a method
   with no call in it runs in one piece.
 - **Flows have no thread and no stack of the machine's**: a flow is a context, and setting
@@ -1021,7 +1025,7 @@ were brought forward. What was settled while building it:
   cannot be set aside from inside a built-in function that has called back into the
   program, as this plan foresaw. To leave few such places:
   - every method of a list, map, string or range that takes a function is now written in
-    Astra, `map`, `filter`, `each`, `find`, `reduce`, `first { }` and `forEach` included;
+    Jade, `map`, `filter`, `each`, `find`, `reduce`, `first { }` and `forEach` included;
   - `apply`, `run`, `also`, `let` and `with` set the block going as a call of the program's
     own instead of calling it from inside themselves;
   - what is left is the comparison function of `sort`, a property's getter, `toString()`
@@ -1068,7 +1072,7 @@ were brought forward. What was settled while building it:
   `Process.currentCommand()` is what started it. `flush()` sends on what has been printed,
   which matters when another program is reading it.
 - **Workers** as point 6 describes them, with these particulars:
-  - the script is named by a string in the call (`Worker("physics.astra")`) and compiled
+  - the script is named by a string in the call (`Worker("physics.jade")`) and compiled
     into the program there, as a module with names of its own, so that a built executable
     carries its workers; the worker loads its own copy of the whole program and runs that
     one module;
@@ -1087,14 +1091,14 @@ were brought forward. What was settled while building it:
 - **Not built:** fetching a URL (point 5 names it; the milestone does not, and none of the
   three apps' background work in the table above needs it); the three I/O kinds are on
   Windows only.
-- **What it cost:** `map` and `filter` now run Astra code instead of C++ and are slower for
+- **What it cost:** `map` and `filter` now run Jade code instead of C++ and are slower for
   it (over a million items, `map` takes 40 ms where it took 26, `filter` 39 where it took
   31); a plain loop and everything else are as fast as before. An error inside the lambda
   shows one more line in its trace, the library function's.
 
 ### 5.7 Static types (M6.5)
 
-Added after M6, at the user's decision (2026-10-13 and 14): Astra becomes statically typed,
+Added after M6, at the user's decision (2026-10-13 and 14): Jade becomes statically typed,
 as Kotlin is. Until now a variable or parameter without a written type held anything, a
 written type was checked only when the line ran, and `obj.name` was looked up by name with
 nothing known in advance. The point is to find mistakes when compiling (a wrong argument,
@@ -1125,7 +1129,7 @@ ported carry every type already.
   in a `var` of a function type. A call of a function then gives what the function declares,
   which lets the compiler leave out checks it has proved.
 - Generic types are kept when the program runs, as in C# and unlike Kotlin and Java (which
-  drop them for compatibility with code compiled before generics, a reason Astra does not
+  drop them for compatibility with code compiled before generics, a reason Jade does not
   have). A collection knows what it was made to hold (`items.itemType`, `map.keyType`,
   `map.valueType`), so does an object of a generic class of the program's own, and
   `x is list<int>` and `x as list<int>` are checked in full. A generic function is given
@@ -1157,7 +1161,7 @@ ported carry every type already.
   names into one function that looks at its argument; with every parameter typed that
   function would have to take `any`, so overloads are allowed instead, chosen when
   compiling, and API names stay as they are.
-- **Built-in functions** (written in C++) get their types from declarations written in Astra
+- **Built-in functions** (written in C++) get their types from declarations written in Jade
   (`external fun print(vararg items : any)`, `external fun string.substring(start : int,
   end : int) : string`), kept with the standard library.
 - **Types are checked when compiling.** The checks the VM makes today for written types are left out wherever the compiler has
@@ -1165,7 +1169,7 @@ ported carry every type already.
   Compiling takes longer, which matters only when running from source.
 
 **Built in five parts,** each tested, the language working throughout. The checker first
-runs beside the old rules and is switched on for good at the end, when every line of Astra
+runs beside the old rules and is switched on for good at the end, when every line of Jade
 in the repository has its types.
 
 1. **The checker's core.** Written types read in full (type arguments, function types,
@@ -1174,7 +1178,7 @@ in the repository has its types.
    variables; operators; calls to declared functions, methods and constructors (count,
    names, defaults, types); members on known types; `any` and casts; `null` and `?.`,
    `?:`, `!!`. The type `nothing` for jumps and functions that never return (D61), and `and`,
-   `or`, `!` and conditions taking only `bool` (D62). Run with `astra check`, and by the tests, without stopping other programs.
+   `or`, `!` and conditions taking only `bool` (D62). Run with `jade check`, and by the tests, without stopping other programs.
 2. **Generics and lambdas.** Type parameters on classes and functions, with bounds
    (`<T : Comparable>`); inference of type arguments; function types and lambdas with and
    without receivers; extension functions; narrowing; `when`; destructuring; overloads.
@@ -1203,12 +1207,12 @@ in the repository has its types.
    reach left out of its compiled form, worked out from the types: functions, classes and
    methods never called (overrides of a called method in a reachable class kept, and what is
    found by name when running). Reflection keeps what D50 says. (c) Built programs made from
-   `astra.exe` itself with what a running program never needs left out (decided 2026-10-18,
+   `jade.exe` itself with what a running program never needs left out (decided 2026-10-18,
    D161): the code of the compiler, checker, parser, lexer, the cache and the shell is kept in
    a section of the executable of its own, and the standard library's source text in another,
-   and `astra build` writes a copy of `astra.exe` without those sections' bytes (the space they
+   and `jade build` writes a copy of `jade.exe` without those sections' bytes (the space they
    took kept, empty, so that every other address stays as it was), then the program. One file,
-   nothing in it twice, and the base never out of step with `astra.exe`. What both sides use
+   nothing in it twice, and the base never out of step with `jade.exe`. What both sides use
    (the inline functions and templates of the headers) stays in the common code: the section
    is chosen after a file's includes. Proved, not assumed: the build links what is kept once
    more on its own, which fails if it names anything left out, workers included; checks on
@@ -1231,7 +1235,7 @@ of part 4 and the sizes of part 5. Version 0.6.5.
 
 - **Overloading.** (Revised by 5.7: with every parameter typed, overloads are allowed after
   all.) About 25 overloaded names, almost all "old blocking form versus new callback
-  form" or "text versus model". Each merges into one Astra function that looks at its
+  form" or "text versus model". Each merges into one Jade function that looks at its
   argument (`textField("abc")`, `textField(model)`); call sites are unchanged. The deprecated
   blocking dialog forms are dropped, as the GLFW backend already answers null for them.
 - **Annotations** (generics and the access words on members were listed here; generics come
@@ -1240,18 +1244,18 @@ of part 4 and the sizes of part 5. Version 0.6.5.
 ## 6. API compatibility rules
 
 1. (Changed by D83: Topaz may improve on JadeUI's names and shapes, but each change is put to the user first and made only when agreed; until then JadeUI's form is kept.) Names, parameter names, order and defaults are identical to the Kotlin source, except for
-   the deliberate changes in 6.1 and the dropped prefix in 6.2. Named arguments and defaults already work in Astra, so
+   the deliberate changes in 6.1 and the dropped prefix in 6.2. Named arguments and defaults already work in Jade, so
    `cell(x, fill = Fill.HORIZONTAL, weightX = 1.0)` carries over with the constant in camelCase: `Fill.horizontal`.
-2. (Changed by D82: these types take names of Astra's own where they read better, decided
+2. (Changed by D82: these types take names of Jade's own where they read better, decided
    type by type in L79 to L87 of language-choices.html.) JDK types in public signatures keep their names, provided by the compat layer with the
    members JadeUI and its apps use: `Color` (293 uses in the API), `Font` (109),
    `BufferedImage` (76, backed by a native surface), `Rectangle` (33), `Dimension` (30),
    `File` (8), `Insets` (4), `Point` (1). `Graphics2D`, `Shape` and the `java.awt.geom`
    types appear only in chart, svg, math and image; they are defined with tier N3.
-3. Built-in type names stay lowercase in Astra, and the porter rewrites Kotlin's: `Int`,
+3. Built-in type names stay lowercase in Jade, and the porter rewrites Kotlin's: `Int`,
    `Long` → `int`; `Double`, `Float` → `float`; `String` → `string`; `Boolean` → `bool`;
    `ByteArray` → `bytes`;
-   `List<T>` → `list<T>`; `Map<K, V>` → `map<K, V>`; `Unit` → no return type. Astra does not
+   `List<T>` → `list<T>`; `Map<K, V>` → `map<K, V>`; `Unit` → no return type. Jade does not
    accept the Kotlin spellings as aliases.
 4. Known deviations, to be kept in a list beside the code: the window types, `WindowSpec`
    and the opener's interface (6.1); blocking
@@ -1319,7 +1323,7 @@ operations that pass through; it is called `WindowHandle` (6.3).
   exception.
 - **Constants and enum entries are camelCase too**, JadeUI's included: `Font.BOLD` is
   `Font.bold`, `Fill.HORIZONTAL` is `Fill.horizontal`, `MAX_TRACK` is `maxTrack`. This is the
-  one place where Astra's names differ from Kotlin's by more than the dropped prefix. The
+  one place where Jade's names differ from Kotlin's by more than the dropped prefix. The
   porter's rule is mechanical (UPPER_SNAKE to camelCase) and applies to about 3,350 uses
   across JadeUI and the three apps. A keyword is a name wherever only a name can come, so
   `ImageStore.CLASS` becomes `ImageStore.class` like the rest. An entry called `NAME`
@@ -1338,7 +1342,7 @@ for on the object.
 
 
 Topaz is the one standard GUI library, so its classes do not carry its name. A class called
-`JadeXxx` in Kotlin is `Xxx` in Astra; everything else about it is unchanged.
+`JadeXxx` in Kotlin is `Xxx` in Jade; everything else about it is unchanged.
 
 Of JadeUI's 227 public top-level types, 72 have the prefix. Four are the window types
 already dealt with above, and two are named on their own account:
@@ -1349,13 +1353,13 @@ already dealt with above, and two are named on their own account:
   `Topaz.requestRepaint()`, `Topaz.inputDialog.prompt(...)`, `Topaz.scheduler`. Nothing in the
   three apps or in JadeUI is called `Topaz` today.
 - **`JadeList` is `ListBox`.** By the rule it would be `List`, one capital letter away from
-  Astra's own `list` type and the name every ported signature is being changed from.
+  Jade's own `list` type and the name every ported signature is being changed from.
   `ListBox` avoids that and matches the class's factory, `listBox(...)`, the way `ComboBox`
   matches `comboBox(...)`.
 
 The other 66 are renamed by the rule:
 
-| Package | Astra names |
+| Package | Jade names |
 | --- | --- |
 | root | `Block`, `Button`, `Canvas`, `CheckBox`, `CheckItem`, `ChecklistDialog`, `ChoiceDialog`, `Clipboard`, `ComboBox`, `Component`, `Content`, `DialogHandle`, `Doc`, `Drafts`, `Event`, `FileDialog`, `FindDialog`, `FormDialog`, `Grid`, `IconButton`, `ImageDialog`, `InputDialog`, `Label`, `Menu`, `MenuBar`, `MenuBarView`, `MenuEntry`, `MenuItem`, `OptionsDialog`, `ProgressBar`, `RadioButton`, `Screen`, `Scroll`, `Separator`, `Slider`, `SourceWindow`, `Spinner`, `Split`, `Table`, `Tabs`, `TextArea`, `TextField`, `Toggle`, `ToolbarSeparator`, `Tree`, `WindowOpener`, `WrappedLabel` |
 | sub-packages | `ChartView`, `CodeView`, `Dialogs`, `DocView`, `HtmlView`, `ProseView`, `FormulaBar`, `Sheet`, `GlView`, `HexView`, `ImageView`, `PictureCanvas`, `PictureEditor`, `PictureViewer`, `LargeTextView`, `MapView`, `MathBlock`, `MathView`, `SvgView` |
@@ -1367,7 +1371,7 @@ The other 66 are renamed by the rule:
   `JadeGrid.Cell` is `Grid.Cell`.
 - **No two Topaz types end up with the same name.** Checked against all 227.
 - **A class and its factory now differ only by the first letter** for 23 widgets: `Button`
-  and `button(...)`, `Grid` and `grid { }`, `TextField` and `textField(...)`. Astra is
+  and `button(...)`, `Grid` and `grid { }`, `TextField` and `textField(...)`. Jade is
   case-sensitive, so both exist, as `JadeButton` and `button` do in Kotlin: the class is the
   widget's content, the function returns it wrapped in a `Component`.
 - **In app code the rename is mechanical.** The three apps name a prefixed type 137 times
@@ -1384,16 +1388,16 @@ The other 66 are renamed by the rule:
 
 The first part of the root package is ported, in `lib/Topaz`:
 
-| Astra | From | Holds |
+| Jade | From | Holds |
 | --- | --- | --- |
-| `Types.astra` | `Topaz.kt` | `Sizes`, `Style`, `Fill`, `Anchor`, `Key`, `EditCommand`, `Event`, `Content`, the capability interfaces, `Palette`, `elide`, `metrics` |
-| `Canvas.astra` | `Canvas.kt` | `Canvas`, `TextMetrics`, `DrawOp`, `RecordingCanvas` (`NativeCanvas` of M5 is now a `Canvas`) |
-| `Component.astra` | `JadeComponent.kt` | `Component` with its kept picture, layout, dispatch, finding and focus helpers; `label`, `button`, `grid` |
-| `Grid.astra` | `JadeGrid.kt` | `Grid`, `Grid.Cell`, `Grid.RowScope` |
-| `Widgets.astra` | `Widgets.kt` | `Label`, `WrappedLabel`, `Button`, `IconButton`, `ToolbarSeparator` |
-| `RenderLoop.astra` | `RenderLoop.kt` | `RenderLoop` |
-| `Topaz.astra` | the object `JadeUi` | `Topaz`: repaint and layout hooks, frame hooks, the opener, focus |
-| `Window.astra` | `Host.kt`, and `JadeGlSurface.kt` of the GLFW backend | `Window`, `WindowHandle`, `WindowOpener`, and `WindowHost`, the policy |
+| `Types.jade` | `Topaz.kt` | `Sizes`, `Style`, `Fill`, `Anchor`, `Key`, `EditCommand`, `Event`, `Content`, the capability interfaces, `Palette`, `elide`, `metrics` |
+| `Canvas.jade` | `Canvas.kt` | `Canvas`, `TextMetrics`, `DrawOp`, `RecordingCanvas` (`NativeCanvas` of M5 is now a `Canvas`) |
+| `Component.jade` | `JadeComponent.kt` | `Component` with its kept picture, layout, dispatch, finding and focus helpers; `label`, `button`, `grid` |
+| `Grid.jade` | `JadeGrid.kt` | `Grid`, `Grid.Cell`, `Grid.RowScope` |
+| `Widgets.jade` | `Widgets.kt` | `Label`, `WrappedLabel`, `Button`, `IconButton`, `ToolbarSeparator` |
+| `RenderLoop.jade` | `RenderLoop.kt` | `RenderLoop` |
+| `Topaz.jade` | the object `JadeUi` | `Topaz`: repaint and layout hooks, frame hooks, the opener, focus |
+| `Window.jade` | `Host.kt`, and `JadeGlSurface.kt` of the GLFW backend | `Window`, `WindowHandle`, `WindowOpener`, and `WindowHost`, the policy |
 
 **The names left open in 6.1.** The handle an opener gives back is a `WindowHandle`
 (`setTitle`, `toFront`, `close`, `fitToContent`, `requestRepaint`, `rootChanged`), and an
@@ -1477,7 +1481,7 @@ class restricts no name like the one asked for, are passed without a lookup. Fou
 of nothing but member access (no restricted members; a class's own private members; a
 subclass using what it inherits; a public member whose name is private in another class)
 run level with the build that checks nothing, within the 2% the timings scatter by.
-Tests: `tests/member_access.astra`, and for a library's side `tests/topaz_grid.astra`.
+Tests: `tests/member_access.jade`, and for a library's side `tests/topaz_grid.jade`.
 
 In Topaz the words are as in JadeUI where a program cannot tell the difference:
 `Component.parent`, `overlayDescendants` and `Topaz.renderGeneration` have `private set`,
@@ -1490,9 +1494,9 @@ the tests carried over here are a program outside the library.
 `GridHiddenTest` (1), `ComponentAtTest` (2), `RecordingCanvasTest` (5), `PaintStyleTest`
 (4), `PaintCacheTest` (3), `RenderIntoTest` (2), `RenderLoopTest` (10), `PaletteThemeTest`
 (3 of 5; two are about a list and a code view) and `WrappedLabelTest` (10): 44 tests, all
-passing, in `tests/topaz_grid.astra`, `topaz_paint.astra` and `topaz_loop.astra`. The host's
-policy has a test of its own, `topaz_host.astra`, since JadeUI's are written against GLFW.
-`examples/widgets.astra` is the grid of labels and buttons in a real window; a click
+passing, in `tests/topaz_grid.jade`, `topaz_paint.jade` and `topaz_loop.jade`. The host's
+policy has a test of its own, `topaz_host.jade`, since JadeUI's are written against GLFW.
+`examples/widgets.jade` is the grid of labels and buttons in a real window; a click
 posted to it by a script pressed its button.
 
 ### 6.4 As built in M7
@@ -1500,23 +1504,23 @@ posted to it by a script pressed its button.
 The rest of the root package that apps build with is ported, in `lib/Topaz`, from the plan in
 `docs/M7-plan.md`:
 
-| Astra | From | Holds |
+| Jade | From | Holds |
 | --- | --- | --- |
-| `TextNav.astra` | `TextNav.kt` | `TextNav`, `DragSelector`, `CaretGeometry`, `CaretKeys` |
-| `Text.astra` | `Text.kt` | `TextEditable`, `StyleRun`, `TextLink`, `SharedTextModel` (undo, style runs, inline objects' places), `TextField`, `textField()` |
-| `TextArea.astra` | `TextArea.kt`, `HScrollBar.kt` | `TextArea`, `textArea()`, and its horizontal bar |
-| `Scroll.astra` | `Scroll.kt` | `Scroll`, `scroll()`, `ScrollAware`, `Pinnable` |
-| `Split.astra`, `Tabs.astra` | `Split.kt`, `Tabs.kt` | `Split`, `split()`; `Tabs`, `Tabs.Tab`, `tabs()` |
-| `Controls.astra` | `Controls.kt` | `CheckBox`, `RadioGroup`, `RadioButton`, `Slider`, `ProgressBar`, `ListBox`, `Toggle`, `HoldRepeat`, `Spinner`, and their builders |
-| `Collections.astra` | `Collections.kt` | `TreeNode`, `Tree`, `Table`, `tree()`, `table()` |
-| `Combo.astra` | `Combo.kt` | `ComboBox`, `comboBox()` |
-| `Screen.astra` | `Screen.kt` | `Screen`, `screen()`, the menu bar's view, the menus' lists, popups, tips, accelerators |
-| `Chrome.astra` | `Chrome.kt`, the part M7 needs | `MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`, `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
-| `Drafts.astra` | `Drafts.kt` | `Drafts` (`Topaz.drafts`) |
-| `Block.astra` | `Block.kt`, `Doc.kt` | `Block`, `block()`, `Doc`, `doc()` |
-| `Window.astra` | the GLFW surface's timing | tips, the caret's blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, `SystemClipboard` |
+| `TextNav.jade` | `TextNav.kt` | `TextNav`, `DragSelector`, `CaretGeometry`, `CaretKeys` |
+| `Text.jade` | `Text.kt` | `TextEditable`, `StyleRun`, `TextLink`, `SharedTextModel` (undo, style runs, inline objects' places), `TextField`, `textField()` |
+| `TextArea.jade` | `TextArea.kt`, `HScrollBar.kt` | `TextArea`, `textArea()`, and its horizontal bar |
+| `Scroll.jade` | `Scroll.kt` | `Scroll`, `scroll()`, `ScrollAware`, `Pinnable` |
+| `Split.jade`, `Tabs.jade` | `Split.kt`, `Tabs.kt` | `Split`, `split()`; `Tabs`, `Tabs.Tab`, `tabs()` |
+| `Controls.jade` | `Controls.kt` | `CheckBox`, `RadioGroup`, `RadioButton`, `Slider`, `ProgressBar`, `ListBox`, `Toggle`, `HoldRepeat`, `Spinner`, and their builders |
+| `Collections.jade` | `Collections.kt` | `TreeNode`, `Tree`, `Table`, `tree()`, `table()` |
+| `Combo.jade` | `Combo.kt` | `ComboBox`, `comboBox()` |
+| `Screen.jade` | `Screen.kt` | `Screen`, `screen()`, the menu bar's view, the menus' lists, popups, tips, accelerators |
+| `Chrome.jade` | `Chrome.kt`, the part M7 needs | `MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`, `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
+| `Drafts.jade` | `Drafts.kt` | `Drafts` (`Topaz.drafts`) |
+| `Block.jade` | `Block.kt`, `Doc.kt` | `Block`, `block()`, `Doc`, `doc()` |
+| `Window.jade` | the GLFW surface's timing | tips, the caret's blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, `SystemClipboard` |
 
-`examples/launcher.astra` is the examples' `Launcher.kt`, close to line for line: the four
+`examples/launcher.jade` is the examples' `Launcher.kt`, close to line for line: the four
 rows of fields, the menus, the file dialogs and the widget tabs of M7 (Controls, Editor,
 Items, Tree, Table, Split, Blocks, Doc). The tabs of later milestones are one line each
 (`"Code" to later("M9")`), replaced as their milestones come. `--snapshot=<dir>` saves a
@@ -1558,7 +1562,7 @@ judged by its expression where nothing runs between the read and its use.
   choice.)
 - `FileDialog` has the forms that call back (`open`, `save` with an `onResult`); JadeUI's
   forms that wait are not carried over (5.6), with the dialogs' in M8.
-- A selection's two ends are a value of their own, not a range, as an Astra range does not
+- A selection's two ends are a value of their own, not a range, as an Jade range does not
   keep its ends reversed.
 - A document gives a block that wraps (`HeightForWidth`) its height at the document's
   width; JadeUI's takes the block's preferred height.
@@ -1577,9 +1581,9 @@ the way: a built program left out an unused class but kept its inner enum's setu
 an int range was not found; a block run on an object looked for its members after the
 program's names, and a bare `block()` inside a class ran on nothing.
 
-**Tests carried over** from JadeUI, with their names, in `tests/topaz_text.astra`,
-`topaz_textfield.astra`, `topaz_scroll.astra`, `topaz_textarea.astra`, `topaz_containers.astra`,
-`topaz_controls.astra`, `topaz_tables.astra`, `topaz_screen.astra` and `topaz_blocks.astra`:
+**Tests carried over** from JadeUI, with their names, in `tests/topaz_text.jade`,
+`topaz_textfield.jade`, `topaz_scroll.jade`, `topaz_textarea.jade`, `topaz_containers.jade`,
+`topaz_controls.jade`, `topaz_tables.jade`, `topaz_screen.jade` and `topaz_blocks.jade`:
 `TextNavParityTest`, `ChromeTest`, `MirroredTextTest`, `EditingTest`, `DeferredTest`,
 `FocusAfterPressTest`, `ScrollTest`, `ScrollRepaintTest`, `NestedScrollTest`,
 `WheelRoutingTest`, `WindowPositionScrollTest`, `ElideTest`, `TextAreaTest`,
@@ -1591,7 +1595,7 @@ program's names, and a bare `block()` inside a class ran on nothing.
 `ScreenMenuTest`, `ScreenPopupTest`, `ScreenGeometryTest`, `AcceleratorTest`,
 `MultiHostHookTest`, `ScreenTipTest`, `BlockTest` and `DocTest`, with the GLFW surface's
 and the hidden application's tests of menus, accelerators and cursors. The timing has a test
-of its own, `topaz_timing.astra`. What waits, with the milestone it waits for: a block whose
+of its own, `topaz_timing.jade`. What waits, with the milestone it waits for: a block whose
 view takes input (the HTML view, M10), the document views (`DocView`, `ProseView`, M10), the
 sheet and its formula bar (M10), the math block (M10), and inline objects in text (M10).
 
@@ -1605,28 +1609,28 @@ part allows, until its second part.
 M8 ported JadeUI's dialogs, its charts and its treemap, and with them JadeMem, the smallest of
 the programs built on JadeUI, from the plan in `docs/M8-plan.md`. In `lib/Topaz`:
 
-| Astra | From | Holds |
+| Jade | From | Holds |
 | --- | --- | --- |
-| `Dialogs.astra` | `JadeDialogs.kt`, `DialogSession.kt` | the specs and results of every dialog, `DialogHandle`, the dialog interfaces and their `No...` forms, `DialogSession`, `Dialogs` |
-| `Prompts.astra` | `Prompts.kt` | the text prompt (one line or several, live, Make static, links) and the value-and-format editor |
-| `Completion.astra` | `sheet/Completion.kt`, `FormatCompletion` | `Completer`, `CompletionPopup`, `FormatCompletion` |
-| `Choices.astra` | `Choices.kt` | choose, pick, the checklist |
-| `Forms.astra` | `Forms.kt` | forms of several kinds, options with actions, the image dialog and its preview |
-| `Panels.astra` | `Panels.kt` | the find and replace panel, the source window |
-| `Chart.astra` | `chart/ChartRenderer.kt`, `ChartView.kt` | `ChartData`, `ChartSeries`, `ChartType`, `ChartPoint`, `ChartHit`, `ChartLayout`, `ChartRenderer`, `ChartView`, `chartView`, `barChart`, `lineChart`, `pieChart` |
-| `Treemap.astra` | `treemap/*.kt` | `TreemapNode`, `TreemapTile`, `Treemap` (squarified), `TreemapRenderer` (cushions), `TreemapView`, `treemap` |
-| `Window.astra` | the GLFW backend's dialogs | `SystemFileDialog` (the system's, on a thread of its own), `ScriptedFileDialog`, `NoWindowOpener`; owned windows passed on to the owner's owner |
+| `Dialogs.jade` | `JadeDialogs.kt`, `DialogSession.kt` | the specs and results of every dialog, `DialogHandle`, the dialog interfaces and their `No...` forms, `DialogSession`, `Dialogs` |
+| `Prompts.jade` | `Prompts.kt` | the text prompt (one line or several, live, Make static, links) and the value-and-format editor |
+| `Completion.jade` | `sheet/Completion.kt`, `FormatCompletion` | `Completer`, `CompletionPopup`, `FormatCompletion` |
+| `Choices.jade` | `Choices.kt` | choose, pick, the checklist |
+| `Forms.jade` | `Forms.kt` | forms of several kinds, options with actions, the image dialog and its preview |
+| `Panels.jade` | `Panels.kt` | the find and replace panel, the source window |
+| `Chart.jade` | `chart/ChartRenderer.kt`, `ChartView.kt` | `ChartData`, `ChartSeries`, `ChartType`, `ChartPoint`, `ChartHit`, `ChartLayout`, `ChartRenderer`, `ChartView`, `chartView`, `barChart`, `lineChart`, `pieChart` |
+| `Treemap.jade` | `treemap/*.kt` | `TreemapNode`, `TreemapTile`, `Treemap` (squarified), `TreemapRenderer` (cushions), `TreemapView`, `treemap` |
+| `Window.jade` | the GLFW backend's dialogs | `SystemFileDialog` (the system's, on a thread of its own), `ScriptedFileDialog`, `NoWindowOpener`; owned windows passed on to the owner's owner |
 
-Below them, in Astra: `Program.environment`, `processId` and `hostName`; `LocalDate`,
+Below them, in Jade: `Program.environment`, `processId` and `hostName`; `LocalDate`,
 `LocalTime`, `LocalDateTime` with Java's patterns; a volume's roots and space; `Regex` (a C++
 engine checked against Java on 162 cases); the canvas's line width, arcs and wedges, and
 shapes that say where they are; foreign functions (`Library`, `Memory`, `CType`, `Foreign`),
 whole numbers and pointers only; and the system's file dialogs on Windows.
 
 **JadeMem** is in its own repository, `D:\Projects\JadeMem`, one folder for each Kotlin
-module (`Core`, `Native`, `Gui`) and `JadeMem.astra` to start it; `PORTING.md` there says how
-Kotlin became Astra. Its 264 tests are the Kotlin's (core 179, gui 62 with `ViewTest`, native
-23). Native is Astra's foreign functions over `ntdll`, `kernel32`, `advapi32`, `pdh` and
+module (`Core`, `Native`, `Gui`) and `JadeMem.jade` to start it; `PORTING.md` there says how
+Kotlin became Jade. Its 264 tests are the Kotlin's (core 179, gui 62 with `ViewTest`, native
+23). Native is Jade's foreign functions over `ntdll`, `kernel32`, `advapi32`, `pdh` and
 `psapi`, and reads the NTFS file table itself; its figures agree with `systeminfo`.
 
 **Speed.** A chart draws on the window's canvas each time it is shown, which keeps it sharp at
@@ -1634,14 +1638,14 @@ any scale of the screen (JadeUI drew it into an image at layout size). A treemap
 worked out for every pixel, in C++ behind `TreemapRenderer.render`: 1,400 by 900 in 23 ms. The
 treemap's layout of 200,000 nodes stays under the test's two seconds. JadeMem's attribution
 scan of every driver image searches each image on all cores (1.4 s for 460 images). An idle
-pool with a timed job (JadeMem's sampler) no longer spins a core (fixed in Astra's locks).
+pool with a timed job (JadeMem's sampler) no longer spins a core (fixed in Jade's locks).
 
 **Differences from the Kotlin, to be known when porting.**
 
 - Only the dialogs that answer through `onResult` are carried over; the forms that wait for an
   answer are not (5.6). Of `BlockingDialogsTest`, the five tests of the other forms are.
 - `CompletionPopup` has one `init`, taking a `Display`; JadeUI's second constructor (an anchor)
-  is `overlayAt(anchor)`, as an Astra class has one `init`.
+  is `overlayAt(anchor)`, as an Jade class has one `init`.
 - JadeUI's small faults, mended: a checklist's draft keeps an item holding a line break; the
   image dialog makes what its listeners compare with before the listeners; switching the find
   panel between Find and Replace does not tell the program it closed. The options dialog's
@@ -1649,12 +1653,12 @@ pool with a timed job (JadeMem's sampler) no longer spins a core (fixed in Astra
   as OK does.
 - A chart is drawn on the canvas, not shown as an image; the treemap's labels likewise.
 - Values on charts are formatted as Kotlin's `String.format` does (half up, from the digits
-  `print` shows), which is now how Astra's `format` works everywhere.
+  `print` shows), which is now how Jade's `format` works everywhere.
 - The Launcher's Dialogs tab and its Dialogs and While Open menus are JadeUI's
-  `DialogShowcase` (`examples/dialog_showcase.astra`), without the blocking rename; the image
+  `DialogShowcase` (`examples/dialog_showcase.jade`), without the blocking rename; the image
   dialog previews a file only until Topaz draws SVG (M10).
 
-**Found and fixed in Astra on the way**, each with its own commit and test: an override of a
+**Found and fixed in Jade on the way**, each with its own commit and test: an override of a
 generic class's method with its type argument filled in was refused; `f.invoke(args)` had no
 type; a `TextArea` read its old rows for the caret's place; a lambda after a call did not go
 into a `vararg`; a folder imported again did not run what sets it up, so an importer kept in
@@ -1683,8 +1687,8 @@ committed to.
   with the full test suite, also under the sanitizer and the stress settings.
 - **Shown:** something that runs, to try by hand, with a short account of what was built,
   what turned out differently from this plan, and what that means for the milestones after.
-- **Versioned:** the version of `astra` goes up with each milestone: M1 is 0.1.0, M2 is
-  0.2.0, M3 is 0.3.0, M3.5 is 0.3.5, and so on. `astra --version` then says which milestone a build is.
+- **Versioned:** the version of `jade` goes up with each milestone: M1 is 0.1.0, M2 is
+  0.2.0, M3 is 0.3.0, M3.5 is 0.3.5, and so on. `jade --version` then says which milestone a build is.
 - **Accepted, or not:** the next milestone starts on a go-ahead. If the result is not good
   enough it is reworked first; if it changes what should come next, the plan is revised
   before going on.
@@ -1746,7 +1750,7 @@ saved as images and compared. In two parts, so that the window work is not held 
 - **Part one, which M5 depends on:** both outline formats, variable fonts, font matching
   and fallback, measuring and positioning by the one rule, rasterising, hinting, colour
   emoji. Ends with a page of text in several fonts and sizes rendered to an image, measured
-  widths matching drawn widths exactly. (Built: `examples/text_page.astra` is that page;
+  widths matching drawn widths exactly. (Built: `examples/text_page.jade` is that page;
   see "As built in M4, part one" in section 4.)
 - **Part two, alongside M5 to M8:** shaping, direction and the Unicode data. Ends with
   Arabic, Hebrew, Devanagari, combining marks and emoji sequences rendered correctly against
@@ -1754,7 +1758,7 @@ saved as images and compared. In two parts, so that the window work is not held 
 
 **M5. Native tier N1 and the compat types.** The old `gui` library is deleted here (section
 3, point 4). Ends with a script that opens a window, draws text and shapes, echoes raw
-events, and renders the same picture to a PNG with no window. (Built: `examples/window.astra`
+events, and renders the same picture to a PNG with no window. (Built: `examples/window.jade`
 is that script; see "As built in M5" in section 4.)
 
 **M6. Core, part one.** `Topaz.kt` (types, events, capability interfaces, `Palette`,
@@ -1763,7 +1767,7 @@ is that script; see "As built in M5" in section 4.)
 (label, button), `RenderLoop.kt`, the `Topaz` object, and `Window`. File names here are the
 Kotlin sources being ported. The root package refers to `doc`, `gl`,
 `sheet` and `dialogs`, so those get stubs for now. Ends with a grid of labels and buttons in
-a real window and the matching Kotlin tests passing. (Built: `examples/widgets.astra`, and
+a real window and the matching Kotlin tests passing. (Built: `examples/widgets.jade`, and
 44 of JadeUI's tests carried over; see 6.3.)
 
 **M6.5. Static types.** Section 5.7, in its five parts: the checker's core, generics and
@@ -1772,7 +1776,7 @@ when running, and smaller built programs. Ends with every test and example passi
 checker's own errors, the suite under the sanitizer and the stress settings, timings and sizes.
 Beside the checker, building only what changed (D145): files compiled once and cached, each
 declaration's summary deciding what else must be compiled again, the standard library and Topaz
-compiled into `astra.exe`, a script's compiled program kept per machine for its next run, and a
+compiled into `jade.exe`, a script's compiled program kept per machine for its next run, and a
 starting budget measured on a ported app. (Built, version 0.6.5: the suite's 576 checks, every
 test, the 18 examples and the standard library passing the checker, 13 files of the checker's own
 errors, under the sanitizer and the GC and thread stress settings. On 19,400 lines a first run in
@@ -1796,7 +1800,7 @@ their kinds (moved from M6.5 part 4 on 2026-10-18). And where the compiler knows
 slot's type (an `int`, a `float`, a small value type, in a local or a field), the slot keeps only
 its 8-byte payload, not the kind beside it, which only `any`, unions and generic parameters
 need; that halves memory for typed code. (Fitting values in 8 bytes by NaN-boxing was set
-aside: it leaves too few bits for Astra's 64-bit `int`.) Ends with the bounce example on every
+aside: it leaves too few bits for Jade's 64-bit `int`.) Ends with the bounce example on every
 core moving its balls in a list of values with `move` unchanged and nothing allocated in a
 frame, and Topaz's layout with `bounds` and `Sizes` inside their components, each measured
 against today, and the suite under the sanitizer and the stress settings, with a new setting
@@ -1818,8 +1822,8 @@ results checked, as D162 to D164 propose. Left for later, each known and tested 
   compare against a baseline built the same way, and count instructions, before calling a
   change slower.
 
-Part 2 (built 2026-10-19): value types as boxes, as D165 proposes. `bench/layout_values.astra`
-against `layout_classes.astra`, Topaz's grid layout with its geometry made new at every step:
+Part 2 (built 2026-10-19): value types as boxes, as D165 proposes. `bench/layout_values.jade`
+against `layout_classes.jade`, Topaz's grid layout with its geometry made new at every step:
 84 ms against 94, a `Sizes` of three `Dimension`s one allocation of 88 bytes against four of
 336. Left for later, each known:
 - A value held in another and read on its own (`val pref = sizes.pref`) is copied into a box
@@ -1836,8 +1840,8 @@ against `layout_classes.astra`, Topaz's grid layout with its geometry made new a
 
 Part 3 (built 2026-10-19): lists of values, as D166 proposes. A list made to hold values keeps
 them packed in one block (a packed list's storage apart from the list, so other lists grow by
-one pointer); every list operation works on the block. Measured with `bench/points_values.astra`
-against `points_classes.astra`, a million points: built 46 ms against 171, summed 34 against 40,
+one pointer); every list operation works on the block. Measured with `bench/points_values.jade`
+against `points_classes.jade`, a million points: built 46 ms against 171, summed 34 against 40,
 sorted by `x` 127 against 70, walked 77 against 55, 284 ms in all against 336, at most 146 MB in
 use against 183 (the list itself 16 MB against some 112). `sortBy` and `sortByDescending`, for
 every list, work out each key once and move each item once (C++, beside `compareValues`): the
@@ -1860,10 +1864,10 @@ checker shows that nothing which may change a list of that value type runs while
 a loop is judged by its body, a call that may wait counting as one that changes every list.
 `pts[i] = pts[i].moved(1)`, `return Point(...)` and `replaceAll { it.moved() }` build the new
 value in the item. A parallel section over a list of values gives each core references into
-its own part of the list. Measured with `bench/bounce_classes.astra`, `bounce_values.astra`
-(a mutating `move`) and `bounce_moved.astra` (`replaceAll { it.moved() }`), 200,000 balls
+its own part of the list. Measured with `bench/bounce_classes.jade`, `bounce_values.jade`
+(a mutating `move`) and `bounce_moved.jade` (`replaceAll { it.moved() }`), 200,000 balls
 moved 200 times: 0.78 s, 0.46 and 0.59 on the 32 cores here, and 4.2 s, 6.1 and 7.6 on one;
-`bench/particles.astra`, a million particles moved on every core and drawn by one loop for 100
+`bench/particles.jade`, a million particles moved on every core and drawn by one loop for 100
 frames, makes no box (five million every five frames before loops were judged by their
 bodies), moving taking 0.93 s and drawing 8.0. Against part 3 built the same way, with Clang
 and with MSVC: `points_values` 17 and 26% faster, `layout_values` 2 and 12%, `layout_classes` 2
@@ -1901,16 +1905,16 @@ given a value; `comp.bounds = Rect(...)` and `cached = measure()` build the valu
 read, and what a function gives back, are read where they are wherever nothing that may change
 values of their type runs while they are in use, and always when read at once (`n.sizes().w`,
 `return cached`). `list.add` copies an item it is given where it is, with no box made for it.
-Measured, against part 4 built the same way: `bench/colors_values.astra`, 100 frames of a
+Measured, against part 4 built the same way: `bench/colors_values.jade`, 100 frames of a
 320 by 240 picture blended with a palette of `Rgba(val argb : int)`, 24 to 31% faster with no
-box made (15.4 million before); `bench/layout_cached_values.astra`, Topaz's layout with each
+box made (15.4 million before); `bench/layout_cached_values.jade`, Topaz's layout with each
 component's `Sizes` kept inside it, 1,215 boxes made where part 4 made 57,126, its time 4 to 7%
 more (the reads through references, below); the other benchmarks within 5 either way. Values
 in variables, arguments and results (D149) are left for part 6, with the slots that keep only
 a payload: they need the same change to how a frame's slots are laid out. Left for later, each
 known:
 - A value of a value type larger than 8 bytes in a variable, an argument or a result is still a
-  box, so Topaz's layout without kept sizes (`bench/layout_values.astra`) makes as many boxes as
+  box, so Topaz's layout without kept sizes (`bench/layout_values.jade`) makes as many boxes as
   before, 470,042 in 200 passes. D149 (part 6).
 - Through a reference into an object, a field is read by finding which of the object's values
   the reference is in, and reading on through a value held in it (`node.sizes().pref.width`)
@@ -1935,7 +1939,7 @@ known, written or worked out from what it is first given, is kept as its 8-byte 
 inside its object, before the object's slots, so that each is at the same place in every object
 of its class, and read and written there by the instructions that remember where a field is.
 Measured against part 5 built the same way:
-`bench/particles.astra` draws a million particles a frame 34 to 40% faster (`toInt()` an
+`bench/particles.jade` draws a million particles a frame 34 to 40% faster (`toInt()` an
 instruction); a million objects of three `float`s take 112 MB at most, against 142 (72 bytes an
 object, against 96); `numeric` 3 to 8% faster; the rest within 4 either way, with Clang and with
 MSVC. Left for later, each known:
@@ -1949,7 +1953,7 @@ MSVC. Left for later, each known:
   each field up by name (part 5); M6.7's instructions that name a frame's slots are where a
   field's place, known when compiling, goes into the instruction.
 - On one core a mutating method on the items of a list is still some 1.3 times slower than on
-  objects (`bench/bounce_values.astra` 6.2 s against 4.8 with Clang): each field read through an
+  objects (`bench/bounce_values.jade` 6.2 s against 4.8 with Clang): each field read through an
   item finds the item again. Keeping where a list's items are beside the list, one load in
   place of three, was tried and measured no faster, so it was left out; the item's place held
   in a frame's slot for the whole method is M6.7's.
@@ -1958,10 +1962,10 @@ Part 7 (2026-10-19): the first half's checkpoint. Topaz's `Point`, `Dimension`, 
 `Rectangle`, and its `Sizes`, became value types, as the user chose the same day (D179): a
 component's `bounds` and the sizes it keeps are inside it, changed through their places, and
 `sizes = content.sizes()` builds the new ones there; `Rectangle` takes all four of its numbers
-(D180). `examples/bounce_values.astra` is the bounce example on every core with `Ball` a value
+(D180). `examples/bounce_values.jade` is the bounce example on every core with `Ball` a value
 type and `move`, its body unchanged, marked mutating. Measured against M6.5 (16200bd) built
 the same way, MSVC and Clang:
-- `bench/bounce_values.astra`, 200,000 balls moved 200 times on the 32 cores here: 0.59 s and
+- `bench/bounce_values.jade`, 200,000 balls moved 200 times on the 32 cores here: 0.59 s and
   0.53, against 0.86 and 1.06 for the class version on M6.5; in a frame, two objects are made
   (the parallel stream and the lambda), none for a ball, where the class version made its
   balls as objects.
@@ -1973,7 +1977,7 @@ the same way, MSVC and Clang:
   to 21% slower, `simulation` 4 to 13%, `colors_classes` 8 to 9% (the checks for references
   and values spread over the instructions, part 4); `fields` 35% faster with Clang and slower
   with MSVC, where its loop's placement moves it.
-- Topaz's own layout (`bench/topaz_layout.astra`, a tree of grids laid out 100 times): 3 to 6%
+- Topaz's own layout (`bench/topaz_layout.jade`, a tree of grids laid out 100 times): 3 to 6%
   slower than M6.5. The sizes pass between functions in variables and results, which keep a
   box until values in variables (D149, M6.7); and a widget not yet painted asks its content for
   its sizes again at each layout, so the sizes kept inside it are written more than read.
@@ -1990,7 +1994,7 @@ calling itself last made a loop, and `tail` (D29); overloads that differ in type
 (D31); collections read-only unless `open`, `accepts`, and new collections made `open`, `toOpenList()`, read-only maps and sets passed by key, value and item type (D32, D34, D45, D46, D47); `extend` (D33);
 `Throwable` and checked exceptions worked out by the compiler (D35, D51 to D54); `lateinit`, `lazy val`
 and `lazy var` (D36, D37); full reflection (D38, D48, D49, D50); `enum class`, `enum interface` and every
-`when` covering every kind (D39); union types and names for types (D40, D41); the nested `it` error (D55); `this@Name` (D57); `this` in blocks and more functions compiled in place (D58); `inline fun` (D59); a `for` over a map giving its entries (D64); data classes extended only by data classes (D65); an `object` made when first used (D66); statics only in one `static { }` block per class (D67); accessors in Kotlin's form only (D68); extension functions following imports (D70); `infix fun`, with `to`, `downTo` and `step` as ones (D72); `Pair`, `Triple`, map entries and indexed values as value types (D73); one name for each thing in the standard library (D74); limits on `int` and `float` at their real values, with sizes clamped at the native layer (D76); a map's keys, values and entries as read-only live views (D77); `println` and `print` as in Kotlin (D78); "task" for what was a flow, `task { }` and `suspendTask { resume -> }` (D81); one `Atomic<T>`, changeable in parallel sections (D85); `Lock`, `LockBox<T>` and `useKey { }` (D86); `Channel<T>`, its size always chosen (D87); `ThreadPool`, `JobQueue`, `after` and `every` (D88); `Job<T>` for a result to come, `task { }` giving one (D89); `Duration` wherever a time is meant (D90); `Process(...)` and `Process.run` (D91); `atomic var` fields changeable in parallel sections (D92); `gather(into, each, merge)` on a parallel stream (D93); `SharedMap` and `SharedSet` (D94); the error for another core's item pointing to `indices.parallelStream()` (D95); `parallel(...)`, nested sections, `parallelChunks`, `parallelSort` and `splitAt` (D96); frozen data shared with workers and `bytes` handed over (D97); sequences and generators (D98); `Color` as a value type (D99); a font's measurements asked of `Font` (D101); `Size` in place of `Dimension` (D102); `Point` as a value type (D103); `Rect` in place of `Rectangle` (D104); `Insets` as a value type (D105); `Drawable`, `Image` and `Surface`, drawn with `canvas.draw` (D106); `Path` in place of `File` (D107); `$$"""` raw strings (D112); `use { }` (D113); `thread { }` giving a `Job` (D117); `Countdown` (D118); `Reader` and `Writer` (D119); sockets with `readTimeout` (D120); `Picture` merged into `Image` (D122); images drawn in memory, surfaces and windows on the graphics card, one `Canvas` (D123). With D123, the canvas, image and surface work found on 2026-10-16: `Canvas` takes every call Topaz's painting uses (`clearRect`, `clipped`, `drawImagePart`, `alpha` on drawing a picture, the font metrics; `withStyle` gone, the style being on the component (D132)), on every kind of canvas, the recording one too; an internal base class holds the origin, clip, scale, colour, font, `visibleBounds`, `sub` and `clipped`, so each engine (software, graphics card, recording) gives only the shapes, text and pictures in its own pixels; the default `fillPolygon`, which draws an outline, fills; `drawString` gives the width on every canvas; an image keeps a change number and the rectangle changed, and Topaz its card copy (D124), in place of the two-way flags and the call on every draw; `crop` and `inkBox` in C++; `Image.load` and `save` take a `Path` (D107); `Surface.canvas` loses its `owner`, and `toPicture` becomes `toImage`, and `Surface.of` and `upload` take an `Image` (D122); an image's canvas works on any thread, so workers can draw thumbnails; and, to be asked about first (L57), an `opaque` flag on `Image` in place of `BufferedImage`'s type numbers. `Image` and `Font` in Astra's standard library beside the text engine (D124). Annotations as checked data, and the test runner `astra test` (D153). Each with tests of its own, the porting notes and the
+`when` covering every kind (D39); union types and names for types (D40, D41); the nested `it` error (D55); `this@Name` (D57); `this` in blocks and more functions compiled in place (D58); `inline fun` (D59); a `for` over a map giving its entries (D64); data classes extended only by data classes (D65); an `object` made when first used (D66); statics only in one `static { }` block per class (D67); accessors in Kotlin's form only (D68); extension functions following imports (D70); `infix fun`, with `to`, `downTo` and `step` as ones (D72); `Pair`, `Triple`, map entries and indexed values as value types (D73); one name for each thing in the standard library (D74); limits on `int` and `float` at their real values, with sizes clamped at the native layer (D76); a map's keys, values and entries as read-only live views (D77); `println` and `print` as in Kotlin (D78); "task" for what was a flow, `task { }` and `suspendTask { resume -> }` (D81); one `Atomic<T>`, changeable in parallel sections (D85); `Lock`, `LockBox<T>` and `useKey { }` (D86); `Channel<T>`, its size always chosen (D87); `ThreadPool`, `JobQueue`, `after` and `every` (D88); `Job<T>` for a result to come, `task { }` giving one (D89); `Duration` wherever a time is meant (D90); `Process(...)` and `Process.run` (D91); `atomic var` fields changeable in parallel sections (D92); `gather(into, each, merge)` on a parallel stream (D93); `SharedMap` and `SharedSet` (D94); the error for another core's item pointing to `indices.parallelStream()` (D95); `parallel(...)`, nested sections, `parallelChunks`, `parallelSort` and `splitAt` (D96); frozen data shared with workers and `bytes` handed over (D97); sequences and generators (D98); `Color` as a value type (D99); a font's measurements asked of `Font` (D101); `Size` in place of `Dimension` (D102); `Point` as a value type (D103); `Rect` in place of `Rectangle` (D104); `Insets` as a value type (D105); `Drawable`, `Image` and `Surface`, drawn with `canvas.draw` (D106); `Path` in place of `File` (D107); `$$"""` raw strings (D112); `use { }` (D113); `thread { }` giving a `Job` (D117); `Countdown` (D118); `Reader` and `Writer` (D119); sockets with `readTimeout` (D120); `Picture` merged into `Image` (D122); images drawn in memory, surfaces and windows on the graphics card, one `Canvas` (D123). With D123, the canvas, image and surface work found on 2026-10-16: `Canvas` takes every call Topaz's painting uses (`clearRect`, `clipped`, `drawImagePart`, `alpha` on drawing a picture, the font metrics; `withStyle` gone, the style being on the component (D132)), on every kind of canvas, the recording one too; an internal base class holds the origin, clip, scale, colour, font, `visibleBounds`, `sub` and `clipped`, so each engine (software, graphics card, recording) gives only the shapes, text and pictures in its own pixels; the default `fillPolygon`, which draws an outline, fills; `drawString` gives the width on every canvas; an image keeps a change number and the rectangle changed, and Topaz its card copy (D124), in place of the two-way flags and the call on every draw; `crop` and `inkBox` in C++; `Image.load` and `save` take a `Path` (D107); `Surface.canvas` loses its `owner`, and `toPicture` becomes `toImage`, and `Surface.of` and `upload` take an `Image` (D122); an image's canvas works on any thread, so workers can draw thumbnails; and, to be asked about first (L57), an `opaque` flag on `Image` in place of `BufferedImage`'s type numbers. `Image` and `Font` in Jade's standard library beside the text engine (D124). Annotations as checked data, and the test runner `jade test` (D153). Each with tests of its own, the porting notes and the
 README brought up to date, and the costs measured where a decision gave an estimate (the
 overflow trap's 2 to 5%, string storage).
 
@@ -2014,7 +2018,7 @@ Group 1, numbers and strings (built 2026-10-20):
   widest; the UTF-8 form made when first asked for and kept, as Python does (the UTF-8 a string
   is made from is not kept); the hash taken over the characters, so equal text hashes alike at
   any width. Joining keeps the wider part's width and goes on from the first part's hash;
-  searching, slicing, splitting and ordering work on the characters. `bench/strings.astra`
+  searching, slicing, splitting and ordering work on the characters. `bench/strings.jade`
   against part 7 (Clang): building text 5 to 12% faster, searching 7% slower, map keys 5%,
   sorting 4%; text with an emoji (4 bytes a character) 9 to 20% slower, as the decision foresaw.
 - `char` (D24, D25, D142): a kind of value of its own; single quotes for one character only
@@ -2043,13 +2047,13 @@ an int by `toInt()`, as an int becomes a float only by `toFloat()` (comparing an
 them work); a char goes where a string is asked for only through Kotlin's overloads; a map
 with string keys indexed by a char is a compile error, though a `Map<any, V>` finds 'c' and
 "c" as one key; the byte order is a `bigEndian` flag; `wrap32()` and `toInt32Wrapped()` both
-exist, as D148 names both; `hash(...)` combines Astra's own hashes until classes' `hashCode`
+exist, as D148 names both; `hash(...)` combines Jade's own hashes until classes' `hashCode`
 is called when running (D26); a char's `upper()` and `lower()` give a char (D74's names;
 Kotlin's `uppercase()` on a `Char` gives a string); the UTF-8 a string is made from is not kept,
 as Python does, only what is asked for later. Left: an object's narrow field is read and
 written by the interpreter's general path, not its quick one, so it is slower to reach than an
-int field. Tests: `numbers.astra`, `chars.astra`, `strings_wide.astra`,
-`check/numbers.astra`, `error_char_quotes.astra`; the suite, 635 checks, passes as it is,
+int field. Tests: `numbers.jade`, `chars.jade`, `strings_wide.jade`,
+`check/numbers.jade`, `error_char_quotes.jade`; the suite, 635 checks, passes as it is,
 with every read from a list of values a copy, under the GC and thread stress settings, with
 the C++ results checked, and under the sanitizer, with and without the GC stress setting.
 
@@ -2092,8 +2096,8 @@ error. Left: a map's `values` is a list made afresh; `items[..]` does not parse;
 reflection; a generic function's collections have `itemType` any; the checker knows nothing of
 the keys of classes in files whose code comes from the cache; nothing is collected while a
 key's `==` or `hashCode` runs; `frozen()` does not go into
-values. Tests: `keys.astra`, `open_lists.astra`, `maps_sets.astra`, `positions.astra`,
-`check/keys.astra`, `check/open.astra`, `check/names.astra`; the suite, 658 checks, passes as
+values. Tests: `keys.jade`, `open_lists.jade`, `maps_sets.jade`, `positions.jade`,
+`check/keys.jade`, `check/open.jade`, `check/names.jade`; the suite, 658 checks, passes as
 it is, with every read from a list of values a copy, under the GC and thread stress settings,
 with the C++ results checked, and under the sanitizer, with and without the GC stress setting.
 Measured with Clang against group 1, best of five: no benchmark slower beyond the noise;
@@ -2128,9 +2132,9 @@ and what they take; what goes in the static block; how a data class passes its f
 extend covers; which extension function a call finds. Left: extend of a built-in type;
 extension functions and extends hold for every file once loaded, when running; two imported
 extensions of one name not reported as ambiguous; a thread waiting for a lazy value hands the
-lock over again and again. Tests: `lazy.astra`, `enum_classes.astra`, `unions.astra`,
-`data_extend.astra`, `extend.astra` (with the folder `ExtLib`), `check/enum_classes.astra`,
-`check/unions.astra`, `check/declarations.astra`, `check/extend.astra`, and error tests for
+lock over again and again. Tests: `lazy.jade`, `enum_classes.jade`, `unions.jade`,
+`data_extend.jade`, `extend.jade` (with the folder `ExtLib`), `check/enum_classes.jade`,
+`check/unions.jade`, `check/declarations.jade`, `check/extend.jade`, and error tests for
 each parse error; the suite, 705 checks, passes as it is, with every read from a list of
 values a copy, under the GC and thread stress settings, with the C++ results checked, and
 under the sanitizer, with and without the GC stress setting.
@@ -2163,8 +2167,8 @@ inline; the scope functions on null; how `downTo` and `step` are written. Left: 
 local and generic functions and inside a try; inline calls with spread arguments, of static
 members or with a vararg; no reads in place inside copied code; the rights given to the whole
 function copied into; `this` in a block whose type the checker cannot tell.
-Tests: `infix.astra`, `inline.astra`, `this_labels.astra`, `sam.astra`, `tail_calls.astra`,
-`check/functions.astra`, and error tests for each new parse and compile error; the suite, 743
+Tests: `infix.jade`, `inline.jade`, `this_labels.jade`, `sam.jade`, `tail_calls.jade`,
+`check/functions.jade`, and error tests for each new parse and compile error; the suite, 743
 checks, passes as it is, with every read from a list of values a copy, under the GC and thread
 stress settings, with the C++ results checked, and under the sanitizer, with and without the GC
 stress setting.
@@ -2174,7 +2178,7 @@ lambdas 18% faster, now copied in. Checking the standard library's inline bodies
 to every start (checking 0.6 to 1.6 ms of the 8).
 
 Group 5, errors (built 2026-10-21):
-- Java's tree of throwables (D35) in the standard library (`errors.astra`): `Throwable` with a
+- Java's tree of throwables (D35) in the standard library (`errors.jade`): `Throwable` with a
   `message` that may be null and a `cause`; `Error` for what the VM cannot go on from;
   `Exception`, with `RuntimeException` and its classes unchecked and every other Exception
   checked. The VM's own errors are of their classes, chosen from each message; `throw` takes
@@ -2193,7 +2197,7 @@ Group 5, errors (built 2026-10-21):
 - The standard library and Topaz say what they throw: IOException on what reads, writes,
   connects or starts a program, ExecutionException and TimeoutException on `Future.get`.
 - `use { }` for an `AutoCloseable` (D113), an inline function, in place of each stream's own.
-- Fixed on the way: `astra dis` ended before the cache it was writing was written, and could
+- Fixed on the way: `jade dis` ended before the cache it was writing was written, and could
   crash.
 Choices made where the decisions left room, for the user to confirm (plans-and-gaps6.7.html, 8.5a to 8.5k):
 the classes of the VM's own errors; what a Throwable holds; where InterruptedException and
@@ -2202,7 +2206,7 @@ a library's public ones; `throw e` in a catch clause; what the standard library 
 what `use` takes; catch clauses in order; where `throws` is written. Left: `throws` on getters and
 setters; an extend's bridges not checked against the interface; the C++ functions known by a
 table; an error from `close()` replacing the block's in `use`; half a millisecond more at start.
-Tests: `exceptions.astra`, `check/exceptions.astra`, `error_catch_type.astra`, and the tests that
+Tests: `exceptions.jade`, `check/exceptions.jade`, `error_catch_type.jade`, and the tests that
 threw `Error` or plain values brought to the tree; the suite, 751 checks, passes as it is, with
 every read from a list of values a copy, under the GC and thread stress settings, with the C++
 results checked, and under the sanitizer, with and without the GC stress setting.
@@ -2214,7 +2218,7 @@ every start (2.2 ms against 1.7), and Topaz checked whole in 13.5 ms against 10.
 Group 6, reflection (built 2026-10-21):
 - `#` gives a class (D48): `Image#` the class named Image, `Box<int>#` with type arguments,
   `int#` a built-in type, `x#` the class of the object x, binding as tightly as a dot. A `Class`
-  (`reflect.astra`) has `name`, `superclass`, `interfaces`, `typeArguments`, `kinds`, `fields`,
+  (`reflect.jade`) has `name`, `superclass`, `interfaces`, `typeArguments`, `kinds`, `fields`,
   `methods`, `constructors`, `annotations`, `field(name)`, `method(name)`, `annotation<T>()` and
   `isInstance(x)`; a field `get` and `set`, a method and a constructor `call`. A class lists
   only what the code where `#` is written may use (D38). `className` and `x.class` are gone,
@@ -2229,16 +2233,16 @@ Group 6, reflection (built 2026-10-21):
 - Annotations (D153): declared `annotation Name(val a : T)`, written on classes, functions,
   fields and parameters, checked as calls given constants, read through reflection. Kotlin's
   annotations for the JVM are errors saying what to write, `@Volatile` among them (L47).
-- `astra test` (D153): runs the functions and methods written `@Test`, with `@BeforeTest`,
+- `jade test` (D153): runs the functions and methods written `@Test`, with `@BeforeTest`,
   `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout` (a test stopped at a safe point once past
-  it) and `@TempDir`; kotlin.test's assertions in `test.astra`.
+  it) and `@TempDir`; kotlin.test's assertions in `test.jade`.
 Choices made where the decisions left room, for the user to confirm (plans-and-gaps6.7.html, 8.6a to 8.6k):
 what `#` names; what a Class is; which members are listed; who may see a member; what is
 wrapped; types that cannot be named; what a built program keeps; what an annotation is; which of
-Kotlin's annotations are errors; how astra test runs; `type(x)` kept. Left: D50's flow of
+Kotlin's annotations are errors; how jade test runs; `type(x)` kept. Left: D50's flow of
 objects done by types, every class kept for a `#` of `any` (G42); `@Deprecated` (1.0).
-Tests: `reflection.astra`, `check/reflection.astra`, `testing/basics.astra` (run by `astra test`),
-`shell/reflection.shell`, `annotation_jvm.astra`, `error_double_colon.astra`, and the tests that used
+Tests: `reflection.jade`, `check/reflection.jade`, `testing/basics.jade` (run by `jade test`),
+`shell/reflection.shell`, `annotation_jvm.jade`, `error_double_colon.jade`, and the tests that used
 `className` or `@Volatile` brought to `#` and none; the suite, 763 checks,
 passes as it is, with every read from a list of values a copy, under the thread stress setting
 and with the C++ results checked, under the GC stress setting (739 there), and under the
@@ -2250,7 +2254,7 @@ library's classes; a program using Topaz compiled afresh 1.1 ms more (7.3 ms com
 
 Group 7, concurrency (built 2026-10-21):
 - Tasks (D81): "flow" became "task" in code, messages, the README and the examples
-  (`task.astra`, `bounce_tasks.astra`); `task { }` gives a `Job` (D89), `suspendTask { resume ->
+  (`task.jade`, `bounce_tasks.jade`); `task { }` gives a `Job` (D89), `suspendTask { resume ->
   }` sets a task aside, `resume.fail(e)` raises an error in it, `delay(time)`. Kotlin's
   `startCoroutine`, `suspendCoroutine`, `Continuation` and `EmptyCoroutineContext` are errors
   naming what to write. A thread waiting for a lazy value another thread is working out now
@@ -2261,9 +2265,9 @@ Group 7, concurrency (built 2026-10-21):
 - `Lock` with `useKey { }`, `LockBox(value)` and `waitUntil { }` (D86): a thread keeps a stack of
   the keys it holds; `waitUntil` gives back the innermost, and a task on the main thread is set
   aside there instead of blocking the loop. `Channel<T>` (D87), `ThreadPool` and `JobQueue`
-  (D88), `Countdown` (D118) and one `Atomic<T>` (D85), all in `thread.astra`; Java's names for
+  (D88), `Countdown` (D118) and one `Atomic<T>` (D85), all in `thread.jade`; Java's names for
   each are errors naming what to write.
-- `Duration` (D90), a value type of whole nanoseconds, in `time.astra`, made by extension
+- `Duration` (D90), a value type of whole nanoseconds, in `time.jade`, made by extension
   properties (`val int.milliseconds : Duration get() => ...`, new in the language); every call
   that waits or times takes one, and a plain number there is an error saying to write a unit.
 - `atomic var` fields (D92): `+=`, `-=`, `= max(...)`, `= min(...)` and `compareAndSet` are each
@@ -2277,7 +2281,7 @@ Group 7, concurrency (built 2026-10-21):
   error for another core's item names `indices.parallelStream()` (D95).
 - Frozen data sent to workers is kept once outside the heaps, counted, and read in place;
   `post(bytes, handOver = true)` moves a buffer (D97).
-- Sequences (D98, `sequence.astra`): `Sequence<T>` with lazy operations, `generateSequence`,
+- Sequences (D98, `sequence.jade`): `Sequence<T>` with lazy operations, `generateSequence`,
   `asSequence()`, and `sequence { yield(x) }` run on a generator, a task whose stack is reserved
   whole and committed a page at a time as it grows. In a sequence's block only `yield`,
   `yieldAll` and suspend functions of `SequenceScope`'s may wait.
@@ -2288,9 +2292,9 @@ where a task's error goes; what `Job.all` and `Job.any` give; `fold` on a parall
 and the shared collections keep a change whole; how a section is divided; `parallelChunks` and
 views; frozen data shared with workers; a `for` over a channel and waking at a Lock; how a
 sequence's block runs; what an atomic field is; what a Duration is.
-Tests: `tasks.astra` (was `flows.astra`) and `threads.astra` rewritten, `sequences.astra`,
-`parallel_tools.astra`, `durations.astra`, `workers_sharing.astra`, `check/concurrency.astra`,
-`error_atomic_field.astra`, and every test and example that used the old names brought to the
+Tests: `tasks.jade` (was `flows.jade`) and `threads.jade` rewritten, `sequences.jade`,
+`parallel_tools.jade`, `durations.jade`, `workers_sharing.jade`, `check/concurrency.jade`,
+`error_atomic_field.jade`, and every test and example that used the old names brought to the
 new ones; the suite, 786 checks, passes as it is, with every read from a list of values a
 copy, under the thread stress setting and with the C++ results checked, under the GC stress
 setting (762 there), and under the sanitizer, with and without the GC stress setting.
@@ -2301,7 +2305,7 @@ one line with both, measured while a sanitizer run took a core; a program using 
 afresh 34.8 ms against 35.0).
 
 Group 8, files and input and output (built 2026-10-21):
-- `Path` in place of `File` (D107, `file.astra`): what is in the path a property (`text`,
+- `Path` in place of `File` (D107, `file.jade`): what is in the path a property (`text`,
   `name`, `extension`, `parent` as a Path, `absolute`), what asks the disk a function
   (`exists()`, `isFile()`, `size()`, `canonical()`, `list()` giving Paths, `walk()` a sequence)
   (D128, D135, D137, D138, D150); `mkdir(parents)`, `moveTo`, `copyTo`, `delete()`,
@@ -2326,7 +2330,7 @@ what `list()` and `walk()` give; deleting and what fails; permissions; what a Ch
 line read lazily that fails; what a read past `readTimeout` throws; a started program's
 members; what `Process.run` does; bare entries for a union parameter; the C++ declared; Paths
 in Topaz. Processes and sockets came to Linux with G56.
-Tests: `std_files.astra` and `io_streams.astra` rewritten, `check/files.astra`, and the tests
+Tests: `std_files.jade` and `io_streams.jade` rewritten, `check/files.jade`, and the tests
 that used `File` brought to `Path`; the suite, 787 checks, passes as it is, with every read from
 a list of values a copy, under the thread stress setting and with the C++ results checked, under
 the GC stress setting (763 there), and under the sanitizer, with and without the GC stress setting.
@@ -2337,15 +2341,15 @@ for a script printing one line (12.6 ms against 12.4, while a sanitizer run took
 functions of files and streams being declared and checked now.
 
 Group 9, graphics and Topaz (built 2026-10-22):
-- The standard library draws, with no import (D124): `graphics.astra` has `Color`, a value type
+- The standard library draws, with no import (D124): `graphics.jade` has `Color`, a value type
   of four bytes with its other forms as secondary constructors (D99), `Point`, `Size`, `Insets`
   and `Rect` as value types (D102 to D105, D152), the shapes `Rect`, `Oval` and `Line`, and
-  `Drawable`; `image.astra` has `Canvas`, `Image` (pixels in memory, a `Grid<Color>`, read
+  `Drawable`; `image.jade` has `Canvas`, `Image` (pixels in memory, a `Grid<Color>`, read
   freely and changed in `editPixels`, D122, D133, D134, D141) and its canvas, drawn by a
   software engine in C++ on the text engine's rasterizer (D123), shapes cut finer than glyphs.
   `Font` is one type, free of scale, measured at a scale where pixels are wanted (D101, D125,
   D144); `TextFont` is internal.
-- `Grid<T>` (D155, `grid.astra`, `grid.cpp`), packed by its type, with parts by ranges, new
+- `Grid<T>` (D155, `grid.jade`, `grid.cpp`), packed by its type, with parts by ranges, new
   grids for rows and columns added or taken away, and work by rows across cores.
 - Language: `.=` (D156), indexes of several parts (`op [](x, y)`), bundles of named arguments
   with a type of their own, `params(size : int, bold : bool)` (D143), secondary constructors
@@ -2424,10 +2428,10 @@ so that `map`, `filter`, `mapOf`, `setOf` and `toSet` give typed, and so packed,
 
 **M6.6.2. A sandbox for tests.** Added 2026-11-04, planned in
 [plans-and-gaps6.7.html](plans-and-gaps6.7.html#m662), its questions answered by the user the same day. One C++
-interface, the host, in front of everything of Astra's that touches the system (files, streams,
+interface, the host, in front of everything of Jade's that touches the system (files, streams,
 processes, sockets, the clock, randomness, installed fonts): the real host is today's code, and
 a virtual one keeps files, a network, programs and time in memory, with a list of faults that
-make the rare failures happen on purpose. Every test of `astra test` runs in a sandbox of its own
+make the rare failures happen on purpose. Every test of `jade test` runs in a sandbox of its own
 unless marked `@RealHost`, and any program may use one with `Sandbox.run { ... }`, which reaches
 nothing outside it; paths in it are Linux's unless it is asked for Windows'. Built 2026-11-04 in seven
 steps (3a4f32a to f677665); what differs from its plan is under "As built" there.
@@ -2488,7 +2492,7 @@ size to content, centre on owner, key filter), `DialogSession` and the eight
 dialogs, async file dialogs (N2), then `chart`. Ends with **JadeMem's gui module ported**,
 its three background samplers running as threads: it is the smallest real app and uses
 exactly this much. Planned in `docs/M8-plan.md` (2026-11-06), which adds, at the user's
-choice, what JadeMem turned out to need: its `core` and `native` modules too, Astra calling
+choice, what JadeMem turned out to need: its `core` and `native` modules too, Jade calling
 functions in DLLs (foreign functions), `treemap` and `Regex` (N5) brought forward from M9,
 and the line width, arcs and wedges of N3.
 
@@ -2499,7 +2503,7 @@ M8).
 `image`. This is more than half of the library by line count and is what Snips needs.
 Isolated workers (5.5) are built here too, ahead of Snips' evaluator.
 
-**M11. 3D view.** N4 (mostly the OpenGL bindings for Astra) and `gl`, when JadeGen is to be
+**M11. 3D view.** N4 (mostly the OpenGL bindings for Jade) and `gl`, when JadeGen is to be
 ported. The window is already OpenGL, so the view's place between the interface and its
 popups is there from M5.
 
@@ -2513,19 +2517,19 @@ sockets exist (M3); what they also need, by their use in the code:
 
 - **TLS**, as client and server, with certificates from PKCS#12 files, and upgrading an open
   connection part way through (SMTP's STARTTLS): `SSLContext`, `SSLSocket`, `KeyStore` are
-  used about 60 times. Astra's own TLS 1.2 and 1.3 (changed 2026-10-17: some apps run as
+  used about 60 times. Jade's own TLS 1.2 and 1.3 (changed 2026-10-17: some apps run as
   dedicated servers on Linux, and the same code must agree with itself on every system;
   SChannel is Windows' only, and Linux's TLS libraries are third-party code that may not be
   there). Split as Go's `crypto/tls`, rustls and Java's own TLS are:
-  - **The protocol in Astra**, most of the code: the handshake's states, building and reading
+  - **The protocol in Jade**, most of the code: the handshake's states, building and reading
     its messages and extensions, the record layer's framing, the key schedule (a sequence of
     HKDF calls), X.509 certificates (DER) and checking their chains, alerts, session tickets
-    and resumption, STARTTLS, PKCS#12. Reading untrusted input in Astra cannot overrun a
+    and resumption, STARTTLS, PKCS#12. Reading untrusted input in Jade cannot overrun a
     buffer or use freed memory, the kind of mistake behind the worst TLS holes (Heartbleed),
     so this is safer than C++ as well as easier to read and test.
   - **The primitives in C++** (the cryptography below), working in place on part of a
     `bytes` (`aead.seal(into = buf, at = 5, from = buf, length = n)`), so a record is neither
-    copied nor allocated: the Astra code handles a record's 5-byte header and C++ encrypts
+    copied nor allocated: the Jade code handles a record's 5-byte header and C++ encrypts
     the up to 16 KB behind it. Sending and receiving cost what an all-C++ TLS costs; a
     handshake spends a little more of the processor on reading certificates (a fraction of a
     millisecond, less after M6.5 to M6.7), next to the public-key work and the network's
@@ -2541,11 +2545,11 @@ sockets exist (M3); what they also need, by their use in the code:
   Windows' certificate store, Linux's files under `/etc/ssl/certs`.
 - **Cryptography**: hashes, signatures, X25519 key agreement, AES-GCM, HMAC, secure random
   numbers, for JadeNet's handshake and for jadelib-crypto, which JadeMail and JadesDomain
-  use. Astra's own, in C++, one implementation on every system (changed 2026-10-17, for the
+  use. Jade's own, in C++, one implementation on every system (changed 2026-10-17, for the
   same reason as TLS): checked against the published test values, written so no secret leaks
   through timing, using the processor's AES and SHA instructions where it has them, and
   secure random numbers from the system (`BCryptGenRandom` on Windows, `getrandom` on Linux).
-  Public, as every C++ piece is (section 1): a `Crypto` library of Astra types any program
+  Public, as every C++ piece is (section 1): a `Crypto` library of Jade types any program
   can use (`Sha256`, `Hmac`, `Hkdf`, `AesGcm`, `ChaCha20Poly1305`, `X25519`, `Ed25519`,
   `Ecdsa`, `Rsa`, `SecureRandom`), each taking and filling parts of a `bytes` in place. The
   crypto is built and tested before TLS is started on it.
@@ -2564,7 +2568,7 @@ sockets exist (M3); what they also need, by their use in the code:
 - The parts of JadeLib these apps use, ported before them: `jadelib-json` (all three),
   `jadelib-crypto` (JadeMail, JadesDomain) and `jadelib-db` (JadeMail).
 
-Servers fit Astra's model as it is: each connection is waiting most of the time, so threads
+Servers fit Jade's model as it is: each connection is waiting most of the time, so threads
 that take turns, or better tasks (D81), one per connection with no thread of its own, serve
 them well. Ends with the three apps' own tests passing, on Windows and on Linux, and each talking to a real
 client of its kind (a mail program, a DNS resolver, a second JadeNet).
@@ -2573,13 +2577,13 @@ client of its kind (a mail program, a DNS resolver, a second JadeNet).
 Godot 4.7: a C++ core of 19,000 lines (simulation, ship designs, voxel objects and cloth, a
 network protocol on ENet, physics on Box2D, and its own mod language, JadePy) and 20,000
 lines of GDScript for interface, drawing, a 3D view of ship interiors, input and files. The
-whole of it, core included, would be ported to Astra: one language for game, server, editors
-and mods, with JadePy replaced by mods written in Astra. In order of risk:
+whole of it, core included, would be ported to Jade: one language for game, server, editors
+and mods, with JadePy replaced by mods written in Jade. In order of risk:
 
 - **First, a measurement.** One heavy slice of the simulation (a tick with many ships)
-  ported and timed against the C++, after M6.5 to M6.7. If Astra is too slow for the tick,
+  ported and timed against the C++, after M6.5 to M6.7. If Jade is too slow for the tick,
   the rest waits for native code (M14).
-- **Heavy parts in C++, as part of Astra's library** (written here, so not third-party
+- **Heavy parts in C++, as part of Jade's library** (written here, so not third-party
   code), as Godot does under GDScript: 2D physics (bodies, convex polygon collision, contacts
   with friction, in place of Box2D, of which JadeGate uses polygons, bodies, velocities and
   transforms), a spatial grid for nearness queries, mesh simplifying, and vector maths over
@@ -2594,21 +2598,21 @@ and mods, with JadePy replaced by mods written in Astra. In order of risk:
 - **Game controllers** (XInput, part of Windows).
 - **Linux** for the dedicated server: the runtime without windows is there from M12; what is
   left is the game server's own needs on it.
-- **A debugger and a profiler** for Astra, which a program of this size needs.
+- **A debugger and a profiler** for Jade, which a program of this size needs.
 
-Ends with the game playable in Astra against the C++ build's behaviour, its tests ported, a
+Ends with the game playable in Jade against the C++ build's behaviour, its tests ported, a
 dedicated server running, and the tick's time measured against the C++.
 
-**M14. Native code for built programs.** Added 2026-10-16, placed when wanted. `astra build
+**M14. Native code for built programs.** Added 2026-10-16, placed when wanted. `jade build
 --exe` writes C++ from the whole typed program and compiles it with the system's C++ compiler
 (Visual Studio on the machine that builds, not on the machines that run it; a tool, as it is
-for building Astra, not code inside the program), as Nim does. Typed code then runs close to
+for building Jade, not code inside the program), as Nim does. Typed code then runs close to
 hand-written C++, typically ten to fifty times faster than bytecode. An x64 code generator of
-Astra's own, needing no compiler, was considered: much more work for slower code unless much
+Jade's own, needing no compiler, was considered: much more work for slower code unless much
 is put into it. Compiling while running (as LuaJIT and V8 do) is not planned: built programs
-are where speed is wanted, and the VM (M6.7) serves the rest. `astra code.astra` keeps working as
+are where speed is wanted, and the VM (M6.7) serves the rest. `jade code.jade` keeps working as
 it does: it compiles the source to bytecode and runs it on the VM, with no C++ compiler needed;
-native code is only what `astra build --exe` makes, and a program behaves the same either way,
+native code is only what `jade build --exe` makes, and a program behaves the same either way,
 which the tests check by running every test both ways.
 
 Port the tests with the code. The root package alone has 71 test files, and most assert on
@@ -2621,12 +2625,12 @@ font metrics will need new numbers: no other font engine measures text exactly a
 
 | | Decision | Outcome |
 | --- | --- | --- |
-| | The library's name in Astra. | `Topaz`, in Title case like every library and class we build; methods, fields, constants and enum entries are camelCase, JadeUI's upper-case constants included (`Fill.horizontal`); the built-in type names stay lowercase (6.2). |
+| | The library's name in Jade. | `Topaz`, in Title case like every library and class we build; methods, fields, constants and enum entries are camelCase, JadeUI's upper-case constants included (`Fill.horizontal`); the built-in type names stay lowercase (6.2). |
 | | What `import` brings in. | `import Topaz` makes its names available as `Topaz.Name` only; `import Topaz.*` also lets them be written bare (5.1, namespaces). |
 | | Classes named after the Kotlin backends. | None. No GLFW or JavaFX names; `JadeHostProvider` and `JadeHostSpec` are dropped. |
 | | The window types. | One class, `Window`, made with `Window(...)` and opened with `show()`, replacing `JadeHost`, `JadeWindow`, `WindowSpec` and `jadeHost(...)` (6.1). |
 | | The old `gui` library. | Unsupported and removed (section 3). |
-| | Threads and async I/O. | Added to Astra (5.5). The thread model is D10 and the way code waits is D11, both below. |
+| | Threads and async I/O. | Added to Jade (5.5). The thread model is D10 and the way code waits is D11, both below. |
 | | The `Topaz` prefix on class names. | Dropped. The global object is `Topaz`; `JadeList` is `ListBox` (6.2). |
 | | Static members. | A `static { ... }` block, with the `static` prefix as shorthand for one member. No companion objects (5.1). The prefix and a second block are refused since D67. |
 | | Enums. | Declared with `enum Name { ... }`, without Kotlin's `class`. An entry may be written by its bare name wherever the destination is declared as that enum; elsewhere the full name is required (5.1). |
@@ -2636,11 +2640,11 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D3 | The native drawing backend. | OpenGL: every window is an OpenGL window and all drawing goes through it, chosen so that an app's 3D view layers cleanly under the popups (section 4). |
 | D4 | How strings are counted and indexed. | By character (code point), not byte. The same as Kotlin except for emoji and other characters outside the basic plane, which are one character here. Binary data gets its own type, `bytes` (5.4). |
 | D5 | Kotlin's type names (`Int`, `String`, `Boolean`, `Double`) as aliases. | No. The built-in names stay lowercase and the porter rewrites them (section 6, rule 3). |
-| D6 | `and` / `or` versus Kotlin's bitwise infix words. | Astra keeps its meaning; the porter applies the rule in 5.3. |
+| D6 | `and` / `or` versus Kotlin's bitwise infix words. | Jade keeps its meaning; the porter applies the rule in 5.3. |
 | D7 | `return` inside a lambda literal. | Kotlin's rule. In a lambda given to `let`, `also`, `apply`, `run` or `takeIf` a bare `return` leaves the enclosing function; in any other lambda literal it is a compile error; `return@label` leaves just the lambda (5.1). Widened by D58. |
 | D8 | `{}` in an expression. | The empty lambda, as in Kotlin. The empty map is written `{:}`; map literals with entries are unchanged (5.3). |
 | D9 | `WindowSpec` and `Topaz.windowOpener`. | `WindowSpec` is folded into `Window(...)`, the one way to make a window. `Topaz.windowOpener` stays as the replaceable object that `show()` uses to realise a window, so tests can still put a fake in its place. `exitOnClose` defaults to false for a window with an owner (6.1). |
-| D10 | The thread model. | Both of two kinds. Threads share one heap, with one running Astra code at a time, so thread code ports as written. Isolated workers, each a separate VM exchanging copied messages, give real parallelism and a hard kill; they are added after threads (5.5). Threads that run fully in parallel on one heap are not planned; parallel sections (5.5, point 7) give several cores to work on separate items, with ownership checked, and that is as far as it goes (revised 2026-10-13). |
+| D10 | The thread model. | Both of two kinds. Threads share one heap, with one running Jade code at a time, so thread code ports as written. Isolated workers, each a separate VM exchanging copied messages, give real parallelism and a hard kill; they are added after threads (5.5). Threads that run fully in parallel on one heap are not planned; parallel sections (5.5, point 7) give several cores to work on separate items, with ownership checked, and that is as far as it goes (revised 2026-10-13). |
 | D11 | How code waits without blocking. | Kotlin's model: suspending functions, called like any other, running on fibers. No `async` or `await` keywords. One set of I/O functions that block on a background thread and suspend inside a flow (5.5). |
 | D12 | How far to commit. | One milestone at a time: build it, test it, and move to the next only when the result is accepted (section 7). |
 | D13 | Namespaces, and an app class with a Topaz name. | One namespace per folder, as with Kotlin packages. A folder's own names win over imported ones, and a library never sees the names of the program that imports it (5.1). |
@@ -2648,7 +2652,7 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D15 | The value of an element of `bytes`. | 0 to 255, not Kotlin's -128 to 127. Code that tests a byte's sign is rewritten by hand (5.3). |
 | D16 | Where text comes from. | An engine of Topaz's own, with no third-party code, complete from the start: both outline formats, variable fonts, shaping for every script, text direction and colour emoji, measuring by one rule on every system (section 4). |
 | D17 | Where the window and its input come from. | Written by us, directly against Windows (a Win32 window with a WGL context), with no third-party code. It sits behind a small interface so that another system needs one new file and no change to the toolkit (section 4). |
-| D18 | Static types. | Astra is statically typed, as Kotlin (5.7): variables typed by their initial value, every parameter typed, `any` cast before use, typed collections, function types and generics of the program's own; no `final`. Milestone M6.5. |
+| D18 | Static types. | Jade is statically typed, as Kotlin (5.7): variables typed by their initial value, every parameter typed, `any` cast before use, typed collections, function types and generics of the program's own; no `final`. Milestone M6.5. |
 | D19 | Integer types. | Two: `byte` (0 to 255, the items of `bytes`) and `int` (64 bits). Byte arithmetic gives an `int`; `toByte()` is an error past the range, `toByteWrapped()` keeps the low 8 bits; a byte is a kind of value of its own when running. 16- and 32-bit values are read and written through functions on `bytes`, not as types, with `uint16(at)` and `uint32(at)` reading unsigned values as an `int` (L0 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 1 (2026-10-20). |
 | D20 | How strings are stored. | Flexible width, as Python since 3.3: each string at 1, 2 or 4 bytes a character, the narrowest its widest character needs, so `s[i]`, `substring` and `length` are direct. C++ code asks for a string's UTF-8 form, made when first asked for and kept (L19 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 1 (2026-10-20). |
 | D21 | Lists of values. | Packed automatically: a list whose items are values (`int`, `float`, `char`, `byte`, `bool`, `value` types) stores them one after another at their own widths, because it knows its item type; `bytes` is `list<byte>`. Lists of objects, of `any`, of `number` and of nullable types store values as now. One sequence type: a separate `pack<T>` was considered and merged into the list (L1 in [language-choices.html](language-choices.html); [value-lists.html](value-lists.html)). |
@@ -2665,14 +2669,14 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D32 | Read-only and changeable collections. | One list type, read-only unless marked `open`: `items : list<Component>` may only be read through that name and takes a `list<Button>`; `items : open list<Component>` may be changed and takes only that exact type. The mark goes wherever a type is written (`map<string, open list<int>>`), the same for maps and sets. A list made with `[...]` can be changed by whoever made it. `frozenList`, `frozenMap` and `frozenSet` (D26) are what nobody may change. Ported `List` → `list`, `MutableList` → `open list`. Kotlin's `open` and `final` are not keywords: in front of a declaration either is an error. Open: what `filter` and the like return, casting `list` to `open list`, maps passed by value type (L9 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20), written `open List<T>` by the naming rule; the mark is the checker's. |
 | D33 | Fitting a type someone else wrote to an interface. | `extend Person : Weighed` declares that a type the program did not write fits one of its interfaces; differing names are bridged inside it with property getters (`extend Car : Weighed { val name : string get() => model }`). No replacing the type's own members (stored fields came with D157, 2026-11-04: "no stored fields" is withdrawn); the interface's methods the type lacks are written in it as `fun`s (D186); a missing member is a compile error at the `extend`. Holds where its folder's names do: its folder and every file importing it, with the access words (`internal extend`, `private extend`); in each file `x is Weighed` agrees with the compiler; a value used as a `Weighed` stays one when passed on. Several types that already fit take one line, `extend Person, Car, Truck : Weighed`. Two identical `extend`s of the same type and interface are one, with no error, so a program works with or without a library holding the copy; two that differ are a compile error naming both, anywhere in the program. Costs what any interface costs (L20 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20), for classes; for built-in types with D185 (G30). |
 | D34 | A list that a type can be added to. | `items : open list<accepts Button>` takes an open list of `Button`, `Component` or any type above `Button`, and refuses lists of `Label` or of `Button`'s subclasses; through it, adding takes a `Button` and reading gives `any` (Kotlin's `MutableList<in Button>`). Only in an `open` type; also for map values and sets, `open map<string, accepts Button>`, `open set<accepts Button>` (L9 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20); reading gives `any?`. |
-| D35 | What can be thrown. | Only a `Throwable`, in Java's tree. Unchecked: `Error` (the VM cannot go on), `RuntimeException` (mistakes: division by zero, index, null, cast, `require`, `check`), `CancellationException`, `InterruptedException`. Checked: every other `Exception` (`IOException`, `TimeoutException`, `ExecutionException`, the program's own). The compiler works out which checked exceptions leave each function over the whole program; `throws` is written only on a library's public functions. A function calling a lambda it was given throws what the lambda throws. A compile error only where one reaches what cannot pass it on: a stored callback, a thread or flow task, an override or `extend` whose original cannot throw it. `require` throws `IllegalArgumentException`, `check` and `error()` `IllegalStateException`; `throw Error(...)` in today's code becomes `Exception` or those; `catch (e)` catches every `Throwable`. Nothing checked when running (L12 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 5 (2026-10-21). Since G41 (2026-11-02): worked out with a work list, a function again only where what it calls has changed, and nothing noted of code put back from the cache (the standard library attached to astra.exe among it), whose kept facts say what it throws; a start checks 0.4 ms less, Topaz from cold 2.7 ms less. |
+| D35 | What can be thrown. | Only a `Throwable`, in Java's tree. Unchecked: `Error` (the VM cannot go on), `RuntimeException` (mistakes: division by zero, index, null, cast, `require`, `check`), `CancellationException`, `InterruptedException`. Checked: every other `Exception` (`IOException`, `TimeoutException`, `ExecutionException`, the program's own). The compiler works out which checked exceptions leave each function over the whole program; `throws` is written only on a library's public functions. A function calling a lambda it was given throws what the lambda throws. A compile error only where one reaches what cannot pass it on: a stored callback, a thread or flow task, an override or `extend` whose original cannot throw it. `require` throws `IllegalArgumentException`, `check` and `error()` `IllegalStateException`; `throw Error(...)` in today's code becomes `Exception` or those; `catch (e)` catches every `Throwable`. Nothing checked when running (L12 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 5 (2026-10-21). Since G41 (2026-11-02): worked out with a work list, a function again only where what it calls has changed, and nothing noted of code put back from the cache (the standard library attached to jade.exe among it), whose kept facts say what it throws; a start checks 0.4 ms less, Topaz from cold 2.7 ms less. |
 | D36 | Fields set after construction. | `lateinit var x : T`: a non-null type, always written, no `!!` at uses; reading it before it is set is an error when running (L13 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D37 | Fields worked out when first read. | `lazy val x = ...` works out its starting value at the first read and keeps it; `lazy var x = ...` likewise, and may then be assigned (assigned before the first read, its starting value is never worked out). Type optional, taken from the starting value; fields, statics and top-level declarations. A starting value that throws leaves it unset for the next read to try again; a read reaching it while it is being worked out is an error; other threads and flows wait for the one value; one test per read. Kotlin's `by lazy` spelling and other delegates are not accepted (L13 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D38 | Reflection. | Full: a class's members with their types, superclass, interfaces (`extend`s included) and type arguments listed; members read, set and called by name; only what the asking code may use, as the access words say. Member types kept when running (memory, not speed). Open: the syntax, what a call by name throws (L12), what part 5's leaving out of unreachable code keeps for it (L14 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 6 (2026-10-21). |
 | D39 | A fixed set of kinds (Kotlin's sealed classes). | `enum class` is Kotlin's `sealed class`; `enum` is unchanged. Its kinds are the classes and objects extending it, in its braces or outside them in the same file only; each writes `: Event()`, inside the braces too (a class there that does not is an ordinary nested class). Bare kind names wherever an `Event` is expected, as for enum entries (`val e : Event = Click(1, 2)`, `is Click` in a `when`). `enum interface` is `sealed interface`, the same rules. Every `when` over an `enum`, `enum class`, `enum interface` or `bool` covers every kind (and `null` for a nullable subject) or has an `else`, statement or not. Bare entries in an `enum class` are a compile error pointing to `enum`. `sealed` is no longer a word (L21 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D40 | Union types. | Yes, with `\|`: `source : string \| TextModel`. Used after `is` narrows it; without narrowing only the common class's members. `when` covers each type or has `else`. A member type goes where the union is asked for; order and repeats do not matter. Named with `type Json = ...`. Inference gives the union (`flag ? 1 : "one"` is `int \| string`); `number` is `int \| float`, `T?` is `T \| null`. Item types too: `list<int \| string>`. Nothing added when running. Built in M6.6 (L15 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D41 | Names for types. | `type` names any type: `type Grid = list<list<int>>`, `type Handler = (Event) -> unit`, `type Table<T> = map<string, list<T>>`. Another way of writing the type, not a new type (Kotlin's `typealias`): values pass both ways, `is` and reflection see the type itself. Access words apply. A name refers to itself only inside another type (`list<Json>`). Built in M6.6 (L15 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
-| D42 | Changes to Astra before 1.0. | Made freely, in one step, with all the code in the repository changed with them; no deprecations, no old names kept. Kotlin's current names, none of its deprecated ones. A removed word gives an error saying what to write instead where that helps. Deprecation cycles from 1.0 (L16 in [language-choices.html](language-choices.html)). |
+| D42 | Changes to Jade before 1.0. | Made freely, in one step, with all the code in the repository changed with them; no deprecations, no old names kept. Kotlin's current names, none of its deprecated ones. A removed word gives an error saying what to write instead where that helps. Deprecation cycles from 1.0 (L16 in [language-choices.html](language-choices.html)). |
 | D43 | Experimental features. | No switches: a feature lands finished, one milestone at a time; unfinished work stays on a branch (L17 in [language-choices.html](language-choices.html)). |
 | D44 | A logical shift and unsigned helpers. | `x >>> n` (and `>>>=`) shifts in zeros; `toUnsignedString` (with a radix), `compareUnsigned`, `divideUnsigned`, `remainderUnsigned`, `parseUnsigned` treat an `int`'s 64 bits as unsigned. Kotlin's `ushr` ports as `>>>`. Still no unsigned types (D23, reconsidered and kept) (L22 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 1 (2026-10-20). |
 | D45 | What making a new collection gives. | `filter`, `map`, `sorted`, `toList` and the like give an `open` list, map or set, which goes anywhere a read-only one is read; a result type of `list<T>` still promises read-only where wanted (L23 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
@@ -2686,7 +2690,7 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D53 | What an override may throw. | No more than the method it replaces: what an interface or abstract method writes, or what a base method's body throws or its written `throws` allows; otherwise a compile error at the override. A base method gives its overrides room by writing `throws`. The same for `extend` bridges and for lambdas taking the place of a one-method interface (L31 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 5 (2026-10-21). Since G38 and G39 (2026-11-01): reading a property calls its getter and assigning it its setter, which pass on what they may throw as calls do, `throws` after `get()` or `set(v)` is a promise and room as on a function, and a property's getter or setter, or an `extend`'s getter, throws no more than the property above it may. |
 | D54 | `throws` written where it is not required. | Allowed on any function, as a check: a compile error if the function could throw anything else. Listing more than the body throws is allowed, giving overrides room; callers handle what is written. Required only on a library's public functions, methods with no body and throwing function types (L32 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 5 (2026-10-21). |
 | D55 | Lambda literals. | Kept: `{ a, b -> }`, `it`, the last expression as the value, `{}` and `{:}`, beside `fun(x) { }`. A lambda using `it` inside another that uses `it` is a compile error asking for one to be named. Under static types the expected function type decides whether there is an `it` (L33 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 4 (2026-10-21). |
-| D56 | Trailing lambdas and the parameters around them. | Kotlin's rules kept: a trailing lambda goes to the last parameter; a defaulted parameter may come before a required one. Astra's exception (the lambda as the last missing required parameter) removed in M6.5 part 3; `groupBy`, `associateBy` and the like become overloads, calls unchanged (L34 in [language-choices.html](language-choices.html)). Overloads themselves are in since M6.5 part 3: functions, methods, static methods, operators and extension functions may have several forms told apart by their parameters' types (and an extension's receiver type), the checker choosing the most specific when compiling and the program choosing by the values where types are not known (README, "A name with several forms"). An override has the parameters of what it overrides, and a method with other parameters is another form, written without `override`; an override that adds one (a parameter with a default, as untyped code did) is an error naming the forms above (decided 2026-10-17, on since step 5). |
+| D56 | Trailing lambdas and the parameters around them. | Kotlin's rules kept: a trailing lambda goes to the last parameter; a defaulted parameter may come before a required one. Jade's exception (the lambda as the last missing required parameter) removed in M6.5 part 3; `groupBy`, `associateBy` and the like become overloads, calls unchanged (L34 in [language-choices.html](language-choices.html)). Overloads themselves are in since M6.5 part 3: functions, methods, static methods, operators and extension functions may have several forms told apart by their parameters' types (and an extension's receiver type), the checker choosing the most specific when compiling and the program choosing by the values where types are not known (README, "A name with several forms"). An override has the parameters of what it overrides, and a method with other parameters is another form, written without `override`; an override that adds one (a parameter with a default, as untyped code did) is an error naming the forms above (decided 2026-10-17, on since step 5). |
 | D57 | Blocks run on an object, and implicit `this`. | Kept as they are, with their lookup order. Added `this@Name`: the object of the enclosing class `Name`, or of the block given to the function `name`, as in Kotlin (3 uses in JadeUI, one in `TextArea`, ported in M7). Built in M6.6 (L35 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 4 (2026-10-21). |
 | D58 | Scope functions, `this` in blocks, and `return` in lambdas. | All kept. `this` inside a block run on an object is that object (since G37, 2026-11-02, also where the object's type is a type parameter or not known), as in Kotlin (today: an error outside methods, the method's object inside them); the method's object is `this@Name`. `apply`, `run`, `with`, `forEach`, `map`, `filter`, `any`, `all`, `first`, `find`, `count`, `sumOf` and the like are compiled in place beside `let`, `also`, `takeIf`, so a bare `return` in their lambdas leaves the enclosing function and they run as plain loops; elsewhere a bare `return` stays an error (L36 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 4 (2026-10-21). |
 | D59 | Inline functions. | `inline fun` added: copied into each call with its lambdas, so a bare `return` in them leaves the caller and nothing is allocated. Lambda parameters worked out (only called: copied in; stored or passed on: not), so no `noinline` or `crossinline`. No recursion. The standard library's in-place functions (D58) are written with it. Built in M6.6 (L60 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 4 (2026-10-21). Since G34 (2026-11-02): one with a vararg, a static one, and a call giving a list with `*` to the vararg are copied in too; a list spread over the parameters before the vararg stays an ordinary call. Since G35 (2026-11-02): code copied in, and a lambda copied into it, read items of a list of values where they are, as code written there does; a lambda copied in is given `items[i]` where it is, taking a copy of its own where it may change such a list or keep the item, and an inline function its arguments, copying them as a function does as it starts. Since G36 (2026-11-02), as the user chose on 8.4g: the rights an inline function keeps where it is copied hold for the code copied in only, ranges of the function noted with them, and not for the rest of the function it is copied into or a lambda written at the call. |
@@ -2694,11 +2698,11 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D61 | Null operators, jumps as values, and `nothing`. | `?.`, `?:`, `!!` and jumps as values kept. Added the type `nothing` (Kotlin's `Nothing`) for what never gives a value: jumps, and functions that never return (`fun error(message : string) : nothing`, `TODO()`), so `x ?: return` and `x ?: error(...)` give a non-null value. Built in M6.5 part 1 (L38 in [language-choices.html](language-choices.html)). |
 | D62 | `and`, `or`, `!` and conditions. | Kotlin's rule: `and`, `or` and `!` take only `bool` and give a `bool`; `if`, `while` and `? :` need a `bool`. Defaults are `?:`, null tests `x != null`. Built in M6.5 part 1 (L61 in [language-choices.html](language-choices.html)). |
 | D63 | `if`, `try` and `when` as values. | Kept: each has the value of the branch taken; `when` in Kotlin's form, covering every kind or with `else` (D39); `if` keeps its braces; `? :` stays (L39 in [language-choices.html](language-choices.html)). |
-| D64 | Destructuring. | Kept for lists, data classes, value types, pairs, triples and map entries. A `for` over a map gives entries, as in Kotlin and Astra's own map functions (`for ((k, v) in map)`; keys by `map.keys`), instead of keys. No `componentN` opt-in for ordinary classes (the one ported use becomes a `value` type). Built in M6.6 (L40 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
+| D64 | Destructuring. | Kept for lists, data classes, value types, pairs, triples and map entries. A `for` over a map gives entries, as in Kotlin and Jade's own map functions (`for ((k, v) in map)`; keys by `map.keys`), instead of keys. No `componentN` opt-in for ordinary classes (the one ported use becomes a `value` type). Built in M6.6 (L40 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
 | D65 | Data classes. | Kept beside `value` types. Extended only by data classes (an ordinary class extending one is a compile error); the child's header starts with the parent's fields, and each gets its own generated `==`, `hashCode`, `toString`, `copy` and destructuring; `==` needs the same class on both sides; `copy` gives the object's own class. Built in M6.6 (L41 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D66 | Singletons and anonymous objects. | `object` and `object : Shape { }` kept. A named `object` is made when first used, as in Kotlin, not where its line is reached, with `lazy val`'s rules (one object across threads and flows; a failure leaves it unmade for the next use to retry). Anonymous objects are made where written. Built in M6.6 (L42 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
-| D67 | Static members. | Declared only in a class's one `static { }` block (Kotlin's one companion object ports as it); the `static` prefix and a second block are compile errors. Astra's own 154 prefixed statics move into their blocks. Built in M6.6 (L43 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
-| D68 | Property accessors. | Kotlin's form only: accessors under the property, `field` for the stored value. Astra's older `get x()` / `set x(v)` members become a compile error showing the Kotlin form; Astra's own 188 move over. Built in M6.6 (L44 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
+| D67 | Static members. | Declared only in a class's one `static { }` block (Kotlin's one companion object ports as it); the `static` prefix and a second block are compile errors. Jade's own 154 prefixed statics move into their blocks. Built in M6.6 (L43 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
+| D68 | Property accessors. | Kotlin's form only: accessors under the property, `field` for the stored value. Jade's older `get x()` / `set x(v)` members become a compile error showing the Kotlin form; Jade's own 188 move over. Built in M6.6 (L44 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20). |
 | D69 | A property and a method with one name. | Kept: a field and a method may share a name (`c.tooltip` reads, `c.tooltip("text")` calls), so JadeUI's chained calls port as written (L45 in [language-choices.html](language-choices.html)). |
 | D70 | Where extension functions are in reach. | Follow imports, as names and `extend` do: in reach in their folder and in files importing it, with the access words; two imported extensions of one name on one type are an error where the call is ambiguous (since D187: at the import or the declaration). The standard library's stay in reach everywhere. Built in M6.6 (L46 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 3 (2026-10-20), for the checker. |
 | D71 | `public` and `@Volatile`. | Both compile errors saying they are not needed, as `open`, `final` and `sealed` are; ported code deletes them (2,506 `public`, 64 `@Volatile`). No annotation is accepted any more (L47 in [language-choices.html](language-choices.html)). |
@@ -2706,13 +2710,13 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D73 | `Pair`, `Triple`, map entries and indexed values. | Become `value` types in M6.6: no identity, compared by contents; nothing made for them in lists of pairs or in loops that take them apart; boxed in ordinary variables and fields as now (L48 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
 | D74 | One name for each thing in the standard library. | Kept: `add`, `removeLast`, `upper`, `lower`, `has` with `contains` and `containsKey`, `join`, `subList`, `substring`, `forEach`, `toInt`, `toFloat`, `roundToInt`, `n.char` and `char(n)`, `c.code`. Gone: `push`, `pop`, `uppercase`, `lowercase`, `joinToString`, `slice`, `each`, `toLong`, `toDouble`, `roundToLong`, `toChar`, `chr` (now `char`), `ord`, and the free functions `len`, `str`, `int`, `float`, `type` (for `size`/`length`, `toString()`, `toInt()`, `toFloat()`, `x#.name`). Each name that goes is a compile error saying what to write (L49 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
 | D75 | The name of the fraction type. | `float`, made with `toFloat()`; Kotlin's `toDouble()` is a compile error saying so (D74 changed to match). Ported `Double` and `Float` are written `float` (L63 in [language-choices.html](language-choices.html)). |
-| D76 | Limits of numbers. | On Astra's types at their real values: `int.maxValue` (2^63 − 1), `int.minValue`, `float.maxValue`, `float.minValue` (most negative), `float.minPositive` (Kotlin's `Double.MIN_VALUE`), `float.nan`, the infinities. `Int`, `Long`, `Double`, `Float` holders go (errors). Topaz uses `int.maxValue` for "unbounded" (its `maxInt` goes); the native layer clamps sizes handed to Windows, OpenGL and the text engine. Built in M6.6 part 8, group 1 (2026-10-20) (L50 in [language-choices.html](language-choices.html)). |
+| D76 | Limits of numbers. | On Jade's types at their real values: `int.maxValue` (2^63 − 1), `int.minValue`, `float.maxValue`, `float.minValue` (most negative), `float.minPositive` (Kotlin's `Double.MIN_VALUE`), `float.nan`, the infinities. `Int`, `Long`, `Double`, `Float` holders go (errors). Topaz uses `int.maxValue` for "unbounded" (its `maxInt` goes); the native layer clamps sizes handed to Windows, OpenGL and the text engine. Built in M6.6 part 8, group 1 (2026-10-20) (L50 in [language-choices.html](language-choices.html)). |
 | D77 | A map's `keys`, `values` and `entries`. | Read-only live views (`set<K>`, `Values<V>`, `set<MapEntry<K, V>>`), not copies: they show the map as it is; changing them is a compile error pointing to the map's own `remove`, `removeAll`, `retainAll`; a snapshot is `toList()` or `frozen()`. Built in M6.6 (L51 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20): keys and entries. `values` (G22, 2026-10-24, as the user chose): a `Values<V>` of its own, not a list, as Kotlin's is a `Collection`: the values in key order, which may repeat and have no positions (`values[i]` an error pointing to `toList()[i]`); a map's values alone are one. |
-| D78 | Printing. | Kotlin's names: `println` ends the line, `print` does not; `write` goes (an error pointing to `print`). Astra's own 1,923 `print` become `println` and its 29 `write` become `print`, in one step. Built in M6.6 (L52 in [language-choices.html](language-choices.html)). |
-| D79 | Thread and input-output classes. | Astra's own where Astra has better, in parts decided separately: atomics (L64), locks (L65), channels (L66), thread pools (L67), futures (L68), durations (L69), processes (L70), what stays (L71) (L53 in [language-choices.html](language-choices.html)). |
-| D80 | Threads. | Kept as they are: one heap, one thread running Astra code at a time (D10). Several cores come from workers and parallel sections, with L72 to L77 widening what they can do. No fully parallel threads (L54 in [language-choices.html](language-choices.html)). |
+| D78 | Printing. | Kotlin's names: `println` ends the line, `print` does not; `write` goes (an error pointing to `print`). Jade's own 1,923 `print` become `println` and its 29 `write` become `print`, in one step. Built in M6.6 (L52 in [language-choices.html](language-choices.html)). |
+| D79 | Thread and input-output classes. | Jade's own where Jade has better, in parts decided separately: atomics (L64), locks (L65), channels (L66), thread pools (L67), futures (L68), durations (L69), processes (L70), what stays (L71) (L53 in [language-choices.html](language-choices.html)). |
+| D80 | Threads. | Kept as they are: one heap, one thread running Jade code at a time (D10). Several cores come from workers and parallel sections, with L72 to L77 widening what they can do. No fully parallel threads (L54 in [language-choices.html](language-choices.html)). |
 | D81 | What a function that can wait is called. | "Task", in code and text: `task { }` starts one (Kotlin's `startCoroutine`), `suspendTask { resume -> }` sets it aside, `resume` a plain function (`resume(value)`, `resume.fail(e)`). `Continuation` and `EmptyCoroutineContext` go; Kotlin's names are errors saying what to write. "Flow" in the README, examples and messages becomes "task"; thread pools speak of work and jobs. (L55 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 7 (2026-10-21). |
-| D82 | Topaz's types named after Java's. | Astra's own names where they read better, decided type by type (L79 to L87); API rule 2 changes accordingly: Topaz keeps JadeUI's names for its own types, not the JDK's (L56 in [language-choices.html](language-choices.html)). |
+| D82 | Topaz's types named after Java's. | Jade's own names where they read better, decided type by type (L79 to L87); API rule 2 changes accordingly: Topaz keeps JadeUI's names for its own types, not the JDK's (L56 in [language-choices.html](language-choices.html)). |
 | D83 | JadeUI's API in Topaz. | Free to improve on JadeUI's names, parameters, order and defaults, but every rename or change is put to the user first, with what it gains and what it costs the apps, and made only when agreed; until then JadeUI's form is kept. Section 6, rule 1 changes accordingly (L57 in [language-choices.html](language-choices.html)). |
 | D84 | `==` on collections. | Kept: `==` compares contents all the way down, `===` identity (D14 confirmed) (L58 in [language-choices.html](language-choices.html)). |
 | D85 | Atomic values. | One `Atomic<T>` (`get`, `set`, `update { }`, `exchange`, `compareAndSet`; on `int` `increment`, `decrement`, `add`); Java's four classes go. The one shared thing a parallel section may change, with real atomic operations underneath; only values and frozen data stored from a section; `update`'s lambda may run more than once. (L64 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 7 (2026-10-21). |
@@ -2738,7 +2742,7 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D105 | `Insets`. | Name kept; a `value` type; Java's order (top, left, bottom, right), named arguments for safety. (L85 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D106 | `BufferedImage`. | A `Drawable` interface, implemented by `Image` (pixels in memory: Java's `BufferedImage`) and `Surface` (on the graphics card); `canvas.drawImage` becomes `canvas.draw(picture : Drawable, x, y, w, h)`. `BufferedImage` and `drawImage` are errors saying what to write; `canvas.draw` and `canvas.fill` take a `Drawable` or a `Shape` (an interface of value types: `Rect`, `Oval`, `Line`, later `Path`); text keeps `drawString(text, x, baseline)`; the number-taking `drawOval`, `fillRect`, `drawLine` and the rest stay, making no shape. (L86 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D107 | The file type. | `Path`, in place of `File` (an error saying to write `Path`): a name of something on disk, file or folder, existing or not; Java's `java.nio.file.Path` lands on it too. Where earlier decisions say `File`, read `Path`. Details in L103 to L106 and L112 to L115 (L87 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
-| D108 | Removed names declared again. | The "write X instead" error is given only when nothing of that name is in reach; a program or library may declare such a name (an extension, a `type` name, a function, a class) and use it, reaching only code that imports it. `until` counts as a name once infix functions exist. Refused modifiers stay refused. A porting library of Kotlin's and Java's names over Astra's is optional (L107 in [language-choices.html](language-choices.html)). |
+| D108 | Removed names declared again. | The "write X instead" error is given only when nothing of that name is in reach; a program or library may declare such a name (an extension, a `type` name, a function, a class) and use it, reaching only code that imports it. `until` counts as a name once infix functions exist. Refused modifiers stay refused. A porting library of Kotlin's and Java's names over Jade's is optional (L107 in [language-choices.html](language-choices.html)). |
 | D109 | `vararg`. | Kept (L88 in [language-choices.html](language-choices.html)). |
 | D110 | Labels on loops. | Kept as they are: `outer@ for`, `break@outer`, `continue@outer`, the same `name@` form as lambdas (L89 in [language-choices.html](language-choices.html)). |
 | D111 | `do { } while`. | Kept (L90 in [language-choices.html](language-choices.html)). |
@@ -2746,7 +2750,7 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D113 | `finally`, and cleaning up. | `finally` kept; `use { }` added: closes a resource with `close()` when its block ends, however it ends; compiled in place. Built in M6.6 (L92 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 5 (2026-10-21). Since G40 (2026-11-01): an error from `close()` after one from the block is set aside for the block's in `Throwable.suppressed` (`addSuppressed`), as Java has it, and an uncaught error shows them. |
 | D114 | `downTo` and `step`. | Kept, as standard-library infix functions (D72) (L93 in [language-choices.html](language-choices.html)). |
 | D115 | Collection helpers. | Kept: `indices`, `lastIndex`, `withIndex()`, `forEachIndexed`, `repeat` (L94 in [language-choices.html](language-choices.html)). |
-| D116 | Named arguments to built-in functions. | On every function, built-in or not: the built-ins are declared in Astra with their parameter names (M6.5 part 3); M2's hand-made list goes. Built in M6.5 part 3 (L95 in [language-choices.html](language-choices.html)). |
+| D116 | Named arguments to built-in functions. | On every function, built-in or not: the built-ins are declared in Jade with their parameter names (M6.5 part 3); M2's hand-made list goes. Built in M6.5 part 3 (L95 in [language-choices.html](language-choices.html)). |
 | D117 | `Thread`. | `Thread` kept for making, configuring and extending threads; `thread(name, daemon) { }` starts one and gives a `Job` of its result, as `task { }` and `submit { }` do. Durations for `join` and `sleep`. (L96 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 7 (2026-10-21). |
 | D118 | `CountDownLatch`. | Named `Countdown(n)`: `countDown()`, `await(timeout)` (blocks a thread, sets a task aside), `count`; `CountDownLatch` an error saying so. (L97 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 7 (2026-10-21). |
 | D119 | Streams. | `Reader` and `Writer` in place of `InputStream` and `OutputStream` (errors saying so), each doing bytes and text, both `Closeable`; `path.reader()` and `path.writer()` open files; `inputStream()`, `bufferedReader()` and the other do-nothing calls are errors pointing to them. (L98 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
@@ -2754,19 +2758,19 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D121 | The exceptions' names. | Java's names kept (`IOException`, `TimeoutException` and the rest), under L12's `Throwable` tree (L100 in [language-choices.html](language-choices.html)). |
 | D122 | `Picture` and `Image`. | One in-memory picture type, `Image`: `Picture`'s loading, saving and pixels, drawn on through `canvas()` (in memory, D123); `Picture` internal (an error saying `Image`); `snapshot()` gives an `Image`. `Surface` unchanged. (L101 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D123 | Drawing on images, surfaces and windows. | One `Canvas` with the same calls for all (the `Image`'s own drawing calls go; pixel access stays). An image is drawn on in memory by a software engine, and its copy on the graphics card, if it has one, is updated from memory (the changed part, when next drawn from the card); surfaces and windows are drawn on the graphics card. So images read back with no wait, draw the same pixels everywhere and draw without a graphics card; heavy off-screen drawing uses a `Surface` (L108 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
-| D124 | Where images and fonts live. | In Astra's standard library, for every program with no import (the user, 2026-10-16, reversing the same day's move into Topaz). The text engine stays where M4 put it (`Typeface`, `Fonts`, the text font, `FontAxis`), and the merged `Image` (D122), with PNG reading and writing, and the font (`Font`, with `TextFont` as L102 settles) join it there; Topaz uses them. `Surface` and the window stay Topaz's. `Canvas`, `Drawable` and the software engine that draws an image's canvas (D123) are in the standard library too, so any program draws into an image without Topaz; Topaz's canvases build on that `Canvas`, which carries no widget style (D132). The standard `Image` knows nothing of the graphics card: it keeps a change number, raised by every drawing call and every pixel set, and the rectangle changed since. Topaz keeps the card copy, in a slot beside the image's pixels in the C++ that only the native layer uses (the texture and the change number it was copied at): drawing an image on a Topaz canvas sends it whole the first time, nothing while the numbers match, and only the changed rectangle when they differ; the slot goes when the image is collected, its texture freed on the main thread. None of this is in the API; `Surface.of(image)` and `surface.toImage()` are for a program that wants the card copy in its own hands. An image drawn on by a worker is handed over, frozen or locked before it is shown, by the rules for parallel work. (Java's `BufferedImage` and its `SurfaceManager`, and Skia's generation IDs, work the same way.) Built in M6.6 part 8, group 9 (2026-10-22). |
+| D124 | Where images and fonts live. | In Jade's standard library, for every program with no import (the user, 2026-10-16, reversing the same day's move into Topaz). The text engine stays where M4 put it (`Typeface`, `Fonts`, the text font, `FontAxis`), and the merged `Image` (D122), with PNG reading and writing, and the font (`Font`, with `TextFont` as L102 settles) join it there; Topaz uses them. `Surface` and the window stay Topaz's. `Canvas`, `Drawable` and the software engine that draws an image's canvas (D123) are in the standard library too, so any program draws into an image without Topaz; Topaz's canvases build on that `Canvas`, which carries no widget style (D132). The standard `Image` knows nothing of the graphics card: it keeps a change number, raised by every drawing call and every pixel set, and the rectangle changed since. Topaz keeps the card copy, in a slot beside the image's pixels in the C++ that only the native layer uses (the texture and the change number it was copied at): drawing an image on a Topaz canvas sends it whole the first time, nothing while the numbers match, and only the changed rectangle when they differ; the slot goes when the image is collected, its texture freed on the main thread. None of this is in the API; `Surface.of(image)` and `surface.toImage()` are for a program that wants the card copy in its own hands. An image drawn on by a worker is handed over, frozen or locked before it is shown, by the rules for parallel work. (Java's `BufferedImage` and its `SurfaceManager`, and Skia's generation IDs, work the same way.) Built in M6.6 part 8, group 9 (2026-10-22). |
 | D125 | `TextFont` and `Font`. | One font type, `Font`, free of scale, in the standard library (D124): a family or `Typeface`, a size and named options; measured in layout units (`scale = ...` for pixels); drawn at each canvas's own scale. `TextFont` internal to the standard library (an error saying `Font`), kept by `Font` per scale; Topaz hands the native layer the `Font` and the scale. Java's constructor and `deriveFont` stay unless changed separately (L57). (L102 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D126 | `mkdir` and `mkdirs`. | One call, `path.mkdir(parents = true)`: the chain by default, just the one folder with `parents = false`; a folder already there is not a failure; failing throws `IOException`. `mkdirs` an error saying `mkdir()`. (L103 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D127 | Character sets. | A small `Charset` that means something: UTF-8 (default), Latin-1, ASCII, UTF-16 LE and BE, on `reader`, `writer`, `readText`, `writeText`, `appendText`, `readLines`, `useLines`, `forEachLine` and the text-to-bytes conversions; ported calls work as written. Named `Charset.utf8`, `latin1`, `ascii`, `utf16le`, `utf16be`, and since G53 `utf16` (a byte order mark read and written, as Java's "UTF-16"), `windows1252` and `latin9` (ISO-8859-15); Kotlin's `Charsets.UTF_8` and Java's `StandardCharsets.UTF_8` (and the rest) are errors naming the one to write. `useLines` gives lines as read (L55). (L105 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D128 | `parent` and `parentFile`. | `parent` is a `Path`; the folder's name is `path.parent.name` and its text `path.parent.text` (L114), so no `parentName`; `parentFile` an error saying `parent`. `parent` is null at the top and for a bare name (`path.parent?.name`), as in Java. (L104 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D129 | <code>renameTo</code> or <code>moveTo</code>. | `a.moveTo(b)`, beside `copyTo`; `renameTo` and Java's `Files.move` errors saying `moveTo`. (L116 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
-| D130 | `size`, not `length`. | Every count of things in Astra is `size`: strings, lists, maps, sets, `bytes`, `StringBuilder`, a `Path`'s size on disk; parameters named `length` (`padStart`) renamed `size`. `length` on Astra's own types is an error saying `size`; a program's own classes may still name a member `length` (a vector's, say). Built in M6.6 (L117 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
-| D131 | Java's `Files.x(path)`. | Onto `Path`: `Files.x(p)` is `p.x()` (`exists`, `readText`, `writeText`, `readBytes`, `writeBytes`, `readLines`, `mkdir`, `moveTo`, `copyTo`, `size`, `list`, `walk`, `reader`, `writer`, `delete`); `Paths.get`/`Path.of` are `Path(s)`; `toPath()`/`toFile()` errors; `fileName` is `name`. Added under Java's names: `Path.createTempDirectory(prefix)`, `Path.createTempFile(prefix, suffix)`, `deleteIfExists()`, `isExecutable` and permissions, `setLastModified`. No `Files` object. Every name in Astra's API says "directory", never "folder" (`Process(..., directory = ...)`). (L106 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
+| D130 | `size`, not `length`. | Every count of things in Jade is `size`: strings, lists, maps, sets, `bytes`, `StringBuilder`, a `Path`'s size on disk; parameters named `length` (`padStart`) renamed `size`. `length` on Jade's own types is an error saying `size`; a program's own classes may still name a member `length` (a vector's, say). Built in M6.6 (L117 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
+| D131 | Java's `Files.x(path)`. | Onto `Path`: `Files.x(p)` is `p.x()` (`exists`, `readText`, `writeText`, `readBytes`, `writeBytes`, `readLines`, `mkdir`, `moveTo`, `copyTo`, `size`, `list`, `walk`, `reader`, `writer`, `delete`); `Paths.get`/`Path.of` are `Path(s)`; `toPath()`/`toFile()` errors; `fileName` is `name`. Added under Java's names: `Path.createTempDirectory(prefix)`, `Path.createTempFile(prefix, suffix)`, `deleteIfExists()`, `isExecutable` and permissions, `setLastModified`. No `Files` object. Every name in Jade's API says "directory", never "folder" (`Process(..., directory = ...)`). (L106 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D132 | A widget's style. | On the component, not the canvas: `paintInto` works out the style (`styleIn`) and keeps it as `paintStyle`; contents read `owner.paintStyle`, every content having an `owner`; `paint(canvas)` unchanged; `Canvas` and `sub` carry no style. JadeUI's 24 reads and 16 `sub(..., style)` change. Two bugs where a component painted in its parent's style (too big to keep; the overlay over a kept picture) fixed in Topaz's port on 2026-10-17. (L109 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D133 | Writing an `Image`'s pixels. | As a `Bitmap`: `image.editPixels { bitmap -> }` writable for the block, marking the image changed after; `image.pixels` the same, read-only (no copy); `image.set(x, y, color)` for one pixel. `bitmap[x, y]` is a `Color` and `bitmap[x, y] = color` sets it, `get(x, y)` and `set(x, y, color)` the same; `width`, `height`; raw bytes by `bitmap.bytes`, writable only in the block. Built into the runtime. Parallel work by rows (`parallelChunks(0..<bitmap.height)`). New: indexing with several arguments, `op [](x, y)` and `op []=(x, y, value)`. Every change raises the change number (D124). (L110 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D134 | A pixel outside the image. | `get`, `set`, `bitmap[x, y]` and `bitmap[x, y] = c` throw `IndexOutOfBoundsException` outside, on `Image` and `Bitmap`; `getOrNull(x, y)` gives null there. (L111 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D135 | `absolute` and `canonical`. | `path.absolute` (made whole; need not exist) and `path.canonical` (`.`, `..` and links worked out; `IOException` if missing), both `Path`s; `absolutePath`, `absoluteFile`, `canonicalPath`, `canonicalFile`, `toAbsolutePath()`, `toRealPath()` errors naming them. (L112 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
-| D136 | The static file shortcuts. | `File.read`, `write`, `append`, `exists` (static, taking text) go: errors saying `Path(p).readText()`, `writeText`, `appendText`, `exists()`; Astra's 7 uses rewritten. `Path.createTempDirectory`/`createTempFile` stay (D131). (L113 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
+| D136 | The static file shortcuts. | `File.read`, `write`, `append`, `exists` (static, taking text) go: errors saying `Path(p).readText()`, `writeText`, `appendText`, `exists()`; Jade's 7 uses rewritten. `Path.createTempDirectory`/`createTempFile` stay (D131). (L113 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D137 | The text of a path. | `path.text`, and `toString()` the same (so `"$path"` works); `.path` and `getPath()` on a `Path` errors saying `.text`. (L114 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D138 | `list` and `listFiles`. | `dir.list()` gives `Path`s (names by `.name`); `dir.walk()` every path below, as a sequence; `listFiles`, `walkTopDown` errors. (L115 in [language-choices.html](language-choices.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D139 | Constants: `const`. | Written `const x = 1000`, not `const val` or `val const` (errors saying so). A check, as `tail`: its value must be worked out from literals and other constants, or a compile error says what is not constant; folded into each use. Top level, `object` and `static { }` only. The apps' 690 `const val` lose their `val`. Built in M6.5 (R2 in [decision-review.html](decision-review.html)): the checker works the value out with the VM's own arithmetic and the compiler writes it in place of each read; any expression made only of literals and constants is folded the same way, except one that would fail when running (a division by zero), which is left to fail then. A `val` whose value is constant and the same for every read (top level, object, static or local) is folded as well, as the user asked on 2026-10-18; a read an access word refuses is left to be refused. `Math` is declared to the checker as `external object Math`, with `pi` and `e` as constants; the standard library's and Topaz's fixed values (`TimeUnit`'s units, `Font`'s styles and families, `BufferedImage`'s types and the like) are constants. The shell checks each input as a file is checked, and takes back one that does not compile. |
@@ -2775,7 +2779,7 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D142 | `n.char` and `char(n)`. | `n.char` only, matching `c.code`; `char(n)` (and Kotlin's `toChar()`) errors saying `n.char`. Changes L49 (D74). Built in M6.6 part 8, group 1 (2026-10-20) (R5 in [decision-review.html](decision-review.html)). |
 | D143 | Bundles of named arguments: `params(...)`. | `val style = params(bold = true, size = 14)` holds named arguments; `label("hello", ...style)` passes them, checked at each call against that function's parameters (an unknown name or a wrong type is a compile error); a name written at the call wins (`...style, size = 18`); `style.copy(size = 18)` and `style + params(italic = true)` build new ones. A value type whose type is its names and their types; expanded at each call, so no cost when running. For functions not designed together; functions that are use an options class. (R20 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
 | D144 | Making a `Font`. | One way: `Font(name, size, bold = ..., italic = ..., weight = ...)` (or from a `Typeface`); Java's `Font(name, Font.BOLD, 14)` and the style flags `Font.bold`, `italic`, `plain` are errors showing the named form. `deriveFont` becomes `font.copy(size = ..., bold = ...)` (an error pointing to it), the one name for a changed copy, as data classes, value types and bundles. Changes L80, L102 (D100, D125). (R6 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
-| D145 | Building only what changed. | Three starting targets, measured on a 20,000-line program and then a ported app: a first run in under half a second, a second run with nothing changed in under 20 ms on top of `astra.exe` starting, a run after a one-line change in under 100 ms. Each file compiled once and cached by a hash of its text; each declaration keeps a summary (type, checked exceptions, may-wait, stable `==`/hash, `const` value, `inline` body); a file is rebuilt only if it or a summary it uses changed, so a body edit that keeps its summary rebuilds one file. Standard library and Topaz compiled when `astra.exe` is built. Whole-program work done on summaries; the build-only parts (dead code, L28's reach) only in `astra build`. M14 compiles its C++ per part. A script's whole compiled program is kept in a cache of the machine's own (`%LOCALAPPDATA%\Astra\cache`, `~/.cache/astra`), so a second run with nothing changed (sizes and times, then hashes, of every file, and `astra.exe`'s version) starts with no compiling; it may hold what suits this processor only, and is never copied with the script. Entries are written atomically after the start; a damaged one is rebuilt; at most 500 MB, the entries used longest ago removed first. Built in M6.5 (R10 in [decision-review.html](decision-review.html)): tests/budgets.ps1 measures the three on the standard library, Topaz, the examples and the tests (19,319 lines), from the process being made to the program ready: 116 ms, 11.5 ms on top of starting, and 73 ms (2026-10-18). A unit is a file, or a folder imported whole; its kept code's numbers are renumbered when it is put back; a summary is a file's text outside named functions' bodies, with the result types not written and R1's in-place facts; the bodies of what is put back are not checked. Every file is still parsed each run (a few at a time, on threads), for the checker reads what it declares; the standard library is attached to astra.exe by the build's last step. Topaz is kept on its first use on each machine, not yet attached when astra.exe is built. |
+| D145 | Building only what changed. | Three starting targets, measured on a 20,000-line program and then a ported app: a first run in under half a second, a second run with nothing changed in under 20 ms on top of `jade.exe` starting, a run after a one-line change in under 100 ms. Each file compiled once and cached by a hash of its text; each declaration keeps a summary (type, checked exceptions, may-wait, stable `==`/hash, `const` value, `inline` body); a file is rebuilt only if it or a summary it uses changed, so a body edit that keeps its summary rebuilds one file. Standard library and Topaz compiled when `jade.exe` is built. Whole-program work done on summaries; the build-only parts (dead code, L28's reach) only in `jade build`. M14 compiles its C++ per part. A script's whole compiled program is kept in a cache of the machine's own (`%LOCALAPPDATA%\Jade\cache`, `~/.cache/jade`), so a second run with nothing changed (sizes and times, then hashes, of every file, and `jade.exe`'s version) starts with no compiling; it may hold what suits this processor only, and is never copied with the script. Entries are written atomically after the start; a damaged one is rebuilt; at most 500 MB, the entries used longest ago removed first. Built in M6.5 (R10 in [decision-review.html](decision-review.html)): tests/budgets.ps1 measures the three on the standard library, Topaz, the examples and the tests (19,319 lines), from the process being made to the program ready: 116 ms, 11.5 ms on top of starting, and 73 ms (2026-10-18). A unit is a file, or a folder imported whole; its kept code's numbers are renumbered when it is put back; a summary is a file's text outside named functions' bodies, with the result types not written and R1's in-place facts; the bodies of what is put back are not checked. Every file is still parsed each run (a few at a time, on threads), for the checker reads what it declares; the standard library is attached to jade.exe by the build's last step. Topaz is kept on its first use on each machine, not yet attached when jade.exe is built. |
 | D146 | Counting from the end: `^k`. | In an index, `^k` is `size - k` (`items[^1]` the last, `items[^k]` computed, `^0` an error), for lists, strings and anything indexed by position. Negative numbers never count from the end: `items[-1]` a compile error saying `items[^1]`, a computed negative index an `IndexOutOfBoundsException`. `last()`, `lastOrNull()`, `lastIndex` stay. Anyone's functions can take `^n`: it makes an `Index` (a value type: a number and a from-the-end flag), an `int` passing as one; `at.of(size)` resolves it; an `int` parameter does not take `^n`; a `Range` may have `^` ends (`r.of(size)`), so `op [](i : Index)` and `op [](r : Range)` give any class `thing[^1]` and `thing[2..^1]`; a range with a `^` end cannot be looped over without a length. Changes L18 (D25). Built in M6.6 (R11 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
 | D147 | Slices. | A range in an index gives that part, inclusive as `..` is: `items[1..]` from 1 to the end, `items[0..^1]` the whole, `items[0..^2]` all but the last, `items[..^2]` (start 0), `items[2..4]` three items, `items[0..<^1]` with the end left out; strings and `bytes` too. A copy (an open list, L23), as `subList` gave; `splitAt` (L76) for views. Out of range an error (a slice may end right at the end: `items[3..]` of three is empty); a slice that runs backwards an error. `subList` and `substring` errors pointing to it (`items.subList(1, 4)` is `items[1..<4]`). One copy, no other cost. Two dimensions on a `Bitmap`: `bitmap[3..5, 10..50]` a new `Bitmap` (columns, then rows; a number takes one column or row); a class may declare `op [](xs, ys)` with ranges. Inside `editPixels`, `bitmap[3..5, 10..50] = other` copies a same-sized `Bitmap` into that region (pixels replaced, not blended; a size mismatch an error), marking only that rectangle changed; `op []=(xs, ys, value)` likewise. Changes L49 (D74). Built in M6.6 (R11 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 2 (2026-10-20). |
 | D148 | Storage widths, and 32-bit helpers. | `int16`, `int32`, `uint16`, `uint32` and `float32` are storage types as `byte` is: compact in packed lists, value types' fields and fields; read as `int` or `float`; arithmetic stays 64-bit; storing what does not fit an error (`toInt16Wrapped()` and the like for the low bits). Helpers for 32-bit work: `wrap32()`, `rotateLeft32`, `rotateRight32`, `hash(a, b, ...)`. Changes L0, L3 (D19, D23). Built in M6.6 part 8, group 1 (2026-10-20) (R12 in [decision-review.html](decision-review.html)). |
@@ -2783,22 +2787,22 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D150 | `Path`: properties and functions. | Properties for what is in the path (`name`, `extension`, `nameWithoutExtension`, `parent`, `text`, `absolute`); functions for what asks the disk (`exists()`, `isFile()`, `isDirectory()`, `isExecutable()`, `size()`, `lastModified()`, `canonical()`, `list()`, `walk()`), so a property never throws. Changes L106, L112, L117 (D131, D135, D130). (R14 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 8 (2026-10-21). |
 | D151 | What a bare `catch (e)` catches. | Every `Exception`, and nothing else; an `Error` (`StackOverflowError`, `OutOfMemoryError`) only when named (`catch (e : Error)` or `Throwable`). Changes L12 (D35). Built in M6.6 with D35, whose tree of throwables it needs (R15 in [decision-review.html](decision-review.html); moved from M6.5 by the user on 2026-10-18). Built in M6.6 part 8, group 5 (2026-10-21). |
 | D152 | `size` in two dimensions. | On things with a width and a height (`Rect`, `Image`, `Surface`, `Bitmap`, `Component`, `Window`) `size` is a `Size`; on collections, strings and `bytes` a count; a path's `size()` its bytes on disk. (R16 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
-| D153 | Annotations, and `astra test`. | Declared like classes (`annotation JsonField(val name : string = "")`), attached to classes, functions, fields and parameters, checked when compiling, read through reflection (`field.annotation<JsonField>()`), kept only where reflection reads them; no code generation. The standard library's own: `@Test`, `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, a test's temporary directory, read by `astra test` (built in M6.6, with `assertEquals` and the like), and `@Deprecated` from 1.0. Kotlin's JVM annotations are errors saying what to write (`@Synchronized` a `Lock`, `@JvmStatic` the `static { }` block, `@Throws` `throws`, `@Suppress` deleted). Changes L47 (D71). Built in M6.6 (R17 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 6 (2026-10-21). |
-| D154 | The case of type names. | A fixed set is lowercase: the scalars `bool`, `char`, `byte`, `int`, `float`, the storage widths `int16`, `int32`, `uint16`, `uint32`, `float32`, and `string`, `any`, `nothing` and `unit`. Every other type is Title case, the standard library's included: `List<T>`, `Map<K, V>`, `Set<T>`, `Bytes`, `Sequence<T>`, `FrozenList<T>`, `FrozenMap<K, V>`, `FrozenSet<T>`, `Number`, `Color`, `Duration`, `Path`, `Channel<T>`. So `list`, `map`, `set` and `bytes` are free as variable names. Code written in these documents before this uses the old lowercase container names; Astra's own code moves in one step (L16). Built in M6.5 part 3, where every type in the repository is written (moved from M6.6) (R21 in [decision-review.html](decision-review.html)). |
+| D153 | Annotations, and `jade test`. | Declared like classes (`annotation JsonField(val name : string = "")`), attached to classes, functions, fields and parameters, checked when compiling, read through reflection (`field.annotation<JsonField>()`), kept only where reflection reads them; no code generation. The standard library's own: `@Test`, `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, a test's temporary directory, read by `jade test` (built in M6.6, with `assertEquals` and the like), and `@Deprecated` from 1.0. Kotlin's JVM annotations are errors saying what to write (`@Synchronized` a `Lock`, `@JvmStatic` the `static { }` block, `@Throws` `throws`, `@Suppress` deleted). Changes L47 (D71). Built in M6.6 (R17 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 6 (2026-10-21). |
+| D154 | The case of type names. | A fixed set is lowercase: the scalars `bool`, `char`, `byte`, `int`, `float`, the storage widths `int16`, `int32`, `uint16`, `uint32`, `float32`, and `string`, `any`, `nothing` and `unit`. Every other type is Title case, the standard library's included: `List<T>`, `Map<K, V>`, `Set<T>`, `Bytes`, `Sequence<T>`, `FrozenList<T>`, `FrozenMap<K, V>`, `FrozenSet<T>`, `Number`, `Color`, `Duration`, `Path`, `Channel<T>`. So `list`, `map`, `set` and `bytes` are free as variable names. Code written in these documents before this uses the old lowercase container names; Jade's own code moves in one step (L16). Built in M6.5 part 3, where every type in the repository is written (moved from M6.6) (R21 in [decision-review.html](decision-review.html)). |
 | D155 | `Grid<T>`. | `Bitmap` becomes a generic built-in grid, `Grid<T>`: packed by item type as a `List` is (a `Color` 4 bytes a cell, `byte` 1, `bool` 1, `int16` 2, `float32` 4; objects unpacked), made with `Grid<bool>(width = 64, height = 64)` and a fill value. Everything decided for `Bitmap` holds for every `T`: `g[x, y]` and `g[x, y] = v`, `get` and `set`, `width`, `height` and `size`, slices `g[3..5, 10..50]` and writing into a region, errors out of range with `getOrNull`, work by rows across cores, `.bytes` for a value type's raw storage, `map { }` to a grid of another type (`pixels.map { it.alpha }` a `Grid<byte>`). An image's pixels are a `Grid<Color>` (`image.pixels`, `editPixels { }`); a grid of another type is data, not drawable. Where D133, D134, D141, D147 and D152 say `Bitmap`, read `Grid<Color>`. Adding rows and columns gives a new grid: `insertRows(at, count, fill)`, `insertColumns(...)`, `prependRows`, `appendRows`, `prependColumns`, `appendColumns`, and `insertRows(at, rows)` with another grid; `removeRows(at, count)` and `removeColumns(at, count)` (`at` may be `^k`); `fill` defaults to the type's zero; an unused result is a compile error. Built in M6.6 part 8, group 9 (2026-10-22). |
 | D156 | `.=`: assigning a member's result back. | `target .= member` means `target = target.member`, the path to the target written and worked out once, as `+=` does (a path written twice can later be changed in one place and not the other): `a.b.c .= copy(p1 = 4)`, `grid .= insertRows(at = 3)`, `items .= sorted()`, `name .= trim()`, `cells[i] .= copy(alive = false)`, `dir .= parent`. The target is anything assignable (a `var`, a `var` field, a list element, a grid cell); the right side any member, a method call or a property, its result fitting the target's type. Raku's `.=`. (R23 in [decision-review.html](decision-review.html)). Built in M6.6 part 8, group 9 (2026-10-22). |
-| D157 | No open classes; `extend` may add stored fields. | Every field is declared, in the header or the body; assigning a field not declared is a compile error everywhere, so a class that declares no fields no longer "stays open" (README, "Fields"). An `extend` may add stored fields to a class the program did not write (`extend Button { var tag : string? = null }`): the compiler sees every `extend` before laying a class out, each is a real slot of every instance of the class and its subclasses, in an extension area after the declared fields, laid out per program in its last step (an ancestor's extension fields first), so compiled code for the class, in `astra.exe` or the cache, is right for every program; reading one is the class's area start plus a fixed offset, one load more than a declared field; the name is in reach only where the `extend` is (L20); it needs an initial value or `lateinit`; two that add the same name are an error unless identical; not on value types or data classes. Costs one slot per instance for each such field in the program; for R10 it changes only the files using it and the program's last step, never the class's compiled code. Open classes go in M6.5 part 3, when everything is typed; extension fields with `extend`. Changes L20 (D33) (R24 in [decision-review.html](decision-review.html)). **Built 2026-11-04 (M6.6 choice 8.3j), kept beside the object** rather than in a slot, by the user's choice: each object's extension fields are an entry in a table the VM keeps by object, made when one is first read or set, its starting value made then; the collector keeps an entry's values while its object lives and drops the entry with it. So no class layout, cache or compiled code changes, objects made before the extend's file loaded have them too, and a program that adds none pays nothing; a read is a table lookup rather than a load. `var` or `val` with a starting value, on classes and objects (not value types, data classes, enums, interfaces or built-in types); an extend may add fields without an interface (`extend Button { var tag : string? = null }`); two extends adding one name to related classes are an error unless written alike. |
+| D157 | No open classes; `extend` may add stored fields. | Every field is declared, in the header or the body; assigning a field not declared is a compile error everywhere, so a class that declares no fields no longer "stays open" (README, "Fields"). An `extend` may add stored fields to a class the program did not write (`extend Button { var tag : string? = null }`): the compiler sees every `extend` before laying a class out, each is a real slot of every instance of the class and its subclasses, in an extension area after the declared fields, laid out per program in its last step (an ancestor's extension fields first), so compiled code for the class, in `jade.exe` or the cache, is right for every program; reading one is the class's area start plus a fixed offset, one load more than a declared field; the name is in reach only where the `extend` is (L20); it needs an initial value or `lateinit`; two that add the same name are an error unless identical; not on value types or data classes. Costs one slot per instance for each such field in the program; for R10 it changes only the files using it and the program's last step, never the class's compiled code. Open classes go in M6.5 part 3, when everything is typed; extension fields with `extend`. Changes L20 (D33) (R24 in [decision-review.html](decision-review.html)). **Built 2026-11-04 (M6.6 choice 8.3j), kept beside the object** rather than in a slot, by the user's choice: each object's extension fields are an entry in a table the VM keeps by object, made when one is first read or set, its starting value made then; the collector keeps an entry's values while its object lives and drops the entry with it. So no class layout, cache or compiled code changes, objects made before the extend's file loaded have them too, and a program that adds none pays nothing; a read is a table lookup rather than a load. `var` or `val` with a starting value, on classes and objects (not value types, data classes, enums, interfaces or built-in types); an extend may add fields without an interface (`extend Button { var tag : string? = null }`); two extends adding one name to related classes are an error unless written alike. |
 | D158 | `++`, `+=` and the rest on a place that may be null. | Null-safe forms, as `?.` is a null-safe `.`: `++?`, `--?`, `+=?`, `-=?`, `*=?`, `/=?`, `%=?` change the place when it holds a value and do nothing when it is null or a map's key is missing (`stock["apples"]--?`, `maybe.count++?`, `a?.visits++?`). The plain operators on a place that may be null are a compile error saying why and naming `++?`, the index's `default` and `?:`; a `?` form on a place that cannot be null is an error naming the plain one. A missing key that should start from a value has it in the index, as Swift's `dict[k, default: 0]`: `counts[word, default = 0]++`, `groups[kind, default = []] += [item]`; as a read it gives the value or the default without adding the key, typed as the map's values, never null; an update through it is one lookup. `map.update(key, start) { old -> new }` for a change that is not one operator; no `increment`. `update` is in the standard library; the operators and the index's `default` come in M6.5 part 3 (L118 in [language-choices.html](language-choices.html)). |
 | D159 | Assigning to the name of a function. | A compile error, as in Kotlin (2026-10-18): `fun area() : int` cannot be given another value, `area = { ... }` or `area += 1`; the error says to keep a function that changes in a `var` of a function type. A call of a function declared once with a return type then gives that type, so the compiler leaves out checks of values it has proved (M6.5 part 4). |
-| D160 | How the VM goes from one instruction to the next. | Decided 2026-10-18, from a measurement on M6.5 part 4's numeric loop with the instructions astra.exe emits (Clang 19, against one switch at 183 ms): a computed `goto` at the end of each instruction, through a table 108 ms, with the code threaded 103 ms; a tail call from each instruction's function 134 ms, threaded 128. Built with Clang (the one in Visual Studio), each instruction ends with its own computed `goto`, and a program's code is threaded when it is loaded: each opcode replaced by the address of its instruction's code, the operands as they are. Neither the executable nor bytecode files change (the addresses differ from run to run); the code held while running is about three times as large, some 1 MB for a program of 19,000 lines. Built with MSVC, which has no computed `goto`, the same instructions, each written once, are the cases of a switch. Built in M6.7, with the VM's loop rewritten. |
-| D161 | How a built program leaves out the compiler. | Decided 2026-10-18, at the user's question whether the bases could be kept in `astra.exe` with nothing in it twice: one `astra.exe`, its code in sections, those a running program never needs (the compiler, checker, parser, lexer, cache, shell; the standard library's source text; Topaz's window, drawing and the text engine) each in a section of its own. `astra build` writes a copy without the sections the program does not need, the space they took kept empty so that no other address moves, and then the program. The build proves the rest needs nothing left out by linking it once more on its own; the tests run as programs built this way. In place of separate base executables beside `astra.exe` (2.7 MB more for every install, the common parts three times) or the compiler in a DLL (two files, and Topaz could not be left out the same way). Built in M6.5 part 5. |
+| D160 | How the VM goes from one instruction to the next. | Decided 2026-10-18, from a measurement on M6.5 part 4's numeric loop with the instructions jade.exe emits (Clang 19, against one switch at 183 ms): a computed `goto` at the end of each instruction, through a table 108 ms, with the code threaded 103 ms; a tail call from each instruction's function 134 ms, threaded 128. Built with Clang (the one in Visual Studio), each instruction ends with its own computed `goto`, and a program's code is threaded when it is loaded: each opcode replaced by the address of its instruction's code, the operands as they are. Neither the executable nor bytecode files change (the addresses differ from run to run); the code held while running is about three times as large, some 1 MB for a program of 19,000 lines. Built with MSVC, which has no computed `goto`, the same instructions, each written once, are the cases of a switch. Built in M6.7, with the VM's loop rewritten. |
+| D161 | How a built program leaves out the compiler. | Decided 2026-10-18, at the user's question whether the bases could be kept in `jade.exe` with nothing in it twice: one `jade.exe`, its code in sections, those a running program never needs (the compiler, checker, parser, lexer, cache, shell; the standard library's source text; Topaz's window, drawing and the text engine) each in a section of its own. `jade build` writes a copy without the sections the program does not need, the space they took kept empty so that no other address moves, and then the program. The build proves the rest needs nothing left out by linking it once more on its own; the tests run as programs built this way. In place of separate base executables beside `jade.exe` (2.7 MB more for every install, the common parts three times) or the compiler in a DLL (two files, and Topaz could not be left out the same way). Built in M6.5 part 5. |
 | D162 | The type of `items.itemType`. | Decided 2026-10-24 by the user: a type as the program runs is a `Class` (D48), one thing for one thing. `items.itemType`, `map.keyType`, `map.valueType`, `values.itemType`, a class's `typeArguments`, a field's and a parameter's `type` and a method's `result` give a `Class` (`any#` for a collection made without its type), so `items.itemType == int#` and `.name` and `isInstance` work on each. `Type`, the type a `Class` stands for, is the standard library's own: written elsewhere it is an error saying to use a Class. (Proposed 2026-10-18, M6.6 part 1, as a built-in `Type` of its own; reflection, group 6, then wrapped it in `Class`.) |
-| D163 | How the C++ functions' results are checked. | Proposed 2026-10-18 (M6.6 part 1), to be confirmed: by a test setting, not on every call. `ASTRA_CHECK_NATIVE_RESULTS=1` compiles a check after every call of an `external` function against its declaration (the standard library compiled from its source, compiled programs kept apart); the suite passes with it, and each checkpoint runs it beside the GC and thread stress settings. The C++ is fixed code, so the suite proves its declarations once, and the compiler may then trust them when the program runs. A list or map a C++ function gives is always tagged at the call with the type the checker worked out, where it has none. |
+| D163 | How the C++ functions' results are checked. | Proposed 2026-10-18 (M6.6 part 1), to be confirmed: by a test setting, not on every call. `JADE_CHECK_NATIVE_RESULTS=1` compiles a check after every call of an `external` function against its declaration (the standard library compiled from its source, compiled programs kept apart); the suite passes with it, and each checkpoint runs it beside the GC and thread stress settings. The C++ is fixed code, so the suite proves its declarations once, and the compiler may then trust them when the program runs. A list or map a C++ function gives is always tagged at the call with the type the checker worked out, where it has none. |
 | D164 | What checking the C++ results changed. | Proposed 2026-10-18 (M6.6 part 1), to be confirmed. The coerce functions give one of their numbers as it was, so `float.coerceIn(Number, Number)` and the like say `Number`, with forms for all ints and all floats that say `int` and `float`. A type parameter that the object a call is made on says nothing of (a `Map` written without type arguments) is unknown, not taken from the arguments: `data.get(key, "missing")` is not a `string?` there. `Deque.toList` builds a `List<T>` rather than casting its `List<T?>`, and `Set ==` gives false for a set of other things rather than failing at a cast, now that casts are checked in full. |
 | D165 | The rules of a value type, as built. | Proposed 2026-10-19 (M6.6 part 2), to be confirmed. `value Point(val x : int, val y : int)` needs a header, every entry a field; it is a data class (printing, `==`, `copy`, coming apart) that implements interfaces and extends no class, and no class extends it. A field is given its value in the header or where it is declared in the body (one declared there with none is an error), and in the type's `init`, and never again: `p.x = 4` and `x += 1` in a method are compile errors saying to make a changed copy, until changing through a place (part 4). `===` on a value type is a compile error, as a value has no identity; through `any` it compares contents. A value type cannot hold itself but where the field may be null, which the checker reports. Every core may read a value, which never changes. |
 | D166 | Lists of values, as built. | Proposed 2026-10-19 (M6.6 part 3), to be confirmed. A list is packed when it is given its type (by its literal, by what it is declared as, or at the call of a C++ function that made it): a `List<int>`, `List<float>`, `List<bool>`, a value type's list, and the nullable ones of those. Putting in a value the list was not made to hold is an error where it is put in (`cannot put a value of type string in a List<int>`), which an unchecked cast through `List<any>` used to allow. A copy of a list (`toList`, `slice`, `subList`, `reversed`, `+` of two of one type) keeps its type and store. `sortBy` and `sortByDescending` call the selector once per item, not twice per comparison. |
 | D167 | Changing a value through its place. | Proposed 2026-10-19 (M6.6 part 4), to be confirmed. A `var` field of a value is changed only through a place that holds the value: a `var` variable (local, global, or one a lambda holds), a `var` field of an object, an item of a list, a value's field that is itself a place, or a lambda's parameter (what `forEach { it.move() }` is given); `p.x = 4`, `p.x += 1`, `pts[i].y++` and `line.to.x = 9`. A `mutating fun` may change `this`'s fields and call the type's other mutating methods, and is called only on a place; `mutating` on anything but a value type is an error. A variable or field changed this way gets a value of its own first, so `val q = p; p.x = 10` leaves `q` as it was. Every part of `pts[next()].x += 1` is worked out once. |
-| D168 | Reading a value where it is. | Proposed 2026-10-19 (M6.6 part 4), to be confirmed. A value read from a list or another value (`pts[i]`, a loop's item, a lambda's `it`, a parameter, `this`) is not copied where the checker shows that nothing which may change a list of its type (remove, insert, sort, set, `replaceAll` and the rest, but not `add` at the end) runs while it is in use, through what the code calls, overrides included; a function given as an argument counts as one that may. A loop is judged by its body; given to a variable from outside the loop, the item is judged by the whole function. `pts[i]` used at once (a field read from it, an argument, a comparison) is judged by its statement; kept in a variable, by its innermost for or while loop, or by the function when the statement may give it to a variable from outside the loop; in a lambda, by the lambda (G10, 2026-10-24). A call that may wait counts as one that changes every list, since other code runs meanwhile. Whatever keeps a value longer than the stack does (a field, a list, a global, a captured variable, a C++ function) takes a copy. The test setting `ASTRA_COPY_READS=1` copies every read, and the suite prints the same with it. |
+| D168 | Reading a value where it is. | Proposed 2026-10-19 (M6.6 part 4), to be confirmed. A value read from a list or another value (`pts[i]`, a loop's item, a lambda's `it`, a parameter, `this`) is not copied where the checker shows that nothing which may change a list of its type (remove, insert, sort, set, `replaceAll` and the rest, but not `add` at the end) runs while it is in use, through what the code calls, overrides included; a function given as an argument counts as one that may. A loop is judged by its body; given to a variable from outside the loop, the item is judged by the whole function. `pts[i]` used at once (a field read from it, an argument, a comparison) is judged by its statement; kept in a variable, by its innermost for or while loop, or by the function when the statement may give it to a variable from outside the loop; in a lambda, by the lambda (G10, 2026-10-24). A call that may wait counts as one that changes every list, since other code runs meanwhile. Whatever keeps a value longer than the stack does (a field, a list, a global, a captured variable, a C++ function) takes a copy. The test setting `JADE_COPY_READS=1` copies every read, and the suite prints the same with it. |
 | D169 | Results built where they go. | Proposed 2026-10-19 (M6.6 part 4), to be confirmed. `pts[i] = f(...)`, where `f` gives a value of the list's type, gives `f` the item as where its result goes; a function that gives a value passes that place on to a call whose result it returns, and making a value from its header alone writes its fields there, every argument worked out before any is written. So `pts[i] = pts[i].moved(1)`, `pts[i] = Point(...)` and `pts[i] = pts[i].copy(x = 4)` make no copy. `list.replaceAll { it.moved() }` replaces each item by what the lambda gives, built where the item is. |
 | D170 | Parallel sections over a list of values. | Proposed 2026-10-19 (M6.6 part 4), to be confirmed. `pts.parallelStream()` deals each core its own part of the list, and hands it the items where they are: `forEach { it.move() }` changes them there, `map` and the rest read them there. `parallelStream().replaceAll { it.moved() }` replaces each item on every core, built where it is. A core reads and writes only its own part (`pts[0]` from another core's part is an error saying so) and changes the list itself not at all (`sortBy`, `replaceAll` and `sortByDescending` count as changing a list); a built-in function given the whole list is refused, but for `isEmpty` and `isNotEmpty`. |
 | D171 | Small values in the value itself. | Proposed 2026-10-19 (M6.6 part 5), to be confirmed. A value type whose layout is at most 8 bytes and holds no object (`value Rgba(val argb : int)`, `value Meters(val m : float)`, `value Flags(var on : bool, var shown : bool)`) is kept in the value itself, its fields in the 8 bytes a value has for its contents and its type's number beside them: in variables, arguments, results, fields, lists and maps, with no box and nothing allocated. The program sees no difference; C++ functions are given it in a box, but `list.add`. |
@@ -2810,16 +2814,16 @@ font metrics will need new numbers: no other font engine measures text exactly a
 | D177 | Fields kept as their payload alone. | Proposed 2026-10-19 (M6.6 part 6), to be confirmed. An int, a float or a bool field whose type is known (written, or worked out from what it is first given), and not null, is kept in its object as its 8 bytes of contents alone, before the object's slots, where every object of the class has it at the same place: an object of three `float` fields takes 72 bytes in place of 96. A val, and a field an init must set, has a bit saying whether it has been given a value, so that giving a val a second value and an init that leaves one unset are still errors; any other payload reads as 0, 0.0 or false before it is first given one, where a slot read an error. Field reads and writes are as fast as before. |
 | D178 | Frame slots, typed arithmetic and values in variables in M6.7. | Decided 2026-10-19 by the user: payload-only slots in objects now (M6.6 part 6); in frames, with instructions chosen by type for arithmetic and values of up to 32 bytes in consecutive slots (D149), in M6.7, on the rewritten loop, since each changes every instruction that touches a frame's slots and M6.7 rewrites those anyway. |
 | D179 | Topaz's geometry as value types. | Decided 2026-10-19 by the user (M6.6 part 7): `Point`, `Dimension`, `Insets`, `Rectangle` and `Sizes` are value types. Two are `==` when their fields are; each is copied where JadeUI's would be shared, so `bounds.translate(1, 1)` changes the `bounds` it is called on and no other; `setSize`, `translate`, `setLocation`, `grow` and `setBounds` are mutating methods, called on a place. A component's `bounds` and the sizes it keeps are inside it. Code that changed a shared one to change another's (none in Topaz) changes only its own. |
-| D180 | `Rect` takes all four numbers. | Proposed 2026-10-19 (M6.6 part 7); confirmed 2026-11-03 (M6.6 choices). `Rect(x, y, width, height)` takes all four, with no defaults: Java's `Rectangle()` is `Rect(0, 0, 0, 0)`, `Rectangle(w, h)` is `Rect(0, 0, w, h)` (both compile errors as written, so that `Rect(30, 40)` cannot quietly mean the corner; its error says x and y come first), and `Rectangle(other)` is `other`, a value being copied wherever it is kept. `Point()`, `Size()` and `Insets()` keep their zeros, as in Java. The reason first given, that Astra has no constructors of other forms, no longer holds: secondary constructors came in part 8 (8.9a, for `Color`), and a `...bundle` chooses among the forms by its names and types as written arguments do. The four numbers stay for the corner's sake alone. |
+| D180 | `Rect` takes all four numbers. | Proposed 2026-10-19 (M6.6 part 7); confirmed 2026-11-03 (M6.6 choices). `Rect(x, y, width, height)` takes all four, with no defaults: Java's `Rectangle()` is `Rect(0, 0, 0, 0)`, `Rectangle(w, h)` is `Rect(0, 0, w, h)` (both compile errors as written, so that `Rect(30, 40)` cannot quietly mean the corner; its error says x and y come first), and `Rectangle(other)` is `other`, a value being copied wherever it is kept. `Point()`, `Size()` and `Insets()` keep their zeros, as in Java. The reason first given, that Jade has no constructors of other forms, no longer holds: secondary constructors came in part 8 (8.9a, for `Color`), and a `...bundle` chooses among the forms by its names and types as written arguments do. The four numbers stay for the corner's sake alone. |
 | D181 | What a message to a worker may hold. | Decided 2026-10-22 by the user, in three steps. First, built with gap G6: besides numbers, strings, booleans, `null`, `bytes`, and lists, maps and sets of those, an object of a data class or a value of a value type, made again on the other side by its constructor from its header fields; a class declared at the top level of a file both sides import, named in the message by the global it is kept in (a worker runs the same program); lists and maps keep their types, and a packed list goes as its block of items, whole. An object of an ordinary class is refused where it is sent, as before: the worker would have a copy, not the object. Second, open, for when real programs need it: an ordinary class may say it can be sent (`class Student(...) : Sendable`), the checker making sure its fields are of types that can, and a message copying the graph of such objects whole, objects shared in it shared in the copy and cycles kept. Never: every class copied without asking, which would make objects whose `init` never ran, whose lambdas lost their surroundings, and whose holds on windows, files or locks broke in the worker. |
 | D182 | What a type parameter is, to the checker. | Decided 2026-10-22 by the user. A type parameter is the one its declaration makes, not a name: `class Apple<T>`'s is Apple's T, `fun <R> other()` in it is other's R, `fun <T> augment()` is augment's T, a generic function declared inside another has its own. Inside the checker each is a thing of its own (its declaration, not a dotted name, which overloaded forms, files and local functions could make ambiguous), and what it is replaced by, worked out and kept in reach goes by that, never by the name; the compiler and the VM, where they are slots by position, do not change. Messages still say `T`, and `T (of augment)` only where two would be confused. A method that declares a type parameter of the same name as its class's (`fun <T> eat()` in `class Apple<T>`) is a compile error: Apple already has a type parameter T; name this one otherwise, or leave it out to use the class's. Built next, before gap G67's fix, which it makes safe (found with G3: the same name in the function called and the code calling it was worked out wrongly). |
 | D183 | `Deque` is `Deck`. | Decided 2026-10-24 by the user: the standard library's queue open at both ends is called `Deck`, simpler to say and to read than `Deque`. Its members are as they were (`addFirst`, `addLast`, `removeFirst`, `removeLast`, `first`, `last`, indexing). `Deque`, and Kotlin's `ArrayDeque`, are compile errors saying `Deck`. |
-| D184 | The program's own class names, `astra.`, `Class.origin` and `Program`. | Decided 2026-10-25 by the user. A class of the program's own named as a built-in type is (`Index`, `Range`, `Values`, `Bytes`) wins where it is in reach, in types, calls, `is` and extension receivers, as a file's own names come first; the built-in types stay reachable by their uses and by `astra.Range` and the like. A class says where it comes from with `origin`: `"astra"` for built-in types and the standard library's classes, a library's folder name for its classes (`"Topaz"`), and the program's name for the program's own. `object Program` holds `val arguments : List<string>` (what `args()` gave, which is now a compile error naming it) and `var name : string`, the main file's name without `.astra` unless the program sets it. |
+| D184 | The program's own class names, `jade.`, `Class.origin` and `Program`. | Decided 2026-10-25 by the user. A class of the program's own named as a built-in type is (`Index`, `Range`, `Values`, `Bytes`) wins where it is in reach, in types, calls, `is` and extension receivers, as a file's own names come first; the built-in types stay reachable by their uses and by `jade.Range` and the like. A class says where it comes from with `origin`: `"jade"` for built-in types and the standard library's classes, a library's folder name for its classes (`"Topaz"`), and the program's name for the program's own. `object Program` holds `val arguments : List<string>` (what `args()` gave, which is now a compile error naming it) and `var name : string`, the main file's name without `.jade` unless the program sets it. |
 | D185 | `extend` of a built-in type. | Decided 2026-10-31 by the user (gap G30, option b). An extend fits `int`, `float`, `string`, `bool`, `char`, `byte`, `Bytes`, `Range`, `List`, `Map` or `Set` to an interface as it does a class: what the interface asks for the type has (a property for a property, a method for a method) or a getter in the extend gives; nothing of the type's own is replaced. Written with what it holds (`extend List<int> : Totalled`), it holds for collections made to hold that, by the type each keeps as the program runs (G25): a `List<any>` holding ints is not one, and a list made without a type is judged by its items. `List` alone is every list. Written otherwise (`string?`, `open List<int>`, `int16`, `any`, `Function`) it is a compile error. `is`, `as`, typed collections, parameters, generic bounds and reflection (`string#.interfaces`) see it; the members it brings are the type's own too (`"abc".weight`), found after the type's own and the extension functions on it. Holds where its folder's names do, as for a class (D33). |
 | D186 | Methods written in an `extend`. | Decided 2026-10-31 by the user. Beside its getters, an `extend` holds `fun`s: each one of the interface's methods (or of those above it) that the type has none of, with that method's parameters as the extend gives the interface its types (`extend Shelf : Keeper<string>` writes `fun keep(item : string)`), and giving what it gives or less. It is written without `override`: there is nothing of the type's to override, and nothing the type has (its own members, or for a built-in type the extension functions on it in reach) may share its name. A method the interface does not ask for is an error that points to an extension function. One of an interface's default methods may be written too, in place of the default. It works for classes, value types and built-in types alike, through the interface, on the type itself, and by `is` and `as` on values of type `any`; where the interface's name has several forms, each is written and found by its parameters. In the bytecode a `fun` is given by `BRIDGE_METHOD` after the getters' `BRIDGE` (format 23). Holds where its folder's names do, as the extend does (D33). |
 | D187 | What one file has in reach means one thing. | Decided 2026-11-01 by the user: "defining something that causes ambiguity should show an error, and importing a library that causes ambiguity with things already defined should show an error", for ordinary names too. A bare name the file's folder declares that a `.*` import brings in too, or that two `.*` imports bring in, is an error whether or not it is used; so are two extension functions in reach with one receiver, name and parameters (their own type parameters by their places), and two extends of a type to one interface from different folders, each with getters or funs. The error is at the declaration where the file has it, or else at the import that brings in the second; several names an import brings in are listed in one error. The standard library's are not counted: a program's own come before them. Replaces the old rule that the file's own folder comes first, and the error at a bare use that two imports share. Closes G32; G31 (which one runs, where no one file has both) is next. |
 | D188 | A call runs the extension function in reach of its file. | Decided 2026-11-01 by the user ("ok" to the plan). When the program runs, each extension function keeps its library's key (its folder's with its access word, or its file's for a private one; the standard library's is one for all of it), and each function its file's reach. A call the checker settled finds the form by its name as before, among those in reach of the running function's file; a call found as it runs the same, so one out of reach is an undefined method, as the checker would say. Between two in reach with the same parameters, the program's own comes before the standard library's. Which class's runs is still told by the value's class. Code copied in from an inline function of another file names the one it means whole. Two extends of a type to one interface from different folders, each with getters or funs, are an error anywhere in the program, at the second, since a value fits an interface in one way whichever file made it fit; the standard library's are not counted, as in D187. Closes G31. |
-| | How files are loaded under namespaces. | Importing a folder loads every `.astra` file directly in it, as one unit. Importing a file loads that file only, into its folder's namespace (5.1). |
+| | How files are loaded under namespaces. | Importing a folder loads every `.jade` file directly in it, as one unit. Importing a file loads that file only, into its folder's namespace (5.1). |
 | | A lambda's parameter list over several lines. | Allowed, as in Kotlin (5.1). |
 
 ### Open
@@ -2847,7 +2851,7 @@ section 4, point 8.)
 - **The largest value type** (value-lists.html): decided "any, up to 64 KB"; offered on
   2026-10-18, not yet answered, is "any size, with a copy on read past 64 KB", the limit
   coming only from the 16-bit offset in a reference into a list item.
-- **How JadeMem's real sampling is done** (M8): on sample data, or through a way for Astra
+- **How JadeMem's real sampling is done** (M8): on sample data, or through a way for Jade
   to call Windows system functions, which this plan does not size.
 - **Sendable classes for workers** (D181, its second step): an ordinary class saying it may be
   sent, checked for fields that can be, and copied as a graph. Open until a program needs it.
@@ -2857,11 +2861,11 @@ section 4, point 8.)
 - **The language work is larger than the library's first milestone.** Section 5.1 is about
   fifteen features; several (interfaces, lambdas with receivers, implicit `this`, nested
   classes) touch the compiler, the VM and the bytecode format.
-- **Grammar conflicts.** Astra writes `if cond { ... }` without parentheses; with trailing
+- **Grammar conflicts.** Jade writes `if cond { ... }` without parentheses; with trailing
   lambdas, `if ready() { ... }` is ambiguous. Swift has the same problem and forbids trailing
   closures in conditions. Spike 1 exists to settle this early.
 - **Namespaces change how every existing program is put together.** Imports stop being
-  global, so current multi-file Astra code, the tests under `tests/modules` among it, has to
+  global, so current multi-file Jade code, the tests under `tests/modules` among it, has to
   be revisited, and the bytecode file and the standalone-executable bundling both carry
   module information that changes shape.
 - **Receiver lookups cost a run-time check** per unqualified name inside a builder block,
@@ -2894,9 +2898,9 @@ section 4, point 8.)
   Windows, so the safeguards are the single lock around all script-visible state and a stress
   mode that switches threads at every safe point.
 - **A flow cannot pause inside a C++ function.** If `forEach`, `map` or `sort` is native and
-  calls back into Astra, a suspending call made from that callback has a C++ frame in its
+  calls back into Jade, a suspending call made from that callback has a C++ frame in its
   way. Kotlin allows it there, and Snips will do it. So the collection functions that take a
-  lambda are written in Astra or expanded in place, and what remains native reports a clear
+  lambda are written in Jade or expanded in place, and what remains native reports a clear
   error instead of misbehaving.
 - **App logic outside the UI is only partly covered.** Threads, processes and sockets (5.5)
   give the apps what their background work needs. JadeMem's kernel-memory queries through

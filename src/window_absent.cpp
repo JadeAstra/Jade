@@ -6,9 +6,9 @@
 
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 void registerText(VM&) { std::abort(); }
 void registerTopaz(VM&) { std::abort(); }
 
-}  // namespace astra
+}  // namespace jade

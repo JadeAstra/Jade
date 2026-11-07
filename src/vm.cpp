@@ -13,7 +13,7 @@
 #include <new>
 #include <stdexcept>
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -39,10 +39,10 @@ VM::VM(bool worker) : output(&std::cout), input(&std::cin), rng(std::random_devi
     threads_.push_back(&mainThread_);
     loadContext(&mainThread_.base);
 
-    if (const char* stress = std::getenv("ASTRA_THREAD_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0')
+    if (const char* stress = std::getenv("JADE_THREAD_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0')
         threadStress_ = true;
 
-    if (const char* stress = std::getenv("ASTRA_GC_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0') {
+    if (const char* stress = std::getenv("JADE_GC_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0') {
         gcStress_ = true;
         nextGC_ = 0;
     }
@@ -279,7 +279,7 @@ void VM::deliverUnasked(bool atEnd) {
     for (Value error : pending) {
         try {
             call(unaskedDeliver, 1, &error);
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             uncaughtReported = true;
             if (onUnaskedError) onUnaskedError(*this, thrown);
         }
@@ -1079,7 +1079,7 @@ Value VM::call(Value callee, int argc, const Value* args) {
 }
 
 Value VM::callOn(Value receiver, Value callee, int argc, const Value* args) {
-    // Only a function written in Astra can be given an object to run on.
+    // Only a function written in Jade can be given an object to run on.
     if (!callee.isObjType(ObjType::Closure)) return call(callee, argc, args);
     if (nativeDepth_ >= kMaxNativeDepth || !roomFor(sp_ + argc + 1)) throw runtimeError(Thrown::StackOverflowError, "stack overflow");
 
@@ -1538,7 +1538,7 @@ bool VM::rightsAllow(Value target, const ObjString* name, const FunctionProto* p
 }
 
 // What is said of a member used by code that may not.
-AstraThrow VM::accessError(Value target, const ObjString* name, const FunctionProto* proto) {
+JadeThrow VM::accessError(Value target, const ObjString* name, const FunctionProto* proto) {
     const bool isStatic = target.isObjType(ObjType::Class);
     const ObjClass* cls = isStatic ? asClass(target) : asInstance(target)->cls;
     const Value* mark = (isStatic ? cls->staticAccessMarks : cls->accessMarks).find(name);
@@ -1604,7 +1604,7 @@ Value VM::implicitReceiver(const CallFrame* frame, const Value* base, const ObjS
 
 // A bare name that is neither a member the code may use nor a variable: said plainly when
 // it is a member of the object the code runs on that the code may not use.
-AstraThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global) {
+JadeThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global) {
     const FunctionProto* proto = frame->closure->proto;
     auto kept = [&](Value candidate) { return hasMember(candidate, name) && accessDenied(candidate, name, proto, false); };
     for (int i = std::exchange(implicitTried_, uint8_t{0}); i-- > 0;)
@@ -1634,10 +1634,10 @@ Value VM::callWithReceiver(Value receiver, ObjClosure* method) {
 
 // ---- Errors ----
 
-AstraThrow VM::runtimeError(const std::string& message) { return runtimeError(Thrown::RuntimeException, message); }
+JadeThrow VM::runtimeError(const std::string& message) { return runtimeError(Thrown::RuntimeException, message); }
 
-AstraThrow VM::runtimeError(Thrown kind, const std::string& message) {
-    AstraThrow t;
+JadeThrow VM::runtimeError(Thrown kind, const std::string& message) {
+    JadeThrow t;
     ObjClass* cls = thrownClasses_[static_cast<size_t>(kind)];
     if (cls == nullptr) cls = errorClass_;
     if (cls == nullptr) {
@@ -1671,7 +1671,7 @@ std::vector<std::string> VM::membersFoundByName() const {
     return found;
 }
 
-AstraThrow VM::errorOf(const char* className, const std::string& message) {
+JadeThrow VM::errorOf(const char* className, const std::string& message) {
     const std::vector<std::string>& known = globalsFoundByName();
     if (std::find(known.begin(), known.end(), className) == known.end())
         return runtimeError(Thrown::InternalError, std::string("internal error: ") + className + " is not among VM::globalsFoundByName()");
@@ -1681,7 +1681,7 @@ AstraThrow VM::errorOf(const char* className, const std::string& message) {
 }
 
 // What the program is told when memory runs out: an OutOfMemoryError, which it can catch.
-AstraThrow VM::outOfMemory() {
+JadeThrow VM::outOfMemory() {
     return runtimeError(Thrown::OutOfMemoryError, "out of memory");
 }
 
@@ -1800,7 +1800,7 @@ void VM::checkArity(const std::string& name, int minArgs, int maxArgs, int argc)
 }
 
 // A bare name was passed where nothing says which enum it could belong to.
-AstraThrow VM::unsettledName(Value pending) {
+JadeThrow VM::unsettledName(Value pending) {
     pendingEnums_--;
     return runtimeError(Thrown::IllegalStateException, "undefined variable '" + static_cast<ObjString*>(pending.as.obj)->utf8() + "'");
 }
@@ -1890,7 +1890,7 @@ bool VM::formTakes(const FunctionProto* proto, const Value* args, int positional
     auto fit = [&](int param, Value v) {
         if (!typed || param == vararg) return 0;
         const int f = paramFit(v, proto->paramTypes[static_cast<size_t>(param)], proto->paramClasses[static_cast<size_t>(param)]);
-        // A function written in Astra, given for a parameter of a function type: it has to
+        // A function written in Jade, given for a parameter of a function type: it has to
         // take as many arguments as the type gives.
         const size_t counted = proto->paramCounts.size() > static_cast<size_t>(param) ? proto->paramCounts[static_cast<size_t>(param)] : 0;
         if (f >= 0 && counted > 0) {
@@ -2126,7 +2126,7 @@ void VM::callTrailing(ObjClosure* closure, int argc) {
     callClosure(closure, arity, packed);
 }
 
-// callValue for such a call. Only a function written in Astra has parameters to look at; to
+// callValue for such a call. Only a function written in Jade has parameters to look at; to
 // anything else the lambda is simply the last argument.
 bool VM::callValueTrailing(Value callee, int argc) {
     if (callee.isObjType(ObjType::Closure)) {
@@ -2596,7 +2596,7 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
     }
 
     const NativeMethod* method = findNativeMethod(receiver, name);
-    // An object of a class as the first argument: the standard library's form in Astra beside
+    // An object of a class as the first argument: the standard library's form in Jade beside
     // the built-in one ("text".replace(regex, ...), M8), as the built-in methods take built-in
     // values only.
     if (method != nullptr && argc >= 1 && sp_[-argc].isObjType(ObjType::Instance)) {
@@ -2648,7 +2648,7 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
 }
 
 Value VM::tailCallOn(Value receiver, Value function) {
-    if (!function.isObjType(ObjType::Closure)) throw runtimeError(Thrown::ClassCastException, "expected a function written in Astra, got a value of type " + typeName(function));
+    if (!function.isObjType(ObjType::Closure)) throw runtimeError(Thrown::ClassCastException, "expected a function written in Jade, got a value of type " + typeName(function));
     // The built-in's own call goes: the receiver takes the place it was called at, and the
     // function is called there with nothing else.
     TempRoot keep(*this, function);
@@ -2681,7 +2681,7 @@ int VM::scopeFunction(ObjString* name, int argc) {
         return callValue(block, 1) ? 2 : 1;
     }
     if (!block.isObjType(ObjType::Closure)) {
-        // Something that is not a function written in Astra is simply called.
+        // Something that is not a function written in Jade is simply called.
         Value result = n == "also" ? call(block, 1, &receiver) : call(block, 0, nullptr);
         if (n != "run") result = receiver;
         sp_ -= 2;
@@ -3106,7 +3106,7 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
     return *cls->layoutOwned;
 }
 
-#ifdef ASTRA_OP_COUNTS
+#ifdef JADE_OP_COUNTS
 // In the build that counts instructions: how many values were put in boxes of their own (M6.6
 // part 4), shown when the program ends.
 namespace {
@@ -3123,7 +3123,7 @@ std::atomic<uint64_t> VM::objectsMade{0};
 
 // A box for a value of `cls`, its fields zero: 0, 0.0, false and null.
 ObjValue* VM::newValue(ObjClass* cls) {
-#ifdef ASTRA_OP_COUNTS
+#ifdef JADE_OP_COUNTS
     boxCount.made.fetch_add(1, std::memory_order_relaxed);
 #endif
     const ValueLayout& layout = layoutOf(cls);
@@ -3761,7 +3761,7 @@ void VM::layInline(ObjClass* cls) {
         try {
             if (type == nullptr) type = fieldClass(declared);
             if (type->isValue) layout = &layoutOf(type);
-        } catch (AstraThrow&) {
+        } catch (JadeThrow&) {
             waiting = true;  // not there yet
             continue;
         }
@@ -4470,7 +4470,7 @@ bool VM::position(Value index, size_t size, size_t& out, const char* what) {
     return resolveIndex(toInt(index, what), size, out);
 }
 
-AstraThrow VM::outOfRange(const char* what, Value index, size_t size) {
+JadeThrow VM::outOfRange(const char* what, Value index, size_t size) {
     std::string message = std::string(what) + " " + stringify(index) + " is out of range (size " + std::to_string(size) + ")";
     if (index.isInt() && index.as.i < 0) message += ": a negative number is no position; the last is [^1]";
     return runtimeError(Thrown::IndexOutOfBoundsException, message);
@@ -4493,7 +4493,7 @@ void VM::sliceBounds(const ObjRange* range, size_t size, size_t& begin, size_t& 
 }
 
 // A range with an end counted from the end, used where its own numbers are wanted.
-AstraThrow VM::rangeFromEnd(const ObjRange* range, const std::string& use) {
+JadeThrow VM::rangeFromEnd(const ObjRange* range, const std::string& use) {
     const std::string shown = stringify(Value::object(const_cast<ObjRange*>(range)));
     return runtimeError(Thrown::IllegalArgumentException, "the range " + shown + " has an end counted from the end (^), which " + use +
                         " cannot work with: slice with it, items[" + shown + "], or make it plain with of(size)");
@@ -4828,14 +4828,14 @@ std::string VM::declaredTypeText(uint8_t type, const ObjClass* cls) const {
     return typeText(type, cls != nullptr ? cls->name->utf8() : std::string());
 }
 
-AstraThrow VM::typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v) {
+JadeThrow VM::typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v) {
     checkRange(type, v, "'" + variable + "'");
     return runtimeError(Thrown::ClassCastException, "cannot assign a value of type " + typeName(v) + " to '" + variable + "', which is declared as " +
                         declaredTypeText(type, cls));
 }
 
 // An int sum, difference, product or quotient whose result does not fit in an int (D27).
-AstraThrow VM::overflowError(Op op, int64_t a, int64_t b) {
+JadeThrow VM::overflowError(Op op, int64_t a, int64_t b) {
     const char* symbol = op == Op::Add ? "+" : op == Op::Sub ? "-" : op == Op::Mul ? "*" : "/";
     const std::string sum = op == Op::Sub && a == 0 ? "-(" + std::to_string(b) + ")" : std::to_string(a) + " " + symbol + " " + std::to_string(b);
     std::string message = sum + " does not fit in an int, which holds -9223372036854775808 to 9223372036854775807";
@@ -5030,7 +5030,7 @@ bool VM::setContains(const ObjSet* set, Value item) {
     return held != nullptr && equals(*held, value);
 }
 
-AstraThrow VM::viewChanged(const ObjSet* view) {
+JadeThrow VM::viewChanged(const ObjSet* view) {
     return runtimeError(Thrown::UnsupportedOperationException, std::string("a map's ") + (view->values ? "values" : view->entries ? "entries" : "keys") +
                         " show the map and cannot be changed through it: change the map, with remove, removeAll { (k, v) -> } or retainAll");
 }
@@ -5441,7 +5441,7 @@ void VM::closeUpvalues(Value* last) {
 // is 0, so no object, value or place of one is taken for it.
 constexpr uint64_t kSeenSize = 1;
 
-#ifdef ASTRA_OP_COUNTS
+#ifdef JADE_OP_COUNTS
 #include <intrin.h>
 // A build for finding where a program's instructions go (M6.5 part 4): how often each runs,
 // and each pair one after the other, shown when the program ends.
@@ -5520,14 +5520,14 @@ inline int32_t operandI32(const uint8_t* at) {
     return static_cast<int32_t>(v);
 }
 
-#if ASTRA_TAIL_CALLS
+#if JADE_TAIL_CALLS
 // An instruction's function (VM::tail), whose address the code holds before each instruction.
-using TailFn = ASTRA_TAIL_FN int (VM::*)(ASTRA_TAIL_PARAMS);
+using TailFn = JADE_TAIL_FN int (VM::*)(JADE_TAIL_PARAMS);
 // The code keeps a function's address, kThreaded bytes. Microsoft's C++ has a member function's
 // pointer be that alone; the Itanium C++ of Linux and macOS, that and how far to move `this`,
 // which for these, functions of VM itself and none virtual, is always 0 (TailTable::get checks).
 static_assert(sizeof(TailFn) == kThreaded || sizeof(TailFn) == 2 * kThreaded, "an instruction's function is one address, or two words");
-ASTRA_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
+JADE_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
     TailFn f;
     if constexpr (sizeof(TailFn) == kThreaded) {
         std::memcpy(&f, at, sizeof f);
@@ -5605,7 +5605,7 @@ void VM::run(int baseFrame) {
     Value* base = nullptr;
     const Value* consts = nullptr;
     std::atomic<uint64_t>* caches = nullptr;
-#if ASTRA_TAIL_CALLS
+#if JADE_TAIL_CALLS
     // The instructions, functions of their own, know where this run() started: in the line of
     // execution it runs on, which another thread's turn leaves as it was.
     struct RunBase {
@@ -5701,13 +5701,13 @@ void VM::run(int baseFrame) {
 
 // Each instruction's case in the loop's switch, and with Clang or GCC its label as well, which
 // the dispatch table points to (D160). MSVC, which has no computed goto, goes by the switch alone.
-#if !ASTRA_TAIL_CALLS && (defined(__clang__) || defined(__GNUC__))
-#define ASTRA_GOTO_DISPATCH 1
+#if !JADE_TAIL_CALLS && (defined(__clang__) || defined(__GNUC__))
+#define JADE_GOTO_DISPATCH 1
 #define CASE(name) \
     case Op::name: \
     op_##name:
 #else
-#define ASTRA_GOTO_DISPATCH 0
+#define JADE_GOTO_DISPATCH 0
 #define CASE(name) case Op::name:
 #endif
 
@@ -5715,7 +5715,7 @@ void VM::run(int baseFrame) {
 // ends of instructions into one: each instruction's own jump to the next is predicted apart from
 // the others' (D160), which is what makes going on from each instruction pay. (With the address
 // read from the code, clang merged them, and numeric was 10% slower than with the table.)
-#define ASTRA_APART() asm volatile("" ::"i"(__COUNTER__))
+#define JADE_APART() asm volatile("" ::"i"(__COUNTER__))
 
 // An instruction's ways out in instructions.inc, as the switch's cases have them (see there).
 #define DONE() break
@@ -5726,41 +5726,41 @@ void VM::run(int baseFrame) {
 #define COLD(op) cold_##op:
 #define JUMP_LABEL(l) goto l
 #define LABEL(l) l:
-// CASES(a, b, ...): CASE(a) CASE(b) ..., up to 16 (ASTRA_EXPAND for MSVC's preprocessor).
-#define ASTRA_EXPAND(x) x
-#define ASTRA_CAT_(a, b) a##b
-#define ASTRA_CAT(a, b) ASTRA_CAT_(a, b)
-#define ASTRA_COUNT_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) n
-#define ASTRA_COUNT(...) ASTRA_EXPAND(ASTRA_COUNT_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))
-#define ASTRA_EACH_1(m, a) m(a)
-#define ASTRA_EACH_2(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_1(m, __VA_ARGS__))
-#define ASTRA_EACH_3(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_2(m, __VA_ARGS__))
-#define ASTRA_EACH_4(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_3(m, __VA_ARGS__))
-#define ASTRA_EACH_5(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_4(m, __VA_ARGS__))
-#define ASTRA_EACH_6(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_5(m, __VA_ARGS__))
-#define ASTRA_EACH_7(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_6(m, __VA_ARGS__))
-#define ASTRA_EACH_8(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_7(m, __VA_ARGS__))
-#define ASTRA_EACH_9(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_8(m, __VA_ARGS__))
-#define ASTRA_EACH_10(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_9(m, __VA_ARGS__))
-#define ASTRA_EACH_11(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_10(m, __VA_ARGS__))
-#define ASTRA_EACH_12(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_11(m, __VA_ARGS__))
-#define ASTRA_EACH_13(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_12(m, __VA_ARGS__))
-#define ASTRA_EACH_14(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_13(m, __VA_ARGS__))
-#define ASTRA_EACH_15(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_14(m, __VA_ARGS__))
-#define ASTRA_EACH_16(m, a, ...) m(a) ASTRA_EXPAND(ASTRA_EACH_15(m, __VA_ARGS__))
-#define ASTRA_EACH(m, ...) ASTRA_EXPAND(ASTRA_CAT(ASTRA_EACH_, ASTRA_COUNT(__VA_ARGS__))(m, __VA_ARGS__))
-#define CASES(...) ASTRA_EACH(CASE, __VA_ARGS__)
+// CASES(a, b, ...): CASE(a) CASE(b) ..., up to 16 (JADE_EXPAND for MSVC's preprocessor).
+#define JADE_EXPAND(x) x
+#define JADE_CAT_(a, b) a##b
+#define JADE_CAT(a, b) JADE_CAT_(a, b)
+#define JADE_COUNT_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) n
+#define JADE_COUNT(...) JADE_EXPAND(JADE_COUNT_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))
+#define JADE_EACH_1(m, a) m(a)
+#define JADE_EACH_2(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_1(m, __VA_ARGS__))
+#define JADE_EACH_3(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_2(m, __VA_ARGS__))
+#define JADE_EACH_4(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_3(m, __VA_ARGS__))
+#define JADE_EACH_5(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_4(m, __VA_ARGS__))
+#define JADE_EACH_6(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_5(m, __VA_ARGS__))
+#define JADE_EACH_7(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_6(m, __VA_ARGS__))
+#define JADE_EACH_8(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_7(m, __VA_ARGS__))
+#define JADE_EACH_9(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_8(m, __VA_ARGS__))
+#define JADE_EACH_10(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_9(m, __VA_ARGS__))
+#define JADE_EACH_11(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_10(m, __VA_ARGS__))
+#define JADE_EACH_12(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_11(m, __VA_ARGS__))
+#define JADE_EACH_13(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_12(m, __VA_ARGS__))
+#define JADE_EACH_14(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_13(m, __VA_ARGS__))
+#define JADE_EACH_15(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_14(m, __VA_ARGS__))
+#define JADE_EACH_16(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_15(m, __VA_ARGS__))
+#define JADE_EACH(m, ...) JADE_EXPAND(JADE_CAT(JADE_EACH_, JADE_COUNT(__VA_ARGS__))(m, __VA_ARGS__))
+#define CASES(...) JADE_EACH(CASE, __VA_ARGS__)
 
 // The end of an instruction that goes on to the next at once: with Clang or GCC, straight to the
 // next one's code from here, as the loop's head would; with MSVC, round the loop.
-#if ASTRA_GOTO_DISPATCH && !defined(ASTRA_OP_COUNTS)
+#if JADE_GOTO_DISPATCH && !defined(JADE_OP_COUNTS)
 #define NEXT()                                \
     do {                                      \
         sp_ = sp;                             \
         const void* to_;                      \
         std::memcpy(&to_, ip, sizeof to_);    \
         frame->ip = ip += kThreaded + kOpBytes;      \
-        ASTRA_APART();                        \
+        JADE_APART();                        \
         goto* to_;                            \
     } while (0)
 #else
@@ -5986,7 +5986,7 @@ void VM::run(int baseFrame) {
     // none in this run, it goes on to whoever called. Returns false in that case.
     // The frame that was running knows where it was: each instruction, as it starts, writes down
     // where it is (M6.5 part 4), so that the loop's own `ip` can stay in a register.
-    auto handled = [&](AstraThrow& thrown) {
+    auto handled = [&](JadeThrow& thrown) {
         if (!thrown.hasTrace && handlers_.empty()) {
             thrown.trace = captureTrace();
             thrown.hasTrace = true;
@@ -5996,7 +5996,7 @@ void VM::run(int baseFrame) {
         return false;
     };
 
-#if ASTRA_GOTO_DISPATCH
+#if JADE_GOTO_DISPATCH
     // The table of where each instruction's code is, above, filled the first time.
     static std::atomic<bool> dispatchMade{false};
     if (!dispatchMade.load(std::memory_order_acquire)) {
@@ -6004,342 +6004,342 @@ void VM::run(int baseFrame) {
         std::lock_guard<std::mutex> hold(filling);
         if (!dispatchMade.load(std::memory_order_relaxed)) {
             for (const void*& at : dispatch) at = &&viaSwitch;
-#define ASTRA_DISPATCH_TO(name) dispatch[static_cast<size_t>(Op::name)] = &&op_##name;
-            ASTRA_DISPATCH_TO(Const)
-            ASTRA_DISPATCH_TO(Null)
-            ASTRA_DISPATCH_TO(True)
-            ASTRA_DISPATCH_TO(False)
-            ASTRA_DISPATCH_TO(Pop)
-            ASTRA_DISPATCH_TO(Dup)
-            ASTRA_DISPATCH_TO(Dup2)
-            ASTRA_DISPATCH_TO(GetLocal)
-            ASTRA_DISPATCH_TO(SetLocal)
-            ASTRA_DISPATCH_TO(GetGlobal)
-            ASTRA_DISPATCH_TO(SetGlobal)
-            ASTRA_DISPATCH_TO(DefineGlobal)
-            ASTRA_DISPATCH_TO(GetImplicit)
-            ASTRA_DISPATCH_TO(TryImplicit)
-            ASTRA_DISPATCH_TO(InvokeImplicit)
-            ASTRA_DISPATCH_TO(SetImplicit)
-            ASTRA_DISPATCH_TO(DefineTypedGlobal)
-            ASTRA_DISPATCH_TO(IndexN)
-            ASTRA_DISPATCH_TO(SetIndexN)
-            ASTRA_DISPATCH_TO(BundleValues)
-            ASTRA_DISPATCH_TO(MergeBundle)
-            ASTRA_DISPATCH_TO(DupN)
-            ASTRA_DISPATCH_TO(SettleEnum)
-            ASTRA_DISPATCH_TO(CheckParam)
-            ASTRA_DISPATCH_TO(CheckReturn)
-            ASTRA_DISPATCH_TO(CheckType)
-            ASTRA_DISPATCH_TO(GetUpvalue)
-            ASTRA_DISPATCH_TO(GetUpvalueChecked)
-            ASTRA_DISPATCH_TO(MakeType)
-            ASTRA_DISPATCH_TO(CachedType)
-            ASTRA_DISPATCH_TO(CacheType)
-            ASTRA_DISPATCH_TO(TypeCollection)
-            ASTRA_DISPATCH_TO(IsFull)
-            ASTRA_DISPATCH_TO(CastFull)
-            ASTRA_DISPATCH_TO(WithTypes)
-            ASTRA_DISPATCH_TO(FrameTypes)
-            ASTRA_DISPATCH_TO(TypeArg)
-            ASTRA_DISPATCH_TO(InstanceTypeArg)
-            ASTRA_DISPATCH_TO(SupertypeMaker)
-            ASTRA_DISPATCH_TO(CheckResult)
-            ASTRA_DISPATCH_TO(ClassOf)
-            ASTRA_DISPATCH_TO(ClassMeta)
-            ASTRA_DISPATCH_TO(AtomicField)
-            ASTRA_DISPATCH_TO(GetCaptured)
-            ASTRA_DISPATCH_TO(SetCaptured)
-            ASTRA_DISPATCH_TO(ObjectClass)
-            ASTRA_DISPATCH_TO(StoreClass)
-            ASTRA_DISPATCH_TO(ObjectClassTyped)
-            ASTRA_DISPATCH_TO(StoreClassTyped)
-            ASTRA_DISPATCH_TO(Capture)
-            ASTRA_DISPATCH_TO(NewObject)
-            ASTRA_DISPATCH_TO(Unset)
-            ASTRA_DISPATCH_TO(SetUpvalue)
-            ASTRA_DISPATCH_TO(GetOwn)
-            ASTRA_DISPATCH_TO(GetProp)
-            ASTRA_DISPATCH_TO(GetOwnRef)
-            ASTRA_DISPATCH_TO(GetPropRef)
-            ASTRA_DISPATCH_TO(SetOwn)
-            ASTRA_DISPATCH_TO(SetProp)
-            ASTRA_DISPATCH_TO(GetIndexRef)
-            ASTRA_DISPATCH_TO(OwnLocal)
-            ASTRA_DISPATCH_TO(GetIndex)
-            ASTRA_DISPATCH_TO(SetIndex)
-            ASTRA_DISPATCH_TO(SetSuper)
-            ASTRA_DISPATCH_TO(GetSuper)
-            ASTRA_DISPATCH_TO(Add)
-            ASTRA_DISPATCH_TO(Sub)
-            ASTRA_DISPATCH_TO(Mul)
-            ASTRA_DISPATCH_TO(StoreLocal)
-            ASTRA_DISPATCH_TO(CopyLocal)
-            ASTRA_DISPATCH_TO(CheckLocal)
-            ASTRA_DISPATCH_TO(Div)
-            ASTRA_DISPATCH_TO(Mod)
-            ASTRA_DISPATCH_TO(AddWrap)
-            ASTRA_DISPATCH_TO(SubWrap)
-            ASTRA_DISPATCH_TO(MulWrap)
-            ASTRA_DISPATCH_TO(Shl)
-            ASTRA_DISPATCH_TO(Shr)
-            ASTRA_DISPATCH_TO(Ushr)
-            ASTRA_DISPATCH_TO(BitAnd)
-            ASTRA_DISPATCH_TO(BitOr)
-            ASTRA_DISPATCH_TO(BitXor)
-            ASTRA_DISPATCH_TO(BitNot)
-            ASTRA_DISPATCH_TO(Neg)
-            ASTRA_DISPATCH_TO(Not)
-            ASTRA_DISPATCH_TO(Eq)
-            ASTRA_DISPATCH_TO(Identical)
-            ASTRA_DISPATCH_TO(Lt)
-            ASTRA_DISPATCH_TO(Le)
-            ASTRA_DISPATCH_TO(Gt)
-            ASTRA_DISPATCH_TO(Ge)
-            ASTRA_DISPATCH_TO(Is)
-            ASTRA_DISPATCH_TO(Jump)
-            ASTRA_DISPATCH_TO(Loop)
-            ASTRA_DISPATCH_TO(JumpIfFalse)
-            ASTRA_DISPATCH_TO(And)
-            ASTRA_DISPATCH_TO(Or)
-            ASTRA_DISPATCH_TO(JumpIfNull)
-            ASTRA_DISPATCH_TO(JumpIfNotNull)
-            ASTRA_DISPATCH_TO(AssertNotNull)
-            ASTRA_DISPATCH_TO(Swap)
-            ASTRA_DISPATCH_TO(PopUnder)
-            ASTRA_DISPATCH_TO(IsType)
-            ASTRA_DISPATCH_TO(Cast)
-            ASTRA_DISPATCH_TO(CastOrNull)
-            ASTRA_DISPATCH_TO(Settle)
-            ASTRA_DISPATCH_TO(Call)
-            ASTRA_DISPATCH_TO(CallNamed)
-            ASTRA_DISPATCH_TO(Spread)
-            ASTRA_DISPATCH_TO(CallSpread)
-            ASTRA_DISPATCH_TO(InvokeOwn)
-            ASTRA_DISPATCH_TO(Invoke)
-            ASTRA_DISPATCH_TO(InvokeOwnTrailing)
-            ASTRA_DISPATCH_TO(InvokeTrailing)
-            ASTRA_DISPATCH_TO(SuperInvoke)
-            ASTRA_DISPATCH_TO(SuperInvokeTrailing)
-            ASTRA_DISPATCH_TO(SuperInit)
-            ASTRA_DISPATCH_TO(Closure)
-            ASTRA_DISPATCH_TO(MakeForms)
-            ASTRA_DISPATCH_TO(MethodForms)
-            ASTRA_DISPATCH_TO(StaticForms)
-            ASTRA_DISPATCH_TO(GetIndexOr)
-            ASTRA_DISPATCH_TO(CloseUpvalue)
-            ASTRA_DISPATCH_TO(CallOn)
-            ASTRA_DISPATCH_TO(ImplicitFirst)
-            ASTRA_DISPATCH_TO(TailLoop)
-            ASTRA_DISPATCH_TO(ReturnInit)
-            ASTRA_DISPATCH_TO(Return)
-            ASTRA_DISPATCH_TO(Class)
-            ASTRA_DISPATCH_TO(Inherit)
-            ASTRA_DISPATCH_TO(ClassInit)
-            ASTRA_DISPATCH_TO(EnsureClassInit)
-            ASTRA_DISPATCH_TO(MissingArg)
-            ASTRA_DISPATCH_TO(DataField)
-            ASTRA_DISPATCH_TO(Extend)
-            ASTRA_DISPATCH_TO(Bridge)
-            ASTRA_DISPATCH_TO(BridgeMethod)
-            ASTRA_DISPATCH_TO(Lazy)
-            ASTRA_DISPATCH_TO(UnstableKey)
-            ASTRA_DISPATCH_TO(Component)
-            ASTRA_DISPATCH_TO(IterNextPair)
-            ASTRA_DISPATCH_TO(MarkInterface)
-            ASTRA_DISPATCH_TO(Extension)
-            ASTRA_DISPATCH_TO(MarkAbstract)
-            ASTRA_DISPATCH_TO(ClassOrigin)
-            ASTRA_DISPATCH_TO(MarkValue)
-            ASTRA_DISPATCH_TO(Numeric)
-            ASTRA_DISPATCH_TO(WithRefResult)
-            ASTRA_DISPATCH_TO(FieldDestination)
-            ASTRA_DISPATCH_TO(PlaceLocal)
-            ASTRA_DISPATCH_TO(PlaceUpvalue)
-            ASTRA_DISPATCH_TO(PlaceGlobal)
-            ASTRA_DISPATCH_TO(PlaceField)
-            ASTRA_DISPATCH_TO(PlaceIndex)
-            ASTRA_DISPATCH_TO(InsertNew)
-            ASTRA_DISPATCH_TO(AddNew)
-            ASTRA_DISPATCH_TO(WithDestinationAt)
-            ASTRA_DISPATCH_TO(WithFrameDestination)
-            ASTRA_DISPATCH_TO(CheckOverride)
-            ASTRA_DISPATCH_TO(Require)
-            ASTRA_DISPATCH_TO(ClassNumber)
-            ASTRA_DISPATCH_TO(MemberAccess)
-            ASTRA_DISPATCH_TO(StaticAccess)
-            ASTRA_DISPATCH_TO(FinishClass)
-            ASTRA_DISPATCH_TO(Getter)
-            ASTRA_DISPATCH_TO(Setter)
-            ASTRA_DISPATCH_TO(PendingEnum)
-            ASTRA_DISPATCH_TO(EnumNext)
-            ASTRA_DISPATCH_TO(EnumEntry)
-            ASTRA_DISPATCH_TO(EnumSeal)
-            ASTRA_DISPATCH_TO(StaticGetter)
-            ASTRA_DISPATCH_TO(StaticSetter)
-            ASTRA_DISPATCH_TO(StaticField)
-            ASTRA_DISPATCH_TO(DeclareField)
-            ASTRA_DISPATCH_TO(FieldInit)
-            ASTRA_DISPATCH_TO(Method)
-            ASTRA_DISPATCH_TO(StaticMethod)
-            ASTRA_DISPATCH_TO(BuildList)
-            ASTRA_DISPATCH_TO(TagCollection)
-            ASTRA_DISPATCH_TO(BuildMap)
-            ASTRA_DISPATCH_TO(BuildString)
-            ASTRA_DISPATCH_TO(Range)
-            ASTRA_DISPATCH_TO(FromEnd)
-            ASTRA_DISPATCH_TO(IterInit)
-            ASTRA_DISPATCH_TO(RangeLoop)
-            ASTRA_DISPATCH_TO(RangeNext)
-            ASTRA_DISPATCH_TO(DefaultArg)
-            ASTRA_DISPATCH_TO(IterNextRef)
-            ASTRA_DISPATCH_TO(IterNext)
-            ASTRA_DISPATCH_TO(TryBegin)
-            ASTRA_DISPATCH_TO(TryEnd)
-            ASTRA_DISPATCH_TO(Throw)
-            ASTRA_DISPATCH_TO(Import)
-            ASTRA_DISPATCH_TO(Count_)
-            ASTRA_DISPATCH_TO(MoveS)
-            ASTRA_DISPATCH_TO(MoveK)
-            ASTRA_DISPATCH_TO(SetTop)
-            ASTRA_DISPATCH_TO(RAddSS)
-            ASTRA_DISPATCH_TO(RAddSK)
-            ASTRA_DISPATCH_TO(RAddKS)
-            ASTRA_DISPATCH_TO(RSubSS)
-            ASTRA_DISPATCH_TO(RSubSK)
-            ASTRA_DISPATCH_TO(RMulSS)
-            ASTRA_DISPATCH_TO(RMulSK)
-            ASTRA_DISPATCH_TO(RMulKS)
-            ASTRA_DISPATCH_TO(RDivSS)
-            ASTRA_DISPATCH_TO(RDivSK)
-            ASTRA_DISPATCH_TO(RLtSS)
-            ASTRA_DISPATCH_TO(RLtSK)
-            ASTRA_DISPATCH_TO(RJumpLtSS)
-            ASTRA_DISPATCH_TO(RJumpLtSK)
-            ASTRA_DISPATCH_TO(RLeSS)
-            ASTRA_DISPATCH_TO(RLeSK)
-            ASTRA_DISPATCH_TO(RJumpLeSS)
-            ASTRA_DISPATCH_TO(RJumpLeSK)
-            ASTRA_DISPATCH_TO(RGtSS)
-            ASTRA_DISPATCH_TO(RGtSK)
-            ASTRA_DISPATCH_TO(RJumpGtSS)
-            ASTRA_DISPATCH_TO(RJumpGtSK)
-            ASTRA_DISPATCH_TO(RGeSS)
-            ASTRA_DISPATCH_TO(RGeSK)
-            ASTRA_DISPATCH_TO(RJumpGeSS)
-            ASTRA_DISPATCH_TO(RJumpGeSK)
-            ASTRA_DISPATCH_TO(REqSS)
-            ASTRA_DISPATCH_TO(REqSK)
-            ASTRA_DISPATCH_TO(RJumpEqSS)
-            ASTRA_DISPATCH_TO(RJumpEqSK)
-            ASTRA_DISPATCH_TO(RGetProp)
-            ASTRA_DISPATCH_TO(RModSS)
-            ASTRA_DISPATCH_TO(RModSK)
-            ASTRA_DISPATCH_TO(RSubKS)
-            ASTRA_DISPATCH_TO(RDivKS)
-            ASTRA_DISPATCH_TO(RSetPropSS)
-            ASTRA_DISPATCH_TO(RSetPropSK)
-            ASTRA_DISPATCH_TO(RGetGlobal)
-            ASTRA_DISPATCH_TO(RGetUpvalue)
-            ASTRA_DISPATCH_TO(RGetIndexSS)
-            ASTRA_DISPATCH_TO(RGetIndexSK)
-            ASTRA_DISPATCH_TO(RNeg)
-            ASTRA_DISPATCH_TO(RNot)
-            ASTRA_DISPATCH_TO(RJumpIfFalse)
-            ASTRA_DISPATCH_TO(RShlSK)
-            ASTRA_DISPATCH_TO(RShrSK)
-            ASTRA_DISPATCH_TO(RBitAndSS)
-            ASTRA_DISPATCH_TO(RBitAndSK)
-            ASTRA_DISPATCH_TO(RBitOrSS)
-            ASTRA_DISPATCH_TO(RBitOrSK)
+#define JADE_DISPATCH_TO(name) dispatch[static_cast<size_t>(Op::name)] = &&op_##name;
+            JADE_DISPATCH_TO(Const)
+            JADE_DISPATCH_TO(Null)
+            JADE_DISPATCH_TO(True)
+            JADE_DISPATCH_TO(False)
+            JADE_DISPATCH_TO(Pop)
+            JADE_DISPATCH_TO(Dup)
+            JADE_DISPATCH_TO(Dup2)
+            JADE_DISPATCH_TO(GetLocal)
+            JADE_DISPATCH_TO(SetLocal)
+            JADE_DISPATCH_TO(GetGlobal)
+            JADE_DISPATCH_TO(SetGlobal)
+            JADE_DISPATCH_TO(DefineGlobal)
+            JADE_DISPATCH_TO(GetImplicit)
+            JADE_DISPATCH_TO(TryImplicit)
+            JADE_DISPATCH_TO(InvokeImplicit)
+            JADE_DISPATCH_TO(SetImplicit)
+            JADE_DISPATCH_TO(DefineTypedGlobal)
+            JADE_DISPATCH_TO(IndexN)
+            JADE_DISPATCH_TO(SetIndexN)
+            JADE_DISPATCH_TO(BundleValues)
+            JADE_DISPATCH_TO(MergeBundle)
+            JADE_DISPATCH_TO(DupN)
+            JADE_DISPATCH_TO(SettleEnum)
+            JADE_DISPATCH_TO(CheckParam)
+            JADE_DISPATCH_TO(CheckReturn)
+            JADE_DISPATCH_TO(CheckType)
+            JADE_DISPATCH_TO(GetUpvalue)
+            JADE_DISPATCH_TO(GetUpvalueChecked)
+            JADE_DISPATCH_TO(MakeType)
+            JADE_DISPATCH_TO(CachedType)
+            JADE_DISPATCH_TO(CacheType)
+            JADE_DISPATCH_TO(TypeCollection)
+            JADE_DISPATCH_TO(IsFull)
+            JADE_DISPATCH_TO(CastFull)
+            JADE_DISPATCH_TO(WithTypes)
+            JADE_DISPATCH_TO(FrameTypes)
+            JADE_DISPATCH_TO(TypeArg)
+            JADE_DISPATCH_TO(InstanceTypeArg)
+            JADE_DISPATCH_TO(SupertypeMaker)
+            JADE_DISPATCH_TO(CheckResult)
+            JADE_DISPATCH_TO(ClassOf)
+            JADE_DISPATCH_TO(ClassMeta)
+            JADE_DISPATCH_TO(AtomicField)
+            JADE_DISPATCH_TO(GetCaptured)
+            JADE_DISPATCH_TO(SetCaptured)
+            JADE_DISPATCH_TO(ObjectClass)
+            JADE_DISPATCH_TO(StoreClass)
+            JADE_DISPATCH_TO(ObjectClassTyped)
+            JADE_DISPATCH_TO(StoreClassTyped)
+            JADE_DISPATCH_TO(Capture)
+            JADE_DISPATCH_TO(NewObject)
+            JADE_DISPATCH_TO(Unset)
+            JADE_DISPATCH_TO(SetUpvalue)
+            JADE_DISPATCH_TO(GetOwn)
+            JADE_DISPATCH_TO(GetProp)
+            JADE_DISPATCH_TO(GetOwnRef)
+            JADE_DISPATCH_TO(GetPropRef)
+            JADE_DISPATCH_TO(SetOwn)
+            JADE_DISPATCH_TO(SetProp)
+            JADE_DISPATCH_TO(GetIndexRef)
+            JADE_DISPATCH_TO(OwnLocal)
+            JADE_DISPATCH_TO(GetIndex)
+            JADE_DISPATCH_TO(SetIndex)
+            JADE_DISPATCH_TO(SetSuper)
+            JADE_DISPATCH_TO(GetSuper)
+            JADE_DISPATCH_TO(Add)
+            JADE_DISPATCH_TO(Sub)
+            JADE_DISPATCH_TO(Mul)
+            JADE_DISPATCH_TO(StoreLocal)
+            JADE_DISPATCH_TO(CopyLocal)
+            JADE_DISPATCH_TO(CheckLocal)
+            JADE_DISPATCH_TO(Div)
+            JADE_DISPATCH_TO(Mod)
+            JADE_DISPATCH_TO(AddWrap)
+            JADE_DISPATCH_TO(SubWrap)
+            JADE_DISPATCH_TO(MulWrap)
+            JADE_DISPATCH_TO(Shl)
+            JADE_DISPATCH_TO(Shr)
+            JADE_DISPATCH_TO(Ushr)
+            JADE_DISPATCH_TO(BitAnd)
+            JADE_DISPATCH_TO(BitOr)
+            JADE_DISPATCH_TO(BitXor)
+            JADE_DISPATCH_TO(BitNot)
+            JADE_DISPATCH_TO(Neg)
+            JADE_DISPATCH_TO(Not)
+            JADE_DISPATCH_TO(Eq)
+            JADE_DISPATCH_TO(Identical)
+            JADE_DISPATCH_TO(Lt)
+            JADE_DISPATCH_TO(Le)
+            JADE_DISPATCH_TO(Gt)
+            JADE_DISPATCH_TO(Ge)
+            JADE_DISPATCH_TO(Is)
+            JADE_DISPATCH_TO(Jump)
+            JADE_DISPATCH_TO(Loop)
+            JADE_DISPATCH_TO(JumpIfFalse)
+            JADE_DISPATCH_TO(And)
+            JADE_DISPATCH_TO(Or)
+            JADE_DISPATCH_TO(JumpIfNull)
+            JADE_DISPATCH_TO(JumpIfNotNull)
+            JADE_DISPATCH_TO(AssertNotNull)
+            JADE_DISPATCH_TO(Swap)
+            JADE_DISPATCH_TO(PopUnder)
+            JADE_DISPATCH_TO(IsType)
+            JADE_DISPATCH_TO(Cast)
+            JADE_DISPATCH_TO(CastOrNull)
+            JADE_DISPATCH_TO(Settle)
+            JADE_DISPATCH_TO(Call)
+            JADE_DISPATCH_TO(CallNamed)
+            JADE_DISPATCH_TO(Spread)
+            JADE_DISPATCH_TO(CallSpread)
+            JADE_DISPATCH_TO(InvokeOwn)
+            JADE_DISPATCH_TO(Invoke)
+            JADE_DISPATCH_TO(InvokeOwnTrailing)
+            JADE_DISPATCH_TO(InvokeTrailing)
+            JADE_DISPATCH_TO(SuperInvoke)
+            JADE_DISPATCH_TO(SuperInvokeTrailing)
+            JADE_DISPATCH_TO(SuperInit)
+            JADE_DISPATCH_TO(Closure)
+            JADE_DISPATCH_TO(MakeForms)
+            JADE_DISPATCH_TO(MethodForms)
+            JADE_DISPATCH_TO(StaticForms)
+            JADE_DISPATCH_TO(GetIndexOr)
+            JADE_DISPATCH_TO(CloseUpvalue)
+            JADE_DISPATCH_TO(CallOn)
+            JADE_DISPATCH_TO(ImplicitFirst)
+            JADE_DISPATCH_TO(TailLoop)
+            JADE_DISPATCH_TO(ReturnInit)
+            JADE_DISPATCH_TO(Return)
+            JADE_DISPATCH_TO(Class)
+            JADE_DISPATCH_TO(Inherit)
+            JADE_DISPATCH_TO(ClassInit)
+            JADE_DISPATCH_TO(EnsureClassInit)
+            JADE_DISPATCH_TO(MissingArg)
+            JADE_DISPATCH_TO(DataField)
+            JADE_DISPATCH_TO(Extend)
+            JADE_DISPATCH_TO(Bridge)
+            JADE_DISPATCH_TO(BridgeMethod)
+            JADE_DISPATCH_TO(Lazy)
+            JADE_DISPATCH_TO(UnstableKey)
+            JADE_DISPATCH_TO(Component)
+            JADE_DISPATCH_TO(IterNextPair)
+            JADE_DISPATCH_TO(MarkInterface)
+            JADE_DISPATCH_TO(Extension)
+            JADE_DISPATCH_TO(MarkAbstract)
+            JADE_DISPATCH_TO(ClassOrigin)
+            JADE_DISPATCH_TO(MarkValue)
+            JADE_DISPATCH_TO(Numeric)
+            JADE_DISPATCH_TO(WithRefResult)
+            JADE_DISPATCH_TO(FieldDestination)
+            JADE_DISPATCH_TO(PlaceLocal)
+            JADE_DISPATCH_TO(PlaceUpvalue)
+            JADE_DISPATCH_TO(PlaceGlobal)
+            JADE_DISPATCH_TO(PlaceField)
+            JADE_DISPATCH_TO(PlaceIndex)
+            JADE_DISPATCH_TO(InsertNew)
+            JADE_DISPATCH_TO(AddNew)
+            JADE_DISPATCH_TO(WithDestinationAt)
+            JADE_DISPATCH_TO(WithFrameDestination)
+            JADE_DISPATCH_TO(CheckOverride)
+            JADE_DISPATCH_TO(Require)
+            JADE_DISPATCH_TO(ClassNumber)
+            JADE_DISPATCH_TO(MemberAccess)
+            JADE_DISPATCH_TO(StaticAccess)
+            JADE_DISPATCH_TO(FinishClass)
+            JADE_DISPATCH_TO(Getter)
+            JADE_DISPATCH_TO(Setter)
+            JADE_DISPATCH_TO(PendingEnum)
+            JADE_DISPATCH_TO(EnumNext)
+            JADE_DISPATCH_TO(EnumEntry)
+            JADE_DISPATCH_TO(EnumSeal)
+            JADE_DISPATCH_TO(StaticGetter)
+            JADE_DISPATCH_TO(StaticSetter)
+            JADE_DISPATCH_TO(StaticField)
+            JADE_DISPATCH_TO(DeclareField)
+            JADE_DISPATCH_TO(FieldInit)
+            JADE_DISPATCH_TO(Method)
+            JADE_DISPATCH_TO(StaticMethod)
+            JADE_DISPATCH_TO(BuildList)
+            JADE_DISPATCH_TO(TagCollection)
+            JADE_DISPATCH_TO(BuildMap)
+            JADE_DISPATCH_TO(BuildString)
+            JADE_DISPATCH_TO(Range)
+            JADE_DISPATCH_TO(FromEnd)
+            JADE_DISPATCH_TO(IterInit)
+            JADE_DISPATCH_TO(RangeLoop)
+            JADE_DISPATCH_TO(RangeNext)
+            JADE_DISPATCH_TO(DefaultArg)
+            JADE_DISPATCH_TO(IterNextRef)
+            JADE_DISPATCH_TO(IterNext)
+            JADE_DISPATCH_TO(TryBegin)
+            JADE_DISPATCH_TO(TryEnd)
+            JADE_DISPATCH_TO(Throw)
+            JADE_DISPATCH_TO(Import)
+            JADE_DISPATCH_TO(Count_)
+            JADE_DISPATCH_TO(MoveS)
+            JADE_DISPATCH_TO(MoveK)
+            JADE_DISPATCH_TO(SetTop)
+            JADE_DISPATCH_TO(RAddSS)
+            JADE_DISPATCH_TO(RAddSK)
+            JADE_DISPATCH_TO(RAddKS)
+            JADE_DISPATCH_TO(RSubSS)
+            JADE_DISPATCH_TO(RSubSK)
+            JADE_DISPATCH_TO(RMulSS)
+            JADE_DISPATCH_TO(RMulSK)
+            JADE_DISPATCH_TO(RMulKS)
+            JADE_DISPATCH_TO(RDivSS)
+            JADE_DISPATCH_TO(RDivSK)
+            JADE_DISPATCH_TO(RLtSS)
+            JADE_DISPATCH_TO(RLtSK)
+            JADE_DISPATCH_TO(RJumpLtSS)
+            JADE_DISPATCH_TO(RJumpLtSK)
+            JADE_DISPATCH_TO(RLeSS)
+            JADE_DISPATCH_TO(RLeSK)
+            JADE_DISPATCH_TO(RJumpLeSS)
+            JADE_DISPATCH_TO(RJumpLeSK)
+            JADE_DISPATCH_TO(RGtSS)
+            JADE_DISPATCH_TO(RGtSK)
+            JADE_DISPATCH_TO(RJumpGtSS)
+            JADE_DISPATCH_TO(RJumpGtSK)
+            JADE_DISPATCH_TO(RGeSS)
+            JADE_DISPATCH_TO(RGeSK)
+            JADE_DISPATCH_TO(RJumpGeSS)
+            JADE_DISPATCH_TO(RJumpGeSK)
+            JADE_DISPATCH_TO(REqSS)
+            JADE_DISPATCH_TO(REqSK)
+            JADE_DISPATCH_TO(RJumpEqSS)
+            JADE_DISPATCH_TO(RJumpEqSK)
+            JADE_DISPATCH_TO(RGetProp)
+            JADE_DISPATCH_TO(RModSS)
+            JADE_DISPATCH_TO(RModSK)
+            JADE_DISPATCH_TO(RSubKS)
+            JADE_DISPATCH_TO(RDivKS)
+            JADE_DISPATCH_TO(RSetPropSS)
+            JADE_DISPATCH_TO(RSetPropSK)
+            JADE_DISPATCH_TO(RGetGlobal)
+            JADE_DISPATCH_TO(RGetUpvalue)
+            JADE_DISPATCH_TO(RGetIndexSS)
+            JADE_DISPATCH_TO(RGetIndexSK)
+            JADE_DISPATCH_TO(RNeg)
+            JADE_DISPATCH_TO(RNot)
+            JADE_DISPATCH_TO(RJumpIfFalse)
+            JADE_DISPATCH_TO(RShlSK)
+            JADE_DISPATCH_TO(RShrSK)
+            JADE_DISPATCH_TO(RBitAndSS)
+            JADE_DISPATCH_TO(RBitAndSK)
+            JADE_DISPATCH_TO(RBitOrSS)
+            JADE_DISPATCH_TO(RBitOrSK)
             // Since M6.7 step 5: typed arithmetic, places, type slots, RGetPath (G14).
-            ASTRA_DISPATCH_TO(AddI)
-            ASTRA_DISPATCH_TO(SubI)
-            ASTRA_DISPATCH_TO(MulI)
-            ASTRA_DISPATCH_TO(DivF)
-            ASTRA_DISPATCH_TO(AddF)
-            ASTRA_DISPATCH_TO(SubF)
-            ASTRA_DISPATCH_TO(MulF)
-            ASTRA_DISPATCH_TO(LtI)
-            ASTRA_DISPATCH_TO(LeI)
-            ASTRA_DISPATCH_TO(GtI)
-            ASTRA_DISPATCH_TO(GeI)
-            ASTRA_DISPATCH_TO(EqI)
-            ASTRA_DISPATCH_TO(LtF)
-            ASTRA_DISPATCH_TO(LeF)
-            ASTRA_DISPATCH_TO(GtF)
-            ASTRA_DISPATCH_TO(GeF)
-            ASTRA_DISPATCH_TO(EqF)
-            ASTRA_DISPATCH_TO(EnterPlaces)
-            ASTRA_DISPATCH_TO(SetPlace)
-            ASTRA_DISPATCH_TO(WithPlace)
-            ASTRA_DISPATCH_TO(KeepLocal)
-            ASTRA_DISPATCH_TO(KeepTop)
-            ASTRA_DISPATCH_TO(FieldTypesMaker)
-            ASTRA_DISPATCH_TO(TypeSlots)
-            ASTRA_DISPATCH_TO(RGetPath)
-            ASTRA_DISPATCH_TO(RAddISS)
-            ASTRA_DISPATCH_TO(RAddISK)
-            ASTRA_DISPATCH_TO(RAddIKS)
-            ASTRA_DISPATCH_TO(RSubISS)
-            ASTRA_DISPATCH_TO(RSubISK)
-            ASTRA_DISPATCH_TO(RSubIKS)
-            ASTRA_DISPATCH_TO(RMulISS)
-            ASTRA_DISPATCH_TO(RMulISK)
-            ASTRA_DISPATCH_TO(RMulIKS)
-            ASTRA_DISPATCH_TO(RAddFSS)
-            ASTRA_DISPATCH_TO(RAddFSK)
-            ASTRA_DISPATCH_TO(RAddFKS)
-            ASTRA_DISPATCH_TO(RSubFSS)
-            ASTRA_DISPATCH_TO(RSubFSK)
-            ASTRA_DISPATCH_TO(RSubFKS)
-            ASTRA_DISPATCH_TO(RMulFSS)
-            ASTRA_DISPATCH_TO(RMulFSK)
-            ASTRA_DISPATCH_TO(RMulFKS)
-            ASTRA_DISPATCH_TO(RDivFSS)
-            ASTRA_DISPATCH_TO(RDivFSK)
-            ASTRA_DISPATCH_TO(RDivFKS)
-            ASTRA_DISPATCH_TO(RLtISS)
-            ASTRA_DISPATCH_TO(RLtISK)
-            ASTRA_DISPATCH_TO(RLeISS)
-            ASTRA_DISPATCH_TO(RLeISK)
-            ASTRA_DISPATCH_TO(RGtISS)
-            ASTRA_DISPATCH_TO(RGtISK)
-            ASTRA_DISPATCH_TO(RGeISS)
-            ASTRA_DISPATCH_TO(RGeISK)
-            ASTRA_DISPATCH_TO(REqISS)
-            ASTRA_DISPATCH_TO(REqISK)
-            ASTRA_DISPATCH_TO(RLtFSS)
-            ASTRA_DISPATCH_TO(RLtFSK)
-            ASTRA_DISPATCH_TO(RLeFSS)
-            ASTRA_DISPATCH_TO(RLeFSK)
-            ASTRA_DISPATCH_TO(RGtFSS)
-            ASTRA_DISPATCH_TO(RGtFSK)
-            ASTRA_DISPATCH_TO(RGeFSS)
-            ASTRA_DISPATCH_TO(RGeFSK)
-            ASTRA_DISPATCH_TO(REqFSS)
-            ASTRA_DISPATCH_TO(REqFSK)
-            ASTRA_DISPATCH_TO(RJumpLtISS)
-            ASTRA_DISPATCH_TO(RJumpLtISK)
-            ASTRA_DISPATCH_TO(RJumpLeISS)
-            ASTRA_DISPATCH_TO(RJumpLeISK)
-            ASTRA_DISPATCH_TO(RJumpGtISS)
-            ASTRA_DISPATCH_TO(RJumpGtISK)
-            ASTRA_DISPATCH_TO(RJumpGeISS)
-            ASTRA_DISPATCH_TO(RJumpGeISK)
-            ASTRA_DISPATCH_TO(RJumpEqISS)
-            ASTRA_DISPATCH_TO(RJumpEqISK)
-            ASTRA_DISPATCH_TO(RJumpLtFSS)
-            ASTRA_DISPATCH_TO(RJumpLtFSK)
-            ASTRA_DISPATCH_TO(RJumpLeFSS)
-            ASTRA_DISPATCH_TO(RJumpLeFSK)
-            ASTRA_DISPATCH_TO(RJumpGtFSS)
-            ASTRA_DISPATCH_TO(RJumpGtFSK)
-            ASTRA_DISPATCH_TO(RJumpGeFSS)
-            ASTRA_DISPATCH_TO(RJumpGeFSK)
-            ASTRA_DISPATCH_TO(RJumpEqFSS)
-            ASTRA_DISPATCH_TO(RJumpEqFSK)
-#undef ASTRA_DISPATCH_TO
+            JADE_DISPATCH_TO(AddI)
+            JADE_DISPATCH_TO(SubI)
+            JADE_DISPATCH_TO(MulI)
+            JADE_DISPATCH_TO(DivF)
+            JADE_DISPATCH_TO(AddF)
+            JADE_DISPATCH_TO(SubF)
+            JADE_DISPATCH_TO(MulF)
+            JADE_DISPATCH_TO(LtI)
+            JADE_DISPATCH_TO(LeI)
+            JADE_DISPATCH_TO(GtI)
+            JADE_DISPATCH_TO(GeI)
+            JADE_DISPATCH_TO(EqI)
+            JADE_DISPATCH_TO(LtF)
+            JADE_DISPATCH_TO(LeF)
+            JADE_DISPATCH_TO(GtF)
+            JADE_DISPATCH_TO(GeF)
+            JADE_DISPATCH_TO(EqF)
+            JADE_DISPATCH_TO(EnterPlaces)
+            JADE_DISPATCH_TO(SetPlace)
+            JADE_DISPATCH_TO(WithPlace)
+            JADE_DISPATCH_TO(KeepLocal)
+            JADE_DISPATCH_TO(KeepTop)
+            JADE_DISPATCH_TO(FieldTypesMaker)
+            JADE_DISPATCH_TO(TypeSlots)
+            JADE_DISPATCH_TO(RGetPath)
+            JADE_DISPATCH_TO(RAddISS)
+            JADE_DISPATCH_TO(RAddISK)
+            JADE_DISPATCH_TO(RAddIKS)
+            JADE_DISPATCH_TO(RSubISS)
+            JADE_DISPATCH_TO(RSubISK)
+            JADE_DISPATCH_TO(RSubIKS)
+            JADE_DISPATCH_TO(RMulISS)
+            JADE_DISPATCH_TO(RMulISK)
+            JADE_DISPATCH_TO(RMulIKS)
+            JADE_DISPATCH_TO(RAddFSS)
+            JADE_DISPATCH_TO(RAddFSK)
+            JADE_DISPATCH_TO(RAddFKS)
+            JADE_DISPATCH_TO(RSubFSS)
+            JADE_DISPATCH_TO(RSubFSK)
+            JADE_DISPATCH_TO(RSubFKS)
+            JADE_DISPATCH_TO(RMulFSS)
+            JADE_DISPATCH_TO(RMulFSK)
+            JADE_DISPATCH_TO(RMulFKS)
+            JADE_DISPATCH_TO(RDivFSS)
+            JADE_DISPATCH_TO(RDivFSK)
+            JADE_DISPATCH_TO(RDivFKS)
+            JADE_DISPATCH_TO(RLtISS)
+            JADE_DISPATCH_TO(RLtISK)
+            JADE_DISPATCH_TO(RLeISS)
+            JADE_DISPATCH_TO(RLeISK)
+            JADE_DISPATCH_TO(RGtISS)
+            JADE_DISPATCH_TO(RGtISK)
+            JADE_DISPATCH_TO(RGeISS)
+            JADE_DISPATCH_TO(RGeISK)
+            JADE_DISPATCH_TO(REqISS)
+            JADE_DISPATCH_TO(REqISK)
+            JADE_DISPATCH_TO(RLtFSS)
+            JADE_DISPATCH_TO(RLtFSK)
+            JADE_DISPATCH_TO(RLeFSS)
+            JADE_DISPATCH_TO(RLeFSK)
+            JADE_DISPATCH_TO(RGtFSS)
+            JADE_DISPATCH_TO(RGtFSK)
+            JADE_DISPATCH_TO(RGeFSS)
+            JADE_DISPATCH_TO(RGeFSK)
+            JADE_DISPATCH_TO(REqFSS)
+            JADE_DISPATCH_TO(REqFSK)
+            JADE_DISPATCH_TO(RJumpLtISS)
+            JADE_DISPATCH_TO(RJumpLtISK)
+            JADE_DISPATCH_TO(RJumpLeISS)
+            JADE_DISPATCH_TO(RJumpLeISK)
+            JADE_DISPATCH_TO(RJumpGtISS)
+            JADE_DISPATCH_TO(RJumpGtISK)
+            JADE_DISPATCH_TO(RJumpGeISS)
+            JADE_DISPATCH_TO(RJumpGeISK)
+            JADE_DISPATCH_TO(RJumpEqISS)
+            JADE_DISPATCH_TO(RJumpEqISK)
+            JADE_DISPATCH_TO(RJumpLtFSS)
+            JADE_DISPATCH_TO(RJumpLtFSK)
+            JADE_DISPATCH_TO(RJumpLeFSS)
+            JADE_DISPATCH_TO(RJumpLeFSK)
+            JADE_DISPATCH_TO(RJumpGtFSS)
+            JADE_DISPATCH_TO(RJumpGtFSK)
+            JADE_DISPATCH_TO(RJumpGeFSS)
+            JADE_DISPATCH_TO(RJumpGeFSK)
+            JADE_DISPATCH_TO(RJumpEqFSS)
+            JADE_DISPATCH_TO(RJumpEqFSK)
+#undef JADE_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
     }
@@ -6349,7 +6349,7 @@ void VM::run(int baseFrame) {
         try {
             LOAD_FRAME();
 
-#if ASTRA_TAIL_CALLS
+#if JADE_TAIL_CALLS
             {
                 // The first instruction's function, which calls the next one's, and so on until
                 // one returns: where run() ends. An error thrown in one comes here, as below.
@@ -6366,11 +6366,11 @@ void VM::run(int baseFrame) {
             // of those, it is read back. The quick ones work on it here and go straight on.
             Value* sp = sp_;
             for (;;) {
-#ifdef ASTRA_OP_COUNTS
+#ifdef JADE_OP_COUNTS
                 countOp(opAt(ip + kThreaded));
 #endif
                 sp_ = sp;
-#if ASTRA_GOTO_DISPATCH
+#if JADE_GOTO_DISPATCH
                 {
                     // Straight to the instruction's code, its address in the code (D160); the
                     // compiler copies the jump to the end of each instruction, where each is
@@ -6394,23 +6394,23 @@ void VM::run(int baseFrame) {
                 sp = sp_;
             }
 #endif
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             if (!handled(thrown)) throw;
         } catch (const std::bad_alloc&) {
             // Asking for memory failed. That is almost always one large request (a list, a
             // string, a buffer), so what is left is plenty for the error itself; if even that
             // fails, the program ends as before.
-            AstraThrow thrown = outOfMemory();
+            JadeThrow thrown = outOfMemory();
             if (!handled(thrown)) throw thrown;
         } catch (const std::length_error&) {
-            AstraThrow thrown = outOfMemory();  // more than a list or a string can ever hold
+            JadeThrow thrown = outOfMemory();  // more than a list or a string can ever hold
             if (!handled(thrown)) throw thrown;
         }
     }
 
 }
 
-#if ASTRA_TAIL_CALLS
+#if JADE_TAIL_CALLS
 // ---- The instructions as functions (M6.7) ----
 // instructions.inc again, each instruction a function of its own: VM::tail<op>. Its ways out:
 // NEXT calls the next instruction's function as its last step, and EXIT_RUN returns, to run().
@@ -6426,35 +6426,35 @@ void VM::run(int baseFrame) {
 #undef RUN_BASE
 #undef R_SLOW2
 #undef R_PLAIN2
-#define ASTRA_TAIL_ARGS ip, sp, base, frame, consts, caches, code
-#define CASE(name) template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS)
-#define ASTRA_DECLARE(name) template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS);
-#define ASTRA_FORWARD(to, name) \
-    template <> ASTRA_TAIL_FN int VM::tail<Op::name>(ASTRA_TAIL_PARAMS) { [[clang::musttail]] return tail<Op::to>(ASTRA_TAIL_ARGS); }
+#define JADE_TAIL_ARGS ip, sp, base, frame, consts, caches, code
+#define CASE(name) template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS)
+#define JADE_DECLARE(name) template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS);
+#define JADE_FORWARD(to, name) \
+    template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS) { [[clang::musttail]] return tail<Op::to>(JADE_TAIL_ARGS); }
 // CASES(a, b, ...): the code is a's; b and the rest go to it.
-#define ASTRA_CASES_1(a0) CASE(a0)
-#define ASTRA_CASES_2(a0, a1) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) CASE(a0)
-#define ASTRA_CASES_3(a0, a1, a2) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) CASE(a0)
-#define ASTRA_CASES_4(a0, a1, a2, a3) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) CASE(a0)
-#define ASTRA_CASES_5(a0, a1, a2, a3, a4) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) CASE(a0)
-#define ASTRA_CASES_6(a0, a1, a2, a3, a4, a5) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) CASE(a0)
-#define ASTRA_CASES_7(a0, a1, a2, a3, a4, a5, a6) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) CASE(a0)
-#define ASTRA_CASES_8(a0, a1, a2, a3, a4, a5, a6, a7) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) CASE(a0)
-#define ASTRA_CASES_9(a0, a1, a2, a3, a4, a5, a6, a7, a8) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) CASE(a0)
-#define ASTRA_CASES_10(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) CASE(a0)
-#define ASTRA_CASES_11(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) CASE(a0)
-#define ASTRA_CASES_12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) CASE(a0)
-#define ASTRA_CASES_13(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) CASE(a0)
-#define ASTRA_CASES_14(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) CASE(a0)
-#define ASTRA_CASES_15(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) ASTRA_FORWARD(a0, a14) CASE(a0)
-#define ASTRA_CASES_16(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) ASTRA_DECLARE(a0) ASTRA_FORWARD(a0, a1) ASTRA_FORWARD(a0, a2) ASTRA_FORWARD(a0, a3) ASTRA_FORWARD(a0, a4) ASTRA_FORWARD(a0, a5) ASTRA_FORWARD(a0, a6) ASTRA_FORWARD(a0, a7) ASTRA_FORWARD(a0, a8) ASTRA_FORWARD(a0, a9) ASTRA_FORWARD(a0, a10) ASTRA_FORWARD(a0, a11) ASTRA_FORWARD(a0, a12) ASTRA_FORWARD(a0, a13) ASTRA_FORWARD(a0, a14) ASTRA_FORWARD(a0, a15) CASE(a0)
-#define CASES(...) ASTRA_EXPAND(ASTRA_CAT(ASTRA_CASES_, ASTRA_COUNT(__VA_ARGS__))(__VA_ARGS__))
+#define JADE_CASES_1(a0) CASE(a0)
+#define JADE_CASES_2(a0, a1) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) CASE(a0)
+#define JADE_CASES_3(a0, a1, a2) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) CASE(a0)
+#define JADE_CASES_4(a0, a1, a2, a3) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) CASE(a0)
+#define JADE_CASES_5(a0, a1, a2, a3, a4) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) CASE(a0)
+#define JADE_CASES_6(a0, a1, a2, a3, a4, a5) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) CASE(a0)
+#define JADE_CASES_7(a0, a1, a2, a3, a4, a5, a6) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) CASE(a0)
+#define JADE_CASES_8(a0, a1, a2, a3, a4, a5, a6, a7) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) CASE(a0)
+#define JADE_CASES_9(a0, a1, a2, a3, a4, a5, a6, a7, a8) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) CASE(a0)
+#define JADE_CASES_10(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) CASE(a0)
+#define JADE_CASES_11(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) CASE(a0)
+#define JADE_CASES_12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) CASE(a0)
+#define JADE_CASES_13(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) CASE(a0)
+#define JADE_CASES_14(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) CASE(a0)
+#define JADE_CASES_15(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) JADE_FORWARD(a0, a14) CASE(a0)
+#define JADE_CASES_16(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) JADE_FORWARD(a0, a14) JADE_FORWARD(a0, a15) CASE(a0)
+#define CASES(...) JADE_EXPAND(JADE_CAT(JADE_CASES_, JADE_COUNT(__VA_ARGS__))(__VA_ARGS__))
 #define NEXT()                                                            \
     do {                                                                  \
         const TailFn to_ = tailAt(ip);                                    \
         sp_ = sp;                                                         \
         frame->ip = ip += kThreaded + kOpBytes;                           \
-        [[clang::musttail]] return (this->*to_)(ASTRA_TAIL_ARGS);         \
+        [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);         \
     } while (0)
 #define DONE()     \
     do {           \
@@ -6462,63 +6462,63 @@ void VM::run(int baseFrame) {
         NEXT();    \
     } while (0)
 #define EXIT_RUN() return 0
-#define FALL_INTO(op) [[clang::musttail]] return tail<Op::op>(ASTRA_TAIL_ARGS)
+#define FALL_INTO(op) [[clang::musttail]] return tail<Op::op>(JADE_TAIL_ARGS)
 #undef HAS_COLD
 #undef GO_COLD
 #undef COLD
-#define HAS_COLD(op) template <> ASTRA_TAIL_FN int VM::cold<Op::op>(ASTRA_TAIL_PARAMS);
-#define GO_COLD(op) [[clang::musttail]] return cold<Op::op>(ASTRA_TAIL_ARGS)
-#define COLD(op) template <> __attribute__((noinline)) ASTRA_TAIL_FN int VM::cold<Op::op>(ASTRA_TAIL_PARAMS)
+#define HAS_COLD(op) template <> JADE_TAIL_FN int VM::cold<Op::op>(JADE_TAIL_PARAMS);
+#define GO_COLD(op) [[clang::musttail]] return cold<Op::op>(JADE_TAIL_ARGS)
+#define COLD(op) template <> __attribute__((noinline)) JADE_TAIL_FN int VM::cold<Op::op>(JADE_TAIL_PARAMS)
 #define RUN_BASE context_->runBase
 #define LABEL(l)
 // The instruction whose code a label of instructions.inc is in, or at the start of.
-#define ASTRA_OP_OF_getIndex GetIndex
-#define ASTRA_OP_OF_iterNext IterNext
-#define ASTRA_OP_OF_plainAdd Add
-#define ASTRA_OP_OF_plainDiv Div
-#define ASTRA_OP_OF_plainEq Eq
-#define ASTRA_OP_OF_plainGe Ge
-#define ASTRA_OP_OF_plainGt Gt
-#define ASTRA_OP_OF_plainLe Le
-#define ASTRA_OP_OF_plainLt Lt
-#define ASTRA_OP_OF_plainMod Mod
-#define ASTRA_OP_OF_plainMul Mul
-#define ASTRA_OP_OF_plainNeg Neg
-#define ASTRA_OP_OF_plainNot Not
-#define ASTRA_OP_OF_plainSub Sub
-#define JUMP_LABEL(l) [[clang::musttail]] return tail<Op::ASTRA_OP_OF_##l>(ASTRA_TAIL_ARGS)
+#define JADE_OP_OF_getIndex GetIndex
+#define JADE_OP_OF_iterNext IterNext
+#define JADE_OP_OF_plainAdd Add
+#define JADE_OP_OF_plainDiv Div
+#define JADE_OP_OF_plainEq Eq
+#define JADE_OP_OF_plainGe Ge
+#define JADE_OP_OF_plainGt Gt
+#define JADE_OP_OF_plainLe Le
+#define JADE_OP_OF_plainLt Lt
+#define JADE_OP_OF_plainMod Mod
+#define JADE_OP_OF_plainMul Mul
+#define JADE_OP_OF_plainNeg Neg
+#define JADE_OP_OF_plainNot Not
+#define JADE_OP_OF_plainSub Sub
+#define JUMP_LABEL(l) [[clang::musttail]] return tail<Op::JADE_OP_OF_##l>(JADE_TAIL_ARGS)
 #define R_SLOW2(b, c, sAt, slowAt)                                                   \
     {                                                                                \
         slowB_ = &(b);                                                               \
         slowC_ = &(c);                                                               \
-        [[clang::musttail]] return slowTwo<sAt, slowAt>(ASTRA_TAIL_ARGS);            \
+        [[clang::musttail]] return slowTwo<sAt, slowAt>(JADE_TAIL_ARGS);            \
     }
 #define R_PLAIN2(b, c, plain)                                                        \
     if (ip[0] == ip[4]) {                                                            \
         slowB_ = &(b);                                                               \
         slowC_ = &(c);                                                               \
-        [[clang::musttail]] return plainTwo<Op::ASTRA_OP_OF_##plain>(ASTRA_TAIL_ARGS); \
+        [[clang::musttail]] return plainTwo<Op::JADE_OP_OF_##plain>(JADE_TAIL_ARGS); \
     }
 
 // What is jumped into before its own code comes.
-ASTRA_DECLARE(Return)
-ASTRA_DECLARE(Add)
-ASTRA_DECLARE(Div)
-ASTRA_DECLARE(Eq)
-ASTRA_DECLARE(Ge)
-ASTRA_DECLARE(GetIndex)
-ASTRA_DECLARE(Gt)
-ASTRA_DECLARE(IterNext)
-ASTRA_DECLARE(Le)
-ASTRA_DECLARE(Lt)
-ASTRA_DECLARE(Mod)
-ASTRA_DECLARE(Mul)
-ASTRA_DECLARE(Neg)
-ASTRA_DECLARE(Not)
-ASTRA_DECLARE(Sub)
+JADE_DECLARE(Return)
+JADE_DECLARE(Add)
+JADE_DECLARE(Div)
+JADE_DECLARE(Eq)
+JADE_DECLARE(Ge)
+JADE_DECLARE(GetIndex)
+JADE_DECLARE(Gt)
+JADE_DECLARE(IterNext)
+JADE_DECLARE(Le)
+JADE_DECLARE(Lt)
+JADE_DECLARE(Mod)
+JADE_DECLARE(Mul)
+JADE_DECLARE(Neg)
+JADE_DECLARE(Not)
+JADE_DECLARE(Sub)
 
 template <int sAt, int slowAt>
-__attribute__((noinline)) ASTRA_TAIL_FN int VM::slowTwo(ASTRA_TAIL_PARAMS) {
+__attribute__((noinline)) JADE_TAIL_FN int VM::slowTwo(JADE_TAIL_PARAMS) {
     const Value b_ = *slowB_, c_ = *slowC_;
     Value* const at = base + ip[sAt];
     at[0] = b_;
@@ -6529,21 +6529,21 @@ __attribute__((noinline)) ASTRA_TAIL_FN int VM::slowTwo(ASTRA_TAIL_PARAMS) {
 }
 
 template <Op plain>
-__attribute__((noinline)) ASTRA_TAIL_FN int VM::plainTwo(ASTRA_TAIL_PARAMS) {
+__attribute__((noinline)) JADE_TAIL_FN int VM::plainTwo(JADE_TAIL_PARAMS) {
     const Value b_ = *slowB_, c_ = *slowC_;
     Value* const at = base + ip[4];
     at[0] = b_;
     at[1] = c_;
     sp = sp_ = at + 2;
     ip += 9;
-    [[clang::musttail]] return tail<plain>(ASTRA_TAIL_ARGS);
+    [[clang::musttail]] return tail<plain>(JADE_TAIL_ARGS);
 }
 
 #include "instructions.inc"
 
 // An instruction run code never has.
 template <Op op>
-ASTRA_TAIL_FN int VM::tail(ASTRA_TAIL_PARAMS) {
+JADE_TAIL_FN int VM::tail(JADE_TAIL_PARAMS) {
     throw runtimeError(Thrown::InternalError, "invalid instruction");
 }
 
@@ -6563,8 +6563,8 @@ const TailFn* TailTable::get() {
 }
 
 #undef CASE
-#undef ASTRA_DECLARE
-#undef ASTRA_FORWARD
+#undef JADE_DECLARE
+#undef JADE_FORWARD
 #undef NEXT
 #undef DONE
 #undef EXIT_RUN
@@ -7309,7 +7309,7 @@ void VM::collectGarbage() {
             it = it->first->marked || it->first->immortal ? std::next(it) : extras_.erase(it);
     }
     // A failed job nothing asked about, now nothing can (8.7a): its error is reported on the
-    // event loop, where Astra code may run.
+    // event loop, where Jade code may run.
     for (auto it = unaskedFailures.begin(); it != unaskedFailures.end();) {
         if (it->first->marked || it->first->immortal) {
             ++it;
@@ -7629,4 +7629,4 @@ void VM::valueTooBig(const ObjClass* cls, uint32_t size) {
                                                           " bytes, and a value type is at most 64 KB (65,536 bytes), as it is copied whole: make it a class");
 }
 
-}  // namespace astra
+}  // namespace jade

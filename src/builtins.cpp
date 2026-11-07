@@ -37,7 +37,7 @@ extern char** environ;
 #include "sandbox.h"
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 // A request for more memory than the machine could ever give, its memory and page file together,
 // is refused at once, with the same error that running out gives; below that the allocator
@@ -255,7 +255,7 @@ namespace {
 
 void registerGlobals(VM& vm) {
     // __nameParams(type, name, params): what a built-in's parameters are called, from its
-    // declaration in src/std/builtins.astra. The standard library calls it as it loads; the
+    // declaration in src/std/builtins.jade. The standard library calls it as it loads; the
     // type is "" for a function.
     vm.defineNative("__nameParams", 3, 3, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isString() || !args[1].isString() || !args[2].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::InternalError, "__nameParams: bad arguments");
@@ -368,7 +368,7 @@ void registerGlobals(VM& vm) {
     // Throws what it is given as it is: the standard library's, for a failure caught where it was
     // thrown and given again later, whose class the compiler cannot know (D35).
     vm.defineNative("__rethrow", 1, 1, [](VM&, int, Value* args) -> Value {
-        AstraThrow thrown;
+        JadeThrow thrown;
         thrown.value = args[0];
         throw thrown;
     });
@@ -382,7 +382,7 @@ void registerGlobals(VM& vm) {
         return Value::null();
     });
 
-    // The program's name, by default: its own file's, without .astra (Program.name, D184).
+    // The program's name, by default: its own file's, without .jade (Program.name, D184).
     vm.defineNative("__programName", 0, 0, [](VM& vm, int, Value*) -> Value {
         return vm.str(vm.mainFileName());
     });
@@ -453,7 +453,7 @@ void registerGlobals(VM& vm) {
     });
 
     vm.defineNative("exit", 0, 1, [](VM& vm, int argc, Value* args) -> Value {
-        throw AstraExit{argc > 0 ? static_cast<int>(vm.toInt(args[0], "exit code")) : 0};
+        throw JadeExit{argc > 0 ? static_cast<int>(vm.toInt(args[0], "exit code")) : 0};
     });
 
     // A value's own hash, as a map takes it, at 32 bits: what hashCode() gives for a value
@@ -490,23 +490,23 @@ void registerMath(VM& vm) {
     math->statics.set(vm.intern("pi"), Value::number(3.14159265358979323846));
     math->statics.set(vm.intern("e"), Value::number(2.71828182845904523536));
 
-#define ASTRA_MATH_UNARY(NAME, FN)                                           \
+#define JADE_MATH_UNARY(NAME, FN)                                           \
     def(NAME, 1, 1, [](VM& vm, int, Value* args) -> Value {                 \
         return Value::number(FN(vm.toNumber(args[0], "Math." NAME "() argument"))); \
     })
-    ASTRA_MATH_UNARY("sqrt", std::sqrt);
-    ASTRA_MATH_UNARY("sin", std::sin);
-    ASTRA_MATH_UNARY("cos", std::cos);
-    ASTRA_MATH_UNARY("tan", std::tan);
-    ASTRA_MATH_UNARY("log", std::log);
-    ASTRA_MATH_UNARY("exp", std::exp);
-    ASTRA_MATH_UNARY("log10", std::log10);
-    ASTRA_MATH_UNARY("log2", std::log2);
-    ASTRA_MATH_UNARY("asin", std::asin);
-    ASTRA_MATH_UNARY("acos", std::acos);
-    ASTRA_MATH_UNARY("atan", std::atan);
-    ASTRA_MATH_UNARY("trunc", std::trunc);
-#undef ASTRA_MATH_UNARY
+    JADE_MATH_UNARY("sqrt", std::sqrt);
+    JADE_MATH_UNARY("sin", std::sin);
+    JADE_MATH_UNARY("cos", std::cos);
+    JADE_MATH_UNARY("tan", std::tan);
+    JADE_MATH_UNARY("log", std::log);
+    JADE_MATH_UNARY("exp", std::exp);
+    JADE_MATH_UNARY("log10", std::log10);
+    JADE_MATH_UNARY("log2", std::log2);
+    JADE_MATH_UNARY("asin", std::asin);
+    JADE_MATH_UNARY("acos", std::acos);
+    JADE_MATH_UNARY("atan", std::atan);
+    JADE_MATH_UNARY("trunc", std::trunc);
+#undef JADE_MATH_UNARY
 
     def("abs", 1, 1, [](VM& vm, int, Value* args) -> Value {
         args[0] = asWideInt(args[0]);   // a byte is an int here
@@ -834,8 +834,8 @@ void registerListMethods(VM& vm) {
         return self;
     });
 
-    // map, filter, reduce, each and find are in src/std/list.astra: a function given to a
-    // method written in Astra runs as part of the program, where a task can be set aside.
+    // map, filter, reduce, each and find are in src/std/list.jade: a function given to a
+    // method written in Jade runs as part of the program, where a task can be set aside.
 }
 
 // ---- Map methods ----
@@ -1163,4 +1163,4 @@ Value VM::numeric(uint8_t which, const Value* args) {
     }
 }
 
-}  // namespace astra
+}  // namespace jade

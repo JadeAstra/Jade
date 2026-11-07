@@ -11,7 +11,7 @@
 
 #include "host.h"
 
-namespace astra {
+namespace jade {
 
 class VM;
 
@@ -74,7 +74,7 @@ private:
 
 std::shared_ptr<SandboxHost> makeSandbox(bool windowsPaths, int64_t diskSize);
 
-// __sandbox, what Sandbox in the standard library (sandbox.astra) is built on.
+// __sandbox, what Sandbox in the standard library (sandbox.jade) is built on.
 void registerSandbox(VM& vm);
 
-}  // namespace astra
+}  // namespace jade

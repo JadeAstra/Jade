@@ -10,7 +10,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::text {
+namespace jade::text {
 
 namespace {
 
@@ -546,4 +546,4 @@ bool CffFont::outline(int glyph, const Coords& coords, Path& path) const {
     return path.verbs.size() > before;
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

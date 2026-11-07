@@ -1,0 +1,10 @@
+// A property's getter taking the place of one above throws no more than that one may: callers
+// through the interface would not catch it (D53, G38).
+interface Weighed {
+  val weight : int
+}
+class Box : Weighed {
+  override val weight : int
+    get() => throw IOException("no scale")
+}
+// expect compile error: error_property_override_throws.jade:8:5: error: the get() of 'weight' may throw IOException, which Weighed.weight it takes the place of cannot: callers through Weighed would not catch it; catch it here, or write throws IOException on the get() of Weighed.weight (D53)

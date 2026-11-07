@@ -11,26 +11,26 @@ and M6.7 left it.
 
 ## What is ported
 
-About 5,000 lines of Kotlin, into roughly the same number of lines of Astra, beside the
+About 5,000 lines of Kotlin, into roughly the same number of lines of Jade, beside the
 3,300 Topaz has now.
 
-| Kotlin | Lines | Astra | Holds |
+| Kotlin | Lines | Jade | Holds |
 | --- | --- | --- | --- |
-| `TextNav.kt` | 276 | `TextNav.astra` | `TextNav`, `DragSelector`, `CaretGeometry`, `CaretKeys` |
-| `Text.kt` | 817 | `Text.astra` | `TextEditable`, `StyleRun`, `TextLink`, `SharedTextModel` (undo, style runs, objects), `TextField`, `textField()` |
-| `TextArea.kt` | 887 | `TextArea.astra` | `TextArea`, `textArea()`: wrapping, culled painting, links, squiggles, block indent |
-| `HScrollBar.kt` | 130 | in `TextArea.astra` | the area's horizontal bar (internal) |
-| `Scroll.kt` | 258 | `Scroll.astra` | `Scroll`, `scroll()`, `ScrollAware`, `Pinnable` |
-| `Split.kt` | 159 | `Split.astra` | `Split`, `split()` |
-| `Tabs.kt` | 246 | `Tabs.astra` | `Tabs`, `Tabs.Tab`, `tabs()` |
-| `Controls.kt` | 532 | `Controls.astra` | `CheckBox`, `RadioGroup`, `RadioButton`, `Slider`, `ProgressBar`, `ListBox`, `Toggle`, `HoldRepeat`, `Spinner` |
-| `Collections.kt` | 452 | `Collections.astra` | `TreeNode`, `Tree`, `Table` |
-| `Combo.kt` | 151 | `Combo.astra` | `ComboBox` |
-| `Screen.kt` | 476 | `Screen.astra` | `Screen`, `screen()`, the menu bar's view, popups, tips, accelerators |
-| `Chrome.kt`, part | 140 of 934 | `Chrome.astra` | the menu model (`MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`), `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
-| `Drafts.kt` | 64 | `Drafts.astra` | `Drafts` (`Topaz.drafts`) |
-| `Block.kt`, `Doc.kt` | 316 | `Block.astra` | if chosen (below) |
-| the GLFW surface's timing | | `Window.astra` | tooltips after 600 ms, the caret's 500 ms blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, the system clipboard |
+| `TextNav.kt` | 276 | `TextNav.jade` | `TextNav`, `DragSelector`, `CaretGeometry`, `CaretKeys` |
+| `Text.kt` | 817 | `Text.jade` | `TextEditable`, `StyleRun`, `TextLink`, `SharedTextModel` (undo, style runs, objects), `TextField`, `textField()` |
+| `TextArea.kt` | 887 | `TextArea.jade` | `TextArea`, `textArea()`: wrapping, culled painting, links, squiggles, block indent |
+| `HScrollBar.kt` | 130 | in `TextArea.jade` | the area's horizontal bar (internal) |
+| `Scroll.kt` | 258 | `Scroll.jade` | `Scroll`, `scroll()`, `ScrollAware`, `Pinnable` |
+| `Split.kt` | 159 | `Split.jade` | `Split`, `split()` |
+| `Tabs.kt` | 246 | `Tabs.jade` | `Tabs`, `Tabs.Tab`, `tabs()` |
+| `Controls.kt` | 532 | `Controls.jade` | `CheckBox`, `RadioGroup`, `RadioButton`, `Slider`, `ProgressBar`, `ListBox`, `Toggle`, `HoldRepeat`, `Spinner` |
+| `Collections.kt` | 452 | `Collections.jade` | `TreeNode`, `Tree`, `Table` |
+| `Combo.kt` | 151 | `Combo.jade` | `ComboBox` |
+| `Screen.kt` | 476 | `Screen.jade` | `Screen`, `screen()`, the menu bar's view, popups, tips, accelerators |
+| `Chrome.kt`, part | 140 of 934 | `Chrome.jade` | the menu model (`MenuItem`, `CheckItem`, `Separator`, `Menu`, `MenuBar`), `ContextMenuProvider`, `StyledText`, `Clipboard`, `MemoryClipboard`, `FileFilter`, `FileDialog`, `NoFileDialog` |
+| `Drafts.kt` | 64 | `Drafts.jade` | `Drafts` (`Topaz.drafts`) |
+| `Block.kt`, `Doc.kt` | 316 | `Block.jade` | if chosen (below) |
+| the GLFW surface's timing | | `Window.jade` | tooltips after 600 ms, the caret's 500 ms blink, hold-to-repeat, popups taking presses, drop-downs, context menus, accelerators, the system clipboard |
 
 Not in M7: the rest of `Chrome.kt` (the dialogs, M8; `WindowSpec` and the rest replaced by
 `Window` in 6.1), `Layers.kt` (the 3D view's layers, M11), `Commands.kt` and `Overrides.kt`
@@ -54,7 +54,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
    limit), so a tall list never asks for a surface it cannot have. `TextUnits.charWidth`
    and `offsets`.
 2. **`TextNav`**, with a value type for a selection's two ends in place of Kotlin's reversed
-   ranges, which an Astra range does not keep. Tests: the word and line rules of
+   ranges, which an Jade range does not keep. Tests: the word and line rules of
    `TextNavParityTest`.
 3. **The text model**: `SharedTextModel` with its undo (the same merging of typing and of
    deleting, `compoundEdit`), style runs kept in step with edits, inline objects' places;
@@ -76,7 +76,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
 7. **`TextArea`**: unwrapped, then wrapped, then its horizontal bar, then culling. Timed on a
    text of 680,000 characters, the size that once took ten seconds a frame in JadeUI: wrapped
    rows kept per width and found by search, and a C++ piece for wrapping if the interpreter's
-   walk is too slow, public in Astra as such pieces are. Tests: `TextAreaTest` (15),
+   walk is too slow, public in Jade as such pieces are. Tests: `TextAreaTest` (15),
    `CaretRectTest`, `TextAreaLinksTest`, `TextAreaCurrentLineTest`, `TextAreaHScrollTest`,
    `TextAreaLargeTextTest`, `TextNavParityTest`.
 8. **`Split` and `Tabs`.** Tests: `SplitTest`, `JadeTabsChromeTest`, `LayoutPassTest`,
@@ -93,7 +93,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
     accelerators after the edit keys; `Window.menuBar` typed. Tests: `ScreenMenuTest`,
     `ScreenPopupTest`, `ScreenGeometryTest`, `AcceleratorTest`, `MultiHostHookTest`, the
     menu cases of the wheel and repaint tests, and the GLFW backend's menu and accelerator
-    tests rewritten for `topaz_host.astra`.
+    tests rewritten for `topaz_host.jade`.
 12. **The window's timed behaviour**: tooltips, the caret's blink, hold-to-repeat, each one
     timer set again as needed and cancelled when the window closes or loses focus (a running
     timer keeps a program alive); the system clipboard (plain text to the system, the last
@@ -101,7 +101,7 @@ Only the Clang Windows build is checked step by step; the full check comes at th
     fields that a test can move on, so nothing waits real time. Tests: `ScreenTipTest`,
     `IdleRepaintTest`, `SteadyStateFrameTest` on a hidden window.
 13. **`Block` and `Doc`**, if they are to be in M7 (below). `BlockTest` (6 of 7), `DocTest`.
-14. **The Launcher**: `examples/launcher.astra`, with its four rows of fields, its menus and
+14. **The Launcher**: `examples/launcher.jade`, with its four rows of fields, its menus and
     its widget tabs (Controls, Editor, Items, Tree, Table, Split), and the tabs of later
     milestones as below. Then the docs (gui-plan.md 6.4, "As built in M7"), the full check
     of every build, the benchmarks, and version 0.7.0.
@@ -111,7 +111,7 @@ pictures and send events, as M6's did.
 
 ## Speed
 
-The JVM walks text a character at a time cheaply; Astra's interpreter does not, so the text
+The JVM walks text a character at a time cheaply; Jade's interpreter does not, so the text
 widgets are where M7's speed is decided. Measured as they are built: typing and moving the
 caret in a 680,000-character area (a frame well under 16 ms), a 4,000-row table (JadeUI's
 own limits: fewer than 400 text draws, 200 layouts in 1.5 s), a 10,000-item list changing its

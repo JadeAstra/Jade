@@ -7,7 +7,7 @@
 #include <system_error>
 #include <vector>
 
-namespace astra {
+namespace jade {
 
 // One end of something read and written byte by byte that a sandbox keeps (M6.6.2): a file of its
 // own opened as a stream. A stream of the system's is the system's handle instead (io.cpp).
@@ -97,4 +97,4 @@ public:
 // The system's.
 Host& realHost();
 
-}  // namespace astra
+}  // namespace jade

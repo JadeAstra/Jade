@@ -1,5 +1,5 @@
-// Parallel sections: several cores running Astra code on the same objects at once. The
-// built-in __parallel, which src/std/parallel.astra is written on.
+// Parallel sections: several cores running Jade code on the same objects at once. The
+// built-in __parallel, which src/std/parallel.jade is written on.
 //
 // Threads take turns and workers copy; this does neither. A section is one call: the work is
 // cut into pieces (a share of a list's items, one of the functions given to parallel(...)),
@@ -36,7 +36,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 // One piece of a section: what to run it on, the number its objects are owned by, and how it
 // turned out.
@@ -48,7 +48,7 @@ struct ParallelPiece {
     std::vector<Value> results;
     Value result;
     bool failed = false;
-    AstraThrow error;
+    JadeThrow error;
 };
 
 // A section: the pieces, what they do, and who started it.
@@ -388,11 +388,11 @@ void VM::runParallelPiece(ParallelPiece& piece) {
                 break;
             }
         }
-    } catch (AstraThrow& thrown) {
+    } catch (JadeThrow& thrown) {
         piece.error = thrown;
         piece.failed = true;
         section.cancelled = true;
-    } catch (const AstraExit&) {
+    } catch (const JadeExit&) {
         piece.error = runtimeError(Thrown::IllegalStateException, "exit() was called in a parallel section");
         piece.failed = true;
         section.cancelled = true;
@@ -421,8 +421,8 @@ namespace {
 
 int coreCount() {
     int count = static_cast<int>(std::thread::hardware_concurrency());
-    // ASTRA_CORES: how many cores a section uses, whatever the machine has. For tests.
-    if (const char* wanted = std::getenv("ASTRA_CORES"); wanted != nullptr && *wanted != '\0') count = std::atoi(wanted);
+    // JADE_CORES: how many cores a section uses, whatever the machine has. For tests.
+    if (const char* wanted = std::getenv("JADE_CORES"); wanted != nullptr && *wanted != '\0') count = std::atoi(wanted);
     return std::clamp(count, 1, 64);
 }
 
@@ -769,12 +769,12 @@ Value VM::runParallelGather(Value source, Value into, Value each) {
 
 // ---- What a core is told when it oversteps ----
 
-AstraThrow VM::wholeBand() const {
+JadeThrow VM::wholeBand() const {
     return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "this List is the one the section is over and is read here an item at a time: a core looks only "
                                                "into its own items, " + std::to_string(bandFrom_) + " to " + std::to_string(bandTo_ - 1));
 }
 
-AstraThrow VM::outsideBand(size_t i) const {
+JadeThrow VM::outsideBand(size_t i) const {
     if (bandObject_->type == ObjType::List)
         return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "item " + std::to_string(i) + " is another core's in this parallel section: a core looks only into its "
                                                    "own items, " + std::to_string(bandFrom_) + " to " + std::to_string(bandTo_ - 1));
@@ -783,11 +783,11 @@ AstraThrow VM::outsideBand(size_t i) const {
                                                std::to_string(bandTo_ - 1) + " (8.7h)");
 }
 
-AstraThrow VM::notOwned(const std::string& what) const {
+JadeThrow VM::notOwned(const std::string& what) const {
     return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "a parallel section changes only the item it was given and what it makes itself: " + what);
 }
 
-AstraThrow VM::notOwned(const Obj* obj) const {
+JadeThrow VM::notOwned(const Obj* obj) const {
     if (obj->frozen != 0) {
         const char* const kind = obj->type == ObjType::List ? "list" : obj->type == ObjType::Map ? "map" : obj->type == ObjType::Set ? "set" : "value";
         const char* const copy = obj->type == ObjType::List ? "toOpenList()" : obj->type == ObjType::Map ? "toOpenMap()" : "toOpenSet()";
@@ -797,7 +797,7 @@ AstraThrow VM::notOwned(const Obj* obj) const {
     return notOwned(describe(*this, obj) + " is shared with the other cores, so here it can be read and not changed");
 }
 
-AstraThrow VM::otherCores(const Obj* obj) const {
+JadeThrow VM::otherCores(const Obj* obj) const {
     if (obj->core == kDrawnInParts)
         return const_cast<VM*>(this)->runtimeError(Thrown::IllegalStateException, "the pixels of an image are drawn on in parts in this parallel section: until it ends they are "
                                                                                    "drawn on through the parts of its canvas alone, and read by nothing");
@@ -1286,4 +1286,4 @@ void registerParallel(VM& vm) {
     vm.defineGlobal("__parallel", Value::object(parallel));
 }
 
-}  // namespace astra
+}  // namespace jade

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace astra::image {
+namespace jade::image {
 
 // Writes a picture as the bytes of a PNG file, compressed.
 std::vector<uint8_t> encodePng(const uint8_t* rgba, int width, int height);
@@ -25,4 +25,4 @@ bool inflate(const uint8_t* data, size_t size, std::vector<uint8_t>& out, size_t
 
 uint32_t crc32(const uint8_t* data, size_t size, uint32_t crc = 0);
 
-}  // namespace astra::image
+}  // namespace jade::image

@@ -25,11 +25,11 @@ In the real lexer, parser, compiler and VM:
 - Type annotations with type arguments and function types: `list<int>`,
   `map<string, list<int>>`, `(int) -> int`, `Grid.() -> Unit`.
 
-Three scripts exercise it, each passing from source, from a compiled `.astc` and as a built
+Three scripts exercise it, each passing from source, from a compiled `.jc` and as a built
 executable, and under the sanitizer with collection stress:
-`spikes/m0/lambdas.astra`, `spikes/m0/receivers.astra`, and a table of corner cases,
+`spikes/m0/lambdas.jade`, `spikes/m0/receivers.jade`, and a table of corner cases,
 `spikes/m0/grammar_probes.ps1`.
-`receivers.astra` ends with the layout block from the examples' `Launcher.kt`, written as it
+`receivers.jade` ends with the layout block from the examples' `Launcher.kt`, written as it
 would be ported, running against stand-in classes.
 
 The existing test suite passes 94 of 94 with these changes in place.
@@ -46,13 +46,13 @@ The existing test suite passes 94 of 94 with these changes in place.
 | A `{` on the line after a call | Starts a block, as today. A trailing lambda has to begin on the line the call ends on, as in Kotlin. |
 | `map<string, list<int>>` ending in `>>` | The parser splits the shift token. |
 
-The whole change to existing Astra code was seven empty-map literals, two of them in the old
+The whole change to existing Jade code was seven empty-map literals, two of them in the old
 `gui` library.
 
 ### Things the plan did not have
 
 1. **A parameter with a default before one without.** Kotlin's
-   `grid(id: String? = null, build: JadeGrid.() -> Unit)` is an error in Astra today, where
+   `grid(id: String? = null, build: JadeGrid.() -> Unit)` is an error in Jade today, where
    defaults must come last. The spike allows it. Such a parameter is filled by a lambda after
    the call or by name, and a call that leaves it without a value is an error.
 2. **A trailing lambda goes to the last parameter**, whatever came before it, including named
@@ -64,7 +64,7 @@ The whole change to existing Astra code was seven empty-map literals, two of the
    as a `fun main()` it behaves the same; with its body moved to the top level of a script it
    would not, if the object happened to have a member of that name.
 4. **A lambda's parameter list has to fit on its first line** in the spike. Kotlin allows it
-   to wrap. Decided: Astra allows it too, in M1.
+   to wrap. Decided: Jade allows it too, in M1.
 5. **Destructuring parameters, `{ (a, b) -> ... }`,** come with the destructuring feature and
    are not in the spike.
 
@@ -102,11 +102,11 @@ instruction of its own.
 These concern how files are loaded once a folder is a namespace. They cannot be tested until
 namespaces exist. Both recommendations were accepted:
 
-1. **Importing a folder loads every `.astra` file directly in it**, once, as one unit, so that
+1. **Importing a folder loads every `.jade` file directly in it**, once, as one unit, so that
    its files see each other whatever order they are in. This is what a Kotlin package is, and
    it is what `import "topaz"` has to mean.
 2. **Importing a file loads that file only**, into the namespace of the folder it is in. A
-   script with `import "helpers"` beside it therefore shares names with `helpers.astra`
+   script with `import "helpers"` beside it therefore shares names with `helpers.jade`
    exactly as today, and the other scripts in that folder are not touched.
 
 ## Spike 2: an OpenGL window and a text engine of our own
@@ -124,12 +124,12 @@ About 1,500 lines of C++ in `src/spike`, with no third-party code:
   it back; raw events delivered to a script function.
 - **png.cpp**: writes a PNG, for the pictures below.
 
-It is reachable from scripts as a class `Spike`, used by `spikes/m0/window.astra` and
-`spikes/m0/text_compare.astra`.
+It is reachable from scripts as a class `Spike`, used by `spikes/m0/window.jade` and
+`spikes/m0/text_compare.jade`.
 
 ### Text: the part to prove
 
-Running `text_compare.astra` draws Segoe UI at 11 to 28 pixels, our engine beside Windows'
+Running `text_compare.jade` draws Segoe UI at 11 to 28 pixels, our engine beside Windows'
 own, into `spikes/m0/out` (`text_compare.png`, `text_compare_dark.png`, and
 `text_compare_zoom.png` for the 12 and 13 pixel rows at three times the size). The pictures
 are not kept in the repository; the script makes them again.

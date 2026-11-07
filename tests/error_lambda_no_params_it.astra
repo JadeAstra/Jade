@@ -1,3 +1,0 @@
-// A lambda that says it takes nothing (`{ -> value }`) has no `it`.
-val f = { -> it + 1 }
-// expect compile error: error_lambda_no_params_it.astra:2:14: error: there is nothing named 'it' here: no variable, function or class of that name is in reach

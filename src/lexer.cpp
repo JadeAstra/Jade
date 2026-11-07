@@ -7,7 +7,7 @@
 
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -696,4 +696,4 @@ size_t Lexer::skipString(size_t p) const {
     throw error("unterminated string", true);
 }
 
-}  // namespace astra
+}  // namespace jade

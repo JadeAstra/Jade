@@ -1,0 +1,189 @@
+// Readers, writers, processes and sockets (D91, D119, D120). The program starts copies of
+// itself to have something known to talk to: with an argument it plays the part of the
+// other program.
+
+if (Program.arguments.contains("echo")) {
+  // Answers each line it reads, until it is told to stop.
+  print("ready")
+  while (true) {
+    val line = input()                // input() sends on what has been printed first
+    if (line == null or line == "quit") { break }
+    print("echo: " + line.upper())
+  }
+  exit(7)
+}
+if (Program.arguments.contains("slow")) {
+  // Says something, then nothing for a while, then something more.
+  print("first")
+  flush()
+  Thread.sleep(150.milliseconds)
+  print("second")
+  exit(0)
+}
+
+// ---- Files a piece at a time ----
+val file = Path("io-streams-test.txt")
+file.writer().use { out ->
+  out.println("one")
+  out.write("two\n")
+  out.write(Bytes([116, 104, 114, 101, 101]))
+}
+val reader = file.reader()
+print(reader.readLine(), reader.read(2), reader.isOpen)      // expect: one Bytes[116, 119] true
+print(reader.readText() == "o\nthree", reader.readLine(), reader.read())   // expect: true null null
+reader.close()
+print(reader.isOpen)                                         // expect: false
+try { reader.readLine() } catch (e : IOException) { print(e.message, e is Exception) }   // expect: the stream is closed true
+file.writer(append = true).use { it.newLine(); it.append("four").append(4) }
+print(file.reader().use { it.readLines() }, file.reader().use { it.readBytes().size })   // expect: ["one", "two", "three", "four4"] 19
+val seen : open List<int> = []
+file.reader().use { it.forEachLine { line -> seen.add(line.size) } }
+print(seen, file.reader().useLines { it.count() }, file.reader().use { it.lineSequence().first() })   // expect: [3, 3, 5, 5] 4 one
+file.delete()
+// The character set may change as the reading or writing goes on, as a protocol's may.
+val mixed = Path("io-streams-mixed.txt")
+mixed.writer().use { it.println("plain é"); it.charset = Charset.latin1; it.println("café") }
+mixed.reader().use { print(it.readLine(), it.charset, mixed.size()); it.charset = Charset.latin1; print(it.readLine()) }
+// expect: plain é utf8 14
+// expect: café
+mixed.delete()
+try { Path("no-such-directory/x.txt").reader() } catch (e : IOException) { print(e.message!!.startsWith("cannot read file 'no-such-directory/x.txt'")) }   // expect: true
+try { Path("no-such-file.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file 'no-such-file.txt'
+
+// ---- A program run to its end (D91) ----
+// The system's shell runs the commands: cmd on Windows, sh elsewhere (G56), each written for both.
+val onWindows = Path.separator == "\\"
+fun shell(windows : string, posix : string) : List<string> => onWindows ? ["cmd", "/c", windows] : ["sh", "-c", posix]
+val outAndErr = shell("echo out& echo err 1>&2", "echo out; echo err 1>&2")
+val run = Process.run(outAndErr)
+print(run.exitCode, run.output.trim(), run.error.trim())     // expect: 0 out err
+print(Process.run(shell("exit 3", "exit 3")).exitCode, Process.run(outAndErr, error = toOutput).output.trim().lines().map { it.trim() })   // expect: 3 ["out", "err"]
+val directory = Path("io streams directory")
+directory.mkdir()
+print(Process.run(shell("cd", "pwd"), directory = directory).output.trim().endsWith("io streams directory"))   // expect: true
+// A program that runs past its timeout is stopped, and run throws (8.8h).
+val slowly : List<string> = onWindows ? ["ping", "-n", "30", "127.0.0.1"] : ["sleep", "30"]
+val began = clock()
+try { Process.run(slowly, timeout = 300.milliseconds) } catch (e : TimeoutException) { print(e.message, clock() - began < 10.0) }   // expect: the program ran longer than 300 ms, and was stopped true
+print(Process.run(outAndErr, timeout = 30.seconds).output.trim())   // expect: out
+directory.delete()
+print(Process.run(shell("echo %JADE_TEST_VALUE%", "echo \$JADE_TEST_VALUE"), environment = {"JADE_TEST_VALUE": "from the parent"}).output.trim())   // expect: from the parent
+
+// ---- A program started, its streams where they are said to go ----
+val listing = Process(outAndErr)
+print(listing.output.readLines(), listing.error.readText().trim(), listing.waitFor(), listing.isAlive, listing.exitCode)   // expect: ["out"] err 0 false 0
+val merged = Process(outAndErr, error = toOutput)
+print(merged.output.readLines().map { it.trim() })            // expect: ["out", "err"]
+try { merged.error } catch (e : IllegalStateException) { print(e.message) }   // expect: the program's errors were not a pipe: start it with error = pipe to read them
+val quiet = Process(outAndErr, output = discard, error = discard)
+print(quiet.waitFor())                                       // expect: 0
+// To and from a file.
+val saved = Path("io-streams-out.txt")
+Process(shell("echo kept", "echo kept"), output = saved).waitFor()
+val finder = Process(shell("findstr k", "grep k"), input = saved)
+print(saved.readText().trim(), finder.output.readText().trim(), finder.waitFor())   // expect: kept kept 0
+saved.delete()
+try { Process("no-such-program-xyz") } catch (e : IOException) { print(e.message!!.startsWith("cannot start 'no-such-program-xyz'")) }   // expect: true
+try { Process(shell("exit", "exit"), input = toOutput) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: toOutput is for a program's errors, not its input
+
+// ---- A conversation over a program's pipes ----
+val echo = Process(Process.currentCommand() + ["echo"])
+print(echo.output.readLine(), echo.isAlive, echo.pid != Process.currentPid())   // expect: ready true true
+for word in ["hello", "naïve café", "with \"quotes\" and  spaces"] {
+  echo.input.println(word)
+  print(echo.output.readLine())
+}
+// expect: echo: HELLO
+// expect: echo: NAÏVE CAFÉ
+// expect: echo: WITH "QUOTES" AND  SPACES
+print(echo.waitFor(20.milliseconds), echo.exitCode, echo.isAlive)   // expect: null null true
+echo.input.println("quit")
+print(echo.waitFor(), echo.output.readLine(), echo.isAlive)   // expect: 7 null false
+// A program that will not end by itself is ended.
+val endless = Process(Process.currentCommand() + ["echo"])
+endless.output.readLine()
+endless.kill()
+// Its exit code is the system's for a program ended: 1 on Windows, 128 and the signal's number elsewhere.
+print(endless.waitFor(5.seconds) != 0, endless.isAlive)      // expect: true false
+
+// ---- Sockets (D120) ----
+val server = ServerSocket(0, bindAddress = "127.0.0.1")
+val port = server.localPort
+// A thread's body is kept, to run where nothing can catch an IOException: it catches its own (D35).
+val serving = thread(name = "server") {
+  try {
+    // Each connection gets its lines back, numbered, until it says "bye".
+    for n in 1..2 {
+      val client = server.accept()
+      var count = 0
+      while (true) {
+        val line = client.reader.readLine()
+        if (line == null or line == "bye") { break }
+        count += 1
+        client.writer.println("$n.$count $line")
+      }
+      client.close()
+    }
+    server.close()
+  } catch (e : IOException) {
+    print("the server failed:", e.message)
+  }
+}
+print(port > 0, server.isClosed)                             // expect: true false
+val first = Socket("127.0.0.1", port)
+first.writer.println("alpha")
+first.writer.println("βeta")
+print(first.reader.readLine(), first.reader.readLine(), first.remoteAddress, first.port == port, first.isConnected)   // expect: 1.1 alpha 1.2 βeta 127.0.0.1 true true
+first.writer.println("bye")
+print(first.reader.readLine(), first.isClosed)               // expect: null false
+first.close()
+print(first.isClosed)                                        // expect: true
+val second = Socket()
+second.connect("localhost", port, 2.seconds)
+second.use {
+  it.writer.write("gamma\n")
+  print(it.reader.readLine())                                // expect: 2.1 gamma
+}
+serving.get()
+print(server.isClosed)                                       // expect: true
+try { Socket("127.0.0.1", port) } catch (e : IOException) { print(e.message!!.startsWith("cannot connect to 127.0.0.1:")) }   // expect: true
+try { Socket().reader } catch (e : IllegalStateException) { print(e.message) }   // expect: the socket is not connected
+// Closing a socket that a thread is waiting on gets the thread out.
+val idle = ServerSocket(0, bindAddress = "127.0.0.1")
+var acceptError : string? = null
+val accepting = thread { try { idle.accept() } catch (e : IOException) { acceptError = e.message } }
+Thread.sleep(30.milliseconds)
+idle.close()
+accepting.get()
+print(acceptError)                                           // expect: the socket is closed
+// A read that has waited too long gives up.
+val silent = ServerSocket(0, bindAddress = "127.0.0.1")
+val patient = Socket("127.0.0.1", silent.localPort)
+patient.readTimeout = 30.milliseconds
+try { patient.reader.readLine() } catch (e : SocketTimeoutException) { print(e.message, e is IOException, patient.readTimeout) }   // expect: the read timed out true 30ms
+patient.close()
+silent.close()
+
+// ---- The same calls in a task ----
+// On the main thread a read would stop the event loop. In a task it sets the task aside
+// instead, and the loop goes on: the timer keeps ticking while the task waits for the line.
+var ticks = 0
+val ticker = EventLoop.every(5.milliseconds) { ticks += 1 }
+task {
+  try {
+    val slow = Process(Process.currentCommand() + ["slow"])
+    val before = ticks
+    val lines = [slow.output.readLine(), slow.output.readLine(), slow.output.readLine()]
+    print(lines, "the loop went on:", ticks - before > 3, "exit code", slow.waitFor())
+    val note = Path("io-streams-task.txt")
+    note.writeText("written and read in a task")
+    print(note.readText(), note.deleteIfExists())
+  } catch (e : IOException) {
+    print("failed:", e.message)
+  }
+  ticker.cancel()
+}
+print("the script has ended")
+// expect: the script has ended
+// expect: ["first", "second", null] the loop went on: true exit code 0
+// expect: written and read in a task true

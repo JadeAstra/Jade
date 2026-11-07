@@ -22,11 +22,11 @@
 
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra {
+namespace jade {
 
 namespace fs = std::filesystem;
 
-// The standard library past the prelude: src/std/*.astra, packed into the executable by the build.
+// The standard library past the prelude: src/std/*.jade, packed into the executable by the build.
 extern const unsigned char kStdSource[];
 extern const size_t kStdSourceSize;
 extern const size_t kStdFileEnds[];
@@ -35,7 +35,7 @@ extern const size_t kStdFileCount;
 namespace {
 
 // Compiled into every program as module 0. Runtime errors are instances of Error.
-// What comes before the standard library's files. Its classes of errors are its own (errors.astra).
+// What comes before the standard library's files. Its classes of errors are its own (errors.jade).
 const char* const kPrelude = "";
 
 enum class FunctionKind { Script, Function, Method, Initializer, StaticMethod, Setter };
@@ -289,7 +289,7 @@ struct ClassState {
 
 bool checkingNativeResults() {
     static const bool checking = [] {
-        const char* set = std::getenv("ASTRA_CHECK_NATIVE_RESULTS");
+        const char* set = std::getenv("JADE_CHECK_NATIVE_RESULTS");
         return set != nullptr && *set != '0' && *set != '\0';
     }();
     return checking;
@@ -297,7 +297,7 @@ bool checkingNativeResults() {
 
 bool copyingReads() {
     static const bool copying = [] {
-        const char* set = std::getenv("ASTRA_COPY_READS");
+        const char* set = std::getenv("JADE_COPY_READS");
         return set != nullptr && *set != '\0' && *set != '0';
     }();
     return copying;
@@ -1775,7 +1775,7 @@ private:
                (name.visibility == GlobalName::Internal && owner.library == ns_->library);
     }
 
-    // Worker("physics.astra"): the script is compiled into the program here, and the path
+    // Worker("physics.jade"): the script is compiled into the program here, and the path
     // in the call is replaced by one that says which module it became (see worker.cpp).
     const LiteralExpr* workerLiteral_ = nullptr;
     std::string workerSpec_;
@@ -1802,7 +1802,7 @@ private:
     }
 
     // Whether `name` is a built-in that only the standard library's own source may use, and
-    // the libraries that come with Astra (the lib folder beside it), which are written on
+    // the libraries that come with Jade (the lib folder beside it), which are written on
     // such built-ins: Topaz on __topaz.
     bool libraryOnly(const std::string& name) const {
         return name.size() > 2 && name[0] == '_' && name[1] == '_' && ns_ != session_.builtins_ && ns_->library == "<program>" &&
@@ -2858,7 +2858,7 @@ private:
         return emitShape(shape, operands, at);
     }
 
-    // A call of a generic function or class written in Astra: its type arguments, as the
+    // A call of a generic function or class written in Jade: its type arguments, as the
     // checker worked them out, given to it by WithTypes right before the call. Each emitter of
     // a call instruction calls this after the arguments.
     // The call a function returns the result of, which it passes where its own result goes; and
@@ -2935,7 +2935,7 @@ private:
 
     // After a call of a function of the C++'s (`external`), on the value it gave: a list or
     // map is given the type the checker worked out where the C++ gave it none (`__arguments()` a
-    // List<string>), and with ASTRA_CHECK_NATIVE_RESULTS the value is checked against the
+    // List<string>), and with JADE_CHECK_NATIVE_RESULTS the value is checked against the
     // declaration, so that the suite proves the declarations say what the C++ does.
     void emitExternalResult(const CallExpr& call) {
         RuntimeType result;
@@ -4450,10 +4450,10 @@ private:
             emitByte((headerAlone ? 1 : 0) | static_cast<int>((phantom & 0x7F) << 1));
             emit(Op::Pop);
         }
-        // A library's class says which library (Class.origin): the standard library's "astra", another's
+        // A library's class says which library (Class.origin): the standard library's "jade", another's
         // its folder's name. The program's own say none.
         if (ns_->library != "<program>") {
-            const std::string origin = ns_->library == "<builtin>" ? std::string("astra") : std::filesystem::path(ns_->library).filename().string();
+            const std::string origin = ns_->library == "<builtin>" ? std::string("jade") : std::filesystem::path(ns_->library).filename().string();
             emitGet(storage, s);
             emit(Op::ClassOrigin);
             emitU16(stringConstant(origin));
@@ -7521,14 +7521,14 @@ static std::string fileKeyOf(const fs::path& path) {
     return canonical.string();
 }
 
-// The .astra files directly in a folder, in name order.
+// The .jade files directly in a folder, in name order.
 static std::vector<fs::path> folderFiles(const std::string& folder) {
     auto known = pathFacts().folders.find(folder);
     if (known != pathFacts().folders.end()) return known->second;
     std::error_code ec;
     std::vector<fs::path> paths;
     for (const fs::directory_entry& entry : fs::directory_iterator(fs::path(folder), ec))
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".astra") paths.push_back(entry.path());
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".jade") paths.push_back(entry.path());
     std::sort(paths.begin(), paths.end());
     pathFacts().folders.emplace(folder, paths);
     return paths;
@@ -7618,8 +7618,8 @@ CompilerSession::CompilerSession(VM& vm, Checker* given) : checker(given), vm_(v
     builtins_ = builtins.get();
     namespaces_["<builtin>"] = std::move(builtins);
     // The standard library is part of the prelude: every program starts with it loaded. It
-    // comes compiled with astra.exe, unless its own mistakes are to be listed (`astra check
-    // --std`) or astra.exe is making that compiled copy.
+    // comes compiled with jade.exe, unless its own mistakes are to be listed (`jade check
+    // --std`) or jade.exe is making that compiled copy.
     const std::string prelude = preludeSource();
     std::string attached;
     if (!checker->reportStandardLibrary && !compilingPrelude && !checkingNativeResults() && !copyingReads() && attachedPrelude(attached) &&
@@ -7661,7 +7661,7 @@ std::vector<FolderRead> CompilerSession::foldersRead() const {
 
 int CompilerSession::compileFile(const std::string& path) {
     forgetPaths();
-    keepingUnits_ = stopAtTypeErrors;  // `astra check` lists mistakes, and keeps nothing
+    keepingUnits_ = stopAtTypeErrors;  // `jade check` lists mistakes, and keeps nothing
     try {
         // The whole program is parsed and checked first, then compiled.
         const std::string key = fileKeyOf(fs::path(path));
@@ -8107,9 +8107,9 @@ void CompilerSession::keepUnits() {
     toKeep_.clear();
 }
 
-// ---- The standard library, compiled when astra.exe is built (D145, point 3) ----
+// ---- The standard library, compiled when jade.exe is built (D145, point 3) ----
 //
-// The build compiles the prelude once, as astra.exe's last step, and attaches its image to the
+// The build compiles the prelude once, as jade.exe's last step, and attaches its image to the
 // file. A session then puts it back as it would a kept unit: the prelude is read, for what it
 // declares, but its bodies are not checked and nothing of it is compiled. The image is of this
 // very file's prelude, so only a hash of the prelude's text is checked against it.
@@ -8188,7 +8188,7 @@ bool CompilerSession::usePrelude(const std::string& prelude, const std::string& 
     const std::string kept = image.substr(line + 1);
     UnitImage parts;
     if (!readImage(kept, parts) || parts.own.size() != 1) return false;
-    // Read for what it declares; its bodies are as they were when astra.exe was built. Its files
+    // Read for what it declares; its bodies are as they were when jade.exe was built. Its files
     // are parsed apart, a few at a time, each at its own lines, and joined in order.
     sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parsePrelude(prelude)));
     const std::vector<StmtPtr>& statements = *sources_.back();
@@ -8198,7 +8198,7 @@ bool CompilerSession::usePrelude(const std::string& prelude, const std::string& 
     program.modules.push_back(nullptr);
     noteModule(0, "<prelude>");
     if (putBack(kept, {"<prelude>"}, {0}, {&statements}, {"<std>"}, "", builtins_) != 1)
-        throw CompileError("<std>", 1, 1, "the standard library attached to astra.exe could not be put back; build astra.exe again");
+        throw CompileError("<std>", 1, 1, "the standard library attached to jade.exe could not be put back; build jade.exe again");
     compileTimes.preludeAttached = true;
     return true;
 }
@@ -8366,9 +8366,9 @@ std::vector<StmtPtr>* CompilerSession::parseFile(const std::string& key, const s
     return raw;
 }
 
-// Where an import leads: a file (as written, or with ".astra" added) or a folder, looked for
+// Where an import leads: a file (as written, or with ".jade" added) or a folder, looked for
 // next to the importing file first, then in the library directories. A file never imports
-// itself: a script called Shapes.astra that says `import Shapes` means the library, so the
+// itself: a script called Shapes.jade that says `import Shapes` means the library, so the
 // importing file is passed over.
 bool CompilerSession::findImport(const std::string& path, const std::string& fromDirectory, const std::string& file,
                                  std::string& found, bool& folder) const {
@@ -8384,7 +8384,7 @@ bool CompilerSession::findImport(const std::string& path, const std::string& fro
     for (const fs::path& place : places) {
         fs::path candidate = place / fs::path(path);
         fs::path withExtension = candidate;
-        withExtension += ".astra";
+        withExtension += ".jade";
         folder = false;
         if (usable(candidate)) {
             found = candidate.string();
@@ -8523,7 +8523,7 @@ void CompilerSession::check() {
 // What the checker found since `before` in the program, as a compile error.
 void CompilerSession::reportNew(size_t before) {
     if (!stopAtTypeErrors) return;
-    // What `astra check --std` finds in the standard library is listed, never a program's error.
+    // What `jade check --std` finds in the standard library is listed, never a program's error.
     std::vector<const CheckDiagnostic*> found;
     for (size_t i = before; i < checker->diagnostics.size(); i++)
         if (checker->diagnostics[i].file != "<std>") found.push_back(&checker->diagnostics[i]);
@@ -8535,7 +8535,7 @@ void CompilerSession::reportNew(size_t before) {
     throw error;
 }
 
-// Source text that is not a file (the standard library, the shell, `astra -e`): parsed, and
+// Source text that is not a file (the standard library, the shell, `jade -e`): parsed, and
 // checked with what it imports; then compiled. An input of the shell that does not compile is
 // taken back from the checker, as it is from the program.
 FunctionProto* CompilerSession::compileUnit(const std::string& source, const std::string& name,
@@ -8569,7 +8569,7 @@ FunctionProto* CompilerSession::compileStatements(const std::vector<StmtPtr>& st
     return proto;
 }
 
-// The script named in `Worker("physics.astra")`, looked for next to the file that names it.
+// The script named in `Worker("physics.jade")`, looked for next to the file that names it.
 // It becomes a module of the program that only a worker runs, so that a program built into
 // an executable carries its workers with it. Its names are its own: the rest of the program
 // neither sees them nor clashes with them, as befits code that shares nothing with it.
@@ -8577,7 +8577,7 @@ int CompilerSession::loadWorker(const std::string& path, const std::string& from
                                 const Node& at) {
     std::error_code ec;
     fs::path candidate = fs::path(fromDirectory.empty() ? "." : fromDirectory) / fs::path(path);
-    if (!fs::is_regular_file(candidate, ec)) candidate += ".astra";
+    if (!fs::is_regular_file(candidate, ec)) candidate += ".jade";
     if (!fs::is_regular_file(candidate, ec))
         throw CompileError(file, at.line, at.col, "cannot find the worker's script '" + path + "' next to this file");
     const fs::path canonical = canonicalPath(candidate, ec);
@@ -8649,7 +8649,7 @@ int CompilerSession::loadModule(const std::string& path, const std::string& disp
     return index;
 }
 
-// Loads every .astra file directly in a folder, as one unit: all of them are read and their
+// Loads every .jade file directly in a folder, as one unit: all of them are read and their
 // declarations noted before any is compiled, so they see each other whatever their order.
 // Files of the folder that were loaded earlier, one at a time, are not loaded again.
 void CompilerSession::loadFolder(const std::string& folder, const std::string& displayPath, const std::string& file,
@@ -8662,7 +8662,7 @@ void CompilerSession::loadFolder(const std::string& folder, const std::string& d
     std::vector<fs::path> paths = folderFiles(folder);
     noteFolder(folder, paths);
     if (paths.empty())
-        throw CompileError(file, at.line, at.col, "the folder '" + displayPath + "' has no .astra files to import");
+        throw CompileError(file, at.line, at.col, "the folder '" + displayPath + "' has no .jade files to import");
 
     // Loaded as a folder already: the same modules, the one set up ahead for them all among them.
     // Each import of a folder runs that one first, wherever it is, as the code of an importer kept
@@ -8806,9 +8806,9 @@ Namespace* CompilerSession::importModule(const std::string& path, const std::str
 void CompilerSession::checkConstAssignments() {
     for (const auto& [global, name, file, line, col] : globalAssignments_)
         if (global->isVal) throw CompileError(file, line, col, "cannot assign to val '" + name + "'");
-        else if (global->isFunction && stopAtTypeErrors)  // astra check: the checker lists it with the rest
+        else if (global->isFunction && stopAtTypeErrors)  // jade check: the checker lists it with the rest
             throw CompileError(file, line, col, "'" + name + "' is a function, and the name of a function is never given another value; " +
                                                     "to change what is called, keep it in a var of a function type");
 }
 
-}  // namespace astra
+}  // namespace jade

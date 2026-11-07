@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 
-namespace astra::text {
+namespace jade::text {
 
 // An outline: straight lines and curves, in the font's units with y growing upwards.
 struct Path {
@@ -218,4 +218,4 @@ private:
     friend struct Variations;
 };
 
-}  // namespace astra::text
+}  // namespace jade::text

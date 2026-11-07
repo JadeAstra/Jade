@@ -1,4 +1,4 @@
-# Runs every tests\*.astra file three ways: straight from source, compiled to a bytecode
+# Runs every tests\*.jade file three ways: straight from source, compiled to a bytecode
 # file, and built into a program of its own. Expected output comes from comments in the test:
 #
 #   // expect: <line>                  the next line of standard output
@@ -6,47 +6,47 @@
 #   // expect compile error: <text>    compilation fails (exit code 65) and reports <text>
 #   // expect error output: <text>     the program finishes normally, having reported <text>
 #
-# One more check at the end covers the --icon option of `astra build`.
+# One more check at the end covers the --icon option of `jade build`.
 #
-# -Parallel N runs the tests\*.astra files N at a time, each with a working directory and a
+# -Parallel N runs the tests\*.jade files N at a time, each with a working directory and a
 # cache of its own, its ways in order; a test that fails is run again alone, and reported only
 # if it fails then too (one that passes alone is listed as such). -Modes runs only some of the
 # five ways (script, cached, units, compiled, program): the stress settings and the sanitizer
 # look for faults in the runtime, which the way a program was loaded does not change.
 #
-#   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 16 -Modes script
+#   powershell -File tests\run.ps1 -Jade build\work\jade.exe -Parallel 16 -Modes script
 #
 # -Stress runs the suite as above, then once more under each of the runtime's stress settings,
-# the way of running a script only (D163): ASTRA_COPY_READS reads a list's value items as copies
-# where they could be read in place, ASTRA_THREAD_STRESS changes threads at every safe point,
-# ASTRA_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
-# ASTRA_GC_STRESS collects at every safe point (gc.astra, which counts collections, and
-# topaz_treemap_big.astra, which times a big layout, are left out of that one). Each checkpoint runs it.
+# the way of running a script only (D163): JADE_COPY_READS reads a list's value items as copies
+# where they could be read in place, JADE_THREAD_STRESS changes threads at every safe point,
+# JADE_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
+# JADE_GC_STRESS collects at every safe point (gc.jade, which counts collections, and
+# topaz_treemap_big.jade, which times a big layout, are left out of that one). Each checkpoint runs it.
 #
-#   powershell -File tests\run.ps1 -Astra build\work\astra.exe -Parallel 24 -Stress
+#   powershell -File tests\run.ps1 -Jade build\work\jade.exe -Parallel 24 -Stress
 
-param([string]$Astra = (Join-Path $PSScriptRoot '..\build\astra.exe'), [int]$Parallel = 1,
+param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'), [int]$Parallel = 1,
       [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'), [switch]$Stress)
 
-if (-not (Test-Path $Astra)) {
-    Write-Host "astra.exe not found at $Astra - run build.bat first"
+if (-not (Test-Path $Jade)) {
+    Write-Host "jade.exe not found at $Jade - run build.bat first"
     exit 2
 }
-$Astra = (Resolve-Path $Astra).Path
+$Jade = (Resolve-Path $Jade).Path
 # `-Modes script,cached` arrives as one string from the command line of another shell.
 $Modes = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
 if ($Stress) {
-    $settings = [ordered]@{ 'copy-reads' = 'ASTRA_COPY_READS'; 'thread-stress' = 'ASTRA_THREAD_STRESS';
-                            'native-results' = 'ASTRA_CHECK_NATIVE_RESULTS'; 'gc-stress' = 'ASTRA_GC_STRESS' }
+    $settings = [ordered]@{ 'copy-reads' = 'JADE_COPY_READS'; 'thread-stress' = 'JADE_THREAD_STRESS';
+                            'native-results' = 'JADE_CHECK_NATIVE_RESULTS'; 'gc-stress' = 'JADE_GC_STRESS' }
     $failed = $false
     Write-Host '== the suite'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Astra $Astra -Parallel $Parallel -Modes ($Modes -join ',')
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes ($Modes -join ',')
     if ($LASTEXITCODE -ne 0) { $failed = $true }
     foreach ($name in $settings.Keys) {
         Write-Host "== $name"
         Set-Item "env:$($settings[$name])" '1'
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Astra $Astra -Parallel $Parallel -Modes script
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes script
         if ($LASTEXITCODE -ne 0) { $failed = $true }
         Remove-Item "env:$($settings[$name])"
     }
@@ -54,27 +54,27 @@ if ($Stress) {
     exit 0
 }
 
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "astra-tests-$PID"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "jade-tests-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
-# The compiled programs astra keeps for a script's next run (D145) go in a cache of the tests'
+# The compiled programs jade keeps for a script's next run (D145) go in a cache of the tests'
 # own, which goes with the rest at the end.
-$env:ASTRA_CACHE = Join-Path $tmp 'cache'
+$env:JADE_CACHE = Join-Path $tmp 'cache'
 
 # What running one test takes, defined here and, for -Parallel, in each runspace.
 $testFunctions = {
-# Runs astra, or with -Program a program built by `astra build --exe`, in `$Dir` with the cache
+# Runs jade, or with -Program a program built by `jade build --exe`, in `$Dir` with the cache
 # `$Cache`.
-function Invoke-Astra([string[]]$AstraArgs, [string]$Program, [string]$Dir, [string]$Cache) {
+function Invoke-Jade([string[]]$JadeArgs, [string]$Program, [string]$Dir, [string]$Cache) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Program
-    $psi.Arguments = ($AstraArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $psi.Arguments = ($JadeArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     # A test that writes files writes them here, not into the source tree.
     $psi.WorkingDirectory = $Dir
-    $psi.EnvironmentVariables['ASTRA_CACHE'] = $Cache
+    $psi.EnvironmentVariables['JADE_CACHE'] = $Cache
     # Programs write UTF-8, and the expectations in the test files are UTF-8 too.
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
@@ -119,9 +119,9 @@ function Get-Marker([string]$path, [string]$pattern) {
     return ''
 }
 
-# Runs one tests\*.astra file the ways asked for, in its own directory with its own cache: what
+# Runs one tests\*.jade file the ways asked for, in its own directory with its own cache: what
 # each way gave, $null where it matched.
-function Test-One([string]$Path, [string]$AstraExe, [string]$Dir, [string[]]$Ways) {
+function Test-One([string]$Path, [string]$JadeExe, [string]$Dir, [string[]]$Ways) {
     New-Item -ItemType Directory -Force $Dir | Out-Null
     $cache = Join-Path $Dir 'cache'
     $name = [IO.Path]::GetFileNameWithoutExtension($Path)
@@ -130,12 +130,12 @@ function Test-One([string]$Path, [string]$AstraExe, [string]$Dir, [string[]]$Way
     $runtimeError = Get-Marker $Path '// expect runtime error: (.*)$'
     $compileError = Get-Marker $Path '// expect compile error: (.*)$'
 
-    $bytecode = Join-Path $Dir ($name + '.astc')
+    $bytecode = Join-Path $Dir ($name + '.jc')
     $results = [ordered]@{}
 
     if ($compileError) {
-        if ($Ways -contains 'script') { $results['script'] = Compare-Run (Invoke-Astra @($Path) $AstraExe $Dir $cache) @() $compileError 65 }
-        if ($Ways -contains 'compiled') { $results['compiled'] = Compare-Run (Invoke-Astra @('build', $Path, '-o', $bytecode) $AstraExe $Dir $cache) @() $compileError 65 }
+        if ($Ways -contains 'script') { $results['script'] = Compare-Run (Invoke-Jade @($Path) $JadeExe $Dir $cache) @() $compileError 65 }
+        if ($Ways -contains 'compiled') { $results['compiled'] = Compare-Run (Invoke-Jade @('build', $Path, '-o', $bytecode) $JadeExe $Dir $cache) @() $compileError 65 }
     } else {
         # `// expect error output: <text>`: the program goes on to its end, having reported <text>
         # (an error that ended one of its threads, say).
@@ -145,33 +145,33 @@ function Test-One([string]$Path, [string]$AstraExe, [string]$Dir, [string[]]$Way
         $script = $null
         # The first run compiles it and keeps the program; cached and units start from what it kept.
         if ($Ways -contains 'script' -or $Ways -contains 'cached' -or $Ways -contains 'units') {
-            $script = Compare-Run (Invoke-Astra @($Path) $AstraExe $Dir $cache) $expected $errorText $exitCode
+            $script = Compare-Run (Invoke-Jade @($Path) $JadeExe $Dir $cache) $expected $errorText $exitCode
         }
         if ($Ways -contains 'script') { $results['script'] = $script }
         # Run again, it starts from the program the first run kept.
-        if ($Ways -contains 'cached') { $results['cached'] = Compare-Run (Invoke-Astra @($Path) $AstraExe $Dir $cache) $expected $errorText $exitCode }
+        if ($Ways -contains 'cached') { $results['cached'] = Compare-Run (Invoke-Jade @($Path) $JadeExe $Dir $cache) $expected $errorText $exitCode }
         # And without the program, it is compiled again from the units the first run kept.
         if ($Ways -contains 'units') {
             Remove-Item (Join-Path $cache '*.program') -ErrorAction SilentlyContinue
-            $results['units'] = Compare-Run (Invoke-Astra @($Path) $AstraExe $Dir $cache) $expected $errorText $exitCode
+            $results['units'] = Compare-Run (Invoke-Jade @($Path) $JadeExe $Dir $cache) $expected $errorText $exitCode
         }
 
         if ($Ways -contains 'compiled') {
-            $build = Invoke-Astra @('build', $Path, '-o', $bytecode) $AstraExe $Dir $cache
+            $build = Invoke-Jade @('build', $Path, '-o', $bytecode) $JadeExe $Dir $cache
             if ($build.Code -ne 0) {
                 $results['compiled'] = "build failed: $($build.Error.Trim())"
             } else {
-                $results['compiled'] = Compare-Run (Invoke-Astra @($bytecode) $AstraExe $Dir $cache) $expected $errorText $exitCode
+                $results['compiled'] = Compare-Run (Invoke-Jade @($bytecode) $JadeExe $Dir $cache) $expected $errorText $exitCode
             }
         }
 
         if ($Ways -contains 'program') {
             $program = Join-Path $Dir ($name + '.exe')
-            $build = Invoke-Astra @('build', $Path, '--exe', '-o', $program) $AstraExe $Dir $cache
+            $build = Invoke-Jade @('build', $Path, '--exe', '-o', $program) $JadeExe $Dir $cache
             if ($build.Code -ne 0) {
                 $results['program'] = "build failed: $($build.Error.Trim())"
             } else {
-                $results['program'] = Compare-Run (Invoke-Astra @() $program $Dir $cache) $expected $errorText $exitCode
+                $results['program'] = Compare-Run (Invoke-Jade @() $program $Dir $cache) $expected $errorText $exitCode
             }
         }
     }
@@ -184,10 +184,10 @@ $passed = 0
 $failures = @()
 $aloneOnly = @()
 
-$tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.astra') | Sort-Object Name)
-# Left out under the GC stress setting, which collects at every safe point: gc.astra counts
-# collections, and topaz_treemap_big.astra's 200,000 nodes would take hours.
-if ($env:ASTRA_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.astra', 'topaz_treemap_big.astra') }) }
+$tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.jade') | Sort-Object Name)
+# Left out under the GC stress setting, which collects at every safe point: gc.jade counts
+# collections, and topaz_treemap_big.jade's 200,000 nodes would take hours.
+if ($env:JADE_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.jade', 'topaz_treemap_big.jade') }) }
 $outcomes = @{}
 if ($Parallel -gt 1) {
     # Each test in a runspace of a pool of $Parallel, all started at once and gathered in order.
@@ -198,7 +198,7 @@ if ($Parallel -gt 1) {
     foreach ($test in $tests) {
         $ps = [powershell]::Create()
         $ps.RunspacePool = $pool
-        [void]$ps.AddScript($runOne).AddArgument($testFunctions.ToString()).AddArgument($test.FullName).AddArgument($Astra).AddArgument((Join-Path $tmp $test.BaseName)).AddArgument($Modes)
+        [void]$ps.AddScript($runOne).AddArgument($testFunctions.ToString()).AddArgument($test.FullName).AddArgument($Jade).AddArgument((Join-Path $tmp $test.BaseName)).AddArgument($Modes)
         $running += @{ Test = $test; Shell = $ps; Handle = $ps.BeginInvoke() }
     }
     foreach ($job in $running) {
@@ -208,7 +208,7 @@ if ($Parallel -gt 1) {
     }
     $pool.Close()
 } else {
-    foreach ($test in $tests) { $outcomes[$test.FullName] = Test-One $test.FullName $Astra (Join-Path $tmp $test.BaseName) $Modes }
+    foreach ($test in $tests) { $outcomes[$test.FullName] = Test-One $test.FullName $Jade (Join-Path $tmp $test.BaseName) $Modes }
 }
 
 foreach ($test in $tests) {
@@ -216,7 +216,7 @@ foreach ($test in $tests) {
     $failed = @($results.Keys | Where-Object { $null -ne $results[$_] })
     if ($Parallel -gt 1 -and $failed.Count -gt 0) {
         # Run again alone: a failure that goes away is the load of the others, not the test.
-        $alone = Test-One $test.FullName $Astra (Join-Path $tmp ($test.BaseName + '-alone')) $Modes
+        $alone = Test-One $test.FullName $Jade (Join-Path $tmp ($test.BaseName + '-alone')) $Modes
         if (@($alone.Keys | Where-Object { $null -ne $alone[$_] }).Count -eq 0) { $aloneOnly += "$($test.Name) [$($failed -join ', ')]" }
         $results = $alone
     }
@@ -229,17 +229,17 @@ foreach ($test in $tests) {
     }
 }
 
-# The type checker (M6.5): `astra check` on each tests\check\*.astra. A line ending in
+# The type checker (M6.5): `jade check` on each tests\check\*.jade. A line ending in
 # `// check: <message>` must be reported with that message, on that line; nothing else may
 # be reported.
-foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'check\*.astra') | Sort-Object Name) {
+foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'check\*.jade') | Sort-Object Name) {
     $wanted = @{}
     $lineNumber = 0
     foreach ($line in [IO.File]::ReadAllLines($test.FullName, [Text.Encoding]::UTF8)) {
         $lineNumber++
         if ($line -match '// check: (.*)$') { $wanted["$($lineNumber): $($Matches[1].TrimEnd())"] = $true }
     }
-    $run = Invoke-Astra @('check', $test.FullName) $Astra $tmp $env:ASTRA_CACHE
+    $run = Invoke-Jade @('check', $test.FullName) $Jade $tmp $env:JADE_CACHE
     $problems = @()
     $found = @{}
     foreach ($line in $run.Lines) {
@@ -263,29 +263,29 @@ foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'check\*.astra') | Sort
     }
 }
 
-# `astra test` (D153) on each tests\testing\*.astra: its `// expect:` lines are what it prints
+# `jade test` (D153) on each tests\testing\*.jade: its `// expect:` lines are what it prints
 # after the line naming the file, and it fails where one of them says FAIL.
-foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'testing\*.astra') | Sort-Object Name) {
+foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'testing\*.jade') | Sort-Object Name) {
     $expected = @(Select-String -Path $test.FullName -Pattern '// expect: ?(.*)$' -Encoding UTF8 |
         ForEach-Object { $_.Matches[0].Groups[1].Value })
-    $run = Invoke-Astra @('test', $test.FullName) $Astra $tmp $env:ASTRA_CACHE
+    $run = Invoke-Jade @('test', $test.FullName) $Jade $tmp $env:JADE_CACHE
     $run.Lines = @($run.Lines | Select-Object -Skip 1)
     $exitCode = if (@($expected | Where-Object { $_ -match '^\s*FAIL' }).Count -gt 0) { 1 } else { 0 }
     $result = Compare-Run $run $expected '' $exitCode
-    if ($null -eq $result) { $passed++ } else { $failures += "$($test.Name) [astra test]`n    $result" }
+    if ($null -eq $result) { $passed++ } else { $failures += "$($test.Name) [jade test]`n    $result" }
 }
 
-# The standard library, Topaz and the examples pass the checker as they are (M6.5): `astra check
+# The standard library, Topaz and the examples pass the checker as they are (M6.5): `jade check
 # --std` checks the standard library's bodies too, which are otherwise put back unchecked.
-$checked = @((Join-Path $PSScriptRoot 'basics.astra') + '|--std')
+$checked = @((Join-Path $PSScriptRoot 'basics.jade') + '|--std')
 $examples = Join-Path $PSScriptRoot '..\examples'  # not there when the tests are copied elsewhere
 if (Test-Path $examples) {
-    foreach ($example in Get-ChildItem (Join-Path $examples '*.astra') | Sort-Object Name) { $checked += $example.FullName }
+    foreach ($example in Get-ChildItem (Join-Path $examples '*.jade') | Sort-Object Name) { $checked += $example.FullName }
 }
 foreach ($entry in $checked) {
     $parts = $entry -split '\|'
     $arguments = if ($parts.Count -gt 1) { @('check', $parts[1], $parts[0]) } else { @('check', $parts[0]) }
-    $run = Invoke-Astra $arguments $Astra $tmp $env:ASTRA_CACHE
+    $run = Invoke-Jade $arguments $Jade $tmp $env:JADE_CACHE
     $name = (Split-Path $parts[0] -Leaf) + $(if ($parts.Count -gt 1) { ' with the standard library' } else { '' })
     if ($run.Code -eq 0) {
         $passed++
@@ -295,17 +295,17 @@ foreach ($entry in $checked) {
 }
 
 # Every public declaration of the standard library is described by a comment above it, which
-# `astra doc` puts in docs/language.html: one with none is listed here. (Not there when the tests
+# `jade doc` puts in docs/language.html: one with none is listed here. (Not there when the tests
 # are copied elsewhere.)
 $standardLibrary = Join-Path $PSScriptRoot '..\src\std'
 if (Test-Path $standardLibrary) {
-    $files = @(Get-ChildItem (Join-Path $standardLibrary '*.astra') | Sort-Object Name | ForEach-Object { $_.FullName })
-    $run = Invoke-Astra (@('doc', '--missing') + $files) $Astra $tmp $env:ASTRA_CACHE
+    $files = @(Get-ChildItem (Join-Path $standardLibrary '*.jade') | Sort-Object Name | ForEach-Object { $_.FullName })
+    $run = Invoke-Jade (@('doc', '--missing') + $files) $Jade $tmp $env:JADE_CACHE
     $undescribed = @($run.Lines | Where-Object { $_ -ne '' })
     if ($run.Code -eq 0 -and $undescribed.Count -eq 0) {
         $passed++
     } else {
-        $failures += "the standard library described [astra doc --missing]`n    $(($undescribed + $run.Error) -join "`n    ")"
+        $failures += "the standard library described [jade doc --missing]`n    $(($undescribed + $run.Error) -join "`n    ")"
     }
 }
 
@@ -314,7 +314,7 @@ if (Test-Path $standardLibrary) {
 foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'shell\*.shell') | Sort-Object Name) {
     $text = [IO.File]::ReadAllText($test.FullName)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Astra
+    $psi.FileName = $Jade
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -348,67 +348,67 @@ foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'shell\*.shell') | Sort
 }
 
 # The cache (D145): what is put back and what is compiled again. Each scenario writes a few
-# files and runs main.astra, then changes some and runs it again, each step with what it should
+# files and runs main.jade, then changes some and runs it again, each step with what it should
 # print, or the compile error it should give. The files written at a step are the ones that change.
 $scenarios = @(
     @{ Name = 'a body changes in an imported file'; Steps = @(
-        @{ Files = @{ 'lib.astra' = 'fun f() : int => 1'; 'main.astra' = "import lib.*`nprint(f())" }; Out = '1' },
-        # Only lib.astra is compiled again: main.astra was compiled against what lib.astra declares,
+        @{ Files = @{ 'lib.jade' = 'fun f() : int => 1'; 'main.jade' = "import lib.*`nprint(f())" }; Out = '1' },
+        # Only lib.jade is compiled again: main.jade was compiled against what lib.jade declares,
         # which a body leaves as it was.
-        @{ Files = @{ 'lib.astra' = 'fun f() : int => 2' }; Out = '2'; Units = 'units put back 1, compiled 1' }) },
+        @{ Files = @{ 'lib.jade' = 'fun f() : int => 2' }; Out = '2'; Units = 'units put back 1, compiled 1' }) },
     @{ Name = 'a body changes a result type not written'; Steps = @(
-        @{ Files = @{ 'lib.astra' = 'fun f() => 1'; 'main.astra' = "import lib.*`nval x : int = f()`nprint(x)" }; Out = '1' },
-        @{ Files = @{ 'lib.astra' = 'fun f() => "s"' }; Error = "main.astra:2:16: error: 'x' is an int; it cannot start as a string" }) },
+        @{ Files = @{ 'lib.jade' = 'fun f() => 1'; 'main.jade' = "import lib.*`nval x : int = f()`nprint(x)" }; Out = '1' },
+        @{ Files = @{ 'lib.jade' = 'fun f() => "s"' }; Error = "main.jade:2:16: error: 'x' is an int; it cannot start as a string" }) },
     @{ Name = 'a type changes in an imported file'; Steps = @(
-        @{ Files = @{ 'lib.astra' = 'fun f() : int => 1'; 'main.astra' = "import lib.*`nval x : int = f()`nprint(x)" }; Out = '1' },
-        @{ Files = @{ 'lib.astra' = 'fun f() : string => "s"' }; Error = "main.astra:2:16: error: 'x' is an int; it cannot start as a string" }) },
+        @{ Files = @{ 'lib.jade' = 'fun f() : int => 1'; 'main.jade' = "import lib.*`nval x : int = f()`nprint(x)" }; Out = '1' },
+        @{ Files = @{ 'lib.jade' = 'fun f() : string => "s"' }; Error = "main.jade:2:16: error: 'x' is an int; it cannot start as a string" }) },
     @{ Name = 'R1: a lambda kept by an unchanged file'; Steps = @(
-        @{ Files = @{ 'lib.astra' = "val held : open List<() -> unit> = []`nfun keep(action : () -> unit) { held.add(action) }`nfun run(action : () -> unit) { action() }"
-                      'main.astra' = "import lib.*`nrun { print(1) }" }; Out = '1' },
-        @{ Files = @{ 'main.astra' = "import lib.*`nsuspend fun waits() { run { delay(1.milliseconds) } }`nsuspend fun stores() { keep { delay(1.milliseconds) } }`nprint(2)" }
-           Error = "main.astra:3:36: error: 'delay' may wait (it is a suspend function), and 'keep' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }" }) },
+        @{ Files = @{ 'lib.jade' = "val held : open List<() -> unit> = []`nfun keep(action : () -> unit) { held.add(action) }`nfun run(action : () -> unit) { action() }"
+                      'main.jade' = "import lib.*`nrun { print(1) }" }; Out = '1' },
+        @{ Files = @{ 'main.jade' = "import lib.*`nsuspend fun waits() { run { delay(1.milliseconds) } }`nsuspend fun stores() { keep { delay(1.milliseconds) } }`nprint(2)" }
+           Error = "main.jade:3:36: error: 'delay' may wait (it is a suspend function), and 'keep' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }" }) },
     @{ Name = 'R1: a function that comes to keep its lambda'; Steps = @(
-        @{ Files = @{ 'lib.astra' = 'fun run(action : () -> unit) { action() }'; 'main.astra' = "import lib.*`nsuspend fun waits() { run { delay(1.milliseconds) } }`nprint(1)" }; Out = '1' },
-        @{ Files = @{ 'lib.astra' = "val held : open List<() -> unit> = []`nfun run(action : () -> unit) { held.add(action) }" }
-           Error = "main.astra:2:34: error: 'delay' may wait (it is a suspend function), and 'run' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }" }) },
+        @{ Files = @{ 'lib.jade' = 'fun run(action : () -> unit) { action() }'; 'main.jade' = "import lib.*`nsuspend fun waits() { run { delay(1.milliseconds) } }`nprint(1)" }; Out = '1' },
+        @{ Files = @{ 'lib.jade' = "val held : open List<() -> unit> = []`nfun run(action : () -> unit) { held.add(action) }" }
+           Error = "main.jade:2:34: error: 'delay' may wait (it is a suspend function), and 'run' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }" }) },
     @{ Name = 'a folder gains a file'; Steps = @(
-        @{ Files = @{ 'parts\a.astra' = 'fun a() : int => 1'; 'main.astra' = "import parts.*`nprint(a())" }; Out = '1' },
-        @{ Files = @{ 'parts\b.astra' = 'fun b() : int => 2'; 'main.astra' = "import parts.*`nprint(a() + b())" }; Out = '3' },
-        @{ Files = @{ 'parts\b.astra' = 'fun b() : int => 20' }; Out = '21' }) },
+        @{ Files = @{ 'parts\a.jade' = 'fun a() : int => 1'; 'main.jade' = "import parts.*`nprint(a())" }; Out = '1' },
+        @{ Files = @{ 'parts\b.jade' = 'fun b() : int => 2'; 'main.jade' = "import parts.*`nprint(a() + b())" }; Out = '3' },
+        @{ Files = @{ 'parts\b.jade' = 'fun b() : int => 20' }; Out = '21' }) },
     # G26: whether a class may be a key comes with its file from the cache, and a change to a body
     # its == reads through (in another file) makes the files that use it be checked again.
     @{ Name = 'G26: a key class from an unchanged file'; Steps = @(
-        @{ Files = @{ 'bank\account.astra' = "class Account(var balance : int, val id : int) {`n  op ==(other : any?) : bool => other is Account and other.balance == balance`n  fun hashCode() : int => id`n}"
-                      'main.astra' = "import bank.*`nprint(Account(1, 2).id)" }; Out = '2' },
-        @{ Files = @{ 'main.astra' = "import bank.*`nval byAccount : open Map<Account, string> = {:}`nbyAccount[Account(5, 1)] = `"first`"" }
-           Error = "main.astra:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)" }) },
+        @{ Files = @{ 'bank\account.jade' = "class Account(var balance : int, val id : int) {`n  op ==(other : any?) : bool => other is Account and other.balance == balance`n  fun hashCode() : int => id`n}"
+                      'main.jade' = "import bank.*`nprint(Account(1, 2).id)" }; Out = '2' },
+        @{ Files = @{ 'main.jade' = "import bank.*`nval byAccount : open Map<Account, string> = {:}`nbyAccount[Account(5, 1)] = `"first`"" }
+           Error = "main.jade:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)" }) },
     @{ Name = 'G26: a body an == reads through changes'; Steps = @(
-        @{ Files = @{ 'bank\account.astra' = "class Account(var balance : int, val id : int) {`n  op ==(other : any?) : bool => other is Account and Helpers.same(this, other)`n  fun hashCode() : int => id`n}"
-                      'bank\helpers.astra' = "object Helpers {`n  fun same(a : Account, b : Account) : bool => a.id == b.id`n}"
-                      'main.astra' = "import bank.*`nval byAccount : open Map<Account, string> = {:}`nbyAccount[Account(5, 1)] = `"first`"`nprint(byAccount.size)" }; Out = '1' },
-        @{ Files = @{ 'bank\helpers.astra' = "object Helpers {`n  fun same(a : Account, b : Account) : bool => a.balance == b.balance`n}" }
-           Error = "main.astra:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)" }) },
+        @{ Files = @{ 'bank\account.jade' = "class Account(var balance : int, val id : int) {`n  op ==(other : any?) : bool => other is Account and Helpers.same(this, other)`n  fun hashCode() : int => id`n}"
+                      'bank\helpers.jade' = "object Helpers {`n  fun same(a : Account, b : Account) : bool => a.id == b.id`n}"
+                      'main.jade' = "import bank.*`nval byAccount : open Map<Account, string> = {:}`nbyAccount[Account(5, 1)] = `"first`"`nprint(byAccount.size)" }; Out = '1' },
+        @{ Files = @{ 'bank\helpers.jade' = "object Helpers {`n  fun same(a : Account, b : Account) : bool => a.balance == b.balance`n}" }
+           Error = "main.jade:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)" }) },
     # M8: a folder reached first through an importer kept compiled, where the importer was
     # compiled after the folder had been loaded by another: the folder's names are made all the same.
     @{ Name = 'a folder first reached through a kept importer'; Steps = @(
-        @{ Files = @{ 'lower\l.astra' = "enum Kind { a, b }`nfun low() : string => `"low `${Kind.b}`""
-                      'upper\u.astra' = "import `"../lower`".*`nfun up() : string => `"up `" + low()"
-                      'main.astra' = "import lower.*`nimport upper.*`nprint(up())" }; Out = 'up low b' },
-        @{ Files = @{ 'main.astra' = "import upper.*`nprint(up())" }; Out = 'up low b' }) },
+        @{ Files = @{ 'lower\l.jade' = "enum Kind { a, b }`nfun low() : string => `"low `${Kind.b}`""
+                      'upper\u.jade' = "import `"../lower`".*`nfun up() : string => `"up `" + low()"
+                      'main.jade' = "import lower.*`nimport upper.*`nprint(up())" }; Out = 'up low b' },
+        @{ Files = @{ 'main.jade' = "import upper.*`nprint(up())" }; Out = 'up low b' }) },
     # M8: a file importing its own folder runs nothing, so that the folder's classes are made first.
     @{ Name = 'a file imports its own folder'; Steps = @(
-        @{ Files = @{ 'lib\a.astra' = "class R {`n  static { val k = 3 }`n}"
-                      'lib\p.astra' = "import `"../lib`".*`nfun p() : int => R.k"
-                      'main.astra' = "import lib.*`nprint(R.k + p())" }; Out = '6' }) },
+        @{ Files = @{ 'lib\a.jade' = "class R {`n  static { val k = 3 }`n}"
+                      'lib\p.jade' = "import `"../lib`".*`nfun p() : int => R.k"
+                      'main.jade' = "import lib.*`nprint(R.k + p())" }; Out = '6' }) },
     @{ Name = 'a constant changes in an imported file'; Steps = @(
-        @{ Files = @{ 'lib.astra' = 'const limit = 10'; 'main.astra' = "import lib.*`nfun twice() : int => limit * 2`nprint(twice())" }; Out = '20' },
-        @{ Files = @{ 'lib.astra' = 'const limit = 11' }; Out = '22' }) }
+        @{ Files = @{ 'lib.jade' = 'const limit = 10'; 'main.jade' = "import lib.*`nfun twice() : int => limit * 2`nprint(twice())" }; Out = '20' },
+        @{ Files = @{ 'lib.jade' = 'const limit = 11' }; Out = '22' }) }
 )
 foreach ($scenario in $scenarios) {
     $dir = Join-Path $tmp ('scenario-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $savedCache = $env:ASTRA_CACHE
-    $env:ASTRA_CACHE = Join-Path $dir 'cache'
+    $savedCache = $env:JADE_CACHE
+    $env:JADE_CACHE = Join-Path $dir 'cache'
     $result = $null
     $stepNumber = 0
     foreach ($step in $scenario.Steps) {
@@ -423,12 +423,12 @@ foreach ($scenario in $scenarios) {
             # The first run says what it compiled and what it put back; the second starts from the
             # program the first kept.
             $counted = $step.Units -and $run -eq 'first'
-            if ($counted) { $env:ASTRA_TIMES = '1' }
-            $got = Invoke-Astra @((Join-Path $dir 'main.astra')) $Astra $tmp $env:ASTRA_CACHE
-            $env:ASTRA_TIMES = $null
+            if ($counted) { $env:JADE_TIMES = '1' }
+            $got = Invoke-Jade @((Join-Path $dir 'main.jade')) $Jade $tmp $env:JADE_CACHE
+            $env:JADE_TIMES = $null
             if ($counted) {
                 $said = $got.Error
-                $got.Error = (($got.Error -split "`r?`n") | Where-Object { $_ -notlike 'astra:*' }) -join "`n"
+                $got.Error = (($got.Error -split "`r?`n") | Where-Object { $_ -notlike 'jade:*' }) -join "`n"
                 if ($said -notmatch [regex]::Escape($step.Units)) {
                     $result = "step $stepNumber, $run run:`n      expected: $($step.Units)`n      got: $said"
                     break
@@ -445,11 +445,11 @@ foreach ($scenario in $scenarios) {
         }
         if ($null -ne $result) { break }
     }
-    $env:ASTRA_CACHE = $savedCache
+    $env:JADE_CACHE = $savedCache
     if ($null -eq $result) { $passed++ } else { $failures += "$($scenario.Name) [cache]`n    $result" }
 }
 
-# The --icon option of `astra build`: a program built with an icon runs as before, and
+# The --icon option of `jade build`: a program built with an icon runs as before, and
 # Windows finds the icon in the file. The icon is one 32 pixel picture in a single colour.
 $iconColor = 220, 30, 40
 $bytes = New-Object IO.MemoryStream
@@ -465,15 +465,15 @@ $writer.Write((New-Object byte[] (32 * 4)))                                     
 $iconFile = Join-Path $tmp 'test.ico'
 [IO.File]::WriteAllBytes($iconFile, $bytes.ToArray())
 
-$source = Join-Path $tmp 'icon.astra'
+$source = Join-Path $tmp 'icon.jade'
 [IO.File]::WriteAllText($source, 'print("has an icon")')
 $program = Join-Path $tmp 'icon.exe'
-$build = Invoke-Astra @('build', $source, '--icon', $iconFile, '-o', $program) $Astra $tmp $env:ASTRA_CACHE
+$build = Invoke-Jade @('build', $source, '--icon', $iconFile, '-o', $program) $Jade $tmp $env:JADE_CACHE
 $result = $null
 if ($build.Code -ne 0) {
     $result = "build failed: $($build.Error.Trim())"
 } else {
-    $result = Compare-Run (Invoke-Astra @() $program $tmp $env:ASTRA_CACHE) @('has an icon') '' 0
+    $result = Compare-Run (Invoke-Jade @() $program $tmp $env:JADE_CACHE) @('has an icon') '' 0
     if ($null -eq $result) {
         Add-Type -AssemblyName System.Drawing
         $pixel = [Drawing.Icon]::ExtractAssociatedIcon($program).ToBitmap().GetPixel(16, 16)

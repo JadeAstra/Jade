@@ -1,8 +1,0 @@
-// A name for a type is declared at the top of a file (D41): one inside a function would name
-// nothing anywhere, so it is an error, not left out.
-fun f() : int {
-  type N = int
-  return 3
-}
-print(f())
-// expect compile error: error_local_type_alias.astra:4:8: error: a name for a type is declared at the top of a file, where all of the file sees it (D41)

@@ -7,7 +7,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::text {
+namespace jade::text {
 
 namespace {
 
@@ -227,4 +227,4 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow) {
     return image;
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

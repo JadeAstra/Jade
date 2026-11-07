@@ -1,6 +1,0 @@
-// An entry of a class header without a default may follow one with, as a parameter of a
-// function may: a call has to give it, by name or as a lambda after it.
-print("never runs")
-class Point(val x : int = 0, val y : int)
-val p = Point(3)
-// expect compile error: error_default.astra:5:14: error: Point(...) needs a value for 'y'

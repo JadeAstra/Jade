@@ -5,8 +5,8 @@
 # an efficient core. Windows says which kind each core is (its efficiency class, higher for the
 # faster); on a processor with one kind, every logical processor is in the mask.
 #
-#   . bench\fastcores.ps1; Invoke-Pinned 'astra.exe' @('x.astra')     (on the fastest cores)
-#   powershell -ExecutionPolicy Bypass -File bench\pinned.ps1 x.astra  (one program, from a shell)
+#   . bench\fastcores.ps1; Invoke-Pinned 'jade.exe' @('x.jade')     (on the fastest cores)
+#   powershell -ExecutionPolicy Bypass -File bench\pinned.ps1 x.jade  (one program, from a shell)
 
 Add-Type -TypeDefinition @'
 using System;

@@ -1,28 +1,28 @@
 # The start-up budgets of D145, measured on this machine with a release build:
 #   a first run, nothing cached, checked and compiled in under half a second;
-#   a second run with nothing changed in under 20 ms on top of astra.exe starting;
+#   a second run with nothing changed in under 20 ms on top of jade.exe starting;
 #   a run after a one-line change inside a function in under 100 ms.
 # The program they are measured on is the standard library, Topaz, the examples and the tests
 # (some 20,000 lines), each test and example in a folder of its own so that their names do not
-# meet, imported by one main file. It is compiled, not run (ASTRA_TIMES=compile).
+# meet, imported by one main file. It is compiled, not run (JADE_TIMES=compile).
 #
 #   powershell -ExecutionPolicy Bypass -File tests\budgets.ps1
 
 # -Keep leaves the program and its cache in the temp folder, to be looked into.
-param([string]$Astra = (Join-Path $PSScriptRoot '..\build\astra.exe'), [int]$Runs = 7, [switch]$Keep)
+param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'), [int]$Runs = 7, [switch]$Keep)
 
-$root = Join-Path ([IO.Path]::GetTempPath()) 'astra-budget'
+$root = Join-Path ([IO.Path]::GetTempPath()) 'jade-budget'
 Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $root | Out-Null
 # A cache of the budgets' own, so that the first run can start with nothing in it.
-$cache = Join-Path ([IO.Path]::GetTempPath()) 'astra-budget-cache'
-$env:ASTRA_CACHE = $cache
+$cache = Join-Path ([IO.Path]::GetTempPath()) 'jade-budget-cache'
+$env:JADE_CACHE = $cache
 function Clear-Cache { Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue }
 
 # What the tests and examples import or start beside them.
 $siblings = 'modules', 'NsShapes', 'NsText', 'workers'
-$sources = @(Get-ChildItem (Join-Path $PSScriptRoot '*.astra') | Where-Object { $_.Name -notlike 'error_*' })
-$sources += @(Get-ChildItem (Join-Path $PSScriptRoot '..\examples\*.astra') | Where-Object { $_.Name -notlike 'bounce_worker*' })
+$sources = @(Get-ChildItem (Join-Path $PSScriptRoot '*.jade') | Where-Object { $_.Name -notlike 'error_*' })
+$sources += @(Get-ChildItem (Join-Path $PSScriptRoot '..\examples\*.jade') | Where-Object { $_.Name -notlike 'bounce_worker*' })
 $main = @()
 $lines = 0
 for ($i = 0; $i -lt $sources.Count; $i++) {
@@ -36,28 +36,28 @@ for ($i = 0; $i -lt $sources.Count; $i++) {
     $main += 'import part{0:d3}' -f $i
     $lines += @(Get-Content $sources[$i].FullName).Count
 }
-$mainFile = Join-Path $root 'main.astra'
+$mainFile = Join-Path $root 'main.jade'
 [IO.File]::WriteAllText($mainFile, ($main -join "`n") + "`nprint(""ready"")`n")
 foreach ($dir in (Join-Path $PSScriptRoot '..\src\std'), (Join-Path $PSScriptRoot '..\lib\Topaz')) {
-    $lines += @(Get-ChildItem (Join-Path $dir '*.astra') | ForEach-Object { @(Get-Content $_.FullName).Count } | Measure-Object -Sum).Sum
+    $lines += @(Get-ChildItem (Join-Path $dir '*.jade') | ForEach-Object { @(Get-Content $_.FullName).Count } | Measure-Object -Sum).Sum
 }
 
-function Time-Astra([string[]]$astraArgs, [string]$times = 'compile') {
-    $env:ASTRA_TIMES = $times
+function Time-Jade([string[]]$jadeArgs, [string]$times = 'compile') {
+    $env:JADE_TIMES = $times
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $output = & $Astra @astraArgs 2>&1
+    $output = & $Jade @jadeArgs 2>&1
     $watch.Stop()
-    $env:ASTRA_TIMES = $null
-    if ($LASTEXITCODE -ne 0) { throw "astra failed: $output" }
-    $said = @($output | Where-Object { "$_" -like 'astra:*' } | ForEach-Object { "$_" })
+    $env:JADE_TIMES = $null
+    if ($LASTEXITCODE -ne 0) { throw "jade failed: $output" }
+    $said = @($output | Where-Object { "$_" -like 'jade:*' } | ForEach-Object { "$_" })
     # A start is timed from when the system made the process to when the program is ready to
-    # run, as astra says; `Work` is the part after astra.exe began its own work. Writing the
-    # cache, and ending the process, are no part of it. Without ASTRA_TIMES it is the whole run.
+    # run, as jade says; `Work` is the part after jade.exe began its own work. Writing the
+    # cache, and ending the process, are no part of it. Without JADE_TIMES it is the whole run.
     $ms = $watch.Elapsed.TotalMilliseconds
     $work = $ms
     foreach ($line in $said) {
         if ($line -match 'ready to run ([\d.]+) ms after the process was made') { $ms = [double]$Matches[1] }
-        if ($line -match 'ready to run ([\d.]+) ms after astra.exe started its work') { $work = [double]$Matches[1] }
+        if ($line -match 'ready to run ([\d.]+) ms after jade.exe started its work') { $work = [double]$Matches[1] }
     }
     $text = @($said | Where-Object { $_ -notmatch 'waited|process was made' }) -join ' '
     return @{ Ms = $ms; Work = $work; Text = $text }
@@ -71,29 +71,29 @@ function Best([scriptblock]$run) {
     return $best
 }
 
-# astra.exe starting, and doing nothing.
-$start = Best { Time-Astra @('--version') '' }
+# jade.exe starting, and doing nothing.
+$start = Best { Time-Jade @('--version') '' }
 # A first run: nothing cached.
-$first = Best { Clear-Cache; Time-Astra @($mainFile) }
+$first = Best { Clear-Cache; Time-Jade @($mainFile) }
 # A second run with nothing changed.
-$null = Time-Astra @($mainFile)
-$second = Best { Time-Astra @($mainFile) }
+$null = Time-Jade @($mainFile)
+$second = Best { Time-Jade @($mainFile) }
 # A run after a one-line change inside a function: a test's function body gains a line.
 $changed = Join-Path $root 'part000'
-$file = @(Get-ChildItem (Join-Path $changed '*.astra'))[0].FullName
+$file = @(Get-ChildItem (Join-Path $changed '*.jade'))[0].FullName
 $original = [IO.File]::ReadAllText($file)
 $edit = Best {
     [IO.File]::WriteAllText($file, $original + "`nfun budgetProbe() : int { val n = $([Environment]::TickCount) `n return n }`n")
-    Time-Astra @($mainFile)
+    Time-Jade @($mainFile)
 }
 [IO.File]::WriteAllText($file, $original)
 
 "program: $($sources.Count) tests and examples, the standard library and Topaz, $lines lines"
-"astra.exe starting:      {0,7:N1} ms" -f $start.Ms
+"jade.exe starting:      {0,7:N1} ms" -f $start.Ms
 "first run:               {0,7:N1} ms  (budget 500)    {1}" -f $first.Ms, $first.Text
-"second run, unchanged:   {0,7:N1} ms  (budget 20 on top of astra.exe starting: {2:N1})    {1}" -f $second.Ms, $second.Text, $second.Work
+"second run, unchanged:   {0,7:N1} ms  (budget 20 on top of jade.exe starting: {2:N1})    {1}" -f $second.Ms, $second.Text, $second.Work
 "after a one-line change: {0,7:N1} ms  (budget 100)    {1}" -f $edit.Ms, $edit.Text
-$env:ASTRA_CACHE = $null
+$env:JADE_CACHE = $null
 if ($Keep) { "kept: $root and $cache" } else {
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     Clear-Cache

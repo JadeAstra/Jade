@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Astra language</title>
-<!-- docs/language.html is made from this page: astra doc src/std/*.astra --template docs/language-template.html -o docs/language.html
+<title>The Jade language</title>
+<!-- docs/language.html is made from this page: jade doc src/std/*.jade --template docs/language-template.html -o docs/language.html
      Edit this page, and the comments in src/std, never docs/language.html itself. -->
 <style>
 :root {
@@ -49,8 +49,8 @@ th { color: var(--muted); font-weight: 600; }
 </head>
 <body>
 <main>
-<h1>The Astra language</h1>
-<p class="lede">Every keyword of Astra, what it does and how it is written, then every function, type and value of the standard library. The library part is made from the comments in its source (<code>src/std</code>) by <code>astra doc</code>, so it says what the library does as it stands.</p>
+<h1>The Jade language</h1>
+<p class="lede">Every keyword of Jade, what it does and how it is written, then every function, type and value of the standard library. The library part is made from the comments in its source (<code>src/std</code>) by <code>jade doc</code>, so it says what the library does as it stands.</p>
 
 <nav>
 <ul>
@@ -269,7 +269,7 @@ task { print(later(21)) }    // 42</pre></dd>
 <pre>fun readConfig(path : string) : string throws IOException =&gt; Path(path).readText()</pre></dd>
 
 <dt><code>external</code></dt>
-<dd>Only in the standard library: a function, property or object written in C++, declared in Astra so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>
+<dd>Only in the standard library: a function, property or object written in C++, declared in Jade so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>
 </dl>
 
 <h3 id="kw-control">Choosing and repeating</h3>
@@ -309,7 +309,7 @@ task { print(later(21)) }    // 42</pre></dd>
 <h3 id="kw-errors">Errors</h3>
 <dl class="kw">
 <dt><code>throw</code></dt>
-<dd>Stops the code with an exception, any <code>Throwable</code>: one of the standard library's (see <code>errors.astra</code> below) or a class of the program's own that extends <code>Exception</code>.</dd>
+<dd>Stops the code with an exception, any <code>Throwable</code>: one of the standard library's (see <code>errors.jade</code> below) or a class of the program's own that extends <code>Exception</code>.</dd>
 
 <dt><code>try</code>, <code>catch</code>, <code>finally</code></dt>
 <dd><code>try</code> runs a block; a <code>catch (e : Kind)</code> after it runs when the block throws an exception of that kind (<code>catch (e)</code> catches any <code>Exception</code>); <code>finally</code> runs last in every case, after any value to return is worked out.
@@ -366,13 +366,13 @@ addButton(widgets)</pre></dd>
 <h3 id="kw-modules">Files and libraries</h3>
 <dl class="kw">
 <dt><code>import</code></dt>
-<dd>Brings in another file or library: <code>import NsText</code> reaches its names as <code>NsText.Block</code>, <code>import NsText.*</code> by their bare names, <code>import NsText as text</code> under a name of the importer's choosing. A path of folders is written with dots, or in quotes (<code>import "modules/strutil.astra"</code>). The standard library needs no import: every program has all of it.</dd>
+<dd>Brings in another file or library: <code>import NsText</code> reaches its names as <code>NsText.Block</code>, <code>import NsText.*</code> by their bare names, <code>import NsText as text</code> under a name of the importer's choosing. A path of folders is written with dots, or in quotes (<code>import "modules/strutil.jade"</code>). The standard library needs no import: every program has all of it.</dd>
 </dl>
 
 <h3 id="kw-refused">Words from other languages</h3>
-<p>These are not Astra's, and each is an error that says what Astra writes instead.</p>
+<p>These are not Jade's, and each is an error that says what Jade writes instead.</p>
 <table>
-<thead><tr><th>Written</th><th>What Astra says</th></tr></thead>
+<thead><tr><th>Written</th><th>What Jade says</th></tr></thead>
 <tbody>
 <tr><td><code>let x = 1</code></td><td>declare variables with <code>val</code> (immutable) or <code>var</code></td></tr>
 <tr><td><code>fn f() {}</code></td><td>declare functions with <code>fun</code></td></tr>
@@ -405,34 +405,34 @@ addButton(widgets)</pre></dd>
 <div class="api-ref">
 <h2 id="api-files">The standard library, file by file</h2>
 <ul>
-<li><a href="#file-builtins-astra">builtins.astra</a></li>
-<li><a href="#file-core-astra">core.astra</a></li>
-<li><a href="#file-errors-astra">errors.astra</a></li>
-<li><a href="#file-file-astra">file.astra</a></li>
-<li><a href="#file-fonts-astra">fonts.astra</a></li>
-<li><a href="#file-foreign-astra">foreign.astra</a></li>
-<li><a href="#file-graphics-astra">graphics.astra</a></li>
-<li><a href="#file-grid-astra">grid.astra</a></li>
-<li><a href="#file-image-astra">image.astra</a></li>
-<li><a href="#file-io-astra">io.astra</a></li>
-<li><a href="#file-list-astra">list.astra</a></li>
-<li><a href="#file-localtime-astra">localtime.astra</a></li>
-<li><a href="#file-map-astra">map.astra</a></li>
-<li><a href="#file-parallel-astra">parallel.astra</a></li>
-<li><a href="#file-range-astra">range.astra</a></li>
-<li><a href="#file-reflect-astra">reflect.astra</a></li>
-<li><a href="#file-regex-astra">regex.astra</a></li>
-<li><a href="#file-sandbox-astra">sandbox.astra</a></li>
-<li><a href="#file-sequence-astra">sequence.astra</a></li>
-<li><a href="#file-set-astra">set.astra</a></li>
-<li><a href="#file-string-astra">string.astra</a></li>
-<li><a href="#file-task-astra">task.astra</a></li>
-<li><a href="#file-test-astra">test.astra</a></li>
-<li><a href="#file-text-astra">text.astra</a></li>
-<li><a href="#file-thread-astra">thread.astra</a></li>
-<li><a href="#file-time-astra">time.astra</a></li>
-<li><a href="#file-values-astra">values.astra</a></li>
-<li><a href="#file-worker-astra">worker.astra</a></li>
+<li><a href="#file-builtins-jade">builtins.jade</a></li>
+<li><a href="#file-core-jade">core.jade</a></li>
+<li><a href="#file-errors-jade">errors.jade</a></li>
+<li><a href="#file-file-jade">file.jade</a></li>
+<li><a href="#file-fonts-jade">fonts.jade</a></li>
+<li><a href="#file-foreign-jade">foreign.jade</a></li>
+<li><a href="#file-graphics-jade">graphics.jade</a></li>
+<li><a href="#file-grid-jade">grid.jade</a></li>
+<li><a href="#file-image-jade">image.jade</a></li>
+<li><a href="#file-io-jade">io.jade</a></li>
+<li><a href="#file-list-jade">list.jade</a></li>
+<li><a href="#file-localtime-jade">localtime.jade</a></li>
+<li><a href="#file-map-jade">map.jade</a></li>
+<li><a href="#file-parallel-jade">parallel.jade</a></li>
+<li><a href="#file-range-jade">range.jade</a></li>
+<li><a href="#file-reflect-jade">reflect.jade</a></li>
+<li><a href="#file-regex-jade">regex.jade</a></li>
+<li><a href="#file-sandbox-jade">sandbox.jade</a></li>
+<li><a href="#file-sequence-jade">sequence.jade</a></li>
+<li><a href="#file-set-jade">set.jade</a></li>
+<li><a href="#file-string-jade">string.jade</a></li>
+<li><a href="#file-task-jade">task.jade</a></li>
+<li><a href="#file-test-jade">test.jade</a></li>
+<li><a href="#file-text-jade">text.jade</a></li>
+<li><a href="#file-thread-jade">thread.jade</a></li>
+<li><a href="#file-time-jade">time.jade</a></li>
+<li><a href="#file-values-jade">values.jade</a></li>
+<li><a href="#file-worker-jade">worker.jade</a></li>
 </ul>
 <h2 id="api-types">Types and what they have</h2>
 <ul class="types">
@@ -585,8 +585,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#int.char"><code>int</code></a> (30)</li>
 <li><a href="#string.size"><code>string</code></a> (109)</li>
 </ul>
-<section class="file" id="file-builtins-astra">
-<h2>builtins.astra</h2>
+<section class="file" id="file-builtins-jade">
+<h2>builtins.jade</h2>
 <h3>Built-in functions and types</h3>
 <p>The functions every program has, and the methods and properties of the built-in types: strings, numbers, lists, maps, sets, ranges and bytes. Where one name takes different shapes (<code>add(item)</code> and <code>add(index, item)</code>), each is listed, and a call means the one its arguments fit.</p>
 <h4>Functions</h4>
@@ -1390,9 +1390,9 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <p>Starts random() and randomInt() again from <code>value</code>: after the same seed, they give the same numbers in the same order.</p>
 </div>
 </section>
-<section class="file" id="file-core-astra">
-<h2>core.astra</h2>
-<p>The standard library, the part written in Astra. The names are Kotlin's, so that code ported from it reads the same.</p>
+<section class="file" id="file-core-jade">
+<h2>core.jade</h2>
+<p>The standard library, the part written in Jade. The names are Kotlin's, so that code ported from it reads the same.</p>
 <h3>Small values that functions hand out</h3>
 <div class="entry" id="Pair"><code class="sig">value Pair&lt;A, B&gt;(val first : A, val second : B)</code><a class="anchor" href="#Pair">#</a>
 <p>Two values, made with <code>a to b</code> or Pair(a, b).</p>
@@ -1456,10 +1456,10 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 </pre>
 </div>
 <div class="entry member" id="Program.arguments"><code class="sig">val arguments : List&lt;string&gt;</code><a class="anchor" href="#Program.arguments">#</a>
-<p>What it was started with after its file's name, in order: [&quot;--fast&quot;, &quot;in.txt&quot;] for <code>astra bank.astra --fast in.txt</code>.</p>
+<p>What it was started with after its file's name, in order: [&quot;--fast&quot;, &quot;in.txt&quot;] for <code>jade bank.jade --fast in.txt</code>.</p>
 </div>
 <div class="entry member" id="Program.name"><code class="sig">var name : string</code><a class="anchor" href="#Program.name">#</a>
-<p>Its name: its own file's, without .astra (&quot;bank&quot; for bank.astra), unless set otherwise. It is the origin of the classes the program declares (Class.origin); set it before it is used.</p>
+<p>Its name: its own file's, without .jade (&quot;bank&quot; for bank.jade), unless set otherwise. It is the origin of the classes the program declares (Class.origin); set it before it is used.</p>
 </div>
 <div class="entry member" id="Program.environment"><code class="sig">val environment : Environment</code><a class="anchor" href="#Program.environment">#</a>
 <p>The environment it was started with, read once: Program.environment[&quot;LOCALAPPDATA&quot;] is that variable's value, or null where it is not set. In a sandbox there are none.</p>
@@ -1648,8 +1648,8 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <p>Runs <code>builder</code> on a new StringBuilder, so that append(...) inside it builds the text, and gives the text.</p>
 </div>
 </section>
-<section class="file" id="file-errors-astra">
-<h2>errors.astra</h2>
+<section class="file" id="file-errors-jade">
+<h2>errors.jade</h2>
 <h3>What can be thrown</h3>
 <p>Java's tree, which Kotlin code uses. Only a Throwable is thrown. It has a message, which may be null, and the Throwable that caused it, if any.</p>
 <pre>Error: what the VM cannot go on from. A bare `catch (e)` does not catch one; it is caught
@@ -1759,15 +1759,15 @@ Exception: everything else, which a bare `catch (e)` catches.
 <p>What a method, a constructor, or a property's getter or setter called by its name threw, as Java's: <code>cause</code> is that. A failure that came through reflection says so.</p>
 </div>
 </section>
-<section class="file" id="file-file-astra">
-<h2>file.astra</h2>
+<section class="file" id="file-file-jade">
+<h2>file.jade</h2>
 <h3>Paths</h3>
 <div class="entry" id="Path"><code class="sig">class Path</code><a class="anchor" href="#Path">#</a>
 <p>A file or directory on disk, by its path: Java's File and java.nio.file.Path in one. Making a Path touches nothing; what is in the path (name, parent, extension) is a property, and what asks the disk (exists(), size(), list()) is a function.</p>
 <pre>val notes = Path(&quot;notes.txt&quot;)
 if (notes.exists()) { print(notes.readText()) }
 Path(directory, &quot;out.bin&quot;).writeBytes(data)
-for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quot;) { print(file.name) } }
+for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;jade&quot;) { print(file.name) } }
 </pre>
 <p>Text is UTF-8 unless a Charset says otherwise.</p>
 </div>
@@ -1777,11 +1777,11 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <div class="entry member" id="Path.separator"><code class="sig">val separator : string get()</code><a class="anchor" href="#Path.separator">#</a>
 <p>What separates the names in a path: &quot;\&quot; on Windows, and in a sandbox with Windows' paths.</p>
 </div>
-<div class="entry member" id="Path.createTempDirectory"><code class="sig">fun createTempDirectory(prefix : string = &quot;astra&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempDirectory">#</a>
+<div class="entry member" id="Path.createTempDirectory"><code class="sig">fun createTempDirectory(prefix : string = &quot;jade&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempDirectory">#</a>
 <p>A new, empty directory or file in the system's temporary directory, its name starting with <code>prefix</code>.</p>
 </div>
-<div class="entry member" id="Path.createTempFile"><code class="sig">fun createTempFile(prefix : string = &quot;astra&quot;, suffix : string = &quot;.tmp&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempFile">#</a>
-<p>A new, empty file in the system's temporary directory, named <code>prefix</code>, a number, then <code>suffix</code>, as astra240932127838.tmp; no other program gets the same one. An IOException where none can be made.</p>
+<div class="entry member" id="Path.createTempFile"><code class="sig">fun createTempFile(prefix : string = &quot;jade&quot;, suffix : string = &quot;.tmp&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempFile">#</a>
+<p>A new, empty file in the system's temporary directory, named <code>prefix</code>, a number, then <code>suffix</code>, as jade240932127838.tmp; no other program gets the same one. An IOException where none can be made.</p>
 </div>
 <div class="entry member" id="Path.roots"><code class="sig">fun roots() : List&lt;Path&gt;</code><a class="anchor" href="#Path.roots">#</a>
 <p>The tops of the file system: each drive on Windows (C:\, D:\), / elsewhere.</p>
@@ -1918,10 +1918,10 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;astra&quo
 <p>The path as it was made, its text.</p>
 </div>
 </section>
-<section class="file" id="file-fonts-astra">
-<h2>fonts.astra</h2>
+<section class="file" id="file-fonts-jade">
+<h2>fonts.jade</h2>
 <h3>Fonts, text and pictures</h3>
-<p>The text engine: reading font files, measuring text and drawing it into a picture, all by code of Astra's own. The system is asked for one thing only, which font files are installed. The same font file gives the same numbers and the same pixels everywhere.</p>
+<p>The text engine: reading font files, measuring text and drawing it into a picture, all by code of Jade's own. The system is asked for one thing only, which font files are installed. The same font file gives the same numbers and the same pixels everywhere.</p>
 <pre>val font = Font(&quot;Segoe UI&quot;, 14, bold = true)
 val page = Image(font.width(&quot;Hello&quot;) + 20, font.lineHeight + 20, Color.white)
 val canvas = page.canvas()
@@ -2159,8 +2159,8 @@ font.copy(size = 16, bold = false)            the same with some options changed
 <p>The font as it was asked for: &quot;Font(Segoe UI, 14, bold)&quot;, &quot;Font(Segoe UI, 14, weight 350)&quot;.</p>
 </div>
 </section>
-<section class="file" id="file-foreign-astra">
-<h2>foreign.astra</h2>
+<section class="file" id="file-foreign-jade">
+<h2>foreign.jade</h2>
 <h3>Foreign functions</h3>
 <p>Calling a function in a library of the system's (a DLL on Windows, a shared library on Linux), with whole numbers, pointers and text, and reading and writing the structures it takes in blocks of native memory:</p>
 <pre>val kernel32 = Library(&quot;kernel32&quot;)
@@ -2299,8 +2299,8 @@ print(Foreign.lastError)            // what the system recorded, as GetLastError
 <p>A block holding <code>text</code> as UTF-16 with a 0 after it, for a structure that points at text.</p>
 </div>
 </section>
-<section class="file" id="file-graphics-astra">
-<h2>graphics.astra</h2>
+<section class="file" id="file-graphics-jade">
+<h2>graphics.jade</h2>
 <h3>Colours and geometry</h3>
 <p>Value types: a Color, a Point, a Size, a Rect or an Insets is what it holds, with no identity, compared by its parts and copied where it is kept. Kept in a list, a field or a variable, it takes no allocation of its own. A var field changes through the place holding the value (<code>bounds.x = 5</code>), and so do the mutating methods (<code>bounds.translate(1, 1)</code>).</p>
 <div class="entry" id="Color"><code class="sig">value Color(val red : byte, val green : byte, val blue : byte, val alpha : byte = 255)</code><a class="anchor" href="#Color">#</a>
@@ -2545,8 +2545,8 @@ Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGB
 <p>The picture's height, in units (an Image's are its pixels).</p>
 </div>
 </section>
-<section class="file" id="file-grid-astra">
-<h2>grid.astra</h2>
+<section class="file" id="file-grid-jade">
+<h2>grid.jade</h2>
 <h3>Grids</h3>
 <div class="entry" id="Grid"><code class="sig">class Grid&lt;T&gt;</code><a class="anchor" href="#Grid">#</a>
 <p>A rectangle of cells, <code>width</code> by <code>height</code>, each a T: an image's pixels (a Grid&lt;Color&gt;), a map of walls (a Grid&lt;bool&gt;), the heights of a terrain (a Grid&lt;float32&gt;). It is packed by T as a List is: a Color 4 bytes a cell, a bool or a byte 1, an int16 2, a float32 4; a grid of objects keeps references.</p>
@@ -2640,8 +2640,8 @@ walls .= appendRows(2)                                  two rows more, a new gri
 <p>Its size, as <code>Grid(64 x 64)</code>, not its cells.</p>
 </div>
 </section>
-<section class="file" id="file-image-astra">
-<h2>image.astra</h2>
+<section class="file" id="file-image-jade">
+<h2>image.jade</h2>
 <h3>Images and canvases</h3>
 <div class="entry" id="TextMetrics"><code class="sig">data TextMetrics(val width : int, val ascent : int, val descent : int, val height : int)</code><a class="anchor" href="#TextMetrics">#</a>
 <p>What a text takes up in a font, in units.</p>
@@ -2922,8 +2922,8 @@ image.save(Path(&quot;out.png&quot;))
 <p>Its pixels, as a new Image: a Surface's at its size in pixels.</p>
 </div>
 </section>
-<section class="file" id="file-io-astra">
-<h2>io.astra</h2>
+<section class="file" id="file-io-jade">
+<h2>io.jade</h2>
 <h3>Readers, writers, processes and sockets</h3>
 <p>Reading and writing a piece at a time, programs started from this one, and connections over the network.</p>
 <p>Anything here that waits (a read, an accept, waitFor) is written as an ordinary call:</p>
@@ -2934,7 +2934,7 @@ image.save(Path(&quot;out.png&quot;))
 </pre>
 <h3>Character sets</h3>
 <div class="entry" id="Charset"><code class="sig">enum Charset</code><a class="anchor" href="#Charset">#</a>
-<p>What text is read and written in. Astra's own text is UTF-8, the default everywhere; the others are for files, programs and protocols that use them (mail's Latin-1 and Windows-1252, Windows' UTF-16). A character the set has no place for is written as '?', and bytes that spell no character are read as U+FFFD. utf16 is Java's &quot;UTF-16&quot;: read in the order a byte order mark says, big-endian where there is none, and written big-endian after a mark; utf16le and utf16be take no mark. latin9 is ISO-8859-15, Latin-1 with the euro.</p>
+<p>What text is read and written in. Jade's own text is UTF-8, the default everywhere; the others are for files, programs and protocols that use them (mail's Latin-1 and Windows-1252, Windows' UTF-16). A character the set has no place for is written as '?', and bytes that spell no character are read as U+FFFD. utf16 is Java's &quot;UTF-16&quot;: read in the order a byte order mark says, big-endian where there is none, and written big-endian after a mark; utf16le and utf16be take no mark. latin9 is ISO-8859-15, Latin-1 with the euro.</p>
 </div>
 <h3>Reader and Writer</h3>
 <div class="entry" id="Reader"><code class="sig">class Reader : AutoCloseable</code><a class="anchor" href="#Reader">#</a>
@@ -3024,7 +3024,7 @@ if (result.exitCode == 0) { print(result.output) }
 <p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said. With a <code>timeout</code>, a program that runs longer is killed, and run throws a TimeoutException (8.8h).</p>
 </div>
 <div class="entry member" id="Process.currentCommand"><code class="sig">fun currentCommand() : open List&lt;string&gt;</code><a class="anchor" href="#Process.currentCommand">#</a>
-<p>What started this program: the path of its executable and, when it is a script run by astra, the script. Process(Process.currentCommand() + [&quot;--second&quot;]) starts it again.</p>
+<p>What started this program: the path of its executable and, when it is a script run by jade, the script. Process(Process.currentCommand() + [&quot;--second&quot;]) starts it again.</p>
 </div>
 <div class="entry member" id="Process.currentPid"><code class="sig">fun currentPid() : int</code><a class="anchor" href="#Process.currentPid">#</a>
 <p>The process id the system gave this program.</p>
@@ -3125,10 +3125,10 @@ while (true) {
 <p>Stops listening. A thread waiting in accept() gets an IOException.</p>
 </div>
 </section>
-<section class="file" id="file-list-astra">
-<h2>list.astra</h2>
+<section class="file" id="file-list-jade">
+<h2>list.jade</h2>
 <h3>Lists</h3>
-<p>The methods a list has besides the built-in ones (add, get, slice, sort and so on). Every method that takes a function is written here, in Astra: the function then runs as part of the program, and a task can be set aside inside it.</p>
+<p>The methods a list has besides the built-in ones (add, get, slice, sort and so on). Every method that takes a function is written here, in Jade: the function then runs as part of the program, and a task can be set aside inside it.</p>
 <h4>The oldest ones</h4>
 <div class="entry" id="List.map"><code class="sig">inline fun &lt;T, R&gt; List&lt;T&gt;.map(transform : (T) -&gt; R) : open List&lt;R&gt;</code><a class="anchor" href="#List.map">#</a>
 <p>What <code>transform</code> gives for each item, in order, as a new list.</p>
@@ -3483,8 +3483,8 @@ while (true) {
 <p>Removes from the list the items for which <code>predicate</code> is true, as removeAll(predicate); true if anything was removed.</p>
 </div>
 </section>
-<section class="file" id="file-localtime-astra">
-<h2>localtime.astra</h2>
+<section class="file" id="file-localtime-jade">
+<h2>localtime.jade</h2>
 <h3>Dates and times where the program runs</h3>
 <p>A date, a time of day, and the two together, as a calendar and a clock show them in the system's time zone, named and written as java.time and kotlinx-datetime have them:</p>
 <pre>val stamp = LocalDateTime.now().format(&quot;yyyyMMdd-HHmmss&quot;)     // 20261106-143005
@@ -3606,8 +3606,8 @@ S...      the fraction of the second, as many digits as letters
 <p>The date and time this moment is in the system's time zone.</p>
 </div>
 </section>
-<section class="file" id="file-map-astra">
-<h2>map.astra</h2>
+<section class="file" id="file-map-jade">
+<h2>map.jade</h2>
 <h3>Maps</h3>
 <p>The methods a map has besides the built-in ones. A function given to one of them takes an entry, which has a <code>key</code> and a <code>value</code> and can be taken apart: { (key, value) -&gt; ... }</p>
 <div class="entry" id="Map.getOrPut"><code class="sig">inline fun &lt;K, V&gt; open Map&lt;K, V&gt;.getOrPut(key : K, defaultValue : () -&gt; V) : V</code><a class="anchor" href="#Map.getOrPut">#</a>
@@ -3726,8 +3726,8 @@ S...      the fraction of the second, as many digits as letters
 <p>The sum of what <code>selector</code> gives for each entry; 0 for an empty map.</p>
 </div>
 </section>
-<section class="file" id="file-parallel-astra">
-<h2>parallel.astra</h2>
+<section class="file" id="file-parallel-jade">
+<h2>parallel.jade</h2>
 <h3>Parallel sections</h3>
 <p>The items of a list worked on by several cores at once, on the objects themselves:</p>
 <pre>balls.parallelStream().forEach { it.move(width, height, steps) }
@@ -3949,8 +3949,8 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>How many cores a parallel section uses on this machine.</p>
 </div>
 </section>
-<section class="file" id="file-range-astra">
-<h2>range.astra</h2>
+<section class="file" id="file-range-jade">
+<h2>range.jade</h2>
 <h3>Ranges</h3>
 <p>A range can be looped over, and has the methods of a list that only read: each makes a list of its numbers where it needs one.</p>
 <div class="entry" id="Range.forEach"><code class="sig">inline fun Range.forEach(action : (int) -&gt; unit)</code><a class="anchor" href="#Range.forEach">#</a>
@@ -4030,8 +4030,8 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </pre>
 </div>
 </section>
-<section class="file" id="file-reflect-astra">
-<h2>reflect.astra</h2>
+<section class="file" id="file-reflect-jade">
+<h2>reflect.jade</h2>
 <h3>Reflection</h3>
 <p><code>Image#</code> is the class named Image and <code>x#</code> the class of the object x: a Class. It tells the class's name, what it extends and implements and the type arguments it was given, and lists its fields, methods and constructors, as far as the code where the <code>#</code> is written may use them: what a class keeps private is listed only to that class's own code. A member listed is read, set or called by its name, through what lists it.</p>
 <p>What a method or constructor called this way throws arrives wrapped in a checked InvocationTargetException, the original in <code>cause</code>. A call the member cannot take, as one with too few arguments or of the wrong types, or on an object of another class, is an IllegalArgumentException of its own.</p>
@@ -4042,7 +4042,7 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>The class's name, or a built-in type's: &quot;Circle&quot;, &quot;int&quot;, &quot;List&quot;.</p>
 </div>
 <div class="entry member" id="Class.origin"><code class="sig">val origin : string</code><a class="anchor" href="#Class.origin">#</a>
-<p>Where it comes from: &quot;astra&quot; for a built-in type and the standard library's classes, a library's name for its classes (&quot;Topaz&quot;), and the program's name (Program.name) for the program's own.</p>
+<p>Where it comes from: &quot;jade&quot; for a built-in type and the standard library's classes, a library's name for its classes (&quot;Topaz&quot;), and the program's name (Program.name) for the program's own.</p>
 </div>
 <div class="entry member" id="Class.superclass"><code class="sig">val superclass : Class?</code><a class="anchor" href="#Class.superclass">#</a>
 <p>The class it extends, with the type arguments it gives it; null where it extends none.</p>
@@ -4198,8 +4198,8 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <p>The class's name and its parameters, as &quot;Box(item : int, count : int)&quot;.</p>
 </div>
 </section>
-<section class="file" id="file-regex-astra">
-<h2>regex.astra</h2>
+<section class="file" id="file-regex-jade">
+<h2>regex.jade</h2>
 <h3>Regular expressions (N5, M8)</h3>
 <p>Patterns in Java's syntax, matched by character (code point), with Kotlin's Regex around them, its names and its meaning:</p>
 <pre>val date = Regex(&quot;(?&lt;year&gt;\\d{4})-(\\d\\d)-(\\d\\d)&quot;)
@@ -4340,8 +4340,8 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <p>The pieces of the text between the matches of <code>regex</code>, as Regex.split.</p>
 </div>
 </section>
-<section class="file" id="file-sandbox-astra">
-<h2>sandbox.astra</h2>
+<section class="file" id="file-sandbox-jade">
+<h2>sandbox.jade</h2>
 <h3>The sandbox</h3>
 <p>A world of files of its own, kept in memory, which the code in it reaches in place of the system's, so that nothing outside it is touched; and faults, which make the rare failures happen on purpose (the M6.6.2 plan, in docs/plans-and-gaps6.7.html):</p>
 <pre>Sandbox.run {
@@ -4422,7 +4422,7 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <p>Connecting to the host fails.</p>
 </div>
 <div class="entry" id="Network"><code class="sig">class Network(private val handle : any)</code><a class="anchor" href="#Network">#</a>
-<p>A sandbox's network: the hosts its code may connect to, each a far side written in Astra, and the ports its ServerSockets listen on.</p>
+<p>A sandbox's network: the hosts its code may connect to, each a far side written in Jade, and the ports its ServerSockets listen on.</p>
 </div>
 <div class="entry member" id="Network.host"><code class="sig">fun host(name : string, port : int, peer : (Peer) -&gt; unit throws Exception)</code><a class="anchor" href="#Network.host">#</a>
 <p>Connecting to <code>name</code>:<code>port</code> in the sandbox runs <code>peer</code> on a thread of its own, as the far side of the connection: what it reads is what the code sends, and what it writes the code reads.</p>
@@ -4494,8 +4494,8 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <p>A file or directory made, changed or deleted in a sandbox.</p>
 </div>
 </section>
-<section class="file" id="file-sequence-astra">
-<h2>sequence.astra</h2>
+<section class="file" id="file-sequence-jade">
+<h2>sequence.jade</h2>
 <h3>Sequences</h3>
 <p>A sequence gives its items one at a time, as they are asked for: nothing is worked out ahead, and nothing is kept, so a sequence can be endless, or longer than would fit in memory.</p>
 <pre>val squares = generateSequence(1) { it + 1 }.map { it * it }
@@ -4684,8 +4684,8 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 </div>
 <h4>How they are made</h4>
 </section>
-<section class="file" id="file-set-astra">
-<h2>set.astra</h2>
+<section class="file" id="file-set-jade">
+<h2>set.jade</h2>
 <h3>Sets and decks</h3>
 <p>A set holds each value once, in the order the values were first added; two values are the same one if a map would take them as one key. It is built in (Set(), add, remove, contains, addAll, removeAll, retainAll, clear, toList, first, last, <code>set + x</code> and <code>set - x</code>); what it does besides is here, each reading its items in order, and those that make a collection making a list, as a list's do. A map's keys and entries are sets too, live views of it.</p>
 <pre>val seen = Set&lt;string&gt;()        setOf(1, 2, 3)        [1, 2, 2].toSet()
@@ -5014,8 +5014,8 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <p>As a list shows itself: [1, 2, 3]</p>
 </div>
 </section>
-<section class="file" id="file-string-astra">
-<h2>string.astra</h2>
+<section class="file" id="file-string-jade">
+<h2>string.jade</h2>
 <h3>Strings</h3>
 <p>The methods a string has besides the built-in ones. Its characters are chars, as s[i] gives them, and so is what each of these functions passes on or gives for one.</p>
 <h4>Parts of the text</h4>
@@ -5178,7 +5178,7 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <p>The string, or what <code>defaultValue</code> gives when the string is blank (empty, or only spaces, tabs and line breaks). <code>defaultValue</code> runs only then.</p>
 </div>
 <h4>To other types</h4>
-<p>toInt, toIntOrNull, toFloat and toFloatOrNull are built in. Astra has one type for whole numbers, 64 bits, and one for fractions, so Kotlin's toLong and toDouble are written so.</p>
+<p>toInt, toIntOrNull, toFloat and toFloatOrNull are built in. Jade has one type for whole numbers, 64 bits, and one for fractions, so Kotlin's toLong and toDouble are written so.</p>
 <div class="entry" id="string.toBoolean"><code class="sig">fun string.toBoolean() : bool</code><a class="anchor" href="#string.toBoolean">#</a>
 <p>Whether the string is &quot;true&quot;, in any mix of capitals and small letters; false for anything else.</p>
 </div>
@@ -5189,8 +5189,8 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 <p>The string followed by <code>other</code> as print would show it: &quot;a&quot;.plus(null) is &quot;anull&quot;.</p>
 </div>
 </section>
-<section class="file" id="file-task-astra">
-<h2>task.astra</h2>
+<section class="file" id="file-task-jade">
+<h2>task.jade</h2>
 <h3>The event loop</h3>
 <div class="entry" id="EventLoop"><code class="sig">object EventLoop</code><a class="anchor" href="#EventLoop">#</a>
 <p>One per program, on the main thread. It runs the jobs posted to it and the timers, one at a time, after the script itself has finished, and the program ends when there is nothing left for it to wait for. A window's events arrive through the same loop.</p>
@@ -5319,10 +5319,10 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <p>Waits for the time given. In a task on the main thread the task is set aside meanwhile and the event loop goes on; anywhere else the thread sleeps.</p>
 </div>
 </section>
-<section class="file" id="file-test-astra">
-<h2>test.astra</h2>
-<h3>Tests: what <code>astra test</code> runs</h3>
-<p>A function written @Test is a test: <code>astra test file.astra</code> runs it, and it passes unless it throws. Around each test run the functions written @BeforeTest and @AfterTest, and around all of a file's tests those written @BeforeAll and @AfterAll. A test may be a method of a class, which is made anew for each of its tests, with no arguments; its own @BeforeTest and @AfterTest methods run on that object, and its static @BeforeAll and @AfterAll methods once.</p>
+<section class="file" id="file-test-jade">
+<h2>test.jade</h2>
+<h3>Tests: what <code>jade test</code> runs</h3>
+<p>A function written @Test is a test: <code>jade test file.jade</code> runs it, and it passes unless it throws. Around each test run the functions written @BeforeTest and @AfterTest, and around all of a file's tests those written @BeforeAll and @AfterAll. A test may be a method of a class, which is made anew for each of its tests, with no arguments; its own @BeforeTest and @AfterTest methods run on that object, and its static @BeforeAll and @AfterAll methods once.</p>
 <pre>@Test fun adds() { assertEquals(4, 2 + 2) }
 @Test @Timeout(500.milliseconds) fun quick() { ... }
 @Test fun writes(@TempDir dir : Path) { Path(dir, &quot;a.txt&quot;).writeText(&quot;hi&quot;) }
@@ -5332,7 +5332,7 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 @Test @Sandboxed(paths = PathStyle.windows) fun windowsPaths() { ... }
 </pre>
 <div class="entry" id="Test"><code class="sig">annotation Test</code><a class="anchor" href="#Test">#</a>
-<p>Makes a function, or a method of a class, a test that <code>astra test</code> runs; it passes unless it throws. It takes no parameters but those written @TempDir.</p>
+<p>Makes a function, or a method of a class, a test that <code>jade test</code> runs; it passes unless it throws. It takes no parameters but those written @TempDir.</p>
 </div>
 <div class="entry" id="BeforeTest"><code class="sig">annotation BeforeTest</code><a class="anchor" href="#BeforeTest">#</a>
 <p>Makes a function one that runs before each test of the file, or a method one that runs before each test of its class, on the object made for it; where it throws, the test fails unrun.</p>
@@ -5405,8 +5405,8 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <p>What the block throws, which has to be a T.</p>
 </div>
 </section>
-<section class="file" id="file-text-astra">
-<h2>text.astra</h2>
+<section class="file" id="file-text-jade">
+<h2>text.jade</h2>
 <h3>StringBuilder</h3>
 <div class="entry" id="StringBuilder"><code class="sig">class StringBuilder</code><a class="anchor" href="#StringBuilder">#</a>
 <p>Text put together a piece at a time. Adding to a string with += copies the whole string each time, which is slow for a long text built in a loop; this keeps the pieces and joins them once.</p>
@@ -5486,10 +5486,10 @@ print(out.toString())
 <p>Whether the text so far ends with <code>suffix</code>.</p>
 </div>
 </section>
-<section class="file" id="file-thread-astra">
-<h2>thread.astra</h2>
+<section class="file" id="file-thread-jade">
+<h2>thread.jade</h2>
 <h3>Threads</h3>
-<p>Threads share everything: a variable or an object is the same one on every thread. One thread runs Astra code at a time, and they change places at calls and at the ends of loop bodies, so anything longer than that which must not be interrupted holds a Lock's key. They are for blocking work and ported code; workers and parallel sections use the cores.</p>
+<p>Threads share everything: a variable or an object is the same one on every thread. One thread runs Jade code at a time, and they change places at calls and at the ends of loop bodies, so anything longer than that which must not be interrupted holds a Lock's key. They are for blocking work and ported code; workers and parallel sections use the cores.</p>
 <pre>val loading = thread(name = &quot;loader&quot;) { load(file) }    // a Job of what the block gives
 loading.then { shown = it }                              // on the event loop, when it is done
 </pre>
@@ -5740,8 +5740,8 @@ items.parallelStream().forEach { if (matches(it)) { hits.increment() } }
 <p>Adds <code>amount</code>, giving the new value: an ArithmeticException if the total does not fit in an int, and nothing is changed.</p>
 </div>
 </section>
-<section class="file" id="file-time-astra">
-<h2>time.astra</h2>
+<section class="file" id="file-time-jade">
+<h2>time.jade</h2>
 <h3>Durations</h3>
 <p>A length of time, kept as a whole number of nanoseconds in a value of its own, free to make:</p>
 <pre>delay(16.milliseconds)
@@ -5922,8 +5922,8 @@ print(path.lastModified())                  // 2026-11-02T14:05:31.250Z
 <p>The moment ISO 8601 text gives, as toString writes it: a date, a time to the second with up to nine digits of fraction, and Z or an offset from UTC (+01:00). An IllegalArgumentException for anything else.</p>
 </div>
 </section>
-<section class="file" id="file-values-astra">
-<h2>values.astra</h2>
+<section class="file" id="file-values-jade">
+<h2>values.jade</h2>
 <h3>A map's values</h3>
 <p>What <code>map.values</code> gives: the map's values, in the order of its keys, as the map holds them now. It is a live view: it keeps nothing of its own, and reading it reads the map, so it shows every change made to the map since. Nothing is changed through it, and its values have no positions: <code>values[i]</code> is <code>values.toList()[i]</code>, a list of them as they are. A value that two keys share is there twice.</p>
 <pre>val prices = {&quot;tea&quot;: 3, &quot;cake&quot;: 4}
@@ -6085,17 +6085,17 @@ all.sum()   all.sortedBy { -it }   for price in prices.values { ... }
 <p>The only value, or null when the map is empty or has more than one.</p>
 </div>
 </section>
-<section class="file" id="file-worker-astra">
-<h2>worker.astra</h2>
+<section class="file" id="file-worker-jade">
+<h2>worker.jade</h2>
 <h3>Workers</h3>
 <div class="entry" id="Worker"><code class="sig">class Worker</code><a class="anchor" href="#Worker">#</a>
 <p>A worker is a second copy of the runtime, on a thread of its own, running a script of its own. Unlike a thread it runs at the same time as the program that started it, on another core: that is what it is for. The price is that the two share nothing, not a variable and not an object. They exchange messages, and a message is copied.</p>
 <p>In the program:</p>
-<pre>val worker = Worker(&quot;primes.astra&quot;)         // the script, next to this file
+<pre>val worker = Worker(&quot;primes.jade&quot;)         // the script, next to this file
 worker.onMessage = { result -&gt; print(&quot;the worker found&quot;, result) }
 worker.post({&quot;upTo&quot;: 100000})
 </pre>
-<p>In primes.astra, where Worker.parent is the program that started it:</p>
+<p>In primes.jade, where Worker.parent is the program that started it:</p>
 <pre>Worker.parent.onMessage = { job -&gt; Worker.parent.post(countPrimes(job[&quot;upTo&quot;])) }
 </pre>
 <p>A message can hold numbers, strings, booleans, null, bytes, and lists and maps of those. Frozen data in one is shared rather than copied, and bytes can be handed over. Messages arrive on the event loop of the side they are sent to, one at a time.</p>

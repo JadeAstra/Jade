@@ -1,10 +1,10 @@
-# Turns the standard library's Astra sources into a C++ file holding their text, so that
-# astra.exe carries them inside itself.
-#   cmake -DOUT=<file.cpp> -DFILES=<a.astra|b.astra|...> -P embed.cmake
+# Turns the standard library's Jade sources into a C++ file holding their text, so that
+# jade.exe carries them inside itself.
+#   cmake -DOUT=<file.cpp> -DFILES=<a.jade|b.jade|...> -P embed.cmake
 cmake_minimum_required(VERSION 3.20)
 
 string(REPLACE "|" ";" files "${FILES}")
-set(out "// Generated from src/std/*.astra by cmake/embed.cmake. Do not edit.\n#include <cstddef>\n// For the compiler alone: in a section of its own, which a built program leaves out (D161).\n#if defined(_MSC_VER)\n#pragma const_seg(\".astras\")\n#endif\nnamespace astra {\nextern const unsigned char kStdSource[];\nextern const size_t kStdSourceSize;\nextern const size_t kStdFileEnds[];\nextern const size_t kStdFileCount;\nconst unsigned char kStdSource[] = {\n")
+set(out "// Generated from src/std/*.jade by cmake/embed.cmake. Do not edit.\n#include <cstddef>\n// For the compiler alone: in a section of its own, which a built program leaves out (D161).\n#if defined(_MSC_VER)\n#pragma const_seg(\".jades\")\n#endif\nnamespace jade {\nextern const unsigned char kStdSource[];\nextern const size_t kStdSourceSize;\nextern const size_t kStdFileEnds[];\nextern const size_t kStdFileCount;\nconst unsigned char kStdSource[] = {\n")
 # Where each file's text ends, so that the files can be parsed apart, a few at a time.
 set(ends "")
 set(offset 0)
@@ -19,5 +19,5 @@ foreach(file ${files})
   string(APPEND ends "${offset},")
 endforeach()
 string(APPEND out "0x00};\nconst size_t kStdSourceSize = sizeof(kStdSource) - 1;\n")
-string(APPEND out "const size_t kStdFileEnds[] = {${ends}};\nconst size_t kStdFileCount = ${count};\n}  // namespace astra\n")
+string(APPEND out "const size_t kStdFileEnds[] = {${ends}};\nconst size_t kStdFileCount = ${count};\n}  // namespace jade\n")
 file(WRITE "${OUT}" "${out}")

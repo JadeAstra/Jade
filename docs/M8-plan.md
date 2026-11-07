@@ -1,7 +1,7 @@
 # Plan: M8, Owned windows, dialogs, charts, and JadeMem
 
 M8 ports JadeUI's dialogs and charts, with what they stand on, and ends with JadeMem ported
-whole and sampling the real machine: the first real application in Astra. Version 0.8.0 when it
+whole and sampling the real machine: the first real application in Jade. Version 0.8.0 when it
 is done.
 
 Written 2026-11-06 from a reading of JadeUI's `dialogs` and `chart` packages, the dialog half
@@ -16,7 +16,7 @@ Reading JadeMem showed that its gui cannot come alone: it calls nearly all of it
 and its `native` module calls about twenty Windows functions through Java's foreign-function
 API. Four pieces were added for it, at the user's choice (2026-11-06):
 
-1. **Astra calls functions in DLLs**: a foreign-function interface, so that JadeMem's native
+1. **Jade calls functions in DLLs**: a foreign-function interface, so that JadeMem's native
    module ports nearly as written, and every later program has the same door to the system.
 2. **`treemap`** comes forward from M9: JadeMem's Disk tab is one.
 3. **Canvas gains arcs, wedges and a line width** from tier N3: a pie chart is wedges, a line
@@ -24,15 +24,15 @@ API. Four pieces were added for it, at the user's choice (2026-11-06):
 4. **`Regex`** (tier N5) comes forward from M9: JadeMem's ETW guard keeps its protected session
    names as patterns.
 
-| Kotlin | Lines | Astra | Holds |
+| Kotlin | Lines | Jade | Holds |
 | --- | --- | --- | --- |
 | `dialogs/*.kt` | 1,401 | `lib/Topaz/Dialogs/` | `DialogSession`, the ten sessions behind the eight dialogs, `JadeDialogs` |
-| `Chrome.kt`, the dialog half | 840 | `Chrome.astra`, `Dialogs/` | the dialog interfaces, their specs and results, `DialogHandle`, the `No…` dialogs |
-| `sheet/Completion.kt`, part | 107 | `lib/Topaz/Completion.astra` | `CompletionPopup`, `Completer`: the value-and-format prompt completes |
+| `Chrome.kt`, the dialog half | 840 | `Chrome.jade`, `Dialogs/` | the dialog interfaces, their specs and results, `DialogHandle`, the `No…` dialogs |
+| `sheet/Completion.kt`, part | 107 | `lib/Topaz/Completion.jade` | `CompletionPopup`, `Completer`: the value-and-format prompt completes |
 | `chart/*.kt` | 774 | `lib/Topaz/Chart/` | `ChartData`, `ChartSeries`, `ChartRenderer`, `ChartView`, the builders |
 | `treemap/*.kt` | 552 | `lib/Topaz/Treemap/` | `TreemapNode`, the layout, `TreemapView` |
-| the GLFW file dialogs | 160 | `Window.astra`, C++ | `SystemFileDialog`, on Windows' own dialogs |
-| JadeMem `native` | 2,106 | JadeMem `native/` | through Astra's foreign functions |
+| the GLFW file dialogs | 160 | `Window.jade`, C++ | `SystemFileDialog`, on Windows' own dialogs |
+| JadeMem `native` | 2,106 | JadeMem `native/` | through Jade's foreign functions |
 | JadeMem `core` | 2,689 | JadeMem `core/` | sampling, attribution, drill-downs, the guard, reports |
 | JadeMem `gui` | 3,831 | JadeMem `gui/` | the application |
 
@@ -40,8 +40,8 @@ About 1,650 lines of JadeUI's tests carry over (dialogs, charts, treemap), and a
 JadeMem's (its `core` tests on its fake system, its `ViewTest`, `RecorderTest`).
 
 **Where JadeMem goes.** Its own repository, `D:\Projects\JadeMem`, beside JadeGen, with one
-folder per Kotlin module (`native`, `core`, `gui`) and its tests, built with `astra build`. Topaz
-and Astra stay in this repository.
+folder per Kotlin module (`native`, `core`, `gui`) and its tests, built with `jade build`. Topaz
+and Jade stay in this repository.
 
 ## Order
 
@@ -64,7 +64,7 @@ build is checked step by step; the full check (MSVC, ASan, stress, Linux) comes 
    with a lambda), `replaceFirst`, `split`, `MatchResult` with `value`, `range`, `groupValues`,
    `groups`, `destructured`, `next()`; and the string forms (`s.matches(re)`, `s.replace(re, …)`,
    `s.split(re)`, `s.contains(re)`, `"…".toRegex()`). The engine in C++, compiled once per
-   pattern, with a public Astra API as every C++ piece has. Tests from Kotlin's documented
+   pattern, with a public Jade API as every C++ piece has. Tests from Kotlin's documented
    behaviour and JadeUI's uses.
 3. **Canvas: a line width, arcs and wedges.** `canvas.lineWidth` for every outline and line;
    `fillArc`/`drawArc` (an arc's outline, or a pie wedge filled) in angles as Java2D takes them;
@@ -97,9 +97,9 @@ build is checked step by step; the full check (MSVC, ASan, stress, Linux) comes 
 7. **The prompts**: `prompt` (one line or several, live, with links) and
    `promptValueAndFormat` (with completion).
 8. **The rest of the eight**: `choose`, `pick`, `check`, `edit` (forms), `show` (options),
-   the image chooser (its preview an Astra `Image`), the find panel and the source window;
+   the image chooser (its preview an Jade `Image`), the find panel and the source window;
    `JadeDialogs.install()`. Tests: `JadeDialogsTest` (20 of its 22; the two others are about the
-   forms that wait, which Astra does not have), and of `BlockingDialogsTest` the five that are
+   forms that wait, which Jade does not have), and of `BlockingDialogsTest` the five that are
    about the asynchronous forms. JadeUI's four small bugs found in reading (a checklist's draft
    broken by an item holding a line break, the image dialog's fields made after the listeners
    that use them, the find panel telling `onClosed` when it switches to Replace, the options
@@ -119,12 +119,12 @@ build is checked step by step; the full check (MSVC, ASan, stress, Linux) comes 
 ### Part four: JadeMem
 
 11. **`native`**: JadeMem's Windows calls (`NtQuerySystemInformation`, PDH, ETW, the token and
-    privileges, `ShellExecuteW`, the raw MFT reader) on Astra's foreign functions, behind its
+    privileges, `ShellExecuteW`, the raw MFT reader) on Jade's foreign functions, behind its
     `NativeApi` interface. Tests: `Win32NativeApiTest` and `MftTest`, on this machine.
 12. **`core`**: the model, sampling, attribution, drill-downs, the ETW guard (its patterns as
     written), reports, the disk scan and its cache, the recorder's formats. Its 14 test files,
     on its fake system (`FakeNativeApi`).
-13. **`gui`**: the application, its threads (sampler, refresh, attribution, disk scan) as Astra
+13. **`gui`**: the application, its threads (sampler, refresh, attribution, disk scan) as Jade
     threads handing their results to the window with `EventLoop.post` in place of
     `Platform.runLater`. Tests: `ViewTest` (54), `RecorderTest`, `DiskTabTest`. Then run against
     the machine, elevated and not, and compared with the Kotlin JadeMem side by side.

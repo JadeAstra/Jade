@@ -1,2 +1,0 @@
-// A worker for tests/workers_unread.astra: it ends at once, reading nothing it is sent.
-Worker.parent!!.close()

@@ -1,0 +1,11 @@
+// An extend's getter throws no more than the interface's property may: callers through the
+// interface would not catch it (D53, G39).
+interface Sized {
+  val size : int
+}
+class Crate(val items : int)
+extend Crate : Sized {
+  val size : int
+    get() => items < 0 ? throw IOException("bad crate") : items
+}
+// expect compile error: error_bridge_throws.jade:9:5: error: this get() of 'size' may throw IOException, which Sized.size it takes the place of cannot: callers through Sized would not catch it; catch it here, or write throws IOException on the get() of Sized.size (D53)

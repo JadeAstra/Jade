@@ -12,7 +12,7 @@
 #include "face.h"
 #include "raster.h"
 
-namespace astra::text {
+namespace jade::text {
 
 struct ColorTables {
     // Null if the font has no colour glyphs of a kind that is read.
@@ -48,4 +48,4 @@ private:
     friend struct Painter;
 };
 
-}  // namespace astra::text
+}  // namespace jade::text

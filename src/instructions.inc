@@ -1765,7 +1765,7 @@ CASE(CallOn) {
     const Value callee = at[0];
     SAVE_IP();
     if (!callee.isObjType(ObjType::Closure)) {
-        // Only a function written in Astra runs on an object: any other is given the arguments alone.
+        // Only a function written in Jade runs on an object: any other is given the arguments alone.
         for (int i = 0; i < argc; i++) at[1 + i] = at[2 + i];
         sp_--;
         if (callValue(callee, argc)) LOAD_FRAME();
@@ -2856,7 +2856,7 @@ CASE(Throw) {
     const ObjClass* throwable = thrownClasses_[static_cast<size_t>(Thrown::Throwable)];
     if (throwable != nullptr && (classOf(value) == nullptr || !classOf(value)->isSubclassOf(throwable)))
         throw runtimeError(Thrown::ClassCastException, "only a Throwable can be thrown, not a value of type " + typeName(value));
-    AstraThrow thrown;
+    JadeThrow thrown;
     thrown.value = *--sp_;
     throw thrown;
 }

@@ -10,11 +10,11 @@
 
 #include "value.h"
 
-namespace astra {
+namespace jade {
 
 class Program;
 
-// Instruction set of the Astra VM. Operands are little-endian: u8, u16, or i32 (absolute
+// Instruction set of the Jade VM. Operands are little-endian: u8, u16, or i32 (absolute
 // jump targets within the function).
 enum class Op : uint16_t {
     Const,         // u16 constant                  -> value
@@ -292,7 +292,7 @@ enum class Op : uint16_t {
     TypeArg,            // u8 index                        -> type
     InstanceTypeArg,    // u8 index                        object class -> type  (of the class's own type parameters)
     SupertypeMaker,     //                                 class function -> class  (ObjClass::supertypeMakers)
-    CheckResult,        // u16 name                        value type -> value  (ASTRA_CHECK_NATIVE_RESULTS: throws on a mismatch)
+    CheckResult,        // u16 name                        value type -> value  (JADE_CHECK_NATIVE_RESULTS: throws on a mismatch)
     // `pts.add(Point(1, 2))` (M6.6 part 3): where the list keeps its items packed and the value
     // type is made from its header alone, the arguments are written into a new item at the
     // end, and on at target with true; otherwise on, the stack as it was, to the call and the add.
@@ -533,7 +533,7 @@ inline uint8_t frozenTypeId(uint8_t id) {
     return id == kTypeList ? kTypeFrozenList : id == kTypeMap ? kTypeFrozenMap : id == kTypeSet ? kTypeFrozenSet : 0;
 }
 
-// A type written `astra.Range` (the built-in Range, where the program has its own class of that
+// A type written `jade.Range` (the built-in Range, where the program has its own class of that
 // name): the built-in name, Range; any other name as it is.
 std::string builtinSpelling(const std::string& name);
 
@@ -942,4 +942,4 @@ bool namesGlobal(const Program& program, const std::vector<std::string>& names);
 // the signature of a form after it; null for an instruction that uses none.
 const std::string* memberNameAt(const FunctionProto& f, size_t at);
 
-}  // namespace astra
+}  // namespace jade

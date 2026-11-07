@@ -8,7 +8,7 @@
 
 #include "lexer.h"
 
-namespace astra {
+namespace jade {
 
 struct Node {
     int line = 0;
@@ -548,7 +548,7 @@ struct FunctionStmt : Stmt {
     // getter is the function.
     bool isProperty = false;
 
-    // `external fun print(vararg items : any?)`: provided by the C++, declared in Astra so that its
+    // `external fun print(vararg items : any?)`: provided by the C++, declared in Jade so that its
     // types and parameter names are known. Only in the standard library; it has no body.
     bool isExternal = false;
     FunctionStmt() : Stmt(StmtKind::Function) {}
@@ -680,4 +680,4 @@ struct ObjectExpr : Expr {
     ObjectExpr() : Expr(ExprKind::Object) {}
 };
 
-}  // namespace astra
+}  // namespace jade

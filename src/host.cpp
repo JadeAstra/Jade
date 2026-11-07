@@ -16,7 +16,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -197,4 +197,4 @@ Host& realHost() {
     return host;
 }
 
-}  // namespace astra
+}  // namespace jade

@@ -1,0 +1,8 @@
+// An extend of a type to an interface that an import extends it to already, each with a
+// getter: a value would fit the interface in two ways (G32).
+import ExtLib.*
+extend Crate : Sized {
+  val size : int
+    get() => 2
+}
+// expect compile error: error_extend_defined_twice.jade:4:1: error: an extend of Crate : Sized is declared here and by ExtLib, which this file imports: a value would fit the interface in two ways, and there is one way a type fits an interface (D33)

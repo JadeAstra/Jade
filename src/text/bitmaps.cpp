@@ -10,7 +10,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::text {
+namespace jade::text {
 
 void scalePicture(const std::vector<uint8_t>& from, int fromWidth, int fromHeight, std::vector<uint8_t>& to, int toWidth, int toHeight) {
     to.assign(static_cast<size_t>(toWidth) * static_cast<size_t>(toHeight) * 4, 0);
@@ -203,4 +203,4 @@ GlyphImage BitmapGlyphs::render(int glyph, float ppem) const {
     return image;
 }
 
-}  // namespace astra::text
+}  // namespace jade::text

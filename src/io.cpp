@@ -1,4 +1,4 @@
-// Streams, child processes and sockets: the built-in __io, which src/std/io.astra is
+// Streams, child processes and sockets: the built-in __io, which src/std/io.jade is
 // written on.
 //
 // Everything here that can wait (a read, a write, an accept, waiting for a process to end)
@@ -51,11 +51,11 @@ extern char** environ;
 #include "sandbox.h"
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 namespace {
 
-AstraThrow ioError(VM& vm, const std::string& message) { return vm.errorOf("IOException", message); }
+JadeThrow ioError(VM& vm, const std::string& message) { return vm.errorOf("IOException", message); }
 
 // What a blocking piece of work leaves for the function that turns it into a value.
 struct Stream;
@@ -70,7 +70,7 @@ struct Outcome {
 
 // A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in
 // Java (D120), told by the mark the wait left, not by the message's text (8.8f).
-AstraThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
+JadeThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
 
 // ---- A sandbox's programs and pipes (M6.6.2 step 4) ----
 
@@ -231,7 +231,7 @@ struct SandboxListener {
     int port = 0;
 };
 
-// A program of a sandbox's: an Astra thread running what the test declared, its end told here.
+// A program of a sandbox's: an Jade thread running what the test declared, its end told here.
 struct SimulatedProcess {
     std::mutex mutex;
     std::condition_variable changed;
@@ -1698,7 +1698,7 @@ void registerIo(VM& vm) {
 
     def("currentPid", 0, 0, [](VM&, int, Value*) -> Value { return Value::integer(currentProcessId()); });
 
-    // What started this program: the path of its executable and, when astra is running a
+    // What started this program: the path of its executable and, when jade is running a
     // script, the script. Starting that list again starts this program again.
     def("selfCommand", 0, 0, [](VM& vm, int, Value*) -> Value {
         ObjList* list = newList(vm);
@@ -1869,4 +1869,4 @@ void registerIo(VM& vm) {
     vm.defineGlobal("__io", Value::object(io));
 }
 
-}  // namespace astra
+}  // namespace jade

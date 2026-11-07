@@ -1,5 +1,5 @@
 // Character sets (D127): text turned into bytes and back in UTF-8, Latin-1, ASCII and UTF-16.
-// Astra's text is UTF-8 throughout; the other sets are for what is read from and written to
+// Jade's text is UTF-8 throughout; the other sets are for what is read from and written to
 // files, processes and sockets that use them, and for the conversions between text and bytes.
 
 #include "charset.h"
@@ -8,7 +8,7 @@
 
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -179,4 +179,4 @@ Charset charsetOf(VM& vm, Value v) {
     throw vm.runtimeError(Thrown::ClassCastException, "expected a Charset (Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252 or latin9), got a value of type " + vm.typeName(v));
 }
 
-}  // namespace astra
+}  // namespace jade

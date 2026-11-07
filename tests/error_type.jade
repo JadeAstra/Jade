@@ -1,0 +1,4 @@
+// A literal that can never fit the declared type is rejected before the program runs.
+print("never runs")
+val port : int = "8080"
+// expect compile error: error_type.jade:3:18: error: 'port' is an int; it cannot start as a string

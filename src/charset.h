@@ -6,7 +6,7 @@
 
 #include "value.h"
 
-namespace astra {
+namespace jade {
 
 class VM;
 
@@ -34,4 +34,4 @@ std::string withoutCarriageReturn(std::string line, Charset cs);
 // A Charset given to a built-in function; UTF-8 for null.
 Charset charsetOf(VM& vm, Value v);
 
-}  // namespace astra
+}  // namespace jade

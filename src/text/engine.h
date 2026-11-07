@@ -32,7 +32,7 @@
 #include "fonts.h"
 #include "raster.h"
 
-namespace astra::text {
+namespace jade::text {
 
 class Font;
 
@@ -152,4 +152,4 @@ int drawText(uint8_t* rgba, int width, int height, Font& font, std::string_view 
 // One glyph's picture laid onto such a picture, its origin at (x, baseline).
 void drawGlyph(uint8_t* rgba, int width, int height, const GlyphImage& image, int x, int baseline, uint32_t color);
 
-}  // namespace astra::text
+}  // namespace jade::text

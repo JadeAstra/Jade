@@ -1,4 +1,4 @@
-# Porting Kotlin to Astra
+# Porting Kotlin to Jade
 
 What to change when Kotlin code (JadeUI, the apps) is brought over, and what to look at that
 compiles but means something else. Grouped as M6.6's second half builds the language choices
@@ -9,7 +9,7 @@ group adds its section.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `Int`, `Long` | `int` | 64 bits, signed (D19) |
 | `Short`, `Int` in a large array or a binary format | `int16`, `int32`, `uint16`, `uint32` | storage widths: compact where kept, read as `int` (D148) |
@@ -25,7 +25,7 @@ group adds its section.
 | `c.code`, `c.toInt()` | `c.code` | |
 | `c.uppercaseChar()`, `c.uppercase()` | `c.upper()` | a char, the char itself where the upper case is longer (D74) |
 | `c.digitToInt()`, `c.isLetter()` | the same | |
-| `n.toByte()` | `n.toByteWrapped()` | Kotlin's keeps the low 8 bits; Astra's `toByte()` is an error past 0 to 255 |
+| `n.toByte()` | `n.toByteWrapped()` | Kotlin's keeps the low 8 bits; Jade's `toByte()` is an error past 0 to 255 |
 | `b.toInt() and 0xFF` | `b.toInt()` | a byte is already 0 to 255 |
 | `buf.getInt(at)`, `toUInt()` on 4 bytes | `buf.int32(at)`, `buf.uint32(at)` | least significant byte first unless `bigEndian = true` |
 | `'text'` in a string literal | `"text"` | single quotes hold one character only (D25) |
@@ -34,27 +34,27 @@ group adds its section.
 
 ### What compiles but means something else
 
-- **Overflow is an error.** Kotlin's `Int` wraps silently past 2,147,483,647; Astra's `int` is 64
+- **Overflow is an error.** Kotlin's `Int` wraps silently past 2,147,483,647; Jade's `int` is 64
   bits and an answer past its range is an error (D27). Code that counts on wrapping says so:
   `a &+ b`, `a &- b`, `a &* b`, and `.toInt32Wrapped()` for Kotlin's 32-bit result. Look for:
   - hash loops, `h = 31 * h + c`: write `h = (31 &* h &+ c.code).toInt32Wrapped()`, or use `hash(...)`;
   - random number generators and checksums multiplying large numbers;
   - `ushr` on a negative number, which in Kotlin works on 32 bits: `x ushr 16` of a negative
-    `Int` is `(x & 0xFFFFFFFF) >>> 16` in Astra, or `x.toUint32Wrapped() >>> 16`;
+    `Int` is `(x & 0xFFFFFFFF) >>> 16` in Jade, or `x.toUint32Wrapped() >>> 16`;
   - masks written for 32 bits (`and 0xFFFFFFFF`), and `inv()` of a 32-bit value;
   - rotations: `Integer.rotateLeft(x, n)` is `x.rotateLeft32(n)`.
 - **A byte is 0 to 255.** Kotlin's `Byte` is signed: a test such as `b < 0` to find the high
   bit becomes `b >= 128`, and `b.toInt()` gives 0 to 255 where Kotlin gave -128 to 127. Byte
   arithmetic gives an int, so `bytes[i] = bytes[i] + 1` needs `.toByte()`, as in Kotlin.
 - **A string's positions count characters, not UTF-16 units.** An emoji or another character
-  past U+FFFF is one char in Astra and two in Kotlin, so `size`, `s[i]` and slices
+  past U+FFFF is one char in Jade and two in Kotlin, so `size`, `s[i]` and slices
   agree with Kotlin on text below U+10000 only.
 - **A char is not a string**, but `'c' == "c"` is true, and they are one map key (D25).
   `c + c` is a string; `c + 1` the next char; `c - 'a'` an int.
 
 ### What the compiler says
 
-A ported line that uses a name Astra does not have is a compile error naming what to write:
+A ported line that uses a name Jade does not have is a compile error naming what to write:
 `Int.MAX_VALUE`, `toChar()`, `char(n)`, `chr(n)`, `ord(c)`, `'ab'`, a constant whose arithmetic
 overflows, a char compared with a string literal of another length.
 
@@ -62,7 +62,7 @@ overflows, a char compared with a string literal of another length.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `List<T>` | `List<T>` | read-only through that name (D32) |
 | `MutableList<T>`, `MutableMap<K, V>`, `MutableSet<T>` | `open List<T>`, `open Map<K, V>`, `open Set<T>` | the compiler says so; a list made with `[...]` or `listOf` is open |
@@ -120,7 +120,7 @@ can change, and an `==` without a `hashCode`.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `sealed class Event` | `enum class Event` | its kinds extend it, in its file (D39) |
 | `sealed interface Shape` | `enum interface Shape` | |
@@ -154,7 +154,7 @@ can change, and an `==` without a `hashCode`.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `fun interface Action { ... }` | `interface Action { ... }` | any interface with one abstract method takes a lambda (D28) |
 | `tailrec fun walk(...)` | `tail fun walk(...)` | or no word: a call of itself as the last step is a loop anyway (D29) |
@@ -183,7 +183,7 @@ can change, and an `==` without a `hashCode`.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `throw Exception("...")` meaning a mistake | `throw IllegalStateException("...")` or another `RuntimeException` | a plain `Exception` is checked (D35) |
 | `catch (e: Exception)` | `catch (e)` or the same | a bare catch takes every Exception, no Error (D151) |
@@ -210,7 +210,7 @@ can change, and an `==` without a `hashCode`.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `x::class`, `Box::class` | `x#`, `Box#` | a `Class`; `Box<int>#` with type arguments (D48) |
 | `x::class.simpleName` | `x#.name` | `className` is gone too |
@@ -225,7 +225,7 @@ can change, and an `==` without a `hashCode`.
 | `@Volatile`, `@Suppress(...)`, `@JvmField`, `@JvmName(...)` | delete it | an error saying so |
 | `@Synchronized fun f()` | `fun f() = lock.useKey { ... }` | |
 | `@JvmStatic` in a companion | the member in `static { }` | |
-| `kotlin.test`: `@Test`, `assertEquals` | the same, run by `astra test` | `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, `@TempDir`, `@RealHost`, `@Sandboxed` |
+| `kotlin.test`: `@Test`, `assertEquals` | the same, run by `jade test` | `@BeforeTest`, `@AfterTest`, `@BeforeAll`, `@AfterAll`, `@Timeout`, `@TempDir`, `@RealHost`, `@Sandboxed` |
 
 ### What compiles but means something else
 
@@ -237,9 +237,9 @@ can change, and an `==` without a `hashCode`.
   `fields` except in its own code, where Kotlin's reflection lists them all.
 - **A field's type is a `Type`, a class is a `Class`**: `field.type == int#.type`, not
   `== Int::class`.
-- **`astra test` runs a file as a program first**: what its top level does runs before the
+- **`jade test` runs a file as a program first**: what its top level does runs before the
   tests.
-- **`astra test` runs each test in a sandbox** (M6.6.2): a test that reads a real file, starts
+- **`jade test` runs each test in a sandbox** (M6.6.2): a test that reads a real file, starts
   a real program or opens a real connection fails there, as none of them is in the sandbox. Set
   up what it needs in the sandbox (files written in it, `processes.add`, `network.host`), or
   write `@RealHost` on the test or its class. A sleep in a sandbox takes no real time.
@@ -248,7 +248,7 @@ can change, and an `==` without a `hashCode`.
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `launch { }`, `async { }`, `startCoroutine` | `task { }` | gives a `Job<T>` of what the block returns (D81) |
 | `coroutineScope { launch { }; async { } }`, `runBlocking { }` | `taskScope { task { }; task { } }` | ends once its tasks have; throws the first failure, the rest cancelled (M6.7) |
@@ -281,7 +281,7 @@ can change, and an `==` without a `hashCode`.
   error it does not catch fails the job, and is seen through `get()` or `onError { }`. A
   `thread { }` also reports it, as Java does for a thread.
 - **`Job.all` and `Job.any` give Jobs**, not lists: `Job.all(jobs).get()` waits for them all.
-- **Threads take turns.** One thread runs Astra code at a time, so threads overlap waiting,
+- **Threads take turns.** One thread runs Jade code at a time, so threads overlap waiting,
   not computing. Work that is to use the cores goes to a parallel section or to workers.
 - **A parallel stream has no `fold`**, which could only go over the items in order on one core:
   it is a compile error saying to use `reduce` (an associative operation, dealt out to the
@@ -302,7 +302,7 @@ can change, and an `==` without a `hashCode`.
 `Future`, `CompletableFuture`, `Executors`, `ExecutorService`, the `BlockingQueue` family,
 `CountDownLatch`, the `Atomic*` classes, `TimeUnit`, `synchronized`, `ReentrantLock`,
 `startCoroutine`, `suspendCoroutine`, `Continuation` and `EmptyCoroutineContext` are each an
-error that names what Astra has in their place. A wait given a bare number (`Thread.sleep(100)`)
+error that names what Jade has in their place. A wait given a bare number (`Thread.sleep(100)`)
 says to write `100.milliseconds`; a `Channel<T>()` without a capacity says to choose one; and
 `lock.lock()` or `lock.withLock { }` says to use `useKey`.
 
@@ -310,7 +310,7 @@ says to write `100.milliseconds`; a `Channel<T>()` without a capacity says to ch
 
 ### What to write instead
 
-| Kotlin | Astra | |
+| Kotlin | Jade | |
 | --- | --- | --- |
 | `File(p)`, `Paths.get(p)`, `Path.of(p)` | `Path(p)` | one type for a path (D107) |
 | `File(dir, name)`, `dir.resolve(name)` | `Path(dir, name)`, `dir.resolve(name)` | |
@@ -362,7 +362,7 @@ says to write `100.milliseconds`; a `Channel<T>()` without a capacity says to ch
 
 `File`, `Files`, `Paths`, `InputStream`, `OutputStream`, `BufferedReader`, `BufferedWriter`,
 `PrintWriter`, `ProcessBuilder`, `Charsets` and `StandardCharsets` are each an error naming what
-to write, and so are Java's members of a file, a stream, a process and a socket that Astra
+to write, and so are Java's members of a file, a stream, a process and a socket that Jade
 names otherwise (`parentFile`, `absolutePath`, `listFiles`, `mkdirs`, `renameTo`, `toFile`,
 `inputStream`, `destroy`, `soTimeout` and the rest) and `toByteArray`.
 
@@ -370,7 +370,7 @@ names otherwise (`parentFile`, `absolutePath`, `listFiles`, `mkdirs`, `renameTo`
 
 ### What to write instead
 
-| Kotlin and JadeUI | Astra | |
+| Kotlin and JadeUI | Jade | |
 | --- | --- | --- |
 | `Dimension(w, h)` | `Size(w, h)` | a value type (D102) |
 | `Rectangle(x, y, w, h)` | `Rect(x, y, w, h)` | a value type; `Rectangle(w, h)` is `Rect(0, 0, w, h)` (D104) |
@@ -420,7 +420,7 @@ names otherwise (`parentFile`, `absolutePath`, `listFiles`, `mkdirs`, `renameTo`
 
 `Dimension`, `Rectangle`, `BufferedImage`, `Picture`, `FontMetrics`, `Bitmap`, `Graphics` and
 `Graphics2D` are each an error naming what to write, and so are Java's members of a colour, a
-font, a canvas, an image, a size, a rectangle and a point that Astra names otherwise (`getRed`,
+font, a canvas, an image, a size, a rectangle and a point that Jade names otherwise (`getRed`,
 `rgb`, `deriveFont`, `Font.bold`, `stringWidth`, `textFont`, `drawImage`, `getFontMetrics`,
 `getRGB`, `setRGB`, `getSubimage`, `setSize`, `getBounds` and the rest), Java's
 `Font(name, style, size)`, and a grid's new rows left unused.

@@ -1,4 +1,4 @@
-// Isolated workers: the built-in __worker, which src/std/worker.astra is written on.
+// Isolated workers: the built-in __worker, which src/std/worker.jade is written on.
 //
 // A worker is a second VM, on a thread of its own, with a heap and a lock of its own. So
 // unlike a thread it really runs at the same time as the program that started it, on another
@@ -15,7 +15,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 // What a worker and the program that started it share. Everything in it is guarded by the
 // mutex, which is what lets either side go away while the other still holds the link.
@@ -626,7 +626,7 @@ void deliverToWorker(VM& vm, const std::string& data) {
 // ---- The worker's thread ----
 
 void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::string> image, int entry, std::vector<std::string> arguments,
-                std::function<void(VM&, AstraThrow&, const std::string&)> onThreadError, std::shared_ptr<Host> host) {
+                std::function<void(VM&, JadeThrow&, const std::string&)> onThreadError, std::shared_ptr<Host> host) {
     // Kept on the heap: if threads of its own are still running when the worker ends, the VM
     // is left as it is rather than taken apart under them.
     VM* vm = new VM(true);
@@ -651,14 +651,14 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
         vm->jobStarted();  // it waits for messages until it closes or is terminated
         vm->runModule(entry);
         vm->runEventLoop(true);
-    } catch (AstraThrow& thrown) {
+    } catch (JadeThrow& thrown) {
         try {
             failure = thrown.value.isObjType(ObjType::Instance) ? vm->stringify(thrown.value) : "exception: " + vm->stringify(thrown.value);
-        } catch (const AstraThrow&) {
+        } catch (const JadeThrow&) {
             failure = "exception (its toString() failed)";
         }
         for (const std::string& line : thrown.trace) failure += "\n  " + line;
-    } catch (const AstraExit&) {
+    } catch (const JadeExit&) {
     } catch (const WorkerStop&) {
     } catch (const std::exception& problem) {
         failure = std::string("the worker could not start: ") + problem.what();
@@ -724,7 +724,7 @@ void registerWorkers(VM& vm) {
         const std::string spec = args[0].isString() ? asString(args[0])->utf8() : std::string();
         const size_t second = spec.size() > 1 && spec[0] == '\x01' ? spec.find('\x01', 1) : std::string::npos;
         if (second == std::string::npos)
-            throw vm.runtimeError(Thrown::IllegalArgumentException, "a worker's script is named by a string written in the call itself, as in Worker(\"physics.astra\"), "
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "a worker's script is named by a string written in the call itself, as in Worker(\"physics.jade\"), "
                                   "so that the script is built into the program");
         if (!vm.programImage) throw vm.runtimeError(Thrown::IllegalStateException, "workers cannot be started here");
 
@@ -847,4 +847,4 @@ void VM::releaseAllBlocks() {
     sharedAs.clear();
 }
 
-}  // namespace astra
+}  // namespace jade

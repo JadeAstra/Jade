@@ -14,7 +14,7 @@
 
 #include "vm.h"
 
-namespace astra {
+namespace jade {
 
 namespace {
 
@@ -327,8 +327,9 @@ void decodeOperands(const std::vector<uint8_t>& code, size_t ip, Operand operand
 }  // namespace
 
 std::string builtinSpelling(const std::string& name) {
-    if (name.rfind("astra.", 0) != 0) return name;
-    const std::string rest = name.substr(6);
+    static const std::string prefix = "jade.";
+    if (name.rfind(prefix, 0) != 0) return name;
+    const std::string rest = name.substr(prefix.size());
     for (uint8_t id = kTypeInt; id < kTypeCount_; id++)
         if (id != kTypeInstance && rest == kTypeNames[id]) return rest;
     return rest == "Unit" || rest == "Nothing" ? rest : name;
@@ -2014,7 +2015,7 @@ bool looksLikeBytecode(const std::string& data) {
 }
 
 void readProgram(Program& program, VM& vm, const std::string& data) {
-    if (!looksLikeBytecode(data)) throw std::runtime_error("not an Astra bytecode file");
+    if (!looksLikeBytecode(data)) throw std::runtime_error("not an Jade bytecode file");
     Reader r{data, program, vm, sizeof kMagic};
     r.defer = true;
 
@@ -2657,4 +2658,4 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
     return result;
 }
 
-}  // namespace astra
+}  // namespace jade

@@ -1,0 +1,770 @@
+// The dialogs (M8): what a program asks through Topaz.inputDialog, Topaz.choiceDialog and the rest,
+// the specs it asks with, the handle every dialog gives back, and the session each dialog is.
+// (JadeUI: the dialog half of Chrome.kt, and dialogs/DialogSession.kt and JadeDialogs.kt.)
+//
+// Every dialog is a window of Topaz's own beside the one in front, never blocking it: each call
+// returns a DialogHandle at once and answers through its callback, and the program stays usable
+// while the dialog is up. With no window to open (no display, or Topaz.windowOpener a
+// NoWindowOpener) each answers null at once. JadeUI's forms that wait for the answer are not in
+// Jade.
+//
+// Keys: Enter is the default action (in a text area of several lines, Ctrl+Enter is), Escape
+// closes, Tab moves between the fields.
+
+// ---- The handle ----
+
+// An open dialog: what every dialog call gives back at once, its answer coming later through the
+// call's onResult. Everything the user can do in the program while it is open is something the
+// program can tell the dialog of:
+//
+//  - The same dialog asked for again (the same draftKey in its spec): the open one comes forward
+//    and is updated; no second window opens, and the first request's onResult is the one told.
+//  - Its subject changed (what is being renamed was renamed some other way): update with the new
+//    spec. What the user has not touched follows; what they typed stays, with a note offering the
+//    new value.
+//  - Its subject went (it was deleted): detach with why. The dialog stays open with what was typed,
+//    says why, and cannot commit, unless the program offers somewhere else to apply it.
+//  - It was done another way, or the program is closing: close. Its onResult hears null, and what
+//    was typed is kept under its draftKey (Topaz.drafts): the dialog opened again with that key
+//    gets it back.
+//
+// A spec's draftKey should name its subject, "rename:layer:4" and not "rename": it is the dialog's
+// identity. A spec without one has none: asking again opens a second dialog, each answering its own
+// onResult, and closing it keeps nothing typed.
+interface DialogHandle<S> {
+  // The spec's draftKey; without one, a label from the kind and the title, which names nothing.
+  val key : string
+  // The window's title.
+  val title : string
+  // Whether the dialog is still open.
+  val open : bool
+  // Brings the dialog's window to the front.
+  fun toFront()
+  // Closes without an answer (onResult hears null); what was typed is kept as a draft, under the
+  // spec's draftKey.
+  fun close()
+  // The subject changed: show `spec`. Untouched fields take its values; touched ones keep the
+  // user's, with a note offering the new one. Also undoes detach.
+  fun update(spec : S)
+  // The subject is gone: say why, keep what was typed, and allow no commit. With `retarget`, a
+  // button labelled `retargetLabel` calls it, and the program updates the dialog onto another
+  // subject.
+  fun detach(reason : string, retargetLabel : string? = null, retarget : (() -> unit)? = null)
+}
+
+// The handle of a dialog that has ended already: what the No... dialogs give.
+internal class FinishedDialog<S>(override val key : string, override val title : string) : DialogHandle<S> {
+  override val open : bool
+    get() => false
+  override fun toFront() {}
+  override fun close() {}
+  override fun update(spec : S) {}
+  override fun detach(reason : string, retargetLabel : string?, retarget : (() -> unit)?) {}
+}
+
+// ---- What a program asks ----
+
+// A prompt for text (InputDialog.prompt): the window's title, a message above the field, the text
+// to start with. `multiline` gives a text area (Enter is a new line; Ctrl+Enter is OK). `onChange`
+// makes it live: told the text on every edit, so the program shows it as it is typed (and goes
+// back when the answer is null). `staticize` adds a button labelled `staticizeLabel` that
+// rewrites the text in place. `links`: Shift over a name that links somewhere underlines it, and
+// Shift+click follows it. `draftKey` names the subject (see DialogHandle).
+class PromptSpec(val title : string, val message : string = "", val initial : string = "", val multiline : bool = false,
+                 val onChange : ((string) -> unit)? = null, val staticizeLabel : string = "Make static", val staticize : ((string) -> string?)? = null,
+                 val links : TextLinks? = null, val draftKey : string? = null, val okLabel : string = "OK") {
+  // draftKey, or without one a label from the title: a name for listings, not an identity.
+  val key : string
+    get() => draftKey ?: "prompt:$title"
+}
+
+// The value-and-format editor (InputDialog.promptValueAndFormat): two boxes, the value and its
+// format (a cell's #bg=... features), both live through onChange. A box holding what its target
+// takes from elsewhere (valueNote, formatNote) shows it greyed until edited, the note beside it.
+// The Format box completes formatNames after a #; the Value box what valueCompleter completes.
+class ValueFormatSpec(val title : string, val value : string, val format : string, val onChange : (string, string) -> unit = { v, f -> },
+                      val links : TextLinks? = null, val valueNote : string = "", val formatNote : string = "", val formatNames : List<string> = [],
+                      val valueCompleter : Completer? = null, val draftKey : string? = null) {
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "value-format:$title"
+}
+
+// A choice (ChoiceDialog.choose): a message and one button for each option. `defaultOption` is
+// what Enter presses: null (the default) for none, so that a key can never make a decision the
+// user did not see.
+class ChoiceSpec(val title : string, val message : string, val options : List<string>, val defaultOption : int? = null,
+                 val draftKey : string? = null) {
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "choice:$title"
+}
+
+// A pick from a list (ChoiceDialog.pick): the options with `initial` chosen; with `nameLabel`, a
+// name field under them holding `defaultName` to begin with.
+class PickSpec(val title : string, val message : string, val options : List<string>, val initial : int = 0, val nameLabel : string? = null,
+               val defaultName : string = "", val draftKey : string? = null) {
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "pick:$title"
+}
+
+// What a pick answered: the option's place, and the name typed (the default name without a name
+// field).
+class PickResult(val index : int, val name : string)
+
+// A checklist (ChecklistDialog.check): the items, those in `checked` ticked to begin with.
+class ChecklistSpec(val title : string, val message : string, val items : List<string>, val checked : Set<string>, val draftKey : string? = null) {
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "checklist:$title"
+}
+
+// The find (and replace) panel (FindDialog.show), one for the whole program: what to find to
+// begin with, what Find Next, Replace and Replace All do, what the program hears when it closes,
+// and options shown as check boxes (those `replaceOnly` only in Replace).
+class FindSpec(val showReplace : bool = false, val initialQuery : string = "", val onFindNext : (string) -> unit = {},
+               val onReplace : (string, string) -> unit = { q, w -> }, val onReplaceAll : (string, string) -> unit = { q, w -> },
+               val onClosed : () -> unit = {}, val options : List<FindOption> = []) {
+  // What its draft is kept under.
+  var draftKey : string? = null
+  // draftKey, or "find".
+  val key : string
+    get() => draftKey ?: "find"
+}
+
+// An option of the find panel, a check box: ticked or not, as the user left it.
+class FindOption(val label : string, var checked : bool = false, val replaceOnly : bool = false)
+
+// The source window (SourceWindow.show), one for the whole program: a live editor of a text,
+// `onChange` told every edit, `onClose` told when it closes or moves to another text.
+class SourceSpec(val id : string, val title : string, val initial : string, val onChange : (string) -> unit, val onClose : () -> unit = {},
+                 val links : TextLinks? = null) {
+  // What its draft would be kept under (a source window keeps none: every edit reached the program).
+  var draftKey : string? = null
+  // draftKey, or "source:" and the id.
+  val key : string
+    get() => draftKey ?: "source:$id"
+}
+
+// A field of a form: its key in the result, its label, and whether it has a Pick... button.
+class FormField(val key : string, val label : string, val pickable : bool = false)
+// A kind of thing a form edits, with its fields.
+class FormKind(val id : string, val label : string, val fields : List<FormField>)
+// A form (FormDialog.edit): kinds to choose among, the one `selected` to begin with, the values
+// to begin with by field key, and `onChange`, told the kind and the values as they are edited.
+class FormSpec(val title : string, val kinds : List<FormKind>, val selected : string, val initial : Map<string, string>,
+               val onChange : (string, Map<string, string>) -> unit = { k, v -> }) {
+  // What its draft is kept under.
+  var draftKey : string? = null
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "form:$title"
+}
+// What a form answered: the kind, the values by field key, and the field whose Pick... was
+// pressed (null for OK).
+class FormResult(val kind : string, val values : Map<string, string>, val pick : string? = null)
+
+// A setting of an options dialog, under its key in the result: a choice among radio buttons, or
+// a check box.
+enum class OptionControl(val key : string, val label : string)
+// A choice among radio buttons, `selected` chosen to begin with; its value the choice's place.
+class ChoiceOption(key : string, label : string, val choices : List<string>, val selected : int) : OptionControl(key, label)
+// A check box; its value "true" or "false".
+class CheckOption(key : string, label : string, val checked : bool) : OptionControl(key, label)
+// An options dialog (OptionsDialog.show): settings, actions besides OK, and a message over them.
+class OptionsSpec(val title : string, val controls : List<OptionControl>, val actions : List<string> = [], val message : string? = null) {
+  // What its draft is kept under.
+  var draftKey : string? = null
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "options:$title"
+}
+// What an options dialog answered: each setting's value by key, and the action pressed (null for
+// OK).
+class OptionsResult(val values : Map<string, string>, val action : string? = null)
+
+// Where an image to insert comes from.
+enum ImageSource { file, svgCode }
+// What the image dialog answered: where the image comes from, and the path or the code.
+class ImageChoice(val source : ImageSource, val value : string)
+// The image dialog (ImageDialog.choose): a file or SVG code, with a preview the program draws
+// (null where it cannot), the source and the value to begin with.
+class ImageSpec(val renderPreview : (ImageSource, string) -> Image?, val title : string = "Insert Image", val source : ImageSource = ImageSource.file,
+                val value : string = "", val draftKey : string? = null) {
+  // draftKey, or without one a label from the title.
+  val key : string
+    get() => draftKey ?: "image:$title"
+}
+
+// ---- The dialogs, as the program asks for them ----
+
+// Prompts for text, and the value-and-format editor.
+interface InputDialog {
+  // Asks for a text: onResult has it, or null when cancelled.
+  fun prompt(spec : PromptSpec, onResult : (string?) -> unit) : DialogHandle<PromptSpec>
+  // Asks for a value and its format: onResult has the two, or null when cancelled.
+  fun promptValueAndFormat(spec : ValueFormatSpec, onResult : (Pair<string, string>?) -> unit) : DialogHandle<ValueFormatSpec>
+}
+// Choices among buttons, and picks from a list.
+interface ChoiceDialog {
+  // Asks for one of the options: onResult has its index, or null when cancelled.
+  fun choose(spec : ChoiceSpec, onResult : (int?) -> unit) : DialogHandle<ChoiceSpec>
+  // Asks for one of a list, and a name where asked for: onResult has them, or null when cancelled.
+  fun pick(spec : PickSpec, onResult : (PickResult?) -> unit) : DialogHandle<PickSpec>
+}
+// Checklists.
+interface ChecklistDialog {
+  // Asks which items are ticked: onResult has them, or null when cancelled.
+  fun check(spec : ChecklistSpec, onResult : (Set<string>?) -> unit) : DialogHandle<ChecklistSpec>
+}
+// Forms of a kind and its fields.
+interface FormDialog {
+  // Asks for a kind and its fields: onResult has them, or null when cancelled.
+  fun edit(spec : FormSpec, onResult : (FormResult?) -> unit) : DialogHandle<FormSpec>
+}
+// Settings with actions.
+interface OptionsDialog {
+  // Shows the settings: onResult has them as left, or null when cancelled.
+  fun show(spec : OptionsSpec, onResult : (OptionsResult?) -> unit) : DialogHandle<OptionsSpec>
+}
+// Insert, Image.
+interface ImageDialog {
+  // Asks for an image, from a file or as SVG code: onResult has it, or null when cancelled.
+  fun choose(spec : ImageSpec, onResult : (ImageChoice?) -> unit) : DialogHandle<ImageSpec>
+}
+// The find and replace panel.
+interface FindDialog {
+  // Shows the panel for `spec`, or the one showing switched to it.
+  fun show(spec : FindSpec) : DialogHandle<FindSpec>
+  // Closes the panel, if it is showing.
+  fun close()
+}
+// The source window.
+interface SourceWindow {
+  // Shows the window for `spec`, or the one showing switched to it.
+  fun show(spec : SourceSpec) : DialogHandle<SourceSpec>
+  // The text with `id` is now `text`: shown, when it is the one showing and not being edited.
+  fun syncIfShowing(id : string, text : string)
+  // Closes the window, if it is showing.
+  fun close()
+  // The id of the text it shows, or null when it is closed.
+  val showing : string?
+}
+
+// The dialogs there are with no windows: each answers null at once.
+class NoInputDialog : InputDialog {
+  override fun prompt(spec : PromptSpec, onResult : (string?) -> unit) : DialogHandle<PromptSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+  override fun promptValueAndFormat(spec : ValueFormatSpec, onResult : (Pair<string, string>?) -> unit) : DialogHandle<ValueFormatSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// Choices with no windows: each answers null at once.
+class NoChoiceDialog : ChoiceDialog {
+  override fun choose(spec : ChoiceSpec, onResult : (int?) -> unit) : DialogHandle<ChoiceSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+  override fun pick(spec : PickSpec, onResult : (PickResult?) -> unit) : DialogHandle<PickSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// Checklists with no windows: each answers null at once.
+class NoChecklistDialog : ChecklistDialog {
+  override fun check(spec : ChecklistSpec, onResult : (Set<string>?) -> unit) : DialogHandle<ChecklistSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// Forms with no windows: each answers null at once.
+class NoFormDialog : FormDialog {
+  override fun edit(spec : FormSpec, onResult : (FormResult?) -> unit) : DialogHandle<FormSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// Settings with no windows: each answers null at once.
+class NoOptionsDialog : OptionsDialog {
+  override fun show(spec : OptionsSpec, onResult : (OptionsResult?) -> unit) : DialogHandle<OptionsSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// Images with no windows: each answers null at once.
+class NoImageDialog : ImageDialog {
+  override fun choose(spec : ImageSpec, onResult : (ImageChoice?) -> unit) : DialogHandle<ImageSpec> {
+    onResult(null)
+    return FinishedDialog(spec.key, spec.title)
+  }
+}
+// A find panel with no windows: it never shows.
+class NoFindDialog : FindDialog {
+  override fun show(spec : FindSpec) : DialogHandle<FindSpec> => FinishedDialog(spec.key, "Find")
+  override fun close() {}
+}
+// A source window with no windows: it never shows.
+class NoSourceWindow : SourceWindow {
+  override fun show(spec : SourceSpec) : DialogHandle<SourceSpec> => FinishedDialog(spec.key, spec.title)
+  override fun syncIfShowing(id : string, text : string) {}
+  override fun close() {}
+  override val showing : string?
+    get() => null
+}
+
+// ---- The session behind each dialog ----
+
+// One value of a dialog the user can change, as the session sees it: how to read and write it as
+// text, and `base`, what the program last said it should be. It is touched when what it shows
+// differs from that: the user's, which an update must not overwrite and a close keeps as a draft.
+internal class Tracked(val name : string, val label : string, val read : () -> string, val write : (string) -> unit, var base : string) {
+  val touched : bool
+    get() => read() != base
+}
+
+// The life of one dialog: its window, its tracked fields and drafts, the notes it shows when its
+// subject changes or goes, and how it ends. Each kind of dialog gives its body, its default action
+// and how a spec maps onto its fields; what DialogHandle promises is kept here, once.
+//
+// It ends once, through finish: committed (the answer to onResult, the draft dropped) or closed
+// (null to onResult, the draft kept when the dialog has a key of its own), whichever way it
+// closed: its buttons, Escape, the window's close box, the program's close, or closeAllDialogs.
+internal abstract class DialogSession<S, R> : DialogHandle<S> {
+  protected var spec : S
+  private var onResult : ((R?) -> unit)?
+
+  override var open : bool = false
+    private set
+  private var currentTitle = ""
+  override val title : string
+    get() => currentTitle
+  protected fun setTitle(value : string) {
+    currentTitle = value
+    window?.setTitle(value)
+  }
+
+  // The window, once open.
+  protected var window : Window? = null
+  // The fields whose values are drafts and follow updates, by name.
+  protected val tracked : open Map<string, Tracked> = {:}
+  // Whether the subject went (detach): no commit until an update.
+  protected var detached = false
+    private set
+
+  // Whether a closed dialog of this kind keeps what was typed: not for one whose every edit
+  // reached the program already (the source window).
+  protected val keepsDrafts : bool
+    get() => true
+  // Whether the key names the dialog's subject: the spec gave a draftKey, or the kind of dialog is
+  // one per program (the find panel). Such a dialog is found again when asked for again, and keeps
+  // its draft; one without, neither.
+  protected abstract val keyed : bool
+  private val drafts : bool
+    get() => keepsDrafts and keyed
+  // What it is listed under while open: its key when that names it, else a name of its own.
+  private var registryKey = ""
+
+  fun init(spec : S, onResult : (R?) -> unit) {
+    this.spec = spec
+    this.onResult = onResult
+  }
+
+  // ---- What a kind of dialog gives ----
+
+  // The dialog's main part, made once; its fields are tracked from here.
+  protected abstract fun buildBody() : Component
+  // The tracked fields' values in a spec, by name: what an update compares with.
+  protected abstract fun specValues(spec : S) : Map<string, string>
+  // The title, message and whatever else of a spec is not a field, shown again after an update.
+  protected fun applySpec(spec : S) {}
+  // What Enter does (the commit button's action), or null for nothing: a choice with no default.
+  protected abstract val primaryAction : (() -> unit)?
+  // Buttons on the left of the row: actions that do something other than end with OK.
+  protected fun leftButtons() : List<Component> => []
+  // Buttons on the right, the commit first.
+  protected abstract fun rightButtons() : List<Component>
+  // The buttons that answer the dialog (OK, an action): detach disables them.
+  protected val commitButtons : List<Component>
+    get() => []
+  // The message lines over the body.
+  protected fun messageOf(spec : S) : string => ""
+  // The window's title for a spec.
+  protected abstract fun titleOf(spec : S) : string
+  // What has the keyboard when the window opens.
+  protected fun initialFocus() : Component? => null
+  // Whether Enter and Escape belong to something inside first: an open completion list.
+  protected fun keysBusy() : bool => false
+  // Told once the dialog has ended, however: a panel's onClosed.
+  protected fun onEnded(committed : bool) {}
+
+  // ---- Its layout ----
+
+  private val messageGrid = GridPane(vgap = 2)
+  private val messageComp = Component(messageGrid)
+  private val notesGrid = GridPane(vgap = 4)
+  private val notesComp = Component(notesGrid)
+  private val noteRows : open Map<string, Component> = {:}
+  private val buttonGrid = GridPane(hgap = 8)
+  private val buttonsComp = Component(buttonGrid)
+  private val outer = GridPane(Insets(12, 14, 12, 14), vgap = 10)
+  private var bodyComp : Component? = null
+  private var made : Component? = null
+
+  // The whole dialog: message, notes, body, buttons; made the first time it is asked for.
+  val content : Component
+    get() {
+      val known = made
+      if (known != null) { return known }
+      notesComp.visible = false
+      bodyComp = buildBody()
+      layButtons()
+      val c = Component(outer)
+      made = c
+      layOuter()
+      return c
+    }
+
+  // What shows, one under another: a grid puts its gap round a hidden row too, so an empty
+  // message or notes area is left out, not hidden.
+  private fun layOuter() {
+    for (c in outer.children.toList()) { outer.remove(c) }
+    var row = 0
+    if (messageComp.visible) {
+      outer.add(messageComp, row, 0, fill = Fill.horizontal, weightX = 1.0)
+      row += 1
+    }
+    if (notesComp.visible) {
+      outer.add(notesComp, row, 0, fill = Fill.horizontal, weightX = 1.0)
+      row += 1
+    }
+    val body = bodyComp
+    if (body != null) {
+      outer.add(body, row, 0, fill = Fill.both, weightX = 1.0, weightY = 1.0)
+      row += 1
+    }
+    outer.add(buttonsComp, row, 0, fill = Fill.horizontal, weightX = 1.0)
+  }
+
+  private fun showMessage(text : string) {
+    for (c in messageGrid.children.toList()) { messageGrid.remove(c) }
+    if (text.isNotEmpty()) {
+      val lines = text.split("\n")
+      for (i in 0 ..< lines.size) {
+        messageGrid.add(Component(Label(lines[i])), i, 0, fill = Fill.horizontal, anchor = Anchor.west, weightX = 1.0)
+      }
+    }
+    val show = text.isNotEmpty()
+    if (messageComp.visible != show) {
+      messageComp.visible = show
+      if (bodyComp != null) { layOuter() }
+    }
+  }
+
+  // Lays the row of buttons out again: after a kind of dialog changed which it shows.
+  protected fun layButtons() {
+    for (c in buttonGrid.children.toList()) { buttonGrid.remove(c) }
+    var col = 0
+    for (b in leftButtons()) {
+      buttonGrid.add(b, 0, col)
+      col += 1
+    }
+    buttonGrid.add(Component(Spacer()), 0, col, fill = Fill.horizontal, weightX = 1.0)
+    col += 1
+    for (b in rightButtons()) {
+      buttonGrid.add(b, 0, col)
+      col += 1
+    }
+    for (b in commitButtons) { b.enabled = !detached }
+  }
+
+  // A field whose value is a draft and follows updates; its base starts at `initial`.
+  protected fun track(name : string, label : string, read : () -> string, write : (string) -> unit, initial : string) : Tracked {
+    val t = Tracked(name, label, read, write, initial)
+    tracked[name] = t
+    return t
+  }
+
+  // ---- Opening ----
+
+  // Opens the dialog; or, when it names its subject and one of the same kind with that key is
+  // open, brings that one forward updated to this spec, and gives it instead. With no window to
+  // open, it ends at once, answering null.
+  fun start() : DialogHandle<S> {
+    if (keyed) {
+      val existing = Dialogs.registry[key]
+      if (existing != null and existing.open and existing# == this#) {
+        val same = existing as DialogSession<S, R>
+        same.update(spec)
+        same.toFront()
+        return same
+      }
+    }
+    setTitle(titleOf(spec))
+    val c = content
+    showMessage(messageOf(spec))
+    if (drafts) {
+      val kept = Topaz.drafts[key]
+      if (kept != null) {
+        for (e in kept.entries) { tracked[e.key]?.write?.invoke(e.value) }
+      }
+    }
+    val pref = c.prefSize()
+    val w = Window(c, title, pref.width, pref.height, owner = Topaz.frontWindow, focus = initialFocus(), dialog = true, sizeToContent = true,
+                   centerOnOwner = true, keyFilter = { e, focused -> filterKey(e, focused) }, onClose = { windowClosed() })
+    open = true
+    registryKey = keyed ? key : key + unkeyedMark + Dialogs.nextUnkeyed()
+    Dialogs.registry[registryKey] = this
+    try {
+      w.show()
+    } catch (e : Throwable) {
+      // no display: as with no window opener
+    }
+    if (w.handle == null) {
+      // Nowhere to show it: cancelled, as the No... dialogs do.
+      open = false
+      Dialogs.registry.remove(registryKey)
+      val told = onResult
+      onResult = null
+      told?.invoke(null)
+      return this
+    }
+    window = w
+    return this
+  }
+
+  // ---- Keys ----
+
+  // Enter is the default action, except in a text area of several lines, where it is a new line
+  // unless Ctrl is held; Escape closes. Every other key goes on to what has the keyboard.
+  internal fun filterKey(e : Event.KeyPress, focused : Component?) : bool {
+    if (!open or keysBusy()) { return false }
+    if (e.key == Key.escape) {
+      close()
+      return true
+    }
+    if (e.key == Key.enter) {
+      if (focused?.content is TextArea and !e.ctrl) { return false }
+      val act = primaryAction
+      if (act == null) { return false }
+      if (!detached) { act() }
+      return true
+    }
+    return false
+  }
+
+  // ---- Ending ----
+
+  // Answers `result` and ends; the draft goes, as it was used. Nothing while detached.
+  protected fun commit(result : R?) {
+    if (!open or detached) { return }
+    if (drafts) { Topaz.drafts.remove(key) }
+    finish(result, true)
+  }
+
+  // Keeps what was typed (when anything was) under the key, when the dialog has one of its own.
+  protected fun saveDraft(except : Set<string> = setOf()) {
+    if (!drafts) { return }
+    val touched = tracked.values.filter { it.touched and !except.contains(it.name) }
+    if (touched.isEmpty()) {
+      Topaz.drafts.remove(key)
+    } else {
+      Topaz.drafts.put(key, touched.associate { it.name to it.read() })
+    }
+  }
+
+  override fun close() {
+    if (!open) { return }
+    saveDraft()
+    finish(null, false)
+  }
+
+  private fun windowClosed() {
+    if (!open) { return }
+    window = null   // gone already
+    saveDraft()
+    finish(null, false)
+  }
+
+  // Ends the dialog: answers, takes the window down, and lets the kind of dialog clear up.
+  protected fun finish(result : R?, committed : bool) {
+    if (!open) { return }
+    open = false
+    Dialogs.registry.remove(registryKey)
+    val told = onResult
+    onResult = null
+    val w = window
+    if (w != null) {
+      window = null
+      try {
+        w.close()
+      } catch (e : Throwable) {
+        // gone already
+      }
+    }
+    try {
+      told?.invoke(result)
+    } catch (e : Throwable) {
+      // what the program does with the answer is its own
+    }
+    onEnded(committed)
+  }
+
+  override fun toFront() {
+    window?.toFront()
+  }
+
+  // ---- The subject changed, or went ----
+
+  override fun update(spec : S) {
+    if (!open) { return }
+    this.spec = spec
+    setTitle(titleOf(spec))
+    showMessage(messageOf(spec))
+    applySpec(spec)
+    if (detached) {
+      detached = false
+      removeNote(detachNote)
+      for (b in commitButtons) { b.enabled = true }
+    }
+    for (e in specValues(spec).entries) {
+      val t = tracked[e.key]
+      if (t == null) { continue }
+      if (!t.touched) {
+        t.base = e.value
+        t.write(e.value)
+        removeNote(e.key)
+      } else if (e.value != t.base) {
+        changedNote(t, e.value)
+      }
+    }
+    relayout()
+  }
+
+  // "Name is now v in the program", with Use it (take the program's value) and Keep mine.
+  private fun changedNote(t : Tracked, v : string) {
+    val flat = v.replace('\n', ' ')
+    val shown = flat.size > 60 ? flat.take(57) + "..." : flat
+    val row = GridPane(hgap = 8)
+    val text = Component(Label("Changed in the app since you opened this: ${t.label} is now “$shown”."))
+    text.foreground = Palette.accent
+    row.add(text, 0, 0, fill = Fill.horizontal, anchor = Anchor.west, weightX = 1.0)
+    row.add(button("Use it") {
+      t.base = v
+      t.write(v)
+      removeNote(t.name)
+      relayout()
+    }, 0, 1)
+    row.add(button("Keep mine") {
+      t.base = v
+      removeNote(t.name)
+      relayout()
+    }, 0, 2)
+    putNote(t.name, Component(row))
+  }
+
+  override fun detach(reason : string, retargetLabel : string?, retarget : (() -> unit)?) {
+    if (!open) { return }
+    detached = true
+    for (b in commitButtons) { b.enabled = false }
+    val row = GridPane(hgap = 8)
+    val text = Component(Label(reason))
+    text.foreground = Palette.fg(0xC62828)
+    row.add(text, 0, 0, fill = Fill.horizontal, anchor = Anchor.west, weightX = 1.0)
+    if (retarget != null) { row.add(button(retargetLabel ?: "Choose another...") { retarget() }, 0, 1) }
+    putNote(detachNote, Component(row))
+    relayout()
+  }
+
+  private fun putNote(name : string, row : Component) {
+    noteRows[name] = row
+    layNotes()
+  }
+
+  private fun removeNote(name : string) {
+    if (noteRows.remove(name) != null) { layNotes() }
+  }
+
+  // The notes again, one to a row, in the order they came.
+  private fun layNotes() {
+    for (c in notesGrid.children.toList()) { notesGrid.remove(c) }
+    val rows = noteRows.values.toList()
+    for (i in 0 ..< rows.size) { notesGrid.add(rows[i], i, 0, fill = Fill.horizontal, weightX = 1.0) }
+    val show = rows.isNotEmpty()
+    if (notesComp.visible != show) {
+      notesComp.visible = show
+      if (bodyComp != null) { layOuter() }
+    }
+  }
+
+  // The notes shown, for tests: each one's first label.
+  internal fun notesForTest() : List<string> => noteRows.values.toList().map { row ->
+    val grid = row.content
+    val first = grid is GridPane ? grid.children.firstOrNull()?.content : null
+    first is Label ? first.text : ""
+  }
+
+  // The dialog changed shape: laid out again, and the window fitted to it.
+  protected fun relayout() {
+    content.invalidateLayout()
+    window?.fitToContent()
+  }
+
+  static {
+    // A push button.
+    fun btn(text : string, onClick : () -> unit) : Component => Component(Button(text, onClick))
+  }
+}
+
+private const detachNote = "\u{0}detached"
+// Between a key that names nothing and the number that tells its dialogs apart in the registry.
+private const unkeyedMark = "\u{0}#"
+
+// ---- The dialogs of Topaz, and those open ----
+
+// Topaz's own dialogs: what each of Topaz's dialog slots holds to begin with.
+object Dialogs {
+  // Prompts for text, and the value-and-format editor.
+  val input : InputDialog = PromptDialogs()
+  // Choices among buttons, and picks from a list.
+  val choice : ChoiceDialog = ChoiceDialogs()
+  // Checklists.
+  val checklist : ChecklistDialog = ChecklistDialogs()
+  // Forms.
+  val form : FormDialog = FormDialogs()
+  // Settings with actions.
+  val options : OptionsDialog = OptionsDialogs()
+  // Insert, Image.
+  val image : ImageDialog = ImageDialogs()
+  // The find and replace panel.
+  val find : FindDialog = FindPanel()
+  // The source window.
+  val source : SourceWindow = SourcePanel()
+
+  // Puts every one of Topaz's dialogs back in its slot, after a program or a test put another there.
+  fun install() {
+    Topaz.inputDialog = input
+    Topaz.choiceDialog = choice
+    Topaz.checklistDialog = checklist
+    Topaz.formDialog = form
+    Topaz.optionsDialog = options
+    Topaz.imageDialog = image
+    Topaz.findDialog = find
+    Topaz.sourceWindow = source
+  }
+
+  // The dialogs open: one that names its subject under its key, any other under a name of its own.
+  internal val registry : open Map<string, DialogSession<any?, any?>> = {:}
+  private var unkeyed = 0
+  internal fun nextUnkeyed() : int {
+    unkeyed += 1
+    return unkeyed
+  }
+  internal fun openDialogs() : List<DialogHandle<any?>> => registry.values.toList()
+  internal fun closeAll() {
+    for (d in registry.values.toList()) { d.close() }
+  }
+}

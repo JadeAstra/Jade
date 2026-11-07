@@ -1,6 +1,6 @@
-// The `astra` command: runs, compiles and disassembles Astra programs, and hosts the shell.
+// The `jade` command: runs, compiles and disassembles Jade programs, and hosts the shell.
 // What a built program runs is in run.cpp; this, with the compiler, is in a part of the
-// executable that `astra build` leaves out of what it writes (M6.5 part 5).
+// executable that `jade build` leaves out of what it writes (M6.5 part 5).
 
 #include <algorithm>
 #include <cstdio>
@@ -46,9 +46,9 @@ extern StartFunction __xi_a[], __xi_z[];
 }
 #endif
 
-using namespace astra;
+using namespace jade;
 
-namespace astra {
+namespace jade {
 int docCommand(const std::vector<std::string>& args);  // src/doc.cpp
 }
 
@@ -97,14 +97,14 @@ std::string startupCodeIn(const std::vector<std::string>& names) {
 }
 
 // The build's check of the sections a built program leaves out (D161), on the link maps of
-// astra.exe, of the core and the window linked alone, and of the core alone: every function
-// those need is in astra.exe in a section they keep, not one left out. A template or inline
+// jade.exe, of the core and the window linked alone, and of the core alone: every function
+// those need is in jade.exe in a section they keep, not one left out. A template or inline
 // function that files on both sides use is made once, from either; this catches the one made
 // on the side left out. What is wrong, or nothing.
-std::string checkMaps(const std::string& astraMap, const std::string& withWindowMap, const std::string& plainMap) {
+std::string checkMaps(const std::string& jadeMap, const std::string& withWindowMap, const std::string& plainMap) {
     // A map's sections by their number, and its symbols with the number of the section each is in.
     struct Map {
-        std::unordered_map<std::string, std::string> sectionNamed;  // "0003" -> ".astrac"
+        std::unordered_map<std::string, std::string> sectionNamed;  // "0003" -> ".jadec"
         std::unordered_map<std::string, std::string> sectionOf;     // symbol -> "0003"
     };
     auto read = [](const std::string& path, Map& map) {
@@ -120,7 +120,7 @@ std::string checkMaps(const std::string& astraMap, const std::string& withWindow
             if (!(words >> second)) continue;
             const std::string number = place.substr(0, 4);
             if (!symbols) {
-                // " 0003:00000000 000e5720H .astrac   CODE": the first part of a section names it
+                // " 0003:00000000 000e5720H .jadec   CODE": the first part of a section names it
                 if (words >> third && third[0] == '.' && place.substr(5) == "00000000") {
                     const std::string name = third.substr(0, third.find('$'));
                     if (!map.sectionNamed.count(number)) map.sectionNamed[number] = name;
@@ -132,24 +132,24 @@ std::string checkMaps(const std::string& astraMap, const std::string& withWindow
         }
         return true;
     };
-    Map astra, withWindow, plain;
-    if (!read(astraMap, astra) || !read(withWindowMap, withWindow) || !read(plainMap, plain)) return "a link map cannot be read";
+    Map jade, withWindow, plain;
+    if (!read(jadeMap, jade) || !read(withWindowMap, withWindow) || !read(plainMap, plain)) return "a link map cannot be read";
     auto check = [&](const Map& needs, const std::vector<std::string>& leftOut, const std::vector<std::string>& allowed) -> std::string {
         for (const auto& [symbol, number] : needs.sectionOf) {
             if (std::find(allowed.begin(), allowed.end(), symbol) != allowed.end()) continue;
-            auto where = astra.sectionOf.find(symbol);
-            if (where == astra.sectionOf.end()) continue;
-            auto name = astra.sectionNamed.find(where->second);
-            if (name == astra.sectionNamed.end()) continue;
+            auto where = jade.sectionOf.find(symbol);
+            if (where == jade.sectionOf.end()) continue;
+            auto name = jade.sectionNamed.find(where->second);
+            if (name == jade.sectionNamed.end()) continue;
             if (std::find(leftOut.begin(), leftOut.end(), name->second) != leftOut.end())
-                return symbol + " is needed by what a built program keeps, but astra.exe has it in " + name->second;
+                return symbol + " is needed by what a built program keeps, but jade.exe has it in " + name->second;
         }
         return {};
     };
-    if (std::string wrong = check(withWindow, {".astrac", ".astras"}, {}); !wrong.empty()) return wrong;
+    if (std::string wrong = check(withWindow, {".jadec", ".jades"}, {}); !wrong.empty()) return wrong;
     // The core calls the window's two entry points only when its section is there.
-    return check(plain, {".astrac", ".astras", ".astraj"},
-                 {"?registerTopaz@astra@@YAXAEAVVM@1@@Z", "?registerText@astra@@YAXAEAVVM@1@@Z"});
+    return check(plain, {".jadec", ".jades", ".jadet"},
+                 {"?registerTopaz@jade@@YAXAEAVVM@1@@Z", "?registerText@jade@@YAXAEAVVM@1@@Z"});
 }
 
 // Leaves the bytes of the named sections out of an executable's image (M6.5 part 5, D161):
@@ -223,29 +223,29 @@ bool leaveOutSections(std::string& image, const std::vector<std::string>& names)
 
 
 const char* const kUsage =
-    "Astra " ASTRA_VERSION " - an object-oriented scripting language\n"
+    "Jade " JADE_VERSION " - an object-oriented scripting language\n"
     "\n"
     "Usage:\n"
-    "  astra                                 start the interactive shell\n"
-    "  astra <file> [args...]                run a source (.astra) or bytecode (.astc) file\n"
-    "  astra run <file> [args...]            same as above\n"
-    "  astra build <file> [-o <out.astc>]    compile a source file to a bytecode file\n"
-    "  astra build <file> --exe [-o <app.exe>] [--windowed] [--icon <file.ico>]\n"
+    "  jade                                  start the interactive shell\n"
+    "  jade <file> [args...]                 run a source (.jade) or bytecode (.jc) file\n"
+    "  jade run <file> [args...]             same as above\n"
+    "  jade build <file> [-o <out.jc>]       compile a source file to a bytecode file\n"
+    "  jade build <file> --exe [-o <app.exe>] [--windowed] [--icon <file.ico>]\n"
     "                                        compile it into a program of its own;\n"
     "                                        --windowed gives it no console window,\n"
     "                                        --icon gives it an icon\n"
-    "  astra check <file>                    check a source file's types, running nothing\n"
-    "  astra test [<file or folder>...]      run the tests (@Test) of the files, or of those in\n"
+    "  jade check <file>                     check a source file's types, running nothing\n"
+    "  jade test [<file or folder>...]       run the tests (@Test) of the files, or of those in\n"
     "                                        the folders (the current one if none is given)\n"
-    "  astra dis <file>                      list the bytecode of a source or bytecode file\n"
-    "  astra doc <file>... [-o <page.html>]  a reference page of the files' declarations, from the\n"
+    "  jade dis <file>                       list the bytecode of a source or bytecode file\n"
+    "  jade doc <file>... [-o <page.html>]   a reference page of the files' declarations, from the\n"
     "                                        comments written above them; --template <page.html>\n"
-    "                                        puts it where that page says <!-- astra doc -->,\n"
+    "                                        puts it where that page says <!-- jade doc -->,\n"
     "                                        --missing lists what has none\n"
-    "  astra --version\n"
-    "  astra --help\n";
+    "  jade --version\n"
+    "  jade --help\n";
 
-// Where the libraries that come with Astra, such as Topaz, live: a "lib" folder beside the executable, and
+// Where the libraries that come with Jade, such as Topaz, live: a "lib" folder beside the executable, and
 // nowhere else, so that a folder someone else can write to is never searched.
 std::vector<std::string> libraryPaths() {
     std::filesystem::path exe = executablePath();
@@ -362,7 +362,7 @@ int loadProgram(const std::string& path, VM& vm, CompilerSession*& session, Prog
                 std::unique_ptr<CompilerSession>& sessionOwner, std::unique_ptr<Program>& programOwner) {
     std::string data;
     if (!readFile(path, data)) {
-        std::cerr << "astra: cannot read '" << path << "'\n";
+        std::cerr << "jade: cannot read '" << path << "'\n";
         return kExitNoInput;
     }
 
@@ -394,18 +394,18 @@ int loadProgram(const std::string& path, VM& vm, CompilerSession*& session, Prog
         std::cerr << e.format() << "\n";
         return kExitCompileError;
     } catch (const std::runtime_error& e) {
-        std::cerr << "astra: " << path << ": " << e.what() << "\n";
+        std::cerr << "jade: " << path << ": " << e.what() << "\n";
         return kExitCompileError;
     }
     return 0;
 }
 
-// `astra check`: compiles the file and what it imports, then checks their types (M6.5).
+// `jade check`: compiles the file and what it imports, then checks their types (M6.5).
 // Each problem is printed as a compile error is; nothing runs.
 int checkFile(const std::string& path, bool standardLibrary) {
     std::string data;
     if (!readFile(path, data)) {
-        std::cerr << "astra: cannot read '" << path << "'\n";
+        std::cerr << "jade: cannot read '" << path << "'\n";
         return kExitNoInput;
     }
     VM vm;
@@ -426,9 +426,9 @@ int checkFile(const std::string& path, bool standardLibrary) {
     return checker.diagnostics.empty() ? 0 : kExitCompileError;
 }
 
-// With ASTRA_TIMES set: how long the program took to be ready to run, and its parts (D145).
+// With JADE_TIMES set: how long the program took to be ready to run, and its parts (D145).
 static void showTimes(const char* what) {
-    if (std::getenv("ASTRA_TIMES") == nullptr) return;
+    if (std::getenv("JADE_TIMES") == nullptr) return;
     const double ready = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - executableStarted).count();
 #ifdef _WIN32
     // From when the system made the process, its loading included: the start a user waits for.
@@ -436,14 +436,14 @@ static void showTimes(const char* what) {
     if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
         GetSystemTimePreciseAsFileTime(&now);
         auto ticks = [](const FILETIME& t) { return (static_cast<unsigned long long>(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
-        std::fprintf(stderr, "astra: %s %.1f ms after the process was made\n", what, (ticks(now) - ticks(created)) / 10000.0);
+        std::fprintf(stderr, "jade: %s %.1f ms after the process was made\n", what, (ticks(now) - ticks(created)) / 10000.0);
     }
 #endif
     if (compileTimes.cacheRead > 0)
-        std::fprintf(stderr, "astra: %s %.1f ms after astra.exe started its work, from the program kept: its files looked at %.1f, "
+        std::fprintf(stderr, "jade: %s %.1f ms after jade.exe started its work, from the program kept: its files looked at %.1f, "
                      "it read in %.1f\n", what, ready, compileTimes.cacheCheck, compileTimes.cacheRead);
     else
-        std::fprintf(stderr, "astra: %s %.1f ms after astra.exe started its work: parsing %.1f, checking %.1f, compiling %.1f "
+        std::fprintf(stderr, "jade: %s %.1f ms after jade.exe started its work: parsing %.1f, checking %.1f, compiling %.1f "
                      "(units put back %d, compiled %d; the standard library %s)\n",
                      what, ready, compileTimes.parse, compileTimes.check, compileTimes.compile, compileTimes.unitsReused,
                      compileTimes.unitsCompiled, compileTimes.preludeAttached ? "attached" : "compiled");
@@ -461,12 +461,12 @@ int runFile(const std::string& path, std::vector<std::string> scriptArgs) {
 
     vm.load(*program);
     showTimes("ready to run");
-    // ASTRA_TIMES=compile stops here: the budgets are timed on programs that are not run.
-    if (const char* times = std::getenv("ASTRA_TIMES"); times != nullptr && std::strcmp(times, "compile") == 0) {
+    // JADE_TIMES=compile stops here: the budgets are timed on programs that are not run.
+    if (const char* times = std::getenv("JADE_TIMES"); times != nullptr && std::strcmp(times, "compile") == 0) {
         // What is kept is written as a program runs; here, with nothing to run, it is waited for.
         const auto waited = std::chrono::steady_clock::now();
         finishKeeping();
-        std::fprintf(stderr, "astra: waited %.1f ms for the cache to be written\n",
+        std::fprintf(stderr, "jade: waited %.1f ms for the cache to be written\n",
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count());
         return 0;
     }
@@ -480,11 +480,11 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
               const std::string& iconPath) {
     std::string data;
     if (!readFile(path, data)) {
-        std::cerr << "astra: cannot read '" << path << "'\n";
+        std::cerr << "jade: cannot read '" << path << "'\n";
         return kExitNoInput;
     }
     if (looksLikeBytecode(data)) {
-        std::cerr << "astra: '" << path << "' is already a bytecode file\n";
+        std::cerr << "jade: '" << path << "' is already a bytecode file\n";
         return kExitUsage;
     }
 
@@ -493,17 +493,17 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     if (!iconPath.empty()) {
         std::string ico;
         if (!readBytes(iconPath, ico)) {
-            std::cerr << "astra: cannot read '" << iconPath << "'\n";
+            std::cerr << "jade: cannot read '" << iconPath << "'\n";
             return kExitNoInput;
         }
         if (!readIcon(ico, icon)) {
-            std::cerr << "astra: '" << iconPath << "' is not an icon file; --icon takes an .ico file\n";
+            std::cerr << "jade: '" << iconPath << "' is not an icon file; --icon takes an .ico file\n";
             return kExitUsage;
         }
     }
 #else
     if (!iconPath.empty()) {
-        std::cerr << "astra: --icon is only available on Windows\n";
+        std::cerr << "jade: --icon is only available on Windows\n";
         return kExitUsage;
     }
 #endif
@@ -514,7 +514,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     const char* executableExtension = "";
 #endif
     if (outPath.empty())
-        outPath = std::filesystem::path(path).replace_extension(asExecutable ? executableExtension : ".astc").string();
+        outPath = std::filesystem::path(path).replace_extension(asExecutable ? executableExtension : ".jc").string();
     if (asExecutable && std::filesystem::path(outPath) == std::filesystem::path(path)) outPath += ".out";
 
     VM vm;
@@ -530,8 +530,8 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
 
     // What the program can never reach is left out of it (M6.5 part 5).
     const LeftOut leftOut = leaveOutUnreachable(session.program, VM::globalsFoundByName(), vm.membersFoundByName());
-    if (std::getenv("ASTRA_TIMES") != nullptr)
-        std::cerr << "astra: left out " << leftOut.declarations << " declarations; the modules' own code "
+    if (std::getenv("JADE_TIMES") != nullptr)
+        std::cerr << "jade: left out " << leftOut.declarations << " declarations; the modules' own code "
                   << leftOut.codeBefore << " bytes, now " << leftOut.codeAfter << "\n";
 
     if (!asExecutable) {
@@ -539,7 +539,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
         if (out) writeProgram(session.program, out);
         out.flush();
         if (!out) {
-            std::cerr << "astra: cannot write '" << outPath << "'\n";
+            std::cerr << "jade: cannot write '" << outPath << "'\n";
             return kExitCannotWrite;
         }
         return 0;
@@ -552,7 +552,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
 
     std::string image;
     if (!readBytes(executablePath(), image)) {
-        std::cerr << "astra: cannot read the astra executable to build from\n";
+        std::cerr << "jade: cannot read the jade executable to build from\n";
         return kExitCannotWrite;
     }
     int64_t existing = bundledProgramSize(image);
@@ -561,21 +561,21 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     // What a built program never needs is left out of it: the compiler side and the standard
     // library's source always, and Topaz's window with the text engine when nothing left in the
     // program names them (M6.5 part 5, D161).
-    std::vector<std::string> unneeded{".astrac", ".astras"};
-    if (!namesGlobal(session.program, {"__topaz", "__text"})) unneeded.push_back(".astraj");
+    std::vector<std::string> unneeded{".jadec", ".jades"};
+    if (!namesGlobal(session.program, {"__topaz", "__text"})) unneeded.push_back(".jadet");
     if (const std::string inside = startupCodeIn(unneeded); !inside.empty()) {
-        std::cerr << "astra: internal error: " << inside << "\n";
+        std::cerr << "jade: internal error: " << inside << "\n";
         return kExitCannotWrite;
     }
     if (!leaveOutSections(image, unneeded)) {
-        std::cerr << "astra: cannot make a program from this executable (its file is not as expected)\n";
+        std::cerr << "jade: cannot make a program from this executable (its file is not as expected)\n";
         return kExitCannotWrite;
     }
 
     if (windowed) {
 #ifdef _WIN32
         if (!makeWindowed(image)) {
-            std::cerr << "astra: cannot make a windowed program from this executable\n";
+            std::cerr << "jade: cannot make a windowed program from this executable\n";
             return kExitCannotWrite;
         }
 #endif
@@ -591,7 +591,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
         return static_cast<bool>(out);
     };
     if (!writeRuntime()) {
-        std::cerr << "astra: cannot write '" << outPath << "' (is that program still running?)\n";
+        std::cerr << "jade: cannot write '" << outPath << "' (is that program still running?)\n";
         return kExitCannotWrite;
     }
 
@@ -607,7 +607,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
         if (!stored) {
             std::error_code ignored;
             std::filesystem::remove(outPath, ignored);
-            std::cerr << "astra: cannot put the icon into '" << outPath << "'\n";
+            std::cerr << "jade: cannot put the icon into '" << outPath << "'\n";
             return kExitCannotWrite;
         }
     }
@@ -621,7 +621,7 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     if (!out) {
         std::error_code ignored;
         std::filesystem::remove(outPath, ignored);
-        std::cerr << "astra: cannot write '" << outPath << "'\n";
+        std::cerr << "jade: cannot write '" << outPath << "'\n";
         return kExitCannotWrite;
     }
     out.close();
@@ -654,7 +654,7 @@ int shell() {
     CompilerSession session(vm);
     session.libraryPaths = libraryPaths();
     bool interactive = stdinIsTerminal();
-    if (interactive) std::cout << "Astra " ASTRA_VERSION " - type .exit to quit\n";
+    if (interactive) std::cout << "Jade " JADE_VERSION " - type .exit to quit\n";
 
     std::string buffer;
     for (;;) {
@@ -690,9 +690,9 @@ int shell() {
             Value result = vm.runModule(module);
             if (!result.isNull()) std::cout << vm.repr(result) << "\n";
             vm.runEventLoop(false, 50);  // whatever has been posted and is ready, without waiting
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             reportUncaught(vm, thrown);
-        } catch (const AstraExit& exit) {
+        } catch (const JadeExit& exit) {
             return exit.code;
         }
         std::cout.flush();
@@ -700,7 +700,7 @@ int shell() {
     return 0;
 }
 
-// ---- astra test (D153) ----
+// ---- jade test (D153) ----
 //
 // Each file is compiled and run as a program of its own; then its functions written @Test are
 // called, each with those written @BeforeTest before it and @AfterTest after it, and those
@@ -719,7 +719,7 @@ const Annotation* annotationNamed(const Annotations& written, const char* name) 
     return nullptr;
 }
 
-// The functions of a file's top level, or the methods of a class, that astra test runs.
+// The functions of a file's top level, or the methods of a class, that jade test runs.
 struct TestGroup {
     const ClassStmt* cls = nullptr;
     std::vector<const FunctionDecl*> tests, beforeTest, afterTest, beforeAll, afterAll;
@@ -755,7 +755,7 @@ public:
         std::cout << path_ << "\n";
         try {
             vm_.runModule(entry);
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             std::cout << "  FAIL  the file's own code, before its tests\n" << describe(thrown);
             failed++;
             return;
@@ -796,11 +796,11 @@ private:
     std::string path_;
 
     // What a test that failed threw, and where.
-    std::string describe(AstraThrow& thrown) {
+    std::string describe(JadeThrow& thrown) {
         std::string text;
         try {
             text = vm_.stringify(thrown.value);
-        } catch (const AstraThrow&) {
+        } catch (const JadeThrow&) {
             text = "an exception whose toString() failed";
         }
         // Where in the program: the standard library's own lines, as assertEquals's, left out.
@@ -834,10 +834,10 @@ private:
         try {
             TempRoot keep(vm_, fn);
             vm_.call(fn, static_cast<int>(args.size()), args.data());
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             failure = describe(thrown);
             ok = false;
-        } catch (const AstraExit& exit) {
+        } catch (const JadeExit& exit) {
             failure = "        exit(" + std::to_string(exit.code) + ") was called\n";
             ok = false;
         }
@@ -902,7 +902,7 @@ private:
         TempRoot keep(vm_, args[1]);
         try {
             box = vm_.call(start, 2, args);
-        } catch (AstraThrow& thrown) {
+        } catch (JadeThrow& thrown) {
             failure = describe(thrown);
             return false;
         }
@@ -918,7 +918,7 @@ private:
         TempRoot keep(vm_, box);
         try {
             vm_.call(vm_.globalAt(session_.globalOf(path_, "__endTestSandbox")), 1, &box);
-        } catch (AstraThrow&) {
+        } catch (JadeThrow&) {
         }
     }
 
@@ -975,7 +975,7 @@ private:
                 // In the sandbox: a directory of its own there, which goes with it.
                 try {
                     args.push_back(vm_.call(vm_.globalAt(session_.globalOf(path_, "__testTempDir")), 0, nullptr));
-                } catch (AstraThrow& thrown) {
+                } catch (JadeThrow& thrown) {
                     failure = describe(thrown);
                     ok = false;
                 }
@@ -983,7 +983,7 @@ private:
             }
             std::error_code ec;
             std::filesystem::path dir = std::filesystem::temp_directory_path(ec) /
-                                        ("astra-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(i));
+                                        ("jade-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(i));
             std::filesystem::create_directories(dir, ec);
             made.push_back(dir);
             const Value text = vm_.str(dir.string());
@@ -991,7 +991,7 @@ private:
             const Value pathClass = vm_.globalAt(session_.globalOf(path_, "Path"));
             try {
                 args.push_back(vm_.call(pathClass, 1, &text));
-            } catch (AstraThrow& thrown) {
+            } catch (JadeThrow& thrown) {
                 failure = describe(thrown);
                 ok = false;
             }
@@ -1010,7 +1010,7 @@ private:
         if (ok && group.cls != nullptr) {
             try {
                 object = vm_.call(cls, 0, nullptr);
-            } catch (AstraThrow& thrown) {
+            } catch (JadeThrow& thrown) {
                 failure = describe(thrown);
                 ok = false;
             }
@@ -1046,7 +1046,7 @@ private:
     }
 };
 
-// The files `astra test` is given, and those in the folders it is given whose text has @Test.
+// The files `jade test` is given, and those in the folders it is given whose text has @Test.
 std::vector<std::string> testFiles(std::vector<std::string> given) {
     if (given.empty()) given.push_back(".");
     std::vector<std::string> files;
@@ -1058,7 +1058,7 @@ std::vector<std::string> testFiles(std::vector<std::string> given) {
         }
         std::vector<std::string> found;
         for (auto it = std::filesystem::recursive_directory_iterator(path, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-            if (!it->is_regular_file(ec) || it->path().extension() != ".astra") continue;
+            if (!it->is_regular_file(ec) || it->path().extension() != ".jade") continue;
             std::string text;
             if (readFile(it->path().string(), text) && text.find("@Test") != std::string::npos) found.push_back(it->path().string());
         }
@@ -1080,7 +1080,7 @@ int testFilesCommand(const std::vector<std::string>& given) {
     for (const std::string& path : files) {
         std::string data;
         if (!readFile(path, data)) {
-            std::cerr << "astra: cannot read '" << path << "'\n";
+            std::cerr << "jade: cannot read '" << path << "'\n";
             broken++;
             continue;
         }
@@ -1100,7 +1100,7 @@ int testFilesCommand(const std::vector<std::string>& given) {
         TestRun run(vm, session, checker, path);
         try {
             run.run(entry);
-        } catch (const AstraExit& exit) {
+        } catch (const JadeExit& exit) {
             std::cout << "  FAIL  exit(" << exit.code << ") was called\n";
             run.failed++;
         }
@@ -1130,14 +1130,14 @@ int dispatch(const std::vector<std::string>& args) {
         return 0;
     }
     if (command == "--version" || command == "-v") {
-        std::cout << "astra " ASTRA_VERSION "\n";
+        std::cout << "jade " JADE_VERSION "\n";
         return 0;
     }
     if (command == "shell") return shell();
 
     if (command == "run") {
         if (args.size() < 2) {
-            std::cerr << "astra: 'run' needs a file\n";
+            std::cerr << "jade: 'run' needs a file\n";
             return kExitUsage;
         }
         return runFile(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
@@ -1159,12 +1159,12 @@ int dispatch(const std::vector<std::string>& args) {
             } else if (input.empty() && !args[i].empty() && args[i][0] != '-') {
                 input = args[i];
             } else {
-                std::cerr << "astra: usage: astra build <file> [-o <out>] [--exe] [--windowed] [--icon <file.ico>]\n";
+                std::cerr << "jade: usage: jade build <file> [-o <out>] [--exe] [--windowed] [--icon <file.ico>]\n";
                 return kExitUsage;
             }
         }
         if (input.empty()) {
-            std::cerr << "astra: 'build' needs a file\n";
+            std::cerr << "jade: 'build' needs a file\n";
             return kExitUsage;
         }
         // Asking for an .exe by name is asking for a program.
@@ -1175,10 +1175,10 @@ int dispatch(const std::vector<std::string>& args) {
     if (command == "--check-sections" && args.size() == 4) {
         // The build's check of what a built program leaves out (D161): nothing of it runs as the
         // program starts, and nothing a built program keeps is made there (the link maps).
-        std::string wrong = startupCodeIn({".astrac", ".astras", ".astraj"});
+        std::string wrong = startupCodeIn({".jadec", ".jades", ".jadet"});
         if (wrong.empty()) wrong = checkMaps(args[1], args[2], args[3]);
         if (wrong.empty()) return 0;
-        std::cerr << "astra: " << wrong << "\n";
+        std::cerr << "jade: " << wrong << "\n";
         return 1;
     }
 
@@ -1196,7 +1196,7 @@ int dispatch(const std::vector<std::string>& args) {
             return kExitCompileError;
         }
         if (image.empty() || !attachPrelude(args[1], image)) {
-            std::cerr << "astra: cannot attach the standard library to " << args[1] << "\n";
+            std::cerr << "jade: cannot attach the standard library to " << args[1] << "\n";
             return kExitCannotWrite;
         }
         return 0;
@@ -1211,7 +1211,7 @@ int dispatch(const std::vector<std::string>& args) {
             else break;
         }
         if (at + 1 != args.size()) {
-            std::cerr << "astra: usage: astra check <file>\n";
+            std::cerr << "jade: usage: jade check <file>\n";
             return kExitUsage;
         }
         return checkFile(args.back(), standardLibrary);
@@ -1223,14 +1223,14 @@ int dispatch(const std::vector<std::string>& args) {
 
     if (command == "dis") {
         if (args.size() != 2) {
-            std::cerr << "astra: usage: astra dis <file>\n";
+            std::cerr << "jade: usage: jade dis <file>\n";
             return kExitUsage;
         }
         return disassembleFile(args[1]);
     }
 
     if (command.size() > 1 && command[0] == '-') {
-        std::cerr << "astra: unknown option '" << command << "'\n" << kUsage;
+        std::cerr << "jade: unknown option '" << command << "'\n" << kUsage;
         return kExitUsage;
     }
 
@@ -1239,8 +1239,8 @@ int dispatch(const std::vector<std::string>& args) {
 
 }  // namespace
 
-namespace astra {
+namespace jade {
 
-int astraCommandMain(const std::vector<std::string>& args) { return dispatch(args); }
+int jadeCommandMain(const std::vector<std::string>& args) { return dispatch(args); }
 
-}  // namespace astra
+}  // namespace jade

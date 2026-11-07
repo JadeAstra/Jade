@@ -1,14 +1,14 @@
-# Astra
+# Jade
 
-Astra is a self-contained object-oriented scripting language: `astra script.astra` runs a
-script with nothing else installed, and a program built with `astra build --exe` runs without
-`astra.exe`. Source code is compiled to bytecode and run on a stack-based virtual machine with
+Jade is a self-contained object-oriented scripting language: `jade script.jade` runs a
+script with nothing else installed, and a program built with `jade build --exe` runs without
+`jade.exe`. Source code is compiled to bytecode and run on a stack-based virtual machine with
 a garbage collector. You can run a script directly, or compile it ahead of time to a bytecode
 file and run that.
 
 The implementation is C++20 with no dependencies beyond the standard library.
 
-```astra
+```jade
 class Animal {
   val name : string
   fun init(name : string) {
@@ -35,7 +35,7 @@ build.bat
 ```
 
 This finds the MSVC toolchain, configures with the CMake and Ninja that ship with Visual
-Studio, and produces `build\astra.exe` with a copy of `lib` beside it. Any other CMake setup
+Studio, and produces `build\jade.exe` with a copy of `lib` beside it. Any other CMake setup
 works too (`cmake -S . -B build && cmake --build build`).
 
 Linux with GCC 13 or later, or Clang 17 or later, and CMake:
@@ -43,42 +43,42 @@ Linux with GCC 13 or later, or Clang 17 or later, and CMake:
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-python3 tests/run.py --astra build/astra --parallel 16
+python3 tests/run.py --jade build/jade --parallel 16
 ```
 
 Scripts, files, processes and sockets work there as on Windows; windows, the fonts the text
-engine reads, and `astra build --exe` are Windows's only so far, and the tests of them say
+engine reads, and `jade build --exe` are Windows's only so far, and the tests of them say
 so in a line `// windows only: <why>` and are passed over. macOS has the same code as Linux
 but has not been tried.
 
 ## Usage
 
 ```
-astra                                 start the interactive shell
-astra <file> [args...]                run a source (.astra) or bytecode (.astc) file
-astra build <file> [-o <out.astc>]    compile a source file to a bytecode file
-astra build <file> --exe [-o <app.exe>] [--windowed] [--icon <file.ico>]
+jade                                 start the interactive shell
+jade <file> [args...]                run a source (.jade) or bytecode (.jc) file
+jade build <file> [-o <out.jc>]    compile a source file to a bytecode file
+jade build <file> --exe [-o <app.exe>] [--windowed] [--icon <file.ico>]
                                       compile it into a program of its own
-astra check <file>                    check a source file's types, running nothing
-astra test [<file or folder>...]      run the tests (@Test) of the files, or of the files in
+jade check <file>                    check a source file's types, running nothing
+jade test [<file or folder>...]      run the tests (@Test) of the files, or of the files in
                                       the folders that have some (the current one if none)
-astra dis <file>                      list the bytecode of a source or bytecode file
-astra doc <file>... [-o <page.html>]  a reference page of the files' declarations, from the
+jade dis <file>                      list the bytecode of a source or bytecode file
+jade doc <file>... [-o <page.html>]  a reference page of the files' declarations, from the
                                       comments above them (--template, --missing)
 ```
 
-`astra doc` describes each declaration by the `//` comment written directly above it; a comment
+`jade doc` describes each declaration by the `//` comment written directly above it; a comment
 standing on its own (a blank line after it) is a heading, `// ---- Part ----` or `// -- Group --`,
 or text between them. Private and internal names are left out. `--missing` lists the
 declarations with no comment, and `--template page.html` puts the reference into a page of
-one's own where it says `<!-- astra doc -->`. [docs/language.html](docs/language.html), every
+one's own where it says `<!-- jade doc -->`. [docs/language.html](docs/language.html), every
 keyword and the whole standard library, is made that way:
 
 ```
-astra doc src/std/*.astra --template docs/language-template.html -o docs/language.html
+jade doc src/std/*.jade --template docs/language-template.html -o docs/language.html
 ```
 
-`astra build` bundles the file and everything it imports into one `.astc`, which runs without
+`jade build` bundles the file and everything it imports into one `.jc`, which runs without
 the sources. Exit codes: 0 success, 65 compile error, 66 file not found, 70 uncaught runtime
 error, or whatever the script passes to `exit()`.
 
@@ -87,13 +87,13 @@ imported in reach: a mistake is a compile error, and the input is taken back. A 
 declared again takes the place of the one before.
 
 Running a script keeps the program it compiled for the next run, in a cache of this machine's
-own (`%LOCALAPPDATA%\Astra\cache` on Windows, `~/.cache/astra` elsewhere, or the folder
-`ASTRA_CACHE` names; never beside the script). A run with nothing changed starts from it,
+own (`%LOCALAPPDATA%\Jade\cache` on Windows, `~/.cache/jade` elsewhere, or the folder
+`JADE_CACHE` names; never beside the script). A run with nothing changed starts from it,
 without reading, checking or compiling: "nothing changed" is each file's size and time, then
 its text where those differ, for the script and everything it imports, the files of each
-folder it imports, and `astra.exe` itself. A damaged entry counts as missing; past 500 MB the
+folder it imports, and `jade.exe` itself. A damaged entry counts as missing; past 500 MB the
 entries used longest ago go first; deleting the cache costs one slower start. With
-`ASTRA_TIMES` set, astra says how long the program took to be ready, and on what.
+`JADE_TIMES` set, jade says how long the program took to be ready, and on what.
 
 When something has changed, only what it touches is compiled again. Each file, or each folder
 imported whole, is kept compiled with its file's summary: what it declares, with what other
@@ -101,21 +101,21 @@ files learn from its function bodies (a result type not written; whether a lambd
 runs there and then). Another file is compiled again only if it changed itself or a summary it
 depends on did, so an edit inside a function's body compiles that file alone, and the bodies
 of what is put back are not checked again. Files are parsed a few at a time, on threads of
-their own. The standard library is compiled when `astra.exe` is built, as the build's last
+their own. The standard library is compiled when `jade.exe` is built, as the build's last
 step, and carried in it: no run compiles or checks it.
 
 ### Standalone programs
 
-`astra build --exe` turns a script into an executable of its own:
+`jade build --exe` turns a script into an executable of its own:
 
 ```
-astra build examples\bank.astra --exe                        makes examples\bank.exe
-astra build examples\bounce.astra --windowed -o Bounce.exe   a GUI app with no console window
-astra build app.astra --windowed --icon app.ico              app.exe, with an icon of its own
+jade build examples\bank.jade --exe                        makes examples\bank.exe
+jade build examples\bounce.jade --windowed -o Bounce.exe   a GUI app with no console window
+jade build app.jade --windowed --icon app.ico              app.exe, with an icon of its own
 ```
 
-The result is one file holding the Astra runtime and the compiled script with everything it
-imports, the `Topaz` library included. It needs neither `astra.exe`, the sources nor `lib` to
+The result is one file holding the Jade runtime and the compiled script with everything it
+imports, the `Topaz` library included. It needs neither `jade.exe`, the sources nor `lib` to
 run, so it can be copied to another machine as it is.
 
 What the program can never reach is left out of it: the functions, classes and extension
@@ -125,16 +125,16 @@ and Topaz's window, drawing and text engine when nothing left in the program use
 `print("hi")` built is 1.7 MB and starts in about 8 ms; a Topaz app is about 2.2 MB.
 
 A built program runs as its own process, named after its file: `Todo.exe` is listed as
-`Todo.exe` in Task Manager, never as `astra.exe`, so two Astra apps running side by side are
+`Todo.exe` in Task Manager, never as `jade.exe`, so two Jade apps running side by side are
 told apart by name. Rename the file and the process name follows.
 
 - Every command-line argument goes to the script and shows up in `Program.arguments`; a built program has
-  no `build`, `dis` or other astra commands.
+  no `build`, `dis` or other jade commands.
 - `--windowed` is for GUI apps: starting the program opens no console window. `print` output
   then goes nowhere unless it is redirected, and an uncaught error is shown in a message box
   instead of being printed.
 - Without `--windowed` the program is a console program, with `print`, `input()` and exit
-  codes working as they do under `astra`.
+  codes working as they do under `jade`.
 - `--icon app.ico` gives the program an icon: Explorer, the taskbar and Task Manager show it
   for the file, and the program's windows carry it in their title bars. It takes an `.ico`
   file, which can hold the picture in several sizes (16, 32, 48 and 256 pixels cover what
@@ -148,7 +148,7 @@ what compiles but means something else.
 
 ### Basics
 
-```astra
+```jade
 val limit = 10           // immutable: assigning to it again is a compile error
 var count = 3            // mutable
 var picked : string?     // null until given a value
@@ -164,7 +164,7 @@ print(1 == 1.0, "a" + 1)            // true a1
 
 Strings use double quotes and build text from code with `$`:
 
-```astra
+```jade
 "hello $name"                        // a variable
 "hello ${car.name}"                  // any expression goes in braces
 "hello ${session.getUser().name}"
@@ -182,13 +182,13 @@ likes, and quotes and backslashes in it are just text. `$name` and `${...}` stil
 `$$` in front, `$$name` and `$${...}` are read and a lone `$` is text, for text full of dollar
 signs; each more `$` in front lets one more in a row be text:
 
-```astra
+```jade
 val price = $$"""cost: $5, total: $$total"""     // cost: $5, total: 12
 ```
 `trimIndent()` takes away the indentation its lines share and `trimMargin()` everything up to
 a `|` at the start of each line, so that the text can be indented with the code around it:
 
-```astra
+```jade
 val path = """C:\temp\new "file".txt"""
 val css = """
     .button {
@@ -201,7 +201,7 @@ val css = """
 Every position counts characters, never bytes, so a string can be cut anywhere without
 cutting a character in half:
 
-```astra
+```jade
 val s = "naïve café"
 s.size                   // 10
 s[2]                     // 'ï': a char
@@ -222,7 +222,7 @@ when first asked for and kept.
 quotes. A character outside the basic plane, such as an emoji, is one char. One made of
 several code points (a letter followed by a combining accent, a flag) is several.
 
-```astra
+```jade
 'c' + 'a' + 't'          // "cat": two chars added are a string
 'a' + 1                  // 'b': a char and an int, a char
 'z' - 'a'                // 25: two chars apart, an int
@@ -233,13 +233,13 @@ several code points (a letter followed by a combining accent, a flag) is several
 
 A result that is not a character is an error, and so is comparing a char with a string known
 when compiling to be of another length (`c == "ab"`). A char goes where a char is asked for:
-`val c : char = 5` is an error. Where Kotlin takes a `Char` or a `String`, so does Astra:
+`val c : char = 5` is an error. Where Kotlin takes a `Char` or a `String`, so does Jade:
 `s.split(',')`, `s.indexOf('x')`, `s.padStart(3, '0')`.
 
 **`Bytes` is for data that is not text**: a fixed number of bytes, each a `byte`, a number
 from 0 to 255, that can be changed in place.
 
-```astra
+```jade
 val b = Bytes(16)                    // sixteen zeros
 val c = Bytes([1, 2, 255])           // from a list; Bytes(b) copies
 c[0] = 7                             // read and written by position: c[0] is a byte
@@ -257,7 +257,7 @@ gives an int, as it never loses anything; an int is made a byte again with `toBy
 error past 0 to 255, or `toByteWrapped()`, which keeps the low 8 bits. An int constant that
 fits needs neither: `val b : byte = 200`, `c[0] = 7`.
 
-```astra
+```jade
 c[0] = (c[0] + 1).toByte()           // c[0] + 1 is an int
 c.int16(0)   c.uint32(4, bigEndian = true)   c.float32(8)       // 16- and 32-bit numbers in the bytes
 c.putInt32(4, -5)   c.putUint16(0, 65535, bigEndian = true)     // and written
@@ -270,7 +270,7 @@ A keyword is only a keyword where it could be one. Where nothing but a name can 
 a name: after a dot, as a field, method, property or enum entry being declared, as the name
 of an argument, and as a key in a map.
 
-```astra
+```jade
 enum Key { if, else, in, class }
 class Token(val class : string, var in : int = 0) {
   fun is(other : Token) : bool => this.class == other.class
@@ -289,8 +289,8 @@ something only in the one place it belongs, and is an ordinary name everywhere e
 Variables are declared with `val` (immutable) or `var` (mutable). A variable takes its type
 from its first value, or from a type written after its name:
 
-```astra
-val name = "Astra"           // a string
+```jade
+val name = "Jade"           // a string
 var total = 0                // an int
 var ratio : Number = 1       // int or float
 var owner : Person? = null   // "?" also allows null
@@ -306,7 +306,7 @@ type written, since there is nothing to take it from. `any` holds any value, and
 holds is used through a cast (`x as Box`) or a test (`if (x is Box) { x.open() }`).
 
 Types are checked when the program is compiled, and a program the checker finds a mistake
-in does not run: each mistake is listed, as a compile error is. `astra check` lists them
+in does not run: each mistake is listed, as a compile error is. `jade check` lists them
 without running anything. A cast is checked as the program runs, and a wrong one raises a
 catchable `ClassCastException`.
 
@@ -319,7 +319,7 @@ never be null. A name that names no type is a compile error; Kotlin's `Int`, `St
 A class of the program's own may have a built-in type's name (`Range`, `Index`, `Values`,
 `Bytes`): where it is in reach, the name means the program's class, in types as in calls, as
 a file's own names come first. The built-in type is still there by its uses (`0..<3`, `^1`,
-`map.values`) and by its full name, `astra.Range` (D184).
+`map.values`) and by its full name, `jade.Range` (D184).
 
 **Storage widths.** `int16`, `int32`, `uint16`, `uint32` and `float32` keep a number in less
 room where it is kept: in a list (`List<int16>`, 2 bytes an item), in a value type's field
@@ -335,7 +335,7 @@ parts, which are bytes, add up as ints: `val total : int = color.red + color.gre
 
 A type can say more: what a list or map holds, and what a function takes and gives back.
 
-```astra
+```jade
 val names : open List<string> = []
 var index : Map<string, List<int>> = {:}
 fun forAll(action : (int) -> unit) { ... }         // unit: gives nothing back
@@ -352,7 +352,7 @@ type or has an `else`. `null` among them makes it nullable, and a union is what 
 unrelated types have in common: `flag ? 1 : "one"` is an `int | string`. Nothing of a union is
 kept when the program runs, so it is not tested as a whole with `is`.
 
-```astra
+```jade
 fun length(source : string | TextModel) : int => when (source) {
   is string -> source.size
   is TextModel -> source.text.size
@@ -362,7 +362,7 @@ fun length(source : string | TextModel) : int => when (source) {
 **Names for types.** `type` gives a type a name, another way of writing it and not a new
 type; it may have type parameters, and may refer to itself inside another type:
 
-```astra
+```jade
 type Grid = List<List<int>>
 type Table<T> = Map<string, List<T>>
 type Json = int | float | string | bool | List<Json> | Map<string, Json>
@@ -373,7 +373,7 @@ A `val` fixes the variable, not the object: a list held in a `val` can still be 
 **Read-only and open collections.** A list, map or set is read only through a name whose type
 is written plainly, and changed only through one written `open`:
 
-```astra
+```jade
 fun show(items : List<Component>) { ... }          // reads: takes a List<Button> as well
 fun fill(into : open List<Component>) { ... }      // changes: takes only a list of exactly that type
 fun addButton(into : open List<accepts Button>)    // takes a list of Button or of any type above it
@@ -401,7 +401,7 @@ otherwise when the program runs.
 `const` declares a value known when the program is compiled, written into each place that
 reads it, so reading it costs nothing:
 
-```astra
+```jade
 const cols = 40
 const rows = cols * 2              // other constants, and arithmetic on them
 const title = "Grid $rows x $cols" // text joined from them
@@ -460,7 +460,7 @@ Operators, from the ones that bind tightest:
 `x .= f(...)` is `x = x.f(...)`: a method that gives a new value, put back where the old one
 was. The place is written once and worked out once, so a long one is not written twice:
 
-```astra
+```jade
 name .= trim()
 p.tags[i] .= trim().upper()
 grid .= appendRows(2)        // a grid's new rows are a new grid
@@ -475,7 +475,7 @@ and shifting by a negative amount is an error.
 
 `++` and `--` add or subtract one from a variable, a field or an element:
 
-```astra
+```jade
 count++
 this.total--
 items[i]++
@@ -488,7 +488,7 @@ target on one line and use it on the next. The operator goes on the same line as
 `is` tests what a value is, against a class or one of the built-in type names, and `in` asks
 a list, string, set or range whether it holds a value, and a map whether it holds an entry:
 
-```astra
+```jade
 shape is Circle       shape !is Circle      // Circle or a subclass of it
 x is int              x is string           // also float, Number, bool, List, Map, Set, Range, Function
 x is Shape?                                 // a Shape, or null
@@ -499,7 +499,7 @@ x is Shape?                                 // a Shape, or null
 `a in b` calls `b.contains(a)`, so a class joins in by having a `contains` method. `as`
 insists that a value has a type and gives the value back; `as?` gives `null` when it does not:
 
-```astra
+```jade
 val circle = shape as Circle                // runtime error unless shape is a Circle
 val radius = (shape as? Circle)?.radius ?: 0
 ```
@@ -508,7 +508,7 @@ val radius = (shape as? Circle)?.radius ?: 0
 last item. A range of positions takes a slice, a new list (or string, or bytes) of those
 items; either end may be left out, or both for a copy of the whole:
 
-```astra
+```jade
 items[0]          items[^1]          items[^2]        // the first, the last, the one before it
 items[1..<3]      items[2..]         items[..^2]      // 1 and 2; from 2 on; all but the last
 text[^3..]        items[..]                          // a string's last three characters; a copy of all
@@ -521,7 +521,7 @@ end" (`items[-1]` with a literal is a compile error naming `items[^1]`). `getOrN
 
 Three operators deal with `null`:
 
-```astra
+```jade
 user?.name                  // the name, or null when user is null
 user?.rename("Sam")         // not called, and its arguments not worked out, when user is null
 user?.address?.city         // each step that may be null needs its own ?.
@@ -536,7 +536,7 @@ to the right-hand side for `false` as well.
 `return`, `throw`, `break` and `continue` can be written where a value is expected, which with
 `?:` gives the usual way to stop when something is missing:
 
-```astra
+```jade
 val user = find(id) ?: return           // leave the function
 val port = config["port"] ?: throw IllegalStateException("no port configured")
 for line in lines {
@@ -547,7 +547,7 @@ for line in lines {
 
 ### Control flow
 
-```astra
+```jade
 if n < 0 { ... } else if n == 0 { ... } else { ... }
 while i < 10 { i += 1 }
 for x in [1, 2, 3] { ... }      // also strings (characters), sets, ranges, maps (entries)
@@ -559,7 +559,7 @@ break    continue
 `when` picks one branch out of several. With a subject, a branch lists the values it takes,
 or tests the subject with `is` or `in`; without one, each branch is a condition:
 
-```astra
+```jade
 when (key) {                              // the parentheses are optional, as for if
   "q", "x" -> quit()                      // either value
   in "0123456789" -> digit(key)           // also !in
@@ -586,7 +586,7 @@ start of a line they open a new branch.
 `if` and `try` have a value too, that of the block that ran, which is the block's last
 expression. The braces stay:
 
-```astra
+```jade
 val width = if wide { 200 } else { 100 }
 val port = try { int(text) } catch (e) { 8080 }
 val label = if count == 0 {
@@ -602,7 +602,7 @@ runs, and does not change the value.
 
 More about loops:
 
-```astra
+```jade
 for i in 10 downTo 1 { ... }             // counting down, 1 included
 for i in 0..100 step 10 { ... }          // every tenth; also after ..< and downTo
 do { line = read() } while line != null  // the block runs before the first test
@@ -617,7 +617,7 @@ rows@ for row in grid {                  // a name for the loop
 
 ### Functions
 
-```astra
+```jade
 fun add(a : int, b : int) : int { return a + b }
 fun square(x : float) : float => x * x     // expression body
 val twice = fun(f : (int) -> int) => fun(v : int) => f(f(v))    // anonymous functions and closures
@@ -629,7 +629,7 @@ exactly as many arguments as they declare.
 A function may refer to the variable it is being stored in, which is how a lambda calls itself
 and how a callback names the thing it was registered as:
 
-```astra
+```jade
 val factorial = fun(n) => n <= 1 ? 1 : n * factorial(n - 1)
 val timer = EventLoop.every(1.seconds, fun() { timer.cancel() })
 ```
@@ -640,7 +640,7 @@ compile error, and a function that runs before the variable has its value fails 
 
 Parameters and the return value can be typed, with the same types as variables:
 
-```astra
+```jade
 fun area(width : Number, height : Number) : Number => width * height
 fun find(name : string, pets : List) : Animal? { ... }     // may return null
 val double = fun(n : int) : int => n * 2                   // lambdas too
@@ -650,7 +650,7 @@ area(3, "4")     // error: argument 'height' of area() must be number, got strin
 
 Arguments can be passed by name, in any order, after any positional ones:
 
-```astra
+```jade
 fun connect(host : string, port : int, secure : bool) { ... }
 
 connect("example.org", secure = true, port = 443)
@@ -664,7 +664,7 @@ argument needs its own parentheses: `f((x = 1))`.
 
 A parameter can have a default value, which makes that argument optional:
 
-```astra
+```jade
 fun greet(name : string, greeting : string = "Hello") : string => "$greeting, $name!"
 
 greet("Ann")                      // Hello, Ann!
@@ -679,7 +679,7 @@ leaves it out is an error.
 A `vararg` parameter takes any number of arguments and receives them as a list. In a call,
 `*list` passes the elements of a list as arguments of their own, to any function:
 
-```astra
+```jade
 fun total(vararg numbers : int) : int {     // the type is that of each argument
   var sum = 0
   for n in numbers { sum += n }
@@ -703,7 +703,7 @@ A function has at most one `vararg` parameter. Passed by name it takes the list 
 made with `params(...)` and passed with `...`. Each goes to the parameter of its name and
 is checked there as if it were written at the call:
 
-```astra
+```jade
 fun label(text : string, size : int = 12, bold : bool = false, color : string = "black") { ... }
 
 val heading = params(size = 18, bold = true)
@@ -734,7 +734,7 @@ A function can be declared more than once under one name, as long as each form d
 the others in its parameters' types or in how many there are (D56). A call means the most
 specific form its arguments fit:
 
-```astra
+```jade
 fun area(r : float) : float => 3.0 * r * r
 fun area(w : float, h : float) : float => w * h
 
@@ -777,7 +777,7 @@ the list's type has to be known.
 A member or an extension function with one parameter, marked `infix`, can be called with its
 name between the two values, as Kotlin has it (D72):
 
-```astra
+```jade
 infix fun string.repeatedTimes(n : int) : string => this.repeat(n)
 "ab" repeatedTimes 3                  // "ababab", the same as "ab".repeatedTimes(3)
 ```
@@ -795,7 +795,7 @@ and a `for` over one counts through it with nothing made.
 such a lambda leaves the function the call is in, `break` and `continue` reach the loops
 around the call, `return@name` leaves the lambda alone, and no lambda is made:
 
-```astra
+```jade
 inline fun <T> List<T>.each(action : (T) -> unit) {
   for (x in this) { action(x) }
 }
@@ -833,9 +833,9 @@ gives, in what is returned. Inside a `try` it stays a call, as
 with Kotlin's `tailrec`: as a loop, an error from a deeper round would pass by the handlers of
 the rounds above it. `tail fun` asks for it: a call of itself that is not its last step is then a
 compile error saying why (Kotlin's `tailrec` is written `tail`). An error's trace counts the
-repeats in place of the frames saved: `at sum (list.astra:5), 10,001 times`.
+repeats in place of the frames saved: `at sum (list.jade:5), 10,001 times`.
 
-```astra
+```jade
 fun sum(n : int, acc : int = 0) : int => n == 0 ? acc : sum(n - 1, acc + n)
 tail fun gcd(a : int, b : int) : int => b == 0 ? a : gcd(b, a % b)
 sum(1000000)                          // no stack overflow
@@ -846,7 +846,7 @@ sum(1000000)                          // no stack overflow
 A function can be written in braces where a value is expected. Its value is its last
 expression:
 
-```astra
+```jade
 val add = { a, b -> a + b }
 val double = { it * 2 }              // with no parameter list, the one argument is called `it`
 val answer = { -> 42 }               // an empty list, said: takes nothing, and has no `it`
@@ -865,7 +865,7 @@ Kotlin. A function that can be given one lambda or two has a form for each (see 
 several forms"), so that the lambda after the call is always the last parameter of the form
 it means:
 
-```astra
+```jade
 fun <T, K> List<T>.groupBy(keySelector : (T) -> K) : Map<K, List<T>> { ... }
 fun <T, K, V> List<T>.groupBy(keySelector : (T) -> K, valueTransform : (T) -> V) : Map<K, List<V>> { ... }
 words.groupBy { it.size }                        // the lambda is keySelector
@@ -883,7 +883,7 @@ whatever default methods it has besides, takes a lambda, as in Java (D28): the l
 an object of the interface whose method runs it. Kotlin's `fun interface` is written
 `interface`, and `Action { ... }`, the interface's name and a lambda, makes one too:
 
-```astra
+```jade
 interface Action { fun run(x : int) : int }
 fun use(a : Action) : int => a.run(3)
 use { it * 2 }                            // 6
@@ -901,7 +901,7 @@ broken after a comma. What tells a lambda from a map is what follows the brace: 
 **A lambda can be run on an object**, whose members are then in reach by their bare names.
 This is what builds a layout or fills in an object:
 
-```astra
+```jade
 val panel = Panel().apply {          // apply runs the lambda on the panel and gives the panel
   title = "Settings"
   gap = 4
@@ -915,7 +915,7 @@ around it first, then on the object, then (in a lambda inside another) on the ob
 lambdas around it, and last among the globals. `this` in it is the object it runs on (D58), and
 the object of a class around the code, or of a block given to a function, is `this@Name` (D57):
 
-```astra
+```jade
 class Form(val name : string) {
   fun title() : string => Panel().run { this.title + " of " + this@Form.name }
 }
@@ -950,7 +950,7 @@ of the function it is written in (see "Inline functions"): the scope functions, 
 `map`, `filter` and the like are inline. A `return` there leaves that function, and `break` and
 `continue` reach a loop around it:
 
-```astra
+```jade
 fun find(node : Node, name : string) : Node? {
   for child in node.children { child.find(name)?.let { return it } }   // leaves find()
   return null
@@ -962,7 +962,7 @@ function it is written in. `return@name` leaves the lambda itself, with a value 
 given; the name is that of the function the lambda is passed to, or one written before the
 lambda:
 
-```astra
+```jade
 items.forEach { if it.hidden { return@forEach }; show(it) }   // on to the next item
 val pick = larger@ { a, b -> if a > b { return@larger a }; b }
 ```
@@ -971,7 +971,7 @@ val pick = larger@ { a, b -> if a > b { return@larger a }; b }
 
 ### Classes
 
-```astra
+```jade
 class Shape(val name : string) {             // header: a field, set when the object is made
   var visible : bool = true                  // field with an initial value
 
@@ -994,7 +994,7 @@ print(s.describe(), s is Shape, type(s)) // square: 9 true Square
 
 The parentheses after the class name list what an object is made from:
 
-```astra
+```jade
 class Student(var name : string, var grade : int)      // a complete class; no body needed
 
 class Vec2(val x : Number, val y : Number) {           // the same as declaring x and y in the body
@@ -1016,7 +1016,7 @@ val ann = Student("Ann", 9)
 
 An entry can have a default value, which makes that argument optional:
 
-```astra
+```jade
 class Config(val host : string = "localhost", var port : int = 8080)
 
 Config()                      // localhost, 8080
@@ -1042,7 +1042,7 @@ runs after it where there is more to do. A call uses the one its arguments fit, 
 among a function's forms; one they fit exactly wins over one that needs a number made smaller
 (an int constant taken as a `byte`).
 
-```astra
+```jade
 class Temperature(val kelvin : float) {
   constructor(celsius : int) : this(celsius + 273.15)
   constructor(degrees : float, scale : string) : this(scale == "F" ? (degrees - 32) * 5 / 9 + 273.15 : degrees + 273.15)
@@ -1066,7 +1066,7 @@ In a value type the body changes the value being made.
 Fields are declared in the class body with `val` or `var`, like variables: the type and the
 initial value are both optional.
 
-```astra
+```jade
 class Account {
   val owner : string            // no initial value: init must set it
   var balance : Number = 0
@@ -1103,7 +1103,7 @@ with val or var`), which catches misspellings; a class that declares none has no
 Subclasses add fields by declaring them. `Throwable` declares `message` and `cause`, so an
 exception class that carries more data declares it:
 
-```astra
+```jade
 class HttpError : Exception {
   val status : int
   fun init(status : int, message : string) {
@@ -1119,7 +1119,7 @@ Methods are declared with `fun`, exactly like functions. A hand-written initiali
 
 A `toString()` method controls how an instance prints. Classes can overload operators:
 
-```astra
+```jade
 class Vec {
   val x : float
   val y : float
@@ -1146,7 +1146,7 @@ object's own `==` where its class has one. `contains`, `indexOf` and `remove` on
 an item the same way. `===` and `!==` ask a different question, whether two names refer to
 the very same object:
 
-```astra
+```jade
 val a = [1, 2]
 val b = [1, 2]
 print(a == b, a === b, a === a)     // true false true
@@ -1161,7 +1161,7 @@ A property looks like a field from outside but runs code: its `get()` when it is
 `set(value)` when it is assigned, written under it as Kotlin writes them (`get name()` as a
 member of its own is an error showing this form):
 
-```astra
+```jade
 class Temperature(var celsius : Number) {
   var fahrenheit : Number
     get() => this.celsius * 9 / 5 + 32
@@ -1186,7 +1186,7 @@ Inside a class, `this.` can be left off. A bare name is looked for among the fun
 variables, then the members of the object, then the static members of the class, then the
 globals:
 
-```astra
+```jade
 class Account(val owner : string, var balance : int = 0) {
   val history : open List<int> = []
 
@@ -1210,7 +1210,7 @@ error says how: `NsShapes.PI_ISH` after an import without `.*`, or that it is pr
 
 A field's initial value can use the entries of the class header and the fields above it:
 
-```astra
+```jade
 class Box(val width : int, val height : int) {
   val area = width * height
   val label = "$area square"
@@ -1223,7 +1223,7 @@ That holds for a class whose initializer is the one made from its header. With a
 A field or property and a method may share a name. Reading the name gives the value and
 calling it runs the method, which is how a setter that can be chained is written:
 
-```astra
+```jade
 class Component {
   var tooltip : string? = null
   fun tooltip(text : string) {
@@ -1239,7 +1239,7 @@ component.tooltip                 // the field
 
 A property given an initial value keeps one, and its accessors reach it as `field`:
 
-```astra
+```jade
 class Panel {
   var gap : int = 4
     set(value) {
@@ -1261,7 +1261,7 @@ is then the plain one. The accessors take the property's type.
 
 #### Abstract classes, override and init blocks
 
-```astra
+```jade
 abstract class Shape(val name : string) {
   abstract fun area()                      // for a subclass to write
   abstract val sides : int
@@ -1315,7 +1315,7 @@ class Square(val side : int) : Shape("square") {
   | `internal` | code of the same library (a program is one library; so is Topaz) |
   | `public`, or nothing | everyone |
 
-  ```astra
+  ```jade
   class Meter {
     private var ticks = 0              // Meter's own
     protected fun format(n) => "$n"    // Meter's and its subclasses'
@@ -1353,7 +1353,7 @@ class. A class's static members are all in its one `static { }` block, as a Kotl
 in its companion object (`static` in front of a member, a second block or a `companion object`
 is an error saying so):
 
-```astra
+```jade
 class Color(val r : int, val g : int, val b : int) {
   static {
     val black = Color(0, 0, 0)              // may be an instance of the class itself
@@ -1382,7 +1382,7 @@ properties); it is not code that runs.
 `object` declares a class together with its one instance, and the name stands for that
 instance:
 
-```astra
+```jade
 object Settings {
   var volume = 5
   val loud : bool
@@ -1403,7 +1403,7 @@ function is made where it is written.
 An object can also be made on the spot, with no name, where a value is expected. It sees the
 variables around it, and inside a method the members of that method's object as well:
 
-```astra
+```jade
 button.onClick(object : Listener {
   override fun clicked(x : int, y : int) { count += 1 }
 })
@@ -1420,7 +1420,7 @@ An interface lists what a class promises to have. A method written without a bod
 `val` / `var`, is for the class to supply; a method or property with a body comes along with
 the interface:
 
-```astra
+```jade
 interface Shape {
   fun area() : Number                          // the class writes this
   val name : string                            // and has a field or getter called name
@@ -1449,7 +1449,7 @@ interface holds no values and is never created.
 A class, enum, interface or object can be declared in the body of a class. It is a static
 member of that class and is reached through it:
 
-```astra
+```jade
 class Event(val source : any) {
   class Click(source : any, val x : int, val y : int) : Event(source)   // may extend the class it is in
   class Key(source : any, val code : int) : Event(source)
@@ -1470,7 +1470,7 @@ Two classes can each have an inner class of the same name (`DrawOp.Text`, `Doc.T
 
 `data` declares a class that is all about the fields in its header:
 
-```astra
+```jade
 data Point(val x : int, val y : int)
 
 val p = Point(1, 2)
@@ -1490,7 +1490,7 @@ A data class is extended only by a data class, whose header starts with its pare
 and passes them up; each has its own `==`, `hashCode`, `toString`, `copy` and parts, and `==`
 needs the same class on both sides:
 
-```astra
+```jade
 data Point3(val x : int, val y : int, val z : int) : Point(x, y)
 Point3(1, 2, 3) == Point(1, 2)          // false: another class
 ```
@@ -1500,7 +1500,7 @@ Point3(1, 2, 3) == Point(1, 2)          // false: another class
 `value` declares a data class whose values are what they hold: they have no identity, and
 change only through the place that holds them.
 
-```astra
+```jade
 value Point(val x : int, val y : int) {
     op +(o : Point) : Point => Point(x + o.x, y + o.y)
 }
@@ -1540,7 +1540,7 @@ an item, a `List<bool>` one byte; a `List<int?>` or `List<Point?>` the same, wit
 item for null. Nothing about the list changes for the program: every list function works on it,
 and an item read from it is a value as any other.
 
-```astra
+```jade
 val pts : List<Point> = []
 pts.add(Point(1, 2))         // written straight into the list: no Point is made on its own
 pts.add(0, Point(0, 0))      // the same, at a position
@@ -1555,7 +1555,7 @@ an item of a list, or a lambda's parameter. Its `var` fields are assigned there,
 `mutating` methods, which may change `this`, are called there. Nothing else that held the same
 value sees the change: values are copied, not shared.
 
-```astra
+```jade
 value Ball(var x : float, var dx : float) {
     mutating fun move() { x += dx }
     fun moved() : Ball => Ball(x + dx, dx)
@@ -1584,7 +1584,7 @@ read where it is the same way, judged by the whole function, except where nothin
 between the read and its use: a field of it read at once (`box.p.x`), or the field given back
 by a return, alone or as either side of `a ?: b` or `c ? a : b` (G70). Otherwise, and wherever a value is kept
 (in a field, a list, a variable a lambda holds), it is copied. The program sees no difference
-but the time and the memory; with `ASTRA_COPY_READS=1` every read is a copy, for testing that.
+but the time and the memory; with `JADE_COPY_READS=1` every read is a copy, for testing that.
 
 `forEach { }`, `forEachIndexed { }` and `onEach { }` hand the lambda each item where it is, so a
 change made through `it` changes the item, as in a parallel section; a lambda that may change a
@@ -1603,7 +1603,7 @@ Larger values kept in variables, arguments and results without a box come in the
 `val (a, b) = value` declares a variable for each part of a list or of a data object, and
 `_` skips a part. The same works for the variable of a `for` loop:
 
-```astra
+```jade
 val (low, high) = minMax(readings)          // a function returning [low, high]
 val (_, second) = ["a", "b", "c"]
 for (name, score) in [["Ann", 3], ["Bo", 5]] { ... }
@@ -1615,7 +1615,7 @@ Asking for more parts than there are is an error.
 `a to b` makes a `Pair`, two values that travel together; `Triple(a, b, c)` holds three. Both
 are data classes, with `first`, `second` (and `third`), and come apart like any other:
 
-```astra
+```jade
 val entry = "width" to 200               // Pair("width", 200)
 val (key, value) = entry
 tabs("General" to general, "Advanced" to advanced)
@@ -1625,7 +1625,7 @@ tabs("General" to general, "Advanced" to advanced)
 
 An enum is a type with a fixed set of values, its entries:
 
-```astra
+```jade
 enum Way { up, down, left, right }
 
 Way.left.name            // "left"
@@ -1642,7 +1642,7 @@ entry can have any name but `entries`, even `name` (`SortKey.name` is then that 
 one of those names clashes with what the enum is given and is an error, unless it says
 `override` and keeps the shape of what it replaces, a property of the same type:
 
-```astra
+```jade
 enum Level {
   low, mid, high, hidden
   override val name : string
@@ -1661,7 +1661,7 @@ the enum chooses to show. Like
 a class, an enum can have a header, fields, methods, properties and static members; the
 entries come first, with their arguments:
 
-```astra
+```jade
 enum Planet(val mass : float, val radius : float) {
   mercury(3.303e23, 2.4397e6),
   earth(5.976e24, 6.37814e6);
@@ -1675,7 +1675,7 @@ enum Planet(val mass : float, val radius : float) {
 **Where the destination is declared as the enum, an entry can be written by its bare name**,
 because there it can mean nothing else:
 
-```astra
+```jade
 var t : Way = up                    // a variable or field of that type, declared or assigned
 t = down
 if t == left { ... }                // the other side of == or !=
@@ -1708,7 +1708,7 @@ extend it, in its braces or outside them in the same file only. `enum interface`
 for an interface. A kind can be written by its bare name wherever the enum class is expected,
 as an enum's entries can:
 
-```astra
+```jade
 enum class Event {
   class Click(val x : int, val y : int) : Event()
   class Key(val code : int) : Event()
@@ -1731,7 +1731,7 @@ list of entries, is an `enum` here, and the error says so; `sealed` is not a wor
 A function can be added to a type from outside, to a class of your own or to a built-in
 type. It is declared with the type in front of its name, and called like a method:
 
-```astra
+```jade
 fun Shape.describe() => "$name of area ${area()}"    // bare names are the shape's members
 fun string.shout() => upper() + "!"
 fun int.isEven() => this % 2 == 0
@@ -1761,7 +1761,7 @@ bridged by getters in it, and the interface's methods the class lacks are writte
 asks for is an error at the `extend`. It may also add fields to the class (D157), with or
 without an interface, shown below.
 
-```astra
+```jade
 interface Weighed { val weight : int; val name : string }
 extend Person : Weighed                  // Person has both already
 extend Car, Truck : Weighed {            // several in one line
@@ -1795,7 +1795,7 @@ does. They are not for a value type, a data class, an enum, an interface or a bu
 whose objects are made and compared by their own fields, and a name the class has is not
 replaced. The funs of an extend of the class read them by bare name, as fields.
 
-```astra
+```jade
 extend Button {
   var tag : string? = null
   var clicks = 0
@@ -1813,7 +1813,7 @@ collections only: `extend List<int> : Totalled` fits a list made to hold ints, a
 type's own too, so `"abc".weight` and `[1, 2].total` read them, and `string#.interfaces` lists
 them.
 
-```astra
+```jade
 extend string : Weighed {
   val weight : int
     get() => size
@@ -1830,7 +1830,7 @@ val loads : List<Weighed> = ["crate", Car("Mini", 1200)]
 
 ### Errors
 
-```astra
+```jade
 class NotFound(what : string) : Exception(what + " not found")
 
 try {
@@ -1867,7 +1867,7 @@ bare `catch (e)` takes every `Exception`, and not an `Error`, which is caught on
 named, `catch (e : Error)` or `catch (e : Throwable)` (D151). A `finally` block runs however the
 `try` is left: at its end, by an error, or by `return`, `break` or `continue`.
 
-```astra
+```jade
 fun load(path : string) : Config? {
   val file = open(path)
   try {
@@ -1910,7 +1910,7 @@ functions and on a method with no body; anywhere
 else it is a check, an error if the body can throw anything else, and room for overrides to
 throw what it names. A function type says it the same way:
 
-```astra
+```jade
 fun fetch(url : string) : Bytes throws IOException | TimeoutException { ... }
 interface Loader { fun load(name : string) : string throws IOException }
 val onSave : () -> unit throws IOException = { file.writeText(text) }
@@ -1933,7 +1933,7 @@ closing, and one on any `AutoCloseable` does.
 `[1, 2]#` the built-in types. It binds as tightly as a dot, so `user.address#` and `items[0]#`
 mean what they look like, and a list of classes reads `[Circle#, Square#]`.
 
-```astra
+```jade
 class Person(val name : string, var age : int) {
   fun greet(other : string) : string => "hello $other"
 }
@@ -1980,7 +1980,7 @@ as well, as Python's `NoneType`: `null#` is the built-in class `null`, so `x#.na
 program runs is always a `Class`: `items.itemType`, `map.keyType` and `map.valueType` give one, as
 do `Box<int>#.typeArguments` and a field's `type`, so `items.itemType == int#` (D162).
 
-**Where a class comes from** is its `origin` (D184): `"astra"` for the built-in types and the
+**Where a class comes from** is its `origin` (D184): `"jade"` for the built-in types and the
 standard library's classes (`List#.origin`, `Deck#.origin`), a library's name for its classes
 (`Button#.origin` is `"Topaz"`), and the program's name, `Program.name`, for the program's own.
 So a program's `Range` and the built-in one, both named `"Range"`, are told apart by it.
@@ -1990,7 +1990,7 @@ So a program's `Range` and the built-in one, both named `"Range"`, are told apar
 An annotation is declared like a class, with the values it holds in its header, and written
 with `@` on a class, a function, a field or a parameter (D153):
 
-```astra
+```jade
 annotation JsonField(val name : string = "", val optional : bool = false)
 
 class User(@JsonField("user_id") val id : int, val name : string)
@@ -2005,14 +2005,14 @@ What it is given is checked as a call to it is, and has to be known when compili
 text, a class (`Box#`), an enum's entry, another annotation, or a list of those. Annotations are
 data: they compare and print by their values (`JsonField(name="user_id", optional=false)`), and
 nothing is made from them but what reflection reads. Kotlin's annotations for the JVM are errors
-that say what Astra writes in their place: `@Synchronized` a `Lock`, `@JvmStatic` the
+that say what Jade writes in their place: `@Synchronized` a `Lock`, `@JvmStatic` the
 `static { }` block, `@Throws` `throws`, `@Volatile` and `@Suppress` nothing.
 
 ### Testing
 
-`astra test` runs the functions written `@Test` (D153), each of which passes unless it throws:
+`jade test` runs the functions written `@Test` (D153), each of which passes unless it throws:
 
-```astra
+```jade
 @Test fun adds() { assertEquals(4, 2 + 2) }
 @Test @Timeout(500.milliseconds) fun quick() { ... }      // fails, stopped, after half a second
 @Test fun writes(@TempDir dir : Path) { Path(dir, "a.txt").writeText("hi") }
@@ -2023,7 +2023,7 @@ file's tests those written `@BeforeAll` and `@AfterAll`. A test may be a method 
 anew for each of its tests. The checks are Kotlin's: `assertEquals`, `assertNotEquals`,
 `assertTrue`, `assertFalse`, `assertNull`, `assertNotNull`, `assertSame`, `assertContains`,
 `assertFails`, `assertFailsWith<T>` and `fail`, each throwing an `AssertionError`. Each file is
-run as a program of its own; `astra test` says which tests failed, with what they threw and
+run as a program of its own; `jade test` says which tests failed, with what they threw and
 where, and exits with 1 if any did.
 
 Each test runs in a sandbox of its own (below), made empty for it, with what runs around it: it
@@ -2032,7 +2032,7 @@ reaches none of the system's files, programs or network, its sleeps take no real
 and the file's own code on the real system, as a program's does. `@RealHost` on a test or a class
 runs it on the real system instead; `@Sandboxed` says what its sandbox is to be like:
 
-```astra
+```jade
 @Test fun faults() {
   Path("/data.txt").writeText("12345")
   Sandbox.current!!.faults.add(Fault.read("/data.txt"))
@@ -2049,7 +2049,7 @@ the threads, tasks and workers it starts, reach in place of the system: nothing 
 touched, and the rare failures can be made to happen on purpose. Any program may use one, for a
 test or a dry run:
 
-```astra
+```jade
 Sandbox.run {
   Path("/data").mkdir()                                  // files kept in memory
   Path("/data/a.txt").writeText("1")
@@ -2075,7 +2075,7 @@ val changes = Sandbox.run(copyFrom = Path("project")) { build(); files.changes()
   thread of its own, given its arguments, environment and input, writing output and errors and
   ending with `exitCode`, or never (`waitForever()`).
 - **The network**: a connection is to a host added with `network.host(name, port) { peer -> ... }`,
-  a far side written in Astra that can answer, reset (`peer.reset()`) or go silent
+  a far side written in Jade that can answer, reset (`peer.reset()`) or go silent
   (`peer.waitForever()`, when a read's `readTimeout` is up at once); a `ServerSocket` listens on a
   port of the sandbox's own, which `network.connect(port)` reaches.
 - **Fonts and the clipboard**: the system's installed fonts, or with `fontsFrom` only those of a
@@ -2090,12 +2090,12 @@ links.
 class or variable declared in one is in reach of the others, with no import. Other folders
 see nothing of it until they import it:
 
-```astra
+```jade
 import Shapes              // the folder Shapes: its names are written Shapes.Circle
 import Shapes.*            // the same, and its names can be written bare as well: Circle
 import Topaz.Chart          // the folder Topaz/Chart: Topaz.Chart.Axis
 import Topaz as Ui          // under a name of your own: Ui.Button
-import Shapes.Circle       // a file, Shapes/Circle.astra: loads that one file
+import Shapes.Circle       // a file, Shapes/Circle.jade: loads that one file
 import "../shared/util" as Util    // a path that is not made of plain names goes in quotes
 ```
 
@@ -2127,7 +2127,7 @@ enforce this; it is how everything that comes with it is named.
 
 Three words say who may see a top-level declaration:
 
-```astra
+```jade
 private fun helper() { ... }      // this file only
 internal val cache = {:}          // this library: its folder and those under it
 fun open() { ... }                // everyone who imports the folder
@@ -2138,8 +2138,8 @@ A library is a folder directly inside `lib`, with everything below it, so `Topaz
 a program count as one library.
 
 An import is looked for next to the importing file, then in the `lib` folder beside
-`astra.exe`, and nowhere else. That is where the libraries that come with Astra, such as `Topaz`, live, so
-`astra.exe` and its `lib` folder belong together when astra is copied somewhere.
+`jade.exe`, and nowhere else. That is where the libraries that come with Jade, such as `Topaz`, live, so
+`jade.exe` and its `lib` folder belong together when jade is copied somewhere.
 
 **Order.** Within a file, and across the files of a folder that is imported as a whole, the
 order of declarations does not matter. Before anything else runs, the imports are loaded, the
@@ -2152,17 +2152,17 @@ that runs before the variable's own line.
 
 ## Windows and widgets: Topaz
 
-`import Topaz.*` gives a program windows. **Topaz is Astra's GUI library, and it is being
+`import Topaz.*` gives a program windows. **Topaz is Jade's GUI library, and it is being
 built**, as a port of JadeUI with the same names (the plan is in `docs\gui-plan.md`). What
 is there today: the native layer, which opens windows, reports what the keyboard and the
 pointer do and draws; and on top of it the first widgets, laid out by a grid. Text fields,
 lists, menus and dialogs come next.
 
 Everything is drawn by Topaz itself, with OpenGL: there are no controls of the system's.
-Text comes from Astra's own text engine (below), so it measures and looks the same wherever
+Text comes from Jade's own text engine (below), so it measures and looks the same wherever
 the same font file is. Windows only so far, on OpenGL 3.3 or later.
 
-```astra
+```jade
 import Topaz.*
 
 var count = 0
@@ -2189,8 +2189,8 @@ closed: the window's events come through the same event loop as `EventLoop`'s ta
 timers (see "Doing several things at once"). Windows and drawing belong to the main thread;
 a thread or a worker hands its result over with `EventLoop.post`.
 
-`examples\widgets.astra` is a window of labels and buttons. `examples\window.astra` draws
-on a bare window and echoes the events it receives, and `examples\bounce.astra` animates
+`examples\widgets.jade` is a window of labels and buttons. `examples\window.jade` draws
+on a bare window and echoes the events it receives, and `examples\bounce.jade` animates
 fifty thousand balls on one.
 
 **Units.** Everything a program gives and gets is in layout units: the pixels of an
@@ -2256,7 +2256,7 @@ that grey by day and its counterpart by night.
 **A widget of your own** is a class with what a `Content` has: its owner, its sizes, how it
 paints, and what it does with events:
 
-```astra
+```jade
 class Swatch(val color : Color) : Content {
   override var owner : Component? = null
   override fun sizes() => Sizes(Size(16, 16), Size(48, 24), Size(1000, 1000))   // least, liked, most
@@ -2282,12 +2282,12 @@ corner. A content that changes says so with `owner.invalidate()`, or `invalidate
 if its size may have changed too. A component keeps a picture of itself and is not painted
 again until it is invalidated.
 Being a `FocusTarget` makes it take the keyboard, a `CursorProvider` gives it its own
-pointer, and there are a few more such interfaces in `lib\Topaz\Types.astra`.
+pointer, and there are a few more such interfaces in `lib\Topaz\Types.jade`.
 
 **Without a window.** A tree of components can be laid out, painted and sent events with
 nothing on the screen, which is how it is tested:
 
-```astra
+```jade
 val ops = root.record(300, 100)                  // what it would draw, as a list of DrawOp
 ops.any { it is DrawOp.Text and it.text == "OK" }
 root.click(280, 20)                              // a press and a release at a point
@@ -2418,7 +2418,7 @@ it has not changed.
 ### The graphics types
 
 JadeUI's API uses a handful of Java's types. Topaz takes the standard library's in their
-place (see "Graphics"), with Astra's names where they read better. A program ported from
+place (see "Graphics"), with Jade's names where they read better. A program ported from
 JadeUI changes these, and each old name is a compile error saying what to write:
 
 | JadeUI | Topaz |
@@ -2436,12 +2436,12 @@ JadeUI changes these, and each old name is a compile error saying what to write:
 ## Standard library
 
 The names are Kotlin's where Kotlin has one, so that code ported from it reads the same, with
-one name for each thing: where Astra keeps a name of its own (`upper`, `lower`, `join`, `size`,
-`toFloat`), Kotlin's other one (`uppercase`, `joinToString`, `length`, `toDouble`) and Astra's
+one name for each thing: where Jade keeps a name of its own (`upper`, `lower`, `join`, `size`,
+`toFloat`), Kotlin's other one (`uppercase`, `joinToString`, `length`, `toDouble`) and Jade's
 old ones (`push`, `pop`, `each`, `has`, `len`, `str`) are compile errors saying what to write. Part
-of the library is built into the runtime and the rest is written in Astra itself
-(`src/std/*.astra`), mostly as extension functions, and carried inside `astra.exe`.
-`examples\words.astra` puts a good part of it to work on a piece of text.
+of the library is built into the runtime and the rest is written in Jade itself
+(`src/std/*.jade`), mostly as extension functions, and carried inside `jade.exe`.
+`examples\words.jade` puts a good part of it to work on a piece of text.
 
 **Functions:** `print(...)`, `write(...)` (no newline), `input(prompt?)`,
 `Range(end)` / `Range(start, end, step?)`,
@@ -2449,8 +2449,8 @@ of the library is built into the runtime and the rest is written in Astra itself
 `Bytes(size | list)`, `with(object, lambda)`, `repeat(times) { index -> }`, `flush()`
 
 **The program:** `Program.arguments` is what it was started with, after its file's name
-(`["--fast", "in.txt"]` for `astra bank.astra --fast in.txt`). `Program.name` is its name: its
-file's, without `.astra` (`"bank"`), unless the program sets it (`Program.name = "Bank"` at
+(`["--fast", "in.txt"]` for `jade bank.jade --fast in.txt`). `Program.name` is its name: its
+file's, without `.jade` (`"bank"`), unless the program sets it (`Program.name = "Bank"` at
 the start). `args()` is now `Program.arguments` (D184). `Program.environment["LOCALAPPDATA"]`
 is an environment variable's value, or null where it is not set (on Windows, whatever the
 case of its name, as the system has it); `Program.processId` is its own process id and
@@ -2483,7 +2483,7 @@ message is a lambda, so it is only worked out when the check fails, and may be l
 | `x.isNaN()`, `x.isInfinite()`, `x.isFinite()` | |
 | `compareValues(a, b)`, `maxOf(a, b, ...)`, `minOf(a, b, ...)` | order numbers or strings; `null` comes first |
 
-Astra has one type for whole numbers (64 bits) and one for fractions, so Kotlin's `toLong`,
+Jade has one type for whole numbers (64 bits) and one for fractions, so Kotlin's `toLong`,
 `roundToLong` and `toDouble` are errors naming `toInt`, `roundToInt` and `toFloat`. Their limits
 are `int.maxValue` (9223372036854775807), `int.minValue`, `float.maxValue`, `float.minValue`
 (the most negative), `float.minPositive` (the smallest above 0, Kotlin's `Double.MIN_VALUE`),
@@ -2519,7 +2519,7 @@ character. `toInt()` is an error for text that is not a number, and `toIntOrNull
 
 `format` fills a pattern in, with the items of Kotlin's `String.format`:
 
-```astra
+```jade
 "%d items at %.2f each".format(3, 1.5)     // 3 items at 1.50 each
 "%5d|%-5d|%05d".format(42, 42, 42)         //    42|42   |00042
 "%,d bytes, %x, %s".format(1234567, 255, [1, 2])   // 1,234,567 bytes, ff, [1, 2]
@@ -2534,7 +2534,7 @@ position.
 **`StringBuilder`** puts a long text together a piece at a time, which `+=` on a string does
 slowly because each one copies the string:
 
-```astra
+```jade
 val out = StringBuilder()
 for row in rows { out.append(row.name).append(": ").appendLine(row.total) }
 print(out.toString())
@@ -2550,7 +2550,7 @@ val line = buildString { append("x = "); append(x) }    // the same in one expre
 `Regex` is Kotlin's, over patterns in Java's syntax with Java's meaning (M8): what a Kotlin
 program writes runs the same, and gives the same matches.
 
-```astra
+```jade
 val date = Regex("(?<year>\\d{4})-(\\d\\d)-(\\d\\d)")
 val m = date.find("due 2026-11-06, paid") ?: return
 print(m.value, m.range, m.groups["year"]?.value)        // 2026-11-06 4..13 2026
@@ -2584,7 +2584,7 @@ The engine is C++ (`src/regex.cpp`): a pattern is compiled once into a small pro
 backtracking on a stack of its own, so a long text cannot overflow the C++ stack. Where the
 outcome from a branch point at a position cannot depend on anything else, a failure there is
 remembered, so patterns such as `(a+)+$` that take exponential time in a simple engine answer
-at once, as Java's do. `tests/regex_java.astra` checks 162 patterns against what Java 23
+at once, as Java's do. `tests/regex_java.jade` checks 162 patterns against what Java 23
 answers.
 
 ### Lists
@@ -2643,7 +2643,7 @@ Maps keep the order their keys were first added in; a missing key reads as `null
 holds, so that an equal one finds the entry (a list that can change finds a frozen one); an
 object whose class has its own `==` and `hashCode` by those; any other object as itself.
 
-```astra
+```jade
 data Cell(val row : int, val column : int)
 val colours = {:}
 colours[Cell(1, 2)] = "red"
@@ -2667,7 +2667,7 @@ runs only on keys of the same hash.
 A **`Set`** holds each value once, in the order the values were first added, and tells values
 apart as a map tells keys apart.
 
-```astra
+```jade
 val seen = Set<int>()                // or setOf(1, 2, 3), setOf(), items.toSet()
 if (seen.add(id)) { ... }            // add gives true if it was not there before
 id in seen        seen.remove(id)        seen.size
@@ -2686,7 +2686,7 @@ set as it is: an item added while it runs is reached, and one removed is not. A 
 A **`Deck`** is a queue open at both ends. Adding and removing are quick at the front as
 well as the back, where a list is quick only at the back.
 
-```astra
+```jade
 val queue = Deck()                   // or Deck(items)
 queue.addLast(job)
 val next = queue.removeFirst()       // removeFirstOrNull() when it may be empty
@@ -2700,7 +2700,7 @@ A `Grid<T>` is a rectangle of cells, `width` by `height`, each a `T`: the walls 
 heights of a terrain, an image's pixels. It is kept packed by its type as a list is: a `bool`
 or a `byte` takes one byte a cell, a `float32` four, a `Color` four.
 
-```astra
+```jade
 val walls = Grid<bool>(width = 64, height = 64)      // every cell false, the type's zero
 walls[3, 4] = true
 val heights = Grid<float32>(100, 100, fill = 1.0)
@@ -2741,7 +2741,7 @@ A **`Path`** stands for a file or directory by its path, Java's `File` and `java
 in one (D107). Making one touches nothing. What is in the path itself is a property; what asks
 the disk is a function, so a property never fails (D150).
 
-```astra
+```jade
 val notes = Path("notes.txt")
 if (notes.exists()) { print(notes.readText()) }
 notes.writeText("first\n")
@@ -2752,7 +2752,7 @@ val out = Path("out")
 out.mkdir()                                               // and any directories above it
 Path(out, "data.bin").writeBytes(Bytes([1, 2, 3]))       // a file inside a directory
 for file in out.list() { print(file.name, file.size()) }
-for file in Path("src").walk() { if (file.extension == "astra") { print(file.text) } }
+for file in Path("src").walk() { if (file.extension == "jade") { print(file.text) } }
 ```
 
 | | |
@@ -2795,8 +2795,8 @@ stop in the middle to wait for something and go on later without holding a threa
 **event loop**, which runs small jobs one after another on the main thread; **threads**,
 which share everything and take turns; **workers**, which share nothing and run on other
 cores; and **parallel sections**, where every core works on the items of one list. Reading
-and writing are written the same way in all of them. `examples\watch.astra` and
-`examples\questions.astra` use them together.
+and writing are written the same way in all of them. `examples\watch.jade` and
+`examples\questions.jade` use them together.
 
 **When a program ends.** A program is over when its script has run to the end, every thread
 that is not a daemon has finished, and the event loop has nothing left to wait for: no job,
@@ -2824,7 +2824,7 @@ A task is a function that can set itself aside in the middle of a call and be ta
 later, where it was. Code that asks one thing and then another, each answered through a
 callback, reads from top to bottom:
 
-```astra
+```jade
 // Something that answers later: prompt returns at once, and calls back with the answer.
 suspend fun ask(question : string) : string => suspendTask { resume -> dialog.prompt(question) { answer -> resume(answer) } }
 
@@ -2858,7 +2858,7 @@ task {
 - `Result` and `runCatching { ... }` are Kotlin's: `isSuccess`, `getOrNull()`,
   `exceptionOrNull()`, `getOrThrow()`, `getOrElse { }`, `onSuccess { }`, `onFailure { }`.
 
-`examples\dots.astra` is a small game written as tasks, and `examples\bounce_tasks.astra`
+`examples\dots.jade` is a small game written as tasks, and `examples\bounce_tasks.jade`
 animates balls with them.
 
 Nothing waits where an answer is wanted at once: in a getter or a setter, `toString`, `==`,
@@ -2890,7 +2890,7 @@ because the main thread waiting would stop the loop that brings the answer.
 concurrency, M6.7): the scope ends only once all of them have, and where one fails, it cancels
 the rest and throws that failure where it ends, so a `try` around it takes it.
 
-```astra
+```jade
 val both = taskScope {
   val page = task { fetch(pageAddress) }
   val picture = task { fetch(pictureAddress) }
@@ -2913,7 +2913,7 @@ and what the blocks of its tasks and threads throw, counted where the scope ends
 A sequence gives its items one at a time, as they are asked for: nothing is worked out ahead
 and nothing is kept, so a sequence can be endless (D98).
 
-```astra
+```jade
 val squares = generateSequence(1) { it + 1 }.map { it * it }
 print(squares.filter { it % 3 == 0 }.take(5).toList())      // [9, 36, 81, 144, 225]
 
@@ -2944,7 +2944,7 @@ Each time a sequence is gone over, it starts again from the beginning.
 
 ### The event loop
 
-```astra
+```jade
 EventLoop.post { refresh() }                    // run this on the main thread, soon; from any thread
 val tick = EventLoop.every(1.seconds) { print("tick") }
 EventLoop.after(5.5.seconds) { tick.cancel() }  // once, after a time
@@ -2958,7 +2958,7 @@ has something to do after the loop is idle calls `EventLoop.run()` itself.
 
 ### Threads
 
-```astra
+```jade
 val loading = thread(name = "loader") { load(file) }    // a Job of what the block gives
 loading.then { shown = it }                              // on the event loop, when it is done
 
@@ -2979,10 +2979,10 @@ once.
 code is then the program's own.
 
 Threads share everything: a variable or an object is the same one on every thread. One
-thread runs Astra code at a time, and they change places at calls and at the ends of loop
+thread runs Jade code at a time, and they change places at calls and at the ends of loop
 bodies. So a thread never sees a list or a map half changed, and a race between threads can
 give a wrong answer but cannot damage the program; but two steps that belong together are
-not done as one unless a lock makes them so. Astra code does not get faster on several cores:
+not done as one unless a lock makes them so. Jade code does not get faster on several cores:
 threads are for blocking work and ported code, and workers and parallel sections use the
 cores. What runs side by side is the waiting: a thread that is reading, sleeping or waiting
 for a lock leaves the others free.
@@ -2999,7 +2999,7 @@ for a lock leaves the others free.
 | `Countdown(n)` | `countDown()`, `await(timeout?)`, `count` |
 | `Atomic(value)` | `get()`, `set(v)`, `exchange(v)`, `compareAndSet(expected, v)`, `update { }`, and `increment()`, `decrement()`, `add(n)` on an int, each done in one step |
 
-```astra
+```jade
 val jobs = Channel<() -> int>.unbounded()
 val results = LockBox<open List<int>>([])
 repeat(3) { thread { for job in jobs { val done = job(); results.useKey { it.add(done) } } } }
@@ -3015,7 +3015,7 @@ too long is stopped: it checks now and then.
 
 **Thread pools** keep threads that take jobs from a queue:
 
-```astra
+```jade
 val pool = ThreadPool(threads = 4)
 val total = pool.submit { sum(numbers) }        // a Job
 total.get(timeout = 2.seconds)                  // TimeoutException if it takes longer
@@ -3029,7 +3029,7 @@ pool.close()                                    // its threads keep the program 
 
 Kotlin's and Java's names (`Future`, `CompletableFuture`, `Executors`, `BlockingQueue`,
 `CountDownLatch`, `AtomicInteger`, `TimeUnit`, `synchronized`, `ReentrantLock`,
-`startCoroutine`, `suspendCoroutine`) are compile errors that name what Astra has in their
+`startCoroutine`, `suspendCoroutine`) are compile errors that name what Jade has in their
 place.
 
 ### Workers
@@ -3039,13 +3039,13 @@ own. Unlike a thread it runs at the same time as the program that started it, on
 core: four workers do four jobs in the time one takes. The price is that a worker shares
 nothing with the program, not a variable and not an object. The two exchange messages.
 
-```astra
+```jade
 // In the program:
-val worker = Worker("primes.astra")              // the script, next to this file
+val worker = Worker("primes.jade")              // the script, next to this file
 worker.onMessage = { count -> print("the worker found", count) }
 worker.post({"upTo": 100000})
 
-// In primes.astra. Worker.parent is the program that started it.
+// In primes.jade. Worker.parent is the program that started it.
 Worker.parent!!.onMessage = { job -> Worker.parent!!.post(countPrimes(job["upTo"])) }
 ```
 
@@ -3078,7 +3078,7 @@ Worker.parent!!.onMessage = { job -> Worker.parent!!.post(countPrimes(job["upTo"
   `worker.onError = { description -> ... }`, and without one the error is reported as an
   uncaught error is.
 - A worker keeps the program alive until it ends, unless it was made as
-  `Worker("script.astra", isDaemon = true)`.
+  `Worker("script.jade", isDaemon = true)`.
 - A worker has no windows: what belongs to the user interface stays with the main program.
 
 Copying has a cost, which decides what a worker is good for. Work that takes much longer
@@ -3091,7 +3091,7 @@ back.
 The items of a list worked on by every core of the machine at once: the objects themselves,
 not copies of them as a worker gets, and at the same time, not in turns as threads work.
 
-```astra
+```jade
 balls.parallelStream().forEach { it.move(width, height, steps) }
 val totals = orders.parallelStream().map { priceOf(it) }.toList()
 val big = files.parallelStream().filter { it.size > limit }.toList()
@@ -3099,7 +3099,7 @@ val big = files.parallelStream().filter { it.size > limit }.toList()
 
 The items are dealt out to the cores, each core runs the lambda on its share, and the call
 returns when all are done. On work that takes a while for each item the gain is large:
-`examples\parallel.astra` counts primes 16 times as fast on a machine with 24 cores, eight
+`examples\parallel.jade` counts primes 16 times as fast on a machine with 24 cores, eight
 fast and sixteen slower ones.
 
 That several cores can run on the same objects safely rests on one rule, which the runtime
@@ -3116,7 +3116,7 @@ holds every core to:
 A lambda that keeps to the rule runs on every core. One that does not gets an error the
 first time it tries, which says what it tried to change. It never damages anything:
 
-```astra
+```jade
 val moved = []
 balls.parallelStream().forEach { it.move(w, h, 1); moved.add(it) }
 // Error: a parallel section changes only the item it was given and what it makes itself:
@@ -3139,7 +3139,7 @@ how many cores a section has.
 **What every core may change.** Some things are made to be changed by many cores at once,
 each change done whole (D85, D92, D94):
 
-```astra
+```jade
 val hits = Atomic(0)
 val seen = SharedSet<string>()
 val byKind = SharedMap<string, int>()
@@ -3162,7 +3162,7 @@ cores share the work out between them as they come free. A list split with `spli
 views that never overlap, each one function's to write, so divide and conquer is written in
 place; `parallelSort()` sorts a list that way.
 
-```astra
+```jade
 fun increment(view : ListView<int>) {
   if (view.size < 1000) { for i in view.indices { view[i] += 1 } }
   else { view.splitAt(view.size / 2) { left, right -> parallel({ increment(left) }, { increment(right) }) } }
@@ -3188,7 +3188,7 @@ numbers.splitAt(numbers.size / 2) { left, right -> parallel({ increment(left) },
 **A buffer or a list in parts.** `bytes`, or any list, can be shared out by position: each
 core gets the positions of one part, and may write those and no others.
 
-```astra
+```jade
 pixels.parallelChunks { positions -> for i in positions { pixels[i] = shade(i) } }
 ```
 
@@ -3206,7 +3206,7 @@ writes block their thread wherever they run.)
 **A `Reader`** reads, and **a `Writer`** writes, a piece at a time, bytes and text alike (D119).
 Each reads ahead or writes through a buffer of its own, so there is nothing to wrap it in.
 
-```astra
+```jade
 Path("log.txt").reader().use { input ->              // use closes it afterwards
   while (true) { val line = input.readLine(); if (line == null) { break }; handle(line) }
 }
@@ -3225,7 +3225,7 @@ its `cause` the `IOException`, since a sequence's lambda cannot throw a checked 
 
 **A process** is another program started from this one (D91):
 
-```astra
+```jade
 val result = Process.run("git", "status", "--short", directory = project)   // to its end
 if (result.exitCode == 0) { print(result.output) } else { print(result.error) }
 
@@ -3250,7 +3250,7 @@ started this program, so that it can start another of itself.
 
 **Sockets** are TCP connections (D120):
 
-```astra
+```jade
 Socket("example.org", 80).use { socket ->                  // or Socket().connect(host, port, timeout = 5.seconds)
   socket.writer.write("GET / HTTP/1.0\r\nHost: example.org\r\n\r\n")
   print(socket.reader.readLine())
@@ -3275,7 +3275,7 @@ A program can call a function of a library of the system's (a DLL on Windows, a 
 on Linux) with whole numbers, pointers and text, and read and write the structures it takes in
 blocks of native memory (M8):
 
-```astra
+```jade
 val kernel32 = Library("kernel32")                 // loaded once; an IOException if it is not there
 val getPerformanceInfo = kernel32.function("K32GetPerformanceInfo", [CType.pointer, CType.int32], CType.int32)
 Memory(104).use { info ->                          // native memory, all zero
@@ -3302,12 +3302,12 @@ print(Foreign.lastError)                           // GetLastError, read at once
 ## Graphics: colours, fonts, text and images
 
 Every program can draw, with no import and no window: colours and shapes, fonts and text,
-and images in memory, saved as PNG. Astra reads font files, measures text and draws it with
+and images in memory, saved as PNG. Jade reads font files, measures text and draws it with
 code of its own. The system is asked for one thing only: which font files are installed.
 Everything else comes out of the files, so the same font file gives the same numbers and the
 same pixels on every machine. Topaz draws windows with the same types.
 
-```astra
+```jade
 val font = Font("Segoe UI", 14, bold = true)
 val image = Image(font.width("Hello") + 20, font.lineHeight + 20, Color.white)
 val canvas = image.canvas()
@@ -3318,7 +3318,7 @@ canvas.fillOval(4, 4, 8, 8)
 image.save("hello.png")
 ```
 
-`examples\text_page.astra` draws a page in several fonts and sizes and saves it as a PNG.
+`examples\text_page.jade` draws a page in several fonts and sizes and saves it as a PNG.
 
 ### Colours and shapes
 
@@ -3408,7 +3408,7 @@ holds every weight and each glyph's outline and width are worked out for the wei
 
 ### A font at a size
 
-```astra
+```jade
 Font("Consolas", 13)                          // by family
 Font("Segoe UI", 12, bold = true, italic = true)
 Font("Bahnschrift", 20, weight = 350)         // any weight, where the font has it
@@ -3448,7 +3448,7 @@ a font of 12 measures exactly as one of 24.
 UI comes from the system's Chinese font, an emoji from its emoji font, each measured and
 drawn by the same rule. One that no installed font has is drawn as the font's "missing" box.
 
-**Hinting** is a rule of Astra's own, not the programs fonts carry: the baseline, the height
+**Hinting** is a rule of Jade's own, not the programs fonts carry: the baseline, the height
 of small letters and the height of capitals are put on pixel edges, so the flat tops and
 bottoms of letters are sharp at small sizes. Nothing is moved sideways, which is why widths
 do not depend on it.
@@ -3464,7 +3464,7 @@ Measuring may be done from threads and inside a parallel section.
 ```
 source ──lexer──▶ tokens ──parser──▶ AST ──compiler──▶ bytecode ──▶ VM
                                                           │
-                                                          └── astra build ──▶ .astc file
+                                                          └── jade build ──▶ .jc file
                                                                              or an .exe
 ```
 
@@ -3473,7 +3473,7 @@ source ──lexer──▶ tokens ──parser──▶ AST ──compiler─�
 | `src/lexer.*` | Tokens, including string interpolation and significant line breaks |
 | `src/parser.*`, `src/ast.h` | Recursive-descent parser producing the syntax tree |
 | `src/compiler.*` | Scope resolution, closures and code generation; module loading |
-| `src/bytecode.*` | Instruction set, bytecode verifier, disassembler, `.astc` reader/writer |
+| `src/bytecode.*` | Instruction set, bytecode verifier, disassembler, `.jc` reader/writer |
 | `src/value.*` | Values and heap objects (strings, lists, maps, classes, closures...) |
 | `src/vm.*` | Interpreter loop, calls, exceptions, mark-and-sweep garbage collector |
 | `src/builtins.cpp`, `src/stdlib.cpp` | Standard library, the part built into the runtime |
@@ -3488,21 +3488,21 @@ source ──lexer──▶ tokens ──parser──▶ AST ──compiler─�
 | `src/text/fonts.*`, `system.cpp` | The fonts there are, matching and fallback; the one file written per system (which font files are installed) |
 | `src/text/engine.*`, `api.cpp` | A font at a size: the measuring rule, hinting, drawing; the built-in the library is written on |
 | `src/image/png.*` | PNG files, with the compression they use |
-| `src/std/*.astra` | Standard library, the part written in Astra; packed into `astra.exe` by the build (`cmake/embed.cmake`) and loaded before every program |
+| `src/std/*.jade` | Standard library, the part written in Jade; packed into `jade.exe` by the build (`cmake/embed.cmake`) and loaded before every program |
 | `src/topaz/platform.h`, `platform_win.cpp` | Topaz's native layer, the part written per system: a window, its events, the clipboard |
 | `src/topaz/render.*`, `gl.*` | Drawing with OpenGL: one small record for each shape, the glyph atlas, pictures on the card |
 | `src/topaz/api.cpp` | The built-in the Topaz library is written on; where layout units become pixels |
-| `lib/Topaz/*.astra` | The Topaz library: its native layer, the types it takes from the JDK, components, the grid, the first widgets, and the window with what it makes of the keyboard and the pointer |
+| `lib/Topaz/*.jade` | The Topaz library: its native layer, the types it takes from the JDK, components, the grid, the first widgets, and the window with what it makes of the keyboard and the pointer |
 | `src/main.cpp` | Command line, the shell, and building standalone programs |
 
 Every function is checked by the verifier before it can run, whether it came from the
-compiler or from a `.astc` file: operands must be in range and the stack depth consistent on
+compiler or from a `.jc` file: operands must be in range and the stack depth consistent on
 every path. That is also where each function's stack requirement is computed.
 
-A standalone program is a copy of `astra.exe` with the compiled bytecode attached to the end
-of the file, followed by its size and a marker. On startup astra looks at the last bytes of
+A standalone program is a copy of `jade.exe` with the compiled bytecode attached to the end
+of the file, followed by its size and a marker. On startup jade looks at the last bytes of
 its own file; when the marker is there it runs the attached program instead of reading the
-command line. `astra.exe` is linked with the static C++ runtime so that such a copy has no
+command line. `jade.exe` is linked with the static C++ runtime so that such a copy has no
 DLLs to bring along. An icon is written into the copy's resources before the bytecode is
 attached.
 
@@ -3512,9 +3512,9 @@ attached.
 powershell -ExecutionPolicy Bypass -File tests\run.ps1
 ```
 
-Each `tests\*.astra` file states its expected output in `// expect:` comments. The runner
+Each `tests\*.jade` file states its expected output in `// expect:` comments. The runner
 executes every test five ways (from source, again from the program the first run kept, again
-from the units it kept, from a compiled `.astc`, and built into an `.exe`) and expects the
+from the units it kept, from a compiled `.jc`, and built into an `.exe`) and expects the
 same result from each. A last check builds a program with `--icon` and looks for the icon in
 the result.
 
@@ -3532,19 +3532,19 @@ powershell -ExecutionPolicy Bypass -File tests\run.ps1 -Parallel 24 -Modes scrip
 `// expect error output:` is for a program that finishes normally having reported an error
 (one that ended a thread, say).
 
-`tests\check\*.astra` are checked with `astra check`, a `// check:` comment on each line that
-must be reported; `tests\shell\*.shell` are typed into the shell; and `tests\testing\*.astra`
-are run with `astra test`, their `// expect:` lines what it prints.
+`tests\check\*.jade` are checked with `jade check`, a `// check:` comment on each line that
+must be reported; `tests\shell\*.shell` are typed into the shell; and `tests\testing\*.jade`
+are run with `jade test`, their `// expect:` lines what it prints.
 
 The tests of fonts and text use fonts every Windows since 10 has, and test what must hold
 whatever the version of a font: that drawing lands where measuring says, not particular
-numbers. The PNG pictures in `tests\png.astra` were written by Windows' own PNG writer.
+numbers. The PNG pictures in `tests\png.jade` were written by Windows' own PNG writer.
 
-Setting `ASTRA_THREAD_STRESS=1` makes the threads of a program change places at every
-opportunity, which is how the code that threads share is tested. `ASTRA_CORES=n` gives
+Setting `JADE_THREAD_STRESS=1` makes the threads of a program change places at every
+opportunity, which is how the code that threads share is tested. `JADE_CORES=n` gives
 parallel sections `n` cores whatever the machine has.
 
-Setting the environment variable `ASTRA_GC_STRESS=1` makes the VM collect garbage at every
+Setting the environment variable `JADE_GC_STRESS=1` makes the VM collect garbage at every
 opportunity, which is slow but useful for finding memory bugs when changing the VM.
 
 ## Limitations
@@ -3561,7 +3561,7 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 - `orEmpty()` on a variable that may be null is the one of its type (`string?`, `List<T>?`,
   `Map<K, V>?`). On a value whose type does not say (`any?`, or `null` written as it is), null
   does not tell which of them is meant, and the call fails; write `text ?: ""` or `items ?: []`.
-- A compiled `.astc` file carries the Astra-written part of the standard library, about 160 KB.
+- A compiled `.jc` file carries the Jade-written part of the standard library, about 160 KB.
 - The access words on a member (`private`, `protected`, `internal`, `private set`) are
   checked when the line runs, not when the program is compiled.
 - A class declared inside another does not belong to one object of the outer class (there is
@@ -3577,20 +3577,20 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
   set. Emoji drawn as SVG are not read. The first use of fonts in a program reads the names
   of all installed ones, about a tenth of a second.
 - Images are read and written as PNG only.
-- Windows, the text engine's fonts and `astra build --exe` are there on Windows only; files,
+- Windows, the text engine's fonts and `jade build --exe` are there on Windows only; files,
   processes and sockets on Linux too. There is no way yet to fetch a URL.
-- Astra code runs on several cores at once only in a parallel section, on the items of one
+- Jade code runs on several cores at once only in a parallel section, on the items of one
   list, or in workers, which share nothing. Threads take turns.
 - Drawing on a window or a surface is done from the main thread only; an image's canvas draws
   on any thread.
-  Five examples animate fifty thousand balls: `bounce.astra` moves and draws them in one loop,
-  `bounce_parallel.astra` moves them in a parallel section (one line different),
-  `bounce_threads.astra` on background threads, `bounce_tasks.astra` in tasks on the main
-  thread, and `bounce_workers.astra` in workers.
+  Five examples animate fifty thousand balls: `bounce.jade` moves and draws them in one loop,
+  `bounce_parallel.jade` moves them in a parallel section (one line different),
+  `bounce_threads.jade` on background threads, `bounce_tasks.jade` in tasks on the main
+  thread, and `bounce_workers.jade` in workers.
 - Top-level variables get their values in order (file by file for a folder), so one cannot be
   used by a statement that runs earlier, unless it is `lazy`.
 - Bytecode files are verified when loaded, but that is a consistency check rather than a
-  security sandbox. Run only `.astc` files you trust.
+  security sandbox. Run only `.jc` files you trust.
 - Standalone programs are 1.7 to 2.2 MB each and have only been tried on Windows. They carry
   no version information, and since they are unsigned Windows may ask for confirmation the
   first time one downloaded from the internet is run. The script inside is stored as
@@ -3600,8 +3600,8 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 
 ## License
 
-Astra, its standard library and Topaz are released under the Apache License, Version 2.0,
-with a runtime library exception: a program built with Astra carries parts of Astra inside
+Jade, its standard library and Topaz are released under the Apache License, Version 2.0,
+with a runtime library exception: a program built with Jade carries parts of Jade inside
 it (the runtime, the standard library, and Topaz if it imports it), and may be distributed on
 any terms, without the attribution the license otherwise asks for. The full text is in
 `LICENSE`.

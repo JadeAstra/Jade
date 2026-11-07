@@ -22,7 +22,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra::topaz {
+namespace jade::topaz {
 
 namespace {
 
@@ -42,7 +42,7 @@ std::string narrow(const wchar_t* wide, int length) {
     return utf8;
 }
 
-const wchar_t* const kWindowClass = L"AstraJadeWindow";
+const wchar_t* const kWindowClass = L"JadeTopazWindow";
 const UINT_PTR kIdleTimer = 1;
 
 // ---- Keys ----
@@ -383,7 +383,7 @@ public:
         // loader none of the room a called function may use, and the loader's first stores land on
         // the saved second float argument: the process's first glClearColor(0, 0, 0, 0) set green
         // to whatever a register held, and a new surface came out green in about a third of the
-        // runs of the Clang build (topaz_canvas.astra). Every function is found here instead, before
+        // runs of the Clang build (topaz_canvas.jade). Every function is found here instead, before
         // any is called, whichever linker made the program. The name is as the import library
         // has it, which the look-up matches exactly. A program that does not delay-load it (the
         // proof build) has nothing to find; one that cannot load it is told so below, when the
@@ -875,19 +875,19 @@ Platform* Platform::get(std::string& error) {
     return thePlatform;
 }
 
-}  // namespace astra::topaz
+}  // namespace jade::topaz
 
 #else
 
 #include "platform.h"
 
-namespace astra::topaz {
+namespace jade::topaz {
 
 Platform* Platform::get(std::string& error) {
     error = "windows are there on Windows only so far";
     return nullptr;
 }
 
-}  // namespace astra::topaz
+}  // namespace jade::topaz
 
 #endif

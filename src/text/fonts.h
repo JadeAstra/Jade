@@ -14,7 +14,7 @@
 
 #include "face.h"
 
-namespace astra::text {
+namespace jade::text {
 
 // ---- What is asked of the system (system.cpp) ----
 
@@ -96,4 +96,4 @@ private:
 
 std::string lowerCase(const std::string& s);
 
-}  // namespace astra::text
+}  // namespace jade::text

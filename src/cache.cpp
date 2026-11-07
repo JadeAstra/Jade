@@ -20,14 +20,14 @@
 #include "compiler.h"
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
-namespace astra {
+namespace jade {
 
 namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kMagic = "ASTRA-PROGRAM-CACHE 3";
-constexpr const char* kUnitMagic = "ASTRA-UNIT-CACHE 3";
+constexpr const char* kMagic = "JADE-PROGRAM-CACHE 3";
+constexpr const char* kUnitMagic = "JADE-UNIT-CACHE 3";
 constexpr uintmax_t kMostBytes = 500ull * 1024 * 1024;
 
 // The entries to be written, and the thread that writes them, one after another; made the
@@ -42,19 +42,19 @@ Writing& writing() {
 }
 
 fs::path cacheRoot() {
-    if (const char* chosen = std::getenv("ASTRA_CACHE"); chosen != nullptr && *chosen != '\0') return fs::path(chosen);
+    if (const char* chosen = std::getenv("JADE_CACHE"); chosen != nullptr && *chosen != '\0') return fs::path(chosen);
 #ifdef _WIN32
     if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0')
-        return fs::path(local) / "Astra" / "cache";
+        return fs::path(local) / "Jade" / "cache";
 #else
-    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && *xdg != '\0') return fs::path(xdg) / "astra";
-    if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') return fs::path(home) / ".cache" / "astra";
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && *xdg != '\0') return fs::path(xdg) / "jade";
+    if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') return fs::path(home) / ".cache" / "jade";
 #endif
     return {};
 }
 
 // Where compiled programs are kept; those compiled to check what the C++ functions give
-// (ASTRA_CHECK_NATIVE_RESULTS), or to copy every read (ASTRA_COPY_READS), apart from the others.
+// (JADE_CHECK_NATIVE_RESULTS), or to copy every read (JADE_COPY_READS), apart from the others.
 fs::path cacheDirectory() {
     fs::path root = cacheRoot();
     if (!root.empty() && checkingNativeResults()) root /= "checked";
@@ -103,16 +103,16 @@ bool stamp(const fs::path& path, uintmax_t& size, long long& time) {
 #endif
 }
 
-// The .astra files directly in a folder, as one hash of their names.
+// The .jade files directly in a folder, as one hash of their names.
 uint64_t folderHash(const fs::path& folder) {
     std::error_code ec;
     std::vector<std::string> names;
     for (const fs::directory_entry& entry : fs::directory_iterator(folder, ec))
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".astra") names.push_back(entry.path().filename().string());
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".jade") names.push_back(entry.path().filename().string());
     return namesHash(std::move(names));
 }
 
-// What astra.exe is: a program kept by another build of it does not hold.
+// What jade.exe is: a program kept by another build of it does not hold.
 std::string executableStamp() {
     uintmax_t size = 0;
     long long time = 0;
@@ -263,7 +263,7 @@ bool attachPrelude(const fs::path& copy, const std::string& image) {
         out.write(file.data(), static_cast<std::streamsize>(file.size()));
         if (!out) return false;
     }
-    // Who may run it, as astra itself: on Linux and macOS a new file is not a program until it
+    // Who may run it, as jade itself: on Linux and macOS a new file is not a program until it
     // is marked as one.
     std::error_code ec;
     const fs::perms own = fs::status(executable(), ec).permissions();
@@ -474,4 +474,4 @@ void keepUnit(const std::string& unit, KeptUnit kept, std::function<std::string(
     });
 }
 
-}  // namespace astra
+}  // namespace jade

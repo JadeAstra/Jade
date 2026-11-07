@@ -27,7 +27,7 @@
 #include "gl.h"
 #include "platform.h"
 
-namespace astra::topaz {
+namespace jade::topaz {
 
 struct Surface {
     int width = 0, height = 0;
@@ -169,4 +169,4 @@ private:
     void drainReleased();
 };
 
-}  // namespace astra::topaz
+}  // namespace jade::topaz

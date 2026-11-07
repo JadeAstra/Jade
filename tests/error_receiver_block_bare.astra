@@ -1,6 +1,0 @@
-// A block run on an object cannot be called bare where nothing of its type is "this".
-class Panel(val name : string)
-fun run(block : Panel.() -> unit) {
-  block()
-}
-// expect compile error: error_receiver_block_bare.astra:4:8: error: 'block' runs on a Panel: give it one, block(obj, ...) or obj.block(...)

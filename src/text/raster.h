@@ -6,7 +6,7 @@
 
 #include "face.h"
 
-namespace astra::text {
+namespace jade::text {
 
 // A small picture of one glyph and where it sits. With the pen on the baseline at (x, y),
 // y growing downwards, its top-left pixel goes at (x + left, y - top).
@@ -47,4 +47,4 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow);
 void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage,
                    float fineness = kGlyphFineness);
 
-}  // namespace astra::text
+}  // namespace jade::text
