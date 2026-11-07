@@ -1,0 +1,207 @@
+// ---- Foreign functions (M8) ----
+// Calling a function in a library of the system's (a DLL on Windows, a shared library on
+// Linux), with whole numbers, pointers and text, and reading and writing the structures it
+// takes in blocks of native memory:
+//
+//   val kernel32 = Library("kernel32")
+//   val getPerformanceInfo = kernel32.function("K32GetPerformanceInfo", [CType.pointer, CType.int32], CType.int32)
+//   Memory(104).use { info ->
+//     info.putInt32(0, 104)
+//     if (getPerformanceInfo.call(info, 104) != 0) { print("commit:", info.int64(8) * info.int64(80)) }
+//   }
+//   print(Foreign.lastError)            // what the system recorded, as GetLastError (errno on Linux) gives it
+//
+// Reading and writing a Memory is checked against its size, as for Bytes; what a foreign function
+// does with what it is given is not: a wrong declaration or a wrong pointer can end the program
+// as it would in C. A sandbox refuses all of it. While a foreign function runs, the program's
+// other threads go on.
+
+// What a foreign function's parameter or result is, as C declares it. A pointer takes a Memory,
+// an address (an int) or null; wideString and utf8String take text (or null), handed over as
+// UTF-16 or UTF-8 with a 0 after it for the length of the call; void is a result of nothing.
+enum CType { int8, uint8, int16, uint16, int32, uint32, int64, pointer, wideString, utf8String, void }
+
+// A library of the system's, loaded once and kept while the program runs: Library("kernel32"),
+// Library("libc.so.6"). On Linux "m" is tried as libm.so too. An IOException where there is none.
+class Library {
+  // The name it was loaded by.
+  val name : string
+  private val handle : int
+
+  fun init(name : string) throws IOException {
+    this.name = name
+    this.handle = __foreign.load(name)
+  }
+
+  // A function of the library, with what it takes and what it gives (nothing by default). An
+  // IllegalArgumentException where the library has no function of that name.
+  fun function(name : string, params : List<CType> = [], result : CType = CType.void) : ForeignFunction {
+    val address = __foreign.find(handle, name)
+    if (address == 0) { throw IllegalArgumentException("the library ${this.name} has no function named $name") }
+    if (params.contains(CType.void)) { throw IllegalArgumentException("a parameter of $name cannot be void; void is a result of nothing") }
+    if (params.size > 16) { throw IllegalArgumentException("a foreign function takes at most 16 arguments, not ${params.size}") }
+    return ForeignFunction(name, address, params, result)
+  }
+
+  // Library(kernel32).
+  override fun toString() : string => "Library($name)"
+}
+
+// A function of a library, found by Library.function.
+class ForeignFunction {
+  // Its name in the library.
+  val name : string
+  // What it takes.
+  val params : List<CType>
+  // What it gives.
+  val result : CType
+  private val address : int
+
+  internal fun init(name : string, address : int, params : List<CType>, result : CType) {
+    this.name = name
+    this.address = address
+    this.params = params
+    this.result = result
+  }
+
+  // Calls it with as many arguments as it takes: whole numbers for numbers, a Memory, an address
+  // or null for a pointer, text or null for text. Gives its result as an int, cut to its type
+  // (0 for void).
+  fun call(vararg args : any?) : int {
+    if (args.size != params.size) { throw IllegalArgumentException("$name() takes ${params.size} arguments, not ${args.size}") }
+    val given : open List<any?> = []
+    val kinds : open List<int> = []
+    for (i in 0 ..< args.size) {
+      val a = args[i]
+      val kind = params[i]
+      kinds.add(kind.ordinal)
+      if (kind == CType.pointer) {
+        given.add(a is Memory ? a.address : a == null ? 0 : a as int)
+      } else if (kind == CType.wideString or kind == CType.utf8String) {
+        given.add(a)
+      } else {
+        given.add(a as int)
+      }
+    }
+    val got = __foreign.call(address, given, kinds, result.ordinal, name)
+    return got == null ? 0 : got as int
+  }
+
+  // ForeignFunction(K32GetPerformanceInfo).
+  override fun toString() : string => "ForeignFunction($name)"
+}
+
+// What foreign calls leave behind.
+object Foreign {
+  // The error the system recorded during this thread's last foreign call: GetLastError on
+  // Windows, errno on Linux; 0 if it recorded none.
+  val lastError : int
+    get() => __foreign.lastError()
+}
+
+// A block of native memory, all zero to begin with, for the structures and buffers a foreign
+// function takes. Read and written at offsets in bytes, in the machine's order (the low byte
+// first), each read and write checked against its size. use { } or close() frees it; one left
+// open is freed when the collector finds nothing holds it.
+class Memory : AutoCloseable {
+  private val block : any
+
+  // A block of `size` bytes.
+  fun init(size : int) {
+    this.block = __foreign.allocate(size)
+  }
+
+  // How many bytes it has.
+  val size : int
+    get() => __foreign.size(block)
+  // Where it is, for a pointer in a structure and for working out where in it a pointer the
+  // system gave back points: `pointer - memory.address` is an offset in it. An
+  // IllegalStateException once it is closed.
+  val address : int
+    get() => __foreign.address(block)
+  // Whether it is still there to be used.
+  val isOpen : bool
+    get() => __foreign.isOpen(block)
+
+  // The signed 8-bit number at `at`.
+  fun int8(at : int) : int => __foreign.read(block, at, 0)
+  // The unsigned 8-bit number at `at`.
+  fun uint8(at : int) : int => __foreign.read(block, at, 1)
+  // The signed 16-bit number at `at`.
+  fun int16(at : int) : int => __foreign.read(block, at, 2)
+  // The unsigned 16-bit number at `at`.
+  fun uint16(at : int) : int => __foreign.read(block, at, 3)
+  // The signed 32-bit number at `at`.
+  fun int32(at : int) : int => __foreign.read(block, at, 4)
+  // The unsigned 32-bit number at `at`.
+  fun uint32(at : int) : int => __foreign.read(block, at, 5)
+  // The 64-bit number at `at`.
+  fun int64(at : int) : int => __foreign.read(block, at, 6)
+  // The pointer at `at`, as an address.
+  fun pointer(at : int) : int => __foreign.read(block, at, 7)
+
+  // Writes a signed 8-bit number at `at`; an ArithmeticException where it does not fit.
+  fun putInt8(at : int, value : int) { __foreign.write(block, at, 0, value) }
+  // Writes an unsigned 8-bit number at `at`.
+  fun putUint8(at : int, value : int) { __foreign.write(block, at, 1, value) }
+  // Writes a signed 16-bit number at `at`.
+  fun putInt16(at : int, value : int) { __foreign.write(block, at, 2, value) }
+  // Writes an unsigned 16-bit number at `at`.
+  fun putUint16(at : int, value : int) { __foreign.write(block, at, 3, value) }
+  // Writes a signed 32-bit number at `at`.
+  fun putInt32(at : int, value : int) { __foreign.write(block, at, 4, value) }
+  // Writes an unsigned 32-bit number at `at`.
+  fun putUint32(at : int, value : int) { __foreign.write(block, at, 5, value) }
+  // Writes a 64-bit number at `at`.
+  fun putInt64(at : int, value : int) { __foreign.write(block, at, 6, value) }
+  // Writes a pointer at `at`: another Memory's address, an address, or null for 0.
+  fun putPointer(at : int, value : Memory? | int) { __foreign.write(block, at, 7, value is Memory ? value.address : value == null ? 0 : value as int) }
+
+  // A copy of `count` bytes from `at`.
+  fun bytes(at : int, count : int) : Bytes => __foreign.bytes(block, at, count)
+  // Copies bytes in at `at`.
+  fun putBytes(at : int, data : Bytes) { __foreign.putBytes(block, at, data) }
+  // The UTF-16 text at `at`: up to its 0, or `length` characters of it, within the block.
+  fun string16(at : int = 0, length : int = -1) : string => __foreign.string16(block, at, length)
+  // Writes text as UTF-16 at `at`, a 0 after it.
+  fun putString16(at : int, text : string) { __foreign.putString16(block, at, text) }
+  // The UTF-8 text at `at`: up to its 0, or `length` bytes of it, within the block.
+  fun string8(at : int = 0, length : int = -1) : string => __foreign.string8(block, at, length)
+  // Writes text as UTF-8 at `at`, a 0 after it.
+  fun putString8(at : int, text : string) { __foreign.putString8(block, at, text) }
+
+  // Frees it now; nothing may be read or written in it after.
+  override fun close() { __foreign.free(block) }
+
+  // Memory(104 bytes).
+  override fun toString() : string => isOpen ? "Memory($size bytes)" : "Memory(closed)"
+
+  static {
+    // A block holding `text` as UTF-16 with a 0 after it, for a structure that points at text.
+    fun ofString16(text : string) : Memory {
+      val made = Memory((text.size + 1) * 4)
+      made.putString16(0, text)
+      return made
+    }
+  }
+}
+
+external object __foreign {
+  fun load(name : string) : int throws IOException
+  fun find(library : int, name : string) : int
+  fun call(address : int, args : List<any?>, kinds : List<int>, result : int, name : string) : int?
+  fun lastError() : int
+  fun allocate(size : int) : any
+  fun free(block : any)
+  fun isOpen(block : any) : bool
+  fun size(block : any) : int
+  fun address(block : any) : int
+  fun read(block : any, at : int, kind : int) : int
+  fun write(block : any, at : int, kind : int, value : int)
+  fun bytes(block : any, at : int, count : int) : Bytes
+  fun putBytes(block : any, at : int, data : Bytes)
+  fun string16(block : any, at : int, length : int) : string
+  fun putString16(block : any, at : int, text : string)
+  fun string8(block : any, at : int, length : int) : string
+  fun putString8(block : any, at : int, text : string)
+}

@@ -3260,6 +3260,36 @@ while (true) {
 thread is waiting on gets that thread out, with an `IOException`, which is what every failure
 to read, write, connect or start a program is.
 
+### Foreign functions
+
+A program can call a function of a library of the system's (a DLL on Windows, a shared library
+on Linux) with whole numbers, pointers and text, and read and write the structures it takes in
+blocks of native memory (M8):
+
+```astra
+val kernel32 = Library("kernel32")                 // loaded once; an IOException if it is not there
+val getPerformanceInfo = kernel32.function("K32GetPerformanceInfo", [CType.pointer, CType.int32], CType.int32)
+Memory(104).use { info ->                          // native memory, all zero
+  info.putInt32(0, 104)
+  if (getPerformanceInfo.call(info, 104) != 0) { print("commit:", info.int64(8) * info.int64(80)) }
+}
+print(Foreign.lastError)                           // GetLastError, read at once after the call (errno on Linux)
+```
+
+- `library.function(name, params, result)` finds a function, an `IllegalArgumentException` where
+  there is none, and `call(...)` calls it. The types are `CType.int8` to `int64` and their
+  unsigned forms, `pointer` (a `Memory`, an address or null), `wideString` and `utf8String`
+  (text handed over with a 0 after it, for the length of the call) and `void` for no result.
+  Results come back as an `int` cut to their type. Floats are not passed yet.
+- A **`Memory(size)`** is read and written at offsets as `Bytes` is (`int32`, `uint16`, `int64`,
+  `pointer`, `putInt32`..., `bytes`, `string16`, `putString16`, `string8`), and every access is
+  checked against its size. `address` is where it is, so a pointer the system gave back into it
+  is an offset: `pointer - memory.address`. `use { }` or `close()` frees it; one nobody closed is
+  freed when the collector finds it unused.
+- While a foreign function runs, the program's other threads go on.
+- What a foreign function does with what it is given is not checked: a wrong declaration or a
+  bad pointer can end the program, as it would in C. A sandbox refuses all of it.
+
 ## Graphics: colours, fonts, text and images
 
 Every program can draw, with no import and no window: colours and shapes, fonts and text,

@@ -1383,7 +1383,7 @@ void registerFiles(VM& vm) {
         if (vm.currentHost().isSandbox())
             throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox has no volumes to ask the space of");
         std::error_code ec;
-        const std::filesystem::space_info room = std::filesystem::space(std::filesystem::u8path(path), ec);
+        const std::filesystem::space_info room = std::filesystem::space(std::filesystem::path(std::u8string(path.begin(), path.end())), ec);
         if (ec) throw pathError(vm, "find the space of", path, ec);
         std::vector<Value> items{Value::integer(static_cast<int64_t>(room.capacity)), Value::integer(static_cast<int64_t>(room.free)),
                                  Value::integer(static_cast<int64_t>(room.available))};

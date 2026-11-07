@@ -410,6 +410,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-errors-astra">errors.astra</a></li>
 <li><a href="#file-file-astra">file.astra</a></li>
 <li><a href="#file-fonts-astra">fonts.astra</a></li>
+<li><a href="#file-foreign-astra">foreign.astra</a></li>
 <li><a href="#file-graphics-astra">graphics.astra</a></li>
 <li><a href="#file-grid-astra">grid.astra</a></li>
 <li><a href="#file-image-astra">image.astra</a></li>
@@ -447,6 +448,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#Bytes.size"><code>Bytes</code></a> (21)</li>
+<li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
@@ -473,6 +475,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#Font"><code>Font</code></a> (35)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
+<li><a href="#Foreign"><code>Foreign</code></a> (2)</li>
+<li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
 <li><a href="#Grid"><code>Grid</code></a> (28)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
@@ -492,6 +496,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Iterator"><code>Iterator</code></a> (3)</li>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
+<li><a href="#Library"><code>Library</code></a> (4)</li>
 <li><a href="#Line"><code>Line</code></a> (4)</li>
 <li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
@@ -506,6 +511,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#MatchGroupCollection"><code>MatchGroupCollection</code></a> (7)</li>
 <li><a href="#MatchResult"><code>MatchResult</code></a> (8)</li>
 <li><a href="#Math"><code>Math</code></a> (36)</li>
+<li><a href="#Memory"><code>Memory</code></a> (29)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
 <li><a href="#Network"><code>Network</code></a> (3)</li>
 <li><a href="#NoSuchElementException"><code>NoSuchElementException</code></a> (1)</li>
@@ -2151,6 +2157,146 @@ font.copy(size = 16, bold = false)            the same with some options changed
 </div>
 <div class="entry member" id="Font.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Font.toString">#</a>
 <p>The font as it was asked for: &quot;Font(Segoe UI, 14, bold)&quot;, &quot;Font(Segoe UI, 14, weight 350)&quot;.</p>
+</div>
+</section>
+<section class="file" id="file-foreign-astra">
+<h2>foreign.astra</h2>
+<h3>Foreign functions</h3>
+<p>Calling a function in a library of the system's (a DLL on Windows, a shared library on Linux), with whole numbers, pointers and text, and reading and writing the structures it takes in blocks of native memory:</p>
+<pre>val kernel32 = Library(&quot;kernel32&quot;)
+val getPerformanceInfo = kernel32.function(&quot;K32GetPerformanceInfo&quot;, [CType.pointer, CType.int32], CType.int32)
+Memory(104).use { info -&gt;
+  info.putInt32(0, 104)
+  if (getPerformanceInfo.call(info, 104) != 0) { print(&quot;commit:&quot;, info.int64(8) * info.int64(80)) }
+}
+print(Foreign.lastError)            // what the system recorded, as GetLastError (errno on Linux) gives it
+</pre>
+<p>Reading and writing a Memory is checked against its size, as for Bytes; what a foreign function does with what it is given is not: a wrong declaration or a wrong pointer can end the program as it would in C. A sandbox refuses all of it. While a foreign function runs, the program's other threads go on.</p>
+<div class="entry" id="CType"><code class="sig">enum CType</code><a class="anchor" href="#CType">#</a>
+<p>What a foreign function's parameter or result is, as C declares it. A pointer takes a Memory, an address (an int) or null; wideString and utf8String take text (or null), handed over as UTF-16 or UTF-8 with a 0 after it for the length of the call; void is a result of nothing.</p>
+</div>
+<div class="entry" id="Library"><code class="sig">class Library</code><a class="anchor" href="#Library">#</a>
+<p>A library of the system's, loaded once and kept while the program runs: Library(&quot;kernel32&quot;), Library(&quot;libc.so.6&quot;). On Linux &quot;m&quot; is tried as libm.so too. An IOException where there is none.</p>
+</div>
+<div class="entry member" id="Library.name"><code class="sig">val name : string</code><a class="anchor" href="#Library.name">#</a>
+<p>The name it was loaded by.</p>
+</div>
+<div class="entry member" id="Library.function"><code class="sig">fun function(name : string, params : List&lt;CType&gt; = [], result : CType = CType.void) : ForeignFunction</code><a class="anchor" href="#Library.function">#</a>
+<p>A function of the library, with what it takes and what it gives (nothing by default). An IllegalArgumentException where the library has no function of that name.</p>
+</div>
+<div class="entry member" id="Library.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Library.toString">#</a>
+<p>Library(kernel32).</p>
+</div>
+<div class="entry" id="ForeignFunction"><code class="sig">class ForeignFunction</code><a class="anchor" href="#ForeignFunction">#</a>
+<p>A function of a library, found by Library.function.</p>
+</div>
+<div class="entry member" id="ForeignFunction.name"><code class="sig">val name : string</code><a class="anchor" href="#ForeignFunction.name">#</a>
+<p>Its name in the library.</p>
+</div>
+<div class="entry member" id="ForeignFunction.params"><code class="sig">val params : List&lt;CType&gt;</code><a class="anchor" href="#ForeignFunction.params">#</a>
+<p>What it takes.</p>
+</div>
+<div class="entry member" id="ForeignFunction.result"><code class="sig">val result : CType</code><a class="anchor" href="#ForeignFunction.result">#</a>
+<p>What it gives.</p>
+</div>
+<div class="entry member" id="ForeignFunction.call"><code class="sig">fun call(vararg args : any?) : int</code><a class="anchor" href="#ForeignFunction.call">#</a>
+<p>Calls it with as many arguments as it takes: whole numbers for numbers, a Memory, an address or null for a pointer, text or null for text. Gives its result as an int, cut to its type (0 for void).</p>
+</div>
+<div class="entry member" id="ForeignFunction.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#ForeignFunction.toString">#</a>
+<p>ForeignFunction(K32GetPerformanceInfo).</p>
+</div>
+<div class="entry" id="Foreign"><code class="sig">object Foreign</code><a class="anchor" href="#Foreign">#</a>
+<p>What foreign calls leave behind.</p>
+</div>
+<div class="entry member" id="Foreign.lastError"><code class="sig">val lastError : int</code><a class="anchor" href="#Foreign.lastError">#</a>
+<p>The error the system recorded during this thread's last foreign call: GetLastError on Windows, errno on Linux; 0 if it recorded none.</p>
+</div>
+<div class="entry" id="Memory"><code class="sig">class Memory : AutoCloseable</code><a class="anchor" href="#Memory">#</a>
+<p>A block of native memory, all zero to begin with, for the structures and buffers a foreign function takes. Read and written at offsets in bytes, in the machine's order (the low byte first), each read and write checked against its size. use { } or close() frees it; one left open is freed when the collector finds nothing holds it.</p>
+</div>
+<div class="entry member" id="Memory.size"><code class="sig">val size : int</code><a class="anchor" href="#Memory.size">#</a>
+<p>How many bytes it has.</p>
+</div>
+<div class="entry member" id="Memory.address"><code class="sig">val address : int</code><a class="anchor" href="#Memory.address">#</a>
+<p>Where it is, for a pointer in a structure and for working out where in it a pointer the system gave back points: <code>pointer - memory.address</code> is an offset in it. An IllegalStateException once it is closed.</p>
+</div>
+<div class="entry member" id="Memory.isOpen"><code class="sig">val isOpen : bool</code><a class="anchor" href="#Memory.isOpen">#</a>
+<p>Whether it is still there to be used.</p>
+</div>
+<div class="entry member" id="Memory.int8"><code class="sig">fun int8(at : int) : int</code><a class="anchor" href="#Memory.int8">#</a>
+<p>The signed 8-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.uint8"><code class="sig">fun uint8(at : int) : int</code><a class="anchor" href="#Memory.uint8">#</a>
+<p>The unsigned 8-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.int16"><code class="sig">fun int16(at : int) : int</code><a class="anchor" href="#Memory.int16">#</a>
+<p>The signed 16-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.uint16"><code class="sig">fun uint16(at : int) : int</code><a class="anchor" href="#Memory.uint16">#</a>
+<p>The unsigned 16-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.int32"><code class="sig">fun int32(at : int) : int</code><a class="anchor" href="#Memory.int32">#</a>
+<p>The signed 32-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.uint32"><code class="sig">fun uint32(at : int) : int</code><a class="anchor" href="#Memory.uint32">#</a>
+<p>The unsigned 32-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.int64"><code class="sig">fun int64(at : int) : int</code><a class="anchor" href="#Memory.int64">#</a>
+<p>The 64-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.pointer"><code class="sig">fun pointer(at : int) : int</code><a class="anchor" href="#Memory.pointer">#</a>
+<p>The pointer at <code>at</code>, as an address.</p>
+</div>
+<div class="entry member" id="Memory.putInt8"><code class="sig">fun putInt8(at : int, value : int)</code><a class="anchor" href="#Memory.putInt8">#</a>
+<p>Writes a signed 8-bit number at <code>at</code>; an ArithmeticException where it does not fit.</p>
+</div>
+<div class="entry member" id="Memory.putUint8"><code class="sig">fun putUint8(at : int, value : int)</code><a class="anchor" href="#Memory.putUint8">#</a>
+<p>Writes an unsigned 8-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putInt16"><code class="sig">fun putInt16(at : int, value : int)</code><a class="anchor" href="#Memory.putInt16">#</a>
+<p>Writes a signed 16-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putUint16"><code class="sig">fun putUint16(at : int, value : int)</code><a class="anchor" href="#Memory.putUint16">#</a>
+<p>Writes an unsigned 16-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putInt32"><code class="sig">fun putInt32(at : int, value : int)</code><a class="anchor" href="#Memory.putInt32">#</a>
+<p>Writes a signed 32-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putUint32"><code class="sig">fun putUint32(at : int, value : int)</code><a class="anchor" href="#Memory.putUint32">#</a>
+<p>Writes an unsigned 32-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putInt64"><code class="sig">fun putInt64(at : int, value : int)</code><a class="anchor" href="#Memory.putInt64">#</a>
+<p>Writes a 64-bit number at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putPointer"><code class="sig">fun putPointer(at : int, value : Memory? | int)</code><a class="anchor" href="#Memory.putPointer">#</a>
+<p>Writes a pointer at <code>at</code>: another Memory's address, an address, or null for 0.</p>
+</div>
+<div class="entry member" id="Memory.bytes"><code class="sig">fun bytes(at : int, count : int) : Bytes</code><a class="anchor" href="#Memory.bytes">#</a>
+<p>A copy of <code>count</code> bytes from <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.putBytes"><code class="sig">fun putBytes(at : int, data : Bytes)</code><a class="anchor" href="#Memory.putBytes">#</a>
+<p>Copies bytes in at <code>at</code>.</p>
+</div>
+<div class="entry member" id="Memory.string16"><code class="sig">fun string16(at : int = 0, length : int = -1) : string</code><a class="anchor" href="#Memory.string16">#</a>
+<p>The UTF-16 text at <code>at</code>: up to its 0, or <code>length</code> characters of it, within the block.</p>
+</div>
+<div class="entry member" id="Memory.putString16"><code class="sig">fun putString16(at : int, text : string)</code><a class="anchor" href="#Memory.putString16">#</a>
+<p>Writes text as UTF-16 at <code>at</code>, a 0 after it.</p>
+</div>
+<div class="entry member" id="Memory.string8"><code class="sig">fun string8(at : int = 0, length : int = -1) : string</code><a class="anchor" href="#Memory.string8">#</a>
+<p>The UTF-8 text at <code>at</code>: up to its 0, or <code>length</code> bytes of it, within the block.</p>
+</div>
+<div class="entry member" id="Memory.putString8"><code class="sig">fun putString8(at : int, text : string)</code><a class="anchor" href="#Memory.putString8">#</a>
+<p>Writes text as UTF-8 at <code>at</code>, a 0 after it.</p>
+</div>
+<div class="entry member" id="Memory.close"><code class="sig">override fun close()</code><a class="anchor" href="#Memory.close">#</a>
+<p>Frees it now; nothing may be read or written in it after.</p>
+</div>
+<div class="entry member" id="Memory.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Memory.toString">#</a>
+<p>Memory(104 bytes).</p>
+</div>
+<div class="entry member" id="Memory.ofString16"><code class="sig">fun ofString16(text : string) : Memory</code><a class="anchor" href="#Memory.ofString16">#</a>
+<p>A block holding <code>text</code> as UTF-16 with a 0 after it, for a structure that points at text.</p>
 </div>
 </section>
 <section class="file" id="file-graphics-astra">

@@ -1093,6 +1093,7 @@ void registerBuiltins(VM& vm) {
     registerSandbox(vm);
     registerGrid(vm);
     registerRegex(vm);
+    registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);
     // A built program that reaches neither Jade nor the text engine has their code left out of

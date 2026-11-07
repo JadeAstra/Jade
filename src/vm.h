@@ -1549,6 +1549,7 @@ void registerIo(VM& vm);       // io.cpp: streams, processes and sockets
 void registerSandbox(VM& vm);  // sandbox.cpp: __sandbox, what Sandbox is built on (M6.6.2)
 void registerGrid(VM& vm);     // grid.cpp: what Grid<T> is built on (D155)
 void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)
+void registerForeign(VM& vm);  // foreign.cpp: Library, Memory and Foreign (M8)
 void registerWorkers(VM& vm);  // worker.cpp: isolated workers
 void registerParallel(VM& vm); // parallel.cpp: parallel sections
 void registerText(VM& vm);     // text/api.cpp: fonts, text and pictures

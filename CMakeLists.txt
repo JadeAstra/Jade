@@ -48,6 +48,7 @@ add_library(astra_core OBJECT
   src/grid.cpp
   src/regex.cpp
   src/regex_api.cpp
+  src/foreign.cpp
   src/worker.cpp
   src/parallel.cpp
   src/run.cpp
