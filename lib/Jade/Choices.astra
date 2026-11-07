@@ -1,4 +1,242 @@
-// Choices among buttons, picks from a list, and checklists (M8): a stub until step 8 ports
-// JadeUI's dialogs/Choices.kt here.
-internal class ChoiceDialogs : NoChoiceDialog()
-internal class ChecklistDialogs : NoChecklistDialog()
+// Choices among buttons, picks from a list, and checklists (M8). (JadeUI: dialogs/Choices.kt;
+// the forms that wait for their answer are not here: a dialog answers through its onResult.)
+
+// ChoiceDialog drawn with Jade's widgets.
+internal class ChoiceDialogs : ChoiceDialog {
+  override fun choose(spec : ChoiceSpec, onResult : (int?) -> unit) : DialogHandle<ChoiceSpec> => ChoiceSession(spec, onResult).start()
+  override fun pick(spec : PickSpec, onResult : (PickResult?) -> unit) : DialogHandle<PickSpec> => PickSession(spec, onResult).start()
+}
+
+// A message and a button for each option. Enter presses only the spec's default option, when it
+// names one.
+internal class ChoiceSession : DialogSession<ChoiceSpec, int> {
+  override val key : string
+  protected override val keyed : bool
+  private var buttons : List<Component>
+
+  fun init(spec : ChoiceSpec, onResult : (int?) -> unit) {
+    super.init(spec, onResult)
+    this.key = spec.key
+    this.keyed = spec.draftKey != null
+    this.buttons = makeButtons(spec)
+  }
+
+  private fun makeButtons(s : ChoiceSpec) : List<Component> => s.options.mapIndexed { i, o -> button(o) { commit(i) } }
+
+  protected override fun titleOf(spec : ChoiceSpec) : string => spec.title
+  protected override fun messageOf(spec : ChoiceSpec) : string => spec.message
+  protected override fun specValues(spec : ChoiceSpec) : Map<string, string> => {:}
+  protected override val primaryAction : (() -> unit)?
+    get() {
+      val i = spec.defaultOption
+      if (i == null or i < 0 or i >= spec.options.size) { return null }
+      return { commit(i) }
+    }
+  protected override fun rightButtons() : List<Component> => buttons
+  protected override val commitButtons : List<Component>
+    get() => buttons
+
+  protected override fun applySpec(spec : ChoiceSpec) {
+    buttons = makeButtons(spec)
+    layButtons()
+  }
+
+  protected override fun buildBody() : Component => Component(Spacer(320, 0))
+}
+
+// A list to pick from; with a name label, a field to name what is made.
+internal class PickSession : DialogSession<PickSpec, PickResult> {
+  override val key : string
+  protected override val keyed : bool
+  private val list : ListBox
+  private val listComp : Component
+  private val name : SharedTextModel
+  private val nameComp : Component
+  private val okButton : Component
+  private val cancelButton : Component
+
+  fun init(spec : PickSpec, onResult : (PickResult?) -> unit) {
+    super.init(spec, onResult)
+    this.key = spec.key
+    this.keyed = spec.draftKey != null
+    this.list = ListBox(spec.options, spec.initial.coerceIn(-1, spec.options.size - 1))
+    this.listComp = Component(list)
+    this.name = SharedTextModel(spec.defaultName)
+    this.nameComp = Component(TextField(name, columns = 24))
+    this.okButton = button("OK") { ok() }
+    this.cancelButton = button("Cancel") { close() }
+  }
+
+  protected override fun titleOf(spec : PickSpec) : string => spec.title
+  protected override fun messageOf(spec : PickSpec) : string => spec.message
+  protected override fun specValues(spec : PickSpec) : Map<string, string> => {"choice": "${spec.initial}", "name": spec.defaultName}
+  protected override val primaryAction : (() -> unit)?
+    get() => { ok() }
+  protected override fun rightButtons() : List<Component> => [okButton, cancelButton]
+  protected override val commitButtons : List<Component>
+    get() => [okButton]
+  protected override fun initialFocus() : Component? => spec.nameLabel != null ? nameComp : listComp
+
+  protected override fun applySpec(spec : PickSpec) {
+    if (list.items != spec.options) { list.items = spec.options }
+  }
+
+  protected override fun buildBody() : Component {
+    track("choice", "the choice", { "${list.selected}" }, { list.selected = it.toIntOrNull() ?: -1 }, "${spec.initial}")
+    val g = GridPane(hgap = 8, vgap = 8)
+    val sc = scroll(listComp)
+    val pref = listComp.prefSize()
+    sc.prefSizeOverride = Size(Math.max(260, pref.width + 20), Math.min(260, pref.height + 4))
+    g.add(sc, 0, 0, colSpan = 2, fill = Fill.both, weightX = 1.0, weightY = 1.0)
+    val label = spec.nameLabel
+    if (label != null) {
+      track("name", label.removeSuffix(":").lower(), { name.text }, { name.setText(it) }, spec.defaultName)
+      g.add(Component(Label(label)), 1, 0, anchor = Anchor.west)
+      g.add(nameComp, 1, 1, fill = Fill.horizontal, weightX = 1.0)
+    }
+    return Component(g)
+  }
+
+  private fun ok() {
+    val i = list.selected
+    if (i < 0 or i >= spec.options.size) { return }
+    commit(PickResult(i, spec.nameLabel != null ? name.text : spec.defaultName))
+  }
+
+  // The list, for tests.
+  internal val listForTest : ListBox
+    get() => list
+  // The name typed, for tests.
+  internal val nameForTest : SharedTextModel
+    get() => name
+}
+
+// ChecklistDialog drawn with Jade's widgets.
+internal class ChecklistDialogs : ChecklistDialog {
+  override fun check(spec : ChecklistSpec, onResult : (Set<string>?) -> unit) : DialogHandle<ChecklistSpec> => ChecklistSession(spec, onResult).start()
+}
+
+// From how many items a filter box helps.
+private const filterFrom = 12
+
+// Checkboxes for the items, with All and None for those shown; and, when the list is long, a
+// filter box that narrows what is shown (the ticks of those hidden are kept).
+internal class ChecklistSession : DialogSession<ChecklistSpec, Set<string>> {
+  override val key : string
+  protected override val keyed : bool
+  private var items : List<string>
+  private val boxes : open Map<string, Component> = {:}
+  private val boxGrid = GridPane()
+  private val filter = SharedTextModel("")
+  private val filterComp : Component
+  private val okButton : Component
+  private val cancelButton : Component
+
+  fun init(spec : ChecklistSpec, onResult : (Set<string>?) -> unit) {
+    super.init(spec, onResult)
+    this.key = spec.key
+    this.keyed = spec.draftKey != null
+    this.items = spec.items
+    this.filterComp = Component(TextField(filter, columns = 20))
+    this.okButton = button("OK") { commit(checked()) }
+    this.cancelButton = button("Cancel") { close() }
+    filter.addListener { applyFilter() }
+  }
+
+  private fun checked() : Set<string> => items.filter { (boxes[it]?.content as CheckBox?)?.checked == true }.toSet()
+
+  // The ticks as one text, for drafts: one item to a line, a line break or a backslash in an item
+  // written with a backslash before it. (JadeUI joined them as they were, so an item holding a
+  // line break came back as two that are not there.)
+  private fun encode(set : Set<string>) : string => items.filter { set.contains(it) }.map { it.replace("\\", "\\\\").replace("\n", "\\n") }.join("\n")
+  private fun decode(s : string) : Set<string> {
+    if (s.isEmpty()) { return setOf() }
+    return s.split("\n").map { line ->
+      val out = StringBuilder()
+      var i = 0
+      while (i < line.size) {
+        val c = line[i]
+        if (c == '\\' and i + 1 < line.size) {
+          out.append(line[i + 1] == 'n' ? '\n' : line[i + 1])
+          i += 2
+        } else {
+          out.append(c)
+          i += 1
+        }
+      }
+      out.toString()
+    }.toSet()
+  }
+
+  private fun setChecked(set : Set<string>) {
+    for (e in boxes.entries) { (e.value.content as CheckBox).checked = set.contains(e.key) }
+  }
+
+  private fun rebuild(newItems : List<string>, keep : Set<string>) {
+    items = newItems
+    for (c in boxGrid.children.toList()) { boxGrid.remove(c) }
+    boxes.clear()
+    for (i in 0 ..< newItems.size) {
+      val item = newItems[i]
+      val c = Component(CheckBox(item, keep.contains(item)))
+      boxes[item] = c
+      boxGrid.add(c, i, 0, fill = Fill.horizontal, anchor = Anchor.west, weightX = 1.0)
+    }
+    applyFilter()
+  }
+
+  private fun applyFilter() {
+    val q = filter.text.trim().lower()
+    for (e in boxes.entries) { e.value.visible = q.isEmpty() or e.key.lower().contains(q) }
+    boxGrid.owner?.invalidateLayout()
+  }
+
+  protected override fun titleOf(spec : ChecklistSpec) : string => spec.title
+  protected override fun messageOf(spec : ChecklistSpec) : string => spec.message
+  protected override fun specValues(spec : ChecklistSpec) : Map<string, string> {
+    val was = items
+    items = spec.items
+    val text = encode(spec.checked)
+    items = was
+    return {"checked": text}
+  }
+  protected override val primaryAction : (() -> unit)?
+    get() => { commit(checked()) }
+  protected override fun rightButtons() : List<Component> => [okButton, cancelButton]
+  protected override fun leftButtons() : List<Component> => [
+    button("All") { for (c in boxes.values) { if (c.visible) { (c.content as CheckBox).checked = true } } },
+    button("None") { for (c in boxes.values) { if (c.visible) { (c.content as CheckBox).checked = false } } }
+  ]
+  protected override val commitButtons : List<Component>
+    get() => [okButton]
+  protected override fun initialFocus() : Component? => spec.items.size > filterFrom ? filterComp : null
+
+  protected override fun applySpec(spec : ChecklistSpec) {
+    if (spec.items != items) { rebuild(spec.items, checked()) }
+  }
+
+  protected override fun buildBody() : Component {
+    rebuild(spec.items, spec.checked)
+    track("checked", "the ticks", { encode(checked()) }, { setChecked(decode(it)) }, encode(spec.checked))
+    val g = GridPane(vgap = 6)
+    if (spec.items.size > filterFrom) {
+      val row = GridPane(hgap = 8)
+      row.add(Component(Label("Filter:")), 0, 0)
+      row.add(filterComp, 0, 1, fill = Fill.horizontal, weightX = 1.0)
+      g.add(Component(row), 0, 0, fill = Fill.horizontal, weightX = 1.0)
+    }
+    val boxesComp = Component(boxGrid)
+    val sc = scroll(boxesComp)
+    val pref = boxesComp.prefSize()
+    sc.prefSizeOverride = Size(Math.max(260, pref.width + 24), Math.min(320, pref.height + 4))
+    g.add(sc, 1, 0, fill = Fill.both, weightX = 1.0, weightY = 1.0)
+    return Component(g)
+  }
+
+  // The boxes by item, for tests.
+  internal val boxesForTest : Map<string, Component>
+    get() => boxes
+  // The filter's text, for tests.
+  internal val filterForTest : SharedTextModel
+    get() => filter
+}

@@ -1,4 +1,239 @@
-// The find panel and the source window (M8): a stub until step 8 ports JadeUI's
-// dialogs/Panels.kt here.
-internal class FindPanel : NoFindDialog()
-internal class SourcePanel : NoSourceWindow()
+// The find panel and the source window (M8): one of each for the whole program, pointed at what
+// is asked for rather than opened again. (JadeUI: dialogs/Panels.kt.)
+
+// FindDialog drawn with Jade's widgets: one panel, pointed anew rather than stacked.
+internal class FindPanel : FindDialog {
+  private var session : FindSession? = null
+
+  override fun show(spec : FindSpec) : DialogHandle<FindSpec> {
+    val s = session
+    if (s != null and s.open) {
+      if (s.showsReplace == spec.showReplace) {
+        s.update(spec)
+        s.toFront()
+        return s
+      }
+      // Find to Replace or back: another panel, the query kept as the draft. The program is not
+      // told it closed, as the panel goes on. (JadeUI told onClosed here.)
+      s.switching = true
+      s.close()
+    }
+    val made = FindSession(spec)
+    session = made
+    return made.start()
+  }
+
+  override fun close() {
+    session?.close()
+  }
+}
+
+// The find and replace panel: the query (and the replacement), the spec's options, Find Next
+// (Enter), Replace, Replace All and Close. It never answers, every button being a callback, so
+// closing is its only ending, and what was typed is kept as the draft for the next time it opens.
+internal class FindSession : DialogSession<FindSpec, unit> {
+  override val key : string
+  // One find panel: its key is its own, whatever is searched.
+  protected override val keyed : bool
+    get() => true
+  // Whether it shows the replacement and the Replace buttons.
+  val showsReplace : bool
+  // Closing to make way for the other panel (Find or Replace): the program is not told.
+  internal var switching = false
+  private val query : SharedTextModel
+  private val with : SharedTextModel
+  private val queryComp : Component
+  private val withComp : Component
+  private val optionsGrid = GridPane(vgap = 2)
+
+  fun init(spec : FindSpec) {
+    super.init(spec) { r -> }
+    this.key = spec.key
+    this.showsReplace = spec.showReplace
+    this.query = SharedTextModel(spec.initialQuery)
+    this.with = SharedTextModel("")
+    this.queryComp = Component(TextField(query, columns = 28))
+    this.withComp = Component(TextField(with, columns = 28))
+    query.selectAll()
+  }
+
+  protected override fun titleOf(spec : FindSpec) : string => spec.showReplace ? "Replace" : "Find"
+  protected override fun specValues(spec : FindSpec) : Map<string, string> => {"query": spec.initialQuery}
+  protected override val primaryAction : (() -> unit)?
+    get() => { spec.onFindNext(query.text) }
+  protected override fun initialFocus() : Component? => queryComp
+  protected override fun rightButtons() : List<Component> {
+    val out = [button("Find Next") { spec.onFindNext(query.text) }]
+    if (showsReplace) {
+      out.add(button("Replace") { spec.onReplace(query.text, with.text) })
+      out.add(button("Replace All") { spec.onReplaceAll(query.text, with.text) })
+    }
+    out.add(button("Close") { close() })
+    return out
+  }
+
+  protected override fun applySpec(spec : FindSpec) {
+    layOptions()
+    relayout()
+  }
+
+  private fun layOptions() {
+    for (c in optionsGrid.children.toList()) { optionsGrid.remove(c) }
+    val shown = spec.options.filter { showsReplace or !it.replaceOnly }
+    for (i in 0 ..< shown.size) {
+      val o = shown[i]
+      optionsGrid.add(Component(CheckBox(o.label, o.checked, onChange = { o.checked = it })), i, 0, anchor = Anchor.west)
+    }
+  }
+
+  protected override fun onEnded(committed : bool) {
+    if (switching) { return }
+    try {
+      spec.onClosed()
+    } catch (e : Throwable) {
+      // what the program does when told is its own
+    }
+  }
+
+  protected override fun buildBody() : Component {
+    track("query", "the search", { query.text }, { query.setText(it) }, spec.initialQuery)
+    val g = GridPane(hgap = 8, vgap = 6)
+    g.add(Component(Label("Find:")), 0, 0, anchor = Anchor.west)
+    g.add(queryComp, 0, 1, fill = Fill.horizontal, weightX = 1.0)
+    if (showsReplace) {
+      track("with", "the replacement", { with.text }, { with.setText(it) }, "")
+      g.add(Component(Label("Replace with:")), 1, 0, anchor = Anchor.west)
+      g.add(withComp, 1, 1, fill = Fill.horizontal, weightX = 1.0)
+    }
+    layOptions()
+    g.add(Component(optionsGrid), 2, 0, colSpan = 2, fill = Fill.horizontal, weightX = 1.0)
+    return Component(g)
+  }
+
+  // The query and the replacement, for tests.
+  internal val queryForTest : SharedTextModel
+    get() => query
+  internal val withForTest : SharedTextModel
+    get() => with
+  // The options shown, for tests: each one's check box.
+  internal fun optionsForTest() : List<CheckBox> => optionsGrid.children.map { it.content as CheckBox }
+}
+
+// SourceWindow drawn with Jade's widgets: one window, pointed at another text rather than made again.
+internal class SourcePanel : SourceWindow {
+  private var session : SourceSession? = null
+
+  override fun show(spec : SourceSpec) : DialogHandle<SourceSpec> {
+    val s = session
+    if (s != null and s.open) {
+      s.retarget(spec)
+      s.toFront()
+      return s
+    }
+    val made = SourceSession(spec)
+    session = made
+    return made.start()
+  }
+
+  override fun syncIfShowing(id : string, text : string) {
+    val s = session
+    if (s != null and s.open and s.id == id) { s.sync(text) }
+  }
+
+  override fun close() {
+    session?.close()
+  }
+
+  override val showing : string?
+    get() {
+      val s = session
+      return s != null and s.open ? s.id : null
+    }
+}
+
+// The source window: the text, live (every keystroke reaches the program through
+// SourceSpec.onChange), so there is nothing to commit and nothing to lose, and it keeps no drafts.
+// An edit made elsewhere comes in through sync without being told back; showing another text
+// points it there (retarget).
+internal class SourceSession : DialogSession<SourceSpec, unit> {
+  override val key : string = "source-window"
+  // One source window, pointed anew.
+  protected override val keyed : bool
+    get() => true
+  protected override val keepsDrafts : bool
+    get() => false
+  // The id of the text it shows.
+  val id : string
+    get() => spec.id
+  private val text : SharedTextModel
+  private val area : TextArea
+  private val areaComp : Component
+  private var syncing = false
+  private var last : string
+
+  fun init(spec : SourceSpec) {
+    super.init(spec) { r -> }
+    this.text = SharedTextModel(spec.initial)
+    this.area = TextArea(text, rows = 24, columns = 80)
+    area.links = linkThrough(spec.links) { close() }
+    this.areaComp = Component(area)
+    this.last = spec.initial
+    text.addListener {
+      val t = text.text
+      if (t != last) {
+        last = t
+        if (!syncing) { this.spec.onChange(t) }
+      }
+    }
+    showLinkCards(area, areaComp)
+  }
+
+  // An edit from elsewhere: shown, not told back.
+  fun sync(t : string) {
+    if (t == text.text) { return }
+    syncing = true
+    try {
+      text.setText(t)
+    } finally {
+      syncing = false
+    }
+  }
+
+  // Shows another text: the one before is told it closed, as if its window had.
+  fun retarget(spec : SourceSpec) {
+    val old = this.spec
+    if (old.id != spec.id) {
+      try {
+        old.onClose()
+      } catch (e : Throwable) {
+        // what the program does when told is its own
+      }
+    }
+    this.spec = spec
+    setTitle(spec.title)
+    area.links = linkThrough(spec.links) { close() }
+    sync(spec.initial)
+  }
+
+  protected override fun titleOf(spec : SourceSpec) : string => spec.title
+  protected override fun specValues(spec : SourceSpec) : Map<string, string> => {:}
+  override fun update(spec : SourceSpec) {
+    retarget(spec)
+  }
+  protected override val primaryAction : (() -> unit)?
+    get() => null
+  protected override fun initialFocus() : Component? => areaComp
+  protected override fun rightButtons() : List<Component> => [button("Close") { close() }]
+  protected override fun onEnded(committed : bool) {
+    try {
+      spec.onClose()
+    } catch (e : Throwable) {
+      // what the program does when told is its own
+    }
+  }
+  protected override fun buildBody() : Component => scroll(areaComp)
+
+  // The text shown, for tests.
+  internal val textForTest : string
+    get() => text.text
+}
