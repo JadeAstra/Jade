@@ -1,0 +1,4 @@
+// The find panel and the source window (M8): a stub until step 8 ports JadeUI's
+// dialogs/Panels.kt here.
+internal class FindPanel : NoFindDialog()
+internal class SourcePanel : NoSourceWindow()

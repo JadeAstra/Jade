@@ -26,6 +26,12 @@ interface WindowOpener {
   fun open(window : Window) : WindowHandle?
 }
 
+// An opener with nowhere to open a window (no display): it opens nothing, so a window stays
+// unshown and a dialog answers null at once.
+class NoWindowOpener : WindowOpener {
+  override fun open(window : Window) : WindowHandle? => null
+}
+
 class Window {
   val initialWidth : int
   val initialHeight : int
@@ -357,6 +363,7 @@ class WindowHost : WindowHandle {
   private fun takeGlobals() {
     Jade.scheduler = { delay, task -> EventLoop.after(delay, task) }
     frontWindowHost = this
+    Jade.frontWindow = window
     if (!hidden and !(Jade.clipboard is SystemClipboard)) { Jade.clipboard = SystemClipboard() }
     // The system's file dialogs, unless the program has given its own.
     if (!hidden and Jade.fileDialog is NoFileDialog) { Jade.fileDialog = SystemFileDialog() }
@@ -420,6 +427,16 @@ class WindowHost : WindowHandle {
     Palette.removeThemeHook(themeHook)
     native.close()
     window.closed()
+    // The window in front was this one: its owner is again, or none.
+    if (frontWindowHost === this) {
+      val back = window.owner?.handle
+      if (back is WindowHost and !back.disposed) {
+        back.takeGlobals()
+      } else {
+        frontWindowHost = null
+        Jade.frontWindow = null
+      }
+    }
     (window.onClose)()
     if (window.exitOnClose and !hidden) { exit(0) }
   }

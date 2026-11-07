@@ -1,0 +1,5 @@
+// Forms, options and the image dialog (M8): a stub until step 8 ports JadeUI's
+// dialogs/Forms.kt here.
+internal class FormDialogs : NoFormDialog()
+internal class OptionsDialogs : NoOptionsDialog()
+internal class ImageDialogs : NoImageDialog()

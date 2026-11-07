@@ -1,0 +1,4 @@
+// Choices among buttons, picks from a list, and checklists (M8): a stub until step 8 ports
+// JadeUI's dialogs/Choices.kt here.
+internal class ChoiceDialogs : NoChoiceDialog()
+internal class ChecklistDialogs : NoChecklistDialog()

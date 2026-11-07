@@ -1,0 +1,131 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
+// Jade's prompts (M8): each a dialog in a window of its own beside the one in front, driven here
+// in hidden windows with made-up keys. Enter answers and Escape cancels; a prompt of several
+// lines takes Enter as a new line; one that names its subject keeps a draft, comes forward when
+// asked for again, follows the program's changes, and stops answering when its subject goes.
+import Jade.*
+
+val keys = Modifiers.none
+fun press(host : WindowHost, code : KeyCode, mods : Modifiers = Modifiers.none) {
+  host.send(RawInput.KeyDown(code, mods))
+}
+
+// -- With no window to open, a prompt answers null at once --
+Jade.windowOpener = NoWindowOpener()
+val none = Jade.inputDialog.prompt(PromptSpec("Rename", "New name:", "old")) { print("no window:", it) }   // expect: no window: null
+print(none.open, Jade.openDialogs().size)   // expect: false 0
+
+val opener = HiddenWindowOpener()
+Jade.windowOpener = opener
+val main = Window(label("main"), "Main", 300, 200, exitOnClose = false)
+main.show()
+print(Jade.frontWindow?.title)   // expect: Main
+fun last() : WindowHost => opener.opened[opener.opened.size - 1] as WindowHost
+
+// -- One line: what is typed replaces the old text; Enter answers it trimmed --
+val rename = Jade.inputDialog.prompt(PromptSpec("Rename", "New name:", "old")) { print("rename:", it) }
+print(rename.open, rename.title, rename.key, Jade.openDialogs().size)   // expect: true Rename prompt:Rename 1
+val renameHost = last()
+print(renameHost.window.title, renameHost.window.owner?.title, Jade.frontWindow?.title)   // expect: Rename Main Rename
+renameHost.send(RawInput.Text("  fresh "))
+press(renameHost, KeyCode.enter)   // expect: rename: fresh
+print(rename.open, Jade.openDialogs().size, Jade.frontWindow?.title)   // expect: false 0 Main
+
+// Nothing but spaces is no name: null.
+Jade.inputDialog.prompt(PromptSpec("Rename", "New name:", "old")) { print("blank:", it) }
+last().send(RawInput.Text("   "))
+press(last(), KeyCode.enter)   // expect: blank: null
+
+// Escape cancels; closing the window does as well.
+Jade.inputDialog.prompt(PromptSpec("Rename", "", "old")) { print("escape:", it) }
+press(last(), KeyCode.escape)   // expect: escape: null
+val closing = Jade.inputDialog.prompt(PromptSpec("Rename", "", "old")) { print("closed:", it) }
+last().window.close()   // expect: closed: null
+print(closing.open)   // expect: false
+
+// -- Several lines: Enter is a new line, Ctrl+Enter answers; onChange hears each change --
+val changes = []
+Jade.inputDialog.prompt(PromptSpec("Note", "Text:", "a", multiline = true, onChange = { changes.add(it) })) { print("note:", [it]) }
+val noteHost = last()
+press(noteHost, KeyCode.end, Modifiers(ctrl = true))
+press(noteHost, KeyCode.enter)
+noteHost.send(RawInput.Text("b"))
+press(noteHost, KeyCode.enter, Modifiers(ctrl = true))   // expect: note: ["a\nb"]
+print(changes)   // expect: ["a\n", "a\nb"]
+
+// -- A prompt that names its subject keeps a draft when it closes, and finds it again --
+val spec = PromptSpec("Rename A1", "Name:", "alpha", draftKey = "rename:A1")
+val first = Jade.inputDialog.prompt(spec) { print("first:", it) }
+last().send(RawInput.Text("beta"))
+first.close()   // expect: first: null
+print(Jade.drafts["rename:A1"])   // expect: {"text": "beta"}
+Jade.inputDialog.prompt(spec) { print("again:", it) }
+press(last(), KeyCode.enter)   // expect: again: beta
+print(Jade.drafts["rename:A1"])   // expect: null
+
+// Asked for again while open, the open one comes forward, updated, and is the handle.
+val one = Jade.inputDialog.prompt(spec) { print("one:", it) }
+val count = opener.opened.size
+val two = Jade.inputDialog.prompt(PromptSpec("Rename A1 again", "Name:", "gamma", draftKey = "rename:A1")) { print("two:", it) }
+print(one == two, opener.opened.size == count, one.title)   // expect: true true Rename A1 again
+// Untouched, the text followed the program's: gamma.
+press(last(), KeyCode.enter)   // expect: one: gamma
+
+// Touched, it keeps what was typed when the program's changes.
+val touched = Jade.inputDialog.prompt(spec) { print("touched:", it) }
+last().send(RawInput.Text("mine"))
+touched.update(PromptSpec("Rename A1", "Name:", "theirs", draftKey = "rename:A1"))
+press(last(), KeyCode.enter)   // expect: touched: mine
+
+// -- When its subject goes, a prompt stops answering until it has one again --
+val gone = Jade.inputDialog.prompt(spec) { print("gone:", it) }
+gone.detach("The cell was deleted.", null, null)
+press(last(), KeyCode.enter)
+print(gone.open)   // expect: true
+gone.update(spec)
+press(last(), KeyCode.enter)   // expect: gone: alpha
+
+// -- Make static: the text made static in place, and the button gone --
+Jade.inputDialog.prompt(PromptSpec("Formula", "Formula:", "=1+1", staticize = { "2" }, staticizeLabel = "Make static")) { print("static:", it) }
+val staticHost = last()
+staticHost.frame()
+val makeStatic = staticHost.window.root.descendants().first { it.content is Button and (it.content as Button).text == "Make static" }
+(makeStatic.content as Button).onClick()
+print(makeStatic.visible)   // expect: false
+press(staticHost, KeyCode.enter)   // expect: static: 2
+
+// -- The value and its format: both live, Enter answers the two --
+val live = []
+Jade.inputDialog.promptValueAndFormat(ValueFormatSpec("Edit B2", "12", "#bold", onChange = { v, f -> live.add("$v|$f") }, formatNames = ["bold", "bg", "italic"])) {
+  print("value and format:", it)
+}
+val vf = last()
+vf.send(RawInput.Text("34"))
+// A text area takes Tab as a tab, so a click puts the keyboard in the format box.
+vf.frame()
+val boxes = vf.window.root.descendants().filter { it.content is TextArea }
+val at = boxes[1].windowPosition()
+vf.send(RawInput.PointerDown(at.x + 4, at.y + 4, PointerButton.left, keys))
+vf.send(RawInput.PointerUp(at.x + 4, at.y + 4, PointerButton.left, keys))
+press(vf, KeyCode.end, Modifiers(ctrl = true))
+vf.send(RawInput.Text(" #i"))
+press(vf, KeyCode.enter)   // the completion list has Enter: #italic=
+press(vf, KeyCode.enter, Modifiers(ctrl = true))   // expect: value and format: Pair(first="1234", second="#bold #italic=")
+print(live.last())   // expect: 1234|#bold #italic=
+
+// -- What completes a format's feature names --
+print(FormatCompletion.candidates("#bg=red #b", 10, ["bold", "bg", "italic"]))   // expect: ["bold", "bg"]
+print(FormatCompletion.candidates("#bold", 5, ["bold"]))   // expect: []
+print(FormatCompletion.accept("x #it y", 5, "italic"))   // expect: Pair(first="x #italic= y", second=10)
+print(FormatCompletion.accept("no hash", 3, "bold"))   // expect: null
+
+// -- Closing every dialog keeps each one's draft --
+val a = Jade.inputDialog.prompt(PromptSpec("A", "", "", draftKey = "a")) { print("a:", it) }
+Jade.inputDialog.prompt(PromptSpec("B", "", "")) { print("b:", it) }
+opener.opened[opener.opened.size - 2].send(RawInput.Text("kept"))
+print(Jade.openDialogs().size)   // expect: 2
+Jade.closeAllDialogs()
+// expect: a: null
+// expect: b: null
+print(Jade.openDialogs().size, Jade.drafts["a"])   // expect: 0 {"text": "kept"}
+main.close()

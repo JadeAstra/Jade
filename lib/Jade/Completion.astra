@@ -1,0 +1,170 @@
+// Completing what is typed (M8): the list a field shows under itself, and what a format's
+// feature names complete with. (JadeUI: sheet/Completion.kt, and FormatCompletion in
+// sheet/FormulaSplit.kt; the rest of the sheet comes in M10.)
+
+// What completes a text being typed (a formula's names, a format's after #): the program knows
+// the language; the field only shows the list and puts the choice in.
+interface Completer {
+  // The completions for what is typed just before `caret` in `text`; `asked` when asked for
+  // outright (Ctrl+Space), when a completer may offer more than it would unasked. Empty for none.
+  fun candidates(text : string, caret : int, asked : bool = false) : List<string>
+  // `text` with `choice` put in for what is being typed before `caret`: the new text and where
+  // the caret goes; null when nothing is being typed there.
+  fun accept(text : string, caret : int, choice : string) : Pair<string, int>?
+}
+
+// The completion list a field shows under itself: offered as the field is typed into (or on
+// Ctrl+Space), never as its caret merely moves, and closed when it moves away; the arrows choose,
+// Enter or Tab puts the choice in, Escape closes it. A display shows the list: in the window, as an
+// overlay at an anchor, or as a dialog's own.
+class CompletionPopup {
+  // Shows the list: show with the choices, the one chosen, and what a click on one does; false
+  // when it could not (nowhere to put it), so that hide is not asked to take away what it never showed.
+  interface Display {
+    // Shows `choices` with the one at `index` marked; a click on one calls `pick` with it.
+    fun show(choices : List<string>, index : int, pick : (int) -> unit) : bool
+    // Takes the list away.
+    fun hide()
+  }
+
+  private val display : Display
+  // The completions on offer; empty when the list is closed.
+  var choices : List<string> = []
+    private set
+  private var index = 0
+  private var shown = false
+  // Where the caret was when the list was offered: moved anywhere else, it closes.
+  private var offeredAt = -1
+  private var completer : Completer? = null
+  private var read : () -> Pair<string, int> = { "" to 0 }
+  private var write : (string, int) -> unit = { t, c -> }
+
+  // A popup shown by `display` (overlayAt for one in the window).
+  fun init(display : Display) {
+    this.display = display
+  }
+
+  // Whether the list is open.
+  val isOpen : bool
+    get() => choices.isNotEmpty()
+
+  // Offers what `completer` completes in the field `read` gives (its text and caret); a choice goes
+  // back by `write`.
+  fun refresh(completer : Completer?, read : () -> Pair<string, int>, write : (string, int) -> unit, asked : bool = false) {
+    this.completer = completer
+    this.read = read
+    this.write = write
+    val now = read()
+    choices = completer?.candidates(now.first, now.second, asked) ?: []
+    index = 0
+    offeredAt = now.second
+    show()
+  }
+
+  // The field's caret is at `caret` now: anywhere but where the list was offered (a click, a drag
+  // across a name, an arrow), and the list closes.
+  fun caretMovedTo(caret : int) {
+    if (isOpen and caret != offeredAt) { hide() }
+  }
+
+  // The choice marked, for tests and hosts.
+  val highlighted : int
+    get() => index
+
+  // A key while the list is open: the arrows, Enter, Tab and Escape are the list's (true: taken).
+  fun key(key : Key) : bool {
+    if (!isOpen) { return false }
+    if (key == Key.up) {
+      index = Math.max(index - 1, 0)
+      show()
+    } else if (key == Key.down) {
+      index = Math.min(index + 1, choices.size - 1)
+      show()
+    } else if (key == Key.enter or key == Key.tab) {
+      accept()
+    } else if (key == Key.escape) {
+      hide()
+    } else {
+      return false
+    }
+    return true
+  }
+
+  // Puts the marked choice in.
+  fun accept() {
+    val choice = choices.getOrNull(index)
+    if (choice == null) { return }
+    val now = read()
+    hide()
+    val put = completer?.accept(now.first, now.second, choice)
+    if (put != null) { write(put.first, put.second) }
+  }
+
+  // Closes the list.
+  fun hide() {
+    choices = []
+    if (shown) {
+      shown = false
+      display.hide()
+    }
+  }
+
+  private fun show() {
+    if (choices.isEmpty()) {
+      hide()
+      return
+    }
+    if (display.show(choices, index) { i ->
+      index = i
+      accept()
+    }) {
+      shown = true
+    }
+  }
+}
+
+// A completion list shown as an overlay in the window, at `anchor` (window coordinates; null: not
+// shown). JadeUI's CompletionPopup(anchor), a class having one init here.
+internal fun overlayAt(anchor : () -> Pair<int, int>?) : CompletionPopup.Display => object : CompletionPopup.Display {
+  override fun show(choices : List<string>, index : int, pick : (int) -> unit) : bool {
+    val at = anchor()
+    if (at == null) { return false }
+    Jade.showOverlay(listBox(choices, index, pick), at.first, at.second)
+    return true
+  }
+  override fun hide() {
+    Jade.showOverlay(null)
+  }
+}
+
+// A format's feature names, completed after a #: "#bg=red #b" completes #bold.
+object FormatCompletion {
+  // A #name being typed, at the end of the text before the caret.
+  private val typing = Regex("#([A-Za-z]*)\$")
+
+  // The names completing the #... just before `caret` in `text`: those starting with what is
+  // typed, not it alone.
+  fun candidates(text : string, caret : int, names : List<string>) : List<string> {
+    val m = typing.find(text[0 ..< caret.coerceIn(0, text.size)])
+    if (m == null) { return [] }
+    val typed = m.groupValues[1]
+    return names.filter { it.startsWith(typed, ignoreCase = true) and !it.equals(typed, ignoreCase = true) }
+  }
+
+  // `text` with `name` put in for the #... before `caret`, with its =: the new text and where the
+  // caret goes; null when no #... is being typed there.
+  fun accept(text : string, caret : int, name : string) : Pair<string, int>? {
+    val at = caret.coerceIn(0, text.size)
+    val m = typing.find(text[0 ..< at])
+    if (m == null) { return null }
+    val start = m.range.start + 1
+    val inserted = "$name="
+    return (text[0 ..< start] + inserted + text[at ..]) to start + inserted.size
+  }
+
+  // A Completer of these names.
+  fun completer(names : List<string>) : Completer => object : Completer {
+    override fun candidates(text : string, caret : int, asked : bool) : List<string> => FormatCompletion.candidates(text, caret, names)
+    override fun accept(text : string, caret : int, choice : string) : Pair<string, int>? => FormatCompletion.accept(text, caret, choice)
+  }
+}

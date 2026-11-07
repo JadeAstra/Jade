@@ -663,8 +663,10 @@ class TextArea : Content, ScrollAware, ContextMenuProvider, TextEditable, Border
   // Where the caret is in the area, as [x, y, height], for a list of completions to open under
   // it; null before it has been painted.
   fun caretRect() : List<int>? {
-    val rowRanges = pRows
-    if (rowRanges.isEmpty() or pLineH == 0) { return null }
+    if (pRows.isEmpty() or pLineH == 0) { return null }
+    // The rows of the text now, at the width last painted: it may have changed since (a list of
+    // completions opens as the text is typed, before the area is painted again).
+    val rowRanges = rowsAt(pW)
     val row = findRow(rowRanges, model.caret)
     val start = rowRanges[row].start
     return [pTx + widthIn(rowRanges[row], start, Math.max(model.caret, start)), areaPad + row * pLineH, pLineH]

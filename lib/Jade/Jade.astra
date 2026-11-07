@@ -34,6 +34,36 @@ object Jade {
   // everything before that and in tests.
   var fileDialog : FileDialog = NoFileDialog()
 
+  // The dialogs a program asks things with (M8): Jade's own (Dialogs) to begin with, each a
+  // window beside the one in front; a program or a test may put others in their place.
+  // Prompts for text, and the value-and-format editor.
+  var inputDialog : InputDialog = Dialogs.input
+  // Choices among buttons, and picks from a list.
+  var choiceDialog : ChoiceDialog = Dialogs.choice
+  // Checklists.
+  var checklistDialog : ChecklistDialog = Dialogs.checklist
+  // Forms of a kind and its fields.
+  var formDialog : FormDialog = Dialogs.form
+  // Settings with actions.
+  var optionsDialog : OptionsDialog = Dialogs.options
+  // Insert, Image.
+  var imageDialog : ImageDialog = Dialogs.image
+  // The find and replace panel.
+  var findDialog : FindDialog = Dialogs.find
+  // The source window.
+  var sourceWindow : SourceWindow = Dialogs.source
+
+  // The dialogs open now, in the order they opened.
+  fun openDialogs() : List<DialogHandle<any?>> => Dialogs.openDialogs()
+  // Closes every open dialog, each keeping its draft: what a program does as it ends.
+  fun closeAllDialogs() {
+    Dialogs.closeAll()
+  }
+
+  // The window in front: what a dialog opens beside, and in front of. Null before any window.
+  var frontWindow : Window? = null
+    internal set
+
   // Goes up whenever something happened that may have changed how any widget looks. A
   // widget's kept picture is good only for the number it was painted at.
   var renderGeneration = 0
