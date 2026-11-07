@@ -484,6 +484,8 @@ public:
     }
 
     void set(ObjString* key, Value value);
+    // Takes a key out; false where it was not there.
+    bool remove(const ObjString* key);
     void addAll(const Table& other);
     void addMissing(const Table& other);  // only the keys this table does not have
 

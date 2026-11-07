@@ -4067,6 +4067,20 @@ Value VM::withPlace(const CallFrame* frame, int place) {
     return Value::ref(at, 0, 0, 0);
 }
 
+// A field of the class's own stands for a property an interface gives with a getter and a
+// setter of its own: the field is the property, as Kotlin's `override var dir : String? = null`
+// is, so the interface's accessors, taken in when the class took the interface, go (M8).
+void VM::dropInterfaceAccessors(ObjClass* cls, const ObjString* name) {
+    for (ObjClass* iface : cls->interfaces) {
+        const Value* getter = iface->getters.find(name);
+        const Value* mine = cls->getters.find(name);
+        if (getter != nullptr && mine != nullptr && mine->as.obj == getter->as.obj) cls->getters.remove(name);
+        const Value* setter = iface->setters.find(name);
+        const Value* mineSet = cls->setters.find(name);
+        if (setter != nullptr && mineSet != nullptr && mineSet->as.obj == setter->as.obj) cls->setters.remove(name);
+    }
+}
+
 // The captures are kept aside until the object has them: making it may run code that uses the
 // stack above its top (its fields' types, worked out for the first object of its class), which
 // would overwrite them there, and the collector looks at the stack only below its top.

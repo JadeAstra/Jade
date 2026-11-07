@@ -333,6 +333,8 @@ public:
     bool construct(ObjClass* cls, int argc, bool packed, const Value* captures = nullptr, uint16_t captureCount = 0);
     // An anonymous object made with the `count` captured cells on the stack's top (NewObject).
     bool constructObject(ObjClass* cls, int count);
+    // A field the class declares in place of a property an interface gives with accessors.
+    void dropInterfaceAccessors(ObjClass* cls, const ObjString* name);
 
     // ---- Lists (M6.6 part 3): see "Lists" in vm.cpp ----
     ListStore storeFor(const ObjTypeInfo* item, uint32_t& width, ObjClass*& itemClass);

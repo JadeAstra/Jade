@@ -2557,6 +2557,7 @@ CASE(DeclareField) {
         cls->shape = newShape();
         DONE();
     }
+    if (cls->hasAccessors) dropInterfaceAccessors(cls, name);
     cls->declaredIndex.set(name, Value::integer(static_cast<int64_t>(cls->declared.size())));
     cls->declared.push_back(field);
     fieldAdded(cls, cls->declared.size() - 1);

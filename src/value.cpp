@@ -546,6 +546,33 @@ void Table::set(ObjString* key, Value value) {
     }
 }
 
+bool Table::remove(const ObjString* key) {
+    if (count_ == 0) return false;
+    const uint32_t mask = capacity_ - 1;
+    uint32_t i = key->hash & mask;
+    for (;;) {
+        if (entries_[i].key == nullptr) return false;
+        if (entries_[i].key == key) break;
+        i = (i + 1) & mask;
+    }
+    // The entries after it, up to a gap, move back where their own place allows, so that each
+    // is still found from its place with no gap on the way (backward-shift deletion).
+    uint32_t j = i;
+    for (;;) {
+        j = (j + 1) & mask;
+        if (entries_[j].key == nullptr) break;
+        const uint32_t home = entries_[j].key->hash & mask;
+        const bool staysPut = i <= j ? (i < home && home <= j) : (i < home || home <= j);
+        if (!staysPut) {
+            entries_[i] = entries_[j];
+            i = j;
+        }
+    }
+    entries_[i] = Entry{};
+    count_--;
+    return true;
+}
+
 void Table::grow() {
     uint32_t oldCapacity = capacity_;
     Entry* old = entries_;

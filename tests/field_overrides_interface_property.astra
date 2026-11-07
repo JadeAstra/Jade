@@ -1,0 +1,70 @@
+// A field of a class's own overrides a property an interface gives with a getter and a setter of
+// its own, as in Kotlin (M8): `override var dir : string? = null` is where the value is kept,
+// read and set, directly and through the interface. The interface's accessors used to win, so
+// what was set was lost (JadeUI's FileDialog.startDir).
+
+interface Folder {
+  var dir : string?
+    get() => null
+    set(value) {}
+  val label : string
+    get() => "a folder"
+}
+class Plain : Folder {
+  override var dir : string? = null
+  override val label : string = "plain"
+}
+class OwnAccessors : Folder {
+  private var kept : string? = null
+  override var dir : string?
+    get() => kept?.upper()
+    set(value) { kept = value }
+}
+class Untouched : Folder
+class Base : Folder {
+  override var dir : string? = "base"
+}
+class Derived : Base()
+
+val p = Plain()
+p.dir = "set"
+val asFolder : Folder = p
+print(p.dir, asFolder.dir, p.label, asFolder.label)   // expect: set set plain plain
+asFolder.dir = "through the interface"
+print(p.dir)   // expect: through the interface
+
+val own = OwnAccessors()
+own.dir = "mine"
+print(own.dir, own.label)   // expect: MINE a folder
+
+val none = Untouched()
+none.dir = "dropped"
+print(none.dir, none.label)   // expect: null a folder
+
+val d = Derived()
+print(d.dir)   // expect: base
+d.dir = "derived"
+print(d.dir, (d as Folder).dir)   // expect: derived derived
+
+// Two interfaces, each with accessors for a property of the same name.
+interface Named {
+  var name : string
+    get() => "nameless"
+    set(value) {}
+}
+class Both : Folder, Named {
+  override var dir : string? = "d"
+  override var name : string = "n"
+}
+val b = Both()
+b.name = "changed"
+b.dir = "also changed"
+print(b.name, b.dir, (b as Named).name)   // expect: changed also changed changed
+
+// Many classes, each dropping accessors, so the class tables lose entries in every order.
+for (i in 0 ..< 50) {
+  val f = Plain()
+  f.dir = "n$i"
+  if (f.dir != "n$i") { print("lost at $i") }
+}
+print("kept")   // expect: kept
