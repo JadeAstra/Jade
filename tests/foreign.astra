@@ -9,7 +9,7 @@ print(lib.name.size > 0, "$lib".startsWith("Library("))   // expect: true true
 
 // The process id, as the system gives it to a foreign call and to Program.
 val pid = lib.function(windows ? "GetCurrentProcessId" : "getpid", [], CType.uint32)
-print(pid.call() == Program.processId, pid)   // expect: true ForeignFunction(GetCurrentProcessId)
+print(pid.call() == Program.processId, pid.toString() == "ForeignFunction(${windows ? "GetCurrentProcessId" : "getpid"})")   // expect: true true
 
 // Text in: a string handed over for the length of the call.
 if (windows) {
