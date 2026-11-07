@@ -6,43 +6,32 @@
 //
 // Shows: the grid, a text field with coloured text, two fields sharing one model (the fx bar of
 // Snips and the small editor in its cell, with the same text, caret and selection), a button
-// changing a label, menus with accelerators and a tick, the file dialogs, and the widgets' tabs.
-// The tabs of later milestones say which milestone brings them, each replaced when it comes.
+// changing a label, menus with accelerators and a tick, the file dialogs, every dialog and the
+// program acting while one is open (the Dialogs and While Open menus), charts, and the widgets'
+// tabs. The tabs of later milestones say which milestone brings them, each replaced when it comes.
 import Jade.*
+import "dialog_showcase".*
 
-// Demo only: a source such as "bar 8,5,12" shown as bars. Stands in for an app's evaluator, as
-// JadeUI's chartFromSpec does; the charts themselves come with M8.
-class Bars : Content {
-  override var owner : Component? = null
-  private val values : List<float>
-
-  fun init(source : string) {
-    val s = source.trim()
-    val gap = s.indexOf(" ")
-    val numbers = gap < 0 ? "" : s[gap + 1 ..< s.size]
-    values = numbers.split(",").map { it.trim().toFloatOrNull() }.filter { it != null }.map { it!! }
-  }
-
-  override fun sizes() : Sizes => Sizes(Size(80, 60), Size(240, 120), Size(int.maxValue, int.maxValue))
-
-  override fun paint(canvas : Canvas) {
-    canvas.color = Color.white
-    canvas.fillRect(0, 0, canvas.width, canvas.height)
-    if (values.isEmpty()) { return }
-    val top = Math.max(values.max(), 1.0)
-    val slot = (canvas.width - 16) / values.size
-    canvas.color = Color(0x0F, 0xA4, 0x7F)
-    for (i in 0 ..< values.size) {
-      val h = (values[i] / top * (canvas.height - 16)).toInt()
-      canvas.fillRect(8 + i * slot + 2, canvas.height - 8 - h, Math.max(slot - 4, 1), h)
-    }
+// Demo only: a source such as "bar 8,5,12" (or line, pie) shown as a chart. Stands in for a
+// program's evaluator, as JadeUI's chartFromSpec does.
+fun chartFromSpec(spec : string) : Component {
+  val s = spec.trim()
+  val gap = s.indexOf(" ")
+  val kind = gap < 0 ? s : s[0 ..< gap]
+  val numbers = gap < 0 ? "" : s[gap + 1 ..< s.size]
+  val values : List<float> = numbers.split(",").map { it.trim().toFloatOrNull() }.filter { it != null }.map { it!! }
+  return when (kind.lower()) {
+    "line" -> lineChart(ChartSeries(values))
+    "pie" -> pieChart(values)
+    else -> barChart(values)
   }
 }
-fun bars(source : string) : Component => Component(Bars(source))
 
 var clicks = 0
 val statusText = Label("clicks: 0")
 val status = Component(statusText)
+// Every dialog, and the program acting while one is open: each answer goes to the status line.
+val showcase = DialogShowcase { statusText.text = it }
 
 val shared = SharedTextModel("shared — edit either")
 
@@ -166,14 +155,17 @@ val widgetTabs = tabs(
   "HTML" to later("M10"),
   "Hex" to later("M9"),
   "Text" to later("M9"),
-  "Chart" to later("M8"),
+  "Chart" to split(barChart([8.0, 5.0, 12.0, 7.0, 3.0], labels = ["Jan", "Feb", "Mar", "Apr", "May"], title = "Bar"),
+                   split(lineChart(ChartSeries([2.0, 4.0, 3.0, 6.0, 8.0, 7.0, 9.0], "a"), ChartSeries([1.0, 3.0, 5.0, 4.0, 6.0, 8.0, 10.0], "b"), title = "Line"),
+                         pieChart([30.0, 20.0, 15.0, 35.0], labels = ["A", "B", "C", "D"], title = "Pie"), vertical = true),
+                   ratio = 0.5),
   "Math" to later("M10"),
   "Formula" to later("M10"),
   // JadeUI's first block is a picture from SVG (M10); its chart block is here with the demo's bars.
   "Blocks" to split(
     block("Blocks show what a program makes of their source. Edit this one: its view is the text, wrapped.",
           "Text block — Edit the words") { wrappedLabel(it) },
-    block("bar 8,5,12,7,3", "Chart block — try: bar 3,1,4,1,5") { bars(it) },
+    block("bar 8,5,12,7,3", "Chart block — try: line 3,1,4,1,5") { chartFromSpec(it) },
     vertical = true),
   "Markdown" to later("M10"),
   "Sheet" to later("M10"),
@@ -182,9 +174,13 @@ val widgetTabs = tabs(
     wrappedLabel("A block document stacks blocks of any kind, each working as it would on its own. " +
                  "Below: a text field, and a chart block."),
     textField("a field inside the document"),
-    block("bar 5,9,3,7,4", "Chart block") { bars(it) },
+    block("bar 5,9,3,7,4", "Chart block") { chartFromSpec(it) },
   ])),
-  "Dialogs" to later("M8"),
+  "Dialogs" to grid {
+    row { cell(label("Layers (the rename dialog's subject) - see the While Open menu:"), anchor = Anchor.west) }
+    row { cell(scroll(showcase.layersComponent), fill = Fill.both, weightX = 1.0, weightY = 1.0) }
+    row { cell(showcase.pastedComponent, fill = Fill.both, weightX = 1.0, weightY = 1.0) }
+  },
   "Icons" to later("M10"))
 
 val ui = grid {
@@ -222,8 +218,8 @@ val ui = grid {
   }
 }
 
-// The menus, with accelerators and a tick, and the file dialogs. JadeUI's Dialogs and While Open
-// menus come with the dialogs, in M8.
+// The menus, with accelerators and a tick, and the file dialogs; then every dialog, and the
+// program acting while one is open.
 val textFilters = [FileFilter("Text files", ["*.txt", "*.md"]), FileFilter("All files", ["*.*"])]
 val menuBar = MenuBar([
   Menu("File", [
@@ -256,6 +252,8 @@ val menuBar = MenuBar([
     MenuItem("Exit") { exit(0) },
   ]),
   Menu("View", [CheckItem("Wrap", checked = true) { editor.wrap = it }]),
+  showcase.dialogsMenu(),
+  showcase.casesMenu(),
 ])
 
 // JadeUI's opens 640 wide, narrower than its row of twenty tabs; this one opens as wide as the row.
@@ -271,13 +269,13 @@ if (seconds != null) {
   }
 }
 
-// --snapshot=<dir>: a picture of each tab of M7, saved as <dir>/launcher-<tab>.png, then closes.
+// --snapshot=<dir>: a picture of each working tab, saved as <dir>/launcher-<tab>.png, then closes.
 val snapshotArg = arguments.firstOrNull { it.startsWith("--snapshot=") }
 if (snapshotArg != null) {
   val dir = snapshotArg["--snapshot=".size ..< snapshotArg.size]
   val host = window.handle as WindowHost
   val t = widgetTabs.content as Tabs
-  val names = ["Controls", "Editor", "Items", "Tree", "Table", "Split", "Blocks", "Doc"]
+  val names = ["Controls", "Editor", "Items", "Tree", "Table", "Split", "Chart", "Blocks", "Doc", "Dialogs"]
   val all = ["Controls", "Editor", "Code", "Items", "Tree", "Table", "Split", "SVG", "HTML", "Hex", "Text", "Chart",
              "Math", "Formula", "Blocks", "Markdown", "Sheet", "Doc", "Dialogs", "Icons"]
   for (name in names) {
