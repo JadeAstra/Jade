@@ -1,0 +1,23 @@
+// callback.invoke(a) is typed as callback(a) is: its arguments checked and its result the
+// function's own, with ?. a result that may be null (M8: it gave any, so a string from it could
+// not be given where a string goes).
+
+class Box(val format : ((float) -> string)? = null)
+
+val box = Box({ "<$it>" })
+val shown : string = box.format?.invoke(1.5) ?: "none"
+print(shown)                                          // expect: <1.5>
+val empty : string = Box().format?.invoke(2.0) ?: "none"
+print(empty)                                          // expect: none
+
+val twice : (int) -> int = { it * 2 }
+val n : int = twice.invoke(21)
+print(n + 0)                                          // expect: 42
+
+// Several parameters, and one that gives nothing.
+val join : (string, int) -> string = { s, k -> s.repeat(k) }
+print(join.invoke("ab", 3))                           // expect: ababab
+val seen = []
+val note : (string) -> unit = { seen.add(it) }
+note.invoke("x")
+print(seen)                                           // expect: ["x"]

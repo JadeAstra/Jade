@@ -58,3 +58,7 @@ number()                      // check: 'number' is an int, which cannot be call
 
 class Plain
 class TooMany(val n : int) : Plain(1)   // check: Plain(...) takes no arguments
+
+// A function value's invoke takes what the function takes (M8).
+val invokeMe : (int) -> string = { "n$it" }
+invokeMe.invoke("text")                               // check: 'invoke' takes an int here, not a string

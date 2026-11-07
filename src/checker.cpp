@@ -9659,6 +9659,12 @@ struct Checker::Impl {
                 for (const ExprPtr& a : c.args) expr(*a);
                 return unknownType();
             }
+            // `f.invoke(a)` and `f?.invoke(a)`: the function called, its arguments checked and its
+            // result typed as for f(a) (M8: std's Function.invoke gave any).
+            if (m.name == "invoke" && obj.kind == Type::Function && obj.knownParams && !obj.receiver) {
+                const Type result = callValue(withNull(obj, false), c, m.name);
+                return m.safe ? withNull(result) : result;
+            }
             Type result = callMethod(obj, c, m);
             return m.safe ? withNull(result) : result;
         }
