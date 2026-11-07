@@ -2973,7 +2973,12 @@ private:
             }
             return;
         }
-        if (t.star || !t.present() || t.name == "any") {
+        // unit and nothing have no class to name when the program runs: of anything, as any is
+        // (`DialogSession<FindSpec, unit>`).
+        const std::string spelt = builtinSpelling(t.name);
+        const bool noClass = (spelt == "unit" || spelt == "nothing") &&
+                             !(session_.checker != nullptr && session_.checker->namesOwnClass(t));
+        if (t.star || !t.present() || t.name == "any" || noClass) {
             shape += 'a';
             return;
         }

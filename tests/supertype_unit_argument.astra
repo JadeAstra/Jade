@@ -1,0 +1,21 @@
+// A supertype given unit or nothing as a type argument (`Base<string, unit>`): the type is made
+// when the program runs where the class's type arguments are needed, as checking a C++
+// function's result against a type parameter does (ASTRA_CHECK_NATIVE_RESULTS); unit and
+// nothing name no class there, and were looked for as one (M8, Jade's FindSession).
+class Base<S, R>(val spec : S) {
+  var last : R? = null
+  fun answer(value : R?) : string {
+    last = value
+    return "answered ${spec}"
+  }
+  fun kinds() : List<R?> => [last]
+}
+
+class Quiet : Base<string, unit>("find") {}
+class Never : Base<int, nothing>(3) {}
+
+val q = Quiet()
+print(q.answer(null), q.kinds())   // expect: answered find [null]
+val n = Never()
+print(n.spec, n.kinds().size)   // expect: 3 1
+print(q is Base<string, unit>)   // expect: true
