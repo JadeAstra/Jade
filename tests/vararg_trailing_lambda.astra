@@ -1,0 +1,13 @@
+// A lambda written after a call whose last parameter is a vararg is one more item of it, as the
+// checker has it (M8: compareBy { it.x } was refused when it ran, as a value given by name).
+
+fun count(vararg fs : (int) -> int) : int => fs.size
+print(count { it + 1 })                             // expect: 1
+print(count({ it }, { it }) )                       // expect: 2
+
+fun after(first : int, vararg fs : (int) -> int) : string => "$first ${fs.map { it(10) }}"
+print(after(1) { it * 2 })                          // expect: 1 [20]
+print(after(2, { it + 1 }) { it * 3 })              // expect: 2 [11, 30]
+
+data R(val x : int, val name : string)
+print([R(2, "b"), R(1, "a")].sortedWith(compareBy { it.x }).map { it.name })   // expect: ["a", "b"]

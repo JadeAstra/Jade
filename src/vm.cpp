@@ -2310,6 +2310,20 @@ bool VM::callNamed(int positional, int named) {
             if (arity == 0) throw runtimeError(Thrown::UnsupportedOperationException, display() + "() takes no arguments, so no lambda can follow the call");
             index = arity - 1;
             name = proto->paramNames[static_cast<size_t>(index)];
+            // To a vararg parameter it is one more item, as the checker has it: compareBy { it.x }
+            // (M8: it was refused as a value given by name).
+            if (index == vararg) {
+                Value& gathered = arranged[static_cast<size_t>(index)];
+                if (gathered.kind == ValueKind::Undefined) {
+                    ObjList* list = alloc<ObjList>();
+                    list->values().push_back(pair[1]);
+                    account(sizeof(Value));
+                    gathered = Value::object(list);
+                } else if (gathered.isObjType(ObjType::List)) {
+                    asList(gathered)->values().push_back(pair[1]);
+                }
+                continue;
+            }
         }
         for (int p = 0; index < 0 && p < arity; p++) {
             if (proto->paramNames[static_cast<size_t>(p)] == name) index = p;
