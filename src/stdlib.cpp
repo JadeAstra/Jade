@@ -1507,7 +1507,7 @@ void registerFiles(VM& vm) {
     def("space", 1, 1, [](VM& vm, int, Value* args) -> Value {
         const std::string& path = vm.toStr(args[0], "file path");
         if (vm.currentHost().isSandbox())
-            throw vm.runtimeError(Thrown::UnsupportedOperationException, "a sandbox has no volumes to ask the space of");
+            throw vm.runtimeError(Thrown::IOException, "a sandbox has no volumes to ask the space of");  // what the properties say they throw
         std::error_code ec;
         const std::filesystem::space_info room = std::filesystem::space(std::filesystem::path(std::u8string(path.begin(), path.end())), ec);
         if (ec) throw pathError(vm, "find the space of", path, ec);

@@ -58,4 +58,10 @@ Sandbox.run {
   } catch (e : UnsupportedOperationException) {
     print(e.message)
   }   // expect: a sandbox has no volumes to list
+  // The space of a volume is an IOException there, as the properties say they throw.
+  try {
+    print(Path("/").totalSpace)
+  } catch (e : IOException) {
+    print(e.message)
+  }   // expect: a sandbox has no volumes to ask the space of
 }
