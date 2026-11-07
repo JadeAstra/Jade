@@ -586,6 +586,10 @@ int VM::monitorWait(Value lock, int64_t timeoutMs) {
 
     int status = 0;
     const Deadline deadline(timeoutMs);
+    // In a sandbox, whose clock moves only when the program waits: where the wait would end by it.
+    Host& here = currentHost();
+    SandboxHost* box = here.isSandbox() ? static_cast<SandboxHost*>(&here) : nullptr;
+    const int64_t boxDeadline = box != nullptr && timeoutMs >= 0 ? box->now() + timeoutMs * 1000000 : -1;
     for (;;) {
         if (me->notified) break;
         if (me->interrupted.exchange(false)) {
@@ -603,6 +607,10 @@ int VM::monitorWait(Value lock, int64_t timeoutMs) {
         park(deadline.left());
     }
     removeFrom(monitor.waiting, me);
+    // A wait that ran out has let its time pass in a sandbox as well, as a sleep does: otherwise a
+    // thread waiting for a time on the sandbox's clock (a pool's timed jobs) would wait for ever,
+    // the clock never reaching it while nothing sleeps.
+    if (status == 1 && boxDeadline >= 0) box->advanceTo(boxDeadline);
 
     // Take the lock back before going on, as it was held. (A thread that was notified is
     // already listed as entering: see monitorNotify.)

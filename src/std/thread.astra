@@ -252,7 +252,8 @@ class Job<T> {
     onDone { EventLoop.post { } }
     var timer = -1
     if (deadline != null) {
-      val left = Math.round((deadline - clock()) * 1000.0)
+      // Rounded up: a fraction of a millisecond still to go is a millisecond to wait, not none.
+      val left = Math.ceil((deadline - clock()) * 1000.0)
       if (left <= 0) { return }
       timer = __loop.timer(left, { })
     }
@@ -383,12 +384,18 @@ fun __deadline(timeout : Duration) : float => clock() + timeout.inSeconds
 // holds the key may take it again.
 class Lock {
   internal val tasks : open List<(bool) -> unit> = []   // the tasks waiting, each to be taken up
+  // Whether the key was taken by useKey since a wait last told the others: what is behind it may
+  // have changed, so the next wait tells them. A wait taken up again, with nothing done since, does
+  // not: two threads waiting on one lock would otherwise wake each other without end (M8: an idle
+  // pool with a timed job spun a core).
+  internal var fresh = false
 
   // Runs `block` holding the key, waiting for it if another thread holds it, and gives it back
   // when the block ends, even by an error: gives what the block gives. Waiting threads and tasks
   // look at their conditions again then. In a parallel section it is an IllegalStateException.
   inline fun <T> useKey(block : () -> T) : T {
     __thread.enter(this)
+    fresh = true
     try {
       return block()
     } finally {
@@ -404,11 +411,18 @@ class Lock {
   internal suspend fun await(deadline : float?) : bool {
     var left = -1
     if (deadline != null) {
-      left = Math.round((deadline - clock()) * 1000.0)
+      // Rounded up: a fraction of a millisecond still to go is a millisecond to wait, not a time
+      // run out. Rounded to nearest, a thread waiting for a time 0.0000000004 s off (0.2 + 0.1)
+      // went round without waiting, and in a sandbox, whose clock moves only by waits, for ever.
+      left = Math.ceil((deadline - clock()) * 1000.0)
       if (left <= 0) { return false }
     }
-    // Giving the key back is a key given back: those waiting look again.
-    __lockWake(this)
+    // Giving the key back is a key given back: those waiting look again, when the key was taken
+    // since they last did (see fresh).
+    if (fresh) {
+      fresh = false
+      __lockWake(this)
+    }
     val running = __task.current()
     if (running == null or !__loop.isLoopThread()) {
       val status = __thread.wait(this, deadline == null ? null : left)
