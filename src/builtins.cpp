@@ -1138,6 +1138,16 @@ void registerBuiltins(VM& vm) {
 Value VM::numeric(uint8_t which, const Value* args) {
     const Value a = args[0].isByte() ? Value::integer(args[0].as.i) : args[0];   // a byte is an int here
     switch (static_cast<NumericOp>(which)) {
+        case NumericOp::ToByte:
+        case NumericOp::ToByteWrapped: {
+            const bool wrapped = which == static_cast<uint8_t>(NumericOp::ToByteWrapped);
+            if (!args[0].isInt())
+                throw runtimeError(Thrown::ClassCastException, std::string(wrapped ? "toByteWrapped" : "toByte") + " is for ints, not " + typeName(args[0]));
+            const int64_t n = args[0].as.i;
+            if (!wrapped && (n < 0 || n > 255))
+                throw runtimeError(Thrown::IllegalArgumentException, std::to_string(n) + " does not fit in a byte, which holds 0 to 255; toByteWrapped() keeps the low 8 bits");
+            return Value::byte(static_cast<uint8_t>(n));
+        }
         case NumericOp::ToInt: return a.isInt() ? a : Value::integer(floatToInt(*this, std::trunc(toNumber(a, "the number"))));
         case NumericOp::ToFloat: return Value::number(toNumber(a, "the number"));
         case NumericOp::RoundToInt:

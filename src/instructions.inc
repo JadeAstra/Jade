@@ -1019,11 +1019,30 @@ LABEL(getIndex) {
                 sp_--;
                 DONE();
             }
+            if (const PackedItems& pack = *list->pack; !pack.nullable && (pack.store == ListStore::Ints || pack.store == ListStore::Floats)) {
+                // 8 bytes an item: an int's or a float's bits, its kind the list's.
+                uint64_t bits;
+                std::memcpy(&bits, pack.block.data() + i * pack.width, 8);
+                sp_[-2].setWhole(static_cast<uint64_t>(pack.store == ListStore::Ints ? ValueKind::Int : ValueKind::Float), bits);
+                sp_--;
+                DONE();
+            }
             if (list->pack->store != ListStore::Items) {
                 sp_[-2] = packedPlain(*list->pack, i);
                 sp_--;
                 DONE();
             }
+        }
+    }
+    if (obj.isObjType(ObjType::Bytes) && index.isInt()) {
+        // A buffer's byte by its position, in range, read at once where nothing stands in the
+        // way, as getIndex reads it.
+        const std::vector<uint8_t>& data = asBytes(obj)->data;
+        const uint64_t i = static_cast<uint64_t>(index.as.i);
+        if (i < data.size() && obj.as.obj != bandObject_ && (obj.as.obj->core == coreId_ || obj.as.obj->core == 0)) {
+            sp_[-2] = Value::byte(data[i]);
+            sp_--;
+            DONE();
         }
     }
     if (obj.isObjType(ObjType::List) && asList(obj)->store() == ListStore::Items && index.isInt()) {
@@ -1053,6 +1072,14 @@ LABEL(getIndex) {
 CASE(SetIndex) {
     {
     Value value = sp_[-1], index = sp_[-2], obj = sp_[-3];
+    if (obj.isObjType(ObjType::Bytes) && index.isInt() && obj.as.obj->core == coreId_ && (value.isByte() || value.isInt()) &&
+        static_cast<uint64_t>(value.as.i) <= 255 && static_cast<uint64_t>(index.as.i) < asBytes(obj)->data.size()) {
+        // A byte, or an int from 0 to 255, into a buffer this core owns: as setIndex writes it.
+        asBytes(obj)->data[static_cast<size_t>(index.as.i)] = static_cast<uint8_t>(value.as.i);
+        sp_[-3] = value;
+        sp_ -= 2;
+        DONE();
+    }
     if (obj.isObjType(ObjType::List) && index.isInt() && obj.as.obj->core == coreId_ && obj.as.obj->frozen == 0 &&
         static_cast<uint64_t>(index.as.i) < asList(obj)->size()) {
         // An int, a float or a bool put into a packed list of its kind (G25): written
@@ -1203,7 +1230,7 @@ COLD(CheckLocal) {
 CASES(Div, DivF) {
 LABEL(plainDiv) {
     Value b = sp_[-1], a = sp_[-2];
-    if (a.isInt() && b.isInt()) {
+    if (a.isWhole() && b.isWhole()) {
         if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
         if (b.as.i == -1 && a.as.i == INT64_MIN) throw overflowError(Op::Div, a.as.i, b.as.i);  // (D27)
         int64_t result = b.as.i == -1 ? -a.as.i : a.as.i / b.as.i;
@@ -1222,7 +1249,7 @@ LABEL(plainDiv) {
 CASE(Mod) {
 LABEL(plainMod) {
     Value b = sp_[-1], a = sp_[-2];
-    if (a.isInt() && b.isInt()) {
+    if (a.isWhole() && b.isWhole()) {
         if (b.as.i == 0) throw runtimeError(Thrown::ArithmeticException, "division by zero");
         sp_[-2] = Value::integer(b.as.i == -1 ? 0 : a.as.i % b.as.i);
         sp_--;
@@ -2194,9 +2221,17 @@ CASE(MarkValue) {
 HAS_COLD(Numeric)
 CASE(Numeric) {
     {
-    const Value& a = sp_[-1];
-    if (ip[0] == static_cast<uint8_t>(NumericOp::ToInt) && a.isFloat() && a.as.d > -9.2e18 && a.as.d < 9.2e18) {
-        sp_[-1].setInt(static_cast<int64_t>(a.as.d));  // the whole part, as toInt() gives
+    // The commonest at once: a float's toInt() and an int's toByte(). The handler is kept as
+    // small as that, as a bigger one costs every call of it more; the other quick cases are
+    // in the cold part, a jump away.
+    Value* const top = sp_ - 1;
+    if (ip[0] == static_cast<uint8_t>(NumericOp::ToInt) && top->isFloat() && top->as.d > -9.2e18 && top->as.d < 9.2e18) {
+        top->setInt(static_cast<int64_t>(top->as.d));  // the whole part, as toInt() gives
+        ip += 1;
+        DONE();
+    }
+    if (ip[0] == static_cast<uint8_t>(NumericOp::ToByte) && top->isInt() && static_cast<uint64_t>(top->as.i) <= 255) {
+        top->setHeader(ValueKind::Byte);  // the number stays as it is
         ip += 1;
         DONE();
     }
@@ -2205,6 +2240,93 @@ CASE(Numeric) {
 }
 COLD(Numeric) {
     {
+    // The other common cases, a conversion of the kind expected or Math's functions on ints or
+    // on floats; anything else (a NaN, a number too big, the wrong kind) as the method does it,
+    // with its error.
+    Value* const top = sp_ - 1;
+    switch (static_cast<NumericOp>(ip[0])) {
+        case NumericOp::ToInt:
+            if (top->isByte()) {
+                top->setInt(top->as.i);
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::ToFloat:
+            if (top->isInt()) {
+                top->setFloat(static_cast<double>(top->as.i));
+                ip += 1;
+                DONE();
+            }
+            if (top->isFloat()) {
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::ToByteWrapped:
+            if (top->isInt()) {
+                const int64_t low = top->as.i & 255;
+                top->setHeader(ValueKind::Byte);
+                top->as.i = low;
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::Floor:
+        case NumericOp::Ceil:
+        case NumericOp::Round:
+            if (top->isFloat() && top->as.d > -9.2e18 && top->as.d < 9.2e18) {
+                const double d = top->as.d;
+                const NumericOp which = static_cast<NumericOp>(ip[0]);
+                top->setInt(static_cast<int64_t>(which == NumericOp::Floor ? std::floor(d) : which == NumericOp::Ceil ? std::ceil(d) : std::round(d)));
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::Sqrt:
+            if (top->isFloat()) {
+                top->as.d = std::sqrt(top->as.d);
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::AbsInt:
+        case NumericOp::AbsFloat:
+            if (top->isInt() && top->as.i != INT64_MIN) {
+                if (top->as.i < 0) top->as.i = -top->as.i;
+                ip += 1;
+                DONE();
+            }
+            if (top->isFloat()) {
+                top->as.d = std::fabs(top->as.d);
+                ip += 1;
+                DONE();
+            }
+            break;
+        case NumericOp::MinInt:
+        case NumericOp::MaxInt:
+        case NumericOp::MinFloat:
+        case NumericOp::MaxFloat: {
+            // The first is kept unless the second is less (min) or more (max): as the cold way.
+            Value* const first = top - 1;
+            const bool min = ip[0] == static_cast<uint8_t>(NumericOp::MinInt) || ip[0] == static_cast<uint8_t>(NumericOp::MinFloat);
+            if (first->isInt() && top->isInt()) {
+                if (min ? top->as.i < first->as.i : top->as.i > first->as.i) first->as.i = top->as.i;
+                sp_--;
+                ip += 1;
+                DONE();
+            }
+            if (first->isFloat() && top->isFloat()) {
+                if (min ? top->as.d < first->as.d : top->as.d > first->as.d) first->as.d = top->as.d;
+                sp_--;
+                ip += 1;
+                DONE();
+            }
+            break;
+        }
+        default:
+            break;
+    }
     const uint8_t which = READ_U8();
     SAVE_IP();
     const int arity = numericArity(which);
@@ -2911,10 +3033,10 @@ R_ARITHMETIC(RSubSK, R_S, R_K, -, subOverflows, plainSub)
 R_ARITHMETIC(RMulSS, R_S, R_S, *, mulOverflows, plainMul)
 R_ARITHMETIC(RMulSK, R_S, R_K, *, mulOverflows, plainMul)
 R_ARITHMETIC(RMulKS, R_K, R_S, *, mulOverflows, plainMul)
-R_FLOAT(RDivSS, R_S, R_S, x / y, plainDiv)
-R_FLOAT(RDivSK, R_S, R_K, x / y, plainDiv)
-R_FLOAT(RModSS, R_S, R_S, std::fmod(x, y), plainMod)
-R_FLOAT(RModSK, R_S, R_K, std::fmod(x, y), plainMod)
+R_DIVIDE(RDivSS, R_S, R_S, x / y, x / y, plainDiv)
+R_DIVIDE(RDivSK, R_S, R_K, x / y, x / y, plainDiv)
+R_DIVIDE(RModSS, R_S, R_S, std::fmod(x, y), x % y, plainMod)
+R_DIVIDE(RModSK, R_S, R_K, std::fmod(x, y), x % y, plainMod)
 R_ARITHMETIC(RSubKS, R_K, R_S, -, subOverflows, plainSub)
 R_INTS(RShlSK, R_S, R_K, c.as.i >= 0 && c.as.i < 64, static_cast<int64_t>(static_cast<uint64_t>(x) << y))
 R_INTS(RShrSK, R_S, R_K, c.as.i >= 0 && c.as.i < 64, x >> y)
@@ -2922,7 +3044,7 @@ R_INTS(RBitAndSS, R_S, R_S, true, x & y)
 R_INTS(RBitAndSK, R_S, R_K, true, x & y)
 R_INTS(RBitOrSS, R_S, R_S, true, x | y)
 R_INTS(RBitOrSK, R_S, R_K, true, x | y)
-R_FLOAT(RDivKS, R_K, R_S, x / y, plainDiv)
+R_DIVIDE(RDivKS, R_K, R_S, x / y, x / y, plainDiv)
 HAS_COLD(RSetPropSS)
 CASES(RSetPropSS, RSetPropSK) {
     // A field of an object found before, as SetProp's own part, here; anything else in the rare
@@ -3108,12 +3230,30 @@ CASES(RGetIndexSS, RGetIndexSK) {
         ip += 9;
         NEXT();
     }
+    if (obj.isObjType(ObjType::Bytes) && index.isInt()) {
+        const std::vector<uint8_t>& data = asBytes(obj)->data;
+        const uint64_t i = static_cast<uint64_t>(index.as.i);
+        if (i < data.size() && obj.as.obj != bandObject_ && (obj.as.obj->core == coreId_ || obj.as.obj->core == 0)) {
+            base[ip[0]] = Value::byte(data[i]);
+            sp = base + ip[3];
+            ip += 9;
+            NEXT();
+        }
+    }
     if (obj.isObjType(ObjType::List) && index.isInt()) {
         const ObjList* list = asList(obj);
         const uint64_t i = static_cast<uint64_t>(index.as.i);
         if (i < list->size() && obj.as.obj != bandObject_ && (obj.as.obj->core == coreId_ || obj.as.obj->core == 0)) {
             if (!list->packed()) {
                 base[ip[0]] = list->values()[i];
+                sp = base + ip[3];
+                ip += 9;
+                NEXT();
+            }
+            if (const PackedItems& pack = *list->pack; !pack.nullable && (pack.store == ListStore::Ints || pack.store == ListStore::Floats)) {
+                uint64_t bits;
+                std::memcpy(&bits, pack.block.data() + i * pack.width, 8);
+                base[ip[0]].setWhole(static_cast<uint64_t>(pack.store == ListStore::Ints ? ValueKind::Int : ValueKind::Float), bits);
                 sp = base + ip[3];
                 ip += 9;
                 NEXT();

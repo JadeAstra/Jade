@@ -7250,6 +7250,9 @@ private:
         else if (name == "Number.isNaN" && argc == 0) op = NumericOp::IsNaN;
         else if (name == "Number.isInfinite" && argc == 0) op = NumericOp::IsInfinite;
         else if (name == "Number.isFinite" && argc == 0) op = NumericOp::IsFinite;
+        else if (name == "byte.toInt" && argc == 0) op = NumericOp::ToInt;
+        else if (name == "int.toByte" && argc == 0) op = NumericOp::ToByte;
+        else if (name == "int.toByteWrapped" && argc == 0) op = NumericOp::ToByteWrapped;
         else {
             onReceiver = false;
             if (name == "Math.sqrt" && argc == 1) op = NumericOp::Sqrt;

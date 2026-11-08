@@ -4620,8 +4620,11 @@ struct Checker::Impl {
     // What numericKind gives: 1 two ints, 2 two floats, 0 anything else; an expression checked
     // more than once with other kinds (in generic code) gets 0.
     std::unordered_map<const Expr*, uint8_t> numericKinds;
+    // A byte counts as an int: it holds its number as an int does, and arithmetic on it gives
+    // an int (D19).
     void noteNumeric(const Expr& at, const Type& l, const Type& r) {
-        const uint8_t kind = l.nullable || r.nullable ? 0 : l.kind == Type::Int && r.kind == Type::Int ? 1 : l.kind == Type::Float && r.kind == Type::Float ? 2 : 0;
+        const bool lWhole = l.kind == Type::Int || l.kind == Type::Byte, rWhole = r.kind == Type::Int || r.kind == Type::Byte;
+        const uint8_t kind = l.nullable || r.nullable ? 0 : lWhole && rWhole ? 1 : l.kind == Type::Float && r.kind == Type::Float ? 2 : 0;
         auto [found, made] = numericKinds.emplace(&at, kind);
         if (!made && found->second != kind) found->second = 0;
     }

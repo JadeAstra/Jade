@@ -247,6 +247,8 @@ struct Value {
     bool isFromEnd() const { return kind == ValueKind::FromEnd; }
     bool isChar() const { return kind == ValueKind::Char; }
     bool isByte() const { return kind == ValueKind::Byte; }
+    // An int or a byte: a whole number in as.i, which arithmetic takes as an int (D19).
+    bool isWhole() const { return kind == ValueKind::Int || kind == ValueKind::Byte; }
 
     bool isNull() const { return kind == ValueKind::Null; }
     bool isBool() const { return kind == ValueKind::Bool; }

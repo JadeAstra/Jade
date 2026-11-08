@@ -600,6 +600,8 @@ enum class NumericOp : uint8_t {
     MaxInt,
     MinFloat,
     MaxFloat,
+    ToByte,         // int.toByte(): an error outside 0 to 255
+    ToByteWrapped,  // int.toByteWrapped(): the low 8 bits
     Count_
 };
 inline int numericArity(uint8_t which) {

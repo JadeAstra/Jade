@@ -5025,7 +5025,7 @@ bool VM::numberArithmetic(Op op) {
 // a << b and a >> b on ints. Returns true if an overloaded operator was called instead.
 bool VM::shift(Op op) {
     Value a = sp_[-2], b = sp_[-1];
-    if (!a.isInt() || !b.isInt()) return binarySlow(op);
+    if (!a.isWhole() || !b.isWhole()) return binarySlow(op);
 
     int64_t count = b.as.i;
     if (count < 0) throw runtimeError(Thrown::ArithmeticException, "cannot shift by a negative amount (" + std::to_string(count) + ")");
@@ -5050,7 +5050,7 @@ bool VM::shift(Op op) {
 // a & b, a | b and a ^ b on ints. Returns true if an overloaded operator was called instead.
 bool VM::bitwise(Op op) {
     Value a = sp_[-2], b = sp_[-1];
-    if (!a.isInt() || !b.isInt()) return binarySlow(op);
+    if (!a.isWhole() || !b.isWhole()) return binarySlow(op);
 
     int64_t result = op == Op::BitAnd ? a.as.i & b.as.i : op == Op::BitOr ? a.as.i | b.as.i : a.as.i ^ b.as.i;
     sp_[-2] = Value::integer(result);
@@ -5943,23 +5943,33 @@ void VM::run(int baseFrame) {
             base[ip[0]].setFloat(b.as.d op c.as.d);          \
             R_DONE()                                         \
         }                                                    \
-        if (b.isInt() && c.isInt()) {                        \
+        if (b.isWhole() && c.isWhole()) {                    \
             int64_t r_;                                      \
             if (!checked(b.as.i, c.as.i, r_)) {              \
                 base[ip[0]].setInt(r_);                      \
                 R_DONE()                                     \
             }                                                \
+        } else if (b.isNumber() && c.isNumber()) {           \
+            /* an int and a float: a float, as plainly */     \
+            base[ip[0]].setFloat(b.toDouble() op c.toDouble()); \
+            R_DONE()                                         \
         }                                                    \
         R_PLAIN2(b, c, plain)                                \
         R_SLOW2(b, c, 4, 5)                                  \
     }
-// Two floats worked out at once (a division: ints have rules of their own).
-#define R_FLOAT(name, LB, LC, floatExpr, plain)              \
+// A division or a remainder of two floats, or of two whole numbers, worked out at once; a whole
+// number divided by 0 or by -1 the plain way, which has the rules for them.
+#define R_DIVIDE(name, LB, LC, floatExpr, intExpr, plain)    \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
         if (b.isFloat() && c.isFloat()) {                    \
             const double x = b.as.d, y = c.as.d;             \
             base[ip[0]].setFloat(floatExpr);                 \
+            R_DONE()                                         \
+        }                                                    \
+        if (b.isWhole() && c.isWhole() && static_cast<uint64_t>(c.as.i) + 1 > 1) { \
+            const int64_t x = b.as.i, y = c.as.i;            \
+            base[ip[0]].setInt(intExpr);                     \
             R_DONE()                                         \
         }                                                    \
         R_PLAIN2(b, c, plain)                                \
@@ -5969,7 +5979,7 @@ void VM::run(int baseFrame) {
 // numbers; and for ==, two booleans, strings and characters, or null and anything.
 #define R_COMPARED(b, c, cmp, equality, holds)                                                           \
     ((b).isFloat() && (c).isFloat()   ? ((holds) = (b).as.d cmp (c).as.d, true)                          \
-     : ((b).isInt() && (c).isInt()) || ((b).isChar() && (c).isChar()) ? ((holds) = (b).as.i cmp (c).as.i, true) \
+     : ((b).isWhole() && (c).isWhole()) || ((b).isChar() && (c).isChar()) ? ((holds) = (b).as.i cmp (c).as.i, true) \
      : !(equality)                    ? false                                                            \
      : (b).isBool() && (c).isBool()   ? ((holds) = (b).as.b == (c).as.b, true)                           \
      : ((b).isString() || (b).isChar()) && ((c).isString() || (c).isChar()) ? ((holds) = valuesEqual((b), (c)), true) \
@@ -5991,7 +6001,7 @@ void VM::run(int baseFrame) {
 #define R_INTS(name, LB, LC, ok, expr)                       \
     CASE(name) {                                             \
         const Value &b = LB(1), &c = LC(2);                  \
-        if (b.isInt() && c.isInt() && (ok)) {                \
+        if (b.isWhole() && c.isWhole() && (ok)) {            \
             const int64_t x = b.as.i, y = c.as.i;            \
             base[ip[0]].setInt(expr);                        \
             R_DONE()                                         \
@@ -6056,7 +6066,7 @@ void VM::run(int baseFrame) {
     if ((a).isFloat() && (b).isFloat()) {                                     \
         (a).setFloat((a).as.d op (b).as.d);                                   \
         done;                                                                 \
-    } else if ((a).isInt() && (b).isInt()) {                                  \
+    } else if ((a).isWhole() && (b).isWhole()) {                              \
         int64_t sum_;                                                         \
         if (!checked((a).as.i, (b).as.i, sum_)) {                             \
             (a).setInt(sum_);                                                 \
@@ -6072,7 +6082,7 @@ void VM::run(int baseFrame) {
     if ((a).isFloat() && (b).isFloat()) {                                     \
         (a).setBool((a).as.d cmp (b).as.d);                                   \
         done;                                                                 \
-    } else if ((a).isInt() && (b).isInt()) {                                  \
+    } else if ((a).isWhole() && (b).isWhole()) {                              \
         (a).setBool((a).as.i cmp (b).as.i);                                   \
         done;                                                                 \
     }
@@ -6080,7 +6090,7 @@ void VM::run(int baseFrame) {
 #define ARITHMETIC(op, checked, floatExpr)                                 \
     {                                                                     \
         Value b = sp_[-1], a = sp_[-2];                                   \
-        if (a.isInt() && b.isInt()) {                                     \
+        if (a.isWhole() && b.isWhole()) {                                 \
             int64_t sum_;                                                 \
             if (checked(a.as.i, b.as.i, sum_)) throw overflowError(op, a.as.i, b.as.i); \
             sp_[-2].setInt(sum_);                                         \
@@ -6099,7 +6109,7 @@ void VM::run(int baseFrame) {
 #define COMPARISON(op, cmp)                                               \
     {                                                                     \
         Value b = sp_[-1], a = sp_[-2];                                   \
-        if (a.isInt() && b.isInt()) {                                     \
+        if (a.isWhole() && b.isWhole()) {                                 \
             sp_[-2].setBool(a.as.i cmp b.as.i);                           \
             sp_--;                                                        \
         } else if (a.isNumber() && b.isNumber()) {                        \
