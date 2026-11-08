@@ -885,6 +885,10 @@ public:
     void collect(Value iterable, std::vector<Value>& out);
     // The errors set aside for an error (Throwable.suppressed, G40), in the order they came.
     std::vector<Value> setAsideOf(Value error);
+    // Where an error is being made (Throwable's stackTrace): the calls under way, innermost first,
+    // as an uncaught error's are shown, leaving out the error's own constructors (the innermost
+    // calls whose receiver is the object being made), as Java's fillInStackTrace does.
+    Value stackHere();
 
     std::ostream* output;
     std::ostream* errorOutput;  // printError's, and Program.errors'
@@ -1498,6 +1502,7 @@ private:
     bool tryHandle(Value exception, int baseFrame);
     void unwindTo(int baseFrame);
     std::vector<std::string> captureTrace() const;
+    std::vector<std::string> captureTraceFrom(int top) const;
 
     void stringifyInto(std::string& out, Value v, bool quote, int depth);
 

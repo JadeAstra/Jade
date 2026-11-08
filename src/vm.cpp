@@ -1636,6 +1636,10 @@ Value VM::callWithReceiver(Value receiver, ObjClosure* method) {
 
 JadeThrow VM::runtimeError(const std::string& message) { return runtimeError(Thrown::RuntimeException, message); }
 
+namespace {
+Value traceList(VM& vm, const std::vector<std::string>& lines);  // below, with the traces
+}
+
 JadeThrow VM::runtimeError(Thrown kind, const std::string& message) {
     JadeThrow t;
     ObjClass* cls = thrownClasses_[static_cast<size_t>(kind)];
@@ -1647,6 +1651,9 @@ JadeThrow VM::runtimeError(Thrown kind, const std::string& message) {
         error->setField(names.message, str(message));
         error->setField(names.cause, Value::null());
         error->setField(intern("setAside"), Value::null());  // Throwable's errors set aside for it (G40)
+        // Where it was made (Throwable.stackTrace): here, as an error made in Jade code keeps
+        // its maker's place. Not for running out of memory, which the strings would take more of.
+        error->setField(intern("frames"), kind == Thrown::OutOfMemoryError ? Value::null() : traceList(*this, captureTrace()));
         t.value = Value::object(error);
     }
     return t;
@@ -1685,10 +1692,15 @@ JadeThrow VM::outOfMemory() {
     return runtimeError(Thrown::OutOfMemoryError, "out of memory");
 }
 
-std::vector<std::string> VM::captureTrace() const {
+std::vector<std::string> VM::captureTrace() const { return captureTraceFrom(frameCount_ - 1); }
+
+// The calls under way from frame `top` down, innermost first: a deep stack keeps its ten
+// innermost calls and its two outermost.
+std::vector<std::string> VM::captureTraceFrom(int top) const {
     std::vector<std::string> trace;
-    for (int i = frameCount_ - 1; i >= 0; i--) {
-        if (frameCount_ > 14 && i == frameCount_ - 11) {
+    const int frames = top + 1;
+    for (int i = top; i >= 0; i--) {
+        if (frames > 14 && i == frames - 11) {
             trace.push_back("... " + std::to_string(i - 1) + " more calls ...");
             i = 1;
         }
@@ -1706,6 +1718,30 @@ std::vector<std::string> VM::captureTrace() const {
         trace.push_back(std::move(line));
     }
     return trace;
+}
+
+namespace {
+
+// Lines of a trace as a list of strings, for an error's `frames`.
+Value traceList(VM& vm, const std::vector<std::string>& lines) {
+    ObjList* list = newList(vm);
+    std::vector<Value>& values = list->values();
+    values.reserve(lines.size());
+    for (const std::string& line : lines) values.push_back(vm.str(line));
+    vm.account(values.size() * sizeof(Value));
+    return Value::object(list);
+}
+
+}  // namespace
+
+Value VM::stackHere() {
+    int top = frameCount_ - 1;
+    if (top >= 0) {
+        const Value made = frames_[static_cast<size_t>(top)].base[0];
+        if (made.isObjType(ObjType::Instance))
+            while (top >= 0 && frames_[static_cast<size_t>(top)].base[0].isObj() && frames_[static_cast<size_t>(top)].base[0].as.obj == made.as.obj) top--;
+    }
+    return traceList(*this, captureTraceFrom(top));
 }
 
 // Transfers control to the innermost catch block, if it belongs to the run() that is asking.

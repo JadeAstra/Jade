@@ -16,6 +16,42 @@ class Throwable(val message : string? = null, val cause : Throwable? = null) {
   // Errors set aside for this one while it was on its way, as Java keeps them (G40): one from
   // close() after this one came from the block of use { }. None until one is added.
   private var setAside : open List<Throwable>? = null
+  // Where it was made: the calls under way then, as its maker's place. (The VM gives its own
+  // errors theirs as it makes them.)
+  private var frames : List<string>? = __stackHere()
+
+  // Where it was made, as Kotlin's stackTrace: the calls under way then, innermost first, each
+  // as an uncaught error shows it, "at f (main.jade:3)"; a deep stack keeps its ten innermost
+  // calls and its two outermost, with how many were left out between. Its own constructors are not
+  // among them. Empty for an OutOfMemoryError.
+  val stackTrace : List<string>
+    get() => frames ?: []
+
+  // The error and where it was made, as Kotlin's stackTraceToString: its toString(), then its
+  // stackTrace, each line indented, then what was set aside for it ("Suppressed: ") and what
+  // caused it ("Caused by: "), each with its own. Each line ends with "\n".
+  //   catch (e : IOException) { log.write(e.stackTraceToString()) }
+  fun stackTraceToString() : string {
+    val lines : open List<string> = []
+    val seen : open List<Throwable> = []
+    __describeInto(lines, seen, "", "")
+    return lines.map { "$it\n" }.join("")
+  }
+
+  // This error's lines for stackTraceToString, after `heading` and indented by `indent`; one
+  // already described (met twice: set aside for one error and the cause of another) is named,
+  // not gone into again.
+  internal fun __describeInto(lines : open List<string>, seen : open List<Throwable>, heading : string, indent : string) {
+    if (seen.any { it === this }) {
+      lines.add("$indent${heading}[already shown] $this")
+      return
+    }
+    seen.add(this)
+    lines.add("$indent$heading$this")
+    for line in stackTrace { lines.add("$indent  $line") }
+    for aside in suppressed { aside.__describeInto(lines, seen, "Suppressed: ", "$indent  ") }
+    cause?.__describeInto(lines, seen, "Caused by: ", indent)
+  }
 
   // The errors set aside for this one, in the order they came.
   val suppressed : List<Throwable>
