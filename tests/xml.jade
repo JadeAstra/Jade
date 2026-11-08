@@ -1,0 +1,98 @@
+// Xml.parse (M9/M10 part one, step 2): XML read into elements and text, strictly, entities
+// under a cap and never one in another file.
+
+fun parsed(text : string) : XmlElement? {
+  try {
+    return Xml.parse(text)
+  } catch (e : XmlException) {
+    print("XmlException: ${e.message}")
+    return null
+  }
+}
+fun fails(text : string) {
+  try {
+    Xml.parse(text)
+    print("parsed: $text")
+  } catch (e : XmlException) {
+    print("${e.description} (${e.line}:${e.column})")
+  }
+}
+
+// Elements, attributes and text.
+val doc = parsed("""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width='100' height="50">
+  <g id="layer">
+    <rect x="1" y="2" width="3" height="4" fill="red"/>
+    <text x="5">Hello <tspan>there</tspan>!</text>
+  </g>
+  <circle r="7"/>
+</svg>""")!!
+print(doc.name, doc.attributes.keys, doc.attr("width"), doc.attr("missing"), doc.parent)   // expect: svg {"xmlns", "width", "height"} 100 null null
+print(doc.elements().map { it.name }, doc.elements("circle").size, doc.elements("rect").size)   // expect: ["g", "circle"] 1 0
+val g = doc.elements("g")[0]
+val text = g.elements("text")[0]
+print(g.parent?.name, text.text, text.children.size, text.elements("tspan")[0].parent?.name)   // expect: svg Hello there! 3 text
+print(g.elements("rect")[0])   // expect: <rect x="1" y="2" width="3" height="4" fill="red"/>
+print(doc.children.size, doc.children[0] is XmlText, doc.children[1] is XmlElement)   // expect: 5 true true
+
+// Entities: the predefined, numeric, and those the DOCTYPE declares; in text and in attributes.
+val entities = parsed("""<!DOCTYPE note [
+  <!ENTITY who "the &quot;world&quot;">
+  <!ENTITY greeting "hello, &who;">
+  <!ENTITY who "not this: the first declaration counts">
+  <!ELEMENT note (#PCDATA)>
+  <!ATTLIST note kind CDATA "a > b">
+  <!-- a comment -->
+]>
+<note title="&lt;&amp;&gt; &#65;&#x42; &greeting;">&greeting; &#169; &#x1F600; &apos;x&apos;</note>""")!!
+print(entities.text)   // expect: hello, the "world" © 😀 'x'
+print(entities.attr("title"))   // expect: <&> AB hello, the "world"
+
+// CDATA, comments and processing instructions; line ends and attribute whitespace.
+val mixed = parsed("<a>one<!-- gone -->two<![CDATA[ <three> & ]]><?pi data?>four</a>")!!
+print(mixed.children.size, mixed.text)   // expect: 1 onetwo <three> & four
+val lines = parsed("<a\r\n  b=\"x\r\n\ty\">1\r\n2\r3</a>")!!
+print(lines.attr("b"), lines.text.replace("\n", "|"))   // expect: x  y 1|2|3
+print(parsed("\u{FEFF}<a/>")!!.name, parsed("<a k='x>y' j=\"it's\"/>")!!.attributes)   // expect: a {"k": "x>y", "j": "it's"}
+
+// Written back as XML, and read again the same.
+val back = Xml.parse(entities.toString())
+print(entities, back.text == entities.text, back.attr("title") == entities.attr("title"))
+// expect: <note title="&lt;&amp;&gt; AB hello, the &quot;world&quot;">hello, the "world" © 😀 'x'</note> true true
+
+// Not well-formed: each an XmlException with its line and column.
+fails("")   // expect: there is no root element (1:1)
+fails("   ")   // expect: there is no root element (1:4)
+fails("hello")   // expect: text before the root element (1:1)
+fails("<a>")   // expect: <a> is not closed (1:4)
+fails("<a></b>")   // expect: </b> where </a> belongs (1:4)
+fails("<a>\n  <b>\n</a>")   // expect: </a> where </b> belongs (3:1)
+fails("<a/><b/>")   // expect: more after the root element (1:5)
+fails("<a/>text")   // expect: more after the root element (1:5)
+fails("<a b=c/>")   // expect: <a> is malformed here: an attribute is name="value", and a tag ends with > or /> (1:4)
+fails("<a b='1' b='2'/>")   // expect: the attribute b twice in <a> (1:10)
+fails("<a b='<'/>")   // expect: <a> is malformed here: an attribute is name="value", and a tag ends with > or /> (1:4)
+fails("<a b='1'c='2'/>")   // expect: <a> is malformed here: an attribute is name="value", and a tag ends with > or /> (1:9)
+fails("< a/>")   // expect: '<' that starts no tag: write &lt; for a < (1:1)
+fails("<a>1 < 2</a>")   // expect: '<' that starts no tag: write &lt; for a < (1:6)
+fails("<a>x & y</a>")   // expect: '&' that starts no reference: write &amp; for an & (1:6)
+fails("<a>&#xZZ;</a>")   // expect: &#xZZ; is no character reference (1:4)
+fails("<a>&#0;</a>")   // expect: &#0; is a character XML does not allow (1:4)
+fails("<a>&nope;</a>")   // expect: the entity &nope; is not declared (1:4)
+fails("<a>]]></a>")   // expect: ']]>' in text: write ]]&gt; (1:4)
+fails("<a><!-- x -- y --></a>")   // expect: '--' inside a comment (1:11)
+fails("<a><!-- open</a>")   // expect: a comment is not closed with --> (1:4)
+fails("<a><![CDATA[x</a>")   // expect: a CDATA section is not closed with ]]> (1:4)
+fails("<a><!WHAT></a>")   // expect: '<!' that starts no comment or CDATA section (1:4)
+fails("<a/><?xml version='1.0'?>")   // expect: an XML declaration other than at the very start (1:5)
+fails("<a><?pi never closed</a>")   // expect: a processing instruction is not closed with ?> (1:4)
+fails("<!DOCTYPE a><!DOCTYPE a><a/>")   // expect: a second DOCTYPE (1:13)
+fails("<!DOCTYPE a [ <!ENTITY e \"x\" ><a/>")   // expect: something other than a declaration in the DOCTYPE (1:31)
+
+// Entities that are refused: one in another file, one inside itself, markup, a parameter entity.
+fails("<!DOCTYPE a [ <!ENTITY secret SYSTEM \"file:///etc/passwd\"> ]>\n<a>&secret;</a>")   // expect: the entity &secret; is in another file, which is never read (2:4)
+fails("<!DOCTYPE a [ <!ENTITY web PUBLIC \"-//x\" \"http://example.com/x\"> ]><a b='&web;'/>")   // expect: the entity &web; is in another file, which is never read (1:74)
+fails("<!DOCTYPE a [ <!ENTITY loop \"x&loop;\"> ]><a>&loop;</a>")   // expect: the entity &loop; refers to itself (1:45)
+fails("<!DOCTYPE a [ <!ENTITY b \"<b/>\"> ]><a>&b;</a>")   // expect: the entity &b; holds markup, which is not read (1:39)
+fails("<!DOCTYPE a [ <!ENTITY % p \"x\"> %p; ]><a/>")   // expect: a parameter entity, which is not read (1:33)
+print(parsed("<!DOCTYPE a SYSTEM \"http://example.com/never-read.dtd\"><a/>")!!.name)   // expect: a

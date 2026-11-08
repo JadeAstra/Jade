@@ -21,7 +21,8 @@
 # where they could be read in place, JADE_THREAD_STRESS changes threads at every safe point,
 # JADE_CHECK_NATIVE_RESULTS checks each C++ function's result against its declaration, and
 # JADE_GC_STRESS collects at every safe point (gc.jade, which counts collections, and
-# topaz_treemap_big.jade, which times a big layout, are left out of that one). Each checkpoint runs it.
+# topaz_treemap_big.jade, which times a big layout, xml_big.jade, and testing\io_files.jade are
+# left out of that one, each taking hours there). Each checkpoint runs it.
 #
 #   powershell -File tests\run.ps1 -Jade build\work\jade.exe -Parallel 24 -Stress
 #
@@ -206,8 +207,9 @@ $aloneOnly = @()
 
 $tests = @(Get-ChildItem (Join-Path $PSScriptRoot '*.jade') | Sort-Object Name)
 # Left out under the GC stress setting, which collects at every safe point: gc.jade counts
-# collections, and topaz_treemap_big.jade's 200,000 nodes would take hours.
-if ($env:JADE_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.jade', 'topaz_treemap_big.jade') }) }
+# collections, and topaz_treemap_big.jade's 200,000 nodes and xml_big.jade's 20,000 elements
+# and million characters of entities would take hours.
+if ($env:JADE_GC_STRESS) { $tests = @($tests | Where-Object { $_.Name -notin @('gc.jade', 'topaz_treemap_big.jade', 'xml_big.jade') }) }
 $outcomes = @{}
 if ($Parallel -gt 1) {
     # Each test in a runspace of a pool of $Parallel, all started at once and gathered in order.

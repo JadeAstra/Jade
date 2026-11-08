@@ -1,0 +1,32 @@
+// Xml.parse on big input (M9/M10 part one, step 2): a document 20,000 elements deep, and one
+// whose entities would expand to a billion characters. Apart from xml.jade because they make
+// many objects: left out under the GC stress setting (tests/run.ps1), where they take hours.
+
+fun fails(text : string) {
+  try {
+    Xml.parse(text)
+    print("parsed: $text")
+  } catch (e : XmlException) {
+    print("${e.description} (${e.line}:${e.column})")
+  }
+}
+
+// Deep nesting: read and its text gathered without recursion.
+val depth = 20000
+val deep = Xml.parse("<a>".repeat(depth) + "x" + "</a>".repeat(depth))
+var level = 0
+var node : XmlElement? = deep
+while (node!!.elements().isNotEmpty()) {
+  node = node!!.elements()[0]
+  level += 1
+}
+print(level, deep.text)   // expect: 19999 x
+
+// A "billion laughs": entities ten times inside one another, refused at a million characters
+// rather than expanded to a billion.
+val laughs = StringBuilder("<!DOCTYPE lolz [\n  <!ENTITY lol \"lol\">\n")
+for (i in 1 ..< 10) {
+  laughs.append("  <!ENTITY lol$i \"").append("&lol${i == 1 ? "" : "${i - 1}"};".repeat(10)).append("\">\n")
+}
+laughs.append("]>\n<lolz>&lol9;</lolz>")
+fails(laughs.toString())   // expect: the entities expand to more than 1000000 characters (13:7)

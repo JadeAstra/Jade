@@ -1,0 +1,530 @@
+// ---- XML ----
+
+// XML read into its elements and their text (M9/M10): SVG pictures, layout overrides, and any
+// other file of tags.
+//
+//   val svg = Xml.parse(FilePath("logo.svg").readText())
+//   for (shape in svg.elements("rect")) { print(shape.attr("width")) }
+//
+// It reads XML 1.0 strictly: a document that is not well-formed is an XmlException giving the
+// line and column. Comments, processing instructions and the DOCTYPE are passed over, and CDATA
+// is text. The predefined entities (&lt; &gt; &amp; &apos; &quot;) and numeric ones (&#169;
+// &#x1F600;) are read, and so are the entities the DOCTYPE declares, as long as they hold text
+// only and all of them together expand to no more than a million characters; an entity the
+// DOCTYPE says is in another file is never read, and using one is an error. Names are kept as
+// written, prefixes and all ("svg:rect", "xlink:href"): namespaces are not worked out.
+object Xml {
+  // The root element of XML text, with everything inside it. An XmlException where the text is
+  // not well-formed XML.
+  fun parse(text : string) : XmlElement throws XmlException => __XmlReader(text).read()
+}
+
+// What is wrong with XML that Xml.parse was given, and where: the line and the column in it,
+// each counted from 1, the column in characters.
+class XmlException(val description : string, val line : int, val column : int)
+    : Exception("$description, at line $line, column $column")
+
+// A part of an XML document: an element (XmlElement) or a run of text (XmlText).
+interface XmlNode {
+  // The element it is in; null for the document's root element.
+  val parent : XmlElement?
+  // Its text: a run of text's own, or all the text inside an element, in order.
+  val text : string
+}
+
+// A run of text in an element, its entities read: "a < b" for `a &lt; b`. A CDATA section and
+// the text either side of it are one run, as is text either side of a comment.
+class XmlText : XmlNode {
+  // The text.
+  override val text : string
+  // The element it is in.
+  override val parent : XmlElement?
+
+  internal fun init(text : string, parent : XmlElement?) {
+    this.text = text
+    this.parent = parent
+  }
+
+  // The text as it is.
+  override fun toString() : string => text
+}
+
+// An element: its name, its attributes, and what it holds.
+//
+//   val rect = svg.elements("rect").first()
+//   val fill = rect.attr("fill") ?: "black"
+class XmlElement : XmlNode {
+  // Its name as written, a prefix included: "rect", "svg:rect".
+  val name : string
+  // Its attributes by name, in the order they were written, their entities read.
+  val attributes : Map<string, string>
+  // The element it is in; null for the root.
+  override val parent : XmlElement?
+  private val held : open List<XmlNode> = []
+
+  internal fun init(name : string, attributes : Map<string, string>, parent : XmlElement?) {
+    this.name = name
+    this.attributes = attributes
+    this.parent = parent
+  }
+
+  // What it holds, in order: its elements and the runs of text between them.
+  val children : List<XmlNode>
+    get() => held
+
+  // The attribute of that name, or null where it has none.
+  fun attr(name : string) : string? => attributes[name]
+
+  // The elements it holds (not those inside them), only those named `name` where it is given.
+  fun elements(name : string? = null) : List<XmlElement> {
+    val found : open List<XmlElement> = []
+    for (child in held) {
+      if (child is XmlElement) {
+        val element = child as XmlElement
+        if (name == null or element.name == name) { found.add(element) }
+      }
+    }
+    return found
+  }
+
+  // All the text inside it, its elements' included, in order.
+  override val text : string
+    get() {
+      val parts : open List<string> = []
+      val pending : open List<XmlNode> = [this]
+      while (pending.isNotEmpty()) {
+        val node = pending.removeLast()
+        if (node is XmlText) {
+          parts.add(node.text)
+        } else {
+          val inside = (node as XmlElement).held
+          var i = inside.size - 1
+          while (i >= 0) {
+            pending.add(inside[i])
+            i -= 1
+          }
+        }
+      }
+      return parts.join("")
+    }
+
+  // Text added after what it holds: joined to a run of text there already.
+  internal fun addText(more : string) {
+    if (more.isEmpty()) { return }
+    val last = held.size - 1
+    if (last >= 0 and held[last] is XmlText) {
+      held[last] = XmlText((held[last] as XmlText).text + more, this)
+    } else {
+      held.add(XmlText(more, this))
+    }
+  }
+
+  // An element added after what it holds.
+  internal fun addElement(child : XmlElement) {
+    held.add(child)
+  }
+
+  // The element written as XML: <rect width="4"/>, with & < > (and " in an attribute) written
+  // as entities.
+  override fun toString() : string {
+    val out = StringBuilder()
+    writeTo(out)
+    return out.toString()
+  }
+
+  private fun writeTo(out : StringBuilder) {
+    out.append("<").append(name)
+    for (key in attributes.keys) {
+      out.append(" ").append(key).append("=\"").append(__xmlEscape(attributes[key]!!, true)).append("\"")
+    }
+    if (held.isEmpty()) {
+      out.append("/>")
+      return
+    }
+    out.append(">")
+    for (child in held) {
+      if (child is XmlText) {
+        out.append(__xmlEscape(child.text, false))
+      } else {
+        (child as XmlElement).writeTo(out)
+      }
+    }
+    out.append("</").append(name).append(">")
+  }
+}
+
+// Text with the characters XML gives a meaning written as entities: & < >, and " in an
+// attribute's value.
+fun __xmlEscape(text : string, inAttribute : bool) : string {
+  var out = text
+  if (out.contains('&')) { out = out.replace("&", "&amp;") }
+  if (out.contains('<')) { out = out.replace("<", "&lt;") }
+  if (out.contains('>')) { out = out.replace(">", "&gt;") }
+  if (inAttribute and out.contains('"')) { out = out.replace("\"", "&quot;") }
+  return out
+}
+
+// Reads XML for Xml.parse, a tag at a time: from one < to the next by the string search, and
+// a tag's name and attributes matched by regular expressions, which do the work of each
+// character in C++.
+class __XmlReader {
+  static {
+    // How many characters the entities a document declares may expand to, all told. Past it a
+    // document is refused, as one made to fill the memory with entities inside entities (a
+    // "billion laughs") would be.
+    val entityLimit = 1_000_000
+    val nameText = "[\\p{L}_:][\\p{L}\\p{N}\\p{M}_:.\\-\\u00B7]*"
+    val name = Regex(nameText)
+    val attribute = Regex("\\s+(" + nameText + ")\\s*=\\s*(?:\"([^\"<]*)\"|'([^'<]*)')")
+    // A whole start tag, checked in one match: its name, its attributes as one span, and
+    // whether it ends with />.
+    val wholeTag = Regex("<(" + nameText + ")((?:\\s+" + nameText + "\\s*=\\s*(?:\"[^\"<]*\"|'[^'<]*'))*)\\s*(/?)>")
+    val tagEnd = Regex("\\s*(/?)>")
+    val endTag = Regex("</(" + nameText + ")\\s*>")
+    // <!ENTITY name "text">, <!ENTITY % name ...> (a parameter entity), or <!ENTITY name SYSTEM
+    // "address"> (one in another file).
+    val entity = Regex("<!ENTITY\\s+(%\\s+)?(" + nameText + ")\\s+(?:\"([^\"]*)\"|'([^']*)'|(?:SYSTEM|PUBLIC)\\s+(?:\"[^\"]*\"|'[^']*')(?:\\s+(?:\"[^\"]*\"|'[^']*'))?(?:\\s+NDATA\\s+" + nameText + ")?)\\s*>")
+  }
+
+  private val t : string
+  private var pos = 0
+  // Whether the start tag just read ended with />.
+  private var selfClosed = false
+  // The entities the DOCTYPE declares: their text, or null for one in another file.
+  private val entities : open Map<string, string?> = {:}
+  // The characters entities have expanded to so far.
+  private var expanded = 0
+  // The entities being expanded, one inside another.
+  private val expanding : open List<string> = []
+
+  internal fun init(text : string) {
+    var given = text
+    if (given.startsWith('\u{FEFF}')) { given = given[1 ..< given.size] }   // a byte order mark
+    // Line ends read as \n, as XML reads them.
+    if (given.contains('\r')) { given = given.replace("\r\n", "\n").replace('\r', '\n') }
+    this.t = given
+  }
+
+  // The root element, everything before and after it read and passed over.
+  fun read() : XmlElement throws XmlException {
+    if (startsAt(0, "<?xml") and (t.size == 5 or isSpace(t[5]))) {   // the XML declaration
+      val end = t.indexOf("?>", 5)
+      if (end < 0) { throw failure("the XML declaration is not closed with ?>", 0) }
+      pos = end + 2
+    }
+    var sawDoctype = false
+    while (true) {
+      skipSpace()
+      if (pos >= t.size) { throw failure("there is no root element", pos) }
+      if (t[pos] != '<') { throw failure("text before the root element", pos) }
+      if (startsAt(pos, "<!--")) {
+        skipComment()
+      } else if (startsAt(pos, "<?")) {
+        skipInstruction()
+      } else if (startsAt(pos, "<!DOCTYPE")) {
+        if (sawDoctype) { throw failure("a second DOCTYPE", pos) }
+        sawDoctype = true
+        readDoctype()
+      } else {
+        val root = startTag(null)
+        if (!selfClosed) { readContent(root) }
+        readEnd()
+        return root
+      }
+    }
+  }
+
+  // What is inside the root element, to its end tag.
+  private fun readContent(root : XmlElement) throws XmlException {
+    var current : XmlElement? = root
+    while (current != null) {
+      val element = current!!
+      val lt = t.indexOf('<', pos)
+      if (lt < 0) { throw failure("<${element.name}> is not closed", t.size) }
+      if (lt > pos) { readText(element, pos, lt) }
+      pos = lt
+      val next = lt + 1 < t.size ? t[lt + 1] : ' '
+      if (next == '/') {
+        val spans = endTag.spansAt(t, lt)
+        if (spans == null) { throw failure("a malformed end tag", lt) }
+        val closing = t[spans!![2] ..< spans!![3]]
+        if (closing != element.name) { throw failure("</$closing> where </${element.name}> belongs", lt) }
+        pos = spans!![1]
+        current = element.parent
+      } else if (next == '!') {
+        if (startsAt(lt, "<!--")) {
+          skipComment()
+        } else if (startsAt(lt, "<![CDATA[")) {
+          val end = t.indexOf("]]>", lt + 9)
+          if (end < 0) { throw failure("a CDATA section is not closed with ]]>", lt) }
+          element.addText(t[lt + 9 ..< end])
+          pos = end + 3
+        } else {
+          throw failure("'<!' that starts no comment or CDATA section", lt)
+        }
+      } else if (next == '?') {
+        skipInstruction()
+      } else {
+        val child = startTag(element)
+        if (!selfClosed) { current = child }
+      }
+    }
+  }
+
+  // After the root element: only whitespace, comments and processing instructions.
+  private fun readEnd() throws XmlException {
+    while (true) {
+      skipSpace()
+      if (pos >= t.size) { return }
+      if (startsAt(pos, "<!--")) {
+        skipComment()
+      } else if (startsAt(pos, "<?")) {
+        skipInstruction()
+      } else {
+        throw failure("more after the root element", pos)
+      }
+    }
+  }
+
+  // A start tag at pos, made an element of `parent`'s. The whole tag is checked by one match;
+  // its attributes are then read out of it with the string search, as they are known to be
+  // well formed. A tag that does not match is read again a part at a time, for its error.
+  private fun startTag(parent : XmlElement?) : XmlElement throws XmlException {
+    val whole = wholeTag.spansAt(t, pos)
+    if (whole == null) { return startTagWithError(parent) }
+    val spans = whole!!
+    val tagName = t[spans[2] ..< spans[3]]
+    val attrs : open Map<string, string> = {:}
+    var p = spans[4]
+    val end = spans[5]
+    while (p < end) {
+      while (isSpace(t[p])) { p += 1 }
+      val equals = t.indexOf('=', p)
+      var nameEnd = equals
+      while (isSpace(t[nameEnd - 1])) { nameEnd -= 1 }
+      val key = t[p ..< nameEnd]
+      if (attrs.get(key) != null) { throw failure("the attribute $key twice in <$tagName>", p) }
+      var quote = equals + 1
+      while (isSpace(t[quote])) { quote += 1 }
+      val close = t.indexOf(t[quote], quote + 1)
+      attrs[key] = attributeValue(t[quote + 1 ..< close], quote + 1)
+      p = close + 1
+    }
+    selfClosed = spans[7] > spans[6]
+    pos = spans[1]
+    val element = XmlElement(tagName, attrs, parent)
+    if (parent != null) { parent!!.addElement(element) }
+    return element
+  }
+
+  // A start tag that the one match did not take, read a part at a time to find what is wrong
+  // with it, and where.
+  private fun startTagWithError(parent : XmlElement?) : XmlElement throws XmlException {
+    val at = pos
+    val named = name.spansAt(t, at + 1)
+    if (named == null) { throw failure("'<' that starts no tag: write &lt; for a <", at) }
+    val tagName = t[named!![0] ..< named!![1]]
+    var p = named!![1]
+    val attrs : open Map<string, string> = {:}
+    while (true) {
+      val a = attribute.spansAt(t, p)
+      if (a == null) { break }
+      val spans = a!!
+      val key = t[spans[2] ..< spans[3]]
+      if (key in attrs.keys) { throw failure("the attribute $key twice in <$tagName>", spans[2]) }
+      val from = spans[4] >= 0 ? spans[4] : spans[6]
+      val to = spans[4] >= 0 ? spans[5] : spans[7]
+      attrs[key] = attributeValue(t[from ..< to], from)
+      p = spans[1]
+    }
+    val end = tagEnd.spansAt(t, p)
+    if (end == null) {
+      var q = p
+      while (q < t.size and isSpace(t[q])) { q += 1 }
+      throw failure("<$tagName> is malformed here: an attribute is name=\"value\", and a tag ends with > or />", q)
+    }
+    selfClosed = end!![3] > end!![2]
+    pos = end!![1]
+    val element = XmlElement(tagName, attrs, parent)
+    if (parent != null) { parent!!.addElement(element) }
+    return element
+  }
+
+  // An attribute's value as written, at `at`: its whitespace made spaces, its entities read.
+  private fun attributeValue(raw : string, at : int) : string throws XmlException {
+    var value = raw
+    if (value.contains('\n')) { value = value.replace('\n', ' ') }
+    if (value.contains('\t')) { value = value.replace('\t', ' ') }
+    return value.contains('&') ? decode(value, at, -1) : value
+  }
+
+  // The text from `from` up to `to`, added to `element`.
+  private fun readText(element : XmlElement, from : int, to : int) throws XmlException {
+    val raw = t[from ..< to]
+    val bad = raw.indexOf("]]>")
+    if (bad >= 0) { throw failure("']]>' in text: write ]]&gt;", from + bad) }
+    element.addText(raw.contains('&') ? decode(raw, from, -1) : raw)
+  }
+
+  // `s` with its references read. Where `s` is at `at` in the document, an error is placed at
+  // its reference; inside an entity's text (`fixedAt` 0 or more), at the reference to the
+  // entity, `fixedAt`.
+  private fun decode(s : string, at : int, fixedAt : int) : string throws XmlException {
+    val parts : open List<string> = []
+    var from = 0
+    var amp = s.indexOf('&')
+    while (amp >= 0) {
+      val here = fixedAt >= 0 ? fixedAt : at + amp
+      if (amp > from) { parts.add(s[from ..< amp]) }
+      val semi = s.indexOf(';', amp + 1)
+      if (semi < 0) { throw failure("'&' that starts no reference: write &amp; for an &", here) }
+      val ref = s[amp + 1 ..< semi]
+      if (ref.startsWith('#')) {
+        parts.add(character(ref, here))
+      } else {
+        val known = ref == "lt" ? "<" : ref == "gt" ? ">" : ref == "amp" ? "&" : ref == "apos" ? "'" : ref == "quot" ? "\"" : null
+        if (known != null) {
+          parts.add(known!!)
+        } else {
+          val named = name.spansAt(ref, 0)
+          if (named == null or named!![1] != ref.size) { throw failure("'&' that starts no reference: write &amp; for an &", here) }
+          parts.add(entityText(ref, here))
+        }
+      }
+      from = semi + 1
+      amp = s.indexOf('&', from)
+    }
+    if (from < s.size) { parts.add(s[from ..< s.size]) }
+    return parts.join("")
+  }
+
+  // The character of a numeric reference, &#169; or &#xA9; without its & and ;.
+  private fun character(ref : string, at : int) : string throws XmlException {
+    val code = ref.startsWith("#x") ? ref[2 ..< ref.size].toIntOrNull(16) : ref[1 ..< ref.size].toIntOrNull(10)
+    if (code == null or (ref.size > 1 and (ref[1] == '+' or ref[1] == '-')) or (ref.startsWith("#x") and ref.size > 2 and (ref[2] == '+' or ref[2] == '-'))) {
+      throw failure("&$ref; is no character reference", at)
+    }
+    val c = code!!
+    val allowed = c == 0x9 or c == 0xA or c == 0xD or (c >= 0x20 and c <= 0xD7FF) or (c >= 0xE000 and c <= 0xFFFD) or (c >= 0x10000 and c <= 0x10FFFF)
+    if (!allowed) { throw failure("&$ref; is a character XML does not allow", at) }
+    return "${c.char}"
+  }
+
+  // The text of an entity the DOCTYPE declared, its own references read, for a reference at `at`.
+  private fun entityText(entityName : string, at : int) : string throws XmlException {
+    if (!(entityName in entities.keys)) { throw failure("the entity &$entityName; is not declared", at) }
+    val value = entities[entityName]
+    if (value == null) { throw failure("the entity &$entityName; is in another file, which is never read", at) }
+    val raw = value!!
+    if (raw.contains('<')) { throw failure("the entity &$entityName; holds markup, which is not read", at) }
+    if (expanding.contains(entityName)) { throw failure("the entity &$entityName; refers to itself", at) }
+    expanding.add(entityName)
+    val result = raw.contains('&') ? decode(raw, at, at) : raw
+    expanding.removeLast()
+    expanded += result.size
+    if (expanded > entityLimit) { throw failure("the entities expand to more than $entityLimit characters", at) }
+    return result
+  }
+
+  // A DOCTYPE at pos: the entities it declares kept, the rest passed over. An external DTD it
+  // names is never read.
+  private fun readDoctype() throws XmlException {
+    val start = pos
+    var p = pos + 9
+    while (p < t.size and t[p] != '[' and t[p] != '>') {
+      p = t[p] == '"' or t[p] == '\'' ? closingQuote(p) + 1 : p + 1
+    }
+    if (p >= t.size) { throw failure("the DOCTYPE is not closed with >", start) }
+    if (t[p] == '[') {
+      p += 1
+      while (true) {
+        while (p < t.size and isSpace(t[p])) { p += 1 }
+        if (p >= t.size) { throw failure("the DOCTYPE's declarations are not closed with ]", start) }
+        if (t[p] == ']') {
+          p += 1
+          break
+        }
+        if (startsAt(p, "<!ENTITY")) {
+          val e = entity.spansAt(t, p)
+          if (e == null) { throw failure("a malformed ENTITY declaration", p) }
+          val spans = e!!
+          if (spans[2] < 0) {   // a general entity; a parameter entity is passed over
+            val key = t[spans[4] ..< spans[5]]
+            if (!(key in entities.keys)) {   // the first declaration of a name is the one that counts
+              entities[key] = spans[6] >= 0 ? t[spans[6] ..< spans[7]] : spans[8] >= 0 ? t[spans[8] ..< spans[9]] : null
+            }
+          }
+          p = spans[1]
+        } else if (startsAt(p, "<!--")) {
+          pos = p
+          skipComment()
+          p = pos
+        } else if (startsAt(p, "<?")) {
+          pos = p
+          skipInstruction()
+          p = pos
+        } else if (startsAt(p, "<!")) {   // ELEMENT, ATTLIST, NOTATION: passed over
+          p += 2
+          while (p < t.size and t[p] != '>') {
+            p = t[p] == '"' or t[p] == '\'' ? closingQuote(p) + 1 : p + 1
+          }
+          if (p >= t.size) { throw failure("a declaration in the DOCTYPE is not closed with >", start) }
+          p += 1
+        } else if (t[p] == '%') {
+          throw failure("a parameter entity, which is not read", p)
+        } else {
+          throw failure("something other than a declaration in the DOCTYPE", p)
+        }
+      }
+      while (p < t.size and isSpace(t[p])) { p += 1 }
+      if (p >= t.size or t[p] != '>') { throw failure("the DOCTYPE is not closed with >", p) }
+    }
+    pos = p + 1
+  }
+
+  // Where the quote at `at` is closed.
+  private fun closingQuote(at : int) : int throws XmlException {
+    val end = t.indexOf(t[at], at + 1)
+    if (end < 0) { throw failure("a quoted value is not closed", at) }
+    return end
+  }
+
+  private fun skipComment() throws XmlException {
+    val end = t.indexOf("--", pos + 4)
+    if (end < 0) { throw failure("a comment is not closed with -->", pos) }
+    if (end + 2 >= t.size or t[end + 2] != '>') { throw failure("'--' inside a comment", end) }
+    pos = end + 3
+  }
+
+  private fun skipInstruction() throws XmlException {
+    val named = name.spansAt(t, pos + 2)
+    if (named == null) { throw failure("a processing instruction with no name", pos) }
+    val target = t[named!![0] ..< named!![1]]
+    if (target.size == 3 and target.startsWith("xml", ignoreCase = true)) { throw failure("an XML declaration other than at the very start", pos) }
+    val end = t.indexOf("?>", named!![1])
+    if (end < 0) { throw failure("a processing instruction is not closed with ?>", pos) }
+    pos = end + 2
+  }
+
+  private fun skipSpace() {
+    while (pos < t.size and isSpace(t[pos])) { pos += 1 }
+  }
+
+  private fun isSpace(c : char) : bool => c == ' ' or c == '\n' or c == '\t'
+
+  // Whether `s` is in the text at `at`.
+  private fun startsAt(at : int, s : string) : bool => at + s.size <= t.size and t[at ..< at + s.size] == s
+
+  // An XmlException for something wrong at `at`, with its line and column.
+  private fun failure(message : string, at : int) : XmlException {
+    var line = 1
+    var lineStart = 0
+    var nl = t.indexOf('\n')
+    while (nl >= 0 and nl < at) {
+      line += 1
+      lineStart = nl + 1
+      nl = t.indexOf('\n', nl + 1)
+    }
+    return XmlException(message, line, at - lineStart + 1)
+  }
+}

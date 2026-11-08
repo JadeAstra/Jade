@@ -78,6 +78,10 @@ class Regex {
   fun matchEntire(input : string) : MatchResult? => made(input, __regex.find(compiled, input, 0, 2))
   // The match that starts at `index`, or null.
   fun matchAt(input : string, index : int) : MatchResult? => made(input, __regex.find(compiled, input, index, 1))
+  // The match at `index`, as matchAt finds it, given as where it and each group start and end
+  // (-1 for a group that took no part), with no MatchResult made: for the standard library's
+  // readers, which match many times (the XML reader).
+  internal fun spansAt(input : string, index : int) : List<int>? => __regex.find(compiled, input, index, 1)
 
   // Every match replaced by `replacement`, in which $1 is a group's text, ${name} a named
   // group's, and \$ a dollar sign (Regex.escapeReplacement makes text that means itself).

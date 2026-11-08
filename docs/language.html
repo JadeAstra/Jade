@@ -405,6 +405,7 @@ addButton(widgets)</pre></dd>
 <div class="api-ref">
 <h2 id="api-files">The standard library, file by file</h2>
 <ul>
+<li><a href="#file-base64-jade">base64.jade</a></li>
 <li><a href="#file-builtins-jade">builtins.jade</a></li>
 <li><a href="#file-bytesource-jade">bytesource.jade</a></li>
 <li><a href="#file-core-jade">core.jade</a></li>
@@ -434,6 +435,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-time-jade">time.jade</a></li>
 <li><a href="#file-values-jade">values.jade</a></li>
 <li><a href="#file-worker-jade">worker.jade</a></li>
+<li><a href="#file-xml-jade">xml.jade</a></li>
 </ul>
 <h2 id="api-types">Types and what they have</h2>
 <ul class="types">
@@ -446,6 +448,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#AssertionError"><code>AssertionError</code></a> (1)</li>
 <li><a href="#Atomic"><code>Atomic</code></a> (10)</li>
 <li><a href="#AutoCloseable"><code>AutoCloseable</code></a> (2)</li>
+<li><a href="#Base64"><code>Base64</code></a> (3)</li>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
@@ -585,6 +588,11 @@ addButton(widgets)</pre></dd>
 <li><a href="#Worker"><code>Worker</code></a> (9)</li>
 <li><a href="#WorkerParent"><code>WorkerParent</code></a> (4)</li>
 <li><a href="#Writer"><code>Writer</code></a> (10)</li>
+<li><a href="#Xml"><code>Xml</code></a> (2)</li>
+<li><a href="#XmlElement"><code>XmlElement</code></a> (9)</li>
+<li><a href="#XmlException"><code>XmlException</code></a> (1)</li>
+<li><a href="#XmlNode"><code>XmlNode</code></a> (3)</li>
+<li><a href="#XmlText"><code>XmlText</code></a> (4)</li>
 <li><a href="#any.toString"><code>any</code></a> (5)</li>
 <li><a href="#byte.toInt"><code>byte</code></a> (1)</li>
 <li><a href="#char.code"><code>char</code></a> (11)</li>
@@ -592,6 +600,22 @@ addButton(widgets)</pre></dd>
 <li><a href="#int.char"><code>int</code></a> (30)</li>
 <li><a href="#string.size"><code>string</code></a> (109)</li>
 </ul>
+<section class="file" id="file-base64-jade">
+<h2>base64.jade</h2>
+<h3>Base64</h3>
+<div class="entry" id="Base64"><code class="sig">object Base64</code><a class="anchor" href="#Base64">#</a>
+<p>Bytes written as text in 64 characters (RFC 4648), A-Z, a-z, 0-9, + and /, with = to pad the text to a whole number of fours: how pictures are put inside a <code>data:</code> address, an e-mail or an SVG file.</p>
+<pre>val text = Base64.encode(&quot;hello&quot;.toBytes())    // &quot;aGVsbG8=&quot;
+val back = Base64.decode(text).decodeToString()  // &quot;hello&quot;
+</pre>
+</div>
+<div class="entry member" id="Base64.encode"><code class="sig">fun encode(data : Bytes) : string</code><a class="anchor" href="#Base64.encode">#</a>
+<p><code>data</code> as Base64 text, padded with = to a whole number of fours, on one line.</p>
+</div>
+<div class="entry member" id="Base64.decode"><code class="sig">fun decode(text : string) : Bytes</code><a class="anchor" href="#Base64.decode">#</a>
+<p>The bytes Base64 text stands for. Whitespace in it is passed over, so the lines MIME breaks it into every 76 characters are read as one; the padding = at the end may be left out. An IllegalArgumentException for a character Base64 has not, for = before the end, or for a length no bytes give (one character over a whole number of fours).</p>
+</div>
+</section>
 <section class="file" id="file-builtins-jade">
 <h2>builtins.jade</h2>
 <h3>Built-in functions and types</h3>
@@ -6331,6 +6355,74 @@ worker.post({&quot;upTo&quot;: 100000})
 </div>
 <div class="entry member" id="WorkerParent.close"><code class="sig">fun close()</code><a class="anchor" href="#WorkerParent.close">#</a>
 <p>Says that the worker is finished: it ends once what it is doing is done.</p>
+</div>
+</section>
+<section class="file" id="file-xml-jade">
+<h2>xml.jade</h2>
+<h3>XML</h3>
+<div class="entry" id="Xml"><code class="sig">object Xml</code><a class="anchor" href="#Xml">#</a>
+<p>XML read into its elements and their text (M9/M10): SVG pictures, layout overrides, and any other file of tags.</p>
+<pre>val svg = Xml.parse(FilePath(&quot;logo.svg&quot;).readText())
+for (shape in svg.elements(&quot;rect&quot;)) { print(shape.attr(&quot;width&quot;)) }
+</pre>
+<p>It reads XML 1.0 strictly: a document that is not well-formed is an XmlException giving the line and column. Comments, processing instructions and the DOCTYPE are passed over, and CDATA is text. The predefined entities (&amp;lt; &amp;gt; &amp;amp; &amp;apos; &amp;quot;) and numeric ones (&amp;#169; &amp;#x1F600;) are read, and so are the entities the DOCTYPE declares, as long as they hold text only and all of them together expand to no more than a million characters; an entity the DOCTYPE says is in another file is never read, and using one is an error. Names are kept as written, prefixes and all (&quot;svg:rect&quot;, &quot;xlink:href&quot;): namespaces are not worked out.</p>
+</div>
+<div class="entry member" id="Xml.parse"><code class="sig">fun parse(text : string) : XmlElement throws XmlException</code><a class="anchor" href="#Xml.parse">#</a>
+<p>The root element of XML text, with everything inside it. An XmlException where the text is not well-formed XML.</p>
+</div>
+<div class="entry" id="XmlException"><code class="sig">class XmlException(val description : string, val line : int, val column : int)</code><a class="anchor" href="#XmlException">#</a>
+<p>What is wrong with XML that Xml.parse was given, and where: the line and the column in it, each counted from 1, the column in characters.</p>
+</div>
+<div class="entry" id="XmlNode"><code class="sig">interface XmlNode</code><a class="anchor" href="#XmlNode">#</a>
+<p>A part of an XML document: an element (XmlElement) or a run of text (XmlText).</p>
+</div>
+<div class="entry member" id="XmlNode.parent"><code class="sig">val parent : XmlElement?</code><a class="anchor" href="#XmlNode.parent">#</a>
+<p>The element it is in; null for the document's root element.</p>
+</div>
+<div class="entry member" id="XmlNode.text"><code class="sig">val text : string</code><a class="anchor" href="#XmlNode.text">#</a>
+<p>Its text: a run of text's own, or all the text inside an element, in order.</p>
+</div>
+<div class="entry" id="XmlText"><code class="sig">class XmlText : XmlNode</code><a class="anchor" href="#XmlText">#</a>
+<p>A run of text in an element, its entities read: &quot;a &lt; b&quot; for <code>a &amp;lt; b</code>. A CDATA section and the text either side of it are one run, as is text either side of a comment.</p>
+</div>
+<div class="entry member" id="XmlText.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlText.text">#</a>
+<p>The text.</p>
+</div>
+<div class="entry member" id="XmlText.parent"><code class="sig">override val parent : XmlElement?</code><a class="anchor" href="#XmlText.parent">#</a>
+<p>The element it is in.</p>
+</div>
+<div class="entry member" id="XmlText.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlText.toString">#</a>
+<p>The text as it is.</p>
+</div>
+<div class="entry" id="XmlElement"><code class="sig">class XmlElement : XmlNode</code><a class="anchor" href="#XmlElement">#</a>
+<p>An element: its name, its attributes, and what it holds.</p>
+<pre>val rect = svg.elements(&quot;rect&quot;).first()
+val fill = rect.attr(&quot;fill&quot;) ?: &quot;black&quot;
+</pre>
+</div>
+<div class="entry member" id="XmlElement.name"><code class="sig">val name : string</code><a class="anchor" href="#XmlElement.name">#</a>
+<p>Its name as written, a prefix included: &quot;rect&quot;, &quot;svg:rect&quot;.</p>
+</div>
+<div class="entry member" id="XmlElement.attributes"><code class="sig">val attributes : Map&lt;string, string&gt;</code><a class="anchor" href="#XmlElement.attributes">#</a>
+<p>Its attributes by name, in the order they were written, their entities read.</p>
+</div>
+<div class="entry member" id="XmlElement.parent"><code class="sig">override val parent : XmlElement?</code><a class="anchor" href="#XmlElement.parent">#</a>
+<p>The element it is in; null for the root.</p>
+</div>
+<div class="entry member" id="XmlElement.children"><code class="sig">val children : List&lt;XmlNode&gt;</code><a class="anchor" href="#XmlElement.children">#</a>
+<p>What it holds, in order: its elements and the runs of text between them.</p>
+</div>
+<div class="entry member" id="XmlElement.attr"><code class="sig">fun attr(name : string) : string?</code><a class="anchor" href="#XmlElement.attr">#</a>
+<p>The attribute of that name, or null where it has none.</p>
+</div>
+<div class="entry member" id="XmlElement.elements"><code class="sig">fun elements(name : string? = null) : List&lt;XmlElement&gt;</code><a class="anchor" href="#XmlElement.elements">#</a>
+<p>The elements it holds (not those inside them), only those named <code>name</code> where it is given.</p>
+</div>
+<div class="entry member" id="XmlElement.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlElement.text">#</a>
+<p>All the text inside it, its elements' included, in order.</p>
+</div>
+<div class="entry member" id="XmlElement.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlElement.toString">#</a>
+<p>The element written as XML: &lt;rect width=&quot;4&quot;/&gt;, with &amp; &lt; &gt; (and &quot; in an attribute) written as entities.</p>
 </div>
 </section>
 </div>
