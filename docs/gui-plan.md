@@ -2,7 +2,7 @@
 
 Status: agreed plan, every decision settled (section 8). Work proceeds one milestone at a
 time (section 7). M0, the two spikes, is done and accepted; what it found is in
-[m0-findings.md](m0-findings.md) and is folded in below. M1, the language, and M2, the
+[plans-and-gaps6.7.html](plans-and-gaps6.7.html#m0) and is folded in below. M1, the language, and M2, the
 standard library, are done. M3, threads and async I/O, is built; what was settled along the
 way is under "As built in M3" in 5.5 (and "As built in M2" in 5.4). M3.5, parallel
 sections, is built too (5.5, point 7). M4, the text engine, has its first part built
@@ -1502,7 +1502,7 @@ posted to it by a script pressed its button.
 ### 6.4 As built in M7
 
 The rest of the root package that apps build with is ported, in `lib/Topaz`, from the plan in
-`docs/M7-plan.md`:
+[plans-and-gaps6.7.html](plans-and-gaps6.7.html#m7p):
 
 | Jade | From | Holds |
 | --- | --- | --- |
@@ -1607,7 +1607,7 @@ part allows, until its second part.
 ### 6.5 As built in M8
 
 M8 ported JadeUI's dialogs, its charts and its treemap, and with them JadeMem, the smallest of
-the programs built on JadeUI, from the plan in `docs/M8-plan.md`. In `lib/Topaz`:
+the programs built on JadeUI, from the plan in [plans-and-gaps6.7.html](plans-and-gaps6.7.html#m8p). In `lib/Topaz`:
 
 | Jade | From | Holds |
 | --- | --- | --- |
@@ -1697,7 +1697,7 @@ Later milestones are described in less detail on purpose. Each is planned proper
 is reached, with what the earlier ones taught.
 
 **M0. Two spikes.** *Done and accepted. What they found is in
-[m0-findings.md](m0-findings.md); the code is on the branch `m0-spikes`.* Spike 1: lambda literals, trailing
+[plans-and-gaps6.7.html](plans-and-gaps6.7.html#m0); the code is on the branch `m0-spikes`.* Spike 1: lambda literals, trailing
 lambdas and receiver blocks in the parser, to find the grammar conflicts before committing
 (a `{` after a call in an `if` header, and telling a map literal from a lambda by its first
 tokens), and the two loading questions left open under namespaces in 5.1. Spike 2: an OpenGL window
@@ -2491,7 +2491,7 @@ section 6.4.
 size to content, centre on owner, key filter), `DialogSession` and the eight
 dialogs, async file dialogs (N2), then `chart`. Ends with **JadeMem's gui module ported**,
 its three background samplers running as threads: it is the smallest real app and uses
-exactly this much. Planned in `docs/M8-plan.md` (2026-11-06), which adds, at the user's
+exactly this much. Planned in [plans-and-gaps6.7.html](plans-and-gaps6.7.html#m8p) (2026-11-06), which adds, at the user's
 choice, what JadeMem turned out to need: its `core` and `native` modules too, Jade calling
 functions in DLLs (foreign functions), `treemap` and `Regex` (N5) brought forward from M9,
 and the line width, arcs and wedges of N3.

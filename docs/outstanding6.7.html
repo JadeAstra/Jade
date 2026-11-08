@@ -100,7 +100,7 @@ pre code { background: none; padding: 0; }
 <li><a href="#m8">Left from M8</a> (thirteen)</li>
 <li><a href="#sandbox">The sandbox: what was left out</a> (eleven)</li>
 <li><a href="#speed">Speed: leads, measurements and limits</a> (ten)</li>
-<li><a href="#cautions">Standing cautions</a> (four)</li>
+<li><a href="#cautions">Standing cautions</a> (five)</li>
 <li><a href="#kept">Left as they are, by decision</a> (eight)</li>
 </ul>
 </nav>
@@ -232,6 +232,7 @@ pre code { background: none; padding: 0; }
 <li><strong>Stores and reads (part D).</strong> A 16-byte read of a value just written in two 8-byte stores waits: most of an R instruction's cost is how its result is stored and read. Writing every int and float result whole cost more than it saved.</li>
 <li><strong>Ref helpers (step 6).</strong> Any branch or call inlined into <code>refClass</code> or <code>refBytes</code> made reads of list items 75% slower, with identical run code: leave them as they are. The same goes for adding work to an instruction's hot part on Windows, where any call there gives it a frame.</li>
 <li><strong>Three ways of running.</strong> <code>JADE_REGISTER_CODE=joined</code> and <code>=plain</code> are kept for testing and timing; the suite is to keep passing in all three.</li>
+<li><strong>One graphics card (<a href="plans-and-gaps6.7.html#m0-not-tested">M0</a>).</strong> Topaz's windows have been drawn only on this machine's NVIDIA card. Intel graphics, virtual machines and Remote Desktop, where OpenGL is weakest, are untried: the risk gui-plan.md's section 9 names, which a run on another machine would settle.</li>
 </ul>
 
 <h2 id="kept">Left as they are, by decision</h2>
