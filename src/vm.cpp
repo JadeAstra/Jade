@@ -3274,6 +3274,9 @@ void VM::writeValueField(uint8_t* at, const ValueField& field, const ObjClass* o
             writeNarrow(field.narrow, at, value);
             break;
         case ValueField::Object: {
+            // A value type's value that may be null is kept by pointer: one kept in a Value of
+            // its own (a small one, of one field) is boxed first, or it would be kept as null.
+            if (value.isSmall()) value = boxSmall(value);
             Obj* obj = value.isObj() ? value.as.obj : nullptr;
             std::memcpy(at, &obj, sizeof obj);
             break;

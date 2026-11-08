@@ -1,0 +1,25 @@
+// A value type of one field (kept in a Value of its own, a small value) in another value's
+// nullable field. Such a field is kept by pointer, and a small value given to it was kept as a
+// null pointer: read back as null, unless it was made in place as the argument (found in M8
+// after, with Path.entries() giving its Instant times as null).
+value One(val n : int)
+value Holder(val o : One?)
+
+fun maybe(give : bool) : One? => give ? One(5) : null
+
+val kept = One(6)
+val h = Holder(kept)
+print(h.o, h.o?.n)   // expect: One(n=6) 6
+print(Holder(maybe(true)).o, Holder(maybe(false)).o)   // expect: One(n=5) null
+val b = false
+print(Holder(b ? null : One(7)).o)   // expect: One(n=7)
+
+// Equality, copy and lists see the same.
+print(h == Holder(One(6)), h.copy(o = null).o, h.copy(o = One(8)).o)   // expect: true null One(n=8)
+val hs = [Holder(kept), Holder(null)]
+print(hs, hs[0].o!!.n + 1)   // expect: [Holder(o=One(n=6)), Holder(o=null)] 7
+
+// Instant is such a value: the case that showed it.
+value Stamp(val at : Instant?)
+val nanos : int? = 7
+print(Stamp(nanos == null ? null : Instant(nanos)).at)   // expect: 1970-01-01T00:00:00.000000007Z
