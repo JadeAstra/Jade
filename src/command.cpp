@@ -1097,6 +1097,13 @@ int testFilesCommand(const std::vector<std::string>& given) {
             continue;
         }
         vm.load(session.program);
+        // A worker a test starts loads its own copy of the program from these bytes, as in a run.
+        Program& program = session.program;
+        vm.programImage = [&program] {
+            std::ostringstream image(std::ios::binary);
+            writeProgram(program, image);
+            return image.str();
+        };
         TestRun run(vm, session, checker, path);
         try {
             run.run(entry);
