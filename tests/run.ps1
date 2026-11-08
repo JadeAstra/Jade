@@ -24,9 +24,19 @@
 # topaz_treemap_big.jade, which times a big layout, are left out of that one). Each checkpoint runs it.
 #
 #   powershell -File tests\run.ps1 -Jade build\work\jade.exe -Parallel 24 -Stress
+#
+# Each run of jade is stopped, and fails, after -TimeLimit seconds: 120 if not given, 600 under
+# JADE_GC_STRESS. A test that hangs then costs minutes, not the hours one once did unnoticed.
 
 param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'), [int]$Parallel = 1,
-      [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'), [switch]$Stress)
+      [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'), [switch]$Stress,
+      [int]$TimeLimit = 0)
+
+# Each run of jade is stopped after this many seconds and fails: 120, or 600 under the GC stress
+# setting, which collects at every safe point; -TimeLimit gives another.
+$askedLimit = $TimeLimit
+if ($TimeLimit -le 0) { $TimeLimit = if ($env:JADE_GC_STRESS) { 600 } else { 120 } }
+$env:JADE_TEST_LIMIT = "$TimeLimit"
 
 if (-not (Test-Path $Jade)) {
     Write-Host "jade.exe not found at $Jade - run build.bat first"
@@ -41,12 +51,12 @@ if ($Stress) {
                             'native-results' = 'JADE_CHECK_NATIVE_RESULTS'; 'gc-stress' = 'JADE_GC_STRESS' }
     $failed = $false
     Write-Host '== the suite'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes ($Modes -join ',')
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes ($Modes -join ',') -TimeLimit $askedLimit
     if ($LASTEXITCODE -ne 0) { $failed = $true }
     foreach ($name in $settings.Keys) {
         Write-Host "== $name"
         Set-Item "env:$($settings[$name])" '1'
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes script
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Jade $Jade -Parallel $Parallel -Modes script -TimeLimit $askedLimit
         if ($LASTEXITCODE -ne 0) { $failed = $true }
         Remove-Item "env:$($settings[$name])"
     }
@@ -81,18 +91,28 @@ function Invoke-Jade([string[]]$JadeArgs, [string]$Program, [string]$Dir, [strin
 
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    # A run past its time limit (JADE_TEST_LIMIT seconds, from -TimeLimit) is stopped, with any
+    # processes it started, and fails as such: a test that hangs costs minutes, not hours.
+    $limit = [int]$env:JADE_TEST_LIMIT
+    $timedOut = $false
+    if ($limit -gt 0 -and -not $process.WaitForExit($limit * 1000)) {
+        $timedOut = $true
+        & taskkill /PID $process.Id /T /F 2>&1 | Out-Null
+    }
     $process.WaitForExit()
 
     $lines = @($stdout.Result -split "\r?\n")
     if ($lines.Count -gt 0 -and $lines[-1] -eq '') {
         $lines = @($lines | Select-Object -SkipLast 1)
     }
-    return @{ Lines = $lines; Error = $stderr; Code = $process.ExitCode }
+    $errorText = if ($timedOut) { "stopped after $limit s: past the time limit (-TimeLimit)`n" + $stderr.Result } else { $stderr.Result }
+    return @{ Lines = $lines; Error = $errorText; Code = $process.ExitCode; TimedOut = $timedOut; Limit = $limit }
 }
 
 # Returns $null if the run matches, otherwise a description of the first difference.
 function Compare-Run($run, [string[]]$expected, [string]$errorText, [int]$exitCode) {
+    if ($run.TimedOut) { return "stopped after $($run.Limit) s: past the time limit (-TimeLimit)" }
     $actual = $run.Lines
     for ($i = 0; $i -lt [Math]::Max($expected.Count, $actual.Count); $i++) {
         $want = if ($i -lt $expected.Count) { $expected[$i].TrimEnd() } else { '<no more output>' }
