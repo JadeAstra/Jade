@@ -234,12 +234,14 @@ class LineIndex {
       while (true) {
         val n = raf.readAt(offset, buffer)
         if (n <= 0) { break }
-        var at = buffer.indexOf(10)
-        while (at >= 0 and at < n) {
-          newlines += 1
-          if (newlines % checkpointInterval == 0) { found.add(offset + at + 1) }
-          at = buffer.indexOf(10, at + 1)
+        // The megabyte's line ends in one call; a checkpoint after each checkpointInterval-th.
+        val ends = buffer.indicesOf(10, 0, n)
+        var next = checkpointInterval - newlines % checkpointInterval
+        while (next <= ends.size) {
+          found.add(offset + ends[next - 1] + 1)
+          next += checkpointInterval
         }
+        newlines += ends.size
         offset += n
         lastByte = buffer[n - 1].toInt()
         indexedBytes = offset
@@ -378,12 +380,13 @@ fun __lineIndexWorker() {
           val n = file.readAt(offset, buffer)
           if (n <= 0) { break }
           val found : open List<int> = []
-          var at = buffer.indexOf(10)
-          while (at >= 0 and at < n) {
-            newlines += 1
-            if (newlines % interval == 0) { found.add(offset + at + 1) }
-            at = buffer.indexOf(10, at + 1)
+          val ends = buffer.indicesOf(10, 0, n)
+          var next = interval - newlines % interval
+          while (next <= ends.size) {
+            found.add(offset + ends[next - 1] + 1)
+            next += interval
           }
+          newlines += ends.size
           offset += n
           lastByte = buffer[n - 1].toInt()
           Worker.parent!!.post({"checkpoints": found, "bytes": offset, "newlines": newlines})

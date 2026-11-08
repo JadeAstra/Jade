@@ -38,6 +38,34 @@ while (at >= 0) {
 }
 print(ends, text.indexOf(10, -5), text.indexOf(10, 99), text.indexOf(99.toByte(), 2))   // expect: [1, 4, 5] 1 -1 6
 
+// All at once (indicesOf), from and up to a position; places outside taken as the ends.
+print(text.indicesOf(10), text.indicesOf(10, 2), text.indicesOf(10, 0, 5), text.indicesOf(10, -3, 99))   // expect: [1, 4, 5] [4, 5] [1, 4] [1, 4, 5]
+print(text.indicesOf(10, 4, 2), text.indicesOf(7), Bytes(0).indicesOf(10), text.indicesOf(10).size)        // expect: [] [] [] 3
+// Over a buffer long enough for 64 bytes at a time, with runs of matches, a block full of
+// them and a tail: the same as indexOf in a loop, from every start and end tried.
+val mixed = Bytes(1000)
+var seed = 7
+for (i in 0 ..< mixed.size) {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff
+  if (seed % 5 == 0 or (i >= 300 and i < 380)) { mixed[i] = 10.toByte() }
+}
+fun byLoop(data : Bytes, from : int, to : int) : List<int> {
+  val found : open List<int> = []
+  var p = data.indexOf(10, from)
+  while (p >= 0 and p < to) {
+    found.add(p)
+    p = data.indexOf(10, p + 1)
+  }
+  return found
+}
+var same = true
+for (from in [0, 1, 63, 64, 65, 290, 333, 999, 1000]) {
+  for (to in [0, 5, 64, 128, 379, 380, 381, 937, 1000]) {
+    if (to >= from and mixed.indicesOf(10, from, to) != byLoop(mixed, from, to)) { same = false }
+  }
+}
+print(same, mixed.indicesOf(10).size == byLoop(mixed, 0, 1000).size)   // expect: true true
+
 // A loop gives the numbers.
 var sum = 0
 for b in data { sum += b }

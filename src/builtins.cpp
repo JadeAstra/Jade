@@ -19,8 +19,12 @@ extern char** environ;
 #include <xlocale.h>
 #endif
 #endif
+#if defined(__SSE2__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -250,6 +254,48 @@ int64_t integerPower(VM& vm, int64_t base, int64_t exponent) {
 }
 
 namespace {
+
+// How many of data[start, end) are `value`, and with `places` given, where each is, in order
+// (Bytes.indicesOf: counted first, so that the list is made the size it ends at). With SSE2,
+// which every x64 processor has, 64 bytes are compared at a time, as four of 16, and the
+// matches read off a 64-bit mask, rather than a memchr call for each. The first four of a
+// block's matches are written whether there are four or not, and the count moved on by how
+// many there are, so that no branch depends on how many there are (as simdjson does): for
+// line ends, a match every 60 bytes or so, a branch on it would guess wrong half the time.
+// `places` has room for 4 more than are found.
+size_t bytePlaces(const uint8_t* data, int64_t start, int64_t end, uint8_t value, int64_t* places) {
+    size_t found = 0;
+    int64_t at = start;
+#if defined(__SSE2__) || defined(_M_X64)
+    const __m128i wanted = _mm_set1_epi8(static_cast<char>(value));
+    auto mask16 = [&](int64_t from) {
+        const __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + from));
+        return static_cast<uint64_t>(static_cast<unsigned>(_mm_movemask_epi8(_mm_cmpeq_epi8(chunk, wanted))));
+    };
+    for (; at + 64 <= end; at += 64) {
+        uint64_t mask = mask16(at) | mask16(at + 16) << 16 | mask16(at + 32) << 32 | mask16(at + 48) << 48;
+        const int count = std::popcount(mask);
+        if (places != nullptr) {
+            int64_t* out = places + found;
+            for (int i = 0; i < 4; i++) {
+                out[i] = at + std::countr_zero(mask);  // 64 past the last: written over or left beyond
+                mask &= mask - 1;
+            }
+            for (int i = 4; mask != 0; i++) {
+                out[i] = at + std::countr_zero(mask);
+                mask &= mask - 1;
+            }
+        }
+        found += static_cast<size_t>(count);
+    }
+#endif
+    for (; at < end; at++)
+        if (data[at] == value) {
+            if (places != nullptr) places[found] = at;
+            found++;
+        }
+    return found;
+}
 
 // ---- Global functions ----
 
@@ -1069,6 +1115,34 @@ void registerBytes(VM& vm) {
             return Value::integer(-1);
         const void* found = std::memchr(data.data() + start, static_cast<int>(args[0].as.i), data.size() - static_cast<size_t>(start));
         return Value::integer(found == nullptr ? -1 : static_cast<const uint8_t*>(found) - data.data());
+    });
+
+    // Every place of a byte from `startIndex` up to `endIndex` (not included), in order, as a
+    // List<int>: a buffer's line ends found in one call (LineIndex), where a loop of indexOf
+    // pays for a call at each. Places outside the bytes are taken as their ends.
+    vm.defineMethod(T, "indicesOf", 1, 3, [](VM& vm, Value self, int argc, Value* args) -> Value {
+        const int64_t size = static_cast<int64_t>(asBytes(self)->data.size());
+        const int64_t start = argc > 1 && !args[1].isNull() ? std::clamp<int64_t>(vm.toInt(args[1], "startIndex"), 0, size) : 0;
+        const int64_t end = argc > 2 && !args[2].isNull() ? std::clamp<int64_t>(vm.toInt(args[2], "endIndex"), start, size) : size;
+        const bool searched = (args[0].isInt() || args[0].isByte()) && args[0].as.i >= 0 && args[0].as.i <= 255;
+        const uint8_t value = static_cast<uint8_t>(args[0].as.i);
+        const size_t count = searched ? bytePlaces(asBytes(self)->data.data(), start, end, value, nullptr) : 0;
+        ObjList* list = newList(vm);
+        TempRoot keep(vm, Value::object(list));
+        vm.typeList(list, vm.typeOf(kTypeList, false, nullptr, {vm.typeOf(kTypeInt, false, nullptr, {})}));
+        if (count == 0) return Value::object(list);
+        if (list->store() == ListStore::Ints) {
+            list->pack->block.resize((count + 4) * sizeof(int64_t));  // room for what bytePlaces writes past the last
+            bytePlaces(asBytes(self)->data.data(), start, end, value, reinterpret_cast<int64_t*>(list->pack->block.data()));
+            list->pack->block.resize(count * sizeof(int64_t));
+            list->pack->count = count;
+            vm.account(list->pack->block.size());
+        } else {
+            std::vector<int64_t> places(count + 4);
+            bytePlaces(asBytes(self)->data.data(), start, end, value, places.data());
+            for (int64_t place : places) vm.listAdd(list, Value::integer(place));
+        }
+        return Value::object(list);
     });
 
     vm.defineMethod(T, "contains", 1, 1, [](VM&, Value self, int, Value* args) -> Value {

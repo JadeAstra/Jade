@@ -449,7 +449,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.size"><code>Bytes</code></a> (21)</li>
+<li><a href="#Bytes.size"><code>Bytes</code></a> (22)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
@@ -1078,6 +1078,9 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="Bytes.indexOf"><code class="sig">fun Bytes.indexOf(value : byte, startIndex : int = 0) : int</code><a class="anchor" href="#Bytes.indexOf">#</a>
 <p>The position of the first byte equal to <code>value</code> at or after <code>startIndex</code>, or -1 where there is none; a negative <code>startIndex</code> is taken as 0, as a string's indexOf takes it.</p>
+</div>
+<div class="entry" id="Bytes.indicesOf"><code class="sig">fun Bytes.indicesOf(value : byte, startIndex : int = 0, endIndex : int = size) : List&lt;int&gt;</code><a class="anchor" href="#Bytes.indicesOf">#</a>
+<p>The positions of every byte equal to <code>value</code> from <code>startIndex</code> up to <code>endIndex</code> (not included), in order: the line ends of a buffer, say, found in one call rather than a call for each. Positions outside the bytes are taken as their ends.</p>
 </div>
 <div class="entry" id="Bytes.contains"><code class="sig">fun Bytes.contains(value : any?) : bool</code><a class="anchor" href="#Bytes.contains">#</a>
 <p>True when a byte equal to <code>value</code> is there, given as a byte or an int; false for anything else.</p>

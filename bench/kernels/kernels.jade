@@ -302,13 +302,32 @@ fun gaussian() : string {
   return "gaussian ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
 }
 
-// The same 100 MB as a file, written first; the time is LineIndex reading and indexing it from
-// the system's cache. As LineIndex counts them: a last line with no line end is a line, and the
-// first line's start is a checkpoint.
-fun lineFile() : FilePath {
+// The same 100 MB as a file, written first, a megabyte at a time (100 MB made and dropped here
+// would be freed while LineIndex is timed, as C++'s is not); the time is LineIndex reading and
+// indexing it from the system's cache. As LineIndex counts them: a last line with no line end
+// is a line, and the first line's start is a checkpoint.
+fun lineFile() : FilePath throws IOException {
   val f = FilePath.createTempFile("lines", ".txt")
-  f.writeBytes(lineData())
-  f.readBytes()   // into the system's cache, as C++'s is
+  val n = 100_000_000
+  val chunk = Bytes(1048576)
+  var s = 1
+  var next = 0          // the next line end, as lineData() places them
+  s = lcg(s)
+  next += 20 + s % 80
+  RandomAccessFile(f, "rw").use { file ->
+    var base = 0
+    while (base < n) {
+      val size = Math.min(chunk.size, n - base)
+      chunk.fill(0.toByte())
+      while (next < base + size) {
+        chunk[next - base] = 10.toByte()
+        s = lcg(s)
+        next += 20 + s % 80
+      }
+      file.writeAt(base, chunk, 0, size)
+      base += size
+    }
+  }
   return f
 }
 fun indexed(name : string, idx : LineIndex, started : Instant) : string =>
@@ -321,8 +340,9 @@ fun lineIndex() : string {
     val idx = LineIndex(f)
     val started = Instant.now()
     idx.build()
+    val line = indexed("lineIndex", idx, started)
     f.deleteIfExists()
-    return indexed("lineIndex", idx, started)
+    return line
   } catch (e : IOException) {
     return "lineIndex failed: ${e.message}"
   }
@@ -334,8 +354,9 @@ suspend fun lineWorker() : string throws IOException | ExecutionException {
   val idx = LineIndex(f)
   val started = Instant.now()
   idx.buildInBackground().get()
+  val line = indexed("lineWorker", idx, started)
   f.deleteIfExists()
-  return indexed("lineWorker", idx, started)
+  return line
 }
 
 val which = Program.arguments.getOrNull(0) ?: "all"
