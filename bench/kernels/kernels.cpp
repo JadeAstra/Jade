@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <cctype>
+#include <string_view>
 #include <string>
 #include <thread>
 #include <vector>
@@ -74,6 +77,171 @@ static void lineWorker() {
     const std::string path = lineFile();
     std::thread([&] { indexFile("lineWorker", path); }).join();
     std::remove(path.c_str());
+}
+
+// Base64 of 5 MB with no pattern, as a picture's bytes, both ways.
+static std::vector<uint8_t> pictureBytes() {
+    std::vector<uint8_t> d(5000000);
+    int64_t s = 3;
+    for (uint8_t& b : d) { s = lcg(s); b = (uint8_t)((s >> 7) & 255); }
+    return d;
+}
+static const char kLetters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static std::string b64encode(const std::vector<uint8_t>& d) {
+    std::string out((d.size() + 2) / 3 * 4, '=');
+    size_t i = 0, o = 0;
+    for (; i + 3 <= d.size(); i += 3, o += 4) {
+        const uint32_t w = d[i] << 16 | d[i + 1] << 8 | d[i + 2];
+        out[o] = kLetters[w >> 18]; out[o + 1] = kLetters[w >> 12 & 63]; out[o + 2] = kLetters[w >> 6 & 63]; out[o + 3] = kLetters[w & 63];
+    }
+    if (i < d.size()) {
+        const uint32_t w = d[i] << 16 | (i + 1 < d.size() ? d[i + 1] << 8 : 0);
+        out[o] = kLetters[w >> 18]; out[o + 1] = kLetters[w >> 12 & 63];
+        if (i + 1 < d.size()) out[o + 2] = kLetters[w >> 6 & 63];
+    }
+    return out;
+}
+static std::vector<uint8_t> b64decode(const std::string& t) {
+    int value[256];
+    for (int& v : value) v = -1;
+    for (int i = 0; i < 64; i++) value[(uint8_t)kLetters[i]] = i;
+    value[' '] = value['\t'] = value['\n'] = value['\r'] = -2;
+    value['='] = -3;
+    std::vector<uint8_t> out(t.size() / 4 * 3 + 3);
+    size_t o = 0; uint32_t w = 0; int have = 0;
+    for (unsigned char c : t) {
+        const int v = value[c];
+        if (v >= 0) {
+            w = w << 6 | v;
+            if (++have == 4) { out[o] = w >> 16; out[o + 1] = w >> 8; out[o + 2] = w; o += 3; w = 0; have = 0; }
+        } else if (v == -1) { printf("bad character\n"); exit(1); }
+    }
+    if (have >= 2) out[o++] = w >> (have == 2 ? 4 : 10);
+    if (have == 3) out[o++] = w >> 2;
+    out.resize(o);
+    return out;
+}
+static void base64Encode() {
+    const auto data = pictureBytes();
+    auto t = Clock::now();
+    const std::string text = b64encode(data);
+    printf("base64Encode %lld ms (characters %zu, last %s)\n", ms(t), text.size(), text.substr(text.size() - 5).c_str());
+}
+static void base64Decode() {
+    const std::string text = b64encode(pictureBytes());
+    std::string mime;
+    for (size_t at = 0; at < text.size(); at += 76) { mime.append(text, at, 76); mime += "\r\n"; }
+    auto t = Clock::now();
+    const auto data = b64decode(mime);
+    printf("base64Decode %lld ms (bytes %zu, last %d)\n", ms(t), data.size(), data.back());
+}
+
+// About 1 MB of SVG, made as kernels.jade makes it, read into a tree of elements, attributes and
+// text with the predefined entities read: the work of Xml.parse without its checks.
+static std::string svgText() {
+    std::string out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"1000\">\n";
+    int64_t s = 5;
+    for (int g = 0; g < 200; g++) {
+        out += "  <g id=\"g" + std::to_string(g) + "\" transform=\"translate(" + std::to_string(g) + "," + std::to_string(g) + ")\">\n";
+        for (int k = 0; k < 25; k++) {
+            out += "    <path d=\"M";
+            for (int p = 0; p < 14; p++) {
+                s = lcg(s);
+                if (p != 0) out += " L";
+                out += std::to_string(s % 1000) + " " + std::to_string((s >> 10) % 1000);
+            }
+            s = lcg(s);
+            out += " Z\" fill=\"#" + std::to_string(s % 900000 + 100000) + "\" stroke=\"black\" stroke-width=\"1.5\"/>\n";
+        }
+        out += "    <text x=\"10\" y=\"20\">Label " + std::to_string(g) + " &amp; more</text>\n  </g>\n";
+    }
+    out += "</svg>\n";
+    return out;
+}
+struct XNode {
+    std::string name, text;  // text: for a run of text
+    bool isText = false;
+    std::vector<std::pair<std::string, std::string>> attributes;
+    std::vector<std::unique_ptr<XNode>> children;
+    XNode* parent = nullptr;
+};
+static std::string entities(std::string_view s) {
+    std::string out;
+    size_t from = 0, amp;
+    while ((amp = s.find('&', from)) != std::string_view::npos) {
+        out.append(s.substr(from, amp - from));
+        const size_t semi = s.find(';', amp);
+        const std::string_view ref = s.substr(amp + 1, semi - amp - 1);
+        out += ref == "lt" ? "<" : ref == "gt" ? ">" : ref == "amp" ? "&" : ref == "apos" ? "'" : "\"";
+        from = semi + 1;
+    }
+    out.append(s.substr(from));
+    return out;
+}
+static std::unique_ptr<XNode> parseXml(const std::string& t) {
+    auto isName = [](char c) { return std::isalnum((unsigned char)c) || c == '-' || c == '_' || c == ':' || c == '.'; };
+    auto isSpace = [](char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r'; };
+    std::unique_ptr<XNode> root;
+    XNode* current = nullptr;
+    size_t pos = 0;
+    for (;;) {
+        const size_t lt = t.find('<', pos);
+        if (lt == std::string::npos) break;
+        if (current != nullptr && lt > pos) {
+            auto text = std::make_unique<XNode>();
+            text->isText = true;
+            text->text = entities(std::string_view(t).substr(pos, lt - pos));
+            text->parent = current;
+            current->children.push_back(std::move(text));
+        }
+        if (t[lt + 1] == '/') { pos = t.find('>', lt) + 1; current = current->parent; if (current == nullptr) break; continue; }
+        if (t[lt + 1] == '!') { pos = t.find("-->", lt) + 3; continue; }
+        if (t[lt + 1] == '?') { pos = t.find("?>", lt) + 2; continue; }
+        auto element = std::make_unique<XNode>();
+        size_t i = lt + 1;
+        while (isName(t[i])) i++;
+        element->name.assign(t, lt + 1, i - lt - 1);
+        for (;;) {
+            while (isSpace(t[i])) i++;
+            if (t[i] == '/' || t[i] == '>') break;
+            const size_t nameStart = i;
+            while (isName(t[i])) i++;
+            std::string key(t, nameStart, i - nameStart);
+            while (isSpace(t[i]) || t[i] == '=') i++;
+            const char quote = t[i];
+            const size_t end = t.find(quote, i + 1);
+            element->attributes.emplace_back(std::move(key), entities(std::string_view(t).substr(i + 1, end - i - 1)));
+            i = end + 1;
+        }
+        const bool closed = t[i] == '/';
+        pos = t.find('>', i) + 1;
+        XNode* made = element.get();
+        element->parent = current;
+        if (current == nullptr) root = std::move(element);
+        else current->children.push_back(std::move(element));
+        if (!closed) current = made;
+        else if (current == nullptr) break;
+    }
+    return root;
+}
+static void xml() {
+    const std::string text = svgText();
+    auto t = Clock::now();
+    const auto root = parseXml(text);
+    const long long took = ms(t);
+    long long elements = 0, attributes = 0, characters = 0;
+    std::vector<const XNode*> pending{root.get()};
+    while (!pending.empty()) {
+        const XNode* e = pending.back();
+        pending.pop_back();
+        elements++;
+        attributes += (long long)e->attributes.size();
+        for (const auto& child : e->children) {
+            if (child->isText) characters += (long long)child->text.size();
+            else pending.push_back(child.get());
+        }
+    }
+    printf("xml %lld ms (bytes %zu, elements %lld, attributes %lld, text %lld)\n", took, text.size(), elements, attributes, characters);
 }
 
 static void idct() {
@@ -246,7 +414,8 @@ int main(int argc, char** argv) {
     struct Kernel { const char* name; void (*run)(); };
     const Kernel all[] = {{"lineEnds", lineEnds}, {"idct", idct}, {"huffman", huffman}, {"gradient", gradient}, {"blur", blur},
                           {"shrink", shrink}, {"flood", flood}, {"radial", radial}, {"gaussian", gaussian},
-                          {"lineIndex", lineIndex}, {"lineWorker", lineWorker}};
+                          {"lineIndex", lineIndex}, {"lineWorker", lineWorker},
+                          {"base64Encode", base64Encode}, {"base64Decode", base64Decode}, {"xml", xml}};
     for (const Kernel& k : all)
         if (which == "all" || which == k.name) k.run();
 }

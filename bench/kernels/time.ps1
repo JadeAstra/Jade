@@ -8,7 +8,7 @@ $here = $PSScriptRoot
 $repo = Split-Path (Split-Path $here)
 . (Join-Path $repo 'bench\fastcores.ps1')
 $mask = Get-FastCoreMask
-$kernels = @('lineEnds', 'idct', 'huffman', 'gradient', 'radial', 'blur', 'gaussian', 'shrink', 'flood', 'lineIndex', 'lineWorker')
+$kernels = @('lineEnds', 'idct', 'huffman', 'gradient', 'radial', 'blur', 'gaussian', 'shrink', 'flood', 'lineIndex', 'lineWorker', 'base64Encode', 'base64Decode', 'xml')
 if ($Only) { $kernels = $kernels | Where-Object { ($Only -split ',') -contains $_ } }
 $programs = @(@{ name = 'C++'; exe = (Join-Path $here 'kernels.exe'); args = @() })
 foreach ($j in $Jade) {

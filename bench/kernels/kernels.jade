@@ -359,10 +359,93 @@ suspend fun lineWorker() : string throws IOException | ExecutionException {
   return line
 }
 
+// 5 MB of bytes for Base64, as a picture's would be: no pattern to them.
+fun pictureBytes() : Bytes {
+  val data = Bytes(5_000_000)
+  var s = 3
+  for (i in 0 ..< data.size) {
+    s = lcg(s)
+    data[i] = (s >> 7).toByteWrapped()
+  }
+  return data
+}
+
+// K12: Base64.encode of 5 MB.
+fun base64Encode() : string {
+  val data = pictureBytes()
+  val started = Instant.now()
+  val text = Base64.encode(data)
+  return "base64Encode ${ms(started)} ms (characters ${text.size}, last ${text[text.size - 5 ..< text.size]})"
+}
+
+// K13: Base64.decode of the 6.7 MB of text 5 MB make, in lines of 76 as MIME writes them.
+fun base64Decode() : string {
+  val text = Base64.encode(pictureBytes())
+  val lines = StringBuilder()
+  var at = 0
+  while (at < text.size) {
+    lines.append(text[at ..< Math.min(at + 76, text.size)]).append("\r\n")
+    at += 76
+  }
+  val mime = lines.toString()
+  val started = Instant.now()
+  val data = Base64.decode(mime)
+  return "base64Decode ${ms(started)} ms (bytes ${data.size}, last ${data[data.size - 1]})"
+}
+
+// About 1 MB of SVG: 200 groups of 25 paths, each with a long path, a colour and a stroke, and a
+// label with an entity in each group.
+fun svgText() : string {
+  val out = StringBuilder()
+  out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"1000\">\n")
+  var s = 5
+  for (g in 0 ..< 200) {
+    out.append("  <g id=\"g").append(g).append("\" transform=\"translate(").append(g).append(",").append(g).append(")\">\n")
+    for (k in 0 ..< 25) {
+      out.append("    <path d=\"M")
+      for (p in 0 ..< 14) {
+        s = lcg(s)
+        out.append(p == 0 ? "" : " L").append(s % 1000).append(" ").append((s >> 10) % 1000)
+      }
+      s = lcg(s)
+      out.append(" Z\" fill=\"#").append(s % 900000 + 100000).append("\" stroke=\"black\" stroke-width=\"1.5\"/>\n")
+    }
+    out.append("    <text x=\"10\" y=\"20\">Label ").append(g).append(" &amp; more</text>\n  </g>\n")
+  }
+  out.append("</svg>\n")
+  return out.toString()
+}
+
+// K14: Xml.parse of about 1 MB of SVG.
+fun xml() : string {
+  val text = svgText()
+  val started = Instant.now()
+  try {
+    val root = Xml.parse(text)
+    val took = ms(started)
+    var elements = 0
+    var attributes = 0
+    var characters = 0
+    val pending : open List<XmlElement> = [root]
+    while (pending.isNotEmpty()) {
+      val e = pending.removeLast()
+      elements += 1
+      attributes += e.attributes.size
+      for (child in e.children) {
+        if (child is XmlElement) { pending.add(child as XmlElement) } else { characters += child.text.size }
+      }
+    }
+    return "xml $took ms (bytes ${text.size}, elements $elements, attributes $attributes, text $characters)"
+  } catch (e : XmlException) {
+    return "xml failed: ${e.message}"
+  }
+}
+
 val which = Program.arguments.getOrNull(0) ?: "all"
 val all : Map<string, () -> string> = {"lineEnds": { lineEnds() }, "idct": { idct() }, "huffman": { huffman() }, "gradient": { gradient() },
                                        "blur": { blur() }, "shrink": { shrink() }, "flood": { flood() }, "radial": { radial() },
-                                       "gaussian": { gaussian() }, "lineIndex": { lineIndex() }}
+                                       "gaussian": { gaussian() }, "lineIndex": { lineIndex() }, "base64Encode": { base64Encode() },
+                                       "base64Decode": { base64Decode() }, "xml": { xml() }}
 for (name in all.keys) {
   if (which == "all" or which == name) { print(all[name]!!()) }
 }
