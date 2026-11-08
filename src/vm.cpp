@@ -2508,9 +2508,7 @@ const NativeMethod* VM::findNativeMethod(Value receiver, const ObjString* name) 
             default: return nullptr;
         }
     }
-    const auto& table = methods_[static_cast<int>(type)];
-    auto it = table.find(name);
-    return it == table.end() ? nullptr : &it->second;
+    return cachedNative(type, name);
 }
 
 // Calls method `name` on the receiver sitting below `argc` arguments. Same result as callValue.

@@ -1296,6 +1296,24 @@ private:
     std::vector<bool> loaded_;
     std::unordered_map<std::string, Value> builtins_;
     std::unordered_map<const ObjString*, NativeMethod> methods_[static_cast<int>(BuiltinType::Count_)];
+    // The methods of methods_ found last, by name and type, so that a call in a loop does not
+    // look in the table each time. Only what was found is kept: a name kept is a key of the
+    // table, so it lives as long as the VM, and its place cannot be some other string's.
+    struct NativeCacheEntry {
+        const ObjString* name = nullptr;
+        const NativeMethod* method = nullptr;
+        BuiltinType type = BuiltinType::Count_;
+    };
+    mutable NativeCacheEntry nativeCache_[256] = {};
+    const NativeMethod* cachedNative(BuiltinType type, const ObjString* name) const {
+        NativeCacheEntry& entry = nativeCache_[((reinterpret_cast<uintptr_t>(name) >> 4) ^ static_cast<uintptr_t>(type) * 37) & 255];
+        if (entry.name == name && entry.type == type) return entry.method;
+        const auto& table = methods_[static_cast<int>(type)];
+        auto it = table.find(name);
+        if (it == table.end()) return nullptr;
+        entry = NativeCacheEntry{name, &it->second, type};
+        return entry.method;
+    }
     ObjClass* errorClass_ = nullptr;
     ObjClass* thrownClasses_[static_cast<size_t>(Thrown::Count_)] = {};
     ObjClass* mapEntryClass_ = nullptr;  // MapEntry, from the standard library: what a map's entries are
@@ -1497,6 +1515,32 @@ private:
     std::string declaredTypeText(uint8_t type, const ObjClass* cls) const;
     JadeThrow typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v);
     const NativeMethod* findNativeMethod(Value receiver, const ObjString* name) const;
+    // A method written in C++ of the string, list, map, set or bytes below `argc` arguments
+    // at `args`, where it may be called at once: on this core's own value, with the arguments
+    // it takes, none of them needing a box or the first an object (the standard library's form
+    // in Jade), and nothing waiting to be checked. Null where invoke() must see to the call.
+    const NativeMethod* quickNative(Value receiver, const ObjString* name, int argc, const Value* args) const {
+        if (receiver.kind != ValueKind::Obj || coreId_ != 0 || pendingEnums_ > 0) return nullptr;
+        const Obj* obj = receiver.as.obj;
+        BuiltinType type;
+        switch (obj->type) {
+            case ObjType::String: type = BuiltinType::String; break;
+            case ObjType::List: type = BuiltinType::List; break;
+            case ObjType::Map: type = BuiltinType::Map; break;
+            case ObjType::Set: type = BuiltinType::Set; break;
+            case ObjType::Bytes: type = BuiltinType::Bytes; break;
+            default: return nullptr;
+        }
+        if (obj->core != 0) return nullptr;
+        const NativeMethod* method = cachedNative(type, name);
+        if (method == nullptr || argc < method->minArgs || (method->maxArgs >= 0 && argc > method->maxArgs)) return nullptr;
+        if (method->mutates && obj->frozen != 0) return nullptr;
+        if (argc >= 1 && args[0].isObjType(ObjType::Instance)) return nullptr;
+        if (!method->takesPlaces)
+            for (int i = 0; i < argc; i++)
+                if (args[i].kind == ValueKind::Ref || args[i].kind == ValueKind::Small) return nullptr;
+        return method;
+    }
     Value makeIterator(Value iterable);
     bool iteratorNext(ObjIterator* it, Value& out);
 

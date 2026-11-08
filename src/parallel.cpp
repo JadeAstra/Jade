@@ -246,6 +246,7 @@ VM::VM(VM& root, uint8_t coreId)
     names = root.names;
     for (size_t i = 0; i < static_cast<size_t>(Op::Count_); i++) opNames_[i] = root.opNames_[i];
     for (size_t i = 0; i < static_cast<size_t>(BuiltinType::Count_); i++) methods_[i] = root.methods_[i];
+    for (NativeCacheEntry& entry : nativeCache_) entry = NativeCacheEntry{};  // it pointed into the tables just replaced
     scriptArgs = root.scriptArgs;
     mainModule_ = root.mainModule_;
     nextGC_ = static_cast<size_t>(-1);

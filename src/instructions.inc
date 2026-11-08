@@ -1615,6 +1615,17 @@ COLD(InvokeOwn) {
     GC_SAFE_POINT();
     SAVE_IP();
     CHECK_ACCESS(sp_[-argc - 1], 1, false, opAt(ip - 3 - kOpBytes) != Op::InvokeOwn);
+    // A method of a string, list, map, set or bytes written in C++, with nothing to see to
+    // first, called here (text.indexOf(c), bytes.indexOf(10, at) in a loop); the rest in invoke().
+    if (const NativeMethod* native = quickNative(sp_[-argc - 1], name, argc, sp_ - argc)) {
+        nativeBase_ = sp_ - argc - 1;
+        pendingTypeArgs_ = nullptr;
+        pendingDestination_ = Value::null();
+        const Value result = native->fn(*this, sp_[-argc - 1], argc, sp_ - argc);
+        sp_ -= argc + 1;
+        *sp_++ = result;
+        DONE();
+    }
     if (invoke(name, argc)) LOAD_FRAME();
     DONE();
 }

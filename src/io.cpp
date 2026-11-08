@@ -73,6 +73,44 @@ struct Outcome {
 // Java (D120), told by the mark the wait left, not by the message's text (8.8f).
 JadeThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
 
+// The buffers a read into the program's bytes goes through (RandomAccessFile.readAt into a
+// buffer), kept for the next read: a file read a megabyte at a time would otherwise take new
+// memory from the system for each, and pay for touching it the first time, which was most of
+// the read's time. A few are kept, none over 16 MB.
+class ScratchBuffers {
+public:
+    std::vector<uint8_t> take(size_t size) {
+        {
+            std::lock_guard<std::mutex> hold(mutex_);
+            for (size_t i = 0; i < kept_.size(); i++)
+                if (kept_[i].size() >= size) {
+                    std::vector<uint8_t> found = std::move(kept_[i]);
+                    kept_.erase(kept_.begin() + static_cast<std::ptrdiff_t>(i));
+                    return found;
+                }
+        }
+        return std::vector<uint8_t>(size);
+    }
+    void give(std::vector<uint8_t>&& buffer) {
+        if (buffer.size() == 0 || buffer.size() > (size_t{16} << 20)) return;
+        std::lock_guard<std::mutex> hold(mutex_);
+        if (kept_.size() < 4) kept_.push_back(std::move(buffer));
+    }
+private:
+    std::mutex mutex_;
+    std::vector<std::vector<uint8_t>> kept_;
+};
+ScratchBuffers& scratchBuffers() {
+    static ScratchBuffers* buffers = new ScratchBuffers();  // never destroyed: a read may end as the program does
+    return *buffers;
+}
+// A read's buffer and what came of it, the buffer given back when the read is done with.
+struct ScratchRead : Outcome {
+    std::vector<uint8_t> buffer;
+    int64_t got = 0;
+    ~ScratchRead() { scratchBuffers().give(std::move(buffer)); }
+};
+
 // ---- A sandbox's programs and pipes (M6.6.2 step 4) ----
 
 // A pipe between two ends in a sandbox: what is written is kept until it is read, however much.
@@ -1573,22 +1611,22 @@ void registerIo(VM& vm) {
         if (position < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a position in a file is 0 or more, not " + std::to_string(position));
         if (offset < 0 || count < 0 || offset > size || count > size - offset)
             throw vm.runtimeError(Thrown::IndexOutOfBoundsException, std::to_string(count) + " bytes from " + std::to_string(offset) + " do not fit in bytes of size " + std::to_string(size));
-        auto out = std::make_shared<Outcome>();
+        auto out = std::make_shared<ScratchRead>();
         const Value into = args[2];
         return vm.blocking(
             [=] {
-                out->data.resize(static_cast<size_t>(count));
-                const int64_t got = readAtPosition(*s, position, out->data.data(), out->data.size(), out->error);
-                out->data.resize(got < 0 ? 0 : static_cast<size_t>(got));
+                out->buffer = scratchBuffers().take(static_cast<size_t>(count));
+                const int64_t got = readAtPosition(*s, position, reinterpret_cast<char*>(out->buffer.data()), static_cast<size_t>(count), out->error);
+                out->got = got < 0 ? 0 : got;
             },
             [out, into, offset](VM& vm) -> Value {
                 if (!out->error.empty()) throw ioError(vm, *out);
                 ObjBytes* bytes = asBytes(into);
                 vm.guardWrite(bytes);
-                if (static_cast<size_t>(offset) + out->data.size() > bytes->data.size())
+                if (offset + out->got > static_cast<int64_t>(bytes->data.size()))
                     throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "the bytes read into became smaller while the file was read");
-                std::memcpy(bytes->data.data() + offset, out->data.data(), out->data.size());
-                return Value::integer(static_cast<int64_t>(out->data.size()));
+                std::memcpy(bytes->data.data() + offset, out->buffer.data(), static_cast<size_t>(out->got));
+                return Value::integer(out->got);
             });
     });
 
