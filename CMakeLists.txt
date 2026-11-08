@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-# The version goes up with each milestone of docs/gui-plan.md: M1 is 0.1.0, M2 is 0.2.0,
+# The version goes up with each milestone of docs/gui-plan.html: M1 is 0.1.0, M2 is 0.2.0,
 # M3.5 is 0.3.5, M4 is 0.4.0, M5 is 0.5.0, M6 is 0.6.0, M6.5 is 0.6.5, M6.6 is 0.6.6, M6.6.2 is
 # 0.6.6.2, M6.7 is 0.6.7, M7 is 0.7.0, M8 is 0.8.0.
 project(Jade VERSION 0.8.0 LANGUAGES CXX)

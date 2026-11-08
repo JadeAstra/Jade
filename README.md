@@ -2153,7 +2153,7 @@ that runs before the variable's own line.
 ## Windows and widgets: Topaz
 
 `import Topaz.*` gives a program windows. **Topaz is Jade's GUI library, and it is being
-built**, as a port of JadeUI with the same names (the plan is in `docs\gui-plan.md`). What
+built**, as a port of JadeUI with the same names (the plan is in `docs\gui-plan.html`). What
 is there today: the native layer, which opens windows, reports what the keyboard and the
 pointer do and draws; and on top of it the first widgets, laid out by a grid. Text fields,
 lists, menus and dialogs come next.

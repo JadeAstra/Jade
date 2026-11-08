@@ -87,7 +87,7 @@ pre code { background: none; padding: 0; }
 <body>
 <main>
 <h1>Outstanding after M8</h1>
-<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it, and brought up to date after M8 (version 0.8.0) on 2026-11-07. Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps6.7.html">plans-and-gaps6.7.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.md">gui-plan.md</a>.</p>
+<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it, and brought up to date after M8 (version 0.8.0) on 2026-11-07. Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps6.7.html">plans-and-gaps6.7.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.html">gui-plan.html</a>.</p>
 
 <nav>
 <h2>Contents</h2>
@@ -109,7 +109,7 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>The question</th><th class="when">Recommended</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-next">M9</td><td>The next milestone waits for the go-ahead: one milestone at a time. M8 is built (version 0.8.0, gui-plan.md section 6.5): the dialogs, charts, the treemap and JadeMem.</td><td class="when">Ready once M8 is accepted</td></tr>
+<tr><td class="part" id="o-next">M9</td><td>The next milestone waits for the go-ahead: one milestone at a time. M8 is built (version 0.8.0, gui-plan.html section 6.5): the dialogs, charts, the treemap and JadeMem.</td><td class="when">Ready once M8 is accepted</td></tr>
 <tr><td class="part" id="o-elevated">JadeMem elevated</td><td>JadeMem has been run unelevated only. The elevated paths (the pool tag table read elevated, real ETW sessions, the raw read of a volume's file table) follow the Kotlin's layouts and were checked against made-up data, not this machine.</td><td class="when">A run as administrator, beside the Kotlin JadeMem</td></tr>
 <tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
 <tr><td class="part" id="o-clang">Windows build</td><td>Which compiler the Windows release is built with. MSVC cannot be made to do tail calls for certain (tried and removed, 2026-11-05), so its build keeps the switch: 3.3 times as long on <code>numeric</code>, about twice on <code>calls</code>, <code>fields</code> and <code>particles</code>, 25% faster on <code>points_values</code>.</td><td class="when">Ship the clang-cl build</td></tr>
@@ -134,9 +134,9 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-87b"><a href="plans-and-gaps6.7.html#m66g-p8-job-all">8.7b</a></td><td><code>Job.any(jobs)</code> is of the first job to succeed, not the first to finish.</td><td class="when">README.md, the table of jobs</td></tr>
 <tr><td class="part" id="o-88c"><a href="plans-and-gaps6.7.html#m66g-p8-permissions">8.8c</a></td><td>The comment on <code>size()</code> still says it also gives when the file was last written, in milliseconds; since G54 that is <code>lastModified()</code>, an <code>Instant</code>.</td><td class="when">src/std/file.jade</td></tr>
 <tr><td class="part" id="o-89j"><a href="plans-and-gaps6.7.html#m66g-p9-shapes">8.9j</a></td><td>Glyph curves are cut to within about a sixth of a pixel at most (a twelfth for TrueType's curves), not a tenth.</td><td class="when">src/text/raster.h</td></tr>
-<tr><td class="part" id="o-open">gui-plan</td><td>Section 8's Open list still asks about D162 to D180 and the largest value type, all decided on 2026-11-03 (the size limit fixed in f836e90). Its two items still open are real: how JadeMem samples (M8) and Sendable classes for workers (D181).</td><td class="when">gui-plan.md, section 8</td></tr>
-<tr><td class="part" id="o-d149">gui-plan</td><td>The D149 row says it was built with the frame slots that keep only a payload, in consecutive slots; it was built as places beside the stack, without them (G17). The D178 row says nothing of what was built: arithmetic chosen by type, not the payload-only slots.</td><td class="when">gui-plan.md, the decisions table</td></tr>
-<tr><td class="part" id="o-m66">gui-plan</td><td>The M6.6 parts' lists still give as M6.7's, and open, gaps built since: G4, G8, G12, G13, G14, G19, G20, G66 (the "about 1 µs a call" for G66 among them).</td><td class="when">gui-plan.md, M6.6 notes</td></tr>
+<tr><td class="part" id="o-open">gui-plan</td><td>Section 8's Open list still asks about D162 to D180 and the largest value type, all decided on 2026-11-03 (the size limit fixed in f836e90). Its two items still open are real: how JadeMem samples (M8) and Sendable classes for workers (D181).</td><td class="when">gui-plan.html, section 8</td></tr>
+<tr><td class="part" id="o-d149">gui-plan</td><td>The D149 row says it was built with the frame slots that keep only a payload, in consecutive slots; it was built as places beside the stack, without them (G17). The D178 row says nothing of what was built: arithmetic chosen by type, not the payload-only slots.</td><td class="when">gui-plan.html, the decisions table</td></tr>
+<tr><td class="part" id="o-m66">gui-plan</td><td>The M6.6 parts' lists still give as M6.7's, and open, gaps built since: G4, G8, G12, G13, G14, G19, G20, G66 (the "about 1 µs a call" for G66 among them).</td><td class="when">gui-plan.html, M6.6 notes</td></tr>
 </tbody></table></div>
 
 <h2 id="deferred">Language and library work left for later</h2>
@@ -156,11 +156,11 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-88j"><a href="plans-and-gaps6.7.html#m66g-p8-native-declared">8.8j</a></td><td>The C++ under fonts and images, <code>__text</code>, is not declared as an <code>external object</code> (as <code>__file</code>, <code>__io</code>, <code>__sandbox</code> and <code>Math</code> are), so the standard library's calls of it are not checked. (Its <code>Fonts.load</code> half is done.)</td><td class="when">-</td></tr>
 <tr><td class="part" id="o-89b"><a href="plans-and-gaps6.7.html#m66g-p9-exact-fit">8.9b</a></td><td>A constant colour such as <code>Color(255, 128, 0)</code> is checked when compiling but made each time it is reached, not made once as a constant.</td><td class="when">Left for now by the user's choice</td></tr>
 <tr><td class="part" id="o-d175"><a href="plans-and-gaps6.7.html#m66g-d175">D175</a></td><td>A generic function compiled once for every layout of its type arguments.</td><td class="when">When a measurement asks for it</td></tr>
-<tr><td class="part" id="o-d181">D181</td><td>Sendable classes for workers (gui-plan.md, section 8, step 2).</td><td class="when">When a program needs it</td></tr>
+<tr><td class="part" id="o-d181">D181</td><td>Sendable classes for workers (<a href="gui-plan.html#s8">gui-plan.html, section 8</a>, step 2).</td><td class="when">When a program needs it</td></tr>
 </tbody></table></div>
 
 <h2 id="m7">Left from M7</h2>
-<p>Found or left while M7 was built (2026-11-06); what M7 ported is in gui-plan.md, section 6.4. Two found in its full check were built after 0.7.0 at the user's word: <strong id="o-g70">G70</strong>, a field of a value type read where it is when nothing runs between the read and its use (a field of it read at once, or the field given back, either side of <code>?:</code> included), which brought <code>topaz_layout</code> back from 0.57 to 0.51 s, level with 0.6.7; and Kotlin's <code>{ -&gt; value }</code>, a lambda that takes nothing.</p>
+<p>Found or left while M7 was built (2026-11-06); what M7 ported is in <a href="gui-plan.html#s6-4">gui-plan.html, section 6.4</a>. Two found in its full check were built after 0.7.0 at the user's word: <strong id="o-g70">G70</strong>, a field of a value type read where it is when nothing runs between the read and its use (a field of it read at once, or the field given back, either side of <code>?:</code> included), which brought <code>topaz_layout</code> back from 0.57 to 0.51 s, level with 0.6.7; and Kotlin's <code>{ -&gt; value }</code>, a lambda that takes nothing.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
@@ -173,7 +173,7 @@ pre code { background: none; padding: 0; }
 </tbody></table></div>
 
 <h2 id="m8">Left from M8</h2>
-<p>Found or left while M8 was built (2026-11-06 and 07); what it ported is in gui-plan.md, section 6.5. Found and fixed on the way, each with its own commit: an override of a generic class's method with its type argument filled in, the type of <code>f.invoke(args)</code>, a text area's caret after an edit, a lambda after a call into a <code>vararg</code>, a folder imported again (and one importing itself), two threads waiting on one lock waking each other without end, timed jobs in a test's sandbox, a sandbox's volume space, an anonymous object's captures, and a field overriding an interface's property.</p>
+<p>Found or left while M8 was built (2026-11-06 and 07); what it ported is in <a href="gui-plan.html#s6-5">gui-plan.html, section 6.5</a>. Found and fixed on the way, each with its own commit: an override of a generic class's method with its type argument filled in, the type of <code>f.invoke(args)</code>, a text area's caret after an edit, a lambda after a call into a <code>vararg</code>, a folder imported again (and one importing itself), two threads waiting on one lock waking each other without end, timed jobs in a test's sandbox, a sandbox's volume space, an anonymous object's captures, and a field overriding an interface's property.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
@@ -232,7 +232,7 @@ pre code { background: none; padding: 0; }
 <li><strong>Stores and reads (part D).</strong> A 16-byte read of a value just written in two 8-byte stores waits: most of an R instruction's cost is how its result is stored and read. Writing every int and float result whole cost more than it saved.</li>
 <li><strong>Ref helpers (step 6).</strong> Any branch or call inlined into <code>refClass</code> or <code>refBytes</code> made reads of list items 75% slower, with identical run code: leave them as they are. The same goes for adding work to an instruction's hot part on Windows, where any call there gives it a frame.</li>
 <li><strong>Three ways of running.</strong> <code>JADE_REGISTER_CODE=joined</code> and <code>=plain</code> are kept for testing and timing; the suite is to keep passing in all three.</li>
-<li><strong>One graphics card (<a href="plans-and-gaps6.7.html#m0-not-tested">M0</a>).</strong> Topaz's windows have been drawn only on this machine's NVIDIA card. Intel graphics, virtual machines and Remote Desktop, where OpenGL is weakest, are untried: the risk gui-plan.md's section 9 names, which a run on another machine would settle.</li>
+<li><strong>One graphics card (<a href="plans-and-gaps6.7.html#m0-not-tested">M0</a>).</strong> Topaz's windows have been drawn only on this machine's NVIDIA card. Intel graphics, virtual machines and Remote Desktop, where OpenGL is weakest, are untried: the risk gui-plan.html's section 9 names, which a run on another machine would settle.</li>
 </ul>
 
 <h2 id="kept">Left as they are, by decision</h2>

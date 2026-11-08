@@ -2,7 +2,7 @@
 
 What to change when Kotlin code (JadeUI, the apps) is brought over, and what to look at that
 compiles but means something else. Grouped as M6.6's second half builds the language choices
-([language-choices.html](language-choices.html), [gui-plan.md](gui-plan.md) D19 to D153); each
+([language-choices.html](language-choices.html), [gui-plan.html](gui-plan.html) D19 to D153); each
 group adds its section.
 
 ## Numbers and strings (M6.6 part 8, group 1)
