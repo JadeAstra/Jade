@@ -534,6 +534,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
 <li><a href="#Program"><code>Program</code></a> (9)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
+<li><a href="#RandomAccessFile"><code>RandomAccessFile</code></a> (10)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
@@ -1952,6 +1953,44 @@ for file in FilePath(&quot;src&quot;).walk() { if (file.extension == &quot;jade&
 </div>
 <div class="entry member" id="DirEntry.name"><code class="sig">val name : string</code><a class="anchor" href="#DirEntry.name">#</a>
 <p>Its name: the last part of its path.</p>
+</div>
+<div class="entry" id="RandomAccessFile"><code class="sig">class RandomAccessFile : AutoCloseable</code><a class="anchor" href="#RandomAccessFile">#</a>
+<p>What FilePath is built on (stdlib.cpp), declared with its types and what it throws. ---- A file at any position ---- A file read and written at a position, rather than from its start to its end as a stream is (M9/M10; Java's RandomAccessFile): a page of a file of many gigabytes read where it is, a byte changed where it is and nothing else written.</p>
+<pre>val file = RandomAccessFile(FilePath(&quot;big.bin&quot;))      // to read
+val page = file.readAt(65536, 4096)                   // 4096 bytes from 65536, fewer at the end
+val edit = RandomAccessFile(&quot;big.bin&quot;, &quot;rw&quot;)         // to read and write, made if it is not there
+edit.writeAt(10, Bytes([255]))
+edit.sync()                                          // on the disk before going on
+edit.close()
+</pre>
+<p>Other programs may read and write the file while it is open, as Java lets them. Each read and write is at its own position, so threads may share one without moving each other's place.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.path"><code class="sig">val path : FilePath</code><a class="anchor" href="#RandomAccessFile.path">#</a>
+<p>The file.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.writable"><code class="sig">val writable : bool</code><a class="anchor" href="#RandomAccessFile.writable">#</a>
+<p>Whether it was opened to write as well (&quot;rw&quot;).</p>
+</div>
+<div class="entry member" id="RandomAccessFile.readAt"><code class="sig">fun readAt(position : int, count : int) : Bytes throws IOException</code><a class="anchor" href="#RandomAccessFile.readAt">#</a>
+<p>Up to <code>count</code> bytes from <code>position</code>: fewer at the end of the file, none past it.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.readAt-2"><code class="sig">fun readAt(position : int, into : Bytes, offset : int = 0, count : int = into.size - offset) : int throws IOException</code><a class="anchor" href="#RandomAccessFile.readAt-2">#</a>
+<p>Reads into <code>into</code> from <code>offset</code>, up to <code>count</code> bytes (all there is room for if not given), from <code>position</code>: how many were read, fewer at the end of the file, 0 past it. Nothing new is made, for a loop that reads page after page into one buffer.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.writeAt"><code class="sig">fun writeAt(position : int, data : Bytes, offset : int = 0, count : int = data.size - offset) throws IOException</code><a class="anchor" href="#RandomAccessFile.writeAt">#</a>
+<p>Writes <code>count</code> of <code>data</code>'s bytes from <code>offset</code> (all of them if not given) at <code>position</code>; the file grows where they go past its end. An IOException on a file opened to read.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.size"><code class="sig">fun size() : int throws IOException</code><a class="anchor" href="#RandomAccessFile.size">#</a>
+<p>The file's size now, in bytes.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.sync"><code class="sig">fun sync() throws IOException</code><a class="anchor" href="#RandomAccessFile.sync">#</a>
+<p>Returns once what was written is on the disk, not only in the system's memory.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.close"><code class="sig">override fun close()</code><a class="anchor" href="#RandomAccessFile.close">#</a>
+<p>Lets go of the file; reading or writing after it is an IOException. Closing again does nothing.</p>
+</div>
+<div class="entry member" id="RandomAccessFile.isOpen"><code class="sig">val isOpen : bool</code><a class="anchor" href="#RandomAccessFile.isOpen">#</a>
+<p>Whether it is still open.</p>
 </div>
 </section>
 <section class="file" id="file-fonts-jade">

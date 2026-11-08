@@ -197,6 +197,7 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is missing</th></tr></thead>
 <tbody>
+<tr><td class="part" id="o-sb-raf">RandomAccessFile</td><td>Refused in a sandbox (M9 and M10): its files are read and written whole or as streams, with no form of reading or writing at a position yet, so <code>PagedFile</code> and <code>writeByteDiff</code> cannot be tested in one.</td></tr>
 <tr><td class="part" id="o-sb-links">Links</td><td>A sandbox has no symbolic links, so code that meets them cannot be tested in one.</td></tr>
 <tr><td class="part" id="o-sb-waits">Timed waits</td><td>A join or lock with a time limit takes real time; the sleeps of several threads add up on the sandbox's clock rather than overlapping.</td></tr>
 <tr><td class="part" id="o-sb-fonts">Fonts</td><td>The planned folder of fonts kept with the tests is not in the repository: a sandbox sees the system's fonts unless given <code>fontsFrom</code>.</td></tr>

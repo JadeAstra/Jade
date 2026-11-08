@@ -1,0 +1,12 @@
+// A RandomAccessFile in a test's sandbox: refused, not opened on the real disk, as what a sandbox
+// has no form of yet is (M6.6.2). A sandbox's files are read and written whole or as streams.
+
+@Test fun refusedInASandbox() {
+  FilePath("/data.bin").writeBytes(Bytes([1, 2, 3]))
+  val e = assertFailsWith<IOException> { RandomAccessFile("/data.bin") }
+  assertEquals("a RandomAccessFile is not available in a sandbox yet", e.message)
+  assertEquals(Bytes([1, 2, 3]), FilePath("/data.bin").readBytes())
+}
+
+// expect:   ok    refusedInASandbox
+// expect: 1 test: 1 passed, 0 failed

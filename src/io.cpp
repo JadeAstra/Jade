@@ -27,6 +27,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -709,6 +710,90 @@ struct Spawn {
 
 // ---- Windows: files, processes and sockets ----
 
+// ---- Windows: a file read and written at a position (RandomAccessFile, M9/M10) ----
+
+// Opened to read ("r") or to read and write ("rw", made if it is not there), others free to read
+// and write it too, as Java's RandomAccessFile leaves it.
+bool openRandom(const std::string& path, bool writable, Outcome& out) {
+    HANDLE handle = CreateFileW(widen(path).c_str(), GENERIC_READ | (writable ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                nullptr, writable ? OPEN_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        out.error = std::string(writable ? "cannot open file '" : "cannot read file '") + path + "': " + systemMessage(GetLastError());
+        return false;
+    }
+    out.made = std::make_shared<Stream>(Stream::Kind::File);
+    out.made->handle = handle;
+    return true;
+}
+
+// Up to `count` bytes from `position`, fewer only at the end: how many, or -1 with `error`.
+int64_t readAtPosition(Stream& s, int64_t position, char* into, size_t count, std::string& error) {
+    Use use(s);
+    size_t done = 0;
+    while (done < count) {
+        if (s.closed.load()) {
+            error = "the file is closed";
+            return -1;
+        }
+        OVERLAPPED at{};
+        const uint64_t from = static_cast<uint64_t>(position) + done;
+        at.Offset = static_cast<DWORD>(from);
+        at.OffsetHigh = static_cast<DWORD>(from >> 32);
+        DWORD got = 0;
+        const DWORD want = static_cast<DWORD>(std::min<size_t>(count - done, 1 << 30));
+        if (!ReadFile(s.handle, into + done, want, &got, &at)) {
+            const DWORD code = GetLastError();
+            if (code == ERROR_HANDLE_EOF) break;
+            error = "cannot read: " + systemMessage(code);
+            return -1;
+        }
+        if (got == 0) break;
+        done += got;
+    }
+    return static_cast<int64_t>(done);
+}
+
+bool writeAtPosition(Stream& s, int64_t position, const char* data, size_t count, std::string& error) {
+    Use use(s);
+    size_t done = 0;
+    while (done < count) {
+        if (s.closed.load()) {
+            error = "the file is closed";
+            return false;
+        }
+        OVERLAPPED at{};
+        const uint64_t from = static_cast<uint64_t>(position) + done;
+        at.Offset = static_cast<DWORD>(from);
+        at.OffsetHigh = static_cast<DWORD>(from >> 32);
+        DWORD wrote = 0;
+        if (!WriteFile(s.handle, data + done, static_cast<DWORD>(std::min<size_t>(count - done, 1 << 30)), &wrote, &at)) {
+            error = "cannot write: " + systemMessage(GetLastError());
+            return false;
+        }
+        done += wrote;
+    }
+    return true;
+}
+
+int64_t sizeOfOpen(Stream& s, std::string& error) {
+    Use use(s);
+    LARGE_INTEGER size{};
+    if (s.closed.load() || !GetFileSizeEx(s.handle, &size)) {
+        error = s.closed.load() ? "the file is closed" : "cannot find the size: " + systemMessage(GetLastError());
+        return -1;
+    }
+    return size.QuadPart;
+}
+
+bool syncOpen(Stream& s, std::string& error) {
+    Use use(s);
+    if (s.closed.load() || !FlushFileBuffers(s.handle)) {
+        error = s.closed.load() ? "the file is closed" : "cannot sync: " + systemMessage(GetLastError());
+        return false;
+    }
+    return true;
+}
+
 bool openFile(const std::string& path, const std::string& mode, Outcome& out) {
     const bool reading = mode == "r";
     HANDLE handle = CreateFileW(widen(path).c_str(), reading ? GENERIC_READ : (mode == "a" ? FILE_APPEND_DATA : GENERIC_WRITE),
@@ -1038,6 +1123,77 @@ void shutdownOutput(Stream& s) { shutdown(s.socket, SD_SEND); }
 
 // ---- POSIX: files, processes and sockets (G56) ----
 
+// ---- POSIX: a file read and written at a position (RandomAccessFile, M9/M10) ----
+
+bool openRandom(const std::string& path, bool writable, Outcome& out) {
+    const int fd = ::open(path.c_str(), (writable ? O_RDWR | O_CREAT : O_RDONLY) | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        out.error = std::string(writable ? "cannot open file '" : "cannot read file '") + path + "': " + std::strerror(errno);
+        return false;
+    }
+    out.made = std::make_shared<Stream>(Stream::Kind::File);
+    out.made->fd = fd;
+    return true;
+}
+
+int64_t readAtPosition(Stream& s, int64_t position, char* into, size_t count, std::string& error) {
+    Use use(s);
+    size_t done = 0;
+    while (done < count) {
+        if (s.closed.load()) {
+            error = "the file is closed";
+            return -1;
+        }
+        const ssize_t got = ::pread(s.fd, into + done, std::min<size_t>(count - done, 1 << 30), static_cast<off_t>(position + static_cast<int64_t>(done)));
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0) {
+            error = std::string("cannot read: ") + std::strerror(errno);
+            return -1;
+        }
+        if (got == 0) break;
+        done += static_cast<size_t>(got);
+    }
+    return static_cast<int64_t>(done);
+}
+
+bool writeAtPosition(Stream& s, int64_t position, const char* data, size_t count, std::string& error) {
+    Use use(s);
+    size_t done = 0;
+    while (done < count) {
+        if (s.closed.load()) {
+            error = "the file is closed";
+            return false;
+        }
+        const ssize_t wrote = ::pwrite(s.fd, data + done, std::min<size_t>(count - done, 1 << 30), static_cast<off_t>(position + static_cast<int64_t>(done)));
+        if (wrote < 0 && errno == EINTR) continue;
+        if (wrote < 0) {
+            error = std::string("cannot write: ") + std::strerror(errno);
+            return false;
+        }
+        done += static_cast<size_t>(wrote);
+    }
+    return true;
+}
+
+int64_t sizeOfOpen(Stream& s, std::string& error) {
+    Use use(s);
+    struct stat info {};
+    if (s.closed.load() || ::fstat(s.fd, &info) != 0) {
+        error = s.closed.load() ? "the file is closed" : std::string("cannot find the size: ") + std::strerror(errno);
+        return -1;
+    }
+    return static_cast<int64_t>(info.st_size);
+}
+
+bool syncOpen(Stream& s, std::string& error) {
+    Use use(s);
+    if (s.closed.load() || ::fsync(s.fd) != 0) {
+        error = s.closed.load() ? "the file is closed" : std::string("cannot sync: ") + std::strerror(errno);
+        return false;
+    }
+    return true;
+}
+
 bool openFile(const std::string& path, const std::string& mode, Outcome& out) {
     const bool reading = mode == "r";
     const int flags = reading ? O_RDONLY : O_WRONLY | O_CREAT | (mode == "a" ? O_APPEND : O_TRUNC);
@@ -1362,6 +1518,122 @@ void registerIo(VM& vm) {
                            [out](VM& vm) -> Value {
                                if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
+                           });
+    });
+
+    // ---- A file at a position (RandomAccessFile, M9/M10) ----
+
+    // openRandom(path, mode): "r" to read, "rw" to read and write, the file made if it is not
+    // there. Not in a sandbox yet: its files are streams.
+    def("openRandom", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const std::string path = vm.toStr(args[0], "file path");
+        const std::string mode = vm.toStr(args[1], "mode");
+        if (mode != "r" && mode != "rw")
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "a RandomAccessFile is opened \"r\" to read or \"rw\" to read and write, not \"" + mode + "\"");
+        refuseInSandbox(vm, "a RandomAccessFile");
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { openRandom(path, mode == "rw", *out); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::integer(keep(out->made));
+                           });
+    });
+
+    // readAt(handle, position, count): up to `count` bytes from `position`, fewer at the end,
+    // none past it.
+    def("readAt", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        const int64_t position = vm.toInt(args[1], "position");
+        const int64_t count = vm.toInt(args[2], "count");
+        if (position < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a position in a file is 0 or more, not " + std::to_string(position));
+        if (count < 0 || count > (int64_t{1} << 31)) throw vm.runtimeError(Thrown::IllegalArgumentException, "readAt() reads 0 to 2^31 bytes, not " + std::to_string(count));
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking(
+            [=] {
+                out->data.resize(static_cast<size_t>(count));
+                const int64_t got = readAtPosition(*s, position, out->data.data(), out->data.size(), out->error);
+                out->data.resize(got < 0 ? 0 : static_cast<size_t>(got));
+            },
+            [out](VM& vm) -> Value {
+                if (!out->error.empty()) throw ioError(vm, *out);
+                return bytesValue(vm, out->data);
+            });
+    });
+
+    // readInto(handle, position, bytes, offset, count): read into `bytes` from `offset`, as
+    // many as there are up to `count`; how many. Read off the program's thread, then copied in on
+    // it, so that the bytes are only ever touched where the program runs.
+    def("readInto", 5, 5, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        const int64_t position = vm.toInt(args[1], "position");
+        if (!args[2].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::ClassCastException, "readAt() reads into Bytes, not " + vm.typeName(args[2]));
+        const int64_t offset = vm.toInt(args[3], "offset");
+        const int64_t count = vm.toInt(args[4], "count");
+        const int64_t size = static_cast<int64_t>(asBytes(args[2])->data.size());
+        if (position < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a position in a file is 0 or more, not " + std::to_string(position));
+        if (offset < 0 || count < 0 || offset > size || count > size - offset)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, std::to_string(count) + " bytes from " + std::to_string(offset) + " do not fit in bytes of size " + std::to_string(size));
+        auto out = std::make_shared<Outcome>();
+        const Value into = args[2];
+        return vm.blocking(
+            [=] {
+                out->data.resize(static_cast<size_t>(count));
+                const int64_t got = readAtPosition(*s, position, out->data.data(), out->data.size(), out->error);
+                out->data.resize(got < 0 ? 0 : static_cast<size_t>(got));
+            },
+            [out, into, offset](VM& vm) -> Value {
+                if (!out->error.empty()) throw ioError(vm, *out);
+                ObjBytes* bytes = asBytes(into);
+                vm.guardWrite(bytes);
+                if (static_cast<size_t>(offset) + out->data.size() > bytes->data.size())
+                    throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "the bytes read into became smaller while the file was read");
+                std::memcpy(bytes->data.data() + offset, out->data.data(), out->data.size());
+                return Value::integer(static_cast<int64_t>(out->data.size()));
+            });
+    });
+
+    // writeAt(handle, position, bytes, offset, count): `count` of the bytes from `offset`,
+    // written at `position`; the file grows where they go past its end.
+    def("writeAt", 5, 5, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        const int64_t position = vm.toInt(args[1], "position");
+        if (!args[2].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::ClassCastException, "writeAt() writes Bytes, not " + vm.typeName(args[2]));
+        const int64_t offset = vm.toInt(args[3], "offset");
+        const int64_t count = vm.toInt(args[4], "count");
+        const std::vector<uint8_t>& data = asBytes(args[2])->data;
+        const int64_t size = static_cast<int64_t>(data.size());
+        if (position < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a position in a file is 0 or more, not " + std::to_string(position));
+        if (offset < 0 || count < 0 || offset > size || count > size - offset)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, std::to_string(count) + " bytes from " + std::to_string(offset) + " are not in bytes of size " + std::to_string(size));
+        auto out = std::make_shared<Outcome>();
+        // A copy, taken here: the program may change the bytes while the write is made.
+        out->data.assign(reinterpret_cast<const char*>(data.data()) + offset, static_cast<size_t>(count));
+        return vm.blocking([=] { writeAtPosition(*s, position, out->data.data(), out->data.size(), out->error); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::null();
+                           });
+    });
+
+    // fileSize(handle): the file's size now.
+    def("fileSize", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { out->number = sizeOfOpen(*s, out->error); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::integer(out->number);
+                           });
+    });
+
+    // sync(handle): what was written, on the disk before it returns.
+    def("sync", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        auto s = streamOf(vm, args[0]);
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { syncOpen(*s, out->error); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::null();
                            });
     });
 

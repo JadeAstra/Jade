@@ -285,6 +285,68 @@ suspend fun SequenceScope<FilePath>.__walkBelow(directory : FilePath, onError : 
 }
 
 // What FilePath is built on (stdlib.cpp), declared with its types and what it throws.
+// ---- A file at any position ----
+// A file read and written at a position, rather than from its start to its end as a stream is
+// (M9/M10; Java's RandomAccessFile): a page of a file of many gigabytes read where it is, a byte
+// changed where it is and nothing else written.
+//
+//   val file = RandomAccessFile(FilePath("big.bin"))      // to read
+//   val page = file.readAt(65536, 4096)                   // 4096 bytes from 65536, fewer at the end
+//   val edit = RandomAccessFile("big.bin", "rw")         // to read and write, made if it is not there
+//   edit.writeAt(10, Bytes([255]))
+//   edit.sync()                                          // on the disk before going on
+//   edit.close()
+//
+// Other programs may read and write the file while it is open, as Java lets them. Each read and
+// write is at its own position, so threads may share one without moving each other's place.
+class RandomAccessFile : AutoCloseable {
+  // The file.
+  val path : FilePath
+  // Whether it was opened to write as well ("rw").
+  val writable : bool
+  private val handle : any
+
+  // Opens the file: "r" to read, which it must be there for, or "rw" to read and write, making
+  // it if it is not there. An IOException where it cannot be opened.
+  fun init(path : FilePath | string, mode : string = "r") throws IOException {
+    this.path = path is FilePath ? path : FilePath(path)
+    this.writable = mode == "rw"
+    this.handle = __io.openRandom(this.path.text, mode)
+  }
+
+  // Up to `count` bytes from `position`: fewer at the end of the file, none past it.
+  fun readAt(position : int, count : int) : Bytes throws IOException => __io.readAt(handle, position, count)
+
+  // Reads into `into` from `offset`, up to `count` bytes (all there is room for if not given),
+  // from `position`: how many were read, fewer at the end of the file, 0 past it. Nothing new is
+  // made, for a loop that reads page after page into one buffer.
+  fun readAt(position : int, into : Bytes, offset : int = 0, count : int = into.size - offset) : int throws IOException =>
+    __io.readInto(handle, position, into, offset, count)
+
+  // Writes `count` of `data`'s bytes from `offset` (all of them if not given) at `position`; the
+  // file grows where they go past its end. An IOException on a file opened to read.
+  fun writeAt(position : int, data : Bytes, offset : int = 0, count : int = data.size - offset) throws IOException {
+    __io.writeAt(handle, position, data, offset, count)
+  }
+
+  // The file's size now, in bytes.
+  fun size() : int throws IOException => __io.fileSize(handle)
+
+  // Returns once what was written is on the disk, not only in the system's memory.
+  fun sync() throws IOException {
+    __io.sync(handle)
+  }
+
+  // Lets go of the file; reading or writing after it is an IOException. Closing again does nothing.
+  override fun close() {
+    __io.close(handle)
+  }
+
+  // Whether it is still open.
+  val isOpen : bool
+    get() => __io.isOpen(handle)
+}
+
 external object __file {
   fun separator() : string
   fun read(path : string, charset : Charset = Charset.utf8) : string throws IOException

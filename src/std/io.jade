@@ -427,6 +427,12 @@ external object __io {
   fun sandboxReset(socket : any)
   fun sandboxSocketHang(socket : any)
   fun open(path : string, mode : string) : any throws IOException
+  fun openRandom(path : string, mode : string) : any throws IOException
+  fun readAt(handle : any, position : int, count : int) : Bytes throws IOException
+  fun readInto(handle : any, position : int, into : Bytes, offset : int, count : int) : int throws IOException
+  fun writeAt(handle : any, position : int, data : Bytes, offset : int, count : int) throws IOException
+  fun fileSize(handle : any) : int throws IOException
+  fun sync(handle : any) throws IOException
   fun read(handle : any, count : int) : Bytes? throws IOException
   fun readAll(handle : any) : Bytes throws IOException
   fun readText(handle : any, charset : Charset = Charset.utf8) : string throws IOException
