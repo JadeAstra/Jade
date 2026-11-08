@@ -1,0 +1,35 @@
+// Program.collectGarbage() and Program.memoryUsed: a collection asked for, and the bytes the objects take.
+
+// A large buffer is counted while it is held, and gone once dropped and collected.
+Program.collectGarbage()
+val before = Program.memoryUsed
+print(before > 0)                                            // expect: true
+var big : Bytes? = Bytes(20_000_000)
+print(Program.memoryUsed - before >= 20_000_000, big!!.size) // expect: true 20000000
+big = null
+Program.collectGarbage()
+print(Program.memoryUsed - before < 1_000_000)               // expect: true
+
+// What is still reached is kept, and counted.
+val kept = Bytes(5_000_000)
+Program.collectGarbage()
+print(Program.memoryUsed - before >= 5_000_000, kept.size)  // expect: true 5000000
+
+// Objects made and dropped in a loop, collected; the ones kept survive the collection.
+val survivors : open List<string> = []
+for (i in 0 ..< 1000) {
+  val text = "item $i"
+  if (i % 100 == 0) { survivors.add(text) }
+}
+Program.collectGarbage()
+print(survivors.size, survivors[3])                          // expect: 10 item 300
+
+// From inside a function, a lambda and a method, mid-expression.
+class Holder(val items : List<int>) {
+  fun total() : int {
+    Program.collectGarbage()
+    return items.sum()
+  }
+}
+print(Holder([1, 2, 3]).total())                             // expect: 6
+print([4, 5].map { Program.collectGarbage(); it * 2 })               // expect: [8, 10]

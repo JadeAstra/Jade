@@ -147,6 +147,24 @@ object Program {
       field = handler
       __thread.uncaughtHandler(handler)
     }
+
+  // The bytes its objects take now, with what they hold (a list's items, the bytes of Bytes),
+  // the garbage not yet collected counted with them: right after collectGarbage(), what is
+  // still in use. Each worker has its own; a foreign Memory block is not counted.
+  //   Program.collectGarbage()
+  //   val before = Program.memoryUsed
+  //   load(map)
+  //   print("the map takes ${Program.memoryUsed - before} bytes")
+  val memoryUsed : int
+    get() => __memoryUsed()
+
+  // Collects the garbage now, as Java's System.gc(): every object nothing can reach any more is
+  // freed. The collector runs by itself as objects are made; this is for a moment that matters,
+  // before something is timed, say, or once a large piece of work is done with, so that its
+  // memory is given back then rather than later. Inside a parallel section it does nothing.
+  fun collectGarbage() {
+    __collectGarbage()
+  }
 }
 
 // The environment variables a program was started with (Program.environment): read like a

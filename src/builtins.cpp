@@ -447,6 +447,15 @@ void registerGlobals(VM& vm) {
         return vm.str(vm.mainFileName());
     });
 
+    // Program.collectGarbage() and Program.memoryUsed: a collection now, and the bytes the objects take.
+    vm.defineNative("__collectGarbage", 0, 0, [](VM& vm, int, Value*) -> Value {
+        vm.collectNow();
+        return Value::null();
+    });
+    vm.defineNative("__memoryUsed", 0, 0, [](VM& vm, int, Value*) -> Value {
+        return Value::integer(static_cast<int64_t>(vm.memoryUsed()));
+    });
+
     vm.defineNative("__arguments", 0, 0, [](VM& vm, int, Value*) -> Value {
         std::vector<Value> items;
         for (const std::string& arg : vm.scriptArgs) items.push_back(vm.str(arg));

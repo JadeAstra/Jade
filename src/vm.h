@@ -637,6 +637,15 @@ public:
 
     // Tells the collector about memory owned by an object beyond its own size.
     void account(size_t bytes) { bytesAllocated_ += bytes; }
+    // A collection now, asked for by the program (Program.collectGarbage): none inside a key's
+    // == or hashCode, nor on a core of a parallel section, where a safe point would not collect
+    // either.
+    void collectNow() {
+        if (keyCalls_ == 0 && coreId_ == 0) collectGarbage();
+    }
+    // The bytes the program's objects take now, the garbage not yet collected counted with them
+    // (Program.memoryUsed); what is still in use, right after a collection.
+    size_t memoryUsed() const { return bytesAllocated_; }
 
     ObjString* intern(std::string_view s);
 
