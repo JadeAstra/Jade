@@ -103,3 +103,11 @@ for (p in ["\\p{IsLatin}", "\\X", "x{2}{3}", "{1}"]) {
 val t = clock()
 print(Regex("^(a+)+\$").matches("a".repeat(40) + "b"), Regex("(\\w+\\s?)+\$").containsMatchIn("an example of a sentence that ends badly!"))   // expect: false false
 print(clock() - t < 1.0)   // expect: true
+
+// A repeat of one character (x*, [^"]*, .*) taken as one run and given back a character at a
+// time: the same matches as before, and patterns of runs one after another still answer at once.
+print(Regex("a*ab").matchAt("aaab", 0)?.value, Regex(".*b").find("xxbyyb\nzb")?.value, Regex("[^\"]*\"").matchAt("abc\"def\"", 0)?.value)   // expect: aaab xxbyyb abc"
+print(Regex("(?>a*)ab").matchAt("aaab", 0)?.value, Regex("[a-c]*+c").find("abcc")?.value, Regex("(a*)*b").find("aaab")?.value, Regex("x*").find("yyy")?.range)   // expect: null null aaab 0..-1
+print(Regex("(?i)a*B").find("xAaAb")?.value, Regex("\\s*=\\s*").matchAt("  =  x", 0)?.value?.size, Regex("(?=a*b)a").find("aab")?.value)   // expect: AaAb 5 a
+val runs = clock()
+print(Regex("a*a*a*a*a*c").containsMatchIn("a".repeat(20000) + "b"), clock() - runs < 1.0)   // expect: false true

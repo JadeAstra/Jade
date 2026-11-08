@@ -241,6 +241,11 @@ enum class Op : uint8_t {
     Char, CharFold, CharFoldAscii, AnyAll, AnyLine, Class, Split, Jmp, Save, Match,
     Begin, LineStart, End, EndFinal, LineEnd, WordBoundary, NotWordBoundary, PreviousEnd,
     BackRef, Look, Atomic, LoopSet, LoopCheck, AtTarget,
+    // X* (greedy) of one character, `test` saying which kind: the longest run taken at once,
+    // and one entry left to give it back a character at a time, where a loop of Split, X and
+    // Jmp would take three instructions and an entry for each character ([^"]* over a long
+    // attribute's value, say).
+    Run,
 };
 
 struct Inst {
@@ -251,6 +256,7 @@ struct Inst {
     uint32_t c = 0;
     int a = 0, b = 0;   // Split: preferred, other; Jmp: target; Save/BackRef/Loop*: slot; Class: class; Look/Atomic: sub-program start
     int minLen = 0, maxLen = 0;
+    Op test = Op::Char;  // Run: the one character's instruction, Char to Class, with the fields above
 };
 
 }  // namespace
@@ -1216,6 +1222,15 @@ public:
                 const int min = n.min, max = n.max;
                 const bool lazy = n.greed == Node::Lazy && i != greedyOnce_;
                 for (int k = 0; k < min; k++) compile(child);
+                const Node::Kind childKind = n_[static_cast<size_t>(child)].kind;
+                if (max < 0 && !lazy && (childKind == Node::Char || childKind == Node::Class || childKind == Node::Dot)) {
+                    // X* of one character: one Run.
+                    compile(child);
+                    Inst& one = at(here() - 1);
+                    one.test = one.op;
+                    one.op = Op::Run;
+                    return;
+                }
                 if (max < 0) {
                     // X*: L: split body, out; body: [mark] X [check] jmp L
                     const bool empty = canBeEmpty(child);
@@ -1271,6 +1286,11 @@ public:
         for (int pc = 0; pc < mainEnd; pc++) {
             const Op op = p_.code[static_cast<size_t>(pc)].op;
             if (op == Op::Split) p_.splitNumber[static_cast<size_t>(pc)] = p_.splits++;
+            if (op == Op::Run) {
+                // Two: one for coming to the run at a position, one for going on after it from one.
+                p_.splitNumber[static_cast<size_t>(pc)] = p_.splits;
+                p_.splits += 2;
+            }
             if (op == Op::BackRef) memo = false;
         }
         // A back reference in a part's program counts too.
@@ -1345,10 +1365,10 @@ void firstOf(const std::vector<Node>& nodes, int i, Program& p) {
 namespace {
 
 struct Entry {
-    enum Kind : uint8_t { Alt, Capture, Register } kind;
+    enum Kind : uint8_t { Alt, Capture, Register, Run } kind;
     int pc;
-    int64_t value;  // Alt: the position; Capture, Register: the value to put back
-    int slot;
+    int64_t value;  // Alt: the position; Capture, Register: the value to put back; Run: the position to go on from next
+    int64_t slot;   // Capture, Register: which; Run: where the run began, the shortest it may be given back to
 };
 
 class Runner {
@@ -1391,16 +1411,9 @@ public:
                     if (ok) pos++, pc++;
                     break;
                 case Op::Split:
-                    if (p_.memo && target < 0 && static_cast<size_t>(pc) < p_.splitNumber.size()) {
-                        if (++splitsTaken_ > kMemoAfter && memo_.empty() && !memoRefused_) startMemo();
-                        if (!memo_.empty()) {
-                            const size_t bit = static_cast<size_t>(p_.splitNumber[static_cast<size_t>(pc)]) * (n_ + 1) + static_cast<size_t>(pos);
-                            if ((memo_[bit >> 6] >> (bit & 63)) & 1) {
-                                ok = false;  // tried from here before, and it failed
-                                break;
-                            }
-                            memo_[bit >> 6] |= uint64_t{1} << (bit & 63);
-                        }
+                    if (!firstTry(pc, pos, target)) {
+                        ok = false;  // tried from here before, and it failed
+                        break;
                     }
                     stack_.push_back(Entry{Entry::Alt, inst.b, pos, 0});
                     pc = inst.a;
@@ -1433,6 +1446,37 @@ public:
                     ok = pos == target;
                     if (ok) pc++;
                     break;
+                case Op::Run: {
+                    if (!firstTry(pc, pos, target)) {
+                        ok = false;  // come to from here before, and it failed
+                        break;
+                    }
+                    const int64_t n = static_cast<int64_t>(n_);
+                    int64_t p = pos;
+                    if (memoed(pc, target)) {
+                        // Coming to the run at a position it passes over would go on from fewer of
+                        // the same places: each noted as tried, as a loop of Splits notes each one.
+                        // Where the run was come to before, all after it has been tried: it stops.
+                        while (p < n && (inst.test == Op::Class ? inClass(p_, inst.a, s_->at(static_cast<size_t>(p))) : oneOf(inst, s_->at(static_cast<size_t>(p)))) &&
+                               !wasTried(pc, p + 1)) {
+                            p++;
+                            noteTried(pc, p, target);
+                        }
+                    } else if (inst.test == Op::Class) {
+                        while (p < n && inClass(p_, inst.a, s_->at(static_cast<size_t>(p)))) p++;
+                    } else {
+                        while (p < n && oneOf(inst, s_->at(static_cast<size_t>(p)))) p++;
+                    }
+                    const int64_t from = runFrom(pc, p, pos, target);
+                    if (from < 0) {
+                        ok = false;
+                        break;
+                    }
+                    if (from > pos) stack_.push_back(Entry{Entry::Run, pc, from - 1, pos});
+                    pos = from;
+                    pc++;
+                    break;
+                }
                 case Op::Begin:
                     ok = pos == 0;
                     if (ok) pc++;
@@ -1529,8 +1573,18 @@ public:
                 } else if (e.kind == Entry::Register) {
                     regs_[static_cast<size_t>(e.slot)] = e.value;
                 } else {
-                    pc = e.pc;
-                    pos = e.value;
+                    if (e.kind == Entry::Run) {
+                        // A run given back to the longest it has not gone on from before, the rest
+                        // of it kept for later; one with nothing left is passed by.
+                        const int64_t from = runFrom(e.pc, e.value, e.slot, target);
+                        if (from < 0) continue;
+                        if (from > e.slot) stack_.push_back(Entry{Entry::Run, e.pc, from - 1, e.slot});
+                        pc = e.pc + 1;
+                        pos = from;
+                    } else {
+                        pc = e.pc;
+                        pos = e.value;
+                    }
                     resumed = true;
                     break;
                 }
@@ -1544,8 +1598,54 @@ public:
     void keepOnlyRestores(size_t mark) {
         size_t out = mark;
         for (size_t k = mark; k < stack_.size(); k++)
-            if (stack_[k].kind != Entry::Alt) stack_[out++] = stack_[k];
+            if (stack_[k].kind == Entry::Capture || stack_[k].kind == Entry::Register) stack_[out++] = stack_[k];
         stack_.resize(out);
+    }
+    // Whether the program goes on from branch point `pc` at `pos` for the first time, noting it:
+    // false where it went on from there before and failed (the memo, once it pays). A Split is a
+    // branch point, and so is a Run at each position it may go on from.
+    // A Run has two numbers: `part` 0 for coming to it at `pos`, 1 for going on after it from `pos`.
+    bool firstTry(int pc, int64_t pos, int64_t target, int part = 0) {
+        if (!p_.memo || target >= 0 || static_cast<size_t>(pc) >= p_.splitNumber.size()) return true;
+        if (++splitsTaken_ > kMemoAfter && memo_.empty() && !memoRefused_) startMemo();
+        if (memo_.empty()) return true;
+        const size_t bit = static_cast<size_t>(p_.splitNumber[static_cast<size_t>(pc)] + part) * (n_ + 1) + static_cast<size_t>(pos);
+        if ((memo_[bit >> 6] >> (bit & 63)) & 1) return false;
+        memo_[bit >> 6] |= uint64_t{1} << (bit & 63);
+        return true;
+    }
+    // Whether the memo is kept for branch point `pc` now.
+    bool memoed(int pc, int64_t target) const {
+        return p_.memo && target < 0 && static_cast<size_t>(pc) < p_.splitNumber.size() && !memo_.empty();
+    }
+    // Whether branch point `pc` was come to at `pos` before (the memo kept).
+    bool wasTried(int pc, int64_t pos) const {
+        const size_t bit = static_cast<size_t>(p_.splitNumber[static_cast<size_t>(pc)]) * (n_ + 1) + static_cast<size_t>(pos);
+        return (memo_[bit >> 6] >> (bit & 63)) & 1;
+    }
+    // Notes branch point `pc` as gone on from at `pos`, without asking.
+    void noteTried(int pc, int64_t pos, int64_t target) {
+        if (!p_.memo || target >= 0 || static_cast<size_t>(pc) >= p_.splitNumber.size() || memo_.empty()) return;
+        const size_t bit = static_cast<size_t>(p_.splitNumber[static_cast<size_t>(pc)]) * (n_ + 1) + static_cast<size_t>(pos);
+        memo_[bit >> 6] |= uint64_t{1} << (bit & 63);
+    }
+    // Where the Run at `pc`, which took the text from `low` up to `high`, goes on from: the
+    // longest it has not gone on from before, or -1 when it has from every one.
+    int64_t runFrom(int pc, int64_t high, int64_t low, int64_t target) {
+        for (int64_t at = high; at >= low; at--)
+            if (firstTry(pc, at, target, 1)) return at;
+        return -1;
+    }
+    // Whether `c` is the one character a Run's instruction matches (any but Class).
+    bool oneOf(const Inst& inst, uint32_t c) const {
+        switch (inst.test) {
+            case Op::Char: return c == inst.c;
+            case Op::CharFold: return fold(c) == inst.c;
+            case Op::CharFoldAscii: return c < 0x80 && (c | 0x20) == inst.c;
+            case Op::AnyAll: return true;
+            case Op::AnyLine: return !isLineTerminator(c, inst.flag);
+            default: return inClass(p_, inst.a, c);
+        }
     }
     void unwindTo(size_t mark) {
         while (stack_.size() > mark) {
