@@ -1,0 +1,398 @@
+// ---- Files of any size, a byte at a time (M9/M10, from JadeUI's jadelib-io) ----
+// What the hex viewer and the large text viewer stand on: a file of many gigabytes read where it
+// is, a few pages of it kept; a byte changed where it is and nothing else written; the lines of a
+// text found without keeping each line's place.
+
+// A source of bytes read at any position: a file (PagedFile, of any size) or bytes in memory
+// (InMemoryByteSource, so that what is not saved yet can be read as a file is). A file's read may
+// fail, an IOException; bytes in memory never do.
+interface ByteSource : AutoCloseable {
+  // How many bytes there are.
+  val length : int
+
+  // The byte at `offset`, 0 to 255; -1 outside the source.
+  fun byteAt(offset : int) : int throws IOException
+
+  // Up to `count` bytes from `offset`, fewer at the end, none outside the source: for work on a
+  // run of bytes, which reads a page at a time where byteAt reads one.
+  fun bytesAt(offset : int, count : int) : Bytes throws IOException {
+    val start = Math.max(0, offset)
+    val end = Math.min(length, offset + Math.max(0, count))
+    val made = Bytes(Math.max(0, end - start))
+    for (i in 0 ..< made.size) { made[i] = byteAt(start + i).toByte() }
+    return made
+  }
+
+  // Forgets what it keeps, after what it reads changed. Nothing by default.
+  fun invalidate() {}
+
+  // Lets go of what it holds. Nothing by default.
+  override fun close() {}
+}
+
+// A ByteSource over bytes in memory, which may be changed in place with setByte.
+class InMemoryByteSource(private val bytes : Bytes) : ByteSource {
+  // How many bytes there are.
+  override val length : int
+    get() => bytes.size
+
+  // The byte at `offset`, 0 to 255; -1 outside the bytes.
+  override fun byteAt(offset : int) : int => offset < 0 or offset >= bytes.size ? -1 : bytes[offset].toInt()
+
+  // Up to `count` bytes from `offset`, a copy; fewer at the end, none outside the bytes.
+  override fun bytesAt(offset : int, count : int) : Bytes {
+    val start = Math.max(0, offset)
+    val end = Math.min(bytes.size, offset + Math.max(0, count))
+    return start >= end ? Bytes(0) : bytes[start ..< end]
+  }
+
+  // Puts the low 8 bits of `value` at `offset`; nothing outside the bytes.
+  fun setByte(offset : int, value : int) {
+    if (offset >= 0 and offset < bytes.size) { bytes[offset] = value.toByteWrapped() }
+  }
+
+  // A copy of the bytes as they are now.
+  fun toByteArray() : Bytes => bytes[0 ..< bytes.size]
+}
+
+// A file read at any position a page at a time, the last 64 pages read kept (4 MB), so that any
+// part of a file of many gigabytes is read without the rest of it being. Its length is the file's
+// as it was opened. Threads may share one: a lock keeps its pages right between them.
+class PagedFile : ByteSource {
+  // The file.
+  val file : FilePath
+  // The file's length as it was opened.
+  override val length : int
+
+  private val raf : RandomAccessFile
+  private val pageSize = 65536
+  private val maxPages = 64
+  // Pages by number, the one read last at the end; the first is let go when there are too many.
+  private val cache : open Map<int, Bytes> = {:}
+  // The page read last, kept apart, for reads one after another.
+  private var lastNumber = -1
+  private var lastPage = Bytes(0)
+  private val lock = Lock()
+
+  fun init(file : FilePath | string) throws IOException {
+    this.file = file is FilePath ? file : FilePath(file)
+    this.raf = RandomAccessFile(this.file)
+    this.length = raf.size()
+  }
+
+  // The byte at `offset`, 0 to 255; -1 outside the file as it was opened, or where the file has
+  // become shorter since.
+  override fun byteAt(offset : int) : int throws IOException {
+    if (offset < 0 or offset >= length) { return -1 }
+    val number = offset / pageSize
+    val page = pageOf(number)
+    val within = offset - number * pageSize
+    return within < page.size ? page[within].toInt() : -1
+  }
+
+  // Up to `count` bytes from `offset`, read a page at a time; fewer at the end of the file as it
+  // was opened, or where it has become shorter since.
+  override fun bytesAt(offset : int, count : int) : Bytes throws IOException {
+    val start = Math.max(0, offset)
+    val end = Math.min(length, offset + Math.max(0, count))
+    if (start >= end) { return Bytes(0) }
+    val first = start / pageSize
+    val last = (end - 1) / pageSize
+    if (first == last) {
+      val page = pageOf(first)
+      val from = start - first * pageSize
+      return page[Math.min(from, page.size) ..< Math.min(end - first * pageSize, page.size)]
+    }
+    var made = Bytes(0)
+    var at = start
+    while (at < end) {
+      val number = at / pageSize
+      val page = pageOf(number)
+      val from = at - number * pageSize
+      val upTo = Math.min(page.size, end - number * pageSize)
+      if (from >= upTo) { break }   // the file became shorter
+      made = made + page[from ..< upTo]
+      at += upTo - from
+    }
+    return made
+  }
+
+  private fun pageOf(number : int) : Bytes throws IOException {
+    return lock.useKey {
+      if (number == lastNumber) {
+        lastPage
+      } else {
+        var page = cache.remove(number)
+        if (page == null) {
+          val start = number * pageSize
+          page = raf.readAt(start, Math.min(pageSize, length - start))
+        }
+        cache[number] = page!!        // to the end: read last
+        if (cache.size > maxPages) { cache.remove(cache.keys.first()) }
+        lastNumber = number
+        lastPage = page!!
+        page!!
+      }
+    }
+  }
+
+  // Forgets the pages read, after the file changed: the next reads are from the file.
+  override fun invalidate() {
+    lock.useKey {
+      cache.clear()
+      lastNumber = -1
+      lastPage = Bytes(0)
+    }
+  }
+
+  // Lets go of the file, and of the pages.
+  override fun close() {
+    lock.useKey {
+      raf.close()
+      cache.clear()
+      lastNumber = -1
+      lastPage = Bytes(0)
+    }
+  }
+}
+
+// Changes bytes of a file where they are, each change a position and the value whose low 8 bits
+// go there, and nothing else written: a file of 20 GB with three bytes edited is saved by writing
+// three bytes. A position outside the file is passed over, never added; the changes are made in
+// order of position (the last of two at one position winning) and are on the disk when it
+// returns. How many were made: fewer than given where some were outside, which is how a caller
+// learns the file became shorter under it. Not written to a new file and renamed into place, as a
+// whole-file save is: that would copy the 20 GB.
+fun writeByteDiff(file : FilePath | string, changes : List<Pair<int, int>>) : int throws IOException {
+  if (changes.isEmpty()) { return 0 }
+  var applied = 0
+  RandomAccessFile(file, "rw").use { raf ->
+    val size = raf.size()
+    val one = Bytes(1)
+    for (change in changes.sortedBy { it.first }) {
+      if (change.first >= 0 and change.first < size) {
+        one[0] = change.second.toByteWrapped()
+        raf.writeAt(change.first, one)
+        applied += 1
+      }
+    }
+    if (applied > 0) { raf.sync() }
+  }
+  return applied
+}
+
+// Where the lines of a text file start, kept for every 4096th line only (checkpointInterval): one
+// number for every 4096 lines, where a number for each line would take gigabytes for a file of
+// 20 GB. A line is found from the checkpoint before it, by reading on to its start.
+//
+// It is built by reading the whole file: with build() where it is called, or with
+// buildInBackground() by a worker of its own on another core, the program going on meanwhile.
+// It can be read while it is built: lineCount and the lookups answer for what is indexed so far.
+class LineIndex {
+  static {
+    // How many lines apart the kept starts are.
+    val checkpointInterval = 4096
+  }
+
+  // The file.
+  val file : FilePath
+  // Its length when the index was made.
+  val fileLength : int
+
+  // The lines indexed so far; all of them once complete (an empty file is one empty line).
+  var lineCount = 0
+    private set
+  // Whether the whole file is indexed.
+  var complete = false
+    private set
+  // How many bytes are indexed so far.
+  var indexedBytes = 0
+    private set
+
+  // The start of line k * checkpointInterval, line 0's from the start, so never empty: a lookup
+  // before the build, or during it, still finds what it asks for by reading on from there. A
+  // build replaces the whole list in one step.
+  private var checkpoints : open List<int> = [0]
+  private var job : Job<int>? = null
+
+  fun init(file : FilePath | string) {
+    this.file = file is FilePath ? file : FilePath(file)
+    this.fileLength = this.file.size()
+  }
+
+  // Reads the whole file where it is called, `onProgress` called after each megabyte. A second
+  // build replaces the index rather than adding to it.
+  fun build(onProgress : () -> unit = {}) throws IOException {
+    val found : open List<int> = [0]
+    checkpoints = found
+    complete = false
+    var offset = 0
+    var newlines = 0
+    var lastByte = -1
+    RandomAccessFile(file).use { raf ->
+      val buffer = Bytes(1048576)
+      while (true) {
+        val n = raf.readAt(offset, buffer)
+        if (n <= 0) { break }
+        var at = buffer.indexOf(10)
+        while (at >= 0 and at < n) {
+          newlines += 1
+          if (newlines % checkpointInterval == 0) { found.add(offset + at + 1) }
+          at = buffer.indexOf(10, at + 1)
+        }
+        offset += n
+        lastByte = buffer[n - 1].toInt()
+        indexedBytes = offset
+        lineCount = newlines + 1          // what is seen so far, a last part of a line counted
+        onProgress()
+      }
+    }
+    finish(offset, newlines, lastByte)
+    onProgress()
+  }
+
+  // Builds the index in a worker of its own, on another core, and returns at once: what is
+  // indexed is here as the worker sends it, about a megabyte at a time, `onProgress` called on the
+  // event loop each time. The job finishes once the whole file is indexed, or fails with the
+  // IOException that stopped it, giving the number of lines; cancelling it stops the worker. A
+  // second build replaces the index.
+  fun buildInBackground(onProgress : () -> unit = {}) : Job<int> {
+    job?.cancel()
+    val found : open List<int> = [0]
+    checkpoints = found
+    complete = false
+    lineCount = 0
+    indexedBytes = 0
+    val done = Job<int>()
+    job = done
+    val entry = __lineIndexWorker   // named here as well, so that a built program keeps it
+    val worker = Worker("std:__lineIndexWorker")   // the program waits for a build under way
+    worker.onMessage = { message ->
+      val part = message as Map<string, any?>
+      if (done.isDone) {
+        // cancelled: what comes after is not this build's
+      } else if (part["error"] != null) {
+        done.fail(IOException(part["error"] as string))
+      } else {
+        for (start in part["checkpoints"] as List<any?>) { found.add(start as int) }
+        indexedBytes = part["bytes"] as int
+        val newlines = part["newlines"] as int
+        if (part["end"] == true) {
+          finish(indexedBytes, newlines, part["lastByte"] as int)
+          onProgress()
+          done.complete(lineCount)
+        } else {
+          lineCount = newlines + 1
+          onProgress()
+        }
+      }
+    }
+    worker.onError = { text -> if (!done.isDone) { done.fail(IOException("the line index's worker failed: $text")) } }
+    done.onDone { if (done.isCancelled) { worker.terminate() } }
+    worker.post({"path": file.absolute.text, "interval": checkpointInterval})
+    return done
+  }
+
+  private fun finish(length : int, newlines : int, lastByte : int) {
+    // A last line end ends the last line: no empty line after it. An empty file is one line.
+    lineCount = length > 0 and lastByte == 10 ? newlines : newlines + 1
+    if (lineCount == 0) { lineCount = 1 }
+    indexedBytes = length
+    complete = true
+  }
+
+  // Where `line` starts, read on from the checkpoint before it in `source`, which holds the file's
+  // bytes; the end of the source for a line past it.
+  fun lineStartOffset(line : int, source : ByteSource) : int throws IOException {
+    val kept = checkpoints
+    val index = Math.max(0, Math.min(line / checkpointInterval, kept.size - 1))
+    var offset = kept[index]
+    var remaining = line - index * checkpointInterval
+    while (remaining > 0) {
+      val chunk = source.bytesAt(offset, 65536)
+      if (chunk.size == 0) { return offset }
+      var at = chunk.indexOf(10)
+      while (at >= 0 and remaining > 0) {
+        remaining -= 1
+        if (remaining == 0) { return offset + at + 1 }
+        at = chunk.indexOf(10, at + 1)
+      }
+      offset += chunk.size
+    }
+    return offset
+  }
+
+  // The line `target` is on, read on from the checkpoint at or before it.
+  fun lineAtOffset(target : int, source : ByteSource) : int throws IOException {
+    val kept = checkpoints
+    var low = 0
+    var high = kept.size - 1
+    var index = 0
+    while (low <= high) {
+      val middle = (low + high) / 2
+      if (kept[middle] <= target) {
+        index = middle
+        low = middle + 1
+      } else {
+        high = middle - 1
+      }
+    }
+    var offset = kept[index]
+    var line = index * checkpointInterval
+    while (offset < target) {
+      val chunk = source.bytesAt(offset, Math.min(65536, target - offset))
+      if (chunk.size == 0) { return line }
+      var at = chunk.indexOf(10)
+      while (at >= 0) {
+        line += 1
+        at = chunk.indexOf(10, at + 1)
+      }
+      offset += chunk.size
+    }
+    return line
+  }
+
+  // How many line starts it keeps: line 0's and one for every checkpointInterval lines after it,
+  // which is what its memory grows with.
+  val checkpointCount : int
+    get() => checkpoints.size
+}
+
+// What the worker of LineIndex.buildInBackground runs, once it has the standard library: the file
+// read a megabyte at a time, its line ends found with the native byte search, and the starts of
+// every so many lines sent back with each megabyte, so that the program shows the lines found so
+// far while the rest is read. Given {"path": ..., "interval": 4096}; it sends {"checkpoints": [...],
+// "bytes": n, "newlines": n} after each megabyte, then the same with "end": true and "lastByte"
+// once the file is read, or {"error": message}.
+fun __lineIndexWorker() {
+  Worker.parent!!.onMessage = { message ->
+    val job = message as Map<string, any?>
+    val interval = job["interval"] as int
+    try {
+      RandomAccessFile(job["path"] as string).use { file ->
+        val buffer = Bytes(1048576)
+        var offset = 0
+        var newlines = 0
+        var lastByte = -1
+        while (true) {
+          val n = file.readAt(offset, buffer)
+          if (n <= 0) { break }
+          val found : open List<int> = []
+          var at = buffer.indexOf(10)
+          while (at >= 0 and at < n) {
+            newlines += 1
+            if (newlines % interval == 0) { found.add(offset + at + 1) }
+            at = buffer.indexOf(10, at + 1)
+          }
+          offset += n
+          lastByte = buffer[n - 1].toInt()
+          Worker.parent!!.post({"checkpoints": found, "bytes": offset, "newlines": newlines})
+        }
+        Worker.parent!!.post({"checkpoints": [], "bytes": offset, "newlines": newlines, "lastByte": lastByte, "end": true})
+      }
+    } catch (e : IOException) {
+      Worker.parent!!.post({"error": e.message})
+    }
+    Worker.parent!!.close()
+  }
+}

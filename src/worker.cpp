@@ -625,7 +625,7 @@ void deliverToWorker(VM& vm, const std::string& data) {
 
 // ---- The worker's thread ----
 
-void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::string> image, int entry, std::vector<std::string> arguments,
+void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::string> image, int entry, std::string function, std::vector<std::string> arguments,
                 std::function<void(VM&, JadeThrow&, const std::string&)> onThreadError, std::shared_ptr<Host> host) {
     // Kept on the heap: if threads of its own are still running when the worker ends, the VM
     // is left as it is rather than taken apart under them.
@@ -649,7 +649,8 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
             link->early.clear();
         }
         vm->jobStarted();  // it waits for messages until it closes or is terminated
-        vm->runModule(entry);
+        if (entry >= 0) vm->runModule(entry);
+        else vm->runStdFunction(function);  // one of the standard library's own (Worker("std:__name"))
         vm->runEventLoop(true);
     } catch (JadeThrow& thrown) {
         try {
@@ -719,10 +720,12 @@ void registerWorkers(VM& vm) {
     // ---- For the program that starts a worker ----
 
     // start(script, object, daemon): `script` is what the compiler made of the path written in
-    // Worker("..."): the number of the module the script became, and the path.
+    // Worker("..."): the number of the module the script became, and the path; or, for a worker
+    // of the standard library's own, Worker("std:__name"), the name of the function it runs.
     def("start", 3, 3, [](VM& vm, int, Value* args) -> Value {
         const std::string spec = args[0].isString() ? asString(args[0])->utf8() : std::string();
-        const size_t second = spec.size() > 1 && spec[0] == '\x01' ? spec.find('\x01', 1) : std::string::npos;
+        const bool library = spec.size() > 1 && spec[0] == '\x02';
+        const size_t second = library ? 0 : spec.size() > 1 && spec[0] == '\x01' ? spec.find('\x01', 1) : std::string::npos;
         if (second == std::string::npos)
             throw vm.runtimeError(Thrown::IllegalArgumentException, "a worker's script is named by a string written in the call itself, as in Worker(\"physics.jade\"), "
                                   "so that the script is built into the program");
@@ -732,14 +735,15 @@ void registerWorkers(VM& vm) {
         link->parent = &vm;
         link->id = vm.nextWorkerId++;
         link->daemon = args[2].truthy();
-        link->path = spec.substr(second + 1);
+        link->path = library ? "std:" + spec.substr(1) : spec.substr(second + 1);
         vm.workerLinks[link->id] = link;
         vm.workerObjects[link->id] = args[1];
         vm.workerStarted();
         if (!link->daemon) vm.jobStarted();  // the program waits for a worker that is not a daemon
 
         auto image = std::make_shared<const std::string>(vm.programImage());
-        std::thread(workerMain, link, image, std::stoi(spec.substr(1, second - 1)), vm.scriptArgs, vm.onThreadError, vm.currentHostShared()).detach();
+        const int entry = library ? -1 : std::stoi(spec.substr(1, second - 1));
+        std::thread(workerMain, link, image, entry, library ? spec.substr(1) : std::string(), vm.scriptArgs, vm.onThreadError, vm.currentHostShared()).detach();
         return Value::integer(link->id);
     });
 

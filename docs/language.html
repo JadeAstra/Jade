@@ -406,6 +406,7 @@ addButton(widgets)</pre></dd>
 <h2 id="api-files">The standard library, file by file</h2>
 <ul>
 <li><a href="#file-builtins-jade">builtins.jade</a></li>
+<li><a href="#file-bytesource-jade">bytesource.jade</a></li>
 <li><a href="#file-core-jade">core.jade</a></li>
 <li><a href="#file-errors-jade">errors.jade</a></li>
 <li><a href="#file-file-jade">file.jade</a></li>
@@ -447,6 +448,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#AutoCloseable"><code>AutoCloseable</code></a> (2)</li>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
+<li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
 <li><a href="#Bytes.size"><code>Bytes</code></a> (21)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
@@ -486,6 +488,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
 <li><a href="#Image"><code>Image</code></a> (23)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
+<li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
 <li><a href="#Index.of"><code>Index</code></a> (3)</li>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
 <li><a href="#IndexedValue"><code>IndexedValue</code></a> (1)</li>
@@ -500,6 +503,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
 <li><a href="#Library"><code>Library</code></a> (4)</li>
 <li><a href="#Line"><code>Line</code></a> (4)</li>
+<li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
 <li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
@@ -523,6 +527,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#NumberFormatException"><code>NumberFormatException</code></a> (1)</li>
 <li><a href="#OutOfMemoryError"><code>OutOfMemoryError</code></a> (1)</li>
 <li><a href="#Oval"><code>Oval</code></a> (4)</li>
+<li><a href="#PagedFile"><code>PagedFile</code></a> (7)</li>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
@@ -1398,6 +1403,108 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry member" id="Math.seed"><code class="sig">fun seed(value : int)</code><a class="anchor" href="#Math.seed">#</a>
 <p>Starts random() and randomInt() again from <code>value</code>: after the same seed, they give the same numbers in the same order.</p>
+</div>
+</section>
+<section class="file" id="file-bytesource-jade">
+<h2>bytesource.jade</h2>
+<h3>Files of any size, a byte at a time (M9/M10, from JadeUI's jadelib-io)</h3>
+<p>What the hex viewer and the large text viewer stand on: a file of many gigabytes read where it is, a few pages of it kept; a byte changed where it is and nothing else written; the lines of a text found without keeping each line's place.</p>
+<div class="entry" id="ByteSource"><code class="sig">interface ByteSource : AutoCloseable</code><a class="anchor" href="#ByteSource">#</a>
+<p>A source of bytes read at any position: a file (PagedFile, of any size) or bytes in memory (InMemoryByteSource, so that what is not saved yet can be read as a file is). A file's read may fail, an IOException; bytes in memory never do.</p>
+</div>
+<div class="entry member" id="ByteSource.length"><code class="sig">val length : int</code><a class="anchor" href="#ByteSource.length">#</a>
+<p>How many bytes there are.</p>
+</div>
+<div class="entry member" id="ByteSource.byteAt"><code class="sig">fun byteAt(offset : int) : int throws IOException</code><a class="anchor" href="#ByteSource.byteAt">#</a>
+<p>The byte at <code>offset</code>, 0 to 255; -1 outside the source.</p>
+</div>
+<div class="entry member" id="ByteSource.bytesAt"><code class="sig">fun bytesAt(offset : int, count : int) : Bytes throws IOException</code><a class="anchor" href="#ByteSource.bytesAt">#</a>
+<p>Up to <code>count</code> bytes from <code>offset</code>, fewer at the end, none outside the source: for work on a run of bytes, which reads a page at a time where byteAt reads one.</p>
+</div>
+<div class="entry member" id="ByteSource.invalidate"><code class="sig">fun invalidate()</code><a class="anchor" href="#ByteSource.invalidate">#</a>
+<p>Forgets what it keeps, after what it reads changed. Nothing by default.</p>
+</div>
+<div class="entry member" id="ByteSource.close"><code class="sig">override fun close()</code><a class="anchor" href="#ByteSource.close">#</a>
+<p>Lets go of what it holds. Nothing by default.</p>
+</div>
+<div class="entry" id="InMemoryByteSource"><code class="sig">class InMemoryByteSource(private val bytes : Bytes) : ByteSource</code><a class="anchor" href="#InMemoryByteSource">#</a>
+<p>A ByteSource over bytes in memory, which may be changed in place with setByte.</p>
+</div>
+<div class="entry member" id="InMemoryByteSource.length"><code class="sig">override val length : int</code><a class="anchor" href="#InMemoryByteSource.length">#</a>
+<p>How many bytes there are.</p>
+</div>
+<div class="entry member" id="InMemoryByteSource.byteAt"><code class="sig">override fun byteAt(offset : int) : int</code><a class="anchor" href="#InMemoryByteSource.byteAt">#</a>
+<p>The byte at <code>offset</code>, 0 to 255; -1 outside the bytes.</p>
+</div>
+<div class="entry member" id="InMemoryByteSource.bytesAt"><code class="sig">override fun bytesAt(offset : int, count : int) : Bytes</code><a class="anchor" href="#InMemoryByteSource.bytesAt">#</a>
+<p>Up to <code>count</code> bytes from <code>offset</code>, a copy; fewer at the end, none outside the bytes.</p>
+</div>
+<div class="entry member" id="InMemoryByteSource.setByte"><code class="sig">fun setByte(offset : int, value : int)</code><a class="anchor" href="#InMemoryByteSource.setByte">#</a>
+<p>Puts the low 8 bits of <code>value</code> at <code>offset</code>; nothing outside the bytes.</p>
+</div>
+<div class="entry member" id="InMemoryByteSource.toByteArray"><code class="sig">fun toByteArray() : Bytes</code><a class="anchor" href="#InMemoryByteSource.toByteArray">#</a>
+<p>A copy of the bytes as they are now.</p>
+</div>
+<div class="entry" id="PagedFile"><code class="sig">class PagedFile : ByteSource</code><a class="anchor" href="#PagedFile">#</a>
+<p>A file read at any position a page at a time, the last 64 pages read kept (4 MB), so that any part of a file of many gigabytes is read without the rest of it being. Its length is the file's as it was opened. Threads may share one: a lock keeps its pages right between them.</p>
+</div>
+<div class="entry member" id="PagedFile.file"><code class="sig">val file : FilePath</code><a class="anchor" href="#PagedFile.file">#</a>
+<p>The file.</p>
+</div>
+<div class="entry member" id="PagedFile.length"><code class="sig">override val length : int</code><a class="anchor" href="#PagedFile.length">#</a>
+<p>The file's length as it was opened.</p>
+</div>
+<div class="entry member" id="PagedFile.byteAt"><code class="sig">override fun byteAt(offset : int) : int throws IOException</code><a class="anchor" href="#PagedFile.byteAt">#</a>
+<p>The byte at <code>offset</code>, 0 to 255; -1 outside the file as it was opened, or where the file has become shorter since.</p>
+</div>
+<div class="entry member" id="PagedFile.bytesAt"><code class="sig">override fun bytesAt(offset : int, count : int) : Bytes throws IOException</code><a class="anchor" href="#PagedFile.bytesAt">#</a>
+<p>Up to <code>count</code> bytes from <code>offset</code>, read a page at a time; fewer at the end of the file as it was opened, or where it has become shorter since.</p>
+</div>
+<div class="entry member" id="PagedFile.invalidate"><code class="sig">override fun invalidate()</code><a class="anchor" href="#PagedFile.invalidate">#</a>
+<p>Forgets the pages read, after the file changed: the next reads are from the file.</p>
+</div>
+<div class="entry member" id="PagedFile.close"><code class="sig">override fun close()</code><a class="anchor" href="#PagedFile.close">#</a>
+<p>Lets go of the file, and of the pages.</p>
+</div>
+<div class="entry" id="writeByteDiff"><code class="sig">fun writeByteDiff(file : FilePath | string, changes : List&lt;Pair&lt;int, int&gt;&gt;) : int throws IOException</code><a class="anchor" href="#writeByteDiff">#</a>
+<p>Changes bytes of a file where they are, each change a position and the value whose low 8 bits go there, and nothing else written: a file of 20 GB with three bytes edited is saved by writing three bytes. A position outside the file is passed over, never added; the changes are made in order of position (the last of two at one position winning) and are on the disk when it returns. How many were made: fewer than given where some were outside, which is how a caller learns the file became shorter under it. Not written to a new file and renamed into place, as a whole-file save is: that would copy the 20 GB.</p>
+</div>
+<div class="entry" id="LineIndex"><code class="sig">class LineIndex</code><a class="anchor" href="#LineIndex">#</a>
+<p>Where the lines of a text file start, kept for every 4096th line only (checkpointInterval): one number for every 4096 lines, where a number for each line would take gigabytes for a file of 20 GB. A line is found from the checkpoint before it, by reading on to its start.</p>
+<p>It is built by reading the whole file: with build() where it is called, or with buildInBackground() by a worker of its own on another core, the program going on meanwhile. It can be read while it is built: lineCount and the lookups answer for what is indexed so far.</p>
+</div>
+<div class="entry member" id="LineIndex.checkpointInterval"><code class="sig">val checkpointInterval</code><a class="anchor" href="#LineIndex.checkpointInterval">#</a>
+<p>How many lines apart the kept starts are.</p>
+</div>
+<div class="entry member" id="LineIndex.file"><code class="sig">val file : FilePath</code><a class="anchor" href="#LineIndex.file">#</a>
+<p>The file.</p>
+</div>
+<div class="entry member" id="LineIndex.fileLength"><code class="sig">val fileLength : int</code><a class="anchor" href="#LineIndex.fileLength">#</a>
+<p>Its length when the index was made.</p>
+</div>
+<div class="entry member" id="LineIndex.lineCount"><code class="sig">var lineCount</code><a class="anchor" href="#LineIndex.lineCount">#</a>
+<p>The lines indexed so far; all of them once complete (an empty file is one empty line).</p>
+</div>
+<div class="entry member" id="LineIndex.complete"><code class="sig">var complete</code><a class="anchor" href="#LineIndex.complete">#</a>
+<p>Whether the whole file is indexed.</p>
+</div>
+<div class="entry member" id="LineIndex.indexedBytes"><code class="sig">var indexedBytes</code><a class="anchor" href="#LineIndex.indexedBytes">#</a>
+<p>How many bytes are indexed so far.</p>
+</div>
+<div class="entry member" id="LineIndex.build"><code class="sig">fun build(onProgress : () -&gt; unit = {}) throws IOException</code><a class="anchor" href="#LineIndex.build">#</a>
+<p>Reads the whole file where it is called, <code>onProgress</code> called after each megabyte. A second build replaces the index rather than adding to it.</p>
+</div>
+<div class="entry member" id="LineIndex.buildInBackground"><code class="sig">fun buildInBackground(onProgress : () -&gt; unit = {}) : Job&lt;int&gt;</code><a class="anchor" href="#LineIndex.buildInBackground">#</a>
+<p>Builds the index in a worker of its own, on another core, and returns at once: what is indexed is here as the worker sends it, about a megabyte at a time, <code>onProgress</code> called on the event loop each time. The job finishes once the whole file is indexed, or fails with the IOException that stopped it, giving the number of lines; cancelling it stops the worker. A second build replaces the index.</p>
+</div>
+<div class="entry member" id="LineIndex.lineStartOffset"><code class="sig">fun lineStartOffset(line : int, source : ByteSource) : int throws IOException</code><a class="anchor" href="#LineIndex.lineStartOffset">#</a>
+<p>Where <code>line</code> starts, read on from the checkpoint before it in <code>source</code>, which holds the file's bytes; the end of the source for a line past it.</p>
+</div>
+<div class="entry member" id="LineIndex.lineAtOffset"><code class="sig">fun lineAtOffset(target : int, source : ByteSource) : int throws IOException</code><a class="anchor" href="#LineIndex.lineAtOffset">#</a>
+<p>The line <code>target</code> is on, read on from the checkpoint at or before it.</p>
+</div>
+<div class="entry member" id="LineIndex.checkpointCount"><code class="sig">val checkpointCount : int</code><a class="anchor" href="#LineIndex.checkpointCount">#</a>
+<p>How many line starts it keeps: line 0's and one for every checkpointInterval lines after it, which is what its memory grows with.</p>
 </div>
 </section>
 <section class="file" id="file-core-jade">

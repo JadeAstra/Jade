@@ -820,6 +820,10 @@ public:
 
     // Runs a module's top-level code and returns its result. Throws JadeThrow or JadeExit.
     Value runModule(int index);
+    // Calls a function of the standard library's by its name, with no arguments, once the
+    // library is loaded: what a worker the library starts runs (Worker("std:__name")). An
+    // IllegalStateException where it has no such function.
+    Value runStdFunction(const std::string& name);
 
     // Calls an Jade value from native code. Anything the caller holds that is not on the VM
     // stack must be protected with TempRoot / TempVector across this call.

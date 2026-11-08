@@ -266,6 +266,9 @@ foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'check\*.jade') | Sort-
 # `jade test` (D153) on each tests\testing\*.jade: its `// expect:` lines are what it prints
 # after the line naming the file, and it fails where one of them says FAIL.
 foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot 'testing\*.jade') | Sort-Object Name) {
+    # Left out under the GC stress setting: io_files.jade fills a 3 MB buffer a byte at a time and
+    # builds a 400,000-line file, which with a collection at every safe point takes hours.
+    if ($env:JADE_GC_STRESS -and $test.Name -eq 'io_files.jade') { continue }
     $expected = @(Select-String -Path $test.FullName -Pattern '// expect: ?(.*)$' -Encoding UTF8 |
         ForEach-Object { $_.Matches[0].Groups[1].Value })
     $run = Invoke-Jade @('test', $test.FullName) $Jade $tmp $env:JADE_CACHE

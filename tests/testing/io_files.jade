@@ -1,0 +1,299 @@
+// JadeUI's jadelib-io tests (ByteDiffTest, ByteSourceTest, HugeFileEngineTest, LineIndexTest),
+// carried over with their names (M9/M10 part one, step 1): writeByteDiff, InMemoryByteSource,
+// PagedFile and LineIndex. On the real host: a sandbox has no RandomAccessFile yet. Two read a
+// private field or a method's flags through reflection in Kotlin; here the first reads the index's
+// public checkpointCount, and the second tests what the flags were for, reads from several threads
+// with the cache forgotten among them, and the line index is read while its worker builds it.
+
+val made : open List<FilePath> = []
+fun file(bytes : List<int>) : FilePath {
+  val f = FilePath.createTempFile("bytediff", ".bin")
+  f.writeBytes(Bytes(bytes))
+  made.add(f)
+  return f
+}
+fun temp(bytes : Bytes) : FilePath {
+  val f = FilePath.createTempFile("huge", ".bin")
+  f.writeBytes(bytes)
+  made.add(f)
+  return f
+}
+fun text(content : string) : FilePath {
+  val f = FilePath.createTempFile("jadeidx", ".txt")
+  f.writeText(content)
+  made.add(f)
+  return f
+}
+// A file of `count` short numbered lines, "line 0\n" and on.
+fun lines(count : int) : FilePath {
+  val built = StringBuilder()
+  for (i in 0 ..< count) { built.append("line ").append(i).append("\n") }
+  return text(built.toString())
+}
+@AfterAll fun cleanUp() {
+  for (f in made) { f.deleteIfExists() }
+}
+
+// ---- ByteDiffTest: saving a hex edit in place ----
+
+@Test @RealHost fun eachChangedOffsetIsOverwrittenAndCounted() {
+  val f = file([1, 2, 3, 4])
+  assertEquals(2, writeByteDiff(f, [0 to 9, 2 to 8]))
+  assertEquals(Bytes([9, 2, 8, 4]), f.readBytes(), "only those two bytes moved")
+}
+
+@Test @RealHost fun anOffsetOutsideTheFileIsSkippedAndMissingFromTheCount() {
+  val f = file([1, 2, 3])
+  assertEquals(1, writeByteDiff(f, [0 to 9, 99 to 7]), "one applied, one dropped")
+  assertEquals(Bytes([9, 2, 3]), f.readBytes())
+  assertEquals(0, writeByteDiff(f, [-1 to 5]), "a negative offset is out of range too")
+  assertEquals(Bytes([9, 2, 3]), f.readBytes(), "and wrote nothing")
+}
+
+@Test @RealHost fun anEmptyDiffAppliesNothingAndSaysSo() {
+  val f = file([1, 2, 3])
+  assertEquals(0, writeByteDiff(f, []))
+  assertEquals(Bytes([1, 2, 3]), f.readBytes())
+}
+
+@Test @RealHost fun theFileLengthNeverChanges() {
+  val f = file([1, 2, 3, 4, 5])
+  writeByteDiff(f, [4 to 9, 500 to 9])
+  assertEquals(5, f.size())
+}
+
+@Test @RealHost fun onlyTheLowByteOfAValueIsWritten() {
+  val f = file([0, 0])
+  writeByteDiff(f, [0 to 0x1FF])
+  assertEquals(255, f.readBytes()[0].toInt())
+}
+
+@Test @RealHost fun theOutcomeDoesNotDependOnTheOrderOfTheDiff() {
+  val forward = file([0, 0, 0, 0])
+  val shuffled = file([0, 0, 0, 0])
+  writeByteDiff(forward, [0 to 1, 1 to 2, 3 to 4])
+  writeByteDiff(shuffled, [3 to 4, 0 to 1, 1 to 2])
+  assertEquals(forward.readBytes(), shuffled.readBytes())
+}
+
+@Test @RealHost fun aRepeatedOffsetEndsAtTheLastValueGiven() {
+  val f = file([0])
+  assertEquals(2, writeByteDiff(f, [0 to 1, 0 to 7]), "both were applied")
+  assertEquals(7, f.readBytes()[0].toInt())
+}
+
+// ---- ByteSourceTest: InMemoryByteSource and PagedFile, reads, bounds and pages ----
+
+@Test fun inMemorySourceReadsBytesAndBounds() {
+  val src = InMemoryByteSource(Bytes([0, 127, 255, 128, 42]))
+  assertEquals(5, src.length)
+  assertEquals(0, src.byteAt(0))
+  assertEquals(127, src.byteAt(1))
+  assertEquals(255, src.byteAt(2))
+  assertEquals(128, src.byteAt(3))
+  assertEquals(42, src.byteAt(4))
+  assertEquals(-1, src.byteAt(-1))      // outside: -1
+  assertEquals(-1, src.byteAt(5))
+}
+
+@Test fun inMemorySourceIsWritable() {
+  val src = InMemoryByteSource(Bytes([1, 2, 3]))
+  src.setByte(1, 0xFF)
+  assertEquals(255, src.byteAt(1))
+  src.setByte(99, 5)                    // outside: nothing, and no error
+  assertEquals(Bytes([1, 255, 3]), src.toByteArray())
+}
+
+@Test @RealHost fun pagedFileReadsAcrossPageBoundaries() {
+  // 200,000 bytes: more than a 64 KiB page, so reads span several.
+  val n = 200000
+  val data = Bytes(n)
+  for (i in 0 ..< n) { data[i] = (i % 251).toByte() }
+  val f = temp(data)
+  PagedFile(f).use { pf ->
+    assertEquals(n, pf.length)
+    for (offset in [0, 100, 65535, 65536, 65537, 131072, 199999]) {
+      assertEquals(offset % 251, pf.byteAt(offset), "byte at $offset")
+    }
+    assertEquals(-1, pf.byteAt(-1))
+    assertEquals(-1, pf.byteAt(n))      // one past the end
+    pf.invalidate()                     // the cache forgotten, then read again, still right
+    assertEquals(65536 % 251, pf.byteAt(65536))
+  }
+}
+
+// ---- HugeFileEngineTest: the huge-file engine's guarantees ----
+
+@Test @RealHost fun invalidateDropsTheCacheAfterTheFileChanges() {
+  val data = Bytes(200000)
+  for (i in 0 ..< data.size) { data[i] = (i % 251).toByte() }
+  val f = temp(data)
+  val p = PagedFile(f)
+  assertEquals(100000 % 251, p.byteAt(100000))
+  RandomAccessFile(f, "rw").use { it.writeAt(100000, Bytes([0xAB])) }
+  assertEquals(100000 % 251, p.byteAt(100000), "still the cached page")
+  p.invalidate()
+  assertEquals(0xAB, p.byteAt(100000), "read from the file again")
+  p.close()
+}
+
+// Readers on several threads (the view and the indexer), the cache forgotten among them, read
+// every byte right: what Kotlin's @Synchronized was for, and the PagedFile's lock is.
+@Test @RealHost suspend fun readsFromSeveralThreadsAreSynchronizedAndCorrect() {
+  val data = Bytes(3000000)
+  for (i in 0 ..< data.size) { data[i] = (i % 253).toByte() }
+  val f = temp(data)
+  val p = PagedFile(f)
+  val errors = Atomic<int>(0)
+  val readers = (0 ..< 4).map { t ->
+    thread {
+      var seed = t + 1
+      for (k in 0 ..< 20000) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff
+        val offset = seed % 3000000
+        if (p.byteAt(offset) != offset % 253) { errors.increment() }
+        if (t == 0 and k % 500 == 0) { p.invalidate() }
+      }
+    }
+  }
+  for (reader in readers) { reader.get() }
+  assertEquals(0, errors.get(), "every read right")
+  p.close()
+}
+
+@Test @RealHost fun aCheckpointIsKeptOnlyEvery4096Lines() {
+  for (case in [10 to 1, 4096 to 2, 3 * 4096 + 7 to 4]) {
+    val idx = LineIndex(lines(case.first))
+    idx.build()
+    assertEquals(case.second, idx.checkpointCount, "${case.first} lines")
+  }
+}
+
+// While the worker is still reading the file, the lines indexed so far are counted and found.
+@Test @RealHost suspend fun theIndexCanBeReadWhileItIsStillBeingBuilt() {
+  val f = lines(400000)          // several megabytes: several messages from the worker
+  val src = PagedFile(f)
+  val idx = LineIndex(f)
+  var seenMidway = false
+  var midway = ""
+  val job = idx.buildInBackground {
+    if (!idx.complete and !seenMidway) {
+      seenMidway = true
+      val count = idx.lineCount
+      val probe = count / 2
+      try {
+        val start = idx.lineStartOffset(probe, src)
+        val found = src.bytesAt(start, 12).decodeToString()
+        midway = count >= 2 and count <= 399999 and found.startsWith("line $probe") ? "found" : "part-way: $count lines, line $probe read as '$found'"
+      } catch (e : IOException) {
+        midway = "failed: ${e.message}"
+      }
+    }
+  }
+  assertEquals(400000, job.get())
+  assertTrue(seenMidway, "read part-way")
+  assertEquals("found", midway)
+  assertTrue(idx.complete)
+  assertEquals(400000, idx.lineCount)
+  src.close()
+}
+
+// ---- LineIndexTest: lines counted, and found from an offset and back ----
+
+@Test @RealHost fun countsLinesWithAndWithoutTrailingNewline() {
+  val withNl = LineIndex(text("a\nb\nc\n"))
+  withNl.build()
+  assertEquals(3, withNl.lineCount)          // a last line end: no empty line after it
+  assertTrue(withNl.complete)
+
+  val noNl = LineIndex(text("a\nb\nc"))
+  noNl.build()
+  assertEquals(3, noNl.lineCount)            // a last part of a line still counts
+
+  val empty = LineIndex(text(""))
+  empty.build()
+  assertEquals(1, empty.lineCount)           // an empty file is one empty line
+}
+
+@Test @RealHost fun locatesLineOffsetsAcrossACheckpoint() {
+  // Lines of 10 bytes ("%09d\n"), so line n starts at n * 10; 10,000 of them pass the
+  // checkpoint at 4096, so the kept starts are used.
+  val count = 10000
+  val built = StringBuilder()
+  for (i in 0 ..< count) { built.append(i.toString().padStart(9, '0')).append("\n") }
+  val f = text(built.toString())
+  val index = LineIndex(f)
+  index.build()
+  assertEquals(count, index.lineCount)
+  PagedFile(f).use { src ->
+    assertEquals(0, index.lineStartOffset(0, src))
+    assertEquals(50000, index.lineStartOffset(5000, src))    // past the checkpoint at 4096
+    assertEquals(99990, index.lineStartOffset(9999, src))
+    assertEquals(5000, index.lineAtOffset(50000, src))
+    assertEquals(5000, index.lineAtOffset(50005, src))       // inside a line: that line
+    assertEquals(0, index.lineAtOffset(3, src))
+  }
+}
+
+@Test @RealHost fun lookingUpBeforeBuildIsAnsweredRatherThanThrown() {
+  val f = text("alpha\nbeta\ngamma\n")
+  val idx = LineIndex(f)
+  val src = InMemoryByteSource(f.readBytes())
+  assertEquals(0, idx.lineStartOffset(0, src), "line 0 starts at 0 whether or not anything is indexed")
+  assertEquals(0, idx.lineAtOffset(0, src), "and offset 0 is on line 0")
+}
+
+@Test @RealHost fun anUnbuiltIndexStillScansToTheCorrectLine() {
+  val f = text("alpha\nbeta\ngamma\n")
+  val idx = LineIndex(f)
+  val src = InMemoryByteSource(f.readBytes())
+  assertEquals(6, idx.lineStartOffset(1, src), "beta begins after 'alpha\\n'")
+  assertEquals(11, idx.lineStartOffset(2, src), "and gamma after 'beta\\n'")
+  assertEquals(1, idx.lineAtOffset(7, src), "an offset inside beta reads as line 1")
+}
+
+@Test @RealHost fun aLineBeyondTheFileStopsAtTheEnd() {
+  val f = text("one\ntwo\n")
+  val idx = LineIndex(f)
+  idx.build()
+  val src = InMemoryByteSource(f.readBytes())
+  assertEquals(f.size(), idx.lineStartOffset(999, src))
+}
+
+@Test @RealHost fun rebuildingReplacesTheIndexRatherThanAppendingToIt() {
+  val built = StringBuilder()
+  for (i in 0 ..< 9000) { built.append("line$i\n") }
+  val f = text(built.toString())
+  val once = LineIndex(f)
+  once.build()
+  val twice = LineIndex(f)
+  twice.build()
+  twice.build()
+  val src = InMemoryByteSource(f.readBytes())
+  assertEquals(once.lineCount, twice.lineCount, "the same file is the same number of lines")
+  for (line in [0, 1, 4095, 4096, 8191, 8999]) {
+    assertEquals(once.lineStartOffset(line, src), twice.lineStartOffset(line, src), "line $line")
+  }
+}
+
+// expect:   ok    eachChangedOffsetIsOverwrittenAndCounted
+// expect:   ok    anOffsetOutsideTheFileIsSkippedAndMissingFromTheCount
+// expect:   ok    anEmptyDiffAppliesNothingAndSaysSo
+// expect:   ok    theFileLengthNeverChanges
+// expect:   ok    onlyTheLowByteOfAValueIsWritten
+// expect:   ok    theOutcomeDoesNotDependOnTheOrderOfTheDiff
+// expect:   ok    aRepeatedOffsetEndsAtTheLastValueGiven
+// expect:   ok    inMemorySourceReadsBytesAndBounds
+// expect:   ok    inMemorySourceIsWritable
+// expect:   ok    pagedFileReadsAcrossPageBoundaries
+// expect:   ok    invalidateDropsTheCacheAfterTheFileChanges
+// expect:   ok    readsFromSeveralThreadsAreSynchronizedAndCorrect
+// expect:   ok    aCheckpointIsKeptOnlyEvery4096Lines
+// expect:   ok    theIndexCanBeReadWhileItIsStillBeingBuilt
+// expect:   ok    countsLinesWithAndWithoutTrailingNewline
+// expect:   ok    locatesLineOffsetsAcrossACheckpoint
+// expect:   ok    lookingUpBeforeBuildIsAnsweredRatherThanThrown
+// expect:   ok    anUnbuiltIndexStillScansToTheCorrectLine
+// expect:   ok    aLineBeyondTheFileStopsAtTheEnd
+// expect:   ok    rebuildingReplacesTheIndexRatherThanAppendingToIt
+// expect: 20 tests: 20 passed, 0 failed

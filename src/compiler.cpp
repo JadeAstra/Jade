@@ -1877,6 +1877,13 @@ private:
         // Only the standard library's Worker: a class of the program's own by that name is left alone.
         auto builtin = session_.builtins_->names.find("Worker");
         if (builtin == session_.builtins_->names.end() || findGlobal("Worker", e, true) != &builtin->second) return;
+        // A worker of the standard library's own, in its own code: a function of the library's,
+        // which the worker calls once it has the library, so no script of its own (LineIndex).
+        if (ns_ == session_.builtins_ && literal.stringValue.rfind("std:", 0) == 0) {
+            workerLiteral_ = &literal;
+            workerSpec_ = std::string(1, '\x02') + literal.stringValue.substr(4);
+            return;
+        }
         const int module = session_.loadWorker(literal.stringValue, directory_, file_, literal);
         workerLiteral_ = &literal;
         workerSpec_ = std::string(1, '\x01') + std::to_string(module) + '\x01' + literal.stringValue;

@@ -1019,6 +1019,13 @@ std::string VM::mainFileName() const {
     return stem.empty() ? std::string("program") : stem;
 }
 
+Value VM::runStdFunction(const std::string& name) {
+    if (!loaded_[0]) runModule(0);
+    for (size_t i = 0; i < globals_.size() && i < program_->globalNames.size(); i++)
+        if (program_->globalNames[i] == name && globals_[i].isObjType(ObjType::Closure)) return call(globals_[i], 0, nullptr);
+    throw runtimeError(Thrown::IllegalStateException, "the standard library has no function " + name + " for a worker to run");
+}
+
 Value VM::runModule(int index) {
     if (index != 0 && mainModule_ < 0) mainModule_ = index;  // the first a program runs: its own file
     if (!loaded_[0]) {
@@ -1040,6 +1047,7 @@ Value VM::runModule(int index) {
                 imageCanvasClass_ = asClass(globals_[i]);
         }
     }
+    if (index == 0) return Value::null();  // the standard library, run above once
     loaded_[static_cast<size_t>(index)] = true;
     return execute(program_->modules[static_cast<size_t>(index)]);
 }
