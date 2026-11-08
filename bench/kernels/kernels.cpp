@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 using Clock = std::chrono::steady_clock;
@@ -31,6 +32,48 @@ static void lineEnds() {
     const uint8_t* p = data.data(); const uint8_t* end = p + n;
     while ((p = (const uint8_t*)memchr(p, 10, end - p)) != nullptr) { lines++; p++; }
     printf("lineEnds (memchr) %lld ms (lines %lld)\n", ms(t), (long long)lines);
+}
+
+// lineEnds' 100 MB as a file, written first (and so in the system's cache); then indexed as
+// LineIndex does, a megabyte read at a time and memchr, counting as it counts (a last line with
+// no line end is a line; the first line's start is a checkpoint).
+static std::string lineFile() {
+    const int64_t n = 100000000;
+    std::vector<uint8_t> data(n);
+    int64_t s = 1, i = 0;
+    while (i < n) { s = lcg(s); i += 20 + s % 80; if (i < n) data[i] = 10; }
+    const char* dir = std::getenv("TEMP");
+    std::string path = std::string(dir ? dir : ".") + "\\kernels_lines.txt";
+    FILE* f = std::fopen(path.c_str(), "wb");
+    std::fwrite(data.data(), 1, data.size(), f);
+    std::fclose(f);
+    return path;
+}
+static void indexFile(const char* name, const std::string& path) {
+    auto t = Clock::now();
+    FILE* f = std::fopen(path.c_str(), "rb");
+    std::vector<uint8_t> buffer(1 << 20);
+    std::vector<int64_t> checkpoints{0};
+    int64_t offset = 0, newlines = 0; int last = -1;
+    size_t got;
+    while ((got = std::fread(buffer.data(), 1, buffer.size(), f)) > 0) {
+        const uint8_t* p = buffer.data(); const uint8_t* end = p + got;
+        while ((p = (const uint8_t*)memchr(p, 10, end - p)) != nullptr) {
+            p++; newlines++;
+            if (newlines % 4096 == 0) checkpoints.push_back(offset + (p - buffer.data()));
+        }
+        offset += (int64_t)got; last = buffer[got - 1];
+    }
+    std::fclose(f);
+    const int64_t lines = newlines + (offset > 0 && last != 10 ? 1 : 0);
+    printf("%s %lld ms (lines %lld, checkpoints %zu)\n", name, ms(t), (long long)lines, checkpoints.size());
+}
+static void lineIndex() { const std::string path = lineFile(); indexFile("lineIndex", path); std::remove(path.c_str()); }
+// The same on a thread of its own, started and waited for, as LineIndex.buildInBackground does.
+static void lineWorker() {
+    const std::string path = lineFile();
+    std::thread([&] { indexFile("lineWorker", path); }).join();
+    std::remove(path.c_str());
 }
 
 static void idct() {
@@ -202,7 +245,8 @@ int main(int argc, char** argv) {
     const std::string which = argc > 1 ? argv[1] : "all";
     struct Kernel { const char* name; void (*run)(); };
     const Kernel all[] = {{"lineEnds", lineEnds}, {"idct", idct}, {"huffman", huffman}, {"gradient", gradient}, {"blur", blur},
-                          {"shrink", shrink}, {"flood", flood}, {"radial", radial}, {"gaussian", gaussian}};
+                          {"shrink", shrink}, {"flood", flood}, {"radial", radial}, {"gaussian", gaussian},
+                          {"lineIndex", lineIndex}, {"lineWorker", lineWorker}};
     for (const Kernel& k : all)
         if (which == "all" || which == k.name) k.run();
 }

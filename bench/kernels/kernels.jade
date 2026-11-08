@@ -6,8 +6,8 @@ fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
 
 fun lcg(seed : int) : int => (seed * 1103515245 + 12345) & 0x7fffffff
 
-// K1: line ends over 100 MB: count them, and keep the offset of every 4096th, as LineIndex does.
-fun lineEnds() : string {
+// 100 MB of lines of 20 to 99 bytes.
+fun lineData() : Bytes {
   val n = 100_000_000
   val data = Bytes(n)
   var s = 1
@@ -17,6 +17,13 @@ fun lineEnds() : string {
     i += 20 + s % 80
     if (i < n) { data[i] = 10.toByte() }
   }
+  return data
+}
+
+// K1: line ends over 100 MB: count them, and keep the offset of every 4096th, as LineIndex does.
+fun lineEnds() : string {
+  val data = lineData()
+  val n = data.size
   val started = Instant.now()
   var lines = 0
   val checkpoints : open List<int> = []
@@ -295,10 +302,47 @@ fun gaussian() : string {
   return "gaussian ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
 }
 
+// The same 100 MB as a file, written first; the time is LineIndex reading and indexing it from
+// the system's cache. As LineIndex counts them: a last line with no line end is a line, and the
+// first line's start is a checkpoint.
+fun lineFile() : FilePath {
+  val f = FilePath.createTempFile("lines", ".txt")
+  f.writeBytes(lineData())
+  f.readBytes()   // into the system's cache, as C++'s is
+  return f
+}
+fun indexed(name : string, idx : LineIndex, started : Instant) : string =>
+  "$name ${ms(started)} ms (lines ${idx.lineCount}, checkpoints ${idx.checkpointCount})"
+
+// K10: LineIndex.build(), where it is called.
+fun lineIndex() : string {
+  try {
+    val f = lineFile()
+    val idx = LineIndex(f)
+    val started = Instant.now()
+    idx.build()
+    f.deleteIfExists()
+    return indexed("lineIndex", idx, started)
+  } catch (e : IOException) {
+    return "lineIndex failed: ${e.message}"
+  }
+}
+
+// K11: LineIndex.buildInBackground(), its worker started and waited for.
+suspend fun lineWorker() : string throws IOException | ExecutionException {
+  val f = lineFile()
+  val idx = LineIndex(f)
+  val started = Instant.now()
+  idx.buildInBackground().get()
+  f.deleteIfExists()
+  return indexed("lineWorker", idx, started)
+}
+
 val which = Program.arguments.getOrNull(0) ?: "all"
 val all : Map<string, () -> string> = {"lineEnds": { lineEnds() }, "idct": { idct() }, "huffman": { huffman() }, "gradient": { gradient() },
                                        "blur": { blur() }, "shrink": { shrink() }, "flood": { flood() }, "radial": { radial() },
-                                       "gaussian": { gaussian() }}
+                                       "gaussian": { gaussian() }, "lineIndex": { lineIndex() }}
 for (name in all.keys) {
   if (which == "all" or which == name) { print(all[name]!!()) }
 }
+if (which == "all" or which == "lineWorker") { print(lineWorker()) }
