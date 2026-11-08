@@ -1,0 +1,19 @@
+value P(var x : float, var y : float)
+val w = 1024
+val ps : open List<P> = []
+for (i in 0 ..< 1000) { ps.add(P((i * 7919 % w) * 1.0, (i * 104729 % 768) * 1.0)) }
+val pixels = Bytes(w * 768)
+val fl = [1.5, 2.5]
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+var t = Instant.now()
+for (frame in 0 ..< 50000) { for (p in ps) { pixels[p.y.toInt() * w + p.x.toInt()] = 255 } }
+print("draw ${ms(t)}")
+t = Instant.now()
+for (frame in 0 ..< 50000) { for (p in ps) { val k = p.y.toInt() * w + p.x.toInt() } }
+print("no write ${ms(t)}")
+t = Instant.now()
+for (frame in 0 ..< 50000) { for (p in ps) { pixels[5] = 255 } }
+print("write only ${ms(t)}")
+t = Instant.now()
+for (frame in 0 ..< 50000) { for (p in ps) { } }
+print("loop only ${ms(t)}")

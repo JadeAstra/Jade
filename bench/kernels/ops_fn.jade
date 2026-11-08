@@ -1,0 +1,50 @@
+// What each kind of step costs in a loop: 50 million of each, the empty loop's time taken off.
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+val n = 50_000_000
+val bytes = Bytes(1024)
+val ints = List(1024) { it }
+val floats = List(1024) { it.toFloat() }
+
+fun main() {
+  var t = Instant.now()
+  var a = 0
+  for (i in 0 ..< n) { a += i }
+  val empty = ms(t)
+  print("loop with an int add: $empty ms")
+
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += bytes[i & 1023] }
+  print("+ a byte read: ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  for (i in 0 ..< n) { bytes[i & 1023] = (i & 255).toByte() }
+  print("+ a byte write with toByte(): ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += ints[i & 1023] }
+  print("+ a List<int> read: ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  var f = 0.0
+  for (i in 0 ..< n) { f += floats[i & 1023] * 0.5 }
+  print("+ a List<float> read, a multiply: ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += (i * 0.25).toInt() }
+  print("+ a float multiply and toInt(): ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += Math.min(i, 7) }
+  print("+ Math.min: ${ms(t) - empty} ms")
+
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += i % 7 }
+  print("+ an int %: ${ms(t) - empty} ms")
+
+}
+main()

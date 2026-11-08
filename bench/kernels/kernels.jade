@@ -1,0 +1,304 @@
+// M9/M10 part zero: the byte and pixel kernels that would otherwise be C++, written as a Jade
+// program would write them, a loop over the items, each timed. kernels.cpp is the same work in
+// C++; docs/M10-speed.html has the timings.
+//   jade kernels.jade [name]
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+
+fun lcg(seed : int) : int => (seed * 1103515245 + 12345) & 0x7fffffff
+
+// K1: line ends over 100 MB: count them, and keep the offset of every 4096th, as LineIndex does.
+fun lineEnds() : string {
+  val n = 100_000_000
+  val data = Bytes(n)
+  var s = 1
+  var i = 0
+  while (i < n) {
+    s = lcg(s)
+    i += 20 + s % 80
+    if (i < n) { data[i] = 10.toByte() }
+  }
+  val started = Instant.now()
+  var lines = 0
+  val checkpoints : open List<int> = []
+  for (k in 0 ..< n) {
+    if (data[k] == 10) {
+      lines += 1
+      if (lines % 4096 == 0) { checkpoints.add(k + 1) }
+    }
+  }
+  return "lineEnds ${ms(started)} ms (lines $lines, checkpoints ${checkpoints.size})"
+}
+
+// K2: the inverse DCT of 200,000 8x8 blocks, separable, in floats, as a JPEG decoder does.
+fun idct() : string {
+  val c : open List<float> = []
+  for (u in 0 ..< 8) {
+    for (x in 0 ..< 8) {
+      val cu = u == 0 ? Math.sqrt(0.125) : 0.5
+      c.add(cu * Math.cos((2 * x + 1) * u * Math.pi / 16))
+    }
+  }
+  val block = List(64) { (it * 7 % 23 - 11).toFloat() }
+  val tmp = List(64) { 0.0 }
+  val out = List(64) { 0.0 }
+  val started = Instant.now()
+  var check = 0.0
+  for (b in 0 ..< 200_000) {
+    block[b % 64] = (b % 31 - 15).toFloat()
+    for (y in 0 ..< 8) {
+      for (x in 0 ..< 8) {
+        var sum = 0.0
+        for (u in 0 ..< 8) { sum += c[u * 8 + x] * block[y * 8 + u] }
+        tmp[y * 8 + x] = sum
+      }
+    }
+    for (x in 0 ..< 8) {
+      for (y in 0 ..< 8) {
+        var sum = 0.0
+        for (v in 0 ..< 8) { sum += c[v * 8 + y] * tmp[v * 8 + x] }
+        out[y * 8 + x] = sum
+      }
+    }
+    check += out[b % 64]
+  }
+  return "idct ${ms(started)} ms (check ${(check * 1000).toInt()})"
+}
+
+// K3: Huffman decoding of 5 MB through a bit reader and a 9-bit lookup table, as JPEG and PNG do.
+fun huffman() : string {
+  val n = 5_000_000
+  val data = Bytes(n)
+  var s = 7
+  for (i in 0 ..< n) {
+    s = lcg(s)
+    data[i] = (s >> 8 & 255).toByte()
+  }
+  // A table of 512 entries: the symbol and how many bits its code takes (1 to 9).
+  val symbol = List(512) { it % 200 }
+  val length = List(512) { 1 + it % 9 }
+  val started = Instant.now()
+  var bits = 0
+  var count = 0
+  var pos = 0
+  var decoded = 0
+  var sum = 0
+  while (pos < n or count >= 9) {
+    while (count < 9 and pos < n) {
+      bits = (bits << 8) | data[pos]
+      pos += 1
+      count += 8
+    }
+    if (count < 9) { break }
+    val peek = (bits >> (count - 9)) & 511
+    count -= length[peek]
+    bits = bits & ((1 << count) - 1)
+    sum += symbol[peek]
+    decoded += 1
+  }
+  return "huffman ${ms(started)} ms (decoded $decoded, sum $sum)"
+}
+
+// K4: a linear gradient over a 3840x2160 RGBA buffer.
+fun gradient() : string {
+  val w = 3840
+  val h = 2160
+  val px = Bytes(w * h * 4)
+  val started = Instant.now()
+  val dx = 0.6 / w
+  val dy = 0.4 / h
+  for (y in 0 ..< h) {
+    var at = y * w * 4
+    for (x in 0 ..< w) {
+      val t = x * dx + y * dy
+      px[at] = (40 + t * 200).toInt().toByte()
+      px[at + 1] = (90 + t * 120).toInt().toByte()
+      px[at + 2] = (200 - t * 150).toInt().toByte()
+      px[at + 3] = 255.toByte()
+      at += 4
+    }
+  }
+  return "gradient ${ms(started)} ms (pixel ${px[w * 4 * 100 + 400]})"
+}
+
+// K5: a box blur of radius 5 over a 3840x2160 RGBA buffer, across then down, with running sums.
+fun blur() : string {
+  val w = 3840
+  val h = 2160
+  val r = 5
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val mid = Bytes(w * h * 4)
+  val dst = Bytes(w * h * 4)
+  val started = Instant.now()
+  val span = 2 * r + 1
+  for (y in 0 ..< h) {
+    for (ch in 0 ..< 4) {
+      var sum = 0
+      for (k in -r .. r) { sum += src[(y * w + Math.max(0, Math.min(w - 1, k))) * 4 + ch] }
+      for (x in 0 ..< w) {
+        mid[(y * w + x) * 4 + ch] = (sum / span).toByte()
+        val out = Math.max(0, x - r)
+        val inn = Math.min(w - 1, x + r + 1)
+        sum += src[(y * w + inn) * 4 + ch] - src[(y * w + out) * 4 + ch]
+      }
+    }
+  }
+  for (x in 0 ..< w) {
+    for (ch in 0 ..< 4) {
+      var sum = 0
+      for (k in -r .. r) { sum += mid[(Math.max(0, Math.min(h - 1, k)) * w + x) * 4 + ch] }
+      for (y in 0 ..< h) {
+        dst[(y * w + x) * 4 + ch] = (sum / span).toByte()
+        val out = Math.max(0, y - r)
+        val inn = Math.min(h - 1, y + r + 1)
+        sum += mid[(inn * w + x) * 4 + ch] - mid[(out * w + x) * 4 + ch]
+      }
+    }
+  }
+  return "blur ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
+}
+
+// K6: a 4000x3000 RGBA picture shrunk to 1000x750 by averaging each 4x4 square.
+fun shrink() : string {
+  val w = 4000
+  val h = 3000
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 17 % 253).toByte() }
+  val ow = w / 4
+  val oh = h / 4
+  val dst = Bytes(ow * oh * 4)
+  val started = Instant.now()
+  for (oy in 0 ..< oh) {
+    for (ox in 0 ..< ow) {
+      for (ch in 0 ..< 4) {
+        var sum = 0
+        for (sy in 0 ..< 4) {
+          val row = ((oy * 4 + sy) * w + ox * 4) * 4 + ch
+          sum += src[row] + src[row + 4] + src[row + 8] + src[row + 12]
+        }
+        dst[(oy * ow + ox) * 4 + ch] = (sum / 16).toByte()
+      }
+    }
+  }
+  return "shrink ${ms(started)} ms (pixel ${dst[ow * 4 * 10 + 40]})"
+}
+
+// K7: a flood fill from the middle of a 2000x2000 RGBA picture with a tolerance, by a queue.
+fun flood() : string {
+  val w = 2000
+  val h = 2000
+  val px = Bytes(w * h * 4)
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      val wall = (x % 97 == 0 and y % 5 != 0) or (y % 89 == 0 and x % 7 != 0)
+      val v = wall ? 0 : 200 + (x + y) % 20
+      val at = (y * w + x) * 4
+      px[at] = v.toByte()
+      px[at + 1] = v.toByte()
+      px[at + 2] = v.toByte()
+      px[at + 3] = 255.toByte()
+    }
+  }
+  val started = Instant.now()
+  val seen = Bytes(w * h)
+  val queue : open List<int> = []
+  val start = (h / 2) * w + w / 2
+  val target = px[start * 4]
+  queue.add(start)
+  seen[start] = 1.toByte()
+  var head = 0
+  var filled = 0
+  while (head < queue.size) {
+    val p = queue[head]
+    head += 1
+    filled += 1
+    val x = p % w
+    val y = p / w
+    for (d in 0 ..< 4) {
+      val nx = d == 0 ? x - 1 : d == 1 ? x + 1 : x
+      val ny = d == 2 ? y - 1 : d == 3 ? y + 1 : y
+      if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
+        val q = ny * w + nx
+        if (seen[q] == 0 and Math.abs(px[q * 4] - target) <= 30) {
+          seen[q] = 1.toByte()
+          queue.add(q)
+        }
+      }
+    }
+  }
+  return "flood ${ms(started)} ms (filled $filled)"
+}
+
+// K8: a radial gradient over a 3840x2160 RGBA buffer, from the middle out to a radius.
+fun radial() : string {
+  val w = 3840
+  val h = 2160
+  val px = Bytes(w * h * 4)
+  val started = Instant.now()
+  val cx = w / 2.0
+  val cy = h / 2.0
+  val radius = 1500.0
+  for (y in 0 ..< h) {
+    var at = y * w * 4
+    val dy = y - cy
+    for (x in 0 ..< w) {
+      val dx = x - cx
+      val t = Math.min(Math.sqrt(dx * dx + dy * dy) / radius, 1.0)
+      px[at] = (30 + t * 200).toInt().toByte()
+      px[at + 1] = (200 - t * 150).toInt().toByte()
+      px[at + 2] = (90 + t * 60).toInt().toByte()
+      px[at + 3] = 255.toByte()
+      at += 4
+    }
+  }
+  return "radial ${ms(started)} ms (pixel ${px[w * 4 * 100 + 400]})"
+}
+
+// K9: a Gaussian blur (sigma 2, 13 weights) over a 1920x1080 RGBA buffer, across into floats,
+// then down into bytes, the edge pixels repeated past the edge.
+fun gaussian() : string {
+  val w = 1920
+  val h = 1080
+  val r = 6
+  val sigma = 2.0
+  val weights : open List<float> = []
+  var total = 0.0
+  for (k in -r .. r) {
+    val v = Math.exp(-(k * k) / (2 * sigma * sigma))
+    weights.add(v)
+    total += v
+  }
+  for (k in 0 ..< weights.size) { weights[k] = weights[k] / total }
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val mid = List(w * h * 4) { 0.0 }
+  val dst = Bytes(w * h * 4)
+  val started = Instant.now()
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      for (ch in 0 ..< 4) {
+        var sum = 0.0
+        for (k in -r .. r) { sum += src[(y * w + Math.max(0, Math.min(w - 1, x + k))) * 4 + ch] * weights[k + r] }
+        mid[(y * w + x) * 4 + ch] = sum
+      }
+    }
+  }
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      for (ch in 0 ..< 4) {
+        var sum = 0.0
+        for (k in -r .. r) { sum += mid[(Math.max(0, Math.min(h - 1, y + k)) * w + x) * 4 + ch] * weights[k + r] }
+        dst[(y * w + x) * 4 + ch] = (sum + 0.5).toInt().toByte()
+      }
+    }
+  }
+  return "gaussian ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
+}
+
+val which = Program.arguments.getOrNull(0) ?: "all"
+val all : Map<string, () -> string> = {"lineEnds": { lineEnds() }, "idct": { idct() }, "huffman": { huffman() }, "gradient": { gradient() },
+                                       "blur": { blur() }, "shrink": { shrink() }, "flood": { flood() }, "radial": { radial() },
+                                       "gaussian": { gaussian() }}
+for (name in all.keys) {
+  if (which == "all" or which == name) { print(all[name]!!()) }
+}

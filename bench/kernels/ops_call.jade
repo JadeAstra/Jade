@@ -1,0 +1,35 @@
+// What a small function call costs in an inner loop, beside the same work written in place.
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+fun lcg(seed : int) : int => (seed * 1103515245 + 12345) & 0x7fffffff
+fun clamp(v : int) : int => v < 0 ? 0 : v > 255 ? 255 : v
+
+class Pix(val w : int) {
+  fun at(x : int, y : int) : int => (y * w + x) * 4
+}
+
+fun main() {
+  val n = 50_000_000
+  var t = Instant.now()
+  var s = 1
+  for (i in 0 ..< n) { s = (s * 1103515245 + 12345) & 0x7fffffff }
+  val inPlace = ms(t)
+  print("lcg in place: $inPlace ms")
+  t = Instant.now()
+  s = 1
+  for (i in 0 ..< n) { s = lcg(s) }
+  print("lcg called: ${ms(t)} ms")
+  t = Instant.now()
+  var a = 0
+  for (i in 0 ..< n) { a += clamp(i & 511 - 128) }
+  print("clamp called: ${ms(t)} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { val v = i & 511 - 128; a += v < 0 ? 0 : v > 255 ? 255 : v }
+  print("clamp in place: ${ms(t)} ms")
+  val p = Pix(1024)
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += p.at(i & 1023, 7) }
+  print("method called: ${ms(t)} ms")
+}
+main()

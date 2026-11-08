@@ -1,0 +1,42 @@
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+val gints = List(1024) { it }
+fun main() {
+  val n = 50_000_000
+  val ints = List(1024) { it }
+  val built : open List<int> = []
+  for (k in 0 ..< 1024) { built.add(k) }
+  val bytes = Bytes(1024)
+  var t = Instant.now()
+  var a = 0
+  for (i in 0 ..< n) { a += i }
+  val empty = ms(t)
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += gints[i & 1023] }
+  print("global List(1024) { it }: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += ints[i & 1023] }
+  print("local List(1024) { it }: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += built[i & 1023] }
+  print("local built by add: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += bytes[i & 1023] }
+  print("local bytes: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += i % 7 }
+  print("int % 7: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += i / 7 }
+  print("int / 7: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += i & 7 }
+  print("int & 7: ${ms(t) - empty} ms")
+}
+main()

@@ -1,0 +1,26 @@
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+fun main() {
+  val n = 50_000_000
+  val bytes = Bytes(1024)
+  var t = Instant.now()
+  var a = 0
+  for (i in 0 ..< n) { a += i }
+  val empty = ms(t)
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += bytes[i & 1023] }
+  print("+ a byte read, added: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { a += bytes[i & 1023].toInt() }
+  print("+ a byte read, toInt, added: ${ms(t) - empty} ms")
+  t = Instant.now()
+  a = 0
+  for (i in 0 ..< n) { val b = bytes[i & 1023] }
+  print("+ a byte read alone: ${ms(t) - empty} ms")
+  t = Instant.now()
+  var c = 0
+  for (i in 0 ..< n) { if (bytes[i & 1023] == 10) { c += 1 } }
+  print("+ a byte read, compared: ${ms(t) - empty} ms")
+}
+main()

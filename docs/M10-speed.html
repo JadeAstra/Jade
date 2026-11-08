@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M10 speed table</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Speed: Jade beside C++ for M9 and M10</h1>
+<p class="lede">The table <a href="M10-plan.html">M10's plan</a> keeps beside it (part zero, question 14): the work that might be C++ for speed, timed in C++ and in Jade, and what the user decides for each piece at the end. Begun 2026-11-08, when part zero was done; a row is added for each piece as parts 1 to 8 build it, and the timings are taken again at the end.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#s-kernels">The kernels</a></li>
+<li><a href="#s-steps">Steps in a loop</a></li>
+<li><a href="#s-vm">What part zero changed in the VM</a></li>
+<li><a href="#s-pieces">The pieces, as they are built</a></li>
+<li><a href="#s-left">Left</a></li>
+</ul>
+</nav>
+<section>
+<p><strong>How they are timed.</strong> <code>bench/kernels</code> holds each kernel twice, <code>kernels.jade</code> and <code>kernels.cpp</code>, the same work done the same way, a loop over the items as a program would write it; <code>build.bat</code> builds the C++ with clang-cl at <code>/O2</code>, and <code>time.ps1</code> runs each kernel on each program, best of three, kept on the fast cores (an i9-14900KF held at 5 GHz). Jade is the Clang build. Every kernel gives the same answer in each, which the script checks. Times in milliseconds.</p>
+
+<h2 id="s-kernels">The kernels</h2>
+<p>Jade's columns are the same Jade program on two builds: the one before part zero (3c1799c) and now (5c6f235, after part zero's two changes). The column of the new operations is the kernel written again with the operations of questions 15 to 17 once part one has built them: what a Jade program would write, and the number most pieces will be decided on.</p>
+<div class="table"><table>
+<thead><tr><th>Kernel</th><th>Work</th><th>C++</th><th>Jade before</th><th>Jade now</th><th>Faster by</th><th>Now, against C++</th><th>Jade with the new operations</th><th>Decision</th></tr></thead>
+<tbody>
+<tr><td class="part"><code>lineEnds</code></td><td>Line ends over 100 MB: counted, and every 4096th kept, as <code>LineIndex</code> keeps them.</td><td class="num">34</td><td class="num">2,543</td><td class="num">457</td><td class="num">5.6&times;</td><td class="num">13&times;</td><td><code>Bytes.indexOf(10, from)</code> in a loop (memchr, 22 ms in C++); <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>idct</code></td><td>The inverse DCT of 200,000 8 by 8 blocks, separable, in floats: a 12.8-megapixel photo's brightness.</td><td class="num">14</td><td class="num">4,652</td><td class="num">3,301</td><td class="num">1.4&times;</td><td class="num">236&times;</td><td>None pays (too small a matrix); the specific C++ piece of question 17, if chosen</td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>huffman</code></td><td>5 MB decoded through a bit reader and a 9-bit table, as JPEG and PNG decode.</td><td class="num">38</td><td class="num">441</td><td class="num">312</td><td class="num">1.4&times;</td><td class="num">8&times;</td><td><code>BitReader</code> and <code>HuffmanTable.decode</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>gradient</code></td><td>A linear gradient over a 3840 by 2160 RGBA picture.</td><td class="num">8</td><td class="num">1,341</td><td class="num">343</td><td class="num">3.9&times;</td><td class="num">43&times;</td><td>Tensor arithmetic from <code>Tensor.arange</code>, or a <code>ColorLookup</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>radial</code></td><td>A radial gradient over a 3840 by 2160 RGBA picture.</td><td class="num">16</td><td class="num">1,567</td><td class="num">393</td><td class="num">4.0&times;</td><td class="num">25&times;</td><td>Tensor arithmetic (<code>sqrt</code>, <code>clamp</code>); <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>blur</code></td><td>A box blur of radius 5 over a 3840 by 2160 RGBA picture, across then down, by running sums.</td><td class="num">304</td><td class="num">8,883</td><td class="num">2,714</td><td class="num">3.3&times;</td><td class="num">9&times;</td><td><code>window(5, Reduce.mean)</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>gaussian</code></td><td>A Gaussian blur, sigma 2 (13 weights), over a 1920 by 1080 RGBA picture, across into floats then down.</td><td class="num">53</td><td class="num">12,800</td><td class="num">5,634</td><td class="num">2.3&times;</td><td class="num">106&times;</td><td><code>convolve(kernel)</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>shrink</code></td><td>A 4000 by 3000 RGBA picture shrunk to 1000 by 750, each 4 by 4 square averaged.</td><td class="num">4</td><td class="num">1,628</td><td class="num">373</td><td class="num">4.4&times;</td><td class="num">93&times;</td><td><code>scaled(1000, 750)</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+<tr><td class="part"><code>flood</code></td><td>A flood fill from the middle of a 2000 by 2000 RGBA picture with a tolerance, by a queue.</td><td class="num">49</td><td class="num">1,161</td><td class="num">657</td><td class="num">1.8&times;</td><td class="num">13&times;</td><td><code>floodRegion(x, y, tolerance)</code>; <em>built in part one</em></td><td><em>at the end</em></td></tr>
+</tbody></table></div>
+<p>What the numbers say. A loop in Jade over bytes or pixels is now 8 to 240 times as long as the same loop in C++: least where the work is a few steps on each item (line ends, Huffman decoding, the flood fill, the box blur's running sums), most where it is many small steps of arithmetic on floats (the DCT, the Gaussian blur) or very little work on many items that C++ does in vector registers (shrinking, the gradients). An interpreter cannot close that; the whole-list, grid and picture operations of questions 15 to 17 move the loop itself into C++, which is why that column is expected near C++'s where an operation fits.</p>
+
+<h2 id="s-steps">Steps in a loop</h2>
+<p>What each kind of step costs, in a function, 50 million times, the loop's own time taken off but in its first line (<code>bench/kernels/ops_fn.jade</code>, <code>ops_call.jade</code>; one run each). Milliseconds.</p>
+<div class="table"><table>
+<thead><tr><th>Step</th><th>Before</th><th>Now</th><th>Faster by</th></tr></thead>
+<tbody>
+<tr><td>An int added (the loop itself)</td><td class="num">115</td><td class="num">108</td><td class="num">1.1&times;</td></tr>
+<tr><td>A byte read from <code>Bytes</code>, added</td><td class="num">1,806</td><td class="num">234</td><td class="num">7.7&times;</td></tr>
+<tr><td>A byte written with <code>toByte()</code></td><td class="num">1,425</td><td class="num">328</td><td class="num">4.3&times;</td></tr>
+<tr><td>A <code>List&lt;int&gt;</code> item read</td><td class="num">464</td><td class="num">231</td><td class="num">2.0&times;</td></tr>
+<tr><td>A <code>List&lt;float&gt;</code> item read and multiplied</td><td class="num">585</td><td class="num">264</td><td class="num">2.2&times;</td></tr>
+<tr><td>A float multiplied and <code>toInt()</code></td><td class="num">476</td><td class="num">356</td><td class="num">1.3&times;</td></tr>
+<tr><td><code>Math.min</code></td><td class="num">600</td><td class="num">247</td><td class="num">2.4&times;</td></tr>
+<tr><td>An int <code>%</code></td><td class="num">420</td><td class="num">168</td><td class="num">2.5&times;</td></tr>
+<tr><td>A small function, <code>lcg(s)</code> (written in place: 234 and 236 ms)</td><td class="num">736</td><td class="num">236</td><td class="num">3.1&times;</td></tr>
+<tr><td>A small function given an expression, <code>clamp(i &amp; 511 - 128)</code> (in place: 393 and 383 ms)</td><td class="num">678</td><td class="num">461</td><td class="num">1.5&times;</td></tr>
+<tr><td>A method, <code>p.at(x, 7)</code></td><td class="num">1,093</td><td class="num">1,095</td><td class="num">1.0&times;</td></tr>
+</tbody></table></div>
+
+<h2 id="s-vm">What part zero changed in the VM</h2>
+<ul>
+<li><strong>2a6d4d2</strong>: a buffer's byte read and written at once; <code>toByte()</code>, <code>toByteWrapped()</code> and a byte's <code>toInt()</code> as one instruction, with a float's <code>toInt()</code> and <code>toByte()</code> in its quick part and Math's <code>min</code>, <code>max</code>, <code>abs</code>, <code>floor</code>, <code>ceil</code>, <code>round</code> and <code>sqrt</code> just behind; a byte taken as an int by the quick paths and by the checker's typed instructions; int <code>/</code> and <code>%</code>, and an int with a float, worked out at once in register code; an item of a packed <code>List&lt;int&gt;</code> or <code>List&lt;float&gt;</code> read straight from its block. The standard benchmarks: <code>particles</code> 15% faster, none slower.</li>
+<li><strong>5c6f235</strong>: a small function put in place of its calls, still a call of its own in a stack trace (the user's choice, 2026-11-08). The standard benchmarks: none slower.</li>
+</ul>
+
+<h2 id="s-pieces">The pieces, as they are built</h2>
+<p>Each piece that might be C++ for speed (question 14), built in Jade in its part, with its timing beside C++'s; the user decides each at the end.</p>
+<div class="table"><table>
+<thead><tr><th>Piece</th><th>Part</th><th>Measured on</th><th>C++</th><th>Jade</th><th>Decision</th></tr></thead>
+<tbody>
+<tr><td colspan="6"><em>None built yet: part one begins with files at an offset.</em></td></tr>
+</tbody></table></div>
+
+<h2 id="s-left">Left</h2>
+<ul>
+<li>Checks moved out of a loop where the compiler can prove them, as the plan's part zero names them: not built. A list's bounds are checked at each read; a read in the steps above takes about 4.5 ns, the check, the index's &amp; and the add among it.</li>
+<li>Methods put in place of their calls as small functions are: about 17 ns a call (<a href="outstanding6.7.html#o-methods">outstanding list</a>).</li>
+<li>Tensor expressions combined into one loop (<a href="outstanding6.7.html#o-fused">outstanding list</a>).</li>
+</ul>
+</section>
+</main>
+</body>
+</html>
