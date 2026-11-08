@@ -461,6 +461,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Constructor"><code>Constructor</code></a> (6)</li>
 <li><a href="#Countdown"><code>Countdown</code></a> (4)</li>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
+<li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
 <li><a href="#Duration"><code>Duration</code></a> (25)</li>
 <li><a href="#Environment"><code>Environment</code></a> (8)</li>
@@ -524,14 +525,14 @@ addButton(widgets)</pre></dd>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
-<li><a href="#Path"><code>Path</code></a> (49)</li>
+<li><a href="#Path"><code>Path</code></a> (50)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
 <li><a href="#PatternSyntaxException"><code>PatternSyntaxException</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
-<li><a href="#Program"><code>Program</code></a> (7)</li>
+<li><a href="#Program"><code>Program</code></a> (9)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#Range.size"><code>Range</code></a> (37)</li>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
@@ -565,7 +566,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#TextMetrics"><code>TextMetrics</code></a> (1)</li>
 <li><a href="#Thread"><code>Thread</code></a> (15)</li>
 <li><a href="#ThreadPool"><code>ThreadPool</code></a> (8)</li>
-<li><a href="#Throwable"><code>Throwable</code></a> (4)</li>
+<li><a href="#Throwable"><code>Throwable</code></a> (6)</li>
 <li><a href="#Timeout"><code>Timeout</code></a> (1)</li>
 <li><a href="#TimeoutException"><code>TimeoutException</code></a> (1)</li>
 <li><a href="#Timer"><code>Timer</code></a> (2)</li>
@@ -593,6 +594,11 @@ addButton(widgets)</pre></dd>
 <div class="entry" id="print"><code class="sig">fun print(vararg items : any?)</code><a class="anchor" href="#print">#</a>
 <p>Writes <code>items</code> to the output as text, a space between each two, and then a line end. A string is written as it is; in a list or a map it is shown in quotes.</p>
 <pre>print(&quot;total&quot;, 3, [1, 2])   // total 3 [1, 2]
+</pre>
+</div>
+<div class="entry" id="printError"><code class="sig">fun printError(vararg items : any?)</code><a class="anchor" href="#printError">#</a>
+<p>Writes <code>items</code> to standard error as print writes them to the output, and then a line end: for what went wrong, which a program's output, sent on to a file or another program, should not carry. What print wrote before it goes out first.</p>
+<pre>printError(&quot;cannot read&quot;, path)
 </pre>
 </div>
 <div class="entry" id="write"><code class="sig">fun write(vararg items : any?)</code><a class="anchor" href="#write">#</a>
@@ -1470,6 +1476,14 @@ Program.name = &quot;bank&quot;            // at the start: what the program's o
 <div class="entry member" id="Program.hostName"><code class="sig">val hostName : string</code><a class="anchor" href="#Program.hostName">#</a>
 <p>The computer's name on the network (&quot;sandbox&quot; in a sandbox).</p>
 </div>
+<div class="entry member" id="Program.output"><code class="sig">val output : Writer</code><a class="anchor" href="#Program.output">#</a>
+<p>Its output, what print writes to, as a Writer: for code that writes to a Writer, a file's or this one. What it writes goes out in turn with print's; closing it does nothing.</p>
+<pre>report.writeTo(Program.output)
+</pre>
+</div>
+<div class="entry member" id="Program.errors"><code class="sig">val errors : Writer</code><a class="anchor" href="#Program.errors">#</a>
+<p>Standard error, what printError writes to, as a Writer: Program.errors.println(&quot;lost&quot;) as Kotlin's System.err.println. What print wrote before goes out first; closing it does nothing.</p>
+</div>
 <div class="entry member" id="Program.onUncaughtError"><code class="sig">var onUncaughtError : ((Throwable) -&gt; unit)?</code><a class="anchor" href="#Program.onUncaughtError">#</a>
 <p>What takes an error nobody caught outside the script itself: the one that ends a thread, on that thread as it ends, and a job's that failed with nothing asking for it (by get, then, onError and the like), once nothing can: when the job is collected, or as the program ends (8.7a). Without one, each is reported as an error nobody caught, the program goes on, and its exit code is 70 when it ends.</p>
 <pre>Program.onUncaughtError = { error -&gt; log.write(&quot;lost: $error&quot;) }
@@ -1663,6 +1677,14 @@ Exception: everything else, which a bare `catch (e)` catches.
 <div class="entry" id="Throwable"><code class="sig">class Throwable(val message : string? = null, val cause : Throwable? = null)</code><a class="anchor" href="#Throwable">#</a>
 <p>What can be thrown, the root of every exception and error. <code>message</code> says what went wrong and may be null; <code>cause</code> is the Throwable that led to this one, if any.</p>
 </div>
+<div class="entry member" id="Throwable.stackTrace"><code class="sig">val stackTrace : List&lt;string&gt;</code><a class="anchor" href="#Throwable.stackTrace">#</a>
+<p>Where it was made, as Kotlin's stackTrace: the calls under way then, innermost first, each as an uncaught error shows it, &quot;at f (main.jade:3)&quot;; a deep stack keeps its ten innermost calls and its two outermost, with how many were left out between. Its own constructors are not among them. Empty for an OutOfMemoryError.</p>
+</div>
+<div class="entry member" id="Throwable.stackTraceToString"><code class="sig">fun stackTraceToString() : string</code><a class="anchor" href="#Throwable.stackTraceToString">#</a>
+<p>The error and where it was made, as Kotlin's stackTraceToString: its toString(), then its stackTrace, each line indented, then what was set aside for it (&quot;Suppressed: &quot;) and what caused it (&quot;Caused by: &quot;), each with its own. Each line ends with &quot;\n&quot;.</p>
+<pre>catch (e : IOException) { log.write(e.stackTraceToString()) }
+</pre>
+</div>
 <div class="entry member" id="Throwable.suppressed"><code class="sig">val suppressed : List&lt;Throwable&gt;</code><a class="anchor" href="#Throwable.suppressed">#</a>
 <p>The errors set aside for this one, in the order they came.</p>
 </div>
@@ -1837,6 +1859,11 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;jade&quot
 <div class="entry member" id="Path.list"><code class="sig">fun list() : open List&lt;Path&gt; throws IOException</code><a class="anchor" href="#Path.list">#</a>
 <p>What is directly in this directory, in order of name; an IOException if it is not a directory.</p>
 </div>
+<div class="entry member" id="Path.entries"><code class="sig">fun entries() : open List&lt;DirEntry&gt; throws IOException</code><a class="anchor" href="#Path.entries">#</a>
+<p>What is directly in this directory, in order of name, each with what it is, its size and when it was last written, as the system gives them while listing it: on Windows in the same call, where list() and then each one's size() and lastModified() ask again for each (as Python's os.scandir has it). An IOException if it is not a directory, as for list().</p>
+<pre>for e in Path(&quot;logs&quot;).entries() { if (e.isFile and e.size &gt; 1_000_000) { print(e.name) } }
+</pre>
+</div>
 <div class="entry member" id="Path.walk"><code class="sig">fun walk(onError : ((Path, IOException) -&gt; unit)? = null) : Sequence&lt;Path&gt;</code><a class="anchor" href="#Path.walk">#</a>
 <p>Every path below this directory, each directory before what is in it, read as it goes. A symbolic link is given but not gone into, as Java's Files.walk does (8.8a): one to a directory above would go round for ever. A directory it cannot read, this one too, is an UncheckedIOException where the walk comes to it, the IOException its cause, as Java's Files.walk throws; with <code>onError</code>, that is given the directory and the IOException, and the walk goes on past it.</p>
 </div>
@@ -1916,6 +1943,12 @@ for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;jade&quot
 </div>
 <div class="entry member" id="Path.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Path.toString">#</a>
 <p>The path as it was made, its text.</p>
+</div>
+<div class="entry" id="DirEntry"><code class="sig">value DirEntry(  val path : Path,  val isDirectory : bool,  val isFile : bool,  val isSymbolicLink : bool,  val size : int,  val lastModified : Instant?)</code><a class="anchor" href="#DirEntry">#</a>
+<p>An entry of a directory, as Path.entries() gives it: its path, and what the system said of it while listing the directory. What it is is the entry's own: a symbolic link (on Windows a junction too) is neither a file nor a directory, whatever it leads to, so that a walk going by isDirectory does not go through one.</p>
+</div>
+<div class="entry member" id="DirEntry.name"><code class="sig">val name : string</code><a class="anchor" href="#DirEntry.name">#</a>
+<p>Its name: the last part of its path.</p>
 </div>
 </section>
 <section class="file" id="file-fonts-jade">
