@@ -2254,24 +2254,27 @@ COLD(Numeric) {
     // The other common cases, a conversion of the kind expected or Math's functions on ints or
     // on floats; anything else (a NaN, a number too big, the wrong kind) as the method does it,
     // with its error.
+    // DONE() is not used inside the switch: built with MSVC it is a `break`, which would leave
+    // only this switch, and the instruction would go on to the cold way with its operand read.
     Value* const top = sp_ - 1;
+    bool done = false;
     switch (static_cast<NumericOp>(ip[0])) {
         case NumericOp::ToInt:
             if (top->isByte()) {
                 top->setInt(top->as.i);
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::ToFloat:
             if (top->isInt()) {
                 top->setFloat(static_cast<double>(top->as.i));
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             if (top->isFloat()) {
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::ToByteWrapped:
@@ -2279,8 +2282,8 @@ COLD(Numeric) {
                 const int64_t low = top->as.i & 255;
                 top->setHeader(ValueKind::Byte);
                 top->as.i = low;
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::Floor:
@@ -2290,28 +2293,28 @@ COLD(Numeric) {
                 const double d = top->as.d;
                 const NumericOp which = static_cast<NumericOp>(ip[0]);
                 top->setInt(static_cast<int64_t>(which == NumericOp::Floor ? std::floor(d) : which == NumericOp::Ceil ? std::ceil(d) : std::round(d)));
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::Sqrt:
             if (top->isFloat()) {
                 top->as.d = std::sqrt(top->as.d);
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::AbsInt:
         case NumericOp::AbsFloat:
             if (top->isInt() && top->as.i != INT64_MIN) {
                 if (top->as.i < 0) top->as.i = -top->as.i;
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             if (top->isFloat()) {
                 top->as.d = std::fabs(top->as.d);
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         case NumericOp::MinInt:
@@ -2324,19 +2327,23 @@ COLD(Numeric) {
             if (first->isInt() && top->isInt()) {
                 if (min ? top->as.i < first->as.i : top->as.i > first->as.i) first->as.i = top->as.i;
                 sp_--;
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             if (first->isFloat() && top->isFloat()) {
                 if (min ? top->as.d < first->as.d : top->as.d > first->as.d) first->as.d = top->as.d;
                 sp_--;
-                ip += 1;
-                DONE();
+                done = true;
+                break;
             }
             break;
         }
         default:
             break;
+    }
+    if (done) {
+        ip += 1;
+        DONE();
     }
     const uint8_t which = READ_U8();
     SAVE_IP();
