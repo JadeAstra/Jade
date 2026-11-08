@@ -383,6 +383,8 @@ struct ObjString final : Obj {
     // Where `part` first is at or after character `from` (last, at or before `from`, when
     // `last`), or -1.
     int64_t find(const ObjString* part, size_t from, bool last = false) const;
+    // The same for one character, read where it is: no string made of it.
+    int64_t findChar(uint32_t c, size_t from, bool last = false) const;
 
     // The memory the string holds beyond the object itself, for the collector's count.
     size_t heldBytes() const {

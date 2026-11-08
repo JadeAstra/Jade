@@ -839,6 +839,36 @@ int64_t ObjString::find(const ObjString* part, size_t from, bool last) const {
     return -1;
 }
 
+int64_t ObjString::findChar(uint32_t c, size_t from, bool last) const {
+    // A string is kept at the narrowest width that holds its characters: one wider is not in it.
+    if (length == 0 || (width == 1 && c > 0xFF) || (width == 2 && c > 0xFFFF)) return -1;
+    const char* const u = units_.data();
+    auto at = [&](size_t i) -> uint32_t {
+        if (width == 1) return static_cast<unsigned char>(u[i]);
+        if (width == 2) {
+            uint16_t unit;
+            std::memcpy(&unit, u + 2 * i, 2);
+            return unit;
+        }
+        uint32_t unit;
+        std::memcpy(&unit, u + 4 * i, 4);
+        return unit;
+    };
+    if (last) {
+        for (size_t i = std::min(from, length - 1) + 1; i-- > 0;)
+            if (at(i) == c) return static_cast<int64_t>(i);
+        return -1;
+    }
+    if (from >= length) return -1;
+    if (width == 1) {
+        const void* found = std::memchr(u + from, static_cast<int>(c), length - from);
+        return found == nullptr ? -1 : static_cast<const char*>(found) - u;
+    }
+    for (size_t i = from; i < length; i++)
+        if (at(i) == c) return static_cast<int64_t>(i);
+    return -1;
+}
+
 namespace {
 
 template <typename A, typename B>

@@ -515,6 +515,8 @@ void registerStringMethods(VM& vm) {
     const BuiltinType T = BuiltinType::String;
 
     vm.defineMethod(T, "contains", 1, 2, [](VM& vm, Value self, int argc, Value* args) -> Value {
+        if (args[0].isChar() && !flag(argc, args, 1))  // a char looked for where it is, no string made of it
+            return Value::boolean(asString(self)->findChar(static_cast<uint32_t>(args[0].as.i), 0) >= 0);
         charAsText(vm, args[0]);
         const std::string& s = asString(self)->utf8();
         const std::string& other = vm.toStr(args[0], "search text");
@@ -542,10 +544,12 @@ void registerStringMethods(VM& vm) {
 
     // Where `other` first appears at or after `startIndex`, or -1.
     vm.defineMethod(T, "indexOf", 1, 3, [](VM& vm, Value self, int argc, Value* args) -> Value {
-        charAsText(vm, args[0]);
         const ObjString* text = asString(self);
-        const ObjString* part = vm.toText(args[0], "search text");
         const size_t start = given(argc, args, 1) ? clampPosition(std::max<int64_t>(vm.toInt(args[1], "start index"), 0), text->length) : 0;
+        // A char looked for where it is: before, a string was made of it for each call.
+        if (args[0].isChar() && !flag(argc, args, 2)) return Value::integer(text->findChar(static_cast<uint32_t>(args[0].as.i), start));
+        charAsText(vm, args[0]);
+        const ObjString* part = vm.toText(args[0], "search text");
         if (flag(argc, args, 2)) {
             const std::string& other = part->utf8();
             // Changing case keeps the number of characters, so a position in one is a position in the other.
@@ -558,12 +562,13 @@ void registerStringMethods(VM& vm) {
 
     // Where `other` last appears, starting at or before `startIndex`, or -1.
     vm.defineMethod(T, "lastIndexOf", 1, 3, [](VM& vm, Value self, int argc, Value* args) -> Value {
-        charAsText(vm, args[0]);
         const ObjString* text = asString(self);
-        const ObjString* part = vm.toText(args[0], "search text");
         int64_t start = given(argc, args, 1) ? vm.toInt(args[1], "start index") : static_cast<int64_t>(text->length);
         if (start < 0) return Value::integer(-1);
         const size_t from = std::min(static_cast<size_t>(start), text->length);
+        if (args[0].isChar() && !flag(argc, args, 2)) return Value::integer(text->findChar(static_cast<uint32_t>(args[0].as.i), from, true));
+        charAsText(vm, args[0]);
+        const ObjString* part = vm.toText(args[0], "search text");
         if (flag(argc, args, 2)) {
             const std::string& other = part->utf8();
             const std::string s = fold(text->utf8());

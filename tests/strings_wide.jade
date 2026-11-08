@@ -29,3 +29,24 @@ val name = "box"
 print($$"""cost: $5, total: $$total, sum $${total * 2}, $name and $$$total""")   // expect: cost: $5, total: 12, sum 24, $name and $12
 print($$$"""a $$b $$$name $$$$name ${x}""", """plain $name ${total + 1} \n""")   // expect: a $$b box $box ${x} plain box 13 \n
 print("in ${ $$"""$$name $x""" } out")   // expect: in box $x out
+
+// A char looked for where it is, in strings kept a byte, two bytes and four bytes a character
+// (no string made of it): the same as looking for the string of it, from every start.
+val narrow = "banana, ÿes"
+val middle = "añ€a€b€"
+val wide = "a😀b😀c"
+var agrees = true
+for (text in [narrow, middle, wide, ""]) {
+  for (c in ['a', 'ÿ', '€', '😀', 'z', 'b']) {
+    for (start in [-2, 0, 1, 3, 5, 99]) {
+      if (text.indexOf(c, start) != text.indexOf(c.toString(), start)) { agrees = false }
+      if (text.lastIndexOf(c, start) != text.lastIndexOf(c.toString(), start)) { agrees = false }
+    }
+    if (text.indexOf(c) != text.indexOf(c.toString()) or text.lastIndexOf(c) != text.lastIndexOf(c.toString())) { agrees = false }
+    if (text.contains(c) != text.contains(c.toString())) { agrees = false }
+  }
+}
+print(agrees)   // expect: true
+print(narrow.indexOf('a'), narrow.indexOf('a', 2), narrow.lastIndexOf('a'), narrow.indexOf('ÿ'), narrow.indexOf('€'))   // expect: 1 3 5 8 -1
+print(middle.indexOf('€'), middle.lastIndexOf('€'), middle.lastIndexOf('€', 4), wide.indexOf('😀'), wide.lastIndexOf('😀'), wide.indexOf('😀', 2))   // expect: 2 6 4 1 3 3
+print(middle.contains('ñ'), wide.contains('b'), wide.contains('ñ'), narrow.indexOf('A', ignoreCase = true))   // expect: true true false 1
