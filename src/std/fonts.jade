@@ -139,10 +139,10 @@ object Fonts {
   // A font from a file that is not installed, or from the bytes of one. A collection
   // (.ttc) holds several: `count` says how many, `index` picks one. An IOException where the
   // file cannot be read or is no font.
-  fun load(path : Path | string | Bytes, index : int = 0) : Typeface throws IOException => Typeface(path is Bytes ? __text.fromBytes(path, index) : __text.load("$path", index))
+  fun load(path : FilePath | string | Bytes, index : int = 0) : Typeface throws IOException => Typeface(path is Bytes ? __text.fromBytes(path, index) : __text.load("$path", index))
   // How many fonts the file at `path` holds: more than 1 for a collection (.ttc), 0 if it
   // cannot be read or is not a font file.
-  fun count(path : Path | string) : int => __text.countIn("$path")
+  fun count(path : FilePath | string) : int => __text.countIn("$path")
 }
 
 // ---- Fonts (D101, D125, D144) ----

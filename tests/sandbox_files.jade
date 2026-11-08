@@ -2,79 +2,79 @@
 // purpose where a fault says.
 
 // -- What is in it, and what is not --
-val real = Path.createTempDirectory("sandboxcheck")
+val real = FilePath.createTempDirectory("sandboxcheck")
 Sandbox.run {
-  print(Sandbox.current != null, Path.separator, Path("/tmp").isDirectory())   // expect: true / true
+  print(Sandbox.current != null, FilePath.separator, FilePath("/tmp").isDirectory())   // expect: true / true
   print(real.exists())                                        // expect: false
-  Path("/data").mkdir()
-  Path("/data/a.txt").writeText("one")
-  Path("/data/b.txt").writeText("two")
-  print(Path("/data").list().map { it.name }, Path("/data/a.txt").readText(), Path("/data/b.txt").size())   // expect: ["a.txt", "b.txt"] one 3
-  Path("/data/c.txt").writer().use { it.write("streamed") }
-  print(Path("/data/c.txt").reader().use { it.readText() }, Path("data/../data/c.txt").exists())   // expect: streamed true
-  Path("/data/c.txt").moveTo(Path("/data/d.txt"))
-  Path("/data/d.txt").copyTo(Path("/data/e.txt"))
-  print(Path("/data/c.txt").exists(), Path("/data/e.txt").readText())   // expect: false streamed
+  FilePath("/data").mkdir()
+  FilePath("/data/a.txt").writeText("one")
+  FilePath("/data/b.txt").writeText("two")
+  print(FilePath("/data").list().map { it.name }, FilePath("/data/a.txt").readText(), FilePath("/data/b.txt").size())   // expect: ["a.txt", "b.txt"] one 3
+  FilePath("/data/c.txt").writer().use { it.write("streamed") }
+  print(FilePath("/data/c.txt").reader().use { it.readText() }, FilePath("data/../data/c.txt").exists())   // expect: streamed true
+  FilePath("/data/c.txt").moveTo(FilePath("/data/d.txt"))
+  FilePath("/data/d.txt").copyTo(FilePath("/data/e.txt"))
+  print(FilePath("/data/c.txt").exists(), FilePath("/data/e.txt").readText())   // expect: false streamed
 }
-print(Sandbox.current == null, Path("/data/a.txt").exists(), real.exists())   // expect: true false true
+print(Sandbox.current == null, FilePath("/data/a.txt").exists(), real.exists())   // expect: true false true
 real.delete()
 
 // -- A directory that fails half way through being listed (bug 6, 8.8a) --
 Sandbox.run {
-  Path("/logs").mkdir()
-  for (name in ["a", "b", "c"]) { Path("/logs/$name.txt").writeText(name) }
+  FilePath("/logs").mkdir()
+  for (name in ["a", "b", "c"]) { FilePath("/logs/$name.txt").writeText(name) }
   faults.add(Fault.list("/logs", after = 2, error = "the device is not ready"))
-  try { Path("/logs").list() } catch (e : IOException) { print(e.message) }   // expect: cannot list the directory '/logs': the device is not ready
+  try { FilePath("/logs").list() } catch (e : IOException) { print(e.message) }   // expect: cannot list the directory '/logs': the device is not ready
 }
 
 // -- Reads and writes that fail part of the way --
 Sandbox.run {
-  Path("/big.txt").writeText("0123456789")
+  FilePath("/big.txt").writeText("0123456789")
   faults.add(Fault.read("/big.txt", after = 4))
-  try { Path("/big.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file '/big.txt': the device is not ready
-  val reader = Path("/big.txt").reader()
+  try { FilePath("/big.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file '/big.txt': the device is not ready
+  val reader = FilePath("/big.txt").reader()
   print(reader.read(100)!!.size)                              // expect: 4
   try { reader.read(100) } catch (e : IOException) { print(e.message) }   // expect: cannot read '/big.txt': the device is not ready
   reader.close()
   faults.add(Fault.write("/out.txt", after = 3, error = "there is no space left on the device"))
-  try { Path("/out.txt").writeText("abcdef") } catch (e : IOException) { print(e.message) }   // expect: cannot write file '/out.txt': there is no space left on the device
-  print(Path("/out.txt").readText())                          // expect: abc
+  try { FilePath("/out.txt").writeText("abcdef") } catch (e : IOException) { print(e.message) }   // expect: cannot write file '/out.txt': there is no space left on the device
+  print(FilePath("/out.txt").readText())                          // expect: abc
 }
 
 // -- A disk that fills --
 Sandbox.run(diskSize = 10) {
-  Path("/a").writeText("12345678")
-  try { Path("/b").writeText("12345") } catch (e : IOException) { print(e.message!!.startsWith("cannot write file '/b'")) }   // expect: true
+  FilePath("/a").writeText("12345678")
+  try { FilePath("/b").writeText("12345") } catch (e : IOException) { print(e.message!!.startsWith("cannot write file '/b'")) }   // expect: true
 }
 
 // -- Windows' paths, on any machine --
 Sandbox.run(paths = PathStyle.windows) {
-  Path("C:\\Data").mkdir()
-  Path("c:/data/Note.txt").writeText("hi")
-  print(Path.separator, Path("C:\\DATA\\note.TXT").readText(), Path("C:\\Data").list().map { it.name }, Path("C:\\Data\\Note.txt").parent!!.name)   // expect: \ hi ["Note.txt"] Data
+  FilePath("C:\\Data").mkdir()
+  FilePath("c:/data/Note.txt").writeText("hi")
+  print(FilePath.separator, FilePath("C:\\DATA\\note.TXT").readText(), FilePath("C:\\Data").list().map { it.name }, FilePath("C:\\Data\\Note.txt").parent!!.name)   // expect: \ hi ["Note.txt"] Data
 }
 
 // -- A dry run: a copy of a real directory, and what the block did to it --
-val project = Path.createTempDirectory("sandboxproject")
-Path(project, "keep.txt").writeText("kept")
-Path(project, "old.txt").writeText("old")
-val before = Path(project, "old.txt").readText()
+val project = FilePath.createTempDirectory("sandboxproject")
+FilePath(project, "keep.txt").writeText("kept")
+FilePath(project, "old.txt").writeText("old")
+val before = FilePath(project, "old.txt").readText()
 val name = project.name
 val changes = Sandbox.run(copyFrom = project) {
-  Path("/$name/new.txt").writeText("new")
-  Path("/$name/old.txt").writeText("changed")
-  Path("/$name/keep.txt").readText()
-  Path("/$name/gone.txt").exists()
+  FilePath("/$name/new.txt").writeText("new")
+  FilePath("/$name/old.txt").writeText("changed")
+  FilePath("/$name/keep.txt").readText()
+  FilePath("/$name/gone.txt").exists()
   files.changes().map { "${it.kind} ${it.path.name}" }
 }
-print(changes, Path(project, "old.txt").readText() == before, Path(project, "new.txt").exists())   // expect: ["made new.txt", "changed old.txt"] true false
+print(changes, FilePath(project, "old.txt").readText() == before, FilePath(project, "new.txt").exists())   // expect: ["made new.txt", "changed old.txt"] true false
 project.deleteRecursively()
 
 // -- What the code in it starts is in it too --
 Sandbox.run {
-  Path("/shared.txt").writeText("from the block")
-  val seen = thread { Path("/shared.txt").readText() }.get()
-  val inTask = task { Path("/shared.txt").exists() }
+  FilePath("/shared.txt").writeText("from the block")
+  val seen = thread { FilePath("/shared.txt").readText() }.get()
+  val inTask = task { FilePath("/shared.txt").exists() }
   print(seen, inTask.get())                                   // expect: from the block true
 }
 

@@ -1,7 +1,7 @@
 // A value type of one field (kept in a Value of its own, a small value) in another value's
 // nullable field. Such a field is kept by pointer, and a small value given to it was kept as a
 // null pointer: read back as null, unless it was made in place as the argument (found in M8
-// after, with Path.entries() giving its Instant times as null).
+// after, with FilePath.entries() giving its Instant times as null).
 value One(val n : int)
 value Holder(val o : One?)
 

@@ -266,7 +266,7 @@ task { print(later(21)) }    // 42</pre></dd>
 
 <dt><code>throws</code></dt>
 <dd>Written after a function's result type: the checked exceptions it may throw, which callers handle. The compiler works these out on its own inside a program; a library's public functions, and declarations with no body, say them.
-<pre>fun readConfig(path : string) : string throws IOException =&gt; Path(path).readText()</pre></dd>
+<pre>fun readConfig(path : string) : string throws IOException =&gt; FilePath(path).readText()</pre></dd>
 
 <dt><code>external</code></dt>
 <dd>Only in the standard library: a function, property or object written in C++, declared in Jade so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>
@@ -473,6 +473,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Faults"><code>Faults</code></a> (2)</li>
 <li><a href="#Field"><code>Field</code></a> (10)</li>
 <li><a href="#FileChange"><code>FileChange</code></a> (1)</li>
+<li><a href="#FilePath"><code>FilePath</code></a> (50)</li>
 <li><a href="#Font"><code>Font</code></a> (35)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
@@ -525,7 +526,6 @@ addButton(widgets)</pre></dd>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
-<li><a href="#Path"><code>Path</code></a> (50)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
 <li><a href="#PatternSyntaxException"><code>PatternSyntaxException</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
@@ -1784,168 +1784,168 @@ Exception: everything else, which a bare `catch (e)` catches.
 <section class="file" id="file-file-jade">
 <h2>file.jade</h2>
 <h3>Paths</h3>
-<div class="entry" id="Path"><code class="sig">class Path</code><a class="anchor" href="#Path">#</a>
-<p>A file or directory on disk, by its path: Java's File and java.nio.file.Path in one. Making a Path touches nothing; what is in the path (name, parent, extension) is a property, and what asks the disk (exists(), size(), list()) is a function.</p>
-<pre>val notes = Path(&quot;notes.txt&quot;)
+<div class="entry" id="FilePath"><code class="sig">class FilePath</code><a class="anchor" href="#FilePath">#</a>
+<p>A file or directory on disk, by its path: Java's File and java.nio.file.Path in one. Making a FilePath touches nothing; what is in the path (name, parent, extension) is a property, and what asks the disk (exists(), size(), list()) is a function.</p>
+<pre>val notes = FilePath(&quot;notes.txt&quot;)
 if (notes.exists()) { print(notes.readText()) }
-Path(directory, &quot;out.bin&quot;).writeBytes(data)
-for file in Path(&quot;src&quot;).walk() { if (file.extension == &quot;jade&quot;) { print(file.name) } }
+FilePath(directory, &quot;out.bin&quot;).writeBytes(data)
+for file in FilePath(&quot;src&quot;).walk() { if (file.extension == &quot;jade&quot;) { print(file.name) } }
 </pre>
 <p>Text is UTF-8 unless a Charset says otherwise.</p>
 </div>
-<div class="entry member" id="Path.text"><code class="sig">val text : string</code><a class="anchor" href="#Path.text">#</a>
+<div class="entry member" id="FilePath.text"><code class="sig">val text : string</code><a class="anchor" href="#FilePath.text">#</a>
 <p>The path as it was made.</p>
 </div>
-<div class="entry member" id="Path.separator"><code class="sig">val separator : string get()</code><a class="anchor" href="#Path.separator">#</a>
+<div class="entry member" id="FilePath.separator"><code class="sig">val separator : string get()</code><a class="anchor" href="#FilePath.separator">#</a>
 <p>What separates the names in a path: &quot;\&quot; on Windows, and in a sandbox with Windows' paths.</p>
 </div>
-<div class="entry member" id="Path.createTempDirectory"><code class="sig">fun createTempDirectory(prefix : string = &quot;jade&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempDirectory">#</a>
+<div class="entry member" id="FilePath.createTempDirectory"><code class="sig">fun createTempDirectory(prefix : string = &quot;jade&quot;) : FilePath throws IOException</code><a class="anchor" href="#FilePath.createTempDirectory">#</a>
 <p>A new, empty directory or file in the system's temporary directory, its name starting with <code>prefix</code>.</p>
 </div>
-<div class="entry member" id="Path.createTempFile"><code class="sig">fun createTempFile(prefix : string = &quot;jade&quot;, suffix : string = &quot;.tmp&quot;) : Path throws IOException</code><a class="anchor" href="#Path.createTempFile">#</a>
+<div class="entry member" id="FilePath.createTempFile"><code class="sig">fun createTempFile(prefix : string = &quot;jade&quot;, suffix : string = &quot;.tmp&quot;) : FilePath throws IOException</code><a class="anchor" href="#FilePath.createTempFile">#</a>
 <p>A new, empty file in the system's temporary directory, named <code>prefix</code>, a number, then <code>suffix</code>, as jade240932127838.tmp; no other program gets the same one. An IOException where none can be made.</p>
 </div>
-<div class="entry member" id="Path.roots"><code class="sig">fun roots() : List&lt;Path&gt;</code><a class="anchor" href="#Path.roots">#</a>
+<div class="entry member" id="FilePath.roots"><code class="sig">fun roots() : List&lt;FilePath&gt;</code><a class="anchor" href="#FilePath.roots">#</a>
 <p>The tops of the file system: each drive on Windows (C:\, D:\), / elsewhere.</p>
 </div>
-<div class="entry member" id="Path.name"><code class="sig">val name : string</code><a class="anchor" href="#Path.name">#</a>
-<p>The last name in the path: Path(&quot;a/b.txt&quot;).name is &quot;b.txt&quot;.</p>
+<div class="entry member" id="FilePath.name"><code class="sig">val name : string</code><a class="anchor" href="#FilePath.name">#</a>
+<p>The last name in the path: FilePath(&quot;a/b.txt&quot;).name is &quot;b.txt&quot;.</p>
 </div>
-<div class="entry member" id="Path.extension"><code class="sig">val extension : string</code><a class="anchor" href="#Path.extension">#</a>
+<div class="entry member" id="FilePath.extension"><code class="sig">val extension : string</code><a class="anchor" href="#FilePath.extension">#</a>
 <p>What follows the last dot of the name, without the dot; &quot;&quot; if there is none.</p>
 </div>
-<div class="entry member" id="Path.nameWithoutExtension"><code class="sig">val nameWithoutExtension : string</code><a class="anchor" href="#Path.nameWithoutExtension">#</a>
+<div class="entry member" id="FilePath.nameWithoutExtension"><code class="sig">val nameWithoutExtension : string</code><a class="anchor" href="#FilePath.nameWithoutExtension">#</a>
 <p>The name without its last dot and what follows: &quot;a.tar&quot; for a.tar.gz, the whole name where it has no dot, and &quot;&quot; for a name such as .bashrc whose only dot comes first.</p>
 </div>
-<div class="entry member" id="Path.parent"><code class="sig">val parent : Path?</code><a class="anchor" href="#Path.parent">#</a>
+<div class="entry member" id="FilePath.parent"><code class="sig">val parent : FilePath?</code><a class="anchor" href="#FilePath.parent">#</a>
 <p>The directory it is in; null at the top (C:\, /) and for a bare name.</p>
 </div>
-<div class="entry member" id="Path.absolute"><code class="sig">val absolute : Path</code><a class="anchor" href="#Path.absolute">#</a>
+<div class="entry member" id="FilePath.absolute"><code class="sig">val absolute : FilePath</code><a class="anchor" href="#FilePath.absolute">#</a>
 <p>Made whole from the current directory; it need not exist.</p>
 </div>
-<div class="entry member" id="Path.resolve"><code class="sig">fun resolve(child : Path | string) : Path</code><a class="anchor" href="#Path.resolve">#</a>
-<p>Something inside this directory: Path(&quot;a&quot;).resolve(&quot;b.txt&quot;) is a/b.txt.</p>
+<div class="entry member" id="FilePath.resolve"><code class="sig">fun resolve(child : FilePath | string) : FilePath</code><a class="anchor" href="#FilePath.resolve">#</a>
+<p>Something inside this directory: FilePath(&quot;a&quot;).resolve(&quot;b.txt&quot;) is a/b.txt.</p>
 </div>
-<div class="entry member" id="Path.exists"><code class="sig">fun exists() : bool</code><a class="anchor" href="#Path.exists">#</a>
+<div class="entry member" id="FilePath.exists"><code class="sig">fun exists() : bool</code><a class="anchor" href="#FilePath.exists">#</a>
 <p>Whether something is there, a file or a directory.</p>
 </div>
-<div class="entry member" id="Path.isFile"><code class="sig">fun isFile() : bool</code><a class="anchor" href="#Path.isFile">#</a>
+<div class="entry member" id="FilePath.isFile"><code class="sig">fun isFile() : bool</code><a class="anchor" href="#FilePath.isFile">#</a>
 <p>Whether a file is there; false for a directory and where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.isDirectory"><code class="sig">fun isDirectory() : bool</code><a class="anchor" href="#Path.isDirectory">#</a>
+<div class="entry member" id="FilePath.isDirectory"><code class="sig">fun isDirectory() : bool</code><a class="anchor" href="#FilePath.isDirectory">#</a>
 <p>Whether a directory is there; false for a file and where nothing is there. Through a link, whether it leads to one.</p>
 </div>
-<div class="entry member" id="Path.isSymbolicLink"><code class="sig">fun isSymbolicLink() : bool</code><a class="anchor" href="#Path.isSymbolicLink">#</a>
+<div class="entry member" id="FilePath.isSymbolicLink"><code class="sig">fun isSymbolicLink() : bool</code><a class="anchor" href="#FilePath.isSymbolicLink">#</a>
 <p>Whether it is a symbolic link itself (on Windows, a junction too), whatever it leads to.</p>
 </div>
-<div class="entry member" id="Path.isReadable"><code class="sig">fun isReadable() : bool</code><a class="anchor" href="#Path.isReadable">#</a>
+<div class="entry member" id="FilePath.isReadable"><code class="sig">fun isReadable() : bool</code><a class="anchor" href="#FilePath.isReadable">#</a>
 <p>Whether this program may read it; false where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.isWritable"><code class="sig">fun isWritable() : bool</code><a class="anchor" href="#Path.isWritable">#</a>
+<div class="entry member" id="FilePath.isWritable"><code class="sig">fun isWritable() : bool</code><a class="anchor" href="#FilePath.isWritable">#</a>
 <p>Whether this program may write it (on Windows, whether it is not read-only); false where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.isExecutable"><code class="sig">fun isExecutable() : bool</code><a class="anchor" href="#Path.isExecutable">#</a>
+<div class="entry member" id="FilePath.isExecutable"><code class="sig">fun isExecutable() : bool</code><a class="anchor" href="#FilePath.isExecutable">#</a>
 <p>Whether it can be run as a program: on Windows, a file whose extension PATHEXT lists; elsewhere, one marked so (or a directory that may be entered).</p>
 </div>
-<div class="entry member" id="Path.size"><code class="sig">fun size() : int</code><a class="anchor" href="#Path.size">#</a>
+<div class="entry member" id="FilePath.size"><code class="sig">fun size() : int</code><a class="anchor" href="#FilePath.size">#</a>
 <p>The size in bytes; 0 for a file that is not there.</p>
 </div>
-<div class="entry member" id="Path.lastModified"><code class="sig">fun lastModified() : Instant?</code><a class="anchor" href="#Path.lastModified">#</a>
+<div class="entry member" id="FilePath.lastModified"><code class="sig">fun lastModified() : Instant?</code><a class="anchor" href="#FilePath.lastModified">#</a>
 <p>When it was last written; null where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.canonical"><code class="sig">fun canonical() : Path throws IOException</code><a class="anchor" href="#Path.canonical">#</a>
+<div class="entry member" id="FilePath.canonical"><code class="sig">fun canonical() : FilePath throws IOException</code><a class="anchor" href="#FilePath.canonical">#</a>
 <p>With <code>.</code>, <code>..</code> and links worked out; an IOException if it is not there.</p>
 </div>
-<div class="entry member" id="Path.list"><code class="sig">fun list() : open List&lt;Path&gt; throws IOException</code><a class="anchor" href="#Path.list">#</a>
+<div class="entry member" id="FilePath.list"><code class="sig">fun list() : open List&lt;FilePath&gt; throws IOException</code><a class="anchor" href="#FilePath.list">#</a>
 <p>What is directly in this directory, in order of name; an IOException if it is not a directory.</p>
 </div>
-<div class="entry member" id="Path.entries"><code class="sig">fun entries() : open List&lt;DirEntry&gt; throws IOException</code><a class="anchor" href="#Path.entries">#</a>
+<div class="entry member" id="FilePath.entries"><code class="sig">fun entries() : open List&lt;DirEntry&gt; throws IOException</code><a class="anchor" href="#FilePath.entries">#</a>
 <p>What is directly in this directory, in order of name, each with what it is, its size and when it was last written, as the system gives them while listing it: on Windows in the same call, where list() and then each one's size() and lastModified() ask again for each (as Python's os.scandir has it). An IOException if it is not a directory, as for list().</p>
-<pre>for e in Path(&quot;logs&quot;).entries() { if (e.isFile and e.size &gt; 1_000_000) { print(e.name) } }
+<pre>for e in FilePath(&quot;logs&quot;).entries() { if (e.isFile and e.size &gt; 1_000_000) { print(e.name) } }
 </pre>
 </div>
-<div class="entry member" id="Path.walk"><code class="sig">fun walk(onError : ((Path, IOException) -&gt; unit)? = null) : Sequence&lt;Path&gt;</code><a class="anchor" href="#Path.walk">#</a>
+<div class="entry member" id="FilePath.walk"><code class="sig">fun walk(onError : ((FilePath, IOException) -&gt; unit)? = null) : Sequence&lt;FilePath&gt;</code><a class="anchor" href="#FilePath.walk">#</a>
 <p>Every path below this directory, each directory before what is in it, read as it goes. A symbolic link is given but not gone into, as Java's Files.walk does (8.8a): one to a directory above would go round for ever. A directory it cannot read, this one too, is an UncheckedIOException where the walk comes to it, the IOException its cause, as Java's Files.walk throws; with <code>onError</code>, that is given the directory and the IOException, and the walk goes on past it.</p>
 </div>
-<div class="entry member" id="Path.totalSpace"><code class="sig">val totalSpace : int</code><a class="anchor" href="#Path.totalSpace">#</a>
+<div class="entry member" id="FilePath.totalSpace"><code class="sig">val totalSpace : int</code><a class="anchor" href="#FilePath.totalSpace">#</a>
 <p>The room on the volume it is on, in bytes, as Java's File gives it: all of it, what is free, and what is free to this program (less, where the system keeps some back or the user has a quota). An IOException where the path is on no volume there is.</p>
 </div>
-<div class="entry member" id="Path.freeSpace"><code class="sig">val freeSpace : int</code><a class="anchor" href="#Path.freeSpace">#</a>
+<div class="entry member" id="FilePath.freeSpace"><code class="sig">val freeSpace : int</code><a class="anchor" href="#FilePath.freeSpace">#</a>
 <p>What is free on its volume, in bytes.</p>
 </div>
-<div class="entry member" id="Path.usableSpace"><code class="sig">val usableSpace : int</code><a class="anchor" href="#Path.usableSpace">#</a>
+<div class="entry member" id="FilePath.usableSpace"><code class="sig">val usableSpace : int</code><a class="anchor" href="#FilePath.usableSpace">#</a>
 <p>What is free on its volume to this program, in bytes.</p>
 </div>
-<div class="entry member" id="Path.readText"><code class="sig">fun readText(charset : Charset = Charset.utf8) : string throws IOException</code><a class="anchor" href="#Path.readText">#</a>
+<div class="entry member" id="FilePath.readText"><code class="sig">fun readText(charset : Charset = Charset.utf8) : string throws IOException</code><a class="anchor" href="#FilePath.readText">#</a>
 <p>The whole file as text in <code>charset</code>; an IOException where it cannot be read, as when it is not there or is a directory.</p>
 </div>
-<div class="entry member" id="Path.readBytes"><code class="sig">fun readBytes() : Bytes throws IOException</code><a class="anchor" href="#Path.readBytes">#</a>
+<div class="entry member" id="FilePath.readBytes"><code class="sig">fun readBytes() : Bytes throws IOException</code><a class="anchor" href="#FilePath.readBytes">#</a>
 <p>The whole file as bytes; an IOException where it cannot be read.</p>
 </div>
-<div class="entry member" id="Path.readLines"><code class="sig">fun readLines(charset : Charset = Charset.utf8) : open List&lt;string&gt; throws IOException</code><a class="anchor" href="#Path.readLines">#</a>
+<div class="entry member" id="FilePath.readLines"><code class="sig">fun readLines(charset : Charset = Charset.utf8) : open List&lt;string&gt; throws IOException</code><a class="anchor" href="#FilePath.readLines">#</a>
 <p>The lines of the file, without their line ends.</p>
 </div>
-<div class="entry member" id="Path.forEachLine"><code class="sig">fun forEachLine(charset : Charset = Charset.utf8, action : (string) -&gt; unit) throws IOException</code><a class="anchor" href="#Path.forEachLine">#</a>
+<div class="entry member" id="FilePath.forEachLine"><code class="sig">fun forEachLine(charset : Charset = Charset.utf8, action : (string) -&gt; unit) throws IOException</code><a class="anchor" href="#FilePath.forEachLine">#</a>
 <p>The lines one at a time, as they are read.</p>
 </div>
-<div class="entry member" id="Path.useLines"><code class="sig">fun &lt;R&gt; useLines(charset : Charset = Charset.utf8, block : (Sequence&lt;string&gt;) -&gt; R) : R throws IOException</code><a class="anchor" href="#Path.useLines">#</a>
+<div class="entry member" id="FilePath.useLines"><code class="sig">fun &lt;R&gt; useLines(charset : Charset = Charset.utf8, block : (Sequence&lt;string&gt;) -&gt; R) : R throws IOException</code><a class="anchor" href="#FilePath.useLines">#</a>
 <p>The block given the lines as a sequence, read as it goes; the file is closed afterwards.</p>
 </div>
-<div class="entry member" id="Path.writeText"><code class="sig">fun writeText(text : string, charset : Charset = Charset.utf8) throws IOException</code><a class="anchor" href="#Path.writeText">#</a>
+<div class="entry member" id="FilePath.writeText"><code class="sig">fun writeText(text : string, charset : Charset = Charset.utf8) throws IOException</code><a class="anchor" href="#FilePath.writeText">#</a>
 <p>Makes <code>text</code>, in <code>charset</code>, the whole file: made where it is not there, emptied first where it is. The directory it is in is not made: an IOException where it is missing, or where the file cannot be written.</p>
 </div>
-<div class="entry member" id="Path.appendText"><code class="sig">fun appendText(text : string, charset : Charset = Charset.utf8) throws IOException</code><a class="anchor" href="#Path.appendText">#</a>
+<div class="entry member" id="FilePath.appendText"><code class="sig">fun appendText(text : string, charset : Charset = Charset.utf8) throws IOException</code><a class="anchor" href="#FilePath.appendText">#</a>
 <p>Adds <code>text</code>, in <code>charset</code>, to the end of the file, which is made where it is not there; an IOException where it cannot be written.</p>
 </div>
-<div class="entry member" id="Path.writeBytes"><code class="sig">fun writeBytes(data : Bytes) throws IOException</code><a class="anchor" href="#Path.writeBytes">#</a>
+<div class="entry member" id="FilePath.writeBytes"><code class="sig">fun writeBytes(data : Bytes) throws IOException</code><a class="anchor" href="#FilePath.writeBytes">#</a>
 <p>Makes <code>data</code> the whole file, as writeText does with text.</p>
 </div>
-<div class="entry member" id="Path.appendBytes"><code class="sig">fun appendBytes(data : Bytes) throws IOException</code><a class="anchor" href="#Path.appendBytes">#</a>
+<div class="entry member" id="FilePath.appendBytes"><code class="sig">fun appendBytes(data : Bytes) throws IOException</code><a class="anchor" href="#FilePath.appendBytes">#</a>
 <p>Adds <code>data</code> to the end of the file, as appendText does with text.</p>
 </div>
-<div class="entry member" id="Path.reader"><code class="sig">fun reader(charset : Charset = Charset.utf8) : Reader throws IOException</code><a class="anchor" href="#Path.reader">#</a>
+<div class="entry member" id="FilePath.reader"><code class="sig">fun reader(charset : Charset = Charset.utf8) : Reader throws IOException</code><a class="anchor" href="#FilePath.reader">#</a>
 <p>A piece at a time: close each when it is done with, or let use { } do it.</p>
 <pre>path.reader().use { it.readLine() }
 </pre>
 </div>
-<div class="entry member" id="Path.writer"><code class="sig">fun writer(append : bool = false, charset : Charset = Charset.utf8) : Writer throws IOException</code><a class="anchor" href="#Path.writer">#</a>
+<div class="entry member" id="FilePath.writer"><code class="sig">fun writer(append : bool = false, charset : Charset = Charset.utf8) : Writer throws IOException</code><a class="anchor" href="#FilePath.writer">#</a>
 <p>A Writer to the file, made where it is not there: emptied first, or with <code>append</code> written after what it holds. An IOException where it cannot be opened.</p>
 </div>
-<div class="entry member" id="Path.mkdir"><code class="sig">fun mkdir(parents : bool = true) throws IOException</code><a class="anchor" href="#Path.mkdir">#</a>
+<div class="entry member" id="FilePath.mkdir"><code class="sig">fun mkdir(parents : bool = true) throws IOException</code><a class="anchor" href="#FilePath.mkdir">#</a>
 <p>The directory, and any missing above it unless <code>parents</code> is false. One there already is no failure.</p>
 </div>
-<div class="entry member" id="Path.delete"><code class="sig">fun delete() throws IOException</code><a class="anchor" href="#Path.delete">#</a>
+<div class="entry member" id="FilePath.delete"><code class="sig">fun delete() throws IOException</code><a class="anchor" href="#FilePath.delete">#</a>
 <p>A file or an empty directory: an IOException if it is not there or cannot go.</p>
 </div>
-<div class="entry member" id="Path.deleteIfExists"><code class="sig">fun deleteIfExists() : bool throws IOException</code><a class="anchor" href="#Path.deleteIfExists">#</a>
+<div class="entry member" id="FilePath.deleteIfExists"><code class="sig">fun deleteIfExists() : bool throws IOException</code><a class="anchor" href="#FilePath.deleteIfExists">#</a>
 <p>The same, giving whether it was there to delete; an IOException only where it could not go.</p>
 </div>
-<div class="entry member" id="Path.deleteRecursively"><code class="sig">fun deleteRecursively() : bool</code><a class="anchor" href="#Path.deleteRecursively">#</a>
+<div class="entry member" id="FilePath.deleteRecursively"><code class="sig">fun deleteRecursively() : bool</code><a class="anchor" href="#FilePath.deleteRecursively">#</a>
 <p>Everything below it too; whether anything was deleted.</p>
 </div>
-<div class="entry member" id="Path.moveTo"><code class="sig">fun moveTo(target : Path | string, overwrite : bool = false) : Path throws IOException</code><a class="anchor" href="#Path.moveTo">#</a>
-<p>Each gives the Path it went to; an IOException if something is there and <code>overwrite</code> is false, or it cannot be done.</p>
+<div class="entry member" id="FilePath.moveTo"><code class="sig">fun moveTo(target : FilePath | string, overwrite : bool = false) : FilePath throws IOException</code><a class="anchor" href="#FilePath.moveTo">#</a>
+<p>Each gives the FilePath it went to; an IOException if something is there and <code>overwrite</code> is false, or it cannot be done.</p>
 </div>
-<div class="entry member" id="Path.copyTo"><code class="sig">fun copyTo(target : Path | string, overwrite : bool = false) : Path throws IOException</code><a class="anchor" href="#Path.copyTo">#</a>
-<p>A copy of the file at <code>target</code>, given as a Path. Only a file is copied: a directory is an IOException, as is a <code>target</code> already there while <code>overwrite</code> is false.</p>
+<div class="entry member" id="FilePath.copyTo"><code class="sig">fun copyTo(target : FilePath | string, overwrite : bool = false) : FilePath throws IOException</code><a class="anchor" href="#FilePath.copyTo">#</a>
+<p>A copy of the file at <code>target</code>, given as a FilePath. Only a file is copied: a directory is an IOException, as is a <code>target</code> already there while <code>overwrite</code> is false.</p>
 </div>
-<div class="entry member" id="Path.setWritable"><code class="sig">fun setWritable(writable : bool) throws IOException</code><a class="anchor" href="#Path.setWritable">#</a>
+<div class="entry member" id="FilePath.setWritable"><code class="sig">fun setWritable(writable : bool) throws IOException</code><a class="anchor" href="#FilePath.setWritable">#</a>
 <p>Lets it be written, or keeps it from being written (on Windows, its read-only flag; elsewhere, written by its owner, or by no one); an IOException where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.setLastModified"><code class="sig">fun setLastModified(time : Instant) throws IOException</code><a class="anchor" href="#Path.setLastModified">#</a>
+<div class="entry member" id="FilePath.setLastModified"><code class="sig">fun setLastModified(time : Instant) throws IOException</code><a class="anchor" href="#FilePath.setLastModified">#</a>
 <p>Sets when it was last written; an IOException where nothing is there.</p>
 </div>
-<div class="entry member" id="Path.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#Path.==">#</a>
-<p>Whether <code>other</code> is a Path with the same text. Paths that name one file in different words, as &quot;a&quot; and &quot;./a&quot;, are not ==; their canonical() Paths are, where the file is there.</p>
+<div class="entry member" id="FilePath.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#FilePath.==">#</a>
+<p>Whether <code>other</code> is a FilePath with the same text. Paths that name one file in different words, as &quot;a&quot; and &quot;./a&quot;, are not ==; their canonical() Paths are, where the file is there.</p>
 </div>
-<div class="entry member" id="Path.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#Path.hashCode">#</a>
+<div class="entry member" id="FilePath.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#FilePath.hashCode">#</a>
 <p>The hash code of its text, the same for two Paths that are ==.</p>
 </div>
-<div class="entry member" id="Path.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Path.toString">#</a>
+<div class="entry member" id="FilePath.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#FilePath.toString">#</a>
 <p>The path as it was made, its text.</p>
 </div>
-<div class="entry" id="DirEntry"><code class="sig">value DirEntry(  val path : Path,  val isDirectory : bool,  val isFile : bool,  val isSymbolicLink : bool,  val size : int,  val lastModified : Instant?)</code><a class="anchor" href="#DirEntry">#</a>
-<p>An entry of a directory, as Path.entries() gives it: its path, and what the system said of it while listing the directory. What it is is the entry's own: a symbolic link (on Windows a junction too) is neither a file nor a directory, whatever it leads to, so that a walk going by isDirectory does not go through one.</p>
+<div class="entry" id="DirEntry"><code class="sig">value DirEntry(  val path : FilePath,  val isDirectory : bool,  val isFile : bool,  val isSymbolicLink : bool,  val size : int,  val lastModified : Instant?)</code><a class="anchor" href="#DirEntry">#</a>
+<p>An entry of a directory, as FilePath.entries() gives it: its path, and what the system said of it while listing the directory. What it is is the entry's own: a symbolic link (on Windows a junction too) is neither a file nor a directory, whatever it leads to, so that a walk going by isDirectory does not go through one.</p>
 </div>
 <div class="entry member" id="DirEntry.name"><code class="sig">val name : string</code><a class="anchor" href="#DirEntry.name">#</a>
 <p>Its name: the last part of its path.</p>
@@ -2070,10 +2070,10 @@ page.save(&quot;hello.png&quot;)
 <div class="entry member" id="Fonts.fallback"><code class="sig">fun fallback(character : any, weight : Number = 400, italic : bool = false) : Typeface?</code><a class="anchor" href="#Fonts.fallback">#</a>
 <p>A typeface that has a character, for text in a font that lacks it; null if none has.</p>
 </div>
-<div class="entry member" id="Fonts.load"><code class="sig">fun load(path : Path | string | Bytes, index : int = 0) : Typeface throws IOException</code><a class="anchor" href="#Fonts.load">#</a>
+<div class="entry member" id="Fonts.load"><code class="sig">fun load(path : FilePath | string | Bytes, index : int = 0) : Typeface throws IOException</code><a class="anchor" href="#Fonts.load">#</a>
 <p>A font from a file that is not installed, or from the bytes of one. A collection (.ttc) holds several: <code>count</code> says how many, <code>index</code> picks one. An IOException where the file cannot be read or is no font.</p>
 </div>
-<div class="entry member" id="Fonts.count"><code class="sig">fun count(path : Path | string) : int</code><a class="anchor" href="#Fonts.count">#</a>
+<div class="entry member" id="Fonts.count"><code class="sig">fun count(path : FilePath | string) : int</code><a class="anchor" href="#Fonts.count">#</a>
 <p>How many fonts the file at <code>path</code> holds: more than 1 for a collection (.ttc), 0 if it cannot be read or is not a font file.</p>
 </div>
 <h3>Fonts</h3>
@@ -2821,7 +2821,7 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
 image[10, 10] = Color.red                     one pixel; get, set and getOrNull too
 image.editPixels { pixels -&gt; pixels[3, 4] = Color.blue }    many at once, a Grid&lt;Color&gt;
-image.save(Path(&quot;out.png&quot;))
+image.save(FilePath(&quot;out.png&quot;))
 </pre>
 <p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Topaz keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed. Threads may draw on one image together: each shape, text or picture is drawn whole before another thread draws, and the copy on the card misses none of them. In a parallel section a piece draws on an image it made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).</p>
 </div>
@@ -2834,7 +2834,7 @@ image.save(Path(&quot;out.png&quot;))
 <div class="entry member" id="Image.of"><code class="sig">fun of(width : int, height : int, pixels : Bytes) : Image</code><a class="anchor" href="#Image.of">#</a>
 <p>An image of pixels given as bytes, four to a pixel: red, green, blue, alpha, top row first.</p>
 </div>
-<div class="entry member" id="Image.load"><code class="sig">fun load(source : Path | string | Bytes) : Image throws IOException</code><a class="anchor" href="#Image.load">#</a>
+<div class="entry member" id="Image.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Image throws IOException</code><a class="anchor" href="#Image.load">#</a>
 <p>Reads a PNG file, or the bytes of one.</p>
 </div>
 <div class="entry member" id="Image.size"><code class="sig">val size : Size</code><a class="anchor" href="#Image.size">#</a>
@@ -2876,7 +2876,7 @@ image.save(Path(&quot;out.png&quot;))
 <div class="entry member" id="Image.inkBox"><code class="sig">fun inkBox(background : Color = Color.clear) : Rect?</code><a class="anchor" href="#Image.inkBox">#</a>
 <p>The smallest rectangle outside which every pixel is <code>background</code>; null if all of them are.</p>
 </div>
-<div class="entry member" id="Image.save"><code class="sig">fun save(path : Path | string) throws IOException</code><a class="anchor" href="#Image.save">#</a>
+<div class="entry member" id="Image.save"><code class="sig">fun save(path : FilePath | string) throws IOException</code><a class="anchor" href="#Image.save">#</a>
 <p>Writes it as a PNG file, or gives the bytes of one. Nothing is lost: loading it gives the same pixels.</p>
 </div>
 <div class="entry member" id="Image.toPng"><code class="sig">fun toPng() : Bytes</code><a class="anchor" href="#Image.toPng">#</a>
@@ -3040,7 +3040,7 @@ image.save(Path(&quot;out.png&quot;))
 </div>
 <h3>Processes</h3>
 <div class="entry" id="Stream"><code class="sig">enum Stream</code><a class="anchor" href="#Stream">#</a>
-<p>Where a stream of a program started from this one goes: pipe (this program reads or writes it, the default), inherit (the same place as this program's own), discard (nowhere), and for errors toOutput (into the output). A Path in their place reads or writes that file.</p>
+<p>Where a stream of a program started from this one goes: pipe (this program reads or writes it, the default), inherit (the same place as this program's own), discard (nowhere), and for errors toOutput (into the output). A FilePath in their place reads or writes that file.</p>
 </div>
 <div class="entry" id="Process"><code class="sig">class Process</code><a class="anchor" href="#Process">#</a>
 <p>A program started from this one.</p>
@@ -3053,7 +3053,7 @@ if (result.exitCode == 0) { print(result.output) }
 </pre>
 <p>The command is the program and its arguments, as separate words or one list. <code>environment</code> holds variables added to this program's own (null takes one out). input is what the program reads, a Writer; output and error what it writes, Readers; each is there when it is a pipe.</p>
 </div>
-<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (Path | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8, timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException</code><a class="anchor" href="#Process.run">#</a>
+<div class="entry member" id="Process.run"><code class="sig">fun run(vararg command : any, directory : (FilePath | string)? = null, environment : Map&lt;string, string?&gt;? = null, input : Stream | FilePath = Stream.discard, error : Stream | FilePath = Stream.pipe, charset : Charset = Charset.utf8, timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException</code><a class="anchor" href="#Process.run">#</a>
 <p>Runs a program to its end and gives what it wrote, as text: Process(...)'s arguments, its output and errors read whatever they are said to be, and its input nothing unless said. With a <code>timeout</code>, a program that runs longer is killed, and run throws a TimeoutException (8.8h).</p>
 </div>
 <div class="entry member" id="Process.currentCommand"><code class="sig">fun currentCommand() : open List&lt;string&gt;</code><a class="anchor" href="#Process.currentCommand">#</a>
@@ -4378,10 +4378,10 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <h3>The sandbox</h3>
 <p>A world of files of its own, kept in memory, which the code in it reaches in place of the system's, so that nothing outside it is touched; and faults, which make the rare failures happen on purpose (the M6.6.2 plan, in docs/plans-and-gaps6.7.html):</p>
 <pre>Sandbox.run {
-  Path(&quot;/data&quot;).mkdir()
-  Path(&quot;/data/a.txt&quot;).writeText(&quot;1&quot;)
+  FilePath(&quot;/data&quot;).mkdir()
+  FilePath(&quot;/data/a.txt&quot;).writeText(&quot;1&quot;)
   faults.add(Fault.list(&quot;/data&quot;, after = 0))
-  Path(&quot;/data&quot;).list()            // an IOException: the device is not ready
+  FilePath(&quot;/data&quot;).list()            // an IOException: the device is not ready
 }
 </pre>
 <p>What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in it too. Its clock moves only when the program waits, a sleep or a timer's delay taking no real time, and its randomness starts from a fixed seed, so that a test runs the same every time. A program started in it is one the sandbox was given (processes.add), run on a thread of its own; a connection is to one of its hosts (network.host), and a ServerSocket listens on a port of its own (network.connect). Its installed fonts are the system's, which nothing can change, or those of a folder it was given (fontsFrom), so that text measures the same on every machine; it has a clipboard of its own. A wait for another thread with a time limit still takes real time.</p>
@@ -4409,7 +4409,7 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <div class="entry member" id="Sandbox.advance"><code class="sig">fun advance(time : Duration)</code><a class="anchor" href="#Sandbox.advance">#</a>
 <p>Its clock moved on by <code>time</code>, as if that much had passed: the timers due by then run when the event loop next looks.</p>
 </div>
-<div class="entry member" id="Sandbox.run"><code class="sig">inline fun &lt;T&gt; run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, seed : int = 1, fontsFrom : Path? = null, block : Sandbox.() -&gt; T) : T</code><a class="anchor" href="#Sandbox.run">#</a>
+<div class="entry member" id="Sandbox.run"><code class="sig">inline fun &lt;T&gt; run(paths : PathStyle = PathStyle.linux, copyFrom : FilePath? = null, diskSize : int? = null, seed : int = 1, fontsFrom : FilePath? = null, block : Sandbox.() -&gt; T) : T</code><a class="anchor" href="#Sandbox.run">#</a>
 <p>Runs <code>block</code> in a new sandbox, and gives what it gives; the block reaches nothing outside it. With <code>copyFrom</code>, the sandbox starts with a copy of that directory of the real system, at its root under the directory's name (a dry run: files.changes() says what the block did). <code>diskSize</code> is the most its files may hold together, in bytes; past it a write fails as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException. Its randomness starts from <code>seed</code>. With <code>fontsFrom</code>, a directory of the real system, its installed fonts are the font files there (.ttf, .otf, .ttc) and no others.</p>
 </div>
 <div class="entry member" id="Sandbox.current"><code class="sig">val current : Sandbox? get()</code><a class="anchor" href="#Sandbox.current">#</a>
@@ -4424,31 +4424,31 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <div class="entry" id="Fault"><code class="sig">data Fault(val operation : string, val path : string, val after : int, val error : string)</code><a class="anchor" href="#Fault">#</a>
 <p>A failure a sandbox makes happen: whenever <code>operation</code> is done to <code>path</code> (&quot;*&quot; for any), with <code>error</code> as what the system would say. A read, a write and a list go <code>after</code> bytes or names first and fail then; the others fail at once.</p>
 </div>
-<div class="entry member" id="Fault.list"><code class="sig">fun list(path : Path | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.list">#</a>
+<div class="entry member" id="Fault.list"><code class="sig">fun list(path : FilePath | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.list">#</a>
 <p>Listing the directory fails after <code>after</code> names.</p>
 </div>
-<div class="entry member" id="Fault.read"><code class="sig">fun read(path : Path | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.read">#</a>
+<div class="entry member" id="Fault.read"><code class="sig">fun read(path : FilePath | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.read">#</a>
 <p>Reading the file fails after <code>after</code> bytes: a whole read at once, a stream's when it gets there.</p>
 </div>
-<div class="entry member" id="Fault.write"><code class="sig">fun write(path : Path | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.write">#</a>
+<div class="entry member" id="Fault.write"><code class="sig">fun write(path : FilePath | string, after : int = 0, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.write">#</a>
 <p>Writing the file fails after <code>after</code> bytes, those written.</p>
 </div>
-<div class="entry member" id="Fault.open"><code class="sig">fun open(path : Path | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.open">#</a>
+<div class="entry member" id="Fault.open"><code class="sig">fun open(path : FilePath | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.open">#</a>
 <p>Opening the file, to read or to write, fails.</p>
 </div>
-<div class="entry member" id="Fault.delete"><code class="sig">fun delete(path : Path | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.delete">#</a>
+<div class="entry member" id="Fault.delete"><code class="sig">fun delete(path : FilePath | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.delete">#</a>
 <p>Deleting it fails.</p>
 </div>
-<div class="entry member" id="Fault.move"><code class="sig">fun move(path : Path | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.move">#</a>
+<div class="entry member" id="Fault.move"><code class="sig">fun move(path : FilePath | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.move">#</a>
 <p>Moving it fails.</p>
 </div>
-<div class="entry member" id="Fault.copy"><code class="sig">fun copy(path : Path | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.copy">#</a>
+<div class="entry member" id="Fault.copy"><code class="sig">fun copy(path : FilePath | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.copy">#</a>
 <p>Copying it fails.</p>
 </div>
-<div class="entry member" id="Fault.mkdir"><code class="sig">fun mkdir(path : Path | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.mkdir">#</a>
+<div class="entry member" id="Fault.mkdir"><code class="sig">fun mkdir(path : FilePath | string, error : string = &quot;access is denied&quot;) : Fault</code><a class="anchor" href="#Fault.mkdir">#</a>
 <p>Making the directory fails.</p>
 </div>
-<div class="entry member" id="Fault.any"><code class="sig">fun any(path : Path | string, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.any">#</a>
+<div class="entry member" id="Fault.any"><code class="sig">fun any(path : FilePath | string, error : string = &quot;the device is not ready&quot;) : Fault</code><a class="anchor" href="#Fault.any">#</a>
 <p>Everything done to it fails.</p>
 </div>
 <div class="entry member" id="Fault.connect"><code class="sig">fun connect(host : string, error : string = &quot;the connection timed out&quot;) : Fault</code><a class="anchor" href="#Fault.connect">#</a>
@@ -4523,7 +4523,7 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 <div class="entry" id="ChangeKind"><code class="sig">enum ChangeKind</code><a class="anchor" href="#ChangeKind">#</a>
 <p>What became of a file or directory in a sandbox.</p>
 </div>
-<div class="entry" id="FileChange"><code class="sig">data FileChange(val kind : ChangeKind, val path : Path)</code><a class="anchor" href="#FileChange">#</a>
+<div class="entry" id="FileChange"><code class="sig">data FileChange(val kind : ChangeKind, val path : FilePath)</code><a class="anchor" href="#FileChange">#</a>
 <p>A file or directory made, changed or deleted in a sandbox.</p>
 </div>
 </section>
@@ -5358,7 +5358,7 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <p>A function written @Test is a test: <code>jade test file.jade</code> runs it, and it passes unless it throws. Around each test run the functions written @BeforeTest and @AfterTest, and around all of a file's tests those written @BeforeAll and @AfterAll. A test may be a method of a class, which is made anew for each of its tests, with no arguments; its own @BeforeTest and @AfterTest methods run on that object, and its static @BeforeAll and @AfterAll methods once.</p>
 <pre>@Test fun adds() { assertEquals(4, 2 + 2) }
 @Test @Timeout(500.milliseconds) fun quick() { ... }
-@Test fun writes(@TempDir dir : Path) { Path(dir, &quot;a.txt&quot;).writeText(&quot;hi&quot;) }
+@Test fun writes(@TempDir dir : FilePath) { FilePath(dir, &quot;a.txt&quot;).writeText(&quot;hi&quot;) }
 </pre>
 <p>Each test runs in a sandbox of its own, made empty for it, with what runs around it and the object made for it: nothing it does reaches the system's files, programs or network, and Sandbox.current is its sandbox, for adding faults, programs and hosts. @BeforeAll and @AfterAll run in a sandbox of the file's, and the file's own code on the real system, as a program's does. @RealHost runs a test, or a class's tests, on the real system instead.</p>
 <pre>@Test @RealHost fun realNetwork() { ... }
@@ -5383,7 +5383,7 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 <p>The longest the test may run, written as a constant (<code>2.seconds</code>, G52): once that is past it fails, stopped where it is, even in a wait.</p>
 </div>
 <div class="entry" id="TempDir"><code class="sig">annotation TempDir</code><a class="anchor" href="#TempDir">#</a>
-<p>A test's parameter that is given a Path naming a new, empty directory of its own, deleted with what it holds once the test is over.</p>
+<p>A test's parameter that is given a FilePath naming a new, empty directory of its own, deleted with what it holds once the test is over.</p>
 </div>
 <div class="entry" id="RealHost"><code class="sig">annotation RealHost</code><a class="anchor" href="#RealHost">#</a>
 <p>Runs a test, or each test of a class with what runs around them, on the real system rather than in a sandbox: for what only the real system shows, such as a real network or programs.</p>

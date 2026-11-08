@@ -361,7 +361,7 @@ enum class Op : uint16_t {
     // `kind` 0 +=, 1 -=, 2 = max, 3 = min, giving the new value, or 4 compareAndSet, which takes
     // what is expected before the new value and gives whether it set it.
     AtomicField,        // u16 name, u8 kind               object [expected] value -> result
-    // A parameter declared as a union holding one enum (`output : Stream | Path`): a bare name
+    // A parameter declared as a union holding one enum (`output : Stream | FilePath`): a bare name
     // that arrived for it becomes that enum's entry; anything else is left as it is.
     SettleEnum,         //                                 value class -> value
     // `grid[x, y]` (D133): a class's op [] or op []= with `count` indexes.

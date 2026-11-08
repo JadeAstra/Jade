@@ -988,7 +988,7 @@ private:
             made.push_back(dir);
             const Value text = vm_.str(dir.string());
             TempRoot keepText(vm_, text);
-            const Value pathClass = vm_.globalAt(session_.globalOf(path_, "Path"));
+            const Value pathClass = vm_.globalAt(session_.globalOf(path_, "FilePath"));
             try {
                 args.push_back(vm_.call(pathClass, 1, &text));
             } catch (JadeThrow& thrown) {

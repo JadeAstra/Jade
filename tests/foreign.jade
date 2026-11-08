@@ -3,7 +3,7 @@
 // the system's last error, other threads running while a call waits, and a sandbox refusing it
 // all. On Windows the process list comes from NtQuerySystemInformation, as JadeMem reads it.
 
-val windows = Path.separator == "\\"
+val windows = FilePath.separator == "\\"
 val lib = Library(windows ? "kernel32" : "libc.so.6")
 print(lib.name.size > 0, "$lib".startsWith("Library("))   // expect: true true
 

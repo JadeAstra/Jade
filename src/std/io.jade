@@ -155,7 +155,7 @@ class Writer : AutoCloseable {
 
 // Where a stream of a program started from this one goes: pipe (this program reads or writes
 // it, the default), inherit (the same place as this program's own), discard (nowhere), and for
-// errors toOutput (into the output). A Path in their place reads or writes that file.
+// errors toOutput (into the output). A FilePath in their place reads or writes that file.
 enum Stream { pipe, inherit, discard, toOutput }
 
 // A program started from this one.
@@ -177,8 +177,8 @@ class Process {
   private val fromProgram : Reader?
   private val fromErrors : Reader?
 
-  fun init(vararg command : any, directory : (Path | string)? = null, environment : Map<string, string?>? = null,
-           input : Stream | Path = Stream.pipe, output : Stream | Path = Stream.pipe, error : Stream | Path = Stream.pipe,
+  fun init(vararg command : any, directory : (FilePath | string)? = null, environment : Map<string, string?>? = null,
+           input : Stream | FilePath = Stream.pipe, output : Stream | FilePath = Stream.pipe, error : Stream | FilePath = Stream.pipe,
            charset : Charset = Charset.utf8) throws IOException {
     val words = __processWords(command)
     val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
@@ -194,8 +194,8 @@ class Process {
     // its output and errors read whatever they are said to be, and its input nothing unless
     // said. With a `timeout`, a program that runs longer is killed, and run throws a
     // TimeoutException (8.8h).
-    fun run(vararg command : any, directory : (Path | string)? = null, environment : Map<string, string?>? = null,
-            input : Stream | Path = Stream.discard, error : Stream | Path = Stream.pipe, charset : Charset = Charset.utf8,
+    fun run(vararg command : any, directory : (FilePath | string)? = null, environment : Map<string, string?>? = null,
+            input : Stream | FilePath = Stream.discard, error : Stream | FilePath = Stream.pipe, charset : Charset = Charset.utf8,
             timeout : Duration? = null) : ProcessResult throws IOException | TimeoutException {
       val words = __processWords(command)
       val handles : List<any?> = __spawn(words, directory == null ? null : "$directory", __redirect(input, "input", "<"),
@@ -271,8 +271,8 @@ fun __processWords(command : List<any>) : List<string> {
 }
 
 // What io.cpp is told for a stream: "pipe", "inherit", "discard", "merge", or a file.
-fun __redirect(target : Stream | Path, which : string, toFile : string) : string {
-  if (target is Path) { return toFile + target.text }
+fun __redirect(target : Stream | FilePath, which : string, toFile : string) : string {
+  if (target is FilePath) { return toFile + target.text }
   return when (target as Stream) {
     Stream.pipe -> "pipe"
     Stream.inherit -> "inherit"

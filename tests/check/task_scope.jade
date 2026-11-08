@@ -3,7 +3,7 @@
 
 // Thrown by a task, named by the function the scope is in.
 suspend fun reads() throws IOException {
-  taskScope { task { Path("a.txt").readText() } }
+  taskScope { task { FilePath("a.txt").readText() } }
 }
 
 // Thrown by a thread, not named.
@@ -31,7 +31,7 @@ suspend fun notThere() throws IOException {                       // check: 'not
 
 // A task of a task of the scope is the scope's too.
 suspend fun nested() throws IOException {
-  taskScope { task { task { Path("b.txt").readText() } } }
+  taskScope { task { task { FilePath("b.txt").readText() } } }
 }
 
 // A scope given to a function takes only lambdas that throw nothing checked.

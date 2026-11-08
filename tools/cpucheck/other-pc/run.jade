@@ -8,7 +8,7 @@
 // On a processor with two kinds of core, give the fast kind's: FFFF on an i9-14900KF.
 // The programs are kept to those processors with Windows' own "start /affinity".
 
-val here = Path(Process.currentCommand()[1]).canonical().parent ?: Path(".")
+val here = FilePath(Process.currentCommand()[1]).canonical().parent ?: FilePath(".")
 val jade = Process.currentCommand()[0]
 val burst = "${here.resolve("burst.exe")}"
 val test = "${here.resolve("test.jade")}"

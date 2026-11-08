@@ -133,7 +133,7 @@ class Surface : Drawable, ToImage {
     __topaz.surfaceUpload(handle, image.pixels)
   }
 
-  fun save(path : Path | string) throws IOException {
+  fun save(path : FilePath | string) throws IOException {
     toImage().save(path)
   }
 

@@ -22,7 +22,7 @@ if (Program.arguments.contains("slow")) {
 }
 
 // ---- Files a piece at a time ----
-val file = Path("io-streams-test.txt")
+val file = FilePath("io-streams-test.txt")
 file.writer().use { out ->
   out.println("one")
   out.write("two\n")
@@ -41,24 +41,24 @@ file.reader().use { it.forEachLine { line -> seen.add(line.size) } }
 print(seen, file.reader().useLines { it.count() }, file.reader().use { it.lineSequence().first() })   // expect: [3, 3, 5, 5] 4 one
 file.delete()
 // The character set may change as the reading or writing goes on, as a protocol's may.
-val mixed = Path("io-streams-mixed.txt")
+val mixed = FilePath("io-streams-mixed.txt")
 mixed.writer().use { it.println("plain é"); it.charset = Charset.latin1; it.println("café") }
 mixed.reader().use { print(it.readLine(), it.charset, mixed.size()); it.charset = Charset.latin1; print(it.readLine()) }
 // expect: plain é utf8 14
 // expect: café
 mixed.delete()
-try { Path("no-such-directory/x.txt").reader() } catch (e : IOException) { print(e.message!!.startsWith("cannot read file 'no-such-directory/x.txt'")) }   // expect: true
-try { Path("no-such-file.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file 'no-such-file.txt'
+try { FilePath("no-such-directory/x.txt").reader() } catch (e : IOException) { print(e.message!!.startsWith("cannot read file 'no-such-directory/x.txt'")) }   // expect: true
+try { FilePath("no-such-file.txt").readText() } catch (e : IOException) { print(e.message) }   // expect: cannot read file 'no-such-file.txt'
 
 // ---- A program run to its end (D91) ----
 // The system's shell runs the commands: cmd on Windows, sh elsewhere (G56), each written for both.
-val onWindows = Path.separator == "\\"
+val onWindows = FilePath.separator == "\\"
 fun shell(windows : string, posix : string) : List<string> => onWindows ? ["cmd", "/c", windows] : ["sh", "-c", posix]
 val outAndErr = shell("echo out& echo err 1>&2", "echo out; echo err 1>&2")
 val run = Process.run(outAndErr)
 print(run.exitCode, run.output.trim(), run.error.trim())     // expect: 0 out err
 print(Process.run(shell("exit 3", "exit 3")).exitCode, Process.run(outAndErr, error = toOutput).output.trim().lines().map { it.trim() })   // expect: 3 ["out", "err"]
-val directory = Path("io streams directory")
+val directory = FilePath("io streams directory")
 directory.mkdir()
 print(Process.run(shell("cd", "pwd"), directory = directory).output.trim().endsWith("io streams directory"))   // expect: true
 // A program that runs past its timeout is stopped, and run throws (8.8h).
@@ -78,7 +78,7 @@ try { merged.error } catch (e : IllegalStateException) { print(e.message) }   //
 val quiet = Process(outAndErr, output = discard, error = discard)
 print(quiet.waitFor())                                       // expect: 0
 // To and from a file.
-val saved = Path("io-streams-out.txt")
+val saved = FilePath("io-streams-out.txt")
 Process(shell("echo kept", "echo kept"), output = saved).waitFor()
 val finder = Process(shell("findstr k", "grep k"), input = saved)
 print(saved.readText().trim(), finder.output.readText().trim(), finder.waitFor())   // expect: kept kept 0
@@ -175,7 +175,7 @@ task {
     val before = ticks
     val lines = [slow.output.readLine(), slow.output.readLine(), slow.output.readLine()]
     print(lines, "the loop went on:", ticks - before > 3, "exit code", slow.waitFor())
-    val note = Path("io-streams-task.txt")
+    val note = FilePath("io-streams-task.txt")
     note.writeText("written and read in a task")
     print(note.readText(), note.deleteIfExists())
   } catch (e : IOException) {

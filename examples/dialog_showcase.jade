@@ -185,7 +185,7 @@ class DialogShowcase(private val report : (string) -> unit) {
   private fun preview(src : ImageSource, v : string) : Image? {
     if (src != ImageSource.file) { return null }
     try {
-      return Image.load(Path(v))
+      return Image.load(FilePath(v))
     } catch (e : Exception) {
       return null
     }

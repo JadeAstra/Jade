@@ -2806,9 +2806,9 @@ struct Checker::Impl {
             {"Continuation", "a Continuation is suspendTask's resume in Jade, a plain function: resume(value), resume.fail(e) (D81)"},
             {"EmptyCoroutineContext", "a task needs no context in Jade: task { ... } (D81)"},
             // Files and input and output (D91, D107, D119, D127, D131, D136).
-            {"File", "a file or directory is a Path in Jade: Path(\"notes.txt\"), Path(directory, name); Path(p).readText(), writeText(text), appendText(text) and exists() in place of File.read, write, append and exists (D107, D136)"},
-            {"Files", "Files.x(p) is p.x() in Jade, on the Path: p.readText(), p.readBytes(), p.mkdir(), a.moveTo(b), p.list(), p.walk() (D131)"},
-            {"Paths", "Paths.get(s) is Path(s) in Jade (D131)"},
+            {"File", "a file or directory is a FilePath in Jade: FilePath(\"notes.txt\"), FilePath(directory, name); FilePath(p).readText(), writeText(text), appendText(text) and exists() in place of File.read, write, append and exists (D107, D136)"},
+            {"Files", "Files.x(p) is p.x() in Jade, on the FilePath: p.readText(), p.readBytes(), p.mkdir(), a.moveTo(b), p.list(), p.walk() (D131)"},
+            {"Paths", "Paths.get(s) is FilePath(s) in Jade (D131)"},
             {"InputStream", "something to read from is a Reader in Jade, bytes and text alike: path.reader(), process.output, socket.reader (D119)"},
             {"OutputStream", "something to write to is a Writer in Jade, bytes and text alike: path.writer(append = ...), process.input, socket.writer (D119)"},
             {"BufferedReader", "a Reader in Jade reads ahead already: path.reader() (D119)"},
@@ -2835,22 +2835,22 @@ struct Checker::Impl {
     // they were asked of.
     static std::string ioAdvice(const std::string& cls, const std::string& name) {
         static const std::unordered_map<std::string, std::string> path = {
-            {"parentFile", "parentFile is written parent, a Path: path.parent?.name, path.parent?.text (D128)"},
-            {"absolutePath", "absolutePath is written absolute, a Path: path.absolute.text for the text (D135)"},
-            {"absoluteFile", "absoluteFile is written absolute, a Path (D135)"},
-            {"canonicalPath", "canonicalPath is written canonical(), a Path: path.canonical().text for the text (D135)"},
-            {"canonicalFile", "canonicalFile is written canonical(), a Path (D135)"},
-            {"toAbsolutePath", "toAbsolutePath() is written absolute, a Path (D135)"},
+            {"parentFile", "parentFile is written parent, a FilePath: path.parent?.name, path.parent?.text (D128)"},
+            {"absolutePath", "absolutePath is written absolute, a FilePath: path.absolute.text for the text (D135)"},
+            {"absoluteFile", "absoluteFile is written absolute, a FilePath (D135)"},
+            {"canonicalPath", "canonicalPath is written canonical(), a FilePath: path.canonical().text for the text (D135)"},
+            {"canonicalFile", "canonicalFile is written canonical(), a FilePath (D135)"},
+            {"toAbsolutePath", "toAbsolutePath() is written absolute, a FilePath (D135)"},
             {"toRealPath", "toRealPath() is written canonical() (D135)"},
-            {"path", "the text of a Path is written text: path.text, or \"$path\" (D137)"},
-            {"getPath", "the text of a Path is written text: path.text, or \"$path\" (D137)"},
+            {"path", "the text of a FilePath is written text: path.text, or \"$path\" (D137)"},
+            {"getPath", "the text of a FilePath is written text: path.text, or \"$path\" (D137)"},
             {"fileName", "fileName is written name (D131)"},
             {"listFiles", "listFiles() is written list(), which gives Paths: dir.list() (D138)"},
             {"walkTopDown", "walkTopDown() is written walk(): every path below, as a sequence (D138)"},
             {"mkdirs", "mkdirs() is written mkdir(), which makes any missing directories above too (D126)"},
             {"renameTo", "renameTo is written moveTo(target), which throws an IOException where it cannot move (D129)"},
-            {"toPath", "there is one type for a path in Jade, Path: the call goes (D131)"},
-            {"toFile", "there is one type for a path in Jade, Path: the call goes (D131)"},
+            {"toPath", "there is one type for a path in Jade, FilePath: the call goes (D131)"},
+            {"toFile", "there is one type for a path in Jade, FilePath: the call goes (D131)"},
             {"inputStream", "a file is read with path.reader() (D119)"},
             {"bufferedReader", "a file is read with path.reader(), which reads ahead already (D119)"},
             {"outputStream", "a file is written with path.writer(append = ...) (D119)"},
@@ -2889,7 +2889,7 @@ struct Checker::Impl {
             {"setSoTimeout", "a read's time limit is readTimeout, a Duration: socket.readTimeout = 5.seconds (D120)"},
             {"getSoTimeout", "a read's time limit is readTimeout, a Duration (D120)"},
         };
-        const std::unordered_map<std::string, std::string>* table = cls == "Path" ? &path
+        const std::unordered_map<std::string, std::string>* table = cls == "FilePath" ? &path
                                                                  : cls == "Reader" || cls == "Writer" ? &stream
                                                                  : cls == "Process" ? &process
                                                                  : cls == "Socket" ? &socket : nullptr;
@@ -9444,7 +9444,7 @@ struct Checker::Impl {
     std::unordered_set<const Expr*> bareArguments;
 
     // Whether a parameter of this type may take a bare name as an entry of an enum: an enum, a
-    // union with one in it (`Stream | Path`), or a type not known until the program runs.
+    // union with one in it (`Stream | FilePath`), or a type not known until the program runs.
     bool settlesBareName(const Type& t) {
         const Type plain = withNull(t, false);
         if (plain.unknown() || plain.kind == Type::TypeParam) return true;
@@ -10137,7 +10137,7 @@ struct Checker::Impl {
                 const bool onFunction = n == "Test" || n == "BeforeTest" || n == "AfterTest" || n == "BeforeAll" || n == "AfterAll" || n == "Timeout";
                 if (onFunction && place != AnnotationPlace::Function) report(a, "@" + n + " goes on a function, for jade test (D153)");
                 if (n == "TempDir" && place != AnnotationPlace::Parameter)
-                    report(a, "@TempDir goes on a test's parameter, a Path given a directory of its own (D153)");
+                    report(a, "@TempDir goes on a test's parameter, a FilePath given a directory of its own (D153)");
                 if ((n == "RealHost" || n == "Sandboxed") && place != AnnotationPlace::Function && place != AnnotationPlace::Class)
                     report(a, "@" + n + " goes on a test or a class of tests, for jade test (M6.6.2)");
                 if (n == "Sandboxed")

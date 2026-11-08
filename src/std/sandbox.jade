@@ -4,10 +4,10 @@
 // happen on purpose (the M6.6.2 plan, in docs/plans-and-gaps6.7.html):
 //
 //   Sandbox.run {
-//     Path("/data").mkdir()
-//     Path("/data/a.txt").writeText("1")
+//     FilePath("/data").mkdir()
+//     FilePath("/data/a.txt").writeText("1")
 //     faults.add(Fault.list("/data", after = 0))
-//     Path("/data").list()            // an IOException: the device is not ready
+//     FilePath("/data").list()            // an IOException: the device is not ready
 //   }
 //
 // What the code in it starts, threads, tasks, workers and the cores of a parallel section, is in
@@ -93,8 +93,8 @@ class Sandbox {
     // as on a full disk. A copyFrom that cannot be copied is an IllegalArgumentException.
     // Its randomness starts from `seed`. With `fontsFrom`, a directory of the real system, its
     // installed fonts are the font files there (.ttf, .otf, .ttc) and no others.
-    inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : Path? = null, diskSize : int? = null, seed : int = 1,
-                       fontsFrom : Path? = null, block : Sandbox.() -> T) : T {
+    inline fun <T> run(paths : PathStyle = PathStyle.linux, copyFrom : FilePath? = null, diskSize : int? = null, seed : int = 1,
+                       fontsFrom : FilePath? = null, block : Sandbox.() -> T) : T {
       val box = Sandbox(__sandbox.make(paths == PathStyle.windows, diskSize ?: -1, copyFrom?.text, seed, fontsFrom?.text), paths)
       __Sandboxes.add(box)
       __sandbox.enter(box.handle)
@@ -125,23 +125,23 @@ class Faults(private val handle : any) {
 data Fault(val operation : string, val path : string, val after : int, val error : string) {
   static {
     // Listing the directory fails after `after` names.
-    fun list(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("list", "$path", after, error)
+    fun list(path : FilePath | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("list", "$path", after, error)
     // Reading the file fails after `after` bytes: a whole read at once, a stream's when it gets there.
-    fun read(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("read", "$path", after, error)
+    fun read(path : FilePath | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("read", "$path", after, error)
     // Writing the file fails after `after` bytes, those written.
-    fun write(path : Path | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("write", "$path", after, error)
+    fun write(path : FilePath | string, after : int = 0, error : string = "the device is not ready") : Fault => Fault("write", "$path", after, error)
     // Opening the file, to read or to write, fails.
-    fun open(path : Path | string, error : string = "access is denied") : Fault => Fault("open", "$path", 0, error)
+    fun open(path : FilePath | string, error : string = "access is denied") : Fault => Fault("open", "$path", 0, error)
     // Deleting it fails.
-    fun delete(path : Path | string, error : string = "access is denied") : Fault => Fault("delete", "$path", 0, error)
+    fun delete(path : FilePath | string, error : string = "access is denied") : Fault => Fault("delete", "$path", 0, error)
     // Moving it fails.
-    fun move(path : Path | string, error : string = "access is denied") : Fault => Fault("move", "$path", 0, error)
+    fun move(path : FilePath | string, error : string = "access is denied") : Fault => Fault("move", "$path", 0, error)
     // Copying it fails.
-    fun copy(path : Path | string, error : string = "access is denied") : Fault => Fault("copy", "$path", 0, error)
+    fun copy(path : FilePath | string, error : string = "access is denied") : Fault => Fault("copy", "$path", 0, error)
     // Making the directory fails.
-    fun mkdir(path : Path | string, error : string = "access is denied") : Fault => Fault("mkdir", "$path", 0, error)
+    fun mkdir(path : FilePath | string, error : string = "access is denied") : Fault => Fault("mkdir", "$path", 0, error)
     // Everything done to it fails.
-    fun any(path : Path | string, error : string = "the device is not ready") : Fault => Fault("any", "$path", 0, error)
+    fun any(path : FilePath | string, error : string = "the device is not ready") : Fault => Fault("any", "$path", 0, error)
     // Connecting to the host fails.
     fun connect(host : string, error : string = "the connection timed out") : Fault => Fault("connect", host, 0, error)
   }
@@ -305,14 +305,14 @@ fun __programStream(how : string, input : bool) : List<any?> throws IOException 
 class SandboxFiles(private val handle : any) {
   // What has been made, changed and deleted since the sandbox was made (with what was copied in),
   // by path.
-  fun changes() : List<FileChange> => __sandbox.changes(handle).map { FileChange(__changeKind(it[0]), Path(it[1])) }
+  fun changes() : List<FileChange> => __sandbox.changes(handle).map { FileChange(__changeKind(it[0]), FilePath(it[1])) }
 }
 
 // What became of a file or directory in a sandbox.
 enum ChangeKind { made, changed, deleted }
 
 // A file or directory made, changed or deleted in a sandbox.
-data FileChange(val kind : ChangeKind, val path : Path)
+data FileChange(val kind : ChangeKind, val path : FilePath)
 
 fun __changeKind(name : string) : ChangeKind => name == "made" ? ChangeKind.made : name == "changed" ? ChangeKind.changed : ChangeKind.deleted
 

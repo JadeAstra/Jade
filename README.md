@@ -247,7 +247,7 @@ c.size        c + b        c[1..<3]        c.toList()        c.fill(0)
 "héllo".toBytes()                    // the text as UTF-8: 6 bytes
 c.decodeToString()                   // and back
 for byte in c { ... }
-Path("photo.png").readBytes()        // files give and take bytes (see Files)
+FilePath("photo.png").readBytes()        // files give and take bytes (see Files)
 ```
 
 Two `Bytes` are `==` if they hold the same bytes. In a type it is written `Bytes`.
@@ -1917,7 +1917,7 @@ val onSave : () -> unit throws IOException = { file.writeText(text) }
 ```
 
 **`use { }`** runs its block on something to close, and closes it afterwards, however the block
-ends: `Path(p).reader().use { it.readText() }` (D113). Where the block fails and `close()` then
+ends: `FilePath(p).reader().use { it.readText() }` (D113). Where the block fails and `close()` then
 fails too, the block's error goes on, with `close()`'s set aside in its `suppressed`. It is for an `AutoCloseable`, which the
 standard library's streams and sockets are; a class of someone else's that has a `close()` is
 fitted to it with `extend`. Like the other functions taking a lambda, it is copied in where it
@@ -2015,7 +2015,7 @@ that say what Jade writes in their place: `@Synchronized` a `Lock`, `@JvmStatic`
 ```jade
 @Test fun adds() { assertEquals(4, 2 + 2) }
 @Test @Timeout(500.milliseconds) fun quick() { ... }      // fails, stopped, after half a second
-@Test fun writes(@TempDir dir : Path) { Path(dir, "a.txt").writeText("hi") }
+@Test fun writes(@TempDir dir : FilePath) { FilePath(dir, "a.txt").writeText("hi") }
 ```
 
 Around each test run the functions written `@BeforeTest` and `@AfterTest`, and around all of a
@@ -2034,9 +2034,9 @@ runs it on the real system instead; `@Sandboxed` says what its sandbox is to be 
 
 ```jade
 @Test fun faults() {
-  Path("/data.txt").writeText("12345")
+  FilePath("/data.txt").writeText("12345")
   Sandbox.current!!.faults.add(Fault.read("/data.txt"))
-  assertFailsWith<IOException> { Path("/data.txt").readText() }
+  assertFailsWith<IOException> { FilePath("/data.txt").readText() }
 }
 @Test @Sandboxed(paths = PathStyle.windows, fontsFrom = "fonts") fun windows() { ... }
 @Test @RealHost fun realNetwork() { ... }
@@ -2051,14 +2051,14 @@ test or a dry run:
 
 ```jade
 Sandbox.run {
-  Path("/data").mkdir()                                  // files kept in memory
-  Path("/data/a.txt").writeText("1")
+  FilePath("/data").mkdir()                                  // files kept in memory
+  FilePath("/data/a.txt").writeText("1")
   faults.add(Fault.list("/data", after = 0))             // the next list fails half way
   processes.add("git") { p -> p.output.write("ok\n") }   // Process("git", ...) runs this
   network.host("example.test", 80) { peer -> peer.send("HTTP/1.1 200 OK\r\n\r\n") }
   Thread.sleep(5.minutes)                                // at once: its clock moves instead
 }
-val changes = Sandbox.run(copyFrom = Path("project")) { build(); files.changes() }   // a dry run
+val changes = Sandbox.run(copyFrom = FilePath("project")) { build(); files.changes() }   // a dry run
 ```
 
 - **Files**: a tree in memory, with Linux's paths by default on every machine, or Windows'
@@ -2744,34 +2744,34 @@ that go through it: `forEach`, `map`, `filter`, `any`, `all`, `none`, `count`, `
 
 ### Files
 
-A **`Path`** stands for a file or directory by its path, Java's `File` and `java.nio.file.Path`
+A **`FilePath`** stands for a file or directory by its path, Java's `File` and `java.nio.file.Path`
 in one (D107). Making one touches nothing. What is in the path itself is a property; what asks
 the disk is a function, so a property never fails (D150).
 
 ```jade
-val notes = Path("notes.txt")
+val notes = FilePath("notes.txt")
 if (notes.exists()) { print(notes.readText()) }
 notes.writeText("first\n")
 notes.appendText("second\n")
 for line in notes.readLines() { ... }
 
-val out = Path("out")
+val out = FilePath("out")
 out.mkdir()                                               // and any directories above it
-Path(out, "data.bin").writeBytes(Bytes([1, 2, 3]))       // a file inside a directory
+FilePath(out, "data.bin").writeBytes(Bytes([1, 2, 3]))       // a file inside a directory
 for file in out.list() { print(file.name, file.size()) }
-for file in Path("src").walk() { if (file.extension == "jade") { print(file.text) } }
+for file in FilePath("src").walk() { if (file.extension == "jade") { print(file.text) } }
 ```
 
 | | |
 | --- | --- |
-| The path | `text` (also `toString()`, so `"$path"` works), `name`, `extension`, `nameWithoutExtension`, `parent` (a `Path`, null at the top), `absolute`, `resolve(child)` |
-| On disk | `exists()`, `isFile()`, `isDirectory()`, `isReadable()`, `isWritable()`, `isExecutable()`, `size()`, `lastModified()` (an `Instant`), `canonical()`, `list()` (the `Path`s in a directory), `walk()` (every path below, as a sequence) |
+| The path | `text` (also `toString()`, so `"$path"` works), `name`, `extension`, `nameWithoutExtension`, `parent` (a `FilePath`, null at the top), `absolute`, `resolve(child)` |
+| On disk | `exists()`, `isFile()`, `isDirectory()`, `isReadable()`, `isWritable()`, `isExecutable()`, `size()`, `lastModified()` (an `Instant`), `canonical()`, `list()` (the `FilePath`s in a directory), `walk()` (every path below, as a sequence) |
 | Text | `readText()`, `readLines()`, `forEachLine { }`, `useLines { lines -> }` (a sequence, read as it goes), `writeText(s)`, `appendText(s)` |
 | Bytes | `readBytes()`, `writeBytes(b)`, `appendBytes(b)` |
 | A piece at a time | `reader()`, `writer(append?)` |
 | Changing | `mkdir(parents = true)`, `delete()`, `deleteIfExists()`, `deleteRecursively()`, `moveTo(path, overwrite?)`, `copyTo(path, overwrite?)`, `setWritable(b)`, `setLastModified(ms)` |
-| New | `Path.createTempDirectory(prefix)`, `Path.createTempFile(prefix, suffix)` |
-| Volumes | `Path.roots()` (each drive on Windows, `/` elsewhere), `totalSpace`, `freeSpace`, `usableSpace` (bytes on the volume a path is on) |
+| New | `FilePath.createTempDirectory(prefix)`, `FilePath.createTempFile(prefix, suffix)` |
+| Volumes | `FilePath.roots()` (each drive on Windows, `/` elsewhere), `totalSpace`, `freeSpace`, `usableSpace` (bytes on the volume a path is on) |
 
 Each text call reads and writes UTF-8, or the character set given: `Charset.utf8`, `latin1`,
 `ascii`, `utf16le`, `utf16be`, `utf16`, `windows1252` or `latin9` (`path.readText(Charset.latin1)`,
@@ -2784,7 +2784,7 @@ Failing to read, write, make, move, copy, delete or list is an `IOException` say
 directory already there is no failure for `mkdir`. Two Paths are `==` if their text is the
 same.
 
-Java's and Kotlin's names say what to write: `File` is `Path`, `Files.x(p)` is `p.x()`,
+Java's and Kotlin's names say what to write: `File` is `FilePath`, `Files.x(p)` is `p.x()`,
 `parentFile` is `parent`, `absolutePath` is `absolute.text`, `listFiles()` is `list()`,
 `mkdirs()` is `mkdir()`, `renameTo` is `moveTo`, `Charsets.UTF_8` is `Charset.utf8`, each as a
 compile error.
@@ -3207,18 +3207,18 @@ Anything here that waits is an ordinary call, and the same one everywhere:
 - in a task on the main thread it sets the task aside, and the event loop goes on;
 - on the main thread outside a task it blocks the main thread.
 
-That holds for a `Path`'s `readText`, `writeText` and the like as well. (A socket's reads and
+That holds for a `FilePath`'s `readText`, `writeText` and the like as well. (A socket's reads and
 writes block their thread wherever they run.)
 
 **A `Reader`** reads, and **a `Writer`** writes, a piece at a time, bytes and text alike (D119).
 Each reads ahead or writes through a buffer of its own, so there is nothing to wrap it in.
 
 ```jade
-Path("log.txt").reader().use { input ->              // use closes it afterwards
+FilePath("log.txt").reader().use { input ->              // use closes it afterwards
   while (true) { val line = input.readLine(); if (line == null) { break }; handle(line) }
 }
-Path("out.txt").writer(append = true).use { it.println("one more line") }
-Path("big.csv").useLines { lines -> lines.filter { it.startsWith("2026") }.count() }
+FilePath("out.txt").writer(append = true).use { it.println("one more line") }
+FilePath("big.csv").useLines { lines -> lines.filter { it.startsWith("2026") }.count() }
 ```
 
 | | |
@@ -3245,7 +3245,7 @@ python.kill()
 `Process(command..., directory, environment, input, output, error, charset)` starts one: the
 command as separate words or one list; `environment` a map of variables added to this
 program's own (null takes one out); `input`, `output` and `error` each `pipe` (the default),
-`inherit` (the same place as this program's own), `discard`, or a `Path` to read from or
+`inherit` (the same place as this program's own), `discard`, or a `FilePath` to read from or
 write to, and for `error` also `toOutput`, into the output. Written bare, they need no
 `Stream.` in front. A started program has `input` (a `Writer`), `output` and `error`
 (`Reader`s), each there when it is a pipe; `waitFor()` (the exit code), `waitFor(timeout)`

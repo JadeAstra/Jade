@@ -4,12 +4,12 @@ import Topaz.*
 
 // The machine's own sans-serif, whatever it is, as the one font of a folder.
 val usual = Font("SansSerif", 14).typeface
-val folder = Path.createTempDirectory("sandboxfonts")
-Path(usual.path).copyTo(Path(folder, Path(usual.path).name))
-Path(folder, "notes.txt").writeText("not a font")             // passed over
+val folder = FilePath.createTempDirectory("sandboxfonts")
+FilePath(usual.path).copyTo(FilePath(folder, FilePath(usual.path).name))
+FilePath(folder, "notes.txt").writeText("not a font")             // passed over
 val outside = Font("SansSerif", 14).width("Hello, world")
 val systemFamilies = Fonts.families()
-val usualBytes = Path(usual.path).readBytes()
+val usualBytes = FilePath(usual.path).readBytes()
 
 // By default, the system's fonts.
 Sandbox.run {
@@ -29,15 +29,15 @@ Sandbox.run(fontsFrom = folder) {
 
 // Font files in its own files: loaded from there, never from the system's.
 Sandbox.run {
-  Path("/fonts").mkdir()
-  Path("/fonts/mine.ttf").writeBytes(usualBytes)
+  FilePath("/fonts").mkdir()
+  FilePath("/fonts/mine.ttf").writeBytes(usualBytes)
   print(Fonts.count("/fonts/mine.ttf"), Fonts.load("/fonts/mine.ttf").family == usual.family)   // expect: 1 true
   print(Fonts.count(usual.path), Fonts.count("/fonts/none.ttf"))         // expect: 0 0
   try { Fonts.load("/fonts/none.ttf") } catch (e : IOException) { print(e.message) }   // expect: cannot read /fonts/none.ttf
 }
 
 // A folder that is not there.
-try { Sandbox.run(fontsFrom = Path(folder, "missing")) { } } catch (e : IllegalArgumentException) { print(e.message!!.endsWith("it is no directory")) }   // expect: true
+try { Sandbox.run(fontsFrom = FilePath(folder, "missing")) { } } catch (e : IllegalArgumentException) { print(e.message!!.endsWith("it is no directory")) }   // expect: true
 folder.deleteRecursively()
 
 // The clipboard: each sandbox's own, empty at the start; the system's is left alone.

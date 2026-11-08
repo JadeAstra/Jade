@@ -12,19 +12,19 @@ var aroundAll = false
 }
 @Test fun writes() {
   assertTrue(Sandbox.current != null)
-  Path("/shared.txt").writeText("one test's")
-  assertEquals("/", Path.separator)
+  FilePath("/shared.txt").writeText("one test's")
+  assertEquals("/", FilePath.separator)
 }
 @Test fun fresh() {
-  assertFalse(Path("/shared.txt").exists(), "each test's sandbox is made empty")
+  assertFalse(FilePath("/shared.txt").exists(), "each test's sandbox is made empty")
 }
-@Test fun tempDir(@TempDir dir : Path) {
+@Test fun tempDir(@TempDir dir : FilePath) {
   assertTrue(dir.text.startsWith("/tmp/"), "a @TempDir is in the sandbox")
 }
 @Test fun faults() {
-  Path("/data.txt").writeText("12345")
+  FilePath("/data.txt").writeText("12345")
   Sandbox.current!!.faults.add(Fault.read("/data.txt"))
-  val e = assertFailsWith<IOException> { Path("/data.txt").readText() }
+  val e = assertFailsWith<IOException> { FilePath("/data.txt").readText() }
   assertEquals("cannot read file '/data.txt': the device is not ready", e.message)
 }
 @Test suspend fun sleeps() {
@@ -34,9 +34,9 @@ var aroundAll = false
 }
 @Test @RealHost fun real() { assertTrue(Sandbox.current == null) }
 @Test @Sandboxed(paths = PathStyle.windows) fun windows() {
-  assertEquals("\\", Path.separator)
-  Path("C:\\Data").mkdir()
-  assertTrue(Path("c:/data").isDirectory())
+  assertEquals("\\", FilePath.separator)
+  FilePath("C:\\Data").mkdir()
+  assertTrue(FilePath("c:/data").isDirectory())
 }
 
 @RealHost

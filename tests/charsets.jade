@@ -20,20 +20,20 @@ print(Bytes([255, 254, 104, 0, 233, 0]).decodeToString(Charset.utf16), Bytes([0,
 // utf16le and utf16be take no mark: one there is a character (U+FEFF) of the text.
 print(Bytes([255, 254, 104, 0]).decodeToString(Charset.utf16le).size)   // expect: 2
 
-val root = Path("jade-charsets-test")
+val root = FilePath("jade-charsets-test")
 root.deleteRecursively()
 root.mkdir()
-val little = Path(root, "little.txt")
+val little = FilePath(root, "little.txt")
 little.writeBytes(Bytes([255, 254, 97, 0, 10, 0, 233, 0, 10, 0]))
 print(little.readLines(Charset.utf16), little.readText(Charset.utf16).size)   // expect: ["a", "é"] 4
 little.reader(Charset.utf16).use { print(it.readLine(), it.readLine(), it.readLine()) }   // expect: a é null
 
 // Written: one mark at the start, big-endian after it, however many writes.
-val big = Path(root, "big.txt")
+val big = FilePath(root, "big.txt")
 big.writer(charset = Charset.utf16).use { it.print("a"); it.print("b") }
 big.appendText("c", Charset.utf16)
 print(big.readBytes(), big.readText(Charset.utf16))           // expect: Bytes[254, 255, 0, 97, 0, 98, 0, 99] abc
-val fresh = Path(root, "fresh.txt")
+val fresh = FilePath(root, "fresh.txt")
 fresh.appendText("d", Charset.utf16)
 print(fresh.readBytes())                                      // expect: Bytes[254, 255, 0, 100]
 

@@ -13,8 +13,8 @@ val label = "x" + clock()
 @Named(3) class E                           // check: Named(...) takes a string for 'name', not an int
 @Named("a") @Named("b") class F             // check: @Named is written twice here
 @Test class G                               // check: @Test goes on a function, for jade test (D153)
-@Test fun t(@TempDir dir : Path, @Named("p") n : int) { }
-@TempDir fun u() { }                        // check: @TempDir goes on a test's parameter, a Path given a directory of its own (D153)
+@Test fun t(@TempDir dir : FilePath, @Named("p") n : int) { }
+@TempDir fun u() { }                        // check: @TempDir goes on a test's parameter, a FilePath given a directory of its own (D153)
 @Test fun v(@RealHost n : int) { }         // check: @RealHost goes on a test or a class of tests, for jade test (M6.6.2)
 @Test @RealHost @Sandboxed fun w() { }      // check: @Sandboxed and @RealHost are both written here: a test runs in a sandbox or on the real system
 

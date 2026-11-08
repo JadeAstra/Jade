@@ -312,8 +312,8 @@ says to write `100.milliseconds`; a `Channel<T>()` without a capacity says to ch
 
 | Kotlin | Jade | |
 | --- | --- | --- |
-| `File(p)`, `Paths.get(p)`, `Path.of(p)` | `Path(p)` | one type for a path (D107) |
-| `File(dir, name)`, `dir.resolve(name)` | `Path(dir, name)`, `dir.resolve(name)` | |
+| `File(p)`, `Paths.get(p)`, `Path.of(p)` | `FilePath(p)` | one type for a path (D107) |
+| `File(dir, name)`, `dir.resolve(name)` | `FilePath(dir, name)`, `dir.resolve(name)` | |
 | `Files.readAllBytes(p)`, `Files.exists(p)` and the rest | `p.readBytes()`, `p.exists()` | `Files.x(p)` is `p.x()` (D131) |
 | `file.path`, `file.toString()` | `path.text`, `"$path"` | (D137) |
 | `file.parentFile`, `file.parent` as text | `path.parent`, `path.parent?.text` | null at the top (D128) |
@@ -321,11 +321,11 @@ says to write `100.milliseconds`; a `Channel<T>()` without a capacity says to ch
 | `file.canonicalFile`, `toRealPath()` | `path.canonical()` | an `IOException` if it is not there |
 | `file.isFile`, `isDirectory` | `path.isFile()`, `path.isDirectory()` | what asks the disk is a function (D150) |
 | `file.length()` | `path.size()` | |
-| `file.list()`, `listFiles()` | `dir.list()` | gives `Path`s; `.map { it.name }` for names (D138) |
+| `file.list()`, `listFiles()` | `dir.list()` | gives `FilePath`s; `.map { it.name }` for names (D138) |
 | `walkTopDown()`, `Files.walk(p)` | `dir.walk()` | a sequence of every path below |
 | `mkdirs()`, `Files.createDirectories(p)` | `mkdir()` | `mkdir(parents = false)` for just one (D126) |
 | `renameTo(b)`, `Files.move(a, b)` | `a.moveTo(b)` | throws where it cannot (D129) |
-| `Files.createTempDirectory(prefix)` | `Path.createTempDirectory(prefix)` | and `createTempFile(prefix, suffix)` |
+| `Files.createTempDirectory(prefix)` | `FilePath.createTempDirectory(prefix)` | and `createTempFile(prefix, suffix)` |
 | `file.inputStream()`, `bufferedReader()` | `path.reader()` | a `Reader`, bytes and text (D119) |
 | `file.outputStream()`, `bufferedWriter()`, `printWriter()` | `path.writer(append = ...)` | a `Writer` |
 | `InputStream`, `OutputStream` | `Reader`, `Writer` | |

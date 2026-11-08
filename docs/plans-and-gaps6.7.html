@@ -738,7 +738,7 @@ pre code { background: none; padding: 0; }
 
 <section class="decision" id="m66g-p8-jade-test">
 <h4><span class="code">8.6j</span>How jade test runs (part 8, group 6)</h4>
-<p>D153 names the annotations. As built: <code>@Test</code>, <code>@BeforeTest</code>, <code>@AfterTest</code>, <code>@BeforeAll</code>, <code>@AfterAll</code> and <code>@Timeout</code> go on functions, and <code>@TempDir</code>, JUnit 5&#39;s name, on a test&#39;s parameter, a Path naming a new directory deleted afterwards. <code>@Timeout</code> takes a Duration written as a constant, <code>@Timeout(2.seconds)</code> (since G52). Each file is compiled and run as a program, then its top-level tests, then each class with <code>@Test</code> methods, made anew for each test with no arguments; the file&#39;s <code>@BeforeTest</code> and <code>@AfterTest</code> run around every test, a class&#39;s inside them, and a class&#39;s static <code>@BeforeAll</code> and <code>@AfterAll</code> once. A test past its time limit is stopped at the next safe point with an AssertionError, or at once where it waits: a sleep, a join, a lock another thread holds, the event loop, a read (G45). A folder given means its files whose text has <code>@Test</code>. It prints each test, ok or FAIL with what was thrown and where (the standard library&#39;s own lines left out), then the counts, and exits with 1 if any failed. The assertions are kotlin.test&#39;s names.</p>
+<p>D153 names the annotations. As built: <code>@Test</code>, <code>@BeforeTest</code>, <code>@AfterTest</code>, <code>@BeforeAll</code>, <code>@AfterAll</code> and <code>@Timeout</code> go on functions, and <code>@TempDir</code>, JUnit 5&#39;s name, on a test&#39;s parameter, a FilePath naming a new directory deleted afterwards. <code>@Timeout</code> takes a Duration written as a constant, <code>@Timeout(2.seconds)</code> (since G52). Each file is compiled and run as a program, then its top-level tests, then each class with <code>@Test</code> methods, made anew for each test with no arguments; the file&#39;s <code>@BeforeTest</code> and <code>@AfterTest</code> run around every test, a class&#39;s inside them, and a class&#39;s static <code>@BeforeAll</code> and <code>@AfterAll</code> once. A test past its time limit is stopped at the next safe point with an AssertionError, or at once where it waits: a sleep, a join, a lock another thread holds, the event loop, a read (G45). A folder given means its files whose text has <code>@Test</code>. It prints each test, ok or FAIL with what was thrown and where (the standard library&#39;s own lines left out), then the counts, and exits with 1 if any failed. The assertions are kotlin.test&#39;s names.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date).</span></div>
 </section>
 
@@ -876,19 +876,19 @@ pre code { background: none; padding: 0; }
 
 <section class="decision" id="m66g-p8-stream-enum">
 <h4><span class="code">8.8i</span>Bare entries where a parameter is a union (part 8, group 8)</h4>
-<p>L70 writes a stream&#39;s target bare: <code>error = toOutput</code>. The parameter is <code>Stream | Path</code>, and bare entries reached only parameters declared as the enum itself. As built, a parameter declared as a union holding exactly one enum takes that enum&#39;s entries by their bare names too, in any program, not only the standard library&#39;s; the entry is settled as the program runs. The enum is named <code>Stream</code>, as L70 calls it. The checker does not check such a name: a misspelt one (<code>f(upp)</code> for a <code>Way | string</code>) fails only as the program runs, where for a parameter of the enum itself it is an error when the program is checked; and it lets a bare name through for a union of two enums, which then fails as the program runs too.</p>
+<p>L70 writes a stream&#39;s target bare: <code>error = toOutput</code>. The parameter is <code>Stream | FilePath</code>, and bare entries reached only parameters declared as the enum itself. As built, a parameter declared as a union holding exactly one enum takes that enum&#39;s entries by their bare names too, in any program, not only the standard library&#39;s; the entry is settled as the program runs. The enum is named <code>Stream</code>, as L70 calls it. The checker does not check such a name: a misspelt one (<code>f(upp)</code> for a <code>Way | string</code>) fails only as the program runs, where for a parameter of the enum itself it is an error when the program is checked; and it lets a bare name through for a union of two enums, which then fails as the program runs too.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed; a bug to fix:</strong> the checker settles and checks a bare name given to a union with one enum, as it does for a parameter of the enum itself, and reports one given to a union of two or more enums (done 2026-11-04, 9f1d860).</span></div>
 </section>
 
 <section class="decision" id="m66g-p8-native-declared">
 <h4><span class="code">8.8j</span>What the C++ that reads and writes throws (part 8, group 8)</h4>
-<p>Gap 8.5f: the checker knew which of the C++ functions under <code>Path</code>, the readers and writers, processes and sockets throw an IOException from a table of its own. As built, those functions are declared in the standard library as <code>external object __file</code> and <code>external object __io</code>, each with its types and <code>throws IOException</code>, as <code>Math</code> is declared, and the checker reads them as it reads any declaration; the table is gone. The standard library&#39;s own calls of them are now checked for their types as well. The C++ under fonts and images, <code>__text</code>, is not declared yet, so its calls are not checked, and <code>Fonts.load</code> throws an IOException it does not declare.</p>
+<p>Gap 8.5f: the checker knew which of the C++ functions under <code>FilePath</code>, the readers and writers, processes and sockets throw an IOException from a table of its own. As built, those functions are declared in the standard library as <code>external object __file</code> and <code>external object __io</code>, each with its types and <code>throws IOException</code>, as <code>Math</code> is declared, and the checker reads them as it reads any declaration; the table is gone. The standard library&#39;s own calls of them are now checked for their types as well. The C++ under fonts and images, <code>__text</code>, is not declared yet, so its calls are not checked, and <code>Fonts.load</code> throws an IOException it does not declare.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed, with a change:</strong> <code>Fonts.load</code> declares <code>throws IOException</code> (done 2026-11-04, b3a3ca2). Declaring <code>__text</code> as an external object comes later, in M6.7 or after.</span></div>
 </section>
 
 <section class="decision" id="m66g-p8-topaz-paths">
 <h4><span class="code">8.8k</span>Paths in Topaz and in images and fonts (part 8, group 8)</h4>
-<p>D107 replaces <code>File</code> everywhere. As built, a window&#39;s <code>onFilesDropped</code> and <code>onFilesDroppedAt</code> give a <code>List&lt;Path&gt;</code> where they gave a <code>List&lt;File&gt;</code>; <code>Image.load</code> (Picture until group 9), <code>Image.save</code>, <code>Fonts.load</code> and <code>count</code>, and a surface&#39;s <code>save</code>, take a <code>Path</code> or its text (and both <code>load</code>s bytes too), where they took anything. <code>Image.load</code> and the two <code>save</code>s declare <code>throws IOException</code>; <code>Fonts.load</code> throws one without declaring it (8.8j), and <code>Fonts.count</code> gives 0 for a file it cannot read. <code>@TempDir</code> gives a Path. Nothing else of Topaz&#39;s changed.</p>
+<p>D107 replaces <code>File</code> everywhere. As built, a window&#39;s <code>onFilesDropped</code> and <code>onFilesDroppedAt</code> give a <code>List&lt;FilePath&gt;</code> where they gave a <code>List&lt;File&gt;</code>; <code>Image.load</code> (Picture until group 9), <code>Image.save</code>, <code>Fonts.load</code> and <code>count</code>, and a surface&#39;s <code>save</code>, take a <code>FilePath</code> or its text (and both <code>load</code>s bytes too), where they took anything. <code>Image.load</code> and the two <code>save</code>s declare <code>throws IOException</code>; <code>Fonts.load</code> throws one without declaring it (8.8j), and <code>Fonts.count</code> gives 0 for a file it cannot read. <code>@TempDir</code> gives a FilePath. Nothing else of Topaz&#39;s changed.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-03: <strong>Confirmed as built</strong> (the text above is brought up to date); <code>Fonts.load</code> declares <code>throws IOException</code> with 8.8j (done 2026-11-04, b3a3ca2).</span></div>
 </section>
 
@@ -1246,7 +1246,7 @@ Decided for M6.7 (2026-11-04): <code>use { }</code> checked against each class's
 <tr><td>8.6g what a built program keeps</td><td>confirm</td><td>G42 left as it is</td></tr>
 <tr><td>8.6h what an annotation is</td><td>small</td><td>Allowed on static fields; Duration</td></tr>
 <tr><td>8.6i Kotlin's annotations</td><td>small</td><td>More advice</td></tr>
-<tr><td>8.6j how <code>jade test</code> runs</td><td>text</td><td><code>@Timeout</code> takes a Duration, <code>@TempDir</code> gives a Path</td></tr>
+<tr><td>8.6j how <code>jade test</code> runs</td><td>text</td><td><code>@Timeout</code> takes a Duration, <code>@TempDir</code> gives a FilePath</td></tr>
 <tr><td>8.6k <code>type(x)</code> and <code>className</code></td><td>small</td><td><code>type(x)</code> gone; more advice</td></tr>
 </tbody></table></div>
 <h4 id="m66c-group-7-tasks-parallel-sections-atomics-time">Group 7: tasks, parallel sections, atomics, time</h4>
@@ -1317,10 +1317,10 @@ the <strong>virtual host</strong> keeps everything in memory: a file system, a n
 <pre><code>// Each test is in a sandbox of its own: Sandbox.current is it.
 @Test fun reportsAHalfReadDirectory() {
   val box = Sandbox.current!!
-  Path("/data").mkdir()
-  for (name in ["a", "b", "c"]) { Path("/data/$name.txt").writeText(name) }
+  FilePath("/data").mkdir()
+  for (name in ["a", "b", "c"]) { FilePath("/data/$name.txt").writeText(name) }
   box.faults.add(Fault.list("/data", after = 2, error = "the device is not ready"))
-  val error = assertFails { Path("/data").list() }
+  val error = assertFails { FilePath("/data").list() }
   assertContains("${error.message}", "the device is not ready")
 }
 
@@ -1341,8 +1341,8 @@ the <strong>virtual host</strong> keeps everything in memory: a file system, a n
 @Test @RealHost fun junctionsOnWindows() { ... }   // on the real system, for what only it can show
 
 // In a program: a dry run of something that would change files.
-Sandbox.run(copyFrom = Path("project")) {
-  tidy(Path("/project"))
+Sandbox.run(copyFrom = FilePath("project")) {
+  tidy(FilePath("/project"))
   print(files.changes())                // what it would have done, and nothing done
 }</code></pre>
 <p>Java has Jimfs, Python pyfakefs and Go <code>fs.FS</code> and fake listeners for parts of this; putting the files, the network, processes, time and faults behind one interface, in the runtime itself, is what lets one test arrange all of them and reach the rare paths.</p>
@@ -1428,7 +1428,7 @@ What the sandbox did can be read afterwards for checks: <code>files.read(...)</c
 <h3 id="m662-as-built-2026-11-04">As built (2026-11-04)</h3>
 <p>One commit for each step: 3a4f32a (the host), 27e42b2 (files, <code>Sandbox.run</code>, faults), e2db836 (the clock and randomness), 14f01d3 (programs), 882aad8 (the network), 6d8f0a3 (fonts and the clipboard), and step 7's. Where it differs from the plan above:</p>
 <ul><li>
-<strong>Files are set up through <code>Path</code></strong>, inside the sandbox, as the program would: there is no <code>files.write</code>. <code>files.changes()</code> says what was made, changed and deleted.
+<strong>Files are set up through <code>FilePath</code></strong>, inside the sandbox, as the program would: there is no <code>files.write</code>. <code>files.changes()</code> says what was made, changed and deleted.
 </li><li>
 <strong>The clock is moved with <code>advance(time)</code></strong>, a method of the sandbox, not <code>clock.advance</code>.
 </li><li>

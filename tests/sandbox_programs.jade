@@ -35,5 +35,5 @@ Sandbox.run {
   try { Process.run("nothing") } catch (e : IOException) { print(e.message) }   // expect: cannot start 'nothing': no program of that name was added to the sandbox
 
   // Its output to a file of the sandbox's, and its errors with its output.
-  Process.run("greet", error = Stream.toOutput, input = Path("/in.txt").also { it.writeText("Bo") }).output.also { print(it.lines().size) }   // expect: 3
+  Process.run("greet", error = Stream.toOutput, input = FilePath("/in.txt").also { it.writeText("Bo") }).output.also { print(it.lines().size) }   // expect: 3
 }

@@ -33,8 +33,8 @@ print(plain.pixels.toBytes().size, plain.toPng().size < 4000, Image.load(plain.t
 
 // Through a file.
 made.save("png_test_out.png")
-print(Image.load("png_test_out.png") == made, Image.load(Path("png_test_out.png")) == made)   // expect: true true
-Path("png_test_out.png").delete()
+print(Image.load("png_test_out.png") == made, Image.load(FilePath("png_test_out.png")) == made)   // expect: true true
+FilePath("png_test_out.png").delete()
 
 // -- Images of every kind the format has, written by Windows' own PNG writer --
 // Each line is an image's file and the pixels Windows' own reader gives for it: grey,

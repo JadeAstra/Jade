@@ -1471,12 +1471,12 @@ JadeThrow pathError(VM& vm, const std::string& what, const std::string& path, co
     return vm.errorOf("IOException", "cannot " + what + " '" + path + "'" + (ec ? ": " + ec.message() : ""));
 }
 
-// What the Path class (src/std/file.jade) is built on. The name starts with two
+// What the FilePath class (src/std/file.jade) is built on. The name starts with two
 // underscores, which only the standard library's own source can use.
 void registerFiles(VM& vm) {
-    ObjClass* file = vm.alloc<ObjClass>(vm.intern("Path"));
+    ObjClass* file = vm.alloc<ObjClass>(vm.intern("FilePath"));
     auto def = [&](const char* name, int minArgs, int maxArgs, NativeFn fn) {
-        file->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("Path.") + name, minArgs, maxArgs, fn)));
+        file->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("FilePath.") + name, minArgs, maxArgs, fn)));
     };
 
     def("read", 1, 2, [](VM& vm, int argc, Value* args) -> Value { return readFile(vm, args[0], false, argc > 1 ? args[1] : Value::null()); });
@@ -1595,7 +1595,7 @@ void registerFiles(VM& vm) {
     });
     // What is in a directory, in order of name, as list gives the names: four values for each, its
     // name, what it is (0 a file, 1 a directory, 2 a link, 3 anything else), its size, and its
-    // time in nanoseconds since 1970 or null. Path.entries makes them DirEntry values.
+    // time in nanoseconds since 1970 or null. FilePath.entries makes them DirEntry values.
     def("entries", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::vector<Host::Entry> found;
         const std::string& path = vm.toStr(args[0], "file path");
@@ -1674,7 +1674,7 @@ void registerFiles(VM& vm) {
         if (isSeparator(base.back(), windows)) return vm.str(base + child);
         return vm.str(base + (windows ? '\\' : '/') + child);
     });
-    // The separator, as the program reads it, follows the host too (Path.separator in file.jade).
+    // The separator, as the program reads it, follows the host too (FilePath.separator in file.jade).
     def("separator", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.str(vm.currentHost().windowsPaths() ? "\\" : "/"); });
 
     vm.defineGlobal("__file", Value::object(file));

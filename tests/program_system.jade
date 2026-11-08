@@ -5,12 +5,12 @@
 // The environment: read like a map, null for a name that is not set. On Windows a name is the
 // same in any case, as the system has it.
 val env = Program.environment
-val path = env["PATH"] ?: env["Path"]
+val path = env["PATH"] ?: env["FilePath"]
 print(path != null and path.size > 0)   // expect: true
 print(env["JADE_NO_SUCH_VARIABLE_HERE"])   // expect: null
 print(env.containsKey("JADE_NO_SUCH_VARIABLE_HERE"))   // expect: false
 print(env.size == env.names.size and env.size == env.toMap().size and env.size > 0)   // expect: true
-val windows = Path.separator == "\\"
+val windows = FilePath.separator == "\\"
 if (windows) {
   print(env["systemroot"] == env["SYSTEMROOT"] and env["SystemRoot"] != null)
 } else {
@@ -21,13 +21,13 @@ if (windows) {
 print(Program.processId > 0, Program.hostName.size > 0)   // expect: true true
 
 // The tops of the file system, and the room on them.
-val roots = Path.roots()
+val roots = FilePath.roots()
 print(roots.size >= 1)   // expect: true
 val top = roots[0]
 print(top.totalSpace > 0, top.totalSpace >= top.freeSpace, top.freeSpace >= top.usableSpace)   // expect: true true true
 val nowhere = windows ? "Q:\\jade\\nowhere" : "/jade/nowhere/at/all"
 try {
-  print(Path(nowhere).totalSpace)
+  print(FilePath(nowhere).totalSpace)
 } catch (e : IOException) {
   print("on no volume")
 }   // expect: on no volume
@@ -54,13 +54,13 @@ try {
 Sandbox.run {
   print(Program.environment.size, Program.environment["PATH"], Program.processId, Program.hostName)   // expect: 0 null 1 sandbox
   try {
-    Path.roots()
+    FilePath.roots()
   } catch (e : UnsupportedOperationException) {
     print(e.message)
   }   // expect: a sandbox has no volumes to list
   // The space of a volume is an IOException there, as the properties say they throw.
   try {
-    print(Path("/").totalSpace)
+    print(FilePath("/").totalSpace)
   } catch (e : IOException) {
     print(e.message)
   }   // expect: a sandbox has no volumes to ask the space of

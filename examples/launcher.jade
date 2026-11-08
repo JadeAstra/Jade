@@ -228,7 +228,7 @@ val menuBar = MenuBar([
       Topaz.fileDialog.open("Open", textFilters) { path ->
         if (path != null) {
           try {
-            editorModel.setText(Path(path).readText())
+            editorModel.setText(FilePath(path).readText())
             statusText.text = "opened: $path"
           } catch (e : IOException) {
             statusText.text = "could not open $path: ${e.message}"
@@ -240,7 +240,7 @@ val menuBar = MenuBar([
       Topaz.fileDialog.save("Save As", "untitled.txt", textFilters) { path ->
         if (path != null) {
           try {
-            Path(path).writeText(editorModel.text)
+            FilePath(path).writeText(editorModel.text)
             statusText.text = "saved: $path"
           } catch (e : IOException) {
             statusText.text = "could not save $path: ${e.message}"
@@ -281,7 +281,7 @@ if (snapshotArg != null) {
   for (name in names) {
     t.active = all.indexOf(name)
     host.frame()
-    val file = Path(dir, "launcher-${name.lower()}.png")
+    val file = FilePath(dir, "launcher-${name.lower()}.png")
     host.snapshot().save(file)
     print("saved", file)
   }

@@ -30,7 +30,7 @@ fun daemon(task : suspend () -> any?) : Thread {
 }
 @Test @RealHost @Timeout(0.5.seconds) suspend fun reads() {
   // A program that writes nothing for half a minute: by Windows's ping, or elsewhere sleep (G56).
-  val quiet = Path.separator == "\\" ? Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul") : Process("sleep", "30")
+  val quiet = FilePath.separator == "\\" ? Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul") : Process("sleep", "30")
   quiet.output.readLine()
 }
 @Test fun after() { assertEquals(2, 1 + 1) }

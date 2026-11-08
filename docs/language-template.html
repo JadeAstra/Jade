@@ -266,7 +266,7 @@ task { print(later(21)) }    // 42</pre></dd>
 
 <dt><code>throws</code></dt>
 <dd>Written after a function's result type: the checked exceptions it may throw, which callers handle. The compiler works these out on its own inside a program; a library's public functions, and declarations with no body, say them.
-<pre>fun readConfig(path : string) : string throws IOException =&gt; Path(path).readText()</pre></dd>
+<pre>fun readConfig(path : string) : string throws IOException =&gt; FilePath(path).readText()</pre></dd>
 
 <dt><code>external</code></dt>
 <dd>Only in the standard library: a function, property or object written in C++, declared in Jade so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>

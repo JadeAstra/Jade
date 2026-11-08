@@ -4,24 +4,24 @@
 // ---- Paths ----
 
 // A file or directory on disk, by its path (D107): Java's File and java.nio.file.Path in one.
-// Making a Path touches nothing; what is in the path (name, parent, extension) is a property,
+// Making a FilePath touches nothing; what is in the path (name, parent, extension) is a property,
 // and what asks the disk (exists(), size(), list()) is a function (D150).
 //
-//   val notes = Path("notes.txt")
+//   val notes = FilePath("notes.txt")
 //   if (notes.exists()) { print(notes.readText()) }
-//   Path(directory, "out.bin").writeBytes(data)
-//   for file in Path("src").walk() { if (file.extension == "jade") { print(file.name) } }
+//   FilePath(directory, "out.bin").writeBytes(data)
+//   for file in FilePath("src").walk() { if (file.extension == "jade") { print(file.name) } }
 //
 // Text is UTF-8 unless a Charset says otherwise (D127).
-class Path {
+class FilePath {
   // The path as it was made (D137).
   val text : string
 
-  // Path(text), or Path(directory, name) for something inside a directory, the directory a
-  // Path or text.
-  fun init(path : Path | string, child : (Path | string)? = null) {
-    val base = path is Path ? path.text : path as string
-    this.text = child == null ? base : __file.join(base, child is Path ? child.text : child as string)
+  // FilePath(text), or FilePath(directory, name) for something inside a directory, the directory a
+  // FilePath or text.
+  fun init(path : FilePath | string, child : (FilePath | string)? = null) {
+    val base = path is FilePath ? path.text : path as string
+    this.text = child == null ? base : __file.join(base, child is FilePath ? child.text : child as string)
   }
 
   static {
@@ -30,19 +30,19 @@ class Path {
 
     // A new, empty directory or file in the system's temporary directory, its name starting with
     // `prefix` (D131).
-    fun createTempDirectory(prefix : string = "jade") : Path throws IOException => Path(__file.createTemp(prefix, "", true))
+    fun createTempDirectory(prefix : string = "jade") : FilePath throws IOException => FilePath(__file.createTemp(prefix, "", true))
     // A new, empty file in the system's temporary directory, named `prefix`, a number, then
     // `suffix`, as jade240932127838.tmp; no other program gets the same one. An IOException
     // where none can be made.
-    fun createTempFile(prefix : string = "jade", suffix : string = ".tmp") : Path throws IOException => Path(__file.createTemp(prefix, suffix, false))
+    fun createTempFile(prefix : string = "jade", suffix : string = ".tmp") : FilePath throws IOException => FilePath(__file.createTemp(prefix, suffix, false))
 
     // The tops of the file system: each drive on Windows (C:\, D:\), / elsewhere (M8).
-    fun roots() : List<Path> => __file.roots().map { Path(it) }
+    fun roots() : List<FilePath> => __file.roots().map { FilePath(it) }
   }
 
   // -- What the path says --
 
-  // The last name in the path: Path("a/b.txt").name is "b.txt".
+  // The last name in the path: FilePath("a/b.txt").name is "b.txt".
   val name : string
     get() => __file.name(text)
 
@@ -64,18 +64,18 @@ class Path {
     }
 
   // The directory it is in; null at the top (C:\, /) and for a bare name (D128).
-  val parent : Path?
+  val parent : FilePath?
     get() {
       val directory : string? = __file.parent(text)
-      return directory == null ? null : Path(directory)
+      return directory == null ? null : FilePath(directory)
     }
 
   // Made whole from the current directory; it need not exist (D135).
-  val absolute : Path
-    get() => Path(__file.absolute(text))
+  val absolute : FilePath
+    get() => FilePath(__file.absolute(text))
 
-  // Something inside this directory: Path("a").resolve("b.txt") is a/b.txt.
-  fun resolve(child : Path | string) : Path => Path(this, child)
+  // Something inside this directory: FilePath("a").resolve("b.txt") is a/b.txt.
+  fun resolve(child : FilePath | string) : FilePath => FilePath(this, child)
 
   // -- What is on disk --
 
@@ -106,28 +106,28 @@ class Path {
   }
 
   // With `.`, `..` and links worked out; an IOException if it is not there (D135).
-  fun canonical() : Path throws IOException => Path(__file.canonical(text))
+  fun canonical() : FilePath throws IOException => FilePath(__file.canonical(text))
 
   // What is directly in this directory, in order of name; an IOException if it is not a
   // directory (D138).
-  fun list() : open List<Path> throws IOException {
+  fun list() : open List<FilePath> throws IOException {
     val names : List<string> = __file.list(text)
     val directory = this
-    return names.map { Path(directory, it) }
+    return names.map { FilePath(directory, it) }
   }
 
   // What is directly in this directory, in order of name, each with what it is, its size and when
   // it was last written, as the system gives them while listing it: on Windows in the same call,
   // where list() and then each one's size() and lastModified() ask again for each (as Python's
   // os.scandir has it). An IOException if it is not a directory, as for list().
-  //   for e in Path("logs").entries() { if (e.isFile and e.size > 1_000_000) { print(e.name) } }
+  //   for e in FilePath("logs").entries() { if (e.isFile and e.size > 1_000_000) { print(e.name) } }
   fun entries() : open List<DirEntry> throws IOException {
     val found : List<any?> = __file.entries(text)
     val directory = this
     return List(found.size / 4) { i ->
       val kind = found[i * 4 + 1] as int
       val nanos = found[i * 4 + 3] as int?
-      DirEntry(Path(directory, found[i * 4] as string), kind == 1, kind == 0, kind == 2, found[i * 4 + 2] as int, nanos == null ? null : Instant(nanos))
+      DirEntry(FilePath(directory, found[i * 4] as string), kind == 1, kind == 0, kind == 2, found[i * 4 + 2] as int, nanos == null ? null : Instant(nanos))
     }
   }
 
@@ -137,7 +137,7 @@ class Path {
   // UncheckedIOException where the walk comes to it, the IOException its cause, as Java's
   // Files.walk throws (G55); with `onError`, that is given the directory and the IOException, and
   // the walk goes on past it.
-  fun walk(onError : ((Path, IOException) -> unit)? = null) : Sequence<Path> {
+  fun walk(onError : ((FilePath, IOException) -> unit)? = null) : Sequence<FilePath> {
     val top = this
     return sequence { __walkBelow(top, onError) }
   }
@@ -214,18 +214,18 @@ class Path {
   // Everything below it too; whether anything was deleted.
   fun deleteRecursively() : bool => __file.deleteRecursively(text)
 
-  // Each gives the Path it went to; an IOException if something is there and `overwrite` is
+  // Each gives the FilePath it went to; an IOException if something is there and `overwrite` is
   // false, or it cannot be done (D129).
-  fun moveTo(target : Path | string, overwrite : bool = false) : Path throws IOException {
-    val to = target is Path ? target : Path(target as string)
+  fun moveTo(target : FilePath | string, overwrite : bool = false) : FilePath throws IOException {
+    val to = target is FilePath ? target : FilePath(target as string)
     __file.move(text, to.text, overwrite)
     return to
   }
 
-  // A copy of the file at `target`, given as a Path. Only a file is copied: a directory is an
+  // A copy of the file at `target`, given as a FilePath. Only a file is copied: a directory is an
   // IOException, as is a `target` already there while `overwrite` is false.
-  fun copyTo(target : Path | string, overwrite : bool = false) : Path throws IOException {
-    val to = target is Path ? target : Path(target as string)
+  fun copyTo(target : FilePath | string, overwrite : bool = false) : FilePath throws IOException {
+    val to = target is FilePath ? target : FilePath(target as string)
     __file.copy(text, to.text, overwrite)
     return to
   }
@@ -236,22 +236,22 @@ class Path {
   // Sets when it was last written (G54); an IOException where nothing is there.
   fun setLastModified(time : Instant) throws IOException { __file.setLastModified(text, time.epochNanoseconds) }
 
-  // Whether `other` is a Path with the same text. Paths that name one file in different words,
+  // Whether `other` is a FilePath with the same text. Paths that name one file in different words,
   // as "a" and "./a", are not ==; their canonical() Paths are, where the file is there.
-  op ==(other : any?) : bool => other is Path and other.text == this.text
+  op ==(other : any?) : bool => other is FilePath and other.text == this.text
   // The hash code of its text, the same for two Paths that are ==.
   fun hashCode() : int => text.hashCode()
   // The path as it was made, its text.
   override fun toString() : string => text
 }
 
-// An entry of a directory, as Path.entries() gives it: its path, and what the system said of it
+// An entry of a directory, as FilePath.entries() gives it: its path, and what the system said of it
 // while listing the directory. What it is is the entry's own: a symbolic link (on Windows a
 // junction too) is neither a file nor a directory, whatever it leads to, so that a walk going by
 // isDirectory does not go through one.
 value DirEntry(
   // Where it is: the directory's path and its name.
-  val path : Path,
+  val path : FilePath,
   // Whether it is a directory.
   val isDirectory : bool,
   // Whether it is an ordinary file.
@@ -269,8 +269,8 @@ value DirEntry(
 
 // The paths below `directory`, for walk(): each, and below each directory what is in it; one
 // that cannot be read thrown, or given to `onError` and gone past.
-suspend fun SequenceScope<Path>.__walkBelow(directory : Path, onError : ((Path, IOException) -> unit)?) {
-  var inside : List<Path> = listOf<Path>()
+suspend fun SequenceScope<FilePath>.__walkBelow(directory : FilePath, onError : ((FilePath, IOException) -> unit)?) {
+  var inside : List<FilePath> = listOf<FilePath>()
   try {
     inside = directory.list()
   } catch (e : IOException) {
@@ -284,7 +284,7 @@ suspend fun SequenceScope<Path>.__walkBelow(directory : Path, onError : ((Path, 
   }
 }
 
-// What Path is built on (stdlib.cpp), declared with its types and what it throws.
+// What FilePath is built on (stdlib.cpp), declared with its types and what it throws.
 external object __file {
   fun separator() : string
   fun read(path : string, charset : Charset = Charset.utf8) : string throws IOException

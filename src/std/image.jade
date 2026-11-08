@@ -222,7 +222,7 @@ abstract class Canvas {
 //   image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
 //   image[10, 10] = Color.red                     one pixel; get, set and getOrNull too
 //   image.editPixels { pixels -> pixels[3, 4] = Color.blue }    many at once, a Grid<Color>
-//   image.save(Path("out.png"))
+//   image.save(FilePath("out.png"))
 //
 // A pixel outside the image is an IndexOutOfBoundsException (D134). Its canvas draws in memory,
 // on any thread, so a worker can draw a thumbnail; Topaz keeps a copy of it on the graphics card
@@ -267,8 +267,8 @@ class Image : Drawable {
       return made
     }
     // Reads a PNG file, or the bytes of one.
-    fun load(source : Path | string | Bytes) : Image throws IOException {
-      val data = source is Bytes ? source : (source is Path ? source : Path(source as string)).readBytes()
+    fun load(source : FilePath | string | Bytes) : Image throws IOException {
+      val data = source is Bytes ? source : (source is FilePath ? source : FilePath(source as string)).readBytes()
       val read : List<any> = __text.decodePng(data)
       val made = Image(read[0] as int, read[1] as int)
       __text.imageSetPixels(made.cells.cells, read[2])
@@ -348,8 +348,8 @@ class Image : Drawable {
 
   // Writes it as a PNG file, or gives the bytes of one. Nothing is lost: loading it gives the
   // same pixels.
-  fun save(path : Path | string) throws IOException {
-    (path is Path ? path : Path(path as string)).writeBytes(toPng())
+  fun save(path : FilePath | string) throws IOException {
+    (path is FilePath ? path : FilePath(path as string)).writeBytes(toPng())
   }
   // The bytes of a PNG file of it. An image with no pixels (0 wide or 0 high) is an
   // IllegalArgumentException, here and in save.
