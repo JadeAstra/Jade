@@ -1,0 +1,36 @@
+// Path.entries() in a test's sandbox, whose files are its own: what is there, in order of name,
+// with each one's size and time, and a listing fault as list() has it.
+
+@Test fun listsWhatIsThere() {
+  Path("/d").mkdir()
+  Path("/d/z.txt").writeText("abc")
+  Path("/d/m").mkdir()
+  Path("/d/a.txt").writeText("")
+  val found = Path("/d").entries()
+  assertEquals(["a.txt", "m", "z.txt"], found.map { it.name })
+  assertEquals([0, 0, 3], found.map { it.size })
+  assertEquals([true, false, true], found.map { it.isFile })
+  assertEquals([false, true, false], found.map { it.isDirectory })
+  assertTrue(found.none { it.isSymbolicLink }, "a sandbox has no links")
+  assertEquals(Path("/d/z.txt").lastModified(), found[2].lastModified)
+}
+
+@Test fun faultsAsList() {
+  Path("/d").mkdir()
+  Path("/d/one.txt").writeText("1")
+  Path("/d/two.txt").writeText("2")
+  Sandbox.current!!.faults.add(Fault.list("/d", after = 1))
+  val e = assertFailsWith<IOException> { Path("/d").entries() }
+  assertEquals("cannot list the directory '/d': the device is not ready", e.message)
+}
+
+@Test fun notADirectory() {
+  Path("/f.txt").writeText("x")
+  assertFailsWith<IOException> { Path("/f.txt").entries() }
+  assertFailsWith<IOException> { Path("/nothing").entries() }
+}
+
+// expect:   ok    listsWhatIsThere
+// expect:   ok    faultsAsList
+// expect:   ok    notADirectory
+// expect: 3 tests: 3 passed, 0 failed

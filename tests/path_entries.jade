@@ -1,0 +1,37 @@
+// Path.entries(): what is in a directory, in order of name, each with what it is, its size and
+// its time, as the system gives them while listing it (the user's name, 2026-11-08).
+val dir = Path.createTempDirectory("entries")
+Path(dir, "b.txt").writeText("hello")
+Path(dir, "a.bin").writeBytes(Bytes(1000))
+Path(dir, "sub").mkdir()
+Path(Path(dir, "sub"), "inner.txt").writeText("x")
+
+val found = dir.entries()
+print(found.map { it.name })   // expect: ["a.bin", "b.txt", "sub"]
+print(found.map { it.name } == dir.list().map { it.name })   // expect: true
+for e in found { print(e.name, e.isFile, e.isDirectory, e.isSymbolicLink, e.size) }
+// expect: a.bin true false false 1000
+// expect: b.txt true false false 5
+// expect: sub false true false 0
+
+// Its path is the directory's and its name; its time is the file's.
+val a = found[0]
+print(a.path == Path(dir, "a.bin"), a.lastModified == a.path.lastModified())   // expect: true true
+print(found.all { it.lastModified != null })   // expect: true
+
+// What is not a directory, or is not there, is an IOException, as for list().
+for bad in [Path(dir, "b.txt"), Path(dir, "missing")] {
+  try {
+    bad.entries()
+    print("listed", bad.name)
+  } catch (e : IOException) {
+    print("IOException", bad.name)
+  }
+}
+// expect: IOException b.txt
+// expect: IOException missing
+
+// An empty directory lists nothing.
+Path(Path(dir, "sub"), "inner.txt").delete()
+print(Path(dir, "sub").entries())   // expect: []
+dir.deleteRecursively()

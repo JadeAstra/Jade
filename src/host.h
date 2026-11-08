@@ -66,6 +66,18 @@ public:
     // The names in a directory, in no order; an error where it is not one, or where reading it
     // fails part of the way.
     virtual std::error_code list(const std::string& path, std::vector<std::string>& names) = 0;
+    // What is in a directory, each with what it is, its size and its time, as the system gives
+    // them while listing it (on Windows in the same call, with nothing more to ask): in no order,
+    // with the errors of list.
+    struct Entry {
+        std::string name;
+        // What the entry itself is: a link (on Windows a junction too) is neither a file nor a
+        // directory, whatever it leads to.
+        bool directory = false, file = false, link = false;
+        uint64_t size = 0;                // a file's, in bytes; 0 for anything else
+        std::optional<int64_t> modified;  // nanoseconds since the start of 1970, where known
+    };
+    virtual std::error_code entries(const std::string& path, std::vector<Entry>& found) = 0;
     // With `.`, `..` and links worked out.
     virtual std::string canonical(const std::string& path, std::error_code& ec) = 0;
     // From the current directory, `.` and `..` worked out but not links; the path itself where

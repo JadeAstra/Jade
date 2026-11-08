@@ -406,6 +406,26 @@ public:
         if (fault != nullptr) return faultError(*fault);  // fewer names than it lets through: it fails at the end
         return {};
     }
+    // As list, with what each is: the sandbox has files and directories, no links.
+    std::error_code entries(const std::string& path, std::vector<Entry>& found) override {
+        std::lock_guard<std::mutex> hold(mutex_);
+        Node* node = find(path);
+        if (node == nullptr) return errc(std::errc::no_such_file_or_directory);
+        if (!node->directory) return errc(std::errc::not_a_directory);
+        const SandboxFault* fault = faultFor("list", path);
+        for (const auto& [key, child] : node->children) {
+            if (fault != nullptr && static_cast<int64_t>(found.size()) >= fault->after) return faultError(*fault);
+            Entry made;
+            made.name = child->name;
+            made.directory = child->directory;
+            made.file = !child->directory;
+            made.size = child->directory ? 0 : child->data.size();
+            made.modified = child->modified;
+            found.push_back(std::move(made));
+        }
+        if (fault != nullptr) return faultError(*fault);
+        return {};
+    }
     std::string canonical(const std::string& path, std::error_code& ec) override {
         std::lock_guard<std::mutex> hold(mutex_);
         std::vector<std::string> names;

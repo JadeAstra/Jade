@@ -111,6 +111,41 @@ public:
         for (const fs::directory_iterator end; it != end; it.increment(ec)) names.push_back(fromPath(it->path().filename()));
         return ec;  // a failed step leaves the iterator at the end, the error in ec
     }
+    std::error_code entries(const std::string& path, std::vector<Entry>& found) override {
+        std::error_code ec;
+        fs::directory_iterator it(toPath(path), ec);
+        if (ec) return ec;
+        // What a directory_entry gives without following links is what the listing read, kept
+        // with it: on Windows each from the same FindNextFile, so nothing more is asked.
+        for (const fs::directory_iterator end; it != end; it.increment(ec)) {
+            const fs::directory_entry& e = *it;
+            Entry made;
+            made.name = fromPath(e.path().filename());
+            std::error_code unknown;
+            const fs::file_type type = e.symlink_status(unknown).type();
+#ifdef _WIN32
+            made.link = type == fs::file_type::symlink || type == fs::file_type::junction;
+#else
+            made.link = type == fs::file_type::symlink;
+#endif
+            made.directory = type == fs::file_type::directory;
+            made.file = type == fs::file_type::regular;
+            if (made.file) {
+                const auto size = e.file_size(unknown);
+                if (!unknown) made.size = static_cast<uint64_t>(size);
+            }
+            unknown.clear();
+            if (!made.link) {
+                const auto time = e.last_write_time(unknown);
+                if (!unknown) {
+                    const auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
+                    made.modified = std::chrono::duration_cast<std::chrono::nanoseconds>(system.time_since_epoch()).count();
+                }
+            }
+            found.push_back(std::move(made));
+        }
+        return ec;  // as list: a failed step ends the listing, the error in ec
+    }
     std::string canonical(const std::string& path, std::error_code& ec) override { return fromPath(fs::canonical(toPath(path), ec)); }
     std::string absolute(const std::string& path) override {
         std::error_code ec;

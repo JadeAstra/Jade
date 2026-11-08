@@ -1593,6 +1593,27 @@ void registerFiles(VM& vm) {
         vm.account(list->values().size() * sizeof(Value));
         return Value::object(list);
     });
+    // What is in a directory, in order of name, as list gives the names: four values for each, its
+    // name, what it is (0 a file, 1 a directory, 2 a link, 3 anything else), its size, and its
+    // time in nanoseconds since 1970 or null. Path.entries makes them DirEntry values.
+    def("entries", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        std::vector<Host::Entry> found;
+        const std::string& path = vm.toStr(args[0], "file path");
+        if (const std::error_code ec = vm.currentHost().entries(path, found)) throw pathError(vm, "list the directory", path, ec);
+        std::sort(found.begin(), found.end(), [](const Host::Entry& a, const Host::Entry& b) { return a.name < b.name; });
+        ObjList* list = newList(vm);
+        TempRoot keep(vm, Value::object(list));
+        std::vector<Value>& values = list->values();
+        values.reserve(found.size() * 4);
+        for (Host::Entry& e : found) {
+            values.push_back(vm.str(std::move(e.name)));
+            values.push_back(Value::integer(e.link ? 2 : e.directory ? 1 : e.file ? 0 : 3));
+            values.push_back(Value::integer(static_cast<int64_t>(e.size)));
+            values.push_back(e.modified ? Value::integer(*e.modified) : Value::null());
+        }
+        vm.account(values.size() * sizeof(Value));
+        return Value::object(list);
+    });
     // With `.`, `..` and links worked out (D135); an IOException if it is not there.
     def("canonical", 1, 1, [](VM& vm, int, Value* args) -> Value {
         std::error_code ec;
