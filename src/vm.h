@@ -887,6 +887,7 @@ public:
     std::vector<Value> setAsideOf(Value error);
 
     std::ostream* output;
+    std::ostream* errorOutput;  // printError's, and Program.errors'
     std::istream* input;
     std::vector<std::string> scriptArgs;
     int mainModule_ = -1;  // the program's own file's module (Program.name)

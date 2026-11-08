@@ -117,6 +117,25 @@ object Program {
   // The computer's name on the network ("sandbox" in a sandbox).
   val hostName : string
     get() => __hostName()
+  // Its output, what print writes to, as a Writer: for code that writes to a Writer, a file's or
+  // this one. What it writes goes out in turn with print's; closing it does nothing.
+  //   report.writeTo(Program.output)
+  val output : Writer
+    get() {
+      val known = outputWriter ?: Writer(__io.standard(1))
+      outputWriter = known
+      return known
+    }
+  private var outputWriter : Writer? = null
+  // Standard error, what printError writes to, as a Writer: Program.errors.println("lost") as
+  // Kotlin's System.err.println. What print wrote before goes out first; closing it does nothing.
+  val errors : Writer
+    get() {
+      val known = errorsWriter ?: Writer(__io.standard(2))
+      errorsWriter = known
+      return known
+    }
+  private var errorsWriter : Writer? = null
   // What takes an error nobody caught outside the script itself: the one that ends a thread, on
   // that thread as it ends, and a job's that failed with nothing asking for it (by get, then,
   // onError and the like), once nothing can: when the job is collected, or as the program ends

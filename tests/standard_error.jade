@@ -1,0 +1,18 @@
+// printError, and Program.output and Program.errors as Writers (the user's names, 2026-11-08):
+// what goes to standard error is not in the output; Program.output is print's output; closing
+// either writer does nothing, as the streams are the program's.
+print("one")
+printError("two", 2)
+Program.output.println("three")
+Program.errors.println("four")
+Program.output.write(Bytes([0x66, 0x69, 0x76, 0x65, 0x0A]))
+Program.errors.use { it.println("six") }
+Program.output.use { it.println("seven") }
+print(Program.output === Program.output, Program.errors.isOpen)
+Program.errors.println("last, after both were closed")
+// expect: one
+// expect: three
+// expect: five
+// expect: seven
+// expect: true true
+// expect error output: last, after both were closed

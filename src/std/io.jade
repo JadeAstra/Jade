@@ -434,6 +434,7 @@ external object __io {
   fun write(handle : any, data : any?, charset : Charset = Charset.utf8) throws IOException
   fun close(handle : any)
   fun isOpen(handle : any?) : bool
+  fun standard(which : int) : any
   fun spawn(command : List<string>, directory : string?, input : string, output : string, error : string,
             environment : Map<string, string?>?) : List<any?> throws IOException
   fun collect(process : any?, output : any?, error : any?, charset : Charset, timeout : int? = null) : List<any?> throws IOException | TimeoutException

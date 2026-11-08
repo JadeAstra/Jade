@@ -283,6 +283,18 @@ void registerGlobals(VM& vm) {
         return Value::null();
     });
 
+    // As print, to standard error; what print wrote before goes out first.
+    vm.defineNative("printError", 0, -1, [](VM& vm, int argc, Value* args) -> Value {
+        vm.output->flush();
+        for (int i = 0; i < argc; i++) {
+            if (i > 0) *vm.errorOutput << ' ';
+            *vm.errorOutput << vm.stringify(args[i]);
+        }
+        *vm.errorOutput << '\n';
+        vm.errorOutput->flush();
+        return Value::null();
+    });
+
     vm.defineNative("write", 0, -1, [](VM& vm, int argc, Value* args) -> Value {
         for (int i = 0; i < argc; i++) *vm.output << vm.stringify(args[i]);
         return Value::null();

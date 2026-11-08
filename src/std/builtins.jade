@@ -17,6 +17,11 @@
 // is written as it is; in a list or a map it is shown in quotes.
 //   print("total", 3, [1, 2])   // total 3 [1, 2]
 external fun print(vararg items : any?)
+// Writes `items` to standard error as print writes them to the output, and then a line end: for
+// what went wrong, which a program's output, sent on to a file or another program, should not
+// carry. What print wrote before it goes out first.
+//   printError("cannot read", path)
+external fun printError(vararg items : any?)
 // Writes `items` to the output as print does, but with nothing between them and no line end.
 external fun write(vararg items : any?)
 // The ints from `first` up to `end`, not including `end`, going by `step`; with one argument,

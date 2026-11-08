@@ -624,6 +624,11 @@ std::mutex streamsMutex;
 std::unordered_map<int64_t, std::shared_ptr<Stream>> streams;
 int64_t nextStream = 1;
 
+// The handles of the program's own output and errors: never in the table, whose numbers start
+// at 1, and written to as print writes (the write below), not through a Stream.
+constexpr int64_t kStandardOutput = -1;
+constexpr int64_t kStandardError = -2;
+
 int64_t keep(std::shared_ptr<Stream> stream) {
     std::lock_guard<std::mutex> hold(streamsMutex);
     const int64_t id = nextStream++;
@@ -1469,6 +1474,21 @@ void registerIo(VM& vm) {
     // Text (in the character set, D127) or bytes. Returns when all of it has been handed to
     // the system.
     def("write", 2, 3, [](VM& vm, int argc, Value* args) -> Value {
+        // The program's own output or errors (Program.output, Program.errors): written here, in
+        // turn with what print and printError write, to the same place.
+        if (args[0].isInt() && (args[0].as.i == kStandardOutput || args[0].as.i == kStandardError)) {
+            std::string data;
+            if (args[1].isObjType(ObjType::Bytes)) data.assign(asBytes(args[1])->data.begin(), asBytes(args[1])->data.end());
+            else data = encodeText(vm.stringify(args[1]), charsetOf(vm, argc > 2 ? args[2] : Value::null()));
+            if (args[0].as.i == kStandardError) {
+                vm.output->flush();  // what print wrote before goes first
+                vm.errorOutput->write(data.data(), static_cast<std::streamsize>(data.size()));
+                vm.errorOutput->flush();
+            } else {
+                vm.output->write(data.data(), static_cast<std::streamsize>(data.size()));
+            }
+            return Value::null();
+        }
         auto s = streamOf(vm, args[0]);
         std::string data;
         // In Charset.utf16, a byte order mark before the stream's first text, none after (G53).
@@ -1504,8 +1524,17 @@ void registerIo(VM& vm) {
     });
 
     def("isOpen", 1, 1, [](VM&, int, Value* args) -> Value {
+        if (args[0].isInt() && (args[0].as.i == kStandardOutput || args[0].as.i == kStandardError)) return Value::boolean(true);
         const std::shared_ptr<Stream> s = findStream(args[0]);
         return Value::boolean(s != nullptr && !s->closed.load());
+    });
+
+    // standard(which): the handle of the program's own output (1) or errors (2), for a Writer.
+    // It is never closed: closing it does nothing, as it is the program's, not the writer's.
+    def("standard", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const int64_t which = vm.toInt(args[0], "which");
+        if (which != 1 && which != 2) throw vm.runtimeError(Thrown::IllegalArgumentException, "standard(1) is the output, standard(2) the errors");
+        return Value::integer(which == 1 ? kStandardOutput : kStandardError);
     });
 
     // ---- Processes ----
