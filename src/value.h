@@ -744,10 +744,14 @@ private:
     std::vector<Value> items_;
 };
 
+struct ObjSet;
 struct ObjMap final : Obj {
     ValueMap map;
     ObjTypeInfo* type = nullptr;  // `Map<string, int>`, as for a list
     bool bundle = false;          // named arguments from params(...) (D143): printed as params(size = 18)
+    // Its keys as a live view (map.keys), made the first time they are asked for and given
+    // again after: `key in map.keys` makes nothing.
+    ObjSet* keysView = nullptr;
     ObjMap() : Obj(ObjType::Map) {}
 };
 

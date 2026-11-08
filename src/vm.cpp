@@ -5148,10 +5148,14 @@ ObjSet* VM::newSet(ObjTypeInfo* type) {
 
 // A map's keys, or its entries, as a set that shows the map as it is and cannot be changed.
 Value VM::mapView(ObjMap* map, bool entries) {
+    // The keys' view is made once and kept (a live view, it is the same whatever it is asked
+    // for); not one a core of a parallel section makes, which would be the core's.
+    if (!entries && map->keysView != nullptr) return Value::object(map->keysView);
     ObjTypeInfo* item = mapPartType(map, entries ? 2 : 0);
     ObjSet* view = newSet(item != nullptr && !item->args.empty() ? typeOf(kTypeSet, false, nullptr, {item->args[0]}) : nullptr);
     view->viewOf = map;
     view->entries = entries;
+    if (!entries && coreId_ == 0) map->keysView = view;
     return Value::object(view);
 }
 
@@ -7584,6 +7588,7 @@ void VM::blacken(Obj* obj) {
                 markValue(entry.key);
                 markValue(entry.value);
             }
+            if (map->keysView != nullptr) markObject(map->keysView);
             break;
         }
         case ObjType::Range:
