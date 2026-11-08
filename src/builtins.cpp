@@ -1060,12 +1060,15 @@ void registerBytes(VM& vm) {
         return self;
     });
 
-    vm.defineMethod(T, "indexOf", 1, 1, [](VM&, Value self, int, Value* args) -> Value {
+    // The first place of a byte at or after `startIndex` (a negative one taken as 0), by the
+    // system's memchr: the native byte search line ends are found with (LineIndex).
+    vm.defineMethod(T, "indexOf", 1, 2, [](VM& vm, Value self, int argc, Value* args) -> Value {
         const std::vector<uint8_t>& data = asBytes(self)->data;
-        if (args[0].isInt() || args[0].isByte())
-            for (size_t i = 0; i < data.size(); i++)
-                if (data[i] == args[0].as.i) return Value::integer(static_cast<int64_t>(i));
-        return Value::integer(-1);
+        const int64_t start = argc > 1 && !args[1].isNull() ? std::max<int64_t>(0, vm.toInt(args[1], "startIndex")) : 0;
+        if ((!args[0].isInt() && !args[0].isByte()) || args[0].as.i < 0 || args[0].as.i > 255 || start >= static_cast<int64_t>(data.size()))
+            return Value::integer(-1);
+        const void* found = std::memchr(data.data() + start, static_cast<int>(args[0].as.i), data.size() - static_cast<size_t>(start));
+        return Value::integer(found == nullptr ? -1 : static_cast<const uint8_t*>(found) - data.data());
     });
 
     vm.defineMethod(T, "contains", 1, 1, [](VM&, Value self, int, Value* args) -> Value {

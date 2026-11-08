@@ -1070,8 +1070,8 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry" id="Bytes.fill"><code class="sig">fun Bytes.fill(value : byte) : Bytes</code><a class="anchor" href="#Bytes.fill">#</a>
 <p>Puts <code>value</code> in every place, and gives the bytes themselves.</p>
 </div>
-<div class="entry" id="Bytes.indexOf"><code class="sig">fun Bytes.indexOf(value : byte) : int</code><a class="anchor" href="#Bytes.indexOf">#</a>
-<p>The position of the first byte equal to <code>value</code>, or -1 where there is none.</p>
+<div class="entry" id="Bytes.indexOf"><code class="sig">fun Bytes.indexOf(value : byte, startIndex : int = 0) : int</code><a class="anchor" href="#Bytes.indexOf">#</a>
+<p>The position of the first byte equal to <code>value</code> at or after <code>startIndex</code>, or -1 where there is none; a negative <code>startIndex</code> is taken as 0, as a string's indexOf takes it.</p>
 </div>
 <div class="entry" id="Bytes.contains"><code class="sig">fun Bytes.contains(value : any?) : bool</code><a class="anchor" href="#Bytes.contains">#</a>
 <p>True when a byte equal to <code>value</code> is there, given as a byte or an int; false for anything else.</p>

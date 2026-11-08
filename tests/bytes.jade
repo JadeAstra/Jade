@@ -28,6 +28,15 @@ copy[0] = 100
 print(joined, joined[1..<3], joined[^2..], data, copy, data == Bytes([1, 2, 255]), data == copy, data === data)
 // expect: Bytes[1, 2, 255, 9] Bytes[2, 255] Bytes[255, 9] Bytes[1, 2, 255] Bytes[100, 2, 255] true false true
 print(data.toList(), data.contains(255), 255 in data, 3 in data, data.indexOf(2), Bytes(2).fill(9))   // expect: [1, 2, 255] true true false 1 Bytes[9, 9]
+// From a position (M9/M10): every newline of a text found in turn, as a line index finds them.
+val text = "a\nbb\n\nccc".toBytes()
+var at = text.indexOf(10)
+val ends : open List<int> = []
+while (at >= 0) {
+  ends.add(at)
+  at = text.indexOf(10, at + 1)
+}
+print(ends, text.indexOf(10, -5), text.indexOf(10, 99), text.indexOf(99.toByte(), 2))   // expect: [1, 4, 5] 1 -1 6
 
 // A loop gives the numbers.
 var sum = 0

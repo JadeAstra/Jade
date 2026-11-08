@@ -424,8 +424,9 @@ external fun Bytes.toList() : open List<byte>
 external fun Bytes.decodeToString(charset : Charset = Charset.utf8) : string
 // Puts `value` in every place, and gives the bytes themselves.
 external fun Bytes.fill(value : byte) : Bytes
-// The position of the first byte equal to `value`, or -1 where there is none.
-external fun Bytes.indexOf(value : byte) : int
+// The position of the first byte equal to `value` at or after `startIndex`, or -1 where there is
+// none; a negative `startIndex` is taken as 0, as a string's indexOf takes it.
+external fun Bytes.indexOf(value : byte, startIndex : int = 0) : int
 // True when a byte equal to `value` is there, given as a byte or an int; false for anything else.
 external fun Bytes.contains(value : any?) : bool
 // 16-, 32- and 64-bit numbers kept in the bytes (D19), at a position, the least significant
