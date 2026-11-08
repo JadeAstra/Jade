@@ -641,8 +641,11 @@ external object Math {
   fun atan2(y : Number, x : Number) : float
   // The length of the hypotenuse, `sqrt(x * x + y * y)`, without overflow on the way.
   fun hypot(x : Number, y : Number) : float
-  // The natural logarithm of `x`; minus infinity for 0, NaN for a negative `x`.
-  fun log(x : Number) : float
+  // The natural logarithm of `x`, in base e; minus infinity for 0, NaN for a negative `x`.
+  fun ln(x : Number) : float
+  // The logarithm of `x` in base `base`, as Kotlin's: `Math.log(8, 2)` is 3.0. NaN where the base
+  // is 1, 0 or negative; the natural logarithm is ln (the user, 2026-11-08).
+  fun log(x : Number, base : Number) : float
   // The logarithm of `x` in base 10.
   fun log10(x : Number) : float
   // The logarithm of `x` in base 2.

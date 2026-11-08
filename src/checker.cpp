@@ -7461,7 +7461,9 @@ struct Checker::Impl {
             for (size_t p = 0; p < n; p++) {
                 if (b.given[p] || f->hasDefault[p] || static_cast<int>(p) == f->vararg) continue;
                 b.missing = true;
-                if (f->owner != nullptr && f->owner->name == "Channel" && f->owner->unit != nullptr && f->owner->unit->prelude)
+                if (f->owner != nullptr && f->owner->name == "Math" && f->name == "log" && f->owner->unit != nullptr && f->owner->unit->prelude)
+                    report(at, "Math.log takes the base: Math.log(x, 10); the natural logarithm is Math.ln(x)");
+                else if (f->owner != nullptr && f->owner->name == "Channel" && f->owner->unit != nullptr && f->owner->unit->prelude)
                     report(at, "a channel says how much it holds: Channel<T>(capacity = n), with 0 for each send to wait for a receive, or "
                                "Channel<T>.unbounded() (D87)");
                 else

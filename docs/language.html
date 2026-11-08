@@ -512,7 +512,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#MatchGroup"><code>MatchGroup</code></a> (1)</li>
 <li><a href="#MatchGroupCollection"><code>MatchGroupCollection</code></a> (7)</li>
 <li><a href="#MatchResult"><code>MatchResult</code></a> (8)</li>
-<li><a href="#Math"><code>Math</code></a> (36)</li>
+<li><a href="#Math"><code>Math</code></a> (37)</li>
 <li><a href="#Memory"><code>Memory</code></a> (29)</li>
 <li><a href="#Method"><code>Method</code></a> (8)</li>
 <li><a href="#Network"><code>Network</code></a> (3)</li>
@@ -1323,8 +1323,11 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry member" id="Math.hypot"><code class="sig">fun hypot(x : Number, y : Number) : float</code><a class="anchor" href="#Math.hypot">#</a>
 <p>The length of the hypotenuse, <code>sqrt(x * x + y * y)</code>, without overflow on the way.</p>
 </div>
-<div class="entry member" id="Math.log"><code class="sig">fun log(x : Number) : float</code><a class="anchor" href="#Math.log">#</a>
-<p>The natural logarithm of <code>x</code>; minus infinity for 0, NaN for a negative <code>x</code>.</p>
+<div class="entry member" id="Math.ln"><code class="sig">fun ln(x : Number) : float</code><a class="anchor" href="#Math.ln">#</a>
+<p>The natural logarithm of <code>x</code>, in base e; minus infinity for 0, NaN for a negative <code>x</code>.</p>
+</div>
+<div class="entry member" id="Math.log"><code class="sig">fun log(x : Number, base : Number) : float</code><a class="anchor" href="#Math.log">#</a>
+<p>The logarithm of <code>x</code> in base <code>base</code>, as Kotlin's: <code>Math.log(8, 2)</code> is 3.0. NaN where the base is 1, 0 or negative; the natural logarithm is ln (the user, 2026-11-08).</p>
 </div>
 <div class="entry member" id="Math.log10"><code class="sig">fun log10(x : Number) : float</code><a class="anchor" href="#Math.log10">#</a>
 <p>The logarithm of <code>x</code> in base 10.</p>

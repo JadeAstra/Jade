@@ -512,7 +512,7 @@ void registerMath(VM& vm) {
     JADE_MATH_UNARY("sin", std::sin);
     JADE_MATH_UNARY("cos", std::cos);
     JADE_MATH_UNARY("tan", std::tan);
-    JADE_MATH_UNARY("log", std::log);
+    JADE_MATH_UNARY("ln", std::log);
     JADE_MATH_UNARY("exp", std::exp);
     JADE_MATH_UNARY("log10", std::log10);
     JADE_MATH_UNARY("log2", std::log2);
@@ -521,6 +521,17 @@ void registerMath(VM& vm) {
     JADE_MATH_UNARY("atan", std::atan);
     JADE_MATH_UNARY("trunc", std::trunc);
 #undef JADE_MATH_UNARY
+
+    // The logarithm in a base given, as Kotlin's log(x, base): NaN for a base of 1 or not above 0.
+    // Bases 2 and 10 by their own functions, which are exact at their powers: log(1000, 10) is 3.0.
+    def("log", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        const double x = vm.toNumber(args[0], "Math.log() argument");
+        const double base = vm.toNumber(args[1], "Math.log() base");
+        if (base <= 0.0 || base == 1.0) return Value::number(std::nan(""));
+        if (base == 2.0) return Value::number(std::log2(x));
+        if (base == 10.0) return Value::number(std::log10(x));
+        return Value::number(std::log(x) / std::log(base));
+    });
 
     def("abs", 1, 1, [](VM& vm, int, Value* args) -> Value {
         args[0] = asWideInt(args[0]);   // a byte is an int here

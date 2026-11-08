@@ -28,6 +28,8 @@ print(smallest)                                              // expect: 3
 // Math, with its constants in camelCase.
 print(Math.pi > 3.14159 and Math.pi < 3.1416, Math.e > 2.718 and Math.e < 2.7183, Math.atan2(1, 1) * 4 == Math.pi, Math.hypot(3, 4))   // expect: true true true 5.0
 print(Math.sign(-3), Math.sign(2.5), Math.trunc(-2.7), Math.log10(1000), Math.log2(8), Math.asin(1) * 2 == Math.pi, Math.acos(1), Math.atan(0))   // expect: -1 1.0 -2.0 3.0 3.0 true 0.0 0.0
+// ln the natural logarithm; log in a base given, as Kotlin's (the user, 2026-11-08).
+print(Math.ln(Math.e), Math.ln(1), Math.log(1000, 10), Math.log(8, 2), Math.log(81, 3), Math.log(5, 1).isNaN(), Math.log(5, -2).isNaN())   // expect: 1.0 0.0 3.0 3.0 4.0 true true
 
 // Ordering any two values, and the largest and smallest of several.
 print(compareValues(1, 2), compareValues("b", "a"), compareValues(2, 2.0), compareValues(null, 1), compareValues(1, null), compareValues(null, null))   // expect: -1 1 0 -1 1 0
