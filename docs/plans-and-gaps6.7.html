@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The plans and gap pages, M0 to M10</title>
+<title>The plans and gap pages, M0 to M8</title>
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
@@ -86,8 +86,8 @@ pre code { background: none; padding: 0; }
 </head>
 <body>
 <main>
-<h1>The plans and gap pages, M0 to M10</h1>
-<p class="lede">What M0's two spikes found, the plans written for M6.6, M6.6.2, M6.7, M7, M8, and M9 and M10 together, and the pages of gaps and choices of M6.6 and M6.7, kept together as a record of what was planned, decided and built. Each is as it was last brought up to date; gap numbers (G1 to G69) and their links are kept. What is still to be done is in <a href="outstanding6.7.html">outstanding6.7.html</a>; the plan for what comes next is in <a href="gui-plan.html">gui-plan.html</a>.</p>
+<h1>The plans and gap pages, M0 to M8</h1>
+<p class="lede">What M0's two spikes found, the plans written for M6.6, M6.6.2, M6.7, M7 and M8, and the pages of gaps and choices of M6.6 and M6.7, kept together as a record of what was planned, decided and built. Each is as it was last brought up to date; gap numbers (G1 to G69) and their links are kept. What is still to be done is in <a href="outstanding6.7.html">outstanding6.7.html</a>; the plan for what comes next is in <a href="gui-plan.html">gui-plan.html</a>.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -99,7 +99,6 @@ pre code { background: none; padding: 0; }
 <li><a href="#m67g">M6.7: gaps to close</a></li>
 <li><a href="#m7p">Plan: M7, Core part two</a></li>
 <li><a href="#m8p">Plan: M8, owned windows, dialogs, charts, and JadeMem</a></li>
-<li><a href="#m910p">Plan: M9 and M10, the self-contained packages and the documents</a></li>
 </ul>
 </nav>
 <section class="source" id="m0">
@@ -1715,156 +1714,6 @@ To be measured for speed and for steadiness: a cold function of no use added to 
 <ul><li><strong>Floats as arguments and results of foreign calls</strong> come when a program needs them; JadeMem's are all whole numbers and pointers.</li><li><strong>File dialogs on Linux</strong>: Linux has no one system dialog. <code>NoFileDialog</code> there until a milestone takes it up.</li><li><strong>The rest of N3</strong> (paths with curves, dashes, gradients, transforms) waits for M10.</li></ul>
 <h3 id="m8p-speed">Speed</h3>
 <ul><li><strong>Regex</strong>: within a few times of Java's on JadeUI's uses (CSS, Markdown, code highlighting in later milestones), timed when built.</li><li><strong>Charts</strong>: a hovered chart repaints without laying out; JadeMem's timeline of 960 points draws within a frame.</li><li><strong>JadeMem</strong>: a sample every 5 seconds costs the window nothing it can see; the attribution scan of every driver file stays on its own thread.</li></ul>
-</section>
-<section class="source" id="m910p">
-<p class="from">Written 2026-11-08</p>
-<h2>Plan: M9 and M10, the self-contained packages and the documents</h2>
-<p>M9 (<code>code</code>, <code>hex</code>, <code>text</code>, <code>map</code>) and M10 (the vector tier N3, then <code>svg</code> and <code>icons</code>, <code>math</code>, <code>css</code>, <code>html</code> and <code>doc</code>, <code>sheet</code>, <code>image</code>) are done together, at the user's word (2026-11-08): the rest of JadeUI that apps build with, everything Snips needs but the app itself. Written 2026-11-08 from a reading of every Kotlin file involved (seven readings, one for each group of packages) against <code>lib/Topaz</code> and Jade's standard library as M8 left them. The questions at the end are put to the user before the steps that need them are built.</p>
-
-<h3 id="m910p-holds">What it holds</h3>
-<p>About 20,500 lines of Kotlin and 16,700 of tests, all of them used by Snips alone:</p>
-<div class="table"><table>
-<thead><tr><th>Kotlin</th><th>Lines</th><th>Tests</th><th>Topaz</th><th>Holds</th></tr></thead>
-<tbody>
-<tr><td><code>code/</code></td><td>401</td><td>9</td><td><code>CodeView.jade</code></td><td>a highlighting code editor; <code>CodeHighlighter</code> with languages as data (CSS, JavaScript, Kotlin, plain, Python, Snippy, and Jade, the user's addition)</td></tr>
-<tr><td><code>hex/</code></td><td>346</td><td>18</td><td><code>HexView.jade</code></td><td>a hex viewer and nibble editor, drawing only the rows in view, editing a huge file in place</td></tr>
-<tr><td><code>text/</code></td><td>251</td><td>17</td><td><code>LargeTextView.jade</code></td><td>a read-only viewer of huge text files over a line index built in the background</td></tr>
-<tr><td><code>map/</code></td><td>749</td><td>22</td><td><code>MapView.jade</code></td><td>an interactive map: pan, zoom, tooltips, culling, editing points, shapes and shared borders, freehand drawing</td></tr>
-<tr><td>jadelib-io (part)</td><td>271</td><td>20</td><td>std</td><td><code>ByteSource</code>, <code>PagedFile</code>, <code>LineIndex</code>, <code>writeByteDiff</code></td></tr>
-<tr><td><code>Commands.kt</code>, <code>Overrides.kt</code> (part)</td><td>~380</td><td>17</td><td><code>Overrides.jade</code></td><td>layout overrides read from <code>.ovr</code> XML files, and the <code>commands</code> file (left out of M7 for want of XML)</td></tr>
-<tr><td><code>math/</code></td><td>1,013</td><td>29</td><td><code>MathBlock.jade</code></td><td><code>MathTypeset</code> (Snips' calculator syntax, not LaTeX: fractions, powers, roots, matrices), <code>MathView</code>, <code>MathBlock</code> (editable lines with results and error marks)</td></tr>
-<tr><td><code>html/</code></td><td>270</td><td>21</td><td><code>Html.jade</code></td><td>a tolerant HTML fragment parser and the entities</td></tr>
-<tr><td><code>css/</code></td><td>1,190</td><td>34</td><td><code>Css.jade</code></td><td>the cascade (selectors, specificity, <code>var()</code>, <code>@media</code>), values (17 units, <code>calc()</code>, borders, gradients, shadows, grid tracks), counters, <code>DocTheme</code></td></tr>
-<tr><td><code>svg/</code>, <code>icons/</code></td><td>1,097</td><td>54</td><td><code>Svg.jade</code>, <code>Icons.jade</code></td><td><code>SvgRenderer</code>, <code>SvgView</code> with text selection, <code>ToolbarIcons</code> (twelve Lucide icons)</td></tr>
-<tr><td><code>image/</code></td><td>2,481</td><td>69</td><td><code>Picture.jade</code></td><td><code>ImageView</code> (the <code>&lt;img&gt;</code> block), <code>PictureViewer</code>, <code>PictureEditor</code> with layers, markup, selections, pixel tools and undo</td></tr>
-<tr><td><code>sheet/</code> (rest)</td><td>3,958</td><td>302</td><td><code>Sheet.jade</code>, <code>FormulaBar.jade</code></td><td>the spreadsheet view (a view only: Snips evaluates), the formula bar, <code>CellRefs</code>, <code>FormulaSplit</code></td></tr>
-<tr><td><code>doc/</code></td><td>8,633</td><td>452</td><td><code>HtmlLayout.jade</code>, <code>HtmlPaint.jade</code>, <code>HtmlView.jade</code>, <code>Prose*.jade</code>, <code>DocView.jade</code>, <code>Markdown.jade</code></td><td>a CSS box engine (block, inline, floats, flex, grid, tables, positioning) with a view; the prose editor (<code>ProseDoc</code>, <code>ProseView</code>); <code>DocView</code>, the document of blocks Snips is built on; Markdown to HTML</td></tr>
-</tbody></table></div>
-<p>About 1,100 tests carry over, and about 70 of the root package's that waited for these views (<code>HtmlBoxEditingTest</code>, <code>CaretParagraph</code>, <code>InsertAffordance</code>, the math and sheet cases of others). Ten of the Launcher's tabs come with them: Code, Hex, Text, SVG, HTML, Math, Formula, Markdown, Sheet, Icons.</p>
-
-<h3 id="m910p-gains">What Jade and Topaz gain first</h3>
-<p><strong>As much as possible in Jade, C++ only where it is required</strong> (the user, 2026-11-08). C++ is required for what Jade cannot do at all (a system call). Where C++ would be chosen for speed (work done for every byte or every pixel), Jade's own speed on such code is looked into first and improved where it can be (the user, 2026-11-08; part zero below), and the choice is made from the numbers. Everything else is written in Jade, on the native pieces Jade already has (string search, <code>Regex</code>, <code>Font.offsets</code>, the rasteriser), and timed: a C++ piece is added only where a timing misses its target, and then with a public Jade API, as every C++ piece has (the user, 2026-10-17). The packages stand on:</p>
-<ul>
-<li><strong>Files read and written at an offset</strong>: a <code>RandomAccessFile</code> (<code>readAt</code>, <code>writeAt</code>, <code>size</code>, <code>sync</code>, <code>close</code>), a thin <strong>C++</strong> piece over the system's calls, and <code>Bytes.indexOf</code> from a position (C++, a primitive). On them, in <strong>Jade</strong>: <code>ByteSource</code>, <code>InMemoryByteSource</code>, <code>PagedFile</code> (cached pages), <code>writeByteDiff</code>, and <code>LineIndex</code>, built in a <strong>worker</strong>: a second VM that runs beside the window's (Jade's threads take turns, workers do not), finding line ends with the native byte search and sending its checkpoints back as messages.</li>
-<li><strong>An XML reader in Jade</strong> (tier N5's other half), tag by tag rather than character by character, jumping from one <code>&lt;</code> to the next with the native string search and reading a tag's attributes with one <code>Regex</code>: elements, attributes, text, CDATA, comments and processing instructions passed over, the predefined and numeric entities, internal entities under a cap and never an external one, strict well-formedness with line and column in its error. For SVG and the <code>.ovr</code> overrides; public as <code>Xml.parse</code> and its element and text types. Timed on a 1 MB SVG.</li>
-<li><strong>Base64</strong> in Jade, accepting MIME's line breaks, for <code>data:</code> addresses; timed on a 5 MB picture.</li>
-<li><strong>Pictures in more formats, read and written</strong>: every format that is read is written, and the other way round (the user, 2026-11-08). Read by <code>Image.load</code> whatever the format: PNG (there now), JPEG (baseline and progressive, its EXIF turn applied), GIF, BMP, and WebP (lossy, lossless and with alpha), the user's addition. Written in each: PNG; JPEG baseline at a quality; GIF with its colours reduced to 256 (an octree, dithering optional); BMP; WebP lossy at a quality or lossless, with alpha. <strong>GIF and WebP animated</strong>, read and written (the user, 2026-11-08): an <code>Animation</code> of frames, each with its delay, how it is laid over the frame before (GIF's disposal, WebP's blending) worked out on reading into whole frames, and a count of loops; an animation written is made into each format's frames and its smallest changed areas. JadeUI wrote PNG only and read an animation's first frame. Decoding and encoding are work for every pixel (Huffman codes, the DCT and its inverse, VP8's prediction, reducing colours): the codecs are <strong>C++</strong>, as PNG's is, unless part zero shows Jade near enough; reading and writing a file's header and EXIF is Jade. JadeUI read WebP nowhere: Snips accepts the files and fails on them.</li>
-<li><strong>The vector tier N3</strong>, split by the rule. In <strong>Jade</strong>, the geometry: a path of lines, quadratic and cubic curves, SVG's path data read into one, curves flattened to the transform's scale, the stroker (butt, round and square caps; miter, round and bevel joins; a miter limit; dashes), affine transforms with save and restore, text through a transform. In <strong>C++</strong> (unless part zero says otherwise), what is done for every pixel, in Topaz's own rasteriser, which both canvases already share for shapes and text: filling a flattened path non-zero or even-odd (a stroke filled as one shape, so a highlighter does not darken where it crosses itself), linear and radial gradients (focal point, pad, reflect, repeat) as the paint of fills, strokes and text, clipping to a path, the Clear composite, pictures drawn through a transform (nearest, bilinear, bicubic), Gaussian blur. The recording canvas records paths. Written by us, not taken from NanoVG (question 3).</li>
-<li><strong>Picture operations</strong>, each work for every pixel, in C++ unless part zero shows Jade near enough: scaled (area-averaged when shrinking), transformed, brightness, contrast and saturation, grey, inverted, a colour lookup, flood fill to a mask and filling a mask, counting differing pixels. The editor's tools, layers, selections and undo around them are Jade.</li>
-<li><strong>Text in Jade</strong>: breaking lines for the box engine on the native <code>Font.offsets</code> (a paragraph measured in one call); a cache of fonts at fractional sizes. A native line breaker only if the document timings ask for one.</li>
-<li><strong>Code highlighting in Jade</strong>, driven by a language read from its <code>.lang</code> data, with a <code>templates</code> key so that <code>"${f("x")}"</code> is code inside a string (Jade, Kotlin, JavaScript); a key typed colours only the lines it changed (and what a string or comment opened there runs on to), not the whole file as JadeUI does.</li>
-<li><strong>In Topaz</strong>: <code>Component.invalidate</code> of a rectangle; the system's dark mode asked through Jade's foreign functions (<code>RegGetValueW</code>, as JadeMem calls Windows), not by running <code>reg query</code>; text areas and fields drawing inline objects (<code>InlineObjects</code>).</li>
-</ul>
-
-<h3 id="m910p-order">Order</h3>
-<p>Each step is committed with its tests, carried over where they exist and written where they do not; JadeUI's bugs found in the readings (below) are fixed as each part is ported, each with a test. Only the Clang Windows build is checked step by step; the full check comes at the end. Timings are taken as each part is built, against the targets under Speed.</p>
-<p><strong>First: <code>Path</code> becomes <code>FilePath</code></strong> (the user, 2026-11-08), so that the vector path can be <code>Path</code>: the standard library, Topaz, the examples, the tests, the C++'s messages and hints, the docs and the language reference, and JadeMem, each in one commit, the suite with its stress settings and JadeMem's tests run on it. D107's name changes; the C++ text engine's own <code>text::Path</code>, a vector path already, stays and becomes the Jade <code>Path</code>'s inside.</p>
-<p><strong>Part zero: Jade's speed on byte and pixel work</strong></p>
-<ol start="0">
-<li><strong>Measured, then improved.</strong> The kernels that would otherwise be C++ written both ways, in Jade and in C++, and timed side by side on this machine: a scan for line ends over 100 MB; JPEG's Huffman decoding and inverse DCT over a 12-megapixel photo; a linear and a radial gradient filled over a 4K canvas; a Gaussian blur; area-averaged scaling; a flood fill. The VM profiled on the Jade versions to find what costs (reading and writing single bytes and pixels, bounds checks, small-integer arithmetic, loop overhead, calls in an inner loop), and improved where the change is general, as M6.7 improved it: an instruction for a typed byte or pixel read and write, checks moved out of loops the compiler can prove, whatever the profile shows. Each improvement benchmarked as M6.7's were and kept only where it helps. Then each piece is placed, from the numbers: in Jade where it comes within the agreed distance of C++ (question 14) and meets its target under Speed, in C++ where it does not. Written up in plans-and-gaps beside this plan, as the C++ pieces chosen and why.</li>
-</ol>
-<p><strong>Part one: what everything stands on</strong></p>
-<ol>
-<li><strong>Files at an offset</strong>: <code>RandomAccessFile</code> and <code>Bytes.indexOf</code> from a position (C++); <code>ByteSource</code>, <code>PagedFile</code>, <code>writeByteDiff</code> and <code>LineIndex</code> in a worker (Jade); jadelib-io's 20 tests (the one that reads a private field through reflection rewritten as a test of reading the index while the worker builds it).</li>
-<li><strong>Base64</strong> and <strong>the XML reader</strong>, in Jade, with tests of their own (malformed input, the entity cap, an external entity refused) and their timings.</li>
-<li><strong>Picture codecs</strong>, where part zero placed them: JPEG, GIF, BMP, WebP, read and written, GIF's and WebP's animations among them. Reading checked pixel for pixel against reference pictures made by another decoder; writing checked by reading back (exactly for the lossless forms, within a measured error for JPEG and lossy WebP) and by other programs opening the files; <code>Image.load</code> choosing by content, saving by the file's extension or a format given, EXIF in Jade.</li>
-<li><strong>N3, paths</strong>: <code>Path</code>, SVG path data, transforms and flattening in Jade; filling a flattened path in the C++ rasteriser on both canvases; recorded paths.</li>
-<li><strong>N3, strokes</strong>, in Jade: caps, joins, the miter limit, dashes.</li>
-<li><strong>N3, the rest</strong>: where part zero placed them, gradients, clipping to a path, Clear, pictures through a transform with interpolation, blur; in Jade, text through a transform with a paint.</li>
-<li><strong>Picture operations</strong>, where part zero placed them.</li>
-<li><strong>Text</strong>: line breaking on <code>Font.offsets</code> and the font cache, in Jade; <code>Component.invalidate</code> of a rectangle; the dark mode through foreign functions.</li>
-</ol>
-<p><strong>Part two: M9's packages</strong></p>
-<ol start="9">
-<li><strong><code>HexView</code></strong>: 18 tests.</li>
-<li><strong><code>LargeTextView</code></strong>: repainting as the index grows, and closing its file; 17 tests.</li>
-<li><strong>The highlighter and <code>CodeView</code></strong>: the lexer in Jade, colouring only the lines a change reaches; the languages (with <code>jade.lang</code>); the text area finding a row's first style run by search; 9 tests and tests of Jade's own colouring.</li>
-<li><strong><code>MapView</code></strong>: shapes' bounds cached and culled before they are transformed, shared vertices worked out once; 20 tests (the two in a document wait for <code>DocView</code>).</li>
-<li><strong>Overrides and commands</strong>, on the XML reader: 17 tests.</li>
-</ol>
-<p><strong>Part three: math</strong> (on the core alone)</p>
-<ol start="14">
-<li><strong><code>MathTypeset</code></strong>, its parser giving no result rather than throwing for a line half typed, with a depth limit, each box knowing the source it came from; <strong><code>MathView</code></strong>.</li>
-<li><strong><code>MathBlock</code></strong>: drawn directly (sharp at any scale), each line laid out again only when it changed, the line editor a real child; 29 tests.</li>
-</ol>
-<p><strong>Part four: HTML, CSS, SVG, icons</strong></p>
-<ol start="16">
-<li><strong><code>Html</code></strong> and its entities; an <code>attributes</code> reader of one tag.</li>
-<li><strong><code>Css</code></strong>: the cascade with its rules indexed by id, class and tag; values; counters; <code>DocTheme</code> with all 148 named colours.</li>
-<li><strong><code>SvgRenderer</code></strong>, parsed once per picture and drawn into a cached picture at device pixels; <strong><code>SvgView</code></strong> with text selection; the image dialog's SVG preview (o-m8-svg); 49 tests.</li>
-<li><strong><code>ToolbarIcons</code></strong>, recoloured through the root's stroke rather than by replacing text, cached; 5 tests.</li>
-</ol>
-<p><strong>Part five: pictures</strong></p>
-<ol start="20">
-<li><strong><code>ImageView</code></strong>, the <code>&lt;img&gt;</code> block, playing an animation on the window's timers, stopped while out of view.</li>
-<li><strong><code>PictureCanvas</code></strong> and <strong><code>PictureViewer</code></strong>, playing animations, with pause and stepping through the frames.</li>
-<li><strong><code>PictureEdit</code></strong>: layers, markup, selections, undo kept in changed tiles rather than whole layers.</li>
-<li><strong><code>PictureEditor</code></strong>; the image package's 69 tests, its dialogs answering through <code>onResult</code> as the dialogs of M8 do.</li>
-</ol>
-<p><strong>Part six: inline objects and the spreadsheet</strong></p>
-<ol start="24">
-<li><strong><code>InlineObjects</code></strong> and their boxes; text fields and areas drawing objects (<code>TextFieldObjectsTest</code>).</li>
-<li><strong><code>CellRefs</code>, <code>FormulaSplit</code>, <code>FormulaBar</code></strong>: 39 tests.</li>
-<li><strong><code>Sheet</code>, its core</strong>: the cell store, geometry by prefix sums and search, painting only the rows and columns in view and clipped to them, editing in place, completion; 92 tests.</li>
-<li><strong>Selections</strong> (sparse, header scopes, merges, find, validation): 68. <strong>Formula editing</strong> (point mode, marquees, the fx mirror): 39. <strong>Clipboard, fill and moving cells</strong>: 33. <strong>Resizing, freezing, scrolling</strong>: 22. Pictures in cells: 9.</li>
-</ol>
-<p><strong>Part seven: documents</strong></p>
-<ol start="28">
-<li><strong><code>RunList</code> and <code>ProseDoc</code></strong>, keeping unknown inline elements; the model's tests.</li>
-<li><strong>The box engine, one</strong>: the cascade's glue, block and inline flow, lists, painting, links, hover, breaking lines on <code>Font.offsets</code>.</li>
-<li><strong>The box engine, two</strong>: floats, inline-block, flex, grid with subgrid, tables, positioning, counters, clipping, the effects of N3.</li>
-<li><strong>Layout that changes only what changed</strong>: blocks kept, boxes placed relative to their block so that an edit moves one number, slices found by search; then <code>HtmlView</code>'s editing, the source popup and Markdown (<code>HtmlBoxEditingTest</code>).</li>
-<li><strong><code>ProseTree</code>, the stylers, <code>ProseView</code></strong>: layout, hit-testing and painting, then editing, undo, the clipboard, objects.</li>
-<li><strong><code>DocView</code></strong>: items, focus, the caret across blocks, the gutter, dragging, the menu, undo; then its page, splicing prose, sticky and fixed blocks, the selection across blocks.</li>
-</ol>
-<p><strong>Part eight: the end</strong></p>
-<ol start="34">
-<li><strong>The tests that waited</strong>: those across packages (a map, a sheet or math in a document), the root package's (about 70), the waiting cases of <code>ContentInvalidationTest</code> and others.</li>
-<li><strong>The Launcher's ten tabs</strong>; the docs (gui-plan.html 6.6, "As built in M9 and M10"; the outstanding list); the full check of every build; the benchmarks; <code>build\m10</code> with the examples built; the version.</li>
-</ol>
-
-<h3 id="m910p-speed">Speed</h3>
-<p>Jade is interpreted, so each part is timed as it is built, and where Jade is too slow a C++ piece with a public API is added, as M7 and M8 did. The targets, from JadeUI's own uses:</p>
-<ul>
-<li><strong>Documents</strong>: a key typed in Snips' DESIGN.html (433,000 characters, about 70,000 words) answered within a frame. JadeUI does everything per key over the whole document; here layout changes only what changed (step 31). Opening it within a second. This is where a native piece (a line breaker, measuring words) is likeliest to be needed.</li>
-<li><strong>The spreadsheet</strong>: a 10,000 by 20 sheet filled, scrolled, moved through and typed in, each within a frame; painting only what is in view, column widths not measured again on every paint.</li>
-<li><strong>Code</strong>: typing in a 5,000-line file within a frame, only the changed lines coloured again; opening it within a quarter of a second.</li>
-<li><strong>Large text and hex</strong>: a file of several gigabytes opened at once and indexed in the background, near the disk's speed, the window answering meanwhile.</li>
-<li><strong>The map</strong>: tens of thousands of features panned and zoomed within a frame.</li>
-<li><strong>SVG</strong>: a 1 MB picture parsed once and drawn within a frame; the Lucide icons at once.</li>
-<li><strong>Pictures</strong>: a 12-megapixel photo opened, zoomed, adjusted and flood-filled, each well within a second; undo not keeping 2 GB.</li>
-</ul>
-
-<h3 id="m910p-bugs">JadeUI's bugs to fix on the way</h3>
-<p>The readings found about 80, each to be fixed where its part is ported, with a test, and listed in 6.6 as a difference. The largest: in <strong>doc</strong>, typing at the start of a paragraph after a heading turns it into a heading, formatting is not undoable, a highlight is saved as coloured text, Markdown lists get two bullets; in <strong>css</strong>, rules after an <code>@import</code> lost, <code>:hover</code> adding no specificity, <code>var()</code> from <code>:root</code> only; in <strong>html</strong>, a <code>&lt;</code> in text read as a tag, a DOCTYPE wrapping the document; in <strong>svg</strong>, <code>render</code> throwing on bad path data, <code>S</code> and <code>T</code> curves wrong, opacity replaced rather than multiplied; in <strong>sheet</strong>, scrolled columns painted over the frozen ones, Delete on a sparse selection clearing one cell, TSV not quoting tabs; in <strong>image</strong>, an ellipse hit-tested by its box, a see-through fill differing from its preview, merging a hidden layer; in <strong>math</strong>, <code>x_(n+1)</code> read as a call, results left on the wrong lines after a delete; in <strong>hex</strong>, a new source keeping the old edits (a save would write them into the new file).</p>
-
-<h3 id="m910p-later">Left for later</h3>
-<ul>
-<li>CMYK and arithmetic-coded JPEG (Java reads neither), progressive JPEG written (it is read; baseline is written, which every reader opens). APNG, PNG's animation, which no one asked for.</li>
-<li>LaTeX in math, and OpenType MATH layout: JadeUI has neither.</li>
-<li>Pictures from <code>http</code> addresses in documents (question 12).</li>
-<li>An HTML table on the clipboard from the spreadsheet: Topaz's clipboard carries text, pictures and its own runs.</li>
-<li>The 3D view's layers (<code>Layers.kt</code>): M11.</li>
-</ul>
-
-<h3 id="m910p-questions">Questions for the user</h3>
-<p>Each with the recommendation; new names in the standard library and in Topaz's API are the user's to settle.</p>
-<ol>
-<li><strong>Version.</strong> M9 and M10 end together: 0.10.0 at the end, with no 0.9.0? <em>Recommended.</em></li>
-<li><strong>The vector path's name.</strong> <em>Decided (the user, 2026-11-08):</em> <code>Path</code>, with the file path renamed <code>FilePath</code> as the milestone's first step. Built as <code>Path().moveTo(x, y).lineTo(...).curveTo(...).close()</code> and from SVG data with <code>Path.parse(d)</code>; the rest by Java's names without "2D", recommended: <code>Transform</code>, <code>Stroke</code> (width, <code>LineCap</code>, <code>LineJoin</code>, miter limit, dashes), <code>FillRule</code>, <code>LinearGradient</code>, <code>RadialGradient</code>, <code>Composite</code>, <code>Interpolation</code>.</li>
-<li><strong>N3 written by us</strong>, its geometry in Jade and its pixels in Topaz's C++ rasteriser, not taken from NanoVG (which gui-plan section 4 left open)? <em>Recommended: by us</em>, with no third-party code, as for text.</li>
-<li><strong>Picture formats.</strong> <em>Decided (the user, 2026-11-08):</em> every format read is written, and the other way round: PNG, JPEG, GIF, BMP, WebP; GIF's and WebP's animations read and written. Recommended for the names: <code>Image.load</code> reading any of them (an animation's first frame), <code>image.save(file, quality = ...)</code> choosing by the file's extension, <code>image.encode(ImageFormat.jpeg, quality = 0.9)</code> giving the bytes, with <code>toPng()</code> kept; <code>Animation.load(file)</code> giving an <code>Animation</code> (<code>frames</code>, each an <code>AnimationFrame</code> with its <code>image</code> and <code>delay</code>; <code>loops</code>, 0 for ever), saved the same way; GIF reduced to 256 colours by an octree, dithering off unless asked for. And the picture editor, given an animation: <em>recommended</em>, it edits one frame at a time, with a strip of the frames to choose from, add, remove and reorder, and each frame's delay; saving keeps the animation.</li>
-<li><strong>Standard library names</strong>: <code>RandomAccessFile</code> (<code>readAt</code>, <code>writeAt</code>, <code>size</code>, <code>sync</code>, <code>close</code>); <code>ByteSource</code>, <code>InMemoryByteSource</code>, <code>PagedFile</code>, <code>LineIndex</code>, <code>writeByteDiff</code>; <code>Base64.encode</code> and <code>decode</code>; <code>Xml.parse</code> with <code>XmlElement</code> (<code>name</code>, <code>attributes</code>, <code>attr(name)</code>, <code>children</code>, <code>elements(name)</code>, <code>text</code>, <code>parent</code>), <code>XmlText</code>, <code>XmlException</code>; <code>FilePath.home()</code>; <code>Bytes.indexOf(value, from)</code>; on <code>Image</code>: <code>scaled</code>, <code>transformed</code>, <code>adjusted</code>, <code>greyscale</code>, <code>inverted</code>, <code>blurred</code>, <code>floodRegion</code> giving a <code>Mask</code>. <em>Those names recommended.</em></li>
-<li><strong>Topaz's names</strong>, "Jade" dropped as section 6.2 has it: <code>CodeView</code>, <code>HexView</code>, <code>LargeTextView</code>, <code>MapView</code> (<code>MapPoint</code>, <code>MapShape</code>, <code>MapTool</code>), <code>MathTypeset</code>, <code>MathView</code>, <code>MathBlock</code>, <code>SvgView</code>, <code>ToolbarIcons</code>, <code>ImageView</code>, <code>PictureViewer</code>, <code>PictureEditor</code>, <code>Sheet</code>, <code>FormulaBar</code>, <code>HtmlView</code>, <code>ProseView</code>, <code>DocView</code>, with their lowercase builders. Files flat in <code>lib/Topaz</code>, the box engine in three files. <em>Recommended.</em></li>
-<li><strong>The code editor's languages</strong>: the built-in ones kept in the library as data, so a program made with <code>jade build</code> has them; a user's in <code>~/.topaz/lang</code>; <code>jade.lang</code> with Jade's keywords and declaration words, its lowercase type names coloured as keywords, <code>it</code>, <code>field</code>, <code>get</code>, <code>set</code> not. <em>Recommended.</em></li>
-<li><strong>The spreadsheet's API</strong>: a selection as a value <code>CellRange</code>, a cell as <code>CellAt</code> (not an array or a Pair); the header scopes as an enum <code>SheetScope</code>; a batch hook <code>onEdits</code> and a bulk <code>update { }</code> (Snips recalculates once per paste, not once per cell); the geometry methods made public; the Snips words in it ("Regenerate", "(AUTOFILL)") given by the program, JadeUI's as the default. <em>Recommended.</em></li>
-<li><strong>Documents</strong>: undo by edit records, which makes formatting undoable; unknown inline elements (<code>sup</code>, <code>sub</code>, <code>mark</code>, a span's style) kept on save; Snips' own behaviour made optional with neutral names (the table's coordinate strips off by default, the <code>snips-*</code> elements renamed); layout exact, helped by C++. <em>Recommended.</em></li>
-<li><strong>Math</strong>: drawn directly, not through a picture per line; minus as the true minus sign (U+2212). Single-letter variables in italics, as in typeset mathematics? <em>Recommended: the minus sign yes; italics left as Snips has them, upright</em>, unless the user wants them.</li>
-<li><strong>SVG</strong>: drawn into a cached picture at device pixels, as JadeUI does, not live on the canvas; JadeUI's departures from SVG fixed (opacity, <code>currentColor</code>, the miter limit, <code>preserveAspectRatio</code>) and listed. <em>Recommended.</em></li>
-<li><strong>Pictures in documents</strong>: from files and <code>data:</code> addresses only, not fetched from <code>http</code> on the window's thread as JadeUI does. <em>Recommended</em>; a fetch in the background can come with M12's networking.</li>
-<li><strong>Overrides</strong>: the <code>commands</code> file and the check mark written with <code>topaz</code> where JadeUI writes <code>jui</code>, both read. <em>Recommended.</em></li>
-<li><strong>How near is near enough.</strong> A piece stays in Jade when, after part zero, it runs within this distance of the same code in C++ and meets its target under Speed. <em>Recommended: within three times</em>, the targets deciding where three times is still too slow (a frame's budget) and where far more is fine (a picture opened once).</li>
-</ol>
 </section>
 </main>
 </body>
