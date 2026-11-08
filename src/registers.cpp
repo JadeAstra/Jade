@@ -1017,6 +1017,7 @@ CodeOffsets codeOffsets(Op o) {
         case Op::MoveS:
         case Op::MoveK:
         case Op::SetTop:
+        case Op::Translate:
         case Op::RGetUpvalue: return {};
         case Op::RGetProp: return {6};
         case Op::RGetPath: return {13};
@@ -1115,6 +1116,17 @@ void threadCode(FunctionProto& f, size_t opBytes) {
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
 
+void runLater(FunctionProto& f) {
+    std::vector<uint8_t> run(kThreaded, 0);
+    run.push_back(static_cast<uint8_t>(static_cast<int>(Op::Translate) & 0xFF));
+    run.push_back(static_cast<uint8_t>(static_cast<int>(Op::Translate) >> 8));
+    f.run = std::move(run);
+    f.runLines.assign(f.run.size(), f.lines.empty() ? 0 : f.lines[0]);
+    f.runRights.clear();
+    f.addressed.done.store(false, std::memory_order_relaxed);
+    if (writeRunAddresses != nullptr) writeRunAddresses(f);
+}
+
 // The length of the run code's instruction whose opcode is at `at`, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
     const Op o = jade::opAt(&run[at]);
@@ -1123,6 +1135,7 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::MoveS:
         case Op::MoveK: return kOpBytes + 2;
         case Op::SetTop: return kOpBytes + 1;
+        case Op::Translate: return kOpBytes;
         case Op::RGetProp: return kOpBytes + 10;
         case Op::RGetPath: return kOpBytes + 17;
         case Op::RSetPropSS:

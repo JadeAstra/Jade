@@ -3043,6 +3043,17 @@ CASE(SetTop) {
     NEXT();
 }
 }
+CASE(Translate) {
+    {
+    // A function's first call (M9/M10): its run code made now from its stack code, rather than
+    // as the program was read, and run from its start, where this instruction stood.
+    FunctionProto* const proto = const_cast<FunctionProto*>(frame->closure->proto);
+    translateNow(*proto);
+    frame->ip = proto->run.data();
+    LOAD_FRAME();
+    NEXT();
+}
+}
 R_ARITHMETIC(RAddSS, R_S, R_S, +, addOverflows, plainAdd)
 R_ARITHMETIC(RAddSK, R_S, R_K, +, addOverflows, plainAdd)
 R_ARITHMETIC(RAddKS, R_K, R_S, +, addOverflows, plainAdd)

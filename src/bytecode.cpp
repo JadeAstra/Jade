@@ -1184,7 +1184,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
     return endDepth;
 }
 
-void verifyFunction(FunctionProto& f, const Program& program) {
+void verifyFunction(FunctionProto& f, const Program& program, bool now) {
     for (const FunctionProto::Rights& r : f.rights)
         if (r.start > r.end || r.end > f.code.size()) throw std::runtime_error("invalid bytecode: rights of copied code out of range");
     if (f.reflection != nullptr) {
@@ -1200,7 +1200,15 @@ void verifyFunction(FunctionProto& f, const Program& program) {
     }
     std::vector<int> depths;
     analyzeStack(f, program, false, &depths);
-    translate(f, depths);
+    if (now || f.chooser || f.code.empty()) {
+        f.untranslated = nullptr;
+        translate(f, depths);
+    } else {
+        // Its run code made at its first call: a program's start reads the whole standard
+        // library, and translating it all took 11 of its 14 ms (M9/M10).
+        f.untranslated = &program;
+        runLater(f);
+    }
     // A function whose whole work is `this.name`: GetLocal 0, GetProp or GetOwn, Return, after
     // the places it gives its frame, which are none (D149).
     const std::vector<uint8_t>& whole = f.code;
@@ -1216,6 +1224,29 @@ void verifyFunction(FunctionProto& f, const Program& program) {
 }
 
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }
+
+void translateNow(FunctionProto& f) {
+    // One at a time: threads of one VM take turns, but a function read late (loadDeferred) or
+    // a program of its own may be reached by more than one.
+    static std::mutex translating;
+    std::lock_guard<std::mutex> hold(translating);
+    if (f.untranslated == nullptr) return;
+    // The standard library's own top-level code runs once, as a program starts, and only makes
+    // its classes and functions: its stack code is run as it is, threaded, which takes a third
+    // of the time of translating its 30 KB into R instructions that would pay for themselves
+    // only in a loop.
+    const bool once = f.name == "<script>" && f.source == "<std>";
+    std::vector<int> depths;
+    if (!once) analyzeStack(f, *f.untranslated, false, &depths);  // as verified: only the depths are wanted again
+    f.addressed.done.store(false, std::memory_order_relaxed);
+    translate(f, depths);
+    f.untranslated = nullptr;
+}
+
+void Program::translateAll() {
+    for (const std::unique_ptr<FunctionProto>& f : owned_)
+        if (f->untranslated != nullptr) translateNow(*f);
+}
 
 // ---- Disassembly ----
 
@@ -1459,7 +1490,7 @@ const char* opName(Op op) {
                                       "R_JUMP_GT_I_SS", "R_JUMP_GT_I_SK", "R_JUMP_GE_I_SS", "R_JUMP_GE_I_SK", "R_JUMP_EQ_I_SS",
                                       "R_JUMP_EQ_I_SK", "R_JUMP_LT_F_SS", "R_JUMP_LT_F_SK", "R_JUMP_LE_F_SS", "R_JUMP_LE_F_SK",
                                       "R_JUMP_GT_F_SS", "R_JUMP_GT_F_SK", "R_JUMP_GE_F_SS", "R_JUMP_GE_F_SK", "R_JUMP_EQ_F_SS",
-                                      "R_JUMP_EQ_F_SK", "R_GET_PATH"};
+                                      "R_JUMP_EQ_F_SK", "R_GET_PATH",   "TRANSLATE"};
     static_assert(sizeof(run) / sizeof(run[0]) == kOpCount - static_cast<size_t>(Op::MoveS), "a name for each");
     const size_t r = i - static_cast<size_t>(Op::MoveS);
     return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";
@@ -1903,7 +1934,7 @@ struct Reader {
     }
 };
 
-void verifyTree(FunctionProto& f, const Program& program);
+void verifyTree(FunctionProto& f, const Program& program, bool now = false);
 
 }  // namespace
 
@@ -1915,17 +1946,17 @@ void loadDeferred(FunctionProto& f) {
     Reader r{kept->bytes, *kept->program, *kept->vm, 0};
     FunctionProto* read = r.proto(1);
     if (r.pos != kept->bytes.size()) r.corrupt();
-    verifyTree(*read, *kept->program);
+    verifyTree(*read, *kept->program, true);  // read when asked for, perhaps in a parallel section: made now
     f = std::move(*read);
     f.describes = true;
 }
 
 namespace {
 
-void verifyTree(FunctionProto& f, const Program& program) {
+void verifyTree(FunctionProto& f, const Program& program, bool now) {
     if (f.deferred != nullptr) return;  // verified when it is read
-    verifyFunction(f, program);
-    for (FunctionProto* nested : f.protos) verifyTree(*nested, program);
+    verifyFunction(f, program, now);
+    for (FunctionProto* nested : f.protos) verifyTree(*nested, program, now);
 }
 
 void writeU16(std::vector<uint8_t>& code, size_t at, int v) {

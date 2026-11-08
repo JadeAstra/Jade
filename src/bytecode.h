@@ -482,6 +482,9 @@ enum class Op : uint16_t {
     // the last field is: read there at once, with nothing looked up on the way. u8 A, u8 B, u8 T,
     // u8 S, u16 cache, u8 hops, u16 name x3, i32 slow.
     RGetPath,
+    // A function's whole run code until it is first called (M9/M10): its run code is made then,
+    // from its stack code, and run from its start. No operands.
+    Translate,
     RunCount_,          // how many instructions there are, the run code's included
 };
 // The stack code's instructions are a byte each; the run code's, two (kOpBytes).
@@ -748,6 +751,9 @@ struct FunctionProto {
         }
     };
     mutable Addressed addressed;
+    // Until the function is first called, the program it is translated in then (translateNow);
+    // its run code is the one instruction Translate. Null once translated.
+    const Program* untranslated = nullptr;
     std::vector<int> runLines;
     struct RunRights {
         uint32_t start, end;  // a range of `run`
@@ -892,6 +898,9 @@ public:
     int entry = 0;
 
     FunctionProto* newProto();
+    // Every function's run code made that is not made yet: before a parallel section, whose
+    // cores share the functions and must not make one's run code while another runs it.
+    void translateAll();
 
 private:
     std::vector<std::unique_ptr<FunctionProto>> owned_;
@@ -899,8 +908,13 @@ private:
 
 // Checks that every operand of `f` is in range and that the stack depth is consistent on
 // all paths, and records the function's stack requirement. The VM relies on both.
-// Throws std::runtime_error if the bytecode is malformed.
-void verifyFunction(FunctionProto& f, const Program& program);
+// Throws std::runtime_error if the bytecode is malformed. Its run code is made at its first
+// call (Translate) unless `now`: a program's start makes only what it runs.
+void verifyFunction(FunctionProto& f, const Program& program, bool now = false);
+// The run code of a function verified but not yet translated, made now (Op::Translate).
+void translateNow(FunctionProto& f);
+// A function's run code until its first call: the one instruction Translate (registers.cpp).
+void runLater(FunctionProto& f);
 
 // For the compiler, part-way through a function: how many stack slots are in use where the
 // code written so far ends, counted from the frame base, or -1 if that point is never reached.

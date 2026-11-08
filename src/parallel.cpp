@@ -562,6 +562,9 @@ void VM::runSection(ParallelSection& section) {
     if (section_ != nullptr) {
         section.generation = section_->generation;
     } else {
+        // The cores share the program's functions: every one's run code made before they start,
+        // so that none is made while another core runs it.
+        if (program_ != nullptr) program_->translateAll();
         std::lock_guard<std::mutex> hold(pool.mutex);
         section.generation = ++pool.generation;
     }

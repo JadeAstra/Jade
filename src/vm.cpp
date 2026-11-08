@@ -6431,6 +6431,7 @@ void VM::run(int baseFrame) {
             JADE_DISPATCH_TO(FieldTypesMaker)
             JADE_DISPATCH_TO(TypeSlots)
             JADE_DISPATCH_TO(RGetPath)
+            JADE_DISPATCH_TO(Translate)
             JADE_DISPATCH_TO(RAddISS)
             JADE_DISPATCH_TO(RAddISK)
             JADE_DISPATCH_TO(RAddIKS)
