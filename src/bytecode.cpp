@@ -374,6 +374,12 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
     if (n == 0 && partial) return 1 + f.arity;
     if (n == 0) fail("empty function");
     if (f.lines.size() != n) fail("line table does not match the code");
+    for (size_t i = 0; i < f.inlined.size(); i++) {
+        const int call = f.inlined[i].callLine;
+        if (call < 0 || (call >= kInlinedLine && static_cast<size_t>(call - kInlinedLine) >= i)) fail("bad call put in place");
+    }
+    for (int line : f.lines)
+        if (line < 0 || (line >= kInlinedLine && static_cast<size_t>(line - kInlinedLine) >= f.inlined.size())) fail("bad line");
     if (f.arity < 0 || f.arity > 255) fail("bad arity");
     if (f.minArity < -1 || f.minArity > f.arity) fail("bad arity");
     if (f.varargIndex < -1 || f.varargIndex >= f.arity) fail("bad vararg parameter");
@@ -1250,7 +1256,7 @@ void disassembleFunction(const FunctionProto& f, const Program& program, std::os
         decodeOperands(code, ip, info.operand, a, b);
 
         out << std::setw(5) << ip << " ";
-        int line = f.lines[ip];
+        int line = f.sourceLine(f.lines[ip]);
         if (line == lastLine) out << "    | ";
         else out << std::setw(5) << line << " ";
         lastLine = line;
@@ -1510,7 +1516,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 30;
+const uint8_t kFormatVersion = 31;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1621,6 +1627,13 @@ struct Writer {
         for (const auto& run : runs) {
             u32(run.first);
             u32(run.second);
+        }
+        u32(static_cast<uint32_t>(f.inlined.size()));
+        for (const FunctionProto::InlinedCall& call : f.inlined) {
+            str(call.name);
+            str(call.source);
+            u32(static_cast<uint32_t>(call.line));
+            u32(static_cast<uint32_t>(call.callLine));
         }
 
         u32(static_cast<uint32_t>(f.constants.size()));
@@ -1817,6 +1830,15 @@ struct Reader {
             uint32_t length = u32();
             if (length > codeSize - f->lines.size()) corrupt();
             f->lines.insert(f->lines.end(), length, static_cast<int>(line));
+        }
+        const uint32_t inlinedCount = count(16);
+        for (uint32_t i = 0; i < inlinedCount; i++) {
+            FunctionProto::InlinedCall call;
+            call.name = str();
+            call.source = str();
+            call.line = static_cast<int>(u32());
+            call.callLine = static_cast<int>(u32());
+            f->inlined.push_back(std::move(call));
         }
 
         uint32_t constantCount = count(1);

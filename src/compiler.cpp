@@ -213,6 +213,9 @@ struct FunctionState {
     int placeTemps = 0;
     std::map<std::pair<int, uint64_t>, int> constantIndex;
     int owner = 0;    // whose code is being compiled in it now (Local::owner)
+    // The compiler's lines for code put in place of a call (Compiler::inlinedSites_), and where
+    // each is in the function's own list (FunctionProto::inlined).
+    std::unordered_map<int, int> inlinedHere;
 
     void add(Local local) {
         local.slot = slotTop++;
@@ -856,6 +859,7 @@ private:
         InlineFrame* frame = nullptr;    // the inline function whose body this is, if any
         int owner = 0;
         int lineFixed = -1;              // the line its code is said to be at: the call's
+        int inlinedBody = -1;            // a small function's body put in place (Compiler::inlinedBody_)
     };
     struct BoundLambda {
         const FunctionDecl* lambda = nullptr;
@@ -882,6 +886,24 @@ private:
     bool implicitOnly_ = false;
     InlineFrame* frame_ = nullptr;
     int lineFixed_ = -1;
+    // Code put in place of a call of a small function (Checker::InlineCall::automatic): each line
+    // of its body, with the function and the line of the call, is one of these, numbered from
+    // kInlinedLine up in the compiler's lines; a function's line table has its own numbers for
+    // those it uses (lineHere). The body being compiled is `inlinedBody_`, -1 for none.
+    struct InlinedSite {
+        std::string name, source;
+        int line = 0;
+        int callLine = 0;  // the compiler's line
+    };
+    struct InlinedBody {
+        std::string name, source;
+        int callLine = 0;  // the compiler's line
+        std::map<int, int> sites;  // by line of the body
+    };
+    std::vector<InlinedSite> inlinedSites_;
+    std::vector<InlinedBody> inlinedBodies_;
+    int inlinedBody_ = -1;
+    std::vector<const FunctionDecl*> smallInlined_;  // small functions being put in place, outermost first
     int nextOwner_ = 0;
     std::unordered_set<int> inlineBodies_;  // owners that are inline bodies, reaching nothing around
     int inlineDepth_ = 0;
@@ -908,6 +930,7 @@ private:
         s.frame = frame_;
         s.owner = fs_->owner;
         s.lineFixed = lineFixed_;
+        s.inlinedBody = inlinedBody_;
         return s;
     }
     void enterScope(const CodeScope& s) {
@@ -921,6 +944,7 @@ private:
         frame_ = s.frame;
         fs_->owner = s.owner;
         lineFixed_ = s.lineFixed;
+        inlinedBody_ = s.inlinedBody;
         noteRights();
     }
 
@@ -1002,6 +1026,12 @@ private:
         if (!session_.checker->inlineCall(e, info)) return false;
         const FunctionDecl& fn = *info.fn;
         if (fn.isAbstract) return false;
+        if (info.automatic) {
+            // Not inside itself, a call of itself being a call (and not more than four deep).
+            if (smallInlined_.size() >= 4 || std::find(smallInlined_.begin(), smallInlined_.end(), &fn) != smallInlined_.end()) return false;
+            for (const FunctionState* state = fs_; state != nullptr; state = state->enclosing)
+                if (state->decl == &fn) return false;
+        }
         const MemberExpr* member = e.callee->kind == ExprKind::Member ? static_cast<const MemberExpr*>(e.callee.get()) : nullptr;
         if (member != nullptr && importedMember(*member->object, member->name, *member) != nullptr) member = nullptr;
         // A static member has no object: `Class.f()` names its class, which there is nothing to work out of (G34).
@@ -1027,9 +1057,23 @@ private:
         const size_t n = fn.params.size();
         std::vector<int> given(n, -1);
         std::vector<std::optional<BoundLambda>> bound(n);
+        // A small function's body that runs nothing of the program's (Checker::InlineCall::pure),
+        // given locals and literals alone: a local is read where it is, as nothing can change it
+        // before the body is done with it.
+        bool readInPlace = info.automatic && info.pure;
+        for (const ExprPtr& arg : e.args)
+            if (arg->kind != ExprKind::Name && arg->kind != ExprKind::Literal) readInPlace = false;
         for (size_t i = 0; i < e.args.size(); i++) {
             const int p = i < info.paramOf.size() ? info.paramOf[i] : -1;
             const Expr& arg = *e.args[i];
+            if (readInPlace && p >= 0 && static_cast<size_t>(p) < n && arg.kind == ExprKind::Name) {
+                VarInfo local;
+                const int at = resolveLocal(fs_, static_cast<const NameExpr&>(arg).name, arg, local);
+                if (at >= 0 && fs_->locals[static_cast<size_t>(at)].place < 0) {
+                    given[static_cast<size_t>(p)] = at;
+                    continue;
+                }
+            }
             if (p < 0 || static_cast<size_t>(p) >= n) {
                 compileExpr(arg);
                 emit(Op::Pop);
@@ -1118,7 +1162,17 @@ private:
         body.implicitOnly = true;
         body.frame = &frame;
         body.owner = frame.owner;
-        body.lineFixed = lineFixed_ >= 0 ? lineFixed_ : e.line;
+        const int callLine = lineFixed_ >= 0 ? lineFixed_ : lineOf(e.line);
+        if (info.automatic) {
+            // A small function's body keeps its lines, as the lines of a call of it (FunctionProto::inlined).
+            body.lineFixed = -1;
+            body.inlinedBody = static_cast<int>(inlinedBodies_.size());
+            inlinedBodies_.push_back(InlinedBody{fn.name, file_, callLine, {}});
+            smallInlined_.push_back(&fn);
+        } else {
+            body.lineFixed = callLine;
+            body.inlinedBody = -1;
+        }
         enterScope(body);
         inlineDepth_++;
         beginScope();
@@ -1155,10 +1209,18 @@ private:
                 emit(Op::Pop);
             }
         }
-        compileInlineBody(fn.body);
+        if (info.automatic) {
+            // `=> value`: the value, as the call's (the body's reads are copies already, inPlaceOff).
+            const auto& ret = static_cast<const ReturnStmt&>(*fn.body[0]);
+            line_ = ret.line;
+            compileExpr(*ret.value);
+        } else {
+            compileInlineBody(fn.body);
+        }
         endScopeKeepingValue();
         for (int jump : frame.exits) patchJump(jump);
         inlineDepth_--;
+        if (info.automatic) smallInlined_.pop_back();
         enterScope(caller);
         line_ = e.line;
         endScopeKeepingValue();
@@ -1453,7 +1515,34 @@ private:
 
     void emitByte(int b) {
         fs_->proto->code.push_back(static_cast<uint8_t>(b));
-        fs_->proto->lines.push_back(lineFixed_ >= 0 ? lineFixed_ : line_);
+        fs_->proto->lines.push_back(lineHere(lineFixed_ >= 0 ? lineFixed_ : lineOf(line_)));
+    }
+
+    // The compiler's line for `line` of the code being compiled: in the body of a small function
+    // put in place, that line of it, called where it was.
+    int lineOf(int line) {
+        if (inlinedBody_ < 0) return line;
+        InlinedBody& body = inlinedBodies_[static_cast<size_t>(inlinedBody_)];
+        auto found = body.sites.find(line);
+        if (found != body.sites.end()) return found->second;
+        const int made = kInlinedLine + static_cast<int>(inlinedSites_.size());
+        inlinedSites_.push_back(InlinedSite{body.name, body.source, line, body.callLine});
+        body.sites.emplace(line, made);
+        return made;
+    }
+
+    // A compiler's line as the function being compiled numbers it: a call put in place gets a
+    // place in its list the first time, after the call it was made in.
+    int lineHere(int line) {
+        if (line < kInlinedLine) return line;
+        auto found = fs_->inlinedHere.find(line);
+        if (found != fs_->inlinedHere.end()) return found->second;
+        const InlinedSite site = inlinedSites_[static_cast<size_t>(line - kInlinedLine)];
+        const int call = lineHere(site.callLine);
+        const int here = kInlinedLine + static_cast<int>(fs_->proto->inlined.size());
+        fs_->proto->inlined.push_back(FunctionProto::InlinedCall{site.name, site.source, site.line, call});
+        fs_->inlinedHere.emplace(line, here);
+        return here;
     }
 
     void emitU16(int value) {

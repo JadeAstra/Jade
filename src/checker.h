@@ -304,6 +304,12 @@ public:
         std::string ownerName;             // as the program names it: `Outer.Inner`
         bool extension = false;
         bool prelude = false;              // the standard library's
+        // Not written `inline`: a small function the checker chose to put in place of the call
+        // (M9/M10 part zero), which a stack trace still shows as a call of its own.
+        bool automatic = false;
+        // And its body is worked out from its parameters alone, all of them numbers, booleans,
+        // characters or text, by operators: nothing the program writes runs meanwhile.
+        bool pure = false;
     };
     bool inlineCall(const CallExpr& call, InlineCall& out) const;
     // Whether a lambda given for this parameter of an inline function is copied in with it: the

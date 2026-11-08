@@ -618,6 +618,9 @@ uint8_t builtinTypeId(const std::string& name);
 // "int", "string?", ... For kTypeInstance pass the class name.
 std::string typeText(uint8_t type, const std::string& className);
 
+// Lines from this one up, in a function's line table, stand for calls put in place (FunctionProto::inlined).
+const int kInlinedLine = 1 << 28;
+
 struct UpvalueDesc {
     bool isLocal;    // captured from the enclosing function's locals (else from its upvalues)
     uint16_t index;
@@ -708,6 +711,24 @@ struct FunctionProto {
 
     std::vector<uint8_t> code;
     std::vector<int> lines;                // source line of each byte in `code`
+
+    // Calls of small functions the compiler put in place of the call (M9/M10 part zero), for a
+    // stack trace to show as calls: a line of `lines` from kInlinedLine up stands for line
+    // `line` of the function `name`, in `source`, called at `callLine`, which is such a line
+    // again where that call was put in place too, of a call before it in this list.
+    struct InlinedCall {
+        std::string name, source;
+        int line = 0;
+        int callLine = 0;
+    };
+    std::vector<InlinedCall> inlined;
+    // The line of the function's own source a line of `lines` or `runLines` is at: for code put in
+    // place of a call, the call's.
+    int sourceLine(int line) const {
+        while (line >= kInlinedLine && static_cast<size_t>(line - kInlinedLine) < inlined.size())
+            line = inlined[static_cast<size_t>(line - kInlinedLine)].callLine;
+        return line;
+    }
 
     // The code the VM runs (M6.7): made from `code` by translate (registers.cpp) when the
     // verifier has passed it; with the source line of each of its bytes, and the ranges of

@@ -1161,7 +1161,7 @@ void dump(const FunctionProto& f) {
     for (size_t at = 0; at + kThreaded < f.run.size();) {
         const char* name = "?";
         const size_t size = runSize(f.run, at + kThreaded, name);
-        std::fprintf(stderr, "%5zu  line %-4d %-18s", at, f.runLines[at], name);
+        std::fprintf(stderr, "%5zu  line %-4d %-18s", at, f.sourceLine(f.runLines[at]), name);
         for (size_t i = kOpBytes; i < size && at + kThreaded + i < f.run.size(); i++) std::fprintf(stderr, " %3d", f.run[at + kThreaded + i]);
         std::fprintf(stderr, "\n");
         at += kThreaded + size;

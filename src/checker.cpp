@@ -3668,6 +3668,7 @@ struct Checker::Impl {
         // `return cached`: the field is given back at once, and is copied on the way unless the
         // caller keeps it where it is (M6.6 part 5).
         if (r.value) noteGivenBack(*r.value);
+        if (r.value && !ctx->isLambda && silent == 0) returnedTypes[&r] = value;
         if (!r.label.empty()) return;  // return@name leaves a lambda
         if (ctx->isLambda && !r.implicit) return;  // a bare return in an inlined lambda leaves the function around it
         if (ctx->returns != nullptr) {
@@ -7501,6 +7502,7 @@ struct Checker::Impl {
         Binding b = bind(f, args, at, what);
         if (f->decl != nullptr && f->decl->isSuspend) noteWait(at, f->name, givesToSequence(f));
         if (f->decl != nullptr && f->decl->isInline && silent == 0) noteInlineCall(f, b, at);
+        else if (silent == 0 && !args.spread) noteSmallCall(f, b, args, at);
         noteCallThrows(f, nullptr, args, &b, at);
         if (receiver != nullptr && f->name == "use" && f->isExtension && f->unit != nullptr && f->unit->prelude) noteCloseOf(*receiver, at);
         // Named arguments and a lambda after the call, given to a C++ function, are put where the
@@ -8543,11 +8545,167 @@ struct Checker::Impl {
     struct InlineCallFact {
         FuncInfo* fn = nullptr;
         std::vector<int> paramOf;
+        bool automatic = false;  // a small function, not written `inline`
+        bool pure = false;       // InlineCall::pure
     };
     std::unordered_map<const Node*, InlineCallFact> inlineCalls;
     // The inline functions each inline function's body calls, to find one that calls itself.
     std::map<FuncInfo*, std::vector<std::pair<FuncInfo*, const Node*>>> inlineCallsFrom;
     std::map<std::pair<FuncInfo*, int>, int> copiedKnown;  // 1 being worked out, 2 yes, 3 no
+
+    // A call of a small function, put in place of the call as an inline function's is (the user,
+    // 2026-11-08: a call costs about three times the work of a small body): a function of the
+    // file's top level, called in the same file, whose body is `=> expression` of a few plain
+    // parts, with no lambda, jump or object made in it; with no type parameters, vararg,
+    // parameter of a function type or annotation, and not waiting or a loop of itself. Never in
+    // the shell, where a later input may declare the function again, which a call would then
+    // reach. The compiler leaves out a call of a function inside itself.
+    // What a function's `return value` gives, as checked in the function: for a small function
+    // put in place, whose end does not check it (noteSmallCall).
+    std::unordered_map<const ReturnStmt*, Type> returnedTypes;
+
+    void noteSmallCall(FuncInfo* f, const Binding& b, const Args& args, const Node& at) {
+        if (f->decl == nullptr || f->decl->isInline || unit == nullptr || unit->shell || f->unit != unit) return;
+        const FunctionDecl& d = *f->decl;
+        if (f->owner != nullptr || f->isExtension || f->isExternal || d.isAbstract || d.isSuspend || d.isTail || d.isLambda ||
+            !d.typeParams.empty() || !f->typeParams.empty() || d.varargIndex >= 0 || f->vararg >= 0 || !d.annotations.empty())
+            return;
+        // What a function's start does with what it is given stays its start's: a parameter left
+        // to its default, a bare enum entry, a narrow int's range (D148), a byte made an int.
+        for (const Type& p : f->params)
+            if (p.kind == Type::Function || p.kind == Type::Unknown || p.storage != 0 ||
+                (p.kind == Type::Class && p.cls != nullptr && (p.cls->isEnum || p.cls->isEnumClass)))
+                return;
+        for (bool given : b.given)
+            if (!given) return;
+        if (b.failed || b.missing || d.body.size() != 1 || d.body[0]->kind != StmtKind::Return) return;
+        const auto& ret = static_cast<const ReturnStmt&>(*d.body[0]);
+        int budget = 32;
+        if (ret.value == nullptr || !plainParts(*ret.value, budget) || !topLevelFunction(f)) return;
+        // And what its end does: a bare enum entry or a byte given back as what the function
+        // gives, a narrow int's range.
+        auto returned = returnedTypes.find(&ret);
+        if (returned == returnedTypes.end() || !knownThrough(returned->second) || !f->result.known() || f->result.storage != 0 ||
+            (f->result.kind == Type::Class && f->result.cls != nullptr && (f->result.cls->isEnum || f->result.cls->isEnumClass)) ||
+            (returned->second.kind == Type::Byte && f->result.kind != Type::Byte))
+            return;
+        // Every argument of a type known through and through: the function's own start checks
+        // one the checker cannot see (a value of an untyped lambda's, say), and a call put in
+        // place has no start.
+        for (size_t i = 0; i < args.exprs.size(); i++) {
+            if (args.names.size() > i && args.names[i] == "...") return;
+            const Type arg = typeQuietly(*args.exprs[i]);
+            if (!knownThrough(arg)) return;
+            const int p = i < b.paramOf.size() ? b.paramOf[i] : -1;
+            if (p < 0 || (arg.kind == Type::Byte && f->params[static_cast<size_t>(p)].kind != Type::Byte)) return;
+        }
+        bool pure = true;
+        for (const Type& p : f->params)
+            if (p.kind != Type::Int && p.kind != Type::Float && p.kind != Type::Bool && p.kind != Type::Byte && p.kind != Type::Char &&
+                p.kind != Type::String)
+                pure = false;
+        inlineCalls[&at] = InlineCallFact{f, b.paramOf, true, pure && operatorsOnParams(*ret.value, d)};
+    }
+
+    static bool knownThrough(const Type& t) {
+        if (t.kind == Type::Unknown || t.kind == Type::TypeParam) return false;
+        for (const Type& arg : t.args)
+            if (!knownThrough(arg)) return false;
+        return true;
+    }
+
+    // Whether `e` is worked out from the function's parameters by operators alone.
+    static bool operatorsOnParams(const Expr& e, const FunctionDecl& d) {
+        switch (e.kind) {
+            case ExprKind::Literal: return true;
+            case ExprKind::Name: {
+                const std::string& name = static_cast<const NameExpr&>(e).name;
+                return std::find(d.params.begin(), d.params.end(), name) != d.params.end();
+            }
+            case ExprKind::Interp: {
+                for (const ExprPtr& part : static_cast<const InterpExpr&>(e).parts)
+                    if (!operatorsOnParams(*part, d)) return false;
+                return true;
+            }
+            case ExprKind::Unary: return operatorsOnParams(*static_cast<const UnaryExpr&>(e).operand, d);
+            case ExprKind::Binary: {
+                const auto& b = static_cast<const BinaryExpr&>(e);
+                return operatorsOnParams(*b.left, d) && operatorsOnParams(*b.right, d);
+            }
+            case ExprKind::Logical: {
+                const auto& l = static_cast<const LogicalExpr&>(e);
+                return operatorsOnParams(*l.left, d) && operatorsOnParams(*l.right, d);
+            }
+            case ExprKind::Ternary: {
+                const auto& t = static_cast<const TernaryExpr&>(e);
+                return operatorsOnParams(*t.condition, d) && operatorsOnParams(*t.then, d) && operatorsOnParams(*t.otherwise, d);
+            }
+            case ExprKind::Elvis: {
+                const auto& v = static_cast<const ElvisExpr&>(e);
+                return operatorsOnParams(*v.left, d) && operatorsOnParams(*v.right, d);
+            }
+            default: return false;
+        }
+    }
+
+    // Whether `e` is made of plain parts alone, no more than `budget` of them: literals, names,
+    // operators, calls, members and indexes.
+    static bool plainParts(const Expr& e, int& budget) {
+        if (--budget < 0) return false;
+        switch (e.kind) {
+            case ExprKind::Literal:
+            case ExprKind::Name: return true;
+            case ExprKind::Interp: {
+                for (const ExprPtr& part : static_cast<const InterpExpr&>(e).parts)
+                    if (!plainParts(*part, budget)) return false;
+                return true;
+            }
+            case ExprKind::Unary: return plainParts(*static_cast<const UnaryExpr&>(e).operand, budget);
+            case ExprKind::Binary: {
+                const auto& b = static_cast<const BinaryExpr&>(e);
+                return plainParts(*b.left, budget) && plainParts(*b.right, budget);
+            }
+            case ExprKind::Logical: {
+                const auto& l = static_cast<const LogicalExpr&>(e);
+                return plainParts(*l.left, budget) && plainParts(*l.right, budget);
+            }
+            case ExprKind::Ternary: {
+                const auto& t = static_cast<const TernaryExpr&>(e);
+                return plainParts(*t.condition, budget) && plainParts(*t.then, budget) && plainParts(*t.otherwise, budget);
+            }
+            case ExprKind::Elvis: {
+                const auto& v = static_cast<const ElvisExpr&>(e);
+                return plainParts(*v.left, budget) && plainParts(*v.right, budget);
+            }
+            case ExprKind::Member: return plainParts(*static_cast<const MemberExpr&>(e).object, budget);
+            case ExprKind::Index: {
+                const auto& x = static_cast<const IndexExpr&>(e);
+                if (x.defaultValue != nullptr || !x.more.empty()) return false;
+                return plainParts(*x.object, budget) && plainParts(*x.index, budget);
+            }
+            case ExprKind::Call: {
+                const auto& call = static_cast<const CallExpr&>(e);
+                if (call.trailingLambda) return false;
+                for (char spread : call.spread)
+                    if (spread) return false;
+                if (!plainParts(*call.callee, budget)) return false;
+                for (const ExprPtr& arg : call.args)
+                    if (!plainParts(*arg, budget)) return false;
+                return true;
+            }
+            default: return false;
+        }
+    }
+
+    // A function declared at the top level of its file, as against one declared in a body,
+    // which may use the locals around it.
+    bool topLevelFunction(FuncInfo* f) {
+        for (const auto* table : {&byNamespace[f->unit->ns], &privates[f->unit->fileKey]}) {
+            auto found = table->find(f->name);
+            if (found != table->end() && std::find(found->second.funcs.begin(), found->second.funcs.end(), f) != found->second.funcs.end()) return true;
+        }
+        return false;
+    }
 
     void noteInlineCall(FuncInfo* f, const Binding& b, const Node& at) {
         inlineCalls[&at] = InlineCallFact{f, b.paramOf};
@@ -11299,6 +11457,8 @@ bool Checker::inlineCall(const CallExpr& call, InlineCall& out) const {
     out.ownerName = f->owner != nullptr ? f->owner->name : std::string();
     out.extension = f->isExtension;
     out.prelude = f->unit->prelude;
+    out.automatic = found->second.automatic;
+    out.pure = found->second.pure;
     return true;
 }
 

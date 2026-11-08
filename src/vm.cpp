@@ -1708,7 +1708,14 @@ std::vector<std::string> VM::captureTraceFrom(int top) const {
         const FunctionProto* p = f.closure->proto;
         size_t offset = static_cast<size_t>(f.ip - p->run.data());
         if (offset > 0) offset--;
-        std::string line = "at " + p->name + " (" + p->source + ":" + std::to_string(p->runLines[offset]) + ")";
+        int at = p->runLines[offset];
+        // Calls put in place (FunctionProto::inlined), innermost first, as the calls they were.
+        while (at >= kInlinedLine && static_cast<size_t>(at - kInlinedLine) < p->inlined.size()) {
+            const FunctionProto::InlinedCall& call = p->inlined[static_cast<size_t>(at - kInlinedLine)];
+            trace.push_back("at " + call.name + " (" + call.source + ":" + std::to_string(call.line) + ")");
+            at = call.callLine;
+        }
+        std::string line = "at " + p->name + " (" + p->source + ":" + std::to_string(at) + ")";
         if (f.repeats > 0) {
             // In place of the frames a call of itself as its last step saved (D29).
             std::string count = std::to_string(static_cast<uint64_t>(f.repeats) + 1);
