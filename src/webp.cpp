@@ -12,6 +12,7 @@
 
 #include "builtins.h"
 #include "vm.h"
+#include "vp8_tables.h"
 
 namespace jade {
 
@@ -452,6 +453,727 @@ private:
     }
 };
 
+
+// ---- VP8: lossy ----
+
+// The boolean decoder (RFC 6386, 7): bits each with a probability of being 0, in 256ths.
+struct BoolDecoder {
+    const uint8_t* p = nullptr;
+    const uint8_t* end = nullptr;
+    uint32_t value = 0, range = 255;
+    int bitCount = 0;
+
+    void init(const uint8_t* data, size_t size) {
+        p = data;
+        end = data + size;
+        value = (next() << 8) | next();
+        range = 255;
+        bitCount = 0;
+    }
+    uint32_t next() { return p < end ? *p++ : 0; }
+    int read(int prob) {
+        const uint32_t split = 1 + (((range - 1) * static_cast<uint32_t>(prob)) >> 8);
+        const uint32_t bigSplit = split << 8;
+        int bit;
+        if (value >= bigSplit) {
+            bit = 1;
+            range -= split;
+            value -= bigSplit;
+        } else {
+            bit = 0;
+            range = split;
+        }
+        while (range < 128) {
+            value <<= 1;
+            range <<= 1;
+            if (++bitCount == 8) {
+                bitCount = 0;
+                value |= next();
+            }
+        }
+        return bit;
+    }
+    int literal(int n) {
+        int v = 0;
+        while (n-- > 0) v = (v << 1) | read(128);
+        return v;
+    }
+    // A flag, then a magnitude of n bits and its sign, where the flag is set.
+    int maybeSigned(int n) {
+        if (!read(128)) return 0;
+        const int v = literal(n);
+        return read(128) ? -v : v;
+    }
+    // A tree's leaf: each node's bit read with its probability; leaves are 0 or negative.
+    int tree(const int8_t* t, const uint8_t* probs) {
+        int i = 0;
+        while ((i = t[i + read(probs[i >> 1])]) > 0) {
+        }
+        return -i;
+    }
+};
+
+enum { kDcPred, kVPred, kHPred, kTmPred, kBPred };
+enum { kBDc, kBTm, kBVe, kBHe, kBLd, kBRd, kBVr, kBVl, kBHd, kBHu };
+
+constexpr int8_t kKeyFrameYModeTree[8] = {-kBPred, 2, 4, 6, -kDcPred, -kVPred, -kHPred, -kTmPred};
+constexpr uint8_t kKeyFrameYModeProbs[4] = {145, 156, 163, 128};
+constexpr int8_t kUvModeTree[6] = {-kDcPred, 2, -kVPred, 4, -kHPred, -kTmPred};
+constexpr uint8_t kKeyFrameUvModeProbs[3] = {142, 114, 183};
+constexpr int8_t kBModeTree[18] = {-kBDc, 2, -kBTm, 4, -kBVe, 6, 8, 12, -kBHe, 10, -kBRd, -kBVr, -kBLd, 14, -kBVl, 16, -kBHd, -kBHu};
+constexpr int8_t kSegmentTree[6] = {2, 4, -0, -1, -2, -3};
+constexpr uint8_t kBands[17] = {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0};
+constexpr uint8_t kZigzag[16] = {0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15};
+constexpr uint8_t kCat3[] = {173, 148, 140}, kCat4[] = {176, 155, 140, 135}, kCat5[] = {180, 157, 141, 134, 130};
+constexpr uint8_t kCat6[] = {254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129};
+
+struct Vp8Error {
+    std::string what;
+};
+
+class Lossy {
+public:
+    Lossy(const uint8_t* data, size_t size) : data_(data), size_(size) {}
+
+    // The picture, as RGBA.
+    std::vector<uint8_t> read(int& width, int& height) {
+        if (size_ < 10) fail("its lossy data is cut short");
+        const uint32_t tag = data_[0] | (data_[1] << 8) | (data_[2] << 16);
+        if ((tag & 1) != 0) fail("its lossy data is not a key frame");
+        const size_t first = tag >> 5;
+        if (data_[3] != 0x9D || data_[4] != 0x01 || data_[5] != 0x2A) fail("its lossy data has no start code");
+        width = (data_[6] | (data_[7] << 8)) & 0x3FFF;
+        height = (data_[8] | (data_[9] << 8)) & 0x3FFF;
+        if (width == 0 || height == 0) fail("a size of 0");
+        if (10 + first > size_) fail("its first partition is cut short");
+        mbCols_ = (width + 15) / 16;
+        mbRows_ = (height + 15) / 16;
+        BoolDecoder d;
+        d.init(data_ + 10, first);
+        header(d, data_ + 10 + first, size_ - 10 - first);
+        frame(d);
+        loopFilter();
+        return toRgba(width, height);
+    }
+
+private:
+    const uint8_t* data_;
+    size_t size_;
+    int mbCols_ = 0, mbRows_ = 0;
+    // The header's settings.
+    bool segmentation_ = false, updateMap_ = false, segmentAbsolute_ = false;
+    int segmentQuant_[4] = {}, segmentFilter_[4] = {};
+    uint8_t segmentProbs_[3] = {255, 255, 255};
+    bool simpleFilter_ = false;
+    int filterLevel_ = 0, sharpness_ = 0;
+    bool filterDeltas_ = false;
+    int refDelta_[4] = {}, modeDelta_[4] = {};
+    std::vector<BoolDecoder> partitions_;
+    int quant_[4][6] = {};  // per segment: y dc, y ac, y2 dc, y2 ac, uv dc, uv ac
+    uint8_t probs_[4][8][3][11];
+    bool skipEnabled_ = false;
+    int skipProb_ = 0;
+    // The planes, with a row above and a column to the left for the edges, and 4 more columns
+    // right of the luma for the last macroblock's above-right.
+    std::vector<uint8_t> y_, u_, v_;
+    size_t yStride_ = 0, uvStride_ = 0;
+    struct MbInfo {
+        uint8_t yMode, segment, hasCoefficients;
+    };
+    std::vector<MbInfo> info_;
+
+    [[noreturn]] static void fail(const std::string& what) { throw Vp8Error{what}; }
+
+    uint8_t* yAt(int x, int y) { return &y_[static_cast<size_t>(y + 1) * yStride_ + static_cast<size_t>(x + 1)]; }
+    uint8_t* uvAt(std::vector<uint8_t>& plane, int x, int y) { return &plane[static_cast<size_t>(y + 1) * uvStride_ + static_cast<size_t>(x + 1)]; }
+
+    void header(BoolDecoder& d, const uint8_t* rest, size_t restSize) {
+        if (d.literal(2) != 0) {
+            // The colour space and clamping bits: 0 and 0 are all VP8 defines for its pictures.
+        }
+        segmentation_ = d.read(128);
+        if (segmentation_) {
+            updateMap_ = d.read(128);
+            if (d.read(128)) {  // the segments' settings
+                segmentAbsolute_ = d.read(128);
+                for (int& q : segmentQuant_) q = d.maybeSigned(7);
+                for (int& f : segmentFilter_) f = d.maybeSigned(6);
+            }
+            if (updateMap_)
+                for (uint8_t& p : segmentProbs_) p = static_cast<uint8_t>(d.read(128) ? d.literal(8) : 255);
+        }
+        simpleFilter_ = d.read(128);
+        filterLevel_ = d.literal(6);
+        sharpness_ = d.literal(3);
+        filterDeltas_ = d.read(128);
+        if (filterDeltas_ && d.read(128)) {
+            for (int& r : refDelta_) r = d.maybeSigned(6);
+            for (int& m : modeDelta_) m = d.maybeSigned(6);
+        }
+        const int count = 1 << d.literal(2);
+        if (restSize < static_cast<size_t>(3 * (count - 1))) fail("its partitions' sizes are cut short");
+        const uint8_t* sizes = rest;
+        const uint8_t* at = rest + 3 * (count - 1);
+        size_t left = restSize - 3 * static_cast<size_t>(count - 1);
+        partitions_.resize(static_cast<size_t>(count));
+        for (int i = 0; i < count; i++) {
+            size_t size = left;
+            if (i < count - 1) size = sizes[i * 3] | (sizes[i * 3 + 1] << 8) | (sizes[i * 3 + 2] << 16);
+            if (size > left) fail("a partition past the end");
+            partitions_[static_cast<size_t>(i)].init(at, size);
+            at += size;
+            left -= size;
+        }
+        const int q = d.literal(7);
+        const int yDc = d.maybeSigned(4), y2Dc = d.maybeSigned(4), y2Ac = d.maybeSigned(4), uvDc = d.maybeSigned(4), uvAc = d.maybeSigned(4);
+        for (int s = 0; s < 4; s++) {
+            int base = q;
+            if (segmentation_) base = segmentAbsolute_ ? segmentQuant_[s] : q + segmentQuant_[s];
+            auto dc = [](int i) { return static_cast<int>(vp8::kDcQuant[std::clamp(i, 0, 127)]); };
+            auto ac = [](int i) { return static_cast<int>(vp8::kAcQuant[std::clamp(i, 0, 127)]); };
+            quant_[s][0] = dc(base + yDc);
+            quant_[s][1] = ac(base);
+            quant_[s][2] = dc(base + y2Dc) * 2;
+            quant_[s][3] = std::max(ac(base + y2Ac) * 155 / 100, 8);
+            quant_[s][4] = std::min(dc(base + uvDc), 132);
+            quant_[s][5] = ac(base + uvAc);
+        }
+        d.read(128);  // refresh entropy probabilities: one frame only, so nothing to keep
+        std::memcpy(probs_, vp8::kDefaultCoeffProbs, sizeof probs_);
+        uint8_t* p = &probs_[0][0][0][0];
+        for (int i = 0; i < 1056; i++)
+            if (d.read(vp8::kCoeffUpdateProbs[i])) p[i] = static_cast<uint8_t>(d.literal(8));
+        skipEnabled_ = d.read(128);
+        if (skipEnabled_) skipProb_ = d.literal(8);
+    }
+
+    // A block's coefficients (dequantized, natural order) from its tokens; whether it had any.
+    bool block(BoolDecoder& d, int type, int context, int first, int dcq, int acq, int16_t* out) {
+        int c = first;
+        const uint8_t* p = probs_[type][kBands[c]][context];
+        if (!d.read(p[0])) return false;
+        for (;;) {
+            while (!d.read(p[1])) {  // a zero: the next has no end of block
+                if (++c == 16) return true;
+                p = probs_[type][kBands[c]][0];
+            }
+            int v, next;
+            if (!d.read(p[2])) {
+                v = 1;
+                next = 1;
+            } else {
+                next = 2;
+                if (!d.read(p[3])) {
+                    v = !d.read(p[4]) ? 2 : 3 + d.read(p[5]);
+                } else if (!d.read(p[6])) {
+                    if (!d.read(p[7])) v = 5 + d.read(159);
+                    else v = 7 + 2 * d.read(165) + d.read(145);
+                } else {
+                    const uint8_t* extra;
+                    int base, bits;
+                    if (!d.read(p[8])) {
+                        if (!d.read(p[9])) extra = kCat3, base = 11, bits = 3;
+                        else extra = kCat4, base = 19, bits = 4;
+                    } else {
+                        if (!d.read(p[10])) extra = kCat5, base = 35, bits = 5;
+                        else extra = kCat6, base = 67, bits = 11;
+                    }
+                    int value = 0;
+                    for (int k = 0; k < bits; k++) value = (value << 1) | d.read(extra[k]);
+                    v = base + value;
+                }
+            }
+            if (d.read(128)) v = -v;
+            out[kZigzag[c]] = static_cast<int16_t>(std::clamp(v * (c > 0 ? acq : dcq), -32768, 32767));
+            if (++c == 16) return true;
+            p = probs_[type][kBands[c]][next];
+            if (!d.read(p[0])) return true;
+        }
+    }
+
+    void frame(BoolDecoder& d) {
+        const size_t w16 = static_cast<size_t>(mbCols_) * 16, h16 = static_cast<size_t>(mbRows_) * 16;
+        yStride_ = w16 + 1 + 4;
+        uvStride_ = w16 / 2 + 1;
+        y_.assign(yStride_ * (h16 + 1), 0);
+        u_.assign(uvStride_ * (h16 / 2 + 1), 0);
+        v_.assign(uvStride_ * (h16 / 2 + 1), 0);
+        // The edges: 127 above (the corner too), 129 to the left.
+        std::memset(y_.data(), 127, yStride_);
+        std::memset(u_.data(), 127, uvStride_);
+        std::memset(v_.data(), 127, uvStride_);
+        for (size_t r = 1; r <= h16; r++) y_[r * yStride_] = 129;
+        for (size_t r = 1; r <= h16 / 2; r++) u_[r * uvStride_] = v_[r * uvStride_] = 129;
+        info_.assign(static_cast<size_t>(mbCols_ * mbRows_), MbInfo{});
+        // Mode contexts, and token contexts: 4 luma, 2 + 2 chroma, 1 Y2 above each macroblock and left.
+        std::vector<uint8_t> aboveModes(static_cast<size_t>(mbCols_) * 4, kBDc);
+        std::vector<std::array<uint8_t, 9>> aboveNz(static_cast<size_t>(mbCols_));
+        int16_t coefs[25][16];
+        for (int my = 0; my < mbRows_; my++) {
+            BoolDecoder& tokens = partitions_[static_cast<size_t>(my) % partitions_.size()];
+            uint8_t leftModes[4] = {kBDc, kBDc, kBDc, kBDc};
+            std::array<uint8_t, 9> leftNz{};
+            for (int mx = 0; mx < mbCols_; mx++) {
+                MbInfo& mb = info_[static_cast<size_t>(my * mbCols_ + mx)];
+                mb.segment = updateMap_ ? static_cast<uint8_t>(d.tree(kSegmentTree, segmentProbs_)) : 0;
+                const bool skip = skipEnabled_ ? d.read(skipProb_) != 0 : false;
+                mb.yMode = static_cast<uint8_t>(d.tree(kKeyFrameYModeTree, kKeyFrameYModeProbs));
+                uint8_t bModes[16];
+                uint8_t* above = &aboveModes[static_cast<size_t>(mx) * 4];
+                if (mb.yMode == kBPred) {
+                    for (int i = 0; i < 16; i++) {
+                        const uint8_t a = i < 4 ? above[i] : bModes[i - 4];
+                        const uint8_t l = (i & 3) == 0 ? leftModes[i >> 2] : bModes[i - 1];
+                        bModes[i] = static_cast<uint8_t>(d.tree(kBModeTree, &vp8::kKeyFrameBModeProbs[(a * 10 + l) * 9]));
+                    }
+                } else {
+                    const uint8_t implied = mb.yMode == kDcPred ? kBDc : mb.yMode == kVPred ? kBVe : mb.yMode == kHPred ? kBHe : kBTm;
+                    std::fill(bModes, bModes + 16, implied);
+                }
+                for (int i = 0; i < 4; i++) {
+                    above[i] = bModes[12 + i];
+                    leftModes[i] = bModes[i * 4 + 3];
+                }
+                const int uvMode = d.tree(kUvModeTree, kKeyFrameUvModeProbs);
+                // The residue.
+                std::memset(coefs, 0, sizeof coefs);
+                std::array<uint8_t, 9>& an = aboveNz[static_cast<size_t>(mx)];
+                const bool hasY2 = mb.yMode != kBPred;
+                const int* q = quant_[mb.segment];
+                bool any = false;
+                if (skip) {
+                    for (int i = 0; i < 8; i++) an[static_cast<size_t>(i)] = leftNz[static_cast<size_t>(i)] = 0;
+                    if (hasY2) an[8] = leftNz[8] = 0;
+                } else {
+                    if (hasY2) {
+                        const bool nz = block(tokens, 1, an[8] + leftNz[8], 0, q[2], q[3], coefs[24]);
+                        an[8] = leftNz[8] = nz;
+                        any |= nz;
+                    }
+                    for (int i = 0; i < 16; i++) {
+                        const bool nz = block(tokens, hasY2 ? 0 : 3, an[static_cast<size_t>(i & 3)] + leftNz[static_cast<size_t>(i >> 2)], hasY2 ? 1 : 0, q[0], q[1], coefs[i]);
+                        an[static_cast<size_t>(i & 3)] = leftNz[static_cast<size_t>(i >> 2)] = nz;
+                        any |= nz;
+                    }
+                    for (int i = 0; i < 8; i++) {
+                        const size_t ai = static_cast<size_t>(4 + (i >= 4 ? 2 : 0) + (i & 1)), li = static_cast<size_t>(4 + (i >= 4 ? 2 : 0) + ((i & 3) >> 1));
+                        const bool nz = block(tokens, 2, an[ai] + leftNz[li], 0, q[4], q[5], coefs[16 + i]);
+                        an[ai] = leftNz[li] = nz;
+                        any |= nz;
+                    }
+                }
+                mb.hasCoefficients = any;
+                reconstruct(mx, my, mb.yMode, bModes, uvMode, coefs, hasY2 && !skip);
+            }
+            // The four pixels right of the last macroblock, on its bottom row: the next row's
+            // last macroblock's above-right.
+            const int last = my * 16 + 15;
+            const uint8_t edge = *yAt(mbCols_ * 16 - 1, last);
+            for (int k = 0; k < 4; k++) *yAt(mbCols_ * 16 + k, last) = edge;
+        }
+    }
+
+    static uint8_t clamp255(int v) { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+    // The inverse DCT of a 4x4 block added to the prediction in place (RFC 6386, 14.4).
+    static void addIdct(const int16_t* in, uint8_t* dst, size_t stride) {
+        int tmp[16];
+        for (int i = 0; i < 4; i++) {
+            const int a1 = in[i] + in[8 + i], b1 = in[i] - in[8 + i];
+            int t1 = (in[4 + i] * 35468) >> 16, t2 = in[12 + i] + ((in[12 + i] * 20091) >> 16);
+            const int c1 = t1 - t2;
+            t1 = in[4 + i] + ((in[4 + i] * 20091) >> 16);
+            t2 = (in[12 + i] * 35468) >> 16;
+            const int d1 = t1 + t2;
+            tmp[i] = a1 + d1;
+            tmp[12 + i] = a1 - d1;
+            tmp[4 + i] = b1 + c1;
+            tmp[8 + i] = b1 - c1;
+        }
+        for (int i = 0; i < 4; i++) {
+            const int* r = tmp + i * 4;
+            const int a1 = r[0] + r[2], b1 = r[0] - r[2];
+            int t1 = (r[1] * 35468) >> 16, t2 = r[3] + ((r[3] * 20091) >> 16);
+            const int c1 = t1 - t2;
+            t1 = r[1] + ((r[1] * 20091) >> 16);
+            t2 = (r[3] * 35468) >> 16;
+            const int d1 = t1 + t2;
+            uint8_t* o = dst + static_cast<size_t>(i) * stride;
+            o[0] = clamp255(o[0] + ((a1 + d1 + 4) >> 3));
+            o[3] = clamp255(o[3] + ((a1 - d1 + 4) >> 3));
+            o[1] = clamp255(o[1] + ((b1 + c1 + 4) >> 3));
+            o[2] = clamp255(o[2] + ((b1 - c1 + 4) >> 3));
+        }
+    }
+
+    // The inverse Walsh-Hadamard transform of Y2: each luma block's DC (RFC 6386, 14.3).
+    static void walsh(const int16_t* in, int16_t coefs[25][16]) {
+        int t[16];
+        for (int i = 0; i < 4; i++) {
+            const int a1 = in[i] + in[12 + i], b1 = in[4 + i] + in[8 + i], c1 = in[4 + i] - in[8 + i], d1 = in[i] - in[12 + i];
+            t[i] = a1 + b1;
+            t[4 + i] = c1 + d1;
+            t[8 + i] = a1 - b1;
+            t[12 + i] = d1 - c1;
+        }
+        for (int i = 0; i < 4; i++) {
+            const int* r = t + i * 4;
+            const int a1 = r[0] + r[3], b1 = r[1] + r[2], c1 = r[1] - r[2], d1 = r[0] - r[3];
+            coefs[i * 4][0] = static_cast<int16_t>((a1 + b1 + 3) >> 3);
+            coefs[i * 4 + 1][0] = static_cast<int16_t>((c1 + d1 + 3) >> 3);
+            coefs[i * 4 + 2][0] = static_cast<int16_t>((a1 - b1 + 3) >> 3);
+            coefs[i * 4 + 3][0] = static_cast<int16_t>((d1 - c1 + 3) >> 3);
+        }
+    }
+
+    // A whole-block prediction (16x16 luma or 8x8 chroma) at `dst`, its edges in the plane. DC
+    // averages only the edges inside the picture (128 where neither is).
+    static void predictBlock(uint8_t* dst, size_t stride, int n, int mode, bool top, bool left) {
+        const uint8_t* above = dst - stride;
+        if (mode == kDcPred) {
+            int sum = 0, shift = 0;
+            if (!top) {
+                for (int i = 0; i < n; i++) sum += above[i];
+                shift++;
+            }
+            if (!left) {
+                for (int i = 0; i < n; i++) sum += dst[static_cast<size_t>(i) * stride - 1];
+                shift++;
+            }
+            const int log = n == 16 ? 4 : 3;
+            const int dc = shift == 0 ? 128 : shift == 1 ? (sum + (1 << (log - 1))) >> log : (sum + (1 << log)) >> (log + 1);
+            for (int y = 0; y < n; y++) std::memset(dst + static_cast<size_t>(y) * stride, dc, static_cast<size_t>(n));
+            return;
+        }
+        for (int y = 0; y < n; y++) {
+            uint8_t* row = dst + static_cast<size_t>(y) * stride;
+            const int l = row[-1];
+            for (int x = 0; x < n; x++) {
+                if (mode == kVPred) row[x] = above[x];
+                else if (mode == kHPred) row[x] = static_cast<uint8_t>(l);
+                else row[x] = clamp255(l + above[x] - above[-1]);
+            }
+        }
+    }
+
+    // A 4x4 sub-block's prediction from its edges: A the 8 above (4 and the 4 above-right), L the
+    // 4 to the left, P above-left.
+    static void predictSub(uint8_t* dst, size_t stride, int mode, const uint8_t* A, const uint8_t* L, int P) {
+        auto put = [&](int x, int y, int v) { dst[static_cast<size_t>(y) * stride + static_cast<size_t>(x)] = static_cast<uint8_t>(v); };
+        auto avg3 = [](int a, int b, int c) { return (a + 2 * b + c + 2) >> 2; };
+        auto avg2 = [](int a, int b) { return (a + b + 1) >> 1; };
+        switch (mode) {
+            case kBDc: {
+                int sum = 4;
+                for (int i = 0; i < 4; i++) sum += A[i] + L[i];
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) put(x, y, sum >> 3);
+                break;
+            }
+            case kBTm:
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) put(x, y, clamp255(L[y] + A[x] - P));
+                break;
+            case kBVe:
+                for (int x = 0; x < 4; x++) {
+                    const int v = avg3(x == 0 ? P : A[x - 1], A[x], A[x + 1]);
+                    for (int y = 0; y < 4; y++) put(x, y, v);
+                }
+                break;
+            case kBHe: {
+                const int v[4] = {avg3(P, L[0], L[1]), avg3(L[0], L[1], L[2]), avg3(L[1], L[2], L[3]), avg3(L[2], L[3], L[3])};
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) put(x, y, v[y]);
+                break;
+            }
+            case kBLd:
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        const int i = x + y;
+                        put(x, y, i < 6 ? avg3(A[i], A[i + 1], A[i + 2]) : avg3(A[6], A[7], A[7]));
+                    }
+                break;
+            case kBRd: {
+                // The edge from the bottom-left up and along: L3 L2 L1 L0 P A0 A1 A2 A3.
+                const int e[9] = {L[3], L[2], L[1], L[0], P, A[0], A[1], A[2], A[3]};
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        const int i = 4 - y + x;
+                        put(x, y, avg3(e[i - 1], e[i], e[i + 1]));
+                    }
+                break;
+            }
+            case kBVr: {
+                const int e[9] = {L[3], L[2], L[1], L[0], P, A[0], A[1], A[2], A[3]};
+                put(0, 3, avg3(e[1], e[2], e[3]));
+                put(0, 2, avg3(e[2], e[3], e[4]));
+                const int a = avg3(e[3], e[4], e[5]);
+                put(0, 1, a), put(1, 3, a);
+                const int b = avg2(e[4], e[5]);
+                put(0, 0, b), put(1, 2, b);
+                const int c = avg3(e[4], e[5], e[6]);
+                put(1, 1, c), put(2, 3, c);
+                const int dd = avg2(e[5], e[6]);
+                put(1, 0, dd), put(2, 2, dd);
+                const int f = avg3(e[5], e[6], e[7]);
+                put(2, 1, f), put(3, 3, f);
+                const int g = avg2(e[6], e[7]);
+                put(2, 0, g), put(3, 2, g);
+                put(3, 1, avg3(e[6], e[7], e[8]));
+                put(3, 0, avg2(e[7], e[8]));
+                break;
+            }
+            case kBVl:
+                put(0, 0, avg2(A[0], A[1]));
+                put(0, 1, avg3(A[0], A[1], A[2]));
+                put(0, 2, avg2(A[1], A[2])), put(1, 0, avg2(A[1], A[2]));
+                put(1, 1, avg3(A[1], A[2], A[3])), put(0, 3, avg3(A[1], A[2], A[3]));
+                put(1, 2, avg2(A[2], A[3])), put(2, 0, avg2(A[2], A[3]));
+                put(1, 3, avg3(A[2], A[3], A[4])), put(2, 1, avg3(A[2], A[3], A[4]));
+                put(2, 2, avg2(A[3], A[4])), put(3, 0, avg2(A[3], A[4]));
+                put(2, 3, avg3(A[3], A[4], A[5])), put(3, 1, avg3(A[3], A[4], A[5]));
+                put(3, 2, avg3(A[4], A[5], A[6]));
+                put(3, 3, avg3(A[5], A[6], A[7]));
+                break;
+            case kBHd: {
+                const int e[9] = {L[3], L[2], L[1], L[0], P, A[0], A[1], A[2], A[3]};
+                put(0, 3, avg2(e[0], e[1]));
+                put(1, 3, avg3(e[0], e[1], e[2]));
+                put(0, 2, avg2(e[1], e[2])), put(2, 3, avg2(e[1], e[2]));
+                put(1, 2, avg3(e[1], e[2], e[3])), put(3, 3, avg3(e[1], e[2], e[3]));
+                put(2, 2, avg2(e[2], e[3])), put(0, 1, avg2(e[2], e[3]));
+                put(3, 2, avg3(e[2], e[3], e[4])), put(1, 1, avg3(e[2], e[3], e[4]));
+                put(2, 1, avg2(e[3], e[4])), put(0, 0, avg2(e[3], e[4]));
+                put(3, 1, avg3(e[3], e[4], e[5])), put(1, 0, avg3(e[3], e[4], e[5]));
+                put(2, 0, avg3(e[4], e[5], e[6]));
+                put(3, 0, avg3(e[5], e[6], e[7]));
+                break;
+            }
+            case kBHu:
+                put(0, 0, avg2(L[0], L[1]));
+                put(1, 0, avg3(L[0], L[1], L[2]));
+                put(2, 0, avg2(L[1], L[2])), put(0, 1, avg2(L[1], L[2]));
+                put(3, 0, avg3(L[1], L[2], L[3])), put(1, 1, avg3(L[1], L[2], L[3]));
+                put(2, 1, avg2(L[2], L[3])), put(0, 2, avg2(L[2], L[3]));
+                put(3, 1, avg3(L[2], L[3], L[3])), put(1, 2, avg3(L[2], L[3], L[3]));
+                put(2, 2, L[3]), put(3, 2, L[3]), put(0, 3, L[3]), put(1, 3, L[3]), put(2, 3, L[3]), put(3, 3, L[3]);
+                break;
+            default:
+                break;
+        }
+    }
+
+    void reconstruct(int mx, int my, int yMode, const uint8_t* bModes, int uvMode, int16_t coefs[25][16], bool walshDone) {
+        uint8_t* yDst = yAt(mx * 16, my * 16);
+        if (yMode == kBPred) {
+            // The macroblock's above-right, for the sub-blocks of its right column.
+            const uint8_t* aboveRight = yAt(mx * 16 + 16, my * 16 - 1);
+            for (int i = 0; i < 16; i++) {
+                const int bx = (i & 3) * 4, by = (i >> 2) * 4;
+                uint8_t* dst = yDst + static_cast<size_t>(by) * yStride_ + static_cast<size_t>(bx);
+                uint8_t A[8], L[4];
+                const uint8_t* up = dst - yStride_;
+                for (int k = 0; k < 4; k++) A[k] = up[k];
+                for (int k = 0; k < 4; k++) A[4 + k] = (i & 3) == 3 ? aboveRight[k] : up[4 + k];
+                for (int k = 0; k < 4; k++) L[k] = dst[static_cast<size_t>(k) * yStride_ - 1];
+                predictSub(dst, yStride_, bModes[i], A, L, up[-1]);
+                addIdct(coefs[i], dst, yStride_);
+            }
+        } else {
+            predictBlock(yDst, yStride_, 16, yMode, my == 0, mx == 0);
+            if (walshDone) walsh(coefs[24], coefs);
+            for (int i = 0; i < 16; i++) addIdct(coefs[i], yDst + static_cast<size_t>((i >> 2) * 4) * yStride_ + static_cast<size_t>((i & 3) * 4), yStride_);
+        }
+        for (int plane = 0; plane < 2; plane++) {
+            std::vector<uint8_t>& p = plane == 0 ? u_ : v_;
+            uint8_t* dst = uvAt(p, mx * 8, my * 8);
+            predictBlock(dst, uvStride_, 8, uvMode, my == 0, mx == 0);
+            for (int i = 0; i < 4; i++) addIdct(coefs[16 + plane * 4 + i], dst + static_cast<size_t>((i >> 1) * 4) * uvStride_ + static_cast<size_t>((i & 1) * 4), uvStride_);
+        }
+    }
+
+    // ---- The loop filter (RFC 6386, 15) ----
+
+    static int s8(int x) { return x < -128 ? -128 : x > 127 ? 127 : x; }
+
+    static void common(uint8_t* p, ptrdiff_t s, bool outer) {
+        const int p1 = p[-2 * s], p0 = p[-s], q0 = p[0], q1 = p[s];
+        int a = 3 * (q0 - p0);
+        if (outer) a += s8(p1 - q1);
+        a = s8(a);
+        const int f1 = (a + 4 > 127 ? 127 : a + 4) >> 3, f2 = (a + 3 > 127 ? 127 : a + 3) >> 3;
+        p[-s] = clamp255(p0 + f2);
+        p[0] = clamp255(q0 - f1);
+        if (!outer) {
+            const int b = (f1 + 1) >> 1;
+            p[-2 * s] = clamp255(p1 + b);
+            p[s] = clamp255(q1 - b);
+        }
+    }
+    static void mbEdge(uint8_t* p, ptrdiff_t s) {
+        const int p2 = p[-3 * s], p1 = p[-2 * s], p0 = p[-s], q0 = p[0], q1 = p[s], q2 = p[2 * s];
+        const int w = s8(s8(p1 - q1) + 3 * (q0 - p0));
+        int a = (27 * w + 63) >> 7;
+        p[-s] = clamp255(p0 + a);
+        p[0] = clamp255(q0 - a);
+        a = (18 * w + 63) >> 7;
+        p[-2 * s] = clamp255(p1 + a);
+        p[s] = clamp255(q1 - a);
+        a = (9 * w + 63) >> 7;
+        p[-3 * s] = clamp255(p2 + a);
+        p[2 * s] = clamp255(q2 - a);
+    }
+    static bool simpleOk(const uint8_t* p, ptrdiff_t s, int limit) { return std::abs(p[-s] - p[0]) * 2 + (std::abs(p[-2 * s] - p[s]) >> 1) <= limit; }
+    static bool normalOk(const uint8_t* p, ptrdiff_t s, int e, int i) {
+        return simpleOk(p, s, 2 * e + i) && std::abs(p[-4 * s] - p[-3 * s]) <= i && std::abs(p[-3 * s] - p[-2 * s]) <= i && std::abs(p[-2 * s] - p[-s]) <= i &&
+               std::abs(p[3 * s] - p[2 * s]) <= i && std::abs(p[2 * s] - p[s]) <= i && std::abs(p[s] - p[0]) <= i;
+    }
+    static bool highVariance(const uint8_t* p, ptrdiff_t s, int t) { return std::abs(p[-2 * s] - p[-s]) > t || std::abs(p[s] - p[0]) > t; }
+
+    // An edge of `count` pixels: across it `s` apart, along it `along` apart.
+    static void edge(uint8_t* p, ptrdiff_t s, ptrdiff_t along, int count, bool mb, int e, int i, int hev) {
+        for (int k = 0; k < count; k++, p += along) {
+            if (!normalOk(p, s, e, i)) continue;
+            if (mb) {
+                if (highVariance(p, s, hev)) common(p, s, true);
+                else mbEdge(p, s);
+            } else {
+                common(p, s, highVariance(p, s, hev));
+            }
+        }
+    }
+
+    void loopFilter() {
+        if (filterLevel_ == 0) return;
+        const ptrdiff_t ys = static_cast<ptrdiff_t>(yStride_), us = static_cast<ptrdiff_t>(uvStride_);
+        for (int my = 0; my < mbRows_; my++)
+            for (int mx = 0; mx < mbCols_; mx++) {
+                const MbInfo& mb = info_[static_cast<size_t>(my * mbCols_ + mx)];
+                int level = filterLevel_;
+                if (segmentation_) level = segmentAbsolute_ ? segmentFilter_[mb.segment] : level + segmentFilter_[mb.segment];
+                level = std::clamp(level, 0, 63);
+                if (filterDeltas_) {
+                    level += refDelta_[0];  // the current frame's: every key frame macroblock is intra
+                    if (mb.yMode == kBPred) level += modeDelta_[0];
+                    level = std::clamp(level, 0, 63);
+                }
+                if (level == 0) continue;
+                int interior = level;
+                if (sharpness_) {
+                    interior >>= sharpness_ > 4 ? 2 : 1;
+                    if (interior > 9 - sharpness_) interior = 9 - sharpness_;
+                }
+                if (interior < 1) interior = 1;
+                const int hev = level >= 40 ? 2 : level >= 15 ? 1 : 0;
+                const bool inner = mb.hasCoefficients || mb.yMode == kBPred;
+                uint8_t* y = yAt(mx * 16, my * 16);
+                uint8_t* u = uvAt(u_, mx * 8, my * 8);
+                uint8_t* v = uvAt(v_, mx * 8, my * 8);
+                if (simpleFilter_) {
+                    const int mbLimit = (level + 2) * 2 + interior, bLimit = level * 2 + interior;
+                    auto simple = [&](uint8_t* p, ptrdiff_t s, ptrdiff_t along, int limit) {
+                        for (int k = 0; k < 16; k++, p += along)
+                            if (simpleOk(p, s, limit)) common(p, s, true);
+                    };
+                    if (mx > 0) simple(y, 1, ys, mbLimit);
+                    if (inner)
+                        for (int k = 4; k < 16; k += 4) simple(y + k, 1, ys, bLimit);
+                    if (my > 0) simple(y, ys, 1, mbLimit);
+                    if (inner)
+                        for (int k = 4; k < 16; k += 4) simple(y + k * ys, ys, 1, bLimit);
+                    continue;
+                }
+                if (mx > 0) {
+                    edge(y, 1, ys, 16, true, level + 2, interior, hev);
+                    edge(u, 1, us, 8, true, level + 2, interior, hev);
+                    edge(v, 1, us, 8, true, level + 2, interior, hev);
+                }
+                if (inner) {
+                    for (int k = 4; k < 16; k += 4) edge(y + k, 1, ys, 16, false, level, interior, hev);
+                    edge(u + 4, 1, us, 8, false, level, interior, hev);
+                    edge(v + 4, 1, us, 8, false, level, interior, hev);
+                }
+                if (my > 0) {
+                    edge(y, ys, 1, 16, true, level + 2, interior, hev);
+                    edge(u, us, 1, 8, true, level + 2, interior, hev);
+                    edge(v, us, 1, 8, true, level + 2, interior, hev);
+                }
+                if (inner) {
+                    for (int k = 4; k < 16; k += 4) edge(y + k * ys, ys, 1, 16, false, level, interior, hev);
+                    edge(u + 4 * us, us, 1, 8, false, level, interior, hev);
+                    edge(v + 4 * us, us, 1, 8, false, level, interior, hev);
+                }
+            }
+    }
+
+    // ---- To RGBA: the chroma twice the size by the triangle filter, BT.601's limited range ----
+
+    static int clip8(int v) { return (v & ~((256 << 6) - 1)) == 0 ? v >> 6 : v < 0 ? 0 : 255; }
+
+    std::vector<uint8_t> toRgba(int width, int height) {
+        const int cw = (width + 1) / 2, ch = (height + 1) / 2;
+        std::vector<uint8_t> out(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+        auto chroma = [&](std::vector<uint8_t>& plane, int x, int y) -> int {
+            return *uvAt(plane, std::clamp(x, 0, cw - 1), std::clamp(y, 0, ch - 1));
+        };
+        for (int y = 0; y < height; y++) {
+            const int sy = y >> 1, ny = (y & 1) ? sy + 1 : sy - 1;
+            for (int x = 0; x < width; x++) {
+                const int sx = x >> 1, nx = (x & 1) ? sx + 1 : sx - 1;
+                auto up = [&](std::vector<uint8_t>& p) {
+                    return (9 * chroma(p, sx, sy) + 3 * chroma(p, nx, sy) + 3 * chroma(p, sx, ny) + chroma(p, nx, ny) + 8) >> 4;
+                };
+                const int yy = *yAt(x, y), uu = up(u_), vv = up(v_);
+                const int base = (yy * 19077) >> 8;
+                uint8_t* o = &out[(static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4];
+                o[0] = static_cast<uint8_t>(clip8(base + ((vv * 26149) >> 8) - 14234));
+                o[1] = static_cast<uint8_t>(clip8(base - ((uu * 6419) >> 8) - ((vv * 13320) >> 8) + 8708));
+                o[2] = static_cast<uint8_t>(clip8(base + ((uu * 33050) >> 8) - 17685));
+                o[3] = 255;
+            }
+        }
+        return out;
+    }
+};
+
+// Alpha's chunk (ALPH) put into RGBA pixels: raw or lossless, then unfiltered.
+void applyAlpha(const uint8_t* data, size_t size, std::vector<uint8_t>& rgba, int width, int height) {
+    if (size < 1) throw Vp8Error{"its alpha is cut short"};
+    const int method = data[0] & 3, filter = (data[0] >> 2) & 3;
+    const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+    std::vector<uint8_t> alpha(n);
+    if (method == 0) {
+        if (size - 1 < n) throw Vp8Error{"its alpha is cut short"};
+        std::memcpy(alpha.data(), data + 1, n);
+    } else if (method == 1) {
+        std::vector<uint32_t> argb;
+        int w = width, h = height;
+        try {
+            Lossless(data + 1, size - 1).read(argb, w, h, true);
+        } catch (const LosslessError& e) {
+            throw Vp8Error{"its alpha: " + e.what};
+        }
+        for (size_t i = 0; i < n; i++) alpha[i] = static_cast<uint8_t>(argb[i] >> 8);
+    } else {
+        throw Vp8Error{"alpha compressed in a way there is none of"};
+    }
+    // The filters undone: each value had its prediction (left, above, or left + above - above-left) taken off.
+    if (filter != 0) {
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++) {
+                const size_t at = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+                int prediction;
+                if (x == 0 && y == 0) prediction = 0;
+                else if (y == 0) prediction = alpha[at - 1];
+                else if (x == 0) prediction = alpha[at - static_cast<size_t>(width)];
+                else if (filter == 1) prediction = alpha[at - 1];
+                else if (filter == 2) prediction = alpha[at - static_cast<size_t>(width)];
+                else prediction = std::clamp(alpha[at - 1] + alpha[at - static_cast<size_t>(width)] - alpha[at - static_cast<size_t>(width) - 1], 0, 255);
+                alpha[at] = static_cast<uint8_t>(alpha[at] + prediction);
+            }
+    }
+    for (size_t i = 0; i < n; i++) rgba[i * 4 + 3] = alpha[i];
+}
 
 // ---- VP8L: writing ----
 
@@ -937,6 +1659,26 @@ void registerWebp(VM& vm) {
             return vm.str(e.what);
         }
         const Value pixels = bytesValue(vm, rgbaOf(argb));
+        TempRoot keep(vm, pixels);
+        return Value::object(newList(vm, {Value::integer(width), Value::integer(height), pixels}));
+    });
+    // decodeLossy(data, from, to, alphaFrom, alphaTo): [width, height, RGBA bytes] of a VP8 key
+    // frame, its alpha from the ALPH chunk's bytes where alphaTo > alphaFrom; or a string, what is wrong.
+    def("decodeLossy", 5, 5, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "WebP's data is Bytes");
+        const std::vector<uint8_t>& data = asBytes(args[0])->data;
+        const int64_t from = vm.toInt(args[1], "from"), to = vm.toInt(args[2], "to"), alphaFrom = vm.toInt(args[3], "alphaFrom"), alphaTo = vm.toInt(args[4], "alphaTo");
+        if (from < 0 || to < from || to > static_cast<int64_t>(data.size()) || alphaFrom < 0 || alphaTo > static_cast<int64_t>(data.size()))
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "a part outside the data");
+        int width = 0, height = 0;
+        std::vector<uint8_t> rgba;
+        try {
+            rgba = Lossy(data.data() + from, static_cast<size_t>(to - from)).read(width, height);
+            if (alphaTo > alphaFrom) applyAlpha(data.data() + alphaFrom, static_cast<size_t>(alphaTo - alphaFrom), rgba, width, height);
+        } catch (const Vp8Error& e) {
+            return vm.str(e.what);
+        }
+        const Value pixels = bytesValue(vm, std::move(rgba));
         TempRoot keep(vm, pixels);
         return Value::object(newList(vm, {Value::integer(width), Value::integer(height), pixels}));
     });

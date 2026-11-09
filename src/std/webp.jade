@@ -67,7 +67,14 @@ object __Webp {
       val parts = read as List<any>
       return Image.of(parts[0] as int, parts[1] as int, parts[2] as Bytes)
     }
-    throw UnsupportedOperationException("lossy WebP is read once part one, step 3 has its codec")
+    // Lossy: VP8, its alpha in the ALPH chunk just before it, if there is one.
+    val alpha = chunk.name == "ALPH" ? chunk : null
+    val picture = chunk.name == "ALPH" ? (at + 1 < chunks.size ? chunks[at + 1] : null) : chunk
+    if (picture == null or picture!!.name != "VP8 ") { throw failure("its alpha has no picture after it") }
+    val read = __webp.decodeLossy(data, picture!!.at, picture!!.at + picture!!.size, alpha?.at ?: 0, alpha == null ? 0 : alpha!!.at + alpha!!.size)
+    if (read is string) { throw failure(read as string) }
+    val parts = read as List<any>
+    return Image.of(parts[0] as int, parts[1] as int, parts[2] as Bytes)
   }
 
   // The chunks from `from` to `to`: each a name of four letters, a size, and that many bytes (and
@@ -204,5 +211,6 @@ fun __webpU24(data : Bytes, at : int) : int => data[at].toInt() | (data[at + 1].
 
 external object __webp {
   fun decodeLossless(data : Bytes, from : int, to : int, width : int, height : int) : any
+  fun decodeLossy(data : Bytes, from : int, to : int, alphaFrom : int, alphaTo : int) : any
   fun encodeLossless(rgba : Bytes, width : int, height : int, headerless : bool) : Bytes
 }
