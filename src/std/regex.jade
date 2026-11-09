@@ -44,8 +44,9 @@ class Regex {
   // The options it was given.
   val options : Set<RegexOption>
   private val compiled : any
-  // The numbers of its named groups, made when a MatchResult first needs them.
-  private var names : Map<string, int>? = null
+  // The numbers of its named groups, made with it: not when first needed, as a Regex made
+  // outside a parallel section is shared there, and may not be changed.
+  private val names : Map<string, int>
 
   // Regex(pattern), or with an option or a set of them: Regex("^a", RegexOption.multiline).
   fun init(pattern : string, options : (RegexOption | Set<RegexOption>)? = null) {
@@ -59,6 +60,7 @@ class Regex {
     val made = __regex.compile(pattern, bits)
     if (made is List) { throw PatternSyntaxException(made[0] as string, pattern, made[1] as int) }
     this.compiled = made
+    this.names = __regex.groupNames(made)
   }
 
   // Whether the whole of `input` matches.
@@ -129,8 +131,7 @@ class Regex {
 
   private fun made(input : string, spans : List<int>?) : MatchResult? {
     if (spans == null) { return null }
-    if (names == null) { names = __regex.groupNames(compiled) }
-    return MatchResult(this, input, spans!!, names!!)
+    return MatchResult(this, input, spans!!, names)
   }
 
   static {

@@ -117,3 +117,7 @@ print(Regex("(\\w+)=(\\d+)").spansAt("x a=12", 2), Regex("b").spansAt("ab", 0), 
 print(Regex("(\\w)=(\\d)").allSpans("a=1 b=2"), Regex("(\\w)=(\\d)").allSpans("a=1 b=2", 1, 6), Regex("x*").allSpans("ab"))   // expect: [0, 3, 0, 1, 2, 3, 4, 7, 4, 5, 6, 7] [] [0, 0, 1, 1, 2, 2]
 try { Regex("a").allSpans("ab", 3) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: start index 3 is out of bounds of a text of 2 characters
 try { Regex("a").allSpans("ab", 1, 0) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: end index 0 is out of bounds: from 1 to 2
+
+// A Regex made outside a parallel section matches inside it, where it is shared and read only.
+val word = Regex("(?<w>[a-z]+)")
+print((1..200).map { "w$it" }.parallelStream().map { word.find(it)!!.groups["w"]!!.value.size }.sumOf { it })   // expect: 200
