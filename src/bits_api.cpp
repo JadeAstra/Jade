@@ -9,6 +9,11 @@
 #include <string>
 #include <vector>
 
+#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(JADE_NO_SSE2)
+#define JADE_SSE2_SCAN 1
+#include <emmintrin.h>
+#endif
+
 #include "builtins.h"
 #include "codec.h"
 #include "vm.h"
@@ -519,54 +524,98 @@ void registerBits(VM& vm) {
                 table(6, k.acCode);
                 table(7, k.acLength);
             }
-            std::vector<uint8_t> out;
-            out.reserve(1 << 16);
-            uint64_t bits = 0;
+            // The bits go 64 at a time through `acc`, out 32 at a time, an FF followed by 00; the
+            // output kept 512 bytes ahead of a block, more than a block can take.
+            std::vector<uint8_t> out(1 << 16);
+            size_t o = 0;
+            uint64_t acc = 0;
             int count = 0;
-            auto put = [&](uint32_t value, uint32_t length) {
-                if (length == 0) return;
-                bits = (bits << length) | (value & ((1u << length) - 1));
-                count += static_cast<int>(length);
-                while (count >= 8) {
-                    count -= 8;
-                    const uint8_t byte = static_cast<uint8_t>(bits >> count);
-                    out.push_back(byte);
-                    if (byte == 0xFF) out.push_back(0);
-                }
-                bits &= (uint64_t{1} << count) - 1;
+            auto room = [&] {
+                if (out.size() - o < 512) out.resize(out.size() * 2);
             };
+            auto flush32 = [&] {
+                count -= 32;
+                const uint32_t w = static_cast<uint32_t>(acc >> count);
+                const uint32_t t = ~w;
+                uint8_t* d = out.data() + o;
+                if (((t - 0x01010101u) & ~t & 0x80808080u) == 0) {  // no byte of FF
+                    d[0] = static_cast<uint8_t>(w >> 24), d[1] = static_cast<uint8_t>(w >> 16), d[2] = static_cast<uint8_t>(w >> 8), d[3] = static_cast<uint8_t>(w);
+                    o += 4;
+                } else {
+                    for (int k = 24; k >= 0; k -= 8) {
+                        const uint8_t byte = static_cast<uint8_t>(w >> k);
+                        out[o++] = byte;
+                        if (byte == 0xFF) out[o++] = 0;
+                    }
+                }
+            };
+            // At most 27 bits: a code of 16 and 11 more.
+            auto put = [&](uint32_t value, uint32_t length) {
+                acc = (acc << length) | value;
+                count += static_cast<int>(length);
+                if (count >= 32) flush32();
+            };
+            // The bits a value takes, and the bits written for it (one less, below 0).
             auto magnitude = [](int v) { return static_cast<uint32_t>(std::bit_width(static_cast<uint32_t>(v < 0 ? -v : v))); };
+            auto valueBits = [](int v, uint32_t s) { return static_cast<uint32_t>(v < 0 ? v - 1 : v) & ((1u << s) - 1); };
             for (int64_t my = 0; my < mcusY; my++)
                 for (int64_t mx = 0; mx < mcusX; mx++)
                     for (Comp& c : comps)
                         for (int64_t by = 0; by < c.v; by++)
                             for (int64_t bx = 0; bx < c.h; bx++) {
+                                room();
                                 const uint8_t* blk = c.coefs + ((my * c.v + by) * c.blocksW + mx * c.h + bx) * 128;
-                                const int dc = coefAt(blk, 0);
+                                int16_t zz[64];
+                                for (int k = 0; k < 64; k++) zz[k] = coefAt(blk, kNatural[k]);
+                                const int dc = zz[0];
                                 const int diff = dc - c.pred;
                                 c.pred = dc;
                                 const uint32_t ds = magnitude(diff);
-                                // A code and its extra bits put together: 27 bits at most.
-                                put((c.dcCode[ds] << ds) | (static_cast<uint32_t>(diff < 0 ? diff + (1 << ds) - 1 : diff) & ((1u << ds) - 1)), c.dcLength[ds] + ds);
-                                int run = 0;
-                                for (int k = 1; k < 64; k++) {
-                                    const int v = coefAt(blk, kNatural[k]);
-                                    if (v == 0) {
-                                        run++;
-                                        continue;
-                                    }
+                                put((c.dcCode[ds] << ds) | valueBits(diff, ds), c.dcLength[ds] + ds);
+                                // Which of the 63 others are not 0, a bit each.
+                                uint64_t nonzero = 0;
+#ifdef JADE_SSE2_SCAN
+                                const __m128i zero = _mm_setzero_si128();
+                                for (int k = 0; k < 64; k += 16) {
+                                    const __m128i a = _mm_cmpeq_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(zz + k)), zero);
+                                    const __m128i b = _mm_cmpeq_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(zz + k + 8)), zero);
+                                    nonzero |= static_cast<uint64_t>(~_mm_movemask_epi8(_mm_packs_epi16(a, b)) & 0xFFFF) << k;
+                                }
+#else
+                                for (int k = 0; k < 64; k++) nonzero |= static_cast<uint64_t>(zz[k] != 0) << k;
+#endif
+                                nonzero &= ~uint64_t{1};
+                                int last = 0;
+                                while (nonzero != 0) {
+                                    const int k = std::countr_zero(nonzero);
+                                    nonzero &= nonzero - 1;
+                                    int run = k - last - 1;
+                                    last = k;
                                     while (run > 15) {
                                         put(c.acCode[0xF0], c.acLength[0xF0]);
                                         run -= 16;
                                     }
-                                    const uint32_t s = magnitude(v);
-                                    const uint32_t symbol = (static_cast<uint32_t>(run) << 4) | s;
-                                    put((c.acCode[symbol] << s) | (static_cast<uint32_t>(v < 0 ? v + (1 << s) - 1 : v) & ((1u << s) - 1)), c.acLength[symbol] + s);
-                                    run = 0;
+                                    const int v = zz[k];
+                                    const uint32_t sz = magnitude(v);
+                                    const uint32_t symbol = (static_cast<uint32_t>(run) << 4) | sz;
+                                    put((c.acCode[symbol] << sz) | valueBits(v, sz), c.acLength[symbol] + sz);
                                 }
-                                if (run > 0) put(c.acCode[0], c.acLength[0]);
+                                if (last < 63) put(c.acCode[0], c.acLength[0]);
                             }
-            if (count > 0) put((1u << (8 - count)) - 1, static_cast<uint32_t>(8 - count));
+            // The last bits, padded with ones to a byte.
+            room();
+            while (count >= 8) {
+                count -= 8;
+                const uint8_t byte = static_cast<uint8_t>(acc >> count);
+                out[o++] = byte;
+                if (byte == 0xFF) out[o++] = 0;
+            }
+            if (count > 0) {
+                const uint8_t byte = static_cast<uint8_t>(((acc << (8 - count)) | ((1u << (8 - count)) - 1)) & 0xFF);
+                out[o++] = byte;
+                if (byte == 0xFF) out[o++] = 0;
+            }
+            out.resize(o);
             return bytesValue(vm, std::move(out));
         });
         vm.defineGlobal("__jpeg", Value::object(jpeg));

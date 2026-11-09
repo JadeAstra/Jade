@@ -14,6 +14,13 @@
 #include "builtins.h"
 #include "vm.h"
 
+// SSE2, which every x64 processor has, for the loops over every sample; each has a plain twin
+// that gives the same numbers, for other processors.
+#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(JADE_NO_SSE2)
+#define JADE_SSE2 1
+#include <emmintrin.h>
+#endif
+
 namespace jade {
 
 namespace {
@@ -250,104 +257,197 @@ std::vector<uint8_t> indicesOf(const std::vector<uint8_t>& px, int width, int he
 
 inline uint8_t clampSample(int v) { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); }
 
-// The inverse DCT of one block of 64 coefficients (natural order), into samples with 128 added:
-// separable, in integers of 4096ths, libjpeg's slow integer method as stb_image has it.
-void inverseBlock(int* b, uint8_t* out, size_t stride) {
-    for (int i = 0; i < 8; i++) {
-        if (b[i + 8] == 0 && b[i + 16] == 0 && b[i + 24] == 0 && b[i + 32] == 0 && b[i + 40] == 0 && b[i + 48] == 0 && b[i + 56] == 0) {
-            const int dc = b[i] * 4;
-            for (int k = 0; k < 8; k++) b[i + k * 8] = dc;
-            continue;
-        }
-        const int p1 = (b[i + 16] + b[i + 48]) * 2217;
-        const int t2 = p1 + b[i + 48] * -7567, t3 = p1 + b[i + 16] * 3135;
-        const int t0 = (b[i] + b[i + 32]) * 4096, t1 = (b[i] - b[i + 32]) * 4096;
-        const int x0 = t0 + t3 + 512, x3 = t0 - t3 + 512, x1 = t1 + t2 + 512, x2 = t1 - t2 + 512;
-        int o0 = b[i + 56], o1 = b[i + 40], o2 = b[i + 24], o3 = b[i + 8];
-        const int q3 = o0 + o2, q4 = o1 + o3, q1 = o0 + o3, q2 = o1 + o2;
-        const int q5 = (q3 + q4) * 4816;
-        o0 *= 1223;
-        o1 *= 8410;
-        o2 *= 12586;
-        o3 *= 6149;
-        const int r1 = q5 + q1 * -3685, r2 = q5 + q2 * -10497, r3 = q3 * -8034, r4 = q4 * -1597;
-        o3 += r1 + r4;
-        o2 += r2 + r3;
-        o1 += r2 + r4;
-        o0 += r1 + r3;
-        b[i] = (x0 + o3) >> 10;
-        b[i + 56] = (x0 - o3) >> 10;
-        b[i + 8] = (x1 + o2) >> 10;
-        b[i + 48] = (x1 - o2) >> 10;
-        b[i + 16] = (x2 + o1) >> 10;
-        b[i + 40] = (x2 - o1) >> 10;
-        b[i + 24] = (x3 + o0) >> 10;
-        b[i + 32] = (x3 - o0) >> 10;
+// The inverse DCT of 8 by 8 blocks: libjpeg's slow integer method, in 4096ths, as stb_image has it,
+// each output written as sums of pairs of inputs times constants (the same integers as its
+// products of sums), so that SSE2 does a pair at a time. A pass down the columns keeps 2 more bits
+// (shift 10), saturated to 16 bits; a pass along the rows adds 128 and rounds (shift 17).
+// The constants: even part t0, t1 from (s0, s4); t3, t2 from (s2, s6); odd part from (s1, s3) and
+// (s5, s7) for each of o3, o2, o1, o0.
+constexpr int kIdctPass1Bias = 512, kIdctPass2Bias = 65536 + (128 << 17);
+
+inline int16_t saturate16(int v) { return static_cast<int16_t>(v < -32768 ? -32768 : v > 32767 ? 32767 : v); }
+
+// One pass over 8 lines of 8 values, `step` apart within a line and `lineStep` between lines.
+inline void inverseEight(const int16_t* in, int step, int16_t* out, int bias, int shift) {
+    const int s0 = in[0], s1 = in[step], s2 = in[2 * step], s3 = in[3 * step], s4 = in[4 * step], s5 = in[5 * step], s6 = in[6 * step], s7 = in[7 * step];
+    if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0 && s6 == 0 && s7 == 0) {
+        const int16_t v = saturate16((s0 * 4096 + bias) >> shift);
+        for (int k = 0; k < 8; k++) out[k * step] = v;
+        return;
     }
-    const int bias = 65536 + (128 << 17);
-    for (int row = 0; row < 8; row++) {
-        const int* r = b + row * 8;
-        const int p1 = (r[2] + r[6]) * 2217;
-        const int t2 = p1 + r[6] * -7567, t3 = p1 + r[2] * 3135;
-        const int t0 = (r[0] + r[4]) * 4096, t1 = (r[0] - r[4]) * 4096;
-        const int x0 = t0 + t3 + bias, x3 = t0 - t3 + bias, x1 = t1 + t2 + bias, x2 = t1 - t2 + bias;
-        int o0 = r[7], o1 = r[5], o2 = r[3], o3 = r[1];
-        const int q3 = o0 + o2, q4 = o1 + o3, q1 = o0 + o3, q2 = o1 + o2;
-        const int q5 = (q3 + q4) * 4816;
-        o0 *= 1223;
-        o1 *= 8410;
-        o2 *= 12586;
-        o3 *= 6149;
-        const int r1 = q5 + q1 * -3685, r2 = q5 + q2 * -10497, r3 = q3 * -8034, r4 = q4 * -1597;
-        o3 += r1 + r4;
-        o2 += r2 + r3;
-        o1 += r2 + r4;
-        o0 += r1 + r3;
-        uint8_t* o = out + static_cast<size_t>(row) * stride;
-        o[0] = clampSample((x0 + o3) >> 17);
-        o[7] = clampSample((x0 - o3) >> 17);
-        o[1] = clampSample((x1 + o2) >> 17);
-        o[6] = clampSample((x1 - o2) >> 17);
-        o[2] = clampSample((x2 + o1) >> 17);
-        o[5] = clampSample((x2 - o1) >> 17);
-        o[3] = clampSample((x3 + o0) >> 17);
-        o[4] = clampSample((x3 - o0) >> 17);
+    const int t0 = s0 * 4096 + s4 * 4096, t1 = s0 * 4096 - s4 * 4096;
+    const int t3 = s2 * 5352 + s6 * 2217, t2 = s2 * 2217 + s6 * -5350;
+    const int x0 = t0 + t3 + bias, x3 = t0 - t3 + bias, x1 = t1 + t2 + bias, x2 = t1 - t2 + bias;
+    const int o3 = s1 * 5683 + s3 * 4816 + s5 * 3219 + s7 * 1131;
+    const int o2 = s1 * 4816 + s3 * -1129 + s5 * -5681 + s7 * -3218;
+    const int o1 = s1 * 3219 + s3 * -5681 + s5 * 1132 + s7 * 4816;
+    const int o0 = s1 * 1131 + s3 * -3218 + s5 * 4816 + s7 * -5680;
+    out[0] = saturate16((x0 + o3) >> shift);
+    out[7 * step] = saturate16((x0 - o3) >> shift);
+    out[step] = saturate16((x1 + o2) >> shift);
+    out[6 * step] = saturate16((x1 - o2) >> shift);
+    out[2 * step] = saturate16((x2 + o1) >> shift);
+    out[5 * step] = saturate16((x2 - o1) >> shift);
+    out[3 * step] = saturate16((x3 + o0) >> shift);
+    out[4 * step] = saturate16((x3 - o0) >> shift);
+}
+
+// One block's coefficients (natural order), each multiplied by its step in 16 bits, to samples.
+[[maybe_unused]] void inverseBlock(const int16_t* coefs, const int16_t* steps, uint8_t* out, size_t stride) {
+    int16_t b[64], c[64];
+    for (int i = 0; i < 64; i++) b[i] = static_cast<int16_t>(coefs[i] * steps[i]);
+    for (int x = 0; x < 8; x++) inverseEight(b + x, 8, c + x, kIdctPass1Bias, 10);
+    for (int y = 0; y < 8; y++) inverseEight(c + y * 8, 1, b + y * 8, kIdctPass2Bias, 17);
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) out[static_cast<size_t>(y) * stride + static_cast<size_t>(x)] = clampSample(b[y * 8 + x]);
+}
+
+#ifdef JADE_SSE2
+// Eight rows of 8 16-bit values turned about the diagonal.
+inline void transpose8x16(__m128i (&r)[8]) {
+    const __m128i a0 = _mm_unpacklo_epi16(r[0], r[1]), a1 = _mm_unpackhi_epi16(r[0], r[1]);
+    const __m128i a2 = _mm_unpacklo_epi16(r[2], r[3]), a3 = _mm_unpackhi_epi16(r[2], r[3]);
+    const __m128i a4 = _mm_unpacklo_epi16(r[4], r[5]), a5 = _mm_unpackhi_epi16(r[4], r[5]);
+    const __m128i a6 = _mm_unpacklo_epi16(r[6], r[7]), a7 = _mm_unpackhi_epi16(r[6], r[7]);
+    const __m128i b0 = _mm_unpacklo_epi32(a0, a2), b1 = _mm_unpackhi_epi32(a0, a2);
+    const __m128i b2 = _mm_unpacklo_epi32(a1, a3), b3 = _mm_unpackhi_epi32(a1, a3);
+    const __m128i b4 = _mm_unpacklo_epi32(a4, a6), b5 = _mm_unpackhi_epi32(a4, a6);
+    const __m128i b6 = _mm_unpacklo_epi32(a5, a7), b7 = _mm_unpackhi_epi32(a5, a7);
+    r[0] = _mm_unpacklo_epi64(b0, b4), r[1] = _mm_unpackhi_epi64(b0, b4);
+    r[2] = _mm_unpacklo_epi64(b1, b5), r[3] = _mm_unpackhi_epi64(b1, b5);
+    r[4] = _mm_unpacklo_epi64(b2, b6), r[5] = _mm_unpackhi_epi64(b2, b6);
+    r[6] = _mm_unpacklo_epi64(b3, b7), r[7] = _mm_unpackhi_epi64(b3, b7);
+}
+
+inline __m128i pairOf(int a, int b) { return _mm_set1_epi32(static_cast<int>((static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) & 0xFFFF))); }
+
+// inverseEight on 8 lines at once, a line in each 16-bit lane: r[k] holds every line's s_k.
+template <int shift>
+inline void inverseEightSse(__m128i (&r)[8], __m128i bias) {
+    const __m128i k04p = pairOf(4096, 4096), k04m = pairOf(4096, -4096), k26a = pairOf(5352, 2217), k26b = pairOf(2217, -5350);
+    const __m128i o3a = pairOf(5683, 4816), o3b = pairOf(3219, 1131), o2a = pairOf(4816, -1129), o2b = pairOf(-5681, -3218);
+    const __m128i o1a = pairOf(3219, -5681), o1b = pairOf(1132, 4816), o0a = pairOf(1131, -3218), o0b = pairOf(4816, -5680);
+    __m128i res[8][2];
+    for (int h = 0; h < 2; h++) {
+        auto mix = [&](__m128i a, __m128i b) { return h == 0 ? _mm_unpacklo_epi16(a, b) : _mm_unpackhi_epi16(a, b); };
+        const __m128i p04 = mix(r[0], r[4]), p26 = mix(r[2], r[6]), p13 = mix(r[1], r[3]), p57 = mix(r[5], r[7]);
+        const __m128i t0 = _mm_madd_epi16(p04, k04p), t1 = _mm_madd_epi16(p04, k04m);
+        const __m128i t3 = _mm_madd_epi16(p26, k26a), t2 = _mm_madd_epi16(p26, k26b);
+        const __m128i x0 = _mm_add_epi32(_mm_add_epi32(t0, t3), bias), x3 = _mm_add_epi32(_mm_sub_epi32(t0, t3), bias);
+        const __m128i x1 = _mm_add_epi32(_mm_add_epi32(t1, t2), bias), x2 = _mm_add_epi32(_mm_sub_epi32(t1, t2), bias);
+        const __m128i o3 = _mm_add_epi32(_mm_madd_epi16(p13, o3a), _mm_madd_epi16(p57, o3b));
+        const __m128i o2 = _mm_add_epi32(_mm_madd_epi16(p13, o2a), _mm_madd_epi16(p57, o2b));
+        const __m128i o1 = _mm_add_epi32(_mm_madd_epi16(p13, o1a), _mm_madd_epi16(p57, o1b));
+        const __m128i o0 = _mm_add_epi32(_mm_madd_epi16(p13, o0a), _mm_madd_epi16(p57, o0b));
+        res[0][h] = _mm_srai_epi32(_mm_add_epi32(x0, o3), shift);
+        res[7][h] = _mm_srai_epi32(_mm_sub_epi32(x0, o3), shift);
+        res[1][h] = _mm_srai_epi32(_mm_add_epi32(x1, o2), shift);
+        res[6][h] = _mm_srai_epi32(_mm_sub_epi32(x1, o2), shift);
+        res[2][h] = _mm_srai_epi32(_mm_add_epi32(x2, o1), shift);
+        res[5][h] = _mm_srai_epi32(_mm_sub_epi32(x2, o1), shift);
+        res[3][h] = _mm_srai_epi32(_mm_add_epi32(x3, o0), shift);
+        res[4][h] = _mm_srai_epi32(_mm_sub_epi32(x3, o0), shift);
+    }
+    for (int k = 0; k < 8; k++) r[k] = _mm_packs_epi32(res[k][0], res[k][1]);
+}
+
+void inverseBlockSse(const int16_t* coefs, const int16_t* steps, uint8_t* out, size_t stride) {
+    __m128i r[8];
+    for (int k = 0; k < 8; k++)
+        r[k] = _mm_mullo_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(coefs + k * 8)), _mm_loadu_si128(reinterpret_cast<const __m128i*>(steps + k * 8)));
+    // Down the columns: the rows are the registers, the columns their lanes.
+    inverseEightSse<10>(r, _mm_set1_epi32(kIdctPass1Bias));
+    transpose8x16(r);
+    inverseEightSse<17>(r, _mm_set1_epi32(kIdctPass2Bias));
+    transpose8x16(r);
+    for (int y = 0; y < 8; y++) _mm_storel_epi64(reinterpret_cast<__m128i*>(out + static_cast<size_t>(y) * stride), _mm_packus_epi16(r[y], r[y]));
+}
+#endif
+
+// The forward DCT along 8 values, AAN's way (libjpeg's float method), in place; `V` is a float or
+// four of them in an SSE register, so that the plain and the SSE2 DCT do the same sums in order.
+template <class V>
+inline void forwardEight(V& e0, V& e1, V& e2, V& e3, V& e4, V& e5, V& e6, V& e7, V c707, V c382, V c541, V c1306) {
+    const V t0 = e0 + e7, t7 = e0 - e7, t1 = e1 + e6, t6 = e1 - e6;
+    const V t2 = e2 + e5, t5 = e2 - e5, t3 = e3 + e4, t4 = e3 - e4;
+    const V t10 = t0 + t3, t13 = t0 - t3, t11 = t1 + t2, t12 = t1 - t2;
+    e0 = t10 + t11;
+    e4 = t10 - t11;
+    const V z1 = (t12 + t13) * c707;
+    e2 = t13 + z1;
+    e6 = t13 - z1;
+    const V u10 = t4 + t5, u11 = t5 + t6, u12 = t6 + t7;
+    const V z5 = (u10 - u12) * c382;
+    const V z2 = c541 * u10 + z5, z4 = c1306 * u12 + z5, z3 = u11 * c707;
+    const V z11 = t7 + z3, z13 = t7 - z3;
+    e5 = z13 + z2;
+    e3 = z13 - z2;
+    e1 = z11 + z4;
+    e7 = z11 - z4;
+}
+constexpr float kC707 = 0.707106781f, kC382 = 0.382683433f, kC541 = 0.541196100f, kC1306 = 1.306562965f;
+
+// The forward DCT of 8 by 8 samples (128 taken off): down the columns, then along the rows;
+// each coefficient left scaled by `aan`, which the caller takes out.
+[[maybe_unused]] void forwardBlock(float* b) {
+    for (int x = 0; x < 8; x++)
+        forwardEight(b[x], b[x + 8], b[x + 16], b[x + 24], b[x + 32], b[x + 40], b[x + 48], b[x + 56], kC707, kC382, kC541, kC1306);
+    for (int y = 0; y < 8; y++) {
+        float* r = b + y * 8;
+        forwardEight(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], kC707, kC382, kC541, kC1306);
     }
 }
 
-// One pass of the forward DCT, AAN's way in floats (libjpeg's float method), over 8 lines of 8
-// samples `step` apart, the lines `lineStep` apart.
-template <int step, int lineStep>
-inline void forwardPass(float* b) {
-    for (int i = 0; i < 8; i++) {
-        float* s = b + i * lineStep;
-        const float t0 = s[0] + s[7 * step], t7 = s[0] - s[7 * step];
-        const float t1 = s[step] + s[6 * step], t6 = s[step] - s[6 * step];
-        const float t2 = s[2 * step] + s[5 * step], t5 = s[2 * step] - s[5 * step];
-        const float t3 = s[3 * step] + s[4 * step], t4 = s[3 * step] - s[4 * step];
-        const float t10 = t0 + t3, t13 = t0 - t3, t11 = t1 + t2, t12 = t1 - t2;
-        s[0] = t10 + t11;
-        s[4 * step] = t10 - t11;
-        const float z1 = (t12 + t13) * 0.707106781f;
-        s[2 * step] = t13 + z1;
-        s[6 * step] = t13 - z1;
-        const float u10 = t4 + t5, u11 = t5 + t6, u12 = t6 + t7;
-        const float z5 = (u10 - u12) * 0.382683433f;
-        const float z2 = 0.541196100f * u10 + z5, z4 = 1.306562965f * u12 + z5, z3 = u11 * 0.707106781f;
-        const float z11 = t7 + z3, z13 = t7 - z3;
-        s[5 * step] = z13 + z2;
-        s[3 * step] = z13 - z2;
-        s[step] = z11 + z4;
-        s[7 * step] = z11 - z4;
-    }
+#ifdef JADE_SSE2
+// Four floats in a register, with the operators forwardEight uses.
+struct F4 {
+    __m128 v;
+    F4() = default;
+    F4(__m128 x) : v(x) {}
+    friend F4 operator+(F4 a, F4 b) { return _mm_add_ps(a.v, b.v); }
+    friend F4 operator-(F4 a, F4 b) { return _mm_sub_ps(a.v, b.v); }
+    friend F4 operator*(F4 a, F4 b) { return _mm_mul_ps(a.v, b.v); }
+};
+
+// An 8 by 8 block of floats as rows of two registers, turned about its diagonal.
+inline void transpose8(F4 (&r)[8][2]) {
+    __m128 a0 = r[0][0].v, a1 = r[1][0].v, a2 = r[2][0].v, a3 = r[3][0].v;
+    __m128 b0 = r[0][1].v, b1 = r[1][1].v, b2 = r[2][1].v, b3 = r[3][1].v;
+    __m128 c0 = r[4][0].v, c1 = r[5][0].v, c2 = r[6][0].v, c3 = r[7][0].v;
+    __m128 d0 = r[4][1].v, d1 = r[5][1].v, d2 = r[6][1].v, d3 = r[7][1].v;
+    _MM_TRANSPOSE4_PS(a0, a1, a2, a3);
+    _MM_TRANSPOSE4_PS(b0, b1, b2, b3);
+    _MM_TRANSPOSE4_PS(c0, c1, c2, c3);
+    _MM_TRANSPOSE4_PS(d0, d1, d2, d3);
+    r[0][0] = a0, r[1][0] = a1, r[2][0] = a2, r[3][0] = a3;
+    r[0][1] = c0, r[1][1] = c1, r[2][1] = c2, r[3][1] = c3;
+    r[4][0] = b0, r[5][0] = b1, r[6][0] = b2, r[7][0] = b3;
+    r[4][1] = d0, r[5][1] = d1, r[6][1] = d2, r[7][1] = d3;
 }
 
-// The forward DCT of 8 by 8 samples (128 taken off): rows, then columns; each coefficient left
-// scaled by `aan`, which the caller takes out.
-void forwardBlock(float* b) {
-    forwardPass<1, 8>(b);
-    forwardPass<8, 1>(b);
+// One block's samples (rows `stride` apart) to its 64 coefficients, each multiplied by its factor
+// and rounded to the nearest (an even one at a half), as 16-bit numbers.
+inline void forwardBlockSse(const uint8_t* p, size_t stride, const float* factor, int16_t* out) {
+    const __m128i zero = _mm_setzero_si128();
+    const __m128 c128 = _mm_set1_ps(128.0f);
+    F4 r[8][2];
+    for (int y = 0; y < 8; y++) {
+        const __m128i row = _mm_unpacklo_epi8(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(p + static_cast<size_t>(y) * stride)), zero);
+        r[y][0] = _mm_sub_ps(_mm_cvtepi32_ps(_mm_unpacklo_epi16(row, zero)), c128);
+        r[y][1] = _mm_sub_ps(_mm_cvtepi32_ps(_mm_unpackhi_epi16(row, zero)), c128);
+    }
+    const F4 c707 = _mm_set1_ps(kC707), c382 = _mm_set1_ps(kC382), c541 = _mm_set1_ps(kC541), c1306 = _mm_set1_ps(kC1306);
+    for (int pass = 0; pass < 2; pass++) {
+        for (int h = 0; h < 2; h++) forwardEight(r[0][h], r[1][h], r[2][h], r[3][h], r[4][h], r[5][h], r[6][h], r[7][h], c707, c382, c541, c1306);
+        transpose8(r);
+    }
+    for (int y = 0; y < 8; y++) {
+        const __m128i lo = _mm_cvtps_epi32(_mm_mul_ps(r[y][0].v, _mm_loadu_ps(factor + y * 8)));
+        const __m128i hi = _mm_cvtps_epi32(_mm_mul_ps(r[y][1].v, _mm_loadu_ps(factor + y * 8 + 4)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out + y * 8), _mm_packs_epi32(lo, hi));
+    }
 }
+#endif
 
 const std::array<float, 64>& aanScale() {
     static const std::array<float, 64> scale = [] {
@@ -386,24 +486,37 @@ std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, i
         // A row at a time: first down the columns (3 parts the nearer row and 1 the other, or 4
         // parts the one row) into `column`, its first and last repeated once past each end; then
         // across.
-        std::vector<int> columnRow(static_cast<size_t>(w) + 2);
-        int* column = columnRow.data() + 1;
+        std::vector<int16_t> columnRow(static_cast<size_t>(w) + 2);
+        int16_t* column = columnRow.data() + 1;
         for (int y = 0; y < th; y++) {
             const int sy = twiceY ? y / 2 : y;
             const int ny = std::clamp(twiceY ? (y % 2 == 0 ? sy - 1 : sy + 1) : sy, 0, h - 1);
             const uint8_t* near = p + static_cast<size_t>(std::min(sy, h - 1)) * stride;
             const uint8_t* far = p + static_cast<size_t>(ny) * stride;
             if (twiceY) {
-                for (int x = 0; x < w; x++) column[x] = near[x] * 3 + far[x];
+                for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 3 + far[x]);
             } else {
-                for (int x = 0; x < w; x++) column[x] = near[x] * 4;
+                for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 4);
             }
             column[-1] = column[0];
             column[w] = column[w - 1];
             uint8_t* o = &out[static_cast<size_t>(y) * static_cast<size_t>(tw)];
             if (twiceX) {
                 const int pairs = tw / 2;
-                for (int k = 0; k < pairs; k++) {
+                int k0 = 0;
+#ifdef JADE_SSE2
+                // Eight pairs at a time: 3 parts each sample and 1 the one before (or after).
+                const __m128i eight = _mm_set1_epi16(8);
+                for (; k0 + 8 <= pairs; k0 += 8) {
+                    const __m128i c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(column + k0));
+                    const __m128i before = _mm_loadu_si128(reinterpret_cast<const __m128i*>(column + k0 - 1));
+                    const __m128i after = _mm_loadu_si128(reinterpret_cast<const __m128i*>(column + k0 + 1));
+                    const __m128i c3 = _mm_add_epi16(_mm_add_epi16(c, c), _mm_add_epi16(c, eight));
+                    const __m128i even = _mm_srli_epi16(_mm_add_epi16(c3, before), 4), odd = _mm_srli_epi16(_mm_add_epi16(c3, after), 4);
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(o + 2 * k0), _mm_packus_epi16(_mm_unpacklo_epi16(even, odd), _mm_unpackhi_epi16(even, odd)));
+                }
+#endif
+                for (int k = k0; k < pairs; k++) {
                     o[2 * k] = static_cast<uint8_t>((column[k] * 3 + column[k - 1] + 8) >> 4);
                     o[2 * k + 1] = static_cast<uint8_t>((column[k] * 3 + column[k + 1] + 8) >> 4);
                 }
@@ -452,22 +565,92 @@ std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, i
     return out;
 }
 
-// YCbCr as JPEG (JFIF) has it, full range: to and from red, green and blue, in 65536ths.
-struct YccTables {
-    int crR[256], cbG[256], crG[256], cbB[256];
-    YccTables() {
-        for (int i = 0; i < 256; i++) {
-            const double d = i - 128;
-            crR[i] = static_cast<int>(std::lround(1.402 * 65536 * d)) + 32768;
-            cbG[i] = -static_cast<int>(std::lround(0.344136 * 65536 * d)) + 32768;
-            crG[i] = -static_cast<int>(std::lround(0.714136 * 65536 * d));
-            cbB[i] = static_cast<int>(std::lround(1.772 * 65536 * d)) + 32768;
+// YCbCr as JPEG (JFIF) has it, full range, to and from red, green and blue: in 16384ths, so that
+// each factor fits 16 bits and SSE2 multiplies pairs of them at once.
+//   Y  = 0.299 R + 0.587 G + 0.114 B             R = Y + 1.402 Cr'
+//   Cb = -0.168736 R - 0.331264 G + 0.5 B + 128  G = Y - 0.344136 Cb' - 0.714136 Cr'
+//   Cr = 0.5 R - 0.418688 G - 0.081312 B + 128   B = Y + 1.772 Cb'      (Cb' = Cb - 128, Cr' = Cr - 128)
+constexpr int kYr = 4899, kYg = 9617, kYb = 1868, kCbR = -2765, kCbG = -5427, kCrG = -6860, kCrB = -1332, kHalf = 8192;
+constexpr int kRcr = 22970, kGcb = -5638, kGcr = -11700, kBcb = 29032;
+
+inline uint8_t lumaOf(int r, int g, int b) { return static_cast<uint8_t>((kYr * r + kYg * g + kYb * b + kHalf) >> 14); }
+
+// `n` RGBA pixels to Y, Cb and Cr (or Y alone where cb is null).
+void rgbToYcc(const uint8_t* px, size_t n, uint8_t* y, uint8_t* cb, uint8_t* cr) {
+    size_t i = 0;
+#ifdef JADE_SSE2
+    const __m128i lowBytes = _mm_set1_epi32(0x00FF00FF);
+    // Pairs of factors for (R, B) and (G, A) in each 32-bit pixel.
+    const __m128i yRB = _mm_set1_epi32((kYb << 16) | kYr), yGA = _mm_set1_epi32(kYg);
+    const __m128i cbRB = _mm_set1_epi32((kHalf << 16) | (kCbR & 0xFFFF)), cbGA = _mm_set1_epi32(kCbG & 0xFFFF);
+    const __m128i crRB = _mm_set1_epi32(((kCrB & 0xFFFF) << 16) | kHalf), crGA = _mm_set1_epi32(kCrG & 0xFFFF);
+    const __m128i roundY = _mm_set1_epi32(kHalf), roundC = _mm_set1_epi32(kHalf - 1 + (128 << 14));
+    auto three = [&](__m128i p, __m128i& oy, __m128i& ob, __m128i& orr) {
+        const __m128i rb = _mm_and_si128(p, lowBytes), ga = _mm_and_si128(_mm_srli_epi32(p, 8), lowBytes);
+        oy = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(_mm_madd_epi16(rb, yRB), _mm_madd_epi16(ga, yGA)), roundY), 14);
+        ob = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(_mm_madd_epi16(rb, cbRB), _mm_madd_epi16(ga, cbGA)), roundC), 14);
+        orr = _mm_srai_epi32(_mm_add_epi32(_mm_add_epi32(_mm_madd_epi16(rb, crRB), _mm_madd_epi16(ga, crGA)), roundC), 14);
+    };
+    for (; i + 16 <= n; i += 16) {
+        __m128i ys[4], bs[4], rs[4];
+        for (int k = 0; k < 4; k++) three(_mm_loadu_si128(reinterpret_cast<const __m128i*>(px + (i + k * 4) * 4)), ys[k], bs[k], rs[k]);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(y + i), _mm_packus_epi16(_mm_packs_epi32(ys[0], ys[1]), _mm_packs_epi32(ys[2], ys[3])));
+        if (cb != nullptr) {
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(cb + i), _mm_packus_epi16(_mm_packs_epi32(bs[0], bs[1]), _mm_packs_epi32(bs[2], bs[3])));
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(cr + i), _mm_packus_epi16(_mm_packs_epi32(rs[0], rs[1]), _mm_packs_epi32(rs[2], rs[3])));
         }
     }
-};
-const YccTables& ycc() {
-    static const YccTables tables;
-    return tables;
+#endif
+    for (; i < n; i++) {
+        const int r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
+        y[i] = lumaOf(r, g, b);
+        if (cb != nullptr) {
+            cb[i] = static_cast<uint8_t>(((kCbR * r + kCbG * g + kHalf * b + kHalf - 1) >> 14) + 128);
+            cr[i] = static_cast<uint8_t>(((kHalf * r + kCrG * g + kCrB * b + kHalf - 1) >> 14) + 128);
+        }
+    }
+}
+
+// `n` pixels of Y, Cb and Cr to RGBA, alpha 255.
+void yccToRgb(const uint8_t* y, const uint8_t* cb, const uint8_t* cr, size_t n, uint8_t* out) {
+    size_t i = 0;
+#ifdef JADE_SSE2
+    const __m128i zero = _mm_setzero_si128(), c128 = _mm_set1_epi16(128), opaque = _mm_set1_epi8(static_cast<char>(0xFF));
+    const __m128i rPair = _mm_set1_epi32(kRcr << 16), gPair = _mm_set1_epi32((kGcr << 16) | (kGcb & 0xFFFF)), bPair = _mm_set1_epi32(kBcb & 0xFFFF);
+    const __m128i round = _mm_set1_epi32(kHalf);
+    // Four pixels' (Cb', Cr') pairs times a pair of factors, in 16384ths, made whole.
+    auto part = [&](__m128i pairs, __m128i factors) { return _mm_srai_epi32(_mm_add_epi32(_mm_madd_epi16(pairs, factors), round), 14); };
+    for (; i + 16 <= n; i += 16) {
+        const __m128i yy = _mm_loadu_si128(reinterpret_cast<const __m128i*>(y + i));
+        const __m128i bb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cb + i));
+        const __m128i rr = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cr + i));
+        __m128i r8[2], g8[2], b8[2];
+        for (int half = 0; half < 2; half++) {
+            const __m128i y16 = half == 0 ? _mm_unpacklo_epi8(yy, zero) : _mm_unpackhi_epi8(yy, zero);
+            const __m128i b16 = _mm_sub_epi16(half == 0 ? _mm_unpacklo_epi8(bb, zero) : _mm_unpackhi_epi8(bb, zero), c128);
+            const __m128i r16 = _mm_sub_epi16(half == 0 ? _mm_unpacklo_epi8(rr, zero) : _mm_unpackhi_epi8(rr, zero), c128);
+            const __m128i lo = _mm_unpacklo_epi16(b16, r16), hi = _mm_unpackhi_epi16(b16, r16);
+            r8[half] = _mm_add_epi16(y16, _mm_packs_epi32(part(lo, rPair), part(hi, rPair)));
+            g8[half] = _mm_add_epi16(y16, _mm_packs_epi32(part(lo, gPair), part(hi, gPair)));
+            b8[half] = _mm_add_epi16(y16, _mm_packs_epi32(part(lo, bPair), part(hi, bPair)));
+        }
+        const __m128i R = _mm_packus_epi16(r8[0], r8[1]), G = _mm_packus_epi16(g8[0], g8[1]), B = _mm_packus_epi16(b8[0], b8[1]);
+        const __m128i rgLo = _mm_unpacklo_epi8(R, G), rgHi = _mm_unpackhi_epi8(R, G);
+        const __m128i baLo = _mm_unpacklo_epi8(B, opaque), baHi = _mm_unpackhi_epi8(B, opaque);
+        __m128i* o = reinterpret_cast<__m128i*>(out + i * 4);
+        _mm_storeu_si128(o, _mm_unpacklo_epi16(rgLo, baLo));
+        _mm_storeu_si128(o + 1, _mm_unpackhi_epi16(rgLo, baLo));
+        _mm_storeu_si128(o + 2, _mm_unpacklo_epi16(rgHi, baHi));
+        _mm_storeu_si128(o + 3, _mm_unpackhi_epi16(rgHi, baHi));
+    }
+#endif
+    for (; i < n; i++) {
+        const int yy = y[i], b = cb[i] - 128, r = cr[i] - 128;
+        out[i * 4] = clampSample(yy + ((kRcr * r + kHalf) >> 14));
+        out[i * 4 + 1] = clampSample(yy + ((kGcb * b + kGcr * r + kHalf) >> 14));
+        out[i * 4 + 2] = clampSample(yy + ((kBcb * b + kHalf) >> 14));
+        out[i * 4 + 3] = 255;
+    }
 }
 
 }  // namespace
@@ -516,16 +699,18 @@ void registerPicture(VM& vm) {
         if (bh > 0 && plane.size() < static_cast<size_t>(((bh - 1) * 8 + 7) * stride + bw * 8)) throw vm.runtimeError(Thrown::IllegalArgumentException, "the plane is smaller than the blocks");
         std::array<int, 64> scale;
         const bool scaled = steps(vm, args[5], scale);
-        int block[64];
+        int16_t steps16[64];
+        for (size_t i = 0; i < 64; i++) steps16[i] = static_cast<int16_t>(scaled ? scale[i] : 1);  // in 16 bits, as the products are kept
         for (int64_t by = 0; by < bh; by++)
             for (int64_t bx = 0; bx < bw; bx++) {
-                const uint8_t* c = &coefs[static_cast<size_t>((by * bw + bx) * 128)];
-                for (int i = 0; i < 64; i++) {
-                    int16_t v;
-                    std::memcpy(&v, c + i * 2, 2);
-                    block[i] = scaled ? v * scale[static_cast<size_t>(i)] : v;
-                }
-                inverseBlock(block, &plane[static_cast<size_t>(by * 8 * stride + bx * 8)], static_cast<size_t>(stride));
+                int16_t c[64];
+                std::memcpy(c, &coefs[static_cast<size_t>((by * bw + bx) * 128)], 128);
+                uint8_t* out = &plane[static_cast<size_t>(by * 8 * stride + bx * 8)];
+#ifdef JADE_SSE2
+                inverseBlockSse(c, steps16, out, static_cast<size_t>(stride));
+#else
+                inverseBlock(c, steps16, out, static_cast<size_t>(stride));
+#endif
             }
         return Value::null();
     });
@@ -542,21 +727,24 @@ void registerPicture(VM& vm) {
         std::array<float, 64> factor;
         for (size_t i = 0; i < 64; i++) factor[i] = 1.0f / (aanScale()[i] * (divided ? static_cast<float>(divisors[i]) : 1.0f));
         std::vector<uint8_t> out(static_cast<size_t>(bw * bh * 128));
-        float block[64];
         for (int64_t by = 0; by < bh; by++)
             for (int64_t bx = 0; bx < bw; bx++) {
                 const uint8_t* p = &plane[static_cast<size_t>(by * 8 * stride + bx * 8)];
+                int16_t q[64];
+#ifdef JADE_SSE2
+                forwardBlockSse(p, static_cast<size_t>(stride), factor.data(), q);
+#else
+                float block[64];
                 for (int y = 0; y < 8; y++)
                     for (int x = 0; x < 8; x++) block[y * 8 + x] = static_cast<float>(p[static_cast<size_t>(y * stride + x)]) - 128.0f;
                 forwardBlock(block);
-                uint8_t* o = &out[static_cast<size_t>((by * bw + bx) * 128)];
-                int16_t q[64];
                 for (size_t i = 0; i < 64; i++) {
-                    // Rounded half away from zero, as lround, without its call.
+                    // Rounded to the nearest, an even one at a half, as SSE2 rounds.
                     const float v = std::clamp(block[i] * factor[i], -32768.0f, 32767.0f);
-                    q[i] = static_cast<int16_t>(v + (v < 0 ? -0.5f : 0.5f));
+                    q[i] = static_cast<int16_t>(std::nearbyint(v));
                 }
-                std::memcpy(o, q, 128);
+#endif
+                std::memcpy(&out[static_cast<size_t>((by * bw + bx) * 128)], q, 128);
             }
         return bytesValue(vm, std::move(out));
     });
@@ -596,17 +784,7 @@ void registerPicture(VM& vm) {
         } else if (space == 1) {
             for (size_t i = 0; i < n; i++) out[i * 4] = planes[0][i], out[i * 4 + 1] = planes[1][i], out[i * 4 + 2] = planes[2][i], out[i * 4 + 3] = 255;
         } else {
-            const YccTables& t = ycc();
-            const uint8_t* py = planes[0];
-            const uint8_t* pb = planes[1];
-            const uint8_t* pr = planes[2];
-            uint8_t* o = out.data();
-            for (size_t i = 0; i < n; i++) {
-                const int y = py[i] << 16, cb = pb[i], cr = pr[i];
-                const uint32_t pixel = clampSample((y + t.crR[cr]) >> 16) | (static_cast<uint32_t>(clampSample((y + t.cbG[cb] + t.crG[cr]) >> 16)) << 8) |
-                                       (static_cast<uint32_t>(clampSample((y + t.cbB[cb]) >> 16)) << 16) | 0xFF000000u;
-                std::memcpy(o + i * 4, &pixel, 4);
-            }
+            yccToRgb(planes[0], planes[1], planes[2], n, out.data());
         }
         return Value::null();
     });
@@ -633,19 +811,8 @@ void registerPicture(VM& vm) {
         const uint8_t* q = px.data();
         if (space == 1) {
             for (size_t i = 0; i < n; i++) planes[0][i] = q[i * 4], planes[1][i] = q[i * 4 + 1], planes[2][i] = q[i * 4 + 2];
-        } else if (space == 0) {
-            uint8_t* y = planes[0].data();
-            for (size_t i = 0; i < n; i++) y[i] = clampSample((19595 * q[i * 4] + 38470 * q[i * 4 + 1] + 7471 * q[i * 4 + 2] + 32768) >> 16);
         } else {
-            uint8_t* y = planes[0].data();
-            uint8_t* cb = planes[1].data();
-            uint8_t* cr = planes[2].data();
-            for (size_t i = 0; i < n; i++) {
-                const int r = q[i * 4], g = q[i * 4 + 1], b = q[i * 4 + 2];
-                y[i] = clampSample((19595 * r + 38470 * g + 7471 * b + 32768) >> 16);
-                cb[i] = clampSample(((-11059 * r - 21709 * g + 32768 * b + 32767) >> 16) + 128);
-                cr[i] = clampSample(((32768 * r - 27439 * g - 5329 * b + 32767) >> 16) + 128);
-            }
+            rgbToYcc(q, n, planes[0].data(), space == 2 ? planes[1].data() : nullptr, space == 2 ? planes[2].data() : nullptr);
         }
         ObjList* list = newList(vm);
         TempRoot keep(vm, Value::object(list));
