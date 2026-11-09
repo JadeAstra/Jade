@@ -48,6 +48,7 @@ add_library(jade_core OBJECT
   src/grid.cpp
   src/regex.cpp
   src/regex_api.cpp
+  src/xml_scan.cpp
   src/foreign.cpp
   src/worker.cpp
   src/parallel.cpp

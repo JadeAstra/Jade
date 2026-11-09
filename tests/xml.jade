@@ -90,6 +90,12 @@ val bare = Xml.parse("<a/>")
 print(bare.version, bare.encoding, bare.standalone, bare.doctype, bare.children.size, bare)   // expect: null null null null 1 <a/>
 print(Xml.parse("<!DOCTYPE a SYSTEM 'x.dtd'><a/>").doctype, Xml.parse("<!DOCTYPE a[]><a/>").doctype?.internalSubset?.isEmpty())   // expect: <!DOCTYPE a SYSTEM "x.dtd"> true
 
+// Xml.scan, the C++ pass the reader builds on: it stops at a name past ASCII, or an end tag of
+// another element, and the reader reads on from there a part at a time.
+print(Xml.scan("<a b='1'>hi</a>"), Xml.scan("<a><é/></a>"), Xml.scan("<a>x</b>"))   // expect: [1, 0, 1, 2, 0, 0, 1, 3, 4, 1, 6, 7, 0, 3, 9, 11, 0, 2, 11, 0, 15] [1, 0, 1, 2, 0, 0, 0, 0, 3] [1, 0, 1, 2, 0, 0, 0, 3, 3, 4, 0, 0, 4]
+val mixedNames = Xml.parse("<a><b k='1'/><é x='2'>t</é><c/></a>").root
+print(mixedNames.elements().map { it.name }, mixedNames.elements("é")[0].attr("x"), mixedNames.text)   // expect: ["b", "é", "c"] 2 t
+
 // Not well-formed: each an XmlException with its line and column.
 fails("")   // expect: there is no root element (1:1)
 fails("   ")   // expect: there is no root element (1:4)

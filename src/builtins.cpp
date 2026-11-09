@@ -1359,6 +1359,7 @@ void registerBuiltins(VM& vm) {
     registerSandbox(vm);
     registerGrid(vm);
     registerRegex(vm);
+    registerXml(vm);
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);

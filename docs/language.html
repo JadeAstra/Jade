@@ -588,7 +588,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Worker"><code>Worker</code></a> (9)</li>
 <li><a href="#WorkerParent"><code>WorkerParent</code></a> (4)</li>
 <li><a href="#Writer"><code>Writer</code></a> (10)</li>
-<li><a href="#Xml"><code>Xml</code></a> (2)</li>
+<li><a href="#Xml"><code>Xml</code></a> (3)</li>
 <li><a href="#XmlCData"><code>XmlCData</code></a> (2)</li>
 <li><a href="#XmlComment"><code>XmlComment</code></a> (4)</li>
 <li><a href="#XmlDoctype"><code>XmlDoctype</code></a> (8)</li>
@@ -6403,6 +6403,23 @@ for (shape in svg.elements(&quot;rect&quot;)) { print(shape.attr(&quot;width&quo
 </div>
 <div class="entry member" id="Xml.parse"><code class="sig">fun parse(text : string) : XmlDocument throws XmlException</code><a class="anchor" href="#Xml.parse">#</a>
 <p>XML text read as a document, with everything in it. An XmlException where the text is not well-formed XML.</p>
+</div>
+<div class="entry member" id="Xml.scan"><code class="sig">fun scan(text : string, startIndex : int = 0) : List&lt;int&gt;</code><a class="anchor" href="#Xml.scan">#</a>
+<p>Where the parts of an element are, in one pass in C++: the element whose start tag is at <code>startIndex</code> and all inside it, to its end tag. What Xml.parse builds its tree from, for a reader of one's own. Records one after another, each its kind and then its numbers, places counted in characters, an end left out:</p>
+<pre>1 a start tag:   1, where, name start, name end, name number, 1 if it ends with /&gt;, the
+                 number of attributes, then for each: name start, name end, name number,
+                 value start, value end, and 1 + 2 where the value holds &amp; (1) or a line
+                 end or tab (2)
+2 an end tag:    2, where
+3 text:          3, start, end, 1 where it holds &amp;
+4 a comment:     4, where, start, end (of what is between &lt;!-- and --&gt;)
+5 an instruction: 5, where, target start, target end, data start, data end
+6 CDATA:         6, where, start, end (of what is between &lt;![CDATA[ and ]]&gt;)
+0 the end:       0, where it stopped
+</pre>
+<p>The scan takes only well-formed XML whose names are ASCII; it stops at the end of the element, or at anything else (something malformed, a name past ASCII, ]]&gt; in text, an end tag of another element), which a reader then reads a part at a time. Entities are left as written; values and text keep their line ends. A name number is the same for each name spelt the same, element's or attribute's, 0 for the first met, 1 for the next new one and so on, so that a reader may make each name's string once.</p>
+<pre>Xml.scan(&quot;&lt;a b='1'&gt;hi&lt;/a&gt;&quot;)   // [1, 0, 1, 2, 0, 0, 1, 3, 4, 1, 6, 7, 0, 3, 9, 11, 0, 2, 11, 0, 15]
+</pre>
 </div>
 <div class="entry" id="XmlException"><code class="sig">class XmlException(val description : string, val line : int, val column : int)</code><a class="anchor" href="#XmlException">#</a>
 <p>What is wrong with XML that Xml.parse was given, and where: the line and the column in it, each counted from 1, the column in characters.</p>
