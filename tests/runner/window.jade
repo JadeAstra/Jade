@@ -271,7 +271,11 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   }
 
   val window = Window(ui, title = "Jade tests — ${start.tests.text}", initialWidth = 1100, initialHeight = 820,
-                      onClose = { suite.stop() })
+                      onClose = {
+                        // The checks running ended with it, and the program: its timer would keep it going.
+                        suite.stop()
+                        exit(0)
+                      })
   saveSnapshot = {
     refresh()
     val failed = shown.firstOrNull { it.status == Status.failed }
