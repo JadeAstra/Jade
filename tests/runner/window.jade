@@ -7,14 +7,17 @@ import "engine".*
 // What each column shows for a check: its name, status, a mark for each way, its time.
 val columnNames = ["Check", "Status", "script", "cached", "units", "compiled", "program", "Time"]
 
-// Each filter's name, and whether it lets a check be shown.
-val filterNames = ["All", "Failed", "Not passed", "Running", "Passed", "Passed only alone"]
-fun filterLets(filter : int, item : Item) : bool => when (filter) {
+// Each filter's name, and whether it lets a check be shown: `inRun` the names of the checks the
+// last run ran.
+val filterNames = ["All", "Failed", "Not passed", "Running", "Passed", "Passed only alone", "This run"]
+val thisRun = 6
+fun filterLets(filter : int, item : Item, inRun : Set<string>) : bool => when (filter) {
   1 -> item.status == Status.failed
   2 -> item.status != Status.passed and item.status != Status.skipped
   3 -> item.status == Status.running
   4 -> item.status == Status.passed
   5 -> item.note.startsWith("passed only when run alone")
+  6 -> item.name in inRun
   else -> true
 }
 
@@ -67,14 +70,22 @@ fun detailOf(item : Item) : string {
 }
 
 // The window, open until it is closed: what `options` says, each a control the person can change.
-// With `snapshot`, a test of the window itself: it opens hidden, runs the checks named in `only`
-// (or all), shows the first that failed, saves a picture of itself there and ends the program.
-fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath? = null) {
+// With `atOnce`, the checks named in `only` (or all) run as it opens, under each setting in turn
+// (the first with the ways asked for, the rest the script way alone, as --stress has them); when
+// they are done, what they gave is printed as the console prints it, and written to `report`, and
+// the window closes `closeAfter` seconds later where everything passed (-1: it stays open). With
+// `snapshot`, a test of the window itself: hidden, it runs them, shows the first that failed, saves
+// a picture of itself there and ends the program.
+fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath? = null, atOnce : List<Setting> = [],
+               report : FilePath? = null, closeAfter : int = -1) {
   var suite = Suite(start)
   var running = false
   var dirty = true
   var shown : List<Item> = []
   var chosen : Item? = null
+  var closing = ""     // said after the summary once the window is to close by itself
+  var inRun : Set<string> = setOf()   // the names of the checks the last run ran
+  var reportText = ""                 // what the runs started with the window gave, once they end
   // The longest text each column has had: a longer one has the table measure its columns again.
   val widest : open List<int> = columnNames.map { it.size }.toOpenList()
 
@@ -82,12 +93,13 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   val jadeModel = SharedTextModel(start.jade.text)
   val wayBoxes = Way.entries.map { w -> CheckBox(w.name, w in start.ways) }
   if (!onWindows) { wayBoxes[Way.program.ordinal].checked = false }
-  val atOnce = Spinner(start.parallel, 1, 64)
+  val howMany = Spinner(start.parallel, 1, 64)
   val settingNames = Setting.entries.map { it == Setting.plain ? "none" : settingName(it) }
   val settingBox = ComboBox(settingNames, start.setting.ordinal)
   val filterBox = ComboBox(filterNames, 0)
   val searchModel = SharedTextModel("")
   val summary = Label("")
+  val phase = Label("Not run yet")    // what the window is doing: running what, or done
   val progress = ProgressBar(0.0)
   val detailModel = SharedTextModel("")
   val detail = TextArea(detailModel)
@@ -99,7 +111,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   fun optionsNow() : Options {
     val o = Options(FilePath(jadeModel.text.trim()), start.tests)
     o.ways = Way.entries.filter { wayBoxes[it.ordinal].checked and (onWindows or it != Way.program) }
-    o.parallel = atOnce.value
+    o.parallel = howMany.value
     o.setting = Setting.entries[Math.max(0, settingBox.selected)]
     o.timeLimit = start.timeLimit
     return o
@@ -130,7 +142,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   fun refresh() {
     val filter = Math.max(0, filterBox.selected)
     val search = searchModel.text.trim().lower()
-    val now = suite.items.filter { filterLets(filter, it) and (search == "" or it.name.lower().contains(search)) }
+    val now = suite.items.filter { filterLets(filter, it, inRun) and (search == "" or it.name.lower().contains(search)) }
     val same = now.size == shown.size and now.indices.all { now[it] === shown[it] }
     if (same) {
       var wider = false
@@ -153,7 +165,8 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       val keep = chosen
       table.selected = keep == null ? -1 : now.indexOf(keep)
     }
-    val items = suite.items
+    // Counted over the checks of the last run, where there has been one.
+    val items = inRun.isEmpty() ? suite.items : suite.items.filter { it.name in inRun }
     val passed = items.count { it.status == Status.passed }
     val failed = items.count { it.status == Status.failed }
     val busy = items.count { it.status == Status.running }
@@ -164,11 +177,17 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
                    " of ${items.size} — ${shown.size} shown"
     progress.value = wanted == 0 ? 0.0 : done.toFloat() / wanted.toFloat()
     val c = chosen
-    detailModel.setText(c == null ? "Choose a check to see what it gave." : detailOf(c))
+    detailModel.setText(c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
+                        "Choose a check to see what it gave.")
   }
 
   // ---- Running ----
+  // The settings still to run, as the window opened, and what those run gave.
+  val left : open List<Setting> = atOnce.toOpenList()
+  val said : open List<string> = []
+  var allPassed = true
   var saveSnapshot : () -> unit = {}
+  var afterRun : () -> unit = {}
   val runButtons : open List<Component> = []
   val stopButton = button("Stop") { suite.stop() }
   stopButton.enabled = false
@@ -179,6 +198,8 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     // The same checks in the new suite.
     val names = which.map { it.name }
     val these = suite.items.filter { it.name in names }
+    inRun = names.toSet()
+    if (phase.text == "Not run yet" or !phase.text.startsWith("Running ")) { phase.text = "Running ${these.size} checks…" }
     running = true
     for (b in runButtons) { b.enabled = false }
     stopButton.enabled = true
@@ -191,10 +212,11 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       }
       EventLoop.post {
         running = false
+        if (!phase.text.startsWith("Running ") or left.isEmpty()) { phase.text = "Done" + closing }
         for (b in runButtons) { b.enabled = true }
         stopButton.enabled = false
         dirty = true
-        if (snapshot != null) { saveSnapshot() }
+        afterRun()
       }
     }
   }
@@ -228,7 +250,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     row {
       for (b in wayBoxes) { cell(Component(b)) }
       cell(label("  at once:"))
-      cell(Component(atOnce).preferredSize(Size(70, 26)))
+      cell(Component(howMany).preferredSize(Size(70, 26)))
       cell(label("  stress:"))
       cell(Component(settingBox).preferredSize(Size(150, 26)))
       cell(label(""), weightX = 1.0)
@@ -239,6 +261,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     row {
       for (b in runButtons) { cell(b) }
       cell(stopButton)
+      cell(Component(phase))
       cell(Component(progress), fill = Fill.horizontal, weightX = 1.0)
     }
   }
@@ -295,9 +318,49 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     window.close()
     exit(0)
   }
+  fun runNext() {
+    val s = left.removeFirst()
+    val number = atOnce.size - left.size
+    phase.text = "Running " + (s == Setting.plain ? "the suite" : settingName(s)) + (atOnce.size > 1 ? " ($number of ${atOnce.size})…" : "…")
+    settingBox.show(s.ordinal)
+    if (s != atOnce[0]) {
+      for (b in wayBoxes) { b.checked = b === wayBoxes[Way.script.ordinal] }
+    }
+    refreshSuite()
+    runThese(only == null ? suite.items : suite.items.filter { it.name in only!! })
+  }
+  afterRun = {
+    if (atOnce.isNotEmpty()) {
+      val names = only
+      val (text, ok) = reportOf(names == null ? suite.items : suite.items.filter { it.name in names })
+      if (!ok) { allPassed = false }
+      if (atOnce.size > 1) { said.add("== " + (atOnce.size - left.size == 1 ? "the suite" : settingName(atOnce[atOnce.size - left.size - 1]))) }
+      said.add(text)
+      if (left.isNotEmpty()) {
+        runNext()
+      } else if (snapshot != null) {
+        saveSnapshot()
+      } else {
+        val all = said.join("\n")
+        reportText = all
+        closing = allPassed ? (closeAfter >= 0 ? ": all passed, closing in $closeAfter s" : ": all passed") :
+                              ": something failed (the report is below; choose a check for its own)"
+        phase.text = "Done" + closing
+        print(all)
+        Program.output.flush()
+        if (report != null) {
+          try { report!!.writeText(all + "\n") } catch (e : IOException) { print("could not write the report:", e.message) }
+        }
+        dirty = true
+        if (allPassed and closeAfter >= 0) { EventLoop.after(closeAfter.seconds) { window.close() } }
+      }
+    }
+  }
   if (snapshot != null) { Topaz.windowOpener = HiddenWindowOpener() }
+  // Only some checks asked for: those shown, the rest not being run.
+  if (only != null) { filterBox.show(thisRun) }
   window.show()
-  if (snapshot != null) { runThese(only == null ? suite.items : suite.items.filter { it.name in only!! }) }
+  if (left.isNotEmpty()) { runNext() }
   // Four times a second: what changed since, and the times of the checks that run.
   EventLoop.every(250.milliseconds) {
     if (dirty or running) {

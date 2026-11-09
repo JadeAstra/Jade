@@ -2,6 +2,7 @@
 // --console (and always where there are no windows yet, off Windows), printing what failed.
 //
 //   jade tests/runner/run.jade                         the window, testing the jade running it
+//   jade tests/runner/run.jade --run --parallel 24 --report out.txt
 //   jade tests/runner/run.jade --console --parallel 24
 //
 // Options, for both:
@@ -11,10 +12,15 @@
 //   --ways <a,b>          which of script, cached, units, compiled, program (all; no program off Windows)
 //   --setting <name>      a stress setting for the programs tested: copy-reads, thread-stress,
 //                         native-results or gc-stress (none)
-//   --stress              (console) the suite, then once more under each stress setting, one way
+//   --stress              the suite, then once more under each stress setting, one way
 //   --time-limit <s>      seconds a run may take (120; 600 under gc-stress; 2400 for that with the
 //                         sanitizer's build)
 //   --only <a,b>          only the checks with these names (the window: run at once)
+//   --run                 (window) start at once; when the run ends, print what it gave as the
+//                         console does, and close the window after --close-after seconds where
+//                         everything passed (it stays open where something failed)
+//   --report <file>       (window, with --run) what the run gave written there too, once it ends
+//   --close-after <s>     (window, with --run) 10 if not given; -1 keeps it open
 //   --snapshot <png>      (window) a test of the window: hidden, it runs the checks, saves a
 //                         picture of itself and ends
 //
@@ -39,6 +45,9 @@ var setting = Setting.plain
 var timeLimit = 0
 var only : List<string>? = null
 var snapshot : FilePath? = null
+var runAtOnce = false
+var report : FilePath? = null
+var closeAfter = 10
 var bad = ""
 
 val arguments = Program.arguments
@@ -64,11 +73,15 @@ while (i < arguments.size) {
     }
     "--only" -> { only = value.split(",").map { it.trim() }; i += 1 }
     "--snapshot" -> { snapshot = FilePath(value); i += 1 }
+    "--run" -> runAtOnce = true
+    "--report" -> { report = FilePath(value); i += 1 }
+    "--close-after" -> { closeAfter = value.toIntOrNull() ?: -2; i += 1 }
     else -> bad = "'$a' is not an option"
   }
   i += 1
 }
 if (parallel < 1) { bad = "--parallel takes a number from 1" }
+if (closeAfter < -1) { bad = "--close-after takes a number of seconds, or -1" }
 if (timeLimit < 0) { bad = "--time-limit takes a number of seconds" }
 if (!jade.exists()) { bad = "no jade at $jade" }
 if (tests == null or !tests!!.isDirectory()) { bad = "no tests at ${tests ?: "?"}: give --tests" }
@@ -88,23 +101,9 @@ suspend fun onConsole(s : Setting, w : List<Way>?) : bool {
   val suite = Suite(options(s, w))
   val chosen = only == null ? suite.items : suite.items.filter { it.name in only!! }
   suite.run(chosen) { }
-  var passed = 0
-  var failures = 0
-  for (item in chosen) {
-    for (label in item.results.keys) {
-      if (item.results[label] == "") {
-        passed += 1
-      } else {
-        failures += 1
-        print("FAIL ${item.name} [$label]\n    ${item.results[label]}")
-      }
-    }
-  }
-  for (item in chosen) { if (item.note.startsWith("passed only when run alone")) { print("${item.note.substringBefore(":")}: ${item.name} ${item.note.substringAfter(": ")}") } }
-  val skipped = chosen.filter { it.status == Status.skipped }
-  for (item in skipped) { print("${item.note.substringBefore(":")}: ${item.name}: ${item.note.substringAfter(": ")}") }
-  print("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} windows only"))
-  return failures == 0
+  val (text, ok) = reportOf(chosen)
+  print(text)
+  return ok
 }
 
 if (console) {
@@ -115,7 +114,7 @@ if (console) {
     // not change (D163).
     print("== the suite")
     ok = onConsole(Setting.plain, ways)
-    for (s in Setting.entries) {
+    for (s in stressSettings) {
       if (s == Setting.plain) { continue }
       print("== ${settingName(s)}")
       if (!onConsole(s, [Way.script])) { ok = false }
@@ -125,5 +124,6 @@ if (console) {
   }
   exit(ok ? 0 : 1)
 } else {
-  showRunner(options(setting, ways), only, snapshot)
+  showRunner(options(setting, ways), only, snapshot,
+             runAtOnce or snapshot != null ? (stress ? stressSettings : [setting]) : [], report, closeAfter)
 }

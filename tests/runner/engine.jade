@@ -616,6 +616,35 @@ class Suite(val options : Options) {
   }
 }
 
+// What a run of `items` gave, as the console prints it: each failure, `FAIL <name> [<way>]` and what
+// was wrong; the checks that passed only alone; those passed over; then `<n> passed, <m> failed`.
+// Each way a check passed is counted. And whether nothing failed.
+fun reportOf(items : List<Item>) : Pair<string, bool> {
+  val lines : open List<string> = []
+  var passed = 0
+  var failures = 0
+  for (item in items) {
+    for (label in item.results.keys) {
+      if (item.results[label] == "") {
+        passed += 1
+      } else {
+        failures += 1
+        lines.add("FAIL ${item.name} [$label]\n    ${item.results[label]}")
+      }
+    }
+  }
+  for (item in items) {
+    if (item.note.startsWith("passed only when run alone")) { lines.add("passed only when run alone: ${item.name} ${item.note.substringAfter(": ")}") }
+  }
+  val skipped = items.filter { it.status == Status.skipped }
+  for (item in skipped) { lines.add("${item.note.substringBefore(":")}: ${item.name}: ${item.note.substringAfter(": ")}") }
+  lines.add("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} windows only"))
+  return Pair(lines.join("\n"), failures == 0)
+}
+
+// The settings a run under --stress goes through: none, then each stress setting.
+val stressSettings : List<Setting> = Setting.entries
+
 // A scenario of the cache's: its steps in order.
 class Scenario(val name : string, val steps : List<Step>)
 // A step: the files it writes, and what main.jade then prints (out), or the compile error it gives
