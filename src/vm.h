@@ -869,13 +869,24 @@ public:
     std::string repr(Value v);       // with strings quoted
     std::string typeName(Value v) const;
 
-    int64_t toInt(Value v, const char* what);
+    // An int, a byte taken as one; else a ClassCastException naming `what`. Inline for the common case:
+    // every method written in C++ reads its arguments with it.
+    int64_t toInt(Value v, const char* what) {
+        if (v.isInt() || v.isByte()) [[likely]] return v.as.i;
+        notAnInt(v, what);
+    }
+    [[noreturn]] void notAnInt(Value v, const char* what);
     // An int handed to Windows, OpenGL or the text engine, which take 32 bits: one past their
     // range is taken as their nearest end (D76), as `int.maxValue` for "no limit" is.
     int toInt32(Value v, const char* what) {
         return static_cast<int>(std::clamp<int64_t>(toInt(v, what), INT32_MIN, INT32_MAX));
     }
-    double toNumber(Value v, const char* what);
+    double toNumber(Value v, const char* what) {
+        if (v.isByte()) return static_cast<double>(v.as.i);
+        if (v.isNumber()) [[likely]] return v.toDouble();
+        notANumber(v, what);
+    }
+    [[noreturn]] void notANumber(Value v, const char* what);
     const std::string& toStr(Value v, const char* what);
     // A string, as its characters (D20); toStr gives its UTF-8 form.
     const ObjString* toText(Value v, const char* what) {

@@ -1824,15 +1824,12 @@ std::string VM::typeName(Value v) const {
 }
 
 // A byte is taken where an int or a number is (M6.6 part 8, group 9).
-int64_t VM::toInt(Value v, const char* what) {
-    if (!v.isInt() && !v.isByte()) throw runtimeError(Thrown::ClassCastException, std::string(what) + " must be an int, got " + typeName(v));
-    return v.as.i;
+void VM::notAnInt(Value v, const char* what) {
+    throw runtimeError(Thrown::ClassCastException, std::string(what) + " must be an int, got " + typeName(v));
 }
 
-double VM::toNumber(Value v, const char* what) {
-    if (v.isByte()) return static_cast<double>(v.as.i);
-    if (!v.isNumber()) throw runtimeError(Thrown::ClassCastException, std::string(what) + " must be a number, got " + typeName(v));
-    return v.toDouble();
+void VM::notANumber(Value v, const char* what) {
+    throw runtimeError(Thrown::ClassCastException, std::string(what) + " must be a number, got " + typeName(v));
 }
 
 const std::string& VM::toStr(Value v, const char* what) {
@@ -5643,7 +5640,7 @@ struct OpCounts {
 OpCounts opCounts;
 inline void countOp(Op which) {
     const size_t op = static_cast<size_t>(which);
-    const uint64_t now = __rdtsc();
+    const uint64_t now = __builtin_readcyclecounter();
     if (opCounts.last != static_cast<int>(kOpCount)) opCounts.cycles[opCounts.last] += now - opCounts.lastTime;
     opCounts.lastTime = now;
     opCounts.single[op]++;
