@@ -9,44 +9,31 @@
 object Base64 {
   // The 64 characters, in the order of their values.
   private val letters : Bytes = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".toBytes()
-  // The value of each byte of text: 0 to 63 for a letter, -1 for a byte no Base64 has, -2 for
-  // whitespace (passed over), -3 for = (padding).
-  private val values : List<int> = makeValues()
+  // A value of 0 to 63 made its letter, for Bytes.mapped.
+  private val toLetters : Bytes = makeToLetters()
+  // A byte of text made its value: 0 to 63 for a letter, 254 for whitespace (passed over), 253
+  // for = (padding), 255 for a byte no Base64 has; for Bytes.mapped.
+  private val toValues : Bytes = makeToValues()
 
-  private fun makeValues() : List<int> {
-    val made : open List<int> = []
-    for (i in 0 ..< 256) { made.add(-1) }
-    for (i in 0 ..< 64) { made[letters[i].toInt()] = i }
-    for (c in [' ', '\t', '\n', '\r', '\u{0C}']) { made[c.code] = -2 }
-    made['='.code] = -3
+  private fun makeToLetters() : Bytes {
+    val made = Bytes(256)
+    for (i in 0 ..< 64) { made[i] = letters[i] }
+    return made
+  }
+
+  private fun makeToValues() : Bytes {
+    val made = Bytes(256).fill(255.toByte())
+    for (i in 0 ..< 64) { made[letters[i].toInt()] = i.toByte() }
+    for (c in [' ', '\t', '\n', '\r', '\u{0C}']) { made[c.code] = 254.toByte() }
+    made['='.code] = 253.toByte()
     return made
   }
 
   // `data` as Base64 text, padded with = to a whole number of fours, on one line.
   fun encode(data : Bytes) : string {
-    val n = data.size
-    val out = Bytes((n + 2) / 3 * 4)
-    val letters = this.letters   // a local, read faster in the loop than the field
-    var i = 0
-    var o = 0
-    while (i + 3 <= n) {
-      val word = (data[i].toInt() << 16) | (data[i + 1].toInt() << 8) | data[i + 2].toInt()
-      out[o] = letters[word >> 18]
-      out[o + 1] = letters[(word >> 12) & 63]
-      out[o + 2] = letters[(word >> 6) & 63]
-      out[o + 3] = letters[word & 63]
-      i += 3
-      o += 4
-    }
-    val left = n - i
-    if (left > 0) {
-      val word = (data[i].toInt() << 16) | (left == 2 ? data[i + 1].toInt() << 8 : 0)
-      out[o] = letters[word >> 18]
-      out[o + 1] = letters[(word >> 12) & 63]
-      out[o + 2] = left == 2 ? letters[(word >> 6) & 63] : 61.toByte()   // 61 is =
-      out[o + 3] = 61.toByte()
-    }
-    return out.decodeToString()
+    val text = data.unpackBits(6).mapped(toLetters).decodeToString()
+    val left = data.size % 3
+    return left == 0 ? text : left == 1 ? text + "==" : text + "="
   }
 
   // The bytes Base64 text stands for. Whitespace in it is passed over, so the lines MIME breaks
@@ -54,48 +41,42 @@ object Base64 {
   // IllegalArgumentException for a character Base64 has not, for = before the end, or for a
   // length no bytes give (one character over a whole number of fours).
   fun decode(text : string) : Bytes {
+    var values = text.toBytes().mapped(toValues)
+    if (values.indexOf(254.toByte()) >= 0) { values = values.without(254.toByte()) }
+    if (values.indexOf(255.toByte()) >= 0) { return decodeWithError(text) }
+    // The padding: only ='s may follow the first, and they fill the last four.
+    var n = values.size
+    val firstPad = values.indexOf(253.toByte())
+    if (firstPad >= 0) {
+      for (i in firstPad ..< n) {
+        if (values[i].toInt() != 253) { return decodeWithError(text) }
+      }
+      val padding = n - firstPad
+      val have = firstPad % 4
+      if (have == 0 or have + padding != 4) {
+        throw IllegalArgumentException("Base64 text has ${padding} = where ${have == 0 ? 0 : 4 - have} belong")
+      }
+      n = firstPad
+    }
+    if (n % 4 == 1) { throw IllegalArgumentException("Base64 text ends with a single character over a whole number of fours") }
+    return (n == values.size ? values : values[0 ..< n]).packBits(6)
+  }
+
+  // Text that is not Base64, read a character at a time for the error and where it is.
+  private fun decodeWithError(text : string) : Bytes {
     val source = text.toBytes()
-    val n = source.size
-    val values = this.values   // a local, read faster in the loop than the field
-    val out = Bytes(n / 4 * 3 + 3)
-    var o = 0
-    var word = 0
-    var have = 0      // the letters in `word`, 0 to 3
-    var padding = 0   // the ='s seen; nothing but whitespace and ='s may follow the first
-    for (i in 0 ..< n) {
-      val value = values[source[i].toInt()]
-      if (value >= 0) {
+    var padding = 0
+    for (i in 0 ..< source.size) {
+      val value = toValues[source[i].toInt()].toInt()
+      if (value < 64) {
         if (padding > 0) { throw IllegalArgumentException("Base64 text goes on after its padding, at character ${characterAt(text, i)}") }
-        word = (word << 6) | value
-        have += 1
-        if (have == 4) {
-          out[o] = (word >> 16).toByteWrapped()
-          out[o + 1] = (word >> 8).toByteWrapped()
-          out[o + 2] = word.toByteWrapped()
-          o += 3
-          word = 0
-          have = 0
-        }
-      } else if (value == -3) {
+      } else if (value == 253) {
         padding += 1
-      } else if (value == -1) {
+      } else if (value == 255) {
         throw IllegalArgumentException("'${text[characterAt(text, i)]}' is not a Base64 character, at character ${characterAt(text, i)}")
       }
     }
-    // What is left of the last four: two letters give one byte, three give two; one gives none.
-    if (have == 1) { throw IllegalArgumentException("Base64 text ends with a single character over a whole number of fours") }
-    if (have >= 2) {
-      out[o] = (word >> (have == 2 ? 4 : 10)).toByteWrapped()
-      o += 1
-    }
-    if (have == 3) {
-      out[o] = (word >> 2).toByteWrapped()
-      o += 1
-    }
-    if (padding > 0 and (have == 0 or have + padding != 4)) {
-      throw IllegalArgumentException("Base64 text has ${padding} = where ${have == 0 ? 0 : 4 - have} belong")
-    }
-    return out[0 ..< o]
+    throw IllegalStateException("Base64 text that has no error")
   }
 
   // The character of `text` that byte `at` of its UTF-8 is in, for an error's message.

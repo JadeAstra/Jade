@@ -1159,6 +1159,138 @@ void registerBytes(VM& vm) {
         return Value::boolean((args[0].isInt() || args[0].isByte()) && std::find(data.begin(), data.end(), args[0].as.i) != data.end());
     });
 
+    // Each byte b made table[b], into new bytes: a table of 256 that turns bytes into letters
+    // (Base64), letters into their values, or one character set's codes into another's.
+    vm.defineMethod(T, "mapped", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::Bytes) || asBytes(args[0])->data.size() != 256)
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "mapped() takes a table of 256 bytes, one for each value a byte has");
+        const size_t n = asBytes(self)->data.size();
+        vm.checkRoomFor(n);
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        TempRoot keep(vm, Value::object(made));
+        made->data.resize(n);
+        const uint8_t* table = asBytes(args[0])->data.data();
+        const uint8_t* from = asBytes(self)->data.data();
+        uint8_t* to = made->data.data();
+        for (size_t i = 0; i < n; i++) to[i] = table[from[i]];
+        vm.account(n);
+        return Value::object(made);
+    });
+
+    // The bits in groups of `width` (1 to 8), the most significant first, each group a byte of
+    // its own: 6 for Base64's letters, 1, 2 or 4 for the pixels of a picture of few colours. A
+    // last group the bits do not fill is filled with zeros.
+    vm.defineMethod(T, "unpackBits", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        const int64_t width = vm.toInt(args[0], "width");
+        if (width < 1 || width > 8) throw vm.runtimeError(Thrown::IllegalArgumentException, "unpackBits() takes a width from 1 to 8, not " + std::to_string(width));
+        const size_t n = asBytes(self)->data.size();
+        const size_t count = (n * 8 + static_cast<size_t>(width) - 1) / static_cast<size_t>(width);
+        vm.checkRoomFor(count);
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        TempRoot keep(vm, Value::object(made));
+        made->data.resize(count);
+        const uint8_t* from = asBytes(self)->data.data();
+        uint8_t* to = made->data.data();
+        size_t i = 0, o = 0;
+        if (width == 8) {
+            std::memcpy(to, from, n);
+            o = n;
+            i = n;
+        } else if (width == 6) {   // three bytes to four groups at a time
+            for (; i + 3 <= n; i += 3, o += 4) {
+                const uint32_t word = (uint32_t{from[i]} << 16) | (uint32_t{from[i + 1]} << 8) | from[i + 2];
+                to[o] = static_cast<uint8_t>(word >> 18);
+                to[o + 1] = static_cast<uint8_t>((word >> 12) & 63);
+                to[o + 2] = static_cast<uint8_t>((word >> 6) & 63);
+                to[o + 3] = static_cast<uint8_t>(word & 63);
+            }
+        } else if (8 % width == 0) {   // 1, 2, 4: whole groups in each byte
+            const int per = 8 / static_cast<int>(width);
+            const uint8_t mask = static_cast<uint8_t>((1u << width) - 1);
+            for (; i < n; i++)
+                for (int k = per - 1; k >= 0; k--) to[o++] = static_cast<uint8_t>((from[i] >> (k * width)) & mask);
+        }
+        // What is left, a bit at a time through a store of bits.
+        uint32_t store = 0;
+        int have = 0;
+        const uint32_t mask = (1u << width) - 1;
+        for (; i < n; i++) {
+            store = (store << 8) | from[i];
+            have += 8;
+            while (have >= width) {
+                have -= static_cast<int>(width);
+                to[o++] = static_cast<uint8_t>((store >> have) & mask);
+            }
+            store &= (1u << have) - 1;
+        }
+        if (have > 0) to[o++] = static_cast<uint8_t>((store << (width - have)) & mask);
+        vm.account(count);
+        return Value::object(made);
+    });
+
+    // The reverse of unpackBits: the low `width` bits (1 to 8) of each byte, the first the most
+    // significant, joined into whole bytes; bits left over that make no whole byte are dropped.
+    vm.defineMethod(T, "packBits", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        const int64_t width = vm.toInt(args[0], "width");
+        if (width < 1 || width > 8) throw vm.runtimeError(Thrown::IllegalArgumentException, "packBits() takes a width from 1 to 8, not " + std::to_string(width));
+        const size_t n = asBytes(self)->data.size();
+        const size_t count = n * static_cast<size_t>(width) / 8;
+        vm.checkRoomFor(count);
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        TempRoot keep(vm, Value::object(made));
+        made->data.resize(count);
+        const uint8_t* from = asBytes(self)->data.data();
+        uint8_t* to = made->data.data();
+        size_t i = 0, o = 0;
+        const uint32_t mask = (1u << width) - 1;
+        if (width == 8) {
+            std::memcpy(to, from, n);
+            i = n;
+            o = n;
+        } else if (width == 6) {   // four groups to three bytes at a time
+            for (; i + 4 <= n; i += 4, o += 3) {
+                const uint32_t word = ((from[i] & 63u) << 18) | ((from[i + 1] & 63u) << 12) | ((from[i + 2] & 63u) << 6) | (from[i + 3] & 63u);
+                to[o] = static_cast<uint8_t>(word >> 16);
+                to[o + 1] = static_cast<uint8_t>(word >> 8);
+                to[o + 2] = static_cast<uint8_t>(word);
+            }
+        }
+        uint32_t store = 0;
+        int have = 0;
+        for (; i < n && o < count; i++) {
+            store = (store << width) | (from[i] & mask);
+            have += static_cast<int>(width);
+            if (have >= 8) {
+                have -= 8;
+                to[o++] = static_cast<uint8_t>(store >> have);
+                store &= (1u << have) - 1;
+            }
+        }
+        vm.account(count);
+        return Value::object(made);
+    });
+
+    // New bytes with every byte equal to `value` taken out: the line breaks of text, say.
+    vm.defineMethod(T, "without", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        const uint8_t value = byteArgument(vm, args[0]);
+        const size_t n = asBytes(self)->data.size();
+        vm.checkRoomFor(n);
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        TempRoot keep(vm, Value::object(made));
+        const std::vector<uint8_t>& from = asBytes(self)->data;
+        made->data.reserve(n);
+        size_t start = 0;
+        while (start < n) {
+            const void* hit = std::memchr(from.data() + start, value, n - start);
+            const size_t end = hit == nullptr ? n : static_cast<size_t>(static_cast<const uint8_t*>(hit) - from.data());
+            made->data.insert(made->data.end(), from.begin() + static_cast<std::ptrdiff_t>(start), from.begin() + static_cast<std::ptrdiff_t>(end));
+            start = end + 1;
+        }
+        made->data.shrink_to_fit();
+        vm.account(made->data.size());
+        return Value::object(made);
+    });
+
 
     // 16-, 32- and 64-bit numbers in the bytes (D19, L0; 64-bit since M8): read as an int (a float for float32) and
     // written, each at a position, least significant byte first unless `bigEndian`.
@@ -1181,9 +1313,13 @@ void registerBytes(VM& vm) {
     vm.defineMethod(BuiltinType::String, "toBytes", 0, 1, [](VM& vm, Value self, int argc, Value* args) -> Value {
         const Charset cs = charsetOf(vm, argc > 0 ? args[0] : Value::null());
         const std::string& utf8 = asString(self)->utf8();
-        const std::string s = cs == Charset::Utf8 ? utf8 : encodeText(utf8, cs);
         ObjBytes* made = vm.alloc<ObjBytes>();
-        made->data.assign(s.begin(), s.end());
+        if (cs == Charset::Utf8) {
+            made->data.assign(utf8.begin(), utf8.end());
+        } else {
+            const std::string s = encodeText(utf8, cs);
+            made->data.assign(s.begin(), s.end());
+        }
         vm.account(made->data.size());
         return Value::object(made);
     });
