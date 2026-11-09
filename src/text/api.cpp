@@ -1039,6 +1039,16 @@ void registerText(VM& vm) {
         h ^= h >> 29;
         return Value::integer(static_cast<int32_t>(static_cast<uint32_t>(h ^ (h >> 32))));
     });
+    // pixels(cells): a picture's pixels as new bytes, four to a pixel (red, green, blue, alpha).
+    def("imagePixels", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed()) throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells");
+        const std::vector<uint8_t>& from = asList(args[0])->pack->block;
+        vm.checkRoomFor(from.size());
+        ObjBytes* made = vm.alloc<ObjBytes>();
+        made->data.assign(from.begin(), from.end());
+        vm.account(made->data.size());
+        return Value::object(made);
+    });
     // setPixels(cells, bytes): a picture's pixels taken from bytes, four to a pixel.
     def("imageSetPixels", 2, 2, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::Bytes))

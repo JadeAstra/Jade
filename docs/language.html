@@ -407,6 +407,7 @@ addButton(widgets)</pre></dd>
 <ul>
 <li><a href="#file-base64-jade">base64.jade</a></li>
 <li><a href="#file-bits-jade">bits.jade</a></li>
+<li><a href="#file-bmp-jade">bmp.jade</a></li>
 <li><a href="#file-builtins-jade">builtins.jade</a></li>
 <li><a href="#file-bytesource-jade">bytesource.jade</a></li>
 <li><a href="#file-core-jade">core.jade</a></li>
@@ -494,8 +495,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
-<li><a href="#Image"><code>Image</code></a> (23)</li>
+<li><a href="#Image"><code>Image</code></a> (25)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
+<li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
 <li><a href="#Index.of"><code>Index</code></a> (3)</li>
 <li><a href="#IndexOutOfBoundsException"><code>IndexOutOfBoundsException</code></a> (1)</li>
@@ -688,6 +690,10 @@ print(packed.inflate().decodeToString())   // hello hello hello
 <div class="entry" id="Bytes.adler32"><code class="sig">fun Bytes.adler32(adler : int = 1) : int</code><a class="anchor" href="#Bytes.adler32">#</a>
 <p>The Adler-32 of the bytes, as zlib has it, carried on from <code>adler</code> for data in parts.</p>
 </div>
+</section>
+<section class="file" id="file-bmp-jade">
+<h2>bmp.jade</h2>
+<h3>BMP</h3>
 </section>
 <section class="file" id="file-builtins-jade">
 <h2>builtins.jade</h2>
@@ -3097,8 +3103,17 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry member" id="Canvas.dispose"><code class="sig">fun dispose()</code><a class="anchor" href="#Canvas.dispose">#</a>
 <p>Lets go of what the canvas holds. A canvas needs no disposing; some kinds may use it.</p>
 </div>
+<div class="entry" id="ImageFormat"><code class="sig">enum ImageFormat</code><a class="anchor" href="#ImageFormat">#</a>
+<p>The kinds of picture file Image.load reads and save and encode write (M9/M10).</p>
+</div>
+<div class="entry member" id="ImageFormat.of"><code class="sig">fun of(data : Bytes) : ImageFormat?</code><a class="anchor" href="#ImageFormat.of">#</a>
+<p>The format of a file's bytes, by how they start; null for none of them.</p>
+</div>
+<div class="entry member" id="ImageFormat.ofName"><code class="sig">fun ofName(name : string) : ImageFormat?</code><a class="anchor" href="#ImageFormat.ofName">#</a>
+<p>The format a file's name asks for, by its extension (.png, .jpg or .jpeg, .gif, .bmp, .webp, in either case); null for another.</p>
+</div>
 <div class="entry" id="Image"><code class="sig">class Image : Drawable</code><a class="anchor" href="#Image">#</a>
-<p>A picture in memory: <code>width</code> by <code>height</code> pixels, each a Color that may be see-through. What a program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a PNG file and saves as one (Java's BufferedImage, D122).</p>
+<p>A picture in memory: <code>width</code> by <code>height</code> pixels, each a Color that may be see-through. What a program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a picture file and saves as one (Java's BufferedImage, D122).</p>
 <pre>val image = Image(200, 100, Color.white)
 image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
 image[10, 10] = Color.red                     one pixel; get, set and getOrNull too
@@ -3117,7 +3132,7 @@ image.save(FilePath(&quot;out.png&quot;))
 <p>An image of pixels given as bytes, four to a pixel: red, green, blue, alpha, top row first.</p>
 </div>
 <div class="entry member" id="Image.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Image throws IOException</code><a class="anchor" href="#Image.load">#</a>
-<p>Reads a PNG file, or the bytes of one.</p>
+<p>Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its content rather than its name. An IOException where it cannot be read or is no picture.</p>
 </div>
 <div class="entry member" id="Image.size"><code class="sig">val size : Size</code><a class="anchor" href="#Image.size">#</a>
 <p>Its width and height.</p>
@@ -3158,8 +3173,14 @@ image.save(FilePath(&quot;out.png&quot;))
 <div class="entry member" id="Image.inkBox"><code class="sig">fun inkBox(background : Color = Color.clear) : Rect?</code><a class="anchor" href="#Image.inkBox">#</a>
 <p>The smallest rectangle outside which every pixel is <code>background</code>; null if all of them are.</p>
 </div>
-<div class="entry member" id="Image.save"><code class="sig">fun save(path : FilePath | string) throws IOException</code><a class="anchor" href="#Image.save">#</a>
-<p>Writes it as a PNG file, or gives the bytes of one. Nothing is lost: loading it gives the same pixels.</p>
+<div class="entry member" id="Image.save"><code class="sig">fun save(path : FilePath | string, quality : Number = 0.9) throws IOException</code><a class="anchor" href="#Image.save">#</a>
+<p>Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName), PNG where it asks for none: <code>quality</code>, from 0 to 1, for the formats that lose some of the picture to be smaller (JPEG, lossy WebP). An IllegalArgumentException for an extension of another format.</p>
+</div>
+<div class="entry member" id="Image.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes</code><a class="anchor" href="#Image.encode">#</a>
+<p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.</p>
+</div>
+<div class="entry member" id="Image.rgbaBytes"><code class="sig">fun rgbaBytes() : Bytes</code><a class="anchor" href="#Image.rgbaBytes">#</a>
+<p>Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of takes them. A copy: changing it changes nothing here.</p>
 </div>
 <div class="entry member" id="Image.toPng"><code class="sig">fun toPng() : Bytes</code><a class="anchor" href="#Image.toPng">#</a>
 <p>The bytes of a PNG file of it. An image with no pixels (0 wide or 0 high) is an IllegalArgumentException, here and in save.</p>

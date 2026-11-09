@@ -214,9 +214,42 @@ abstract class Canvas {
   fun dispose() {}
 }
 
+// The kinds of picture file Image.load reads and save and encode write (M9/M10).
+enum ImageFormat {
+  png, jpeg, gif, bmp, webp;
+
+  static {
+    // The format of a file's bytes, by how they start; null for none of them.
+    fun of(data : Bytes) : ImageFormat? {
+      fun starts(text : string, at : int = 0) : bool {
+        if (data.size < at + text.size) { return false }
+        for (i in 0 ..< text.size) {
+          if (data[at + i].toInt() != text[i].code) { return false }
+        }
+        return true
+      }
+      if (data.size >= 8 and data[0].toInt() == 0x89 and starts("PNG", 1)) { return ImageFormat.png }
+      if (data.size >= 3 and data[0].toInt() == 0xFF and data[1].toInt() == 0xD8 and data[2].toInt() == 0xFF) { return ImageFormat.jpeg }
+      if (starts("GIF87a") or starts("GIF89a")) { return ImageFormat.gif }
+      if (starts("BM")) { return ImageFormat.bmp }
+      if (starts("RIFF") and starts("WEBP", 8)) { return ImageFormat.webp }
+      return null
+    }
+    // The format a file's name asks for, by its extension (.png, .jpg or .jpeg, .gif, .bmp,
+    // .webp, in either case); null for another.
+    fun ofName(name : string) : ImageFormat? {
+      val dot = name.lastIndexOf('.')
+      if (dot < 0) { return null }
+      val ext = name[dot + 1 ..].lower()
+      return ext == "png" ? ImageFormat.png : ext == "jpg" or ext == "jpeg" ? ImageFormat.jpeg : ext == "gif" ? ImageFormat.gif :
+          ext == "bmp" ? ImageFormat.bmp : ext == "webp" ? ImageFormat.webp : null
+    }
+  }
+}
+
 // A picture in memory: `width` by `height` pixels, each a Color that may be see-through. What a
-// program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a PNG
-// file and saves as one (Java's BufferedImage, D122).
+// program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a
+// picture file and saves as one (Java's BufferedImage, D122).
 //
 //   val image = Image(200, 100, Color.white)
 //   image.canvas().fill(Oval(20.0, 20.0, 60.0, 60.0))
@@ -266,9 +299,13 @@ class Image : Drawable {
       __text.imageSetPixels(made.cells.cells, pixels)
       return made
     }
-    // Reads a PNG file, or the bytes of one.
+    // Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its
+    // content rather than its name. An IOException where it cannot be read or is no picture.
     fun load(source : FilePath | string | Bytes) : Image throws IOException {
       val data = source is Bytes ? source : (source is FilePath ? source : FilePath(source as string)).readBytes()
+      val format = ImageFormat.of(data)
+      if (format == ImageFormat.bmp) { return __Bmp.decode(data) }
+      if (format != null and format != ImageFormat.png) { throw UnsupportedOperationException("${format} pictures are read once part one, step 3 has their codec") }
       val read : List<any> = __text.decodePng(data)
       val made = Image(read[0] as int, read[1] as int)
       __text.imageSetPixels(made.cells.cells, read[2])
@@ -346,11 +383,29 @@ class Image : Drawable {
     return box == null ? null : Rect(box[0], box[1], box[2], box[3])
   }
 
-  // Writes it as a PNG file, or gives the bytes of one. Nothing is lost: loading it gives the
-  // same pixels.
-  fun save(path : FilePath | string) throws IOException {
-    (path is FilePath ? path : FilePath(path as string)).writeBytes(toPng())
+  // Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName),
+  // PNG where it asks for none: `quality`, from 0 to 1, for the formats that lose some of the
+  // picture to be smaller (JPEG, lossy WebP). An IllegalArgumentException for an extension of
+  // another format.
+  fun save(path : FilePath | string, quality : Number = 0.9) throws IOException {
+    val file = path is FilePath ? path : FilePath(path as string)
+    val format = ImageFormat.ofName(file.name)
+    val ext = file.name.lastIndexOf('.') < 0 ? "" : file.name[file.name.lastIndexOf('.') + 1 ..]
+    if (format == null and ext.isNotEmpty()) { throw IllegalArgumentException("a picture is saved as .png, .jpg, .gif, .bmp or .webp, not .$ext") }
+    file.writeBytes(encode(format ?: ImageFormat.png, quality))
   }
+
+  // The bytes of a picture file of it in `format`, at `quality` (0 to 1) where the format loses
+  // some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.
+  fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes {
+    if (format == ImageFormat.png) { return toPng() }
+    if (format == ImageFormat.bmp) { return __Bmp.encode(this) }
+    throw UnsupportedOperationException("${format} pictures are written once part one, step 3 has their codec")
+  }
+
+  // Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of
+  // takes them. A copy: changing it changes nothing here.
+  fun rgbaBytes() : Bytes => __text.imagePixels(cells.cells)
   // The bytes of a PNG file of it. An image with no pixels (0 wide or 0 high) is an
   // IllegalArgumentException, here and in save.
   fun toPng() : Bytes => __text.encodePng(cells.cells, width, height)
