@@ -1632,6 +1632,7 @@ void registerThreads(VM& vm);  // threads.cpp: threads, locks, the event loop an
 void registerIo(VM& vm);       // io.cpp: streams, processes and sockets
 void registerSandbox(VM& vm);  // sandbox.cpp: __sandbox, what Sandbox is built on (M6.6.2)
 void registerGrid(VM& vm);     // grid.cpp: what Grid<T> is built on (D155)
+void registerBits(VM& vm);     // bits_api.cpp: what BitReader, HuffmanTable, inflate and deflate are built on
 void registerXml(VM& vm);      // xml_scan.cpp: what Xml.scan is built on (M9/M10)
 void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)
 void registerForeign(VM& vm);  // foreign.cpp: Library, Memory and Foreign (M8)

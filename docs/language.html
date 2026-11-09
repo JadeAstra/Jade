@@ -406,6 +406,7 @@ addButton(widgets)</pre></dd>
 <h2 id="api-files">The standard library, file by file</h2>
 <ul>
 <li><a href="#file-base64-jade">base64.jade</a></li>
+<li><a href="#file-bits-jade">bits.jade</a></li>
 <li><a href="#file-builtins-jade">builtins.jade</a></li>
 <li><a href="#file-bytesource-jade">bytesource.jade</a></li>
 <li><a href="#file-core-jade">core.jade</a></li>
@@ -451,8 +452,10 @@ addButton(widgets)</pre></dd>
 <li><a href="#Base64"><code>Base64</code></a> (3)</li>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
+<li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
+<li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.size"><code>Bytes</code></a> (27)</li>
+<li><a href="#Bytes.inflate"><code>Bytes</code></a> (31)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
@@ -465,6 +468,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
 <li><a href="#Constructor"><code>Constructor</code></a> (6)</li>
 <li><a href="#Countdown"><code>Countdown</code></a> (4)</li>
+<li><a href="#DataFormatException"><code>DataFormatException</code></a> (1)</li>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
@@ -486,6 +490,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
 <li><a href="#Grid"><code>Grid</code></a> (28)</li>
+<li><a href="#HuffmanTable"><code>HuffmanTable</code></a> (2)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
@@ -619,6 +624,69 @@ val back = Base64.decode(text).decodeToString()  // &quot;hello&quot;
 </div>
 <div class="entry member" id="Base64.decode"><code class="sig">fun decode(text : string) : Bytes</code><a class="anchor" href="#Base64.decode">#</a>
 <p>The bytes Base64 text stands for. Whitespace in it is passed over, so the lines MIME breaks it into every 76 characters are read as one; the padding = at the end may be left out. An IllegalArgumentException for a character Base64 has not, for = before the end, or for a length no bytes give (one character over a whole number of fours).</p>
+</div>
+</section>
+<section class="file" id="file-bits-jade">
+<h2>bits.jade</h2>
+<h3>Bits</h3>
+<p>What codecs read and write bytes with (M9/M10 part one, step 3): bits from any place in bytes, Huffman codes, and deflate both ways. The bit by bit work is C++; a codec's structure, its headers and blocks, is Jade over them.</p>
+<div class="entry" id="BitOrder"><code class="sig">enum BitOrder</code><a class="anchor" href="#BitOrder">#</a>
+<p>The order bits are taken from a byte in: its lowest first, as deflate (PNG, ZIP), GIF and WebP's lossless form have them, or its highest first, as JPEG has them. A value of several bits is read the same way: lsbFirst, its first bit is its lowest.</p>
+</div>
+<div class="entry" id="BitReader"><code class="sig">class BitReader</code><a class="anchor" href="#BitReader">#</a>
+<p>Reads bits from bytes, one value of up to 32 bits at a time, from any place.</p>
+<pre>val reader = BitReader(data, 2)          // from byte 2, lowest bits first
+val last = reader.readBits(1)
+val kind = reader.readBits(2)
+</pre>
+</div>
+<div class="entry member" id="BitReader.bytes"><code class="sig">val bytes : Bytes</code><a class="anchor" href="#BitReader.bytes">#</a>
+<p>The bytes it reads.</p>
+</div>
+<div class="entry member" id="BitReader.order"><code class="sig">val order : BitOrder</code><a class="anchor" href="#BitReader.order">#</a>
+<p>The order it takes bits in.</p>
+</div>
+<div class="entry member" id="BitReader.position"><code class="sig">var position : int</code><a class="anchor" href="#BitReader.position">#</a>
+<p>Where the next bit is, counted in bits from the start of the bytes; it may be set, to read from another place.</p>
+</div>
+<div class="entry member" id="BitReader.bitsLeft"><code class="sig">val bitsLeft : int</code><a class="anchor" href="#BitReader.bitsLeft">#</a>
+<p>The bits after the position.</p>
+</div>
+<div class="entry member" id="BitReader.readBits"><code class="sig">fun readBits(n : int) : int throws DataFormatException</code><a class="anchor" href="#BitReader.readBits">#</a>
+<p>The next <code>n</code> bits (0 to 32) as a number, the position moved past them. A DataFormatException where they go past the end of the bytes.</p>
+</div>
+<div class="entry member" id="BitReader.peekBits"><code class="sig">fun peekBits(n : int) : int</code><a class="anchor" href="#BitReader.peekBits">#</a>
+<p>The next <code>n</code> bits (0 to 32), the position left where it is; zeros for bits past the end.</p>
+</div>
+<div class="entry member" id="BitReader.skipBits"><code class="sig">fun skipBits(n : int) throws DataFormatException</code><a class="anchor" href="#BitReader.skipBits">#</a>
+<p>The position moved past the next <code>n</code> bits. A DataFormatException where they go past the end.</p>
+</div>
+<div class="entry member" id="BitReader.alignToByte"><code class="sig">fun alignToByte()</code><a class="anchor" href="#BitReader.alignToByte">#</a>
+<p>The position moved on to the start of the next byte, if it is not at one.</p>
+</div>
+<div class="entry" id="HuffmanTable"><code class="sig">class HuffmanTable</code><a class="anchor" href="#HuffmanTable">#</a>
+<p>A Huffman code, decoded a code at a time from a BitReader.</p>
+<pre>val codes = HuffmanTable([2, 1, 3, 3])   // symbol 1 is 0, symbol 0 is 10, 2 is 110, 3 is 111
+val symbol = codes.decode(reader)
+</pre>
+</div>
+<div class="entry member" id="HuffmanTable.decode"><code class="sig">fun decode(reader : BitReader) : int throws DataFormatException</code><a class="anchor" href="#HuffmanTable.decode">#</a>
+<p>The symbol of the next code <code>reader</code> has, its position moved past it. A DataFormatException where the bits there are no code of the table.</p>
+</div>
+<div class="entry" id="Bytes.inflate"><code class="sig">fun Bytes.inflate(raw : bool = false, limit : int? = null) : Bytes throws DataFormatException</code><a class="anchor" href="#Bytes.inflate">#</a>
+<p>The bytes deflate-compressed data expands to: with zlib's header and check, as PNG holds it, or <code>raw</code> (deflate alone, as ZIP and gzip hold it). No more than <code>limit</code> bytes, so that a little data made to expand to a great deal is refused. A DataFormatException where the data is damaged, ends early, or expands past the limit (null, none).</p>
+<pre>val packed = &quot;hello hello hello&quot;.toBytes().deflate()
+print(packed.inflate().decodeToString())   // hello hello hello
+</pre>
+</div>
+<div class="entry" id="Bytes.deflate"><code class="sig">fun Bytes.deflate(level : int = 6, raw : bool = false) : Bytes</code><a class="anchor" href="#Bytes.deflate">#</a>
+<p>The bytes deflate-compressed, at <code>level</code> 0 (stored as they are, as fast as copying) to 9 (smallest, slowest), as zlib's levels are; 6 is zlib's own default. With zlib's header and check unless <code>raw</code>.</p>
+</div>
+<div class="entry" id="Bytes.crc32"><code class="sig">fun Bytes.crc32(crc : int = 0) : int</code><a class="anchor" href="#Bytes.crc32">#</a>
+<p>The CRC-32 of the bytes, as PNG, ZIP and gzip have it, carried on from <code>crc</code> for data in parts.</p>
+</div>
+<div class="entry" id="Bytes.adler32"><code class="sig">fun Bytes.adler32(adler : int = 1) : int</code><a class="anchor" href="#Bytes.adler32">#</a>
+<p>The Adler-32 of the bytes, as zlib has it, carried on from <code>adler</code> for data in parts.</p>
 </div>
 </section>
 <section class="file" id="file-builtins-jade">
@@ -1937,6 +2005,9 @@ Exception: everything else, which a bare `catch (e)` catches.
 <h4>Checked</h4>
 <div class="entry" id="IOException"><code class="sig">class IOException(message : string? = null, cause : Throwable? = null) : Exception(message, cause)</code><a class="anchor" href="#IOException">#</a>
 <p>Reading, writing, connecting or starting a program went wrong.</p>
+</div>
+<div class="entry" id="DataFormatException"><code class="sig">class DataFormatException(message : string? = null, cause : Throwable? = null) : Exception(message, cause)</code><a class="anchor" href="#DataFormatException">#</a>
+<p>Data that is not in the form it should be: compressed data that is damaged or ends early, bits that are no code (Bytes.inflate, BitReader, HuffmanTable), a picture file a codec cannot read.</p>
 </div>
 <div class="entry" id="SocketTimeoutException"><code class="sig">class SocketTimeoutException(message : string? = &quot;the read timed out&quot;) : IOException(message)</code><a class="anchor" href="#SocketTimeoutException">#</a>
 <p>A socket's read that waited longer than its readTimeout, an IOException as in Java.</p>

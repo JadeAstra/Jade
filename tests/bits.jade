@@ -1,0 +1,72 @@
+// Bits for codecs (M9/M10 part one, step 3): BitReader in either order, HuffmanTable from
+// lengths or from codes and symbols, deflate both ways with zlib's streams, CRC-32 and Adler-32.
+
+// Lowest bit first, as deflate has them: 0b10110100 gives 100 then 10110.
+val low = BitReader(Bytes([0b10110100, 0xFF, 0x01]))
+print(low.readBits(3), low.readBits(5), low.peekBits(4), low.position, low.bitsLeft)   // expect: 4 22 15 8 16
+low.skipBits(4)
+low.alignToByte()
+print(low.position, low.readBits(8), low.readBits(0), low.bitsLeft)   // expect: 16 1 0 0
+// Highest bit first, as JPEG has them; a value across bytes.
+val high = BitReader(Bytes([0b10110100, 0xFF, 0x80]), 0, BitOrder.msbFirst)
+print(high.readBits(3), high.readBits(5), high.readBits(9), high.order)   // expect: 5 20 511 msbFirst
+// From a byte on, the position set, 32 bits at once; zeros peeked past the end.
+val far = BitReader(Bytes([9, 0x78, 0x56, 0x34, 0x12]), 1)
+print(far.position, far.readBits(32) == 0x12345678, far.peekBits(7))   // expect: 8 true 0
+far.position = 4
+print(far.readBits(4), far.readBits(8))   // expect: 0 120
+try { far.peekBits(33) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: bits are read 0 to 32 at a time, not 33
+try { BitReader(Bytes([1])).readBits(9) } catch (e : DataFormatException) { print(e.message) }   // expect: 9 bits read at bit 0, past the end of 1 bytes
+try { BitReader(Bytes([1]), 1).skipBits(1) } catch (e : DataFormatException) { print(e.message) }   // expect: 1 bits skipped at bit 8, past the end of 1 bytes
+
+// A Huffman code by its lengths: symbol 1 is 0, symbol 0 is 10, symbol 2 is 110, symbol 3 is 111.
+val codes = HuffmanTable([2, 1, 3, 3])
+val msb = BitReader(Bytes([0b01011011, 0b10000000]), 0, BitOrder.msbFirst)
+print(codes.decode(msb), codes.decode(msb), codes.decode(msb), codes.decode(msb), msb.position)   // expect: 1 0 2 3 9
+// The same codes lowest bit first: each code's first bit is the lowest bit not yet read.
+val lsb = BitReader(Bytes([0b11011010, 0b00000001]))
+print(codes.decode(lsb), codes.decode(lsb), codes.decode(lsb), codes.decode(lsb), lsb.position)   // expect: 1 0 2 3 9
+// Codes longer than the table's first ten bits: symbol i has length i + 1, up to 16.
+val deep = HuffmanTable((0 ..< 16).map { it + 1 })
+val ones = BitReader(Bytes([0xFF, 0xFE, 0xFF]), 0, BitOrder.msbFirst)
+print(deep.decode(ones), ones.position)   // expect: 15 16
+val elevenOnes = BitReader(Bytes([0xFF, 0b11100000]), 0, BitOrder.msbFirst)
+print(deep.decode(elevenOnes), elevenOnes.position)   // expect: 11 12
+// JPEG's way: lengths in the order of the codes, with each code's symbol.
+val jpeg = HuffmanTable([2, 2, 3], [0x05, 0x01, 0x23])
+val jpegBits = BitReader(Bytes([0b01001000]), 0, BitOrder.msbFirst)
+print(jpeg.decode(jpegBits), jpeg.decode(jpegBits), jpeg.decode(jpegBits))   // expect: 1 5 35
+try { HuffmanTable([1, 1, 1]) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: not a Huffman code: more codes than the lengths have room for
+try { HuffmanTable([17]) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: not a Huffman code: a code length is 0 to 16, not 17
+try { HuffmanTable([1, 1], [3]) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: not a Huffman code: there are 2 lengths but 1 symbols
+// Bits that are no code (an incomplete code's gap), and a code past the end.
+try { HuffmanTable([1]).decode(BitReader(Bytes([0x80]), 0, BitOrder.msbFirst)) } catch (e : DataFormatException) { print(e.message) }   // expect: bits that are no code of the Huffman table, at bit 0
+try { codes.decode(BitReader(Bytes([0xFF]), 0, BitOrder.msbFirst).also { it.position = 7 }) } catch (e : DataFormatException) { print(e.message) }   // expect: bits that are no code of the Huffman table, at bit 7
+
+// Deflate: zlib's own streams read, ours read back at every level, raw as well.
+print(Bytes([120, 218, 203, 72, 205, 201, 201, 87, 200, 64, 144, 0, 58, 46, 6, 125]).inflate().decodeToString())   // expect: hello hello hello
+print(Bytes([75, 76, 74, 78, 4, 35, 0]).inflate(true).decodeToString())   // expect: abcabcabc
+val text = "the quick brown fox jumps over the lazy dog; ".repeat(300).toBytes()
+print((0 .. 9).map { text.deflate(it).inflate() == text }.all { it }, (0 .. 9).map { text.deflate(it, true).inflate(true) == text }.all { it })   // expect: true true
+print(text.deflate(0).size > text.size, text.deflate(9).size < 200, text.deflate().size == text.deflate(6).size)   // expect: true true true
+print(Bytes([]).deflate().inflate().size, Bytes([]).deflate(0).inflate().size, Bytes([7]).deflate(1).inflate().toList())   // expect: 0 0 [7]
+var mixed = Bytes(70000)
+for (i in 0 ..< mixed.size) { mixed[i] = ((i * 7919) % 251 + (i / 1000)).toByteWrapped() }
+print(mixed.deflate(1).inflate() == mixed, mixed.deflate(9).inflate() == mixed, mixed.deflate(0).inflate() == mixed)   // expect: true true true
+
+// Damaged, early-ending and over-large data refused.
+for (bad in [Bytes([1, 2, 3]), Bytes([120, 218, 203, 72]), Bytes([120, 218, 203, 72, 205, 201, 201, 87, 200, 64, 144, 0, 58, 46, 6, 126]), Bytes([120, 1, 7])]) {
+  try { bad.inflate() } catch (e : DataFormatException) { print(e.message) }
+}
+// expect: not zlib data: its header is wrong
+// expect: the compressed data ends early
+// expect: damaged compressed data: its check does not match what it expands to
+// expect: damaged compressed data: a block of a kind there is none of
+try { text.deflate().inflate(limit = 100) } catch (e : DataFormatException) { print(e.message) }   // expect: the compressed data expands past the limit
+print(text.deflate().inflate(limit = text.size).size == text.size)   // expect: true
+try { text.deflate(10) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: deflate() takes a level from 0 to 9, not 10
+
+// The checks, as zlib works them out; carried on over data in parts.
+print("The quick brown fox jumps over the lazy dog".toBytes().crc32(), "Wikipedia".toBytes().adler32())   // expect: 1095738169 300286872
+val whole = "abcdefgh".toBytes()
+print(whole[4 ..].crc32(whole[0 ..< 4].crc32()) == whole.crc32(), whole[4 ..].adler32(whole[0 ..< 4].adler32()) == whole.adler32())   // expect: true true

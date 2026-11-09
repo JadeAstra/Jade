@@ -1360,6 +1360,7 @@ void registerBuiltins(VM& vm) {
     registerGrid(vm);
     registerRegex(vm);
     registerXml(vm);
+    registerBits(vm);
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);
