@@ -52,7 +52,41 @@ fun __paletteBytes(palette : List<Color>, most : int) : Bytes {
   return out
 }
 
+// ---- The DCT of 8 by 8 blocks, and planes ----
+
+// The discrete cosine transform of a plane's 8 by 8 blocks, both ways, as JPEG has it (and video,
+// and picture analysis): samples 0 to 255, 128 taken off, made 64 coefficients a block, and back.
+// Coefficients are kept as 16-bit numbers, two bytes each (lowest first), 64 a block in natural
+// order (across, then down), the blocks one after another across the plane, then down.
+object Dct {
+  // The samples of `blocksWide` by `blocksHigh` blocks of coefficients, into `plane` (rows `stride`
+  // bytes apart, from its start), each block's coefficients first multiplied by `scale`'s 64 steps
+  // (natural order) where it is given: a JPEG's dequantization. In integers (libjpeg's slow integer
+  // method, as stb_image has it), the samples kept to 0 to 255.
+  fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List<int>? = null) {
+    __picture.inverse8x8(coefficients, blocksWide, blocksHigh, plane, stride, scale)
+  }
+
+  // The coefficients of `blocksWide` by `blocksHigh` blocks of `plane` (rows `stride` bytes apart),
+  // each divided by `divisors`' 64 steps (natural order) and rounded where they are given: a JPEG's
+  // quantization. AAN's method in floats (libjpeg's float method).
+  fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List<int>? = null) : Bytes =>
+      __picture.forward8x8(plane, stride, blocksWide, blocksHigh, divisors)
+}
+
+// The plane (one byte a sample, `width` by `height`, rows `stride` bytes apart) at another size,
+// `toWidth` by `toHeight`: twice either way (or one less, for an odd size) by a triangle filter,
+// 3 parts the nearest sample and 1 the next, as libjpeg's "fancy" upsampling; half either way by
+// averaging; any other size by bilinear interpolation between the samples' centres.
+fun Bytes.scaledPlane(width : int, height : int, toWidth : int, toHeight : int, stride : int = width) : Bytes =>
+    __picture.scalePlane(this, width, height, toWidth, toHeight, stride)
+
 external object __picture {
   fun palette(pixels : any, count : int) : Bytes
   fun indices(pixels : any, width : int, height : int, palette : Bytes, method : int) : Bytes
+  fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List<int>?) : unit
+  fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List<int>?) : Bytes
+  fun scalePlane(plane : Bytes, width : int, height : int, toWidth : int, toHeight : int, stride : int) : Bytes
+  fun fromPlanes(planes : List<Bytes>, width : int, height : int, space : int) : Bytes
+  fun toPlanes(pixels : any, space : int) : List<Bytes>
 }

@@ -65,7 +65,7 @@ class BitReader {
 //   val codes = HuffmanTable([2, 1, 3, 3])   // symbol 1 is 0, symbol 0 is 10, 2 is 110, 3 is 111
 //   val symbol = codes.decode(reader)
 class HuffmanTable {
-  private val table : any
+  internal val table : any
 
   // The code from each symbol's code length, 0 for a symbol that has none, numbered as deflate
   // numbers them: shorter codes first, and those of one length in the order of their symbols.

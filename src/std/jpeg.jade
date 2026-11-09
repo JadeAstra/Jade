@@ -1,6 +1,8 @@
 // ---- JPEG ----
 
-// JPEG read and written in Jade (M9/M10 part one, step 3), over BitReader and HuffmanTable. Read:
+// JPEG read and written in Jade (M9/M10 part one, step 3): the markers, tables, EXIF and errors in
+// Jade, the work for every block in general C++ (Dct, Image.fromPlanes and toPlanes, scaledPlane),
+// and a scan's Huffman-coded runs and sizes, which are JPEG's alone, in C++ of JPEG's own. Read:
 // baseline and progressive (refinement scans included), restart intervals, any sampling, one
 // component (grey), three (YCbCr, or RGB where Adobe's marker says so) or four (CMYK, YCCK), the
 // chroma upsampled as libjpeg does (a triangle filter for twice), and the EXIF orientation applied.
@@ -26,9 +28,7 @@ class __JpegComponent {
   var blocksH = 0
   var usedW = 0     // the blocks the picture covers, which a scan of this component alone reads
   var usedH = 0
-  var pred = 0
-  var plane = Bytes(0)
-  var coefs : open List<int> = []   // a progressive picture's coefficients, 64 a block
+  var coefs = Bytes(0)   // 64 coefficients a block, 16 bits each, natural order, as read (quantized)
 }
 
 class __JpegReader {
@@ -48,10 +48,7 @@ class __JpegReader {
   private var restartInterval = 0
   private var orientation = 1
   private var adobe = -1     // Adobe's colour transform: 0 none, 1 YCbCr, 2 YCCK; -1 no Adobe marker
-  private var eobrun = 0
   private var scans = 0
-  // One block's coefficients while a sequential picture is read.
-  private val block : open List<int> = List(64) { 0 }
 
   internal fun init(data : Bytes) {
     this.data = data
@@ -99,7 +96,6 @@ class __JpegReader {
       // Damaged or cut short after a scan: what was read is kept, as browsers keep it.
     }
     if (components.isEmpty() or scans == 0) { throw failure("it has no picture") }
-    if (progressive) { finishProgressive() }
     return orient(colors())
   }
 
@@ -133,8 +129,7 @@ class __JpegReader {
       c.blocksH = mcusY * c.v
       c.usedW = ((width * c.h + hMax - 1) / hMax + 7) / 8
       c.usedH = ((height * c.v + vMax - 1) / vMax + 7) / 8
-      c.plane = Bytes(c.blocksW * 8 * c.blocksH * 8)
-      if (progressive) { c.coefs = Grid<int>(c.blocksW * c.blocksH * 64, 1).cells }
+      c.coefs = Bytes(c.blocksW * c.blocksH * 128)
     }
   }
 
@@ -196,14 +191,13 @@ class __JpegReader {
   private fun scan(at : int) throws IOException | DataFormatException {
     if (components.isEmpty()) { throw failure("a scan before its frame") }
     val count = data[at].toInt()
-    val inScan : open List<__JpegComponent> = []
+    val inScan : open List<List<any?>> = []
     for (i in 0 ..< count) {
       val id = data[at + 1 + i * 2].toInt()
       val c = components.firstOrNull { it.id == id }
       if (c == null) { throw failure("a scan of component $id, which the frame has not") }
-      c!!.dc = data[at + 2 + i * 2].toInt() >> 4
-      c!!.ac = data[at + 2 + i * 2].toInt() & 15
-      inScan.add(c!!)
+      val tables = data[at + 2 + i * 2].toInt()
+      inScan.add([c!!.coefs, c!!.blocksW, c!!.h, c!!.v, c!!.usedW, c!!.usedH, dcTables[tables >> 4]?.table, acTables[tables & 15]?.table])
     }
     val p = at + 1 + count * 2
     val first = data[p].toInt()
@@ -211,346 +205,45 @@ class __JpegReader {
     val high = data[p + 2].toInt() >> 4
     val low = data[p + 2].toInt() & 15
     if (progressive and (first > last or last > 63 or (first == 0) != (last == 0) or first > 0 and count != 1)) { throw failure("a progressive scan's bands are out of range") }
-    for (c in inScan) {
-      if (!progressive or first == 0 and high == 0) {
-        if (dcTables[c.dc] == null) { throw failure("a scan uses a DC table not given") }
-      }
-      if ((!progressive or first > 0) and acTables[c.ac] == null) { throw failure("a scan uses an AC table not given") }
-      if (!progressive and quant[c.quant].isEmpty()) { throw failure("a scan uses a quantization table not given") }
-    }
-    val segments = entropySegments()
+    val result = __jpeg.decodeScan(data, pos, inScan, mcusX, mcusY, restartInterval, progressive, first, last, high, low)
+    if (result is string) { throw DataFormatException(result as string) }
+    pos = result as int
     scans += 1
-    for (c in components) { c.pred = 0 }
-    eobrun = 0
-    var segment = 0
-    var reader = BitReader(segments[0], 0, BitOrder.msbFirst)
-    var left = restartInterval
-    // One block of one component, or MCUs of several, interleaved.
-    val single = inScan.size == 1
-    val unitsX = single ? inScan[0].usedW : mcusX
-    val unitsY = single ? inScan[0].usedH : mcusY
-    for (uy in 0 ..< unitsY) {
-      for (ux in 0 ..< unitsX) {
-        if (restartInterval > 0) {
-          if (left == 0) {
-            segment += 1
-            reader = BitReader(segment < segments.size ? segments[segment] : Bytes(8), 0, BitOrder.msbFirst)
-            for (c in components) { c.pred = 0 }
-            eobrun = 0
-            left = restartInterval
-          }
-          left -= 1
-        }
-        if (single) {
-          oneBlock(inScan[0], reader, ux, uy, first, last, high, low)
-        } else {
-          for (c in inScan) {
-            for (by in 0 ..< c.v) {
-              for (bx in 0 ..< c.h) { oneBlock(c, reader, ux * c.h + bx, uy * c.v + by, first, last, high, low) }
-            }
-          }
-        }
-      }
-    }
   }
-
-  // The data of the scan that starts at pos, to the next marker, as its pieces between restart
-  // markers, each with its stuffed zero bytes (FF 00 for FF) taken out and some zeros put after,
-  // for a reader that looks a little past the end. pos is left at that marker.
-  private fun entropySegments() : List<Bytes> {
-    val pieces : open List<Bytes> = []
-    val ranges : open List<int> = []
-    var cursor = pos
-    val ffs = data.indicesOf(0xFF.toByte(), pos)
-    var k = 0
-    var ended = false
-    while (k < ffs.size and !ended) {
-      val i = ffs[k]
-      k += 1
-      if (i < cursor) { continue }
-      val next = i + 1 < data.size ? data[i + 1].toInt() : 0xD9
-      if (next == 0x00) {
-        ranges.add(cursor)
-        ranges.add(i + 1)
-        cursor = i + 2
-      } else if (next >= 0xD0 and next <= 0xD7) {
-        ranges.add(cursor)
-        ranges.add(i)
-        pieces.add(join(ranges))
-        ranges.clear()
-        cursor = i + 2
-      } else if (next == 0xFF) {
-        continue   // a fill byte before a marker
-      } else {
-        ranges.add(cursor)
-        ranges.add(i)
-        pos = i
-        ended = true
-      }
-    }
-    if (!ended) {
-      ranges.add(cursor)
-      ranges.add(data.size)
-      pos = data.size
-    }
-    pieces.add(join(ranges))
-    return pieces
-  }
-
-  private fun join(ranges : List<int>) : Bytes {
-    var total = 8
-    var i = 0
-    while (i < ranges.size) {
-      total += ranges[i + 1] - ranges[i]
-      i += 2
-    }
-    val out = Bytes(total)
-    var o = 0
-    i = 0
-    while (i < ranges.size) {
-      val n = ranges[i + 1] - ranges[i]
-      if (n > 0) { out.copyFrom(data, ranges[i], 1, o, 1, n) }
-      o += n
-      i += 2
-    }
-    return out
-  }
-
-  private fun oneBlock(c : __JpegComponent, r : BitReader, bx : int, by : int, first : int, last : int, high : int, low : int) throws DataFormatException {
-    if (!progressive) {
-      sequentialBlock(c, r, bx, by)
-      return
-    }
-    val base = (by * c.blocksW + bx) * 64
-    val coefs = c.coefs
-    if (first == 0) {
-      if (high == 0) {
-        val t = dcTables[c.dc]!!.decode(r)
-        c.pred += t == 0 ? 0 : extend(r.readBits(t), t)
-        coefs[base] = c.pred << low
-      } else if (r.readBits(1) == 1) {
-        coefs[base] = coefs[base] | (1 << low)
-      }
-      return
-    }
-    val table = acTables[c.ac]!!
-    if (high == 0) {   // the first pass over a band
-      if (eobrun > 0) {
-        eobrun -= 1
-        return
-      }
-      var k = first
-      while (k <= last) {
-        val rs = table.decode(r)
-        val s = rs & 15
-        val run = rs >> 4
-        if (s == 0) {
-          if (run < 15) {
-            eobrun = (1 << run) - 1
-            if (run > 0) { eobrun += r.readBits(run) }
-            return
-          }
-          k += 16
-        } else {
-          k += run
-          if (k > 63) { throw DataFormatException("a coefficient past the block") }
-          coefs[base + __jpegNatural[k]] = extend(r.readBits(s), s) * (1 << low)
-          k += 1
-        }
-      }
-      return
-    }
-    // A refining pass: a bit more of each coefficient already there, and new ones of the least size.
-    val plus = 1 << low
-    val minus = -1 << low
-    var k = first
-    if (eobrun == 0) {
-      while (k <= last) {
-        val rs = table.decode(r)
-        var s = rs & 15
-        var run = rs >> 4
-        var value = 0
-        if (s != 0) {
-          value = r.readBits(1) == 1 ? plus : minus
-        } else if (run != 15) {
-          eobrun = 1 << run
-          if (run > 0) { eobrun += r.readBits(run) }
-          break
-        }
-        while (k <= last) {
-          val at = base + __jpegNatural[k]
-          if (coefs[at] != 0) {
-            if (r.readBits(1) == 1 and coefs[at] & plus == 0) { coefs[at] += coefs[at] >= 0 ? plus : minus }
-          } else {
-            run -= 1
-            if (run < 0) { break }
-          }
-          k += 1
-        }
-        if (value != 0 and k <= last) { coefs[base + __jpegNatural[k]] = value }
-        k += 1
-      }
-    }
-    if (eobrun > 0) {
-      while (k <= last) {
-        val at = base + __jpegNatural[k]
-        if (coefs[at] != 0 and r.readBits(1) == 1 and coefs[at] & plus == 0) { coefs[at] += coefs[at] >= 0 ? plus : minus }
-        k += 1
-      }
-      eobrun -= 1
-    }
-  }
-
-  // A sequential picture's block: read, made samples at once.
-  private fun sequentialBlock(c : __JpegComponent, r : BitReader, bx : int, by : int) throws DataFormatException {
-    val q = quant[c.quant]
-    val b = block
-    for (i in 0 ..< 64) { b[i] = 0 }
-    val t = dcTables[c.dc]!!.decode(r)
-    c.pred += t == 0 ? 0 : extend(r.readBits(t), t)
-    b[0] = c.pred * q[0]
-    val table = acTables[c.ac]!!
-    var k = 1
-    while (k < 64) {
-      val rs = table.decode(r)
-      val s = rs & 15
-      if (s == 0) {
-        if (rs >> 4 != 15) { break }
-        k += 16
-        continue
-      }
-      k += rs >> 4
-      if (k > 63) { throw DataFormatException("a coefficient past the block") }
-      val at = __jpegNatural[k]
-      b[at] = extend(r.readBits(s), s) * q[at]
-      k += 1
-    }
-    __jpegIdct(b, c.plane, c.blocksW * 8, bx * 8, by * 8)
-  }
-
-  private fun finishProgressive() {
-    for (c in components) {
-      val q = quant[c.quant]
-      val b = block
-      for (by in 0 ..< c.blocksH) {
-        for (bx in 0 ..< c.blocksW) {
-          val base = (by * c.blocksW + bx) * 64
-          for (i in 0 ..< 64) { b[i] = c.coefs[base + i] * (q.isEmpty() ? 1 : q[i]) }
-          __jpegIdct(b, c.plane, c.blocksW * 8, bx * 8, by * 8)
-        }
-      }
-    }
-  }
-
-  private fun extend(v : int, s : int) : int => v < (1 << (s - 1)) ? v - (1 << s) + 1 : v
 
   // ---- Colour ----
 
   private fun colors() : Image {
-    val n = width * height
-    val out = Bytes(n * 4)
-    out.copyFrom(Bytes([255]), 0, 0, 3, 4, n)
-    if (components.size == 1) {
-      val c = components[0]
+    // Each component's samples, through the inverse DCT, then at the picture's size.
+    val full : open List<Bytes> = []
+    for (c in components) {
       val stride = c.blocksW * 8
-      for (y in 0 ..< height) {
-        for (ch in 0 ..< 3) { out.copyFrom(c.plane, y * stride, 1, y * width * 4 + ch, 4, width) }
-      }
-      return Image.of(width, height, out)
+      val plane = Bytes(stride * c.blocksH * 8)
+      Dct.inverse8x8(c.coefs, c.blocksW, c.blocksH, plane, stride, quant[c.quant].isEmpty() ? null : quant[c.quant])
+      val sw = (width * c.h + hMax - 1) / hMax
+      val sh = (height * c.v + vMax - 1) / vMax
+      full.add(plane.scaledPlane(sw, sh, width, height, stride))
     }
-    // Each component at the picture's size.
-    val full = components.map { upsample(it) }
+    if (components.size == 1) { return Image.fromPlanes(width, height, full, ColorSpace.grey) }
     // Adobe's marker says; else three components are YCbCr unless their ids are R, G and B.
     val rgbIds = components.size == 3 and components[0].id == 82 and components[1].id == 71 and components[2].id == 66
     val transform = adobe >= 0 ? adobe : components.size == 3 and !rgbIds ? 1 : 0
-    if (components.size == 3 and transform == 0) {
-      for (ch in 0 ..< 3) { out.copyFrom(full[ch], 0, 1, ch, 4, n) }
-      return Image.of(width, height, out)
-    }
-    val tables = __jpegColorTables
-    val y0 = full[0]
-    val cb = full[1]
-    val cr = full[2]
-    if (components.size == 3) {
-      var o = 0
-      for (i in 0 ..< n) {
-        val yy = y0[i].toInt() << 16
-        val b = cb[i].toInt()
-        val r = cr[i].toInt()
-        out[o] = __clampByte((yy + tables[r]) >> 16)
-        out[o + 1] = __clampByte((yy + tables[256 + b] + tables[512 + r]) >> 16)
-        out[o + 2] = __clampByte((yy + tables[768 + b]) >> 16)
-        o += 4
-      }
-      return Image.of(width, height, out)
-    }
+    if (components.size == 3) { return Image.fromPlanes(width, height, full, transform == 0 ? ColorSpace.rgb : ColorSpace.ycbcr) }
     // Four: CMYK as Adobe writes it (inverted), or YCCK, its first three YCbCr for C, M and Y.
+    val cmy = transform == 2 ? Image.fromPlanes(width, height, full[0 ..< 3], ColorSpace.ycbcr).toPlanes() : full[0 ..< 3]
     val k = full[3]
+    val out = Bytes(width * height * 4)
     var o = 0
-    for (i in 0 ..< n) {
-      var c1 = y0[i].toInt()
-      var c2 = cb[i].toInt()
-      var c3 = cr[i].toInt()
-      if (transform == 2) {
-        val yy = c1 << 16
-        val b = c2
-        val r = c3
-        c1 = 255 - __clampByte((yy + tables[r]) >> 16).toInt()
-        c2 = 255 - __clampByte((yy + tables[256 + b] + tables[512 + r]) >> 16).toInt()
-        c3 = 255 - __clampByte((yy + tables[768 + b]) >> 16).toInt()
-      }
+    for (i in 0 ..< width * height) {
       val kk = k[i].toInt()
-      out[o] = (c1 * kk / 255).toByte()
-      out[o + 1] = (c2 * kk / 255).toByte()
-      out[o + 2] = (c3 * kk / 255).toByte()
+      for (ch in 0 ..< 3) {
+        val v = cmy[ch][i].toInt()
+        out[o + ch] = ((transform == 2 ? 255 - v : v) * kk / 255).toByte()
+      }
+      out[o + 3] = 255.toByte()
       o += 4
     }
     return Image.of(width, height, out)
-  }
-
-  // A component's samples at the picture's size: as they are where it is not subsampled; twice
-  // either way by a triangle filter (libjpeg's "fancy" upsampling), the nearest sample otherwise.
-  private fun upsample(c : __JpegComponent) : Bytes {
-    val stride = c.blocksW * 8
-    val sw = (width * c.h + hMax - 1) / hMax
-    val sh = (height * c.v + vMax - 1) / vMax
-    val fx = hMax / c.h
-    val fy = vMax / c.v
-    val out = Bytes(width * height)
-    if (fx == 1 and fy == 1 and hMax % c.h == 0) {
-      for (y in 0 ..< height) { out.copyFrom(c.plane, y * stride, 1, y * width, 1, width) }
-      return out
-    }
-    if (hMax % c.h != 0 or vMax % c.v != 0 or fx > 2 or fy > 2) {
-      for (y in 0 ..< height) {
-        val sy = y * c.v / vMax
-        for (x in 0 ..< width) { out[y * width + x] = c.plane[sy * stride + x * c.h / hMax] }
-      }
-      return out
-    }
-    val p = c.plane
-    for (y in 0 ..< height) {
-      // The source row, and the one nearest above or below for the vertical weight of 1 in 4.
-      val sy = fy == 2 ? y / 2 : y
-      val near = fy == 2 ? (y % 2 == 0 ? Math.max(sy - 1, 0) : Math.min(sy + 1, sh - 1)) : sy
-      val row = sy * stride
-      val other = near * stride
-      var o = y * width
-      for (x in 0 ..< width) {
-        if (fx == 2) {
-          val sx = x / 2
-          val nx = x % 2 == 0 ? Math.max(sx - 1, 0) : Math.min(sx + 1, sw - 1)
-          // Each way 3 parts the nearest and 1 the next: 9, 3, 3 and 1 parts of 16 both ways.
-          val here = fy == 2 ? p[row + sx].toInt() * 3 + p[other + sx].toInt() : p[row + sx].toInt() * 4
-          val beside = fy == 2 ? p[row + nx].toInt() * 3 + p[other + nx].toInt() : p[row + nx].toInt() * 4
-          out[o] = ((here * 3 + beside + 8) >> 4).toByte()
-        } else {
-          out[o] = ((p[row + x].toInt() * 3 + p[other + x].toInt() + 2) >> 2).toByte()
-        }
-        o += 1
-      }
-    }
-    return out
   }
 
   // The picture turned as EXIF's orientation says (1 as it is; 2 to 8 mirrored and turned).
@@ -584,126 +277,6 @@ class __JpegReader {
   private fun failure(why : string) : IOException => IOException("not a JPEG file that can be read: $why")
 }
 
-// YCbCr to RGB as tables of 65536ths: Cr's part of red, Cb's and Cr's of green, Cb's of blue.
-val __jpegColorTables : List<int> = __makeJpegColorTables()
-fun __makeJpegColorTables() : List<int> {
-  val t : open List<int> = List(1024) { 0 }
-  for (i in 0 ..< 256) {
-    val d = i - 128
-    t[i] = Math.round(1.402 * 65536 * d).toInt() + 32768
-    t[256 + i] = -Math.round(0.344136 * 65536 * d).toInt() + 32768
-    t[512 + i] = -Math.round(0.714136 * 65536 * d).toInt()
-    t[768 + i] = Math.round(1.772 * 65536 * d).toInt() + 32768
-  }
-  return t
-}
-
-fun __clampByte(v : int) : byte => (v < 0 ? 0 : v > 255 ? 255 : v).toByte()
-
-// The inverse DCT of a block's 64 dequantized coefficients (natural order) into samples, 8 by 8,
-// at (x0, y0) of a plane `stride` wide: separable, in integers of 4096ths (libjpeg's slow integer
-// method, as stb_image has it), columns first, a column of zeros past its first taken at once.
-fun __jpegIdct(b : open List<int>, plane : Bytes, stride : int, x0 : int, y0 : int) {
-  for (i in 0 ..< 8) {
-    if (b[i + 8] == 0 and b[i + 16] == 0 and b[i + 24] == 0 and b[i + 32] == 0 and b[i + 40] == 0 and b[i + 48] == 0 and b[i + 56] == 0) {
-      val dc = b[i] * 4
-      b[i + 8] = dc
-      b[i + 16] = dc
-      b[i + 24] = dc
-      b[i + 32] = dc
-      b[i + 40] = dc
-      b[i + 48] = dc
-      b[i + 56] = dc
-      b[i] = dc
-      continue
-    }
-    // The even part.
-    var p1 = (b[i + 16] + b[i + 48]) * 2217
-    val t2 = p1 + b[i + 48] * -7567
-    val t3 = p1 + b[i + 16] * 3135
-    val t0 = (b[i] + b[i + 32]) * 4096
-    val t1 = (b[i] - b[i + 32]) * 4096
-    val x0e = t0 + t3 + 512
-    val x3e = t0 - t3 + 512
-    val x1e = t1 + t2 + 512
-    val x2e = t1 - t2 + 512
-    // The odd part.
-    var o0 = b[i + 56]
-    var o1 = b[i + 40]
-    var o2 = b[i + 24]
-    var o3 = b[i + 8]
-    val q3 = o0 + o2
-    val q4 = o1 + o3
-    val q1 = o0 + o3
-    val q2 = o1 + o2
-    val q5 = (q3 + q4) * 4816
-    o0 = o0 * 1223
-    o1 = o1 * 8410
-    o2 = o2 * 12586
-    o3 = o3 * 6149
-    val r1 = q5 + q1 * -3685
-    val r2 = q5 + q2 * -10497
-    val r3 = q3 * -8034
-    val r4 = q4 * -1597
-    o3 += r1 + r4
-    o2 += r2 + r3
-    o1 += r2 + r4
-    o0 += r1 + r3
-    b[i] = (x0e + o3) >> 10
-    b[i + 56] = (x0e - o3) >> 10
-    b[i + 8] = (x1e + o2) >> 10
-    b[i + 48] = (x1e - o2) >> 10
-    b[i + 16] = (x2e + o1) >> 10
-    b[i + 40] = (x2e - o1) >> 10
-    b[i + 24] = (x3e + o0) >> 10
-    b[i + 32] = (x3e - o0) >> 10
-  }
-  // The rows, into samples: 4096ths and 4 times 8 brought down, 128 added.
-  val bias = 65536 + (128 << 17)
-  for (row in 0 ..< 8) {
-    val r = row * 8
-    var p1 = (b[r + 2] + b[r + 6]) * 2217
-    val t2 = p1 + b[r + 6] * -7567
-    val t3 = p1 + b[r + 2] * 3135
-    val t0 = (b[r] + b[r + 4]) * 4096
-    val t1 = (b[r] - b[r + 4]) * 4096
-    val x0e = t0 + t3 + bias
-    val x3e = t0 - t3 + bias
-    val x1e = t1 + t2 + bias
-    val x2e = t1 - t2 + bias
-    var o0 = b[r + 7]
-    var o1 = b[r + 5]
-    var o2 = b[r + 3]
-    var o3 = b[r + 1]
-    val q3 = o0 + o2
-    val q4 = o1 + o3
-    val q1 = o0 + o3
-    val q2 = o1 + o2
-    val q5 = (q3 + q4) * 4816
-    o0 = o0 * 1223
-    o1 = o1 * 8410
-    o2 = o2 * 12586
-    o3 = o3 * 6149
-    val r1 = q5 + q1 * -3685
-    val r2 = q5 + q2 * -10497
-    val r3 = q3 * -8034
-    val r4 = q4 * -1597
-    o3 += r1 + r4
-    o2 += r2 + r3
-    o1 += r2 + r4
-    o0 += r1 + r3
-    val at = (y0 + row) * stride + x0
-    plane[at] = __clampByte((x0e + o3) >> 17)
-    plane[at + 7] = __clampByte((x0e - o3) >> 17)
-    plane[at + 1] = __clampByte((x1e + o2) >> 17)
-    plane[at + 6] = __clampByte((x1e - o2) >> 17)
-    plane[at + 2] = __clampByte((x2e + o1) >> 17)
-    plane[at + 5] = __clampByte((x2e - o1) >> 17)
-    plane[at + 3] = __clampByte((x3e + o0) >> 17)
-    plane[at + 4] = __clampByte((x3e - o0) >> 17)
-  }
-}
-
 // ---- Writing ----
 
 class __JpegWriter {
@@ -711,8 +284,6 @@ class __JpegWriter {
   private val quality : int
   private var data = Bytes(65536)
   private var size = 0
-  private var bits = 0
-  private var count = 0
 
   internal fun init(image : Image, quality : Number) {
     this.image = image
@@ -724,32 +295,32 @@ class __JpegWriter {
     val w = image.width
     val h = image.height
     if (w == 0 or h == 0) { throw IllegalArgumentException("an image with no pixels is not written as a JPEG") }
-    // The tables, scaled for the quality as libjpeg scales them, each in zigzag order.
+    // The tables, scaled for the quality as libjpeg scales them, in zigzag order.
     val scale = quality < 50 ? 5000 / quality : 200 - quality * 2
     val tables = [__jpegLuma, __jpegChroma].map { std -> (0 ..< 64).map { k -> Math.max(1, Math.min(255, (std[k] * scale + 50) / 100)) } }
-    // The planes: Y at full size, Cb and Cr halved each way, each padded to whole blocks.
-    val pixels = image.rgbaBytes()
+    val natural = tables.map { zz -> List(64) { 0 }.also { for (k in 0 ..< 64) { it[__jpegNatural[k]] = zz[k] } } }
+    // Laid over white where something is see-through; then Y, Cb and Cr, the last two halved each way.
+    var solid = image
+    if (Bytes(w * h).copyFrom(image.rgbaBytes(), 3, 4, 0, 1, w * h).without(255.toByte()).size > 0) {
+      solid = Image(w, h, Color.white)
+      solid.canvas().draw(image, 0, 0)
+    }
+    val planes = solid.toPlanes(ColorSpace.ycbcr)
     val mw = (w + 15) / 16 * 16
     val mh = (h + 15) / 16 * 16
-    val yp : open List<int> = Grid<int>(mw * mh, 1).cells
-    val cbp : open List<int> = Grid<int>(mw / 2 * (mh / 2), 1).cells
-    val crp : open List<int> = Grid<int>(mw / 2 * (mh / 2), 1).cells
-    for (y in 0 ..< mh) {
-      val sy = Math.min(y, h - 1)
-      for (x in 0 ..< mw) {
-        val p = (sy * w + Math.min(x, w - 1)) * 4
-        val a = pixels[p + 3].toInt()
-        // Laid over white where it is see-through.
-        val r = a == 255 ? pixels[p].toInt() : (pixels[p].toInt() * a + 255 * (255 - a) + 127) / 255
-        val g = a == 255 ? pixels[p + 1].toInt() : (pixels[p + 1].toInt() * a + 255 * (255 - a) + 127) / 255
-        val b = a == 255 ? pixels[p + 2].toInt() : (pixels[p + 2].toInt() * a + 255 * (255 - a) + 127) / 255
-        yp[y * mw + x] = (19595 * r + 38470 * g + 7471 * b + 32768) >> 16
-        val c = (y / 2) * (mw / 2) + x / 2
-        cbp[c] = cbp[c] + ((-11059 * r - 21709 * g + 32768 * b) >> 16)
-        crp[c] = crp[c] + ((32768 * r - 27439 * g - 5329 * b) >> 16)
-      }
-    }
-    // Markers: the start, JFIF, the tables, the frame, the Huffman tables, the scan.
+    val cw = (w + 1) / 2
+    val ch = (h + 1) / 2
+    val luma = padded(planes[0], w, h, mw, mh)
+    val cb = padded(planes[1].scaledPlane(w, h, cw, ch), cw, ch, mw / 2, mh / 2)
+    val cr = padded(planes[2].scaledPlane(w, h, cw, ch), cw, ch, mw / 2, mh / 2)
+    val codes = [__JpegCodes(__jpegDcLumaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcLumaCounts, __jpegAcLumaSymbols),
+                 __JpegCodes(__jpegDcChromaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcChromaCounts, __jpegAcChromaSymbols)]
+    val scan = __jpeg.encodeScan([
+      [Dct.forward8x8(luma, mw, mw / 8, mh / 8, natural[0]), mw / 8, 2, 2, codes[0].code, codes[0].length, codes[1].code, codes[1].length],
+      [Dct.forward8x8(cb, mw / 2, mw / 16, mh / 16, natural[1]), mw / 16, 1, 1, codes[2].code, codes[2].length, codes[3].code, codes[3].length],
+      [Dct.forward8x8(cr, mw / 2, mw / 16, mh / 16, natural[1]), mw / 16, 1, 1, codes[2].code, codes[2].length, codes[3].code, codes[3].length]],
+      mw / 16, mh / 16)
+    // Markers: the start, JFIF, the tables, the frame, the Huffman tables, the scan, the end.
     marker(0xD8)
     segment(0xE0, [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0])
     for (t in 0 ..< 2) { segment(0xDB, [t] + tables[t]) }
@@ -759,98 +330,20 @@ class __JpegWriter {
     segment(0xC4, [0x01] + __jpegDcChromaCounts + __jpegDcSymbols)
     segment(0xC4, [0x11] + __jpegAcChromaCounts + __jpegAcChromaSymbols)
     segment(0xDA, [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0])
-    val codes = [__JpegCodes(__jpegDcLumaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcLumaCounts, __jpegAcLumaSymbols),
-                 __JpegCodes(__jpegDcChromaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcChromaCounts, __jpegAcChromaSymbols)]
-    // The divisors: each table's step with the AAN DCT's scale of each coefficient folded in.
-    val divisors = tables.map { t -> (0 ..< 64).map { k -> t[k] * __jpegAanScale[__jpegNatural[k]] * 8.0 } }
-    val block = List(64) { 0.0 }
-    var predY = 0
-    var predCb = 0
-    var predCr = 0
-    for (my in 0 ..< mh / 16) {
-      for (mx in 0 ..< mw / 16) {
-        for (k in 0 ..< 4) {
-          val bx = mx * 16 + (k % 2) * 8
-          val by = my * 16 + (k / 2) * 8
-          for (y in 0 ..< 8) {
-            for (x in 0 ..< 8) { block[y * 8 + x] = (yp[(by + y) * mw + bx + x] - 128).toFloat() }
-          }
-          predY = encodeBlock(block, divisors[0], predY, codes[0], codes[1])
-        }
-        val cw = mw / 2
-        for (plane in 0 ..< 2) {
-          val p = plane == 0 ? cbp : crp
-          for (y in 0 ..< 8) {
-            for (x in 0 ..< 8) { block[y * 8 + x] = (p[(my * 8 + y) * cw + mx * 8 + x] / 4).toFloat() }   // 4 pixels summed, centred on 0
-          }
-          if (plane == 0) { predCb = encodeBlock(block, divisors[1], predCb, codes[2], codes[3]) } else { predCr = encodeBlock(block, divisors[1], predCr, codes[2], codes[3]) }
-        }
-      }
-    }
-    flushBits()
-    marker(0xD9)
-    return data[0 ..< size]
+    val head = data[0 ..< size]
+    return head + scan + Bytes([0xFF, 0xD9])
   }
 
-  // A block: its DCT, quantized, its DC as a difference from the one before, its ACs as runs of
-  // zeros and sizes. Gives its DC.
-  private fun encodeBlock(b : open List<float>, divisors : List<float>, pred : int, dc : __JpegCodes, ac : __JpegCodes) : int {
-    __jpegFdct(b)
-    val q = List(64) { 0 }
-    for (k in 0 ..< 64) {
-      val v = b[__jpegNatural[k]] / divisors[k]
-      q[k] = (v < 0 ? -Math.floor(-v + 0.5) : Math.floor(v + 0.5)).toInt()
+  // A plane `w` by `h` made `pw` by `ph`, its last column and row repeated.
+  private fun padded(plane : Bytes, w : int, h : int, pw : int, ph : int) : Bytes {
+    if (w == pw and h == ph) { return plane }
+    val out = Bytes(pw * ph)
+    for (y in 0 ..< ph) {
+      val from = Math.min(y, h - 1) * w
+      out.copyFrom(plane, from, 1, y * pw, 1, w)
+      if (pw > w) { out.copyFrom(plane, from + w - 1, 0, y * pw + w, 1, pw - w) }
     }
-    val diff = q[0] - pred
-    val dcSize = magnitude(diff)
-    put(dc.code[dcSize], dc.length[dcSize])
-    if (dcSize > 0) { put(diff < 0 ? diff + (1 << dcSize) - 1 : diff, dcSize) }
-    var run = 0
-    for (k in 1 ..< 64) {
-      val v = q[k]
-      if (v == 0) {
-        run += 1
-        continue
-      }
-      while (run > 15) {
-        put(ac.code[0xF0], ac.length[0xF0])
-        run -= 16
-      }
-      val s = magnitude(v)
-      val symbol = (run << 4) | s
-      put(ac.code[symbol], ac.length[symbol])
-      put(v < 0 ? v + (1 << s) - 1 : v, s)
-      run = 0
-    }
-    if (run > 0) { put(ac.code[0], ac.length[0]) }
-    return q[0]
-  }
-
-  private fun magnitude(v : int) : int {
-    var a = v < 0 ? -v : v
-    var s = 0
-    while (a > 0) {
-      s += 1
-      a = a >> 1
-    }
-    return s
-  }
-
-  // Bits, highest first, an FF byte followed by a 00.
-  private fun put(value : int, length : int) {
-    bits = (bits << length) | (value & ((1 << length) - 1))
-    count += length
-    while (count >= 8) {
-      count -= 8
-      val next = (bits >> count) & 255
-      byte(next)
-      if (next == 0xFF) { byte(0) }
-    }
-    bits = bits & ((1 << count) - 1)
-  }
-
-  private fun flushBits() {
-    if (count > 0) { put((1 << (8 - count)) - 1, 8 - count) }   // padded with ones
+    return out
   }
 
   private fun byte(value : int) {
@@ -892,57 +385,6 @@ class __JpegCodes(counts : List<int>, symbols : List<int>) {
   }
 }
 
-// The forward DCT of 64 samples in place, AAN's way in floats (libjpeg's float method): each
-// coefficient left scaled by __jpegAanScale, which the divisors take out.
-fun __jpegFdct(b : open List<float>) {
-  for (pass in 0 ..< 2) {
-    for (i in 0 ..< 8) {
-      val s = pass == 0 ? i * 8 : i
-      val d = pass == 0 ? 1 : 8
-      val t0 = b[s] + b[s + 7 * d]
-      val t7 = b[s] - b[s + 7 * d]
-      val t1 = b[s + d] + b[s + 6 * d]
-      val t6 = b[s + d] - b[s + 6 * d]
-      val t2 = b[s + 2 * d] + b[s + 5 * d]
-      val t5 = b[s + 2 * d] - b[s + 5 * d]
-      val t3 = b[s + 3 * d] + b[s + 4 * d]
-      val t4 = b[s + 3 * d] - b[s + 4 * d]
-      // The even part.
-      val t10 = t0 + t3
-      val t13 = t0 - t3
-      val t11 = t1 + t2
-      val t12 = t1 - t2
-      b[s] = t10 + t11
-      b[s + 4 * d] = t10 - t11
-      val z1 = (t12 + t13) * 0.707106781
-      b[s + 2 * d] = t13 + z1
-      b[s + 6 * d] = t13 - z1
-      // The odd part.
-      val u10 = t4 + t5
-      val u11 = t5 + t6
-      val u12 = t6 + t7
-      val z5 = (u10 - u12) * 0.382683433
-      val z2 = 0.541196100 * u10 + z5
-      val z4 = 1.306562965 * u12 + z5
-      val z3 = u11 * 0.707106781
-      val z11 = t7 + z3
-      val z13 = t7 - z3
-      b[s + 5 * d] = z13 + z2
-      b[s + 3 * d] = z13 - z2
-      b[s + d] = z11 + z4
-      b[s + 7 * d] = z11 - z4
-    }
-  }
-}
-
-// AAN's scale of each coefficient, natural order: cos(k pi / 16) * sqrt(2) for k > 0, 1 for 0,
-// row's times column's.
-val __jpegAanScale : List<float> = __makeAanScale()
-fun __makeAanScale() : List<float> {
-  val f = [1.0, 1.387039845, 1.306562965, 1.175875602, 1.0, 0.785694958, 0.541196100, 0.275899379]
-  return (0 ..< 64).map { f[it / 8] * f[it % 8] }
-}
-
 // IJG's tables (the JPEG standard's Annex K), zigzag order, and its Huffman tables.
 val __jpegLuma : List<int> = [16, 11, 12, 14, 12, 10, 16, 14, 13, 14, 18, 17, 16, 19, 24, 40, 26, 24, 22, 22, 24, 49, 35, 37, 29, 40, 58, 51, 61, 60, 57, 51,
   56, 55, 64, 72, 92, 78, 64, 68, 87, 69, 55, 56, 80, 109, 81, 87, 95, 98, 103, 104, 103, 62, 77, 113, 121, 112, 100, 120, 92, 101, 103, 99]
@@ -967,3 +409,9 @@ val __jpegAcChromaSymbols : List<int> = [0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x0
   0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8,
   0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
   0xE8, 0xE9, 0xEA, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA]
+
+external object __jpeg {
+  fun decodeScan(data : Bytes, at : int, components : List<List<any?>>, mcusX : int, mcusY : int, restartInterval : int, progressive : bool,
+                 first : int, last : int, high : int, low : int) : any
+  fun encodeScan(components : List<List<any>>, mcusX : int, mcusY : int) : Bytes
+}

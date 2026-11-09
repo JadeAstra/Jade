@@ -461,7 +461,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.inflate"><code>Bytes</code></a> (32)</li>
+<li><a href="#Bytes.inflate"><code>Bytes</code></a> (33)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
@@ -471,10 +471,12 @@ addButton(widgets)</pre></dd>
 <li><a href="#Class"><code>Class</code></a> (23)</li>
 <li><a href="#ClassCastException"><code>ClassCastException</code></a> (1)</li>
 <li><a href="#Color"><code>Color</code></a> (24)</li>
+<li><a href="#ColorSpace"><code>ColorSpace</code></a> (1)</li>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
 <li><a href="#Constructor"><code>Constructor</code></a> (6)</li>
 <li><a href="#Countdown"><code>Countdown</code></a> (4)</li>
 <li><a href="#DataFormatException"><code>DataFormatException</code></a> (1)</li>
+<li><a href="#Dct"><code>Dct</code></a> (3)</li>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
 <li><a href="#Dither"><code>Dither</code></a> (1)</li>
@@ -501,7 +503,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
-<li><a href="#Image"><code>Image</code></a> (25)</li>
+<li><a href="#Image"><code>Image</code></a> (27)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
 <li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
@@ -3166,6 +3168,9 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry member" id="ImageFormat.ofName"><code class="sig">fun ofName(name : string) : ImageFormat?</code><a class="anchor" href="#ImageFormat.ofName">#</a>
 <p>The format a file's name asks for, by its extension (.png, .jpg or .jpeg, .gif, .bmp, .webp, in either case); null for another.</p>
 </div>
+<div class="entry" id="ColorSpace"><code class="sig">enum ColorSpace</code><a class="anchor" href="#ColorSpace">#</a>
+<p>How a picture's colours are kept as planes, one byte a sample each (Image.fromPlanes, image.toPlanes): one plane of grey (luma, as ITU-R BT.601 weighs red, green and blue); red, green and blue; or YCbCr as JPEG (JFIF) has it, full range, Cb and Cr centred on 128.</p>
+</div>
 <div class="entry" id="Image"><code class="sig">class Image : Drawable</code><a class="anchor" href="#Image">#</a>
 <p>A picture in memory: <code>width</code> by <code>height</code> pixels, each a Color that may be see-through. What a program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a picture file and saves as one (Java's BufferedImage, D122).</p>
 <pre>val image = Image(200, 100, Color.white)
@@ -3184,6 +3189,9 @@ image.save(FilePath(&quot;out.png&quot;))
 </div>
 <div class="entry member" id="Image.of"><code class="sig">fun of(width : int, height : int, pixels : Bytes) : Image</code><a class="anchor" href="#Image.of">#</a>
 <p>An image of pixels given as bytes, four to a pixel: red, green, blue, alpha, top row first.</p>
+</div>
+<div class="entry member" id="Image.fromPlanes"><code class="sig">fun fromPlanes(width : int, height : int, planes : List&lt;Bytes&gt;, space : ColorSpace = ColorSpace.rgb) : Image</code><a class="anchor" href="#Image.fromPlanes">#</a>
+<p>A solid picture made from planes of one byte a sample, each <code>width</code> by <code>height</code>, row by row: one for grey, three for red, green and blue or Y, Cb and Cr. An IllegalArgumentException for planes of another size or number.</p>
 </div>
 <div class="entry member" id="Image.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Image throws IOException</code><a class="anchor" href="#Image.load">#</a>
 <p>Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its content rather than its name. An IOException where it cannot be read or is no picture.</p>
@@ -3232,6 +3240,9 @@ image.save(FilePath(&quot;out.png&quot;))
 </div>
 <div class="entry member" id="Image.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes</code><a class="anchor" href="#Image.encode">#</a>
 <p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.</p>
+</div>
+<div class="entry member" id="Image.toPlanes"><code class="sig">fun toPlanes(space : ColorSpace = ColorSpace.rgb) : List&lt;Bytes&gt;</code><a class="anchor" href="#Image.toPlanes">#</a>
+<p>Its colours as planes, one byte a sample, each width by height, row by row: one for grey, three for red, green and blue or Y, Cb and Cr. Alpha is left out.</p>
 </div>
 <div class="entry member" id="Image.rgbaBytes"><code class="sig">fun rgbaBytes() : Bytes</code><a class="anchor" href="#Image.rgbaBytes">#</a>
 <p>Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of takes them. A copy: changing it changes nothing here.</p>
@@ -4359,6 +4370,19 @@ val poster = image.pixels.dither(colors, Dither.none)
 </div>
 <div class="entry" id="Grid.dither"><code class="sig">fun Grid&lt;Color&gt;.dither(palette : List&lt;Color&gt;, method : Dither = Dither.floydSteinberg) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.dither">#</a>
 <p>The picture with each pixel the nearest of <code>palette</code>'s colours (the channels weighted as the eye sees them), its error spread by <code>method</code>; a see-through pixel (alpha below 128) clear. The palette's alpha is not read: every colour is solid.</p>
+</div>
+<h3>The DCT of 8 by 8 blocks, and planes</h3>
+<div class="entry" id="Dct"><code class="sig">object Dct</code><a class="anchor" href="#Dct">#</a>
+<p>The discrete cosine transform of a plane's 8 by 8 blocks, both ways, as JPEG has it (and video, and picture analysis): samples 0 to 255, 128 taken off, made 64 coefficients a block, and back. Coefficients are kept as 16-bit numbers, two bytes each (lowest first), 64 a block in natural order (across, then down), the blocks one after another across the plane, then down.</p>
+</div>
+<div class="entry member" id="Dct.inverse8x8"><code class="sig">fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List&lt;int&gt;? = null)</code><a class="anchor" href="#Dct.inverse8x8">#</a>
+<p>The samples of <code>blocksWide</code> by <code>blocksHigh</code> blocks of coefficients, into <code>plane</code> (rows <code>stride</code> bytes apart, from its start), each block's coefficients first multiplied by <code>scale</code>'s 64 steps (natural order) where it is given: a JPEG's dequantization. In integers (libjpeg's slow integer method, as stb_image has it), the samples kept to 0 to 255.</p>
+</div>
+<div class="entry member" id="Dct.forward8x8"><code class="sig">fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List&lt;int&gt;? = null) : Bytes</code><a class="anchor" href="#Dct.forward8x8">#</a>
+<p>The coefficients of <code>blocksWide</code> by <code>blocksHigh</code> blocks of <code>plane</code> (rows <code>stride</code> bytes apart), each divided by <code>divisors</code>' 64 steps (natural order) and rounded where they are given: a JPEG's quantization. AAN's method in floats (libjpeg's float method).</p>
+</div>
+<div class="entry" id="Bytes.scaledPlane"><code class="sig">fun Bytes.scaledPlane(width : int, height : int, toWidth : int, toHeight : int, stride : int = width) : Bytes</code><a class="anchor" href="#Bytes.scaledPlane">#</a>
+<p>The plane (one byte a sample, <code>width</code> by <code>height</code>, rows <code>stride</code> bytes apart) at another size, <code>toWidth</code> by <code>toHeight</code>: twice either way (or one less, for an odd size) by a triangle filter, 3 parts the nearest sample and 1 the next, as libjpeg's &quot;fancy&quot; upsampling; half either way by averaging; any other size by bilinear interpolation between the samples' centres.</p>
 </div>
 </section>
 <section class="file" id="file-range-jade">

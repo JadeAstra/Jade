@@ -2,6 +2,8 @@
 // bits read from any place in bytes, either order; a Huffman code decoded at a place; and
 // codec.cpp's deflate both ways.
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -76,6 +78,206 @@ Value bytesValue(VM& vm, std::vector<uint8_t>&& data) {
     return Value::object(made);
 }
 
+
+// ---- JPEG's scans (the only part of JPEG in C++: its Huffman-coded runs and sizes) ----
+
+constexpr int kNatural[64] = {0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,  12, 19, 26, 33, 40, 48,
+                              41, 34, 27, 20, 13, 6,  7,  14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23,
+                              30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+
+// A scan's coded bits, highest first, an FF followed by 00 read as FF; at a marker, zeros.
+struct JpegBits {
+    const uint8_t* d;
+    size_t size;
+    size_t pos;
+    uint64_t buffer = 0;
+    int count = 0;
+    bool atMarker = false;
+
+    void fill() {
+        while (count <= 56) {
+            uint32_t byte = 0;
+            if (!atMarker && pos < size) {
+                byte = d[pos];
+                if (byte == 0xFF) {
+                    const uint8_t next = pos + 1 < size ? d[pos + 1] : 0xD9;
+                    if (next == 0x00) {
+                        pos += 2;
+                    } else {
+                        atMarker = true;
+                        byte = 0;
+                    }
+                } else {
+                    pos++;
+                }
+            }
+            buffer |= static_cast<uint64_t>(byte) << (56 - count);
+            count += 8;
+        }
+    }
+    uint32_t get(int n) {
+        if (n == 0) return 0;
+        if (count < n) fill();
+        const uint32_t v = static_cast<uint32_t>(buffer >> (64 - n));
+        buffer <<= n;
+        count -= n;
+        return v;
+    }
+    // Past a restart marker: the bits left of the byte dropped, the marker passed (looked for
+    // further on where it is not straight after).
+    void restart() {
+        buffer = 0;
+        count = 0;
+        atMarker = false;
+        while (pos + 1 < size) {
+            if (d[pos] == 0xFF && d[pos + 1] >= 0xD0 && d[pos + 1] <= 0xD7) {
+                pos += 2;
+                return;
+            }
+            if (d[pos] == 0xFF && d[pos + 1] != 0x00 && d[pos + 1] != 0xFF) return;  // another marker: left to the end
+            pos++;
+        }
+    }
+};
+
+int decodeMsb(const HuffmanCode& code, JpegBits& b) {
+    if (b.count < 16) b.fill();
+    const uint32_t bits = static_cast<uint32_t>(b.buffer >> 48);
+    const uint32_t entry = code.fastMsb[bits >> (HuffmanCode::kLongest - HuffmanCode::kFast)];
+    if (entry != 0) {
+        b.buffer <<= (entry & 31);
+        b.count -= static_cast<int>(entry & 31);
+        return static_cast<int>(entry >> 5);
+    }
+    uint32_t c = bits >> (HuffmanCode::kLongest - HuffmanCode::kFast);
+    for (int length = HuffmanCode::kFast + 1; length <= HuffmanCode::kLongest; length++) {
+        c = (c << 1) | ((bits >> (HuffmanCode::kLongest - length)) & 1);
+        const uint32_t offset = c - code.firstCode[length];
+        if (offset < code.counts[length]) {
+            b.buffer <<= length;
+            b.count -= length;
+            return code.symbols[code.firstIndex[length] + offset];
+        }
+    }
+    return -1;
+}
+
+inline int extendJpeg(uint32_t v, int s) { return s == 0 ? 0 : v < (1u << (s - 1)) ? static_cast<int>(v) - (1 << s) + 1 : static_cast<int>(v); }
+
+struct ScanComponent {
+    uint8_t* coefs;  // 16 bits a coefficient, 64 a block, natural order
+    int64_t blocksW, h, v, usedW, usedH;
+    const HuffmanCode* dc;
+    const HuffmanCode* ac;
+    int pred = 0;
+};
+
+inline int16_t coefAt(const uint8_t* c, int i) {
+    int16_t v;
+    std::memcpy(&v, c + i * 2, 2);
+    return v;
+}
+inline void setCoef(uint8_t* c, int i, int v) {
+    const int16_t s = static_cast<int16_t>(std::clamp(v, -32768, 32767));
+    std::memcpy(c + i * 2, &s, 2);
+}
+
+// One block of a scan; false for bits that are no code.
+bool scanBlock(ScanComponent& c, JpegBits& b, int64_t bx, int64_t by, bool progressive, int first, int last, int high, int low, int& eobrun) {
+    uint8_t* blk = c.coefs + (by * c.blocksW + bx) * 128;
+    if (!progressive || (first == 0 && high == 0)) {
+        if (!progressive || first == 0) {
+            const int t = decodeMsb(*c.dc, b);
+            if (t < 0 || t > 16) return false;
+            c.pred += extendJpeg(b.get(t), t);
+            setCoef(blk, 0, progressive ? c.pred * (1 << low) : c.pred);
+        }
+        if (progressive) return true;
+        for (int k = 1; k < 64;) {
+            const int rs = decodeMsb(*c.ac, b);
+            if (rs < 0) return false;
+            const int s = rs & 15, run = rs >> 4;
+            if (s == 0) {
+                if (run != 15) break;
+                k += 16;
+                continue;
+            }
+            k += run;
+            if (k > 63) return false;
+            setCoef(blk, kNatural[k], extendJpeg(b.get(s), s));
+            k++;
+        }
+        return true;
+    }
+    if (first == 0) {  // a DC refined by a bit
+        if (b.get(1)) setCoef(blk, 0, coefAt(blk, 0) | (1 << low));
+        return true;
+    }
+    if (high == 0) {  // a band's first pass
+        if (eobrun > 0) {
+            eobrun--;
+            return true;
+        }
+        for (int k = first; k <= last;) {
+            const int rs = decodeMsb(*c.ac, b);
+            if (rs < 0) return false;
+            const int s = rs & 15, run = rs >> 4;
+            if (s == 0) {
+                if (run < 15) {
+                    eobrun = (1 << run) - 1;
+                    if (run > 0) eobrun += static_cast<int>(b.get(run));
+                    return true;
+                }
+                k += 16;
+                continue;
+            }
+            k += run;
+            if (k > 63) return false;
+            setCoef(blk, kNatural[k], extendJpeg(b.get(s), s) * (1 << low));
+            k++;
+        }
+        return true;
+    }
+    // A refining pass: a bit more of each coefficient already there, new ones of the least size.
+    const int plus = 1 << low, minus = -1 * (1 << low);
+    int k = first;
+    auto refine = [&](int at) {
+        const int v = coefAt(blk, at);
+        if (b.get(1) && (v & plus) == 0) setCoef(blk, at, v + (v >= 0 ? plus : minus));
+    };
+    if (eobrun == 0) {
+        for (; k <= last; k++) {
+            const int rs = decodeMsb(*c.ac, b);
+            if (rs < 0) return false;
+            const int s = rs & 15;
+            int run = rs >> 4;
+            int value = 0;
+            if (s != 0) {
+                value = b.get(1) ? plus : minus;
+            } else if (run != 15) {
+                eobrun = 1 << run;
+                if (run > 0) eobrun += static_cast<int>(b.get(run));
+                break;
+            }
+            while (k <= last) {
+                const int at = kNatural[k];
+                if (coefAt(blk, at) != 0) {
+                    refine(at);
+                } else {
+                    if (--run < 0) break;
+                }
+                k++;
+            }
+            if (value != 0 && k <= last) setCoef(blk, kNatural[k], value);
+        }
+    }
+    if (eobrun > 0) {
+        for (; k <= last; k++)
+            if (coefAt(blk, kNatural[k]) != 0) refine(kNatural[k]);
+        eobrun--;
+    }
+    return true;
+}
 }  // namespace
 
 void registerBits(VM& vm) {
@@ -208,6 +410,172 @@ void registerBits(VM& vm) {
     });
 
     vm.defineGlobal("__bits", Value::object(holder));
+
+    // ---- JPEG's scans ----
+    {
+        ObjClass* jpeg = vm.alloc<ObjClass>(vm.intern("Jpeg"));
+        auto jdef = [&](const char* name, int minArgs, int maxArgs, NativeFn fn) {
+            jpeg->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("Jpeg.") + name, minArgs, maxArgs, fn)));
+        };
+        // decodeScan(data, at, components, mcusX, mcusY, restartInterval, progressive, first, last,
+        // high, low): the scan's coefficients into each component's; gives where the next marker
+        // is, or a string, what is wrong. Each component: [coefficients, blocksW, h, v, usedW,
+        // usedH, dc table, ac table].
+        jdef("decodeScan", 11, 11, [](VM& vm, int, Value* args) -> Value {
+            const std::vector<uint8_t>& data = bytesOf(vm, args[0]);
+            const int64_t at = vm.toInt(args[1], "at");
+            if (!args[2].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a scan's components are a list");
+            ObjList* list = asList(args[2]);
+            std::vector<ScanComponent> comps;
+            for (size_t i = 0; i < list->size(); i++) {
+                const Value cv = vm.listGet(list, i);
+                if (!cv.isObjType(ObjType::List) || asList(cv)->size() != 8) throw vm.runtimeError(Thrown::IllegalArgumentException, "a scan's component is a list of 8");
+                ObjList* c = asList(cv);
+                ScanComponent sc{};
+                const Value coefs = vm.listGet(c, 0);
+                if (!coefs.isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a component's coefficients are Bytes");
+                sc.coefs = asBytes(coefs)->data.data();
+                sc.blocksW = vm.toInt(vm.listGet(c, 1), "blocksW");
+                sc.h = vm.toInt(vm.listGet(c, 2), "h");
+                sc.v = vm.toInt(vm.listGet(c, 3), "v");
+                sc.usedW = vm.toInt(vm.listGet(c, 4), "usedW");
+                sc.usedH = vm.toInt(vm.listGet(c, 5), "usedH");
+                const Value dc = vm.listGet(c, 6), ac = vm.listGet(c, 7);
+                sc.dc = dc.isNull() ? nullptr : &huffmanOf(vm, dc);
+                sc.ac = ac.isNull() ? nullptr : &huffmanOf(vm, ac);
+                const size_t needed = static_cast<size_t>(sc.blocksW * std::max<int64_t>(sc.usedH, sc.v) * 128);
+                if (asBytes(coefs)->data.size() < needed) throw vm.runtimeError(Thrown::IllegalArgumentException, "a component's coefficients are fewer than its blocks");
+                comps.push_back(sc);
+            }
+            const int64_t mcusX = vm.toInt(args[3], "mcusX"), mcusY = vm.toInt(args[4], "mcusY"), interval = vm.toInt(args[5], "restartInterval");
+            const bool progressive = args[6].truthy();
+            const int first = static_cast<int>(vm.toInt(args[7], "first")), last = static_cast<int>(vm.toInt(args[8], "last"));
+            const int high = static_cast<int>(vm.toInt(args[9], "high")), low = static_cast<int>(vm.toInt(args[10], "low"));
+            for (const ScanComponent& c : comps) {
+                if ((!progressive || (first == 0 && high == 0)) && c.dc == nullptr) return vm.str("a scan uses a DC table not given");
+                if ((!progressive || first > 0) && c.ac == nullptr) return vm.str("a scan uses an AC table not given");
+            }
+            JpegBits b{data.data(), data.size(), static_cast<size_t>(at)};
+            int eobrun = 0;
+            int64_t left = interval;
+            const bool single = comps.size() == 1;
+            const int64_t unitsX = single ? comps[0].usedW : mcusX, unitsY = single ? comps[0].usedH : mcusY;
+            for (int64_t uy = 0; uy < unitsY; uy++)
+                for (int64_t ux = 0; ux < unitsX; ux++) {
+                    if (interval > 0) {
+                        if (left == 0) {
+                            b.restart();
+                            for (ScanComponent& c : comps) c.pred = 0;
+                            eobrun = 0;
+                            left = interval;
+                        }
+                        left--;
+                    }
+                    if (single) {
+                        if (!scanBlock(comps[0], b, ux, uy, progressive, first, last, high, low, eobrun)) return vm.str("damaged data: bits that are no code");
+                    } else {
+                        for (ScanComponent& c : comps)
+                            for (int64_t by = 0; by < c.v; by++)
+                                for (int64_t bx = 0; bx < c.h; bx++)
+                                    if (!scanBlock(c, b, ux * c.h + bx, uy * c.v + by, progressive, first, last, high, low, eobrun))
+                                        return vm.str("damaged data: bits that are no code");
+                    }
+                }
+            // The next marker: where the reading stopped, or further on.
+            size_t p = b.pos;
+            while (p + 1 < data.size() && !(data[p] == 0xFF && data[p + 1] != 0x00 && data[p + 1] != 0xFF && (data[p + 1] < 0xD0 || data[p + 1] > 0xD7))) p++;
+            return Value::integer(static_cast<int64_t>(p + 1 < data.size() ? p : data.size()));
+        });
+        // encodeScan(components, mcusX, mcusY): a baseline scan of the components' coefficients,
+        // interleaved, as coded bytes (FF followed by 00), padded with ones. Each component:
+        // [coefficients, blocksW, h, v, dc codes, dc lengths, ac codes, ac lengths].
+        jdef("encodeScan", 3, 3, [](VM& vm, int, Value* args) -> Value {
+            if (!args[0].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a scan's components are a list");
+            ObjList* list = asList(args[0]);
+            struct Comp {
+                const uint8_t* coefs;
+                int64_t blocksW, h, v;
+                std::array<uint32_t, 256> dcCode, dcLength, acCode, acLength;
+                int pred = 0;
+            };
+            std::vector<Comp> comps(list->size());
+            const int64_t mcusX = vm.toInt(args[1], "mcusX"), mcusY = vm.toInt(args[2], "mcusY");
+            for (size_t i = 0; i < list->size(); i++) {
+                ObjList* c = asList(vm.listGet(list, i));
+                Comp& k = comps[i];
+                const Value coefs = vm.listGet(c, 0);
+                k.coefs = asBytes(coefs)->data.data();
+                k.blocksW = vm.toInt(vm.listGet(c, 1), "blocksW");
+                k.h = vm.toInt(vm.listGet(c, 2), "h");
+                k.v = vm.toInt(vm.listGet(c, 3), "v");
+                if (asBytes(coefs)->data.size() < static_cast<size_t>(k.blocksW * mcusY * k.v * 128)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a component's coefficients are fewer than its blocks");
+                auto table = [&](int index, std::array<uint32_t, 256>& into) {
+                    ObjList* t = asList(vm.listGet(c, static_cast<size_t>(index)));
+                    for (size_t s = 0; s < 256; s++) into[s] = static_cast<uint32_t>(vm.listGet(t, s).as.i);
+                };
+                table(4, k.dcCode);
+                table(5, k.dcLength);
+                table(6, k.acCode);
+                table(7, k.acLength);
+            }
+            std::vector<uint8_t> out;
+            out.reserve(1 << 16);
+            uint64_t bits = 0;
+            int count = 0;
+            auto put = [&](uint32_t value, uint32_t length) {
+                if (length == 0) return;
+                bits = (bits << length) | (value & ((1u << length) - 1));
+                count += static_cast<int>(length);
+                while (count >= 8) {
+                    count -= 8;
+                    const uint8_t byte = static_cast<uint8_t>(bits >> count);
+                    out.push_back(byte);
+                    if (byte == 0xFF) out.push_back(0);
+                }
+                bits &= (uint64_t{1} << count) - 1;
+            };
+            auto magnitude = [](int v) {
+                uint32_t a = static_cast<uint32_t>(v < 0 ? -v : v), s = 0;
+                while (a) s++, a >>= 1;
+                return s;
+            };
+            for (int64_t my = 0; my < mcusY; my++)
+                for (int64_t mx = 0; mx < mcusX; mx++)
+                    for (Comp& c : comps)
+                        for (int64_t by = 0; by < c.v; by++)
+                            for (int64_t bx = 0; bx < c.h; bx++) {
+                                const uint8_t* blk = c.coefs + ((my * c.v + by) * c.blocksW + mx * c.h + bx) * 128;
+                                const int dc = coefAt(blk, 0);
+                                const int diff = dc - c.pred;
+                                c.pred = dc;
+                                const uint32_t ds = magnitude(diff);
+                                put(c.dcCode[ds], c.dcLength[ds]);
+                                put(static_cast<uint32_t>(diff < 0 ? diff + (1 << ds) - 1 : diff), ds);
+                                int run = 0;
+                                for (int k = 1; k < 64; k++) {
+                                    const int v = coefAt(blk, kNatural[k]);
+                                    if (v == 0) {
+                                        run++;
+                                        continue;
+                                    }
+                                    while (run > 15) {
+                                        put(c.acCode[0xF0], c.acLength[0xF0]);
+                                        run -= 16;
+                                    }
+                                    const uint32_t s = magnitude(v);
+                                    const uint32_t symbol = (static_cast<uint32_t>(run) << 4) | s;
+                                    put(c.acCode[symbol], c.acLength[symbol]);
+                                    put(static_cast<uint32_t>(v < 0 ? v + (1 << s) - 1 : v), s);
+                                    run = 0;
+                                }
+                                if (run > 0) put(c.acCode[0], c.acLength[0]);
+                            }
+            if (count > 0) put((1u << (8 - count)) - 1, static_cast<uint32_t>(8 - count));
+            return bytesValue(vm, std::move(out));
+        });
+        vm.defineGlobal("__jpeg", Value::object(jpeg));
+    }
+
 }
 
 }  // namespace jade

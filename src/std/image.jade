@@ -247,6 +247,11 @@ enum ImageFormat {
   }
 }
 
+// How a picture's colours are kept as planes, one byte a sample each (Image.fromPlanes,
+// image.toPlanes): one plane of grey (luma, as ITU-R BT.601 weighs red, green and blue); red, green
+// and blue; or YCbCr as JPEG (JFIF) has it, full range, Cb and Cr centred on 128.
+enum ColorSpace { grey, rgb, ycbcr }
+
 // A picture in memory: `width` by `height` pixels, each a Color that may be see-through. What a
 // program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a
 // picture file and saves as one (Java's BufferedImage, D122).
@@ -299,6 +304,11 @@ class Image : Drawable {
       __text.imageSetPixels(made.cells.cells, pixels)
       return made
     }
+    // A solid picture made from planes of one byte a sample, each `width` by `height`, row by row:
+    // one for grey, three for red, green and blue or Y, Cb and Cr. An IllegalArgumentException for
+    // planes of another size or number.
+    fun fromPlanes(width : int, height : int, planes : List<Bytes>, space : ColorSpace = ColorSpace.rgb) : Image =>
+      Image.of(width, height, __picture.fromPlanes(planes, width, height, space.ordinal))
     // Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its
     // content rather than its name. An IOException where it cannot be read or is no picture.
     fun load(source : FilePath | string | Bytes) : Image throws IOException {
@@ -410,6 +420,10 @@ class Image : Drawable {
     }
     throw UnsupportedOperationException("${format} pictures are written once part one, step 3 has their codec")
   }
+
+  // Its colours as planes, one byte a sample, each width by height, row by row: one for grey, three
+  // for red, green and blue or Y, Cb and Cr. Alpha is left out.
+  fun toPlanes(space : ColorSpace = ColorSpace.rgb) : List<Bytes> => __picture.toPlanes(cells.cells, space.ordinal)
 
   // Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of
   // takes them. A copy: changing it changes nothing here.
