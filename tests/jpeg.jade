@@ -1,0 +1,48 @@
+// JPEG (M9/M10 part one, step 3): read and written in Jade. Besides what is here, the reader was
+// checked against Windows' own (GDI+) on the 393 JPEGs that come with Windows and its programs,
+// 45 of them progressive: every pixel of every one within 3 levels of GDI+'s.
+
+// A JPEG written by Windows' own encoder (4:2:0, quality 80), read within 3 levels of what GDI+
+// reads from it.
+val windows = Image.load(Base64.decode("/9j/4AAQSkZJRgABAQEAYABgAAD/4QA6RXhpZgAATU0AKgAAAAgAA1EQAAEAAAABAQAAAFERAAQAAAABAAAAAFESAAQAAAABAAAAAAAAAAD/2wBDAAcFBQYFBAcGBQYIBwcIChELCgkJChUPEAwRGBUaGRgVGBcbHichGx0lHRcYIi4iJSgpKywrGiAvMy8qMicqKyr/2wBDAQcICAoJChQLCxQqHBgcKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKir/wAARCAAYACgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDxC20jp8ta1tpHT5a6W20jp8tatto/T5a2oVDzsHmvmc1baR0+Wta20jp8tdLbaR0+Wta20jp8te3QqH1+DzXbU5m20jp8tFdwmmpDHvkGAP1oravnGCwklCvVUXvZn1lDMpShdGPbaP0+WtW20jp8tFFfI0JM/l3B4ip3Na20fp8taSaakMe+QYA/WiiuzF4qphcHUrw3jFtX8j7LAV6kpJNjBp73Em5lwB0X0ooor8ZqYiriJurVleT3Z97RrzUEkz//2Q=="))
+val reference = Base64.decode("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").inflate()
+val read = windows.rgbaBytes()
+var worst = 0
+for (i in 0 ..< read.size) { worst = Math.max(worst, Math.abs(read[i].toInt() - reference[i].toInt())) }
+print(windows, worst <= 3)   // expect: Image(40 x 24) true
+
+// Written and read back near what was written; lower quality, a smaller file.
+val pattern = Image(48, 32)
+for (y in 0 ..< 32) { for (x in 0 ..< 48) { pattern[x, y] = Color((x * 5) % 256, (y * 8) % 256, 128) } }
+fun error(a : Image, b : Image) : int {
+  var most = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      most = Math.max(most, Math.abs(a[x, y].red.toInt() - b[x, y].red.toInt()) + Math.abs(a[x, y].green.toInt() - b[x, y].green.toInt()) + Math.abs(a[x, y].blue.toInt() - b[x, y].blue.toInt()))
+    }
+  }
+  return most
+}
+val fine = pattern.encode(ImageFormat.jpeg, 0.95)
+val coarse = pattern.encode(ImageFormat.jpeg, 0.3)
+print(ImageFormat.of(fine), Image.load(fine).size, error(pattern, Image.load(fine)) < 40, coarse.size < fine.size)   // expect: jpeg Size(48 x 32) true true
+// A see-through picture is laid over white, as JPEG has no alpha.
+print(Image.load(Image(16, 16, Color.clear).encode(ImageFormat.jpeg))[8, 8])   // expect: Color(255, 255, 255)
+try { pattern.encode(ImageFormat.jpeg, 1.5) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a JPEG's quality is from 0 to 1, not 1.5
+
+// EXIF's orientation applied: 6, turned a quarter right, the left half (red) on top.
+val halves = Image(32, 16, Color.blue)
+for (y in 0 ..< 16) { for (x in 0 ..< 16) { halves[x, y] = Color.red } }
+val plain = halves.encode(ImageFormat.jpeg, 0.95)
+// An APP1 segment: Exif, a big-endian TIFF header, one entry: 0x112 (orientation) = 6.
+val exif = Bytes([0xFF, 0xE1, 0, 34, 0x45, 0x78, 0x69, 0x66, 0, 0, 0x4D, 0x4D, 0, 42, 0, 0, 0, 8, 0, 1, 1, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0])
+val turned = Image.load(plain[0 ..< 2] + exif + plain[2 ..])
+print(turned.size, turned[8, 4].red.toInt() > 200, turned[8, 28].blue.toInt() > 200)   // expect: Size(16 x 32) true true
+
+// What cannot be read.
+for (bad in [Bytes([0xFF, 0xD8, 0x12, 0x34]), plain[0 ..< 30], Bytes([0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0])]) {
+  try { Image.load(bad) } catch (e : IOException) { print(e.message) }
+}
+// expect: not a picture file: its bytes start as none of PNG, JPEG, GIF, BMP and WebP
+// expect: not a JPEG file that can be read: a segment of 67 bytes past the end
+// expect: not a JPEG file that can be read: arithmetic coding, which is not read

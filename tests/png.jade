@@ -132,7 +132,7 @@ print(read, "images read,", wrong.size, "wrong", wrong)   // expect: 26 images r
 fun attempt(block : () -> unit) {
   try { block(); return "no error" } catch (e) { return (e is IOException ? "IOException: " : "Error: ") + e.message }
 }
-print(attempt { Image.load(Bytes([1, 2, 3])) })          // expect: IOException: not a PNG picture
+print(attempt { Image.load(Bytes([1, 2, 3])) })          // expect: IOException: not a picture file: its bytes start as none of PNG, JPEG, GIF, BMP and WebP
 print(attempt { Image.load(file[0..<60]) })         // expect: IOException: damaged PNG picture
 val cut = Bytes(file[0..<file.size - 40])
 print(attempt { Image.load(cut) } != "no error")         // expect: true
