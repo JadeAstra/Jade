@@ -59,7 +59,7 @@ val folder = FilePath.createTempDirectory("jade_gif")
 Animation(frames(false)).save(folder.resolve("spin.gif"))
 few.save(folder.resolve("few.gif"))
 print(Animation.load(folder.resolve("spin.gif")).frames.size, Image.load(folder.resolve("few.gif")) == few, Animation.load(Image(2, 2).toPng()).frames.size)   // expect: 4 true 1
-try { Animation(frames(false)).save(folder.resolve("spin.png")) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: an animation is saved as .gif, not spin.png
+try { Animation(frames(false)).save(folder.resolve("spin.png")) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: an animation is saved as .gif or .webp, not spin.png
 folder.deleteRecursively()
 
 // What is refused.

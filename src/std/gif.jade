@@ -1,8 +1,8 @@
 // ---- GIF, and animations ----
 
 // An animation: whole pictures shown one after another, each for its delay, `loops` times over (0,
-// for ever). Read from a GIF, or a WebP once it is read (a still picture of another format is an
-// animation of one frame), and written as one; how each frame is laid over the one before (GIF's
+// for ever). Read from a GIF or a WebP (a still picture of another format is an animation of one
+// frame), and written as either; how each frame is laid over the one before (GIF's
 // disposal, WebP's blending) is worked out on reading, into whole frames, and an animation written
 // is made into each format's frames of only what changed.
 //
@@ -40,23 +40,25 @@ class Animation {
     fun load(source : FilePath | string | Bytes) : Animation throws IOException {
       val data = source is Bytes ? source : (source is FilePath ? source : FilePath(source as string)).readBytes()
       if (ImageFormat.of(data) == ImageFormat.gif) { return __Gif.decode(data, false) }
+      if (ImageFormat.of(data) == ImageFormat.webp) { return __Webp.decode(data, false) }
       return Animation([AnimationFrame(Image.load(data), 0.seconds)])
     }
   }
 
-  // Writes it as a GIF file (the only animated format written yet), as its name's extension asks.
-  // An IllegalArgumentException for another extension.
+  // Writes it as a GIF or WebP file, as its name's extension asks. An IllegalArgumentException for
+  // another extension.
   fun save(path : FilePath | string) throws IOException {
     val file = path is FilePath ? path : FilePath(path as string)
     val format = ImageFormat.ofName(file.name)
-    if (format != ImageFormat.gif) { throw IllegalArgumentException("an animation is saved as .gif, not ${file.name}") }
-    file.writeBytes(encode(ImageFormat.gif))
+    if (format != ImageFormat.gif and format != ImageFormat.webp) { throw IllegalArgumentException("an animation is saved as .gif or .webp, not ${file.name}") }
+    file.writeBytes(encode(format!!))
   }
 
-  // The bytes of an animated picture file of it in `format`.
+  // The bytes of an animated picture file of it in `format`: GIF or WebP.
   fun encode(format : ImageFormat) : Bytes {
-    if (format != ImageFormat.gif) { throw UnsupportedOperationException("an animation is written as a GIF; ${format} once its codec has animations") }
-    return __Gif.encode(this)
+    if (format == ImageFormat.gif) { return __Gif.encode(this) }
+    if (format == ImageFormat.webp) { return __Webp.encode(this) }
+    throw IllegalArgumentException("an animation is written as a GIF or a WebP, not ${format}")
   }
 
   // Its size, frames and loops, as `Animation(16 x 12, 4 frames, loops 0)`.

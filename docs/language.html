@@ -439,6 +439,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-thread-jade">thread.jade</a></li>
 <li><a href="#file-time-jade">time.jade</a></li>
 <li><a href="#file-values-jade">values.jade</a></li>
+<li><a href="#file-webp-jade">webp.jade</a></li>
 <li><a href="#file-worker-jade">worker.jade</a></li>
 <li><a href="#file-xml-jade">xml.jade</a></li>
 </ul>
@@ -2640,7 +2641,7 @@ print(Foreign.lastError)            // what the system recorded, as GetLastError
 <h2>gif.jade</h2>
 <h3>GIF, and animations</h3>
 <div class="entry" id="Animation"><code class="sig">class Animation</code><a class="anchor" href="#Animation">#</a>
-<p>An animation: whole pictures shown one after another, each for its delay, <code>loops</code> times over (0, for ever). Read from a GIF, or a WebP once it is read (a still picture of another format is an animation of one frame), and written as one; how each frame is laid over the one before (GIF's disposal, WebP's blending) is worked out on reading, into whole frames, and an animation written is made into each format's frames of only what changed.</p>
+<p>An animation: whole pictures shown one after another, each for its delay, <code>loops</code> times over (0, for ever). Read from a GIF or a WebP (a still picture of another format is an animation of one frame), and written as either; how each frame is laid over the one before (GIF's disposal, WebP's blending) is worked out on reading, into whole frames, and an animation written is made into each format's frames of only what changed.</p>
 <pre>val spinner = Animation.load(&quot;spinner.gif&quot;)
 for (frame in spinner.frames) { show(frame.image); sleep(frame.delay) }
 </pre>
@@ -2661,10 +2662,10 @@ for (frame in spinner.frames) { show(frame.image); sleep(frame.delay) }
 <p>Reads an animation from a file, or the bytes of one, whatever its format: a GIF's frames, or any other picture as one frame. An IOException where it cannot be read.</p>
 </div>
 <div class="entry member" id="Animation.save"><code class="sig">fun save(path : FilePath | string) throws IOException</code><a class="anchor" href="#Animation.save">#</a>
-<p>Writes it as a GIF file (the only animated format written yet), as its name's extension asks. An IllegalArgumentException for another extension.</p>
+<p>Writes it as a GIF or WebP file, as its name's extension asks. An IllegalArgumentException for another extension.</p>
 </div>
 <div class="entry member" id="Animation.encode"><code class="sig">fun encode(format : ImageFormat) : Bytes</code><a class="anchor" href="#Animation.encode">#</a>
-<p>The bytes of an animated picture file of it in <code>format</code>.</p>
+<p>The bytes of an animated picture file of it in <code>format</code>: GIF or WebP.</p>
 </div>
 <div class="entry member" id="Animation.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Animation.toString">#</a>
 <p>Its size, frames and loops, as <code>Animation(16 x 12, 4 frames, loops 0)</code>.</p>
@@ -6530,6 +6531,10 @@ all.sum()   all.sortedBy { -it }   for price in prices.values { ... }
 <div class="entry" id="Values.singleOrNull"><code class="sig">fun &lt;T&gt; Values&lt;T&gt;.singleOrNull() : T?</code><a class="anchor" href="#Values.singleOrNull">#</a>
 <p>The only value, or null when the map is empty or has more than one.</p>
 </div>
+</section>
+<section class="file" id="file-webp-jade">
+<h2>webp.jade</h2>
+<h3>WebP</h3>
 </section>
 <section class="file" id="file-worker-jade">
 <h2>worker.jade</h2>

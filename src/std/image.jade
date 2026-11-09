@@ -318,6 +318,7 @@ class Image : Drawable {
       if (format == ImageFormat.bmp) { return __Bmp.decode(data) }
       if (format == ImageFormat.gif) { return __Gif.decode(data, true).frames[0].image }
       if (format == ImageFormat.jpeg) { return __Jpeg.decode(data) }
+      if (format == ImageFormat.webp) { return __Webp.decode(data, true).frames[0].image }
       if (format != null and format != ImageFormat.png) { throw UnsupportedOperationException("${format} pictures are read once part one, step 3 has their codec") }
       val read : List<any> = __text.decodePng(data)
       val made = Image(read[0] as int, read[1] as int)
@@ -414,6 +415,7 @@ class Image : Drawable {
     if (format == ImageFormat.png) { return toPng() }
     if (format == ImageFormat.bmp) { return __Bmp.encode(this) }
     if (format == ImageFormat.gif) { return __Gif.encodeImage(this) }
+    if (format == ImageFormat.webp) { return __Webp.encodeImage(this, quality) }
     if (format == ImageFormat.jpeg) {
       if (quality < 0 or quality > 1) { throw IllegalArgumentException("a JPEG's quality is from 0 to 1, not $quality") }
       return __Jpeg.encode(this, quality)

@@ -1632,6 +1632,7 @@ void registerThreads(VM& vm);  // threads.cpp: threads, locks, the event loop an
 void registerIo(VM& vm);       // io.cpp: streams, processes and sockets
 void registerSandbox(VM& vm);  // sandbox.cpp: __sandbox, what Sandbox is built on (M6.6.2)
 void registerGrid(VM& vm);     // grid.cpp: what Grid<T> is built on (D155)
+void registerWebp(VM& vm);     // webp.cpp: WebP's two codecs, VP8L and VP8
 void registerPicture(VM& vm);  // picture.cpp: palettes and dithering over a picture's pixels
 void registerBits(VM& vm);     // bits_api.cpp: what BitReader, HuffmanTable, inflate and deflate are built on
 void registerXml(VM& vm);      // xml_scan.cpp: what Xml.scan is built on (M9/M10)

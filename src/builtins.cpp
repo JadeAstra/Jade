@@ -1405,6 +1405,7 @@ void registerBuiltins(VM& vm) {
     registerXml(vm);
     registerBits(vm);
     registerPicture(vm);
+    registerWebp(vm);
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);
