@@ -27,23 +27,27 @@
 #   powershell -File tests\run.ps1 -Jade build\work\jade.exe -Parallel 24 -Stress
 #
 # Each run of jade is stopped, and fails, after -TimeLimit seconds: 120 if not given, 600 under
-# JADE_GC_STRESS. A test that hangs then costs minutes, not the hours one once did unnoticed.
+# JADE_GC_STRESS, 2400 under JADE_GC_STRESS with the sanitizer's build (the one with its runtime,
+# clang_rt.asan_dynamic-x86_64.dll, beside it), where the slowest tests take about 21 minutes
+# (2026-11-09). A test that hangs then costs minutes, not the hours one once did unnoticed.
 
 param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'), [int]$Parallel = 1,
       [string[]]$Modes = @('script', 'cached', 'units', 'compiled', 'program'), [switch]$Stress,
       [int]$TimeLimit = 0)
-
-# Each run of jade is stopped after this many seconds and fails: 120, or 600 under the GC stress
-# setting, which collects at every safe point; -TimeLimit gives another.
-$askedLimit = $TimeLimit
-if ($TimeLimit -le 0) { $TimeLimit = if ($env:JADE_GC_STRESS) { 600 } else { 120 } }
-$env:JADE_TEST_LIMIT = "$TimeLimit"
 
 if (-not (Test-Path $Jade)) {
     Write-Host "jade.exe not found at $Jade - run build.bat first"
     exit 2
 }
 $Jade = (Resolve-Path $Jade).Path
+
+# Each run of jade is stopped after this many seconds and fails: 120, or 600 under the GC stress
+# setting, which collects at every safe point, and 2400 for that under the sanitizer, which makes
+# each step several times slower again; -TimeLimit gives another.
+$askedLimit = $TimeLimit
+$sanitized = Test-Path (Join-Path (Split-Path $Jade) 'clang_rt.asan_dynamic-x86_64.dll')
+if ($TimeLimit -le 0) { $TimeLimit = if ($env:JADE_GC_STRESS) { if ($sanitized) { 2400 } else { 600 } } else { 120 } }
+$env:JADE_TEST_LIMIT = "$TimeLimit"
 # `-Modes script,cached` arrives as one string from the command line of another shell.
 $Modes = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
