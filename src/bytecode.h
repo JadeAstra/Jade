@@ -482,14 +482,19 @@ enum class Op : uint16_t {
     // the last field is: read there at once, with nothing looked up on the way. u8 A, u8 B, u8 T,
     // u8 S, u16 cache, u8 hops, u16 name x3, i32 slow.
     RGetPath,
-    // A method called on the receiver in slot R with up to two arguments, slots or constants, its
+    // A method called on the receiver in slot R with up to four arguments, slots or constants, its
     // result to slot A (M9/M10): a method in C++ of a string, list, map, set or bytes called at
     // once, a method of an object's class entered at once; anything else the slow way, Invoke's
-    // stack code. u8 A, u8 R, u8 X1, u8 X2, u8 T, u8 S, u8 argc, u8 flags (1: X1 a constant, 2: X2
-    // one, 4: InvokeOwn), u16 name, u16 cache, i32 slow, i32 resume (in the slow way, just after its
-    // Invoke: where a call returns to, or a task set aside goes on). The cache keeps the C++
-    // method last called here and the kind of value it was called on (nativeCacheEntry).
+    // stack code. u8 A, u8 R, u8 T, u8 S, u8 argc, u8 flags (bit k-1: Xk a constant; 16:
+    // InvokeOwn), u8 X1, X2, X3, X4, u16 name, u16 cache, i32 slow, i32 resume (in the slow way,
+    // just after its Invoke: where a call returns to, or a task set aside goes on). The cache keeps
+    // the C++ method last called here and the kind of value it was called on (nativeCacheEntry).
     RInvoke,
+    // `f(x1, x2)`: the function in slot F called with up to four arguments, slots or constants,
+    // its result to slot A (M9/M10). A closure that needs nothing done first is entered at once;
+    // any other call goes the slow way, Call's stack code. u8 A, u8 F, u8 T, u8 S, u8 argc, u8
+    // flags (bit k-1: Xk a constant), u8 X1, X2, X3, X4, i32 slow, i32 resume (as RInvoke's).
+    RCall,
     // A function's whole run code until it is first called (M9/M10): its run code is made then,
     // from its stack code, and run from its start. No operands.
     Translate,
@@ -686,6 +691,10 @@ struct FunctionProto {
     std::string name;
     std::string source;
     int arity = 0;
+    // The number of arguments a call may pass for its frame to be made at once (QUICK_CALL in
+    // vm.cpp): its arity, where it is no set of forms, takes no vararg and keeps no type
+    // arguments; else -1, every call going through VM::call. Set as the function is verified.
+    int quickArity = -1;
 
     // Fewest arguments a call may pass. Parameters beyond that have default values, which the
     // function fills in itself (see DefaultArg). -1 means "the same as arity".

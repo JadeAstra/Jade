@@ -5583,9 +5583,22 @@ void VM::closeUpvalues(Value* last) {
 
 // ---- Interpreter loop ----
 
-// What a GetProp place remembers where it read the size of a string or a list: no class's shape
-// is 0, so no object, value or place of one is taken for it.
+// What a GetProp place remembers where it read the size of a string, list, map or bytes: no
+// class's shape is 0, so no object, value or place of one is taken for it.
 constexpr uint64_t kSeenSize = 1;
+
+// The size of a string, list, map or bytes, read at once; else -1.
+static inline int64_t quickSize(const Value& v) {
+    if (v.kind != ValueKind::Obj) return -1;
+    const Obj* obj = v.as.obj;
+    switch (obj->type) {
+        case ObjType::String: return static_cast<int64_t>(static_cast<const ObjString*>(obj)->length);
+        case ObjType::List: return static_cast<int64_t>(static_cast<const ObjList*>(obj)->size());
+        case ObjType::Map: return static_cast<int64_t>(static_cast<const ObjMap*>(obj)->map.size());
+        case ObjType::Bytes: return static_cast<int64_t>(static_cast<const ObjBytes*>(obj)->data.size());
+        default: return -1;
+    }
+}
 
 #ifdef JADE_OP_COUNTS
 #include <intrin.h>
@@ -5827,8 +5840,7 @@ void VM::run(int baseFrame) {
         ObjClosure* const quick_ = (callee);                                                                  \
         const FunctionProto* const proto_ = quick_->proto;                                                    \
         Value* const base_ = sp - (argc) - 1;                                                                 \
-        if ((argc) == proto_->arity && !proto_->chooser && proto_->varargIndex < 0 && pendingEnums_ == 0 &&   \
-            (proto_->typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 &&                                    \
+        if ((argc) == proto_->quickArity && pendingEnums_ == 0 &&                                             \
             frameCount_ < frameLimit_ && stackEnd_ - base_ >= proto_->maxStack && bytesAllocated_ <= nextGC_ &&\
             !attention_.load(std::memory_order_relaxed)) {                                                    \
             frame->ip = ip + (size);                                                                          \
@@ -5840,7 +5852,14 @@ void VM::run(int baseFrame) {
             /* Where its result goes, for a function that takes it; for any other, none (M6.6 part 4). */  \
             if (proto_->typeArgs != 0) frameDestination(frameCount_ - 1) = pendingDestination_;               \
             pendingDestination_ = Value::null();                                                              \
-            LOAD_FRAME();                                                                                     \
+            /* The new frame's registers from what is at hand, not read back from it (LOAD_FRAME). */      \
+            frame = &next_;                                                                                   \
+            ip = proto_->run.data();                                                                          \
+            base = base_;                                                                                     \
+            code = ip;                                                                                        \
+            ADDRESS_CODE(proto_);                                                                             \
+            consts = proto_->constants.data();                                                                \
+            caches = proto_->caches.get();                                                                    \
             NEXT();                                                                                           \
         }                                                                                                     \
     }
@@ -6497,6 +6516,7 @@ void VM::run(int baseFrame) {
             JADE_DISPATCH_TO(RJumpEqFSS)
             JADE_DISPATCH_TO(RJumpEqFSK)
             JADE_DISPATCH_TO(RInvoke)
+            JADE_DISPATCH_TO(RCall)
 #undef JADE_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }

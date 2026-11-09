@@ -572,14 +572,9 @@ COLD(GetOwn) {
             }
         }
     } else if (caches != nullptr && caches[FAST_U16(2)].load(std::memory_order_relaxed) == kSeenSize) {
-        // The size of a string or a list, where this place read one before.
-        if (sp[-1].isString()) {
-            sp[-1] = Value::integer(static_cast<int64_t>(asString(sp[-1])->length));
-            ip += 4;
-            NEXT();
-        }
-        if (sp[-1].isObjType(ObjType::List)) {
-            sp[-1] = Value::integer(static_cast<int64_t>(asList(sp[-1])->size()));
+        // The size of a string, list, map or bytes, where this place read one before.
+        if (const int64_t size = quickSize(sp[-1]); size >= 0) {
+            sp[-1].setInt(size);
             ip += 4;
             NEXT();
         }
@@ -716,7 +711,8 @@ COLD(GetOwn) {
             DONE();
         }
     }
-    if (caches != nullptr && name == names.size && (name->restricted & 1) == 0 && (obj.isString() || obj.isObjType(ObjType::List)))
+    // (Whether some class keeps a `size` of its own private does not matter: these have none.)
+    if (caches != nullptr && name == names.size && quickSize(obj) >= 0)
         caches[cache].store(kSeenSize, std::memory_order_relaxed);
     sp_[-1] = getProperty(obj, name);
     DONE();
@@ -3532,6 +3528,14 @@ COLD(RGetProp) {
     if (caches != nullptr) {
         const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
         Value& out = base[ip[0]];
+        if (seen == kSeenSize) {
+            if (const int64_t size = quickSize(obj); size >= 0) {
+                out.setInt(size);
+                sp = base + ip[2];
+                ip += 10;
+                NEXT();
+            }
+        }
         if (narrowRead(obj, seen, out)) {  // an object's narrow field (G20)
             sp = base + ip[2];
             ip += 10;
@@ -3569,19 +3573,6 @@ COLD(RGetProp) {
                     }
                 }
             }
-        } else if (seen == kSeenSize) {
-            if (obj.isString()) {
-                out.setInt(static_cast<int64_t>(asString(obj)->length));
-                sp = base + ip[2];
-                ip += 10;
-                NEXT();
-            }
-            if (obj.isObjType(ObjType::List)) {
-                out.setInt(static_cast<int64_t>(asList(obj)->size()));
-                sp = base + ip[2];
-                ip += 10;
-                NEXT();
-            }
         }
     }
     Value* const at = base + ip[3];
@@ -3590,49 +3581,76 @@ COLD(RGetProp) {
     ip = code + operandI32(ip + 6);
     NEXT();
 }
-// Where a method written in Jade, called by an RInvoke, returns to: the instruction after it,
-// where its result is to stay where the call leaves it (slot S, A being S); else, into its slow
-// way just after the Invoke, which stores it where it goes and comes back.
-#define R_INVOKE_RETURN (ip[0] == ip[5] ? std::ptrdiff_t{20} : (code + operandI32(ip + 16)) - ip)
+// RCall and RInvoke begin alike: u8 A, u8 F (the function) or R (the receiver), u8 T, u8 S,
+// u8 argc, u8 flags, u8 X1, X2, X3, X4. The function or receiver and the arguments go where
+// the stack would have them, from slot S, for every way: the arguments first, the last first,
+// then the function or receiver (an argument's slot may be where that goes, never the other
+// way). Each is copied whole (Value::copyWhole), and one already where it goes (worked out
+// there) is left. Bit k-1 of flags says Xk is a constant.
+#define R_CALL_ARGUMENT(k)                                                              \
+    if ((ip[5] & (1 << ((k) - 1))) != 0) Value::copyWhole(at + (k), &consts[ip[5 + (k)]]); \
+    else if (ip[5 + (k)] != ip[3] + (k)) Value::copyWhole(at + (k), &base[ip[5 + (k)]]);
+#define R_CALL_PUT(argc)                                    \
+    if ((argc) > 0) {                                       \
+        if ((argc) > 1) {                                   \
+            if ((argc) > 2) {                               \
+                if ((argc) > 3) { R_CALL_ARGUMENT(4) }      \
+                R_CALL_ARGUMENT(3)                          \
+            }                                               \
+            R_CALL_ARGUMENT(2)                              \
+        }                                                   \
+        R_CALL_ARGUMENT(1)                                  \
+    }                                                       \
+    if (ip[1] != ip[3]) Value::copyWhole(at, &base[ip[1]]);
+// Where a function written in Jade, called by an RCall or RInvoke of `size` bytes, its resume
+// place at ip + `resume`, returns to: the instruction after it, where its result is to stay
+// where the call leaves it (slot S, A being S); else, into its slow way just after the call,
+// which stores it where it goes and comes back.
+#define R_CALL_RETURN(size, resume) (ip[0] == ip[3] ? std::ptrdiff_t{size} : (code + operandI32(ip + (resume))) - ip)
+CASE(RCall) {
+    {
+    // ... i32 slow, i32 resume: `f(x1, x2)`, up to four arguments. A closure that needs nothing
+    // done first is entered here; any other call goes the slow way, the stack's Call.
+    const int argc = ip[4];
+    Value* const at = base + ip[3];
+    R_CALL_PUT(argc)
+    sp = at + argc + 1;
+    if (at[0].isObjType(ObjType::Closure)) QUICK_CALL(asClosure(at[0]), argc, R_CALL_RETURN(18, 14))
+    ip = code + operandI32(ip + 10);
+    NEXT();
+    }
+}
 HAS_COLD(RInvoke)
 CASE(RInvoke) {
     {
-    // u8 A, u8 R, u8 X1, u8 X2, u8 T, u8 S, u8 argc, u8 flags, u16 name, u16 cache, i32 slow,
-    // i32 resume. The receiver and arguments put where the stack would have them, from slot S,
-    // for every way. A method of an object's class here; the rest in the rare part, which calls
-    // C++ (the call would have this part keep a frame of its own, every way).
-    // Each copied whole (Value::copyWhole), and the arguments before the receiver: an argument's
-    // slot may be where the receiver goes, never the other way.
-    const int argc = ip[6];
-    Value* const at = base + ip[5];
-    // One already where it goes (a value worked out there) is left.
-    if (argc > 0) {
-        if (argc > 1 && ((ip[7] & 2) != 0 || ip[3] != ip[5] + 2)) Value::copyWhole(at + 2, (ip[7] & 2) != 0 ? &consts[ip[3]] : &base[ip[3]]);
-        if ((ip[7] & 1) != 0 || ip[2] != ip[5] + 1) Value::copyWhole(at + 1, (ip[7] & 1) != 0 ? &consts[ip[2]] : &base[ip[2]]);
-    }
-    if (ip[1] != ip[5]) Value::copyWhole(at, &base[ip[1]]);
+    // ... u16 name, u16 cache, i32 slow, i32 resume: `receiver.name(x1, x2)`, up to four
+    // arguments; flags 16 for an InvokeOwn. A method of an object's class here; the rest in the
+    // rare part, which calls C++ (the call would have this part keep a frame of its own, every way).
+    const int argc = ip[4];
+    Value* const at = base + ip[3];
+    R_CALL_PUT(argc)
     const Value& receiver = at[0];
     sp = at + argc + 1;
     if (receiver.isObjType(ObjType::Instance)) {
         // A method of the object's class, open to this code, entered at once.
         const ObjInstance* instance = asInstance(receiver);
-        const ObjString* name = asString(consts[FAST_U16(8)]);
-        if (((name->restricted & 1) == 0 || (ip[7] & 4) != 0) && (instance->core == 0 || instance->core == coreId_))
-            if (const Value* method = instance->cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_INVOKE_RETURN)
+        const ObjString* name = asString(consts[FAST_U16(10)]);
+        if (((name->restricted & 1) == 0 || (ip[5] & 16) != 0) && (instance->core == 0 || instance->core == coreId_))
+            if (const Value* method = instance->cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_CALL_RETURN(22, 18))
     }
     GO_COLD(RInvoke);
     }
 }
 COLD(RInvoke) {
     {
-    const int argc = ip[6];
-    Value* const at = base + ip[5];
+    const int argc = ip[4];
+    Value* const at = base + ip[3];
     const Value receiver = at[0];
     if (receiver.kind == ValueKind::Obj && receiver.as.obj->type != ObjType::Instance) {
         // The C++ method this place called last, on a value of the same type: called again at
         // once, its result straight to slot A, where nothing is to be checked first (as quickNative).
         const Obj* obj = receiver.as.obj;
-        const uint64_t seen = caches[FAST_U16(10)].load(std::memory_order_relaxed);
+        const uint64_t seen = caches[FAST_U16(12)].load(std::memory_order_relaxed);
         if (static_cast<int>((seen >> 48) & 63) == static_cast<int>(obj->type) + 1 && obj->core == 0 && coreId_ == 0 && pendingEnums_ == 0 &&
             bytesAllocated_ <= nextGC_ && !attention_.load(std::memory_order_relaxed) && ((seen >> 54) & 1 & obj->frozen) == 0 &&
             (argc == 0 || !at[1].isObjType(ObjType::Instance))) {
@@ -3642,54 +3660,57 @@ COLD(RInvoke) {
                     if (at[i].kind == ValueKind::Ref || at[i].kind == ValueKind::Small) plain = false;
             if (plain) {
                 sp_ = sp;
-                frame->ip = code + operandI32(ip + 16);  // an error's line, or where a task set aside goes on
+                frame->ip = code + operandI32(ip + 18);  // an error's line, or where a task set aside goes on
                 nativeBase_ = at;
                 pendingTypeArgs_ = nullptr;
                 pendingDestination_ = Value::null();
                 const NativeMethodFn fn = reinterpret_cast<NativeMethodFn>(seen & 0xFFFFFFFFFFFFull);
                 base[ip[0]] = fn(*this, receiver, argc, at + 1);
-                sp = base + ip[4];
-                ip += 20;
+                sp = base + ip[2];
+                ip += 22;
                 NEXT();
             }
         }
     }
-    const ObjString* name = asString(consts[FAST_U16(8)]);
-    const bool open = (name->restricted & 1) == 0 || (ip[7] & 4) != 0;
+    const ObjString* name = asString(consts[FAST_U16(10)]);
+    const bool open = (name->restricted & 1) == 0 || (ip[5] & 16) != 0;
     if (receiver.isSmall()) {
         // A method of a small value's type, run on the value itself (M6.6 part 5).
         if (open)
-            if (const Value* method = smallClassOf(receiver)->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_INVOKE_RETURN)
+            if (const Value* method = smallClassOf(receiver)->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_CALL_RETURN(22, 18))
     } else if (receiver.isObjType(ObjType::Value)) {
         // A method of a value's type (M6.6 part 2), which any core may run.
         if (open)
-            if (const Value* method = asValue(receiver)->cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_INVOKE_RETURN)
+            if (const Value* method = asValue(receiver)->cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_CALL_RETURN(22, 18))
     } else if (receiver.isRef()) {
         // A method of the type of a value where it is kept, run on it there (G9).
         const ObjClass* cls = refClassOrNull(receiver);
         if (cls != nullptr && open)
-            if (const Value* method = cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_INVOKE_RETURN)
-    } else if (receiver.kind == ValueKind::Obj && receiver.as.obj->type != ObjType::Instance && (name->restricted & 1) == 0 &&
+            if (const Value* method = cls->methods.find(name)) QUICK_CALL(asClosure(*method), argc, R_CALL_RETURN(22, 18))
+    } else if (receiver.kind == ValueKind::Obj && receiver.as.obj->type != ObjType::Instance &&
                bytesAllocated_ <= nextGC_ && !attention_.load(std::memory_order_relaxed)) {
         // A method in C++ of a string, list, map, set or bytes: kept in the place's cache, and called.
+        // Their methods are open to all, whatever a class keeps private under the same name.
         if (const NativeMethod* native = quickNative(receiver, name, argc, at + 1)) {
-            caches[FAST_U16(10)].store(nativeCacheEntry(native, receiver.as.obj->type), std::memory_order_relaxed);
+            caches[FAST_U16(12)].store(nativeCacheEntry(native, receiver.as.obj->type), std::memory_order_relaxed);
             sp_ = sp;
-            frame->ip = code + operandI32(ip + 16);
+            frame->ip = code + operandI32(ip + 18);
             nativeBase_ = at;
             pendingTypeArgs_ = nullptr;
             pendingDestination_ = Value::null();
             base[ip[0]] = native->fn(*this, receiver, argc, at + 1);
-            sp = base + ip[4];
-            ip += 20;
+            sp = base + ip[2];
+            ip += 22;
             NEXT();
         }
     }
-    ip = code + operandI32(ip + 12);
+    ip = code + operandI32(ip + 14);
     NEXT();
     }
 }
-#undef R_INVOKE_RETURN
+#undef R_CALL_ARGUMENT
+#undef R_CALL_PUT
+#undef R_CALL_RETURN
 HAS_COLD(RGetPath)
 CASE(RGetPath) {
     // `node.sizes.pref.width` (G14): from an object of the class last seen, or a value where it

@@ -1198,6 +1198,7 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now) {
                 if (entry[i] >= program.globalNames.size() && !(i == 0 && entry[i] == kNoGlobal))
                     throw std::runtime_error("invalid bytecode: a class's supertypes name no global");
     }
+    f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
     std::vector<int> depths;
     analyzeStack(f, program, false, &depths);
     if (now || f.chooser || f.code.empty()) {
@@ -1490,7 +1491,7 @@ const char* opName(Op op) {
                                       "R_JUMP_GT_I_SS", "R_JUMP_GT_I_SK", "R_JUMP_GE_I_SS", "R_JUMP_GE_I_SK", "R_JUMP_EQ_I_SS",
                                       "R_JUMP_EQ_I_SK", "R_JUMP_LT_F_SS", "R_JUMP_LT_F_SK", "R_JUMP_LE_F_SS", "R_JUMP_LE_F_SK",
                                       "R_JUMP_GT_F_SS", "R_JUMP_GT_F_SK", "R_JUMP_GE_F_SS", "R_JUMP_GE_F_SK", "R_JUMP_EQ_F_SS",
-                                      "R_JUMP_EQ_F_SK", "R_GET_PATH",   "R_INVOKE",     "TRANSLATE"};
+                                      "R_JUMP_EQ_F_SK", "R_GET_PATH",   "R_INVOKE", "R_CALL",     "TRANSLATE"};
     static_assert(sizeof(run) / sizeof(run[0]) == kOpCount - static_cast<size_t>(Op::MoveS), "a name for each");
     const size_t r = i - static_cast<size_t>(Op::MoveS);
     return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";

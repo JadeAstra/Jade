@@ -172,7 +172,8 @@ bool storesResult(Op r) {
         case Op::RBitAndSK:
         case Op::RBitOrSS:
         case Op::RBitOrSK:
-        case Op::RInvoke: return true;
+        case Op::RInvoke:
+        case Op::RCall: return true;
         default: return (r >= Op::RAddSS && r <= Op::REqSK) || (r >= Op::RAddISS && r <= Op::REqFSK);
     }
 }
@@ -181,9 +182,10 @@ int topOperand(Op r) {
         case Op::RGetProp:
         case Op::RGetPath:
         case Op::RNeg:
-        case Op::RNot: return 3;  // u8 A, u8 B, u8 T
+        case Op::RNot:
+        case Op::RInvoke:
+        case Op::RCall: return 3;  // u8 A, u8 B, u8 T
         case Op::RGetGlobal: return 2;  // u8 A, u8 T
-        case Op::RInvoke: return 5;     // u8 A, u8 R, u8 X1, u8 X2, u8 T
         default: return 4;  // u8 A, u8 B, u8 C, u8 T
     }
 }
@@ -201,7 +203,7 @@ struct Slow {
     int line = 0;
     size_t old = 0;  // the stack instruction's offset in the stack code, for the rights there
     // Where in the R instruction the place after its stack code's first instruction goes (an
-    // RInvoke's resume), or none.
+    // RInvoke's or RCall's resume), or none.
     size_t resumePlace = SIZE_MAX;
 };
 
@@ -260,6 +262,12 @@ public:
             if (static_cast<int>(stack_.size()) != depth) fail("the depth does not match");
             newAt_[at] = static_cast<uint32_t>(out_.size());
             known = one(at, size, depth);
+            // A function's result checked just after an instruction that gives one of that type
+            // always (an int from AddI, whose operands the checker knew, D178): nothing to check.
+            const size_t next = at + size;
+            if (known && skip_ == SIZE_MAX && next + 1 < n_ && !leader_[next] && static_cast<Op>(code_[next]) == Op::CheckReturn &&
+                alwaysGives(static_cast<Op>(code_[at])) == code_[next + 1])
+                skip_ = next;
             at += size;
         }
         if (known) canonical();
@@ -602,6 +610,31 @@ private:
         return true;
     }
 
+    // The type an instruction's result always has, where it has one: kTypeInt, kTypeFloat or
+    // kTypeBool; else 0.
+    static int alwaysGives(Op o) {
+        switch (o) {
+            case Op::AddI:
+            case Op::SubI:
+            case Op::MulI: return kTypeInt;
+            case Op::AddF:
+            case Op::SubF:
+            case Op::MulF:
+            case Op::DivF: return kTypeFloat;
+            case Op::LtI:
+            case Op::LeI:
+            case Op::GtI:
+            case Op::GeI:
+            case Op::EqI:
+            case Op::LtF:
+            case Op::LeF:
+            case Op::GtF:
+            case Op::GeF:
+            case Op::EqF: return kTypeBool;
+            default: return 0;
+        }
+    }
+
     // ---- One instruction ----
 
     // Translates the instruction at `at`; false where the code after it is not reached from it.
@@ -869,6 +902,9 @@ private:
             case Op::InvokeOwn:
                 if (invokeAt(o, at, size, depth)) return true;
                 break;
+            case Op::Call:
+                if (callAt(at, size, depth)) return true;
+                break;
             case Op::Neg:
             case Op::Not: {
                 if (!inASlot(stack_.back())) break;
@@ -892,37 +928,59 @@ private:
         return asStackCode(o, at, size);
     }
 
-    // `receiver.name(x1, x2)`, up to two arguments, as an RInvoke: false where the code is not that.
+    // `receiver.name(x1, x2)`, up to four arguments, as an RInvoke: false where the code is not that.
     bool invokeAt(Op o, size_t at, size_t size, int depth) {
         if (!notes_ || !rs_ || joinedOnly_) return false;
         const int argc = code_[at + 3];
+        if (!callStart(Op::RInvoke, o, at, size, depth, argc, o == Op::InvokeOwn ? 16 : 0)) return false;
+        u16(readU16(code_, at + 1));
+        if (f_.cacheCount + pathCaches_ >= 0xFFFF) fail("too many caches");
+        u16(static_cast<int>(f_.cacheCount + pathCaches_++));
+        callEnd(depth - argc - 1);
+        return true;
+    }
+
+    // `f(x1, x2)`, up to four arguments, as an RCall: false where the code is not that.
+    bool callAt(size_t at, size_t size, int depth) {
+        if (!notes_ || !rs_ || joinedOnly_) return false;
+        const int argc = code_[at + 1];
+        if (!callStart(Op::RCall, Op::Call, at, size, depth, argc, 0)) return false;
+        callEnd(depth - argc - 1);
+        return true;
+    }
+
+    // What an RCall and an RInvoke begin with (instructions.inc): the function or receiver at slot
+    // s, under `argc` arguments, written as `r`, the stack's instruction `o` its slow way; false,
+    // with nothing written, where they are not all where a byte can name them.
+    bool callStart(Op r, Op o, size_t at, size_t size, int depth, int argc, int flags) {
         const int s = depth - argc - 1;
-        if (argc > 2 || s < 0 || s + argc + 1 > 255) return false;
-        const Entry receiver = stack_[static_cast<size_t>(s)];
-        if (!inASlot(receiver)) return false;
+        if (argc > 4 || s < 0 || s + argc + 1 > 255) return false;
+        const Entry callee = stack_[static_cast<size_t>(s)];
+        if (!inASlot(callee)) return false;
         for (int k = 0; k < argc; k++)
             if (!byByte(stack_[static_cast<size_t>(s + 1 + k)])) return false;
         placeBelow(s);
         const std::vector<Entry> taken = take(argc + 1);
-        int flags = o == Op::InvokeOwn ? 4 : 0, x[2] = {0, 0};
+        int x[4] = {0, 0, 0, 0};
         for (int k = 0; k < argc; k++) {
             x[k] = operand(taken[static_cast<size_t>(k + 1)], s + 1 + k);
             if (isConstant(taken[static_cast<size_t>(k + 1)])) flags |= 1 << k;
         }
         Slow& slow = newSlow(s, at);
         copyInto(slow, o, at, size);
-        op(Op::RInvoke);
+        op(r);
         u8(s);
-        u8(operand(receiver, s));
-        u8(x[0]);
-        u8(x[1]);
+        u8(operand(callee, s));
         u8(s + 1);
         u8(s);
         u8(argc);
         u8(flags);
-        u16(readU16(code_, at + 1));
-        if (f_.cacheCount + pathCaches_ >= 0xFFFF) fail("too many caches");
-        u16(static_cast<int>(f_.cacheCount + pathCaches_++));
+        for (int k = 0; k < 4; k++) u8(x[k]);
+        return true;
+    }
+    // And what they end with: the slow way's start and its resume, the result left at slot s.
+    void callEnd(int s) {
+        Slow& slow = slows_.back();
         slow.place = out_.size();
         i32(0);
         slow.resumePlace = out_.size();
@@ -931,7 +989,6 @@ private:
         lastR_ = true;
         stack_.push_back(Entry{});
         top_ = s + 1;
-        return true;
     }
 
     // The stack as the stack code has it, and the instruction as it is.
@@ -1074,7 +1131,8 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RGetUpvalue: return {};
         case Op::RGetProp: return {6};
         case Op::RGetPath: return {13};
-        case Op::RInvoke: return {12, 16};
+        case Op::RInvoke: return {14, 18};
+        case Op::RCall: return {10, 14};
         case Op::RSetPropSS:
         case Op::RSetPropSK: return {7};
         case Op::RGetGlobal:
@@ -1192,7 +1250,8 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::Translate: return kOpBytes;
         case Op::RGetProp: return kOpBytes + 10;
         case Op::RGetPath: return kOpBytes + 17;
-        case Op::RInvoke: return kOpBytes + 20;
+        case Op::RInvoke: return kOpBytes + 22;
+        case Op::RCall: return kOpBytes + 18;
         case Op::RSetPropSS:
         case Op::RSetPropSK: return kOpBytes + 11;
         case Op::RGetUpvalue: return kOpBytes + 4;
