@@ -945,6 +945,134 @@ Characters ObjString::slice(size_t begin, size_t end) const {
     return out;
 }
 
+// ---- objectMemory ----
+
+namespace objectMemory {
+
+#if defined(__SANITIZE_ADDRESS__)
+#define JADE_OBJECT_HEAP 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define JADE_OBJECT_HEAP 1
+#endif
+#endif
+
+namespace {
+
+constexpr size_t kLargest = 512;           // blocks up to this many bytes come from the lists
+constexpr size_t kClasses = kLargest / 16 + 1;
+constexpr size_t kChunk = 256 * 1024;      // the memory new blocks are cut from, taken at a time
+
+struct FreeBlock {
+    FreeBlock* next;
+};
+
+// A thread's lists, and what is left of its chunk. Never freed: when its thread ends it is
+// handed to the next thread that wants one, with all that is on it.
+struct Pool {
+    FreeBlock* free[kClasses] = {};
+    uint8_t* cut = nullptr;
+    uint8_t* cutEnd = nullptr;
+};
+
+std::mutex orphansLock;
+std::vector<Pool*>& orphans() {
+    static auto* list = new std::vector<Pool*>();  // never destroyed: threads end after main's statics
+    return *list;
+}
+
+thread_local Pool* pool = nullptr;  // trivial, so that it may be read at any time, even at exit
+
+// Hands this thread's pool on when the thread ends.
+struct PoolRelease {
+    ~PoolRelease() {
+        if (pool == nullptr) return;
+        std::lock_guard<std::mutex> hold(orphansLock);
+        orphans().push_back(pool);
+        pool = nullptr;
+    }
+};
+thread_local PoolRelease poolRelease;
+
+Pool& ownPool() {
+    if (pool != nullptr) return *pool;
+    {
+        std::lock_guard<std::mutex> hold(orphansLock);
+        if (!orphans().empty()) {
+            pool = orphans().back();
+            orphans().pop_back();
+        }
+    }
+    if (pool == nullptr) pool = new Pool();
+    (void)&poolRelease;  // made on this thread, so that its pool is handed on when the thread ends
+    return *pool;
+}
+
+}  // namespace
+
+void* take(size_t size) {
+#ifdef JADE_OBJECT_HEAP
+    return ::operator new(size);
+#else
+    if (size > kLargest) return ::operator new(size);
+    const size_t k = (size + 15) >> 4;
+    Pool& p = ownPool();
+    if (FreeBlock* block = p.free[k]) {
+        p.free[k] = block->next;
+        return block;
+    }
+    const size_t bytes = k << 4;
+    if (static_cast<size_t>(p.cutEnd - p.cut) < bytes) {
+        // What is left of the old chunk goes on the lists, a block of 16 at a time.
+        while (p.cutEnd - p.cut >= 16) {
+            auto* rest = reinterpret_cast<FreeBlock*>(p.cut);
+            rest->next = p.free[1];
+            p.free[1] = rest;
+            p.cut += 16;
+        }
+        p.cut = static_cast<uint8_t*>(::operator new(kChunk, std::align_val_t{16}));
+        p.cutEnd = p.cut + kChunk;
+    }
+    void* made = p.cut;
+    p.cut += bytes;
+    return made;
+#endif
+}
+
+void give(void* p, size_t size) noexcept {
+    if (p == nullptr) return;
+#ifdef JADE_OBJECT_HEAP
+    (void)size;
+    ::operator delete(p);
+#else
+    if (size > kLargest) {
+        ::operator delete(p);
+        return;
+    }
+    const size_t k = (size + 15) >> 4;
+    Pool& own = ownPool();
+    auto* block = static_cast<FreeBlock*>(p);
+    block->next = own.free[k];
+    own.free[k] = block;
+#endif
+}
+
+void* takeSized(size_t size) {
+    auto* block = static_cast<uint8_t*>(take(size + 16));
+    std::memcpy(block, &size, sizeof size);
+    return block + 16;
+}
+
+void giveSized(void* p) noexcept {
+    if (p == nullptr) return;
+    uint8_t* block = static_cast<uint8_t*>(p) - 16;
+    size_t size;
+    std::memcpy(&size, block, sizeof size);
+    give(block, size + 16);
+}
+
+}  // namespace objectMemory
+
 thread_local uint8_t currentCore = 0;
 thread_local const std::bitset<256>* currentReadable = nullptr;
 thread_local KeyMethods* keyMethods = nullptr;

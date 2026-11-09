@@ -44,7 +44,24 @@ constexpr uint8_t kViewedInParts = 254;
 constexpr uint32_t kMaxValueBytes = 65536;
 
 // Header shared by every garbage-collected object.
+// The memory objects are made in: blocks of up to 512 bytes from free lists kept on each
+// thread, a list for each multiple of 16, where the system's heap takes 25 to 50 ns a block;
+// larger ones from the heap. A block freed on another thread than it was made on joins that
+// thread's list. Under the address sanitizer every block is the heap's, so that it sees them.
+namespace objectMemory {
+void* take(size_t size);
+void give(void* p, size_t size) noexcept;
+// For objects of a size of their own (instances, value boxes): the size kept in 16 bytes in
+// front of the object, where its delete finds it.
+void* takeSized(size_t size);
+void giveSized(void* p) noexcept;
+}  // namespace objectMemory
+
 struct Obj {
+    // Made in objectMemory's blocks, and given back with the size of what was made.
+    static void* operator new(size_t size) { return objectMemory::take(size); }
+    static void operator delete(void* p, size_t size) noexcept { objectMemory::give(p, size); }
+
     Obj* next = nullptr;  // intrusive list of all objects, owned by the VM
     const ObjType type;
     bool marked = false;
@@ -1242,9 +1259,9 @@ struct ObjInstance final : Obj {
     ObjUpvalue* captured(uint32_t k) const { return static_cast<ObjUpvalue*>(fields()[fieldCount + k].as.obj); }
 
     // `count` slots of values, and `bytes` of payloads (a multiple of 8).
-    static void* operator new(size_t size, uint32_t count, uint32_t bytes) { return ::operator new(size + count * sizeof(Value) + bytes); }
-    static void operator delete(void* p, uint32_t, uint32_t) { ::operator delete(p); }
-    static void operator delete(void* p) { ::operator delete(p); }
+    static void* operator new(size_t size, uint32_t count, uint32_t bytes) { return objectMemory::takeSized(size + count * sizeof(Value) + bytes); }
+    static void operator delete(void* p, uint32_t, uint32_t) noexcept { objectMemory::giveSized(p); }
+    static void operator delete(void* p) noexcept { objectMemory::giveSized(p); }
 
     Value* fields() { return reinterpret_cast<Value*>(reinterpret_cast<uint8_t*>(this) + slotsStart); }
     const Value* fields() const { return reinterpret_cast<const Value*>(reinterpret_cast<const uint8_t*>(this) + slotsStart); }
@@ -1349,9 +1366,9 @@ struct ObjValue final : Obj {
 
     explicit ObjValue(ObjClass* c) : Obj(ObjType::Value), cls(c) {}
 
-    static void* operator new(size_t size, uint32_t bytes) { return ::operator new(size + bytes); }
-    static void operator delete(void* p, uint32_t) { ::operator delete(p); }
-    static void operator delete(void* p) { ::operator delete(p); }
+    static void* operator new(size_t size, uint32_t bytes) { return objectMemory::takeSized(size + bytes); }
+    static void operator delete(void* p, uint32_t) noexcept { objectMemory::giveSized(p); }
+    static void operator delete(void* p) noexcept { objectMemory::giveSized(p); }
 
     uint8_t* data() { return reinterpret_cast<uint8_t*>(this + 1); }
     const uint8_t* data() const { return reinterpret_cast<const uint8_t*>(this + 1); }
@@ -1392,7 +1409,7 @@ struct PlaceArena {
     uint8_t* const memory;
 
     PlaceArena() : memory(static_cast<uint8_t*>(::operator new(size_t{kCount} * kStride))) {
-        for (uint32_t i = 0; i < kCount; i++) new (memory + size_t{i} * kStride) ObjPlace();
+        for (uint32_t i = 0; i < kCount; i++) ::new (memory + size_t{i} * kStride) ObjPlace();
     }
     ~PlaceArena() {
         for (uint32_t i = 0; i < kCount; i++) at(i)->~ObjPlace();
