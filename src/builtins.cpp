@@ -1177,6 +1177,19 @@ void registerBytes(VM& vm) {
         return Value::object(made);
     });
 
+    // Each byte b made table[b] where it is, and the bytes themselves given back: mapped without
+    // new bytes made, for bytes that are not wanted as they were.
+    vm.defineMethod(T, "mapInPlace", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::Bytes) || asBytes(args[0])->data.size() != 256)
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "mapInPlace() takes a table of 256 bytes, one for each value a byte has");
+        const uint8_t* table = asBytes(args[0])->data.data();
+        std::vector<uint8_t>& data = asBytes(self)->data;
+        uint8_t* at = data.data();
+        const size_t n = data.size();
+        for (size_t i = 0; i < n; i++) at[i] = table[at[i]];
+        return self;
+    });
+
     // The bits in groups of `width` (1 to 8), the most significant first, each group a byte of
     // its own: 6 for Base64's letters, 1, 2 or 4 for the pixels of a picture of few colours. A
     // last group the bits do not fill is filled with zeros.
@@ -1228,18 +1241,25 @@ void registerBytes(VM& vm) {
         return Value::object(made);
     });
 
-    // The reverse of unpackBits: the low `width` bits (1 to 8) of each byte, the first the most
-    // significant, joined into whole bytes; bits left over that make no whole byte are dropped.
-    vm.defineMethod(T, "packBits", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+    // The reverse of unpackBits: the low `width` bits (1 to 8) of each byte from `startIndex` up
+    // to `endIndex`, the first the most significant, joined into whole bytes; bits left over that
+    // make no whole byte are dropped.
+    vm.defineMethod(T, "packBits", 1, 3, [](VM& vm, Value self, int argc, Value* args) -> Value {
         const int64_t width = vm.toInt(args[0], "width");
         if (width < 1 || width > 8) throw vm.runtimeError(Thrown::IllegalArgumentException, "packBits() takes a width from 1 to 8, not " + std::to_string(width));
-        const size_t n = asBytes(self)->data.size();
+        const int64_t size = static_cast<int64_t>(asBytes(self)->data.size());
+        const int64_t first = argc > 1 && !args[1].isNull() ? vm.toInt(args[1], "startIndex") : 0;
+        const int64_t last = argc > 2 && !args[2].isNull() ? vm.toInt(args[2], "endIndex") : size;
+        if (first < 0 || last > size || first > last)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "packBits() from " + std::to_string(first) + " to " + std::to_string(last) +
+                                  " is out of bounds of " + std::to_string(size) + " bytes");
+        const size_t n = static_cast<size_t>(last - first);
         const size_t count = n * static_cast<size_t>(width) / 8;
         vm.checkRoomFor(count);
         ObjBytes* made = vm.alloc<ObjBytes>();
         TempRoot keep(vm, Value::object(made));
         made->data.resize(count);
-        const uint8_t* from = asBytes(self)->data.data();
+        const uint8_t* from = asBytes(self)->data.data() + first;
         uint8_t* to = made->data.data();
         size_t i = 0, o = 0;
         const uint32_t mask = (1u << width) - 1;
@@ -1286,7 +1306,6 @@ void registerBytes(VM& vm) {
             made->data.insert(made->data.end(), from.begin() + static_cast<std::ptrdiff_t>(start), from.begin() + static_cast<std::ptrdiff_t>(end));
             start = end + 1;
         }
-        made->data.shrink_to_fit();
         vm.account(made->data.size());
         return Value::object(made);
     });
@@ -1360,7 +1379,7 @@ void registerBuiltins(VM& vm) {
     vm.markMutating(BuiltinType::Set, {"add", "remove", "clear", "addAll", "removeAll", "retainAll"});
     // Given an item of a list of values where it is, `add` copies it in at once (M6.6 part 5).
     vm.markTakesPlaces(BuiltinType::List, {"add"});
-    vm.markMutating(BuiltinType::Bytes, {"fill", "putInt16", "putUint16", "putInt32", "putUint32", "putFloat32"});
+    vm.markMutating(BuiltinType::Bytes, {"fill", "mapInPlace", "putInt16", "putUint16", "putInt32", "putUint32", "putFloat32"});
     for (const char* global : {"__thread", "__loop", "__io", "__file", "__worker", "input", "exit"})
         vm.markNotParallel(global);
     vm.markNotParallel("__task", {"arity"});      // how many parameters a function has: map.forEach asks

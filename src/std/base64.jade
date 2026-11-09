@@ -41,7 +41,7 @@ object Base64 {
   // IllegalArgumentException for a character Base64 has not, for = before the end, or for a
   // length no bytes give (one character over a whole number of fours).
   fun decode(text : string) : Bytes {
-    var values = text.toBytes().mapped(toValues)
+    var values = text.toBytes().mapInPlace(toValues)
     if (values.indexOf(254.toByte()) >= 0) { values = values.without(254.toByte()) }
     if (values.indexOf(255.toByte()) >= 0) { return decodeWithError(text) }
     // The padding: only ='s may follow the first, and they fill the last four.
@@ -59,7 +59,7 @@ object Base64 {
       n = firstPad
     }
     if (n % 4 == 1) { throw IllegalArgumentException("Base64 text ends with a single character over a whole number of fours") }
-    return (n == values.size ? values : values[0 ..< n]).packBits(6)
+    return values.packBits(6, 0, n)
   }
 
   // Text that is not Base64, read a character at a time for the error and where it is.

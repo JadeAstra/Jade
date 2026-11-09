@@ -439,17 +439,21 @@ external fun Bytes.contains(value : any?) : bool
 // Bytes made letters (Base64), letters made their values, one character set's codes made another's.
 // An IllegalArgumentException for a table of another size.
 external fun Bytes.mapped(table : Bytes) : Bytes
+// Each byte b made table[b] where it is, as mapped does but with no new bytes made; gives the
+// bytes themselves. An IllegalArgumentException for a table of another size than 256.
+external fun Bytes.mapInPlace(table : Bytes) : Bytes
 // The bits in groups of `width` (1 to 8), the most significant first, each group a byte of its
 // own: 6 for Base64's letters, 1, 2 or 4 for the pixels of a picture of few colours. A last group
 // the bits do not fill is filled with zeros. An IllegalArgumentException for another width.
 //
 //   Bytes([0b10110100]).unpackBits(2)   // [2, 3, 1, 0]
 external fun Bytes.unpackBits(width : int) : Bytes
-// The reverse of unpackBits: the low `width` bits (1 to 8) of each byte, the first the most
-// significant, joined into whole bytes; bits over that make no whole byte are dropped.
+// The reverse of unpackBits: the low `width` bits (1 to 8) of each byte from `startIndex` up to
+// `endIndex`, the first the most significant, joined into whole bytes; bits over that make no
+// whole byte are dropped.
 //
 //   Bytes([2, 3, 1, 0]).packBits(2)     // [0b10110100]
-external fun Bytes.packBits(width : int) : Bytes
+external fun Bytes.packBits(width : int, startIndex : int = 0, endIndex : int = size) : Bytes
 // New bytes with every byte equal to `value` taken out: the line breaks of text, say.
 external fun Bytes.without(value : byte) : Bytes
 // 16-, 32- and 64-bit numbers kept in the bytes (D19), at a position, the least significant

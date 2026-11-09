@@ -98,4 +98,7 @@ print(Bytes([1, 2, 3, 4, 5]).unpackBits(6).packBits(6).toList(), Bytes([1, 2, 3]
 print(Bytes([1, 10, 2, 10, 10]).without(10).toList(), Bytes([10, 10]).without(10).size, "abc".toBytes().mapped(Bytes(256).fill(65)).decodeToString())   // expect: [1, 2] 0 AAA
 try { Bytes([1]).unpackBits(9) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: unpackBits() takes a width from 1 to 8, not 9
 try { Bytes([1]).packBits(0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: packBits() takes a width from 1 to 8, not 0
+val inPlace = Bytes([1, 2, 3])
+print(inPlace.mapInPlace(Bytes(256).fill(9)) === inPlace, inPlace.toList(), Bytes([9, 2, 3, 0, 9]).packBits(2, 1, 5).toList())   // expect: true [9, 9, 9] [177]
+try { Bytes([1]).packBits(6, 0, 2) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: packBits() from 0 to 2 is out of bounds of 1 bytes
 try { Bytes([1]).mapped(Bytes(10)) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: mapped() takes a table of 256 bytes, one for each value a byte has

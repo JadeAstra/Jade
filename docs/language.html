@@ -452,7 +452,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BeforeAll"><code>BeforeAll</code></a> (1)</li>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.size"><code>Bytes</code></a> (26)</li>
+<li><a href="#Bytes.size"><code>Bytes</code></a> (27)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
@@ -1117,13 +1117,16 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry" id="Bytes.mapped"><code class="sig">fun Bytes.mapped(table : Bytes) : Bytes</code><a class="anchor" href="#Bytes.mapped">#</a>
 <p>New bytes with each byte b made table[b]: <code>table</code> is 256 bytes, one for each value a byte has. Bytes made letters (Base64), letters made their values, one character set's codes made another's. An IllegalArgumentException for a table of another size.</p>
 </div>
+<div class="entry" id="Bytes.mapInPlace"><code class="sig">fun Bytes.mapInPlace(table : Bytes) : Bytes</code><a class="anchor" href="#Bytes.mapInPlace">#</a>
+<p>Each byte b made table[b] where it is, as mapped does but with no new bytes made; gives the bytes themselves. An IllegalArgumentException for a table of another size than 256.</p>
+</div>
 <div class="entry" id="Bytes.unpackBits"><code class="sig">fun Bytes.unpackBits(width : int) : Bytes</code><a class="anchor" href="#Bytes.unpackBits">#</a>
 <p>The bits in groups of <code>width</code> (1 to 8), the most significant first, each group a byte of its own: 6 for Base64's letters, 1, 2 or 4 for the pixels of a picture of few colours. A last group the bits do not fill is filled with zeros. An IllegalArgumentException for another width.</p>
 <pre>Bytes([0b10110100]).unpackBits(2)   // [2, 3, 1, 0]
 </pre>
 </div>
-<div class="entry" id="Bytes.packBits"><code class="sig">fun Bytes.packBits(width : int) : Bytes</code><a class="anchor" href="#Bytes.packBits">#</a>
-<p>The reverse of unpackBits: the low <code>width</code> bits (1 to 8) of each byte, the first the most significant, joined into whole bytes; bits over that make no whole byte are dropped.</p>
+<div class="entry" id="Bytes.packBits"><code class="sig">fun Bytes.packBits(width : int, startIndex : int = 0, endIndex : int = size) : Bytes</code><a class="anchor" href="#Bytes.packBits">#</a>
+<p>The reverse of unpackBits: the low <code>width</code> bits (1 to 8) of each byte from <code>startIndex</code> up to <code>endIndex</code>, the first the most significant, joined into whole bytes; bits over that make no whole byte are dropped.</p>
 <pre>Bytes([2, 3, 1, 0]).packBits(2)     // [0b10110100]
 </pre>
 </div>
