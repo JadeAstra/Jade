@@ -254,6 +254,68 @@ void registerXml(VM& vm) {
         else Scanner<uint32_t>(reinterpret_cast<const uint32_t*>(units), text->length, out).scan(static_cast<size_t>(from));
         return intList(vm, out);
     });
+    // The attributes of the start tag record at `at` of a scan's records, as a map; the names
+    // made once, by their numbers, in `names` (Xml.attributes). Null where a value holds &, its
+    // entities left to the reader.
+    def("attributes", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isString() || !args[1].isObjType(ObjType::List) || !args[3].isObjType(ObjType::List))
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "Xml.attributes takes the text, its records from Xml.scan, a place in them and a list of names");
+        const ObjString* text = asString(args[0]);
+        ObjList* records = asList(args[1]);
+        ObjList* names = asList(args[3]);
+        const int64_t at = vm.toInt(args[2], "index");
+        const int64_t size = static_cast<int64_t>(records->size());
+        auto number = [&](int64_t i) -> int64_t {
+            if (i < 0 || i >= size) throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "Xml.attributes: record " + std::to_string(at) + " runs past the records");
+            const Value v = vm.listGet(records, static_cast<size_t>(i));
+            if (!v.isInt()) throw vm.runtimeError(Thrown::IllegalArgumentException, "Xml.attributes: the records are numbers");
+            return v.as.i;
+        };
+        auto piece = [&](int64_t start, int64_t end) -> Value {
+            if (start < 0 || end < start || static_cast<size_t>(end) > text->length)
+                throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "Xml.attributes: a place outside the text");
+            return vm.str(text->slice(static_cast<size_t>(start), static_cast<size_t>(end)));
+        };
+        if (number(at) != 1) throw vm.runtimeError(Thrown::IllegalArgumentException, "Xml.attributes: record " + std::to_string(at) + " is no start tag");
+        const int64_t count = number(at + 6);
+        auto named = [&](int64_t n, int64_t start, int64_t end) -> Value {
+            const int64_t have = static_cast<int64_t>(names->size());
+            if (n < have) return vm.listGet(names, static_cast<size_t>(n));
+            if (n != have) throw vm.runtimeError(Thrown::IllegalArgumentException, "Xml.attributes: name " + std::to_string(n) + " comes before names " + std::to_string(have) + " and on");
+            const Value made = piece(start, end);
+            TempRoot keep(vm, made);
+            vm.listAdd(names, made);
+            return made;
+        };
+        named(number(at + 4), number(at + 2), number(at + 3));  // the element's own name first, as the scan numbers it
+        // Every name added before anything else, so that a reader given null finds them all.
+        for (int64_t i = 0; i < count; i++) named(number(at + 7 + i * 6 + 2), number(at + 7 + i * 6), number(at + 7 + i * 6 + 1));
+        for (int64_t i = 0; i < count; i++)
+            if ((number(at + 7 + i * 6 + 5) & 1) != 0) return Value::null();
+        ObjMap* made = vm.alloc<ObjMap>();
+        TempRoot keep(vm, Value::object(made));
+        for (int64_t i = 0; i < count; i++) {
+            const int64_t a = at + 7 + i * 6;
+            const Value key = named(number(a + 2), number(a), number(a + 1));
+            TempRoot keepKey(vm, key);
+            Value value = piece(number(a + 3), number(a + 4));
+            if ((number(a + 5) & 2) != 0) {   // line ends and tabs in a value read as spaces
+                Characters spaced = asString(value)->slice(0, asString(value)->length);
+                for (size_t k = 0; k < spaced.size(); k++) {
+                    const uint32_t c = spaced[k];
+                    if (c == '\n' || c == '\t' || c == '\r') {
+                        if (spaced.width == 1) spaced.units[k] = ' ';
+                        else if (spaced.width == 2) { const uint16_t s = ' '; std::memcpy(&spaced.units[2 * k], &s, 2); }
+                        else { const uint32_t s = ' '; std::memcpy(&spaced.units[4 * k], &s, 4); }
+                    }
+                }
+                value = vm.str(std::move(spaced));
+            }
+            TempRoot keepValue(vm, value);
+            made->map.set(key, value);
+        }
+        return Value::object(made);
+    });
     vm.defineGlobal("__xml", Value::object(holder));
 }
 

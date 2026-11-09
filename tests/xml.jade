@@ -93,6 +93,13 @@ print(Xml.parse("<!DOCTYPE a SYSTEM 'x.dtd'><a/>").doctype, Xml.parse("<!DOCTYPE
 // Xml.scan, the C++ pass the reader builds on: it stops at a name past ASCII, or an end tag of
 // another element, and the reader reads on from there a part at a time.
 print(Xml.scan("<a b='1'>hi</a>"), Xml.scan("<a><é/></a>"), Xml.scan("<a>x</b>"))   // expect: [1, 0, 1, 2, 0, 0, 1, 3, 4, 1, 6, 7, 0, 3, 9, 11, 0, 2, 11, 0, 15] [1, 0, 1, 2, 0, 0, 0, 0, 3] [1, 0, 1, 2, 0, 0, 0, 3, 3, 4, 0, 0, 4]
+// Xml.attributes: a start tag's map made in C++, names added by number; null where a value
+// holds an entity, left to the reader.
+val tagged = "<a b='1' c=\"x
+y\"><d e='&amp;'/></a>"
+val known : open List<string> = []
+print(Xml.attributes(tagged, Xml.scan(tagged), 0, known), known)   // expect: {"b": "1", "c": "x y"} ["a", "b", "c"]
+print(Xml.attributes(tagged, Xml.scan(tagged), 19, known), known)   // expect: null ["a", "b", "c", "d", "e"]
 val mixedNames = Xml.parse("<a><b k='1'/><é x='2'>t</é><c/></a>").root
 print(mixedNames.elements().map { it.name }, mixedNames.elements("é")[0].attr("x"), mixedNames.text)   // expect: ["b", "é", "c"] 2 t
 
