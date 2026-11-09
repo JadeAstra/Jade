@@ -1,7 +1,7 @@
 // What WebP (src/std/webp.jade) is built on: the work for every pixel of its two codecs, VP8L
 // (lossless) and VP8 (lossy), in C++ of WebP's own, as JPEG's scans are (the user, 2026-11-08).
 // The RIFF container, the extended header, alpha's chunk, animation's frames and errors are Jade.
-// Written from the WebP specification (RFC 9649).
+// Written from the WebP specification (RFC 9649) and the VP8 one (RFC 6386).
 
 #include <algorithm>
 #include <array>
@@ -532,6 +532,7 @@ struct Vp8Error {
 };
 
 class Lossy {
+    friend class LossyWriter;  // the encoder predicts and reconstructs as the decoder does
 public:
     Lossy(const uint8_t* data, size_t size) : data_(data), size_(size) {}
 
@@ -1136,6 +1137,534 @@ private:
     }
 };
 
+
+// ---- VP8: writing ----
+
+// The boolean encoder (RFC 6386, 7.3).
+struct BoolEncoder {
+    std::vector<uint8_t> out;
+    uint32_t range = 255, bottom = 0;
+    int bitCount = 24;
+
+    void carry() {
+        for (size_t i = out.size(); i-- > 0;) {
+            if (out[i] != 255) {
+                out[i]++;
+                return;
+            }
+            out[i] = 0;
+        }
+    }
+    void write(int prob, int bit) {
+        const uint32_t split = 1 + (((range - 1) * static_cast<uint32_t>(prob)) >> 8);
+        if (bit) {
+            bottom += split;
+            range -= split;
+        } else {
+            range = split;
+        }
+        while (range < 128) {
+            range <<= 1;
+            if (bottom & (1u << 31)) carry();
+            bottom <<= 1;
+            if (!--bitCount) {
+                out.push_back(static_cast<uint8_t>(bottom >> 24));
+                bottom &= (1u << 24) - 1;
+                bitCount = 8;
+            }
+        }
+    }
+    void literal(int value, int n) {
+        for (int i = n - 1; i >= 0; i--) write(128, (value >> i) & 1);
+    }
+    void flush() {
+        int c = bitCount;
+        uint32_t v = bottom;
+        if (v & (1u << (32 - c))) carry();
+        v <<= c & 7;
+        c >>= 3;
+        while (--c >= 0) v <<= 8;
+        for (c = 0; c < 4; c++) {
+            out.push_back(static_cast<uint8_t>(v >> 24));
+            v <<= 8;
+        }
+    }
+    // A tree's leaf: the path to it found and written, each node's bit with its probability.
+    void tree(const int8_t* t, const uint8_t* probs, int leaf) {
+        int path[16], depth = 0;
+        auto find = [&](auto&& self, int i, int d) -> bool {
+            for (int b = 0; b < 2; b++) {
+                const int next = t[i + b];
+                path[d] = b;
+                if (next <= 0 ? -next == leaf : self(self, next, d + 1)) {
+                    depth = next <= 0 ? d + 1 : depth;
+                    return true;
+                }
+            }
+            return false;
+        };
+        find(find, 0, 0);
+        int i = 0;
+        for (int d = 0; d < depth; d++) {
+            write(probs[i >> 1], path[d]);
+            i = t[i + path[d]];
+        }
+    }
+};
+
+class LossyWriter {
+public:
+    // `rgba` width by height, at `quality` 0 to 1 (0 smallest, 1 best).
+    LossyWriter(const uint8_t* rgba, int width, int height, double quality) : w_(width), h_(height) {
+        mbCols_ = (width + 15) / 16;
+        mbRows_ = (height + 15) / 16;
+        // A quantizer index from the quality: 0 the finest, 127 the coarsest. Between these points
+        // a quality gives about the size and loss libwebp gives at 100 times it.
+        static const double kQuality[] = {0, 0.1, 0.5, 0.75, 0.9, 0.95, 1}, kIndex[] = {127, 78, 50, 31, 12.5, 5.7, 0};
+        const double q = std::clamp(quality, 0.0, 1.0);
+        int k = 0;
+        while (k < 5 && q > kQuality[k + 1]) k++;
+        const double t = (q - kQuality[k]) / (kQuality[k + 1] - kQuality[k]);
+        qi_ = std::clamp(static_cast<int>(std::lround(kIndex[k] + t * (kIndex[k + 1] - kIndex[k]))), 0, 127);
+        auto dc = [](int i) { return static_cast<int>(vp8::kDcQuant[std::clamp(i, 0, 127)]); };
+        auto ac = [](int i) { return static_cast<int>(vp8::kAcQuant[std::clamp(i, 0, 127)]); };
+        step_[0] = dc(qi_);
+        step_[1] = ac(qi_);
+        step_[2] = dc(qi_) * 2;
+        step_[3] = std::max(ac(qi_) * 155 / 100, 8);
+        step_[4] = std::min(dc(qi_), 132);
+        step_[5] = ac(qi_);
+        filterLevel_ = std::clamp(qi_ * 2 / 5, 0, 63);
+        toYuv(rgba);
+    }
+
+    std::vector<uint8_t> write() {
+        const size_t w16 = static_cast<size_t>(mbCols_) * 16, h16 = static_cast<size_t>(mbRows_) * 16;
+        yStride_ = w16 + 1 + 4;
+        uvStride_ = w16 / 2 + 1;
+        y_.assign(yStride_ * (h16 + 1), 0);
+        u_.assign(uvStride_ * (h16 / 2 + 1), 0);
+        v_.assign(uvStride_ * (h16 / 2 + 1), 0);
+        std::memset(y_.data(), 127, yStride_);
+        std::memset(u_.data(), 127, uvStride_);
+        std::memset(v_.data(), 127, uvStride_);
+        for (size_t r = 1; r <= h16; r++) y_[r * yStride_] = 129;
+        for (size_t r = 1; r <= h16 / 2; r++) u_[r * uvStride_] = v_[r * uvStride_] = 129;
+        mbs_.resize(static_cast<size_t>(mbCols_ * mbRows_));
+        for (int my = 0; my < mbRows_; my++) {
+            for (int mx = 0; mx < mbCols_; mx++) encodeMb(mx, my, mbs_[static_cast<size_t>(my * mbCols_ + mx)]);
+            const int last = my * 16 + 15;
+            const uint8_t edge = *yAt(mbCols_ * 16 - 1, last);
+            for (int k = 0; k < 4; k++) *yAt(mbCols_ * 16 + k, last) = edge;
+        }
+        return bitstream();
+    }
+
+private:
+    int w_, h_, mbCols_, mbRows_, qi_ = 0, filterLevel_ = 0;
+    int step_[6];  // y dc, y ac, y2 dc, y2 ac, uv dc, uv ac
+    std::vector<uint8_t> srcY_, srcU_, srcV_;  // the picture as YUV, padded to whole macroblocks
+    std::vector<uint8_t> y_, u_, v_;           // the reconstruction, laid out as the decoder's
+    size_t yStride_ = 0, uvStride_ = 0;
+    struct Mb {
+        uint8_t yMode = kDcPred, uvMode = kDcPred;
+        uint8_t bModes[16] = {};
+        int16_t coefs[25][16] = {};  // quantized, natural order
+        bool hasY2 = true;
+    };
+    std::vector<Mb> mbs_;
+
+    uint8_t* yAt(int x, int y) { return &y_[static_cast<size_t>(y + 1) * yStride_ + static_cast<size_t>(x + 1)]; }
+    uint8_t* uvAt(std::vector<uint8_t>& plane, int x, int y) { return &plane[static_cast<size_t>(y + 1) * uvStride_ + static_cast<size_t>(x + 1)]; }
+
+    // RGB to YUV, BT.601's limited range, the chroma the average of each 2 by 2; edges repeated
+    // out to whole macroblocks.
+    void toYuv(const uint8_t* rgba) {
+        const int W = mbCols_ * 16, H = mbRows_ * 16;
+        srcY_.assign(static_cast<size_t>(W * H), 0);
+        srcU_.assign(static_cast<size_t>(W * H / 4), 0);
+        srcV_.assign(static_cast<size_t>(W * H / 4), 0);
+        auto px = [&](int x, int y) { return rgba + (static_cast<size_t>(std::min(y, h_ - 1)) * static_cast<size_t>(w_) + static_cast<size_t>(std::min(x, w_ - 1))) * 4; };
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                const uint8_t* p = px(x, y);
+                srcY_[static_cast<size_t>(y * W + x)] = static_cast<uint8_t>((16839 * p[0] + 33059 * p[1] + 6420 * p[2] + (16 << 16) + (1 << 15)) >> 16);
+            }
+        for (int y = 0; y < H / 2; y++)
+            for (int x = 0; x < W / 2; x++) {
+                int r = 0, g = 0, b = 0;
+                for (int k = 0; k < 4; k++) {
+                    const uint8_t* p = px(x * 2 + (k & 1), y * 2 + (k >> 1));
+                    r += p[0];
+                    g += p[1];
+                    b += p[2];
+                }
+                srcU_[static_cast<size_t>(y * W / 2 + x)] = static_cast<uint8_t>(std::clamp((-9719 * r - 19081 * g + 28800 * b + (128 << 18) + (1 << 17)) >> 18, 0, 255));
+                srcV_[static_cast<size_t>(y * W / 2 + x)] = static_cast<uint8_t>(std::clamp((28800 * r - 24116 * g - 4684 * b + (128 << 18) + (1 << 17)) >> 18, 0, 255));
+            }
+    }
+
+    // The 4x4 forward DCT, the decoder's inverse undone: twice the orthonormal DCT.
+    static void fdct(const int* in, double* out) {
+        static const auto basis = [] {
+            std::array<double, 16> c{};
+            for (int k = 0; k < 4; k++)
+                for (int n = 0; n < 4; n++) c[static_cast<size_t>(k * 4 + n)] = (k == 0 ? 0.5 : std::sqrt(0.5)) * std::cos((2 * n + 1) * k * 3.14159265358979323846 / 8);
+            return c;
+        }();
+        double tmp[16];
+        for (int y = 0; y < 4; y++)
+            for (int u = 0; u < 4; u++) {
+                double s = 0;
+                for (int x = 0; x < 4; x++) s += basis[static_cast<size_t>(u * 4 + x)] * in[y * 4 + x];
+                tmp[y * 4 + u] = s;
+            }
+        for (int v = 0; v < 4; v++)
+            for (int u = 0; u < 4; u++) {
+                double s = 0;
+                for (int y = 0; y < 4; y++) s += basis[static_cast<size_t>(v * 4 + y)] * tmp[y * 4 + u];
+                out[v * 4 + u] = 2 * s;
+            }
+    }
+
+    // Quantized: rounded, with a dead zone for the AC coefficients so that small ones go.
+    static int quantize(double v, int step, bool ac) {
+        const double a = std::abs(v) / step + (ac ? 0.38 : 0.5);
+        const int q = std::min(static_cast<int>(a), 2048 + 66);
+        return v < 0 ? -q : q;
+    }
+
+    static int64_t sse(const uint8_t* a, size_t as, const uint8_t* b, size_t bs, int n) {
+        int64_t s = 0;
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++) {
+                const int d = a[static_cast<size_t>(y) * as + static_cast<size_t>(x)] - b[static_cast<size_t>(y) * bs + static_cast<size_t>(x)];
+                s += d * d;
+            }
+        return s;
+    }
+
+    // A 4x4 block's residue (source less prediction) transformed and quantized into `q`, and
+    // reconstructed into `dst` over the prediction; how many coefficients are not zero.
+    int codeBlock(const uint8_t* src, size_t ss, uint8_t* dst, size_t ds, int dcStep, int acStep, int16_t* q) {
+        int residue[16];
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 4; x++) residue[y * 4 + x] = src[static_cast<size_t>(y) * ss + static_cast<size_t>(x)] - dst[static_cast<size_t>(y) * ds + static_cast<size_t>(x)];
+        double f[16];
+        fdct(residue, f);
+        int nz = 0;
+        int16_t deq[16];
+        for (int i = 0; i < 16; i++) {
+            q[i] = static_cast<int16_t>(quantize(f[i], i == 0 ? dcStep : acStep, i > 0));
+            deq[i] = static_cast<int16_t>(q[i] * (i == 0 ? dcStep : acStep));
+            nz += q[i] != 0;
+        }
+        Lossy::addIdct(deq, dst, ds);
+        return nz;
+    }
+
+    void encodeMb(int mx, int my, Mb& mb) {
+        const size_t sw = static_cast<size_t>(mbCols_) * 16;
+        const uint8_t* src = &srcY_[static_cast<size_t>(my * 16) * sw + static_cast<size_t>(mx * 16)];
+        uint8_t* dst = yAt(mx * 16, my * 16);
+        const double lambda = 0.25 * step_[1] * step_[1];
+        // Each 16x16 mode's prediction; the best kept.
+        uint8_t pred[16 * 16], best16[16 * 16];
+        int mode16 = kDcPred;
+        int64_t bestPrediction = INT64_MAX;
+        for (int m = kDcPred; m <= kTmPred; m++) {
+            // Predicted in place, then copied out: the decoder predicts from the frame's edges.
+            Lossy::predictBlock(dst, yStride_, 16, m, my == 0, mx == 0);
+            for (int y = 0; y < 16; y++) std::memcpy(pred + y * 16, dst + static_cast<size_t>(y) * yStride_, 16);
+            const int64_t e = sse(src, sw, pred, 16, 16);
+            if (e < bestPrediction) {
+                bestPrediction = e;
+                mode16 = m;
+                std::memcpy(best16, pred, sizeof pred);
+            }
+        }
+        // 16x16: each block's AC, and the DCs together through Y2.
+        Mb i16;
+        i16.yMode = static_cast<uint8_t>(mode16);
+        i16.hasY2 = true;
+        uint8_t recon16[16 * 16];
+        std::memcpy(recon16, best16, sizeof recon16);
+        double dcs[16];
+        int nz16 = 0;
+        for (int b = 0; b < 16; b++) {
+            const int bx = (b & 3) * 4, by = (b >> 2) * 4;
+            int residue[16];
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++)
+                    residue[y * 4 + x] = src[static_cast<size_t>(by + y) * sw + static_cast<size_t>(bx + x)] - recon16[(by + y) * 16 + bx + x];
+            double f[16];
+            fdct(residue, f);
+            dcs[b] = f[0];
+            for (int i = 1; i < 16; i++) {
+                i16.coefs[b][i] = static_cast<int16_t>(quantize(f[i], step_[1], true));
+                nz16 += i16.coefs[b][i] != 0;
+            }
+        }
+        // Y2: the DCs' Walsh-Hadamard transform, the decoder's inverse undone (M' D M / 2).
+        static const int M[4][4] = {{1, 1, 1, 1}, {1, 1, -1, -1}, {1, -1, -1, 1}, {1, -1, 1, -1}};
+        double t[16], wht[16];
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++) {
+                double s = 0;
+                for (int k = 0; k < 4; k++) s += M[k][r] * dcs[k * 4 + c];
+                t[r * 4 + c] = s;
+            }
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++) {
+                double s = 0;
+                for (int k = 0; k < 4; k++) s += t[r * 4 + k] * M[k][c];
+                wht[r * 4 + c] = s / 2;
+            }
+        for (int i = 0; i < 16; i++) {
+            i16.coefs[24][i] = static_cast<int16_t>(quantize(wht[i], i == 0 ? step_[2] : step_[3], i > 0));
+            nz16 += i16.coefs[24][i] != 0;
+        }
+        // Reconstructed as the decoder will.
+        {
+            int16_t deq[25][16] = {};
+            for (int i = 0; i < 16; i++) deq[24][i] = static_cast<int16_t>(i16.coefs[24][i] * (i == 0 ? step_[2] : step_[3]));
+            Lossy::walsh(deq[24], deq);
+            for (int b = 0; b < 16; b++) {
+                for (int i = 1; i < 16; i++) deq[b][i] = static_cast<int16_t>(i16.coefs[b][i] * step_[1]);
+                Lossy::addIdct(deq[b], recon16 + (b >> 2) * 4 * 16 + (b & 3) * 4, 16);
+            }
+        }
+        const double cost16 = static_cast<double>(sse(src, sw, recon16, 16, 16)) + lambda * (nz16 + 2);
+        // 4x4: each sub-block's best mode, coded and reconstructed in place before the next.
+        Mb i4;
+        i4.yMode = kBPred;
+        i4.hasY2 = false;
+        int nz4 = 0;
+        const uint8_t* aboveRight = yAt(mx * 16 + 16, my * 16 - 1);
+        for (int b = 0; b < 16; b++) {
+            const int bx = (b & 3) * 4, by = (b >> 2) * 4;
+            uint8_t* d = dst + static_cast<size_t>(by) * yStride_ + static_cast<size_t>(bx);
+            const uint8_t* s = src + static_cast<size_t>(by) * sw + static_cast<size_t>(bx);
+            uint8_t A[8], L[4];
+            const uint8_t* up = d - yStride_;
+            for (int k = 0; k < 4; k++) A[k] = up[k];
+            for (int k = 0; k < 4; k++) A[4 + k] = (b & 3) == 3 ? aboveRight[k] : up[4 + k];
+            for (int k = 0; k < 4; k++) L[k] = d[static_cast<size_t>(k) * yStride_ - 1];
+            int bestMode = kBDc;
+            int64_t bestError = INT64_MAX;
+            for (int m = kBDc; m <= kBHu; m++) {
+                Lossy::predictSub(d, yStride_, m, A, L, up[-1]);
+                const int64_t e = sse(s, sw, d, yStride_, 4) + (m == kBDc ? 0 : static_cast<int64_t>(lambda * 0.15));
+                if (e < bestError) {
+                    bestError = e;
+                    bestMode = m;
+                }
+            }
+            Lossy::predictSub(d, yStride_, bestMode, A, L, up[-1]);
+            i4.bModes[b] = static_cast<uint8_t>(bestMode);
+            nz4 += codeBlock(s, sw, d, yStride_, step_[0], step_[1], i4.coefs[b]);
+        }
+        const double cost4 = static_cast<double>(sse(src, sw, dst, yStride_, 16)) + lambda * (nz4 + 6);
+        if (cost16 <= cost4) {
+            for (int y = 0; y < 16; y++) std::memcpy(dst + static_cast<size_t>(y) * yStride_, recon16 + y * 16, 16);
+            mb = i16;
+        } else {
+            mb = i4;
+        }
+        // Chroma: the best of the four modes for U and V together.
+        const size_t cs = sw / 2;
+        const uint8_t* su = &srcU_[static_cast<size_t>(my * 8) * cs + static_cast<size_t>(mx * 8)];
+        const uint8_t* sv = &srcV_[static_cast<size_t>(my * 8) * cs + static_cast<size_t>(mx * 8)];
+        uint8_t* du = uvAt(u_, mx * 8, my * 8);
+        uint8_t* dv = uvAt(v_, mx * 8, my * 8);
+        int uvMode = kDcPred;
+        int64_t bestUv = INT64_MAX;
+        for (int m = kDcPred; m <= kTmPred; m++) {
+            Lossy::predictBlock(du, uvStride_, 8, m, my == 0, mx == 0);
+            Lossy::predictBlock(dv, uvStride_, 8, m, my == 0, mx == 0);
+            const int64_t e = sse(su, cs, du, uvStride_, 8) + sse(sv, cs, dv, uvStride_, 8);
+            if (e < bestUv) {
+                bestUv = e;
+                uvMode = m;
+            }
+        }
+        mb.uvMode = static_cast<uint8_t>(uvMode);
+        Lossy::predictBlock(du, uvStride_, 8, uvMode, my == 0, mx == 0);
+        Lossy::predictBlock(dv, uvStride_, 8, uvMode, my == 0, mx == 0);
+        for (int i = 0; i < 4; i++) {
+            const size_t off = static_cast<size_t>((i >> 1) * 4), offx = static_cast<size_t>((i & 1) * 4);
+            codeBlock(su + off * cs + offx, cs, du + off * uvStride_ + offx, uvStride_, step_[4], step_[5], mb.coefs[16 + i]);
+            codeBlock(sv + off * cs + offx, cs, dv + off * uvStride_ + offx, uvStride_, step_[4], step_[5], mb.coefs[20 + i]);
+        }
+    }
+
+    // A block's tokens, under the default probabilities; whether it had any.
+    static bool tokens(BoolEncoder& e, int type, int context, int first, const int16_t* q) {
+        int last = -1;
+        for (int c = 15; c >= first; c--)
+            if (q[kZigzag[c]] != 0) {
+                last = c;
+                break;
+            }
+        int c = first;
+        const uint8_t* p = vp8::kDefaultCoeffProbs + ((type * 8 + kBands[c]) * 3 + context) * 11;
+        auto probsAt = [&](int at, int ctx) { return vp8::kDefaultCoeffProbs + ((type * 8 + kBands[at]) * 3 + ctx) * 11; };
+        if (last < 0) {
+            e.write(p[0], 0);
+            return false;
+        }
+        e.write(p[0], 1);
+        for (;;) {
+            const int v = q[kZigzag[c]];
+            if (v == 0) {
+                e.write(p[1], 0);
+                c++;
+                p = probsAt(c, 0);
+                continue;
+            }
+            e.write(p[1], 1);
+            const int a = std::abs(v);
+            int next = 2;
+            if (a == 1) {
+                e.write(p[2], 0);
+                next = 1;
+            } else {
+                e.write(p[2], 1);
+                if (a <= 4) {
+                    e.write(p[3], 0);
+                    if (a == 2) {
+                        e.write(p[4], 0);
+                    } else {
+                        e.write(p[4], 1);
+                        e.write(p[5], a == 4);
+                    }
+                } else {
+                    e.write(p[3], 1);
+                    if (a <= 10) {
+                        e.write(p[6], 0);
+                        if (a <= 6) {
+                            e.write(p[7], 0);
+                            e.write(159, a - 5);
+                        } else {
+                            e.write(p[7], 1);
+                            e.write(165, (a - 7) >> 1);
+                            e.write(145, (a - 7) & 1);
+                        }
+                    } else {
+                        e.write(p[6], 1);
+                        const uint8_t* extra;
+                        int base, bits;
+                        if (a <= 34) {
+                            e.write(p[8], 0);
+                            if (a <= 18) e.write(p[9], 0), extra = kCat3, base = 11, bits = 3;
+                            else e.write(p[9], 1), extra = kCat4, base = 19, bits = 4;
+                        } else {
+                            e.write(p[8], 1);
+                            if (a <= 66) e.write(p[10], 0), extra = kCat5, base = 35, bits = 5;
+                            else e.write(p[10], 1), extra = kCat6, base = 67, bits = 11;
+                        }
+                        for (int k = 0; k < bits; k++) e.write(extra[k], ((a - base) >> (bits - 1 - k)) & 1);
+                    }
+                }
+            }
+            e.write(128, v < 0);
+            if (++c == 16) return true;
+            p = probsAt(c, next);
+            if (c > last) {
+                e.write(p[0], 0);
+                return true;
+            }
+            e.write(p[0], 1);
+        }
+    }
+
+    std::vector<uint8_t> bitstream() {
+        // How often a macroblock has no coefficients, for the probability of the skip flag.
+        auto empty = [](const Mb& mb) {
+            for (int b = 0; b < 25; b++) {
+                if (b == 24 && !mb.hasY2) continue;
+                for (int i = 0; i < 16; i++)
+                    if (mb.coefs[b][i] != 0) return false;
+            }
+            return true;
+        };
+        int skipped = 0;
+        for (const Mb& mb : mbs_) skipped += empty(mb);
+        const int skipProb = std::clamp(255 - 255 * skipped / std::max<int>(1, static_cast<int>(mbs_.size())), 1, 254);
+        BoolEncoder head, toks;
+        head.literal(0, 2);  // colour space, clamping
+        head.write(128, 0);  // no segmentation
+        head.write(128, 0);  // the normal loop filter
+        head.literal(filterLevel_, 6);
+        head.literal(0, 3);  // sharpness
+        head.write(128, 0);  // no filter adjustments
+        head.literal(0, 2);  // one token partition
+        head.literal(qi_, 7);
+        for (int i = 0; i < 5; i++) head.write(128, 0);  // no quantizer deltas
+        head.write(128, 0);                              // refresh entropy probabilities
+        for (int i = 0; i < 1056; i++) head.write(vp8::kCoeffUpdateProbs[i], 0);
+        head.write(128, 1);  // skipping macroblocks with no coefficients
+        head.literal(skipProb, 8);
+        std::vector<uint8_t> aboveModes(static_cast<size_t>(mbCols_) * 4, kBDc);
+        std::vector<std::array<uint8_t, 9>> aboveNz(static_cast<size_t>(mbCols_));
+        for (int my = 0; my < mbRows_; my++) {
+            uint8_t leftModes[4] = {kBDc, kBDc, kBDc, kBDc};
+            std::array<uint8_t, 9> leftNz{};
+            for (int mx = 0; mx < mbCols_; mx++) {
+                const Mb& mb = mbs_[static_cast<size_t>(my * mbCols_ + mx)];
+                const bool skip = empty(mb);
+                head.write(skipProb, skip);
+                head.tree(kKeyFrameYModeTree, kKeyFrameYModeProbs, mb.yMode);
+                uint8_t* above = &aboveModes[static_cast<size_t>(mx) * 4];
+                uint8_t bModes[16];
+                if (mb.yMode == kBPred) {
+                    for (int i = 0; i < 16; i++) {
+                        const uint8_t a = i < 4 ? above[i] : bModes[i - 4];
+                        const uint8_t l = (i & 3) == 0 ? leftModes[i >> 2] : bModes[i - 1];
+                        bModes[i] = mb.bModes[i];
+                        head.tree(kBModeTree, &vp8::kKeyFrameBModeProbs[(a * 10 + l) * 9], bModes[i]);
+                    }
+                } else {
+                    const uint8_t implied = mb.yMode == kDcPred ? kBDc : mb.yMode == kVPred ? kBVe : mb.yMode == kHPred ? kBHe : kBTm;
+                    std::fill(bModes, bModes + 16, implied);
+                }
+                for (int i = 0; i < 4; i++) {
+                    above[i] = bModes[12 + i];
+                    leftModes[i] = bModes[i * 4 + 3];
+                }
+                head.tree(kUvModeTree, kKeyFrameUvModeProbs, mb.uvMode);
+                std::array<uint8_t, 9>& an = aboveNz[static_cast<size_t>(mx)];
+                if (skip) {
+                    for (int i = 0; i < 8; i++) an[static_cast<size_t>(i)] = leftNz[static_cast<size_t>(i)] = 0;
+                    if (mb.hasY2) an[8] = leftNz[8] = 0;
+                    continue;
+                }
+                if (mb.hasY2) an[8] = leftNz[8] = tokens(toks, 1, an[8] + leftNz[8], 0, mb.coefs[24]);
+                for (int i = 0; i < 16; i++) {
+                    const bool nz = tokens(toks, mb.hasY2 ? 0 : 3, an[static_cast<size_t>(i & 3)] + leftNz[static_cast<size_t>(i >> 2)], mb.hasY2 ? 1 : 0, mb.coefs[i]);
+                    an[static_cast<size_t>(i & 3)] = leftNz[static_cast<size_t>(i >> 2)] = nz;
+                }
+                for (int i = 0; i < 8; i++) {
+                    const size_t ai = static_cast<size_t>(4 + (i >= 4 ? 2 : 0) + (i & 1)), li = static_cast<size_t>(4 + (i >= 4 ? 2 : 0) + ((i & 3) >> 1));
+                    const bool nz = tokens(toks, 2, an[ai] + leftNz[li], 0, mb.coefs[16 + i]);
+                    an[ai] = leftNz[li] = nz;
+                }
+            }
+        }
+        head.flush();
+        toks.flush();
+        // The frame: its tag (a key frame, shown, the first partition's size), start code, size.
+        std::vector<uint8_t> out;
+        const uint32_t tag = (static_cast<uint32_t>(head.out.size()) << 5) | (1u << 4);
+        out.push_back(static_cast<uint8_t>(tag));
+        out.push_back(static_cast<uint8_t>(tag >> 8));
+        out.push_back(static_cast<uint8_t>(tag >> 16));
+        out.insert(out.end(), {0x9D, 0x01, 0x2A, static_cast<uint8_t>(w_), static_cast<uint8_t>(w_ >> 8), static_cast<uint8_t>(h_), static_cast<uint8_t>(h_ >> 8)});
+        out.insert(out.end(), head.out.begin(), head.out.end());
+        out.insert(out.end(), toks.out.begin(), toks.out.end());
+        return out;
+    }
+};
 // Alpha's chunk (ALPH) put into RGBA pixels: raw or lossless, then unfiltered.
 void applyAlpha(const uint8_t* data, size_t size, std::vector<uint8_t>& rgba, int width, int height) {
     if (size < 1) throw Vp8Error{"its alpha is cut short"};
@@ -1694,6 +2223,32 @@ void registerWebp(VM& vm) {
         for (size_t i = 0; i < argb.size(); i++)
             argb[i] = (static_cast<uint32_t>(rgba[i * 4 + 3]) << 24) | (static_cast<uint32_t>(rgba[i * 4]) << 16) | (static_cast<uint32_t>(rgba[i * 4 + 1]) << 8) | rgba[i * 4 + 2];
         return bytesValue(vm, encodeLossless(argb, static_cast<int>(width), static_cast<int>(height), args[3].truthy()));
+    });
+    // encodeLossy(rgba, width, height, quality): [VP8 data, ALPH data or null] of RGBA pixels at
+    // `quality` from 0 to 1; the alpha, kept losslessly, only where some pixel is see-through.
+    def("encodeLossy", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "pixels are Bytes");
+        const std::vector<uint8_t>& rgba = asBytes(args[0])->data;
+        const int64_t width = vm.toInt(args[1], "width"), height = vm.toInt(args[2], "height");
+        if (width < 1 || height < 1 || width > 16383 || height > 16383) throw vm.runtimeError(Thrown::IllegalArgumentException, "a lossy WebP is 1 to 16383 pixels each way, not " + std::to_string(width) + " by " + std::to_string(height));
+        if (rgba.size() != static_cast<size_t>(width * height * 4)) throw vm.runtimeError(Thrown::IllegalArgumentException, "the pixels are not " + std::to_string(width) + " by " + std::to_string(height));
+        const double quality = vm.toNumber(args[3], "quality");
+        const Value picture = bytesValue(vm, LossyWriter(rgba.data(), static_cast<int>(width), static_cast<int>(height), quality).write());
+        TempRoot keepPicture(vm, picture);
+        const size_t n = static_cast<size_t>(width * height);
+        bool seeThrough = false;
+        for (size_t i = 0; i < n && !seeThrough; i++) seeThrough = rgba[i * 4 + 3] != 255;
+        Value alpha = Value::null();
+        if (seeThrough) {
+            // ALPH: lossless, unfiltered, the alpha as green.
+            std::vector<uint32_t> green(n);
+            for (size_t i = 0; i < n; i++) green[i] = 0xFF000000u | (static_cast<uint32_t>(rgba[i * 4 + 3]) << 8);
+            std::vector<uint8_t> data = encodeLossless(green, static_cast<int>(width), static_cast<int>(height), true);
+            data.insert(data.begin(), 0x01);
+            alpha = bytesValue(vm, std::move(data));
+        }
+        TempRoot keepAlpha(vm, alpha);
+        return Value::object(newList(vm, {picture, alpha}));
     });
     vm.defineGlobal("__webp", Value::object(holder));
 }

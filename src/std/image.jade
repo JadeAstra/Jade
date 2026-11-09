@@ -411,6 +411,8 @@ class Image : Drawable {
 
   // The bytes of a picture file of it in `format`, at `quality` (0 to 1) where the format loses
   // some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.
+  // WebP is lossless at quality 1 and lossy below it, its alpha kept exactly either way; its quality
+  // gives about the size and loss libwebp's does at 100 times it.
   fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes {
     if (format == ImageFormat.png) { return toPng() }
     if (format == ImageFormat.bmp) { return __Bmp.encode(this) }

@@ -25,7 +25,7 @@ for (y in 0 ..< 45) { for (x in 0 ..< 70) { pattern[x, y] = Color((x * 7 + y) % 
 val few = Image(33, 17, Color(200, 10, 10))
 for (y in 0 ..< 17) { for (x in 0 ..< 33) { if ((x / 3 + y / 2) % 3 == 0) { few[x, y] = Color.blue } } }
 for (image in [pattern, few, Image(1, 1, Color(1, 2, 3, 4)), Image(300, 2, Color.white)]) {
-  val file = image.encode(ImageFormat.webp)
+  val file = image.encode(ImageFormat.webp, 1)
   print(ImageFormat.of(file), Image.load(file) == image)
 }
 // expect: webp true
@@ -47,12 +47,12 @@ val read = Animation.load(written.encode(ImageFormat.webp))
 print(read, (0 ..< 5).all { read.frames[it].image == moving[it].image }, read.frames.map { it.delay.inWholeMilliseconds })   // expect: Animation(24 x 16, 5 frames, loops 2) true [40, 80, 120, 160, 200]
 val folder = FilePath.createTempDirectory("jade_webp")
 written.save(folder.resolve("moving.webp"))
-pattern.save(folder.resolve("still.WEBP"))
+pattern.save(folder.resolve("still.WEBP"), 1)
 print(Animation.load(folder.resolve("moving.webp")).frames.size, Image.load(folder.resolve("still.WEBP")) == pattern)   // expect: 5 true
 folder.deleteRecursively()
 
 // What cannot be read.
-val good = few.encode(ImageFormat.webp)
+val good = few.encode(ImageFormat.webp, 1)
 for (bad in [good[0 ..< 16], good[0 ..< 20] + Bytes([0x2E]) + good[21 ..], good[0 ..< 30]]) {
   try { Image.load(bad) } catch (e : IOException) { print(e.message) }
 }
@@ -73,3 +73,42 @@ checkLossy("simple", "UklGRk4BAABXRUJQVlA4IEIBAAAQBwCdASooABgAPqlMnEmmJKKhNVgIAM
 checkLossy("alpha", "UklGRnwBAABXRUJQVlA4WAoAAAAQAAAAIwAAEwAAQUxQSCcAAAABuYzof0Bp20ZQUVHv9p/5v2MRE0A2QFGYXMIQoYRgRkZecXFVBgAAVlA4IC4BAABQBwCdASokABQAPmkskUWkIqGarAQAQAaEtgBYj6Obm9J4j6hS7KN55RrY09K4iIN6W3NJoo1yss+PcxhJXbU5jboAAP7+SRi4RqmOAmuCMFlPF9HAGNCgqoBwQgVoqZrZx5jEkynR+R7t8UTqyzI3AEjKKh13/bLUjYcMHHeT/m4zE/f5e9FyPDSVs7t4OtD5QSTAX3KsabP8onYvUdbVWHCKfsEJxsb6sujF6ZTPbGG7gZvqF+C3heiN9d/Bk8Fm0092P72hDzeaRgkDIsqHhOAGloPwB2NC9wDnEMX9d872yFqgZvwEwyz31zlwld8Oam6ngq6kZpfWezUdnyF6c8p7xD8Luo6z86F7pVkqMHX2cwNlA8+XKURUuF2OfzxpNxEuecEXkAQOAAAAAA==", 737831068)   // expect: alpha 36 20 true
 checkLossy("alpha_lossy", "UklGRoQBAABXRUJQVlA4WAoAAAAQAAAAIwAAEwAAQUxQSDAAAAART0CkbZti97CiR0TsIh0IaVtNCimkkEIKKUxhClOY8iWI6H8GSVKkyZAlh1zyyCdWUDggLgEAAFAHAJ0BKiQAFAA+aSyRRaQioZqsBABABoS2AFiPo5ub0niPqFLso3nlGtjT0riIg3pbc0mijXKyz49zGEldtTmNugAA/v5JGLhGqY4Ca4IwWU8X0cAY0KCqgHBCBWipmtnHmMSTKdH5Hu3xROrLMjcASMoqHXf9stSNhwwcd5P+bjMT9/l70XI8NJWzu3g60PlBJMBfcqxps/yidi9R1tVYcIp+wQnGxvqy6MXplM9sYbuBm+oX4LeF6I3138GTwWbTT3Y/vaEPN5pGCQMiyoeE4AaWg/AHY0L3AOcQxf13zvbIWqBm/ATDLPfXOXCV3w5qbqeCrqRml9Z7NR2fIXpzynvEPwu6jrPzoXulWSowdfZzA2UDz5cpRFS4XY5/PGk3ES55wReQBA4AAAAA", 797086724)   // expect: alpha_lossy 36 20 true
 checkLossy("tiny", "UklGRlIAAABXRUJQVlA4IEYAAABwAgCdASoDAAIAAMASJZACdLoAyQDJAAX3+GsAAP7/vbr0h/oJbPUWJo/+e/2/A/4N/bv/cMZkP+DfqR/zxXEx5rNJCQAA", 2695436483)   // expect: tiny 3 2 true
+
+// Written lossy below quality 1: a VP8 chunk alone, or under an extended header with the alpha
+// kept exactly in an ALPH chunk. libwebp reads what Jade writes the same as Jade does (checked
+// outside the suite); here, the size kept, the alpha exact, the colours close and closer as the
+// quality rises, and fewer bytes as it falls.
+fun meanError(a : Image, b : Image) : float {
+  val x = a.rgbaBytes()
+  val y = b.rgbaBytes()
+  var sum = 0
+  for (i in 0 ..< x.size) { sum += Math.abs(x[i].toInt() - y[i].toInt()) }
+  return sum.toFloat() / x.size
+}
+fun alphas(image : Image) : List<int> {
+  val bytes = image.rgbaBytes()
+  return (0 ..< bytes.size / 4).map { bytes[it * 4 + 3].toInt() }
+}
+val scene = Image(61, 43)
+for (y in 0 ..< 43) { for (x in 0 ..< 61) { scene[x, y] = Color((x * 4 + y) % 256, (y * 6) % 256, 128 + (x - y) / 2, 255) } }
+val sizes : open List<int> = []
+val errors : open List<float> = []
+for (q in [0.1, 0.5, 0.9, 0.99]) {
+  val file = scene.encode(ImageFormat.webp, q)
+  val back = Image.load(file)
+  sizes.add(file.size)
+  errors.add(meanError(scene, back))
+  print(q, file[12 ..< 16].decodeToString(Charset.latin1), back.width, back.height, meanError(scene, back) < 4)
+}
+// expect: 0.1 VP8  61 43 true
+// expect: 0.5 VP8  61 43 true
+// expect: 0.9 VP8  61 43 true
+// expect: 0.99 VP8  61 43 true
+print((1 ..< 4).all { sizes[it] > sizes[it - 1] and errors[it] < errors[it - 1] })   // expect: true
+val glass = scene.copy()
+for (y in 0 ..< 43) { for (x in 0 ..< 61) { glass[x, y] = glass[x, y].withAlpha((x * 9 + y * 2) % 256) } }
+val glassFile = glass.encode(ImageFormat.webp, 0.8)
+val glassBack = Image.load(glassFile)
+print(glassFile[12 ..< 16].decodeToString(Charset.latin1), alphas(glassBack) == alphas(glass))   // expect: VP8X true
+print(Image.load(Image(1, 1, Color(9, 200, 30)).encode(ImageFormat.webp, 0.75)).width, Image.load(Image(300, 1, Color.white).encode(ImageFormat.webp)).width)   // expect: 1 300
+try { scene.encode(ImageFormat.webp, 1.5) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a WebP's quality is from 0 to 1, not 1.5

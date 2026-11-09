@@ -3240,7 +3240,7 @@ image.save(FilePath(&quot;out.png&quot;))
 <p>Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName), PNG where it asks for none: <code>quality</code>, from 0 to 1, for the formats that lose some of the picture to be smaller (JPEG, lossy WebP). An IllegalArgumentException for an extension of another format.</p>
 </div>
 <div class="entry member" id="Image.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes</code><a class="anchor" href="#Image.encode">#</a>
-<p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.</p>
+<p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels. WebP is lossless at quality 1 and lossy below it, its alpha kept exactly either way; its quality gives about the size and loss libwebp's does at 100 times it.</p>
 </div>
 <div class="entry member" id="Image.toPlanes"><code class="sig">fun toPlanes(space : ColorSpace = ColorSpace.rgb) : List&lt;Bytes&gt;</code><a class="anchor" href="#Image.toPlanes">#</a>
 <p>Its colours as planes, one byte a sample, each width by height, row by row: one for grey, three for red, green and blue or Y, Cb and Cr. Alpha is left out.</p>
