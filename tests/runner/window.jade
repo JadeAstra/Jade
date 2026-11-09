@@ -1,0 +1,305 @@
+// The test runner's window: every check of the suite in a table, with its status, each way's mark
+// and the time it took, kept up to date as the checks run; what failed in the one chosen below
+// it. Above: the jade tested, the ways, how many at once, a stress setting, and the buttons.
+import Topaz.*
+import "engine".*
+
+// What each column shows for a check: its name, status, a mark for each way, its time.
+val columnNames = ["Check", "Status", "script", "cached", "units", "compiled", "program", "Time"]
+
+// Each filter's name, and whether it lets a check be shown.
+val filterNames = ["All", "Failed", "Not passed", "Running", "Passed", "Passed only alone"]
+fun filterLets(filter : int, item : Item) : bool => when (filter) {
+  1 -> item.status == Status.failed
+  2 -> item.status != Status.passed and item.status != Status.skipped
+  3 -> item.status == Status.running
+  4 -> item.status == Status.passed
+  5 -> item.note.startsWith("passed only when run alone")
+  else -> true
+}
+
+fun statusText(item : Item) : string => when (item.status) {
+  Status.waiting -> item.results.isEmpty() ? "" : "stopped"
+  Status.running -> "running"
+  Status.passed -> item.note.startsWith("passed only when run alone") ? "passed alone" : "passed"
+  Status.failed -> "FAILED"
+  Status.skipped -> "skipped"
+}
+
+// A way's mark: running, passed, failed, or nothing where it was not run (yet).
+fun wayMark(item : Item, way : Way) : string {
+  if (item.kind != Kind.file) { return "" }
+  if (way.name in item.running) { return "…" }
+  val r = item.results[way.name]
+  return r == null ? "" : r == "" ? "✓" : "✗"
+}
+
+// Seconds as "1.2 s", or "" for none; the time so far for a check that runs.
+fun timeText(item : Item) : string {
+  val s = item.status == Status.running ? clock() - item.started : item.seconds
+  if (s <= 0.0) { return "" }
+  val tenths = Math.round(s * 10.0)
+  return "${tenths / 10}.${tenths % 10} s"
+}
+
+fun rowOf(item : Item) : List<string> {
+  val row : open List<string> = [item.name, statusText(item)]
+  for (w in Way.entries) { row.add(wayMark(item, w)) }
+  row.add(timeText(item))
+  return row
+}
+
+// What the chosen check gave, for the pane below the table.
+fun detailOf(item : Item) : string {
+  val head = "${item.name}: ${statusText(item).isEmpty() ? "not run" : statusText(item)}" + (timeText(item).isEmpty() ? "" : ", ${timeText(item)}")
+  val lines : open List<string> = [head]
+  if (item.path != null) { lines.add(item.path!!.text) }
+  for (label in item.results.keys) {
+    val r = item.results[label]!!
+    lines.add("")
+    lines.add(r == "" ? "[$label] passed" : "[$label] FAILED\n    $r")
+  }
+  if (item.note != "") {
+    lines.add("")
+    lines.add(item.note)
+  }
+  return lines.join("\n")
+}
+
+// The window, open until it is closed: what `options` says, each a control the person can change.
+// With `snapshot`, a test of the window itself: it opens hidden, runs the checks named in `only`
+// (or all), shows the first that failed, saves a picture of itself there and ends the program.
+fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath? = null) {
+  var suite = Suite(start)
+  var running = false
+  var dirty = true
+  var shown : List<Item> = []
+  var chosen : Item? = null
+  // The longest text each column has had: a longer one has the table measure its columns again.
+  val widest : open List<int> = columnNames.map { it.size }.toOpenList()
+
+  // ---- The controls ----
+  val jadeModel = SharedTextModel(start.jade.text)
+  val wayBoxes = Way.entries.map { w -> CheckBox(w.name, w in start.ways) }
+  if (!onWindows) { wayBoxes[Way.program.ordinal].checked = false }
+  val atOnce = Spinner(start.parallel, 1, 64)
+  val settingNames = Setting.entries.map { it == Setting.plain ? "none" : settingName(it) }
+  val settingBox = ComboBox(settingNames, start.setting.ordinal)
+  val filterBox = ComboBox(filterNames, 0)
+  val searchModel = SharedTextModel("")
+  val summary = Label("")
+  val progress = ProgressBar(0.0)
+  val detailModel = SharedTextModel("")
+  val detail = TextArea(detailModel)
+  detail.readOnly = true
+  val table = Table(columnNames, [])
+  val tableComponent = Component(table)
+
+  // The options the controls say now.
+  fun optionsNow() : Options {
+    val o = Options(FilePath(jadeModel.text.trim()), start.tests)
+    o.ways = Way.entries.filter { wayBoxes[it.ordinal].checked and (onWindows or it != Way.program) }
+    o.parallel = atOnce.value
+    o.setting = Setting.entries[Math.max(0, settingBox.selected)]
+    o.timeLimit = start.timeLimit
+    return o
+  }
+
+  // A new suite for the options now, each check keeping what it gave where it is still there.
+  fun refreshSuite() {
+    val old = suite.items
+    try {
+      suite = Suite(optionsNow())
+    } catch (e : IOException) {
+      summary.text = "the tests cannot be read: ${e.message}"
+      return
+    }
+    for (item in suite.items) {
+      val before = old.firstOrNull { it.name == item.name }
+      if (before != null) {
+        item.status = before.status
+        for (label in before.results.keys) { item.results[label] = before.results[label]!! }
+        item.seconds = before.seconds
+        item.note = before.note
+      }
+    }
+    dirty = true
+  }
+
+  // The table, the summary and the pane brought up to date.
+  fun refresh() {
+    val filter = Math.max(0, filterBox.selected)
+    val search = searchModel.text.trim().lower()
+    val now = suite.items.filter { filterLets(filter, it) and (search == "" or it.name.lower().contains(search)) }
+    val same = now.size == shown.size and now.indices.all { now[it] === shown[it] }
+    if (same) {
+      var wider = false
+      for (r in 0 ..< now.size) {
+        val cells = rowOf(now[r])
+        for (c in 0 ..< cells.size) {
+          table.rows[r][c] = cells[c]
+          if (cells[c].size > widest[c]) {
+            widest[c] = cells[c].size
+            wider = true
+          }
+        }
+      }
+      // Measured again (the table keeps its widths until something about them changes).
+      if (wider) { table.maxColumnWidth = table.maxColumnWidth }
+      tableComponent.invalidate()
+    } else {
+      shown = now
+      table.setRows(now.map { rowOf(it) })
+      val keep = chosen
+      table.selected = keep == null ? -1 : now.indexOf(keep)
+    }
+    val items = suite.items
+    val passed = items.count { it.status == Status.passed }
+    val failed = items.count { it.status == Status.failed }
+    val busy = items.count { it.status == Status.running }
+    val skipped = items.count { it.status == Status.skipped }
+    val done = passed + failed + skipped
+    val wanted = items.count { it.status != Status.waiting or it.results.isNotEmpty() } + items.count { it.status == Status.waiting and it.results.isEmpty() and running }
+    summary.text = "$passed passed, $failed failed" + (busy > 0 ? ", $busy running" : "") + (skipped > 0 ? ", $skipped skipped" : "") +
+                   " of ${items.size} — ${shown.size} shown"
+    progress.value = wanted == 0 ? 0.0 : done.toFloat() / wanted.toFloat()
+    val c = chosen
+    detailModel.setText(c == null ? "Choose a check to see what it gave." : detailOf(c))
+  }
+
+  // ---- Running ----
+  var saveSnapshot : () -> unit = {}
+  val runButtons : open List<Component> = []
+  val stopButton = button("Stop") { suite.stop() }
+  stopButton.enabled = false
+
+  fun runThese(which : List<Item>) {
+    if (running or which.isEmpty()) { return }
+    refreshSuite()
+    // The same checks in the new suite.
+    val names = which.map { it.name }
+    val these = suite.items.filter { it.name in names }
+    running = true
+    for (b in runButtons) { b.enabled = false }
+    stopButton.enabled = true
+    val runningSuite = suite
+    thread(daemon = true) {
+      try {
+        runningSuite.run(these) { dirty = true }
+      } catch (e : Exception) {
+        EventLoop.post { summary.text = "the run failed: ${e.message}" }
+      }
+      EventLoop.post {
+        running = false
+        for (b in runButtons) { b.enabled = true }
+        stopButton.enabled = false
+        dirty = true
+        if (snapshot != null) { saveSnapshot() }
+      }
+    }
+  }
+
+  runButtons.add(button("Run all") { runThese(suite.items) })
+  runButtons.add(button("Run failed") { runThese(suite.items.filter { it.status == Status.failed }) })
+  runButtons.add(button("Run shown") { runThese(shown) })
+  runButtons.add(button("Run chosen") {
+    val c = chosen
+    if (c != null) { runThese([c]) }
+  })
+
+  table.onSelect = { r ->
+    chosen = r >= 0 and r < shown.size ? shown[r] : null
+    dirty = true
+  }
+  table.onActivate = { r -> if (r >= 0 and r < shown.size) { runThese([shown[r]]) } }
+  filterBox.onSelect = { dirty = true }
+  searchModel.addListener { dirty = true }
+  settingBox.onSelect = { if (!running) { refreshSuite() } }
+
+  val browse = button("Choose…") {
+    Topaz.fileDialog.open("The jade to test", [FileFilter("Programs", ["*.exe"]), FileFilter("All files", ["*.*"])]) { path ->
+      if (path != null) { jadeModel.setText(path) }
+    }
+  }
+
+  // ---- The layout ----
+  val waysRow = grid {
+    hgap = 10
+    row {
+      for (b in wayBoxes) { cell(Component(b)) }
+      cell(label("  at once:"))
+      cell(Component(atOnce).preferredSize(Size(70, 26)))
+      cell(label("  stress:"))
+      cell(Component(settingBox).preferredSize(Size(150, 26)))
+      cell(label(""), weightX = 1.0)
+    }
+  }
+  val buttonsRow = grid {
+    hgap = 8
+    row {
+      for (b in runButtons) { cell(b) }
+      cell(stopButton)
+      cell(Component(progress), fill = Fill.horizontal, weightX = 1.0)
+    }
+  }
+  val filterRow = grid {
+    hgap = 8
+    row {
+      cell(label("Show:"))
+      cell(Component(filterBox).preferredSize(Size(160, 26)))
+      cell(label("  Find:"))
+      cell(Component(TextField(searchModel)), fill = Fill.horizontal, weightX = 1.0)
+      cell(Component(summary), anchor = Anchor.east)
+    }
+  }
+  val ui = grid {
+    insets = Insets(10, 10, 10, 10)
+    hgap = 8
+    vgap = 8
+    row {
+      cell(label("jade:"))
+      cell(Component(TextField(jadeModel)), fill = Fill.horizontal, weightX = 1.0)
+      cell(browse)
+    }
+    row { cell(waysRow, colSpan = 3, fill = Fill.horizontal, weightX = 1.0) }
+    row { cell(buttonsRow, colSpan = 3, fill = Fill.horizontal, weightX = 1.0) }
+    row { cell(filterRow, colSpan = 3, fill = Fill.horizontal, weightX = 1.0) }
+    row {
+      cell(split(scroll(tableComponent), scroll(Component(detail)), vertical = true, ratio = 0.72), colSpan = 3, fill = Fill.both,
+           weightX = 1.0, weightY = 1.0)
+    }
+  }
+
+  val window = Window(ui, title = "Jade tests — ${start.tests.text}", initialWidth = 1100, initialHeight = 820,
+                      onClose = { suite.stop() })
+  saveSnapshot = {
+    refresh()
+    val failed = shown.firstOrNull { it.status == Status.failed }
+    if (failed != null) {
+      chosen = failed
+      table.selected = shown.indexOf(failed)
+      refresh()
+    }
+    val host = window.handle as WindowHost
+    host.frame()
+    try {
+      host.snapshot().save(snapshot!!)
+      print("saved", snapshot)
+    } catch (e : IOException) {
+      print("could not save the picture:", e.message)
+    }
+    window.close()
+    exit(0)
+  }
+  if (snapshot != null) { Topaz.windowOpener = HiddenWindowOpener() }
+  window.show()
+  if (snapshot != null) { runThese(only == null ? suite.items : suite.items.filter { it.name in only!! }) }
+  // Four times a second: what changed since, and the times of the checks that run.
+  EventLoop.every(250.milliseconds) {
+    if (dirty or running) {
+      dirty = false
+      refresh()
+    }
+  }
+  refresh()
+}

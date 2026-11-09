@@ -1,6 +1,6 @@
 // Xml.parse on big input (M9/M10 part one, step 2): a document 20,000 elements deep, and one
 // whose entities would expand to a billion characters. Apart from xml.jade because they make
-// many objects: left out under the GC stress setting (tests/run.ps1), where they take hours.
+// many objects: left out under the GC stress setting (tests/runner), where they take hours.
 
 fun fails(text : string) {
   try {

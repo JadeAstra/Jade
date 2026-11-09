@@ -43,7 +43,7 @@ Linux with GCC 13 or later, or Clang 17 or later, and CMake:
 ```
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-python3 tests/run.py --jade build/jade --parallel 16
+build/jade tests/runner/run.jade --parallel 16
 ```
 
 Scripts, files, processes and sockets work there as on Windows; windows, the fonts the text
@@ -3516,8 +3516,15 @@ attached.
 ## Tests
 
 ```
-powershell -ExecutionPolicy Bypass -File tests\run.ps1
+build\jade.exe tests\runner\run.jade
 ```
+
+The test runner is a Jade program with a window: every check of the suite in a table, with its
+status, a mark for each way it is run and the time it took, kept up to date as the checks run.
+Choose one to see what it gave; run them all, the failed ones, the ones shown or the one chosen;
+show only the failed, the running or the passed, or find one by name; and choose the jade to
+test, the ways, how many run at once and a stress setting. It tests the `jade` that runs it,
+unless told another.
 
 Each `tests\*.jade` file states its expected output in `// expect:` comments. The runner
 executes every test five ways (from source, again from the program the first run kept, again
@@ -3525,15 +3532,19 @@ from the units it kept, from a compiled `.jc`, and built into an `.exe`) and exp
 same result from each. A last check builds a program with `--icon` and looks for the icon in
 the result.
 
-`-Parallel 24` runs 24 tests at a time, each in a directory and with a cache of its own; a
-test that fails is run again alone, and reported only if it fails again (one that passes alone
-is listed as such). `-Modes script` runs only some of the five ways, which is enough under the
-stress settings below: they look for faults in the runtime, which do not depend on how the
-program was loaded.
+`--console` prints what failed instead, and ends with `<n> passed, <m> failed`; off Windows,
+where there are no windows yet, that is what it does. `--parallel 24` runs 24 checks at a time,
+each in a directory and with a cache of its own; a check that fails is run again alone, and
+reported only if it fails again (one that passes alone is listed as such). `--ways script` runs
+only some of the five ways, which is enough under the stress settings below: they look for
+faults in the runtime, which do not depend on how the program was loaded. `--stress` runs the
+suite, then once more under each stress setting, one way; `--setting gc-stress` (or
+`copy-reads`, `thread-stress`, `native-results`) runs it under one.
 
 ```
-powershell -ExecutionPolicy Bypass -File tests\run.ps1 -Parallel 24
-powershell -ExecutionPolicy Bypass -File tests\run.ps1 -Parallel 24 -Modes script
+build\jade.exe tests\runner\run.jade --console --parallel 24
+build\jade.exe tests\runner\run.jade --console --parallel 24 --stress
+build\jade.exe tests\runner\run.jade --console --parallel 24 --ways script --setting gc-stress
 ```
 
 `// expect error output:` is for a program that finishes normally having reported an error
