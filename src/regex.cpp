@@ -1371,10 +1371,19 @@ struct Entry {
     int64_t slot;   // Capture, Register: which; Run: where the run began, the shortest it may be given back to
 };
 
+// The entries of the match being made on this thread, kept from one match to the next: a
+// match is made at a time on a thread, and most are short, where a vector of their own would
+// cost them an allocation each.
+std::vector<Entry>& scratchStack() {
+    static thread_local std::vector<Entry> stack;
+    stack.clear();
+    return stack;
+}
+
 class Runner {
 public:
     Runner(const Program& p, const ObjString* s, std::vector<int64_t>& caps, size_t searchStart)
-        : p_(p), s_(s), n_(s->length), caps_(caps), regs_(static_cast<size_t>(p.loops), -1), searchStart_(searchStart) {}
+        : p_(p), s_(s), n_(s->length), caps_(caps), regs_(static_cast<size_t>(p.loops), -1), stack_(scratchStack()), searchStart_(searchStart) {}
 
     // Runs the program from `pc` at `pos`; on success `end` is where the match ended. With a
     // target, a look-behind's program, it must end there; with requireEnd, at the end of the input.
@@ -1461,6 +1470,15 @@ public:
                                !wasTried(pc, p + 1)) {
                             p++;
                             noteTried(pc, p, target);
+                        }
+                    } else if (inst.test == Op::Class && s_->width == 1) {
+                        // Text of one byte a character, ASCII ones tested by the class's bits alone.
+                        const uint8_t* text = reinterpret_cast<const uint8_t*>(s_->units().data());
+                        const auto& bits = p_.asciiBits[static_cast<size_t>(inst.a)];
+                        while (p < n) {
+                            const uint8_t c = text[p];
+                            if (c < 128 ? ((bits[c >> 6] >> (c & 63)) & 1) == 0 : !inClass(p_, inst.a, c)) break;
+                            p++;
                         }
                     } else if (inst.test == Op::Class) {
                         while (p < n && inClass(p_, inst.a, s_->at(static_cast<size_t>(p)))) p++;
@@ -1667,7 +1685,7 @@ private:
     const size_t n_;
     std::vector<int64_t>& caps_;
     std::vector<int64_t> regs_;
-    std::vector<Entry> stack_;
+    std::vector<Entry>& stack_;
     const size_t searchStart_;
     // Which branch points failed at which positions, once the search has taken enough branches
     // for it to pay; refused where the table would be too large.

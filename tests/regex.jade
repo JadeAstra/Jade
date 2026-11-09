@@ -111,3 +111,9 @@ print(Regex("(?>a*)ab").matchAt("aaab", 0)?.value, Regex("[a-c]*+c").find("abcc"
 print(Regex("(?i)a*B").find("xAaAb")?.value, Regex("\\s*=\\s*").matchAt("  =  x", 0)?.value?.size, Regex("(?=a*b)a").find("aab")?.value)   // expect: AaAb 5 a
 val runs = clock()
 print(Regex("a*a*a*a*a*c").containsMatchIn("a".repeat(20000) + "b"), clock() - runs < 1.0)   // expect: false true
+
+// A match's places with no MatchResult made: at a place, and all of them from one place to another.
+print(Regex("(\\w+)=(\\d+)").spansAt("x a=12", 2), Regex("b").spansAt("ab", 0), Regex("(a)|(b)").spansAt("b", 0))   // expect: [2, 6, 2, 3, 4, 6] null [0, 1, -1, -1, 0, 1]
+print(Regex("(\\w)=(\\d)").allSpans("a=1 b=2"), Regex("(\\w)=(\\d)").allSpans("a=1 b=2", 1, 6), Regex("x*").allSpans("ab"))   // expect: [0, 3, 0, 1, 2, 3, 4, 7, 4, 5, 6, 7] [] [0, 0, 1, 1, 2, 2]
+try { Regex("a").allSpans("ab", 3) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: start index 3 is out of bounds of a text of 2 characters
+try { Regex("a").allSpans("ab", 1, 0) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: end index 0 is out of bounds: from 1 to 2

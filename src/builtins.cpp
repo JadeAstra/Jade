@@ -1138,7 +1138,7 @@ void registerBytes(VM& vm) {
         const size_t count = searched ? bytePlaces(asBytes(self)->data.data(), start, end, value, nullptr) : 0;
         ObjList* list = newList(vm);
         TempRoot keep(vm, Value::object(list));
-        vm.typeList(list, vm.typeOf(kTypeList, false, nullptr, {vm.typeOf(kTypeInt, false, nullptr, {})}));
+        vm.typeList(list, vm.intListType());
         if (count == 0) return Value::object(list);
         if (list->store() == ListStore::Ints) {
             list->pack->block.resize((count + 4) * sizeof(int64_t));  // room for what bytePlaces writes past the last

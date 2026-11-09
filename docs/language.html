@@ -547,7 +547,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
 <li><a href="#Rect"><code>Rect</code></a> (26)</li>
-<li><a href="#Regex"><code>Regex</code></a> (19)</li>
+<li><a href="#Regex"><code>Regex</code></a> (21)</li>
 <li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
@@ -4483,6 +4483,16 @@ for (word in Regex(&quot;\\w+&quot;).findAll(text)) { ... }
 </div>
 <div class="entry member" id="Regex.matchAt"><code class="sig">fun matchAt(input : string, index : int) : MatchResult?</code><a class="anchor" href="#Regex.matchAt">#</a>
 <p>The match that starts at <code>index</code>, or null.</p>
+</div>
+<div class="entry member" id="Regex.spansAt"><code class="sig">fun spansAt(input : string, index : int) : List&lt;int&gt;?</code><a class="anchor" href="#Regex.spansAt">#</a>
+<p>The match at <code>index</code>, as matchAt finds it, given as where it and each group start and end, the end left out: [start, end, group 1's start, group 1's end, ...], -1 for a group that took no part; null where there is no match. No MatchResult is made, for readers that match many times.</p>
+<pre>Regex(&quot;(\\w+)=(\\d+)&quot;).spansAt(&quot;x a=12&quot;, 2)   // [2, 6, 2, 3, 4, 6]
+</pre>
+</div>
+<div class="entry member" id="Regex.allSpans"><code class="sig">fun allSpans(input : string, startIndex : int = 0, endIndex : int = input.size) : List&lt;int&gt;</code><a class="anchor" href="#Regex.allSpans">#</a>
+<p>Every match from <code>startIndex</code>, one after another as findAll finds them, up to the first that does not end by <code>endIndex</code>: their places one after another in one list, each as spansAt gives them (so 2 for the whole and 2 for each group).</p>
+<pre>Regex(&quot;(\\w)=(\\d)&quot;).allSpans(&quot;a=1 b=2&quot;)   // [0, 3, 0, 1, 2, 3, 4, 7, 4, 5, 6, 7]
+</pre>
 </div>
 <div class="entry member" id="Regex.replace"><code class="sig">fun replace(input : string, replacement : string) : string</code><a class="anchor" href="#Regex.replace">#</a>
 <p>Every match replaced by <code>replacement</code>, in which $1 is a group's text, ${name} a named group's, and \$ a dollar sign (Regex.escapeReplacement makes text that means itself).</p>

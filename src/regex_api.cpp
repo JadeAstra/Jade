@@ -47,6 +47,29 @@ void appendChar(Characters& out, uint32_t c) {
     out.append(bytes, 1, width);
 }
 
+// A List<int> of `count` numbers, kept packed: one block for them all.
+Value intList(VM& vm, const int64_t* numbers, size_t count) {
+    ObjList* list = newList(vm);
+    TempRoot keep(vm, Value::object(list));
+    vm.typeList(list, vm.intListType());
+    if (count == 0) return Value::object(list);
+    if (list->store() == ListStore::Ints) {
+        list->pack->block.resize(count * sizeof(int64_t));
+        std::memcpy(list->pack->block.data(), numbers, count * sizeof(int64_t));
+        list->pack->count = count;
+        vm.account(list->pack->block.size());
+    } else {
+        for (size_t i = 0; i < count; i++) vm.listAdd(list, Value::integer(numbers[i]));
+    }
+    return Value::object(list);
+}
+
+// The groups of the match being made on this thread, kept from one to the next.
+std::vector<int64_t>& scratchGroups() {
+    static thread_local std::vector<int64_t> groups;
+    return groups;
+}
+
 Pattern::Mode modeOf(int64_t n) { return n == 1 ? Pattern::Mode::AtStart : n == 2 ? Pattern::Mode::Entire : Pattern::Mode::Search; }
 
 // Java's appendReplacement: $n (as many digits as still name a group), ${name}, \x for x.
@@ -137,12 +160,34 @@ void registerRegex(VM& vm) {
         if (from < 0 || static_cast<size_t>(from) > text->length)
             throw vm.runtimeError(Thrown::IndexOutOfBoundsException,
                                   "start index " + std::to_string(from) + " is out of bounds of a text of " + std::to_string(text->length) + " characters");
-        std::vector<int64_t> groups;
+        std::vector<int64_t>& groups = scratchGroups();
         if (!pattern.match(text, static_cast<size_t>(from), modeOf(vm.toInt(args[3], "mode")), groups)) return Value::null();
-        std::vector<Value> items;
-        items.reserve(groups.size());
-        for (int64_t g : groups) items.push_back(Value::integer(g));
-        return Value::object(newList(vm, std::move(items)));
+        return intList(vm, groups.data(), groups.size());
+    });
+    // Every match from `from` that ends by `to`, as findAll finds them: each one's places, as
+    // find gives them, one after another in one List<int>.
+    def("allSpans", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        const Pattern& pattern = patternOf(vm, args[0]);
+        const ObjString* text = textOf(vm, args[1]);
+        const int64_t start = vm.toInt(args[2], "startIndex");
+        const int64_t end = vm.toInt(args[3], "endIndex");
+        const int64_t n = static_cast<int64_t>(text->length);
+        if (start < 0 || start > n)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException,
+                                  "start index " + std::to_string(start) + " is out of bounds of a text of " + std::to_string(n) + " characters");
+        if (end < start || end > n)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException,
+                                  "end index " + std::to_string(end) + " is out of bounds: from " + std::to_string(start) + " to " + std::to_string(n));
+        static thread_local std::vector<int64_t> all;
+        all.clear();
+        std::vector<int64_t>& groups = scratchGroups();
+        size_t from = static_cast<size_t>(start);
+        while (static_cast<int64_t>(from) <= end && pattern.match(text, from, Pattern::Mode::Search, groups) && groups[1] <= end) {
+            all.insert(all.end(), groups.begin(), groups.end());
+            const size_t b = static_cast<size_t>(groups[0]), e = static_cast<size_t>(groups[1]);
+            from = e == b ? e + 1 : e;
+        }
+        return intList(vm, all.data(), all.size());
     });
     // Every match, or the first, replaced by `replacement` in Java's way ($1, ${name}, \$).
     def("replace", 4, 4, [](VM& vm, int, Value* args) -> Value {

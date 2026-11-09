@@ -44,6 +44,8 @@ class Regex {
   // The options it was given.
   val options : Set<RegexOption>
   private val compiled : any
+  // The numbers of its named groups, made when a MatchResult first needs them.
+  private var names : Map<string, int>? = null
 
   // Regex(pattern), or with an option or a set of them: Regex("^a", RegexOption.multiline).
   fun init(pattern : string, options : (RegexOption | Set<RegexOption>)? = null) {
@@ -78,10 +80,20 @@ class Regex {
   fun matchEntire(input : string) : MatchResult? => made(input, __regex.find(compiled, input, 0, 2))
   // The match that starts at `index`, or null.
   fun matchAt(input : string, index : int) : MatchResult? => made(input, __regex.find(compiled, input, index, 1))
-  // The match at `index`, as matchAt finds it, given as where it and each group start and end
-  // (-1 for a group that took no part), with no MatchResult made: for the standard library's
-  // readers, which match many times (the XML reader).
-  internal fun spansAt(input : string, index : int) : List<int>? => __regex.find(compiled, input, index, 1)
+  // The match at `index`, as matchAt finds it, given as where it and each group start and end,
+  // the end left out: [start, end, group 1's start, group 1's end, ...], -1 for a group that took
+  // no part; null where there is no match. No MatchResult is made, for readers that match many
+  // times.
+  //
+  //   Regex("(\\w+)=(\\d+)").spansAt("x a=12", 2)   // [2, 6, 2, 3, 4, 6]
+  fun spansAt(input : string, index : int) : List<int>? => __regex.find(compiled, input, index, 1)
+  // Every match from `startIndex`, one after another as findAll finds them, up to the first that
+  // does not end by `endIndex`: their places one after another in one list, each as spansAt
+  // gives them (so 2 for the whole and 2 for each group).
+  //
+  //   Regex("(\\w)=(\\d)").allSpans("a=1 b=2")   // [0, 3, 0, 1, 2, 3, 4, 7, 4, 5, 6, 7]
+  fun allSpans(input : string, startIndex : int = 0, endIndex : int = input.size) : List<int> =>
+      __regex.allSpans(compiled, input, startIndex, endIndex)
 
   // Every match replaced by `replacement`, in which $1 is a group's text, ${name} a named
   // group's, and \$ a dollar sign (Regex.escapeReplacement makes text that means itself).
@@ -115,7 +127,11 @@ class Regex {
   // The pattern.
   override fun toString() : string => pattern
 
-  private fun made(input : string, spans : List<int>?) : MatchResult? => spans == null ? null : MatchResult(this, input, spans, __regex.groupNames(compiled))
+  private fun made(input : string, spans : List<int>?) : MatchResult? {
+    if (spans == null) { return null }
+    if (names == null) { names = __regex.groupNames(compiled) }
+    return MatchResult(this, input, spans!!, names!!)
+  }
 
   static {
     // A pattern that matches `literal` as it is: \Q...\E around it, as Java's Pattern.quote.
@@ -231,6 +247,7 @@ external object __regex {
   fun groupCount(pattern : any) : int
   fun groupNames(pattern : any) : Map<string, int>
   fun find(pattern : any, text : string, from : int, mode : int) : List<int>?
+  fun allSpans(pattern : any, text : string, from : int, to : int) : List<int>
   fun replace(pattern : any, text : string, replacement : string, firstOnly : bool) : string
   fun split(pattern : any, text : string, limit : int) : List<string>
 }

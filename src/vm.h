@@ -777,6 +777,11 @@ public:
         if (anyType_ == nullptr) anyType_ = typeOf(0, false, nullptr, {});
         return anyType_;
     }
+    // The type List<int>, made once: for natives that give lists of places, called many times.
+    ObjTypeInfo* intListType() {
+        if (intListType_ == nullptr) intListType_ = typeOf(kTypeList, false, nullptr, {typeOf(kTypeInt, false, nullptr, {})});
+        return intListType_;
+    }
     // The type arguments of frame `index`, a kTypeArguments type, null where there are none: a
     // generic function's are those WithTypes gave its call, and a lambda's those of where it was
     // made. Kept only for a function whose FunctionProto::typeArgs says it reads them. They are
@@ -1365,6 +1370,7 @@ private:
     std::unordered_map<std::string_view, ObjString*> interned_;
     std::unordered_map<std::string, ObjTypeInfo*> types_;  // by what they are made of (typeOf)
     ObjTypeInfo* anyType_ = nullptr;
+    ObjTypeInfo* intListType_ = nullptr;
     // The type arguments WithTypes gave for the call that follows it, which takes them: the
     // frame it pushes, or the object it makes. Cleared by a call of C++, which has none.
     const ObjTypeInfo* pendingTypeArgs_ = nullptr;
