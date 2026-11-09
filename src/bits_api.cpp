@@ -572,6 +572,109 @@ void registerBits(VM& vm) {
         vm.defineGlobal("__jpeg", Value::object(jpeg));
     }
 
+    // ---- GIF's LZW (the only part of GIF in C++, the user's choice of 2026-11-08) ----
+    {
+        ObjClass* gif = vm.alloc<ObjClass>(vm.intern("Gif"));
+        // decodeLzw(data, at, minSize, out): a picture's codes, in the blocks starting at `at` (each
+        // its length, then that many bytes, to an empty one), from minSize + 1 bits up to 12, into
+        // the indices of `out`; how many came, or a string, what is wrong. The data ending before
+        // its end code keeps what came; codes past `out` are dropped; codes after the table is
+        // full go on with it as it is.
+        gif->statics.set(vm.intern("decodeLzw"), Value::object(vm.alloc<ObjNative>("Gif.decodeLzw", 4, 4, [](VM& vm, int, Value* args) -> Value {
+            const std::vector<uint8_t>& data = bytesOf(vm, args[0]);
+            const int64_t at = vm.toInt(args[1], "at"), minSize = vm.toInt(args[2], "minSize");
+            if (!args[3].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "indices are written into Bytes");
+            std::vector<uint8_t>& outBytes = asBytes(args[3])->data;
+            if (at < 0 || at > static_cast<int64_t>(data.size()) || minSize < 1 || minSize > 11) throw vm.runtimeError(Thrown::IllegalArgumentException, "no LZW data there");
+            const uint8_t* d = data.data();
+            const size_t size = data.size();
+            size_t pos = static_cast<size_t>(at), blockLeft = 0;
+            bool ended = false;
+            uint64_t buffer = 0;
+            int bits = 0;
+            // The next byte of the blocks, or false at their end.
+            auto nextByte = [&](uint8_t& byte) {
+                while (blockLeft == 0) {
+                    if (ended || pos >= size || d[pos] == 0) {
+                        ended = true;
+                        return false;
+                    }
+                    blockLeft = d[pos++];
+                }
+                if (pos >= size) {
+                    ended = true;
+                    return false;
+                }
+                byte = d[pos++];
+                blockLeft--;
+                return true;
+            };
+            const int clear = 1 << minSize, end = clear + 1;
+            // Each entry is a string already written: where in `out` it starts, and its length.
+            uint32_t start[4096], length[4096];
+            for (int i = 0; i < clear; i++) length[i] = 1;
+            int codeSize = static_cast<int>(minSize) + 1, next = end + 1, old = -1;
+            uint32_t mask = (1u << codeSize) - 1, oldAt = 0;
+            uint8_t* out = outBytes.data();
+            const size_t total = outBytes.size();
+            size_t o = 0;
+            for (;;) {
+                while (bits < codeSize) {
+                    uint8_t byte;
+                    if (!nextByte(byte)) return Value::integer(static_cast<int64_t>(o));
+                    buffer |= static_cast<uint64_t>(byte) << bits;
+                    bits += 8;
+                }
+                const int code = static_cast<int>(buffer & mask);
+                buffer >>= codeSize;
+                bits -= codeSize;
+                if (code == clear) {
+                    codeSize = static_cast<int>(minSize) + 1;
+                    mask = (1u << codeSize) - 1;
+                    next = end + 1;
+                    old = -1;
+                    continue;
+                }
+                if (code == end) return Value::integer(static_cast<int64_t>(o));
+                if (old < 0 && code > clear) return vm.str("its first code, " + std::to_string(code) + ", is not a colour");
+                if (code > next || (code == next && next >= 4096)) return vm.str("an LZW code, " + std::to_string(code) + ", past those made");
+                const bool made = code == next;
+                if (old >= 0 && next < 4096) {
+                    start[next] = oldAt;
+                    length[next] = length[old] + 1;
+                    next++;
+                    if (static_cast<uint32_t>(next) == mask + 1 && codeSize < 12) {
+                        codeSize++;
+                        mask = (1u << codeSize) - 1;
+                    }
+                }
+                if (o >= total) return Value::integer(static_cast<int64_t>(total));
+                if (code < clear) {
+                    out[o] = static_cast<uint8_t>(code);
+                    oldAt = static_cast<uint32_t>(o);
+                    o++;
+                    old = code;
+                    continue;
+                }
+                const size_t n = length[code], from = start[code];
+                if (o + n > total) {
+                    std::memmove(out + o, out + from, total - o);
+                    return Value::integer(static_cast<int64_t>(total));
+                }
+                if (made) {
+                    std::memcpy(out + o, out + from, n - 1);
+                    out[o + n - 1] = out[from];
+                } else {
+                    std::memcpy(out + o, out + from, n);
+                }
+                oldAt = static_cast<uint32_t>(o);
+                o += n;
+                old = code;
+            }
+        })));
+        vm.defineGlobal("__gif", Value::object(gif));
+    }
+
 }
 
 }  // namespace jade

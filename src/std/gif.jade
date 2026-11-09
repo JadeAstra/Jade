@@ -142,20 +142,12 @@ object __Gif {
       if (at >= data.size) { throw failure("a picture's data is cut short") }
       val minSize = data[at].toInt()
       if (minSize < 1 or minSize > 11) { throw failure("an LZW code size of $minSize") }
-      // The picture's data, its blocks put together.
-      val end = skipBlocks(data, at + 1)
-      val packedData = Bytes(end - at)   // 2 bytes or more past the data: room for lzw's 16-bit reads
-      var o = 0
-      var b = at + 1
-      while (b < end and data[b].toInt() != 0) {
-        val n = data[b].toInt()
-        packedData.copyFrom(data, b + 1, 1, o, 1, n)
-        o += n
-        b += n + 1
-      }
-      at = end
+      // The picture's codes, in blocks, decoded in C++ (src/bits_api.cpp).
       val indices = Bytes(w * h)
-      val count = lzw(packedData, o, minSize, indices)
+      val decoded = __gif.decodeLzw(data, at + 1, minSize, indices)
+      if (decoded is string) { throw failure(decoded as string) }
+      val count = decoded as int
+      at = skipBlocks(data, at + 1)
       val rows = flags & 0x40 != 0 ? interlaced(h) : null
       val before = disposal == 3 ? Bytes(canvas) : null
       place(canvas, width, height, indices, count, left, top, w, h, rows, colors!!, transparent)
@@ -243,90 +235,6 @@ object __Gif {
           p += 4
         }
       }
-    }
-  }
-
-  // LZW: `size` bytes of codes, lowest bit first, from `minSize` + 1 bits up to 12, into indices;
-  // how many came. A code past the table is an error; codes after the table is full go on with it
-  // as it is (a clear put off). Each entry of the table is a string already written: where it
-  // starts in `out` and how long it is, so that a code is one copy.
-  private fun lzw(data : Bytes, size : int, minSize : int, out : Bytes) : int throws IOException {
-    val clear = 1 << minSize
-    val end = clear + 1
-    val start : open List<int> = Grid<int>(4096, 1).cells
-    val length : open List<int> = Grid<int>(4096, 1).cells
-    var codeSize = minSize + 1
-    var mask = (1 << codeSize) - 1
-    var next = end + 1
-    var old = -1
-    var oldAt = 0
-    var accumulated = 0
-    var bits = 0
-    var pos = 0
-    var o = 0
-    val total = out.size
-    while (true) {
-      if (bits < codeSize) {   // 16 bits at a time: `data` has a byte to spare past `size`
-        if (pos >= size) { return o }   // the data ends without its end code: what came is kept
-        accumulated = accumulated | (data.uint16(pos) << bits)
-        bits += 16
-        pos += 2
-      }
-      val code = accumulated & mask
-      accumulated = accumulated >> codeSize
-      bits -= codeSize
-      if (code < clear) {
-        if (old >= 0 and next < 4096) {
-          start[next] = oldAt
-          length[next] = (old < clear ? 1 : length[old]) + 1
-          next += 1
-          if (next == mask + 1 and codeSize < 12) {
-            codeSize += 1
-            mask = (1 << codeSize) - 1
-          }
-        }
-        if (o >= total) { return o }
-        out[o] = code.toByteWrapped()
-        oldAt = o
-        o += 1
-        old = code
-        continue
-      }
-      if (code == clear) {
-        codeSize = minSize + 1
-        mask = (1 << codeSize) - 1
-        next = end + 1
-        old = -1
-        continue
-      }
-      if (code == end) { return o }
-      if (old < 0) { throw failure("its first code, $code, is not a colour") }
-      if (code > next or code == next and next >= 4096) { throw failure("an LZW code, $code, past those made") }
-      val made = code == next
-      if (next < 4096) {
-        start[next] = oldAt
-        length[next] = (old < clear ? 1 : length[old]) + 1
-        next += 1
-        if (next == mask + 1 and codeSize < 12) {
-          codeSize += 1
-          mask = (1 << codeSize) - 1
-        }
-      }
-      val from = start[code]
-      val n = length[code]
-      if (o + n > total) {
-        if (o < total) { out.copyFrom(out, from, 1, o, 1, total - o) }
-        return total
-      }
-      if (made) {
-        out.copyFrom(out, from, 1, o, 1, n - 1)
-        out[o + n - 1] = out[from]
-      } else {
-        out.copyFrom(out, from, 1, o, 1, n)
-      }
-      oldAt = o
-      o += n
-      old = code
     }
   }
 
@@ -593,4 +501,8 @@ class __GifBits {
     }
     return data[0 ..< size]
   }
+}
+
+external object __gif {
+  fun decodeLzw(data : Bytes, at : int, minSize : int, out : Bytes) : any
 }
