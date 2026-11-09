@@ -1,5 +1,6 @@
 #include "value.h"
 
+#include <cstdlib>
 #include <mutex>
 #include <new>
 
@@ -968,18 +969,27 @@ struct FreeBlock {
 };
 
 // A thread's lists, and what is left of its chunk. Never freed: when its thread ends it is
-// handed to the next thread that wants one, with all that is on it.
+// handed to the next thread that wants one, with all that is on it. Made with malloc, as is
+// all the pool's own memory: every `new` in the program comes here, so the pool may not use one.
 struct Pool {
     FreeBlock* free[kClasses] = {};
     uint8_t* cut = nullptr;
     uint8_t* cutEnd = nullptr;
+    Pool* nextOrphan = nullptr;
 };
 
-std::mutex orphansLock;
-std::vector<Pool*>& orphans() {
-    static auto* list = new std::vector<Pool*>();  // never destroyed: threads end after main's statics
-    return *list;
-}
+// The pools of threads that have ended, behind a lock that needs no constructor: `new` may
+// be called before any of the program's statics are made.
+std::atomic_flag orphansLock = ATOMIC_FLAG_INIT;
+Pool* orphans = nullptr;
+
+struct OrphansHeld {
+    OrphansHeld() {
+        while (orphansLock.test_and_set(std::memory_order_acquire)) {
+        }
+    }
+    ~OrphansHeld() { orphansLock.clear(std::memory_order_release); }
+};
 
 thread_local Pool* pool = nullptr;  // trivial, so that it may be read at any time, even at exit
 
@@ -987,8 +997,9 @@ thread_local Pool* pool = nullptr;  // trivial, so that it may be read at any ti
 struct PoolRelease {
     ~PoolRelease() {
         if (pool == nullptr) return;
-        std::lock_guard<std::mutex> hold(orphansLock);
-        orphans().push_back(pool);
+        OrphansHeld hold;
+        pool->nextOrphan = orphans;
+        orphans = pool;
         pool = nullptr;
     }
 };
@@ -997,13 +1008,18 @@ thread_local PoolRelease poolRelease;
 Pool& ownPool() {
     if (pool != nullptr) return *pool;
     {
-        std::lock_guard<std::mutex> hold(orphansLock);
-        if (!orphans().empty()) {
-            pool = orphans().back();
-            orphans().pop_back();
+        OrphansHeld hold;
+        if (orphans != nullptr) {
+            pool = orphans;
+            orphans = orphans->nextOrphan;
+            pool->nextOrphan = nullptr;
         }
     }
-    if (pool == nullptr) pool = new Pool();
+    if (pool == nullptr) {
+        void* memory = std::malloc(sizeof(Pool));
+        if (memory == nullptr) throw std::bad_alloc();
+        pool = ::new (memory) Pool();
+    }
     (void)&poolRelease;  // made on this thread, so that its pool is handed on when the thread ends
     return *pool;
 }
@@ -1014,7 +1030,11 @@ void* take(size_t size) {
 #ifdef JADE_OBJECT_HEAP
     return ::operator new(size);
 #else
-    if (size > kLargest) return ::operator new(size);
+    if (size > kLargest) {
+        void* large = std::malloc(size);
+        if (large == nullptr) throw std::bad_alloc();
+        return large;
+    }
     const size_t k = (size + 15) >> 4;
     Pool& p = ownPool();
     if (FreeBlock* block = p.free[k]) {
@@ -1030,8 +1050,10 @@ void* take(size_t size) {
             p.free[1] = rest;
             p.cut += 16;
         }
-        p.cut = static_cast<uint8_t*>(::operator new(kChunk, std::align_val_t{16}));
-        p.cutEnd = p.cut + kChunk;
+        auto* chunk = static_cast<uint8_t*>(std::malloc(kChunk));  // 16-byte aligned, as malloc's are
+        if (chunk == nullptr) throw std::bad_alloc();
+        p.cut = chunk;
+        p.cutEnd = chunk + kChunk;
     }
     void* made = p.cut;
     p.cut += bytes;
@@ -1046,7 +1068,7 @@ void give(void* p, size_t size) noexcept {
     ::operator delete(p);
 #else
     if (size > kLargest) {
-        ::operator delete(p);
+        std::free(p);
         return;
     }
     const size_t k = (size + 15) >> 4;
@@ -1161,6 +1183,9 @@ void ValueMap::addNew(const Value& key, const Value& value, uint32_t hash) {
         shift_ = shift;
         used_ = live_;
         version_++;
+        // Room for as many entries as the index takes before it grows again: one allocation
+        // where the entries growing a step at a time took three for a small map.
+        entries_.reserve(capacity * 3 / 4);
     }
     entries_.push_back(Entry{key, value, true, hash});
     const size_t mask = slots_.size() - 1;
@@ -1243,3 +1268,31 @@ bool ObjRange::contains(int64_t i) const {
 }
 
 }  // namespace jade
+
+#ifndef JADE_OBJECT_HEAP
+// Every other `new` in the program, the standard library's included (the C++ runtime is linked
+// in, not shared): the buffers of strings, vectors and maps from the same lists as objects,
+// with their size kept in front of them, as an unsized delete needs it.
+void* operator new(size_t size) { return jade::objectMemory::takeSized(size); }
+void* operator new[](size_t size) { return jade::objectMemory::takeSized(size); }
+void* operator new(size_t size, const std::nothrow_t&) noexcept {
+    try {
+        return jade::objectMemory::takeSized(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+    try {
+        return jade::objectMemory::takeSized(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+void operator delete(void* p) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete[](void* p) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete(void* p, size_t) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete[](void* p, size_t) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { jade::objectMemory::giveSized(p); }
+#endif
