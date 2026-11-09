@@ -4536,10 +4536,12 @@ void VM::sliceBounds(const ObjRange* range, size_t size, size_t& begin, size_t& 
     const int64_t n = static_cast<int64_t>(size);
     const int64_t first = range->startFromEnd ? n - range->start : range->start;
     const int64_t last = (range->endFromEnd ? n - range->end : range->end) + (range->inclusive ? 1 : 0);
-    const std::string shown = stringify(Value::object(const_cast<ObjRange*>(range)));
-    if (first < 0 || first > n || last < 0 || last > n)
-        throw runtimeError(Thrown::IndexOutOfBoundsException, "the slice " + shown + " is out of range (size " + std::to_string(size) + ")");
-    if (last < first) throw runtimeError(Thrown::IllegalArgumentException, "the slice " + shown + " runs backwards: from " + std::to_string(first) + " to " + std::to_string(last - 1));
+    if (first < 0 || first > n || last < 0 || last > n || last < first) {   // the range shown only for an error: it costs more than the slice
+        const std::string shown = stringify(Value::object(const_cast<ObjRange*>(range)));
+        if (first < 0 || first > n || last < 0 || last > n)
+            throw runtimeError(Thrown::IndexOutOfBoundsException, "the slice " + shown + " is out of range (size " + std::to_string(size) + ")");
+        throw runtimeError(Thrown::IllegalArgumentException, "the slice " + shown + " runs backwards: from " + std::to_string(first) + " to " + std::to_string(last - 1));
+    }
     begin = static_cast<size_t>(first);
     end = static_cast<size_t>(last);
 }
