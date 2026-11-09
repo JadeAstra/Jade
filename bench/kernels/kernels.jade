@@ -421,7 +421,7 @@ fun xml() : string {
   val text = svgText()
   val started = Instant.now()
   try {
-    val root = Xml.parse(text)
+    val root = Xml.parse(text).root
     val took = ms(started)
     var elements = 0
     var attributes = 0

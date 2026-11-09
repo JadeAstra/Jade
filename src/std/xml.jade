@@ -1,22 +1,23 @@
 // ---- XML ----
 
-// XML read into its elements and their text (M9/M10): SVG pictures, layout overrides, and any
+// XML read into a tree with nothing left out (M9/M10): SVG pictures, layout overrides, and any
 // other file of tags.
 //
-//   val svg = Xml.parse(FilePath("logo.svg").readText())
+//   val svg = Xml.parse(FilePath("logo.svg").readText()).root
 //   for (shape in svg.elements("rect")) { print(shape.attr("width")) }
 //
 // It reads XML 1.0 strictly: a document that is not well-formed is an XmlException giving the
-// line and column. Comments, processing instructions and the DOCTYPE are passed over, and CDATA
-// is text. The predefined entities (&lt; &gt; &amp; &apos; &quot;) and numeric ones (&#169;
-// &#x1F600;) are read, and so are the entities the DOCTYPE declares, as long as they hold text
-// only and all of them together expand to no more than a million characters; an entity the
-// DOCTYPE says is in another file is never read, and using one is an error. Names are kept as
-// written, prefixes and all ("svg:rect", "xlink:href"): namespaces are not worked out.
+// line and column. Everything in it is kept: the XML declaration, the DOCTYPE, comments,
+// processing instructions and CDATA sections are each read into the tree, in their places. The
+// predefined entities (&lt; &gt; &amp; &apos; &quot;) and numeric ones (&#169; &#x1F600;) are
+// read, and so are the entities the DOCTYPE declares, as long as they hold text only and all of
+// them together expand to no more than a million characters; an entity the DOCTYPE says is in
+// another file is never read, and using one is an error. Names are kept as written, prefixes
+// and all ("svg:rect", "xlink:href"): namespaces are not worked out.
 object Xml {
-  // The root element of XML text, with everything inside it. An XmlException where the text is
-  // not well-formed XML.
-  fun parse(text : string) : XmlElement throws XmlException => __XmlReader(text).read()
+  // XML text read as a document, with everything in it. An XmlException where the text is not
+  // well-formed XML.
+  fun parse(text : string) : XmlDocument throws XmlException => __XmlReader(text).read()
 }
 
 // What is wrong with XML that Xml.parse was given, and where: the line and the column in it,
@@ -24,16 +25,67 @@ object Xml {
 class XmlException(val description : string, val line : int, val column : int)
     : Exception("$description, at line $line, column $column")
 
-// A part of an XML document: an element (XmlElement) or a run of text (XmlText).
+// A whole XML document: its declaration, and the DOCTYPE, comments and processing instructions
+// around its root element.
+//
+//   val doc = Xml.parse(text)
+//   print(doc.version, doc.encoding, doc.root.name)
+class XmlDocument {
+  // The version the XML declaration gives, "1.0"; null where there is no declaration.
+  val version : string?
+  // The encoding the XML declaration names, as written; null where it names none.
+  val encoding : string?
+  // The XML declaration's standalone="yes" (true) or "no" (false); null where it says neither.
+  val standalone : bool?
+  // The DOCTYPE; null where there is none.
+  val doctype : XmlDoctype?
+  // The root element, with everything inside it.
+  val root : XmlElement
+  // What is outside the XML declaration, in order: comments, processing instructions, the
+  // DOCTYPE and the root element.
+  val children : List<XmlNode>
+
+  internal fun init(version : string?, encoding : string?, standalone : bool?, doctype : XmlDoctype?,
+                    root : XmlElement, children : List<XmlNode>) {
+    this.version = version
+    this.encoding = encoding
+    this.standalone = standalone
+    this.doctype = doctype
+    this.root = root
+    this.children = children
+  }
+
+  // The document written as XML: the declaration where it had one, then each of its children
+  // on a line of its own.
+  override fun toString() : string {
+    val out = StringBuilder()
+    if (version != null) {
+      out.append("<?xml version=\"").append(version!!).append("\"")
+      if (encoding != null) { out.append(" encoding=\"").append(encoding!!).append("\"") }
+      if (standalone != null) { out.append(" standalone=\"").append(standalone!! ? "yes" : "no").append("\"") }
+      out.append("?>")
+    }
+    for (child in children) {
+      if (out.size > 0) { out.append("\n") }
+      out.append(child.toString())
+    }
+    return out.toString()
+  }
+}
+
+// A part of an XML document: an element (XmlElement), a run of text (XmlText, and XmlCData
+// within it), a comment (XmlComment), a processing instruction (XmlInstruction) or the DOCTYPE
+// (XmlDoctype).
 interface XmlNode {
-  // The element it is in; null for the document's root element.
+  // The element it is in; null for the root element and what is outside it.
   val parent : XmlElement?
-  // Its text: a run of text's own, or all the text inside an element, in order.
+  // Its text: a run of text's own, a comment's, an instruction's data, or all the text inside
+  // an element (its CDATA sections included, its comments and instructions not); none for the
+  // DOCTYPE.
   val text : string
 }
 
-// A run of text in an element, its entities read: "a < b" for `a &lt; b`. A CDATA section and
-// the text either side of it are one run, as is text either side of a comment.
+// A run of text in an element, its entities read: "a < b" for `a &lt; b`.
 class XmlText : XmlNode {
   // The text.
   override val text : string
@@ -47,6 +99,96 @@ class XmlText : XmlNode {
 
   // The text as it is.
   override fun toString() : string => text
+}
+
+// A CDATA section: a run of text written as <![CDATA[ ... ]]>, where nothing is markup.
+class XmlCData : XmlText {
+  internal fun init(text : string, parent : XmlElement?) {
+    super.init(text, parent)
+  }
+
+  // The section as written: <![CDATA[a < b]]>.
+  override fun toString() : string => "<![CDATA[$text]]>"
+}
+
+// A comment: its text is what is between <!-- and -->.
+class XmlComment : XmlNode {
+  // The comment's text, its spaces kept: " note " for <!-- note -->.
+  override val text : string
+  // The element it is in; null outside the root element.
+  override val parent : XmlElement?
+
+  internal fun init(text : string, parent : XmlElement?) {
+    this.text = text
+    this.parent = parent
+  }
+
+  // The comment as written: <!-- note -->.
+  override fun toString() : string => "<!--$text-->"
+}
+
+// A processing instruction: <?xml-stylesheet href="style.css"?> is the target "xml-stylesheet"
+// and the data "href=\"style.css\"".
+class XmlInstruction : XmlNode {
+  // The name it starts with.
+  val target : string
+  // What follows the target and its space, up to the ?>; empty where there is nothing.
+  val data : string
+  // The element it is in; null outside the root element.
+  override val parent : XmlElement?
+
+  internal fun init(target : string, data : string, parent : XmlElement?) {
+    this.target = target
+    this.data = data
+    this.parent = parent
+  }
+
+  // The data.
+  override val text : string
+    get() => data
+
+  // The instruction as written: <?target data?>.
+  override fun toString() : string => data.isEmpty() ? "<?$target?>" : "<?$target $data?>"
+}
+
+// The DOCTYPE: the root element's name it gives, the DTD it names, and the declarations written
+// inside it. A DTD in another file is never read.
+class XmlDoctype : XmlNode {
+  // The name of the root element it gives.
+  val name : string
+  // The public identifier after PUBLIC; null where there is none.
+  val publicId : string?
+  // The address after SYSTEM, or after PUBLIC and its identifier; null where there is none.
+  val systemId : string?
+  // The declarations between [ and ] as written, their comments included; null where there is
+  // no [ ].
+  val internalSubset : string?
+
+  internal fun init(name : string, publicId : string?, systemId : string?, internalSubset : string?) {
+    this.name = name
+    this.publicId = publicId
+    this.systemId = systemId
+    this.internalSubset = internalSubset
+  }
+
+  // Null: the DOCTYPE is outside the root element.
+  override val parent : XmlElement?
+    get() => null
+  // Empty: the DOCTYPE holds no text.
+  override val text : string
+    get() => ""
+
+  // The DOCTYPE as XML: <!DOCTYPE svg PUBLIC "id" "address" [declarations]>.
+  override fun toString() : string {
+    val out = StringBuilder("<!DOCTYPE ").append(name)
+    if (publicId != null) {
+      out.append(" PUBLIC ").append(__xmlQuoted(publicId!!)).append(" ").append(__xmlQuoted(systemId!!))
+    } else if (systemId != null) {
+      out.append(" SYSTEM ").append(__xmlQuoted(systemId!!))
+    }
+    if (internalSubset != null) { out.append(" [").append(internalSubset!!).append("]") }
+    return out.append(">").toString()
+  }
 }
 
 // An element: its name, its attributes, and what it holds.
@@ -68,7 +210,8 @@ class XmlElement : XmlNode {
     this.parent = parent
   }
 
-  // What it holds, in order: its elements and the runs of text between them.
+  // What it holds, in order: its elements, runs of text, CDATA sections, comments and
+  // processing instructions.
   val children : List<XmlNode>
     get() => held
 
@@ -87,7 +230,8 @@ class XmlElement : XmlNode {
     return found
   }
 
-  // All the text inside it, its elements' included, in order.
+  // All the text inside it, its elements' and CDATA sections' included, in order; not its
+  // comments or processing instructions.
   override val text : string
     get() {
       val parts : open List<string> = []
@@ -96,7 +240,7 @@ class XmlElement : XmlNode {
         val node = pending.removeLast()
         if (node is XmlText) {
           parts.add(node.text)
-        } else {
+        } else if (node is XmlElement) {
           val inside = (node as XmlElement).held
           var i = inside.size - 1
           while (i >= 0) {
@@ -108,24 +252,13 @@ class XmlElement : XmlNode {
       return parts.join("")
     }
 
-  // Text added after what it holds: joined to a run of text there already.
-  internal fun addText(more : string) {
-    if (more.isEmpty()) { return }
-    val last = held.size - 1
-    if (last >= 0 and held[last] is XmlText) {
-      held[last] = XmlText((held[last] as XmlText).text + more, this)
-    } else {
-      held.add(XmlText(more, this))
-    }
-  }
-
-  // An element added after what it holds.
-  internal fun addElement(child : XmlElement) {
+  // A node added after what it holds.
+  internal fun add(child : XmlNode) {
     held.add(child)
   }
 
   // The element written as XML: <rect width="4"/>, with & < > (and " in an attribute) written
-  // as entities.
+  // as entities, and its CDATA sections, comments and processing instructions as they were.
   override fun toString() : string {
     val out = StringBuilder()
     writeTo(out)
@@ -143,10 +276,12 @@ class XmlElement : XmlNode {
     }
     out.append(">")
     for (child in held) {
-      if (child is XmlText) {
+      if (child is XmlElement) {
+        (child as XmlElement).writeTo(out)
+      } else if (child is XmlText and !(child is XmlCData)) {
         out.append(__xmlEscape(child.text, false))
       } else {
-        (child as XmlElement).writeTo(out)
+        out.append(child.toString())
       }
     }
     out.append("</").append(name).append(">")
@@ -163,6 +298,9 @@ fun __xmlEscape(text : string, inAttribute : bool) : string {
   if (inAttribute and out.contains('"')) { out = out.replace("\"", "&quot;") }
   return out
 }
+
+// A DOCTYPE's identifier in quotes: double ones, or single where it holds a double.
+fun __xmlQuoted(text : string) : string => text.contains('"') ? "'$text'" : "\"$text\""
 
 // Reads XML for Xml.parse, a tag at a time: from one < to the next by the string search, and
 // a tag's name and attributes matched by regular expressions, which do the work of each
@@ -181,6 +319,15 @@ class __XmlReader {
     val wholeTag = Regex("<(" + nameText + ")((?:\\s+" + nameText + "\\s*=\\s*(?:\"[^\"<]*\"|'[^'<]*'))*)\\s*(/?)>")
     val tagEnd = Regex("\\s*(/?)>")
     val endTag = Regex("</(" + nameText + ")\\s*>")
+    // <?xml version="1.0" encoding="UTF-8" standalone="yes"?>, the encoding and standalone
+    // left out or not, in that order.
+    val declaration = Regex("<\\?xml\\s+version\\s*=\\s*(?:\"(1\\.[0-9]+)\"|'(1\\.[0-9]+)')" +
+        "(?:\\s+encoding\\s*=\\s*(?:\"([A-Za-z][A-Za-z0-9._\\-]*)\"|'([A-Za-z][A-Za-z0-9._\\-]*)'))?" +
+        "(?:\\s+standalone\\s*=\\s*(?:\"(yes|no)\"|'(yes|no)'))?\\s*\\?>")
+    // <!DOCTYPE name, then SYSTEM "address" or PUBLIC "identifier" "address" where it has them.
+    val doctypeHead = Regex("<!DOCTYPE\\s+(" + nameText + ")(?:\\s+(?:SYSTEM\\s+(?:\"([^\"]*)\"|'([^']*)')|" +
+        "PUBLIC\\s+(?:\"([ \\na-zA-Z0-9\\-'()+,./:=?;!*#@\$_%]*)\"|'([ \\na-zA-Z0-9\\-()+,./:=?;!*#@\$_%]*)')" +
+        "\\s+(?:\"([^\"]*)\"|'([^']*)')))?\\s*")
     // <!ENTITY name "text">, <!ENTITY % name ...> (a parameter entity), or <!ENTITY name SYSTEM
     // "address"> (one in another file).
     val entity = Regex("<!ENTITY\\s+(%\\s+)?(" + nameText + ")\\s+(?:\"([^\"]*)\"|'([^']*)'|(?:SYSTEM|PUBLIC)\\s+(?:\"[^\"]*\"|'[^']*')(?:\\s+(?:\"[^\"]*\"|'[^']*'))?(?:\\s+NDATA\\s+" + nameText + ")?)\\s*>")
@@ -205,31 +352,43 @@ class __XmlReader {
     this.t = given
   }
 
-  // The root element, everything before and after it read and passed over.
-  fun read() : XmlElement throws XmlException {
+  // The document: the XML declaration, what is around the root element, and the root.
+  fun read() : XmlDocument throws XmlException {
+    var version : string? = null
+    var encoding : string? = null
+    var standalone : bool? = null
     if (startsAt(0, "<?xml") and (t.size == 5 or isSpace(t[5]))) {   // the XML declaration
-      val end = t.indexOf("?>", 5)
-      if (end < 0) { throw failure("the XML declaration is not closed with ?>", 0) }
-      pos = end + 2
+      val found = declaration.spansAt(t, 0)
+      if (found == null) {
+        if (t.indexOf("?>", 5) < 0) { throw failure("the XML declaration is not closed with ?>", 0) }
+        throw failure("a malformed XML declaration: <?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>, the last two left out or not", 0)
+      }
+      val spans = found!!
+      version = spans[2] >= 0 ? t[spans[2] ..< spans[3]] : t[spans[4] ..< spans[5]]
+      if (spans[6] >= 0) { encoding = t[spans[6] ..< spans[7]] } else if (spans[8] >= 0) { encoding = t[spans[8] ..< spans[9]] }
+      if (spans[10] >= 0) { standalone = t[spans[10] ..< spans[11]] == "yes" } else if (spans[12] >= 0) { standalone = t[spans[12] ..< spans[13]] == "yes" }
+      pos = spans[1]
     }
-    var sawDoctype = false
+    val outside : open List<XmlNode> = []
+    var doctype : XmlDoctype? = null
     while (true) {
       skipSpace()
       if (pos >= t.size) { throw failure("there is no root element", pos) }
       if (t[pos] != '<') { throw failure("text before the root element", pos) }
       if (startsAt(pos, "<!--")) {
-        skipComment()
+        outside.add(readComment(null))
       } else if (startsAt(pos, "<?")) {
-        skipInstruction()
+        outside.add(readInstruction(null))
       } else if (startsAt(pos, "<!DOCTYPE")) {
-        if (sawDoctype) { throw failure("a second DOCTYPE", pos) }
-        sawDoctype = true
-        readDoctype()
+        if (doctype != null) { throw failure("a second DOCTYPE", pos) }
+        doctype = readDoctype()
+        outside.add(doctype!!)
       } else {
         val root = startTag(null)
         if (!selfClosed) { readContent(root) }
-        readEnd()
-        return root
+        outside.add(root)
+        readEnd(outside)
+        return XmlDocument(version, encoding, standalone, doctype, root, outside)
       }
     }
   }
@@ -253,17 +412,17 @@ class __XmlReader {
         current = element.parent
       } else if (next == '!') {
         if (startsAt(lt, "<!--")) {
-          skipComment()
+          element.add(readComment(element))
         } else if (startsAt(lt, "<![CDATA[")) {
           val end = t.indexOf("]]>", lt + 9)
           if (end < 0) { throw failure("a CDATA section is not closed with ]]>", lt) }
-          element.addText(t[lt + 9 ..< end])
+          element.add(XmlCData(t[lt + 9 ..< end], element))
           pos = end + 3
         } else {
           throw failure("'<!' that starts no comment or CDATA section", lt)
         }
       } else if (next == '?') {
-        skipInstruction()
+        element.add(readInstruction(element))
       } else {
         val child = startTag(element)
         if (!selfClosed) { current = child }
@@ -271,15 +430,16 @@ class __XmlReader {
     }
   }
 
-  // After the root element: only whitespace, comments and processing instructions.
-  private fun readEnd() throws XmlException {
+  // After the root element: only whitespace, comments and processing instructions, added to
+  // `outside`.
+  private fun readEnd(outside : open List<XmlNode>) throws XmlException {
     while (true) {
       skipSpace()
       if (pos >= t.size) { return }
       if (startsAt(pos, "<!--")) {
-        skipComment()
+        outside.add(readComment(null))
       } else if (startsAt(pos, "<?")) {
-        skipInstruction()
+        outside.add(readInstruction(null))
       } else {
         throw failure("more after the root element", pos)
       }
@@ -313,7 +473,7 @@ class __XmlReader {
     selfClosed = spans[7] > spans[6]
     pos = spans[1]
     val element = XmlElement(tagName, attrs, parent)
-    if (parent != null) { parent!!.addElement(element) }
+    if (parent != null) { parent!!.add(element) }
     return element
   }
 
@@ -346,7 +506,7 @@ class __XmlReader {
     selfClosed = end!![3] > end!![2]
     pos = end!![1]
     val element = XmlElement(tagName, attrs, parent)
-    if (parent != null) { parent!!.addElement(element) }
+    if (parent != null) { parent!!.add(element) }
     return element
   }
 
@@ -363,7 +523,8 @@ class __XmlReader {
     val raw = t[from ..< to]
     val bad = raw.indexOf("]]>")
     if (bad >= 0) { throw failure("']]>' in text: write ]]&gt;", from + bad) }
-    element.addText(raw.contains('&') ? decode(raw, from, -1) : raw)
+    val text = raw.contains('&') ? decode(raw, from, -1) : raw
+    if (text.isNotEmpty()) { element.add(XmlText(text, element)) }
   }
 
   // `s` with its references read. Where `s` is at `at` in the document, an error is placed at
@@ -426,44 +587,50 @@ class __XmlReader {
     return result
   }
 
-  // A DOCTYPE at pos: the entities it declares kept, the rest passed over. An external DTD it
-  // names is never read.
-  private fun readDoctype() throws XmlException {
+  // A DOCTYPE at pos. The entities it declares are kept for reading references, and all its
+  // declarations as written. An external DTD it names is never read.
+  private fun readDoctype() : XmlDoctype throws XmlException {
     val start = pos
-    var p = pos + 9
-    while (p < t.size and t[p] != '[' and t[p] != '>') {
-      p = t[p] == '"' or t[p] == '\'' ? closingQuote(p) + 1 : p + 1
+    val head = doctypeHead.spansAt(t, start)
+    if (head == null) {
+      throw failure("a malformed DOCTYPE: <!DOCTYPE name>, with SYSTEM \"address\" or PUBLIC \"identifier\" \"address\" after the name where it names a DTD", start)
     }
-    if (p >= t.size) { throw failure("the DOCTYPE is not closed with >", start) }
-    if (t[p] == '[') {
+    val spans = head!!
+    val doctypeName = t[spans[2] ..< spans[3]]
+    var publicId : string? = null
+    var systemId : string? = null
+    if (spans[4] >= 0) { systemId = t[spans[4] ..< spans[5]] } else if (spans[6] >= 0) { systemId = t[spans[6] ..< spans[7]] }
+    if (spans[8] >= 0) { publicId = t[spans[8] ..< spans[9]] } else if (spans[10] >= 0) { publicId = t[spans[10] ..< spans[11]] }
+    if (spans[12] >= 0) { systemId = t[spans[12] ..< spans[13]] } else if (spans[14] >= 0) { systemId = t[spans[14] ..< spans[15]] }
+    var p = spans[1]
+    var internalSubset : string? = null
+    if (p < t.size and t[p] == '[') {
       p += 1
+      val subsetStart = p
       while (true) {
         while (p < t.size and isSpace(t[p])) { p += 1 }
         if (p >= t.size) { throw failure("the DOCTYPE's declarations are not closed with ]", start) }
-        if (t[p] == ']') {
-          p += 1
-          break
-        }
+        if (t[p] == ']') { break }
         if (startsAt(p, "<!ENTITY")) {
           val e = entity.spansAt(t, p)
           if (e == null) { throw failure("a malformed ENTITY declaration", p) }
-          val spans = e!!
-          if (spans[2] < 0) {   // a general entity; a parameter entity is passed over
-            val key = t[spans[4] ..< spans[5]]
+          val found = e!!
+          if (found[2] < 0) {   // a general entity; a parameter entity is kept only as written
+            val key = t[found[4] ..< found[5]]
             if (!(key in entities.keys)) {   // the first declaration of a name is the one that counts
-              entities[key] = spans[6] >= 0 ? t[spans[6] ..< spans[7]] : spans[8] >= 0 ? t[spans[8] ..< spans[9]] : null
+              entities[key] = found[6] >= 0 ? t[found[6] ..< found[7]] : found[8] >= 0 ? t[found[8] ..< found[9]] : null
             }
           }
-          p = spans[1]
+          p = found[1]
         } else if (startsAt(p, "<!--")) {
           pos = p
-          skipComment()
+          readComment(null)
           p = pos
         } else if (startsAt(p, "<?")) {
           pos = p
-          skipInstruction()
+          readInstruction(null)
           p = pos
-        } else if (startsAt(p, "<!")) {   // ELEMENT, ATTLIST, NOTATION: passed over
+        } else if (startsAt(p, "<!")) {   // ELEMENT, ATTLIST, NOTATION: kept as written
           p += 2
           while (p < t.size and t[p] != '>') {
             p = t[p] == '"' or t[p] == '\'' ? closingQuote(p) + 1 : p + 1
@@ -476,10 +643,16 @@ class __XmlReader {
           throw failure("something other than a declaration in the DOCTYPE", p)
         }
       }
+      internalSubset = t[subsetStart ..< p]
+      p += 1
       while (p < t.size and isSpace(t[p])) { p += 1 }
-      if (p >= t.size or t[p] != '>') { throw failure("the DOCTYPE is not closed with >", p) }
+    }
+    if (p >= t.size) { throw failure("the DOCTYPE is not closed with >", start) }
+    if (t[p] != '>') {
+      throw failure("a malformed DOCTYPE: <!DOCTYPE name>, with SYSTEM \"address\" or PUBLIC \"identifier\" \"address\" after the name where it names a DTD", p)
     }
     pos = p + 1
+    return XmlDoctype(doctypeName, publicId, systemId, internalSubset)
   }
 
   // Where the quote at `at` is closed.
@@ -489,21 +662,33 @@ class __XmlReader {
     return end
   }
 
-  private fun skipComment() throws XmlException {
+  // A comment at pos, in `parent`.
+  private fun readComment(parent : XmlElement?) : XmlComment throws XmlException {
     val end = t.indexOf("--", pos + 4)
     if (end < 0) { throw failure("a comment is not closed with -->", pos) }
     if (end + 2 >= t.size or t[end + 2] != '>') { throw failure("'--' inside a comment", end) }
+    val comment = XmlComment(t[pos + 4 ..< end], parent)
     pos = end + 3
+    return comment
   }
 
-  private fun skipInstruction() throws XmlException {
+  // A processing instruction at pos, in `parent`.
+  private fun readInstruction(parent : XmlElement?) : XmlInstruction throws XmlException {
     val named = name.spansAt(t, pos + 2)
     if (named == null) { throw failure("a processing instruction with no name", pos) }
-    val target = t[named!![0] ..< named!![1]]
+    val nameEnd = named!![1]
+    val target = t[named!![0] ..< nameEnd]
     if (target.size == 3 and target.startsWith("xml", ignoreCase = true)) { throw failure("an XML declaration other than at the very start", pos) }
-    val end = t.indexOf("?>", named!![1])
+    val end = t.indexOf("?>", nameEnd)
     if (end < 0) { throw failure("a processing instruction is not closed with ?>", pos) }
+    var dataStart = nameEnd
+    if (end > nameEnd) {
+      if (!isSpace(t[nameEnd])) { throw failure("a processing instruction's name with no space after it", nameEnd) }
+      while (dataStart < end and isSpace(t[dataStart])) { dataStart += 1 }
+    }
+    val instruction = XmlInstruction(target, t[dataStart ..< end], parent)
     pos = end + 2
+    return instruction
   }
 
   private fun skipSpace() {

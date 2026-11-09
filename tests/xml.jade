@@ -1,9 +1,10 @@
-// Xml.parse (M9/M10 part one, step 2): XML read into elements and text, strictly, entities
-// under a cap and never one in another file.
+// Xml.parse (M9/M10 part one, step 2): XML read strictly into a tree that keeps everything,
+// entities under a cap and never one in another file.
 
+// The root element.
 fun parsed(text : string) : XmlElement? {
   try {
-    return Xml.parse(text)
+    return Xml.parse(text).root
   } catch (e : XmlException) {
     print("XmlException: ${e.message}")
     return null
@@ -48,17 +49,46 @@ val entities = parsed("""<!DOCTYPE note [
 print(entities.text)   // expect: hello, the "world" © 😀 'x'
 print(entities.attr("title"))   // expect: <&> AB hello, the "world"
 
-// CDATA, comments and processing instructions; line ends and attribute whitespace.
-val mixed = parsed("<a>one<!-- gone -->two<![CDATA[ <three> & ]]><?pi data?>four</a>")!!
-print(mixed.children.size, mixed.text)   // expect: 1 onetwo <three> & four
+// CDATA, comments and processing instructions kept in their places: an element's text has its
+// CDATA and not its comments or instructions. Line ends and attribute whitespace.
+val mixed = parsed("<a>one<!-- kept -->two<![CDATA[ <three> & ]]><?pi  data ?>four<?bare?></a>")!!
+print(mixed.children.size, mixed.text, mixed)   // expect: 7 onetwo <three> & four <a>one<!-- kept -->two<![CDATA[ <three> & ]]><?pi data ?>four<?bare?></a>
+val cdata = mixed.children[3]
+print(cdata is XmlCData, cdata is XmlText, cdata.text, cdata.parent?.name, (mixed.children[1] as XmlComment).text)   // expect: true true  <three> &  a  kept 
+val pi = mixed.children[4] as XmlInstruction
+print(pi.target, pi.data, pi.text, pi.parent?.name, (mixed.children[6] as XmlInstruction).data.isEmpty())   // expect: pi data  data  a true
 val lines = parsed("<a\r\n  b=\"x\r\n\ty\">1\r\n2\r3</a>")!!
 print(lines.attr("b"), lines.text.replace("\n", "|"))   // expect: x  y 1|2|3
 print(parsed("\u{FEFF}<a/>")!!.name, parsed("<a k='x>y' j=\"it's\"/>")!!.attributes)   // expect: a {"k": "x>y", "j": "it's"}
 
 // Written back as XML, and read again the same.
-val back = Xml.parse(entities.toString())
+val back = Xml.parse(entities.toString()).root
 print(entities, back.text == entities.text, back.attr("title") == entities.attr("title"))
 // expect: <note title="&lt;&amp;&gt; AB hello, the &quot;world&quot;">hello, the "world" © 😀 'x'</note> true true
+
+// The whole document: the XML declaration, and the DOCTYPE, comments and instructions around
+// the root element.
+val whole = Xml.parse("""<?xml version="1.0" encoding='UTF-8' standalone="no"?>
+<!-- before -->
+<?xml-stylesheet href="style.css"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" 'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd' [<!ENTITY e "x"> <!-- in the DTD -->]>
+<svg>&e;</svg>
+<!-- after -->""")
+print(whole.version, whole.encoding, whole.standalone, whole.root.name, whole.root.text, whole.children.size)   // expect: 1.0 UTF-8 false svg x 5
+print(whole.children[0] is XmlComment, whole.children[1] is XmlInstruction, whole.children[2] == whole.doctype, whole.children[3] == whole.root, whole.children[0].parent)   // expect: true true true true null
+val dt = whole.doctype!!
+print(dt.name, dt.publicId, dt.systemId, dt.internalSubset, dt.text.isEmpty())   // expect: svg -//W3C//DTD SVG 1.1//EN http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd <!ENTITY e "x"> <!-- in the DTD --> true
+print(whole)
+// expect: <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+// expect: <!-- before -->
+// expect: <?xml-stylesheet href="style.css"?>
+// expect: <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY e "x"> <!-- in the DTD -->]>
+// expect: <svg>x</svg>
+// expect: <!-- after -->
+print(Xml.parse(whole.toString()).toString() == whole.toString())   // expect: true
+val bare = Xml.parse("<a/>")
+print(bare.version, bare.encoding, bare.standalone, bare.doctype, bare.children.size, bare)   // expect: null null null null 1 <a/>
+print(Xml.parse("<!DOCTYPE a SYSTEM 'x.dtd'><a/>").doctype, Xml.parse("<!DOCTYPE a[]><a/>").doctype?.internalSubset?.isEmpty())   // expect: <!DOCTYPE a SYSTEM "x.dtd"> true
 
 // Not well-formed: each an XmlException with its line and column.
 fails("")   // expect: there is no root element (1:1)
@@ -85,6 +115,13 @@ fails("<a><!-- open</a>")   // expect: a comment is not closed with --> (1:4)
 fails("<a><![CDATA[x</a>")   // expect: a CDATA section is not closed with ]]> (1:4)
 fails("<a><!WHAT></a>")   // expect: '<!' that starts no comment or CDATA section (1:4)
 fails("<a/><?xml version='1.0'?>")   // expect: an XML declaration other than at the very start (1:5)
+fails("<?xml version=\"2.0\"?><a/>")   // expect: a malformed XML declaration: <?xml version="1.0" encoding="UTF-8" standalone="yes"?>, the last two left out or not (1:1)
+fails("<?xml version='1.0' standalone='yes' encoding='UTF-8'?><a/>")   // expect: a malformed XML declaration: <?xml version="1.0" encoding="UTF-8" standalone="yes"?>, the last two left out or not (1:1)
+fails("<?xml version='1.0'")   // expect: the XML declaration is not closed with ?> (1:1)
+fails("<a><?pi\$x?></a>")   // expect: a processing instruction's name with no space after it (1:8)
+fails("<!DOCTYPE a SYSTEM><a/>")   // expect: a malformed DOCTYPE: <!DOCTYPE name>, with SYSTEM "address" or PUBLIC "identifier" "address" after the name where it names a DTD (1:1)
+fails("<!DOCTYPE a PUBLIC \"a{b}\" \"x\"><a/>")   // expect: a malformed DOCTYPE: <!DOCTYPE name>, with SYSTEM "address" or PUBLIC "identifier" "address" after the name where it names a DTD (1:1)
+fails("<!DOCTYPE a [] x><a/>")   // expect: a malformed DOCTYPE: <!DOCTYPE name>, with SYSTEM "address" or PUBLIC "identifier" "address" after the name where it names a DTD (1:16)
 fails("<a><?pi never closed</a>")   // expect: a processing instruction is not closed with ?> (1:4)
 fails("<!DOCTYPE a><!DOCTYPE a><a/>")   // expect: a second DOCTYPE (1:13)
 fails("<!DOCTYPE a [ <!ENTITY e \"x\" ><a/>")   // expect: something other than a declaration in the DOCTYPE (1:31)

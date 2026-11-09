@@ -13,7 +13,7 @@ fun fails(text : string) {
 
 // Deep nesting: read and its text gathered without recursion.
 val depth = 20000
-val deep = Xml.parse("<a>".repeat(depth) + "x" + "</a>".repeat(depth))
+val deep = Xml.parse("<a>".repeat(depth) + "x" + "</a>".repeat(depth)).root
 var level = 0
 var node : XmlElement? = deep
 while (node!!.elements().isNotEmpty()) {

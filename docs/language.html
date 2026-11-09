@@ -589,8 +589,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#WorkerParent"><code>WorkerParent</code></a> (4)</li>
 <li><a href="#Writer"><code>Writer</code></a> (10)</li>
 <li><a href="#Xml"><code>Xml</code></a> (2)</li>
+<li><a href="#XmlCData"><code>XmlCData</code></a> (2)</li>
+<li><a href="#XmlComment"><code>XmlComment</code></a> (4)</li>
+<li><a href="#XmlDoctype"><code>XmlDoctype</code></a> (8)</li>
+<li><a href="#XmlDocument"><code>XmlDocument</code></a> (8)</li>
 <li><a href="#XmlElement"><code>XmlElement</code></a> (9)</li>
 <li><a href="#XmlException"><code>XmlException</code></a> (1)</li>
+<li><a href="#XmlInstruction"><code>XmlInstruction</code></a> (6)</li>
 <li><a href="#XmlNode"><code>XmlNode</code></a> (3)</li>
 <li><a href="#XmlText"><code>XmlText</code></a> (4)</li>
 <li><a href="#any.toString"><code>any</code></a> (5)</li>
@@ -6361,29 +6366,56 @@ worker.post({&quot;upTo&quot;: 100000})
 <h2>xml.jade</h2>
 <h3>XML</h3>
 <div class="entry" id="Xml"><code class="sig">object Xml</code><a class="anchor" href="#Xml">#</a>
-<p>XML read into its elements and their text (M9/M10): SVG pictures, layout overrides, and any other file of tags.</p>
-<pre>val svg = Xml.parse(FilePath(&quot;logo.svg&quot;).readText())
+<p>XML read into a tree with nothing left out (M9/M10): SVG pictures, layout overrides, and any other file of tags.</p>
+<pre>val svg = Xml.parse(FilePath(&quot;logo.svg&quot;).readText()).root
 for (shape in svg.elements(&quot;rect&quot;)) { print(shape.attr(&quot;width&quot;)) }
 </pre>
-<p>It reads XML 1.0 strictly: a document that is not well-formed is an XmlException giving the line and column. Comments, processing instructions and the DOCTYPE are passed over, and CDATA is text. The predefined entities (&amp;lt; &amp;gt; &amp;amp; &amp;apos; &amp;quot;) and numeric ones (&amp;#169; &amp;#x1F600;) are read, and so are the entities the DOCTYPE declares, as long as they hold text only and all of them together expand to no more than a million characters; an entity the DOCTYPE says is in another file is never read, and using one is an error. Names are kept as written, prefixes and all (&quot;svg:rect&quot;, &quot;xlink:href&quot;): namespaces are not worked out.</p>
+<p>It reads XML 1.0 strictly: a document that is not well-formed is an XmlException giving the line and column. Everything in it is kept: the XML declaration, the DOCTYPE, comments, processing instructions and CDATA sections are each read into the tree, in their places. The predefined entities (&amp;lt; &amp;gt; &amp;amp; &amp;apos; &amp;quot;) and numeric ones (&amp;#169; &amp;#x1F600;) are read, and so are the entities the DOCTYPE declares, as long as they hold text only and all of them together expand to no more than a million characters; an entity the DOCTYPE says is in another file is never read, and using one is an error. Names are kept as written, prefixes and all (&quot;svg:rect&quot;, &quot;xlink:href&quot;): namespaces are not worked out.</p>
 </div>
-<div class="entry member" id="Xml.parse"><code class="sig">fun parse(text : string) : XmlElement throws XmlException</code><a class="anchor" href="#Xml.parse">#</a>
-<p>The root element of XML text, with everything inside it. An XmlException where the text is not well-formed XML.</p>
+<div class="entry member" id="Xml.parse"><code class="sig">fun parse(text : string) : XmlDocument throws XmlException</code><a class="anchor" href="#Xml.parse">#</a>
+<p>XML text read as a document, with everything in it. An XmlException where the text is not well-formed XML.</p>
 </div>
 <div class="entry" id="XmlException"><code class="sig">class XmlException(val description : string, val line : int, val column : int)</code><a class="anchor" href="#XmlException">#</a>
 <p>What is wrong with XML that Xml.parse was given, and where: the line and the column in it, each counted from 1, the column in characters.</p>
 </div>
+<div class="entry" id="XmlDocument"><code class="sig">class XmlDocument</code><a class="anchor" href="#XmlDocument">#</a>
+<p>A whole XML document: its declaration, and the DOCTYPE, comments and processing instructions around its root element.</p>
+<pre>val doc = Xml.parse(text)
+print(doc.version, doc.encoding, doc.root.name)
+</pre>
+</div>
+<div class="entry member" id="XmlDocument.version"><code class="sig">val version : string?</code><a class="anchor" href="#XmlDocument.version">#</a>
+<p>The version the XML declaration gives, &quot;1.0&quot;; null where there is no declaration.</p>
+</div>
+<div class="entry member" id="XmlDocument.encoding"><code class="sig">val encoding : string?</code><a class="anchor" href="#XmlDocument.encoding">#</a>
+<p>The encoding the XML declaration names, as written; null where it names none.</p>
+</div>
+<div class="entry member" id="XmlDocument.standalone"><code class="sig">val standalone : bool?</code><a class="anchor" href="#XmlDocument.standalone">#</a>
+<p>The XML declaration's standalone=&quot;yes&quot; (true) or &quot;no&quot; (false); null where it says neither.</p>
+</div>
+<div class="entry member" id="XmlDocument.doctype"><code class="sig">val doctype : XmlDoctype?</code><a class="anchor" href="#XmlDocument.doctype">#</a>
+<p>The DOCTYPE; null where there is none.</p>
+</div>
+<div class="entry member" id="XmlDocument.root"><code class="sig">val root : XmlElement</code><a class="anchor" href="#XmlDocument.root">#</a>
+<p>The root element, with everything inside it.</p>
+</div>
+<div class="entry member" id="XmlDocument.children"><code class="sig">val children : List&lt;XmlNode&gt;</code><a class="anchor" href="#XmlDocument.children">#</a>
+<p>What is outside the XML declaration, in order: comments, processing instructions, the DOCTYPE and the root element.</p>
+</div>
+<div class="entry member" id="XmlDocument.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlDocument.toString">#</a>
+<p>The document written as XML: the declaration where it had one, then each of its children on a line of its own.</p>
+</div>
 <div class="entry" id="XmlNode"><code class="sig">interface XmlNode</code><a class="anchor" href="#XmlNode">#</a>
-<p>A part of an XML document: an element (XmlElement) or a run of text (XmlText).</p>
+<p>A part of an XML document: an element (XmlElement), a run of text (XmlText, and XmlCData within it), a comment (XmlComment), a processing instruction (XmlInstruction) or the DOCTYPE (XmlDoctype).</p>
 </div>
 <div class="entry member" id="XmlNode.parent"><code class="sig">val parent : XmlElement?</code><a class="anchor" href="#XmlNode.parent">#</a>
-<p>The element it is in; null for the document's root element.</p>
+<p>The element it is in; null for the root element and what is outside it.</p>
 </div>
 <div class="entry member" id="XmlNode.text"><code class="sig">val text : string</code><a class="anchor" href="#XmlNode.text">#</a>
-<p>Its text: a run of text's own, or all the text inside an element, in order.</p>
+<p>Its text: a run of text's own, a comment's, an instruction's data, or all the text inside an element (its CDATA sections included, its comments and instructions not); none for the DOCTYPE.</p>
 </div>
 <div class="entry" id="XmlText"><code class="sig">class XmlText : XmlNode</code><a class="anchor" href="#XmlText">#</a>
-<p>A run of text in an element, its entities read: &quot;a &lt; b&quot; for <code>a &amp;lt; b</code>. A CDATA section and the text either side of it are one run, as is text either side of a comment.</p>
+<p>A run of text in an element, its entities read: &quot;a &lt; b&quot; for <code>a &amp;lt; b</code>.</p>
 </div>
 <div class="entry member" id="XmlText.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlText.text">#</a>
 <p>The text.</p>
@@ -6393,6 +6425,66 @@ for (shape in svg.elements(&quot;rect&quot;)) { print(shape.attr(&quot;width&quo
 </div>
 <div class="entry member" id="XmlText.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlText.toString">#</a>
 <p>The text as it is.</p>
+</div>
+<div class="entry" id="XmlCData"><code class="sig">class XmlCData : XmlText</code><a class="anchor" href="#XmlCData">#</a>
+<p>A CDATA section: a run of text written as &lt;![CDATA[ ... ]]&gt;, where nothing is markup.</p>
+</div>
+<div class="entry member" id="XmlCData.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlCData.toString">#</a>
+<p>The section as written: &lt;![CDATA[a &lt; b]]&gt;.</p>
+</div>
+<div class="entry" id="XmlComment"><code class="sig">class XmlComment : XmlNode</code><a class="anchor" href="#XmlComment">#</a>
+<p>A comment: its text is what is between &lt;!-- and --&gt;.</p>
+</div>
+<div class="entry member" id="XmlComment.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlComment.text">#</a>
+<p>The comment's text, its spaces kept: &quot; note &quot; for &lt;!-- note --&gt;.</p>
+</div>
+<div class="entry member" id="XmlComment.parent"><code class="sig">override val parent : XmlElement?</code><a class="anchor" href="#XmlComment.parent">#</a>
+<p>The element it is in; null outside the root element.</p>
+</div>
+<div class="entry member" id="XmlComment.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlComment.toString">#</a>
+<p>The comment as written: &lt;!-- note --&gt;.</p>
+</div>
+<div class="entry" id="XmlInstruction"><code class="sig">class XmlInstruction : XmlNode</code><a class="anchor" href="#XmlInstruction">#</a>
+<p>A processing instruction: &lt;?xml-stylesheet href=&quot;style.css&quot;?&gt; is the target &quot;xml-stylesheet&quot; and the data &quot;href=\&quot;style.css\&quot;&quot;.</p>
+</div>
+<div class="entry member" id="XmlInstruction.target"><code class="sig">val target : string</code><a class="anchor" href="#XmlInstruction.target">#</a>
+<p>The name it starts with.</p>
+</div>
+<div class="entry member" id="XmlInstruction.data"><code class="sig">val data : string</code><a class="anchor" href="#XmlInstruction.data">#</a>
+<p>What follows the target and its space, up to the ?&gt;; empty where there is nothing.</p>
+</div>
+<div class="entry member" id="XmlInstruction.parent"><code class="sig">override val parent : XmlElement?</code><a class="anchor" href="#XmlInstruction.parent">#</a>
+<p>The element it is in; null outside the root element.</p>
+</div>
+<div class="entry member" id="XmlInstruction.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlInstruction.text">#</a>
+<p>The data.</p>
+</div>
+<div class="entry member" id="XmlInstruction.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlInstruction.toString">#</a>
+<p>The instruction as written: &lt;?target data?&gt;.</p>
+</div>
+<div class="entry" id="XmlDoctype"><code class="sig">class XmlDoctype : XmlNode</code><a class="anchor" href="#XmlDoctype">#</a>
+<p>The DOCTYPE: the root element's name it gives, the DTD it names, and the declarations written inside it. A DTD in another file is never read.</p>
+</div>
+<div class="entry member" id="XmlDoctype.name"><code class="sig">val name : string</code><a class="anchor" href="#XmlDoctype.name">#</a>
+<p>The name of the root element it gives.</p>
+</div>
+<div class="entry member" id="XmlDoctype.publicId"><code class="sig">val publicId : string?</code><a class="anchor" href="#XmlDoctype.publicId">#</a>
+<p>The public identifier after PUBLIC; null where there is none.</p>
+</div>
+<div class="entry member" id="XmlDoctype.systemId"><code class="sig">val systemId : string?</code><a class="anchor" href="#XmlDoctype.systemId">#</a>
+<p>The address after SYSTEM, or after PUBLIC and its identifier; null where there is none.</p>
+</div>
+<div class="entry member" id="XmlDoctype.internalSubset"><code class="sig">val internalSubset : string?</code><a class="anchor" href="#XmlDoctype.internalSubset">#</a>
+<p>The declarations between [ and ] as written, their comments included; null where there is no [ ].</p>
+</div>
+<div class="entry member" id="XmlDoctype.parent"><code class="sig">override val parent : XmlElement?</code><a class="anchor" href="#XmlDoctype.parent">#</a>
+<p>Null: the DOCTYPE is outside the root element.</p>
+</div>
+<div class="entry member" id="XmlDoctype.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlDoctype.text">#</a>
+<p>Empty: the DOCTYPE holds no text.</p>
+</div>
+<div class="entry member" id="XmlDoctype.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlDoctype.toString">#</a>
+<p>The DOCTYPE as XML: &lt;!DOCTYPE svg PUBLIC &quot;id&quot; &quot;address&quot; [declarations]&gt;.</p>
 </div>
 <div class="entry" id="XmlElement"><code class="sig">class XmlElement : XmlNode</code><a class="anchor" href="#XmlElement">#</a>
 <p>An element: its name, its attributes, and what it holds.</p>
@@ -6410,7 +6502,7 @@ val fill = rect.attr(&quot;fill&quot;) ?: &quot;black&quot;
 <p>The element it is in; null for the root.</p>
 </div>
 <div class="entry member" id="XmlElement.children"><code class="sig">val children : List&lt;XmlNode&gt;</code><a class="anchor" href="#XmlElement.children">#</a>
-<p>What it holds, in order: its elements and the runs of text between them.</p>
+<p>What it holds, in order: its elements, runs of text, CDATA sections, comments and processing instructions.</p>
 </div>
 <div class="entry member" id="XmlElement.attr"><code class="sig">fun attr(name : string) : string?</code><a class="anchor" href="#XmlElement.attr">#</a>
 <p>The attribute of that name, or null where it has none.</p>
@@ -6419,10 +6511,10 @@ val fill = rect.attr(&quot;fill&quot;) ?: &quot;black&quot;
 <p>The elements it holds (not those inside them), only those named <code>name</code> where it is given.</p>
 </div>
 <div class="entry member" id="XmlElement.text"><code class="sig">override val text : string</code><a class="anchor" href="#XmlElement.text">#</a>
-<p>All the text inside it, its elements' included, in order.</p>
+<p>All the text inside it, its elements' and CDATA sections' included, in order; not its comments or processing instructions.</p>
 </div>
 <div class="entry member" id="XmlElement.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#XmlElement.toString">#</a>
-<p>The element written as XML: &lt;rect width=&quot;4&quot;/&gt;, with &amp; &lt; &gt; (and &quot; in an attribute) written as entities.</p>
+<p>The element written as XML: &lt;rect width=&quot;4&quot;/&gt;, with &amp; &lt; &gt; (and &quot; in an attribute) written as entities, and its CDATA sections, comments and processing instructions as they were.</p>
 </div>
 </section>
 </div>
