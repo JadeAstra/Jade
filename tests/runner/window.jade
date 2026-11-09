@@ -84,6 +84,11 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   var shown : List<Item> = []
   var chosen : Item? = null
   var closing = ""     // said after the summary once the window is to close by itself
+  // The names of the checks the runs' threads told of since the table was last brought up to
+  // date, and where each check shown is in it.
+  val changedLock = Lock()
+  val changed : open Set<string> = setOf()
+  val rowByName : open Map<string, int> = {:}
   var inRun : Set<string> = setOf()   // the names of the checks the last run ran
   var reportText = ""                 // what the runs started with the window gave, once they end
   // The longest text each column has had: a longer one has the table measure its columns again.
@@ -144,12 +149,29 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     val search = searchModel.text.trim().lower()
     val now = suite.items.filter { filterLets(filter, it, inRun) and (search == "" or it.name.lower().contains(search)) }
     val same = now.size == shown.size and now.indices.all { now[it] === shown[it] }
+    // The checks told of since last time, and those running, whose times move: only their rows
+    // are made again, so that the table stays quick to scroll while the checks run.
+    val told : List<string> = changedLock.useKey {
+      val t = changed.toList()
+      changed.clear()
+      t
+    }
     if (same) {
       var wider = false
-      for (r in 0 ..< now.size) {
+      var any = false
+      val again : open List<int> = []
+      for (name in told) {
+        val r = rowByName[name]
+        if (r != null) { again.add(r) }
+      }
+      for (r in 0 ..< now.size) { if (now[r].status == Status.running) { again.add(r) } }
+      for (r in again) {
         val cells = rowOf(now[r])
         for (c in 0 ..< cells.size) {
-          table.rows[r][c] = cells[c]
+          if (table.rows[r][c] != cells[c]) {
+            table.rows[r][c] = cells[c]
+            any = true
+          }
           if (cells[c].size > widest[c]) {
             widest[c] = cells[c].size
             wider = true
@@ -158,10 +180,12 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       }
       // Measured again (the table keeps its widths until something about them changes).
       if (wider) { table.maxColumnWidth = table.maxColumnWidth }
-      tableComponent.invalidate()
+      if (any) { tableComponent.invalidate() }
     } else {
       shown = now
       table.setRows(now.map { rowOf(it) })
+      rowByName.clear()
+      for (r in 0 ..< now.size) { rowByName[now[r].name] = r }
       val keep = chosen
       table.selected = keep == null ? -1 : now.indexOf(keep)
     }
@@ -177,8 +201,10 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
                    " of ${items.size} — ${shown.size} shown"
     progress.value = wanted == 0 ? 0.0 : done.toFloat() / wanted.toFloat()
     val c = chosen
-    detailModel.setText(c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
-                        "Choose a check to see what it gave.")
+    val text = c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
+               "Choose a check to see what it gave."
+    // Set only when it changes: setting it lays the pane out again, and puts the caret back.
+    if (text != detailModel.text) { detailModel.setText(text) }
   }
 
   // ---- Running ----
@@ -206,7 +232,10 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     val runningSuite = suite
     thread(daemon = true) {
       try {
-        runningSuite.run(these) { dirty = true }
+        runningSuite.run(these) { item ->
+          changedLock.useKey { changed.add(item.name) }
+          dirty = true
+        }
       } catch (e : Exception) {
         EventLoop.post { summary.text = "the run failed: ${e.message}" }
       }
