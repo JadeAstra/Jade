@@ -341,7 +341,14 @@ struct Characters {
 // engine, names) asks for utf8(): for ASCII text the characters themselves, for other text
 // made when first asked for and kept.
 struct ObjString final : Obj {
-    const uint32_t hash;  // of the characters, whatever the width
+    // The hash of the characters, whatever the width: worked out when first asked for, as most
+    // strings (a file's text, a line, a piece of a document) are never a key or compared.
+    uint32_t hash() const {
+        const uint64_t known = hash_.load(std::memory_order_relaxed);
+        return known != 0 ? static_cast<uint32_t>(known) : makeHash();
+    }
+    // The hash with bit 32 set where it has been worked out; 0 where it has not.
+    uint64_t knownHash() const { return hash_.load(std::memory_order_relaxed); }
 
     // Some class has a member of this name that not all code may use (1), or may assign to
     // (2); and some class has one that is private (4). Set and never cleared: a member of
@@ -357,7 +364,7 @@ struct ObjString final : Obj {
     // From characters at some width; kept at the narrowest that holds them.
     explicit ObjString(Characters characters) : ObjString(make(std::move(characters))) {}
     // Two strings joined: kept at the wider one's width, which is the narrowest that holds
-    // both, and hashed on from the first one's hash over the second's characters alone.
+    // both.
     ObjString(const ObjString* first, const ObjString* second) : ObjString(join(first, second)) {}
     ~ObjString() override { delete utf8_.load(std::memory_order_relaxed); }
 
@@ -394,13 +401,15 @@ struct ObjString final : Obj {
 
 private:
     const std::string units_;
+    // The hash, bit 32 set to say it is there; 0 until it is asked for. Several cores may work
+    // it out at the same moment, each to the same number.
+    mutable std::atomic<uint64_t> hash_{0};
     // The UTF-8 form of text that is not all ASCII, once asked for. Several cores may ask at
     // the same moment: each makes it, and the first to store it wins.
     mutable std::atomic<const std::string*> utf8_{nullptr};
 
     struct Made {
         std::string units;
-        uint32_t hash;
         uint8_t width;
         bool ascii;
         size_t length;
@@ -409,13 +418,18 @@ private:
     static Made join(const ObjString* first, const ObjString* second);
     explicit ObjString(Made made);
     const std::string& makeUtf8() const;
+    uint32_t makeHash() const;
 };
 
 inline void appendText(Characters& to, const ObjString* text) { to.append(text->units().data(), text->length, text->width); }
 
 // Whether two strings hold the same characters.
 inline bool sameText(const ObjString* a, const ObjString* b) {
-    return a == b || (a->hash == b->hash && a->width == b->width && a->units() == b->units());
+    if (a == b) return true;
+    if (a->length != b->length || a->width != b->width) return false;
+    const uint64_t ha = a->knownHash(), hb = b->knownHash();
+    if (ha != 0 && hb != 0 && ha != hb) return false;
+    return a->units() == b->units();
 }
 // Orders two strings by their characters' numbers (which is the order of their UTF-8 bytes).
 int compareText(const ObjString* a, const ObjString* b);
@@ -478,7 +492,7 @@ public:
     const Value* find(const ObjString* key) const {
         if (count_ == 0) return nullptr;
         uint32_t mask = capacity_ - 1;
-        uint32_t i = key->hash & mask;
+        uint32_t i = key->hash() & mask;
         for (;;) {
             const Entry& e = entries_[i];
             if (e.key == key) return &e.value;

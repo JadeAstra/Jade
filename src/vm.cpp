@@ -1438,7 +1438,7 @@ void VM::setAccess(ObjClass* cls, Table& marks, ObjString* name, bool write, con
                static_cast<uint32_t>(cls->accessIds.size()) << 12;
         cls->accessIds.insert(cls->accessIds.end(), run.begin(), run.end());
         name->restricted |= (write ? 2 : 1) | (kind == kAccessPrivate ? 4 : 0);
-        if (&marks == &cls->accessMarks) cls->accessBits |= 1ull << (name->hash & 63);
+        if (&marks == &cls->accessMarks) cls->accessBits |= 1ull << (name->hash() & 63);
     }
     const Value* before = marks.find(name);
     uint64_t mark = before != nullptr ? static_cast<uint64_t>(before->as.i) : 0;
@@ -1500,7 +1500,7 @@ bool VM::memberDenied(const ObjClass* cls, const ObjString* name, const Function
 bool VM::memberDeniedTo(const ObjClass* cls, const ObjString* name, const std::vector<uint16_t>* ids, bool write) const {
     // Code written in the object's own class may use all that the class has, or all but what a
     // class above keeps private: then a name that is private nowhere is its to use.
-    if ((cls->accessBits >> (name->hash & 63) & 1) == 0) return false;
+    if ((cls->accessBits >> (name->hash() & 63) & 1) == 0) return false;
     if (ids != nullptr && (cls->accessAllOwn || (cls->accessSharedOwn && (name->restricted & 4) == 0)) && writtenIn(*ids, cls)) return false;
     const Value* mark = cls->accessMarks.find(name);
     if (mark == nullptr) return false;
@@ -3353,7 +3353,7 @@ const uint8_t* VM::readThrough(const uint8_t* at, const ValueField* field, const
         // A name some class keeps from being read, and this value's class among them: whether it
         // may be read is told by the instruction itself. (One only kept from being assigned, as a
         // `private set` width elsewhere is, or kept by other classes only, is read here.)
-        if ((name->restricted & 1) != 0 && (field->cls->accessBits >> (name->hash & 63) & 1) != 0) break;
+        if ((name->restricted & 1) != 0 && (field->cls->accessBits >> (name->hash() & 63) & 1) != 0) break;
         const Value* index = field->cls->declaredIndex.find(name);
         if (index == nullptr) break;
         const ValueField& inner = layoutOf(field->cls).fields[static_cast<size_t>(index->as.i)];
@@ -5794,7 +5794,7 @@ void VM::run(int baseFrame) {
             const FunctionProto* const proto_ = frame->closure->proto;                           \
             const bool own_ = !(checked) ||                                                      \
                               (classOf(target_) != nullptr &&                                    \
-                               ((classOf(target_)->accessBits >> (name->hash & 63) & 1) == 0 ||  \
+                               ((classOf(target_)->accessBits >> (name->hash() & 63) & 1) == 0 ||  \
                                 (classOf(target_)->number == proto_->ownClass &&                 \
                                  (classOf(target_)->accessAllOwn ||                              \
                                   (classOf(target_)->accessSharedOwn && (name->restricted & 4) == 0))))); \

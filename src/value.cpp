@@ -100,7 +100,7 @@ size_t hashValue(const Value& v) {
             return static_cast<size_t>(bits);
         }
         case ValueKind::Obj:
-            if (v.as.obj->type == ObjType::String) return asString(v)->hash;
+            if (v.as.obj->type == ObjType::String) return asString(v)->hash();
             return std::hash<const Obj*>()(v.as.obj);
         case ValueKind::Small: return keyHash(v, 0);
         default:
@@ -194,7 +194,7 @@ size_t mixHash(size_t seed, size_t next) {
 
 // What a value's or a data object's hash starts from: its class's name, not where the class is
 // in memory, so that the hash is the same every run (8.2d).
-size_t classSeed(const ObjClass* cls) { return cls->name->hash; }
+size_t classSeed(const ObjClass* cls) { return cls->name->hash(); }
 
 size_t valueBytesHash(const ValueLayout& layout, const uint8_t* x, int depth) {
     size_t h = 23;
@@ -529,7 +529,7 @@ void Table::set(ObjString* key, Value value) {
     if ((count_ + 1) * 4 > capacity_ * 3) grow();
 
     uint32_t mask = capacity_ - 1;
-    uint32_t i = key->hash & mask;
+    uint32_t i = key->hash() & mask;
     for (;;) {
         Entry& e = entries_[i];
         if (e.key == key) {
@@ -549,7 +549,7 @@ void Table::set(ObjString* key, Value value) {
 bool Table::remove(const ObjString* key) {
     if (count_ == 0) return false;
     const uint32_t mask = capacity_ - 1;
-    uint32_t i = key->hash & mask;
+    uint32_t i = key->hash() & mask;
     for (;;) {
         if (entries_[i].key == nullptr) return false;
         if (entries_[i].key == key) break;
@@ -561,7 +561,7 @@ bool Table::remove(const ObjString* key) {
     for (;;) {
         j = (j + 1) & mask;
         if (entries_[j].key == nullptr) break;
-        const uint32_t home = entries_[j].key->hash & mask;
+        const uint32_t home = entries_[j].key->hash() & mask;
         const bool staysPut = i <= j ? (i < home && home <= j) : (i < home || home <= j);
         if (!staysPut) {
             entries_[i] = entries_[j];
@@ -699,9 +699,21 @@ void decodeInto(std::string_view text, size_t i, char* out) {
 
 }  // namespace
 
+// How many of the bytes at the start are ASCII: sixteen at a time, then one at a time.
+static size_t asciiPrefix(const char* text, size_t size) {
+    size_t i = 0;
+    for (; i + 16 <= size; i += 16) {
+        uint64_t a, b;
+        std::memcpy(&a, text + i, 8);
+        std::memcpy(&b, text + i + 8, 8);
+        if (((a | b) & 0x8080808080808080ull) != 0) break;
+    }
+    while (i < size && static_cast<unsigned char>(text[i]) < 0x80) i++;
+    return i;
+}
+
 Characters Characters::fromUtf8(std::string text) {
-    size_t ascii = 0;
-    while (ascii < text.size() && static_cast<unsigned char>(text[ascii]) < 0x80) ascii++;
+    const size_t ascii = asciiPrefix(text.data(), text.size());
     if (ascii == text.size()) return Characters{std::move(text), 1};
 
     // Once to find how many characters there are and the width they need, once to keep them.
@@ -731,9 +743,7 @@ void Characters::widen(const char* in, size_t count, uint8_t from, uint8_t to, s
 }
 
 void Characters::appendUtf8Text(std::string_view text) {
-    size_t i = 0;
-    while (i < text.size() && static_cast<unsigned char>(text[i]) < 0x80) i++;
-    if (i == text.size()) {
+    if (asciiPrefix(text.data(), text.size()) == text.size()) {
         append(text.data(), text.size(), 1);
         return;
     }
@@ -742,30 +752,40 @@ void Characters::appendUtf8Text(std::string_view text) {
 
 namespace {
 
-// The hash of `length` characters of type Unit, and the widest of them.
+// The hash of `length` characters of type Unit.
 template <typename Unit>
-uint32_t hashUnits(const char* data, size_t length, uint32_t& widest, uint32_t hash = kEmptyStringHash) {
-    uint32_t all = 0, most = 0;
+uint32_t hashUnits(const char* data, size_t length) {
+    uint32_t hash = kEmptyStringHash;
     for (size_t i = 0; i < length; i++) {
         Unit c;
         std::memcpy(&c, data + i * sizeof(Unit), sizeof(Unit));
         hash = hashCharacter(hash, c);
-        if constexpr (sizeof(Unit) == 1) all |= c;  // below 128 if their bits together are
-        else most = std::max<uint32_t>(most, c);
     }
-    widest = sizeof(Unit) == 1 ? all : most;
     return hash;
+}
+
+// The widest of `length` characters of type Unit; for bytes, all their bits together, which is
+// below 128 when all of them are. No hash in the same loop, so the compiler takes many at once.
+template <typename Unit>
+uint32_t widestUnit(const char* data, size_t length) {
+    const Unit* units = reinterpret_cast<const Unit*>(data);
+    uint32_t widest = 0;
+    if constexpr (sizeof(Unit) == 1) {
+        for (size_t i = 0; i < length; i++) widest |= units[i];
+    } else {
+        for (size_t i = 0; i < length; i++) widest = std::max<uint32_t>(widest, units[i]);
+    }
+    return widest;
 }
 
 }  // namespace
 
 ObjString::Made ObjString::make(Characters characters) {
     const size_t length = characters.size();
-    uint32_t widest = 0;
     const char* data = characters.units.data();
-    const uint32_t hash = characters.width == 1   ? hashUnits<uint8_t>(data, length, widest)
-                          : characters.width == 2 ? hashUnits<uint16_t>(data, length, widest)
-                                                  : hashUnits<uint32_t>(data, length, widest);
+    const uint32_t widest = characters.width == 1   ? widestUnit<uint8_t>(data, length)
+                            : characters.width == 2 ? widestUnit<uint16_t>(data, length)
+                                                    : widestUnit<uint32_t>(data, length);
     const uint8_t width = widest < 0x100 ? 1 : widest < 0x10000 ? 2 : 4;
     if (width < characters.width) {
         // Kept at the narrowest width that holds it, so that equal strings are kept alike.
@@ -773,7 +793,7 @@ ObjString::Made ObjString::make(Characters characters) {
         for (size_t i = 0; i < length; i++) putUnit(narrow, i, width, characters[i]);
         characters.units = std::move(narrow);
     }
-    return Made{std::move(characters.units), hash, width, widest < 0x80, length};
+    return Made{std::move(characters.units), width, widest < 0x80, length};
 }
 
 ObjString::Made ObjString::join(const ObjString* first, const ObjString* second) {
@@ -782,16 +802,18 @@ ObjString::Made ObjString::join(const ObjString* first, const ObjString* second)
     units.reserve((first->length + second->length) * width);
     Characters::widen(first->units().data(), first->length, first->width, width, units);
     Characters::widen(second->units().data(), second->length, second->width, width, units);
-    uint32_t widest = 0;
-    const char* data = second->units().data();
-    const uint32_t hash = second->width == 1   ? hashUnits<uint8_t>(data, second->length, widest, first->hash)
-                          : second->width == 2 ? hashUnits<uint16_t>(data, second->length, widest, first->hash)
-                                               : hashUnits<uint32_t>(data, second->length, widest, first->hash);
-    return Made{std::move(units), hash, width, first->ascii && second->ascii, first->length + second->length};
+    return Made{std::move(units), width, first->ascii && second->ascii, first->length + second->length};
 }
 
 ObjString::ObjString(Made made)
-    : Obj(ObjType::String), hash(made.hash), width(made.width), ascii(made.ascii), length(made.length), units_(std::move(made.units)) {}
+    : Obj(ObjType::String), width(made.width), ascii(made.ascii), length(made.length), units_(std::move(made.units)) {}
+
+uint32_t ObjString::makeHash() const {
+    const char* data = units_.data();
+    const uint32_t hash = width == 1 ? hashUnits<uint8_t>(data, length) : width == 2 ? hashUnits<uint16_t>(data, length) : hashUnits<uint32_t>(data, length);
+    hash_.store((uint64_t{1} << 32) | hash, std::memory_order_relaxed);
+    return hash;
+}
 
 const std::string& ObjString::makeUtf8() const {
     auto text = std::make_unique<std::string>();
