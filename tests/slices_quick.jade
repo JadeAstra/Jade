@@ -1,0 +1,30 @@
+// A slice of a string or of bytes made at once, with no range made for it (RANGE followed by
+// GET_INDEX): the same parts as before, and anything else the usual way, its errors as before.
+
+val s = "abcdef"
+val a = 1
+val b = 3
+print(s[a ..< b], s[a .. b], s[a ..], s[..< b], s[^2 ..], s[a ..< ^1], s[3 ..< 3].isEmpty())   // expect: bc bcd bcdef abc ef bcde true
+val wide = "a😀b€c"
+print(wide[1 ..< 3], wide[^3 ..], wide[0 .. 0])   // expect: 😀b b€c a
+val bytes = Bytes([1, 2, 3, 4, 5])
+print(bytes[1 ..< 3].toList(), bytes[^2 ..].toList(), bytes[0 .. 1].toList())   // expect: [2, 3] [4, 5] [1, 2]
+
+// Inside a function, its bounds in variables.
+fun middle(t : string, i : int, j : int) : string => t[i ..< j]
+print(middle("hello", 1, 4), middle("hello", 0, 0).size)   // expect: ell 0
+
+// Lists and stepped ranges go the usual way.
+val items = [1, 2, 3, 4]
+print(items[1 ..< 3], items[^2 ..])   // expect: [2, 3] [3, 4]
+
+// Parts outside or backwards: the errors as before.
+try { s[2 ..< 9] } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: the slice 2..<9 is out of range (size 6)
+try { s[4 ..< 2] } catch (e : IllegalArgumentException) { print(e.message) }   // expect: the slice 4..<2 runs backwards: from 4 to 1
+try { bytes[^9 ..] } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: the slice ^9..^1 is out of range (size 5)
+
+// A class's own operator get takes the range, made as before.
+class Window {
+  op [](r : Range) : string => "window ${r.start} to ${r.end}"
+}
+print(Window()[2 ..< 5])   // expect: window 2 to 5

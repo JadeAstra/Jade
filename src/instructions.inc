@@ -2837,6 +2837,34 @@ CASE(Range) {
         throw runtimeError(Thrown::ClassCastException, "range bounds must be ints, got " + typeName(start) + " and " + typeName(end));
     if ((start.isFromEnd() || end.isFromEnd()) && (flags & 6) != 0)
         throw runtimeError(Thrown::IllegalStateException, "a range with an end counted from the end (^) has no step and does not count down");
+    // A slice, s[a ..< b]: where the next instruction takes the range as an index of a string or
+    // of bytes, and the part lies inside them, the part is made here and the range never is.
+    // Anything else (a list, an operator of a class's own, a part outside) goes the usual way.
+    if ((flags & 6) == 0 && opAt(ip + kThreaded) == Op::GetIndex) {
+        const Value obj = sp_[-3];
+        if ((obj.isString() || obj.isObjType(ObjType::Bytes)) && classOf(obj) == nullptr) {
+            const int64_t n = obj.isString() ? static_cast<int64_t>(asString(obj)->length) : static_cast<int64_t>(asBytes(obj)->data.size());
+            const int64_t first = start.isFromEnd() ? n - start.as.i : start.as.i;
+            const int64_t last = (end.isFromEnd() ? n - end.as.i : end.as.i) + ((flags & 1) != 0 ? 1 : 0);
+            if (first >= 0 && first <= last && last <= n) {
+                guardRead(obj.as.obj);
+                Value part;
+                if (obj.isString()) {
+                    part = str(asString(obj)->slice(static_cast<size_t>(first), static_cast<size_t>(last)));
+                } else {
+                    const std::vector<uint8_t>& data = asBytes(obj)->data;
+                    ObjBytes* made = alloc<ObjBytes>();
+                    made->data.assign(data.begin() + first, data.begin() + last);
+                    account(made->data.size());
+                    part = Value::object(made);
+                }
+                sp_[-3] = part;
+                sp_ -= 2;
+                ip += kThreaded + kOpBytes;  // past the GET_INDEX, whose work is done
+                DONE();
+            }
+        }
+    }
     sp_[-2] = Value::object(alloc<ObjRange>(start.as.i, end.as.i, (flags & 2) ? -step : step, (flags & 1) != 0,
                                             start.isFromEnd(), end.isFromEnd()));
     sp_--;
