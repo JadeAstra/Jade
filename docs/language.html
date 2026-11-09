@@ -2661,11 +2661,11 @@ for (frame in spinner.frames) { show(frame.image); sleep(frame.delay) }
 <div class="entry member" id="Animation.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Animation throws IOException</code><a class="anchor" href="#Animation.load">#</a>
 <p>Reads an animation from a file, or the bytes of one, whatever its format: a GIF's frames, or any other picture as one frame. An IOException where it cannot be read.</p>
 </div>
-<div class="entry member" id="Animation.save"><code class="sig">fun save(path : FilePath | string) throws IOException</code><a class="anchor" href="#Animation.save">#</a>
-<p>Writes it as a GIF or WebP file, as its name's extension asks. An IllegalArgumentException for another extension.</p>
+<div class="entry member" id="Animation.save"><code class="sig">fun save(path : FilePath | string, quality : Number? = null) throws IOException</code><a class="anchor" href="#Animation.save">#</a>
+<p>Writes it as a GIF or WebP file, as its name's extension asks, at <code>quality</code> as <code>encode</code>. An IllegalArgumentException for another extension.</p>
 </div>
-<div class="entry member" id="Animation.encode"><code class="sig">fun encode(format : ImageFormat) : Bytes</code><a class="anchor" href="#Animation.encode">#</a>
-<p>The bytes of an animated picture file of it in <code>format</code>: GIF or WebP.</p>
+<div class="entry member" id="Animation.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number? = null) : Bytes</code><a class="anchor" href="#Animation.encode">#</a>
+<p>The bytes of an animated picture file of it in <code>format</code>: GIF or WebP. A WebP's frames are lossless at <code>quality</code> 1 (with none, too) and lossy below it, as Image.encode's; a GIF has no quality, its colours made at most 256 for each frame.</p>
 </div>
 <div class="entry member" id="Animation.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Animation.toString">#</a>
 <p>Its size, frames and loops, as <code>Animation(16 x 12, 4 frames, loops 0)</code>.</p>
@@ -3236,11 +3236,11 @@ image.save(FilePath(&quot;out.png&quot;))
 <div class="entry member" id="Image.inkBox"><code class="sig">fun inkBox(background : Color = Color.clear) : Rect?</code><a class="anchor" href="#Image.inkBox">#</a>
 <p>The smallest rectangle outside which every pixel is <code>background</code>; null if all of them are.</p>
 </div>
-<div class="entry member" id="Image.save"><code class="sig">fun save(path : FilePath | string, quality : Number = 0.9) throws IOException</code><a class="anchor" href="#Image.save">#</a>
-<p>Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName), PNG where it asks for none: <code>quality</code>, from 0 to 1, for the formats that lose some of the picture to be smaller (JPEG, lossy WebP). An IllegalArgumentException for an extension of another format.</p>
+<div class="entry member" id="Image.save"><code class="sig">fun save(path : FilePath | string, quality : Number? = null) throws IOException</code><a class="anchor" href="#Image.save">#</a>
+<p>Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName), PNG where it asks for none: <code>quality</code>, from 0 to 1, for the formats that lose some of the picture to be smaller (JPEG, lossy WebP), null for the format's own (as <code>encode</code>). An IllegalArgumentException for an extension of another format.</p>
 </div>
-<div class="entry member" id="Image.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes</code><a class="anchor" href="#Image.encode">#</a>
-<p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels. WebP is lossless at quality 1 and lossy below it, its alpha kept exactly either way; its quality gives about the size and loss libwebp's does at 100 times it.</p>
+<div class="entry member" id="Image.encode"><code class="sig">fun encode(format : ImageFormat, quality : Number? = null) : Bytes</code><a class="anchor" href="#Image.encode">#</a>
+<p>The bytes of a picture file of it in <code>format</code>, at <code>quality</code> (0 to 1) where the format loses some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels. WebP is lossless at quality 1 and lossy below it, its alpha kept exactly either way; its quality gives about the size and loss libwebp's does at 100 times it. With no quality, JPEG's is 0.9 and WebP's 1, lossless.</p>
 </div>
 <div class="entry member" id="Image.toPlanes"><code class="sig">fun toPlanes(space : ColorSpace = ColorSpace.rgb) : List&lt;Bytes&gt;</code><a class="anchor" href="#Image.toPlanes">#</a>
 <p>Its colours as planes, one byte a sample, each width by height, row by row: one for grey, three for red, green and blue or Y, Cb and Cr. Alpha is left out.</p>

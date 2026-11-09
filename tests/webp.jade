@@ -112,3 +112,10 @@ val glassBack = Image.load(glassFile)
 print(glassFile[12 ..< 16].decodeToString(Charset.latin1), alphas(glassBack) == alphas(glass))   // expect: VP8X true
 print(Image.load(Image(1, 1, Color(9, 200, 30)).encode(ImageFormat.webp, 0.75)).width, Image.load(Image(300, 1, Color.white).encode(ImageFormat.webp)).width)   // expect: 1 300
 try { scene.encode(ImageFormat.webp, 1.5) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a WebP's quality is from 0 to 1, not 1.5
+
+// With no quality a WebP is lossless; an animation's frames lossy below quality 1, alpha still exact.
+print(Image.load(scene.encode(ImageFormat.webp)) == scene, scene.encode(ImageFormat.webp)[12 ..< 16].decodeToString(Charset.latin1))   // expect: true VP8L
+val lossyFile = written.encode(ImageFormat.webp, 0.8)
+val lossyRead = Animation.load(lossyFile)
+print(lossyRead, lossyFile.decodeToString(Charset.latin1).contains("VP8 ") and !lossyFile.decodeToString(Charset.latin1).contains("VP8L"), (0 ..< 5).all { meanError(lossyRead.frames[it].image, moving[it].image) < 6 and alphas(lossyRead.frames[it].image) == alphas(moving[it].image) })   // expect: Animation(24 x 16, 5 frames, loops 2) true true
+try { written.encode(ImageFormat.webp, -0.5) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a WebP's quality is from 0 to 1, not -0.5

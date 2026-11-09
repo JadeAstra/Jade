@@ -101,27 +101,37 @@ object __Webp {
   fun encodeImage(image : Image, quality : Number) : Bytes {
     if (image.width == 0 or image.height == 0) { throw IllegalArgumentException("an image with no pixels is not written as a WebP") }
     if (quality < 0 or quality > 1) { throw IllegalArgumentException("a WebP's quality is from 0 to 1, not $quality") }
-    if (quality == 1) {
-      if (image.width > 16384 or image.height > 16384) { throw IllegalArgumentException("a WebP is up to 16384 pixels each way") }
-      return riff([chunk("VP8L", __webp.encodeLossless(image.rgbaBytes(), image.width, image.height, false))])
-    }
-    if (image.width > 16383 or image.height > 16383) { throw IllegalArgumentException("a lossy WebP is up to 16383 pixels each way") }
-    val parts = __webp.encodeLossy(image.rgbaBytes(), image.width, image.height, quality)
-    val picture = chunk("VP8 ", parts[0] as Bytes)
-    if (parts[1] == null) { return riff([picture]) }
+    checkSize(image.width, image.height, quality)
+    val picture = pictureChunks(image.rgbaBytes(), image.width, image.height, quality)
+    if (picture.size == 1) { return riff(picture) }
     val head = Bytes(10)
     head[0] = 0x10   // alpha
     __webpPutU24(head, 4, image.width - 1)
     __webpPutU24(head, 7, image.height - 1)
-    return riff([chunk("VP8X", head), chunk("ALPH", parts[1] as Bytes), picture])
+    return riff([chunk("VP8X", head)] + picture)
+  }
+
+  private fun checkSize(width : int, height : int, quality : Number) {
+    if (quality == 1 and (width > 16384 or height > 16384)) { throw IllegalArgumentException("a WebP is up to 16384 pixels each way") }
+    if (quality < 1 and (width > 16383 or height > 16383)) { throw IllegalArgumentException("a lossy WebP is up to 16383 pixels each way") }
+  }
+
+  // A picture's chunks: VP8L at quality 1; else VP8, after an ALPH chunk where any pixel is see-through.
+  private fun pictureChunks(rgba : Bytes, width : int, height : int, quality : Number) : List<Bytes> {
+    if (quality == 1) { return [chunk("VP8L", __webp.encodeLossless(rgba, width, height, false))] }
+    val parts = __webp.encodeLossy(rgba, width, height, quality)
+    val picture = chunk("VP8 ", parts[0] as Bytes)
+    return parts[1] == null ? [picture] : [chunk("ALPH", parts[1] as Bytes), picture]
   }
 
   // An animation as a WebP file: each frame the rectangle it changes (the whole of the first), put
-  // in place of what is there rather than blended, so that a pixel may become see-through again.
-  fun encode(animation : Animation) : Bytes {
+  // in place of what is there rather than blended, so that a pixel may become see-through again;
+  // lossless at quality 1, else lossy at that quality.
+  fun encode(animation : Animation, quality : Number) : Bytes {
     val width = animation.width
     val height = animation.height
-    if (width > 16384 or height > 16384) { throw IllegalArgumentException("a WebP is up to 16384 pixels each way") }
+    if (quality < 0 or quality > 1) { throw IllegalArgumentException("a WebP's quality is from 0 to 1, not $quality") }
+    checkSize(width, height, quality)
     val parts : open List<Bytes> = []
     val head = Bytes(10)
     head[0] = 0x12   // animation, and alpha
@@ -161,7 +171,9 @@ object __Webp {
       __webpPutU24(header, 9, h - 1)
       __webpPutU24(header, 12, Math.min(frame.delay.inWholeMilliseconds, 0xFFFFFF))
       header[15] = 0x02   // not blended, not cleared after
-      parts.add(chunk("ANMF", header + chunk("VP8L", __webp.encodeLossless(part, w, h, false))))
+      var body = header
+      for (c in pictureChunks(part, w, h, quality)) { body = body + c }
+      parts.add(chunk("ANMF", body))
       previous = pixels
     }
     return riff(parts)

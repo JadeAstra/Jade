@@ -399,9 +399,9 @@ class Image : Drawable {
 
   // Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName),
   // PNG where it asks for none: `quality`, from 0 to 1, for the formats that lose some of the
-  // picture to be smaller (JPEG, lossy WebP). An IllegalArgumentException for an extension of
-  // another format.
-  fun save(path : FilePath | string, quality : Number = 0.9) throws IOException {
+  // picture to be smaller (JPEG, lossy WebP), null for the format's own (as `encode`). An
+  // IllegalArgumentException for an extension of another format.
+  fun save(path : FilePath | string, quality : Number? = null) throws IOException {
     val file = path is FilePath ? path : FilePath(path as string)
     val format = ImageFormat.ofName(file.name)
     val ext = file.name.lastIndexOf('.') < 0 ? "" : file.name[file.name.lastIndexOf('.') + 1 ..]
@@ -412,15 +412,17 @@ class Image : Drawable {
   // The bytes of a picture file of it in `format`, at `quality` (0 to 1) where the format loses
   // some of the picture. PNG, BMP and lossless forms lose nothing: loading them gives the same pixels.
   // WebP is lossless at quality 1 and lossy below it, its alpha kept exactly either way; its quality
-  // gives about the size and loss libwebp's does at 100 times it.
-  fun encode(format : ImageFormat, quality : Number = 0.9) : Bytes {
+  // gives about the size and loss libwebp's does at 100 times it. With no quality, JPEG's is 0.9
+  // and WebP's 1, lossless.
+  fun encode(format : ImageFormat, quality : Number? = null) : Bytes {
     if (format == ImageFormat.png) { return toPng() }
     if (format == ImageFormat.bmp) { return __Bmp.encode(this) }
     if (format == ImageFormat.gif) { return __Gif.encodeImage(this) }
-    if (format == ImageFormat.webp) { return __Webp.encodeImage(this, quality) }
+    if (format == ImageFormat.webp) { return __Webp.encodeImage(this, quality ?: 1) }
     if (format == ImageFormat.jpeg) {
-      if (quality < 0 or quality > 1) { throw IllegalArgumentException("a JPEG's quality is from 0 to 1, not $quality") }
-      return __Jpeg.encode(this, quality)
+      val q = quality ?: 0.9
+      if (q < 0 or q > 1) { throw IllegalArgumentException("a JPEG's quality is from 0 to 1, not $q") }
+      return __Jpeg.encode(this, q)
     }
     throw UnsupportedOperationException("${format} pictures are written once part one, step 3 has their codec")
   }

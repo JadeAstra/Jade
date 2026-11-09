@@ -45,19 +45,21 @@ class Animation {
     }
   }
 
-  // Writes it as a GIF or WebP file, as its name's extension asks. An IllegalArgumentException for
-  // another extension.
-  fun save(path : FilePath | string) throws IOException {
+  // Writes it as a GIF or WebP file, as its name's extension asks, at `quality` as `encode`. An
+  // IllegalArgumentException for another extension.
+  fun save(path : FilePath | string, quality : Number? = null) throws IOException {
     val file = path is FilePath ? path : FilePath(path as string)
     val format = ImageFormat.ofName(file.name)
     if (format != ImageFormat.gif and format != ImageFormat.webp) { throw IllegalArgumentException("an animation is saved as .gif or .webp, not ${file.name}") }
-    file.writeBytes(encode(format!!))
+    file.writeBytes(encode(format!!, quality))
   }
 
-  // The bytes of an animated picture file of it in `format`: GIF or WebP.
-  fun encode(format : ImageFormat) : Bytes {
+  // The bytes of an animated picture file of it in `format`: GIF or WebP. A WebP's frames are
+  // lossless at `quality` 1 (with none, too) and lossy below it, as Image.encode's; a GIF has no
+  // quality, its colours made at most 256 for each frame.
+  fun encode(format : ImageFormat, quality : Number? = null) : Bytes {
     if (format == ImageFormat.gif) { return __Gif.encode(this) }
-    if (format == ImageFormat.webp) { return __Webp.encode(this) }
+    if (format == ImageFormat.webp) { return __Webp.encode(this, quality ?: 1) }
     throw IllegalArgumentException("an animation is written as a GIF or a WebP, not ${format}")
   }
 
