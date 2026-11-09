@@ -65,7 +65,7 @@ object __Webp {
       val read = __webp.decodeLossless(data, chunk.at, chunk.at + chunk.size, 0, 0)
       if (read is string) { throw failure(read as string) }
       val parts = read as List<any>
-      return Image.of(parts[0] as int, parts[1] as int, parts[2] as Bytes)
+      return Image.taking(parts[0] as int, parts[1] as int, parts[2] as Bytes)
     }
     // Lossy: VP8, its alpha in the ALPH chunk just before it, if there is one.
     val alpha = chunk.name == "ALPH" ? chunk : null
@@ -74,7 +74,7 @@ object __Webp {
     val read = __webp.decodeLossy(data, picture!!.at, picture!!.at + picture!!.size, alpha?.at ?: 0, alpha == null ? 0 : alpha!!.at + alpha!!.size)
     if (read is string) { throw failure(read as string) }
     val parts = read as List<any>
-    return Image.of(parts[0] as int, parts[1] as int, parts[2] as Bytes)
+    return Image.taking(parts[0] as int, parts[1] as int, parts[2] as Bytes)
   }
 
   // The chunks from `from` to `to`: each a name of four letters, a size, and that many bytes (and

@@ -1060,6 +1060,19 @@ void registerText(VM& vm) {
         return Value::null();
     });
 
+    // takePixels(cells, bytes): a picture's pixels taken from new bytes without a copy, the bytes
+    // left holding what the cells held. For the standard library's decoders, whose bytes are
+    // nowhere else.
+    def("imageTakePixels", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::Bytes))
+            throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells and bytes");
+        std::vector<uint8_t>& to = asList(args[0])->pack->block;
+        std::vector<uint8_t>& from = asBytes(args[1])->data;
+        if (to.size() != from.size()) throw vm.runtimeError(Thrown::IllegalArgumentException, "the bytes do not fit the picture");
+        to.swap(from);
+        return Value::null();
+    });
+
     vm.defineGlobal("__text", Value::object(lib));
     // What may be done in a parallel section: measuring, and finding a font to draw with, which
     // change nothing a program can see (the engine's tables have locks of their own, held for an

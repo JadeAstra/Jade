@@ -70,7 +70,7 @@ object __Bmp {
     val out = Bytes(width * height * 4)
     if (compression == 1 or compression == 2) {
       readRunLength(data, pixelsAt, width, height, topDown, compression == 2, palette, out)
-      return Image.of(width, height, out)
+      return Image.taking(width, height, out)
     }
     val stride = (width * bits + 31) / 32 * 4
     if (pixelsAt < 0 or pixelsAt + stride * (height - 1) + (width * bits + 7) / 8 > data.size) { throw failure("its pixels are cut short") }
@@ -108,7 +108,7 @@ object __Bmp {
       val alphas = Bytes(width * height).copyFrom(out, 3, 4, 0, 1, width * height)
       if (alphas.without(0).size == 0) { out.copyFrom(opaque, 0, 0, 3, 4, width * height) }
     }
-    return Image.of(width, height, out)
+    return Image.taking(width, height, out)
   }
 
   // The bits of `value` under `mask`, made 0 to 255: fewer than 8 repeated from the top to fill

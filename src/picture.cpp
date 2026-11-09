@@ -315,32 +315,38 @@ void inverseBlock(int* b, uint8_t* out, size_t stride) {
     }
 }
 
-// The forward DCT of 8 by 8 samples (128 taken off), AAN's way in floats (libjpeg's float
-// method), each coefficient left scaled by `aan`, which the caller takes out.
-void forwardBlock(float* b) {
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < 8; i++) {
-            const int s = pass == 0 ? i * 8 : i, d = pass == 0 ? 1 : 8;
-            const float t0 = b[s] + b[s + 7 * d], t7 = b[s] - b[s + 7 * d];
-            const float t1 = b[s + d] + b[s + 6 * d], t6 = b[s + d] - b[s + 6 * d];
-            const float t2 = b[s + 2 * d] + b[s + 5 * d], t5 = b[s + 2 * d] - b[s + 5 * d];
-            const float t3 = b[s + 3 * d] + b[s + 4 * d], t4 = b[s + 3 * d] - b[s + 4 * d];
-            const float t10 = t0 + t3, t13 = t0 - t3, t11 = t1 + t2, t12 = t1 - t2;
-            b[s] = t10 + t11;
-            b[s + 4 * d] = t10 - t11;
-            const float z1 = (t12 + t13) * 0.707106781f;
-            b[s + 2 * d] = t13 + z1;
-            b[s + 6 * d] = t13 - z1;
-            const float u10 = t4 + t5, u11 = t5 + t6, u12 = t6 + t7;
-            const float z5 = (u10 - u12) * 0.382683433f;
-            const float z2 = 0.541196100f * u10 + z5, z4 = 1.306562965f * u12 + z5, z3 = u11 * 0.707106781f;
-            const float z11 = t7 + z3, z13 = t7 - z3;
-            b[s + 5 * d] = z13 + z2;
-            b[s + 3 * d] = z13 - z2;
-            b[s + d] = z11 + z4;
-            b[s + 7 * d] = z11 - z4;
-        }
+// One pass of the forward DCT, AAN's way in floats (libjpeg's float method), over 8 lines of 8
+// samples `step` apart, the lines `lineStep` apart.
+template <int step, int lineStep>
+inline void forwardPass(float* b) {
+    for (int i = 0; i < 8; i++) {
+        float* s = b + i * lineStep;
+        const float t0 = s[0] + s[7 * step], t7 = s[0] - s[7 * step];
+        const float t1 = s[step] + s[6 * step], t6 = s[step] - s[6 * step];
+        const float t2 = s[2 * step] + s[5 * step], t5 = s[2 * step] - s[5 * step];
+        const float t3 = s[3 * step] + s[4 * step], t4 = s[3 * step] - s[4 * step];
+        const float t10 = t0 + t3, t13 = t0 - t3, t11 = t1 + t2, t12 = t1 - t2;
+        s[0] = t10 + t11;
+        s[4 * step] = t10 - t11;
+        const float z1 = (t12 + t13) * 0.707106781f;
+        s[2 * step] = t13 + z1;
+        s[6 * step] = t13 - z1;
+        const float u10 = t4 + t5, u11 = t5 + t6, u12 = t6 + t7;
+        const float z5 = (u10 - u12) * 0.382683433f;
+        const float z2 = 0.541196100f * u10 + z5, z4 = 1.306562965f * u12 + z5, z3 = u11 * 0.707106781f;
+        const float z11 = t7 + z3, z13 = t7 - z3;
+        s[5 * step] = z13 + z2;
+        s[3 * step] = z13 - z2;
+        s[step] = z11 + z4;
+        s[7 * step] = z11 - z4;
     }
+}
+
+// The forward DCT of 8 by 8 samples (128 taken off): rows, then columns; each coefficient left
+// scaled by `aan`, which the caller takes out.
+void forwardBlock(float* b) {
+    forwardPass<1, 8>(b);
+    forwardPass<8, 1>(b);
 }
 
 const std::array<float, 64>& aanScale() {
@@ -377,17 +383,46 @@ std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, i
     const bool sameX = tw == w, sameY = th == h;
     const bool halfX = w == 2 * tw || w == 2 * tw - 1, halfY = h == 2 * th || h == 2 * th - 1;
     if ((twiceX || sameX) && (twiceY || sameY)) {
+        // A row at a time: first down the columns (3 parts the nearer row and 1 the other, or 4
+        // parts the one row) into `column`, its first and last repeated once past each end; then
+        // across.
+        std::vector<int> columnRow(static_cast<size_t>(w) + 2);
+        int* column = columnRow.data() + 1;
         for (int y = 0; y < th; y++) {
             const int sy = twiceY ? y / 2 : y;
-            const int ny = twiceY ? (y % 2 == 0 ? sy - 1 : sy + 1) : sy;
-            uint8_t* o = &out[static_cast<size_t>(y) * static_cast<size_t>(tw)];
-            for (int x = 0; x < tw; x++) {
-                const int sx = twiceX ? x / 2 : x;
-                const int nx = twiceX ? (x % 2 == 0 ? sx - 1 : sx + 1) : sx;
-                const int here = twiceY ? at(sx, sy) * 3 + at(sx, ny) : at(sx, sy) * 4;
-                const int beside = twiceY ? at(nx, sy) * 3 + at(nx, ny) : at(nx, sy) * 4;
-                o[x] = static_cast<uint8_t>(twiceX ? (here * 3 + beside + 8) >> 4 : (here + 2) >> 2);
+            const int ny = std::clamp(twiceY ? (y % 2 == 0 ? sy - 1 : sy + 1) : sy, 0, h - 1);
+            const uint8_t* near = p + static_cast<size_t>(std::min(sy, h - 1)) * stride;
+            const uint8_t* far = p + static_cast<size_t>(ny) * stride;
+            if (twiceY) {
+                for (int x = 0; x < w; x++) column[x] = near[x] * 3 + far[x];
+            } else {
+                for (int x = 0; x < w; x++) column[x] = near[x] * 4;
             }
+            column[-1] = column[0];
+            column[w] = column[w - 1];
+            uint8_t* o = &out[static_cast<size_t>(y) * static_cast<size_t>(tw)];
+            if (twiceX) {
+                const int pairs = tw / 2;
+                for (int k = 0; k < pairs; k++) {
+                    o[2 * k] = static_cast<uint8_t>((column[k] * 3 + column[k - 1] + 8) >> 4);
+                    o[2 * k + 1] = static_cast<uint8_t>((column[k] * 3 + column[k + 1] + 8) >> 4);
+                }
+                if (tw % 2 != 0) o[tw - 1] = static_cast<uint8_t>((column[pairs] * 3 + column[pairs - 1] + 8) >> 4);
+            } else {
+                for (int x = 0; x < tw; x++) o[x] = static_cast<uint8_t>((column[x] + 2) >> 2);
+            }
+        }
+        return out;
+    }
+    if (halfX && halfY) {
+        // Each 2 by 2 averaged, the last column or row repeated where the size is odd.
+        for (int y = 0; y < th; y++) {
+            const uint8_t* r0 = p + static_cast<size_t>(2 * y) * stride;
+            const uint8_t* r1 = p + static_cast<size_t>(std::min(2 * y + 1, h - 1)) * stride;
+            uint8_t* o = &out[static_cast<size_t>(y) * static_cast<size_t>(tw)];
+            const int whole = w / 2;
+            for (int x = 0; x < whole; x++) o[x] = static_cast<uint8_t>((r0[2 * x] + r0[2 * x + 1] + r1[2 * x] + r1[2 * x + 1] + 2) >> 2);
+            if (whole < tw) o[whole] = static_cast<uint8_t>((r0[w - 1] * 2 + r1[w - 1] * 2 + 2) >> 2);
         }
         return out;
     }
@@ -515,11 +550,13 @@ void registerPicture(VM& vm) {
                     for (int x = 0; x < 8; x++) block[y * 8 + x] = static_cast<float>(p[static_cast<size_t>(y * stride + x)]) - 128.0f;
                 forwardBlock(block);
                 uint8_t* o = &out[static_cast<size_t>((by * bw + bx) * 128)];
+                int16_t q[64];
                 for (size_t i = 0; i < 64; i++) {
-                    const float v = block[i] * factor[i];
-                    const int16_t q = static_cast<int16_t>(std::clamp(static_cast<int>(std::lround(v)), -32768, 32767));
-                    std::memcpy(o + i * 2, &q, 2);
+                    // Rounded half away from zero, as lround, without its call.
+                    const float v = std::clamp(block[i] * factor[i], -32768.0f, 32767.0f);
+                    q[i] = static_cast<int16_t>(v + (v < 0 ? -0.5f : 0.5f));
                 }
+                std::memcpy(o, q, 128);
             }
         return bytesValue(vm, std::move(out));
     });
@@ -535,9 +572,9 @@ void registerPicture(VM& vm) {
         if (p.size() < static_cast<size_t>((h - 1) * stride + w)) throw vm.runtimeError(Thrown::IllegalArgumentException, "the plane is smaller than its size says");
         return bytesValue(vm, scalePlane(p.data(), static_cast<size_t>(stride), static_cast<int>(w), static_cast<int>(h), static_cast<int>(tw), static_cast<int>(th)));
     });
-    // fromPlanes(planes, width, height, space): RGBA pixels from planes of one byte a sample, each
-    // width by height: 0 grey, 1 RGB, 2 YCbCr.
-    def("fromPlanes", 4, 4, [](VM& vm, int, Value* args) -> Value {
+    // fromPlanes(planes, width, height, space, into): RGBA pixels from planes of one byte a sample,
+    // each width by height (0 grey, 1 RGB, 2 YCbCr), written into a picture's cells of that size.
+    def("fromPlanes", 5, 5, [](VM& vm, int, Value* args) -> Value {
         const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height"), space = vm.toInt(args[3], "space");
         if (!args[0].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::IllegalArgumentException, "planes are a list of Bytes");
         ObjList* list = asList(args[0]);
@@ -551,22 +588,40 @@ void registerPicture(VM& vm) {
                 throw vm.runtimeError(Thrown::IllegalArgumentException, "each plane is " + std::to_string(w) + " by " + std::to_string(h) + " bytes");
             planes.push_back(asBytes(v)->data.data());
         }
-        std::vector<uint8_t> out(n * 4);
+        if (!args[4].isObjType(ObjType::List) || !asList(args[4])->packed() || asList(args[4])->pack->block.size() != n * 4)
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture is not " + std::to_string(w) + " by " + std::to_string(h));
+        std::vector<uint8_t>& out = asList(args[4])->pack->block;
         if (space == 0) {
             for (size_t i = 0; i < n; i++) out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = planes[0][i], out[i * 4 + 3] = 255;
         } else if (space == 1) {
             for (size_t i = 0; i < n; i++) out[i * 4] = planes[0][i], out[i * 4 + 1] = planes[1][i], out[i * 4 + 2] = planes[2][i], out[i * 4 + 3] = 255;
         } else {
             const YccTables& t = ycc();
+            const uint8_t* py = planes[0];
+            const uint8_t* pb = planes[1];
+            const uint8_t* pr = planes[2];
+            uint8_t* o = out.data();
             for (size_t i = 0; i < n; i++) {
-                const int y = planes[0][i] << 16, cb = planes[1][i], cr = planes[2][i];
-                out[i * 4] = clampSample((y + t.crR[cr]) >> 16);
-                out[i * 4 + 1] = clampSample((y + t.cbG[cb] + t.crG[cr]) >> 16);
-                out[i * 4 + 2] = clampSample((y + t.cbB[cb]) >> 16);
-                out[i * 4 + 3] = 255;
+                const int y = py[i] << 16, cb = pb[i], cr = pr[i];
+                const uint32_t pixel = clampSample((y + t.crR[cr]) >> 16) | (static_cast<uint32_t>(clampSample((y + t.cbG[cb] + t.crG[cr]) >> 16)) << 8) |
+                                       (static_cast<uint32_t>(clampSample((y + t.cbB[cb]) >> 16)) << 16) | 0xFF000000u;
+                std::memcpy(o + i * 4, &pixel, 4);
             }
         }
-        return bytesValue(vm, std::move(out));
+        return Value::null();
+    });
+    // isOpaque(pixels): whether no pixel is see-through at all.
+    def("isOpaque", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const std::vector<uint8_t>& px = pixelsOf(vm, args[0]);
+        const size_t n = px.size() / 4;
+        uint32_t all = 0xFFFFFFFFu;
+        for (size_t i = 0; i < n; i++) {
+            uint32_t pixel;
+            std::memcpy(&pixel, px.data() + i * 4, 4);
+            all &= pixel;
+            if ((i & 4095) == 4095 && (all >> 24) != 255) return Value::boolean(false);
+        }
+        return Value::boolean((all >> 24) == 255);
     });
     // toPlanes(pixels, space): planes of one byte a sample from RGBA pixels (alpha left out).
     def("toPlanes", 2, 2, [](VM& vm, int, Value* args) -> Value {
@@ -575,18 +630,21 @@ void registerPicture(VM& vm) {
         const size_t n = px.size() / 4;
         const size_t count = space == 0 ? 1 : 3;
         std::vector<std::vector<uint8_t>> planes(count, std::vector<uint8_t>(n));
-        for (size_t i = 0; i < n; i++) {
-            const int r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
-            if (space == 1) {
-                planes[0][i] = static_cast<uint8_t>(r);
-                planes[1][i] = static_cast<uint8_t>(g);
-                planes[2][i] = static_cast<uint8_t>(b);
-                continue;
-            }
-            planes[0][i] = clampSample((19595 * r + 38470 * g + 7471 * b + 32768) >> 16);
-            if (space == 2) {
-                planes[1][i] = clampSample(((-11059 * r - 21709 * g + 32768 * b + 32767) >> 16) + 128);
-                planes[2][i] = clampSample(((32768 * r - 27439 * g - 5329 * b + 32767) >> 16) + 128);
+        const uint8_t* q = px.data();
+        if (space == 1) {
+            for (size_t i = 0; i < n; i++) planes[0][i] = q[i * 4], planes[1][i] = q[i * 4 + 1], planes[2][i] = q[i * 4 + 2];
+        } else if (space == 0) {
+            uint8_t* y = planes[0].data();
+            for (size_t i = 0; i < n; i++) y[i] = clampSample((19595 * q[i * 4] + 38470 * q[i * 4 + 1] + 7471 * q[i * 4 + 2] + 32768) >> 16);
+        } else {
+            uint8_t* y = planes[0].data();
+            uint8_t* cb = planes[1].data();
+            uint8_t* cr = planes[2].data();
+            for (size_t i = 0; i < n; i++) {
+                const int r = q[i * 4], g = q[i * 4 + 1], b = q[i * 4 + 2];
+                y[i] = clampSample((19595 * r + 38470 * g + 7471 * b + 32768) >> 16);
+                cb[i] = clampSample(((-11059 * r - 21709 * g + 32768 * b + 32767) >> 16) + 128);
+                cr[i] = clampSample(((32768 * r - 27439 * g - 5329 * b + 32767) >> 16) + 128);
             }
         }
         ObjList* list = newList(vm);

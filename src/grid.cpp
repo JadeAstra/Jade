@@ -37,7 +37,19 @@ void appendCopies(VM& vm, ObjList* list, size_t count, Value value) {
     PackedItems& pack = *list->pack;
     const size_t width = pack.width;
     pack.block.resize((start + count) * width);
-    for (size_t i = 1; i < count; i++) std::memcpy(pack.block.data() + (start + i) * width, pack.block.data() + start * width, width);
+    // The new bytes are zeros already, which is all a value of zeros (a clear Color, 0) needs;
+    // any other is copied in doubling runs.
+    uint8_t* first = pack.block.data() + start * width;
+    bool zeros = true;
+    for (size_t k = 0; k < width && zeros; k++) zeros = first[k] == 0;
+    if (!zeros) {
+        size_t done = 1;
+        while (done < count) {
+            const size_t n = std::min(done, count - done);
+            std::memcpy(first + done * width, first, n * width);
+            done += n;
+        }
+    }
     if (pack.nullable) {
         const bool isNull = vm.listGet(list, start).isNull();
         pack.nulls.resize((start + count + 63) / 64, 0);

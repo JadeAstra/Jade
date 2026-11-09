@@ -33,7 +33,7 @@ fun Grid<Color>.dither(palette : List<Color>, method : Dither = Dither.floydStei
   // The colours by index, with index palette.size clear for see-through pixels.
   val colors = Bytes(256 * 4).copyFrom(__paletteBytes(palette, 256), 0, 1, 0, 1, palette.size * 4)
   val made = Grid<Color>(width, height)
-  __text.imageSetPixels(made.cells, indices.mapped(colors, 4))
+  __text.imageTakePixels(made.cells, indices.mapped(colors, 4))
   return made
 }
 
@@ -87,6 +87,7 @@ external object __picture {
   fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List<int>?) : unit
   fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List<int>?) : Bytes
   fun scalePlane(plane : Bytes, width : int, height : int, toWidth : int, toHeight : int, stride : int) : Bytes
-  fun fromPlanes(planes : List<Bytes>, width : int, height : int, space : int) : Bytes
+  fun fromPlanes(planes : List<Bytes>, width : int, height : int, space : int, into : any) : unit
   fun toPlanes(pixels : any, space : int) : List<Bytes>
+  fun isOpaque(pixels : any) : bool
 }

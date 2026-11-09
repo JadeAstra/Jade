@@ -243,7 +243,7 @@ class __JpegReader {
       out[o + 3] = 255.toByte()
       o += 4
     }
-    return Image.of(width, height, out)
+    return Image.taking(width, height, out)
   }
 
   // The picture turned as EXIF's orientation says (1 as it is; 2 to 8 mirrored and turned).
@@ -271,7 +271,7 @@ class __JpegReader {
         out.copyFrom(from, (y * w + x) * 4, 1, (ny * ow + nx) * 4, 1, 4)
       }
     }
-    return Image.of(ow, oh, out)
+    return Image.taking(ow, oh, out)
   }
 
   private fun failure(why : string) : IOException => IOException("not a JPEG file that can be read: $why")
@@ -301,7 +301,7 @@ class __JpegWriter {
     val natural = tables.map { zz -> List(64) { 0 }.also { for (k in 0 ..< 64) { it[__jpegNatural[k]] = zz[k] } } }
     // Laid over white where something is see-through; then Y, Cb and Cr, the last two halved each way.
     var solid = image
-    if (Bytes(w * h).copyFrom(image.rgbaBytes(), 3, 4, 0, 1, w * h).without(255.toByte()).size > 0) {
+    if (!__picture.isOpaque(image.cells.cells)) {
       solid = Image(w, h, Color.white)
       solid.canvas().draw(image, 0, 0)
     }

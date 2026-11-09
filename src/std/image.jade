@@ -307,8 +307,18 @@ class Image : Drawable {
     // A solid picture made from planes of one byte a sample, each `width` by `height`, row by row:
     // one for grey, three for red, green and blue or Y, Cb and Cr. An IllegalArgumentException for
     // planes of another size or number.
-    fun fromPlanes(width : int, height : int, planes : List<Bytes>, space : ColorSpace = ColorSpace.rgb) : Image =>
-      Image.of(width, height, __picture.fromPlanes(planes, width, height, space.ordinal))
+    fun fromPlanes(width : int, height : int, planes : List<Bytes>, space : ColorSpace = ColorSpace.rgb) : Image {
+      val made = Image(width, height)
+      __picture.fromPlanes(planes, width, height, space.ordinal, made.cells.cells)
+      return made
+    }
+    // An image of new bytes, four to a pixel, taken as its pixels without a copy: the bytes are
+    // left holding other values. For the standard library's decoders, whose bytes are nowhere else.
+    internal fun taking(width : int, height : int, pixels : Bytes) : Image {
+      val made = Image(width, height)
+      __text.imageTakePixels(made.cells.cells, pixels)
+      return made
+    }
     // Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its
     // content rather than its name. An IOException where it cannot be read or is no picture.
     fun load(source : FilePath | string | Bytes) : Image throws IOException {
@@ -322,7 +332,7 @@ class Image : Drawable {
       if (format != null and format != ImageFormat.png) { throw UnsupportedOperationException("${format} pictures are read once part one, step 3 has their codec") }
       val read : List<any> = __text.decodePng(data)
       val made = Image(read[0] as int, read[1] as int)
-      __text.imageSetPixels(made.cells.cells, read[2])
+      __text.imageTakePixels(made.cells.cells, read[2])
       return made
     }
   }

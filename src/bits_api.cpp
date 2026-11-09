@@ -3,6 +3,7 @@
 // codec.cpp's deflate both ways.
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cstring>
 #include <string>
@@ -534,11 +535,7 @@ void registerBits(VM& vm) {
                 }
                 bits &= (uint64_t{1} << count) - 1;
             };
-            auto magnitude = [](int v) {
-                uint32_t a = static_cast<uint32_t>(v < 0 ? -v : v), s = 0;
-                while (a) s++, a >>= 1;
-                return s;
-            };
+            auto magnitude = [](int v) { return static_cast<uint32_t>(std::bit_width(static_cast<uint32_t>(v < 0 ? -v : v))); };
             for (int64_t my = 0; my < mcusY; my++)
                 for (int64_t mx = 0; mx < mcusX; mx++)
                     for (Comp& c : comps)
@@ -549,8 +546,8 @@ void registerBits(VM& vm) {
                                 const int diff = dc - c.pred;
                                 c.pred = dc;
                                 const uint32_t ds = magnitude(diff);
-                                put(c.dcCode[ds], c.dcLength[ds]);
-                                put(static_cast<uint32_t>(diff < 0 ? diff + (1 << ds) - 1 : diff), ds);
+                                // A code and its extra bits put together: 27 bits at most.
+                                put((c.dcCode[ds] << ds) | (static_cast<uint32_t>(diff < 0 ? diff + (1 << ds) - 1 : diff) & ((1u << ds) - 1)), c.dcLength[ds] + ds);
                                 int run = 0;
                                 for (int k = 1; k < 64; k++) {
                                     const int v = coefAt(blk, kNatural[k]);
@@ -564,8 +561,7 @@ void registerBits(VM& vm) {
                                     }
                                     const uint32_t s = magnitude(v);
                                     const uint32_t symbol = (static_cast<uint32_t>(run) << 4) | s;
-                                    put(c.acCode[symbol], c.acLength[symbol]);
-                                    put(static_cast<uint32_t>(v < 0 ? v + (1 << s) - 1 : v), s);
+                                    put((c.acCode[symbol] << s) | (static_cast<uint32_t>(v < 0 ? v + (1 << s) - 1 : v) & ((1u << s) - 1)), c.acLength[symbol] + s);
                                     run = 0;
                                 }
                                 if (run > 0) put(c.acCode[0], c.acLength[0]);
