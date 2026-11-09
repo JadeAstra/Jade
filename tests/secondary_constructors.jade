@@ -59,3 +59,12 @@ fun <T> __repeat(item : T, count : int) : List<T> {
 }
 val bag = Bag("x", 3)
 print(bag.items, Bag<int>(4, 2).items, Bag([1, 2]).items)   // expect: ["x", "x", "x"] [4, 4] [1, 2]
+
+// Chosen the same inside a lambda, where a bare name could be a member of an object the lambda
+// runs on: Color(int, int, int) is the constructor that takes ints, not the one that takes bytes.
+val tint = { x : int -> Color(x % 256, 2, 3) }
+fun withColor(block : (int) -> Color) : Color => block(301)
+val pixels = Grid<Color>(2, 1)
+fun editAll(block : (Grid<Color>) -> unit) { block(pixels) }
+editAll { p -> p[1, 0] = Color(70 * 4 % 256, 2, 3) }
+print(tint(300), withColor { Color(it % 256, 0, 0) }, pixels[1, 0])   // expect: Color(44, 2, 3) Color(45, 0, 0) Color(24, 2, 3)

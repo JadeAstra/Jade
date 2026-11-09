@@ -7057,6 +7057,10 @@ private:
     // Returns false when the name is to be called as an ordinary value.
     bool compileBareCall(const CallExpr& e) {
         if (kindName(*e.callee) != nullptr) return false;  // an enum class's kind: compileCallee
+        // A class's secondary constructor the checker chose (`Color(x, 2, 3)` with ints): its
+        // static function, called by compileCallee, even where a lambda may run on an object whose
+        // member a bare name could be, as nothing chooses among constructors when it runs.
+        if (session_.checker != nullptr && session_.checker->secondaryConstructor(e) != nullptr) return false;
         const auto& callee = static_cast<const NameExpr&>(*e.callee);
         const std::string& name = callee.name;
         VarInfo info;
