@@ -1,0 +1,46 @@
+// Palettes and dithering (M9/M10 part one, step 3): the colours that stand best for a picture, and
+// the picture put into them.
+
+// A picture of few colours has those colours, in the order first met; see-through pixels left out.
+val few = Image(4, 2, Color(10, 20, 30))
+few[1, 0] = Color(200, 0, 0)
+few[2, 1] = Color(0, 0, 255, 100)
+print(few.pixels.palette(), few.pixels.palette(2))   // expect: [Color(10, 20, 30), Color(200, 0, 0)] [Color(10, 20, 30), Color(200, 0, 0)]
+print(few.pixels.dither(few.pixels.palette(), Dither.none)[2, 1], few.pixels.dither(few.pixels.palette()) == Image(4, 2, Color(10, 20, 30)).also { it[1, 0] = Color(200, 0, 0); it[2, 1] = Color.clear }.pixels)   // expect: Color(0, 0, 0, 0) true
+
+// One of many: no more colours than asked for, each near the pixels it stands for.
+val ramp = Image(64, 16)
+ramp.editPixels { p -> for (y in 0 ..< 16) { for (x in 0 ..< 64) { p[x, y] = Color(x * 4, y * 16, 255 - x * 4) } } }
+val eight = ramp.pixels.palette(8)
+print(eight.size <= 8, eight.size >= 4, eight.all { it.alpha.toInt() == 255 })   // expect: true true true
+val mapped = ramp.pixels.dither(eight, Dither.none)
+var inPalette = true
+var worst = 0
+for (y in 0 ..< 16) {
+  for (x in 0 ..< 64) {
+    val c = mapped[x, y]
+    if (!(c in eight)) { inPalette = false }
+    worst = Math.max(worst, Math.abs(c.red.toInt() - ramp[x, y].red.toInt()))
+  }
+}
+print(inPalette, worst < 96)   // expect: true true
+
+// Dithered grey between black and white: about half of each, the error spread; not dithered, all one.
+val grey = Image(40, 40, Color(128, 128, 128)).pixels
+val blackWhite = [Color.black, Color.white]
+for (method in [Dither.none, Dither.floydSteinberg, Dither.atkinson]) {
+  val g = grey.dither(blackWhite, method)
+  var whites = 0
+  for (y in 0 ..< 40) { for (x in 0 ..< 40) { if (g[x, y] == Color.white) { whites += 1 } } }
+  print(method, whites == 0 or whites == 1600 ? "one colour" : whites > 600 and whites < 1000 ? "about half" : "$whites")
+}
+// expect: none one colour
+// expect: floydSteinberg about half
+// expect: atkinson about half
+
+// What is refused.
+try { few.pixels.palette(0) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a palette has 1 to 256 colours, not 0
+try { few.pixels.dither([]) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a palette has 1 to 256 colours, not 0
+val full = (0 ..< 256).map { Color(it, 0, 0) }
+try { few.pixels.dither(full) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a palette of 256 colours leaves no index for the see-through pixels: give it 255 at most
+print(Image(2, 2, Color(3, 0, 0)).pixels.dither(full)[0, 0])   // expect: Color(3, 0, 0)

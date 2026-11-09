@@ -51,6 +51,7 @@ add_library(jade_core OBJECT
   src/xml_scan.cpp
   src/codec.cpp
   src/bits_api.cpp
+  src/picture.cpp
   src/foreign.cpp
   src/worker.cpp
   src/parallel.cpp

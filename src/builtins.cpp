@@ -1404,6 +1404,7 @@ void registerBuiltins(VM& vm) {
     registerRegex(vm);
     registerXml(vm);
     registerBits(vm);
+    registerPicture(vm);
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);

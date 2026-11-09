@@ -1,0 +1,587 @@
+// ---- GIF, and animations ----
+
+// An animation: whole pictures shown one after another, each for its delay, `loops` times over (0,
+// for ever). Read from a GIF, or a WebP once it is read (a still picture of another format is an
+// animation of one frame), and written as one; how each frame is laid over the one before (GIF's
+// disposal, WebP's blending) is worked out on reading, into whole frames, and an animation written
+// is made into each format's frames of only what changed.
+//
+//   val spinner = Animation.load("spinner.gif")
+//   for (frame in spinner.frames) { show(frame.image); sleep(frame.delay) }
+class Animation {
+  // Its frames, in order: at least one.
+  val frames : List<AnimationFrame>
+  // How many times it plays, 0 for ever.
+  val loops : int
+
+  fun init(frames : List<AnimationFrame>, loops : int = 0) {
+    if (frames.isEmpty()) { throw IllegalArgumentException("an animation has a frame at least") }
+    val first = frames[0].image
+    for (frame in frames) {
+      if (frame.image.width != first.width or frame.image.height != first.height) {
+        throw IllegalArgumentException("an animation's frames are all ${first.width} by ${first.height}, not ${frame.image.width} by ${frame.image.height}")
+      }
+    }
+    if (loops < 0) { throw IllegalArgumentException("an animation loops 0 (for ever) or more times, not $loops") }
+    this.frames = frames
+    this.loops = loops
+  }
+
+  // Its width, its frames'.
+  val width : int
+    get() => frames[0].image.width
+  // Its height, its frames'.
+  val height : int
+    get() => frames[0].image.height
+
+  static {
+    // Reads an animation from a file, or the bytes of one, whatever its format: a GIF's frames, or
+    // any other picture as one frame. An IOException where it cannot be read.
+    fun load(source : FilePath | string | Bytes) : Animation throws IOException {
+      val data = source is Bytes ? source : (source is FilePath ? source : FilePath(source as string)).readBytes()
+      if (ImageFormat.of(data) == ImageFormat.gif) { return __Gif.decode(data, false) }
+      return Animation([AnimationFrame(Image.load(data), 0.seconds)])
+    }
+  }
+
+  // Writes it as a GIF file (the only animated format written yet), as its name's extension asks.
+  // An IllegalArgumentException for another extension.
+  fun save(path : FilePath | string) throws IOException {
+    val file = path is FilePath ? path : FilePath(path as string)
+    val format = ImageFormat.ofName(file.name)
+    if (format != ImageFormat.gif) { throw IllegalArgumentException("an animation is saved as .gif, not ${file.name}") }
+    file.writeBytes(encode(ImageFormat.gif))
+  }
+
+  // The bytes of an animated picture file of it in `format`.
+  fun encode(format : ImageFormat) : Bytes {
+    if (format != ImageFormat.gif) { throw UnsupportedOperationException("an animation is written as a GIF; ${format} once its codec has animations") }
+    return __Gif.encode(this)
+  }
+
+  // Its size, frames and loops, as `Animation(16 x 12, 4 frames, loops 0)`.
+  override fun toString() : string => "Animation($width x $height, ${frames.size} frames, loops $loops)"
+}
+
+// One frame of an animation: the whole picture as it is shown, and how long for.
+class AnimationFrame(val image : Image, val delay : Duration) {
+  // Its size and delay, as `AnimationFrame(16 x 12, 200ms)`.
+  override fun toString() : string => "AnimationFrame(${image.width} x ${image.height}, $delay)"
+}
+
+// GIF read and written in Jade (M9/M10 part one, step 3). Read: every frame, with local and global
+// colour tables, transparency, interlacing, the three disposals and the loop count; LZW to 12 bits,
+// a clear code put off or not. Written: a picture's own colours where it has 256 or fewer (one kept
+// for see-through pixels where it has any), else an octree's, not dithered (dither the pixels first
+// for that); an animation's frames as only the rectangle each changes.
+object __Gif {
+  // The animation in `data`; with `firstOnly`, its first frame alone.
+  fun decode(data : Bytes, firstOnly : bool) : Animation throws IOException {
+    if (data.size < 13 or ImageFormat.of(data) != ImageFormat.gif) { throw failure("it does not start with GIF87a or GIF89a") }
+    val width = data.uint16(6)
+    val height = data.uint16(8)
+    if (width == 0 or height == 0) { throw failure("a size of $width by $height") }
+    val packed = data[10].toInt()
+    var at = 13
+    var global : Bytes? = null
+    if (packed & 0x80 != 0) {
+      val size = 2 << (packed & 7)
+      global = colorTable(data, at, size)
+      at += size * 3
+    }
+    val canvas = Bytes(width * height * 4)
+    val frames : open List<AnimationFrame> = []
+    var loops = 1   // a GIF with no loop count plays once
+    var delay = 0
+    var disposal = 0
+    var transparent = -1
+    while (true) {
+      if (at >= data.size) {
+        if (frames.isNotEmpty()) { break }   // no trailer: what came is kept, as browsers do
+        throw failure("it ends before its first picture")
+      }
+      val kind = data[at].toInt()
+      if (kind == 0x3B) { break }
+      if (kind == 0x21) {
+        if (at + 2 >= data.size) { throw failure("an extension is cut short") }
+        val label = data[at + 1].toInt()
+        at += 2
+        if (label == 0xF9 and data[at].toInt() >= 4 and at + 5 <= data.size) {   // how the next picture is shown
+          val flags = data[at + 1].toInt()
+          delay = data.uint16(at + 2)
+          transparent = flags & 1 != 0 ? data[at + 4].toInt() : -1
+          disposal = (flags >> 2) & 7
+        } else if (label == 0xFF and data[at].toInt() == 11 and at + 16 <= data.size) {   // NETSCAPE2.0: the loop count
+          val name = data[at + 1 ..< at + 12].decodeToString(Charset.latin1)
+          if ((name == "NETSCAPE2.0" or name == "ANIMEXTS1.0") and data[at + 12].toInt() >= 3 and data[at + 13].toInt() == 1) {
+            loops = data.uint16(at + 14)
+          }
+        }
+        at = skipBlocks(data, at)
+        continue
+      }
+      if (kind != 0x2C) { throw failure("a block of kind $kind where a picture or an extension belongs") }
+      if (at + 10 > data.size) { throw failure("a picture's description is cut short") }
+      val left = data.uint16(at + 1)
+      val top = data.uint16(at + 3)
+      val w = data.uint16(at + 5)
+      val h = data.uint16(at + 7)
+      val flags = data[at + 9].toInt()
+      at += 10
+      var colors = global
+      if (flags & 0x80 != 0) {
+        val size = 2 << (flags & 7)
+        colors = colorTable(data, at, size)
+        at += size * 3
+      }
+      if (colors == null) { throw failure("a picture with no colour table") }
+      if (at >= data.size) { throw failure("a picture's data is cut short") }
+      val minSize = data[at].toInt()
+      if (minSize < 1 or minSize > 11) { throw failure("an LZW code size of $minSize") }
+      // The picture's data, its blocks put together.
+      val end = skipBlocks(data, at + 1)
+      val packedData = Bytes(end - at)
+      var o = 0
+      var b = at + 1
+      while (b < end and data[b].toInt() != 0) {
+        val n = data[b].toInt()
+        packedData.copyFrom(data, b + 1, 1, o, 1, n)
+        o += n
+        b += n + 1
+      }
+      at = end
+      val indices = Bytes(w * h)
+      val count = lzw(packedData, o, minSize, indices)
+      val rows = flags & 0x40 != 0 ? interlaced(h) : null
+      val before = disposal == 3 ? Bytes(canvas) : null
+      place(canvas, width, height, indices, count, left, top, w, h, rows, colors!!, transparent)
+      frames.add(AnimationFrame(Image.of(width, height, canvas), (delay * 10).milliseconds))
+      if (firstOnly) { break }
+      // What the next picture is laid over: this one as it is (0, 1), its rectangle cleared (2),
+      // or what was before it (3).
+      if (disposal == 2) {
+        val clear = Bytes(4)
+        for (y in Math.max(0, top) ..< Math.min(height, top + h)) {
+          val from = Math.max(0, left)
+          val to = Math.min(width, left + w)
+          if (to > from) { canvas.copyFrom(clear, 0, 0, (y * width + from) * 4, 1, (to - from) * 4) }
+        }
+      } else if (disposal == 3) {
+        canvas.copyFrom(before!!, 0, 1, 0, 1, canvas.size)
+      }
+      delay = 0
+      disposal = 0
+      transparent = -1
+    }
+    if (frames.isEmpty()) { throw failure("it has no picture") }
+    return Animation(frames, loops)
+  }
+
+  // A colour table of `size` colours at `at`, as 256 colours of four bytes (red, green, blue,
+  // alpha 255), the ones past `size` black.
+  private fun colorTable(data : Bytes, at : int, size : int) : Bytes throws IOException {
+    if (at + size * 3 > data.size) { throw failure("a colour table is cut short") }
+    val table = Bytes(256 * 4)
+    table.copyFrom(data, at, 3, 0, 4, size)
+    table.copyFrom(data, at + 1, 3, 1, 4, size)
+    table.copyFrom(data, at + 2, 3, 2, 4, size)
+    table.copyFrom(Bytes([255]), 0, 0, 3, 4, 256)
+    return table
+  }
+
+  // Past the blocks starting at `at`, each its length and then that many bytes, to the empty one.
+  private fun skipBlocks(data : Bytes, at : int) : int throws IOException {
+    var i = at
+    while (true) {
+      if (i >= data.size) { throw failure("its blocks are cut short") }
+      val n = data[i].toInt()
+      i += n + 1
+      if (n == 0) { return i }
+    }
+  }
+
+  // The rows of an interlaced picture in the order they come: every eighth from 0, every eighth
+  // from 4, every fourth from 2, every second from 1.
+  private fun interlaced(h : int) : List<int> {
+    val rows : open List<int> = []
+    for ((start, step) in [Pair(0, 8), Pair(4, 8), Pair(2, 4), Pair(1, 2)]) {
+      var y = start
+      while (y < h) {
+        rows.add(y)
+        y += step
+      }
+    }
+    return rows
+  }
+
+  // The picture's first `count` indices laid on the canvas at (left, top), through the colours,
+  // the transparent index leaving what is there.
+  private fun place(canvas : Bytes, width : int, height : int, indices : Bytes, count : int, left : int, top : int, w : int, h : int,
+                    rows : List<int>?, colors : Bytes, transparent : int) {
+    val rgba = indices.mapped(colors, 4)
+    for (r in 0 ..< h) {
+      val y = top + (rows == null ? r : rows!![r])
+      if (y < 0 or y >= height or r * w >= count) { continue }
+      val from = Math.max(0, -left)
+      val to = Math.min(Math.min(w, width - left), count - r * w)
+      if (to <= from) { continue }
+      val o = (y * width + left + from) * 4
+      if (transparent < 0) {
+        canvas.copyFrom(rgba, (r * w + from) * 4, 1, o, 1, (to - from) * 4)
+      } else {
+        var i = r * w + from
+        var p = o
+        for (x in from ..< to) {
+          if (indices[i].toInt() != transparent) {
+            canvas.copyFrom(rgba, i * 4, 1, p, 1, 4)
+          }
+          i += 1
+          p += 4
+        }
+      }
+    }
+  }
+
+  // LZW: `size` bytes of codes, lowest bit first, from `minSize` + 1 bits up to 12, into indices;
+  // how many came. A code past the table is an error; codes after the table is full go on with it
+  // as it is (a clear put off).
+  private fun lzw(data : Bytes, size : int, minSize : int, out : Bytes) : int throws IOException {
+    val clear = 1 << minSize
+    val end = clear + 1
+    val prefix : open List<int> = Grid<int>(4096, 1).cells
+    val first : open List<int> = Grid<int>(4096, 1).cells
+    val length : open List<int> = Grid<int>(4096, 1).cells
+    val suffix = Bytes(4096)
+    for (i in 0 ..< clear) {
+      first[i] = i
+      length[i] = 1
+      suffix[i] = i.toByteWrapped()
+    }
+    var codeSize = minSize + 1
+    var mask = (1 << codeSize) - 1
+    var next = end + 1
+    var old = -1
+    var accumulated = 0
+    var bits = 0
+    var pos = 0
+    var o = 0
+    val total = out.size
+    while (true) {
+      while (bits < codeSize) {
+        if (pos >= size) { return o }   // the data ends without its end code: what came is kept
+        accumulated = accumulated | (data[pos].toInt() << bits)
+        bits += 8
+        pos += 1
+      }
+      val code = accumulated & mask
+      accumulated = accumulated >> codeSize
+      bits -= codeSize
+      if (code == clear) {
+        codeSize = minSize + 1
+        mask = (1 << codeSize) - 1
+        next = end + 1
+        old = -1
+        continue
+      }
+      if (code == end) { return o }
+      if (old < 0) {
+        if (code >= clear) { throw failure("its first code, $code, is not a colour") }
+        if (o < total) {
+          out[o] = code.toByteWrapped()
+          o += 1
+        }
+        old = code
+        continue
+      }
+      if (code > next or code == next and next >= 4096) { throw failure("an LZW code, $code, past those made") }
+      if (next < 4096) {
+        // The new entry: the old code's string and the first byte of this one's (of the old
+        // one's, where this is the code being made).
+        prefix[next] = old
+        first[next] = first[old]
+        suffix[next] = (code == next ? first[old] : first[code]).toByteWrapped()
+        length[next] = length[old] + 1
+        next += 1
+        if (next == mask + 1 and codeSize < 12) {
+          codeSize += 1
+          mask = (1 << codeSize) - 1
+        }
+      }
+      // The code's string, written from its end back.
+      val n = length[code]
+      var c = code
+      var k = o + n - 1
+      while (k >= o) {
+        if (k < total) { out[k] = suffix[c] }
+        c = prefix[c]
+        k -= 1
+      }
+      o = Math.min(o + n, total)
+      old = code
+    }
+  }
+
+  private fun failure(why : string) : IOException => IOException("not a GIF file that can be read: $why")
+
+  // ---- Writing ----
+
+  // One picture.
+  fun encodeImage(image : Image) : Bytes => encode(Animation([AnimationFrame(image, 0.seconds)], 1))
+
+  fun encode(animation : Animation) : Bytes {
+    val width = animation.width
+    val height = animation.height
+    val out = __GifOut()
+    out.ascii("GIF89a")
+    out.u16(width)
+    out.u16(height)
+    out.byte(0)   // no global colour table: each frame has its own
+    out.byte(0)
+    out.byte(0)
+    val animated = animation.frames.size > 1
+    if (animated and animation.loops != 1) {
+      out.byte(0x21)
+      out.byte(0xFF)
+      out.byte(11)
+      out.ascii("NETSCAPE2.0")
+      out.byte(3)
+      out.byte(1)
+      out.u16(animation.loops == 0 ? 0 : animation.loops)
+      out.byte(0)
+    }
+    // An animation with a see-through pixel is written a whole frame at a time, each cleared after
+    // it is shown (disposal 2): a frame kept (disposal 1) cannot make a solid pixel see-through
+    // again. Others, only the rectangle each frame changes, over the one before.
+    val all = animation.frames.map { it.image.rgbaBytes() }
+    var clears = false
+    for (pixels in all) {
+      if (Bytes(width * height).copyFrom(pixels, 3, 4, 0, 1, width * height).mapped(__seeThroughTable).without(0).size > 0) {
+        clears = true
+        break
+      }
+    }
+    var previous : Bytes? = null
+    val table = __LzwTable()
+    for (f in 0 ..< animation.frames.size) {
+      val frame = animation.frames[f]
+      val pixels = all[f]
+      // Only the rectangle that changed from the frame before (the whole of the first).
+      var left = 0
+      var top = 0
+      var right = width
+      var bottom = height
+      if (previous != null and !clears) {
+        val box = changedBox(previous!!, pixels, width, height)
+        if (box == null) {
+          left = 0
+          top = 0
+          right = 1
+          bottom = 1
+        } else {
+          left = box!![0]
+          top = box!![1]
+          right = box!![2]
+          bottom = box!![3]
+        }
+      }
+      val w = right - left
+      val h = bottom - top
+      val part = Bytes(w * h * 4)
+      for (y in 0 ..< h) { part.copyFrom(pixels, ((top + y) * width + left) * 4, 1, y * w * 4, 1, w * 4) }
+      val partGrid = Image.of(w, h, part).pixels
+      // Its colours: its own where it has few enough, else an octree's; one kept for see-through.
+      val seeThrough = Bytes(w * h).copyFrom(part, 3, 4, 0, 1, w * h).mapped(__seeThroughTable).without(0).size > 0
+      val colors = partGrid.palette(seeThrough ? 255 : 256)
+      val paletteBytes = __paletteBytes(colors, 256)
+      val indices : Bytes = __picture.indices(part, w, h, paletteBytes, 0)
+      var tableSize = 2
+      var bits = 1
+      while (tableSize < colors.size + (seeThrough ? 1 : 0)) {
+        tableSize *= 2
+        bits += 1
+      }
+      // How it is shown: its delay, kept (disposal 1) or cleared after (2), and its see-through index.
+      out.byte(0x21)
+      out.byte(0xF9)
+      out.byte(4)
+      out.byte((animated ? (clears ? 2 : 1) << 2 : 0) | (seeThrough ? 1 : 0))
+      out.u16((frame.delay.inWholeMilliseconds + 5) / 10)
+      out.byte(seeThrough ? colors.size : 0)
+      out.byte(0)
+      // The picture, with its colour table.
+      out.byte(0x2C)
+      out.u16(left)
+      out.u16(top)
+      out.u16(w)
+      out.u16(h)
+      out.byte(0x80 | (bits - 1))
+      for (i in 0 ..< tableSize) {
+        if (i < colors.size) {
+          out.byte(colors[i].red.toInt())
+          out.byte(colors[i].green.toInt())
+          out.byte(colors[i].blue.toInt())
+        } else {
+          out.byte(0)
+          out.byte(0)
+          out.byte(0)
+        }
+      }
+      val minSize = Math.max(2, bits)
+      out.byte(minSize)
+      out.blocks(table.encode(indices, minSize))
+      previous = pixels
+    }
+    out.byte(0x3B)
+    return out.bytes()
+  }
+
+  // The smallest rectangle (left, top, right, bottom) outside which `a` and `b` are the same, or
+  // null where they are the same throughout.
+  private fun changedBox(a : Bytes, b : Bytes, width : int, height : int) : List<int>? {
+    var top = 0
+    while (top < height and a[top * width * 4 ..< (top + 1) * width * 4] == b[top * width * 4 ..< (top + 1) * width * 4]) { top += 1 }
+    if (top == height) { return null }
+    var bottom = height
+    while (a[(bottom - 1) * width * 4 ..< bottom * width * 4] == b[(bottom - 1) * width * 4 ..< bottom * width * 4]) { bottom -= 1 }
+    var left = width
+    var right = 0
+    for (y in top ..< bottom) {
+      var x = 0
+      while (x < left and a.int32((y * width + x) * 4) == b.int32((y * width + x) * 4)) { x += 1 }
+      if (x < left) { left = x }
+      x = width - 1
+      while (x >= right and a.int32((y * width + x) * 4) == b.int32((y * width + x) * 4)) { x -= 1 }
+      if (x + 1 > right) { right = x + 1 }
+    }
+    return [left, top, right, bottom]
+  }
+}
+
+// Alpha below 128 made 1, else 0: which pixels GIF writes see-through.
+val __seeThroughTable : Bytes = __makeSeeThroughTable()
+fun __makeSeeThroughTable() : Bytes {
+  val table = Bytes(256)
+  for (i in 0 ..< 128) { table[i] = 1 }
+  return table
+}
+
+// A GIF being written: bytes put one after another.
+class __GifOut {
+  private var data = Bytes(4096)
+  private var size = 0
+
+  fun byte(value : int) {
+    room(1)
+    data[size] = value.toByteWrapped()
+    size += 1
+  }
+  fun u16(value : int) {
+    byte(value & 0xFF)
+    byte(value >> 8)
+  }
+  fun ascii(text : string) {
+    for (c in text) { byte(c.code) }
+  }
+  // `codes` in blocks of up to 255 bytes, each after its length, and the empty block.
+  fun blocks(codes : Bytes) {
+    var at = 0
+    while (at < codes.size) {
+      val n = Math.min(255, codes.size - at)
+      room(n + 1)
+      data[size] = n.toByteWrapped()
+      data.copyFrom(codes, at, 1, size + 1, 1, n)
+      size += n + 1
+      at += n
+    }
+    byte(0)
+  }
+  fun bytes() : Bytes => data[0 ..< size]
+
+  private fun room(n : int) {
+    if (size + n <= data.size) { return }
+    var grown = data.size * 2
+    while (grown < size + n) { grown *= 2 }
+    data = Bytes(grown).copyFrom(data, 0, 1, 0, 1, size)
+  }
+}
+
+// LZW for GIF: a table of the strings met, kept from one frame to the next and emptied of what a
+// frame put in it, by (code, next index) as a list rather than a map, for speed.
+class __LzwTable {
+  // Zeros made at once by a grid's cells, rather than a million added one at a time.
+  private val child : open List<int> = Grid<int>(4096 * 256, 1).cells
+  private val used : open List<int> = []
+
+  // The indices as codes, lowest bit first, from `minSize` + 1 bits up to 12, a clear code when the
+  // table is full.
+  fun encode(indices : Bytes, minSize : int) : Bytes {
+    val clear = 1 << minSize
+    val end = clear + 1
+    val out = __GifBits()
+    var codeSize = minSize + 1
+    var next = end + 1
+    out.put(clear, codeSize)
+    if (indices.size == 0) {
+      out.put(end, codeSize)
+      return out.bytes()
+    }
+    var prefix = indices[0].toInt()
+    for (i in 1 ..< indices.size) {
+      val k = indices[i].toInt()
+      val key = (prefix << 8) | k
+      val found = child[key]
+      if (found != 0) {
+        prefix = found
+        continue
+      }
+      out.put(prefix, codeSize)
+      child[key] = next
+      used.add(key)
+      next += 1
+      if (next == (1 << codeSize) + 1 and codeSize < 12) { codeSize += 1 }
+      if (next == 4096) {
+        out.put(clear, codeSize)
+        reset()
+        codeSize = minSize + 1
+        next = end + 1
+      }
+      prefix = k
+    }
+    out.put(prefix, codeSize)
+    out.put(end, codeSize)
+    reset()
+    return out.bytes()
+  }
+
+  private fun reset() {
+    for (key in used) { child[key] = 0 }
+    used.clear()
+  }
+}
+
+// Codes put together lowest bit first.
+class __GifBits {
+  private var data = Bytes(4096)
+  private var size = 0
+  private var accumulated = 0
+  private var bits = 0
+
+  fun put(code : int, length : int) {
+    accumulated = accumulated | (code << bits)
+    bits += length
+    while (bits >= 8) {
+      if (size == data.size) { data = Bytes(data.size * 2).copyFrom(data, 0, 1, 0, 1, size) }
+      data[size] = accumulated.toByteWrapped()
+      size += 1
+      accumulated = accumulated >> 8
+      bits -= 8
+    }
+  }
+
+  fun bytes() : Bytes {
+    if (bits > 0) {
+      put(0, 8 - bits)
+    }
+    return data[0 ..< size]
+  }
+}

@@ -415,6 +415,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-file-jade">file.jade</a></li>
 <li><a href="#file-fonts-jade">fonts.jade</a></li>
 <li><a href="#file-foreign-jade">foreign.jade</a></li>
+<li><a href="#file-gif-jade">gif.jade</a></li>
 <li><a href="#file-graphics-jade">graphics.jade</a></li>
 <li><a href="#file-grid-jade">grid.jade</a></li>
 <li><a href="#file-image-jade">image.jade</a></li>
@@ -423,6 +424,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-localtime-jade">localtime.jade</a></li>
 <li><a href="#file-map-jade">map.jade</a></li>
 <li><a href="#file-parallel-jade">parallel.jade</a></li>
+<li><a href="#file-picture-jade">picture.jade</a></li>
 <li><a href="#file-range-jade">range.jade</a></li>
 <li><a href="#file-reflect-jade">reflect.jade</a></li>
 <li><a href="#file-regex-jade">regex.jade</a></li>
@@ -444,6 +446,8 @@ addButton(widgets)</pre></dd>
 <li><a href="#A.to"><code>A</code></a> (1)</li>
 <li><a href="#AfterAll"><code>AfterAll</code></a> (1)</li>
 <li><a href="#AfterTest"><code>AfterTest</code></a> (1)</li>
+<li><a href="#Animation"><code>Animation</code></a> (9)</li>
+<li><a href="#AnimationFrame"><code>AnimationFrame</code></a> (2)</li>
 <li><a href="#Arc"><code>Arc</code></a> (5)</li>
 <li><a href="#ArcKind"><code>ArcKind</code></a> (1)</li>
 <li><a href="#ArithmeticException"><code>ArithmeticException</code></a> (1)</li>
@@ -472,6 +476,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#DataFormatException"><code>DataFormatException</code></a> (1)</li>
 <li><a href="#Deck"><code>Deck</code></a> (47)</li>
 <li><a href="#DirEntry"><code>DirEntry</code></a> (2)</li>
+<li><a href="#Dither"><code>Dither</code></a> (1)</li>
 <li><a href="#Drawable"><code>Drawable</code></a> (3)</li>
 <li><a href="#Duration"><code>Duration</code></a> (25)</li>
 <li><a href="#Environment"><code>Environment</code></a> (8)</li>
@@ -490,7 +495,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Foreign"><code>Foreign</code></a> (2)</li>
 <li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
-<li><a href="#Grid"><code>Grid</code></a> (28)</li>
+<li><a href="#Grid"><code>Grid</code></a> (30)</li>
 <li><a href="#HuffmanTable"><code>HuffmanTable</code></a> (2)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
@@ -2628,6 +2633,46 @@ print(Foreign.lastError)            // what the system recorded, as GetLastError
 <p>A block holding <code>text</code> as UTF-16 with a 0 after it, for a structure that points at text.</p>
 </div>
 </section>
+<section class="file" id="file-gif-jade">
+<h2>gif.jade</h2>
+<h3>GIF, and animations</h3>
+<div class="entry" id="Animation"><code class="sig">class Animation</code><a class="anchor" href="#Animation">#</a>
+<p>An animation: whole pictures shown one after another, each for its delay, <code>loops</code> times over (0, for ever). Read from a GIF, or a WebP once it is read (a still picture of another format is an animation of one frame), and written as one; how each frame is laid over the one before (GIF's disposal, WebP's blending) is worked out on reading, into whole frames, and an animation written is made into each format's frames of only what changed.</p>
+<pre>val spinner = Animation.load(&quot;spinner.gif&quot;)
+for (frame in spinner.frames) { show(frame.image); sleep(frame.delay) }
+</pre>
+</div>
+<div class="entry member" id="Animation.frames"><code class="sig">val frames : List&lt;AnimationFrame&gt;</code><a class="anchor" href="#Animation.frames">#</a>
+<p>Its frames, in order: at least one.</p>
+</div>
+<div class="entry member" id="Animation.loops"><code class="sig">val loops : int</code><a class="anchor" href="#Animation.loops">#</a>
+<p>How many times it plays, 0 for ever.</p>
+</div>
+<div class="entry member" id="Animation.width"><code class="sig">val width : int</code><a class="anchor" href="#Animation.width">#</a>
+<p>Its width, its frames'.</p>
+</div>
+<div class="entry member" id="Animation.height"><code class="sig">val height : int</code><a class="anchor" href="#Animation.height">#</a>
+<p>Its height, its frames'.</p>
+</div>
+<div class="entry member" id="Animation.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Animation throws IOException</code><a class="anchor" href="#Animation.load">#</a>
+<p>Reads an animation from a file, or the bytes of one, whatever its format: a GIF's frames, or any other picture as one frame. An IOException where it cannot be read.</p>
+</div>
+<div class="entry member" id="Animation.save"><code class="sig">fun save(path : FilePath | string) throws IOException</code><a class="anchor" href="#Animation.save">#</a>
+<p>Writes it as a GIF file (the only animated format written yet), as its name's extension asks. An IllegalArgumentException for another extension.</p>
+</div>
+<div class="entry member" id="Animation.encode"><code class="sig">fun encode(format : ImageFormat) : Bytes</code><a class="anchor" href="#Animation.encode">#</a>
+<p>The bytes of an animated picture file of it in <code>format</code>.</p>
+</div>
+<div class="entry member" id="Animation.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Animation.toString">#</a>
+<p>Its size, frames and loops, as <code>Animation(16 x 12, 4 frames, loops 0)</code>.</p>
+</div>
+<div class="entry" id="AnimationFrame"><code class="sig">class AnimationFrame(val image : Image, val delay : Duration)</code><a class="anchor" href="#AnimationFrame">#</a>
+<p>One frame of an animation: the whole picture as it is shown, and how long for.</p>
+</div>
+<div class="entry member" id="AnimationFrame.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#AnimationFrame.toString">#</a>
+<p>Its size and delay, as <code>AnimationFrame(16 x 12, 200ms)</code>.</p>
+</div>
+</section>
 <section class="file" id="file-graphics-jade">
 <h2>graphics.jade</h2>
 <h3>Colours and geometry</h3>
@@ -4291,6 +4336,23 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 </div>
 <div class="entry" id="availableProcessors"><code class="sig">fun availableProcessors() : int</code><a class="anchor" href="#availableProcessors">#</a>
 <p>How many cores a parallel section uses on this machine.</p>
+</div>
+</section>
+<section class="file" id="file-picture-jade">
+<h2>picture.jade</h2>
+<h3>Palettes and dithering</h3>
+<p>General picture operations over a picture's pixels, a Grid&lt;Color&gt; (image.pixels, or a grid of one's own), the work for every pixel in C++ (question 17): the colours that stand best for a picture, and the picture put into them. What GIF's 256 colours need, and posterising.</p>
+<div class="entry" id="Dither"><code class="sig">enum Dither</code><a class="anchor" href="#Dither">#</a>
+<p>How a picture put into a few colours spreads each pixel's error to the pixels after it: not at all, each pixel its nearest colour; Floyd and Steinberg's way, 7/16 of it to the right and 3/16, 5/16 and 1/16 to the three below; or Atkinson's, 1/8 to each of six neighbours (three quarters in all, so lighter and of more contrast, as the first Macintosh had it).</p>
+</div>
+<div class="entry" id="Grid.palette"><code class="sig">fun Grid&lt;Color&gt;.palette(count : int = 256) : List&lt;Color&gt;</code><a class="anchor" href="#Grid.palette">#</a>
+<p>The colours that stand best for the picture, at most <code>count</code> (1 to 256): its own colours where it has no more than that, in the order first met, or else an octree's (its colours to 5 bits a channel, the branches with fewest pixels joined until few enough are left), each the average of the pixels it stands for. See-through pixels (alpha below 128) are left out; every colour given is solid.</p>
+<pre>val colors = image.pixels.palette(16)
+val poster = image.pixels.dither(colors, Dither.none)
+</pre>
+</div>
+<div class="entry" id="Grid.dither"><code class="sig">fun Grid&lt;Color&gt;.dither(palette : List&lt;Color&gt;, method : Dither = Dither.floydSteinberg) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.dither">#</a>
+<p>The picture with each pixel the nearest of <code>palette</code>'s colours (the channels weighted as the eye sees them), its error spread by <code>method</code>; a see-through pixel (alpha below 128) clear. The palette's alpha is not read: every colour is solid.</p>
 </div>
 </section>
 <section class="file" id="file-range-jade">

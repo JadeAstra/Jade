@@ -1,0 +1,58 @@
+// ---- Palettes and dithering ----
+
+// General picture operations over a picture's pixels, a Grid<Color> (image.pixels, or a grid of
+// one's own), the work for every pixel in C++ (question 17): the colours that stand best for a
+// picture, and the picture put into them. What GIF's 256 colours need, and posterising.
+
+// How a picture put into a few colours spreads each pixel's error to the pixels after it: not at
+// all, each pixel its nearest colour; Floyd and Steinberg's way, 7/16 of it to the right and 3/16,
+// 5/16 and 1/16 to the three below; or Atkinson's, 1/8 to each of six neighbours (three quarters in
+// all, so lighter and of more contrast, as the first Macintosh had it).
+enum Dither { none, floydSteinberg, atkinson }
+
+// The colours that stand best for the picture, at most `count` (1 to 256): its own colours where it
+// has no more than that, in the order first met, or else an octree's (its colours to 5 bits a
+// channel, the branches with fewest pixels joined until few enough are left), each the average of
+// the pixels it stands for. See-through pixels (alpha below 128) are left out; every colour given
+// is solid.
+//
+//   val colors = image.pixels.palette(16)
+//   val poster = image.pixels.dither(colors, Dither.none)
+fun Grid<Color>.palette(count : int = 256) : List<Color> {
+  val made : Bytes = __picture.palette(cells, count)
+  val colors : open List<Color> = []
+  for (i in 0 ..< made.size / 4) { colors.add(Color(made[i * 4], made[i * 4 + 1], made[i * 4 + 2])) }
+  return colors
+}
+
+// The picture with each pixel the nearest of `palette`'s colours (the channels weighted as the eye
+// sees them), its error spread by `method`; a see-through pixel (alpha below 128) clear. The
+// palette's alpha is not read: every colour is solid.
+fun Grid<Color>.dither(palette : List<Color>, method : Dither = Dither.floydSteinberg) : Grid<Color> {
+  val indices : Bytes = __picture.indices(cells, width, height, __paletteBytes(palette, 256), method.ordinal)
+  // The colours by index, with index palette.size clear for see-through pixels.
+  val colors = Bytes(256 * 4).copyFrom(__paletteBytes(palette, 256), 0, 1, 0, 1, palette.size * 4)
+  val made = Grid<Color>(width, height)
+  __text.imageSetPixels(made.cells, indices.mapped(colors, 4))
+  return made
+}
+
+// A palette's colours as bytes, four each, alpha 255; an IllegalArgumentException for none or more
+// than `most`.
+fun __paletteBytes(palette : List<Color>, most : int) : Bytes {
+  if (palette.isEmpty() or palette.size > most) { throw IllegalArgumentException("a palette has 1 to $most colours, not ${palette.size}") }
+  val out = Bytes(palette.size * 4)
+  for (i in 0 ..< palette.size) {
+    val c = palette[i]
+    out[i * 4] = c.red
+    out[i * 4 + 1] = c.green
+    out[i * 4 + 2] = c.blue
+    out[i * 4 + 3] = 255.toByte()
+  }
+  return out
+}
+
+external object __picture {
+  fun palette(pixels : any, count : int) : Bytes
+  fun indices(pixels : any, width : int, height : int, palette : Bytes, method : int) : Bytes
+}
