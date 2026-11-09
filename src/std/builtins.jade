@@ -437,8 +437,12 @@ external fun Bytes.indicesOf(value : byte, startIndex : int = 0, endIndex : int 
 external fun Bytes.contains(value : any?) : bool
 // New bytes with each byte b made table[b]: `table` is 256 bytes, one for each value a byte has.
 // Bytes made letters (Base64), letters made their values, one character set's codes made another's.
-// An IllegalArgumentException for a table of another size.
-external fun Bytes.mapped(table : Bytes) : Bytes
+// With a `width`, each byte made `width` bytes from table[b * width] on, the table 256 times as
+// long: a palette's indices made colours, four bytes each. An IllegalArgumentException for a
+// table of another size.
+//
+//   indices.mapped(palette, 4)   // RGBA for each index, palette holding 256 colours
+external fun Bytes.mapped(table : Bytes, width : int = 1) : Bytes
 // Each byte b made table[b] where it is, as mapped does but with no new bytes made; gives the
 // bytes themselves. An IllegalArgumentException for a table of another size than 256.
 external fun Bytes.mapInPlace(table : Bytes) : Bytes
@@ -456,6 +460,15 @@ external fun Bytes.unpackBits(width : int) : Bytes
 external fun Bytes.packBits(width : int, startIndex : int = 0, endIndex : int = size) : Bytes
 // New bytes with every byte equal to `value` taken out: the line breaks of text, say.
 external fun Bytes.without(value : byte) : Bytes
+// Copies `count` bytes of `source` in, from `sourceIndex` on a step of `sourceStep` (0, the same
+// byte each time) to `index` on a step of `step`; gives the bytes themselves. Pixels' channels
+// moved at once: blue, green, red rows into red, green, blue, alpha, a plane into pixels, one
+// value into every fourth byte. `source` may be the bytes themselves where the parts do not
+// overlap. An IndexOutOfBoundsException where either side would go outside its bytes.
+//
+//   rgba.copyFrom(bgr, 2, 3, 0, 4, pixels)          // the reds, from every third byte to every fourth
+//   rgba.copyFrom(Bytes([255]), 0, 0, 3, 4, pixels)  // every alpha 255
+external fun Bytes.copyFrom(source : Bytes, sourceIndex : int, sourceStep : int, index : int, step : int, count : int) : Bytes
 // 16-, 32- and 64-bit numbers kept in the bytes (D19), at a position, the least significant
 // byte first unless bigEndian; read as an int, a float for float32 and float64.
 // int16 reads the signed 16-bit number at `at`, from -32768 to 32767. Each of these reads and

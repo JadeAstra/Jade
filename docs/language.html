@@ -456,7 +456,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.inflate"><code>Bytes</code></a> (31)</li>
+<li><a href="#Bytes.inflate"><code>Bytes</code></a> (32)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
@@ -1188,8 +1188,10 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <div class="entry" id="Bytes.contains"><code class="sig">fun Bytes.contains(value : any?) : bool</code><a class="anchor" href="#Bytes.contains">#</a>
 <p>True when a byte equal to <code>value</code> is there, given as a byte or an int; false for anything else.</p>
 </div>
-<div class="entry" id="Bytes.mapped"><code class="sig">fun Bytes.mapped(table : Bytes) : Bytes</code><a class="anchor" href="#Bytes.mapped">#</a>
-<p>New bytes with each byte b made table[b]: <code>table</code> is 256 bytes, one for each value a byte has. Bytes made letters (Base64), letters made their values, one character set's codes made another's. An IllegalArgumentException for a table of another size.</p>
+<div class="entry" id="Bytes.mapped"><code class="sig">fun Bytes.mapped(table : Bytes, width : int = 1) : Bytes</code><a class="anchor" href="#Bytes.mapped">#</a>
+<p>New bytes with each byte b made table[b]: <code>table</code> is 256 bytes, one for each value a byte has. Bytes made letters (Base64), letters made their values, one character set's codes made another's. With a <code>width</code>, each byte made <code>width</code> bytes from table[b * width] on, the table 256 times as long: a palette's indices made colours, four bytes each. An IllegalArgumentException for a table of another size.</p>
+<pre>indices.mapped(palette, 4)   // RGBA for each index, palette holding 256 colours
+</pre>
 </div>
 <div class="entry" id="Bytes.mapInPlace"><code class="sig">fun Bytes.mapInPlace(table : Bytes) : Bytes</code><a class="anchor" href="#Bytes.mapInPlace">#</a>
 <p>Each byte b made table[b] where it is, as mapped does but with no new bytes made; gives the bytes themselves. An IllegalArgumentException for a table of another size than 256.</p>
@@ -1206,6 +1208,12 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="Bytes.without"><code class="sig">fun Bytes.without(value : byte) : Bytes</code><a class="anchor" href="#Bytes.without">#</a>
 <p>New bytes with every byte equal to <code>value</code> taken out: the line breaks of text, say.</p>
+</div>
+<div class="entry" id="Bytes.copyFrom"><code class="sig">fun Bytes.copyFrom(source : Bytes, sourceIndex : int, sourceStep : int, index : int, step : int, count : int) : Bytes</code><a class="anchor" href="#Bytes.copyFrom">#</a>
+<p>Copies <code>count</code> bytes of <code>source</code> in, from <code>sourceIndex</code> on a step of <code>sourceStep</code> (0, the same byte each time) to <code>index</code> on a step of <code>step</code>; gives the bytes themselves. Pixels' channels moved at once: blue, green, red rows into red, green, blue, alpha, a plane into pixels, one value into every fourth byte. <code>source</code> may be the bytes themselves where the parts do not overlap. An IndexOutOfBoundsException where either side would go outside its bytes.</p>
+<pre>rgba.copyFrom(bgr, 2, 3, 0, 4, pixels)          // the reds, from every third byte to every fourth
+rgba.copyFrom(Bytes([255]), 0, 0, 3, 4, pixels)  // every alpha 255
+</pre>
 </div>
 <div class="entry" id="Bytes.int16"><code class="sig">fun Bytes.int16(at : int, bigEndian : bool = false) : int</code><a class="anchor" href="#Bytes.int16">#</a>
 <p>16-, 32- and 64-bit numbers kept in the bytes, at a position, the least significant byte first unless bigEndian; read as an int, a float for float32 and float64. int16 reads the signed 16-bit number at <code>at</code>, from -32768 to 32767. Each of these reads and writes is an IndexOutOfBoundsException where the number would run past the end.</p>

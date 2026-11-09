@@ -102,3 +102,19 @@ val inPlace = Bytes([1, 2, 3])
 print(inPlace.mapInPlace(Bytes(256).fill(9)) === inPlace, inPlace.toList(), Bytes([9, 2, 3, 0, 9]).packBits(2, 1, 5).toList())   // expect: true [9, 9, 9] [177]
 try { Bytes([1]).packBits(6, 0, 2) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: packBits() from 0 to 2 is out of bounds of 1 bytes
 try { Bytes([1]).mapped(Bytes(10)) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: mapped() takes a table of 256 bytes, one for each value a byte has
+
+// A palette's indices made colours, several bytes each; channels moved with a step on each side.
+val palette = Bytes(256 * 3)
+palette[3] = 10
+palette[4] = 20
+palette[5] = 30
+print(Bytes([1, 0, 1]).mapped(palette, 3).toList())   // expect: [10, 20, 30, 0, 0, 0, 10, 20, 30]
+try { Bytes([1]).mapped(Bytes(256), 3) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: mapped() with a width of 3 takes a table of 768 bytes, 3 for each value a byte has
+val bgr = Bytes([1, 2, 3, 4, 5, 6])
+val rgba = Bytes(8)
+rgba.copyFrom(bgr, 2, 3, 0, 4, 2).copyFrom(bgr, 1, 3, 1, 4, 2).copyFrom(bgr, 0, 3, 2, 4, 2).copyFrom(Bytes([255]), 0, 0, 3, 4, 2)
+print(rgba.toList())   // expect: [3, 2, 1, 255, 6, 5, 4, 255]
+val shifted = Bytes([1, 2, 3, 4, 5])
+print(shifted.copyFrom(shifted, 0, 1, 2, 1, 3).toList(), Bytes(3).copyFrom(Bytes([9]), 0, 0, 0, 1, 0).toList())   // expect: [1, 2, 1, 2, 3] [0, 0, 0]
+try { Bytes(4).copyFrom(bgr, 0, 3, 0, 1, 3) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: copyFrom() reads 0 to 6 of 6 bytes
+try { Bytes(4).copyFrom(bgr, 0, 1, 0, 2, 3) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: copyFrom() writes 0 to 4 of 4 bytes

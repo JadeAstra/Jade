@@ -1160,21 +1160,64 @@ void registerBytes(VM& vm) {
     });
 
     // Each byte b made table[b], into new bytes: a table of 256 that turns bytes into letters
-    // (Base64), letters into their values, or one character set's codes into another's.
-    vm.defineMethod(T, "mapped", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
-        if (!args[0].isObjType(ObjType::Bytes) || asBytes(args[0])->data.size() != 256)
-            throw vm.runtimeError(Thrown::IllegalArgumentException, "mapped() takes a table of 256 bytes, one for each value a byte has");
+    // (Base64), letters into their values, or one character set's codes into another's. With a
+    // `width`, each byte made `width` bytes, table[b * width] on: a palette's index made its colour.
+    vm.defineMethod(T, "mapped", 1, 2, [](VM& vm, Value self, int argc, Value* args) -> Value {
+        const int64_t width = argc > 1 && !args[1].isNull() ? vm.toInt(args[1], "width") : 1;
+        if (width < 1 || width > 64) throw vm.runtimeError(Thrown::IllegalArgumentException, "mapped() takes a width from 1 to 64, not " + std::to_string(width));
+        if (!args[0].isObjType(ObjType::Bytes) || asBytes(args[0])->data.size() != static_cast<size_t>(256 * width))
+            throw vm.runtimeError(Thrown::IllegalArgumentException, width == 1 ? std::string("mapped() takes a table of 256 bytes, one for each value a byte has")
+                                                                               : "mapped() with a width of " + std::to_string(width) + " takes a table of " +
+                                                                                     std::to_string(256 * width) + " bytes, " + std::to_string(width) + " for each value a byte has");
         const size_t n = asBytes(self)->data.size();
-        vm.checkRoomFor(n);
+        const size_t w = static_cast<size_t>(width);
+        vm.checkRoomFor(n * w);
         ObjBytes* made = vm.alloc<ObjBytes>();
         TempRoot keep(vm, Value::object(made));
-        made->data.resize(n);
+        made->data.resize(n * w);
         const uint8_t* table = asBytes(args[0])->data.data();
         const uint8_t* from = asBytes(self)->data.data();
         uint8_t* to = made->data.data();
-        for (size_t i = 0; i < n; i++) to[i] = table[from[i]];
-        vm.account(n);
+        if (w == 1) {
+            for (size_t i = 0; i < n; i++) to[i] = table[from[i]];
+        } else if (w == 4) {
+            for (size_t i = 0; i < n; i++) std::memcpy(to + i * 4, table + from[i] * 4, 4);
+        } else {
+            for (size_t i = 0; i < n; i++) std::memcpy(to + i * w, table + from[i] * w, w);
+        }
+        vm.account(n * w);
         return Value::object(made);
+    });
+
+    // `count` bytes of `source` copied in, from `sourceIndex` on a step of `sourceStep` (0, the
+    // same byte each time) to `index` on a step of `step`: one channel of interleaved pixels into
+    // another's place, a plane into pixels, a byte into every fourth place. Gives the bytes
+    // themselves. An IndexOutOfBoundsException where either side would go outside its bytes.
+    vm.defineMethod(T, "copyFrom", 6, 6, [](VM& vm, Value self, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "copyFrom() copies from Bytes, not a value of type " + vm.typeName(args[0]));
+        const int64_t sourceIndex = vm.toInt(args[1], "sourceIndex"), sourceStep = vm.toInt(args[2], "sourceStep");
+        const int64_t index = vm.toInt(args[3], "index"), step = vm.toInt(args[4], "step"), count = vm.toInt(args[5], "count");
+        const std::vector<uint8_t>& from = asBytes(args[0])->data;
+        std::vector<uint8_t>& to = asBytes(self)->data;
+        if (count < 0 || sourceStep < 0 || step < 1) throw vm.runtimeError(Thrown::IllegalArgumentException, "copyFrom() takes a count and a source step of 0 or more and a step of 1 or more");
+        if (count == 0) return self;
+        const int64_t lastFrom = sourceIndex + sourceStep * (count - 1), lastTo = index + step * (count - 1);
+        if (sourceIndex < 0 || lastFrom >= static_cast<int64_t>(from.size()))
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "copyFrom() reads " + std::to_string(sourceIndex) + " to " + std::to_string(lastFrom) + " of " + std::to_string(from.size()) + " bytes");
+        if (index < 0 || lastTo >= static_cast<int64_t>(to.size()))
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "copyFrom() writes " + std::to_string(index) + " to " + std::to_string(lastTo) + " of " + std::to_string(to.size()) + " bytes");
+        const uint8_t* s = from.data() + sourceIndex;
+        uint8_t* d = to.data() + index;
+        const size_t n = static_cast<size_t>(count), ss = static_cast<size_t>(sourceStep), ds = static_cast<size_t>(step);
+        if (ss == 1 && ds == 1) {
+            std::memmove(d, s, n);
+        } else if (ss == 0) {
+            const uint8_t value = *s;
+            for (size_t i = 0; i < n; i++) d[i * ds] = value;
+        } else {
+            for (size_t i = 0; i < n; i++) d[i * ds] = s[i * ss];
+        }
+        return self;
     });
 
     // Each byte b made table[b] where it is, and the bytes themselves given back: mapped without
@@ -1381,7 +1424,7 @@ void registerBuiltins(VM& vm) {
     vm.markMutating(BuiltinType::Set, {"add", "remove", "clear", "addAll", "removeAll", "retainAll"});
     // Given an item of a list of values where it is, `add` copies it in at once (M6.6 part 5).
     vm.markTakesPlaces(BuiltinType::List, {"add"});
-    vm.markMutating(BuiltinType::Bytes, {"fill", "mapInPlace", "putInt16", "putUint16", "putInt32", "putUint32", "putFloat32"});
+    vm.markMutating(BuiltinType::Bytes, {"fill", "mapInPlace", "copyFrom", "putInt16", "putUint16", "putInt32", "putUint32", "putFloat32"});
     for (const char* global : {"__thread", "__loop", "__io", "__file", "__worker", "input", "exit"})
         vm.markNotParallel(global);
     vm.markNotParallel("__task", {"arity"});      // how many parameters a function has: map.forEach asks
