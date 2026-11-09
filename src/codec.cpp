@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 
 namespace jade::codec {
@@ -465,7 +466,7 @@ public:
             haveNext = false;
             insert(i);
             if (m.length >= 3 && effort_.lazy > 0 && m.length < effort_.lazy && i + 1 < size_) {
-                next = find(i + 1);
+                next = find(i + 1, m.length);
                 haveNext = true;
                 if (next.length > m.length) {
                     literal(i);
@@ -492,7 +493,7 @@ public:
     }
 
 private:
-    static constexpr int kHashBits = 15;
+    static constexpr int kHashBits = 16;
     static constexpr size_t kWindow = 32768;
     static constexpr size_t kBlockSymbols = 32768;
 
@@ -510,26 +511,47 @@ private:
     uint32_t distanceCounts_[30] = {};
 
     uint32_t hashAt(size_t i) const {
-        return ((static_cast<uint32_t>(data_[i]) << 16 | static_cast<uint32_t>(data_[i + 1]) << 8 | data_[i + 2]) * 2654435761u) >> (32 - kHashBits);
+        uint32_t v;
+        std::memcpy(&v, data_ + i, 4);
+        return (v * 2654435761u) >> (32 - kHashBits);
     }
     void insert(size_t i) {
-        if (i + 2 >= size_) return;
+        if (i + 3 >= size_) return;
         const uint32_t h = hashAt(i);
         previous_[i & (kWindow - 1)] = head_[h];
         head_[h] = static_cast<int32_t>(i);
     }
-    Match find(size_t i) const {
+    // How many bytes at `a` and `b` are the same, up to `limit`: eight compared at a time.
+    int sameLength(const uint8_t* a, const uint8_t* b, int limit) const {
+        int length = 0;
+        while (length + 8 <= limit) {
+            uint64_t x, y;
+            std::memcpy(&x, a + length, 8);
+            std::memcpy(&y, b + length, 8);
+            if (x != y) return length + (std::countr_zero(x ^ y) >> 3);
+            length += 8;
+        }
+        while (length < limit && a[length] == b[length]) length++;
+        return length;
+    }
+    // The longest earlier repeat of the bytes at `i`; after a repeat of `previous` bytes that is
+    // already good, a quarter of the search, as zlib does.
+    Match find(size_t i, int previous = 0) const {
         Match best;
-        if (i + 2 >= size_) return best;
+        if (i + 3 >= size_) return best;
         const int limit = static_cast<int>(std::min<size_t>(258, size_ - i));
         int chain = effort_.chain;
-        int bestLength = 2;
+        if (previous >= effort_.good) chain >>= 2;
+        int bestLength = std::max(2, previous);
+        if (bestLength >= limit) return best;
+        const uint8_t* here = data_ + i;
         for (int32_t at = head_[hashAt(i)]; at >= 0 && chain-- > 0; at = previous_[static_cast<size_t>(at) & (kWindow - 1)]) {
             const size_t from = static_cast<size_t>(at);
             if (from >= i || i - from > kWindow - 262) break;  // out of the window, or a place written over
-            if (data_[from + static_cast<size_t>(bestLength)] != data_[i + static_cast<size_t>(bestLength)] || data_[from] != data_[i]) continue;
-            int length = 0;
-            while (length < limit && data_[from + static_cast<size_t>(length)] == data_[i + static_cast<size_t>(length)]) length++;
+            const uint8_t* there = data_ + from;
+            // The two bytes that would end a longer repeat, and the first, before the rest.
+            if (there[bestLength] != here[bestLength] || there[bestLength - 1] != here[bestLength - 1] || there[0] != here[0]) continue;
+            const int length = sameLength(there, here, limit);
             if (length > bestLength) {
                 bestLength = length;
                 best.length = length;

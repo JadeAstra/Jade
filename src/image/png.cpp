@@ -54,37 +54,62 @@ std::vector<uint8_t> encodePng(const uint8_t* rgba, int width, int height) {
 
     // Each row is written as its difference from something near it, whichever of the
     // format's five ways leaves the smallest numbers: that is what makes it compress.
+    // The rows are kept with `bpp` zeros before them, so that the byte to the left is always there;
+    // each filter is its own plain loop over the row, which the compiler makes into vector code.
     const size_t rowBytes = static_cast<size_t>(width) * bpp;
-    std::vector<uint8_t> raw;
-    raw.reserve((rowBytes + 1) * static_cast<size_t>(height));
-    std::vector<uint8_t> current(rowBytes), above(rowBytes, 0), tried(rowBytes), best(rowBytes);
+    std::vector<uint8_t> raw((rowBytes + 1) * static_cast<size_t>(height));
+    std::vector<uint8_t> rowA(rowBytes + bpp, 0), rowB(rowBytes + bpp, 0);
+    std::vector<uint8_t> tried[5];
+    for (auto& t : tried) t.resize(rowBytes);
+    uint8_t* above = rowA.data();
+    uint8_t* current = rowB.data();
+    auto score = [&](const uint8_t* t) {
+        uint32_t sum = 0;
+        for (size_t i = 0; i < rowBytes; i++) sum += static_cast<uint32_t>(std::abs(static_cast<int>(static_cast<int8_t>(t[i]))));
+        return sum;
+    };
     for (int y = 0; y < height; y++) {
         const uint8_t* row = rgba + static_cast<size_t>(y) * static_cast<size_t>(width) * 4;
-        for (size_t x = 0; x < static_cast<size_t>(width); x++)
-            for (size_t k = 0; k < bpp; k++) current[x * bpp + k] = row[x * 4 + k];
-        int bestFilter = 0;
-        long bestSum = -1;
-        for (int filter = 0; filter < 5; filter++) {
-            long sum = 0;
-            for (size_t i = 0; i < rowBytes; i++) {
-                const int left = i >= bpp ? current[i - bpp] : 0, up = above[i], upLeft = i >= bpp ? above[i - bpp] : 0;
-                int predicted = 0;
-                if (filter == 1) predicted = left;
-                else if (filter == 2) predicted = up;
-                else if (filter == 3) predicted = (left + up) / 2;
-                else if (filter == 4) predicted = paeth(left, up, upLeft);
-                tried[i] = static_cast<uint8_t>(current[i] - predicted);
-                sum += std::abs(static_cast<int8_t>(tried[i]));
-            }
-            if (bestSum < 0 || sum < bestSum) {
-                bestSum = sum;
-                bestFilter = filter;
-                best.swap(tried);
+        uint8_t* cur = current + bpp;
+        if (bpp == 4) {
+            std::memcpy(cur, row, rowBytes);
+        } else {
+            for (size_t x = 0; x < static_cast<size_t>(width); x++) {
+                cur[x * 3] = row[x * 4];
+                cur[x * 3 + 1] = row[x * 4 + 1];
+                cur[x * 3 + 2] = row[x * 4 + 2];
             }
         }
-        raw.push_back(static_cast<uint8_t>(bestFilter));
-        raw.insert(raw.end(), best.begin(), best.end());
-        above = current;
+        const uint8_t* up = above + bpp;
+        const uint8_t* left = current;  // cur[i - bpp]
+        const uint8_t* upLeft = above;  // up[i - bpp]
+        uint8_t* t1 = tried[1].data();
+        uint8_t* t2 = tried[2].data();
+        uint8_t* t3 = tried[3].data();
+        uint8_t* t4 = tried[4].data();
+        std::memcpy(tried[0].data(), cur, rowBytes);
+        for (size_t i = 0; i < rowBytes; i++) t1[i] = static_cast<uint8_t>(cur[i] - left[i]);
+        for (size_t i = 0; i < rowBytes; i++) t2[i] = static_cast<uint8_t>(cur[i] - up[i]);
+        for (size_t i = 0; i < rowBytes; i++) t3[i] = static_cast<uint8_t>(cur[i] - ((left[i] + up[i]) >> 1));
+        for (size_t i = 0; i < rowBytes; i++) {
+            const int a = left[i], b = up[i], c = upLeft[i];
+            const int pa = std::abs(b - c), pb = std::abs(a - c), pc = std::abs(a + b - 2 * c);
+            const int predicted = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+            t4[i] = static_cast<uint8_t>(cur[i] - predicted);
+        }
+        int bestFilter = 0;
+        uint32_t bestSum = score(tried[0].data());
+        for (int filter = 1; filter < 5; filter++) {
+            const uint32_t sum = score(tried[filter].data());
+            if (sum < bestSum) {
+                bestSum = sum;
+                bestFilter = filter;
+            }
+        }
+        uint8_t* out = raw.data() + static_cast<size_t>(y) * (rowBytes + 1);
+        out[0] = static_cast<uint8_t>(bestFilter);
+        std::memcpy(out + 1, tried[bestFilter].data(), rowBytes);
+        std::swap(above, current);
     }
     chunk(out, "IDAT", codec::deflate(raw.data(), raw.size(), 6));
     chunk(out, "IEND", {});
