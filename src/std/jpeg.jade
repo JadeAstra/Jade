@@ -214,22 +214,23 @@ class __JpegReader {
   // ---- Colour ----
 
   private fun colors() : Image {
-    // Each component's samples, through the inverse DCT, then at the picture's size.
-    val full : open List<Bytes> = []
+    // Each component's samples, through the inverse DCT, at its own size: scaled to the picture's
+    // a row at a time as the colours are worked out (one, three), or first (four).
+    val planes : open List<Plane> = []
     for (c in components) {
       val stride = c.blocksW * 8
       val plane = Bytes(stride * c.blocksH * 8)
       Dct.inverse8x8(c.coefs, c.blocksW, c.blocksH, plane, stride, quant[c.quant].isEmpty() ? null : quant[c.quant])
-      val sw = (width * c.h + hMax - 1) / hMax
-      val sh = (height * c.v + vMax - 1) / vMax
-      full.add(plane.scaledPlane(sw, sh, width, height, stride))
+      c.coefs = Bytes(0)   // free to go
+      planes.add(Plane(plane, (width * c.h + hMax - 1) / hMax, (height * c.v + vMax - 1) / vMax, stride))
     }
-    if (components.size == 1) { return Image.fromPlanes(width, height, full, ColorSpace.grey) }
+    if (components.size == 1) { return Image.fromScaledPlanes(width, height, planes, ColorSpace.grey) }
     // Adobe's marker says; else three components are YCbCr unless their ids are R, G and B.
     val rgbIds = components.size == 3 and components[0].id == 82 and components[1].id == 71 and components[2].id == 66
     val transform = adobe >= 0 ? adobe : components.size == 3 and !rgbIds ? 1 : 0
-    if (components.size == 3) { return Image.fromPlanes(width, height, full, transform == 0 ? ColorSpace.rgb : ColorSpace.ycbcr) }
+    if (components.size == 3) { return Image.fromScaledPlanes(width, height, planes, transform == 0 ? ColorSpace.rgb : ColorSpace.ycbcr) }
     // Four: CMYK as Adobe writes it (inverted), or YCCK, its first three YCbCr for C, M and Y.
+    val full = planes.map { it.bytes.scaledPlane(it.width, it.height, width, height, it.stride) }
     val cmy = transform == 2 ? Image.fromPlanes(width, height, full[0 ..< 3], ColorSpace.ycbcr).toPlanes() : full[0 ..< 3]
     val k = full[3]
     val out = Bytes(width * height * 4)

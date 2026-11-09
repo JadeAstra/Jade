@@ -87,7 +87,7 @@ external object __picture {
   fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List<int>?) : unit
   fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List<int>?) : Bytes
   fun scalePlane(plane : Bytes, width : int, height : int, toWidth : int, toHeight : int, stride : int) : Bytes
-  fun fromPlanes(planes : List<Bytes>, width : int, height : int, space : int, into : any) : unit
+  fun fromPlanes(planes : List<Bytes>, width : int, height : int, space : int, into : any, sizes : List<int>? = null) : unit
   fun toPlanes(pixels : any, space : int) : List<Bytes>
   fun isOpaque(pixels : any) : bool
 }

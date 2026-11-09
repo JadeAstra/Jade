@@ -252,6 +252,11 @@ enum ImageFormat {
 // and blue; or YCbCr as JPEG (JFIF) has it, full range, Cb and Cr centred on 128.
 enum ColorSpace { grey, rgb, ycbcr }
 
+// A plane of one byte a sample, `width` by `height`, its rows `stride` bytes apart from the start of
+// `bytes` (Image.fromScaledPlanes): a JPEG's chroma at half size, say, or a plane in a buffer wider
+// than its picture.
+value Plane(val bytes : Bytes, val width : int, val height : int, val stride : int = width)
+
 // A picture in memory: `width` by `height` pixels, each a Color that may be see-through. What a
 // program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a
 // picture file and saves as one (Java's BufferedImage, D122).
@@ -310,6 +315,23 @@ class Image : Drawable {
     fun fromPlanes(width : int, height : int, planes : List<Bytes>, space : ColorSpace = ColorSpace.rgb) : Image {
       val made = Image(width, height)
       __picture.fromPlanes(planes, width, height, space.ordinal, made.cells.cells)
+      return made
+    }
+    // The same from planes each of its own size, scaled to the picture's as Bytes.scaledPlane
+    // scales (twice either way by libjpeg's triangle filter, say), a row at a time as the colours
+    // are worked out: no plane is made at the picture's size. An IllegalArgumentException for a
+    // plane smaller than its size says, or planes of another number.
+    //
+    //   Image.fromScaledPlanes(w, h, [Plane(y, w, h), Plane(cb, w / 2, h / 2), Plane(cr, w / 2, h / 2)], ColorSpace.ycbcr)
+    fun fromScaledPlanes(width : int, height : int, planes : List<Plane>, space : ColorSpace = ColorSpace.rgb) : Image {
+      val made = Image(width, height)
+      val sizes : open List<int> = []
+      for (p in planes) {
+        sizes.add(p.width)
+        sizes.add(p.height)
+        sizes.add(p.stride)
+      }
+      __picture.fromPlanes(planes.map { it.bytes }, width, height, space.ordinal, made.cells.cells, sizes)
       return made
     }
     // An image of new bytes, four to a pixel, taken as its pixels without a copy: the bytes are

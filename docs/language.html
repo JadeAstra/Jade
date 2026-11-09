@@ -504,7 +504,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
-<li><a href="#Image"><code>Image</code></a> (27)</li>
+<li><a href="#Image"><code>Image</code></a> (28)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
 <li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
@@ -553,6 +553,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
 <li><a href="#PatternSyntaxException"><code>PatternSyntaxException</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
+<li><a href="#Plane"><code>Plane</code></a> (1)</li>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
@@ -3172,6 +3173,9 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry" id="ColorSpace"><code class="sig">enum ColorSpace</code><a class="anchor" href="#ColorSpace">#</a>
 <p>How a picture's colours are kept as planes, one byte a sample each (Image.fromPlanes, image.toPlanes): one plane of grey (luma, as ITU-R BT.601 weighs red, green and blue); red, green and blue; or YCbCr as JPEG (JFIF) has it, full range, Cb and Cr centred on 128.</p>
 </div>
+<div class="entry" id="Plane"><code class="sig">value Plane(val bytes : Bytes, val width : int, val height : int, val stride : int = width)</code><a class="anchor" href="#Plane">#</a>
+<p>A plane of one byte a sample, <code>width</code> by <code>height</code>, its rows <code>stride</code> bytes apart from the start of <code>bytes</code> (Image.fromScaledPlanes): a JPEG's chroma at half size, say, or a plane in a buffer wider than its picture.</p>
+</div>
 <div class="entry" id="Image"><code class="sig">class Image : Drawable</code><a class="anchor" href="#Image">#</a>
 <p>A picture in memory: <code>width</code> by <code>height</code> pixels, each a Color that may be see-through. What a program makes, reads and changes a pixel at a time, draws on with its canvas, loads from a picture file and saves as one (Java's BufferedImage, D122).</p>
 <pre>val image = Image(200, 100, Color.white)
@@ -3193,6 +3197,11 @@ image.save(FilePath(&quot;out.png&quot;))
 </div>
 <div class="entry member" id="Image.fromPlanes"><code class="sig">fun fromPlanes(width : int, height : int, planes : List&lt;Bytes&gt;, space : ColorSpace = ColorSpace.rgb) : Image</code><a class="anchor" href="#Image.fromPlanes">#</a>
 <p>A solid picture made from planes of one byte a sample, each <code>width</code> by <code>height</code>, row by row: one for grey, three for red, green and blue or Y, Cb and Cr. An IllegalArgumentException for planes of another size or number.</p>
+</div>
+<div class="entry member" id="Image.fromScaledPlanes"><code class="sig">fun fromScaledPlanes(width : int, height : int, planes : List&lt;Plane&gt;, space : ColorSpace = ColorSpace.rgb) : Image</code><a class="anchor" href="#Image.fromScaledPlanes">#</a>
+<p>The same from planes each of its own size, scaled to the picture's as Bytes.scaledPlane scales (twice either way by libjpeg's triangle filter, say), a row at a time as the colours are worked out: no plane is made at the picture's size. An IllegalArgumentException for a plane smaller than its size says, or planes of another number.</p>
+<pre>Image.fromScaledPlanes(w, h, [Plane(y, w, h), Plane(cb, w / 2, h / 2), Plane(cr, w / 2, h / 2)], ColorSpace.ycbcr)
+</pre>
 </div>
 <div class="entry member" id="Image.load"><code class="sig">fun load(source : FilePath | string | Bytes) : Image throws IOException</code><a class="anchor" href="#Image.load">#</a>
 <p>Reads a picture file, or the bytes of one, whatever its format (ImageFormat), known by its content rather than its name. An IOException where it cannot be read or is no picture.</p>

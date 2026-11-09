@@ -41,3 +41,22 @@ for (y in 0 ..< 2) { for (x in 0 ..< 3) { worst = Math.max(worst, Math.abs(again
 print(worst <= 3, Image(1, 1, Color.white).toPlanes(ColorSpace.ycbcr).map { it[0].toInt() })   // expect: true [255, 128, 128]
 print(Image(1, 1, Color(255, 0, 0)).toPlanes(ColorSpace.grey)[0].toList(), Image.fromPlanes(2, 1, [Bytes([7, 9])], ColorSpace.grey)[1, 0])   // expect: [76] Color(9, 9, 9)
 try { Image.fromPlanes(2, 2, [Bytes(4)], ColorSpace.rgb) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: the colour space takes 3 planes, not 1
+
+// Planes each of its own size, scaled as scaledPlane scales a row at a time: the same picture as
+// the planes scaled first. Twice either way (odd sizes too), the same, a stride wider than the
+// plane, and a size neither (scaled whole first).
+fun samples(w : int, h : int, seed : int) : Bytes {
+  val b = Bytes(w * h)
+  for (i in 0 ..< b.size) { b[i] = ((i * seed + i / 7) % 256).toByteWrapped() }
+  return b
+}
+fun sameAsScaled(w : int, h : int, sizes : List<List<int>>, space : ColorSpace) : bool {
+  val planes = sizes.mapIndexed { i, s -> Plane(samples(s[2], s[1], 31 + i * 10), s[0], s[1], s[2]) }
+  val scaled = planes.map { it.bytes.scaledPlane(it.width, it.height, w, h, it.stride) }
+  return Image.fromScaledPlanes(w, h, planes, space) == Image.fromPlanes(w, h, scaled, space)
+}
+print(sameAsScaled(8, 6, [[8, 6, 8], [4, 3, 4], [4, 3, 4]], ColorSpace.ycbcr), sameAsScaled(7, 5, [[7, 5, 16], [4, 3, 4], [4, 3, 9]], ColorSpace.ycbcr))   // expect: true true
+print(sameAsScaled(9, 4, [[9, 4, 9], [5, 4, 5], [9, 2, 12]], ColorSpace.rgb), sameAsScaled(6, 6, [[3, 3, 3]], ColorSpace.grey), sameAsScaled(9, 9, [[9, 9, 9], [3, 3, 3], [3, 3, 3]], ColorSpace.ycbcr))   // expect: true true true
+print(sameAsScaled(40, 30, [[40, 30, 48], [20, 15, 24], [20, 15, 24]], ColorSpace.ycbcr))   // expect: true
+try { Image.fromScaledPlanes(4, 4, [Plane(Bytes(5), 2, 2, 4)], ColorSpace.grey) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a plane is smaller than its size says
+try { Image.fromScaledPlanes(4, 4, [Plane(Bytes(8), 4, 2, 3)], ColorSpace.grey) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a plane of 4 by 2, rows 3 apart, cannot be

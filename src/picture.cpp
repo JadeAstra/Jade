@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <memory>
 #include <vector>
 
 #include "builtins.h"
@@ -473,35 +474,39 @@ bool steps(VM& vm, const Value& v, std::array<int, 64>& out) {
 
 // ---- Planes ----
 
-// A plane `width` by `height` (rows `stride` apart) made `toWidth` by `toHeight`: twice either way
-// by a triangle filter, 3 parts the nearest sample and 1 the next (libjpeg's "fancy" upsampling),
-// half by averaging, any other size by bilinear interpolation between sample centres.
-std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, int tw, int th) {
-    std::vector<uint8_t> out(static_cast<size_t>(tw) * static_cast<size_t>(th));
-    auto at = [&](int x, int y) -> int { return p[static_cast<size_t>(std::clamp(y, 0, h - 1)) * stride + static_cast<size_t>(std::clamp(x, 0, w - 1))]; };
-    const bool twiceX = tw == 2 * w || tw == 2 * w - 1, twiceY = th == 2 * h || th == 2 * h - 1;
-    const bool sameX = tw == w, sameY = th == h;
-    const bool halfX = w == 2 * tw || w == 2 * tw - 1, halfY = h == 2 * th || h == 2 * th - 1;
-    if ((twiceX || sameX) && (twiceY || sameY)) {
-        // A row at a time: first down the columns (3 parts the nearer row and 1 the other, or 4
-        // parts the one row) into `column`, its first and last repeated once past each end; then
-        // across.
-        std::vector<int16_t> columnRow(static_cast<size_t>(w) + 2);
-        int16_t* column = columnRow.data() + 1;
-        for (int y = 0; y < th; y++) {
-            const int sy = twiceY ? y / 2 : y;
-            const int ny = std::clamp(twiceY ? (y % 2 == 0 ? sy - 1 : sy + 1) : sy, 0, h - 1);
-            const uint8_t* near = p + static_cast<size_t>(std::min(sy, h - 1)) * stride;
-            const uint8_t* far = p + static_cast<size_t>(ny) * stride;
-            if (twiceY) {
-                for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 3 + far[x]);
-            } else {
-                for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 4);
-            }
-            column[-1] = column[0];
-            column[w] = column[w - 1];
-            uint8_t* o = &out[static_cast<size_t>(y) * static_cast<size_t>(tw)];
-            if (twiceX) {
+// A plane `width` by `height` (rows `stride` apart) made `toWidth` by `toHeight` one row at a time,
+// where each way it is twice the size (or one less, for an odd size) or the same: down the columns
+// (3 parts the nearer row and 1 the other, or 4 parts the one row), then across, by a triangle
+// filter, 3 parts the nearest sample and 1 the next (libjpeg's "fancy" upsampling).
+class RowScaler {
+public:
+    static bool fits(int w, int h, int tw, int th) {
+        return (tw == 2 * w || tw == 2 * w - 1 || tw == w) && (th == 2 * h || th == 2 * h - 1 || th == h);
+    }
+    RowScaler(const uint8_t* p, size_t stride, int w, int h, int tw, int th)
+        : p_(p), stride_(stride), w_(w), h_(h), tw_(tw), twiceX_(tw != w), twiceY_(th != h), columnRow_(static_cast<size_t>(w) + 2) {}
+    // Row y of the scaled plane, its tw samples written at o.
+    void row(int y, uint8_t* o) {
+        const int w = w_, h = h_, tw = tw_;
+        int16_t* column = columnRow_.data() + 1;
+        const int sy = twiceY_ ? y / 2 : y;
+        const int ny = std::clamp(twiceY_ ? (y % 2 == 0 ? sy - 1 : sy + 1) : sy, 0, h - 1);
+        const uint8_t* near = p_ + static_cast<size_t>(std::min(sy, h - 1)) * stride_;
+        const uint8_t* far = p_ + static_cast<size_t>(ny) * stride_;
+        if (!twiceX_ && !twiceY_) {
+            std::memcpy(o, near, static_cast<size_t>(w));
+            return;
+        }
+        // Down the columns into `column`, its first and last repeated once past each end.
+        if (twiceY_) {
+            for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 3 + far[x]);
+        } else {
+            for (int x = 0; x < w; x++) column[x] = static_cast<int16_t>(near[x] * 4);
+        }
+        column[-1] = column[0];
+        column[w] = column[w - 1];
+        {
+            if (twiceX_) {
                 const int pairs = tw / 2;
                 int k0 = 0;
 #ifdef JADE_SSE2
@@ -525,6 +530,27 @@ std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, i
                 for (int x = 0; x < tw; x++) o[x] = static_cast<uint8_t>((column[x] + 2) >> 2);
             }
         }
+    }
+
+private:
+    const uint8_t* p_;
+    size_t stride_;
+    int w_, h_, tw_;
+    bool twiceX_, twiceY_;
+    std::vector<int16_t> columnRow_;
+};
+
+// A plane `width` by `height` (rows `stride` apart) made `toWidth` by `toHeight`: twice either way
+// by a triangle filter, 3 parts the nearest sample and 1 the next (libjpeg's "fancy" upsampling),
+// half by averaging, any other size by bilinear interpolation between sample centres.
+std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, int tw, int th) {
+    std::vector<uint8_t> out(static_cast<size_t>(tw) * static_cast<size_t>(th));
+    auto at = [&](int x, int y) -> int { return p[static_cast<size_t>(std::clamp(y, 0, h - 1)) * stride + static_cast<size_t>(std::clamp(x, 0, w - 1))]; };
+    const bool sameX = tw == w, sameY = th == h;
+    const bool halfX = w == 2 * tw || w == 2 * tw - 1, halfY = h == 2 * th || h == 2 * th - 1;
+    if (RowScaler::fits(w, h, tw, th)) {
+        RowScaler rows(p, stride, w, h, tw, th);
+        for (int y = 0; y < th; y++) rows.row(y, &out[static_cast<size_t>(y) * static_cast<size_t>(tw)]);
         return out;
     }
     if (halfX && halfY) {
@@ -760,25 +786,89 @@ void registerPicture(VM& vm) {
         if (p.size() < static_cast<size_t>((h - 1) * stride + w)) throw vm.runtimeError(Thrown::IllegalArgumentException, "the plane is smaller than its size says");
         return bytesValue(vm, scalePlane(p.data(), static_cast<size_t>(stride), static_cast<int>(w), static_cast<int>(h), static_cast<int>(tw), static_cast<int>(th)));
     });
-    // fromPlanes(planes, width, height, space, into): RGBA pixels from planes of one byte a sample,
-    // each width by height (0 grey, 1 RGB, 2 YCbCr), written into a picture's cells of that size.
-    def("fromPlanes", 5, 5, [](VM& vm, int, Value* args) -> Value {
+    // fromPlanes(planes, width, height, space, into, sizes?): RGBA pixels from planes of one byte a
+    // sample (0 grey, 1 RGB, 2 YCbCr), written into a picture's cells, width by height. Each plane
+    // is width by height, or, where `sizes` is given, the size it says (its width, height and
+    // stride, three numbers a plane), scaled to the picture's as scalePlane scales, row by row.
+    def("fromPlanes", 5, 6, [](VM& vm, int argc, Value* args) -> Value {
         const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height"), space = vm.toInt(args[3], "space");
         if (!args[0].isObjType(ObjType::List)) throw vm.runtimeError(Thrown::IllegalArgumentException, "planes are a list of Bytes");
         ObjList* list = asList(args[0]);
         const size_t want = space == 0 ? 1 : 3;
         if (list->size() != want) throw vm.runtimeError(Thrown::IllegalArgumentException, "the colour space takes " + std::to_string(want) + " planes, not " + std::to_string(list->size()));
+        if (w < 1 || h < 1 || w > 65536 || h > 65536) throw vm.runtimeError(Thrown::IllegalArgumentException, "a picture of " + std::to_string(w) + " by " + std::to_string(h) + " cannot be");
         const size_t n = static_cast<size_t>(w * h);
+        const bool sized = argc > 5 && !args[5].isNull();
+        if (sized && (!args[5].isObjType(ObjType::List) || asList(args[5])->size() != want * 3))
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "the sizes are three numbers a plane");
         std::vector<const uint8_t*> planes;
+        struct Size { int w, h; size_t stride; };
+        std::vector<Size> sizes;
+        bool whole = true;  // every plane the picture's size, its rows one after another
         for (size_t i = 0; i < want; i++) {
             const Value v = vm.listGet(list, i);
-            if (!v.isObjType(ObjType::Bytes) || asBytes(v)->data.size() != n)
+            if (!v.isObjType(ObjType::Bytes)) throw vm.runtimeError(Thrown::IllegalArgumentException, "planes are a list of Bytes");
+            const std::vector<uint8_t>& bytes = asBytes(v)->data;
+            Size s{static_cast<int>(w), static_cast<int>(h), static_cast<size_t>(w)};
+            if (sized) {
+                const int64_t pw = vm.toInt(vm.listGet(asList(args[5]), i * 3), "width"), ph = vm.toInt(vm.listGet(asList(args[5]), i * 3 + 1), "height");
+                const int64_t stride = vm.toInt(vm.listGet(asList(args[5]), i * 3 + 2), "stride");
+                if (pw < 1 || ph < 1 || pw > 65536 || ph > 65536 || stride < pw || stride > (int64_t{1} << 31))
+                    throw vm.runtimeError(Thrown::IllegalArgumentException, "a plane of " + std::to_string(pw) + " by " + std::to_string(ph) + ", rows " +
+                                                                             std::to_string(stride) + " apart, cannot be");
+                if (bytes.size() < static_cast<size_t>((ph - 1) * stride + pw))
+                    throw vm.runtimeError(Thrown::IllegalArgumentException, "a plane is smaller than its size says");
+                s = Size{static_cast<int>(pw), static_cast<int>(ph), static_cast<size_t>(stride)};
+                if (pw != w || ph != h || static_cast<size_t>(stride) != static_cast<size_t>(w)) whole = false;
+            } else if (bytes.size() != n) {
                 throw vm.runtimeError(Thrown::IllegalArgumentException, "each plane is " + std::to_string(w) + " by " + std::to_string(h) + " bytes");
-            planes.push_back(asBytes(v)->data.data());
+            }
+            planes.push_back(bytes.data());
+            sizes.push_back(s);
         }
         if (!args[4].isObjType(ObjType::List) || !asList(args[4])->packed() || asList(args[4])->pack->block.size() != n * 4)
             throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture is not " + std::to_string(w) + " by " + std::to_string(h));
         std::vector<uint8_t>& out = asList(args[4])->pack->block;
+        if (!whole) {
+            // A row of each plane at a time: where it is the picture's width and height, read where
+            // it is; where it is twice as small (or the same) either way, scaled into a row of its
+            // own; at any other size, scaled whole first.
+            std::vector<std::vector<uint8_t>> scaledWhole(want), rows(want);
+            std::vector<std::unique_ptr<RowScaler>> scalers(want);
+            for (size_t i = 0; i < want; i++) {
+                const Size& s = sizes[i];
+                if (s.w == w && s.h == h) continue;
+                if (RowScaler::fits(s.w, s.h, static_cast<int>(w), static_cast<int>(h))) {
+                    scalers[i] = std::make_unique<RowScaler>(planes[i], s.stride, s.w, s.h, static_cast<int>(w), static_cast<int>(h));
+                    rows[i].resize(static_cast<size_t>(w));
+                } else {
+                    scaledWhole[i] = scalePlane(planes[i], s.stride, s.w, s.h, static_cast<int>(w), static_cast<int>(h));
+                    planes[i] = scaledWhole[i].data();
+                    sizes[i] = Size{static_cast<int>(w), static_cast<int>(h), static_cast<size_t>(w)};
+                }
+            }
+            const uint8_t* row[3] = {nullptr, nullptr, nullptr};
+            const size_t width = static_cast<size_t>(w);
+            for (int y = 0; y < h; y++) {
+                for (size_t i = 0; i < want; i++) {
+                    if (scalers[i]) {
+                        scalers[i]->row(y, rows[i].data());
+                        row[i] = rows[i].data();
+                    } else {
+                        row[i] = planes[i] + static_cast<size_t>(y) * sizes[i].stride;
+                    }
+                }
+                uint8_t* o = out.data() + static_cast<size_t>(y) * width * 4;
+                if (space == 0) {
+                    for (size_t x = 0; x < width; x++) o[x * 4] = o[x * 4 + 1] = o[x * 4 + 2] = row[0][x], o[x * 4 + 3] = 255;
+                } else if (space == 1) {
+                    for (size_t x = 0; x < width; x++) o[x * 4] = row[0][x], o[x * 4 + 1] = row[1][x], o[x * 4 + 2] = row[2][x], o[x * 4 + 3] = 255;
+                } else {
+                    yccToRgb(row[0], row[1], row[2], width, o);
+                }
+            }
+            return Value::null();
+        }
         if (space == 0) {
             for (size_t i = 0; i < n; i++) out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = planes[0][i], out[i * 4 + 3] = 255;
         } else if (space == 1) {
