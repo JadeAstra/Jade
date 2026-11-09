@@ -1175,7 +1175,10 @@ private:
     static constexpr int kThreadMaxFrames = 8000;
     static constexpr int kMaxNativeDepth = 200;
     static constexpr int kMaxTaskNesting = 60;
-    static constexpr size_t kMinHeap = 4 * 1024 * 1024;
+    // The heap a collection first waits for, and the least it waits for after: 16 MB, so that a
+    // program building a large structure (an XML document's tree, say) is not marked again and
+    // again while it grows (the user, 2026-11-08; it was 4 MB).
+    static constexpr size_t kMinHeap = 16 * 1024 * 1024;
 
     // Execution state: that of the context that is running (see Context).
     Value* stack_;
