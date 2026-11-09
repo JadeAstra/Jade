@@ -6496,6 +6496,7 @@ void VM::run(int baseFrame) {
             JADE_DISPATCH_TO(RJumpGeFSK)
             JADE_DISPATCH_TO(RJumpEqFSS)
             JADE_DISPATCH_TO(RJumpEqFSK)
+            JADE_DISPATCH_TO(RInvoke)
 #undef JADE_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }

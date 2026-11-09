@@ -1490,7 +1490,7 @@ const char* opName(Op op) {
                                       "R_JUMP_GT_I_SS", "R_JUMP_GT_I_SK", "R_JUMP_GE_I_SS", "R_JUMP_GE_I_SK", "R_JUMP_EQ_I_SS",
                                       "R_JUMP_EQ_I_SK", "R_JUMP_LT_F_SS", "R_JUMP_LT_F_SK", "R_JUMP_LE_F_SS", "R_JUMP_LE_F_SK",
                                       "R_JUMP_GT_F_SS", "R_JUMP_GT_F_SK", "R_JUMP_GE_F_SS", "R_JUMP_GE_F_SK", "R_JUMP_EQ_F_SS",
-                                      "R_JUMP_EQ_F_SK", "R_GET_PATH",   "TRANSLATE"};
+                                      "R_JUMP_EQ_F_SK", "R_GET_PATH",   "R_INVOKE",     "TRANSLATE"};
     static_assert(sizeof(run) / sizeof(run[0]) == kOpCount - static_cast<size_t>(Op::MoveS), "a name for each");
     const size_t r = i - static_cast<size_t>(Op::MoveS);
     return i >= static_cast<size_t>(Op::MoveS) && r < sizeof(run) / sizeof(run[0]) ? run[r] : "?";

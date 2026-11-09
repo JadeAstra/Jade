@@ -482,6 +482,14 @@ enum class Op : uint16_t {
     // the last field is: read there at once, with nothing looked up on the way. u8 A, u8 B, u8 T,
     // u8 S, u16 cache, u8 hops, u16 name x3, i32 slow.
     RGetPath,
+    // A method called on the receiver in slot R with up to two arguments, slots or constants, its
+    // result to slot A (M9/M10): a method in C++ of a string, list, map, set or bytes called at
+    // once, a method of an object's class entered at once; anything else the slow way, Invoke's
+    // stack code. u8 A, u8 R, u8 X1, u8 X2, u8 T, u8 S, u8 argc, u8 flags (1: X1 a constant, 2: X2
+    // one, 4: InvokeOwn), u16 name, u16 cache, i32 slow, i32 resume (in the slow way, just after its
+    // Invoke: where a call returns to, or a task set aside goes on). The cache keeps the C++
+    // method last called here and the kind of value it was called on (nativeCacheEntry).
+    RInvoke,
     // A function's whole run code until it is first called (M9/M10): its run code is made then,
     // from its stack code, and run from its start. No operands.
     Translate,

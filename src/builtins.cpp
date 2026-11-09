@@ -1000,11 +1000,15 @@ uint8_t byteArgument(VM& vm, Value v) {
 }
 
 // Where a number of `size` bytes starts in `data`, at `at`: an error past the end.
-size_t binaryAt(VM& vm, const std::vector<uint8_t>& data, Value at, size_t size) {
+[[noreturn]] void binaryPastEnd(VM& vm, const std::vector<uint8_t>& data, int64_t i, size_t size) {
+    throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "a " + std::to_string(size * 8) + "-bit number at " + std::to_string(i) + " runs past the end of " +
+                          std::to_string(data.size()) + " bytes");
+}
+
+inline size_t binaryAt(VM& vm, const std::vector<uint8_t>& data, Value at, size_t size) {
     const int64_t i = vm.toInt(at, "position");
-    if (i < 0 || static_cast<uint64_t>(i) > data.size() || data.size() - static_cast<size_t>(i) < size)
-        throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "a " + std::to_string(size * 8) + "-bit number at " + std::to_string(i) + " runs past the end of " +
-                              std::to_string(data.size()) + " bytes");
+    if (i < 0 || static_cast<uint64_t>(i) > data.size() || data.size() - static_cast<size_t>(i) < size) [[unlikely]]
+        binaryPastEnd(vm, data, i, size);
     return static_cast<size_t>(i);
 }
 

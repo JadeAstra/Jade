@@ -171,7 +171,8 @@ bool storesResult(Op r) {
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
-        case Op::RBitOrSK: return true;
+        case Op::RBitOrSK:
+        case Op::RInvoke: return true;
         default: return (r >= Op::RAddSS && r <= Op::REqSK) || (r >= Op::RAddISS && r <= Op::REqFSK);
     }
 }
@@ -182,6 +183,7 @@ int topOperand(Op r) {
         case Op::RNeg:
         case Op::RNot: return 3;  // u8 A, u8 B, u8 T
         case Op::RGetGlobal: return 2;  // u8 A, u8 T
+        case Op::RInvoke: return 5;     // u8 A, u8 R, u8 X1, u8 X2, u8 T
         default: return 4;  // u8 A, u8 B, u8 C, u8 T
     }
 }
@@ -198,6 +200,9 @@ struct Slow {
     std::vector<std::pair<size_t, size_t>> targets;  // where in it a place to jump to goes, and the old target
     int line = 0;
     size_t old = 0;  // the stack instruction's offset in the stack code, for the rights there
+    // Where in the R instruction the place after its stack code's first instruction goes (an
+    // RInvoke's resume), or none.
+    size_t resumePlace = SIZE_MAX;
 };
 
 // How much the translator does.
@@ -275,7 +280,7 @@ public:
         f_.run = std::move(out_);
         f_.runLines = std::move(outLines_);
         if (pathCaches_ != 0) {
-            // The caches the RGetPaths were given, after the stack code's, all empty yet.
+            // The caches the RGetPaths and RInvokes were given, after the stack code's, all empty yet.
             f_.cacheCount += pathCaches_;
             f_.caches.reset(new std::atomic<uint64_t>[f_.cacheCount]());
         }
@@ -860,6 +865,10 @@ private:
                 endR(slow, s);
                 return true;
             }
+            case Op::Invoke:
+            case Op::InvokeOwn:
+                if (invokeAt(o, at, size, depth)) return true;
+                break;
             case Op::Neg:
             case Op::Not: {
                 if (!inASlot(stack_.back())) break;
@@ -881,6 +890,48 @@ private:
             default: break;
         }
         return asStackCode(o, at, size);
+    }
+
+    // `receiver.name(x1, x2)`, up to two arguments, as an RInvoke: false where the code is not that.
+    bool invokeAt(Op o, size_t at, size_t size, int depth) {
+        if (!notes_ || !rs_ || joinedOnly_) return false;
+        const int argc = code_[at + 3];
+        const int s = depth - argc - 1;
+        if (argc > 2 || s < 0 || s + argc + 1 > 255) return false;
+        const Entry receiver = stack_[static_cast<size_t>(s)];
+        if (!inASlot(receiver)) return false;
+        for (int k = 0; k < argc; k++)
+            if (!byByte(stack_[static_cast<size_t>(s + 1 + k)])) return false;
+        placeBelow(s);
+        const std::vector<Entry> taken = take(argc + 1);
+        int flags = o == Op::InvokeOwn ? 4 : 0, x[2] = {0, 0};
+        for (int k = 0; k < argc; k++) {
+            x[k] = operand(taken[static_cast<size_t>(k + 1)], s + 1 + k);
+            if (isConstant(taken[static_cast<size_t>(k + 1)])) flags |= 1 << k;
+        }
+        Slow& slow = newSlow(s, at);
+        copyInto(slow, o, at, size);
+        op(Op::RInvoke);
+        u8(s);
+        u8(operand(receiver, s));
+        u8(x[0]);
+        u8(x[1]);
+        u8(s + 1);
+        u8(s);
+        u8(argc);
+        u8(flags);
+        u16(readU16(code_, at + 1));
+        if (f_.cacheCount + pathCaches_ >= 0xFFFF) fail("too many caches");
+        u16(static_cast<int>(f_.cacheCount + pathCaches_++));
+        slow.place = out_.size();
+        i32(0);
+        slow.resumePlace = out_.size();
+        i32(0);
+        slow.size = out_.size() - slow.instruction;
+        lastR_ = true;
+        stack_.push_back(Entry{});
+        top_ = s + 1;
+        return true;
     }
 
     // The stack as the stack code has it, and the instruction as it is.
@@ -960,6 +1011,8 @@ private:
         putI32(slow.place, static_cast<int32_t>(start));
         const size_t codeAt = out_.size();
         for (uint8_t b : slow.code) byte(b);
+        if (slow.resumePlace != SIZE_MAX)
+            putI32(slow.resumePlace, static_cast<int32_t>(codeAt + kOpBytes + instructionSize(code_, slow.old) - 1));
         for (const auto& [place, target] : slow.targets) fixups_.emplace_back(codeAt + place, target);
         op(Op::Jump);
         i32(static_cast<int32_t>(slow.instruction + slow.size));
@@ -1021,6 +1074,7 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RGetUpvalue: return {};
         case Op::RGetProp: return {6};
         case Op::RGetPath: return {13};
+        case Op::RInvoke: return {12, 16};
         case Op::RSetPropSS:
         case Op::RSetPropSK: return {7};
         case Op::RGetGlobal:
@@ -1138,6 +1192,7 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::Translate: return kOpBytes;
         case Op::RGetProp: return kOpBytes + 10;
         case Op::RGetPath: return kOpBytes + 17;
+        case Op::RInvoke: return kOpBytes + 20;
         case Op::RSetPropSS:
         case Op::RSetPropSK: return kOpBytes + 11;
         case Op::RGetUpvalue: return kOpBytes + 4;

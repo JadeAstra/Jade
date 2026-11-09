@@ -191,13 +191,23 @@ struct Value {
         std::memcpy(&as, &bits, sizeof bits);
 #endif
     }
-    void setInt(int64_t i) {
-        setHeader(ValueKind::Int);
-        as.i = i;
+    // An int or a float written in one store, as setWhole: a copy of the whole value soon after
+    // (a GetLocal of a loop's counter) is handed it at once, where after two stores it would wait.
+    // A copy of a whole value in one load and one store: what reads it whole soon after (a
+    // function's GetLocal of a parameter) is handed it at once, where after the stores of its
+    // fields one at a time it would wait.
+    static void copyWhole(Value* to, const Value* from) {
+#if defined(__SSE2__) || defined(_M_X64)
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(to), _mm_loadu_si128(reinterpret_cast<const __m128i*>(from)));
+#else
+        std::memcpy(static_cast<void*>(to), from, sizeof(Value));
+#endif
     }
+    void setInt(int64_t i) { setWhole(static_cast<uint8_t>(ValueKind::Int), static_cast<uint64_t>(i)); }
     void setFloat(double d) {
-        setHeader(ValueKind::Float);
-        as.d = d;
+        uint64_t bits;
+        std::memcpy(&bits, &d, sizeof bits);
+        setWhole(static_cast<uint8_t>(ValueKind::Float), bits);
     }
     void setBool(bool b) {
         setHeader(ValueKind::Bool);

@@ -1570,6 +1570,16 @@ private:
                 if (args[i].kind == ValueKind::Ref || args[i].kind == ValueKind::Small) return nullptr;
         return method;
     }
+    // An RInvoke's cache (instructions.inc): the C++ method called there last, for a receiver of
+    // one type, in 64 bits: the function (in the low 48, where every function of the program is),
+    // the receiver's ObjType + 1 (6 bits), whether the method changes its receiver and whether it
+    // takes places. Kept apart from the VM's tables, so that it means the same in any VM; 0 where
+    // it cannot be kept. `argc` is the place's, which never changes.
+    static uint64_t nativeCacheEntry(const NativeMethod* method, ObjType type) {
+        const uint64_t fn = reinterpret_cast<uint64_t>(method->fn);
+        if ((fn >> 48) != 0 || static_cast<int>(type) >= 63) return 0;
+        return fn | (static_cast<uint64_t>(static_cast<int>(type) + 1) << 48) | (uint64_t{method->mutates} << 54) | (uint64_t{method->takesPlaces} << 55);
+    }
     Value makeIterator(Value iterable);
     bool iteratorNext(ObjIterator* it, Value& out);
 
