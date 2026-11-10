@@ -194,7 +194,7 @@ pre code { background: none; padding: 0; }
 <ul>
 <li><strong>x64 Windows first</strong> (this machine), then <strong>x64 Linux</strong>: the same stencil source and the same tool, reading ELF; the calling conventions differ, which <code>preserve_none</code> mostly hides (question 4).</li>
 <li><strong>ARM64</strong> later: the stencil source does not change; the tool learns the other machine's gaps.</li>
-<li><strong>The MSVC build</strong> has no Clang to make stencils with: it runs without machine code, as the interpreter it is now (question 5).</li>
+<li><strong>The MSVC build</strong> is suspended (the user, 2026-11-10): on Windows only the Clang build is built and checked, so machine code needs no answer for it. GCC's build on Linux keeps the interpreter's switch, which the MSVC build used too; it stays.</li>
 </ul>
 
 <h2 id="np-speed">Speed: where it starts and the targets</h2>
@@ -215,7 +215,7 @@ pre code { background: none; padding: 0; }
 <p>Code that spends its time in the library, making objects or in the collector gains least; typed loops most. Every step is benchmarked as M6.7's were, against the commit before it, and kept only where it helps. The start-up budgets are watched throughout.</p>
 
 <h2 id="np-order">Order</h2>
-<p>Each step committed with its tests; only the Clang Windows build checked step by step, the full check (MSVC, ASan, the stress settings, Linux) at the end.</p>
+<p>Each step committed with its tests; only the Clang Windows build checked step by step, the full check (ASan, now through Clang, the stress settings, Linux) at the end.</p>
 <ol start="0">
 <li><strong>The spike.</strong> The machine code copy and patch would make for the <code>numeric</code> benchmark's loop and for two picture kernels (the gradient and the byte loop above), put together by hand from the handlers' machine code, with every check and way out kept, run beside the VM and C++ and timed; and the same with the loop's values in registers, and as a loop template (its checks done once, and the byte loop as a loop made ahead). Nothing in Jade changes. It says whether the targets hold before anything is built (question 8).</li>
 <li><strong>Operands by name</strong> in <code>instructions.inc</code>, a change of spelling only: the interpreter's machine code the same, the benchmarks within noise of the commit before.</li>
@@ -231,7 +231,7 @@ pre code { background: none; padding: 0; }
 
 <h2 id="np-same">What does not change</h2>
 <ul>
-<li>The language, its checks and its messages; the stack code and the cache's format for it; the VM, which still runs everything machine code leaves to it, and all of it in the MSVC build.</li>
+<li>The language, its checks and its messages; the stack code and the cache's format for it; the VM, which still runs everything machine code leaves to it, and all of it with <code>--interpret</code>.</li>
 <li>How a program is run: <code>jade something.jade</code>, the shell, <code>jade test</code>, <code>jade build</code>. Nothing new to install; no C++ compiler on the machine that runs Jade.</li>
 <li><strong>Anyone with <code>jade.exe</code> alone can still run and build everything</strong> (the user, 2026-11-10): the stencils are made once, when <code>jade.exe</code> itself is built, and are part of it; running a program, and <code>jade build</code> making one, only copy them and fill in their gaps. A program made with <code>jade build</code> carries the same stencils and makes its machine code on the machine it runs on (kept in that machine's cache), so it too needs nothing installed. Only building <code>jade.exe</code> itself needs Clang, as it does now; only M14, if it is ever built, would need a C++ compiler, and it stays optional.</li>
 <li>M14 stays in the plan as it is, for built programs that want the last factor (question 6).</li>
@@ -263,7 +263,7 @@ pre code { background: none; padding: 0; }
 <li><strong>When a function is given machine code.</strong> <em>Recommended:</em> at its first call, when its run code is made, as now; if the first-run budget suffers, at its second call instead (a function called once runs in the VM).</li>
 <li><strong>On by default, and the switch.</strong> <em>Recommended:</em> on for everything (scripts, the shell, workers, tests, built programs); off with <code>jade --interpret</code> or <code>JADE_NATIVE=0</code>; the test runner runs every test both ways.</li>
 <li><strong>Linux.</strong> <em>Recommended:</em> in this milestone, after Windows (step 7), so that Jade stays the same on both.</li>
-<li><strong>The MSVC build.</strong> <em>Recommended:</em> runs without machine code, as now; whether the Windows release is built with Clang (the open question <a href="outstanding.html#o-clang">o-clang</a>) matters more once only the Clang build has it.</li>
+<li><strong>The MSVC build.</strong> <em>Decided (the user, 2026-11-10):</em> suspended; on Windows the work is done and checked on the Clang build alone.</li>
 <li><strong>M14.</strong> <em>Recommended:</em> kept in the plan as it is, and looked at again with this milestone's timings.</li>
 <li><strong>Registers.</strong> <em>Recommended:</em> as many as <code>preserve_none</code> gives beyond the VM's own state (on x64 about six for ints and six for floats), for ints, floats and bools only.</li>
 <li><strong>The spike as a gate.</strong> <em>Recommended:</em> if copy and patch is less than 2.5 times as fast as the VM on the spike's loops, or registers less than 5 times, stop and report before step 1.</li>
