@@ -295,8 +295,9 @@ external fun <T> open List<T>.replaceAll(transform : (T) -> T)          // each 
 //   [1, 2, 3, 4].join(limit = 2)   // "1, 2, ..."
 external fun <T> List<T>.join(separator : string = ", ", prefix : string = "", postfix : string = "", limit : int = -1,
                               truncated : string = "...", transform : ((T) -> any?)? = null) : string
-// Puts `item` in the place of every item.
-external fun <T> open List<T>.fill(item : T)
+// Puts `item` in the place of every item, or of those from `from` up to `to` (Kotlin's
+// fill(element, fromIndex, toIndex)); an IndexOutOfBoundsException for a range outside the list.
+external fun <T> open List<T>.fill(item : T, from : int = 0, to : int = -1)
 
 // -- Set --
 

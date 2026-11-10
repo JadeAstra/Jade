@@ -1676,6 +1676,7 @@ void registerSandbox(VM& vm);  // sandbox.cpp: __sandbox, what Sandbox is built 
 void registerGrid(VM& vm);     // grid.cpp: what Grid<T> is built on (D155)
 void registerWebp(VM& vm);     // webp.cpp: WebP's two codecs, VP8L and VP8
 void registerPicture(VM& vm);  // picture.cpp: palettes and dithering over a picture's pixels
+void registerNumeric(VM& vm);  // numeric.cpp: whole-list, grid and picture operations (M9/M10, questions 15 and 17)
 void registerBits(VM& vm);     // bits_api.cpp: what BitReader, HuffmanTable, inflate and deflate are built on
 void registerXml(VM& vm);      // xml_scan.cpp: what Xml.scan is built on (M9/M10)
 void registerRegex(VM& vm);    // regex_api.cpp: what Regex is built on (N5, M8)

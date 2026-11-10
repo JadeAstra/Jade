@@ -191,7 +191,8 @@ var total = 0.0
 for (y in 0 ..< 41) { for (x in 0 ..< 41) { total += soft[x, y].alpha.toInt() } }
 // All of the dot's alpha, spread out, less what rounds away to nothing far out.
 print(total > 200 and total <= 260, soft[20, 20].alpha.toInt() > soft[23, 20].alpha.toInt(), soft[23, 20].alpha == soft[20, 23].alpha, rgb(soft[22, 20]))   // expect: true true true 0 0 0
-print(Image(5, 5, Color.red).blurred(0)[2, 2] == Color.red, Image(5, 5, Color.red).blurred(2)[0, 0].alpha.toInt() < 255)   // expect: true true
+// The edge pixels repeated beyond the edges: a picture of one colour stays it.
+print(Image(5, 5, Color.red).blurred(0)[2, 2] == Color.red, Image(5, 5, Color.red).blurred(2)[0, 0] == Color.red)   // expect: true true
 try { dot.blurred(-1) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a blur's radius is 0 or more, not -1
 
 // -- Kept and put back --

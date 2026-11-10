@@ -1198,9 +1198,24 @@ void registerListMethods(VM& vm) {
         return Value::integer(-1);
     });
 
-    vm.defineMethod(T, "fill", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+    // fill(item, from = 0, to = size): -1 for `to` is the end (the declaration's default).
+    vm.defineMethod(T, "fill", 1, 3, [](VM& vm, Value self, int argc, Value* args) -> Value {
         ObjList* list = asList(self);
-        for (size_t i = 0; i < list->size(); i++) vm.listSet(list, i, args[0]);
+        const int64_t size = static_cast<int64_t>(list->size());
+        const int64_t from = argc > 1 ? vm.toInt(args[1], "from") : 0;
+        const int64_t to = argc > 2 && vm.toInt(args[2], "to") >= 0 ? vm.toInt(args[2], "to") : size;
+        if (from < 0 || from > to || to > size)
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "fill from " + std::to_string(from) + " to " + std::to_string(to) + " is not inside the " + std::to_string(size) + " items");
+        if (to == from) return Value::null();
+        vm.listSet(list, static_cast<size_t>(from), args[0]);
+        if (list->packed() && !list->pack->nullable) {
+            // The first written as the list keeps it, then copied: a picture's row filled at once.
+            const size_t w = list->pack->width;
+            uint8_t* first = vm.itemAt(list, static_cast<size_t>(from));
+            for (int64_t i = from + 1; i < to; i++) std::memcpy(vm.itemAt(list, static_cast<size_t>(i)), first, w);
+            return Value::null();
+        }
+        for (int64_t i = from + 1; i < to; i++) vm.listSet(list, static_cast<size_t>(i), args[0]);
         return Value::null();
     });
 }

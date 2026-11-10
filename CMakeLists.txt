@@ -52,6 +52,7 @@ add_library(jade_core OBJECT
   src/codec.cpp
   src/bits_api.cpp
   src/picture.cpp
+  src/numeric.cpp
   src/webp.cpp
   src/foreign.cpp
   src/worker.cpp

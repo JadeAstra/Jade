@@ -585,6 +585,8 @@ inline fun <T, R> List<T>.fold(initial : R, operation : (R, T) -> R) : R {
 // A list of ints sums to an int, one with a float in it to a float; an empty list to a zero of
 // its item type, 0 or 0.0.
 fun <T : Number> List<T>.sum() : T {
+  // A List<int> or List<float>: added up in C++.
+  if (__num.fast(this) as bool) { return __num.sum(this) as T }
   var total : Number = 0
   for item in this { total += item }
   return total is T ? total as T : total.toFloat() as T
@@ -605,6 +607,10 @@ fun <T : Number> List<T>.average() : float => this.size == 0 ? 0.0 / 0.0 : this.
 // Items that cannot be compared, such as a string and an int, give a ClassCastException.
 fun <T> List<T>.maxOrNull() : T? {
   if (this.size == 0) { return null }
+  if (__num.fast(this) as bool) {
+    val found = __num.extreme(this, true)
+    if (found != null) { return found as T }
+  }
   var best = this[0]
   for item in this {
     if (compareValues(item, best) > 0) { best = item }
@@ -616,6 +622,10 @@ fun <T> List<T>.maxOrNull() : T? {
 // Items that cannot be compared, such as a string and an int, give a ClassCastException.
 fun <T> List<T>.minOrNull() : T? {
   if (this.size == 0) { return null }
+  if (__num.fast(this) as bool) {
+    val found = __num.extreme(this, false)
+    if (found != null) { return found as T }
+  }
   var best = this[0]
   for item in this {
     if (compareValues(item, best) < 0) { best = item }

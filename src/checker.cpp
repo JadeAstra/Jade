@@ -8997,6 +8997,18 @@ struct Checker::Impl {
         int narrowed = 0;     // int constants taken as bytes (D19)
     };
 
+    // Whether each bounded type parameter in `t` stands, in `env`, for a type within its bound;
+    // one not yet given a type, or given one not known, may be anything still.
+    bool boundsHold(const Type& t, const Env& env) {
+        if (t.kind == Type::TypeParam && t.bound != nullptr) {
+            auto found = env.find(t.name);
+            if (found != env.end() && !found->second.unknown() && found->second.kind != Type::TypeParam && !fits(withNull(found->second, false), *t.bound)) return false;
+        }
+        for (const Type& a : t.args)
+            if (!boundsHold(a, env)) return false;
+        return true;
+    }
+
     // A type with the given type parameters, wherever they are in it, as their bound, or as
     // any? where they have none: what they may stand for.
     static Type loosened(const Type& t, const std::vector<std::string>& names) {
@@ -9041,6 +9053,9 @@ struct Checker::Impl {
                 unify(f->receiver, *receiver, fit.env, vars);
                 fixByReceiver(f->receiver, fit.env, vars);
                 if (!fits(*receiver, subst(f->receiver, fit.env))) continue;
+                // A type parameter the receiver gives a type to keeps to its bound: a form for
+                // <T : Number> Grid<T> is not one for a Grid<Color>.
+                if (!boundsHold(f->receiver, fit.env)) continue;
                 receiverFits = true;
             }
             fit.binding = bind(f, args, at, what + "(...)");

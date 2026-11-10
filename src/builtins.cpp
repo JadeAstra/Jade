@@ -1409,6 +1409,7 @@ void registerBuiltins(VM& vm) {
     registerXml(vm);
     registerBits(vm);
     registerPicture(vm);
+    registerNumeric(vm);
     registerWebp(vm);
     registerForeign(vm);
     registerWorkers(vm);

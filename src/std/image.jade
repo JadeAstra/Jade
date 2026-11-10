@@ -800,9 +800,11 @@ value Plane(val bytes : Bytes, val width : int, val height : int, val stride : i
 // made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).
 class Image : Drawable {
   // Its width, in pixels.
-  override val width : int
+  override var width : int
+    private set
   // Its height, in pixels.
-  override val height : int
+  override var height : int
+    private set
   internal var cells : Grid<Color>
   // A number raised by every change, and the rectangle changed since the card's copy was made:
   // what Topaz's native layer sends again (D124).
@@ -948,72 +950,108 @@ class Image : Drawable {
   // A new image of the same size with the same pixels, changed apart from this one.
   fun copy() : Image => crop(0, 0, width, height)
 
+  // -- Picture operations (question 5): each gives a new image, the work for each pixel in C++ --
+
   // A copy blurred by a Gaussian whose standard deviation is `radius` pixels, as CSS's blur()
   // and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that,
-  // their colours weighed by their alpha so that a see-through edge does not darken, and clear
-  // beyond the picture's edges. An IllegalArgumentException for a radius below 0.
+  // across and then down, their colours weighed by their alpha so that a see-through edge does
+  // not darken, the edge pixels repeated beyond the edges. An IllegalArgumentException for a
+  // radius below 0.
   fun blurred(radius : Number) : Image {
     val s = radius.toFloat()
     if (!(s >= 0.0)) { throw IllegalArgumentException("a blur's radius is 0 or more, not $radius") }
     if (s == 0.0 or width == 0 or height == 0) { return copy() }
     val reach = Math.ceil(3.0 * s).toInt()
-    val weights : open List<float> = List(2 * reach + 1) { 0.0 }
+    val across = Grid<float>(2 * reach + 1, 1)
     var total = 0.0
-    for (k in -reach .. reach) {
-      val w = Math.exp(-(k * k) / (2.0 * s * s))
-      weights[k + reach] = w
-      total += w
+    for (k in -reach .. reach) { total += Math.exp(-(k * k) / (2.0 * s * s)) }
+    for (k in -reach .. reach) { across[k + reach, 0] = Math.exp(-(k * k) / (2.0 * s * s)) / total }
+    return of(pixels.convolve(across).convolve(across.transposed()))
+  }
+
+  // The picture at another size: each way it shrinks, each new pixel the average of those it
+  // covers; each way it grows, read between pixels by `interpolation`; colours weighed by alpha.
+  // An IllegalArgumentException for a size below 0.
+  fun scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Image {
+    if (width < 0 or height < 0) { throw IllegalArgumentException("an image is 0 by 0 or more, not $width by $height") }
+    if (this.width == 0 or this.height == 0) { return Image(width, height) }
+    return of(pixels.scaled(width, height, interpolation))
+  }
+
+  // The picture moved, turned, stretched or slanted by `transform`, in a new image just large
+  // enough to hold all of it, its top left corner where the transformed picture's leftmost and
+  // topmost points are; what is around it clear, its edges smooth. Read between pixels by
+  // `interpolation`. An IllegalStateException for a transform that flattens everything onto a
+  // line.
+  fun transformed(transform : Transform, interpolation : Interpolation = Interpolation.bilinear) : Image {
+    val back = transform.inverse()
+    var minX = 1e300
+    var minY = 1e300
+    var maxX = -1e300
+    var maxY = -1e300
+    for (k in 0 .. 3) {
+      val (x, y) = transform.apply(k % 2 == 0 ? 0 : width, k < 2 ? 0 : height)
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
     }
-    for (k in 0 ..< weights.size) { weights[k] = weights[k] / total }
-    val n = width * height
-    val src = cells.cells
-    // The four parts, colours times alpha; then across, then down.
-    val parts : List<open List<float>> = [List(n) { 0.0 }, List(n) { 0.0 }, List(n) { 0.0 }, List(n) { 0.0 }]
-    for (i in 0 ..< n) {
-      val c = src[i]
-      val a = c.alpha.toInt()
-      parts[0][i] = c.red.toInt() * a / 255.0
-      parts[1][i] = c.green.toInt() * a / 255.0
-      parts[2][i] = c.blue.toInt() * a / 255.0
-      parts[3][i] = a.toFloat()
+    val left = Math.floor(minX + 1e-9)
+    val top = Math.floor(minY + 1e-9)
+    val w = Math.max(0, Math.ceil(maxX - 1e-9).toInt() - left.toInt())
+    val h = Math.max(0, Math.ceil(maxY - 1e-9).toInt() - top.toInt())
+    if (w == 0 or h == 0 or width == 0 or height == 0) { return Image(w, h) }
+    // A new pixel's middle, back to where it was, as a place among this picture's pixels.
+    val m = Transform.translation(left + 0.5, top + 0.5).then(back).then(Transform.translation(-0.5, -0.5))
+    val xs = Grid<float>(w, h)
+    val ys = Grid<float>(w, h)
+    __num.places(w, h, m.scaleX, m.shearY, m.shearX, m.scaleY, m.translateX, m.translateY, xs.cells, ys.cells)
+    return of(pixels.sample(xs, ys, interpolation, Color.clear))
+  }
+
+  // The picture with its brightness, contrast and saturation changed, as CSS's brightness(),
+  // contrast() and saturate() change them: 1 leaves each as it is; 0 makes the picture black,
+  // flat grey, or grey; more than 1 makes it brighter, harder, more colourful. Alpha is kept.
+  fun adjusted(brightness : Number = 1, contrast : Number = 1, saturation : Number = 1) : Image {
+    val b = brightness.toFloat()
+    val c = contrast.toFloat()
+    val table : open List<int> = []
+    for (v in 0 .. 255) {
+      val x = ((v / 255.0) * b - 0.5) * c + 0.5
+      table.add(Math.min(255, Math.max(0, Math.round(x * 255.0).toInt())))
     }
-    val line : open List<float> = List(Math.max(width, height)) { 0.0 }
-    for (p in parts) {
-      // Across each row, then down each column: a line copied out, padded with reach clear
-      // pixels each side, so that every sum takes the whole kernel.
-      val padded : open List<float> = List(Math.max(width, height) + 2 * reach) { 0.0 }
-      val taps = 2 * reach + 1
-      for (y in 0 ..< height) {
-        val base = y * width
-        for (x in 0 ..< width) { padded[x + reach] = p[base + x] }
-        for (x in 0 ..< width) {
-          var sum = 0.0
-          for (k in 0 ..< taps) { sum += padded[x + k] * weights[k] }
-          line[x] = sum
-        }
-        for (x in 0 ..< width) { p[base + x] = line[x] }
-      }
-      for (x in width + reach ..< padded.size) { padded[x] = 0.0 }
-      for (x in 0 ..< width) {
-        for (y in 0 ..< height) { padded[y + reach] = p[y * width + x] }
-        for (y in height + reach ..< padded.size) { padded[y] = 0.0 }
-        for (y in 0 ..< height) {
-          var sum = 0.0
-          for (k in 0 ..< taps) { sum += padded[y + k] * weights[k] }
-          line[y] = sum
-        }
-        for (y in 0 ..< height) { p[y * width + x] = line[y] }
-      }
+    var made = pixels.mapChannels(table, table, table)
+    val sat = saturation.toFloat()
+    if (sat != 1.0) {
+      // CSS's saturate() matrix, from Filter Effects.
+      made = made.mapColors(ColorLookup { p -> __mix(p, 0.213 + 0.787 * sat, 0.715 - 0.715 * sat, 0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 + 0.285 * sat,
+                                                        0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 - 0.715 * sat, 0.072 + 0.928 * sat) })
     }
-    val made = Image(width, height)
-    val out = made.cells.cells
-    for (i in 0 ..< n) {
-      val a = parts[3][i]
-      if (a >= 0.5) {
-        fun part(v : float) : int => Math.min(255, Math.max(0, Math.round(v * 255.0 / a).toInt()))
-        out[i] = Color(part(parts[0][i]), part(parts[1][i]), part(parts[2][i]), Math.min(255, Math.round(a).toInt()))
-      }
-    }
+    return of(made)
+  }
+
+  // The picture in greys, as CSS's grayscale(1): each pixel 0.2126 of its red, 0.7152 of its green
+  // and 0.0722 of its blue, as the eye weighs them; alpha kept.
+  fun greyscale() : Image => of(pixels.mapColors(ColorLookup { p -> __mix(p, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722) }))
+
+  // The picture with its colours turned round, each part 255 less itself; alpha kept.
+  fun inverted() : Image {
+    val table : open List<int> = []
+    for (v in 0 .. 255) { table.add(255 - v) }
+    return of(pixels.mapChannels(table, table, table))
+  }
+
+  // The pixels joined to (x, y) through pixels whose colour differs from its own by no more than
+  // `tolerance` in any part, alpha too: the magic wand's selection, a flood fill's area. Filled
+  // with image.editPixels { it.fill(color, where = mask) }.
+  fun floodRegion(x : int, y : int, tolerance : int = 0) : Mask => pixels.floodRegion(x, y, tolerance)
+
+  // An image of a grid of colours made for it, which it takes as its own.
+  private fun of(grid : Grid<Color>) : Image {
+    val made = Image(0, 0)
+    made.width = grid.width
+    made.height = grid.height
+    made.cells = grid
     return made
   }
 
@@ -1262,6 +1300,16 @@ class ImageCanvas : Canvas {
                          from.cells.cells, from.width, from.height, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha)
     drawn()
   }
+}
+
+// A colour through a 3 by 3 matrix of its red, green and blue, rounded and held from 0 to 255;
+// alpha kept.
+fun __mix(c : Color, rr : float, rg : float, rb : float, gr : float, gg : float, gb : float, br : float, bg : float, bb : float) : Color {
+  val r = c.red.toInt()
+  val g = c.green.toInt()
+  val b = c.blue.toInt()
+  fun part(v : float) : int => Math.min(255, Math.max(0, Math.round(v).toInt()))
+  return Color(part(rr * r + rg * g + rb * b), part(gr * r + gg * g + gb * b), part(br * r + bg * g + bb * b), c.alpha.toInt())
 }
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another

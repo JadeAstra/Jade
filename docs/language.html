@@ -424,6 +424,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-list-jade">list.jade</a></li>
 <li><a href="#file-localtime-jade">localtime.jade</a></li>
 <li><a href="#file-map-jade">map.jade</a></li>
+<li><a href="#file-numeric-jade">numeric.jade</a></li>
 <li><a href="#file-paint-jade">paint.jade</a></li>
 <li><a href="#file-parallel-jade">parallel.jade</a></li>
 <li><a href="#file-path-jade">path.jade</a></li>
@@ -464,8 +465,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#BeforeTest"><code>BeforeTest</code></a> (1)</li>
 <li><a href="#BitOrder"><code>BitOrder</code></a> (1)</li>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
+<li><a href="#BlendMode"><code>BlendMode</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.inflate"><code>Bytes</code></a> (33)</li>
+<li><a href="#Bytes.inflate"><code>Bytes</code></a> (34)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (66)</li>
@@ -475,6 +477,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Class"><code>Class</code></a> (23)</li>
 <li><a href="#ClassCastException"><code>ClassCastException</code></a> (1)</li>
 <li><a href="#Color"><code>Color</code></a> (24)</li>
+<li><a href="#ColorLookup"><code>ColorLookup</code></a> (1)</li>
 <li><a href="#ColorSpace"><code>ColorSpace</code></a> (1)</li>
 <li><a href="#Composite"><code>Composite</code></a> (1)</li>
 <li><a href="#ConcurrentModificationException"><code>ConcurrentModificationException</code></a> (1)</li>
@@ -505,12 +508,12 @@ addButton(widgets)</pre></dd>
 <li><a href="#Foreign"><code>Foreign</code></a> (2)</li>
 <li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
-<li><a href="#Grid"><code>Grid</code></a> (30)</li>
+<li><a href="#Grid"><code>Grid</code></a> (83)</li>
 <li><a href="#HuffmanTable"><code>HuffmanTable</code></a> (2)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
-<li><a href="#Image"><code>Image</code></a> (29)</li>
+<li><a href="#Image"><code>Image</code></a> (35)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (20)</li>
 <li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
@@ -533,7 +536,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
 <li><a href="#LineJoin"><code>LineJoin</code></a> (1)</li>
 <li><a href="#LinearGradient"><code>LinearGradient</code></a> (2)</li>
-<li><a href="#List.size"><code>List</code></a> (151)</li>
+<li><a href="#List.size"><code>List</code></a> (192)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
 <li><a href="#LocalDateTime"><code>LocalDateTime</code></a> (14)</li>
@@ -542,6 +545,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#LockBox"><code>LockBox</code></a> (2)</li>
 <li><a href="#Map.size"><code>Map</code></a> (58)</li>
 <li><a href="#MapEntry"><code>MapEntry</code></a> (2)</li>
+<li><a href="#Mask"><code>Mask</code></a> (7)</li>
 <li><a href="#MatchGroup"><code>MatchGroup</code></a> (1)</li>
 <li><a href="#MatchGroupCollection"><code>MatchGroupCollection</code></a> (7)</li>
 <li><a href="#MatchResult"><code>MatchResult</code></a> (8)</li>
@@ -577,6 +581,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Reader"><code>Reader</code></a> (12)</li>
 <li><a href="#RealHost"><code>RealHost</code></a> (1)</li>
 <li><a href="#Rect"><code>Rect</code></a> (26)</li>
+<li><a href="#Reduce"><code>Reduce</code></a> (1)</li>
 <li><a href="#Regex"><code>Regex</code></a> (21)</li>
 <li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
@@ -617,6 +622,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#UncheckedIOException"><code>UncheckedIOException</code></a> (1)</li>
 <li><a href="#UnsupportedOperationException"><code>UnsupportedOperationException</code></a> (1)</li>
 <li><a href="#Values.size"><code>Values</code></a> (51)</li>
+<li><a href="#WindowShape"><code>WindowShape</code></a> (1)</li>
 <li><a href="#Worker"><code>Worker</code></a> (9)</li>
 <li><a href="#WorkerParent"><code>WorkerParent</code></a> (4)</li>
 <li><a href="#Writer"><code>Writer</code></a> (10)</li>
@@ -1035,8 +1041,8 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 <pre>[1, 2, 3, 4].join(limit = 2)   // &quot;1, 2, ...&quot;
 </pre>
 </div>
-<div class="entry" id="List.fill"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.fill(item : T)</code><a class="anchor" href="#List.fill">#</a>
-<p>Puts <code>item</code> in the place of every item.</p>
+<div class="entry" id="List.fill"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.fill(item : T, from : int = 0, to : int = -1)</code><a class="anchor" href="#List.fill">#</a>
+<p>Puts <code>item</code> in the place of every item, or of those from <code>from</code> up to <code>to</code> (Kotlin's fill(element, fromIndex, toIndex)); an IndexOutOfBoundsException for a range outside the list.</p>
 </div>
 <h4>Set</h4>
 <div class="entry" id="Set"><code class="sig">fun &lt;T&gt; Set(from : any? = null) : open Set&lt;T&gt;</code><a class="anchor" href="#Set">#</a>
@@ -3284,10 +3290,10 @@ image.save(FilePath(&quot;out.png&quot;))
 </pre>
 <p>A pixel outside the image is an IndexOutOfBoundsException. Its canvas draws in memory, on any thread, so a worker can draw a thumbnail; Topaz keeps a copy of it on the graphics card for drawing it there, brought up to date from what has changed. Threads may draw on one image together: each shape, text or picture is drawn whole before another thread draws, and the copy on the card misses none of them. In a parallel section a piece draws on an image it made itself, or through a part of a split canvas handed to it (ImageCanvas.split, G64).</p>
 </div>
-<div class="entry member" id="Image.width"><code class="sig">override val width : int</code><a class="anchor" href="#Image.width">#</a>
+<div class="entry member" id="Image.width"><code class="sig">override var width : int</code><a class="anchor" href="#Image.width">#</a>
 <p>Its width, in pixels.</p>
 </div>
-<div class="entry member" id="Image.height"><code class="sig">override val height : int</code><a class="anchor" href="#Image.height">#</a>
+<div class="entry member" id="Image.height"><code class="sig">override var height : int</code><a class="anchor" href="#Image.height">#</a>
 <p>Its height, in pixels.</p>
 </div>
 <div class="entry member" id="Image.of"><code class="sig">fun of(width : int, height : int, pixels : Bytes) : Image</code><a class="anchor" href="#Image.of">#</a>
@@ -3341,7 +3347,25 @@ image.save(FilePath(&quot;out.png&quot;))
 <p>A new image of the same size with the same pixels, changed apart from this one.</p>
 </div>
 <div class="entry member" id="Image.blurred"><code class="sig">fun blurred(radius : Number) : Image</code><a class="anchor" href="#Image.blurred">#</a>
-<p>A copy blurred by a Gaussian whose standard deviation is <code>radius</code> pixels, as CSS's blur() and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that, their colours weighed by their alpha so that a see-through edge does not darken, and clear beyond the picture's edges. An IllegalArgumentException for a radius below 0.</p>
+<p>A copy blurred by a Gaussian whose standard deviation is <code>radius</code> pixels, as CSS's blur() and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that, across and then down, their colours weighed by their alpha so that a see-through edge does not darken, the edge pixels repeated beyond the edges. An IllegalArgumentException for a radius below 0.</p>
+</div>
+<div class="entry member" id="Image.scaled"><code class="sig">fun scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Image</code><a class="anchor" href="#Image.scaled">#</a>
+<p>The picture at another size: each way it shrinks, each new pixel the average of those it covers; each way it grows, read between pixels by <code>interpolation</code>; colours weighed by alpha. An IllegalArgumentException for a size below 0.</p>
+</div>
+<div class="entry member" id="Image.transformed"><code class="sig">fun transformed(transform : Transform, interpolation : Interpolation = Interpolation.bilinear) : Image</code><a class="anchor" href="#Image.transformed">#</a>
+<p>The picture moved, turned, stretched or slanted by <code>transform</code>, in a new image just large enough to hold all of it, its top left corner where the transformed picture's leftmost and topmost points are; what is around it clear, its edges smooth. Read between pixels by <code>interpolation</code>. An IllegalStateException for a transform that flattens everything onto a line.</p>
+</div>
+<div class="entry member" id="Image.adjusted"><code class="sig">fun adjusted(brightness : Number = 1, contrast : Number = 1, saturation : Number = 1) : Image</code><a class="anchor" href="#Image.adjusted">#</a>
+<p>The picture with its brightness, contrast and saturation changed, as CSS's brightness(), contrast() and saturate() change them: 1 leaves each as it is; 0 makes the picture black, flat grey, or grey; more than 1 makes it brighter, harder, more colourful. Alpha is kept.</p>
+</div>
+<div class="entry member" id="Image.greyscale"><code class="sig">fun greyscale() : Image</code><a class="anchor" href="#Image.greyscale">#</a>
+<p>The picture in greys, as CSS's grayscale(1): each pixel 0.2126 of its red, 0.7152 of its green and 0.0722 of its blue, as the eye weighs them; alpha kept.</p>
+</div>
+<div class="entry member" id="Image.inverted"><code class="sig">fun inverted() : Image</code><a class="anchor" href="#Image.inverted">#</a>
+<p>The picture with its colours turned round, each part 255 less itself; alpha kept.</p>
+</div>
+<div class="entry member" id="Image.floodRegion"><code class="sig">fun floodRegion(x : int, y : int, tolerance : int = 0) : Mask</code><a class="anchor" href="#Image.floodRegion">#</a>
+<p>The pixels joined to (x, y) through pixels whose colour differs from its own by no more than <code>tolerance</code> in any part, alpha too: the magic wand's selection, a flood fill's area. Filled with image.editPixels { it.fill(color, where = mask) }.</p>
 </div>
 <div class="entry member" id="Image.inkBox"><code class="sig">fun inkBox(background : Color = Color.clear) : Rect?</code><a class="anchor" href="#Image.inkBox">#</a>
 <p>The smallest rectangle outside which every pixel is <code>background</code>; null if all of them are.</p>
@@ -4247,6 +4271,343 @@ S...      the fraction of the second, as many digits as letters
 </div>
 <div class="entry" id="Map.sumOf"><code class="sig">inline fun &lt;K, V, R : Number&gt; Map&lt;K, V&gt;.sumOf(selector : (MapEntry&lt;K, V&gt;) -&gt; R) : R</code><a class="anchor" href="#Map.sumOf">#</a>
 <p>The sum of what <code>selector</code> gives for each entry; 0 for an empty map.</p>
+</div>
+</section>
+<section class="file" id="file-numeric-jade">
+<h2>numeric.jade</h2>
+<h3>Whole lists and grids at once (M9/M10, questions 15 and 17)</h3>
+<p>numpy's kind of work on the lists and grids Jade has: a List&lt;int&gt; or List&lt;float&gt;, a list of a narrow width (List&lt;float32&gt;, List&lt;int16&gt;), Bytes, and a Grid of any of them are each one packed block of numbers, and an operation on the whole of one is a loop in C++ over it.</p>
+<pre>val prices : List&lt;float&gt; = ...
+val withTax = prices.timesEach(1.2)
+val total = prices.dot(amounts)
+val heights = Grid&lt;float&gt;(100, 100)
+val smooth = heights.convolve(Grid&lt;float&gt;(3, 3, fill = 1.0 / 9))
+</pre>
+<p>The answers are those Jade's operators give: an int with an int stays an int, its overflow an ArithmeticException as + gives (the ...Wrapped forms wrap round instead, as &amp;+ does); ints divided are whole numbers, a division by zero an error; anything with a float is a float. An int list's operations take ints; make it floats first for float answers. A list of a narrow width gives a list of its own width, and a result written into one is checked against its range as storing it is. Sizes must match, or an IllegalArgumentException says both; a single number may stand for a list, for every item.</p>
+<p>Each gives a new list or grid, or, given <code>into</code>, writes its answer there and makes nothing: numpy's out=, for an inner loop that should not make a list each time.</p>
+<h4>- Lists -</h4>
+<div class="entry" id="List.plusEach"><code class="sig">fun List&lt;int&gt;.plusEach(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.plusEach">#</a>
+<p>Item by item, this plus <code>other</code> (a list of the same size, or one number for every item).</p>
+</div>
+<div class="entry" id="List.plusEach-2"><code class="sig">fun List&lt;float&gt;.plusEach(other : List&lt;Number&gt; | Number) : List&lt;float&gt;</code><a class="anchor" href="#List.plusEach-2">#</a>
+<p>Item by item, this plus <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="List.plusEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.plusEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number) : List&lt;T&gt;</code><a class="anchor" href="#List.plusEach-3">#</a>
+<p>Item by item, this plus <code>other</code>, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.plusEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.plusEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.plusEach-4">#</a>
+<p>Item by item, this plus <code>other</code>, written into <code>into</code> (of this list's size), which it gives.</p>
+</div>
+<div class="entry" id="List.minusEach"><code class="sig">fun List&lt;int&gt;.minusEach(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.minusEach">#</a>
+<p>Item by item, this minus <code>other</code>.</p>
+</div>
+<div class="entry" id="List.minusEach-2"><code class="sig">fun List&lt;float&gt;.minusEach(other : List&lt;Number&gt; | Number) : List&lt;float&gt;</code><a class="anchor" href="#List.minusEach-2">#</a>
+<p>Item by item, this minus <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="List.minusEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.minusEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number) : List&lt;T&gt;</code><a class="anchor" href="#List.minusEach-3">#</a>
+<p>Item by item, this minus <code>other</code>, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.minusEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.minusEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.minusEach-4">#</a>
+<p>Item by item, this minus <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.timesEach"><code class="sig">fun List&lt;int&gt;.timesEach(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.timesEach">#</a>
+<p>Item by item, this times <code>other</code>.</p>
+</div>
+<div class="entry" id="List.timesEach-2"><code class="sig">fun List&lt;float&gt;.timesEach(other : List&lt;Number&gt; | Number) : List&lt;float&gt;</code><a class="anchor" href="#List.timesEach-2">#</a>
+<p>Item by item, this times <code>other</code>, as floats: prices.timesEach(1.2).</p>
+</div>
+<div class="entry" id="List.timesEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.timesEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number) : List&lt;T&gt;</code><a class="anchor" href="#List.timesEach-3">#</a>
+<p>Item by item, this times <code>other</code>, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.timesEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.timesEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.timesEach-4">#</a>
+<p>Item by item, this times <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.divEach"><code class="sig">fun List&lt;int&gt;.divEach(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.divEach">#</a>
+<p>Item by item, this divided by <code>other</code>: whole numbers, as int / int gives them.</p>
+</div>
+<div class="entry" id="List.divEach-2"><code class="sig">fun List&lt;float&gt;.divEach(other : List&lt;Number&gt; | Number) : List&lt;float&gt;</code><a class="anchor" href="#List.divEach-2">#</a>
+<p>Item by item, this divided by <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="List.divEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.divEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number) : List&lt;T&gt;</code><a class="anchor" href="#List.divEach-3">#</a>
+<p>Item by item, this divided by <code>other</code>, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.divEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.divEach(other : List&lt;T&gt; | List&lt;Number&gt; | Number, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.divEach-4">#</a>
+<p>Item by item, this divided by <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.plusEachWrapped"><code class="sig">fun List&lt;int&gt;.plusEachWrapped(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.plusEachWrapped">#</a>
+<p>Item by item, this plus <code>other</code>, an int's overflow wrapping round as &amp;+ does, with no check: for hashes, checksums and the steps of a random number.</p>
+</div>
+<div class="entry" id="List.plusEachWrapped-2"><code class="sig">fun &lt;R : Number&gt; List&lt;int&gt;.plusEachWrapped(other : List&lt;int&gt; | int, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.plusEachWrapped-2">#</a>
+<p>The same, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.minusEachWrapped"><code class="sig">fun List&lt;int&gt;.minusEachWrapped(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.minusEachWrapped">#</a>
+<p>Item by item, this minus <code>other</code>, wrapping round as &amp;- does.</p>
+</div>
+<div class="entry" id="List.minusEachWrapped-2"><code class="sig">fun &lt;R : Number&gt; List&lt;int&gt;.minusEachWrapped(other : List&lt;int&gt; | int, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.minusEachWrapped-2">#</a>
+<p>The same, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.timesEachWrapped"><code class="sig">fun List&lt;int&gt;.timesEachWrapped(other : List&lt;int&gt; | int) : List&lt;int&gt;</code><a class="anchor" href="#List.timesEachWrapped">#</a>
+<p>Item by item, this times <code>other</code>, wrapping round as &amp;* does.</p>
+</div>
+<div class="entry" id="List.timesEachWrapped-2"><code class="sig">fun &lt;R : Number&gt; List&lt;int&gt;.timesEachWrapped(other : List&lt;int&gt; | int, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.timesEachWrapped-2">#</a>
+<p>The same, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.clampEach"><code class="sig">fun List&lt;int&gt;.clampEach(low : int, high : int) : List&lt;int&gt;</code><a class="anchor" href="#List.clampEach">#</a>
+<p>Each item held from <code>low</code> to <code>high</code>, as Kotlin's coerceIn for a whole list.</p>
+</div>
+<div class="entry" id="List.clampEach-2"><code class="sig">fun List&lt;float&gt;.clampEach(low : Number, high : Number) : List&lt;float&gt;</code><a class="anchor" href="#List.clampEach-2">#</a>
+<p>Each item held from <code>low</code> to <code>high</code>, as floats.</p>
+</div>
+<div class="entry" id="List.clampEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.clampEach(low : Number, high : Number) : List&lt;T&gt;</code><a class="anchor" href="#List.clampEach-3">#</a>
+<p>Each item held from <code>low</code> to <code>high</code>, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.clampEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.clampEach(low : Number, high : Number, into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.clampEach-4">#</a>
+<p>Each item held from <code>low</code> to <code>high</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.absEach"><code class="sig">fun List&lt;int&gt;.absEach() : List&lt;int&gt;</code><a class="anchor" href="#List.absEach">#</a>
+<p>Each item made positive.</p>
+</div>
+<div class="entry" id="List.absEach-2"><code class="sig">fun List&lt;float&gt;.absEach() : List&lt;float&gt;</code><a class="anchor" href="#List.absEach-2">#</a>
+<p>Each item made positive, as floats.</p>
+</div>
+<div class="entry" id="List.absEach-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.absEach() : List&lt;T&gt;</code><a class="anchor" href="#List.absEach-3">#</a>
+<p>Each item made positive, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.absEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.absEach(into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.absEach-4">#</a>
+<p>Each item made positive, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.dot"><code class="sig">fun List&lt;int&gt;.dot(other : List&lt;int&gt;) : int</code><a class="anchor" href="#List.dot">#</a>
+<p>The sum of the products of the items in turn, an int for two lists of ints.</p>
+</div>
+<div class="entry" id="List.dot-2"><code class="sig">fun List&lt;float&gt;.dot(other : List&lt;Number&gt;) : float</code><a class="anchor" href="#List.dot-2">#</a>
+<p>The sum of the products of the items in turn, as a float.</p>
+</div>
+<div class="entry" id="List.dot-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.dot(other : List&lt;Number&gt;) : Number</code><a class="anchor" href="#List.dot-3">#</a>
+<p>The sum of the products of the items in turn: an int for ints, a float otherwise.</p>
+</div>
+<div class="entry" id="List.runningSum"><code class="sig">fun List&lt;int&gt;.runningSum() : List&lt;int&gt;</code><a class="anchor" href="#List.runningSum">#</a>
+<p>Each item the sum of those up to it and itself: the prefix sums.</p>
+</div>
+<div class="entry" id="List.runningSum-2"><code class="sig">fun List&lt;float&gt;.runningSum() : List&lt;float&gt;</code><a class="anchor" href="#List.runningSum-2">#</a>
+<p>Each item the sum of those up to it and itself, as floats.</p>
+</div>
+<div class="entry" id="List.runningSum-3"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.runningSum() : List&lt;T&gt;</code><a class="anchor" href="#List.runningSum-3">#</a>
+<p>The prefix sums, in a list of this list's own width.</p>
+</div>
+<div class="entry" id="List.runningSum-4"><code class="sig">fun &lt;T : Number, R : Number&gt; List&lt;T&gt;.runningSum(into : open List&lt;R&gt;) : List&lt;R&gt;</code><a class="anchor" href="#List.runningSum-4">#</a>
+<p>The prefix sums, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="List.copyInto"><code class="sig">fun &lt;T&gt; List&lt;T&gt;.copyInto(destination : open List&lt;T&gt;, destinationOffset : int = 0, startIndex : int = 0, endIndex : int = this.size) : open List&lt;T&gt;</code><a class="anchor" href="#List.copyInto">#</a>
+<p>The items from <code>startIndex</code> up to <code>endIndex</code> copied into <code>destination</code> from <code>destinationOffset</code> on, at once, as Kotlin's copyInto; gives <code>destination</code>. An IndexOutOfBoundsException where they do not fit.</p>
+</div>
+<div class="entry" id="Bytes.copyInto"><code class="sig">fun Bytes.copyInto(destination : Bytes, destinationOffset : int = 0, startIndex : int = 0, endIndex : int = this.size) : Bytes</code><a class="anchor" href="#Bytes.copyInto">#</a>
+<p>The bytes from <code>startIndex</code> up to <code>endIndex</code> copied into <code>destination</code> from <code>destinationOffset</code> on, at once; gives <code>destination</code>.</p>
+</div>
+<div class="entry" id="List.addAt"><code class="sig">fun open List&lt;int&gt;.addAt(indices : List&lt;int&gt;, values : List&lt;int&gt; | int)</code><a class="anchor" href="#List.addAt">#</a>
+<p>Each of <code>values</code> (one for each index, or one number for all) added at its index, an index given more than once adding each time, as numpy's add.at: counting, and points splatted.</p>
+</div>
+<div class="entry" id="List.addAt-2"><code class="sig">fun open List&lt;float&gt;.addAt(indices : List&lt;int&gt;, values : List&lt;Number&gt; | Number)</code><a class="anchor" href="#List.addAt-2">#</a>
+<p>Each of <code>values</code> added at its index, as floats.</p>
+</div>
+<div class="entry" id="List.histogram"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List&lt;int&gt;</code><a class="anchor" href="#List.histogram">#</a>
+<p>How many items fall in each of <code>bins</code> equal parts of <code>from</code> to <code>to</code> (the least and the most item when they are null), the last part taking <code>to</code> itself; items outside are not counted.</p>
+</div>
+<h4>- Grids of numbers -</h4>
+<div class="entry" id="Grid.plusEach"><code class="sig">fun Grid&lt;int&gt;.plusEach(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.plusEach">#</a>
+<p>Cell by cell, this plus <code>other</code> (a grid of the same size, or one number).</p>
+</div>
+<div class="entry" id="Grid.plusEach-2"><code class="sig">fun Grid&lt;float&gt;.plusEach(other : Grid&lt;Number&gt; | Number) : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.plusEach-2">#</a>
+<p>Cell by cell, this plus <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="Grid.plusEach-3"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.plusEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.plusEach-3">#</a>
+<p>Cell by cell, this plus <code>other</code>, in a grid of this grid's own width.</p>
+</div>
+<div class="entry" id="Grid.plusEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; Grid&lt;T&gt;.plusEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number, into : Grid&lt;R&gt;) : Grid&lt;R&gt;</code><a class="anchor" href="#Grid.plusEach-4">#</a>
+<p>Cell by cell, this plus <code>other</code>, written into <code>into</code>, which it gives.</p>
+</div>
+<div class="entry" id="Grid.minusEach"><code class="sig">fun Grid&lt;int&gt;.minusEach(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.minusEach">#</a>
+<p>Cell by cell, this minus <code>other</code>.</p>
+</div>
+<div class="entry" id="Grid.minusEach-2"><code class="sig">fun Grid&lt;float&gt;.minusEach(other : Grid&lt;Number&gt; | Number) : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.minusEach-2">#</a>
+<p>Cell by cell, this minus <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="Grid.minusEach-3"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.minusEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.minusEach-3">#</a>
+<p>Cell by cell, this minus <code>other</code>, in a grid of this grid's own width.</p>
+</div>
+<div class="entry" id="Grid.minusEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; Grid&lt;T&gt;.minusEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number, into : Grid&lt;R&gt;) : Grid&lt;R&gt;</code><a class="anchor" href="#Grid.minusEach-4">#</a>
+<p>Cell by cell, this minus <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="Grid.timesEach"><code class="sig">fun Grid&lt;int&gt;.timesEach(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.timesEach">#</a>
+<p>Cell by cell, this times <code>other</code>.</p>
+</div>
+<div class="entry" id="Grid.timesEach-2"><code class="sig">fun Grid&lt;float&gt;.timesEach(other : Grid&lt;Number&gt; | Number) : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.timesEach-2">#</a>
+<p>Cell by cell, this times <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="Grid.timesEach-3"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.timesEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.timesEach-3">#</a>
+<p>Cell by cell, this times <code>other</code>, in a grid of this grid's own width.</p>
+</div>
+<div class="entry" id="Grid.timesEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; Grid&lt;T&gt;.timesEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number, into : Grid&lt;R&gt;) : Grid&lt;R&gt;</code><a class="anchor" href="#Grid.timesEach-4">#</a>
+<p>Cell by cell, this times <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="Grid.divEach"><code class="sig">fun Grid&lt;int&gt;.divEach(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.divEach">#</a>
+<p>Cell by cell, this divided by <code>other</code>: whole numbers for ints.</p>
+</div>
+<div class="entry" id="Grid.divEach-2"><code class="sig">fun Grid&lt;float&gt;.divEach(other : Grid&lt;Number&gt; | Number) : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.divEach-2">#</a>
+<p>Cell by cell, this divided by <code>other</code>, as floats.</p>
+</div>
+<div class="entry" id="Grid.divEach-3"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.divEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.divEach-3">#</a>
+<p>Cell by cell, this divided by <code>other</code>, in a grid of this grid's own width.</p>
+</div>
+<div class="entry" id="Grid.divEach-4"><code class="sig">fun &lt;T : Number, R : Number&gt; Grid&lt;T&gt;.divEach(other : Grid&lt;T&gt; | Grid&lt;Number&gt; | Number, into : Grid&lt;R&gt;) : Grid&lt;R&gt;</code><a class="anchor" href="#Grid.divEach-4">#</a>
+<p>Cell by cell, this divided by <code>other</code>, written into <code>into</code>.</p>
+</div>
+<div class="entry" id="Grid.plusEachWrapped"><code class="sig">fun Grid&lt;int&gt;.plusEachWrapped(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.plusEachWrapped">#</a>
+<p>Cell by cell, this plus <code>other</code>, wrapping round as &amp;+ does.</p>
+</div>
+<div class="entry" id="Grid.minusEachWrapped"><code class="sig">fun Grid&lt;int&gt;.minusEachWrapped(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.minusEachWrapped">#</a>
+<p>Cell by cell, this minus <code>other</code>, wrapping round as &amp;- does.</p>
+</div>
+<div class="entry" id="Grid.timesEachWrapped"><code class="sig">fun Grid&lt;int&gt;.timesEachWrapped(other : Grid&lt;int&gt; | int) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.timesEachWrapped">#</a>
+<p>Cell by cell, this times <code>other</code>, wrapping round as &amp;* does.</p>
+</div>
+<div class="entry" id="Grid.clampEach"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.clampEach(low : Number, high : Number) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.clampEach">#</a>
+<p>Each cell held from <code>low</code> to <code>high</code>.</p>
+</div>
+<div class="entry" id="Grid.absEach"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.absEach() : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.absEach">#</a>
+<p>Each cell made positive.</p>
+</div>
+<div class="entry" id="Grid.sum"><code class="sig">fun Grid&lt;int&gt;.sum() : int</code><a class="anchor" href="#Grid.sum">#</a>
+<p>The total of every cell: an int for ints, a float otherwise.</p>
+</div>
+<div class="entry" id="Grid.sum-2"><code class="sig">fun Grid&lt;float&gt;.sum() : float</code><a class="anchor" href="#Grid.sum-2">#</a>
+<p>The total of every cell, as a float.</p>
+</div>
+<div class="entry" id="Grid.sum-3"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.sum() : Number</code><a class="anchor" href="#Grid.sum-3">#</a>
+<p>The total of every cell.</p>
+</div>
+<div class="entry" id="Grid.average"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.average() : float</code><a class="anchor" href="#Grid.average">#</a>
+<p>The mean of the cells; NaN for an empty grid.</p>
+</div>
+<div class="entry" id="Grid.min"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.min() : T</code><a class="anchor" href="#Grid.min">#</a>
+<p>The least cell; a NoSuchElementException for an empty grid.</p>
+</div>
+<div class="entry" id="Grid.max"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.max() : T</code><a class="anchor" href="#Grid.max">#</a>
+<p>The greatest cell; a NoSuchElementException for an empty grid.</p>
+</div>
+<div class="entry" id="Grid.rowSums"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.rowSums() : List&lt;Number&gt;</code><a class="anchor" href="#Grid.rowSums">#</a>
+<p>Each row's total, top to bottom.</p>
+</div>
+<div class="entry" id="Grid.columnSums"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.columnSums() : List&lt;Number&gt;</code><a class="anchor" href="#Grid.columnSums">#</a>
+<p>Each column's total, left to right.</p>
+</div>
+<div class="entry" id="Grid.fill"><code class="sig">fun &lt;T&gt; Grid&lt;T&gt;.fill(value : T)</code><a class="anchor" href="#Grid.fill">#</a>
+<p>Every cell set to <code>value</code>.</p>
+</div>
+<div class="entry" id="Grid.transposed"><code class="sig">fun &lt;T&gt; Grid&lt;T&gt;.transposed() : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.transposed">#</a>
+<p>The grid turned on its diagonal: height by width, column x of row y moved to column y of row x.</p>
+</div>
+<div class="entry" id="Grid.convolve"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.convolve(kernel : Grid&lt;float&gt;, into : Grid&lt;float&gt;? = null) : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.convolve">#</a>
+<p>Each cell the sum of its neighbours weighted by <code>kernel</code> (centred on it, its middle the cell itself), the edge cells repeated past the edge: blurs, sharpening, edges, a terrain smoothed.</p>
+</div>
+<div class="entry" id="Grid.scaled"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.scaled">#</a>
+<p>The grid resampled to <code>width</code> by <code>height</code>: each cell the average of the part it covers each way it shrinks, read between cells by <code>interpolation</code> each way it grows; ints rounded.</p>
+</div>
+<div class="entry" id="Reduce"><code class="sig">enum Reduce</code><a class="anchor" href="#Reduce">#</a>
+<p>How a cell's neighbourhood is reduced, by window(): its least, its greatest, its middle value, its mean, its total. Erode is min, dilate max, denoising median, a box blur mean.</p>
+</div>
+<div class="entry" id="WindowShape"><code class="sig">enum WindowShape</code><a class="anchor" href="#WindowShape">#</a>
+<p>The shape of a neighbourhood: every cell within <code>radius</code> across and down (square), or within <code>radius</code> of the middle (disc).</p>
+</div>
+<div class="entry" id="Grid.window"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.window(radius : int, reduce : Reduce, shape : WindowShape = WindowShape.square, into : Grid&lt;T&gt;? = null) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.window">#</a>
+<p>Each cell its neighbourhood within <code>radius</code> reduced (cells outside the grid left out): erode (Reduce.min), dilate (max), denoise (median), a box blur (mean), local totals (sum). Over a square the cost of a cell does not grow with the radius; over a disc it grows with it once.</p>
+</div>
+<div class="entry" id="Grid.sample"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.sample(xs : Grid&lt;float&gt;, ys : Grid&lt;float&gt;, interpolation : Interpolation = Interpolation.bilinear, outside : Number? = null) : Grid&lt;T&gt;</code><a class="anchor" href="#Grid.sample">#</a>
+<p>A grid the size of <code>xs</code>, each cell read from the place (xs[x, y], ys[x, y]) of this one (whole numbers the middles of its cells), between cells by <code>interpolation</code>: rotation, any affine or perspective transform, lens correction, warps. Outside this grid, <code>outside</code>, or the nearest edge where it is null.</p>
+</div>
+<div class="entry" id="Grid.addAt"><code class="sig">fun Grid&lt;int&gt;.addAt(xs : List&lt;int&gt;, ys : List&lt;int&gt;, values : List&lt;int&gt; | int)</code><a class="anchor" href="#Grid.addAt">#</a>
+<p>Each of <code>values</code> added at its cell (xs[i], ys[i]), a cell given more than once adding each time: points splatted into a grid, a heat map.</p>
+</div>
+<div class="entry" id="Grid.addAt-2"><code class="sig">fun Grid&lt;float&gt;.addAt(xs : List&lt;int&gt;, ys : List&lt;int&gt;, values : List&lt;Number&gt; | Number)</code><a class="anchor" href="#Grid.addAt-2">#</a>
+<p>The same for a grid of floats.</p>
+</div>
+<div class="entry" id="Grid.histogram"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List&lt;int&gt;</code><a class="anchor" href="#Grid.histogram">#</a>
+<p>How many cells fall in each of <code>bins</code> equal parts of <code>from</code> to <code>to</code> (the least and the most cell when they are null).</p>
+</div>
+<div class="entry" id="Grid.regions"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.regions(tolerance : Number = 0, diagonal : bool = false) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.regions">#</a>
+<p>Every connected area of cells numbered from 0, in the order their first cells come row by row: two neighbours (across and down, and corner to corner with <code>diagonal</code>) in one area where they differ by no more than <code>tolerance</code>. The magic wand, a selection's islands, counting shapes.</p>
+</div>
+<div class="entry" id="Grid.floodRegion"><code class="sig">fun &lt;T : Number&gt; Grid&lt;T&gt;.floodRegion(x : int, y : int, tolerance : Number = 0, diagonal : bool = false) : Mask</code><a class="anchor" href="#Grid.floodRegion">#</a>
+<p>The cells joined to (x, y) through cells that differ from it by no more than <code>tolerance</code>.</p>
+</div>
+<div class="entry" id="Grid.distances"><code class="sig">fun Grid&lt;bool&gt;.distances() : Grid&lt;float&gt;</code><a class="anchor" href="#Grid.distances">#</a>
+<p>Of a grid of bools: each cell's distance to the nearest true cell, exact (across, down and between), infinity when none is true: a feathered selection, a glow, an outline round a shape.</p>
+</div>
+<div class="entry" id="Grid.countDifferent"><code class="sig">fun &lt;T&gt; Grid&lt;T&gt;.countDifferent(other : Grid&lt;T&gt;) : int</code><a class="anchor" href="#Grid.countDifferent">#</a>
+<p>Of any grid: how many cells differ from those of another of the same size: for tests, and for undo.</p>
+</div>
+<h4>- Grids of colours -</h4>
+<div class="entry" id="Grid.mapChannels"><code class="sig">fun Grid&lt;Color&gt;.mapChannels(red : List&lt;int&gt;? = null, green : List&lt;int&gt;? = null, blue : List&lt;int&gt;? = null, alpha : List&lt;int&gt;? = null, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.mapChannels">#</a>
+<p>Each part of each colour through a table of 256 values (0 to 255; a part kept as it is where its table is null): brightness, contrast, gamma, levels, inverting, together in one pass.</p>
+</div>
+<div class="entry" id="Grid.convolve-2"><code class="sig">fun Grid&lt;Color&gt;.convolve(kernel : Grid&lt;float&gt;, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.convolve-2">#</a>
+<p>Each colour the sum of its neighbours' weighted by <code>kernel</code>, each part on its own, multiplied by alpha on the way so that a see-through edge does not darken; the edge cells repeated past the edge.</p>
+</div>
+<div class="entry" id="Grid.scaled-2"><code class="sig">fun Grid&lt;Color&gt;.scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.scaled-2">#</a>
+<p>The picture resampled to <code>width</code> by <code>height</code>: area-averaged each way it shrinks, read between pixels by <code>interpolation</code> each way it grows; colours weighed by alpha.</p>
+</div>
+<div class="entry" id="Grid.window-2"><code class="sig">fun Grid&lt;Color&gt;.window(radius : int, reduce : Reduce, shape : WindowShape = WindowShape.square, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.window-2">#</a>
+<p>Each pixel its neighbourhood within <code>radius</code> reduced, each part of the colour on its own (a mean weighed by alpha, as a blur).</p>
+</div>
+<div class="entry" id="Grid.sample-2"><code class="sig">fun Grid&lt;Color&gt;.sample(xs : Grid&lt;float&gt;, ys : Grid&lt;float&gt;, interpolation : Interpolation = Interpolation.bilinear, outside : Color? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.sample-2">#</a>
+<p>A picture the size of <code>xs</code>, each pixel read from the place (xs[x, y], ys[x, y]) of this one, between pixels by <code>interpolation</code>, weighed by alpha; outside it <code>outside</code>, or the nearest edge where it is null.</p>
+</div>
+<div class="entry" id="Grid.histogram-2"><code class="sig">fun Grid&lt;Color&gt;.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List&lt;List&lt;int&gt;&gt;</code><a class="anchor" href="#Grid.histogram-2">#</a>
+<p>How the pixels' parts fall in each of <code>bins</code> equal parts of <code>from</code> to <code>to</code> (0 to 256, a bin a level, when they are null): four lists, red, green, blue, alpha. Auto-levels, equalising, counting colours.</p>
+</div>
+<div class="entry" id="Grid.regions-2"><code class="sig">fun Grid&lt;Color&gt;.regions(tolerance : int = 0, diagonal : bool = false) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.regions-2">#</a>
+<p>Every connected area of pixels numbered from 0, two neighbours in one area where no part of their colours (alpha too) differs by more than <code>tolerance</code>.</p>
+</div>
+<div class="entry" id="Grid.floodRegion-2"><code class="sig">fun Grid&lt;Color&gt;.floodRegion(x : int, y : int, tolerance : int = 0, diagonal : bool = false) : Mask</code><a class="anchor" href="#Grid.floodRegion-2">#</a>
+<p>The pixels joined to (x, y) through pixels whose colour differs from its own by no more than <code>tolerance</code> in any part: the magic wand, a flood fill's area.</p>
+</div>
+<div class="entry" id="Grid.fill-2"><code class="sig">fun Grid&lt;Color&gt;.fill(color : Color, where : Mask)</code><a class="anchor" href="#Grid.fill-2">#</a>
+<p>The pixels of <code>where</code> (every pixel when it is null) set to <code>color</code>.</p>
+</div>
+<div class="entry" id="BlendMode"><code class="sig">enum BlendMode</code><a class="anchor" href="#BlendMode">#</a>
+<p>The ways a picture is laid over another, by their names in CSS's mix-blend-mode and the W3C's compositing: normal; multiply, screen and overlay; darken and lighten; colorDodge and colorBurn; hardLight and softLight; difference and exclusion; and hue, saturation, color and luminosity, which take one of those from the picture laid over and the rest from beneath.</p>
+</div>
+<div class="entry" id="Grid.blend"><code class="sig">fun Grid&lt;Color&gt;.blend(over : Grid&lt;Color&gt;, x : int = 0, y : int = 0, opacity : Number = 1.0, mode : BlendMode = BlendMode.normal)</code><a class="anchor" href="#Grid.blend">#</a>
+<p><code>over</code> laid over this picture with its top left corner at (x, y), by its alpha times <code>opacity</code>, in a blend mode: layers, markup, pasting. What falls outside this picture is left out.</p>
+</div>
+<div class="entry" id="ColorLookup"><code class="sig">class ColorLookup</code><a class="anchor" href="#ColorLookup">#</a>
+<p>Any colour-to-colour function as a table of 33 by 33 by 33 colours, worked out once (the function called 35,937 times), for pixels.mapColors to put a picture through in one pass: saturation, hue, colour balance, sepia, grading, all at once, as photo editors do it. Between the table's colours the answer is mixed, so a function that bends sharply between them is off by about a level in 255; exact work on each part on its own is mapChannels'. A colour's own alpha is kept, times the alpha the function gives.</p>
+<pre>val sepia = ColorLookup { c -&gt; Color(Math.min(255, (c.red * 0.39 + c.green * 0.77 + c.blue * 0.19).toInt()), ...) }
+</pre>
+</div>
+<div class="entry" id="Grid.mapColors"><code class="sig">fun Grid&lt;Color&gt;.mapColors(lookup : ColorLookup, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.mapColors">#</a>
+<p>Each colour put through a ColorLookup's table.</p>
+</div>
+<h4>- Masks -</h4>
+<div class="entry" id="Mask"><code class="sig">class Mask(val pixels : Grid&lt;bool&gt;)</code><a class="anchor" href="#Mask">#</a>
+<p>Which pixels of a picture something applies to (question 5): what floodRegion gives, and what grid.fill(color, where = mask) fills. A grid of bools, true for each pixel in it.</p>
+</div>
+<div class="entry member" id="Mask.width"><code class="sig">val width : int</code><a class="anchor" href="#Mask.width">#</a>
+<p>Its width, in pixels.</p>
+</div>
+<div class="entry member" id="Mask.height"><code class="sig">val height : int</code><a class="anchor" href="#Mask.height">#</a>
+<p>Its height, in pixels.</p>
+</div>
+<div class="entry member" id="Mask.[]"><code class="sig">op [](x : int, y : int) : bool</code><a class="anchor" href="#Mask.[]">#</a>
+<p>Whether the pixel (<code>x</code>, <code>y</code>) is in it; an IndexOutOfBoundsException outside it.</p>
+</div>
+<div class="entry member" id="Mask.count"><code class="sig">val count : int</code><a class="anchor" href="#Mask.count">#</a>
+<p>How many pixels are in it.</p>
+</div>
+<div class="entry member" id="Mask.bounds"><code class="sig">val bounds : Rect?</code><a class="anchor" href="#Mask.bounds">#</a>
+<p>The smallest rectangle holding every pixel in it; null when it holds none.</p>
+</div>
+<div class="entry member" id="Mask.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Mask.toString">#</a>
+<p>The mask as text: &quot;Mask(30 x 20, 140 pixels)&quot;.</p>
 </div>
 </section>
 <section class="file" id="file-paint-jade">
