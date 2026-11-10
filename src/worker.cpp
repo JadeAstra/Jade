@@ -639,7 +639,7 @@ void workerMain(std::shared_ptr<WorkerLink> link, std::shared_ptr<const std::str
 
     std::string failure;
     try {
-        readProgram(*program, *vm, *image);
+        readProgram(*program, *vm, *image, true);
         vm->load(*program);
         {
             std::lock_guard<std::mutex> hold(link->mutex);

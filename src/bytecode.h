@@ -807,6 +807,10 @@ struct FunctionProto {
     // The set of a name's forms, made by MakeForms: it has no code of its own; calling it
     // calls the form the arguments fit (VM::chooseForm).
     bool chooser = false;
+    // Read from a program jade itself made (its cache, a worker's image) and not checked yet:
+    // checked by the verifier at its first call, before its code runs, its maxStack and caches
+    // found then (translateNow; VM's Translate makes room for its stack).
+    bool unverified = false;
     // Of an extension function, the number of its library (extensionLibrary), from the key at
     // the end of its signature; 0 for any other function.
     uint16_t library = 0;
@@ -927,7 +931,9 @@ private:
 // all paths, and records the function's stack requirement. The VM relies on both.
 // Throws std::runtime_error if the bytecode is malformed. Its run code is made at its first
 // call (Translate) unless `now`: a program's start makes only what it runs.
-void verifyFunction(FunctionProto& f, const Program& program, bool now = false);
+// `trusted`: the code is jade's own making (a kept program, a worker's image), and a function
+// translated at its first call is checked by the verifier then, rather than now.
+void verifyFunction(FunctionProto& f, const Program& program, bool now = false, bool trusted = false);
 // The run code of a function verified but not yet translated, made now (Op::Translate).
 void translateNow(FunctionProto& f);
 // A function's run code until its first call: the one instruction Translate (registers.cpp).
@@ -955,7 +961,9 @@ const char* opName(Op op);
 // Bytecode files. readProgram verifies everything it loads and throws std::runtime_error
 // on a malformed file.
 void writeProgram(const Program& program, std::ostream& out);
-void readProgram(Program& program, VM& vm, const std::string& data);
+// `trusted` as for verifyFunction: a program kept in the cache, or a worker's image, both made by
+// this jade; a bytecode file or a built program's own is checked whole as it is read.
+void readProgram(Program& program, VM& vm, const std::string& data, bool trusted = false);
 bool looksLikeBytecode(const std::string& data);
 
 // ---- A part of a program kept by itself (D145) ----

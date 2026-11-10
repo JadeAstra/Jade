@@ -350,7 +350,7 @@ static bool timed(double& total, Work work) {
 static bool loadKept(VM& vm, const std::string& bytecode, std::unique_ptr<Program>& owner) {
     auto kept = std::make_unique<Program>();
     try {
-        readProgram(*kept, vm, bytecode);
+        readProgram(*kept, vm, bytecode, true);
     } catch (const std::exception&) {
         return false;
     }

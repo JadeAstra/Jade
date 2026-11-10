@@ -1184,7 +1184,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
     return endDepth;
 }
 
-void verifyFunction(FunctionProto& f, const Program& program, bool now) {
+void verifyFunction(FunctionProto& f, const Program& program, bool now, bool trusted) {
     for (const FunctionProto::Rights& r : f.rights)
         if (r.start > r.end || r.end > f.code.size()) throw std::runtime_error("invalid bytecode: rights of copied code out of range");
     if (f.reflection != nullptr) {
@@ -1200,8 +1200,13 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now) {
     }
     f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
     std::vector<int> depths;
-    analyzeStack(f, program, false, &depths);
-    if (now || f.chooser || f.code.empty()) {
+    // Code of jade's own making translated at its first call is checked then (translateNow):
+    // a program's start reads many functions it never calls (a quarter of a kept program's
+    // start went to checking them, 2026-11-09).
+    const bool later = !now && !f.chooser && !f.code.empty();
+    f.unverified = trusted && later;
+    if (!f.unverified) analyzeStack(f, program, false, &depths);
+    if (!later) {
         f.untranslated = nullptr;
         translate(f, depths);
     } else {
@@ -1238,7 +1243,13 @@ void translateNow(FunctionProto& f) {
     // only in a loop.
     const bool once = f.name == "<script>" && f.source == "<std>";
     std::vector<int> depths;
-    if (!once) analyzeStack(f, *f.untranslated, false, &depths);  // as verified: only the depths are wanted again
+    // As verified, only the depths are wanted again; one read unverified is verified now.
+    if (!once || f.unverified) {
+        std::vector<int> found;
+        analyzeStack(f, *f.untranslated, false, &found);
+        if (!once) depths = std::move(found);
+        f.unverified = false;
+    }
     f.addressed.done.store(false, std::memory_order_relaxed);
     translate(f, depths);
     f.untranslated = nullptr;
@@ -1935,7 +1946,7 @@ struct Reader {
     }
 };
 
-void verifyTree(FunctionProto& f, const Program& program, bool now = false);
+void verifyTree(FunctionProto& f, const Program& program, bool now = false, bool trusted = false);
 
 }  // namespace
 
@@ -1954,10 +1965,10 @@ void loadDeferred(FunctionProto& f) {
 
 namespace {
 
-void verifyTree(FunctionProto& f, const Program& program, bool now) {
+void verifyTree(FunctionProto& f, const Program& program, bool now, bool trusted) {
     if (f.deferred != nullptr) return;  // verified when it is read
-    verifyFunction(f, program, now);
-    for (FunctionProto* nested : f.protos) verifyTree(*nested, program, now);
+    verifyFunction(f, program, now, trusted);
+    for (FunctionProto* nested : f.protos) verifyTree(*nested, program, now, trusted);
 }
 
 void writeU16(std::vector<uint8_t>& code, size_t at, int v) {
@@ -2068,7 +2079,7 @@ bool looksLikeBytecode(const std::string& data) {
     return data.size() >= sizeof kMagic && std::memcmp(data.data(), kMagic, sizeof kMagic) == 0;
 }
 
-void readProgram(Program& program, VM& vm, const std::string& data) {
+void readProgram(Program& program, VM& vm, const std::string& data, bool trusted) {
     if (!looksLikeBytecode(data)) throw std::runtime_error("not an Jade bytecode file");
     Reader r{data, program, vm, sizeof kMagic};
     r.defer = true;
@@ -2093,7 +2104,7 @@ void readProgram(Program& program, VM& vm, const std::string& data) {
     for (FunctionProto* module : program.modules) {
         if (module->arity != 0 || !module->upvalues.empty())
             throw std::runtime_error("invalid bytecode: a module cannot take arguments or capture variables");
-        verifyTree(*module, program);
+        verifyTree(*module, program, false, trusted);
     }
 }
 

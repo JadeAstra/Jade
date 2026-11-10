@@ -3073,7 +3073,10 @@ CASE(Translate) {
     // as the program was read, and run from its start, where this instruction stood.
     FunctionProto* const proto = const_cast<FunctionProto*>(frame->closure->proto);
     translateNow(*proto);
-    frame->ip = proto->run.data();
+    frame->ip = proto->run.data();  // the code this instruction stood in is gone
+    // One read unverified had its stack's size found just now: room made for it, as a call does.
+    if (stackEnd_ - frame->base < proto->maxStack && !growContext(frame->base + proto->maxStack, frameCount_))
+        throw runtimeError(Thrown::StackOverflowError, "stack overflow");
     LOAD_FRAME();
     NEXT();
 }
