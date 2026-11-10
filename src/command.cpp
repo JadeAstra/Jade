@@ -447,6 +447,10 @@ static void showTimes(const char* what) {
                      "(units put back %d, compiled %d; the standard library %s)\n",
                      what, ready, compileTimes.parse, compileTimes.check, compileTimes.compile, compileTimes.unitsReused,
                      compileTimes.unitsCompiled, compileTimes.preludeAttached ? "attached" : "compiled");
+    if (compileTimes.cacheRead <= 0)
+        std::fprintf(stderr, "jade: and besides: the kept program looked at %.1f, the kept units read %.1f, loading %.1f; "
+                     "of compiling, putting back %.1f\n",
+                     compileTimes.cacheCheck, compileTimes.unitsRead, compileTimes.load, compileTimes.putBack);
 }
 
 int runFile(const std::string& path, std::vector<std::string> scriptArgs) {
@@ -459,7 +463,11 @@ int runFile(const std::string& path, std::vector<std::string> scriptArgs) {
     std::unique_ptr<Program> programOwner;
     if (int failed = loadProgram(path, vm, session, program, sessionOwner, programOwner)) return failed;
 
-    vm.load(*program);
+    {
+        const auto loading = std::chrono::steady_clock::now();
+        vm.load(*program);
+        compileTimes.load = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loading).count();
+    }
     showTimes("ready to run");
     // JADE_TIMES=compile stops here: the budgets are timed on programs that are not run.
     if (const char* times = std::getenv("JADE_TIMES"); times != nullptr && std::strcmp(times, "compile") == 0) {

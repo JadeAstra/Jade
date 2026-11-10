@@ -7581,11 +7581,26 @@ std::string formKey(const FunctionDecl& fn) {
 // What the system says of a path, asked once per compile: the answers do not change while a
 // program compiles, and on Windows each asking opens the file. The shell forgets them before
 // each input, since files may change between them.
+//
+// A folder asked about more than once is listed, once, and what is in it answered from the
+// listing: whether a name is a file, a folder or nothing, and, where the folder's canonical path
+// is known, a name's canonical path as the folder's and the name as the listing has it. A program
+// of 276 folders, each imported by name, asked the system some 1,250 times, about 45 ms of its
+// start on Windows (2026-11-09). A link, or a name the listing cannot speak for, is asked of the
+// system as before.
 namespace {
+struct Listing {
+    bool read = false;  // false where the folder could not be listed
+    // Each name in it, folded where names are told apart without case (Windows): the name as it
+    // is, and what it is: 1 a file, 2 a folder, 0 a link or anything else, which is asked about.
+    std::unordered_map<fs::path::string_type, std::pair<fs::path::string_type, int>> entries;
+};
 struct PathFacts {
     std::unordered_map<fs::path::string_type, std::pair<fs::path, std::error_code>> canonical;
     std::unordered_map<fs::path::string_type, int> kind;  // 0 nothing there, 1 a file, 2 a folder
     std::unordered_map<std::string, std::vector<fs::path>> folders;
+    std::unordered_map<fs::path::string_type, Listing> listings;
+    std::unordered_map<fs::path::string_type, int> asked;  // how often a folder was asked about
 };
 // Made the first time a thread needs it, not as each thread starts (M6.5 part 5).
 PathFacts& pathFacts() {
@@ -7596,11 +7611,86 @@ PathFacts& pathFacts() {
 
 static void forgetPaths() { pathFacts() = PathFacts{}; }
 
+// A name as a listing keeps it: in lower case on Windows, as is elsewhere.
+static fs::path::string_type foldedName(const fs::path::string_type& name) {
+#ifdef _WIN32
+    fs::path::string_type folded = name;
+    for (auto& c : folded)
+        if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c - L'A' + L'a');
+    return folded;
+#else
+    return name;
+#endif
+}
+
+// Whether a name is ASCII alone, which a listing can say is not there: past ASCII, Windows' own
+// folding of case could differ from foldedName's.
+static bool plainName(const fs::path::string_type& name) {
+    for (auto c : name)
+        if (static_cast<unsigned long>(c) >= 0x80) return false;
+    return true;
+}
+
+// The listing of a folder, made the first time it is asked for; null where it cannot be listed.
+static const Listing* listingOf(const fs::path& folder) {
+    PathFacts& facts = pathFacts();
+    auto listed = facts.listings.find(folder.native());
+    if (listed == facts.listings.end()) {
+        Listing listing;
+        std::error_code ec;
+        fs::directory_iterator it(folder, ec);
+        listing.read = !ec;
+        for (; listing.read && it != fs::directory_iterator(); it.increment(ec)) {
+            if (ec) {
+                listing.read = false;
+                break;
+            }
+            std::error_code what;
+            const bool link = it->is_symlink(what);
+            const int kind = what || link ? 0 : it->is_directory(what) ? 2 : it->is_regular_file(what) ? 1 : 0;
+            const fs::path::string_type name = it->path().filename().native();
+            listing.entries.emplace(foldedName(name), std::make_pair(name, what ? 0 : kind));
+        }
+        if (!listing.read) listing.entries.clear();
+        listed = facts.listings.emplace(folder.native(), std::move(listing)).first;
+    }
+    return listed->second.read ? &listed->second : nullptr;
+}
+
+// Whether a path is written plainly: whole, and without . or .. in it.
+static bool plainPath(const fs::path& path) {
+    return path.is_absolute() && path.has_filename() && path.native() == path.lexically_normal().native();
+}
+
+// The listing of the folder `path` is in, where it may speak for `path`: the folder listed
+// already, or asked about before (a folder asked about once is not listed, a big one say), and
+// `path` written plainly (else null).
+static const Listing* listingFor(const fs::path& path) {
+    if (!plainPath(path)) return nullptr;
+    const fs::path folder = path.parent_path();
+    PathFacts& facts = pathFacts();
+    if (facts.listings.count(folder.native()) == 0 && ++facts.asked[folder.native()] < 2) return nullptr;
+    return listingOf(folder);
+}
+
 static fs::path canonicalPath(const fs::path& path, std::error_code& ec) {
     auto found = pathFacts().canonical.find(path.native());
     if (found == pathFacts().canonical.end()) {
         std::error_code asked;
-        fs::path answer = fs::weakly_canonical(path, asked);
+        fs::path answer;
+        bool known = false;
+        // In a folder whose canonical path is known, a file or folder that is no link: that path
+        // and its name as the listing has it, which is what the system would say.
+        if (const Listing* listing = listingFor(path)) {
+            auto entry = listing->entries.find(foldedName(path.filename().native()));
+            auto folder = pathFacts().canonical.find(path.parent_path().native());
+            if (entry != listing->entries.end() && entry->second.second != 0 && folder != pathFacts().canonical.end() &&
+                !folder->second.second && !folder->second.first.empty()) {
+                answer = folder->second.first / entry->second.first;
+                known = true;
+            }
+        }
+        if (!known) answer = fs::weakly_canonical(path, asked);
         found = pathFacts().canonical.emplace(path.native(), std::make_pair(std::move(answer), asked)).first;
     }
     ec = found->second.second;
@@ -7610,9 +7700,17 @@ static fs::path canonicalPath(const fs::path& path, std::error_code& ec) {
 static int pathKind(const fs::path& path) {
     auto found = pathFacts().kind.find(path.native());
     if (found != pathFacts().kind.end()) return found->second;
-    std::error_code ec;
-    const fs::file_status status = fs::status(path, ec);
-    const int kind = ec ? 0 : fs::is_regular_file(status) ? 1 : fs::is_directory(status) ? 2 : 0;
+    int kind = -1;
+    if (const Listing* listing = listingFor(path)) {
+        auto entry = listing->entries.find(foldedName(path.filename().native()));
+        if (entry != listing->entries.end() && entry->second.second != 0) kind = entry->second.second;
+        else if (entry == listing->entries.end() && plainName(path.filename().native())) kind = 0;
+    }
+    if (kind < 0) {
+        std::error_code ec;
+        const fs::file_status status = fs::status(path, ec);
+        kind = ec ? 0 : fs::is_regular_file(status) ? 1 : fs::is_directory(status) ? 2 : 0;
+    }
     pathFacts().kind.emplace(path.native(), kind);
     return kind;
 }
@@ -7630,8 +7728,18 @@ static std::vector<fs::path> folderFiles(const std::string& folder) {
     if (known != pathFacts().folders.end()) return known->second;
     std::error_code ec;
     std::vector<fs::path> paths;
-    for (const fs::directory_entry& entry : fs::directory_iterator(fs::path(folder), ec))
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".jade") paths.push_back(entry.path());
+    const fs::path where(folder);
+    // From its listing, kept for what is asked of its files after; a link asked about.
+    const Listing* listing = plainPath(where) ? listingOf(where) : nullptr;
+    if (listing != nullptr) {
+        for (const auto& [folded, entry] : listing->entries) {
+            const fs::path file = where / entry.first;
+            if (file.extension() == ".jade" && (entry.second == 1 || (entry.second == 0 && fs::is_regular_file(file, ec)))) paths.push_back(file);
+        }
+    } else {
+        for (const fs::directory_entry& entry : fs::directory_iterator(where, ec))
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".jade") paths.push_back(entry.path());
+    }
     std::sort(paths.begin(), paths.end());
     pathFacts().folders.emplace(folder, paths);
     return paths;
@@ -7961,7 +8069,11 @@ int CompilerSession::reuseUnit(const std::string& unit, const std::vector<std::s
     if (plannedUnit == planned_.end()) return 0;
     KeptUnit kept = std::move(plannedUnit->second);
     planned_.erase(plannedUnit);
-    const int reused = putBack(kept.image, files, modules, statements, names, directory, ns);
+    int reused;
+    {
+        PartTimer timed(compileTimes.putBack);
+        reused = putBack(kept.image, files, modules, statements, names, directory, ns);
+    }
     if (reused == 1) compileTimes.unitsReused++;
     return reused;
 }
@@ -8039,6 +8151,7 @@ int CompilerSession::putBack(const std::string& data, const std::vector<std::str
 // unit; any other file is one by itself.
 void CompilerSession::planReuse() {
     if (!keepingUnits_) return;
+    PartTimer timed(compileTimes.unitsRead);
     std::set<std::string> inFolders;
     for (const auto& [folder, files] : foldersGathered_) {
         inFolders.insert(files.begin(), files.end());

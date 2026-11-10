@@ -81,6 +81,9 @@ struct CompileTimes {
     double cacheCheck = 0, cacheRead = 0;  // a kept program: its files looked at, and it read in
     int unitsReused = 0, unitsCompiled = 0;  // units of the program put back from the cache, and compiled
     bool preludeAttached = false;            // the standard library came compiled with jade.exe
+    // Where a program is compiled with units put back: the kept units read (planReuse), their code
+    // put back (part of compiling), and the program loaded into the VM after.
+    double unitsRead = 0, putBack = 0, load = 0;
 };
 extern CompileTimes compileTimes;
 

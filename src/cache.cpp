@@ -1,4 +1,5 @@
 #include "cache.h"
+#include <mutex>
 
 #include <algorithm>
 #include <atomic>
@@ -39,6 +40,23 @@ struct Writing {
 Writing& writing() {
     static Writing made;
     return made;
+}
+
+// The entries read this run, to be marked as used (their time set to now, which is how trim
+// tells the ones used longest ago): by the writer, once the program is ready, rather than as each
+// is read. On Windows each mark opens its file to write, and for the 276 units of a program put
+// back after a one-line change that was about 100 ms of its start (2026-11-09).
+struct Used {
+    std::mutex lock;
+    std::vector<fs::path> entries;
+};
+Used& used() {
+    static Used made;
+    return made;
+}
+void markUsed(const fs::path& entry) {
+    std::lock_guard<std::mutex> hold(used().lock);
+    used().entries.push_back(entry);
 }
 
 fs::path cacheRoot() {
@@ -192,6 +210,17 @@ void write(fs::path entry, std::string text) {
 
 // Sets the writer going on what is waiting, if anything is.
 void startKeeping() {
+    {
+        std::lock_guard<std::mutex> hold(used().lock);
+        if (!used().entries.empty()) {
+            writing().jobs.push_back([entries = std::move(used().entries)] {
+                std::error_code ec;
+                const auto now = fs::file_time_type::clock::now();
+                for (const fs::path& e : entries) fs::last_write_time(e, now, ec);
+            });
+            used().entries.clear();
+        }
+    }
     if (writing().jobs.empty()) return;
     if (writing().writer.joinable()) writing().writer.join();
     writing().writer = std::thread([todo = std::move(writing().jobs)] {
@@ -391,8 +420,7 @@ bool cachedProgram(const std::string& path, std::string& bytecode) {
 
     bytecode = text.substr(at, n);
     // Used now: the last to go when the cache is trimmed.
-    std::error_code ec;
-    fs::last_write_time(entry, fs::file_time_type::clock::now(), ec);
+    markUsed(entry);
     return true;
 }
 
@@ -450,8 +478,7 @@ bool keptUnit(const std::string& unit, KeptUnit& out) {
             const auto at = static_cast<size_t>(in.tellg());
             if (at == static_cast<size_t>(-1) || at + n != text.size()) return false;
             out.image = text.substr(at, n);
-            std::error_code ec;
-            fs::last_write_time(entry, fs::file_time_type::clock::now(), ec);
+            markUsed(entry);
             return true;
         } else {
             return false;
