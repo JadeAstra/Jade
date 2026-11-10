@@ -12,7 +12,8 @@
 //
 // Besides the tests/*.jade files: tests/check (`jade check`), tests/testing (`jade test`),
 // tests/shell (the shell), the cache's scenarios, the standard library and the examples checked
-// whole, the standard library described (`jade doc --missing`), and `jade build --icon`.
+// whole, the standard library described (`jade doc --missing`), `jade build --icon`, and the
+// start-up budgets of D145, timed last, alone.
 
 // The ways a test file is run: from source, again from the program the first run kept, again
 // from the units it kept, compiled to a bytecode file, and built into a program of its own.
@@ -22,7 +23,7 @@ enum Way { script, cached, units, compiled, program }
 enum Status { waiting, running, passed, failed, skipped }
 
 // What a check is.
-enum Kind { file, checker, testing, shell, cache, whole, described, icon }
+enum Kind { file, checker, testing, shell, cache, whole, described, icon, budgets }
 
 // The runtime's stress settings (D163), each run with its variable set: a list's value items read
 // as copies, a change of thread at every safe point, each C++ function's result checked against
@@ -70,8 +71,13 @@ class Options {
   fun limit() : int {
     if (timeLimit > 0) { return timeLimit }
     if (setting != Setting.gcStress) { return 120 }
+    return sanitized() ? 2400 : 600
+  }
+
+  // Whether the jade tested is the sanitizer's build.
+  fun sanitized() : bool {
     val folder = jade.absolute.parent
-    return folder != null and FilePath(folder, "clang_rt.asan_dynamic-x86_64.dll").exists() ? 2400 : 600
+    return folder != null and FilePath(folder, "clang_rt.asan_dynamic-x86_64.dll").exists()
   }
 }
 
@@ -84,6 +90,7 @@ class Item(val kind : Kind, val name : string, val path : FilePath?) {
   var seconds = 0.0
   var started = 0.0                 // clock() when it started, while it runs
   var note = ""                     // why it was passed over, or that it passed only alone
+  var measured = ""                 // what it timed, for the budgets
   internal var process : Process? = null
 
   // The labels that failed.
@@ -95,6 +102,7 @@ class Item(val kind : Kind, val name : string, val path : FilePath?) {
     val parts : open List<string> = []
     for (label in failed) { parts.add("[$label]\n    ${results[label]}") }
     if (note != "") { parts.add(note) }
+    if (measured != "") { parts.add(measured) }
     return parts.join("\n\n")
   }
 }
@@ -138,6 +146,8 @@ class Suite(val options : Options) {
     for (f in jadeFiles(FilePath(t, "../examples"))) { found.add(Item(Kind.whole, "examples/${f.name}", f)) }
     if (FilePath(t, "../src/std").isDirectory()) { found.add(Item(Kind.described, "the standard library described", FilePath(t, "../src/std"))) }
     if (onWindows) { found.add(Item(Kind.icon, "jade build --icon", null)) }
+    // Timed only where the times mean something: no stress setting, not the sanitizer's build.
+    if (options.setting == Setting.plain and !options.sanitized()) { found.add(Item(Kind.budgets, "start-up budgets", null)) }
     return found
   }
 
@@ -162,11 +172,14 @@ class Suite(val options : Options) {
       item.results.clear()
       item.running.clear()
       item.note = ""
+      item.measured = ""
       item.seconds = 0.0
       onChange(item)
     }
+    // The budgets after everything else, alone: they are times.
+    val timed = chosen.filter { it.kind == Kind.budgets }
     val pool = ThreadPool(Math.max(1, options.parallel), daemon = true)
-    val jobs = chosen.map { item -> pool.submit { runItem(item, FilePath(dir, safeName(item.name)), onChange) } }
+    val jobs = chosen.filter { it.kind != Kind.budgets }.map { item -> pool.submit { runItem(item, FilePath(dir, safeName(item.name)), onChange) } }
     for (job in jobs) { job.get() }
     pool.close()
     if (options.parallel > 1) {
@@ -180,6 +193,7 @@ class Suite(val options : Options) {
         }
       }
     }
+    for (item in timed) { runItem(item, FilePath(dir, safeName(item.name)), onChange) }
     scratch = null
     dir.deleteRecursively()
   }
@@ -223,6 +237,7 @@ class Suite(val options : Options) {
         Kind.whole -> item.results["checked whole"] = runWhole(item, dir)
         Kind.described -> item.results["jade doc --missing"] = runDescribed(item, dir)
         Kind.icon -> item.results["program"] = runIcon(dir)
+        Kind.budgets -> runBudgets(item, dir)
       }
     } catch (e : Exception) {
       item.results["runner"] = "the runner failed: ${e.message}"
@@ -516,6 +531,143 @@ class Suite(val options : Options) {
     return ""
   }
 
+  // ---- The start-up budgets ----
+
+  // The start-up budgets of D145, timed on this machine: a first run, nothing cached, checked and
+  // compiled in under half a second; a second run with nothing changed in under 20 ms on top of
+  // jade starting; a run after a one-line change inside a function in under 100 ms. Timed on the
+  // tests, the examples, the standard library and Topaz (some 20,000 lines), each test and example
+  // in a folder of its own so that their names do not meet, imported by one main file, compiled
+  // and not run (JADE_TIMES=compile). Each is the best of seven, as jade reports it: from when the
+  // system made the process to when the program is ready to run.
+  private fun runBudgets(item : Item, dir : FilePath) throws IOException {
+    val t = options.tests
+    val program = FilePath(dir, "program")
+    program.mkdir()
+    // Every test that compiles (not those that test an error of the compiler's) and every
+    // example, each with what it imports from beside it: a folder of the tests', or another example.
+    val sources : open List<FilePath> = jadeFiles(t).filter { !it.name.startsWith("error_") and !it.readText().contains("// expect compile error") }.toOpenList()
+    val examples = jadeFiles(FilePath(t, "../examples"))
+    sources.addAll(examples.filter { !it.name.startsWith("bounce_worker") })
+    val folders = t.list().filter { it.isDirectory() and it.name !in ["check", "testing", "shell", "runner"] }
+    val partOf : open Map<string, string> = {:}    // each file's name, and its part
+    val parts : open List<string> = []
+    val linesOf : open Map<string, int> = {:}
+    for (k in 0 ..< sources.size) {
+      val part = "part${"$k".padStart(3, '0')}"
+      val folder = FilePath(program, part)
+      folder.mkdir()
+      val text = sources[k].readText()
+      sources[k].copyTo(FilePath(folder, sources[k].name))
+      partOf[sources[k].name] = part
+      for (f in folders) {
+        if (text.contains("import ${f.name}") or text.contains("\"${f.name}")) { copyTree(f, FilePath(folder, f.name)) }
+      }
+      for (e in examples) {
+        if (e != sources[k] and text.contains("import \"${e.nameWithoutExtension}\"")) { e.copyTo(FilePath(folder, e.name), overwrite = true) }
+      }
+      parts.add(part)
+      linesOf[part] = text.lines().size
+    }
+    val main = FilePath(program, "main.jade")
+    val cache = FilePath(dir, "cache")
+    // Parts that do not go together (two tests' extensions of the same name, say) left out, as
+    // the checker names them, until the rest compiles.
+    val dropped : open List<string> = []
+    for (round in 0 ..< 8) {
+      main.writeText(parts.map { "import $it" }.join("\n") + "\nprint(\"ready\")\n")
+      val checked = jade(item, ["check", main.text], dir, cache)
+      if (checked.code == 0) { break }
+      val bad : open Set<string> = setOf()
+      for (line in checked.lines + splitLines(checked.error)) {
+        val brings = Regex("^main\\.jade:\\d+:\\d+: error: import (part\\d+) brings in").find(line)
+        if (brings != null) { bad.add(brings.groupValues[1]) }
+        val inFile = Regex("^([^:\\\\/]+\\.jade):\\d+:\\d+: error").find(line)
+        if (inFile != null) {
+          val p = partOf[inFile.groupValues[1]]
+          if (p != null) { bad.add(p) }
+        }
+      }
+      if (bad.isEmpty()) { break }
+      for (p in bad) {
+        parts.remove(p)
+        dropped.add(p)
+      }
+    }
+    var lines = 0
+    for (p in parts) { lines += linesOf[p]!! }
+    for (d in [FilePath(t, "../src/std"), FilePath(t, "../lib/Topaz")]) {
+      for (f in jadeFiles(d)) { lines += f.readLines().size }
+    }
+    val leftOut = dropped.isEmpty() ? "" : " (${dropped.size} left out that do not go with the rest: " +
+                  dropped.map { p -> partOf.keys.firstOrNull { partOf[it] == p } ?: p }.join(", ") + ")"
+    val compile = {"JADE_TIMES": "compile"}
+
+    // jade starting and doing nothing, timed here; the rest as jade reports it.
+    var start = 1000000.0
+    for (r in 0 ..< 7) {
+      val from = clock()
+      jade(item, ["--version"], dir, cache)
+      start = Math.min(start, (clock() - from) * 1000.0)
+    }
+    var problem = ""
+    // The best of seven: [ms from the process made, ms of jade's own work, what jade said].
+    fun best(before : () -> unit throws IOException) : List<any> throws IOException {
+      var kept : List<any> = [1000000.0, 1000000.0, ""]
+      for (r in 0 ..< 7) {
+        before()
+        val run = jade(item, [main.text], dir, cache, extra = compile)
+        if (run.code != 0) { problem = "jade failed: ${run.error.trim()} ${run.lines.join(" ")}" }
+        val said = splitLines(run.error).filter { it.startsWith("jade:") }
+        var ms = 1000000.0
+        var work = 1000000.0
+        for (line in said) {
+          val made = Regex("ready to run ([\\d.]+) ms after the process was made").find(line)
+          if (made != null) { ms = made.groupValues[1].toFloat() }
+          val own = Regex("ready to run ([\\d.]+) ms after jade.exe started its work").find(line)
+          if (own != null) { work = own.groupValues[1].toFloat() }
+        }
+        if (ms < (kept[0] as float)) { kept = [ms, work, said.filter { !it.contains("waited") and !it.contains("process was made") }.join(" ")] }
+      }
+      return kept
+    }
+    // A first run: nothing cached.
+    val first = best { cache.deleteRecursively() }
+    // A second run with nothing changed.
+    jade(item, [main.text], dir, cache, extra = compile)
+    val second = best { }
+    // A run after a one-line change inside a function: a test's function body gains a line.
+    val changed = jadeFiles(FilePath(program, "part000"))[0]
+    val original = changed.readText()
+    var probe = 0
+    val edited = best {
+      probe += 1
+      changed.writeText(original + "\nfun budgetProbe() : int { val n = ${clock().toInt()}$probe\n return n }\n")
+    }
+    changed.writeText(original)
+    if (problem != "") {
+      item.results["budgets"] = problem
+      return
+    }
+    fun ms(v : any) : string => "${Math.round((v as float) * 10.0) / 10.0} ms"
+    item.measured = "program: ${parts.size} tests and examples, the standard library and Topaz, $lines lines$leftOut\n" +
+                    "jade starting:           ${ms(start)}\n" +
+                    "first run:               ${ms(first[0])}  (budget 500)    ${first[2]}\n" +
+                    "second run, unchanged:   ${ms(second[0])}, ${ms(second[1])} on top of jade starting (budget 20)    ${second[2]}\n" +
+                    "after a one-line change: ${ms(edited[0])}  (budget 100)    ${edited[2]}"
+    item.results["first run"] = (first[0] as float) <= 500.0 ? "" : "took ${ms(first[0])}, budget 500 ms"
+    item.results["second run"] = (second[1] as float) <= 20.0 ? "" : "took ${ms(second[1])} on top of jade starting, budget 20 ms"
+    item.results["after a change"] = (edited[0] as float) <= 100.0 ? "" : "took ${ms(edited[0])}, budget 100 ms"
+  }
+
+  // A folder and all in it copied to `to`.
+  private fun copyTree(from : FilePath, to : FilePath) throws IOException {
+    to.mkdir()
+    for (f in from.list()) {
+      if (f.isDirectory()) { copyTree(f, FilePath(to, f.name)) } else { f.copyTo(FilePath(to, f.name), overwrite = true) }
+    }
+  }
+
   // ---- jade build --icon ----
 
   // A program built with an icon runs as before, and the icon is in the file, where Windows looks
@@ -638,6 +790,9 @@ fun reportOf(items : List<Item>) : Pair<string, bool> {
   }
   val skipped = items.filter { it.status == Status.skipped }
   for (item in skipped) { lines.add("${item.note.substringBefore(":")}: ${item.name}: ${item.note.substringAfter(": ")}") }
+  for (item in items) {
+    if (item.measured != "") { lines.add("${item.name}:\n    " + item.measured.lines().join("\n    ")) }
+  }
   lines.add("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} windows only"))
   return Pair(lines.join("\n"), failures == 0)
 }
