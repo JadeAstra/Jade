@@ -1794,6 +1794,175 @@ void registerNumeric(VM& vm) {
         return Value::null();
     });
 
+    // ---- What a canvas does to a layer's pixels (src/std/paint.jade), each pixel as the Jade
+    // that came before did it (2026-11-10, the user's choice of C++ for these) ----
+
+    // paintCells(cells, width, height, table, cycle, linear, gx, gy, ox, oy, f0, f1, qx, qy, qq,
+    // m00, m01, m02, m10, m11, m12): a layer drawn in solid black given a gradient's colours,
+    // each pixel's alpha kept as a share. `table` is 256 colours; cycle 0 pad, 1 reflect, 2
+    // repeat; m.. take a pixel's column and row to the gradient's units. Linear: t = (x - ox) *
+    // gx + (y - oy) * gy. Radial: from the focus (f0, f1), q the focus less the centre, qq its
+    // length squared less the radius squared.
+    def("paintCells", 21, 21, [](VM& vm, int, Value* args) -> Value {
+        const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
+        uint8_t* cells = colorCells(vm, args[0], w * h, "the layer");
+        const uint8_t* table = colorCells(vm, args[3], 256, "the gradient's table");
+        const int64_t cycle = vm.toInt(args[4], "cycle");
+        const bool linear = args[5].truthy();
+        double p[15];
+        for (int k = 0; k < 15; k++) p[k] = vm.toNumber(args[6 + k], "a gradient's number");
+        const double gx = p[0], gy = p[1], ox = p[2], oy = p[3], f0 = p[4], f1 = p[5], qx = p[6], qy = p[7], qq = p[8];
+        const double m00 = p[9], m01 = p[10], m02 = p[11], m10 = p[12], m11 = p[13], m12 = p[14];
+        auto index = [&](double u) -> int {
+            if (cycle == 0) return u <= 0.0 ? 0 : u >= 1.0 ? 255 : static_cast<int>(rounded(u * 255.0));
+            if (cycle == 2) u = u - std::floor(u);
+            else {
+                u = std::fmod(std::fabs(u), 2.0);
+                if (u > 1.0) u = 2.0 - u;
+            }
+            if (!(u > 0.0)) return 0;
+            if (u >= 1.0) return 255;
+            return static_cast<int>(rounded(u * 255.0));
+        };
+        const double step = gx * m00 + gy * m10;
+        for (size_t row = 0; row < h; row++) {
+            double ux = m01 * static_cast<double>(row) + m02, uy = m11 * static_cast<double>(row) + m12;
+            double t = (ux - ox) * gx + (uy - oy) * gy;
+            uint8_t* c = cells + row * w * 4;
+            for (size_t col = 0; col < w; col++, c += 4) {
+                const int a = c[3];
+                if (a != 0) {
+                    double u = t;
+                    if (!linear) {
+                        const double dx = ux - f0, dy = uy - f1;
+                        const double aa = dx * dx + dy * dy;
+                        if (aa == 0.0) {
+                            u = 0.0;
+                        } else {
+                            const double bb = 2.0 * (qx * dx + qy * dy);
+                            const double root = (-bb + std::sqrt(std::max(0.0, bb * bb - 4.0 * aa * qq))) / (2.0 * aa);
+                            u = root <= 0.0 ? 1.0 : 1.0 / root;
+                        }
+                    }
+                    const uint8_t* from = table + index(u) * 4;
+                    c[0] = from[0];
+                    c[1] = from[1];
+                    c[2] = from[2];
+                    c[3] = a == 255 && from[3] == 255 ? 255 : static_cast<uint8_t>((a * from[3] + 127) / 255);
+                }
+                ux += m00;
+                uy += m10;
+                t += step;
+            }
+        }
+        return Value::null();
+    });
+
+    // maskCells(cells, width, height, left, top, mask, maskWidth, maskHeight, maskLeft, maskTop):
+    // a layer's alpha made a share of a mask's, the mask's pixel under each; the layer at (left,
+    // top) and the mask at (maskLeft, maskTop) in the same pixels, outside the mask nothing.
+    def("maskCells", 10, 10, [](VM& vm, int, Value* args) -> Value {
+        const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
+        uint8_t* cells = colorCells(vm, args[0], w * h, "the layer");
+        const int64_t left = vm.toInt(args[3], "left"), top = vm.toInt(args[4], "top");
+        const size_t mw = sizeArg(vm, args[6], "the mask's width"), mh = sizeArg(vm, args[7], "the mask's height");
+        const uint8_t* mask = colorCells(vm, args[5], mw * mh, "the mask");
+        const int64_t maskLeft = vm.toInt(args[8], "maskLeft"), maskTop = vm.toInt(args[9], "maskTop");
+        for (size_t row = 0; row < h; row++) {
+            const int64_t my = top + static_cast<int64_t>(row) - maskTop;
+            const bool rowIn = my >= 0 && my < static_cast<int64_t>(mh);
+            uint8_t* c = cells + row * w * 4;
+            for (size_t col = 0; col < w; col++, c += 4) {
+                const int a = c[3];
+                if (a == 0) continue;
+                const int64_t mx = left + static_cast<int64_t>(col) - maskLeft;
+                const int k = rowIn && mx >= 0 && mx < static_cast<int64_t>(mw) ? mask[(static_cast<size_t>(my) * mw + static_cast<size_t>(mx)) * 4 + 3] : 0;
+                if (k != 255) c[3] = static_cast<uint8_t>((a * k + 127) / 255);
+            }
+        }
+        return Value::null();
+    });
+
+    // resample(cells, width, height, picture, pictureWidth, pictureHeight, sx, sy, sw, sh, m00,
+    // m01, m02, m10, m11, m12, interpolation, alpha): a part of a picture, (sx, sy) sw by sh of
+    // its pixels, drawn into a layer: m.. take a layer pixel's column and row to where its middle
+    // falls in the picture. Read by interpolation (0 nearest, 1 bilinear, 2 bicubic, Catmull-Rom),
+    // weighed by alpha, the part's edge pixels repeated past it; its edges smoothed by how much
+    // of each layer pixel they cover; see-through by `alpha`.
+    def("resample", 18, 18, [](VM& vm, int, Value* args) -> Value {
+        const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
+        uint8_t* cells = colorCells(vm, args[0], w * h, "the layer");
+        const int64_t fw = static_cast<int64_t>(sizeArg(vm, args[4], "the picture's width")), fh = static_cast<int64_t>(sizeArg(vm, args[5], "the picture's height"));
+        const uint8_t* src = colorCells(vm, args[3], static_cast<size_t>(fw * fh), "the picture");
+        double p[10];
+        for (int k = 0; k < 10; k++) p[k] = vm.toNumber(args[6 + k], "a place in the picture");
+        const double sx = p[0], sy = p[1], sw = p[2], sh = p[3];
+        const double m00 = p[4], m01 = p[5], m02 = p[6], m10 = p[7], m11 = p[8], m12 = p[9];
+        const int64_t interpolation = vm.toInt(args[16], "interpolation");
+        const double alpha = vm.toNumber(args[17], "alpha");
+        const double reachX = std::max(1e-9, std::fabs(m00) + std::fabs(m01));
+        const double reachY = std::max(1e-9, std::fabs(m10) + std::fabs(m11));
+        const int64_t x0 = std::max<int64_t>(0, static_cast<int64_t>(std::floor(sx))), y0 = std::max<int64_t>(0, static_cast<int64_t>(std::floor(sy)));
+        const int64_t x1 = std::min<int64_t>(fw, static_cast<int64_t>(std::ceil(sx + sw))) - 1;
+        const int64_t y1 = std::min<int64_t>(fh, static_cast<int64_t>(std::ceil(sy + sh))) - 1;
+        if (x1 < x0 || y1 < y0) return Value::null();
+        double r = 0, g = 0, b = 0, a = 0;
+        auto take = [&](int64_t px, int64_t py, double weight) {
+            const uint8_t* c = src + (std::min(y1, std::max(y0, py)) * fw + std::min(x1, std::max(x0, px))) * 4;
+            const double ca = c[3] * weight;
+            r += c[0] * ca;
+            g += c[1] * ca;
+            b += c[2] * ca;
+            a += ca;
+        };
+        auto cubic = [](double t, double into[4]) {
+            const double t2 = t * t, t3 = t2 * t;
+            into[0] = (-t3 + 2.0 * t2 - t) / 2.0;
+            into[1] = (3.0 * t3 - 5.0 * t2 + 2.0) / 2.0;
+            into[2] = (-3.0 * t3 + 4.0 * t2 + t) / 2.0;
+            into[3] = (t3 - t2) / 2.0;
+        };
+        double wx[4], wy[4];
+        for (size_t row = 0; row < h; row++) {
+            double u = m01 * static_cast<double>(row) + m02, v = m11 * static_cast<double>(row) + m12;
+            uint8_t* c = cells + row * w * 4;
+            for (size_t col = 0; col < w; col++, c += 4, u += m00, v += m10) {
+                const double coverX = std::min(1.0, std::max(0.0, std::min(u - sx, sx + sw - u) / reachX + 0.5));
+                const double coverY = std::min(1.0, std::max(0.0, std::min(v - sy, sy + sh - v) / reachY + 0.5));
+                const double cover = coverX * coverY;
+                if (!(cover > 0.0)) continue;
+                r = g = b = a = 0;
+                if (interpolation == 0) {
+                    take(static_cast<int64_t>(std::floor(u)), static_cast<int64_t>(std::floor(v)), 1.0);
+                } else {
+                    const double fx = u - 0.5, fy = v - 0.5;
+                    const int64_t ix = static_cast<int64_t>(std::floor(fx)), iy = static_cast<int64_t>(std::floor(fy));
+                    if (interpolation == 1) {
+                        const double tx = fx - static_cast<double>(ix), ty = fy - static_cast<double>(iy);
+                        take(ix, iy, (1.0 - tx) * (1.0 - ty));
+                        take(ix + 1, iy, tx * (1.0 - ty));
+                        take(ix, iy + 1, (1.0 - tx) * ty);
+                        take(ix + 1, iy + 1, tx * ty);
+                    } else {
+                        cubic(fx - static_cast<double>(ix), wx);
+                        cubic(fy - static_cast<double>(iy), wy);
+                        for (int m = 0; m < 4; m++)
+                            for (int n = 0; n < 4; n++) take(ix - 1 + n, iy - 1 + m, wx[n] * wy[m]);
+                    }
+                }
+                if (a > 0.0) {
+                    const double out = std::min(255.0, a * cover * alpha);
+                    auto part = [&](double q) { return static_cast<uint8_t>(std::min<int64_t>(255, std::max<int64_t>(0, rounded(q / a)))); };
+                    c[0] = part(r);
+                    c[1] = part(g);
+                    c[2] = part(b);
+                    c[3] = static_cast<uint8_t>(std::min<int64_t>(255, std::max<int64_t>(0, rounded(out))));
+                }
+            }
+        }
+        return Value::null();
+    });
+
     vm.defineGlobal("__num", Value::object(lib));
 }
 
