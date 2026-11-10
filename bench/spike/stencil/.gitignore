@@ -1,0 +1,4 @@
+stencils.h
+*.obj
+region.bin
+region.o
