@@ -596,6 +596,8 @@ public:
                 return true;
             }
             case ValueField::Bool: out.setWhole(static_cast<uint8_t>(ValueKind::Bool), *at != 0 ? 1 : 0); return true;
+            // A byte, a char or another narrow width (a Color's parts): what it holds, made whole.
+            case ValueField::Narrow: out = readNarrow(field.narrow, at); return true;
             default: return false;
         }
     }

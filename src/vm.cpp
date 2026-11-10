@@ -3143,6 +3143,12 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
         made->fields.push_back(field);
     }
     made->size = (at + made->align - 1) / made->align * made->align;
+    for (const ObjString* component : cls->components) {
+        uint32_t index = UINT32_MAX;
+        for (size_t f = 0; f < made->fields.size(); f++)
+            if (made->fields[f].name == component) index = static_cast<uint32_t>(f);
+        made->components.push_back(index);
+    }
     // The checker refuses a bigger one; this holds for one it did not see (Size, 2026-11-03).
     if (made->size > kMaxValueBytes) valueTooBig(cls, made->size);
 
@@ -3312,6 +3318,34 @@ void VM::checkRange(uint8_t type, Value v, const std::string& where) {
 // Writes `value` into a field kept at `at`, checked against the field's declared type as an
 // object's field is.
 void VM::writeValueField(uint8_t* at, const ValueField& field, const ObjClass* owner, Value value) {
+    // The commonest: an int, a float, a bool or a byte into a field of just that.
+    switch (field.kind) {
+        case ValueField::Int:
+            if (value.isInt()) {
+                std::memcpy(at, &value.as.i, sizeof value.as.i);
+                return;
+            }
+            break;
+        case ValueField::Float:
+            if (value.isFloat()) {
+                std::memcpy(at, &value.as.d, sizeof value.as.d);
+                return;
+            }
+            break;
+        case ValueField::Bool:
+            if (value.isBool()) {
+                *at = value.as.b ? 1 : 0;
+                return;
+            }
+            break;
+        case ValueField::Narrow:
+            if (field.narrow == Narrow::Byte && value.isByte()) {
+                *at = static_cast<uint8_t>(value.as.i);
+                return;
+            }
+            break;
+        default: break;
+    }
     if (field.kind == ValueField::Narrow && value.isInt() && field.narrow != Narrow::Byte && field.narrow != Narrow::Char &&
         !fitsNarrow(field.narrow, value))
         throw runtimeError(Thrown::ClassCastException, storageMismatch(field.narrow, value) + " (field '" + field.name->utf8() + "' of " + owner->name->utf8() + ")");
@@ -3737,6 +3771,13 @@ void VM::listSwap(ObjList* list, size_t i, size_t j) {
 // straight from the arguments, with no initializer run. Where the result goes, if `dest` is such
 // a place and still there (value-lists.html section 7), every argument worked out before any of
 // the old value is written over; otherwise in a box of its own. The result in place of the call.
+// Header field `k` of a value type: where its layout found it, or by its name.
+static const ValueField& headerField(ObjClass* cls, const ValueLayout& layout, int k) {
+    if (static_cast<size_t>(k) < layout.components.size() && layout.components[static_cast<size_t>(k)] != UINT32_MAX)
+        return layout.fields[layout.components[static_cast<size_t>(k)]];
+    return layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
+}
+
 void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* made) {
     const ValueLayout& layout = layoutOf(cls);
     Value* const args = sp_ - argc;
@@ -3755,7 +3796,7 @@ void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* 
         uint8_t* const at = refAt(dest, true);
         std::memcpy(item, at, layout.size);
         for (int k = 0; k < argc; k++) {
-            const ValueField& field = layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
+            const ValueField& field = headerField(cls, layout, k);
             writeValueField(item + field.offset, field, cls, args[k]);
         }
         std::memcpy(at, item, layout.size);
@@ -3773,7 +3814,7 @@ void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* 
         // Small: in the value itself, with no box (M6.6 part 5).
         uint8_t bytes[8] = {};
         for (int k = 0; k < argc; k++) {
-            const ValueField& field = layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
+            const ValueField& field = headerField(cls, layout, k);
             writeValueField(bytes + field.offset, field, cls, args[k]);
         }
         sp_ = args;
@@ -3784,7 +3825,7 @@ void VM::makeFromHeader(ObjClass* cls, int argc, Value dest, const ObjTypeInfo* 
     box->type = made;
     sp_[-argc - 1] = Value::object(box);  // kept where the collector sees it
     for (int k = 0; k < argc; k++) {
-        const ValueField& field = layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
+        const ValueField& field = headerField(cls, layout, k);
         writeValueField(box->data() + field.offset, field, cls, args[k]);
     }
     sp_ = args;
@@ -3945,7 +3986,7 @@ bool VM::addNew(int argc) {
     uint8_t* item = layout.size <= sizeof small ? small : (large.resize(layout.size), large.data());
     std::memset(item, 0, layout.size);
     for (int k = 0; k < argc; k++) {
-        const ValueField& field = layout.fields[static_cast<size_t>(cls->declaredIndex.find(cls->components[static_cast<size_t>(k)])->as.i)];
+        const ValueField& field = headerField(cls, layout, k);
         writeValueField(item + field.offset, field, cls, args[k]);
     }
     PackedItems& pack = *list->pack;
@@ -5868,9 +5909,11 @@ void VM::run(int baseFrame) {
         ObjClosure* const quick_ = (callee);                                                                  \
         const FunctionProto* const proto_ = quick_->proto;                                                    \
         Value* const base_ = sp - (argc) - 1;                                                                 \
-        if ((argc) == proto_->quickArity && pendingEnums_ == 0 &&                                             \
+        if ((argc) <= proto_->quickArity && (argc) >= proto_->quickFewest && pendingEnums_ == 0 &&            \
             frameCount_ < frameLimit_ && stackEnd_ - base_ >= proto_->maxStack && bytesAllocated_ <= nextGC_ &&\
             !attention_.load(std::memory_order_relaxed)) {                                                    \
+            /* Arguments left out are marked, and the function fills in their defaults. */                   \
+            for (int left_ = (argc); left_ < proto_->quickArity; left_++) *sp++ = Value::undefined();         \
             frame->ip = ip + (size);                                                                          \
             CallFrame& next_ = frames_[static_cast<size_t>(frameCount_++)];                                   \
             next_.dropResult = false; next_.repeats = 0;                                                                         \

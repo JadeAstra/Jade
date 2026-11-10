@@ -695,6 +695,8 @@ struct FunctionProto {
     // vm.cpp): its arity, where it is no set of forms, takes no vararg and keeps no type
     // arguments; else -1, every call going through VM::call. Set as the function is verified.
     int quickArity = -1;
+    // And the fewest it may pass, the rest left to their defaults, which it fills in itself.
+    int quickFewest = 0;
 
     // Fewest arguments a call may pass. Parameters beyond that have default values, which the
     // function fills in itself (see DefaultArg). -1 means "the same as arity".

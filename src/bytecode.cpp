@@ -1220,6 +1220,7 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now, bool tru
     const bool bodyLater = f.laterBody != nullptr;
     if (!bodyLater) verifyBody(f, program);
     f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
+    f.quickFewest = f.quickArity >= 0 ? f.requiredArgs() : 0;
     std::vector<int> depths;
     // Code of jade's own making translated at its first call is checked then (translateNow):
     // a program's start reads many functions it never calls (a quarter of a kept program's

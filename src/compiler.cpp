@@ -6580,6 +6580,12 @@ private:
                 } else {
                     compileCallee(e);
                     compileArgs(e.args);
+                    // A value type's header defaults left out, passed here (Color(1, 2, 3)'s alpha).
+                    if (const auto* defaults = session_.checker != nullptr ? session_.checker->headerDefaults(e) : nullptr;
+                        defaults != nullptr && argc + defaults->size() <= 0xFF) {
+                        for (const Expr* d : *defaults) compileExpr(*d);
+                        argc += static_cast<int>(defaults->size());
+                    }
                     emitCallPrelude(e, argc + 1);
                     line_ = e.line;
                     emit(Op::Call);

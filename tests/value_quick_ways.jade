@@ -1,0 +1,83 @@
+// The VM's quick ways for values of value types (2026-11-10): a small value (8 bytes or less of
+// numbers) read from a list, put into one, kept in a val with no place of the frame's; a field
+// of a byte or another narrow width read through the cache; a value made from its whole header
+// in R_CALL; a value type's literal header defaults passed at the call; and a call that leaves
+// defaulted arguments out entered at once. Each gives what the slow way gives.
+
+value Rgb(val r : byte, val g : byte, val b : byte, val a : byte = 255)
+value Pair16(val low : int16, val high : uint16)
+value Wide(val x : int, val y : int, val name : string = "w")
+value Flagged(val on : bool = true, val n : int = -3, val f : float = 0.5, val c : char = 'q')
+value Nudged(var step : int = 2) {
+  // A val keeps its value; a var's place is changed by a mutating method.
+  mutating fun nudge() { step += 1 }
+}
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+fun loops() {
+  // Read from a list into a val, its fields read; the same read into a var.
+  val table : List<Color> = List(4) { Color(it * 10, 255 - it, 7, 200) }
+  var total = 0
+  for (i in 0 ..< 8) {
+    val c = table[i & 3]
+    total += c.red + c.green + c.blue + c.alpha
+  }
+  var last = Color.black
+  for (i in 0 ..< 5) { last = table[i % 4] }
+  print(total, last, table[2].red, table[3])   // expect: 3804 Color(0, 255, 7, 200) 20 Color(30, 252, 7, 200)
+
+  // Put into a list of its type, and into a list of nullable ones.
+  val out : open List<Color> = List(4) { Color.black }.toOpenList()
+  for (i in 0 ..< 4) { out[i] = table[3 - i] }
+  val maybe : open List<Color?> = [null, null]
+  maybe[1] = table[1]
+  print(out, maybe)
+  // expect: [Color(30, 252, 7, 200), Color(20, 253, 7, 200), Color(10, 254, 7, 200), Color(0, 255, 7, 200)] [null, Color(10, 254, 7, 200)]
+
+  // Narrow fields of other widths, read through the cache in a loop.
+  val pairs : List<Pair16> = [Pair16(-5, 60000), Pair16(7, 1)]
+  var sum = 0
+  for (k in 0 ..< 4) {
+    val p = pairs[k % 2]
+    sum += p.low + p.high
+  }
+  print(sum)   // expect: 120006
+
+  // Made from the whole header, in a loop; with literal defaults left out; with a default
+  // that is no literal (the initializer gives it).
+  var made = Rgb(0.toByte(), 0.toByte(), 0.toByte())
+  for (i in 0 ..< 3) { made = Rgb(i.toByte(), 2.toByte(), 3.toByte(), 4.toByte()) }
+  val defaulted = Rgb(1.toByte(), 2.toByte(), 3.toByte())
+  print(made, defaulted, Color(1, 2, 3), Flagged(), Flagged(false), Wide(1, 2), Wide(1, 2, "z"))
+  // expect: Rgb(r=2, g=2, b=3, a=4) Rgb(r=1, g=2, b=3, a=255) Color(1, 2, 3) Flagged(on=true, n=-3, f=0.5, c='q') Flagged(on=false, n=-3, f=0.5, c='q') Wide(x=1, y=2, name="w") Wide(x=1, y=2, name="z")
+
+  // A var's place still changes through a mutating method; a val's copy is its own.
+  var n = Nudged()
+  n.nudge()
+  val kept = n
+  n.nudge()
+  print(n, kept)   // expect: Nudged(step=4) Nudged(step=3)
+
+  // What is checked still is: a part out of range.
+  val big = table.size * 75
+  print(failing { Color(big, 0, 0) })   // expect: IllegalArgumentException: a colour's red is from 0 to 255, not 300
+}
+loops()
+
+// A call that leaves defaulted arguments out, entered at once: the defaults may read the
+// arguments before them.
+fun scaled(x : int, by : int = 2, plus : int = x * 10) : int => x * by + plus
+fun countUp(n : int, step : int = 1) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += scaled(i) + scaled(i, step) + scaled(i, step, 0) }
+  return t
+}
+print(scaled(3), scaled(3, 4), scaled(3, 4, 5), countUp(4), countUp(4, 3))   // expect: 36 42 17 144 168

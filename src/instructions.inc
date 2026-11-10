@@ -1093,6 +1093,15 @@ CASE(SetIndex) {
             sp_ -= 2;
             DONE();
         }
+        if (pack != nullptr && pack->store == ListStore::Items && value.isSmall() && pack->itemType == nullptr && pack->typeSlot == 0 &&
+            smallClassOf(value) == pack->itemClass) {
+            // A value kept in the value itself (a Color) put into a list of its type: its bytes copied.
+            std::memcpy(pack->block.data() + i * pack->width, smallBytes(value), pack->itemClass->layout.load(std::memory_order_relaxed)->size);
+            if (pack->nullable) pack->nulls[i / 64] &= ~(uint64_t{1} << (i % 64));
+            sp_[-3] = value;
+            sp_ -= 2;
+            DONE();
+        }
     }
     if (classOf(obj) != nullptr) {
         SAVE_IP();
@@ -3320,6 +3329,13 @@ CASES(RGetIndexSS, RGetIndexSK) {
                 ip += 9;
                 NEXT();
             }
+            if (const PackedItems& pack = *list->pack; !pack.nullable && pack.itemType == nullptr && pack.typeSlot == 0 && pack.itemClass->smallId != 0) {
+                // A value kept in the value itself (a Color): its bytes, read at once.
+                base[ip[0]] = smallFrom(pack.itemClass, pack.block.data() + i * pack.width, pack.itemClass->layout.load(std::memory_order_relaxed)->size);
+                sp = base + ip[3];
+                ip += 9;
+                NEXT();
+            }
         }
     }
     const Value objHere = obj, indexHere = index;
@@ -3531,6 +3547,18 @@ COLD(RGetProp) {
     if (caches != nullptr) {
         const uint64_t seen = caches[FAST_U16(4)].load(std::memory_order_relaxed);
         Value& out = base[ip[0]];
+        // A value kept in the value itself (a Color in a val) first: the commonest here.
+        if (obj.isSmall()) {
+            const ObjClass* cls = smallClassOf(obj);
+            if (static_cast<uint32_t>(seen >> 32) == cls->shape) {
+                const ValueField& field = cls->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                if (readPlain(smallBytes(obj) + field.offset, field, out)) {
+                    sp = base + ip[2];
+                    ip += 10;
+                    NEXT();
+                }
+            }
+        }
         if (seen == kSeenSize) {
             if (const int64_t size = quickSize(obj); size >= 0) {
                 out.setInt(size);
@@ -3610,15 +3638,43 @@ COLD(RGetProp) {
 // where the call leaves it (slot S, A being S); else, into its slow way just after the call,
 // which stores it where it goes and comes back.
 #define R_CALL_RETURN(size, resume) (ip[0] == ip[3] ? std::ptrdiff_t{size} : (code + operandI32(ip + (resume))) - ip)
+HAS_COLD(RCall)
 CASE(RCall) {
     {
     // ... i32 slow, i32 resume: `f(x1, x2)`, up to four arguments. A closure that needs nothing
-    // done first is entered here; any other call goes the slow way, the stack's Call.
+    // done first is entered here; a value type made from its header in the rare part; any other
+    // call goes the slow way, the stack's Call.
     const int argc = ip[4];
     Value* const at = base + ip[3];
     R_CALL_PUT(argc)
     sp = at + argc + 1;
     if (at[0].isObjType(ObjType::Closure)) QUICK_CALL(asClosure(at[0]), argc, R_CALL_RETURN(18, 14))
+    GO_COLD(RCall);
+    }
+}
+COLD(RCall) {
+    {
+    // A value type given every field of its header (`Point(x, y)`), its static values worked
+    // out and nothing of its type to work out first: made here, as construct makes it, and
+    // left where the call leaves its result.
+    const int argc = ip[4];
+    Value* const at = base + ip[3];
+    if (at[0].isObjType(ObjType::Class) && pendingTypeArgs_ == nullptr && pendingEnums_ == 0) {
+        ObjClass* const cls = asClass(at[0]);
+        if (cls->isValue && cls->madeFromHeader && cls->staticInit == nullptr && cls->fieldTypesMaker == nullptr &&
+            static_cast<size_t>(argc) == cls->components.size()) {
+            bool given = true;
+            for (int k = 1; k <= argc; k++) given = given && at[k].kind != ValueKind::Undefined;
+            if (given) {
+                SAVE_IP();
+                sp_ = at + argc + 1;
+                makeFromHeader(cls, argc, std::exchange(pendingDestination_, Value::null()), nullptr);
+                sp = sp_;
+                ip += R_CALL_RETURN(18, 14);
+                NEXT();
+            }
+        }
+    }
     ip = code + operandI32(ip + 10);
     NEXT();
     }

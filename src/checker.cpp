@@ -3765,7 +3765,8 @@ struct Checker::Impl {
             }
         }
         declareLocal(v.name, type, v.isVal);
-        if (!global && !v.isLazy && !v.isConst && valueClass(type)) {
+        const Type plainType = withNull(type, false);
+        if (!global && !v.isLazy && !v.isConst && valueClass(type) && !(v.isVal && !type.nullable && smallValueClass(plainType.cls))) {
             if (silent == 0) placeLocals.insert(&v);
             scopes.back()[v.name].place = &v;
         } else if (!global && v.init && valueClass(value) && silent == 0) {
@@ -4172,6 +4173,31 @@ struct Checker::Impl {
             }
         }
         return {(at + align - 1) / align * align, align};
+    }
+
+    // Whether a value type is kept in a value itself when the program runs, with no box: at most
+    // 8 bytes of numbers, bools and characters, or such values, and no type parameters (the VM's
+    // rule, VM::layoutOf). Such a value read into a val needs no place of the frame's.
+    bool smallValueClass(ClassInfo* k, int depth = 0) {
+        if (k == nullptr || !k->isValue || !k->typeParams.empty() || depth > 8) return false;
+        for (const auto& [name, field] : k->fields) {
+            if (field->decl != nullptr && field->decl->getter && !field->decl->init) continue;
+            const Type t = fieldType(field);
+            if (t.nullable) return false;
+            switch (t.kind) {
+                case Type::Int:
+                case Type::Float:
+                case Type::Bool:
+                case Type::Byte:
+                case Type::Char: break;
+                case Type::Class:
+                    if (!smallValueClass(t.cls, depth + 1)) return false;
+                    break;
+                default: return false;
+            }
+        }
+        std::vector<ClassInfo*> visiting{k};
+        return valueBytes(k, visiting).first <= 8;
     }
 
     // Kinds of an enum class named bare (D39), for the compiler: the node, the full name.
@@ -8010,6 +8036,7 @@ struct Checker::Impl {
         }
         if (init != nullptr) {
             callWith(init, args, {}, env, nullptr, at, what, &env);
+            noteHeaderDefaults(k, init, args, at);
         } else {
             for (const ExprPtr& a : args.exprs) expr(*a);
             if (k->inits.empty() && !k->decl->hasHeader && k->decl->supertypes.empty() && !args.exprs.empty())
@@ -8026,6 +8053,51 @@ struct Checker::Impl {
     // Calls of a class's name that chose one of its secondary constructors: the static function
     // made of it, which the compiler calls in place of making the object.
     std::unordered_map<const Node*, FuncInfo*> secondaryCalls;
+
+    // A value type made from its header with its last fields left to their defaults, each a
+    // literal (`Color(1, 2, 3)`, alpha 255): the defaults, which the compiler passes at the call,
+    // so that the value is made at once from its whole header and not by its initializer.
+    std::unordered_map<const Node*, std::vector<const Expr*>> headerDefaults;
+
+    void noteHeaderDefaults(ClassInfo* k, FuncInfo* init, const Args& args, const Node& at) {
+        if (silent != 0 || !k->isValue || !k->typeParams.empty() || k->decl == nullptr || !k->headerInit || init != headerFunc(k)) return;
+        if (args.spread || args.trailing) return;
+        for (const std::string& name : args.names)
+            if (!name.empty()) return;
+        const auto& header = k->decl->header;
+        if (args.exprs.size() >= header.size()) return;
+        std::vector<const Expr*> defaults;
+        for (size_t i = args.exprs.size(); i < header.size(); i++) {
+            const Expr* d = header[i].defaultValue.get();
+            if (d == nullptr) return;
+            const bool literal = d->kind == ExprKind::Literal ||
+                                 (d->kind == ExprKind::Unary && static_cast<const UnaryExpr*>(d)->operand->kind == ExprKind::Literal);
+            if (!literal) return;
+            // Passed as it is, so of just its field's type; an int literal where a byte goes, a
+            // byte constant (D19), as the initializer would make it.
+            auto field = k->fields.find(header[i].name);
+            if (field == k->fields.end()) return;
+            const Type want = fieldType(field->second);
+            const ConstValue known = foldQuietly(*d);
+            if (want.nullable || want.storage != 0) return;
+            if (want.kind == Type::Byte) {
+                if (known.kind == ConstValue::Byte) {
+                    // already one
+                } else if (known.kind == ConstValue::Int && known.i >= 0 && known.i <= 255) {
+                    byteConstants[d] = static_cast<uint8_t>(known.i);
+                } else {
+                    return;
+                }
+            } else {
+                const bool same = (want.kind == Type::Int && known.kind == ConstValue::Int) || (want.kind == Type::Float && known.kind == ConstValue::Float) ||
+                                  (want.kind == Type::Bool && known.kind == ConstValue::Bool) || (want.kind == Type::String && known.kind == ConstValue::String) ||
+                                  (want.kind == Type::Char && known.kind == ConstValue::Char);
+                if (!same) return;
+            }
+            defaults.push_back(d);
+        }
+        headerDefaults[&at] = std::move(defaults);
+    }
 
     // A call of a name that may have several forms (overloads, D56): the form it means is
     // chosen, and the call checked against it. `envs`, when given, holds each form's own `env`.
@@ -12197,6 +12269,11 @@ const std::vector<std::string>* Checker::bundleExpansion(const Expr& bundle) con
 bool Checker::bundleMake(const Node& at) const { return impl_->bundleMakes.count(&at) != 0; }
 bool Checker::bundleCopy(const Node& at) const { return impl_->bundleCopies.count(&at) != 0; }
 bool Checker::bundleAdd(const Node& at) const { return impl_->bundleAdds.count(&at) != 0; }
+
+const std::vector<const Expr*>* Checker::headerDefaults(const CallExpr& call) const {
+    auto found = impl_->headerDefaults.find(&call);
+    return found == impl_->headerDefaults.end() ? nullptr : &found->second;
+}
 
 const FunctionDecl* Checker::secondaryConstructor(const CallExpr& call) const {
     auto found = impl_->secondaryCalls.find(&call);

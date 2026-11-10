@@ -148,6 +148,9 @@ public:
     const FunctionDecl* extensionCalled(const CallExpr& call) const;
     // A call of a class's name that chose a secondary constructor: the static function made of it.
     const FunctionDecl* secondaryConstructor(const CallExpr& call) const;
+    // A value type made from its header with literal defaults left out: those defaults, which
+    // the call passes itself; null for any other call.
+    const std::vector<const Expr*>* headerDefaults(const CallExpr& call) const;
     // Bundles of named arguments (D143): the names `...bundle` passes on at a call; whether a
     // call is params(...), a bundle's copy(...), or `+` is of two bundles.
     const std::vector<std::string>* bundleExpansion(const Expr& bundle) const;

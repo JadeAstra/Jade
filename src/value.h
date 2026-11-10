@@ -985,6 +985,9 @@ struct ValueLayout {
     std::vector<ValueField> fields;   // in the order of the class's `declared`, index for index
     std::vector<uint32_t> objects;    // where the Object fields are, nested types' included, for the collector
     std::vector<uint32_t> values;     // and the Any fields
+    // For each of the class's `components` (its header's fields, in order), its field's index in
+    // `fields`: a value made from its header finds each at once, not by its name.
+    std::vector<uint32_t> components;
 };
 
 // The value types kept in the value itself (ValueKind::Small), by number; each VM keeps its
