@@ -1868,6 +1868,7 @@ struct Reader {
         }
 
         uint32_t runs = count(8);
+        f->lines.reserve(codeSize);  // a line for each byte of the code
         for (uint32_t i = 0; i < runs; i++) {
             uint32_t line = u32();
             uint32_t length = u32();

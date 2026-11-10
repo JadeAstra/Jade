@@ -47,6 +47,8 @@ VM::VM(bool worker) : output(&std::cout), errorOutput(&std::cerr), input(&std::c
         nextGC_ = 0;
     }
 
+    // Room for the names a program of some size holds, so that the table is not made again as it grows.
+    interned_.reserve(8192);
     names.init = intern("init");
     names.toString = intern("toString");
     names.message = intern("message");

@@ -8152,19 +8152,36 @@ int CompilerSession::putBack(const std::string& data, const std::vector<std::str
 void CompilerSession::planReuse() {
     if (!keepingUnits_) return;
     PartTimer timed(compileTimes.unitsRead);
+    std::vector<std::pair<std::string, std::vector<std::string>>> units;
     std::set<std::string> inFolders;
     for (const auto& [folder, files] : foldersGathered_) {
         inFolders.insert(files.begin(), files.end());
-        planUnit("folder:" + folder, files);
+        units.emplace_back("folder:" + folder, files);
     }
     for (const auto& [file, directory] : directoryOf_)
-        if (inFolders.count(file) == 0 && file.rfind("<worker>", 0) != 0) planUnit("file:" + file, {file});
+        if (inFolders.count(file) == 0 && file.rfind("<worker>", 0) != 0) units.emplace_back("file:" + file, std::vector<std::string>{file});
+    // Each unit's kept entry read first, a few at a time: reading a file takes the system a while,
+    // and 276 of them one after another were about 15 ms of a start after a one-line change
+    // (2026-11-09). Then each planned, in order, by this thread alone.
+    std::vector<KeptUnit> kept(units.size());
+    std::vector<char> found(units.size(), 0);
+    std::atomic<size_t> next{0};
+    auto read = [&] {
+        for (size_t i = next++; i < units.size(); i = next++) found[i] = keptUnit(units[i].first, kept[i]) ? 1 : 0;
+    };
+    const size_t cores = std::max(1u, std::thread::hardware_concurrency());
+    const size_t helpers = units.size() < 8 ? 0 : std::min<size_t>(cores - 1, 7);
+    std::vector<std::thread> threads;
+    for (size_t i = 0; i < helpers; i++) threads.emplace_back(read);
+    read();
+    for (std::thread& t : threads) t.join();
+    for (size_t i = 0; i < units.size(); i++)
+        if (found[i]) planUnit(units[i].first, units[i].second, std::move(kept[i]));
 }
 
-void CompilerSession::planUnit(const std::string& unit, const std::vector<std::string>& files) {
-    KeptUnit kept;
+void CompilerSession::planUnit(const std::string& unit, const std::vector<std::string>& files, KeptUnit kept) {
     UnitImage image;
-    if (!keptUnit(unit, kept) || kept.own.size() != files.size() || !readImage(kept.image, image)) return;
+    if (kept.own.size() != files.size() || !readImage(kept.image, image)) return;
     std::vector<std::string> sorted(files.begin(), files.end());
     std::sort(sorted.begin(), sorted.end());
     for (size_t i = 0; i < sorted.size(); i++) {

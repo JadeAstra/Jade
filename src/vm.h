@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <iosfwd>
@@ -1381,7 +1382,27 @@ private:
 #endif
     size_t liveBytes_ = 0;
     std::vector<Obj*> gray_;
-    std::unordered_map<std::string_view, ObjString*> interned_;
+    // A name's hash eight bytes at a time: the library's own goes a byte at a time on Windows,
+    // and a program's start interns every name it holds (a quarter of reading a kept program in,
+    // 2026-11-09).
+    struct NameHash {
+        size_t operator()(std::string_view s) const noexcept {
+            uint64_t h = 0x9E3779B97F4A7C15ull ^ s.size();
+            const char* p = s.data();
+            size_t n = s.size();
+            for (; n >= 8; p += 8, n -= 8) {
+                uint64_t w;
+                std::memcpy(&w, p, 8);
+                h = (h ^ w) * 0xFF51AFD7ED558CCDull;
+                h ^= h >> 32;
+            }
+            uint64_t w = 0;
+            std::memcpy(&w, p, n);
+            h = (h ^ w) * 0xC4CEB9FE1A85EC53ull;
+            return static_cast<size_t>(h ^ (h >> 29));
+        }
+    };
+    std::unordered_map<std::string_view, ObjString*, NameHash> interned_;
     std::unordered_map<std::string, ObjTypeInfo*> types_;  // by what they are made of (typeOf)
     ObjTypeInfo* anyType_ = nullptr;
     ObjTypeInfo* intListType_ = nullptr;

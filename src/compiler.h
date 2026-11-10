@@ -254,7 +254,8 @@ private:
     std::vector<std::string> dependencies(const std::vector<std::string>& files) const;
     void settleReuse();
     void planReuse();
-    void planUnit(const std::string& unit, const std::vector<std::string>& files);
+    // `kept`: the unit's entry in the cache, as keptUnit read it.
+    void planUnit(const std::string& unit, const std::vector<std::string>& files, KeptUnit kept);
     void checkSkipped(const std::vector<std::string>& files);
     void reportNew(size_t before);
     int libraryNumber(const std::string& library, const std::string& file, int line);
