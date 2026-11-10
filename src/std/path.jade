@@ -412,6 +412,74 @@ class Path(var fillRule : FillRule = FillRule.nonZero) : Shape {
     return out
   }
 
+  // The contours in straight pieces for a stroke (Stroke.outline), cut as flatten cuts them,
+  // each point marked as a corner of the path or a point along a curve.
+  internal fun contours(pixels : float) : List<__Contour> {
+    val all : open List<__Contour> = []
+    var c = __Contour()
+    var x = 0.0
+    var y = 0.0
+    var p = 0
+    for (v in verbs) {
+      if (v == 0) {
+        c = __Contour()
+        all.add(c)
+        x = coords[p]
+        y = coords[p + 1]
+        c.add(x, y, true)
+        p += 2
+      } else if (v == 1) {
+        x = coords[p]
+        y = coords[p + 1]
+        c.add(x, y, true)
+        p += 2
+      } else if (v == 2) {
+        val cx = coords[p]
+        val cy = coords[p + 1]
+        val ex = coords[p + 2]
+        val ey = coords[p + 3]
+        val bend = Math.hypot(x - 2.0 * cx + ex, y - 2.0 * cy + ey) * pixels
+        val pieces = Math.min(256, Math.max(1, Math.ceil(Math.sqrt(bend * 27.0)).toInt()))
+        for (i in 1 .. pieces) {
+          val t = i.toFloat() / pieces
+          val u = 1.0 - t
+          c.add(u * u * x + 2.0 * u * t * cx + t * t * ex, u * u * y + 2.0 * u * t * cy + t * t * ey, i == pieces)
+        }
+        x = ex
+        y = ey
+        p += 4
+      } else if (v == 3) {
+        val ax = coords[p]
+        val ay = coords[p + 1]
+        val bx = coords[p + 2]
+        val by = coords[p + 3]
+        val ex = coords[p + 4]
+        val ey = coords[p + 5]
+        val bend = Math.max(Math.hypot(x - 2.0 * ax + bx, y - 2.0 * ay + by), Math.hypot(ax - 2.0 * bx + ex, ay - 2.0 * by + ey)) * pixels
+        val pieces = Math.min(256, Math.max(1, Math.ceil(Math.sqrt(bend * 40.5)).toInt()))
+        for (i in 1 .. pieces) {
+          val t = i.toFloat() / pieces
+          val u = 1.0 - t
+          c.add(u * u * u * x + 3.0 * u * u * t * ax + 3.0 * u * t * t * bx + t * t * t * ex,
+                u * u * u * y + 3.0 * u * u * t * ay + 3.0 * u * t * t * by + t * t * t * ey, i == pieces)
+        }
+        x = ex
+        y = ey
+        p += 6
+      } else {
+        c.closed = true
+        // Closed back to where it began: that point once, not twice.
+        val n = c.size
+        if (n > 1 and c.points[2 * n - 2] == c.points[0] and c.points[2 * n - 1] == c.points[1]) {
+          c.points.removeAt(c.points.size - 1)
+          c.points.removeAt(c.points.size - 1)
+          c.corners.removeAt(c.corners.size - 1)
+        }
+      }
+    }
+    return all
+  }
+
   // The path as SVG path data, in places: "M0 10 L20 10 Q30 0 40 10 Z".
   override fun toString() : string {
     val parts : open List<string> = []
@@ -757,8 +825,8 @@ fun __roundRectPath(x : Number, y : Number, w : Number, h : Number, arcW : Numbe
 
 // The part of the oval in the rectangle that an Arc fills (canvas.fillArc): from `start` degrees
 // through `extent` more, counter-clockwise, 45 at the top right corner; a slice for a pie, the
-// arc and its chord otherwise.
-fun __arcPath(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind) : Path {
+// arc and its chord otherwise. For its outline (`filled` false), an open arc is left open.
+fun __arcPath(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, filled : bool = true) : Path {
   val a = w.toFloat() / 2.0
   val b = h.toFloat() / 2.0
   val cx = x + a
@@ -773,5 +841,5 @@ fun __arcPath(x : Number, y : Number, w : Number, h : Number, start : Number, ex
     path.moveTo(cx + a * Math.cos(from), cy + b * Math.sin(from))
   }
   __ellipseArc(path, cx, cy, a, b, 1.0, 0.0, from, sweep)
-  return path.close()
+  return !filled and kind == ArcKind.open ? path : path.close()
 }

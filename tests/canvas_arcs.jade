@@ -168,16 +168,21 @@ for (scale in [1, 2]) {
 // expect: scale 2 differ true true
 
 // A part of a canvas draws as thick as the canvas it came from; a recording keeps arcs with
-// their width.
+// their width (an open one with butt ends: with the stroke's square ends, the default, it is
+// stroked as a path, and recorded as one).
 val image = Image(40, 40, Color.white)
 val c = image.canvas()
 c.lineWidth = 5
 print(c.sub(0, 0, 10, 10).lineWidth, c.clipped(0, 0, 5, 5).lineWidth)   // expect: 5 5
 val ops : open List<DrawOp> = []
 val rec = RecordingCanvas(100, 100, ops)
-rec.lineWidth = 2
+rec.stroke = Stroke(2, LineCap.butt)
 rec.color = Color.red
 rec.drawArc(1, 2, 30, 40, 10, 80)
 rec.fill(Arc(0.0, 0.0, 10.0, 10.0, 0.0, 45.0, ArcKind.pie))
 print(ops)
 // expect: [Arc(x=1, y=2, w=30, h=40, start=10, extent=80, kind=open, fill=false, color=Color(255, 0, 0), lineWidth=2), Arc(x=0.0, y=0.0, w=10.0, h=10.0, start=0.0, extent=45.0, kind=pie, fill=true, color=Color(255, 0, 0), lineWidth=2)]
+rec.lineWidth = 3
+rec.stroke = rec.stroke.copy(cap = LineCap.square)
+rec.drawArc(1, 2, 30, 40, 10, 80)
+print(ops.last() is DrawOp.Fill, rec.lineWidth)   // expect: true 3

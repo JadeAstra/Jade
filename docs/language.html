@@ -434,6 +434,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-sequence-jade">sequence.jade</a></li>
 <li><a href="#file-set-jade">set.jade</a></li>
 <li><a href="#file-string-jade">string.jade</a></li>
+<li><a href="#file-stroke-jade">stroke.jade</a></li>
 <li><a href="#file-task-jade">task.jade</a></li>
 <li><a href="#file-test-jade">test.jade</a></li>
 <li><a href="#file-text-jade">text.jade</a></li>
@@ -466,7 +467,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Bytes.inflate"><code>Bytes</code></a> (33)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
-<li><a href="#Canvas"><code>Canvas</code></a> (60)</li>
+<li><a href="#Canvas"><code>Canvas</code></a> (61)</li>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
 <li><a href="#Channel"><code>Channel</code></a> (10)</li>
 <li><a href="#Charset"><code>Charset</code></a> (1)</li>
@@ -524,7 +525,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
 <li><a href="#Library"><code>Library</code></a> (4)</li>
 <li><a href="#Line"><code>Line</code></a> (4)</li>
+<li><a href="#LineCap"><code>LineCap</code></a> (1)</li>
 <li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
+<li><a href="#LineJoin"><code>LineJoin</code></a> (1)</li>
 <li><a href="#List.size"><code>List</code></a> (151)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
@@ -588,6 +591,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#StackOverflowError"><code>StackOverflowError</code></a> (1)</li>
 <li><a href="#Stream"><code>Stream</code></a> (1)</li>
 <li><a href="#StringBuilder"><code>StringBuilder</code></a> (24)</li>
+<li><a href="#Stroke"><code>Stroke</code></a> (3)</li>
 <li><a href="#T.use"><code>T</code></a> (7)</li>
 <li><a href="#TaskScope"><code>TaskScope</code></a> (6)</li>
 <li><a href="#TempDir"><code>TempDir</code></a> (1)</li>
@@ -3039,7 +3043,7 @@ canvas.draw(photo, 100, 10)                   a picture, an Image or a Surface
 canvas.font = Font(&quot;Segoe UI&quot;, 14)
 canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 </pre>
-<p>What is drawn is given in units; a canvas has <code>scale</code> pixels to the unit. fillRect(x, y, w, h) covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. Outlines and lines are <code>lineWidth</code> units thick, 1 to begin with. A canvas for a part of another (sub, clipped) draws only inside it.</p>
+<p>What is drawn is given in units; a canvas has <code>scale</code> pixels to the unit. fillRect(x, y, w, h) covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. Outlines and lines are drawn with the canvas's <code>stroke</code>, <code>lineWidth</code> units thick, 1 to begin with (M8, N3). A canvas for a part of another (sub, clipped) draws only inside it.</p>
 <p>This class holds what every kind has (its size, scale, place, clip, colour and font); each kind draws the shapes, the text and the pictures, in its own pixels.</p>
 </div>
 <div class="entry member" id="Canvas.width"><code class="sig">val width : int</code><a class="anchor" href="#Canvas.width">#</a>
@@ -3075,8 +3079,12 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry member" id="Canvas.font"><code class="sig">var font : Font</code><a class="anchor" href="#Canvas.font">#</a>
 <p>The font that text is drawn in: Dialog at 12 to begin with.</p>
 </div>
+<div class="entry member" id="Canvas.stroke"><code class="sig">var stroke : Stroke</code><a class="anchor" href="#Canvas.stroke">#</a>
+<p>How outlines and lines are drawn (N3): their width, ends, corners and dashes, as Java's Graphics2D.setStroke. Stroke(), Java's default, to begin with: 1 unit wide, square ends, miter corners.</p>
+<p>The outlines of drawRect, drawOval, drawLine and the rest keep to whole pixels as Java's do: the line a coordinate names runs through the middle of the pixels from it to it plus one, and a wider one spreads around it, its larger half to the right and below, its width made whole pixels. draw(path) strokes a path where it says, as fill(path) fills it.</p>
+</div>
 <div class="entry member" id="Canvas.lineWidth"><code class="sig">var lineWidth : Number</code><a class="anchor" href="#Canvas.lineWidth">#</a>
-<p>How thick outlines and lines are, in units: 1 to begin with, as Java's BasicStroke(w) sets it. A wider one spreads around the one-unit line, its larger half to the right and below, so that whole numbers keep straight lines on whole pixels; lines through several points (a polyline, a polygon's outline) join round where they meet.</p>
+<p>How thick outlines and lines are, in units: the stroke's width, 1 to begin with. Setting it keeps the rest of the stroke, as Java's BasicStroke(w) would not.</p>
 </div>
 <div class="entry member" id="Canvas.deviceScaleX"><code class="sig">val deviceScaleX : float</code><a class="anchor" href="#Canvas.deviceScaleX">#</a>
 <p>How many pixels there are to a unit.</p>
@@ -3104,10 +3112,10 @@ canvas.rotate(Math.pi / 6)
 canvas.fillRect(-20, -10, 40, 20)      a rectangle turned about (60, 40)
 canvas.restore()
 </pre>
-<p>Filled shapes and paths go through any transform. For now the rest goes through less: outlines and lines through one that moves them and stretches them the same both ways, pictures and clearRect through one that moves and stretches them, text through one that only moves it; through any other, each is an UnsupportedOperationException, until the steps of N3 that bring strokes, text and pictures. sub and clipped work through one that moves and stretches.</p>
+<p>Shapes, filled or their outlines drawn, and paths go through any transform; an outline's width stretches as what is drawn stretches. For now the rest goes through less: pictures and clearRect through one that moves and stretches them, text through one that only moves it; through any other, each is an UnsupportedOperationException, until the step of N3 that brings text and pictures. sub and clipped work through one that moves and stretches.</p>
 </div>
 <div class="entry member" id="Canvas.save"><code class="sig">fun save()</code><a class="anchor" href="#Canvas.save">#</a>
-<p>Keeps the transform, the colour, the font and the line width, for restore() to put back. Saves can be inside each other: each restore() puts back the last one not yet put back.</p>
+<p>Keeps the transform, the colour, the font and the stroke, for restore() to put back. Saves can be inside each other: each restore() puts back the last one not yet put back.</p>
 </div>
 <div class="entry member" id="Canvas.restore"><code class="sig">fun restore()</code><a class="anchor" href="#Canvas.restore">#</a>
 <p>Puts back what the last save() kept. An IllegalStateException with nothing kept.</p>
@@ -3140,7 +3148,7 @@ canvas.restore()
 <p>The outline of that oval, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units.</p>
 </div>
 <div class="entry member" id="Canvas.drawLine"><code class="sig">fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#Canvas.drawLine">#</a>
-<p>A line one unit thick from (<code>x1</code>, <code>y1</code>) to (<code>x2</code>, <code>y2</code>), both ends included.</p>
+<p>A line one unit thick from (<code>x1</code>, <code>y1</code>) to (<code>x2</code>, <code>y2</code>), both ends included: with the stroke's square ends, as Java's default; its ends are the stroke's.</p>
 </div>
 <div class="entry member" id="Canvas.drawPolyline"><code class="sig">fun drawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.drawPolyline">#</a>
 <p>Lines from point to point of (<code>xs[i]</code>, <code>ys[i]</code>), the first <code>n</code> of them or all when <code>n</code> is null, left open at the last point.</p>
@@ -3158,7 +3166,7 @@ canvas.restore()
 <p>The curve of that part of the oval's outline, as Java's drawArc: as drawOval draws it, one line width thick.</p>
 </div>
 <div class="entry member" id="Canvas.draw"><code class="sig">fun draw(shape : Shape)</code><a class="anchor" href="#Canvas.draw">#</a>
-<p>A shape's outline: a Rect's, an Oval's or an Arc's, or a Line; an IllegalArgumentException for any other shape. A Path's outline comes with strokes (N3): an UnsupportedOperationException for now.</p>
+<p>A shape's outline, drawn with the canvas's stroke: a Rect's, an Oval's or an Arc's as drawRect, drawOval and drawArc draw them, a Line as drawLine does, a Path's where it says (D106, N3); an IllegalArgumentException for any other shape.</p>
 </div>
 <div class="entry member" id="Canvas.fill"><code class="sig">fun fill(shape : Shape)</code><a class="anchor" href="#Canvas.fill">#</a>
 <p>The whole of a shape: a Rect, an Oval, an Arc or a Path filled, a Line drawn; an IllegalArgumentException for any other shape. A Path is filled by its fill rule, each of its contours closed.</p>
@@ -5823,6 +5831,30 @@ print(squares.filter { it % 3 == 0 }.take(5).toList())     // [9, 36, 81, 144, 2
 </div>
 <div class="entry" id="string.plus"><code class="sig">fun string.plus(other : any?) : string</code><a class="anchor" href="#string.plus">#</a>
 <p>The string followed by <code>other</code> as print would show it: &quot;a&quot;.plus(null) is &quot;anull&quot;.</p>
+</div>
+</section>
+<section class="file" id="file-stroke-jade">
+<h2>stroke.jade</h2>
+<h3>Strokes (N3)</h3>
+<div class="entry" id="LineCap"><code class="sig">enum LineCap</code><a class="anchor" href="#LineCap">#</a>
+<p>How the open ends of a stroked line look, as Java's BasicStroke: cut off square at the end (butt), a half circle round it (round), or a half square past it (square).</p>
+</div>
+<div class="entry" id="LineJoin"><code class="sig">enum LineJoin</code><a class="anchor" href="#LineJoin">#</a>
+<p>How a stroked line turns a corner, as Java's BasicStroke: out to a point (miter), round it (round), or cut across it (bevel).</p>
+</div>
+<div class="entry" id="Stroke"><code class="sig">value Stroke(val width : Number = 1, val cap : LineCap = LineCap.square, val join : LineJoin = LineJoin.miter, val miterLimit : Number = 10, val dashes : List&lt;Number&gt;? = null, val dashPhase : Number = 0)</code><a class="anchor" href="#Stroke">#</a>
+<p>How lines are drawn, as Java's BasicStroke: <code>width</code> units across, centred on the line; its ends by <code>cap</code> and its corners by <code>join</code>; a miter that would reach out more than <code>miterLimit</code> times the width is cut across as a bevel. With <code>dashes</code>, the line is drawn in pieces: a piece that long, a gap that long, and so on round the list again, starting <code>dashPhase</code> units into it, afresh on each contour (a list with an odd count is gone round twice, as SVG does).</p>
+<pre>canvas.stroke = Stroke(3, LineCap.round, LineJoin.round)
+canvas.draw(path)
+canvas.stroke = Stroke(1, dashes = [4, 2])
+</pre>
+<p>A canvas's lineWidth is its stroke's width. Java's defaults: 1 unit, square ends, miter joins, a miter limit of 10, no dashes.</p>
+</div>
+<div class="entry member" id="Stroke.outline"><code class="sig">fun outline(path : Path, pixels : Number = 4) : Path</code><a class="anchor" href="#Stroke.outline">#</a>
+<p>The shape the stroke makes of <code>path</code>: what is filled to draw its outline, by nonZero, as Java's createStrokedShape. Curves are cut into straight pieces fine enough for <code>pixels</code> pixels a unit, to within about a hundredth of a pixel, and so are round ends and corners. An IllegalArgumentException for a width or a miter limit below 0 or below 1, or dashes that are not all 0 or more and add up to more than 0. A width of 0 makes an empty path.</p>
+</div>
+<div class="entry member" id="Stroke.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Stroke.toString">#</a>
+<p>The stroke as text: &quot;Stroke(2, round, miter, 10)&quot;, with its dashes if it has them.</p>
 </div>
 </section>
 <section class="file" id="file-task-jade">

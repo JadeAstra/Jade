@@ -18,8 +18,8 @@ data TextMetrics(val width : int, val ascent : int, val descent : int, val heigh
 // What is drawn is given in units; a canvas has `scale` pixels to the unit. fillRect(x, y, w, h)
 // covers w by h units; drawRect is an outline one unit thick that covers w + 1 by h + 1, as in
 // Java; shapes have smooth edges, and rectangles and straight lines sit on whole pixels. Outlines
-// and lines are `lineWidth` units thick, 1 to begin with (M8). A canvas for a part of another
-// (sub, clipped) draws only inside it.
+// and lines are drawn with the canvas's `stroke`, `lineWidth` units thick, 1 to begin with (M8,
+// N3). A canvas for a part of another (sub, clipped) draws only inside it.
 //
 // This class holds what every kind has (its size, scale, place, clip, colour and font); each kind
 // draws the shapes, the text and the pictures, in its own pixels.
@@ -47,11 +47,22 @@ abstract class Canvas {
   var color : Color = Color.black
   // The font that text is drawn in: Dialog at 12 to begin with.
   var font : Font = Font("Dialog", 12)
-  // How thick outlines and lines are, in units: 1 to begin with, as Java's BasicStroke(w) sets
-  // it. A wider one spreads around the one-unit line, its larger half to the right and below, so
-  // that whole numbers keep straight lines on whole pixels; lines through several points (a
-  // polyline, a polygon's outline) join round where they meet.
-  var lineWidth : Number = 1
+  // How outlines and lines are drawn (N3): their width, ends, corners and dashes, as Java's
+  // Graphics2D.setStroke. Stroke(), Java's default, to begin with: 1 unit wide, square ends,
+  // miter corners.
+  //
+  // The outlines of drawRect, drawOval, drawLine and the rest keep to whole pixels as Java's
+  // do: the line a coordinate names runs through the middle of the pixels from it to it plus
+  // one, and a wider one spreads around it, its larger half to the right and below, its width
+  // made whole pixels. draw(path) strokes a path where it says, as fill(path) fills it.
+  var stroke : Stroke = Stroke()
+  // How thick outlines and lines are, in units: the stroke's width, 1 to begin with. Setting it
+  // keeps the rest of the stroke, as Java's BasicStroke(w) would not.
+  var lineWidth : Number
+    get() => stroke.width
+    set(value) {
+      stroke = stroke.copy(width = value)
+    }
 
   fun init(width : int, height : int, scale : Number, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) {
     this.width = width
@@ -106,7 +117,7 @@ abstract class Canvas {
     val made = another(width, height, left, top, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
-    made.lineWidth = lineWidth
+    made.stroke = stroke
     if (turn == 1) { made.transform = Transform.scaling(transform.scaleX, transform.scaleY) }
     return made
   }
@@ -123,7 +134,7 @@ abstract class Canvas {
     val made = another(width, height, originX, originY, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
-    made.lineWidth = lineWidth
+    made.stroke = stroke
     made.transform = transform
     return made
   }
@@ -142,12 +153,11 @@ abstract class Canvas {
   //   canvas.fillRect(-20, -10, 40, 20)      a rectangle turned about (60, 40)
   //   canvas.restore()
   //
-  // Filled shapes and paths go through any transform. For now the rest goes through less:
-  // outlines and lines through one that moves them and stretches them the same both ways,
-  // pictures and clearRect through one that moves and stretches them, text through one that only
-  // moves it; through any other, each is an UnsupportedOperationException, until the steps of N3
-  // that bring strokes, text and pictures. sub and clipped work through one that moves and
-  // stretches.
+  // Shapes, filled or their outlines drawn, and paths go through any transform; an outline's
+  // width stretches as what is drawn stretches. For now the rest goes through less: pictures and
+  // clearRect through one that moves and stretches them, text through one that only moves it;
+  // through any other, each is an UnsupportedOperationException, until the step of N3 that
+  // brings text and pictures. sub and clipped work through one that moves and stretches.
   var transform : Transform = Transform.identity
     set(value) {
       field = value
@@ -159,11 +169,11 @@ abstract class Canvas {
   // What save() kept, the last kept at the end.
   private var saved : open List<__CanvasState>? = null
 
-  // Keeps the transform, the colour, the font and the line width, for restore() to put back.
+  // Keeps the transform, the colour, the font and the stroke, for restore() to put back.
   // Saves can be inside each other: each restore() puts back the last one not yet put back.
   fun save() {
     if (saved == null) { saved = [] }
-    saved!!.add(__CanvasState(transform, color, font, lineWidth))
+    saved!!.add(__CanvasState(transform, color, font, stroke))
   }
   // Puts back what the last save() kept. An IllegalStateException with nothing kept.
   fun restore() {
@@ -173,7 +183,7 @@ abstract class Canvas {
     transform = state.transform
     color = state.color
     font = state.font
-    lineWidth = state.lineWidth
+    stroke = state.stroke
   }
   // Moves what is drawn from now on by `dx` across and `dy` down, inside what the transform
   // already does: transform = transform.translate(dx, dy).
@@ -196,23 +206,56 @@ abstract class Canvas {
   // The error for what cannot be drawn through the transform yet.
   private fun notYet(what : string, until : string) : nothing =>
     throw UnsupportedOperationException("$what through $transform comes with $until (N3)")
-  // An outline or a line through the transform, with the line width stretched as it stretches
-  // what is drawn: `draw` given that stretch. For now only through a transform that moves and
-  // stretches the same both ways.
-  private fun stroked(what : string, draw : (float) -> unit) {
-    if (turn != 1 or transform.scaleX != transform.scaleY) { notYet(what, "strokes") }
-    val s = transform.scaleX
-    if (s == 1.0) {
-      draw(s)
+  // An outline or a line: drawn the plain way (`draw`, given how much the transform stretches)
+  // when that is `fast` for the stroke, there are no dashes and the transform stretches the same
+  // both ways; otherwise `shape` stroked, moved to the middle of the one-unit line its
+  // coordinates name, its width whole pixels as the plain way makes it.
+  private fun outline(fast : bool, draw : (float) -> unit, shape : () -> Path) {
+    val s = turn == 0 ? 1.0 : (turn == 1 and transform.scaleX == transform.scaleY ? transform.scaleX : 0.0)
+    if (fast and s > 0.0 and stroke.dashes == null) {
+      if (s == 1.0) {
+        draw(s)
+        return
+      }
+      val kept = stroke
+      stroke = kept.copy(width = kept.width * s)
+      try {
+        draw(s)
+      } finally {
+        stroke = kept
+      }
       return
     }
-    val kept = lineWidth
-    lineWidth = kept * s
-    try {
-      draw(s)
-    } finally {
-      lineWidth = kept
+    // Pixels a unit through the transform, and the width and the middle the plain way gives.
+    val k = scale.toFloat() * stretch()
+    val unit = Math.max(1.0, Math.round(k).toFloat())
+    val wide = Math.max(1.0, Math.round(stroke.width.toFloat() * k).toFloat())
+    val extra = Math.max(0.0, wide - unit)
+    val before = Math.floor(extra / 2.0)
+    val middle = (unit / 2.0 + (extra - 2.0 * before) / 2.0) / k
+    strokePath(shape().transformed(Transform.translation(middle, middle)), wide / k)
+  }
+  // How much the transform stretches what is drawn, at most, whichever way.
+  private fun stretch() : float {
+    val t = transform
+    return Math.sqrt(Math.max(t.scaleX * t.scaleX + t.shearY * t.shearY, t.shearX * t.shearX + t.scaleY * t.scaleY))
+  }
+  // A path stroked `width` units wide with the canvas's stroke, through the transform.
+  private fun strokePath(path : Path, width : Number) {
+    val st = width == stroke.width ? stroke : stroke.copy(width = width)
+    fillTurned(st.outline(path, scale.toFloat() * stretch()))
+  }
+  // Whether the stroke is no wider than a unit, where how lines end and meet does not show.
+  private val thin : bool
+    get() => stroke.width.toFloat() <= 1.0
+  // Points as an open path, or closed.
+  private fun linesPath(xs : List<Number>, ys : List<Number>, n : int?, closed : bool) : Path {
+    val count = Math.min(n ?: xs.size, Math.min(xs.size, ys.size))
+    val path = Path()
+    for (i in 0 ..< count) {
+      if (i == 0) { path.moveTo(xs[i], ys[i]) } else { path.lineTo(xs[i], ys[i]) }
     }
+    return closed ? path.close() : path
   }
   // The first `n` points (all when it is null) through the transform: their x's and their y's.
   private fun mapped(xs : List<Number>, ys : List<Number>, n : int?) : Pair<List<Number>, List<Number>> {
@@ -240,8 +283,8 @@ abstract class Canvas {
   }
   // The outline of that rectangle, one unit thick, covering `w` + 1 by `h` + 1 units, as Java's does.
   fun drawRect(x : Number, y : Number, w : Number, h : Number) {
-    if (turn == 0) { plainDrawRect(x, y, w, h) }
-    else { stroked("drawRect") { s -> plainDrawRect(mx(x), my(y), w * s, h * s) } }
+    if (turn == 0 and stroke.dashes == null and (thin or stroke.join == LineJoin.miter)) { plainDrawRect(x, y, w, h) }
+    else { outline(thin or stroke.join == LineJoin.miter, { s -> plainDrawRect(mx(x), my(y), w * s, h * s) }) { __rectPath(x, y, w, h) } }
   }
   // Makes a rectangle clear again: what is under the picture shows through it.
   fun clearRect(x : Number, y : Number, w : Number, h : Number) {
@@ -262,8 +305,8 @@ abstract class Canvas {
   // The outline of a rectangle with rounded corners, one unit thick, covering `w` + 1 by `h` + 1
   // units as drawRect does.
   fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
-    if (turn == 0) { plainDrawRoundRect(x, y, w, h, arcW, arcH) }
-    else { stroked("drawRoundRect") { s -> plainDrawRoundRect(mx(x), my(y), w * s, h * s, arcW * s, arcH * s) } }
+    if (turn == 0 and stroke.dashes == null) { plainDrawRoundRect(x, y, w, h, arcW, arcH) }
+    else { outline(true, { s -> plainDrawRoundRect(mx(x), my(y), w * s, h * s, arcW * s, arcH * s) }) { __roundRectPath(x, y, w, h, arcW, arcH) } }
   }
   // Fills the oval that fits inside the rectangle of `w` by `h` units at (`x`, `y`).
   fun fillOval(x : Number, y : Number, w : Number, h : Number) {
@@ -273,33 +316,37 @@ abstract class Canvas {
   }
   // The outline of that oval, one unit thick, covering `w` + 1 by `h` + 1 units.
   fun drawOval(x : Number, y : Number, w : Number, h : Number) {
-    if (turn == 0) { plainDrawOval(x, y, w, h) }
-    else { stroked("drawOval") { s -> plainDrawOval(mx(x), my(y), w * s, h * s) } }
+    if (turn == 0 and stroke.dashes == null) { plainDrawOval(x, y, w, h) }
+    else { outline(true, { s -> plainDrawOval(mx(x), my(y), w * s, h * s) }) { __ovalPath(x, y, w, h) } }
   }
-  // A line one unit thick from (`x1`, `y1`) to (`x2`, `y2`), both ends included.
+  // A line one unit thick from (`x1`, `y1`) to (`x2`, `y2`), both ends included: with the
+  // stroke's square ends, as Java's default; its ends are the stroke's.
   fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
-    if (turn == 0) { plainDrawLine(x1, y1, x2, y2) }
-    else { stroked("drawLine") { s -> plainDrawLine(mx(x1), my(y1), mx(x2), my(y2)) } }
+    val fast = thin or stroke.cap == LineCap.square
+    if (turn == 0 and stroke.dashes == null and fast) { plainDrawLine(x1, y1, x2, y2) }
+    else { outline(fast, { s -> plainDrawLine(mx(x1), my(y1), mx(x2), my(y2)) }) { Path().moveTo(x1, y1).lineTo(x2, y2) } }
   }
   // Lines from point to point of (`xs[i]`, `ys[i]`), the first `n` of them or all when `n` is null,
   // left open at the last point.
   fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    if (turn == 0) { plainDrawPolyline(xs, ys, n) }
+    val fast = thin or (stroke.join == LineJoin.round and stroke.cap == LineCap.butt)
+    if (turn == 0 and stroke.dashes == null and fast) { plainDrawPolyline(xs, ys, n) }
     else {
-      stroked("drawPolyline") { s ->
+      outline(fast, { s ->
         val (px, py) = mapped(xs, ys, n)
         plainDrawPolyline(px, py, px.size)
-      }
+      }) { linesPath(xs, ys, n, false) }
     }
   }
   // The same lines closed: a last one goes from the last point back to the first.
   fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
-    if (turn == 0) { plainDrawPolygon(xs, ys, n) }
+    val fast = thin or stroke.join == LineJoin.round
+    if (turn == 0 and stroke.dashes == null and fast) { plainDrawPolygon(xs, ys, n) }
     else {
-      stroked("drawPolygon") { s ->
+      outline(fast, { s ->
         val (px, py) = mapped(xs, ys, n)
         plainDrawPolygon(px, py, px.size)
-      }
+      }) { linesPath(xs, ys, n, true) }
     }
   }
   // Fills the polygon whose corners are those points.
@@ -323,22 +370,26 @@ abstract class Canvas {
   // An arc through the transform. Its angles go with the rectangle it is in, 45 pointing at the
   // top right corner, so one stretched is the arc of the stretched rectangle.
   private fun arc(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
-    if (turn == 0) { arcShape(x, y, w, h, start, extent, kind, fill) }
-    else if (!fill) { stroked("drawArc") { s -> arcShape(mx(x), my(y), w * s, h * s, start, extent, kind, false) } }
+    if (!fill) {
+      val fast = thin or (kind == ArcKind.open ? stroke.cap == LineCap.butt : stroke.join == LineJoin.miter)
+      if (turn == 0 and stroke.dashes == null and fast) { arcShape(x, y, w, h, start, extent, kind, false) }
+      else { outline(fast, { s -> arcShape(mx(x), my(y), w * s, h * s, start, extent, kind, false) }) { __arcPath(x, y, w, h, start, extent, kind, false) } }
+    }
+    else if (turn == 0) { arcShape(x, y, w, h, start, extent, kind, true) }
     else if (turn == 1) { arcShape(mx(x), my(y), w * transform.scaleX, h * transform.scaleY, start, extent, kind, true) }
     else { fillTurned(__arcPath(x, y, w, h, start, extent, kind)) }
   }
 
-  // A shape's outline: a Rect's, an Oval's or an Arc's, or a Line (D106); an
-  // IllegalArgumentException for any other shape. A Path's outline comes with strokes (N3): an
-  // UnsupportedOperationException for now.
+  // A shape's outline, drawn with the canvas's stroke: a Rect's, an Oval's or an Arc's as drawRect,
+  // drawOval and drawArc draw them, a Line as drawLine does, a Path's where it says (D106, N3); an
+  // IllegalArgumentException for any other shape.
   fun draw(shape : Shape) {
     if (shape is Rect) { drawRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { drawOval(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Arc) { arc(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, false) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
-    else if (shape is Path) { throw UnsupportedOperationException("a Path's outline comes with strokes (N3)") }
-    else { throw IllegalArgumentException("a canvas draws a Rect, an Oval, an Arc or a Line, not $shape") }
+    else if (shape is Path) { strokePath(shape, stroke.width) }
+    else { throw IllegalArgumentException("a canvas draws a Rect, an Oval, an Arc, a Line or a Path, not $shape") }
   }
   // The whole of a shape: a Rect, an Oval, an Arc or a Path filled, a Line drawn; an
   // IllegalArgumentException for any other shape. A Path is filled by its fill rule, each of its
@@ -717,7 +768,7 @@ class Image : Drawable {
 }
 
 // What Canvas.save() keeps for restore() to put back.
-class __CanvasState(val transform : Transform, val color : Color, val font : Font, val lineWidth : Number)
+class __CanvasState(val transform : Transform, val color : Color, val font : Font, val stroke : Stroke)
 
 // What draws on an Image: the software engine, in the image's pixels (D123).
 class ImageCanvas : Canvas {

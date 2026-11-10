@@ -1,0 +1,323 @@
+// ---- Strokes (N3) ----
+
+// How the open ends of a stroked line look, as Java's BasicStroke: cut off square at the end
+// (butt), a half circle round it (round), or a half square past it (square).
+enum LineCap { butt, round, square }
+
+// How a stroked line turns a corner, as Java's BasicStroke: out to a point (miter), round it
+// (round), or cut across it (bevel).
+enum LineJoin { miter, round, bevel }
+
+// How lines are drawn, as Java's BasicStroke: `width` units across, centred on the line; its
+// ends by `cap` and its corners by `join`; a miter that would reach out more than `miterLimit`
+// times the width is cut across as a bevel. With `dashes`, the line is drawn in pieces: a piece
+// that long, a gap that long, and so on round the list again, starting `dashPhase` units into
+// it, afresh on each contour (a list with an odd count is gone round twice, as SVG does).
+//
+//   canvas.stroke = Stroke(3, LineCap.round, LineJoin.round)
+//   canvas.draw(path)
+//   canvas.stroke = Stroke(1, dashes = [4, 2])
+//
+// A canvas's lineWidth is its stroke's width. Java's defaults: 1 unit, square ends, miter joins,
+// a miter limit of 10, no dashes.
+value Stroke(val width : Number = 1, val cap : LineCap = LineCap.square, val join : LineJoin = LineJoin.miter, val miterLimit : Number = 10,
+             val dashes : List<Number>? = null, val dashPhase : Number = 0) {
+  // The shape the stroke makes of `path`: what is filled to draw its outline, by nonZero, as
+  // Java's createStrokedShape. Curves are cut into straight pieces fine enough for `pixels`
+  // pixels a unit, to within about a hundredth of a pixel, and so are round ends and corners.
+  // An IllegalArgumentException for a width or a miter limit below 0 or below 1, or dashes
+  // that are not all 0 or more and add up to more than 0. A width of 0 makes an empty path.
+  fun outline(path : Path, pixels : Number = 4) : Path {
+    if (!(width.toFloat() >= 0.0)) { throw IllegalArgumentException("a stroke's width is 0 or more, not $width") }
+    if (!(miterLimit.toFloat() >= 1.0)) { throw IllegalArgumentException("a stroke's miter limit is 1 or more, not $miterLimit") }
+    val d = dashes
+    if (d != null) {
+      var sum = 0.0
+      for (v in d) {
+        if (!(v.toFloat() >= 0.0)) { throw IllegalArgumentException("a stroke's dashes are 0 or more, not $d") }
+        sum += v.toFloat()
+      }
+      if (!(sum > 0.0)) { throw IllegalArgumentException("a stroke's dashes add up to more than 0, not $d") }
+    }
+    val made = Path()
+    if (width.toFloat() == 0.0) { return made }
+    __Stroker(this, Math.max(pixels.toFloat(), 1e-6), made).stroke(path)
+    return made
+  }
+
+  // The stroke as text: "Stroke(2, round, miter, 10)", with its dashes if it has them.
+  override fun toString() : string => "Stroke($width, $cap, $join, $miterLimit${dashes == null ? "" : ", dashes $dashes from $dashPhase"})"
+}
+
+// A contour of a path in straight lines, for stroking: its points' x and y one after another,
+// whether each is a corner of the path (where a join goes) or a point on a curve, and whether
+// the contour is closed.
+class __Contour {
+  val points : open List<float> = []
+  val corners : open List<bool> = []
+  var closed = false
+
+  // A point, unless it is where the last one is (then the last one is a corner if this is).
+  fun add(x : float, y : float, corner : bool) {
+    val n = points.size
+    if (n > 0 and points[n - 2] == x and points[n - 1] == y) {
+      if (corner) { corners[corners.size - 1] = true }
+      return
+    }
+    points.add(x)
+    points.add(y)
+    corners.add(corner)
+  }
+  val size : int
+    get() => corners.size
+}
+
+// What Stroke.outline does: each contour of a path, dashed if the stroke says so, made into
+// pieces that each go round the same way (a band for each straight piece, a corner's join, an
+// end's cap), so that filled by nonZero they cover what the stroke covers, once.
+class __Stroker(val stroke : Stroke, val pixels : float, val out : Path) {
+  private val half = stroke.width.toFloat() / 2.0
+  // The corners of a piece, collected before it is added.
+  private val piece : open List<float> = []
+
+  fun stroke(path : Path) {
+    for (contour in path.contours(pixels)) {
+      if (stroke.dashes == null) { line(contour.points, contour.corners, contour.closed) }
+      else { dash(contour) }
+    }
+  }
+
+  // Lines through the points: a band for each piece, a join at each point between two, and caps
+  // at the ends of an open one.
+  private fun line(points : List<float>, corners : List<bool>, closed : bool) {
+    val n = corners.size
+    if (n == 0) { return }
+    if (n == 1) {
+      dot(points[0], points[1], 1.0, 0.0)
+      return
+    }
+    val bands = closed ? n : n - 1
+    for (i in 0 ..< bands) {
+      val j = (i + 1) % n
+      band(points[2 * i], points[2 * i + 1], points[2 * j], points[2 * j + 1])
+    }
+    // Joins: at every point of a closed contour, between the ends of an open one.
+    val from = closed ? 0 : 1
+    val to = closed ? n : n - 1
+    for (i in from ..< to) {
+      val p = (i + n - 1) % n
+      val q = (i + 1) % n
+      join(points[2 * p], points[2 * p + 1], points[2 * i], points[2 * i + 1], points[2 * q], points[2 * q + 1], corners[i])
+    }
+    if (!closed) {
+      cap(points[0], points[1], points[2], points[3])
+      cap(points[2 * n - 2], points[2 * n - 1], points[2 * n - 4], points[2 * n - 3])
+    }
+  }
+
+  // A line that has no length: a round cap is a disc, a square one a square turned along
+  // (dx, dy), a butt one nothing; as Java draws it.
+  private fun dot(x : float, y : float, dx : float, dy : float) {
+    if (stroke.cap == LineCap.round) { disc(x, y) }
+    else if (stroke.cap == LineCap.square) {
+      val ux = dx * half
+      val uy = dy * half
+      polygon([x - ux + uy, y - uy - ux, x + ux + uy, y + uy - ux, x + ux - uy, y + uy + ux, x - ux - uy, y - uy + ux])
+    }
+  }
+
+  // The band of a straight piece from (x0, y0) to (x1, y1).
+  private fun band(x0 : float, y0 : float, x1 : float, y1 : float) {
+    val length = Math.hypot(x1 - x0, y1 - y0)
+    if (length == 0.0) { return }
+    val nx = -(y1 - y0) / length * half
+    val ny = (x1 - x0) / length * half
+    polygon([x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny])
+  }
+
+  // Where the piece from (ax, ay) to (px, py) meets the one on to (bx, by): the gap on the
+  // outside of the turn filled by the stroke's join at a corner of the path, and cut across
+  // between the pieces of a curve, whose turns are too small to show the difference.
+  private fun join(ax : float, ay : float, px : float, py : float, bx : float, by : float, corner : bool) {
+    val l1 = Math.hypot(px - ax, py - ay)
+    val l2 = Math.hypot(bx - px, by - py)
+    if (l1 == 0.0 or l2 == 0.0) { return }
+    val d1x = (px - ax) / l1
+    val d1y = (py - ay) / l1
+    val d2x = (bx - px) / l2
+    val d2y = (by - py) / l2
+    val cross = d1x * d2y - d1y * d2x
+    val dot = d1x * d2x + d1y * d2y
+    if (Math.abs(cross) < 1e-12 and dot > 0.0) { return }
+    // The outside of the turn.
+    val side = cross > 0.0 ? -1.0 : 1.0
+    val ax2 = px - d1y * half * side
+    val ay2 = py + d1x * half * side
+    val bx2 = px - d2y * half * side
+    val by2 = py + d2x * half * side
+    val kind = corner ? stroke.join : LineJoin.bevel
+    if (kind == LineJoin.round) {
+      disc(px, py)
+      return
+    }
+    if (kind == LineJoin.miter) {
+      // How far the point reaches, in widths: 1 / cos(half the turn).
+      val halfTurn = Math.sqrt(Math.max(0.0, (1.0 + dot) / 2.0))
+      if (halfTurn > 0.0 and 1.0 / halfTurn <= stroke.miterLimit.toFloat()) {
+        val mx = (ax2 + bx2) / 2.0 - px
+        val my = (ay2 + by2) / 2.0 - py
+        val ml = Math.hypot(mx, my)
+        if (ml > 0.0) {
+          val reach = half / halfTurn
+          polygon([px, py, ax2, ay2, px + mx / ml * reach, py + my / ml * reach, bx2, by2])
+          return
+        }
+      }
+    }
+    polygon([px, py, ax2, ay2, bx2, by2])
+  }
+
+  // The cap at the end (x, y) of a line coming from (fx, fy).
+  private fun cap(x : float, y : float, fx : float, fy : float) {
+    if (stroke.cap == LineCap.butt) { return }
+    if (stroke.cap == LineCap.round) {
+      disc(x, y)
+      return
+    }
+    val length = Math.hypot(x - fx, y - fy)
+    if (length == 0.0) { return }
+    val ux = (x - fx) / length * half
+    val uy = (y - fy) / length * half
+    polygon([x - uy, y + ux, x + ux - uy, y + uy + ux, x + ux + uy, y + uy - ux, x + uy, y - ux])
+  }
+
+  // A disc of the stroke's width round (x, y), in as many pieces as its size needs.
+  private fun disc(x : float, y : float) {
+    val r = half * pixels
+    val n = r < 0.5 ? 8 : Math.min(512, Math.max(8, Math.ceil(Math.pi / Math.acos(Math.max(0.0, 1.0 - 0.02 / r))).toInt()))
+    piece.clear()
+    for (i in 0 ..< n) {
+      val a = 2.0 * Math.pi * i / n
+      piece.add(x + half * Math.cos(a))
+      piece.add(y + half * Math.sin(a))
+    }
+    polygon(piece)
+  }
+
+  // A piece added going the same way round as every other: positive area, y growing down.
+  private fun polygon(xy : List<float>) {
+    val n = xy.size / 2
+    var area = 0.0
+    for (i in 0 ..< n) {
+      val j = (i + 1) % n
+      area += xy[2 * i] * xy[2 * j + 1] - xy[2 * j] * xy[2 * i + 1]
+    }
+    if (area == 0.0) { return }
+    if (area > 0.0) {
+      out.moveTo(xy[0], xy[1])
+      for (i in 1 ..< n) { out.lineTo(xy[2 * i], xy[2 * i + 1]) }
+    } else {
+      out.moveTo(xy[2 * n - 2], xy[2 * n - 1])
+      var i = n - 2
+      while (i >= 0) {
+        out.lineTo(xy[2 * i], xy[2 * i + 1])
+        i -= 1
+      }
+    }
+    out.close()
+  }
+
+  // The contour in dashes: each an open line of its own, with its caps.
+  private fun dash(contour : __Contour) {
+    val pattern : open List<float> = []
+    for (v in stroke.dashes!!) { pattern.add(v.toFloat()) }
+    if (pattern.size % 2 == 1) {
+      val once = pattern.size
+      for (i in 0 ..< once) { pattern.add(pattern[i]) }
+    }
+    var total = 0.0
+    for (v in pattern) { total += v }
+    // Where in the pattern the contour starts.
+    var index = 0
+    var left = pattern[0]
+    var phase = stroke.dashPhase.toFloat() % total
+    if (phase < 0.0) { phase += total }
+    while (phase > 0.0) {
+      if (phase >= left) {
+        phase -= left
+        index = (index + 1) % pattern.size
+        left = pattern[index]
+      } else {
+        left -= phase
+        phase = 0.0
+      }
+    }
+    val n = contour.size
+    val pts = contour.points
+    if (n == 1) {
+      if (index % 2 == 0) { dot(pts[0], pts[1], 1.0, 0.0) }
+      return
+    }
+    val segments = contour.closed ? n : n - 1
+    val xs : open List<float> = []
+    val cs : open List<bool> = []
+    var on = index % 2 == 0
+    if (on) {
+      xs.add(pts[0])
+      xs.add(pts[1])
+      cs.add(true)
+    }
+    for (s in 0 ..< segments) {
+      val e = (s + 1) % n
+      val x0 = pts[2 * s]
+      val y0 = pts[2 * s + 1]
+      val x1 = pts[2 * e]
+      val y1 = pts[2 * e + 1]
+      val length = Math.hypot(x1 - x0, y1 - y0)
+      var done = 0.0
+      while (length - done > left) {
+        // The dash or the gap ends inside this piece.
+        done += left
+        val t = done / length
+        val x = x0 + (x1 - x0) * t
+        val y = y0 + (y1 - y0) * t
+        if (on) {
+          xs.add(x)
+          xs.add(y)
+          cs.add(true)
+          ended(xs, cs, x1 - x0, y1 - y0)
+        } else {
+          xs.clear()
+          cs.clear()
+          xs.add(x)
+          xs.add(y)
+          cs.add(true)
+        }
+        on = !on
+        index = (index + 1) % pattern.size
+        left = pattern[index]
+      }
+      left -= length - done
+      if (on) {
+        xs.add(x1)
+        xs.add(y1)
+        cs.add(contour.corners[e])
+      }
+    }
+    if (on) { ended(xs, cs, 1.0, 0.0) }
+  }
+
+  // A dash made: stroked as an open line, and the points let go of.
+  private fun ended(xs : open List<float>, cs : open List<bool>, dx : float, dy : float) {
+    if (cs.size == 1 or (cs.size == 2 and xs[0] == xs[2] and xs[1] == xs[3])) {
+      val l = Math.hypot(dx, dy)
+      dot(xs[0], xs[1], l == 0.0 ? 1.0 : dx / l, l == 0.0 ? 0.0 : dy / l)
+    } else if (cs.size >= 2) {
+      cs[0] = true
+      cs[cs.size - 1] = true
+      line(xs, cs, false)
+    }
+    xs.clear()
+    cs.clear()
+  }
+}
