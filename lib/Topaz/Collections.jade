@@ -234,7 +234,8 @@ fun tree(roots : List<TreeNode>, onSelect : (TreeNode) -> unit = {}) : Component
 // Rows of cells under a row of column headings: a click chooses a row (onSelect), a double click
 // or Enter acts on it (onActivate), or, in an editable table, edits the cell in a field over it
 // (Enter keeps the edit and tells onEdit, Escape drops it, a click elsewhere keeps it). A column is
-// as wide as its widest cell, up to maxColumnWidth; longer cells end in "…".
+// as wide as its widest cell, up to maxColumnWidth; longer cells end in "…". In a Scroll the
+// headings stay at the top of the view as the rows go past under them.
 class Table : Content, Bordered, ScrollAware {
   override var owner : Component? = null
   var editable : bool
@@ -269,6 +270,7 @@ class Table : Content, Bordered, ScrollAware {
     }
 
   private var pendingReveal : Range? = null
+  private var pinY = 0   // how far down the table the view's top is, where the headings are painted
   private val editor : TextField
   private val editorComp : Component
   private var editRow = -1
@@ -301,6 +303,14 @@ class Table : Content, Bordered, ScrollAware {
 
   override fun viewportHeight(px : int) {}
   override fun viewportWidth(px : int) {}
+  // Told as the Scroll paints: the headings are painted there, over the rows.
+  override fun scrollOffset(px : int) {
+    val y = Math.max(px, 0)
+    if (y != pinY) {
+      pinY = y
+      owner?.invalidate()   // painted again: the headings move with the view
+    }
+  }
   override fun consumeReveal() : Range? {
     val r = pendingReveal
     pendingReveal = null
@@ -310,7 +320,7 @@ class Table : Content, Bordered, ScrollAware {
     if (selected < 0) { return }
     val rowH = rowHeight()
     val top = rowH * (selected + 1)       // after the headings
-    pendingReveal = top .. top + rowH
+    pendingReveal = top - rowH .. top + rowH   // and room above it for the headings held at the view's top
     Topaz.requestLayout()
   }
 
@@ -345,7 +355,7 @@ class Table : Content, Bordered, ScrollAware {
 
   private fun cellAt(x : int, y : int) : Pair<int, int> {
     val rowH = rowHeight()
-    if (y < rowH) { return -1 to -1 }
+    if (y < rowH or y < pinY + rowH) { return -1 to -1 }   // the headings, where they are held
     val r = (y - rowH) / rowH
     if (r < 0 or r >= rows.size) { return -1 to -1 }
     val xs = columnEdges()
@@ -370,18 +380,12 @@ class Table : Content, Bordered, ScrollAware {
     canvas.color = Palette.surface
     canvas.fillRect(0, 0, canvas.width, canvas.height)
     canvas.font = font
-    canvas.color = Palette.headerBg
-    canvas.fillRect(0, 0, canvas.width, rowH)
-    var hx = 0
+    var lx = 0
     for (c in 0 ..< columns.size) {
-      canvas.color = Palette.ink
-      canvas.drawString(elide(columns[c], font, widths[c] - cpad * 2), hx + cpad, cpad / 2 + fm.ascent)
-      hx += widths[c]
+      lx += widths[c]
       canvas.color = Palette.border
-      canvas.drawLine(hx, 0, hx, canvas.height)
+      canvas.drawLine(lx, 0, lx, canvas.height)
     }
-    canvas.color = Palette.border
-    canvas.drawLine(0, rowH, canvas.width, rowH)
     // Only the rows the canvas shows: a long table in a scroll shows a screenful of them.
     val vis = canvas.visibleBounds
     val first = Math.max((vis.y - rowH) / rowH - 1, 0)
@@ -415,6 +419,20 @@ class Table : Content, Bordered, ScrollAware {
         sub.dispose()
       }
     }
+    // The headings last, over the rows: at the top, or held at the view's top in a Scroll.
+    val hy = Math.max(0, Math.min(pinY, canvas.height - rowH))
+    canvas.color = Palette.headerBg
+    canvas.fillRect(0, hy, canvas.width, rowH)
+    var hx = 0
+    for (c in 0 ..< columns.size) {
+      canvas.color = Palette.ink
+      canvas.drawString(elide(columns[c], font, widths[c] - cpad * 2), hx + cpad, hy + cpad / 2 + fm.ascent)
+      hx += widths[c]
+      canvas.color = Palette.border
+      canvas.drawLine(hx, hy, hx, hy + rowH)
+    }
+    canvas.color = Palette.border
+    canvas.drawLine(0, hy + rowH, canvas.width, hy + rowH)
     if (styleOf(this).framed) {
       canvas.color = Palette.border
       canvas.drawRect(0, 0, canvas.width - 1, canvas.height - 1)

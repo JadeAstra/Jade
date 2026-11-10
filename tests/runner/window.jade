@@ -112,6 +112,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   detail.wrap = true
   val table = Table(columnNames, [])
   val tableComponent = Component(table)
+  val tableScroll = Scroll(tableComponent)
   // Back to what the whole run gave, from a check chosen.
   val summaryButton = button("Summary") {
     chosen = null
@@ -329,7 +330,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     row { cell(filterRow, colSpan = 3, fill = Fill.horizontal, weightX = 1.0) }
     row {
       // The table on the left, as wide as its columns want; what the chosen check gave beside it.
-      cell(split(scroll(tableComponent), scroll(Component(detail)), ratio = 0.5), colSpan = 3, fill = Fill.both,
+      cell(split(Component(tableScroll), scroll(Component(detail)), ratio = 0.5), colSpan = 3, fill = Fill.both,
            weightX = 1.0, weightY = 1.0)
     }
   }
@@ -349,6 +350,11 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       refresh()
     }
     val host = window.handle as WindowHost
+    // Part way down a long table, to show its headings held at the top.
+    if (shown.size > 40) {
+      host.frame()
+      tableScroll.scrollTo(300)
+    }
     host.frame()
     try {
       host.snapshot().save(snapshot!!)
