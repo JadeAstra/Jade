@@ -209,6 +209,12 @@ class ProgressBar : Content {
       field = v.coerceIn(0.0, 1.0)
       owner?.invalidate()
     }
+  // The colour of the filled part: the palette's accent when null, as it is to begin with.
+  var color : Color? = null
+    set(v) {
+      field = v
+      owner?.invalidate()
+    }
 
   fun init(value : float = 0.0) {
     this.value = value
@@ -221,7 +227,7 @@ class ProgressBar : Content {
     canvas.fillRoundRect(0, 0, canvas.width - 1, canvas.height - 1, 8, 8)
     val fillW = (value * (canvas.width - 1)).toInt()
     if (fillW > 0) {
-      canvas.color = Palette.accent
+      canvas.color = color ?: Palette.accent
       canvas.fillRoundRect(0, 0, fillW, canvas.height - 1, 8, 8)
     }
     canvas.color = Palette.border

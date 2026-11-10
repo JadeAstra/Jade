@@ -210,6 +210,10 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     summary.text = "$passed passed, $failed failed" + (busy > 0 ? ", $busy running" : "") + (skipped > 0 ? ", $skipped skipped" : "") +
                    " of ${items.size} — ${shown.size} shown"
     progress.value = wanted == 0 ? 0.0 : done.toFloat() / wanted.toFloat()
+    // Red from the first failure on; green once a run has ended with every check passed.
+    val wasColor = progress.color
+    val nowColor = failed > 0 ? Color(208, 52, 52) : (!running and done > 0 and done == wanted and passed + skipped == done ? Color(46, 160, 67) : null)
+    if (nowColor != wasColor) { progress.color = nowColor }
     val c = chosen
     val text = c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
                "Choose a check to see what it gave."
