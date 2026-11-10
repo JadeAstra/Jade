@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plan: native code</title>
+<title>Plan: M9.5, native code</title>
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
@@ -86,12 +86,8 @@ pre code { background: none; padding: 0; }
 </head>
 <body>
 <main>
-<h1>Plan: M9 and M10, the self-contained packages and the documents</h1>
-</head>
-<body>
-<main>
-<h1>Plan: native code while running</h1>
-<p class="lede">Written 2026-11-10, at the user's word: built now, before part two of <a href="M10-plan.html">M9 and M10</a>, after which the speed of pictures and tensors is looked at again. The timings it starts from are in <a href="M10-speed.html">M10-speed.html</a>; what is still to be done elsewhere is in <a href="outstanding.html">outstanding.html</a>; the plan of the whole library is <a href="gui-plan.html">gui-plan.html</a>, where M14 (native code for built programs, through a C++ compiler) is described.</p>
+<h1>Plan: M9.5, native code while running</h1>
+<p class="lede">Written 2026-11-10, at the user's word: M9.5, version 0.9.5 when it is done, built now, before part two of <a href="M10-plan.html">M9 and M10</a>, after which the speed of pictures and tensors is looked at again. The timings it starts from are in <a href="M10-speed.html">M10-speed.html</a>; what is still to be done elsewhere is in <a href="outstanding.html">outstanding.html</a>; the plan of the whole library is <a href="gui-plan.html">gui-plan.html</a>, where M14 (native code for built programs, through a C++ compiler) is described.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -259,7 +255,7 @@ pre code { background: none; padding: 0; }
 <h2 id="np-questions">Questions for the user</h2>
 <p>Each with the recommendation.</p>
 <ol>
-<li><strong>The milestone's name and version.</strong> It goes between part one and part two of M9/M10. <em>Recommended:</em> called <strong>M9.5</strong>, with no version of its own: M9/M10 still ends at 0.10.0, which it is part of the way to.</li>
+<li><strong>The milestone's name and version.</strong> <em>Decided (the user, 2026-11-10):</em> <strong>M9.5</strong>, version <strong>0.9.5</strong> when it is done; it goes between part one and part two of M9/M10, which still ends at 0.10.0.</li>
 <li><strong>When a function is given machine code.</strong> <em>Recommended:</em> at its first call, when its run code is made, as now; if the first-run budget suffers, at its second call instead (a function called once runs in the VM).</li>
 <li><strong>On by default, and the switch.</strong> <em>Recommended:</em> on for everything (scripts, the shell, workers, tests, built programs); off with <code>jade --interpret</code> or <code>JADE_NATIVE=0</code>; the test runner runs every test both ways.</li>
 <li><strong>Linux.</strong> <em>Recommended:</em> in this milestone, after Windows (step 7), so that Jade stays the same on both.</li>
