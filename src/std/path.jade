@@ -789,6 +789,16 @@ class __PathData(val d : string) {
 
 // -- The canvas's shapes as paths, for filling them through a transform that turns them --
 
+// A shape as a path: a Rect's, an Oval's or an Arc's outline, or a Path itself; an
+// IllegalArgumentException for any other.
+fun __pathOf(shape : Shape) : Path {
+  if (shape is Path) { return shape }
+  if (shape is Rect) { return __rectPath(shape.x, shape.y, shape.width, shape.height) }
+  if (shape is Oval) { return __ovalPath(shape.x, shape.y, shape.width, shape.height) }
+  if (shape is Arc) { return __arcPath(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind) }
+  throw IllegalArgumentException("a canvas is clipped to a Rect, an Oval, an Arc or a Path, not $shape")
+}
+
 // The rectangle `w` by `h` at (x, y).
 fun __rectPath(x : Number, y : Number, w : Number, h : Number) : Path => Path().moveTo(x, y).lineTo(x + w, y).lineTo(x + w, y + h).lineTo(x, y + h).close()
 

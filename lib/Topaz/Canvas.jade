@@ -86,6 +86,9 @@ class RecordingCanvas : Canvas {
   protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
     ops.add(DrawOp.Arc(x + originX, y + originY, w, h, start, extent, kind, fill, color, lineWidth))
   }
+  protected override fun plainLay(cells : List<Color>, width : int, height : int, left : int, top : int, clear : bool) {
+    ops.add(clear ? DrawOp.Clear(left, top, width, height) : DrawOp.Image(left, top, width, height))
+  }
   protected override fun plainFillPath(path : Path) {
     ops.add(DrawOp.Fill(originX == 0 and originY == 0 ? path : path.transformed(Transform.translation(originX, originY)), color))
   }

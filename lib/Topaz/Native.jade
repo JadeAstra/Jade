@@ -234,6 +234,10 @@ class NativeCanvas : Canvas {
     use()
     __topaz.arc(x, y, w, h, start, extent, kind.ordinal, fill)
   }
+  protected override fun plainLay(cells : List<Color>, width : int, height : int, left : int, top : int, clear : bool) {
+    use()
+    __topaz.pixels(cells, width, height, left, top, clear)
+  }
   protected override fun plainFillPath(path : Path) {
     use()
     __topaz.path(path.flatten(scale.toFloat()), path.fillRule == FillRule.evenOdd)

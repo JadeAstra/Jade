@@ -43,8 +43,34 @@ abstract class Canvas {
   // The row just past the last one it may draw on.
   protected val clipBottom : int
 
-  // The colour that shapes and text are drawn in: black to begin with.
+  // The colour that shapes and text are drawn in: black to begin with. Setting it makes it the
+  // paint, as Java's setColor does.
   var color : Color = Color.black
+    set(value) {
+      field = value
+      gradient = null
+    }
+  // What shapes, outlines and text are filled with (N3), as Java's setPaint: the colour, or a
+  // LinearGradient or RadialGradient, whose points go through the transform as what is drawn
+  // does. Setting a Color sets `color`. Pictures are drawn as they are, whatever the paint.
+  var paint : Paint
+    get() => gradient ?: color
+    set(value) {
+      if (value is Color) { color = value } else { gradient = value }
+    }
+  // How what is drawn is put together with what is there (N3): laid over it (srcOver, to begin
+  // with), or clearing it where it would have been drawn (clear), as Java's setComposite.
+  var composite : Composite = Composite.srcOver
+  // How pictures are read between their pixels when they are drawn larger, smaller or turned
+  // (N3): bilinear to begin with.
+  var interpolation : Interpolation = Interpolation.bilinear
+  // The paint when it is not a colour.
+  private var gradient : Paint? = null
+  // The clip to a shape (clipped(shape)): how much of each pixel of its box, in the pixels drawn
+  // on, may be drawn on, as alpha; the box at (maskLeft, maskTop).
+  private var mask : Image? = null
+  private var maskLeft = 0
+  private var maskTop = 0
   // The font that text is drawn in: Dialog at 12 to begin with.
   var font : Font = Font("Dialog", 12)
   // How outlines and lines are drawn (N3): their width, ends, corners and dashes, as Java's
@@ -105,38 +131,83 @@ abstract class Canvas {
     }
 
   // A canvas for a part of this one: its (0, 0) is at (x, y) here, and nothing it draws lands
-  // outside the part. Through a transform that moves and stretches, the part is where the
-  // transform puts it, and the new canvas stretches as this one does; through one that turns,
-  // slants or mirrors, an UnsupportedOperationException for now (N3).
+  // outside the part. Through a transform, the part is where the transform puts it, and the new
+  // canvas goes through the transform too.
   fun sub(x : int, y : int, width : int, height : int) : Canvas {
-    if (turn == 2) { notYet("a part of a canvas", "pictures") }
+    if (turn == 2) {
+      // Turned: the part clipped to as a shape, the transform moved to it.
+      val made = clippedTo(__rectPath(x, y, width, height), width, height)
+      made.transform = transform.translate(x, y)
+      return made
+    }
     val left = originX + Math.round(mx(x) * scale).toInt()
     val top = originY + Math.round(my(y) * scale).toInt()
     val right = originX + Math.round(mx(x + width) * scale).toInt()
     val bottom = originY + Math.round(my(y + height) * scale).toInt()
     val made = another(width, height, left, top, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
-    made.color = color
-    made.font = font
-    made.stroke = stroke
+    handOn(made)
     if (turn == 1) { made.transform = Transform.scaling(transform.scaleX, transform.scaleY) }
     return made
   }
 
-  // The same canvas, drawing only inside a rectangle of it: where the transform puts the
-  // rectangle, when it moves and stretches; an UnsupportedOperationException for now through one
-  // that turns, slants or mirrors (N3).
+  // The same canvas, drawing only inside a rectangle of it, where the transform puts it.
   fun clipped(x : Number, y : Number, w : Number, h : Number) : Canvas {
-    if (turn == 2) { notYet("a clipped canvas", "pictures") }
+    if (turn == 2) { return clippedTo(__rectPath(x, y, w, h), width, height) }
     val left = originX + Math.round(mx(x) * scale).toInt()
     val top = originY + Math.round(my(y) * scale).toInt()
     val right = originX + Math.round(mx(x + w) * scale).toInt()
     val bottom = originY + Math.round(my(y + h) * scale).toInt()
     val made = another(width, height, originX, originY, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
-    made.color = color
-    made.font = font
-    made.stroke = stroke
+    handOn(made)
     made.transform = transform
     return made
+  }
+
+  // The same canvas, drawing only inside a shape (N3), as Java's Graphics2D.clip: a Rect, an Oval,
+  // an Arc or a Path, through the transform, its edge smooth; inside whatever it was clipped to
+  // already. An IllegalArgumentException for any other shape.
+  fun clipped(shape : Shape) : Canvas {
+    if (shape is Rect and turn != 2) { return clipped(shape.x, shape.y, shape.width, shape.height) }
+    return clippedTo(__pathOf(shape), width, height)
+  }
+
+  // A canvas `w` by `h` units drawing only inside `path`, in units through the transform.
+  private fun clippedTo(path : Path, w : int, h : int) : Canvas {
+    val b = path.bounds
+    val box = deviceBox(b.x, b.y, b.x + b.width, b.y + b.height, 0)
+    if (box == null) {
+      val none = another(w, h, originX, originY, clipLeft, clipTop, clipLeft, clipTop)
+      handOn(none)
+      none.transform = transform
+      return none
+    }
+    val made = another(w, h, originX, originY, box.x, box.y, box.x + box.width, box.y + box.height)
+    handOn(made)
+    made.transform = transform
+    val m = Image(box.width, box.height)
+    val drawn = ImageCanvas(m, width, height, scale, originX - box.x, originY - box.y, 0, 0, box.width, box.height)
+    drawn.transform = transform
+    drawn.fill(path)
+    val old = mask
+    if (old != null) { __maskCells(m.cells.cells, box.width, box.height, box.x, box.y, old, maskLeft, maskTop) }
+    made.mask = m
+    made.maskLeft = box.x
+    made.maskTop = box.y
+    return made
+  }
+
+  // What a canvas made from this one (sub, clipped) draws with as it begins: the paint, font,
+  // stroke, composite, interpolation and clip to a shape.
+  private fun handOn(made : Canvas) {
+    made.color = color
+    made.gradient = gradient
+    made.font = font
+    made.stroke = stroke
+    made.composite = composite
+    made.interpolation = interpolation
+    made.mask = mask
+    made.maskLeft = maskLeft
+    made.maskTop = maskTop
   }
 
   // A canvas of this kind over the same pixels, at another place, with another clip.
@@ -153,11 +224,10 @@ abstract class Canvas {
   //   canvas.fillRect(-20, -10, 40, 20)      a rectangle turned about (60, 40)
   //   canvas.restore()
   //
-  // Shapes, filled or their outlines drawn, and paths go through any transform; an outline's
-  // width stretches as what is drawn stretches. For now the rest goes through less: pictures and
-  // clearRect through one that moves and stretches them, text through one that only moves it;
-  // through any other, each is an UnsupportedOperationException, until the step of N3 that
-  // brings text and pictures. sub and clipped work through one that moves and stretches.
+  // Everything goes through it: shapes, filled or their outlines drawn, and paths; text, as its
+  // glyphs' outlines when it is turned or stretched; pictures, read between their pixels by the
+  // canvas's interpolation; sub and clipped. An outline's width stretches as what is drawn
+  // stretches.
   var transform : Transform = Transform.identity
     set(value) {
       field = value
@@ -169,11 +239,12 @@ abstract class Canvas {
   // What save() kept, the last kept at the end.
   private var saved : open List<__CanvasState>? = null
 
-  // Keeps the transform, the colour, the font and the stroke, for restore() to put back.
+  // Keeps the transform, the paint, the font, the stroke, the composite and the interpolation, for
+  // restore() to put back.
   // Saves can be inside each other: each restore() puts back the last one not yet put back.
   fun save() {
     if (saved == null) { saved = [] }
-    saved!!.add(__CanvasState(transform, color, font, stroke))
+    saved!!.add(__CanvasState(transform, color, gradient, font, stroke, composite, interpolation))
   }
   // Puts back what the last save() kept. An IllegalStateException with nothing kept.
   fun restore() {
@@ -182,8 +253,11 @@ abstract class Canvas {
     val state = kept.removeAt(kept.size - 1)
     transform = state.transform
     color = state.color
+    gradient = state.gradient
     font = state.font
     stroke = state.stroke
+    composite = state.composite
+    interpolation = state.interpolation
   }
   // Moves what is drawn from now on by `dx` across and `dy` down, inside what the transform
   // already does: transform = transform.translate(dx, dy).
@@ -203,9 +277,98 @@ abstract class Canvas {
   private fun fillTurned(path : Path) {
     plainFillPath(turn == 0 ? path : path.transformed(transform))
   }
-  // The error for what cannot be drawn through the transform yet.
-  private fun notYet(what : string, until : string) : nothing =>
-    throw UnsupportedOperationException("$what through $transform comes with $until (N3)")
+  // Whether what is drawn goes through a layer: painted by a gradient, clipped to a shape, or
+  // clearing.
+  private val layering : bool
+    get() => gradient != null or mask != null or composite != Composite.srcOver
+  // How far an outline may reach out from the line it follows, in units: half its width, out to
+  // its miter limit, and a unit more.
+  private val reach : float
+    get() => stroke.width.toFloat() * Math.max(1.0, stroke.miterLimit.toFloat()) / 2.0 + 1.0
+
+  // The box of pixels, in the target's own, that what is drawn between (x0, y0) and (x1, y1), in
+  // units before the transform, `margin` units round it, may touch: inside the clip and any
+  // clip to a shape. Null when there are none.
+  private fun deviceBox(x0 : Number, y0 : Number, x1 : Number, y1 : Number, margin : Number) : Rect? {
+    val t = transform
+    var minX = 1e300
+    var minY = 1e300
+    var maxX = -1e300
+    var maxY = -1e300
+    for (k in 0 .. 3) {
+      val ux = (k % 2 == 0 ? x0 : x1).toFloat()
+      val uy = (k < 2 ? y0 : y1).toFloat()
+      val px = t.scaleX * ux + t.shearX * uy + t.translateX
+      val py = t.shearY * ux + t.scaleY * uy + t.translateY
+      minX = Math.min(minX, px)
+      minY = Math.min(minY, py)
+      maxX = Math.max(maxX, px)
+      maxY = Math.max(maxY, py)
+    }
+    val s = scale.toFloat()
+    val grow = Math.abs(margin.toFloat()) * s * stretch() + 2.0
+    fun whole(v : Number) : int => Math.max(-1e9, Math.min(1e9, v.toFloat())).toInt()
+    var l = Math.max(clipLeft, whole(Math.floor(originX + minX * s - grow)))
+    var tp = Math.max(clipTop, whole(Math.floor(originY + minY * s - grow)))
+    var r = Math.min(clipRight, whole(Math.ceil(originX + maxX * s + grow)))
+    var b = Math.min(clipBottom, whole(Math.ceil(originY + maxY * s + grow)))
+    val m = mask
+    if (m != null) {
+      l = Math.max(l, maskLeft)
+      tp = Math.max(tp, maskTop)
+      r = Math.min(r, maskLeft + m.width)
+      b = Math.min(b, maskTop + m.height)
+    }
+    if (r <= l or b <= tp) { return null }
+    return Rect(l, tp, r - l, b - tp)
+  }
+
+  // What `draw` draws between (x0, y0) and (x1, y1), `margin` round it, drawn into a layer in
+  // memory and then laid on: in solid black where it is `painted` by a gradient, and given the
+  // gradient's colours; its alpha a share of the clip to a shape; laid over what is there, or
+  // clearing it.
+  private fun layered(x0 : Number, y0 : Number, x1 : Number, y1 : Number, margin : Number, painted : bool, draw : (Canvas) -> unit) {
+    val box = deviceBox(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), margin)
+    if (box == null) { return }
+    val layer = Image(box.width, box.height)
+    val drawn = ImageCanvas(layer, width, height, scale, originX - box.x, originY - box.y, 0, 0, box.width, box.height)
+    val clearing = composite == Composite.clear
+    val g = gradient
+    drawn.color = clearing or (painted and g != null) ? Color.black : color
+    drawn.font = font
+    drawn.stroke = stroke
+    drawn.transform = transform
+    drawn.interpolation = interpolation
+    draw(drawn)
+    val cells = layer.cells.cells
+    if (g != null and painted and !clearing) {
+      if (transform.determinant == 0.0) { return }
+      // A pixel of the layer to the gradient's units: its middle in the pixels drawn on, then in
+      // units, then back through the transform.
+      val toUser = Transform.translation(box.x + 0.5 - originX, box.y + 0.5 - originY).then(Transform.scaling(1.0 / scale.toFloat())).then(transform.inverse())
+      __paintCells(cells, box.width, box.height, g, toUser)
+    }
+    val m = mask
+    if (m != null) { __maskCells(cells, box.width, box.height, box.x, box.y, m, maskLeft, maskTop) }
+    plainLay(cells, box.width, box.height, box.x, box.y, clearing)
+  }
+
+  // A part of a picture, (`sx`, `sy`) `sw` by `sh` of its pixels, drawn into the rectangle `w` by
+  // `h` at (`x`, `y`) through the transform, read between its pixels by the canvas's
+  // interpolation.
+  private fun resampled(picture : Drawable, sx : Number, sy : Number, sw : Number, sh : Number, x : Number, y : Number, w : Number, h : Number, alpha : Number) {
+    if (transform.determinant == 0.0 or w.toFloat() == 0.0 or h.toFloat() == 0.0) { return }
+    val box = deviceBox(x, y, x + w, y + h, 0)
+    if (box == null) { return }
+    val from = __imageOf(picture)
+    val toSource = Transform.translation(box.x + 0.5 - originX, box.y + 0.5 - originY).then(Transform.scaling(1.0 / scale.toFloat())).then(transform.inverse())
+                   .then(Transform.translation(-x.toFloat(), -y.toFloat())).then(Transform.scaling(sw.toFloat() / w.toFloat(), sh.toFloat() / h.toFloat()))
+                   .then(Transform.translation(sx, sy))
+    val layer = Image(box.width, box.height)
+    __resample(layer.cells.cells, box.width, box.height, from, sx.toFloat(), sy.toFloat(), sw.toFloat(), sh.toFloat(), toSource, interpolation,
+               Math.min(1.0, Math.max(0.0, alpha.toFloat())))
+    plainLay(layer.cells.cells, box.width, box.height, box.x, box.y, false)
+  }
   // An outline or a line: drawn the plain way (`draw`, given how much the transform stretches)
   // when that is `fast` for the stroke, there are no dashes and the transform stretches the same
   // both ways; otherwise `shape` stroked, moved to the middle of the one-unit line its
@@ -277,24 +440,45 @@ abstract class Canvas {
   // Fills the rectangle of `w` by `h` units whose top-left corner is at (`x`, `y`), in the
   // canvas's colour.
   fun fillRect(x : Number, y : Number, w : Number, h : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, 0, true) { c -> c.fillRect(x, y, w, h) }
+      return
+    }
     if (turn == 0) { plainFillRect(x, y, w, h) }
     else if (turn == 1) { plainFillRect(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
     else { fillTurned(__rectPath(x, y, w, h)) }
   }
   // The outline of that rectangle, one unit thick, covering `w` + 1 by `h` + 1 units, as Java's does.
   fun drawRect(x : Number, y : Number, w : Number, h : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, reach, true) { c -> c.drawRect(x, y, w, h) }
+      return
+    }
     if (turn == 0 and stroke.dashes == null and (thin or stroke.join == LineJoin.miter)) { plainDrawRect(x, y, w, h) }
     else { outline(thin or stroke.join == LineJoin.miter, { s -> plainDrawRect(mx(x), my(y), w * s, h * s) }) { __rectPath(x, y, w, h) } }
   }
   // Makes a rectangle clear again: what is under the picture shows through it.
   fun clearRect(x : Number, y : Number, w : Number, h : Number) {
-    if (turn == 0) { plainClearRect(x, y, w, h) }
-    else if (turn == 1) { plainClearRect(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
-    else { notYet("clearRect", "pictures") }
+    if (turn == 2 or mask != null) {
+      // Turned or clipped to a shape: the rectangle filled with the Clear composite.
+      val kept = composite
+      composite = Composite.clear
+      try {
+        fillRect(x, y, w, h)
+      } finally {
+        composite = kept
+      }
+    }
+    else if (turn == 0) { plainClearRect(x, y, w, h) }
+    else { plainClearRect(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
   }
   // Fills a rectangle with rounded corners, each corner a quarter of an oval `arcW` wide and `arcH`
   // high.
   fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, 0, true) { c -> c.fillRoundRect(x, y, w, h, arcW, arcH) }
+      return
+    }
     if (turn == 0) { plainFillRoundRect(x, y, w, h, arcW, arcH) }
     else if (turn == 1) {
       val sx = transform.scaleX
@@ -305,23 +489,39 @@ abstract class Canvas {
   // The outline of a rectangle with rounded corners, one unit thick, covering `w` + 1 by `h` + 1
   // units as drawRect does.
   fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, reach, true) { c -> c.drawRoundRect(x, y, w, h, arcW, arcH) }
+      return
+    }
     if (turn == 0 and stroke.dashes == null) { plainDrawRoundRect(x, y, w, h, arcW, arcH) }
     else { outline(true, { s -> plainDrawRoundRect(mx(x), my(y), w * s, h * s, arcW * s, arcH * s) }) { __roundRectPath(x, y, w, h, arcW, arcH) } }
   }
   // Fills the oval that fits inside the rectangle of `w` by `h` units at (`x`, `y`).
   fun fillOval(x : Number, y : Number, w : Number, h : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, 0, true) { c -> c.fillOval(x, y, w, h) }
+      return
+    }
     if (turn == 0) { plainFillOval(x, y, w, h) }
     else if (turn == 1) { plainFillOval(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
     else { fillTurned(__ovalPath(x, y, w, h)) }
   }
   // The outline of that oval, one unit thick, covering `w` + 1 by `h` + 1 units.
   fun drawOval(x : Number, y : Number, w : Number, h : Number) {
+    if (layering) {
+      layered(x, y, x + w, y + h, reach, true) { c -> c.drawOval(x, y, w, h) }
+      return
+    }
     if (turn == 0 and stroke.dashes == null) { plainDrawOval(x, y, w, h) }
     else { outline(true, { s -> plainDrawOval(mx(x), my(y), w * s, h * s) }) { __ovalPath(x, y, w, h) } }
   }
   // A line one unit thick from (`x1`, `y1`) to (`x2`, `y2`), both ends included: with the
   // stroke's square ends, as Java's default; its ends are the stroke's.
   fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
+    if (layering) {
+      layered(x1, y1, x2, y2, reach, true) { c -> c.drawLine(x1, y1, x2, y2) }
+      return
+    }
     val fast = thin or stroke.cap == LineCap.square
     if (turn == 0 and stroke.dashes == null and fast) { plainDrawLine(x1, y1, x2, y2) }
     else { outline(fast, { s -> plainDrawLine(mx(x1), my(y1), mx(x2), my(y2)) }) { Path().moveTo(x1, y1).lineTo(x2, y2) } }
@@ -329,6 +529,11 @@ abstract class Canvas {
   // Lines from point to point of (`xs[i]`, `ys[i]`), the first `n` of them or all when `n` is null,
   // left open at the last point.
   fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (layering) {
+      val b = linesPath(xs, ys, n, false).bounds
+      layered(b.x, b.y, b.x + b.width, b.y + b.height, reach, true) { c -> c.drawPolyline(xs, ys, n) }
+      return
+    }
     val fast = thin or (stroke.join == LineJoin.round and stroke.cap == LineCap.butt)
     if (turn == 0 and stroke.dashes == null and fast) { plainDrawPolyline(xs, ys, n) }
     else {
@@ -340,6 +545,11 @@ abstract class Canvas {
   }
   // The same lines closed: a last one goes from the last point back to the first.
   fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (layering) {
+      val b = linesPath(xs, ys, n, true).bounds
+      layered(b.x, b.y, b.x + b.width, b.y + b.height, reach, true) { c -> c.drawPolygon(xs, ys, n) }
+      return
+    }
     val fast = thin or stroke.join == LineJoin.round
     if (turn == 0 and stroke.dashes == null and fast) { plainDrawPolygon(xs, ys, n) }
     else {
@@ -351,6 +561,11 @@ abstract class Canvas {
   }
   // Fills the polygon whose corners are those points.
   fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (layering) {
+      val b = linesPath(xs, ys, n, true).bounds
+      layered(b.x, b.y, b.x + b.width, b.y + b.height, 0, true) { c -> c.fillPolygon(xs, ys, n) }
+      return
+    }
     if (turn == 0) { plainFillPolygon(xs, ys, n) }
     else {
       val (px, py) = mapped(xs, ys, n)
@@ -370,6 +585,10 @@ abstract class Canvas {
   // An arc through the transform. Its angles go with the rectangle it is in, 45 pointing at the
   // top right corner, so one stretched is the arc of the stretched rectangle.
   private fun arc(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
+    if (layering) {
+      layered(x, y, x + w, y + h, fill ? 0 : reach, true) { c -> c.arc(x, y, w, h, start, extent, kind, fill) }
+      return
+    }
     if (!fill) {
       val fast = thin or (kind == ArcKind.open ? stroke.cap == LineCap.butt : stroke.join == LineJoin.miter)
       if (turn == 0 and stroke.dashes == null and fast) { arcShape(x, y, w, h, start, extent, kind, false) }
@@ -388,7 +607,14 @@ abstract class Canvas {
     else if (shape is Oval) { drawOval(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Arc) { arc(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, false) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
-    else if (shape is Path) { strokePath(shape, stroke.width) }
+    else if (shape is Path) {
+      if (layering) {
+        val b = shape.bounds
+        layered(b.x, b.y, b.x + b.width, b.y + b.height, reach, true) { c -> c.draw(shape) }
+      } else {
+        strokePath(shape, stroke.width)
+      }
+    }
     else { throw IllegalArgumentException("a canvas draws a Rect, an Oval, an Arc, a Line or a Path, not $shape") }
   }
   // The whole of a shape: a Rect, an Oval, an Arc or a Path filled, a Line drawn; an
@@ -398,7 +624,14 @@ abstract class Canvas {
     if (shape is Rect) { fillRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { fillOval(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Arc) { arc(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, true) }
-    else if (shape is Path) { fillTurned(shape) }
+    else if (shape is Path) {
+      if (layering) {
+        val b = shape.bounds
+        layered(b.x, b.y, b.x + b.width, b.y + b.height, 0, true) { c -> c.fill(shape) }
+      } else {
+        fillTurned(shape)
+      }
+    }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
     else { throw IllegalArgumentException("a canvas fills a Rect, an Oval, an Arc, a Path or a Line, not $shape") }
   }
@@ -435,15 +668,29 @@ abstract class Canvas {
   // transform: path.flatten(scale) gives it in straight lines, fine enough for this canvas's
   // pixels.
   protected abstract fun plainFillPath(path : Path)
+  // Pixels laid on, pixel for pixel (N3): `cells`, `width` by `height` of them row by row, red,
+  // green, blue and alpha not multiplied by alpha, at (`left`, `top`) in the pixels drawn on,
+  // inside the clip; laid over what is there, or with `clear` clearing it by their alpha. What a
+  // layer drew (a gradient, a clip to a shape, the Clear composite) and a picture drawn through
+  // a transform are laid on so.
+  protected abstract fun plainLay(cells : List<Color>, width : int, height : int, left : int, top : int, clear : bool)
 
   // -- Text --
 
   // Text in the canvas's font and colour, starting at x with its baseline at y: letters sit on
   // that row and tails hang below it. Gives the width it took, in units.
   fun drawString(text : string, x : Number, y : Number) : int {
+    if (layering) {
+      val m = measure(text)
+      var took = 0
+      layered(x, y - m.height, x + m.width, y + m.height, m.height, true) { c -> took = c.drawString(text, x, y) }
+      return took
+    }
     if (turn == 0) { return plainDrawString(text, x, y) }
     if (turn == 1 and transform.scaleX == 1.0 and transform.scaleY == 1.0) { return plainDrawString(text, mx(x), my(y)) }
-    notYet("drawString", "text")
+    // Turned or stretched: its glyphs' outlines, filled.
+    fillTurned(font.outline(text, x, y, scale))
+    return measure(text).width
   }
   // drawString, through no transform.
   protected abstract fun plainDrawString(text : string, x : Number, y : Number) : int
@@ -461,16 +708,23 @@ abstract class Canvas {
   // A picture at (x, y): at its own size, or scaled into w by h; `alpha` below 1.0 makes it
   // see-through.
   fun draw(picture : Drawable, x : Number, y : Number, w : Number? = null, h : Number? = null, alpha : Number = 1.0) {
-    if (turn == 0) { drawPicture(picture, x, y, w, h, alpha) }
-    else if (turn != 1) { notYet("a picture", "pictures") }
+    val pw = w ?: picture.width
+    val ph = h ?: picture.height
+    if (layering) { layered(x, y, x + pw, y + ph, 0, false) { c -> c.draw(picture, x, y, w, h, alpha) } }
+    else if (turn == 2 or interpolation != Interpolation.bilinear) {
+      val from = __imageOf(picture)
+      resampled(picture, 0, 0, from.width, from.height, x, y, pw, ph, alpha)
+    }
+    else if (turn == 0) { drawPicture(picture, x, y, w, h, alpha) }
     else if (w == null and h == null and transform.scaleX == 1.0 and transform.scaleY == 1.0) { drawPicture(picture, mx(x), my(y), null, null, alpha) }
-    else { drawPicture(picture, mx(x), my(y), (w ?: picture.width) * transform.scaleX, (h ?: picture.height) * transform.scaleY, alpha) }
+    else { drawPicture(picture, mx(x), my(y), pw * transform.scaleX, ph * transform.scaleY, alpha) }
   }
   // A part of a picture, given in its own pixels, put into a rectangle.
   fun drawPart(picture : Drawable, sourceX : Number, sourceY : Number, sourceW : Number, sourceH : Number, x : Number, y : Number, w : Number, h : Number,
                alpha : Number = 1.0) {
-    if (turn == 0) { drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha) }
-    else if (turn != 1) { notYet("a picture", "pictures") }
+    if (layering) { layered(x, y, x + w, y + h, 0, false) { c -> c.drawPart(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha) } }
+    else if (turn == 2 or interpolation != Interpolation.bilinear) { resampled(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha) }
+    else if (turn == 0) { drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha) }
     else { drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, mx(x), my(y), w * transform.scaleX, h * transform.scaleY, alpha) }
   }
   // What draw(picture, ...) asks of each kind of canvas: the picture at (`x`, `y`), at its own size or
@@ -694,6 +948,75 @@ class Image : Drawable {
   // A new image of the same size with the same pixels, changed apart from this one.
   fun copy() : Image => crop(0, 0, width, height)
 
+  // A copy blurred by a Gaussian whose standard deviation is `radius` pixels, as CSS's blur()
+  // and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that,
+  // their colours weighed by their alpha so that a see-through edge does not darken, and clear
+  // beyond the picture's edges. An IllegalArgumentException for a radius below 0.
+  fun blurred(radius : Number) : Image {
+    val s = radius.toFloat()
+    if (!(s >= 0.0)) { throw IllegalArgumentException("a blur's radius is 0 or more, not $radius") }
+    if (s == 0.0 or width == 0 or height == 0) { return copy() }
+    val reach = Math.ceil(3.0 * s).toInt()
+    val weights : open List<float> = List(2 * reach + 1) { 0.0 }
+    var total = 0.0
+    for (k in -reach .. reach) {
+      val w = Math.exp(-(k * k) / (2.0 * s * s))
+      weights[k + reach] = w
+      total += w
+    }
+    for (k in 0 ..< weights.size) { weights[k] = weights[k] / total }
+    val n = width * height
+    val src = cells.cells
+    // The four parts, colours times alpha; then across, then down.
+    val parts : List<open List<float>> = [List(n) { 0.0 }, List(n) { 0.0 }, List(n) { 0.0 }, List(n) { 0.0 }]
+    for (i in 0 ..< n) {
+      val c = src[i]
+      val a = c.alpha.toInt()
+      parts[0][i] = c.red.toInt() * a / 255.0
+      parts[1][i] = c.green.toInt() * a / 255.0
+      parts[2][i] = c.blue.toInt() * a / 255.0
+      parts[3][i] = a.toFloat()
+    }
+    val line : open List<float> = List(Math.max(width, height)) { 0.0 }
+    for (p in parts) {
+      // Across each row, then down each column: a line copied out, padded with reach clear
+      // pixels each side, so that every sum takes the whole kernel.
+      val padded : open List<float> = List(Math.max(width, height) + 2 * reach) { 0.0 }
+      val taps = 2 * reach + 1
+      for (y in 0 ..< height) {
+        val base = y * width
+        for (x in 0 ..< width) { padded[x + reach] = p[base + x] }
+        for (x in 0 ..< width) {
+          var sum = 0.0
+          for (k in 0 ..< taps) { sum += padded[x + k] * weights[k] }
+          line[x] = sum
+        }
+        for (x in 0 ..< width) { p[base + x] = line[x] }
+      }
+      for (x in width + reach ..< padded.size) { padded[x] = 0.0 }
+      for (x in 0 ..< width) {
+        for (y in 0 ..< height) { padded[y + reach] = p[y * width + x] }
+        for (y in height + reach ..< padded.size) { padded[y] = 0.0 }
+        for (y in 0 ..< height) {
+          var sum = 0.0
+          for (k in 0 ..< taps) { sum += padded[y + k] * weights[k] }
+          line[y] = sum
+        }
+        for (y in 0 ..< height) { p[y * width + x] = line[y] }
+      }
+    }
+    val made = Image(width, height)
+    val out = made.cells.cells
+    for (i in 0 ..< n) {
+      val a = parts[3][i]
+      if (a >= 0.5) {
+        fun part(v : float) : int => Math.min(255, Math.max(0, Math.round(v * 255.0 / a).toInt()))
+        out[i] = Color(part(parts[0][i]), part(parts[1][i]), part(parts[2][i]), Math.min(255, Math.round(a).toInt()))
+      }
+    }
+    return made
+  }
+
   // The smallest rectangle outside which every pixel is `background`; null if all of them are.
   fun inkBox(background : Color = Color.clear) : Rect? {
     val box : List<int>? = __text.imageInkBox(cells.cells, width, height, background.argb)
@@ -768,7 +1091,8 @@ class Image : Drawable {
 }
 
 // What Canvas.save() keeps for restore() to put back.
-class __CanvasState(val transform : Transform, val color : Color, val font : Font, val stroke : Stroke)
+class __CanvasState(val transform : Transform, val color : Color, val gradient : Paint?, val font : Font, val stroke : Stroke, val composite : Composite,
+                    val interpolation : Interpolation)
 
 // What draws on an Image: the software engine, in the image's pixels (D123).
 class ImageCanvas : Canvas {
@@ -901,6 +1225,11 @@ class ImageCanvas : Canvas {
   protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
     __text.canvasArc(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, start, extent,
                      kind.ordinal, fill, lineWidth)
+    drawn()
+  }
+  // Pixels laid over the image's, or clearing them.
+  protected override fun plainLay(cells : List<Color>, width : int, height : int, left : int, top : int, clear : bool) {
+    __text.canvasLay(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, cells, width, height, left, top, clear)
     drawn()
   }
   // A path, smooth at its edges, laid over what is there.

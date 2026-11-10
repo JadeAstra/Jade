@@ -1,0 +1,328 @@
+// ---- Paints, composites and pictures through a transform (N3) ----
+
+// What shapes, outlines and text are filled with, as Java's Paint: a Color, a LinearGradient or
+// a RadialGradient. A canvas's `paint` is one of them; setting its `color` sets its paint to that
+// colour.
+interface Paint {}
+
+// What a gradient does past its ends, as Java's MultipleGradientPaint.CycleMethod: keeps the
+// end colours (pad), goes back the other way (reflect), or starts again (repeat).
+enum CycleMethod { pad, reflect, repeat }
+
+// Colours changing along a line, as Java's LinearGradientPaint: `colors[i]` at `fractions[i]` of
+// the way from (x1, y1) to (x2, y2), in between mixed, and lines across it of one colour. The
+// fractions go up from 0 to 1, one for each colour, two or more. Its points go through the
+// canvas's transform as what is drawn does.
+//
+//   canvas.paint = LinearGradient(0, 0, 100, 0, [0, 1], [Color.red, Color.blue])
+//   canvas.fillRect(0, 0, 100, 40)
+value LinearGradient(val x1 : Number, val y1 : Number, val x2 : Number, val y2 : Number, val fractions : List<Number>, val colors : List<Color>,
+                     val cycle : CycleMethod = CycleMethod.pad) : Paint {
+  // The colour at (`x`, `y`). An IllegalArgumentException for fractions and colours that do not
+  // go together.
+  fun colorAt(x : Number, y : Number) : Color => __gradientTable(fractions, colors)[__cycled(at(x.toFloat(), y.toFloat()), cycle)]
+
+  // How far along (x, y) is, 0 at the start and 1 at the end.
+  internal fun at(x : float, y : float) : float {
+    val dx = x2.toFloat() - x1.toFloat()
+    val dy = y2.toFloat() - y1.toFloat()
+    val length2 = dx * dx + dy * dy
+    return length2 == 0.0 ? 0.0 : ((x - x1.toFloat()) * dx + (y - y1.toFloat()) * dy) / length2
+  }
+}
+
+// Colours changing out from a point, as Java's RadialGradientPaint: `colors[i]` at `fractions[i]`
+// of the way from the focus (`fx`, `fy`, the centre unless given) to the circle of `radius` round
+// (`cx`, `cy`). A focus outside the circle is brought in, as Java brings it.
+//
+//   canvas.paint = RadialGradient(50, 50, 40, [0, 1], [Color.white, Color.black], fx = 35, fy = 35)
+value RadialGradient(val cx : Number, val cy : Number, val radius : Number, val fractions : List<Number>, val colors : List<Color>,
+                     val cycle : CycleMethod = CycleMethod.pad, val fx : Number? = null, val fy : Number? = null) : Paint {
+  // The colour at (`x`, `y`). An IllegalArgumentException for fractions and colours that do not
+  // go together, or a radius not above 0.
+  fun colorAt(x : Number, y : Number) : Color => __gradientTable(fractions, colors)[__cycled(at(x.toFloat(), y.toFloat()), cycle)]
+
+  // How far out (x, y) is: along the line from the focus through it, the part of the way to the
+  // circle.
+  internal fun at(x : float, y : float) : float {
+    val r = radius.toFloat()
+    if (!(r > 0.0)) { throw IllegalArgumentException("a radial gradient's radius is more than 0, not $radius") }
+    val c0 = cx.toFloat()
+    val c1 = cy.toFloat()
+    var f0 = (fx ?: cx).toFloat()
+    var f1 = (fy ?: cy).toFloat()
+    // A focus on or outside the circle, brought in to 0.97 of the radius.
+    val off = Math.hypot(f0 - c0, f1 - c1)
+    if (off > r * 0.97) {
+      f0 = c0 + (f0 - c0) * r * 0.97 / off
+      f1 = c1 + (f1 - c1) * r * 0.97 / off
+    }
+    val dx = x - f0
+    val dy = y - f1
+    val a = dx * dx + dy * dy
+    if (a == 0.0) { return 0.0 }
+    val gx = f0 - c0
+    val gy = f1 - c1
+    val b = 2.0 * (gx * dx + gy * dy)
+    val c = gx * gx + gy * gy - r * r
+    val s = (-b + Math.sqrt(Math.max(0.0, b * b - 4.0 * a * c))) / (2.0 * a)
+    return s <= 0.0 ? 1.0 : 1.0 / s
+  }
+}
+
+// How what is drawn is put together with what is there, as Java's AlphaComposite: laid over it
+// (srcOver), or clearing it where it would have been drawn (clear), what is under the picture
+// showing through.
+enum Composite { srcOver, clear }
+
+// How a picture's pixels are read between them when it is drawn larger, smaller or turned, as
+// Java's RenderingHints: the nearest one, a mix of the four round the place (bilinear), or of
+// the sixteen (bicubic, sharper).
+enum Interpolation { nearest, bilinear, bicubic }
+
+// A gradient's colours at 256 places from 0 to 1, mixed between its stops as Java mixes them,
+// each part on its own, not multiplied by alpha.
+fun __gradientTable(fractions : List<Number>, colors : List<Color>) : List<Color> {
+  if (fractions.size != colors.size or colors.size < 2) {
+    throw IllegalArgumentException("a gradient has two colours or more, each with its fraction, not ${colors.size} colours and ${fractions.size} fractions")
+  }
+  for (i in 0 ..< fractions.size) {
+    val f = fractions[i].toFloat()
+    if (!(f >= 0.0 and f <= 1.0) or (i > 0 and !(f > fractions[i - 1].toFloat()))) {
+      throw IllegalArgumentException("a gradient's fractions go up from 0 to 1, not $fractions")
+    }
+  }
+  val table : open List<Color> = []
+  var k = 0
+  for (i in 0 ..< 256) {
+    val t = i / 255.0
+    while (k < fractions.size - 1 and t > fractions[k + 1].toFloat()) { k += 1 }
+    if (t <= fractions[0].toFloat()) { table.add(colors[0]) }
+    else if (k >= fractions.size - 1) { table.add(colors[colors.size - 1]) }
+    else {
+      val a = fractions[k].toFloat()
+      val b = fractions[k + 1].toFloat()
+      val u = (t - a) / (b - a)
+      val p = colors[k]
+      val q = colors[k + 1]
+      fun mix(x : byte, y : byte) : int => Math.round(x.toInt() + (y.toInt() - x.toInt()) * u).toInt()
+      table.add(Color(mix(p.red, q.red), mix(p.green, q.green), mix(p.blue, q.blue), mix(p.alpha, q.alpha)))
+    }
+  }
+  return table
+}
+
+// A place along a gradient, t, as an index into its table, by its cycle.
+fun __cycled(t : float, cycle : CycleMethod) : int {
+  var u = t
+  if (cycle == CycleMethod.repeat) { u = u - Math.floor(u) }
+  else if (cycle == CycleMethod.reflect) {
+    u = Math.abs(u) % 2.0
+    if (u > 1.0) { u = 2.0 - u }
+  }
+  if (!(u > 0.0)) { return 0 }
+  if (u >= 1.0) { return 255 }
+  return Math.round(u * 255.0).toInt()
+}
+
+// A layer of `width` by `height` pixels drawn in solid black (each pixel's alpha what was drawn
+// there) given a gradient's colours instead, its alpha kept as a share. `toUser` takes a pixel's
+// column and row to the place its middle is in the gradient's units.
+fun __paintCells(cells : open List<Color>, width : int, height : int, paint : Paint, toUser : Transform) {
+  var table : List<Color> = []
+  var cycle = CycleMethod.pad
+  // Linear: t = (x - x1) * gx + (y - y1) * gy. Radial: the focus (f0, f1) and centre (c0, c1).
+  var linear = true
+  var gx = 0.0
+  var gy = 0.0
+  var ox = 0.0
+  var oy = 0.0
+  var f0 = 0.0
+  var f1 = 0.0
+  var c0 = 0.0
+  var c1 = 0.0
+  var rr = 0.0
+  if (paint is LinearGradient) {
+    table = __gradientTable(paint.fractions, paint.colors)
+    cycle = paint.cycle
+    val dx = paint.x2.toFloat() - paint.x1.toFloat()
+    val dy = paint.y2.toFloat() - paint.y1.toFloat()
+    val length2 = dx * dx + dy * dy
+    if (length2 > 0.0) {
+      gx = dx / length2
+      gy = dy / length2
+    }
+    ox = paint.x1.toFloat()
+    oy = paint.y1.toFloat()
+  } else if (paint is RadialGradient) {
+    table = __gradientTable(paint.fractions, paint.colors)
+    cycle = paint.cycle
+    linear = false
+    val r = paint.radius.toFloat()
+    if (!(r > 0.0)) { throw IllegalArgumentException("a radial gradient's radius is more than 0, not ${paint.radius}") }
+    c0 = paint.cx.toFloat()
+    c1 = paint.cy.toFloat()
+    f0 = (paint.fx ?: paint.cx).toFloat()
+    f1 = (paint.fy ?: paint.cy).toFloat()
+    val off = Math.hypot(f0 - c0, f1 - c1)
+    if (off > r * 0.97) {
+      f0 = c0 + (f0 - c0) * r * 0.97 / off
+      f1 = c1 + (f1 - c1) * r * 0.97 / off
+    }
+    rr = r * r
+  } else {
+    throw IllegalArgumentException("a canvas paints with a Color, a LinearGradient or a RadialGradient, not $paint")
+  }
+  val pad = cycle == CycleMethod.pad
+  // Along a row, a linear gradient's t goes up by the same amount each pixel.
+  val step = gx * toUser.scaleX + gy * toUser.shearY
+  val qx = f0 - c0
+  val qy = f1 - c1
+  val qq = qx * qx + qy * qy - rr
+  for (row in 0 ..< height) {
+    var ux = toUser.shearX * row + toUser.translateX
+    var uy = toUser.scaleY * row + toUser.translateY
+    var t = (ux - ox) * gx + (uy - oy) * gy
+    var i = row * width
+    for (col in 0 ..< width) {
+      val a = cells[i].alpha.toInt()
+      if (a != 0) {
+        var u = t
+        if (!linear) {
+          val dx = ux - f0
+          val dy = uy - f1
+          val aa = dx * dx + dy * dy
+          if (aa == 0.0) { u = 0.0 }
+          else {
+            val bb = 2.0 * (qx * dx + qy * dy)
+            val s = (-bb + Math.sqrt(Math.max(0.0, bb * bb - 4.0 * aa * qq))) / (2.0 * aa)
+            u = s <= 0.0 ? 1.0 : 1.0 / s
+          }
+        }
+        val k = pad ? (u <= 0.0 ? 0 : (u >= 1.0 ? 255 : Math.round(u * 255.0).toInt())) : __cycled(u, cycle)
+        val c = table[k]
+        val ca = c.alpha.toInt()
+        cells[i] = a == 255 and ca == 255 ? c : Color(c.red, c.green, c.blue, ((a * ca + 127) / 255).toByte())
+      }
+      ux += toUser.scaleX
+      uy += toUser.shearY
+      t += step
+      i += 1
+    }
+  }
+}
+
+// A layer's alpha made a share of a mask's: the mask's pixel under each, the layer at
+// (`left`, `top`) and the mask at (`maskLeft`, `maskTop`), in the same pixels.
+fun __maskCells(cells : open List<Color>, width : int, height : int, left : int, top : int, mask : Image, maskLeft : int, maskTop : int) {
+  val m = mask.cells.cells
+  for (row in 0 ..< height) {
+    val my = top + row - maskTop
+    var i = row * width
+    for (col in 0 ..< width) {
+      val a = cells[i].alpha.toInt()
+      if (a != 0) {
+        val mx = left + col - maskLeft
+        val k = my >= 0 and my < mask.height and mx >= 0 and mx < mask.width ? m[my * mask.width + mx].alpha.toInt() : 0
+        if (k != 255) {
+          val c = cells[i]
+          cells[i] = Color(c.red, c.green, c.blue, ((a * k + 127) / 255).toByte())
+        }
+      }
+      i += 1
+    }
+  }
+}
+
+// A part of a picture, (sx, sy) `sw` by `sh` of its pixels, drawn into a layer of `width` by
+// `height` pixels: `toSource` takes a pixel's column and row to where its middle falls in the
+// picture's pixels. Read between pixels by `interpolation`; its edges smoothed by how much of
+// each layer pixel they cover; see-through by `alpha`.
+fun __resample(cells : open List<Color>, width : int, height : int, from : Image, sx : float, sy : float, sw : float, sh : float, toSource : Transform,
+               interpolation : Interpolation, alpha : float) {
+  val src = from.cells.cells
+  val fw = from.width
+  val fh = from.height
+  // How far a layer pixel reaches in the picture, across and down: the edges' smoothing.
+  val reachX = Math.max(1e-9, Math.abs(toSource.scaleX) + Math.abs(toSource.shearX))
+  val reachY = Math.max(1e-9, Math.abs(toSource.shearY) + Math.abs(toSource.scaleY))
+  val x0 = Math.max(0, Math.floor(sx).toInt())
+  val y0 = Math.max(0, Math.floor(sy).toInt())
+  val x1 = Math.min(fw, Math.ceil(sx + sw).toInt()) - 1
+  val y1 = Math.min(fh, Math.ceil(sy + sh).toInt()) - 1
+  if (x1 < x0 or y1 < y0) { return }
+  // The weights of the pixels round a place, accumulated as red, green, blue, all times alpha,
+  // and alpha.
+  var r = 0.0
+  var g = 0.0
+  var b = 0.0
+  var a = 0.0
+  fun take(px : int, py : int, w : float) {
+    val c = src[Math.min(y1, Math.max(y0, py)) * fw + Math.min(x1, Math.max(x0, px))]
+    val ca = c.alpha.toInt() * w
+    r += c.red.toInt() * ca
+    g += c.green.toInt() * ca
+    b += c.blue.toInt() * ca
+    a += ca
+  }
+  // Catmull-Rom's weights for the four pixels round a place t of the way between the middle two,
+  // put into `into`.
+  fun cubic(t : float, into : open List<float>) {
+    val t2 = t * t
+    val t3 = t2 * t
+    into[0] = (-t3 + 2.0 * t2 - t) / 2.0
+    into[1] = (3.0 * t3 - 5.0 * t2 + 2.0) / 2.0
+    into[2] = (-3.0 * t3 + 4.0 * t2 + t) / 2.0
+    into[3] = (t3 - t2) / 2.0
+  }
+  val wx : open List<float> = [0.0, 0.0, 0.0, 0.0]
+  val wy : open List<float> = [0.0, 0.0, 0.0, 0.0]
+  for (row in 0 ..< height) {
+    var u = toSource.shearX * row + toSource.translateX
+    var v = toSource.scaleY * row + toSource.translateY
+    var i = row * width
+    for (col in 0 ..< width) {
+      val coverX = Math.min(1.0, Math.max(0.0, Math.min(u - sx, sx + sw - u) / reachX + 0.5))
+      val coverY = Math.min(1.0, Math.max(0.0, Math.min(v - sy, sy + sh - v) / reachY + 0.5))
+      val cover = coverX * coverY
+      if (cover > 0.0) {
+        r = 0.0
+        g = 0.0
+        b = 0.0
+        a = 0.0
+        if (interpolation == Interpolation.nearest) {
+          take(Math.floor(u).toInt(), Math.floor(v).toInt(), 1.0)
+        } else if (interpolation == Interpolation.bilinear) {
+          val fx = u - 0.5
+          val fy = v - 0.5
+          val ix = Math.floor(fx).toInt()
+          val iy = Math.floor(fy).toInt()
+          val tx = fx - ix
+          val ty = fy - iy
+          take(ix, iy, (1.0 - tx) * (1.0 - ty))
+          take(ix + 1, iy, tx * (1.0 - ty))
+          take(ix, iy + 1, (1.0 - tx) * ty)
+          take(ix + 1, iy + 1, tx * ty)
+        } else {
+          val fx = u - 0.5
+          val fy = v - 0.5
+          val ix = Math.floor(fx).toInt()
+          val iy = Math.floor(fy).toInt()
+          cubic(fx - ix, wx)
+          cubic(fy - iy, wy)
+          for (m in 0 .. 3) {
+            for (n in 0 .. 3) { take(ix - 1 + n, iy - 1 + m, wx[n] * wy[m]) }
+          }
+        }
+        if (a > 0.0) {
+          val out = Math.min(255.0, a * cover * alpha)
+          fun part(p : float) : int => Math.min(255, Math.max(0, Math.round(p / a).toInt()))
+          cells[i] = Color(part(r), part(g), part(b), Math.round(out).toInt())
+        }
+      }
+      u += toSource.scaleX
+      v += toSource.shearY
+      i += 1
+    }
+  }
+}

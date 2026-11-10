@@ -261,6 +261,41 @@ class Font {
   // a screen with that many to a unit: the sum of its characters' widths, and so where it ends
   // when drawn.
   fun width(text : string | char, scale : Number = 1) : int => text is char ? engineAt(scale).charWidth(text) : engineAt(scale).width(text)
+
+  // A line of text as a Path (N3), as Java's GlyphVector.getOutline: its glyphs' outlines, the
+  // start of its baseline at (`x`, `y`), in units; placed as the font places them at `scale`
+  // pixels to a unit. What a canvas fills to draw text through a transform; a colour glyph (an
+  // emoji) gives its shape, in one colour.
+  fun outline(text : string, x : Number = 0, y : Number = 0, scale : Number = 1) : Path {
+    val data = __text.textOutline(engineHandle(scale), text) as List<Number>
+    val s = scale.toFloat()
+    val ox = x.toFloat()
+    val oy = y.toFloat()
+    val path = Path()
+    var i = 0
+    while (i < data.size) {
+      val verb = data[i].toInt()
+      i += 1
+      fun px(k : int) : float => ox + data[i + 2 * k].toFloat() / s
+      fun py(k : int) : float => oy + data[i + 2 * k + 1].toFloat() / s
+      if (verb == 0) {
+        path.moveTo(px(0), py(0))
+        i += 2
+      } else if (verb == 1) {
+        path.lineTo(px(0), py(0))
+        i += 2
+      } else if (verb == 2) {
+        path.quadTo(px(0), py(0), px(1), py(1))
+        i += 4
+      } else if (verb == 3) {
+        path.curveTo(px(0), py(0), px(1), py(1), px(2), py(2))
+        i += 6
+      } else {
+        path.close()
+      }
+    }
+    return path
+  }
   // Where each character of `text` starts and where the last one ends, in layout units or with
   // `scale` in that screen's pixels: one number more than it has characters, the first 0.
   //   font.offsets("abc")   [0, font.width("a"), font.width("ab"), font.width("abc")]

@@ -1080,6 +1080,53 @@ void registerText(VM& vm) {
         return Value::null();
     });
 
+    // lay(target..., cells, width, height, left, top, clear): a picture's pixels laid over the
+    // target's at (left, top) in its pixels, inside the clip (N3: what a layer drew, a picture
+    // drawn through a transform). With `clear`, what is there is cleared by each pixel's alpha
+    // instead, as Java's Clear composite.
+    def("canvasLay", 16, 16, [](VM& vm, int, Value* args) -> Value {
+        const Target t = targetOf(vm, args);
+        const int64_t w = vm.toInt(args[11], "width"), h = vm.toInt(args[12], "height");
+        const std::vector<uint8_t>& from = rgbaOf(vm, args[10], w, h);
+        const int64_t left = vm.toInt(args[13], "left"), top = vm.toInt(args[14], "top");
+        const bool clear = args[15].truthy();
+        const int64_t l = std::max<int64_t>(t.clipLeft, left), r = std::min<int64_t>(t.clipRight, left + w);
+        const int64_t tp = std::max<int64_t>(t.clipTop, top), b = std::min<int64_t>(t.clipBottom, top + h);
+        for (int64_t row = tp; row < b; row++) {
+            const uint8_t* s = from.data() + (static_cast<size_t>(row - top) * static_cast<size_t>(w) + static_cast<size_t>(l - left)) * 4;
+            uint8_t* d = t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(l)) * 4;
+            for (int64_t col = l; col < r; col++, s += 4, d += 4) {
+                if (s[3] == 0) continue;
+                if (clear) d[3] = static_cast<uint8_t>((d[3] * (255u - s[3]) + 127) / 255);
+                else blendPixel(d, s[0], s[1], s[2], s[3]);
+            }
+        }
+        return Value::null();
+    });
+    // outline(font, text): the glyphs of a line of text as outlines, from the start of its
+    // baseline in the font's pixels, y growing downwards (N3): a verb (0 move, 1 line, 2
+    // quadratic, 3 cubic, 4 close) and then its points' x and y, one after another.
+    def("textOutline", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        auto font = fontOf(vm, args[0]);
+        const std::string& s = vm.toStr(args[1], "text");
+        std::vector<text::PlacedGlyph> glyphs;
+        font->place(s, glyphs);
+        std::vector<Value> out;
+        text::Path path;
+        for (const text::PlacedGlyph& g : glyphs) {
+            if (!g.font->outline(g.glyph, path)) continue;
+            size_t p = 0;
+            for (uint8_t verb : path.verbs) {
+                out.push_back(Value::integer(verb));
+                const int count = verb == text::Path::Move || verb == text::Path::Line ? 1 : verb == text::Path::Quad ? 2 : verb == text::Path::Cubic ? 3 : 0;
+                for (int k = 0; k < count; k++, p += 2) {
+                    out.push_back(Value::number(static_cast<double>(path.points[p]) + g.x));
+                    out.push_back(Value::number(-static_cast<double>(path.points[p + 1])));
+                }
+            }
+        }
+        return listOf(vm, std::move(out));
+    });
     // path(target..., colour, outline, evenOdd): a Path flattened into straight lines
     // (Path.flatten) and filled (N3), each contour closed. Not on whole pixels: a path is where
     // it says.
@@ -1110,7 +1157,7 @@ void registerText(VM& vm) {
     // instant); and drawing on a canvas, which says itself what it may draw on (mayDraw).
     vm.markNotParallel("__text", {"width", "charWidth", "faceGlyph", "find", "faceInfo", "font", "fontInfo", "canvasFillRect", "canvasDrawRect",
                                   "canvasClear", "canvasRoundRect", "canvasOval", "canvasLine", "canvasPolygon", "canvasArc", "canvasText",
-                                  "canvasPicture", "canvasPath"});
+                                  "canvasPicture", "canvasPath", "canvasLay", "textOutline"});
 }
 
 }  // namespace jade

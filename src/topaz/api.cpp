@@ -972,6 +972,19 @@ void registerTopaz(VM& vm) {
         }
         return Value::null();
     });
+    // pixels(cells, width, height, left, top, clear): a picture's pixels laid over the target at
+    // (left, top) in its pixels, inside the clip, or clearing what is there by their alpha (N3).
+    def("pixels", 6, 6, [](VM& vm, int, Value* args) -> Value {
+        Renderer& r = need(vm);
+        const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
+        std::vector<uint8_t>* data = nullptr;
+        if (args[0].isObjType(ObjType::List) && asList(args[0])->packed() && asList(args[0])->pack->width == 4) data = &asList(args[0])->pack->block;
+        if (data == nullptr || w < 0 || h < 0 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4 != data->size())
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture's pixels do not fit its size");
+        r.pixels(data->data(), static_cast<int>(w), static_cast<int>(h), static_cast<int>(vm.toInt(args[3], "left")), static_cast<int>(vm.toInt(args[4], "top")),
+                 args[5].truthy());
+        return Value::null();
+    });
     // path(outline, evenOdd): a Path flattened into straight lines (Path.flatten) and filled
     // (N3), as the image canvas's canvasPath fills it. Rasterised once, and kept by its look, as
     // a polygon is.

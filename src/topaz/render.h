@@ -83,6 +83,11 @@ public:
     // Another surface, or a part of it, drawn into a rectangle, as see-through as `alpha` says.
     void image(int source, float srcLeft, float srcTop, float srcRight, float srcBottom, float left, float top, float right, float bottom, float alpha);
 
+    // Pixels in memory (red, green, blue, alpha, not multiplied by alpha), `w` by `h`, laid over
+    // the target at (left, top), pixel for pixel; with `clear`, what is there cleared by their
+    // alpha instead, as Java's Clear composite (N3).
+    void pixels(const uint8_t* rgba, int w, int h, int left, int top, bool clear);
+
     // Sends what has been drawn so far to the card.
     void flush();
     // Draws a surface into a window. It shows once the window's buffers are swapped, which

@@ -1,0 +1,207 @@
+// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// Paints, clips to a shape, the Clear composite, text and pictures through a transform, and
+// blur (N3): the image's canvas and the graphics card's draw them alike.
+import Topaz.*
+
+// A canvas on an image in memory, and one on a hidden window's surface, given the same scene;
+// their pictures, to be compared.
+fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
+  val image = Image(120 * scale, 100 * scale, Color.white)
+  scene(image.canvasAt(120, 100, scale))
+  Topaz.windowOpener = HiddenWindowOpener(scale)
+  val w = Window(Component(object : Content {
+    override var owner : Component? = null
+    override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))
+    override fun paint(canvas : Canvas) {
+      canvas.color = Color.white
+      canvas.fillRect(0, 0, 120, 100)
+      scene(canvas)
+    }
+  }), "Paint", 120, 100)
+  w.show()
+  val host = w.handle as WindowHost
+  host.frame()
+  val card = host.snapshot()
+  w.close()
+  return [image, card]
+}
+// How much of a rectangle of pixels is covered, a pixel's darkness its share: a shape's area.
+fun area(image : Image, x0 : int, y0 : int, x1 : int, y1 : int) : float {
+  var sum = 0.0
+  for (y in y0 ..< y1) {
+    for (x in x0 ..< x1) { sum += (255 - image[x, y].red.toInt()) / 255.0 }
+  }
+  return sum
+}
+// How many pixels the two pictures differ in by much.
+fun differing(a : Image, b : Image) : int {
+  var n = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      val p = a[x, y]
+      val q = b[x, y]
+      if (Math.abs(p.red.toInt() - q.red.toInt()) + Math.abs(p.green.toInt() - q.green.toInt()) + Math.abs(p.blue.toInt() - q.blue.toInt()) > 60) { n += 1 }
+    }
+  }
+  return n
+}
+fun rgb(c : Color) : string => "${c.red} ${c.green} ${c.blue}"
+
+// -- Gradients --
+
+val across = LinearGradient(0, 0, 100, 0, [0, 1], [Color.black, Color.white])
+print(rgb(across.colorAt(0, 5)), rgb(across.colorAt(50, 5)), rgb(across.colorAt(100, 5)), rgb(across.colorAt(150, 5)))   // expect: 0 0 0 128 128 128 255 255 255 255 255 255
+val bands = LinearGradient(0, 0, 10, 0, [0, 0.5, 1], [Color.red, Color.green, Color.blue], CycleMethod.reflect)
+print(rgb(bands.colorAt(5, 0)), rgb(bands.colorAt(15, 0)), rgb(bands.colorAt(20, 0)), rgb(LinearGradient(0, 0, 10, 0, [0, 1], [Color.black, Color.white], CycleMethod.repeat).colorAt(12.5, 0)))   // expect: 0 254 1 0 254 1 255 0 0 64 64 64
+val spot = RadialGradient(50, 50, 40, [0, 1], [Color.white, Color.black])
+print(rgb(spot.colorAt(50, 50)), rgb(spot.colorAt(70, 50)), rgb(spot.colorAt(95, 50)))   // expect: 255 255 255 127 127 127 0 0 0
+// With the focus moved, the colour at the focus is the first.
+print(rgb(RadialGradient(50, 50, 40, [0, 1], [Color.white, Color.black], fx = 30, fy = 50).colorAt(30, 50)))   // expect: 255 255 255
+for (bad in [{ LinearGradient(0, 0, 1, 0, [0], [Color.red]).colorAt(0, 0) }, { LinearGradient(0, 0, 1, 0, [0.5, 0.2], [Color.red, Color.blue]).colorAt(0, 0) }]) {
+  try { bad() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: a gradient has two colours or more, each with its fraction, not 1 colours and 1 fractions
+// expect: a gradient's fractions go up from 0 to 1, not [0.5, 0.2]
+
+// A rectangle filled with a gradient from black to white across it: dark on the left, light on
+// the right, and grey in the middle, on both canvases; a circle's edge stays smooth.
+val graded = pictures(1) { c ->
+  c.paint = LinearGradient(10, 0, 110, 0, [0, 1], [Color.black, Color.white])
+  c.fillRect(10, 10, 100, 30)
+  c.paint = RadialGradient(60, 75, 20, [0, 1], [Color.black, Color(0, 0, 0, 0)])
+  c.fillOval(40, 55, 40, 40)
+  c.color = Color.blue
+  c.fillRect(0, 0, 5, 5)   // a colour again
+}
+for (p in graded) { print(p[12, 20].red.toInt() < 20, Math.abs(p[60, 20].red.toInt() - 128) < 6, p[108, 20].red.toInt() > 235, rgb(p[60, 75]), rgb(p[2, 2])) }
+print(differing(graded[0], graded[1]) < 10)
+// expect: true true true 9 9 9 0 0 255
+// expect: true true true 9 9 9 0 0 255
+// expect: true
+// A gradient goes through the transform as what is drawn does; text and outlines take it too.
+val turnedGradient = pictures(1) { c ->
+  c.translate(60, 50)
+  c.rotate(Math.pi / 2)
+  c.paint = LinearGradient(-40, 0, 40, 0, [0, 1], [Color.black, Color.white])
+  c.fillRect(-40, -40, 80, 80)
+}
+for (p in turnedGradient) { print(p[60, 12].red.toInt() < 20, p[60, 88].red.toInt() > 235, Math.abs(p[25, 50].red.toInt() - p[95, 50].red.toInt()) < 4) }
+// expect: true true true
+// expect: true true true
+
+// -- Clipping to a shape --
+
+// Filled inside a circle, a rectangle covers only the circle; drawn on through a part of the
+// clipped canvas, a line stays inside too.
+val inCircle = pictures(1) { c ->
+  c.color = Color.black
+  val round = c.clipped(Oval(20.0, 10.0, 80.0, 80.0))
+  round.fillRect(0, 0, 120, 100)
+  round.color = Color.red
+  round.sub(0, 0, 120, 100).drawLine(0, 50, 119, 50)
+}
+// The circle's 5027 pixels, less the 80 the red line takes.
+for (p in inCircle) { print(Math.abs(area(p, 0, 0, 120, 100) - 4947) < 40, rgb(p[10, 50]), rgb(p[60, 50]), rgb(p[60, 5])) }
+print(differing(inCircle[0], inCircle[1]) < 10)
+// expect: true 255 255 255 255 0 0 255 255 255
+// expect: true 255 255 255 255 0 0 255 255 255
+// expect: true
+// Clips nest: a canvas clipped to two overlapping squares draws only where both are.
+val both = pictures(1) { c ->
+  c.color = Color.black
+  c.clipped(Path().moveTo(10, 10).lineTo(60, 10).lineTo(60, 60).lineTo(10, 60).close()).clipped(Oval(30.0, 30.0, 60.0, 60.0)).fillRect(0, 0, 120, 100)
+}
+for (p in both) { print(Math.abs(area(p, 0, 0, 120, 100) - 706.9) < 15) }
+// expect: true
+// expect: true
+
+// -- The Clear composite --
+
+// Clearing takes away what is there, letting what is under the picture show through: a turned
+// clearRect and a disc drawn with the Clear composite.
+val image = Image(60, 60, Color.black)
+val canvas = image.canvas()
+canvas.composite = Composite.clear
+canvas.fillOval(10, 10, 20, 20)
+canvas.composite = Composite.srcOver
+canvas.rotate(Math.pi / 4, 45, 45)
+canvas.clearRect(40, 40, 10, 10)
+print(image[20, 20].alpha, image[2, 2].alpha, image[45, 45].alpha, image[45, 39].alpha, image[40, 40].alpha)   // expect: 0 255 0 0 255
+var clearedArea = 0.0
+for (y in 0 ..< 60) { for (x in 0 ..< 60) { clearedArea += (255 - image[x, y].alpha.toInt()) / 255.0 } }
+print(Math.abs(clearedArea - 314.2 - 100) < 4)   // expect: true
+
+// -- Text through a transform --
+
+// Turned a quarter, text runs down the canvas: its ink as tall as the upright text is wide.
+val words = pictures(1) { c ->
+  c.color = Color.black
+  c.font = Font("Dialog", 14)
+  c.drawString("Wide text", 5, 20)
+  c.save()
+  c.rotate(Math.pi / 2, 100, 10)
+  c.drawString("Wide text", 100, 10)
+  c.restore()
+}
+for (p in words) {
+  val upright = p.crop(0, 0, 90, 30).inkBox(Color.white)!!
+  val turned = p.crop(80, 0, 40, 100).inkBox(Color.white)!!
+  print(Math.abs(upright.width - turned.height) <= 2, Math.abs(upright.height - turned.width) <= 2, turned.height > 50)
+}
+// expect: true true true
+// expect: true true true
+print(Font("Dialog", 14).outline("Hi", 0, 20).bounds.height > 8, Font("Dialog", 14).outline("").isEmpty)   // expect: true true
+
+// -- Pictures through a transform --
+
+// A checkerboard picture turned an eighth: its area stays its own, and nearest keeps its
+// colours pure where bilinear mixes them.
+val board = Image(20, 20, Color.white)
+for (y in 0 ..< 20) { for (x in 0 ..< 20) { if ((x / 5 + y / 5) % 2 == 0) { board[x, y] = Color.black } } }
+for (way in [Interpolation.nearest, Interpolation.bilinear, Interpolation.bicubic]) {
+  val pics = pictures(1) { c ->
+    c.color = Color.red
+    c.fillRect(0, 0, 120, 100)
+    c.interpolation = way
+    c.rotate(Math.pi / 4, 60, 50)
+    c.draw(board, 40, 30, 40, 40)
+  }
+  val p = pics[0]
+  var red = 0.0
+  var mixed = 0
+  for (y in 0 ..< 100) {
+    for (x in 0 ..< 120) {
+      val c = p[x, y]
+      red += (c.red.toInt() - c.green.toInt()) / 255.0
+      if (c.green.toInt() > 20 and c.green.toInt() < 235 and c.red.toInt() == c.green.toInt()) { mixed += 1 }
+    }
+  }
+  print(way, Math.abs(12000 - red - 1600) < 20, mixed > 0, differing(pics[0], pics[1]) < 30)
+}
+// expect: nearest true false true
+// expect: bilinear true true true
+// expect: bicubic true true true
+
+// -- Blur --
+
+val dot = Image(41, 41)
+dot[20, 20] = Color.black
+val soft = dot.blurred(3)
+var total = 0.0
+for (y in 0 ..< 41) { for (x in 0 ..< 41) { total += soft[x, y].alpha.toInt() } }
+// All of the dot's alpha, spread out, less what rounds away to nothing far out.
+print(total > 200 and total <= 260, soft[20, 20].alpha.toInt() > soft[23, 20].alpha.toInt(), soft[23, 20].alpha == soft[20, 23].alpha, rgb(soft[22, 20]))   // expect: true true true 0 0 0
+print(Image(5, 5, Color.red).blurred(0)[2, 2] == Color.red, Image(5, 5, Color.red).blurred(2)[0, 0].alpha.toInt() < 255)   // expect: true true
+try { dot.blurred(-1) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a blur's radius is 0 or more, not -1
+
+// -- Kept and put back --
+
+val kept = Image(10, 10).canvas()
+kept.paint = across
+kept.composite = Composite.clear
+kept.interpolation = Interpolation.nearest
+kept.save()
+kept.color = Color.red
+kept.composite = Composite.srcOver
+kept.restore()
+print(kept.paint == across, kept.composite, kept.interpolation, kept.color)   // expect: true clear nearest Color(0, 0, 0)

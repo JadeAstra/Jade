@@ -253,6 +253,18 @@ const GlyphImage& Font::image(int glyph, uint32_t foreground) {
     return *slot;
 }
 
+bool Font::outline(int glyph, Path& out) const {
+    out.clear();
+    if (!face_->outline(glyph, coords_, out)) return false;
+    const float slant = fakeItalic_ ? 0.2f : 0.0f;
+    for (size_t i = 0; i + 1 < out.points.size(); i += 2) {
+        const float y = out.points[i + 1] * unit_;
+        out.points[i] = out.points[i] * unit_ + y * slant;
+        out.points[i + 1] = y;
+    }
+    return !out.empty();
+}
+
 GlyphImage Font::render(int glyph, uint32_t foreground) const {
     if (const ColorTables* color = face_->color(); color != nullptr && color->has(glyph)) {
         GlyphImage image = color->render(*face_, glyph, coords_, unit_, foreground);

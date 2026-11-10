@@ -634,6 +634,34 @@ void Renderer::image(int source, float srcLeft, float srcTop, float srcRight, fl
     made.v1 = srcBottom / static_cast<float>(from->height);
 }
 
+void Renderer::pixels(const uint8_t* rgba, int w, int h, int left, int top, bool clear) {
+    if (w <= 0 || h <= 0 || surface(target_) == nullptr) return;
+    // As the card blends: colours multiplied by their alpha.
+    std::vector<uint8_t> made(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+    for (size_t i = 0; i < made.size(); i += 4) {
+        const uint32_t a = rgba[i + 3];
+        made[i] = static_cast<uint8_t>((rgba[i] * a + 127) / 255);
+        made[i + 1] = static_cast<uint8_t>((rgba[i + 1] * a + 127) / 255);
+        made[i + 2] = static_cast<uint8_t>((rgba[i + 2] * a + 127) / 255);
+        made[i + 3] = static_cast<uint8_t>(a);
+    }
+    const GLuint texture = makeTexture(false);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgba8), w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, made.data());
+    temporaries_.push_back(texture);
+    if (clear) {
+        // Drawn on its own, keeping by what it does not cover.
+        flush();
+        gl.BlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+    }
+    push(left + w / 2.0f, top + h / 2.0f, w / 2.0f, h / 2.0f, 4, 0, 0, 0, 0xFFFFFFFFu, texture);
+    batch_.back().u1 = batch_.back().v1 = 1;
+    if (clear) {
+        flush();
+        gl.BlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
+}
+
 void Renderer::clear(int left, int top, int right, int bottom) {
     Surface* s = surface(target_);
     if (s == nullptr) return;

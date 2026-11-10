@@ -95,6 +95,9 @@ public:
     // the colour of the text for part of itself. The picture is kept; the reference is good
     // for as long as the font is.
     const GlyphImage& image(int glyph, uint32_t foreground = 0x000000FF);
+    // A glyph's outline in device pixels, y growing upwards, from its origin: as its picture is
+    // drawn but not fitted to pixels (N3: text through a transform). False for a glyph with none.
+    bool outline(int glyph, Path& out) const;
 
     ~Font();
     Font(const Font&) = delete;

@@ -10,7 +10,7 @@
 //   Color(255, 128, 0)            Color(255, 128, 0, 128)      half see-through
 //   Color(0xFF8000)               Color(0x80FF8000, true)      one number, with its alpha
 //   Color(1.0, 0.5, 0.0)          parts from 0.0 to 1.0        color.argb, 0xAARRGGBB
-value Color(val red : byte, val green : byte, val blue : byte, val alpha : byte = 255) {
+value Color(val red : byte, val green : byte, val blue : byte, val alpha : byte = 255) : Paint {
   // Parts given as ints, each from 0 to 255.
   constructor(red : int, green : int, blue : int, alpha : int = 255) :
     this(__colorPart(red, "red"), __colorPart(green, "green"), __colorPart(blue, "blue"), __colorPart(alpha, "alpha"))
