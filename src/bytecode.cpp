@@ -1184,7 +1184,9 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
     return endDepth;
 }
 
-void verifyFunction(FunctionProto& f, const Program& program, bool now, bool trusted) {
+// What a function's body is checked for besides its stack (analyzeStack): its rights and notes
+// in range, and whether its whole work is reading a field. Done as it is read, or as its body is.
+void verifyBody(FunctionProto& f, const Program& program) {
     for (const FunctionProto::Rights& r : f.rights)
         if (r.start > r.end || r.end > f.code.size()) throw std::runtime_error("invalid bytecode: rights of copied code out of range");
     if (f.reflection != nullptr) {
@@ -1197,23 +1199,6 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now, bool tru
             for (size_t i = 0; i < entry.size(); i++)
                 if (entry[i] >= program.globalNames.size() && !(i == 0 && entry[i] == kNoGlobal))
                     throw std::runtime_error("invalid bytecode: a class's supertypes name no global");
-    }
-    f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
-    std::vector<int> depths;
-    // Code of jade's own making translated at its first call is checked then (translateNow):
-    // a program's start reads many functions it never calls (a quarter of a kept program's
-    // start went to checking them, 2026-11-09).
-    const bool later = !now && !f.chooser && !f.code.empty();
-    f.unverified = trusted && later;
-    if (!f.unverified) analyzeStack(f, program, false, &depths);
-    if (!later) {
-        f.untranslated = nullptr;
-        translate(f, depths);
-    } else {
-        // Its run code made at its first call: a program's start reads the whole standard
-        // library, and translating it all took 11 of its 14 ms (M9/M10).
-        f.untranslated = &program;
-        runLater(f);
     }
     // A function whose whole work is `this.name`: GetLocal 0, GetProp or GetOwn, Return, after
     // the places it gives its frame, which are none (D149).
@@ -1229,6 +1214,30 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now, bool tru
         f.readsField = asString(f.constants[u16(4)]);
 }
 
+void verifyFunction(FunctionProto& f, const Program& program, bool now, bool trusted) {
+    // One read without its body: what needs the body is done as it is read (loadBody), and it
+    // is translated at its first call.
+    const bool bodyLater = f.laterBody != nullptr;
+    if (!bodyLater) verifyBody(f, program);
+    f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
+    std::vector<int> depths;
+    // Code of jade's own making translated at its first call is checked then (translateNow):
+    // a program's start reads many functions it never calls (a quarter of a kept program's
+    // start went to checking them, 2026-11-09).
+    const bool later = !now && !f.chooser && (bodyLater || !f.code.empty());
+    f.unverified = trusted && later;
+    if (!f.unverified) analyzeStack(f, program, false, &depths);
+    if (!later) {
+        f.untranslated = nullptr;
+        translate(f, depths);
+    } else {
+        // Its run code made at its first call: a program's start reads the whole standard
+        // library, and translating it all took 11 of its 14 ms (M9/M10).
+        f.untranslated = &program;
+        runLater(f);
+    }
+}
+
 int stackDepthAtEnd(FunctionProto& f, const Program& program) { return analyzeStack(f, program, true); }
 
 void translateNow(FunctionProto& f) {
@@ -1237,6 +1246,7 @@ void translateNow(FunctionProto& f) {
     static std::mutex translating;
     std::lock_guard<std::mutex> hold(translating);
     if (f.untranslated == nullptr) return;
+    loadBody(f);
     // The standard library's own top-level code runs once, as a program starts, and only makes
     // its classes and functions: its stack code is run as it is, threaded, which takes a third
     // of the time of translating its 30 KB into R instructions that would pay for themselves
@@ -1559,7 +1569,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 31;
+const uint8_t kFormatVersion = 32;
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -1634,6 +1644,20 @@ struct Writer {
             u8(i < f.paramCounts.size() ? f.paramCounts[i] : 0);
         }
 
+        // The body: its length, then the body written with what it needs of its own (its
+        // reaches in full), so that it can be read by itself when first asked for. One read
+        // without its body is written as it was read.
+        if (f.laterBody != nullptr) {
+            str(f.laterBody->bytes);
+            return;
+        }
+        std::ostringstream apart;
+        Writer own{apart};
+        own.body(f);
+        str(apart.str());
+    }
+
+    void body(const FunctionProto& f) {
         u32(static_cast<uint32_t>(f.code.size()));
         out.write(reinterpret_cast<const char*>(f.code.data()), static_cast<std::streamsize>(f.code.size()));
         u32(static_cast<uint32_t>(f.spans.size()));
@@ -1731,6 +1755,7 @@ struct Reader {
     size_t pos = 0;
     std::vector<const FileReach*> reaches{};  // as they were written
     bool defer = false;                     // a class's description left to be read when asked for
+    bool lazyBodies = false;                // a function's body left to be read when asked for (loadBody)
 
     [[noreturn]] void corrupt() { throw std::runtime_error("corrupt or truncated bytecode file"); }
 
@@ -1741,19 +1766,24 @@ struct Reader {
         need(1);
         return static_cast<uint8_t>(data[pos++]);
     }
+    // Little-endian numbers, each read with one look at what is left: a kept program's start reads
+    // hundreds of thousands of them (2026-11-09).
     uint16_t u16() {
-        uint16_t lo = u8();
-        return static_cast<uint16_t>(lo | (u8() << 8));
+        need(2);
+        const auto* b = reinterpret_cast<const uint8_t*>(data.data() + pos);
+        pos += 2;
+        return static_cast<uint16_t>(b[0] | (b[1] << 8));
     }
     uint32_t u32() {
-        uint32_t v = 0;
-        for (int i = 0; i < 4; i++) v |= static_cast<uint32_t>(u8()) << (8 * i);
-        return v;
+        need(4);
+        const auto* b = reinterpret_cast<const uint8_t*>(data.data() + pos);
+        pos += 4;
+        return static_cast<uint32_t>(b[0]) | static_cast<uint32_t>(b[1]) << 8 | static_cast<uint32_t>(b[2]) << 16 |
+               static_cast<uint32_t>(b[3]) << 24;
     }
     uint64_t u64() {
-        uint64_t v = 0;
-        for (int i = 0; i < 8; i++) v |= static_cast<uint64_t>(u8()) << (8 * i);
-        return v;
+        const uint64_t lo = u32();
+        return lo | static_cast<uint64_t>(u32()) << 32;
     }
     // A count of items that each take at least `itemSize` bytes in the file.
     uint32_t count(size_t itemSize) {
@@ -1764,6 +1794,13 @@ struct Reader {
     std::string str() {
         uint32_t n = count(1);
         std::string s = data.substr(pos, n);
+        pos += n;
+        return s;
+    }
+    // The same where it is only looked at (interned, say): no copy made.
+    std::string_view view() {
+        uint32_t n = count(1);
+        std::string_view s(data.data() + pos, n);
         pos += n;
         return s;
     }
@@ -1784,7 +1821,7 @@ struct Reader {
         if ((f->typeArgs & ~(kTypeArgsOwn | kTypeArgsKept | kTakesDestination | kHasPlaces)) != 0) corrupt();
         f->typeArgBase = u8();
         uint32_t paramCount = count(4);
-        for (uint32_t i = 0; i < paramCount; i++) f->paramNames.push_back(vm.intern(str()));
+        for (uint32_t i = 0; i < paramCount; i++) f->paramNames.push_back(vm.intern(view()));
 
         uint32_t upvalueCount = count(3);
         for (uint32_t i = 0; i < upvalueCount; i++) {
@@ -1832,6 +1869,23 @@ struct Reader {
             f->paramCounts.push_back(u8());
         }
 
+        // The body: kept as its bytes where it may be read later, else read now, in place.
+        const uint32_t bodySize = count(1);
+        if (lazyBodies && !f->chooser) {
+            f->laterBody = std::make_unique<FunctionProto::LaterBody>(
+                FunctionProto::LaterBody{data.substr(pos, bodySize), &vm, &program, nesting});
+        } else {
+            Reader own{data, program, vm, pos};
+            own.defer = defer;
+            own.lazyBodies = lazyBodies;
+            own.body(f, nesting);
+            if (own.pos != pos + bodySize) corrupt();
+        }
+        pos += bodySize;
+        return f;
+    }
+
+    void body(FunctionProto* f, int nesting) {
         uint32_t codeSize = count(1);
         f->code.assign(data.begin() + static_cast<std::ptrdiff_t>(pos),
                        data.begin() + static_cast<std::ptrdiff_t>(pos + codeSize));
@@ -1899,7 +1953,7 @@ struct Reader {
                     break;
                 }
                 case TagString:
-                    f->constants.push_back(Value::object(vm.intern(str())));
+                    f->constants.push_back(Value::object(vm.intern(view())));
                     break;
                 case TagChar: {
                     const uint64_t c = u64();
@@ -1943,13 +1997,29 @@ struct Reader {
             pos += size;
             f->protos.push_back(described);
         }
-        return f;
     }
 };
 
 void verifyTree(FunctionProto& f, const Program& program, bool now = false, bool trusted = false);
 
 }  // namespace
+
+void verifyBody(FunctionProto& f, const Program& program);
+
+void loadBody(FunctionProto& f) {
+    static std::mutex loading;
+    std::lock_guard<std::mutex> hold(loading);
+    if (f.laterBody == nullptr) return;
+    const std::unique_ptr<FunctionProto::LaterBody> kept = std::move(f.laterBody);
+    Reader r{kept->bytes, *kept->program, *kept->vm, 0};
+    r.lazyBodies = true;
+    r.body(&f, kept->nesting);
+    if (r.pos != kept->bytes.size()) r.corrupt();
+    // What its header's checks left for the body, and its nested functions' headers, as a
+    // program's are as it is read: theirs verified at their first calls.
+    verifyBody(f, *kept->program);
+    for (FunctionProto* nested : f.protos) verifyTree(*nested, *kept->program, false, true);
+}
 
 void loadDeferred(FunctionProto& f) {
     static std::mutex loading;
@@ -2084,6 +2154,7 @@ void readProgram(Program& program, VM& vm, const std::string& data, bool trusted
     if (!looksLikeBytecode(data)) throw std::runtime_error("not an Jade bytecode file");
     Reader r{data, program, vm, sizeof kMagic};
     r.defer = true;
+    r.lazyBodies = trusted;  // jade's own making: each function's body read when it is first asked for
 
     uint8_t version = r.u8();
     if (version != kFormatVersion)

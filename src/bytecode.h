@@ -875,10 +875,25 @@ struct FunctionProto {
         Program* program;
     };
     std::unique_ptr<Deferred> deferred;
+
+    // Of a function read from a program jade made and kept (its cache, a worker's image): its
+    // body, all after its header (code, constants, lines, nested functions), left as the bytes
+    // it was written in until something first asks for it (loadBody): a program's start reads
+    // many functions it never calls, and most of reading one is its body (2026-11-09).
+    struct LaterBody {
+        std::string bytes;
+        VM* vm;
+        Program* program;
+        int nesting;
+    };
+    std::unique_ptr<LaterBody> laterBody;
 };
 
 // Reads a description kept apart into the function, and verifies it; nothing for one read.
 void loadDeferred(FunctionProto& f);
+// Reads the body of a function read without it (FunctionProto::laterBody), and what it holds;
+// nothing for one that has its body. Safe from any thread.
+void loadBody(FunctionProto& f);
 
 // Makes the code the VM runs from `f`'s code, given the stack's depth before each of its
 // instructions (-1 where none is reached): registers.cpp (M6.7).

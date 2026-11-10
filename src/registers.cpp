@@ -360,6 +360,7 @@ private:
         }
     }
     void markCaptured(const FunctionProto& nested) {
+        loadBody(const_cast<FunctionProto&>(nested));  // its own nested functions are in its body
         for (const UpvalueDesc& u : nested.upvalues)
             if (u.isLocal) capture(u.index);
         for (const FunctionProto* inner : nested.protos)
