@@ -20,6 +20,9 @@ interface DrawOp {
   data Text(val text : string, val x : Number, val y : Number, val color : Color, val font : Font) : DrawOp
   data Image(val x : Number, val y : Number, val w : Number, val h : Number) : DrawOp
   data Clear(val x : Number, val y : Number, val w : Number, val h : Number) : DrawOp
+  // A Path filled (N3), its points through the canvas's transform and from the outermost
+  // canvas's top left corner.
+  data Fill(val path : Path, val color : Color) : DrawOp
 }
 
 // A canvas that draws nothing and keeps a list of what it was asked to draw. It is one unit to
@@ -37,28 +40,28 @@ class RecordingCanvas : Canvas {
   protected override fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas =>
     RecordingCanvas(width, height, ops, originX, originY, clipLeft, clipTop, clipRight, clipBottom)
 
-  override fun fillRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillRect(x : Number, y : Number, w : Number, h : Number) {
     ops.add(DrawOp.Rect(x + originX, y + originY, w, h, true, color))
   }
-  override fun drawRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawRect(x : Number, y : Number, w : Number, h : Number) {
     ops.add(DrawOp.Rect(x + originX, y + originY, w, h, false, color))
   }
-  override fun clearRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainClearRect(x : Number, y : Number, w : Number, h : Number) {
     ops.add(DrawOp.Clear(x + originX, y + originY, w, h))
   }
-  override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     ops.add(DrawOp.RoundRect(x + originX, y + originY, w, h, true, color))
   }
-  override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     ops.add(DrawOp.RoundRect(x + originX, y + originY, w, h, false, color))
   }
-  override fun fillOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillOval(x : Number, y : Number, w : Number, h : Number) {
     ops.add(DrawOp.Oval(x + originX, y + originY, w, h, true, color))
   }
-  override fun drawOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawOval(x : Number, y : Number, w : Number, h : Number) {
     ops.add(DrawOp.Oval(x + originX, y + originY, w, h, false, color))
   }
-  override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
+  protected override fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
     ops.add(DrawOp.Line(x1 + originX, y1 + originY, x2 + originX, y2 + originY, color))
   }
   private fun poly(xs : List<Number>, ys : List<Number>, n : int?, closed : bool, fill : bool) : DrawOp.Poly {
@@ -71,19 +74,22 @@ class RecordingCanvas : Canvas {
     }
     return DrawOp.Poly(px, py, closed, fill, color)
   }
-  override fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolyline(xs : List<Number>, ys : List<Number>, n : int?) {
     ops.add(poly(xs, ys, n, false, false))
   }
-  override fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     ops.add(poly(xs, ys, n, true, false))
   }
-  override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainFillPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     ops.add(poly(xs, ys, n, true, true))
   }
   protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
     ops.add(DrawOp.Arc(x + originX, y + originY, w, h, start, extent, kind, fill, color, lineWidth))
   }
-  override fun drawString(text : string, x : Number, y : Number) : int {
+  protected override fun plainFillPath(path : Path) {
+    ops.add(DrawOp.Fill(originX == 0 and originY == 0 ? path : path.transformed(Transform.translation(originX, originY)), color))
+  }
+  protected override fun plainDrawString(text : string, x : Number, y : Number) : int {
     ops.add(DrawOp.Text(text, x + originX, y + originY, color, font))
     return metrics(font).stringWidth(text)
   }

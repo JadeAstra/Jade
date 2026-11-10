@@ -77,7 +77,7 @@ public:
     // A filled polygon: x, y pairs.
     void polygon(const std::vector<float>& points, uint32_t rgba);
     // Any outline, in pixels with y growing downwards, filled (an arc, a wide line; M8).
-    void shape(const text::Path& downward, uint32_t rgba);
+    void shape(const text::Path& downward, uint32_t rgba, text::FillRule rule = text::FillRule::NonZero);
     // A line of text with its start at x and its baseline at y. Returns its width.
     int text(text::Font& font, std::string_view utf8, int x, int baseline, uint32_t rgba);
     // Another surface, or a part of it, drawn into a rectangle, as see-through as `alpha` says.

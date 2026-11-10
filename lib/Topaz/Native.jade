@@ -185,47 +185,47 @@ class NativeCanvas : Canvas {
     }
   }
 
-  override fun fillRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillRect(x : Number, y : Number, w : Number, h : Number) {
     use()
     __topaz.fillRect(x, y, w, h)
   }
-  override fun drawRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawRect(x : Number, y : Number, w : Number, h : Number) {
     use()
     __topaz.drawRect(x, y, w, h)
   }
-  override fun clearRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainClearRect(x : Number, y : Number, w : Number, h : Number) {
     use()
     __topaz.clearRect(x, y, w, h)
   }
-  override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     use()
     __topaz.roundRect(x, y, w, h, arcW, arcH, true)
   }
-  override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     use()
     __topaz.roundRect(x, y, w, h, arcW, arcH, false)
   }
-  override fun fillOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillOval(x : Number, y : Number, w : Number, h : Number) {
     use()
     __topaz.oval(x, y, w, h, true)
   }
-  override fun drawOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawOval(x : Number, y : Number, w : Number, h : Number) {
     use()
     __topaz.oval(x, y, w, h, false)
   }
-  override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
+  protected override fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
     use()
     __topaz.line(x1, y1, x2, y2)
   }
-  override fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolyline(xs : List<Number>, ys : List<Number>, n : int?) {
     use()
     __topaz.polygon(xs, ys, n ?: xs.size, false, false)
   }
-  override fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     use()
     __topaz.polygon(xs, ys, n ?: xs.size, false, true)
   }
-  override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainFillPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     use()
     __topaz.polygon(xs, ys, n ?: xs.size, true, true)
   }
@@ -234,8 +234,12 @@ class NativeCanvas : Canvas {
     use()
     __topaz.arc(x, y, w, h, start, extent, kind.ordinal, fill)
   }
+  protected override fun plainFillPath(path : Path) {
+    use()
+    __topaz.path(path.flatten(scale.toFloat()), path.fillRule == FillRule.evenOdd)
+  }
 
-  override fun drawString(text : string, x : Number, y : Number) : int {
+  protected override fun plainDrawString(text : string, x : Number, y : Number) : int {
     use()
     if (sentFont != font) {
       __topaz.font(font, scale)   // the native layer finds the engine's font for it (D125)

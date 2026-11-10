@@ -506,7 +506,7 @@ void Renderer::polygon(const std::vector<float>& points, uint32_t rgba) {
     shape(path, rgba);
 }
 
-void Renderer::shape(const text::Path& downward, uint32_t rgba) {
+void Renderer::shape(const text::Path& downward, uint32_t rgba, text::FillRule rule) {
     const std::vector<float>& points = downward.points;
     if (points.size() < 6) return;
     float minX = points[0], minY = points[1], maxX = minX, maxY = minY;
@@ -532,6 +532,7 @@ void Renderer::shape(const text::Path& downward, uint32_t rgba) {
     }
     for (uint8_t verb : downward.verbs) mix(verb);
     mix(static_cast<int64_t>(points.size()));
+    mix(static_cast<int64_t>(rule));  // the same outline fills otherwise by the other rule
 
     AtlasEntry entry;
     auto known = shapes_.find(hash);
@@ -546,7 +547,7 @@ void Renderer::shape(const text::Path& downward, uint32_t rgba) {
             path.points[i] -= originX;
             path.points[i + 1] = -(path.points[i + 1] - originY);
         }
-        const text::GlyphImage image = text::rasterize(path, text::kShapeFineness);
+        const text::GlyphImage image = text::rasterize(path, text::kShapeFineness, rule);
         if (image.empty()) return;
         if (small) {
             entry = store(image);

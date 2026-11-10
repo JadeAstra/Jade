@@ -1,0 +1,777 @@
+// ---- Paths and transforms (N3) ----
+
+// Which parts of a path whose contours cross or lie inside each other are inside it, as Java's
+// WIND_NON_ZERO and WIND_EVEN_ODD. With nonZero, a part the contours go round more times one way
+// than the other: a contour inside another going the same way fills, one going the other way
+// makes a hole. With evenOdd, a part inside an odd number of contours: one inside another makes
+// a hole whichever way it goes.
+enum FillRule { nonZero, evenOdd }
+
+// A change of place for every point of the plane: moved, turned, stretched, slanted, or several
+// of these at once, as Java's AffineTransform. A point (x, y) goes to
+//
+//   x' = scaleX * x + shearX * y + translateX
+//   y' = shearY * x + scaleY * y + translateY
+//
+// It is a value: translate, scale, rotate and shear each give a new transform. As in Java, what
+// each adds is done first, before what the transform already does, which is how a canvas's
+// transform builds up: canvas.translate(50, 50) then canvas.rotate(a) turns what is drawn about
+// the point (50, 50). `t.then(u)` is the other way: t first, then u.
+//
+//   val t = Transform.identity.translate(50, 50).rotate(Math.pi / 4)
+//   val (x, y) = t.apply(10, 0)          where (10, 0) lands
+//   val back = t.inverse()               the transform that undoes t
+//
+// Angles are in radians, as Java's: from the x axis towards the y axis, which on a canvas, whose
+// y grows downwards, is clockwise.
+value Transform(val scaleX : float = 1.0, val shearY : float = 0.0, val shearX : float = 0.0, val scaleY : float = 1.0,
+                val translateX : float = 0.0, val translateY : float = 0.0) {
+  static {
+    // The transform that leaves every point where it is.
+    val identity = Transform()
+
+    // Moves every point `dx` across and `dy` down.
+    fun translation(dx : Number, dy : Number) : Transform => Transform(1.0, 0.0, 0.0, 1.0, dx.toFloat(), dy.toFloat())
+    // Stretches by `sx` across and `sy` down (`sx` both ways when `sy` is not given), away from (0, 0).
+    fun scaling(sx : Number, sy : Number? = null) : Transform => Transform(sx.toFloat(), 0.0, 0.0, (sy ?: sx).toFloat(), 0.0, 0.0)
+    // Turns by `angle` radians about (`cx`, `cy`): clockwise on a canvas. Quarter turns are exact,
+    // as Java makes them.
+    fun rotation(angle : Number, cx : Number = 0, cy : Number = 0) : Transform {
+      val a = angle.toFloat()
+      var sin = Math.sin(a)
+      var cos = Math.cos(a)
+      if (sin == 1.0 or sin == -1.0) { cos = 0.0 }
+      else if (cos == 1.0 or cos == -1.0) { sin = 0.0 }
+      val x = cx.toFloat()
+      val y = cy.toFloat()
+      return Transform(cos, sin, -sin, cos, x - cos * x + sin * y, y - sin * x - cos * y)
+    }
+    // Slants: each point moves across by `shx` times its y, and down by `shy` times its x.
+    fun shearing(shx : Number, shy : Number) : Transform => Transform(1.0, shy.toFloat(), shx.toFloat(), 1.0, 0.0, 0.0)
+  }
+
+  // Whether it leaves every point where it is.
+  val isIdentity : bool
+    get() => scaleX == 1.0 and shearY == 0.0 and shearX == 0.0 and scaleY == 1.0 and translateX == 0.0 and translateY == 0.0
+  // How many times it makes an area larger: below 0 when it also mirrors, 0 when it flattens
+  // everything onto a line (and cannot be undone).
+  val determinant : float
+    get() => scaleX * scaleY - shearX * shearY
+
+  // This transform after a move of `dx` across and `dy` down.
+  fun translate(dx : Number, dy : Number) : Transform {
+    val x = dx.toFloat()
+    val y = dy.toFloat()
+    return Transform(scaleX, shearY, shearX, scaleY, scaleX * x + shearX * y + translateX, shearY * x + scaleY * y + translateY)
+  }
+  // This transform after stretching by `sx` across and `sy` down (`sx` both ways when `sy` is not
+  // given).
+  fun scale(sx : Number, sy : Number? = null) : Transform {
+    val x = sx.toFloat()
+    val y = (sy ?: sx).toFloat()
+    return Transform(scaleX * x, shearY * x, shearX * y, scaleY * y, translateX, translateY)
+  }
+  // This transform after turning by `angle` radians about (`cx`, `cy`).
+  fun rotate(angle : Number, cx : Number = 0, cy : Number = 0) : Transform => after(Transform.rotation(angle, cx, cy))
+  // This transform after slanting by `shx` and `shy`, as Transform.shearing.
+  fun shear(shx : Number, shy : Number) : Transform => after(Transform.shearing(shx, shy))
+  // This transform, then `next`.
+  fun then(next : Transform) : Transform => next.after(this)
+
+  // `first`, then this transform.
+  private fun after(first : Transform) : Transform =>
+    Transform(scaleX * first.scaleX + shearX * first.shearY, shearY * first.scaleX + scaleY * first.shearY,
+              scaleX * first.shearX + shearX * first.scaleY, shearY * first.shearX + scaleY * first.scaleY,
+              scaleX * first.translateX + shearX * first.translateY + translateX, shearY * first.translateX + scaleY * first.translateY + translateY)
+
+  // The transform that puts every point back where this one found it. An IllegalStateException
+  // for one that cannot be undone, its determinant 0: it flattens everything onto a line.
+  fun inverse() : Transform {
+    val d = determinant
+    if (d == 0.0 or !d.isFinite()) { throw IllegalStateException("$this cannot be undone: it flattens everything onto a line") }
+    return Transform(scaleY / d, -shearY / d, -shearX / d, scaleX / d, (shearX * translateY - scaleY * translateX) / d, (shearY * translateX - scaleX * translateY) / d)
+  }
+
+  // Where the point (`x`, `y`) goes: its x and y, to take apart, val (px, py) = t.apply(x, y).
+  fun apply(x : Number, y : Number) : Pair<float, float> {
+    val fx = x.toFloat()
+    val fy = y.toFloat()
+    return Pair(scaleX * fx + shearX * fy + translateX, shearY * fx + scaleY * fy + translateY)
+  }
+
+  // The transform as text, its two rows: "Transform([1.0, 0.0, 5.0], [0.0, 1.0, 0.0])".
+  override fun toString() : string => "Transform([$scaleX, $shearX, $translateX], [$shearY, $scaleY, $translateY])"
+}
+
+// A shape of straight lines and curves, as Java's Path2D: made a piece at a time, or read from
+// the path data of an SVG picture.
+//
+//   val arrow = Path().moveTo(0, 10).lineTo(20, 10).lineTo(20, 0).lineTo(35, 15).lineTo(20, 30).lineTo(20, 20).lineTo(0, 20).close()
+//   val drop = Path.parse("M20 0 C20 20 40 30 40 40 A20 20 0 0 1 0 40 C0 30 20 20 20 0 Z")
+//   canvas.fill(arrow)
+//
+// It is made of contours: each starts with moveTo and goes on with lines and curves; close()
+// draws a straight line back to where it started. A filled path fills every contour as if it
+// were closed, and where contours cross or lie inside each other, `fillRule` says what is inside.
+// Its numbers are in units, as everything else drawn on a canvas.
+class Path(var fillRule : FillRule = FillRule.nonZero) : Shape {
+  static {
+    // A path read from SVG path data, the `d` of a <path>: M, L, H, V, C, S, Q, T, A and Z, in
+    // capitals for places and in small letters for steps from the last point, the numbers apart
+    // by spaces or commas or by nothing where they cannot run together ("M10-5.5.5"). An
+    // IllegalArgumentException where the data is not right, saying at which character (from
+    // 0) and what was expected there.
+    fun parse(d : string) : Path => __PathData(d).read()
+  }
+
+  // What it is made of: a verb for each piece (0 move, 1 line, 2 quadratic curve, 3 cubic curve,
+  // 4 close), and the x and y of each piece's points one after another.
+  private val verbs : open List<int> = []
+  private val coords : open List<float> = []
+  // Where the contour being made began, which close() goes back to; and where it has got to.
+  private var startX = 0.0
+  private var startY = 0.0
+  private var lastX = 0.0
+  private var lastY = 0.0
+
+  // Whether it has nothing in it yet.
+  val isEmpty : bool
+    get() => verbs.isEmpty()
+
+  // Starts a contour at (`x`, `y`). A moveTo right after another takes its place.
+  fun moveTo(x : Number, y : Number) : Path {
+    val fx = x.toFloat()
+    val fy = y.toFloat()
+    if (verbs.isNotEmpty() and verbs[verbs.size - 1] == 0) {
+      coords[coords.size - 2] = fx
+      coords[coords.size - 1] = fy
+    } else {
+      verbs.add(0)
+      coords.add(fx)
+      coords.add(fy)
+    }
+    startX = fx
+    startY = fy
+    lastX = fx
+    lastY = fy
+    return this
+  }
+  // A straight line on to (`x`, `y`).
+  fun lineTo(x : Number, y : Number) : Path {
+    piece("lineTo")
+    verbs.add(1)
+    lastX = x.toFloat()
+    lastY = y.toFloat()
+    coords.add(lastX)
+    coords.add(lastY)
+    return this
+  }
+  // A curve on to (`x`, `y`) that bends towards (`cx`, `cy`): a quadratic Bézier curve.
+  fun quadTo(cx : Number, cy : Number, x : Number, y : Number) : Path {
+    piece("quadTo")
+    verbs.add(2)
+    coords.add(cx.toFloat())
+    coords.add(cy.toFloat())
+    lastX = x.toFloat()
+    lastY = y.toFloat()
+    coords.add(lastX)
+    coords.add(lastY)
+    return this
+  }
+  // A curve on to (`x`, `y`) that leaves towards (`c1x`, `c1y`) and arrives from (`c2x`, `c2y`):
+  // a cubic Bézier curve.
+  fun curveTo(c1x : Number, c1y : Number, c2x : Number, c2y : Number, x : Number, y : Number) : Path {
+    piece("curveTo")
+    verbs.add(3)
+    coords.add(c1x.toFloat())
+    coords.add(c1y.toFloat())
+    coords.add(c2x.toFloat())
+    coords.add(c2y.toFloat())
+    lastX = x.toFloat()
+    lastY = y.toFloat()
+    coords.add(lastX)
+    coords.add(lastY)
+    return this
+  }
+  // A part of an ellipse on to (`x`, `y`), as SVG's A: the ellipse `rx` across and `ry` down,
+  // turned by `rotation` degrees; of the four arcs that join the points, the larger or the
+  // smaller one (`largeArc`), going clockwise on a canvas or not (`sweep`). Made of cubic curves.
+  // An ellipse too small to reach is made larger until it does, as SVG says; with `rx` or `ry` 0
+  // it is a straight line.
+  fun arcTo(rx : Number, ry : Number, rotation : Number, largeArc : bool, sweep : bool, x : Number, y : Number) : Path {
+    piece("arcTo")
+    val x1 = lastX
+    val y1 = lastY
+    val x2 = x.toFloat()
+    val y2 = y.toFloat()
+    if (x1 == x2 and y1 == y2) { return this }
+    var a = Math.abs(rx.toFloat())
+    var b = Math.abs(ry.toFloat())
+    if (a == 0.0 or b == 0.0) { return lineTo(x2, y2) }
+    // The centre, as SVG's implementation notes (F.6.5) work it out.
+    val phi = rotation.toFloat() * Math.pi / 180.0
+    val cos = Math.cos(phi)
+    val sin = Math.sin(phi)
+    val hx = (x1 - x2) / 2.0
+    val hy = (y1 - y2) / 2.0
+    val px = cos * hx + sin * hy
+    val py = -sin * hx + cos * hy
+    val reach = px * px / (a * a) + py * py / (b * b)
+    if (reach > 1.0) {
+      a *= Math.sqrt(reach)
+      b *= Math.sqrt(reach)
+    }
+    val num = a * a * b * b - a * a * py * py - b * b * px * px
+    val den = a * a * py * py + b * b * px * px
+    var k = den == 0.0 ? 0.0 : Math.sqrt(Math.max(0.0, num / den))
+    if (largeArc == sweep) { k = -k }
+    val ccx = k * a * py / b
+    val ccy = -k * b * px / a
+    val cx = cos * ccx - sin * ccy + (x1 + x2) / 2.0
+    val cy = sin * ccx + cos * ccy + (y1 + y2) / 2.0
+    val ux = (px - ccx) / a
+    val uy = (py - ccy) / b
+    val vx = (-px - ccx) / a
+    val vy = (-py - ccy) / b
+    val start = Math.atan2(uy, ux)
+    var sweepAngle = Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+    if (!sweep and sweepAngle > 0.0) { sweepAngle -= 2.0 * Math.pi }
+    else if (sweep and sweepAngle < 0.0) { sweepAngle += 2.0 * Math.pi }
+    __ellipseArc(this, cx, cy, a, b, cos, sin, start, sweepAngle)
+    // The last point exactly where it was asked for.
+    coords[coords.size - 2] = x2
+    coords[coords.size - 1] = y2
+    lastX = x2
+    lastY = y2
+    return this
+  }
+  // Closes the contour with a straight line back to where it began. A line or a curve after it
+  // starts a new contour there.
+  fun close() : Path {
+    if (verbs.isNotEmpty() and verbs[verbs.size - 1] != 4) {
+      verbs.add(4)
+      lastX = startX
+      lastY = startY
+    }
+    return this
+  }
+
+  // Before a line or a curve: a contour to add it to.
+  private fun piece(what : string) {
+    if (verbs.isEmpty()) { throw IllegalStateException("a path starts with moveTo, not $what") }
+    if (verbs[verbs.size - 1] == 4) {
+      verbs.add(0)
+      coords.add(startX)
+      coords.add(startY)
+    }
+  }
+
+  // The path with every point moved by `t`, its fill rule the same. Curves stay curves.
+  fun transformed(t : Transform) : Path {
+    val made = Path(fillRule)
+    for (v in verbs) { made.verbs.add(v) }
+    var i = 0
+    while (i < coords.size) {
+      val x = coords[i]
+      val y = coords[i + 1]
+      made.coords.add(t.scaleX * x + t.shearX * y + t.translateX)
+      made.coords.add(t.shearY * x + t.scaleY * y + t.translateY)
+      i += 2
+    }
+    made.startX = t.scaleX * startX + t.shearX * startY + t.translateX
+    made.startY = t.shearY * startX + t.scaleY * startY + t.translateY
+    made.lastX = t.scaleX * lastX + t.shearX * lastY + t.translateX
+    made.lastY = t.shearY * lastX + t.scaleY * lastY + t.translateY
+    return made
+  }
+
+  // The smallest rectangle of whole units that holds the whole path: the curves' own extremes,
+  // not their control points'. An empty path's is Rect(0, 0, 0 x 0).
+  override val bounds : Rect
+    get() {
+      if (coords.isEmpty()) { return Rect(0, 0, 0, 0) }
+      val box = __Extent(coords[0], coords[1])
+      var x = 0.0
+      var y = 0.0
+      var p = 0
+      for (v in verbs) {
+        if (v == 0 or v == 1) {
+          x = coords[p]
+          y = coords[p + 1]
+          box.add(x, y)
+          p += 2
+        } else if (v == 2) {
+          box.quad(x, y, coords[p], coords[p + 1], coords[p + 2], coords[p + 3])
+          x = coords[p + 2]
+          y = coords[p + 3]
+          p += 4
+        } else if (v == 3) {
+          box.cubic(x, y, coords[p], coords[p + 1], coords[p + 2], coords[p + 3], coords[p + 4], coords[p + 5])
+          x = coords[p + 4]
+          y = coords[p + 5]
+          p += 6
+        }
+      }
+      return __boundsOf(box.minX, box.minY, box.maxX, box.maxY)
+    }
+
+  // Whether the point (`px`, `py`) is inside the path filled by its fill rule, each contour
+  // closed; on an edge it may be either.
+  override fun contains(px : float, py : float) : bool {
+    if (verbs.isEmpty()) { return false }
+    val b = bounds
+    if (px < b.x or py < b.y or px > b.x + b.width or py > b.y + b.height) { return false }
+    // Curves cut finely for the path's size: a pixel to every 1/4096 of it.
+    val outline = flatten(4096.0 / Math.max(1.0, Math.max(b.width, b.height).toFloat()))
+    var winding = 0
+    var i = 0
+    while (i < outline.size) {
+      val n = outline[i].toInt()
+      val first = i + 1
+      for (j in 0 ..< n) {
+        val a = first + 2 * j
+        val c = first + 2 * ((j + 1) % n)
+        val x0 = outline[a]
+        val y0 = outline[a + 1]
+        val x1 = outline[c]
+        val y1 = outline[c + 1]
+        if (y0 <= py and y1 > py) {
+          if ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) > 0.0) { winding += 1 }
+        } else if (y1 <= py and y0 > py) {
+          if ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0.0) { winding -= 1 }
+        }
+      }
+      i = first + 2 * n
+    }
+    return fillRule == FillRule.nonZero ? winding != 0 : winding % 2 != 0
+  }
+
+  // The path in straight lines, as a canvas fills it: for each contour, how many points it has
+  // and then their x and y, one after another. Curves are cut into as many pieces as their bend
+  // needs at `pixels` pixels a unit, to within about a hundredth of a pixel. A contour of one
+  // point is left out.
+  fun flatten(pixels : float) : List<float> {
+    val out : open List<float> = []
+    var countAt = -1
+    var x = 0.0
+    var y = 0.0
+    var p = 0
+    for (v in verbs) {
+      if (v == 0) {
+        __endContour(out, countAt)
+        countAt = out.size
+        out.add(1.0)
+        x = coords[p]
+        y = coords[p + 1]
+        out.add(x)
+        out.add(y)
+        p += 2
+      } else if (v == 1) {
+        x = coords[p]
+        y = coords[p + 1]
+        out.add(x)
+        out.add(y)
+        p += 2
+      } else if (v == 2) {
+        val cx = coords[p]
+        val cy = coords[p + 1]
+        val ex = coords[p + 2]
+        val ey = coords[p + 3]
+        val bend = Math.hypot(x - 2.0 * cx + ex, y - 2.0 * cy + ey) * pixels
+        val pieces = Math.min(256, Math.max(1, Math.ceil(Math.sqrt(bend * 27.0)).toInt()))
+        for (i in 1 .. pieces) {
+          val t = i.toFloat() / pieces
+          val u = 1.0 - t
+          out.add(u * u * x + 2.0 * u * t * cx + t * t * ex)
+          out.add(u * u * y + 2.0 * u * t * cy + t * t * ey)
+        }
+        x = ex
+        y = ey
+        p += 4
+      } else if (v == 3) {
+        val ax = coords[p]
+        val ay = coords[p + 1]
+        val bx = coords[p + 2]
+        val by = coords[p + 3]
+        val ex = coords[p + 4]
+        val ey = coords[p + 5]
+        val bend = Math.max(Math.hypot(x - 2.0 * ax + bx, y - 2.0 * ay + by), Math.hypot(ax - 2.0 * bx + ex, ay - 2.0 * by + ey)) * pixels
+        val pieces = Math.min(256, Math.max(1, Math.ceil(Math.sqrt(bend * 40.5)).toInt()))
+        for (i in 1 .. pieces) {
+          val t = i.toFloat() / pieces
+          val u = 1.0 - t
+          out.add(u * u * u * x + 3.0 * u * u * t * ax + 3.0 * u * t * t * bx + t * t * t * ex)
+          out.add(u * u * u * y + 3.0 * u * u * t * ay + 3.0 * u * t * t * by + t * t * t * ey)
+        }
+        x = ex
+        y = ey
+        p += 6
+      }
+    }
+    __endContour(out, countAt)
+    return out
+  }
+
+  // The path as SVG path data, in places: "M0 10 L20 10 Q30 0 40 10 Z".
+  override fun toString() : string {
+    val parts : open List<string> = []
+    var p = 0
+    for (v in verbs) {
+      val take = v == 0 or v == 1 ? 2 : v == 2 ? 4 : v == 3 ? 6 : 0
+      val letter = v == 0 ? "M" : v == 1 ? "L" : v == 2 ? "Q" : v == 3 ? "C" : "Z"
+      val numbers : open List<string> = []
+      for (i in p ..< p + take) { numbers.add(__pathNumber(coords[i])) }
+      parts.add(letter + numbers.join(" "))
+      p += take
+    }
+    return parts.join(" ")
+  }
+}
+
+// A number as path data writes it: a whole one without ".0".
+fun __pathNumber(v : float) : string {
+  if (v == Math.floor(v) and Math.abs(v) < 1e15) { return "${v.toInt()}" }
+  return "$v"
+}
+
+// The count of the contour whose count is at `countAt` in a flattened path, now that it has all
+// its points; one of a single point taken out again.
+fun __endContour(out : open List<float>, countAt : int) {
+  if (countAt < 0) { return }
+  val n = (out.size - countAt - 1) / 2
+  if (n < 2) {
+    while (out.size > countAt) { out.removeAt(out.size - 1) }
+    return
+  }
+  out[countAt] = n.toFloat()
+}
+
+// The part of the ellipse centred on (cx, cy), `a` across and `b` down before it is turned by
+// the angle whose cosine and sine are `cos` and `sin`, from `start` through `sweep` radians, added
+// to `path` as cubic curves of a quarter turn or less each (k = 4/3 tan(quarter of the angle)
+// puts the control points where the curve best follows the ellipse).
+fun __ellipseArc(path : Path, cx : float, cy : float, a : float, b : float, cos : float, sin : float, start : float, sweep : float) {
+  val pieces = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.pi / 2.0) - 1e-9).toInt())
+  val step = sweep / pieces
+  val k = 4.0 / 3.0 * Math.tan(step / 4.0)
+  var t = start
+  for (i in 0 ..< pieces) {
+    val c1 = Math.cos(t)
+    val s1 = Math.sin(t)
+    val c2 = Math.cos(t + step)
+    val s2 = Math.sin(t + step)
+    // On the circle of radius 1, then stretched, turned and moved.
+    val p1x = c1 - k * s1
+    val p1y = s1 + k * c1
+    val p2x = c2 + k * s2
+    val p2y = s2 - k * c2
+    path.curveTo(cx + a * p1x * cos - b * p1y * sin, cy + a * p1x * sin + b * p1y * cos,
+                 cx + a * p2x * cos - b * p2y * sin, cy + a * p2x * sin + b * p2y * cos,
+                 cx + a * c2 * cos - b * s2 * sin, cy + a * c2 * sin + b * s2 * cos)
+    t += step
+  }
+}
+
+// The box round some points and curves, as it grows.
+class __Extent(var minX : float, var minY : float) {
+  var maxX = minX
+  var maxY = minY
+
+  fun add(x : float, y : float) {
+    if (x < minX) { minX = x }
+    if (x > maxX) { maxX = x }
+    if (y < minY) { minY = y }
+    if (y > maxY) { maxY = y }
+  }
+  // A quadratic curve's end and the point where it turns back, each way.
+  fun quad(x0 : float, y0 : float, cx : float, cy : float, x1 : float, y1 : float) {
+    add(x1, y1)
+    for (axis in 0 .. 1) {
+      val a = axis == 0 ? x0 : y0
+      val c = axis == 0 ? cx : cy
+      val e = axis == 0 ? x1 : y1
+      val den = a - 2.0 * c + e
+      if (den != 0.0) {
+        val t = (a - c) / den
+        if (t > 0.0 and t < 1.0) {
+          val u = 1.0 - t
+          add(u * u * x0 + 2.0 * u * t * cx + t * t * x1, u * u * y0 + 2.0 * u * t * cy + t * t * y1)
+        }
+      }
+    }
+  }
+  // A cubic curve's end and the points where it turns back, each way.
+  fun cubic(x0 : float, y0 : float, ax : float, ay : float, bx : float, by : float, x1 : float, y1 : float) {
+    add(x1, y1)
+    for (axis in 0 .. 1) {
+      val p0 = axis == 0 ? x0 : y0
+      val p1 = axis == 0 ? ax : ay
+      val p2 = axis == 0 ? bx : by
+      val p3 = axis == 0 ? x1 : y1
+      // Where the curve's slope that way is 0: a t^2 + b t + c = 0.
+      val a = -p0 + 3.0 * p1 - 3.0 * p2 + p3
+      val b = 2.0 * (p0 - 2.0 * p1 + p2)
+      val c = p1 - p0
+      if (Math.abs(a) < 1e-12) {
+        if (b != 0.0) { at(-c / b, x0, y0, ax, ay, bx, by, x1, y1) }
+      } else {
+        val disc = b * b - 4.0 * a * c
+        if (disc >= 0.0) {
+          val root = Math.sqrt(disc)
+          at((-b + root) / (2.0 * a), x0, y0, ax, ay, bx, by, x1, y1)
+          at((-b - root) / (2.0 * a), x0, y0, ax, ay, bx, by, x1, y1)
+        }
+      }
+    }
+  }
+  private fun at(t : float, x0 : float, y0 : float, ax : float, ay : float, bx : float, by : float, x1 : float, y1 : float) {
+    if (!(t > 0.0 and t < 1.0)) { return }
+    val u = 1.0 - t
+    add(u * u * u * x0 + 3.0 * u * u * t * ax + 3.0 * u * t * t * bx + t * t * t * x1,
+        u * u * u * y0 + 3.0 * u * u * t * ay + 3.0 * u * t * t * by + t * t * t * y1)
+  }
+}
+
+// Reads SVG path data (Path.parse): the grammar of SVG 1.1's paths, 8.3.9, with its errors
+// said by the character they are at.
+class __PathData(val d : string) {
+  private var at = 0
+  private val path = Path()
+  // The last point, the start of the contour, and the control point a following S or T mirrors.
+  private var x = 0.0
+  private var y = 0.0
+  private var startX = 0.0
+  private var startY = 0.0
+  private var controlX = 0.0
+  private var controlY = 0.0
+
+  fun read() : Path {
+    skip()
+    if (at >= d.size) { return path }
+    if (d[at] != 'M' and d[at] != 'm') { fail("M or m first") }
+    var last = ' '
+    while (at < d.size) {
+      var command = d[at]
+      if (command.isLetter()) {
+        at += 1
+      } else {
+        // More numbers for the last command: it goes on, a move going on as lines.
+        if (last == ' ' or last == 'Z' or last == 'z') { fail("a command letter") }
+        command = last == 'M' ? 'L' : last == 'm' ? 'l' : last
+      }
+      val relative = command.isLowerCase()
+      val ox = relative ? x : 0.0
+      val oy = relative ? y : 0.0
+      val kind = command.upper()
+      var nextControlX = x
+      var nextControlY = y
+      var smooth = false
+      if (kind == 'M') {
+        val (px, py) = pair()
+        x = ox + px
+        y = oy + py
+        path.moveTo(x, y)
+        startX = x
+        startY = y
+      } else if (kind == 'L') {
+        val (px, py) = pair()
+        x = ox + px
+        y = oy + py
+        path.lineTo(x, y)
+      } else if (kind == 'H') {
+        x = (relative ? x : 0.0) + number()
+        path.lineTo(x, y)
+      } else if (kind == 'V') {
+        y = (relative ? y : 0.0) + number()
+        path.lineTo(x, y)
+      } else if (kind == 'C' or kind == 'S') {
+        // S's first control point mirrors the last curve's second, or is the last point.
+        var c1x = 2.0 * x - controlX
+        var c1y = 2.0 * y - controlY
+        if (kind == 'C') {
+          val (ax, ay) = pair()
+          c1x = ox + ax
+          c1y = oy + ay
+        } else if (last.upper() != 'C' and last.upper() != 'S') {
+          c1x = x
+          c1y = y
+        }
+        val (bx, by) = pair()
+        val (ex, ey) = pair()
+        path.curveTo(c1x, c1y, ox + bx, oy + by, ox + ex, oy + ey)
+        nextControlX = ox + bx
+        nextControlY = oy + by
+        smooth = true
+        x = ox + ex
+        y = oy + ey
+      } else if (kind == 'Q' or kind == 'T') {
+        var cx = 2.0 * x - controlX
+        var cy = 2.0 * y - controlY
+        if (kind == 'Q') {
+          val (ax, ay) = pair()
+          cx = ox + ax
+          cy = oy + ay
+        } else if (last.upper() != 'Q' and last.upper() != 'T') {
+          cx = x
+          cy = y
+        }
+        val (ex, ey) = pair()
+        path.quadTo(cx, cy, ox + ex, oy + ey)
+        nextControlX = cx
+        nextControlY = cy
+        smooth = true
+        x = ox + ex
+        y = oy + ey
+      } else if (kind == 'A') {
+        val rx = number()
+        val ry = number()
+        val rotation = number()
+        val large = flag()
+        val sweep = flag()
+        val (ex, ey) = pair()
+        x = ox + ex
+        y = oy + ey
+        path.arcTo(rx, ry, rotation, large, sweep, x, y)
+      } else if (kind == 'Z') {
+        path.close()
+        x = startX
+        y = startY
+      } else {
+        at -= 1
+        fail("a command letter")
+      }
+      if (!smooth) {
+        nextControlX = x
+        nextControlY = y
+      }
+      controlX = nextControlX
+      controlY = nextControlY
+      last = command
+      skip()
+      if (kind == 'Z' and at < d.size and !d[at].isLetter()) { fail("a command letter after Z") }
+      if (at < d.size and d[at] == ',') {
+        at += 1
+        skip()
+        if (at >= d.size or d[at].isLetter()) { fail("a number after the comma") }
+      }
+    }
+    return path
+  }
+
+  // Spaces between numbers and commands.
+  private fun skip() {
+    while (at < d.size and d[at].isWhitespace()) { at += 1 }
+  }
+  // Two numbers, x and y.
+  private fun pair() : Pair<float, float> {
+    val px = number()
+    val py = number()
+    return Pair(px, py)
+  }
+  // A number, and the space or comma after it.
+  private fun number() : float {
+    skipComma()
+    val begin = at
+    if (at < d.size and (d[at] == '+' or d[at] == '-')) { at += 1 }
+    var digits = 0
+    while (at < d.size and d[at].isDigit()) { at += 1; digits += 1 }
+    if (at < d.size and d[at] == '.') {
+      at += 1
+      while (at < d.size and d[at].isDigit()) { at += 1; digits += 1 }
+    }
+    if (digits == 0) {
+      at = begin
+      fail("a number")
+    }
+    if (at < d.size and (d[at] == 'e' or d[at] == 'E')) {
+      val mark = at
+      at += 1
+      if (at < d.size and (d[at] == '+' or d[at] == '-')) { at += 1 }
+      if (at >= d.size or !d[at].isDigit()) {
+        at = mark
+        fail("the digits of an exponent")
+      }
+      while (at < d.size and d[at].isDigit()) { at += 1 }
+    }
+    return d[begin ..< at].toFloat()
+  }
+  // An arc's flag: 0 or 1, a character of its own ("a10 10 0 1110 10": flags 1 and 1, then 10).
+  private fun flag() : bool {
+    skipComma()
+    if (at < d.size and (d[at] == '0' or d[at] == '1')) {
+      at += 1
+      return d[at - 1] == '1'
+    }
+    fail("an arc's flag, 0 or 1")
+  }
+  // Before a number: spaces, and one comma between it and the one before. The first number
+  // after a command letter has no comma before it.
+  private fun skipComma() {
+    skip()
+    if (at < d.size and d[at] == ',' and at > 0 and !d[at - 1].isLetter()) {
+      at += 1
+      skip()
+    }
+  }
+  private fun fail(expected : string) : nothing {
+    val near = at < d.size ? "'${d[at]}'" : "the end"
+    throw IllegalArgumentException("path data: expected $expected at character $at, found $near, in \"$d\"")
+  }
+}
+
+// -- The canvas's shapes as paths, for filling them through a transform that turns them --
+
+// The rectangle `w` by `h` at (x, y).
+fun __rectPath(x : Number, y : Number, w : Number, h : Number) : Path => Path().moveTo(x, y).lineTo(x + w, y).lineTo(x + w, y + h).lineTo(x, y + h).close()
+
+// The oval in that rectangle, four quarter curves.
+fun __ovalPath(x : Number, y : Number, w : Number, h : Number) : Path {
+  val a = w.toFloat() / 2.0
+  val b = h.toFloat() / 2.0
+  val path = Path().moveTo(x + w, y + b)
+  __ellipseArc(path, x + a, y + b, a, b, 1.0, 0.0, 0.0, 2.0 * Math.pi)
+  return path.close()
+}
+
+// The rectangle with its corners rounded by quarters of an oval `arcW` across and `arcH` down,
+// as Java's RoundRectangle2D; kept to the rectangle's size.
+fun __roundRectPath(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) : Path {
+  val l = x.toFloat()
+  val t = y.toFloat()
+  val r = l + w.toFloat()
+  val bottom = t + h.toFloat()
+  val a = Math.min(Math.abs(arcW.toFloat()), Math.abs(w.toFloat())) / 2.0
+  val b = Math.min(Math.abs(arcH.toFloat()), Math.abs(h.toFloat())) / 2.0
+  if (a == 0.0 or b == 0.0) { return __rectPath(x, y, w, h) }
+  val quarter = Math.pi / 2.0
+  val path = Path().moveTo(l + a, t).lineTo(r - a, t)
+  __ellipseArc(path, r - a, t + b, a, b, 1.0, 0.0, -quarter, quarter)
+  path.lineTo(r, bottom - b)
+  __ellipseArc(path, r - a, bottom - b, a, b, 1.0, 0.0, 0.0, quarter)
+  path.lineTo(l + a, bottom)
+  __ellipseArc(path, l + a, bottom - b, a, b, 1.0, 0.0, quarter, quarter)
+  path.lineTo(l, t + b)
+  __ellipseArc(path, l + a, t + b, a, b, 1.0, 0.0, Math.pi, quarter)
+  return path.close()
+}
+
+// The part of the oval in the rectangle that an Arc fills (canvas.fillArc): from `start` degrees
+// through `extent` more, counter-clockwise, 45 at the top right corner; a slice for a pie, the
+// arc and its chord otherwise.
+fun __arcPath(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind) : Path {
+  val a = w.toFloat() / 2.0
+  val b = h.toFloat() / 2.0
+  val cx = x + a
+  val cy = y + b
+  // Down the canvas is up the arc's angles: they turn the other way.
+  val from = -start.toFloat() * Math.pi / 180.0
+  val sweep = -Math.max(-360.0, Math.min(360.0, extent.toFloat())) * Math.pi / 180.0
+  val path = Path()
+  if (kind == ArcKind.pie) {
+    path.moveTo(cx, cy).lineTo(cx + a * Math.cos(from), cy + b * Math.sin(from))
+  } else {
+    path.moveTo(cx + a * Math.cos(from), cy + b * Math.sin(from))
+  }
+  __ellipseArc(path, cx, cy, a, b, 1.0, 0.0, from, sweep)
+  return path.close()
+}

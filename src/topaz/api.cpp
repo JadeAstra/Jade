@@ -972,6 +972,16 @@ void registerTopaz(VM& vm) {
         }
         return Value::null();
     });
+    // path(outline, evenOdd): a Path flattened into straight lines (Path.flatten) and filled
+    // (N3), as the image canvas's canvasPath fills it. Rasterised once, and kept by its look, as
+    // a polygon is.
+    def("path", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        Renderer& r = need(vm);
+        text::Path path;
+        if (!text::pathOf(vm, args[0], state().originX, state().originY, state().scale, path)) return Value::null();
+        r.shape(path, state().color, args[1].truthy() ? text::FillRule::EvenOdd : text::FillRule::NonZero);
+        return Value::null();
+    });
     // arc(x, y, w, h, start, extent, kind, fill): an arc of the oval in the rectangle (M8), filled
     // as oval fills (a wedge for a pie, the arc and its chord otherwise) or its outline drawn as
     // an oval's, the line width across. Rasterised once, and kept by its look, as a polygon is.

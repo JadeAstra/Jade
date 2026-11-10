@@ -80,107 +80,322 @@ abstract class Canvas {
       val top = Math.max(0, Math.floor((clipTop - originY) / s).toInt())
       val right = Math.min(width, Math.ceil((clipRight - originX) / s).toInt())
       val bottom = Math.min(height, Math.ceil((clipBottom - originY) / s).toInt())
-      return Rect(left, top, Math.max(0, right - left), Math.max(0, bottom - top))
+      val shown = Rect(left, top, Math.max(0, right - left), Math.max(0, bottom - top))
+      if (turn == 0) { return shown }
+      // Through the transform: the box round where the part's corners come from.
+      if (transform.determinant == 0.0 or shown.isEmpty) { return Rect(0, 0, 0, 0) }
+      val back = transform.inverse()
+      val (ax, ay) = back.apply(shown.x, shown.y)
+      val (bx, by) = back.apply(shown.x + shown.width, shown.y)
+      val (cx, cy) = back.apply(shown.x, shown.y + shown.height)
+      val (dx, dy) = back.apply(shown.x + shown.width, shown.y + shown.height)
+      return __boundsOf(Math.min(Math.min(ax, bx), Math.min(cx, dx)), Math.min(Math.min(ay, by), Math.min(cy, dy)),
+                        Math.max(Math.max(ax, bx), Math.max(cx, dx)), Math.max(Math.max(ay, by), Math.max(cy, dy)))
     }
 
   // A canvas for a part of this one: its (0, 0) is at (x, y) here, and nothing it draws lands
-  // outside the part.
+  // outside the part. Through a transform that moves and stretches, the part is where the
+  // transform puts it, and the new canvas stretches as this one does; through one that turns,
+  // slants or mirrors, an UnsupportedOperationException for now (N3).
   fun sub(x : int, y : int, width : int, height : int) : Canvas {
-    val left = originX + Math.round(x * scale).toInt()
-    val top = originY + Math.round(y * scale).toInt()
-    val right = originX + Math.round((x + width) * scale).toInt()
-    val bottom = originY + Math.round((y + height) * scale).toInt()
+    if (turn == 2) { notYet("a part of a canvas", "pictures") }
+    val left = originX + Math.round(mx(x) * scale).toInt()
+    val top = originY + Math.round(my(y) * scale).toInt()
+    val right = originX + Math.round(mx(x + width) * scale).toInt()
+    val bottom = originY + Math.round(my(y + height) * scale).toInt()
     val made = another(width, height, left, top, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
     made.lineWidth = lineWidth
+    if (turn == 1) { made.transform = Transform.scaling(transform.scaleX, transform.scaleY) }
     return made
   }
 
-  // The same canvas, drawing only inside a rectangle of it.
+  // The same canvas, drawing only inside a rectangle of it: where the transform puts the
+  // rectangle, when it moves and stretches; an UnsupportedOperationException for now through one
+  // that turns, slants or mirrors (N3).
   fun clipped(x : Number, y : Number, w : Number, h : Number) : Canvas {
-    val left = originX + Math.round(x * scale).toInt()
-    val top = originY + Math.round(y * scale).toInt()
-    val right = originX + Math.round((x + w) * scale).toInt()
-    val bottom = originY + Math.round((y + h) * scale).toInt()
+    if (turn == 2) { notYet("a clipped canvas", "pictures") }
+    val left = originX + Math.round(mx(x) * scale).toInt()
+    val top = originY + Math.round(my(y) * scale).toInt()
+    val right = originX + Math.round(mx(x + w) * scale).toInt()
+    val bottom = originY + Math.round(my(y + h) * scale).toInt()
     val made = another(width, height, originX, originY, Math.max(clipLeft, left), Math.max(clipTop, top), Math.min(clipRight, right), Math.min(clipBottom, bottom))
     made.color = color
     made.font = font
     made.lineWidth = lineWidth
+    made.transform = transform
     return made
   }
 
   // A canvas of this kind over the same pixels, at another place, with another clip.
   protected abstract fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas
 
+  // -- The transform (N3) --
+
+  // What is done to everything drawn before it lands on the canvas: moved, turned, stretched or
+  // slanted, as Java's Graphics2D does with its transform. Transform.identity to begin with.
+  //
+  //   canvas.save()
+  //   canvas.translate(60, 40)
+  //   canvas.rotate(Math.pi / 6)
+  //   canvas.fillRect(-20, -10, 40, 20)      a rectangle turned about (60, 40)
+  //   canvas.restore()
+  //
+  // Filled shapes and paths go through any transform. For now the rest goes through less:
+  // outlines and lines through one that moves them and stretches them the same both ways,
+  // pictures and clearRect through one that moves and stretches them, text through one that only
+  // moves it; through any other, each is an UnsupportedOperationException, until the steps of N3
+  // that bring strokes, text and pictures. sub and clipped work through one that moves and
+  // stretches.
+  var transform : Transform = Transform.identity
+    set(value) {
+      field = value
+      turn = value.isIdentity ? 0 : (value.shearX == 0.0 and value.shearY == 0.0 and value.scaleX > 0.0 and value.scaleY > 0.0 ? 1 : 2)
+    }
+  // What the transform does: 0 nothing; 1 moves and stretches, without turning or mirroring; 2
+  // anything else.
+  private var turn = 0
+  // What save() kept, the last kept at the end.
+  private var saved : open List<__CanvasState>? = null
+
+  // Keeps the transform, the colour, the font and the line width, for restore() to put back.
+  // Saves can be inside each other: each restore() puts back the last one not yet put back.
+  fun save() {
+    if (saved == null) { saved = [] }
+    saved!!.add(__CanvasState(transform, color, font, lineWidth))
+  }
+  // Puts back what the last save() kept. An IllegalStateException with nothing kept.
+  fun restore() {
+    val kept = saved
+    if (kept == null or kept.isEmpty()) { throw IllegalStateException("restore() puts back what save() kept, and nothing is kept") }
+    val state = kept.removeAt(kept.size - 1)
+    transform = state.transform
+    color = state.color
+    font = state.font
+    lineWidth = state.lineWidth
+  }
+  // Moves what is drawn from now on by `dx` across and `dy` down, inside what the transform
+  // already does: transform = transform.translate(dx, dy).
+  fun translate(dx : Number, dy : Number) {
+    transform = transform.translate(dx, dy)
+  }
+  // Turns what is drawn from now on by `angle` radians, clockwise, about (`cx`, `cy`), inside
+  // what the transform already does: transform = transform.rotate(angle, cx, cy).
+  fun rotate(angle : Number, cx : Number = 0, cy : Number = 0) {
+    transform = transform.rotate(angle, cx, cy)
+  }
+
+  // An x and a y through a transform that only moves and stretches.
+  private fun mx(x : Number) : float => transform.scaleX * x + transform.translateX
+  private fun my(y : Number) : float => transform.scaleY * y + transform.translateY
+  // A filled shape through the transform.
+  private fun fillTurned(path : Path) {
+    plainFillPath(turn == 0 ? path : path.transformed(transform))
+  }
+  // The error for what cannot be drawn through the transform yet.
+  private fun notYet(what : string, until : string) : nothing =>
+    throw UnsupportedOperationException("$what through $transform comes with $until (N3)")
+  // An outline or a line through the transform, with the line width stretched as it stretches
+  // what is drawn: `draw` given that stretch. For now only through a transform that moves and
+  // stretches the same both ways.
+  private fun stroked(what : string, draw : (float) -> unit) {
+    if (turn != 1 or transform.scaleX != transform.scaleY) { notYet(what, "strokes") }
+    val s = transform.scaleX
+    if (s == 1.0) {
+      draw(s)
+      return
+    }
+    val kept = lineWidth
+    lineWidth = kept * s
+    try {
+      draw(s)
+    } finally {
+      lineWidth = kept
+    }
+  }
+  // The first `n` points (all when it is null) through the transform: their x's and their y's.
+  private fun mapped(xs : List<Number>, ys : List<Number>, n : int?) : Pair<List<Number>, List<Number>> {
+    val count = Math.min(n ?: xs.size, Math.min(xs.size, ys.size))
+    val t = transform
+    val px : open List<Number> = []
+    val py : open List<Number> = []
+    for (i in 0 ..< count) {
+      val x = xs[i].toFloat()
+      val y = ys[i].toFloat()
+      px.add(t.scaleX * x + t.shearX * y + t.translateX)
+      py.add(t.shearY * x + t.scaleY * y + t.translateY)
+    }
+    return Pair(px, py)
+  }
+
   // -- Shapes --
 
   // Fills the rectangle of `w` by `h` units whose top-left corner is at (`x`, `y`), in the
   // canvas's colour.
-  abstract fun fillRect(x : Number, y : Number, w : Number, h : Number)
+  fun fillRect(x : Number, y : Number, w : Number, h : Number) {
+    if (turn == 0) { plainFillRect(x, y, w, h) }
+    else if (turn == 1) { plainFillRect(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
+    else { fillTurned(__rectPath(x, y, w, h)) }
+  }
   // The outline of that rectangle, one unit thick, covering `w` + 1 by `h` + 1 units, as Java's does.
-  abstract fun drawRect(x : Number, y : Number, w : Number, h : Number)
+  fun drawRect(x : Number, y : Number, w : Number, h : Number) {
+    if (turn == 0) { plainDrawRect(x, y, w, h) }
+    else { stroked("drawRect") { s -> plainDrawRect(mx(x), my(y), w * s, h * s) } }
+  }
   // Makes a rectangle clear again: what is under the picture shows through it.
-  abstract fun clearRect(x : Number, y : Number, w : Number, h : Number)
+  fun clearRect(x : Number, y : Number, w : Number, h : Number) {
+    if (turn == 0) { plainClearRect(x, y, w, h) }
+    else if (turn == 1) { plainClearRect(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
+    else { notYet("clearRect", "pictures") }
+  }
   // Fills a rectangle with rounded corners, each corner a quarter of an oval `arcW` wide and `arcH`
   // high.
-  abstract fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)
+  fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+    if (turn == 0) { plainFillRoundRect(x, y, w, h, arcW, arcH) }
+    else if (turn == 1) {
+      val sx = transform.scaleX
+      val sy = transform.scaleY
+      plainFillRoundRect(mx(x), my(y), w * sx, h * sy, arcW * sx, arcH * sy)
+    } else { fillTurned(__roundRectPath(x, y, w, h, arcW, arcH)) }
+  }
   // The outline of a rectangle with rounded corners, one unit thick, covering `w` + 1 by `h` + 1
   // units as drawRect does.
-  abstract fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)
+  fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+    if (turn == 0) { plainDrawRoundRect(x, y, w, h, arcW, arcH) }
+    else { stroked("drawRoundRect") { s -> plainDrawRoundRect(mx(x), my(y), w * s, h * s, arcW * s, arcH * s) } }
+  }
   // Fills the oval that fits inside the rectangle of `w` by `h` units at (`x`, `y`).
-  abstract fun fillOval(x : Number, y : Number, w : Number, h : Number)
+  fun fillOval(x : Number, y : Number, w : Number, h : Number) {
+    if (turn == 0) { plainFillOval(x, y, w, h) }
+    else if (turn == 1) { plainFillOval(mx(x), my(y), w * transform.scaleX, h * transform.scaleY) }
+    else { fillTurned(__ovalPath(x, y, w, h)) }
+  }
   // The outline of that oval, one unit thick, covering `w` + 1 by `h` + 1 units.
-  abstract fun drawOval(x : Number, y : Number, w : Number, h : Number)
+  fun drawOval(x : Number, y : Number, w : Number, h : Number) {
+    if (turn == 0) { plainDrawOval(x, y, w, h) }
+    else { stroked("drawOval") { s -> plainDrawOval(mx(x), my(y), w * s, h * s) } }
+  }
   // A line one unit thick from (`x1`, `y1`) to (`x2`, `y2`), both ends included.
-  abstract fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)
+  fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
+    if (turn == 0) { plainDrawLine(x1, y1, x2, y2) }
+    else { stroked("drawLine") { s -> plainDrawLine(mx(x1), my(y1), mx(x2), my(y2)) } }
+  }
   // Lines from point to point of (`xs[i]`, `ys[i]`), the first `n` of them or all when `n` is null,
   // left open at the last point.
-  abstract fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null)
+  fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (turn == 0) { plainDrawPolyline(xs, ys, n) }
+    else {
+      stroked("drawPolyline") { s ->
+        val (px, py) = mapped(xs, ys, n)
+        plainDrawPolyline(px, py, px.size)
+      }
+    }
+  }
   // The same lines closed: a last one goes from the last point back to the first.
-  abstract fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null)
+  fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (turn == 0) { plainDrawPolygon(xs, ys, n) }
+    else {
+      stroked("drawPolygon") { s ->
+        val (px, py) = mapped(xs, ys, n)
+        plainDrawPolygon(px, py, px.size)
+      }
+    }
+  }
   // Fills the polygon whose corners are those points.
-  abstract fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null)
+  fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+    if (turn == 0) { plainFillPolygon(xs, ys, n) }
+    else {
+      val (px, py) = mapped(xs, ys, n)
+      plainFillPolygon(px, py, px.size)
+    }
+  }
   // Fills a slice of the oval in the rectangle, as Java's fillArc: from `startAngle` degrees
   // through `arcAngle` more, 0 at three o'clock and counter-clockwise (M8).
   fun fillArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number) {
-    arcShape(x, y, w, h, startAngle, arcAngle, ArcKind.pie, true)
+    arc(x, y, w, h, startAngle, arcAngle, ArcKind.pie, true)
   }
   // The curve of that part of the oval's outline, as Java's drawArc: as drawOval draws it, one
   // line width thick.
   fun drawArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number) {
-    arcShape(x, y, w, h, startAngle, arcAngle, ArcKind.open, false)
+    arc(x, y, w, h, startAngle, arcAngle, ArcKind.open, false)
   }
-  // What fillArc, drawArc and an Arc ask of each kind of canvas: the part of the oval from
-  // `start` through `extent` degrees, filled as fillOval fills (a slice for a pie, the arc and
-  // its chord otherwise) or its outline drawn as drawOval draws (the curve, and the chord or the
-  // two lines to the middle).
-  protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)
+  // An arc through the transform. Its angles go with the rectangle it is in, 45 pointing at the
+  // top right corner, so one stretched is the arc of the stretched rectangle.
+  private fun arc(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool) {
+    if (turn == 0) { arcShape(x, y, w, h, start, extent, kind, fill) }
+    else if (!fill) { stroked("drawArc") { s -> arcShape(mx(x), my(y), w * s, h * s, start, extent, kind, false) } }
+    else if (turn == 1) { arcShape(mx(x), my(y), w * transform.scaleX, h * transform.scaleY, start, extent, kind, true) }
+    else { fillTurned(__arcPath(x, y, w, h, start, extent, kind)) }
+  }
 
   // A shape's outline: a Rect's, an Oval's or an Arc's, or a Line (D106); an
-  // IllegalArgumentException for any other shape.
+  // IllegalArgumentException for any other shape. A Path's outline comes with strokes (N3): an
+  // UnsupportedOperationException for now.
   fun draw(shape : Shape) {
     if (shape is Rect) { drawRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { drawOval(shape.x, shape.y, shape.width, shape.height) }
-    else if (shape is Arc) { arcShape(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, false) }
+    else if (shape is Arc) { arc(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, false) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
+    else if (shape is Path) { throw UnsupportedOperationException("a Path's outline comes with strokes (N3)") }
     else { throw IllegalArgumentException("a canvas draws a Rect, an Oval, an Arc or a Line, not $shape") }
   }
-  // The whole of a shape: a Rect, an Oval or an Arc filled, a Line drawn; an
-  // IllegalArgumentException for any other shape.
+  // The whole of a shape: a Rect, an Oval, an Arc or a Path filled, a Line drawn; an
+  // IllegalArgumentException for any other shape. A Path is filled by its fill rule, each of its
+  // contours closed.
   fun fill(shape : Shape) {
     if (shape is Rect) { fillRect(shape.x, shape.y, shape.width, shape.height) }
     else if (shape is Oval) { fillOval(shape.x, shape.y, shape.width, shape.height) }
-    else if (shape is Arc) { arcShape(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, true) }
+    else if (shape is Arc) { arc(shape.x, shape.y, shape.width, shape.height, shape.start, shape.extent, shape.kind, true) }
+    else if (shape is Path) { fillTurned(shape) }
     else if (shape is Line) { drawLine(shape.x1, shape.y1, shape.x2, shape.y2) }
-    else { throw IllegalArgumentException("a canvas fills a Rect, an Oval, an Arc or a Line, not $shape") }
+    else { throw IllegalArgumentException("a canvas fills a Rect, an Oval, an Arc, a Path or a Line, not $shape") }
   }
+
+  // What each kind of canvas draws, the transform done already: the calls above, through no
+  // transform.
+  protected abstract fun plainFillRect(x : Number, y : Number, w : Number, h : Number)
+  // drawRect, through no transform.
+  protected abstract fun plainDrawRect(x : Number, y : Number, w : Number, h : Number)
+  // clearRect, through no transform.
+  protected abstract fun plainClearRect(x : Number, y : Number, w : Number, h : Number)
+  // fillRoundRect, through no transform.
+  protected abstract fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)
+  // drawRoundRect, through no transform.
+  protected abstract fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)
+  // fillOval, through no transform.
+  protected abstract fun plainFillOval(x : Number, y : Number, w : Number, h : Number)
+  // drawOval, through no transform.
+  protected abstract fun plainDrawOval(x : Number, y : Number, w : Number, h : Number)
+  // drawLine, through no transform.
+  protected abstract fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)
+  // drawPolyline, through no transform.
+  protected abstract fun plainDrawPolyline(xs : List<Number>, ys : List<Number>, n : int?)
+  // drawPolygon, through no transform.
+  protected abstract fun plainDrawPolygon(xs : List<Number>, ys : List<Number>, n : int?)
+  // fillPolygon, through no transform.
+  protected abstract fun plainFillPolygon(xs : List<Number>, ys : List<Number>, n : int?)
+  // What fillArc, drawArc and an Arc ask of each kind of canvas, through no transform: the part
+  // of the oval from `start` through `extent` degrees, filled as fillOval fills (a slice for a
+  // pie, the arc and its chord otherwise) or its outline drawn as drawOval draws (the curve, and
+  // the chord or the two lines to the middle).
+  protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)
+  // A path filled by its fill rule, each contour closed, its points already through the
+  // transform: path.flatten(scale) gives it in straight lines, fine enough for this canvas's
+  // pixels.
+  protected abstract fun plainFillPath(path : Path)
 
   // -- Text --
 
   // Text in the canvas's font and colour, starting at x with its baseline at y: letters sit on
   // that row and tails hang below it. Gives the width it took, in units.
-  abstract fun drawString(text : string, x : Number, y : Number) : int
+  fun drawString(text : string, x : Number, y : Number) : int {
+    if (turn == 0) { return plainDrawString(text, x, y) }
+    if (turn == 1 and transform.scaleX == 1.0 and transform.scaleY == 1.0) { return plainDrawString(text, mx(x), my(y)) }
+    notYet("drawString", "text")
+  }
+  // drawString, through no transform.
+  protected abstract fun plainDrawString(text : string, x : Number, y : Number) : int
 
   // What a text takes up in a font, on this canvas: measured in its pixels, in units rounded up.
   fun measure(text : string, font : Font = this.font) : TextMetrics {
@@ -195,12 +410,17 @@ abstract class Canvas {
   // A picture at (x, y): at its own size, or scaled into w by h; `alpha` below 1.0 makes it
   // see-through.
   fun draw(picture : Drawable, x : Number, y : Number, w : Number? = null, h : Number? = null, alpha : Number = 1.0) {
-    drawPicture(picture, x, y, w, h, alpha)
+    if (turn == 0) { drawPicture(picture, x, y, w, h, alpha) }
+    else if (turn != 1) { notYet("a picture", "pictures") }
+    else if (w == null and h == null and transform.scaleX == 1.0 and transform.scaleY == 1.0) { drawPicture(picture, mx(x), my(y), null, null, alpha) }
+    else { drawPicture(picture, mx(x), my(y), (w ?: picture.width) * transform.scaleX, (h ?: picture.height) * transform.scaleY, alpha) }
   }
   // A part of a picture, given in its own pixels, put into a rectangle.
   fun drawPart(picture : Drawable, sourceX : Number, sourceY : Number, sourceW : Number, sourceH : Number, x : Number, y : Number, w : Number, h : Number,
                alpha : Number = 1.0) {
-    drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha)
+    if (turn == 0) { drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, x, y, w, h, alpha) }
+    else if (turn != 1) { notYet("a picture", "pictures") }
+    else { drawPicturePart(picture, sourceX, sourceY, sourceW, sourceH, mx(x), my(y), w * transform.scaleX, h * transform.scaleY, alpha) }
   }
   // What draw(picture, ...) asks of each kind of canvas: the picture at (`x`, `y`), at its own size or
   // scaled into `w` by `h`, see-through by `alpha`.
@@ -496,6 +716,9 @@ class Image : Drawable {
   }
 }
 
+// What Canvas.save() keeps for restore() to put back.
+class __CanvasState(val transform : Transform, val color : Color, val font : Font, val lineWidth : Number)
+
 // What draws on an Image: the software engine, in the image's pixels (D123).
 class ImageCanvas : Canvas {
   private val image : Image
@@ -564,62 +787,62 @@ class ImageCanvas : Canvas {
 
   // Fills the rectangle in the image's pixels, laid over what is there by the colour's alpha;
   // nothing when `w` or `h` is 0 or less.
-  override fun fillRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillRect(x : Number, y : Number, w : Number, h : Number) {
     __text.canvasFillRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h)
     drawn()
   }
   // The rectangle's outline, one unit thick, covering `w` + 1 by `h` + 1 units; nothing when `w` or
   // `h` is below 0.
-  override fun drawRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawRect(x : Number, y : Number, w : Number, h : Number) {
     __text.canvasDrawRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, lineWidth)
     drawn()
   }
   // Makes the pixels of the rectangle clear, all four bytes 0, its edges on whole pixels, inside
   // the clip.
-  override fun clearRect(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainClearRect(x : Number, y : Number, w : Number, h : Number) {
     __text.canvasClear(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, x, y, w, h)
     drawn()
   }
   // Fills a rectangle with rounded corners, smooth at its edges, laid over what is there.
-  override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, true, lineWidth)
     drawn()
   }
   // The outline of a rectangle with rounded corners, one unit thick.
-  override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
+  protected override fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number) {
     __text.canvasRoundRect(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, arcW, arcH, false, lineWidth)
     drawn()
   }
   // Fills the oval inside the rectangle, smooth at its edge, laid over what is there.
-  override fun fillOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainFillOval(x : Number, y : Number, w : Number, h : Number) {
     __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, true, lineWidth)
     drawn()
   }
   // The outline of the oval inside the rectangle, one unit thick, covering `w` + 1 by `h` + 1 units.
-  override fun drawOval(x : Number, y : Number, w : Number, h : Number) {
+  protected override fun plainDrawOval(x : Number, y : Number, w : Number, h : Number) {
     __text.canvasOval(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x, y, w, h, false, lineWidth)
     drawn()
   }
   // A line one unit thick with square ends: one across or up and down sits on whole pixels, a
   // slanted one has smooth edges.
-  override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
+  protected override fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number) {
     __text.canvasLine(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, x1, y1, x2, y2, lineWidth)
     drawn()
   }
   // Lines through the first `n` points, or all of them, left open; `n` is cut down to the shorter
   // list, and fewer than 2 points draw nothing.
-  override fun drawPolyline(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolyline(xs : List<Number>, ys : List<Number>, n : int?) {
     __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, false, lineWidth)
     drawn()
   }
   // Lines through the first `n` points, or all of them, closed back to the first; fewer than 2
   // points draw nothing.
-  override fun drawPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainDrawPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, false, true, lineWidth)
     drawn()
   }
   // Fills the polygon through the first `n` points, or all of them; fewer than 2 draw nothing.
-  override fun fillPolygon(xs : List<Number>, ys : List<Number>, n : int? = null) {
+  protected override fun plainFillPolygon(xs : List<Number>, ys : List<Number>, n : int?) {
     __text.canvasPolygon(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb, xs, ys, n ?: xs.size, true, true, lineWidth)
     drawn()
   }
@@ -629,9 +852,15 @@ class ImageCanvas : Canvas {
                      kind.ordinal, fill, lineWidth)
     drawn()
   }
+  // A path, smooth at its edges, laid over what is there.
+  protected override fun plainFillPath(path : Path) {
+    __text.canvasPath(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb,
+                      path.flatten(scale.toFloat()), path.fillRule == FillRule.evenOdd)
+    drawn()
+  }
   // Draws `text` in the canvas's font and colour, its baseline at `y`, and gives the width it took,
   // in units rounded up.
-  override fun drawString(text : string, x : Number, y : Number) : int {
+  protected override fun plainDrawString(text : string, x : Number, y : Number) : int {
     val device : int = __text.canvasText(this, image.width, image.height, scale, originX, originY, clipLeft, clipTop, clipRight, clipBottom, color.argb,
                                          font.engineHandle(scale), text, x, y)
     drawn()

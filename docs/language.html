@@ -425,6 +425,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-localtime-jade">localtime.jade</a></li>
 <li><a href="#file-map-jade">map.jade</a></li>
 <li><a href="#file-parallel-jade">parallel.jade</a></li>
+<li><a href="#file-path-jade">path.jade</a></li>
 <li><a href="#file-picture-jade">picture.jade</a></li>
 <li><a href="#file-range-jade">range.jade</a></li>
 <li><a href="#file-reflect-jade">reflect.jade</a></li>
@@ -465,7 +466,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Bytes.inflate"><code>Bytes</code></a> (33)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
-<li><a href="#Canvas"><code>Canvas</code></a> (42)</li>
+<li><a href="#Canvas"><code>Canvas</code></a> (60)</li>
 <li><a href="#ChangeKind"><code>ChangeKind</code></a> (1)</li>
 <li><a href="#Channel"><code>Channel</code></a> (10)</li>
 <li><a href="#Charset"><code>Charset</code></a> (1)</li>
@@ -493,6 +494,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Field"><code>Field</code></a> (10)</li>
 <li><a href="#FileChange"><code>FileChange</code></a> (1)</li>
 <li><a href="#FilePath"><code>FilePath</code></a> (50)</li>
+<li><a href="#FillRule"><code>FillRule</code></a> (1)</li>
 <li><a href="#Font"><code>Font</code></a> (35)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
@@ -505,7 +507,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
 <li><a href="#Image"><code>Image</code></a> (28)</li>
-<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (18)</li>
+<li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (19)</li>
 <li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
 <li><a href="#Index.of"><code>Index</code></a> (3)</li>
@@ -550,6 +552,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Pair"><code>Pair</code></a> (2)</li>
 <li><a href="#ParallelStream"><code>ParallelStream</code></a> (24)</li>
 <li><a href="#Parameter"><code>Parameter</code></a> (7)</li>
+<li><a href="#Path"><code>Path</code></a> (14)</li>
 <li><a href="#PathStyle"><code>PathStyle</code></a> (1)</li>
 <li><a href="#PatternSyntaxException"><code>PatternSyntaxException</code></a> (1)</li>
 <li><a href="#Peer"><code>Peer</code></a> (7)</li>
@@ -597,6 +600,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#TimeoutException"><code>TimeoutException</code></a> (1)</li>
 <li><a href="#Timer"><code>Timer</code></a> (2)</li>
 <li><a href="#ToImage"><code>ToImage</code></a> (2)</li>
+<li><a href="#Transform"><code>Transform</code></a> (16)</li>
 <li><a href="#Triple"><code>Triple</code></a> (2)</li>
 <li><a href="#Typeface"><code>Typeface</code></a> (28)</li>
 <li><a href="#UncheckedIOException"><code>UncheckedIOException</code></a> (1)</li>
@@ -3084,45 +3088,67 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <p>The part of the canvas that can be drawn on, in units: the rest is clipped away.</p>
 </div>
 <div class="entry member" id="Canvas.sub"><code class="sig">fun sub(x : int, y : int, width : int, height : int) : Canvas</code><a class="anchor" href="#Canvas.sub">#</a>
-<p>A canvas for a part of this one: its (0, 0) is at (x, y) here, and nothing it draws lands outside the part.</p>
+<p>A canvas for a part of this one: its (0, 0) is at (x, y) here, and nothing it draws lands outside the part. Through a transform that moves and stretches, the part is where the transform puts it, and the new canvas stretches as this one does; through one that turns, slants or mirrors, an UnsupportedOperationException for now (N3).</p>
 </div>
 <div class="entry member" id="Canvas.clipped"><code class="sig">fun clipped(x : Number, y : Number, w : Number, h : Number) : Canvas</code><a class="anchor" href="#Canvas.clipped">#</a>
-<p>The same canvas, drawing only inside a rectangle of it.</p>
+<p>The same canvas, drawing only inside a rectangle of it: where the transform puts the rectangle, when it moves and stretches; an UnsupportedOperationException for now through one that turns, slants or mirrors (N3).</p>
 </div>
 <div class="entry member" id="Canvas.another"><code class="sig">protected abstract fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas</code><a class="anchor" href="#Canvas.another">#</a>
 <p>A canvas of this kind over the same pixels, at another place, with another clip.</p>
 </div>
-<div class="entry member" id="Canvas.fillRect"><code class="sig">abstract fun fillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.fillRect">#</a>
+<div class="entry member" id="Canvas.transform"><code class="sig">var transform : Transform</code><a class="anchor" href="#Canvas.transform">#</a>
+<p>What is done to everything drawn before it lands on the canvas: moved, turned, stretched or slanted, as Java's Graphics2D does with its transform. Transform.identity to begin with.</p>
+<pre>canvas.save()
+canvas.translate(60, 40)
+canvas.rotate(Math.pi / 6)
+canvas.fillRect(-20, -10, 40, 20)      a rectangle turned about (60, 40)
+canvas.restore()
+</pre>
+<p>Filled shapes and paths go through any transform. For now the rest goes through less: outlines and lines through one that moves them and stretches them the same both ways, pictures and clearRect through one that moves and stretches them, text through one that only moves it; through any other, each is an UnsupportedOperationException, until the steps of N3 that bring strokes, text and pictures. sub and clipped work through one that moves and stretches.</p>
+</div>
+<div class="entry member" id="Canvas.save"><code class="sig">fun save()</code><a class="anchor" href="#Canvas.save">#</a>
+<p>Keeps the transform, the colour, the font and the line width, for restore() to put back. Saves can be inside each other: each restore() puts back the last one not yet put back.</p>
+</div>
+<div class="entry member" id="Canvas.restore"><code class="sig">fun restore()</code><a class="anchor" href="#Canvas.restore">#</a>
+<p>Puts back what the last save() kept. An IllegalStateException with nothing kept.</p>
+</div>
+<div class="entry member" id="Canvas.translate"><code class="sig">fun translate(dx : Number, dy : Number)</code><a class="anchor" href="#Canvas.translate">#</a>
+<p>Moves what is drawn from now on by <code>dx</code> across and <code>dy</code> down, inside what the transform already does: transform = transform.translate(dx, dy).</p>
+</div>
+<div class="entry member" id="Canvas.rotate"><code class="sig">fun rotate(angle : Number, cx : Number = 0, cy : Number = 0)</code><a class="anchor" href="#Canvas.rotate">#</a>
+<p>Turns what is drawn from now on by <code>angle</code> radians, clockwise, about (<code>cx</code>, <code>cy</code>), inside what the transform already does: transform = transform.rotate(angle, cx, cy).</p>
+</div>
+<div class="entry member" id="Canvas.fillRect"><code class="sig">fun fillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.fillRect">#</a>
 <p>Fills the rectangle of <code>w</code> by <code>h</code> units whose top-left corner is at (<code>x</code>, <code>y</code>), in the canvas's colour.</p>
 </div>
-<div class="entry member" id="Canvas.drawRect"><code class="sig">abstract fun drawRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.drawRect">#</a>
+<div class="entry member" id="Canvas.drawRect"><code class="sig">fun drawRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.drawRect">#</a>
 <p>The outline of that rectangle, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units, as Java's does.</p>
 </div>
-<div class="entry member" id="Canvas.clearRect"><code class="sig">abstract fun clearRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.clearRect">#</a>
+<div class="entry member" id="Canvas.clearRect"><code class="sig">fun clearRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.clearRect">#</a>
 <p>Makes a rectangle clear again: what is under the picture shows through it.</p>
 </div>
-<div class="entry member" id="Canvas.fillRoundRect"><code class="sig">abstract fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.fillRoundRect">#</a>
+<div class="entry member" id="Canvas.fillRoundRect"><code class="sig">fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.fillRoundRect">#</a>
 <p>Fills a rectangle with rounded corners, each corner a quarter of an oval <code>arcW</code> wide and <code>arcH</code> high.</p>
 </div>
-<div class="entry member" id="Canvas.drawRoundRect"><code class="sig">abstract fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.drawRoundRect">#</a>
+<div class="entry member" id="Canvas.drawRoundRect"><code class="sig">fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.drawRoundRect">#</a>
 <p>The outline of a rectangle with rounded corners, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units as drawRect does.</p>
 </div>
-<div class="entry member" id="Canvas.fillOval"><code class="sig">abstract fun fillOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.fillOval">#</a>
+<div class="entry member" id="Canvas.fillOval"><code class="sig">fun fillOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.fillOval">#</a>
 <p>Fills the oval that fits inside the rectangle of <code>w</code> by <code>h</code> units at (<code>x</code>, <code>y</code>).</p>
 </div>
-<div class="entry member" id="Canvas.drawOval"><code class="sig">abstract fun drawOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.drawOval">#</a>
+<div class="entry member" id="Canvas.drawOval"><code class="sig">fun drawOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.drawOval">#</a>
 <p>The outline of that oval, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units.</p>
 </div>
-<div class="entry member" id="Canvas.drawLine"><code class="sig">abstract fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#Canvas.drawLine">#</a>
+<div class="entry member" id="Canvas.drawLine"><code class="sig">fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#Canvas.drawLine">#</a>
 <p>A line one unit thick from (<code>x1</code>, <code>y1</code>) to (<code>x2</code>, <code>y2</code>), both ends included.</p>
 </div>
-<div class="entry member" id="Canvas.drawPolyline"><code class="sig">abstract fun drawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.drawPolyline">#</a>
+<div class="entry member" id="Canvas.drawPolyline"><code class="sig">fun drawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.drawPolyline">#</a>
 <p>Lines from point to point of (<code>xs[i]</code>, <code>ys[i]</code>), the first <code>n</code> of them or all when <code>n</code> is null, left open at the last point.</p>
 </div>
-<div class="entry member" id="Canvas.drawPolygon"><code class="sig">abstract fun drawPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.drawPolygon">#</a>
+<div class="entry member" id="Canvas.drawPolygon"><code class="sig">fun drawPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.drawPolygon">#</a>
 <p>The same lines closed: a last one goes from the last point back to the first.</p>
 </div>
-<div class="entry member" id="Canvas.fillPolygon"><code class="sig">abstract fun fillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.fillPolygon">#</a>
+<div class="entry member" id="Canvas.fillPolygon"><code class="sig">fun fillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#Canvas.fillPolygon">#</a>
 <p>Fills the polygon whose corners are those points.</p>
 </div>
 <div class="entry member" id="Canvas.fillArc"><code class="sig">fun fillArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number)</code><a class="anchor" href="#Canvas.fillArc">#</a>
@@ -3131,17 +3157,56 @@ canvas.drawString(&quot;Hello&quot;, 20, 60)            the text's baseline at y
 <div class="entry member" id="Canvas.drawArc"><code class="sig">fun drawArc(x : Number, y : Number, w : Number, h : Number, startAngle : Number, arcAngle : Number)</code><a class="anchor" href="#Canvas.drawArc">#</a>
 <p>The curve of that part of the oval's outline, as Java's drawArc: as drawOval draws it, one line width thick.</p>
 </div>
-<div class="entry member" id="Canvas.arcShape"><code class="sig">protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)</code><a class="anchor" href="#Canvas.arcShape">#</a>
-<p>What fillArc, drawArc and an Arc ask of each kind of canvas: the part of the oval from <code>start</code> through <code>extent</code> degrees, filled as fillOval fills (a slice for a pie, the arc and its chord otherwise) or its outline drawn as drawOval draws (the curve, and the chord or the two lines to the middle).</p>
-</div>
 <div class="entry member" id="Canvas.draw"><code class="sig">fun draw(shape : Shape)</code><a class="anchor" href="#Canvas.draw">#</a>
-<p>A shape's outline: a Rect's, an Oval's or an Arc's, or a Line; an IllegalArgumentException for any other shape.</p>
+<p>A shape's outline: a Rect's, an Oval's or an Arc's, or a Line; an IllegalArgumentException for any other shape. A Path's outline comes with strokes (N3): an UnsupportedOperationException for now.</p>
 </div>
 <div class="entry member" id="Canvas.fill"><code class="sig">fun fill(shape : Shape)</code><a class="anchor" href="#Canvas.fill">#</a>
-<p>The whole of a shape: a Rect, an Oval or an Arc filled, a Line drawn; an IllegalArgumentException for any other shape.</p>
+<p>The whole of a shape: a Rect, an Oval, an Arc or a Path filled, a Line drawn; an IllegalArgumentException for any other shape. A Path is filled by its fill rule, each of its contours closed.</p>
 </div>
-<div class="entry member" id="Canvas.drawString"><code class="sig">abstract fun drawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#Canvas.drawString">#</a>
+<div class="entry member" id="Canvas.plainFillRect"><code class="sig">protected abstract fun plainFillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.plainFillRect">#</a>
+<p>What each kind of canvas draws, the transform done already: the calls above, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawRect"><code class="sig">protected abstract fun plainDrawRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.plainDrawRect">#</a>
+<p>drawRect, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainClearRect"><code class="sig">protected abstract fun plainClearRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.plainClearRect">#</a>
+<p>clearRect, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainFillRoundRect"><code class="sig">protected abstract fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.plainFillRoundRect">#</a>
+<p>fillRoundRect, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawRoundRect"><code class="sig">protected abstract fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#Canvas.plainDrawRoundRect">#</a>
+<p>drawRoundRect, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainFillOval"><code class="sig">protected abstract fun plainFillOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.plainFillOval">#</a>
+<p>fillOval, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawOval"><code class="sig">protected abstract fun plainDrawOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#Canvas.plainDrawOval">#</a>
+<p>drawOval, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawLine"><code class="sig">protected abstract fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#Canvas.plainDrawLine">#</a>
+<p>drawLine, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawPolyline"><code class="sig">protected abstract fun plainDrawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#Canvas.plainDrawPolyline">#</a>
+<p>drawPolyline, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawPolygon"><code class="sig">protected abstract fun plainDrawPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#Canvas.plainDrawPolygon">#</a>
+<p>drawPolygon, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.plainFillPolygon"><code class="sig">protected abstract fun plainFillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#Canvas.plainFillPolygon">#</a>
+<p>fillPolygon, through no transform.</p>
+</div>
+<div class="entry member" id="Canvas.arcShape"><code class="sig">protected abstract fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)</code><a class="anchor" href="#Canvas.arcShape">#</a>
+<p>What fillArc, drawArc and an Arc ask of each kind of canvas, through no transform: the part of the oval from <code>start</code> through <code>extent</code> degrees, filled as fillOval fills (a slice for a pie, the arc and its chord otherwise) or its outline drawn as drawOval draws (the curve, and the chord or the two lines to the middle).</p>
+</div>
+<div class="entry member" id="Canvas.plainFillPath"><code class="sig">protected abstract fun plainFillPath(path : Path)</code><a class="anchor" href="#Canvas.plainFillPath">#</a>
+<p>A path filled by its fill rule, each contour closed, its points already through the transform: path.flatten(scale) gives it in straight lines, fine enough for this canvas's pixels.</p>
+</div>
+<div class="entry member" id="Canvas.drawString"><code class="sig">fun drawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#Canvas.drawString">#</a>
 <p>Text in the canvas's font and colour, starting at x with its baseline at y: letters sit on that row and tails hang below it. Gives the width it took, in units.</p>
+</div>
+<div class="entry member" id="Canvas.plainDrawString"><code class="sig">protected abstract fun plainDrawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#Canvas.plainDrawString">#</a>
+<p>drawString, through no transform.</p>
 </div>
 <div class="entry member" id="Canvas.measure"><code class="sig">fun measure(text : string, font : Font = this.font) : TextMetrics</code><a class="anchor" href="#Canvas.measure">#</a>
 <p>What a text takes up in a font, on this canvas: measured in its pixels, in units rounded up.</p>
@@ -3281,43 +3346,46 @@ image.save(FilePath(&quot;out.png&quot;))
 <div class="entry member" id="ImageCanvas.another"><code class="sig">protected override fun another(width : int, height : int, originX : int, originY : int, clipLeft : int, clipTop : int, clipRight : int, clipBottom : int) : Canvas</code><a class="anchor" href="#ImageCanvas.another">#</a>
 <p>An ImageCanvas over the same image at another place, with another clip: what sub and clipped give. One made from a part is a part too, inside it, so it is made only by the code that may draw through the part: in a parallel section, the piece it was handed to.</p>
 </div>
-<div class="entry member" id="ImageCanvas.fillRect"><code class="sig">override fun fillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.fillRect">#</a>
+<div class="entry member" id="ImageCanvas.plainFillRect"><code class="sig">protected override fun plainFillRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.plainFillRect">#</a>
 <p>Fills the rectangle in the image's pixels, laid over what is there by the colour's alpha; nothing when <code>w</code> or <code>h</code> is 0 or less.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawRect"><code class="sig">override fun drawRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.drawRect">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawRect"><code class="sig">protected override fun plainDrawRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.plainDrawRect">#</a>
 <p>The rectangle's outline, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units; nothing when <code>w</code> or <code>h</code> is below 0.</p>
 </div>
-<div class="entry member" id="ImageCanvas.clearRect"><code class="sig">override fun clearRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.clearRect">#</a>
+<div class="entry member" id="ImageCanvas.plainClearRect"><code class="sig">protected override fun plainClearRect(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.plainClearRect">#</a>
 <p>Makes the pixels of the rectangle clear, all four bytes 0, its edges on whole pixels, inside the clip.</p>
 </div>
-<div class="entry member" id="ImageCanvas.fillRoundRect"><code class="sig">override fun fillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#ImageCanvas.fillRoundRect">#</a>
+<div class="entry member" id="ImageCanvas.plainFillRoundRect"><code class="sig">protected override fun plainFillRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#ImageCanvas.plainFillRoundRect">#</a>
 <p>Fills a rectangle with rounded corners, smooth at its edges, laid over what is there.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawRoundRect"><code class="sig">override fun drawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#ImageCanvas.drawRoundRect">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawRoundRect"><code class="sig">protected override fun plainDrawRoundRect(x : Number, y : Number, w : Number, h : Number, arcW : Number, arcH : Number)</code><a class="anchor" href="#ImageCanvas.plainDrawRoundRect">#</a>
 <p>The outline of a rectangle with rounded corners, one unit thick.</p>
 </div>
-<div class="entry member" id="ImageCanvas.fillOval"><code class="sig">override fun fillOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.fillOval">#</a>
+<div class="entry member" id="ImageCanvas.plainFillOval"><code class="sig">protected override fun plainFillOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.plainFillOval">#</a>
 <p>Fills the oval inside the rectangle, smooth at its edge, laid over what is there.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawOval"><code class="sig">override fun drawOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.drawOval">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawOval"><code class="sig">protected override fun plainDrawOval(x : Number, y : Number, w : Number, h : Number)</code><a class="anchor" href="#ImageCanvas.plainDrawOval">#</a>
 <p>The outline of the oval inside the rectangle, one unit thick, covering <code>w</code> + 1 by <code>h</code> + 1 units.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawLine"><code class="sig">override fun drawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#ImageCanvas.drawLine">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawLine"><code class="sig">protected override fun plainDrawLine(x1 : Number, y1 : Number, x2 : Number, y2 : Number)</code><a class="anchor" href="#ImageCanvas.plainDrawLine">#</a>
 <p>A line one unit thick with square ends: one across or up and down sits on whole pixels, a slanted one has smooth edges.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawPolyline"><code class="sig">override fun drawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#ImageCanvas.drawPolyline">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawPolyline"><code class="sig">protected override fun plainDrawPolyline(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#ImageCanvas.plainDrawPolyline">#</a>
 <p>Lines through the first <code>n</code> points, or all of them, left open; <code>n</code> is cut down to the shorter list, and fewer than 2 points draw nothing.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawPolygon"><code class="sig">override fun drawPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#ImageCanvas.drawPolygon">#</a>
+<div class="entry member" id="ImageCanvas.plainDrawPolygon"><code class="sig">protected override fun plainDrawPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#ImageCanvas.plainDrawPolygon">#</a>
 <p>Lines through the first <code>n</code> points, or all of them, closed back to the first; fewer than 2 points draw nothing.</p>
 </div>
-<div class="entry member" id="ImageCanvas.fillPolygon"><code class="sig">override fun fillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int? = null)</code><a class="anchor" href="#ImageCanvas.fillPolygon">#</a>
+<div class="entry member" id="ImageCanvas.plainFillPolygon"><code class="sig">protected override fun plainFillPolygon(xs : List&lt;Number&gt;, ys : List&lt;Number&gt;, n : int?)</code><a class="anchor" href="#ImageCanvas.plainFillPolygon">#</a>
 <p>Fills the polygon through the first <code>n</code> points, or all of them; fewer than 2 draw nothing.</p>
 </div>
 <div class="entry member" id="ImageCanvas.arcShape"><code class="sig">protected override fun arcShape(x : Number, y : Number, w : Number, h : Number, start : Number, extent : Number, kind : ArcKind, fill : bool)</code><a class="anchor" href="#ImageCanvas.arcShape">#</a>
 <p>A part of the oval, filled or its outline drawn, smooth at its edges.</p>
 </div>
-<div class="entry member" id="ImageCanvas.drawString"><code class="sig">override fun drawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#ImageCanvas.drawString">#</a>
+<div class="entry member" id="ImageCanvas.plainFillPath"><code class="sig">protected override fun plainFillPath(path : Path)</code><a class="anchor" href="#ImageCanvas.plainFillPath">#</a>
+<p>A path, smooth at its edges, laid over what is there.</p>
+</div>
+<div class="entry member" id="ImageCanvas.plainDrawString"><code class="sig">protected override fun plainDrawString(text : string, x : Number, y : Number) : int</code><a class="anchor" href="#ImageCanvas.plainDrawString">#</a>
 <p>Draws <code>text</code> in the canvas's font and colour, its baseline at <code>y</code>, and gives the width it took, in units rounded up.</p>
 </div>
 <div class="entry member" id="ImageCanvas.drawPicture"><code class="sig">protected override fun drawPicture(picture : Drawable, x : Number, y : Number, w : Number?, h : Number?, alpha : Number)</code><a class="anchor" href="#ImageCanvas.drawPicture">#</a>
@@ -4364,6 +4432,118 @@ pages.parallelStream().forEach { page -&gt; for (link in page.links) { seen.add(
 <div class="entry" id="availableProcessors"><code class="sig">fun availableProcessors() : int</code><a class="anchor" href="#availableProcessors">#</a>
 <p>How many cores a parallel section uses on this machine.</p>
 </div>
+</section>
+<section class="file" id="file-path-jade">
+<h2>path.jade</h2>
+<h3>Paths and transforms (N3)</h3>
+<div class="entry" id="FillRule"><code class="sig">enum FillRule</code><a class="anchor" href="#FillRule">#</a>
+<p>Which parts of a path whose contours cross or lie inside each other are inside it, as Java's WIND_NON_ZERO and WIND_EVEN_ODD. With nonZero, a part the contours go round more times one way than the other: a contour inside another going the same way fills, one going the other way makes a hole. With evenOdd, a part inside an odd number of contours: one inside another makes a hole whichever way it goes.</p>
+</div>
+<div class="entry" id="Transform"><code class="sig">value Transform(val scaleX : float = 1.0, val shearY : float = 0.0, val shearX : float = 0.0, val scaleY : float = 1.0, val translateX : float = 0.0, val translateY : float = 0.0)</code><a class="anchor" href="#Transform">#</a>
+<p>A change of place for every point of the plane: moved, turned, stretched, slanted, or several of these at once, as Java's AffineTransform. A point (x, y) goes to</p>
+<pre>x' = scaleX * x + shearX * y + translateX
+y' = shearY * x + scaleY * y + translateY
+</pre>
+<p>It is a value: translate, scale, rotate and shear each give a new transform. As in Java, what each adds is done first, before what the transform already does, which is how a canvas's transform builds up: canvas.translate(50, 50) then canvas.rotate(a) turns what is drawn about the point (50, 50). <code>t.then(u)</code> is the other way: t first, then u.</p>
+<pre>val t = Transform.identity.translate(50, 50).rotate(Math.pi / 4)
+val (x, y) = t.apply(10, 0)          where (10, 0) lands
+val back = t.inverse()               the transform that undoes t
+</pre>
+<p>Angles are in radians, as Java's: from the x axis towards the y axis, which on a canvas, whose y grows downwards, is clockwise.</p>
+</div>
+<div class="entry member" id="Transform.identity"><code class="sig">val identity</code><a class="anchor" href="#Transform.identity">#</a>
+<p>The transform that leaves every point where it is.</p>
+</div>
+<div class="entry member" id="Transform.translation"><code class="sig">fun translation(dx : Number, dy : Number) : Transform</code><a class="anchor" href="#Transform.translation">#</a>
+<p>Moves every point <code>dx</code> across and <code>dy</code> down.</p>
+</div>
+<div class="entry member" id="Transform.scaling"><code class="sig">fun scaling(sx : Number, sy : Number? = null) : Transform</code><a class="anchor" href="#Transform.scaling">#</a>
+<p>Stretches by <code>sx</code> across and <code>sy</code> down (<code>sx</code> both ways when <code>sy</code> is not given), away from (0, 0).</p>
+</div>
+<div class="entry member" id="Transform.rotation"><code class="sig">fun rotation(angle : Number, cx : Number = 0, cy : Number = 0) : Transform</code><a class="anchor" href="#Transform.rotation">#</a>
+<p>Turns by <code>angle</code> radians about (<code>cx</code>, <code>cy</code>): clockwise on a canvas. Quarter turns are exact, as Java makes them.</p>
+</div>
+<div class="entry member" id="Transform.shearing"><code class="sig">fun shearing(shx : Number, shy : Number) : Transform</code><a class="anchor" href="#Transform.shearing">#</a>
+<p>Slants: each point moves across by <code>shx</code> times its y, and down by <code>shy</code> times its x.</p>
+</div>
+<div class="entry member" id="Transform.isIdentity"><code class="sig">val isIdentity : bool</code><a class="anchor" href="#Transform.isIdentity">#</a>
+<p>Whether it leaves every point where it is.</p>
+</div>
+<div class="entry member" id="Transform.determinant"><code class="sig">val determinant : float</code><a class="anchor" href="#Transform.determinant">#</a>
+<p>How many times it makes an area larger: below 0 when it also mirrors, 0 when it flattens everything onto a line (and cannot be undone).</p>
+</div>
+<div class="entry member" id="Transform.translate"><code class="sig">fun translate(dx : Number, dy : Number) : Transform</code><a class="anchor" href="#Transform.translate">#</a>
+<p>This transform after a move of <code>dx</code> across and <code>dy</code> down.</p>
+</div>
+<div class="entry member" id="Transform.scale"><code class="sig">fun scale(sx : Number, sy : Number? = null) : Transform</code><a class="anchor" href="#Transform.scale">#</a>
+<p>This transform after stretching by <code>sx</code> across and <code>sy</code> down (<code>sx</code> both ways when <code>sy</code> is not given).</p>
+</div>
+<div class="entry member" id="Transform.rotate"><code class="sig">fun rotate(angle : Number, cx : Number = 0, cy : Number = 0) : Transform</code><a class="anchor" href="#Transform.rotate">#</a>
+<p>This transform after turning by <code>angle</code> radians about (<code>cx</code>, <code>cy</code>).</p>
+</div>
+<div class="entry member" id="Transform.shear"><code class="sig">fun shear(shx : Number, shy : Number) : Transform</code><a class="anchor" href="#Transform.shear">#</a>
+<p>This transform after slanting by <code>shx</code> and <code>shy</code>, as Transform.shearing.</p>
+</div>
+<div class="entry member" id="Transform.then"><code class="sig">fun then(next : Transform) : Transform</code><a class="anchor" href="#Transform.then">#</a>
+<p>This transform, then <code>next</code>.</p>
+</div>
+<div class="entry member" id="Transform.inverse"><code class="sig">fun inverse() : Transform</code><a class="anchor" href="#Transform.inverse">#</a>
+<p>The transform that puts every point back where this one found it. An IllegalStateException for one that cannot be undone, its determinant 0: it flattens everything onto a line.</p>
+</div>
+<div class="entry member" id="Transform.apply"><code class="sig">fun apply(x : Number, y : Number) : Pair&lt;float, float&gt;</code><a class="anchor" href="#Transform.apply">#</a>
+<p>Where the point (<code>x</code>, <code>y</code>) goes: its x and y, to take apart, val (px, py) = t.apply(x, y).</p>
+</div>
+<div class="entry member" id="Transform.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Transform.toString">#</a>
+<p>The transform as text, its two rows: &quot;Transform([1.0, 0.0, 5.0], [0.0, 1.0, 0.0])&quot;.</p>
+</div>
+<div class="entry" id="Path"><code class="sig">class Path(var fillRule : FillRule = FillRule.nonZero) : Shape</code><a class="anchor" href="#Path">#</a>
+<p>A shape of straight lines and curves, as Java's Path2D: made a piece at a time, or read from the path data of an SVG picture.</p>
+<pre>val arrow = Path().moveTo(0, 10).lineTo(20, 10).lineTo(20, 0).lineTo(35, 15).lineTo(20, 30).lineTo(20, 20).lineTo(0, 20).close()
+val drop = Path.parse(&quot;M20 0 C20 20 40 30 40 40 A20 20 0 0 1 0 40 C0 30 20 20 20 0 Z&quot;)
+canvas.fill(arrow)
+</pre>
+<p>It is made of contours: each starts with moveTo and goes on with lines and curves; close() draws a straight line back to where it started. A filled path fills every contour as if it were closed, and where contours cross or lie inside each other, <code>fillRule</code> says what is inside. Its numbers are in units, as everything else drawn on a canvas.</p>
+</div>
+<div class="entry member" id="Path.parse"><code class="sig">fun parse(d : string) : Path</code><a class="anchor" href="#Path.parse">#</a>
+<p>A path read from SVG path data, the <code>d</code> of a &lt;path&gt;: M, L, H, V, C, S, Q, T, A and Z, in capitals for places and in small letters for steps from the last point, the numbers apart by spaces or commas or by nothing where they cannot run together (&quot;M10-5.5.5&quot;). An IllegalArgumentException where the data is not right, saying at which character (from 0) and what was expected there.</p>
+</div>
+<div class="entry member" id="Path.isEmpty"><code class="sig">val isEmpty : bool</code><a class="anchor" href="#Path.isEmpty">#</a>
+<p>Whether it has nothing in it yet.</p>
+</div>
+<div class="entry member" id="Path.moveTo"><code class="sig">fun moveTo(x : Number, y : Number) : Path</code><a class="anchor" href="#Path.moveTo">#</a>
+<p>Starts a contour at (<code>x</code>, <code>y</code>). A moveTo right after another takes its place.</p>
+</div>
+<div class="entry member" id="Path.lineTo"><code class="sig">fun lineTo(x : Number, y : Number) : Path</code><a class="anchor" href="#Path.lineTo">#</a>
+<p>A straight line on to (<code>x</code>, <code>y</code>).</p>
+</div>
+<div class="entry member" id="Path.quadTo"><code class="sig">fun quadTo(cx : Number, cy : Number, x : Number, y : Number) : Path</code><a class="anchor" href="#Path.quadTo">#</a>
+<p>A curve on to (<code>x</code>, <code>y</code>) that bends towards (<code>cx</code>, <code>cy</code>): a quadratic Bézier curve.</p>
+</div>
+<div class="entry member" id="Path.curveTo"><code class="sig">fun curveTo(c1x : Number, c1y : Number, c2x : Number, c2y : Number, x : Number, y : Number) : Path</code><a class="anchor" href="#Path.curveTo">#</a>
+<p>A curve on to (<code>x</code>, <code>y</code>) that leaves towards (<code>c1x</code>, <code>c1y</code>) and arrives from (<code>c2x</code>, <code>c2y</code>): a cubic Bézier curve.</p>
+</div>
+<div class="entry member" id="Path.arcTo"><code class="sig">fun arcTo(rx : Number, ry : Number, rotation : Number, largeArc : bool, sweep : bool, x : Number, y : Number) : Path</code><a class="anchor" href="#Path.arcTo">#</a>
+<p>A part of an ellipse on to (<code>x</code>, <code>y</code>), as SVG's A: the ellipse <code>rx</code> across and <code>ry</code> down, turned by <code>rotation</code> degrees; of the four arcs that join the points, the larger or the smaller one (<code>largeArc</code>), going clockwise on a canvas or not (<code>sweep</code>). Made of cubic curves. An ellipse too small to reach is made larger until it does, as SVG says; with <code>rx</code> or <code>ry</code> 0 it is a straight line.</p>
+</div>
+<div class="entry member" id="Path.close"><code class="sig">fun close() : Path</code><a class="anchor" href="#Path.close">#</a>
+<p>Closes the contour with a straight line back to where it began. A line or a curve after it starts a new contour there.</p>
+</div>
+<div class="entry member" id="Path.transformed"><code class="sig">fun transformed(t : Transform) : Path</code><a class="anchor" href="#Path.transformed">#</a>
+<p>The path with every point moved by <code>t</code>, its fill rule the same. Curves stay curves.</p>
+</div>
+<div class="entry member" id="Path.bounds"><code class="sig">override val bounds : Rect</code><a class="anchor" href="#Path.bounds">#</a>
+<p>The smallest rectangle of whole units that holds the whole path: the curves' own extremes, not their control points'. An empty path's is Rect(0, 0, 0 x 0).</p>
+</div>
+<div class="entry member" id="Path.contains"><code class="sig">override fun contains(px : float, py : float) : bool</code><a class="anchor" href="#Path.contains">#</a>
+<p>Whether the point (<code>px</code>, <code>py</code>) is inside the path filled by its fill rule, each contour closed; on an edge it may be either.</p>
+</div>
+<div class="entry member" id="Path.flatten"><code class="sig">fun flatten(pixels : float) : List&lt;float&gt;</code><a class="anchor" href="#Path.flatten">#</a>
+<p>The path in straight lines, as a canvas fills it: for each contour, how many points it has and then their x and y, one after another. Curves are cut into as many pieces as their bend needs at <code>pixels</code> pixels a unit, to within about a hundredth of a pixel. A contour of one point is left out.</p>
+</div>
+<div class="entry member" id="Path.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Path.toString">#</a>
+<p>The path as SVG path data, in places: &quot;M0 10 L20 10 Q30 0 40 10 Z&quot;.</p>
+</div>
+<h4>The canvas's shapes as paths, for filling them through a transform that turns them</h4>
 </section>
 <section class="file" id="file-picture-jade">
 <h2>picture.jade</h2>

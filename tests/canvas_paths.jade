@@ -1,0 +1,254 @@
+// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// Paths, fill rules and transforms (N3): a Path made a piece at a time or read from SVG path
+// data, a Transform as a value, and a canvas's transform, which every fill goes through; the
+// image's canvas and the graphics card's fill alike.
+import Topaz.*
+
+// -- Paths --
+
+val arrow = Path().moveTo(0, 10).lineTo(20, 10).lineTo(20, 0).lineTo(35, 15).lineTo(20, 30).lineTo(20, 20).lineTo(0, 20).close()
+print(arrow)   // expect: M0 10 L20 10 L20 0 L35 15 L20 30 L20 20 L0 20 Z
+print(arrow.bounds, arrow.contains(5.0, 15.0), arrow.contains(5.0, 5.0), arrow.contains(30.0, 15.0))   // expect: Rect(0, 0, 35 x 30) true false true
+// A curve's bounds are where it turns, not where its control points are.
+print(Path().moveTo(0, 10).quadTo(20, -10, 40, 10).bounds, Path().moveTo(0, 0).curveTo(0, 40, 40, 40, 40, 0).bounds)   // expect: Rect(0, 0, 40 x 10) Rect(0, 0, 40 x 30)
+print(Path().isEmpty, Path().bounds, Path().contains(0.0, 0.0))   // expect: true Rect(0, 0, 0 x 0) false
+// A moveTo after another takes its place; a line after close() starts again where the contour began.
+print(Path().moveTo(1, 1).moveTo(2, 2).lineTo(3, 3).close().lineTo(5, 5))   // expect: M2 2 L3 3 Z M2 2 L5 5
+try { Path().lineTo(1, 1) } catch (e : IllegalStateException) { print(e.message) }   // expect: a path starts with moveTo, not lineTo
+
+// Fill rules: a square inside a square going the same way fills with nonZero and is a hole with
+// evenOdd; going the other way it is a hole with both.
+fun squares(inner : bool) : Path {
+  val p = Path().moveTo(0, 0).lineTo(10, 0).lineTo(10, 10).lineTo(0, 10).close()
+  return inner ? p.moveTo(3, 3).lineTo(7, 3).lineTo(7, 7).lineTo(3, 7).close() : p.moveTo(3, 3).lineTo(3, 7).lineTo(7, 7).lineTo(7, 3).close()
+}
+for (same in [true, false]) {
+  val p = squares(same)
+  val nonZero = p.contains(5.0, 5.0)
+  p.fillRule = FillRule.evenOdd
+  print(same ? "same way" : "other way", nonZero, p.contains(5.0, 5.0), p.contains(1.0, 1.0))
+}
+// expect: same way true false true
+// expect: other way false false true
+
+// -- SVG path data --
+
+print(Path.parse("M10-5.5.5.5l3 4h5v-2zm1,1 2,2"))   // expect: M10 -5.5 L0.5 0.5 L3.5 4.5 L8.5 4.5 L8.5 2.5 Z M11 -4.5 L13 -2.5
+print(Path.parse("  m 1e1 2E+1 L+3,.5e1 "))   // expect: M10 20 L3 5
+// S and T mirror the last curve's control point; after anything else it is the current point.
+print(Path.parse("M0 0 C10 0 20 10 20 20 S30 40 40 40 Q50 30 60 40 T80 40"))   // expect: M0 0 C10 0 20 10 20 20 C20 30 30 40 40 40 Q50 30 60 40 Q70 50 80 40
+print(Path.parse("M0 0 L10 0 S20 10 30 0 T40 0"))   // expect: M0 0 L10 0 C10 0 20 10 30 0 Q30 0 40 0
+// An arc's flags may run into each other and into the next number.
+val quarter = Path.parse("M0 0a10 10 0 0110 10")
+print(quarter.bounds, Path.parse("M0 0 A10 10 0 1 1 10 10").bounds, Path.parse("M0 0 A5 5 0 0 1 20 0").bounds)   // expect: Rect(0, 0, 10 x 10) Rect(0, -10, 20 x 20) Rect(0, -10, 20 x 10)
+print("[${Path.parse("")}]", Path.parse("M1 2 3 4 z").toString())   // expect: [] M1 2 L3 4 Z
+for (bad in ["M10 L", "L1 2", "M1 2 Z 3 4", "M1e", "M1 2 A1 1 0 2 0 3 4", "M 1 2 X", "M1,,2", "M1 2,"]) {
+  try {
+    Path.parse(bad)
+    print("read", bad)
+  } catch (e : IllegalArgumentException) {
+    print(e.message)
+  }
+}
+// expect: path data: expected a number at character 4, found 'L', in "M10 L"
+// expect: path data: expected M or m first at character 0, found 'L', in "L1 2"
+// expect: path data: expected a command letter after Z at character 7, found '3', in "M1 2 Z 3 4"
+// expect: path data: expected the digits of an exponent at character 2, found 'e', in "M1e"
+// expect: path data: expected an arc's flag, 0 or 1 at character 12, found '2', in "M1 2 A1 1 0 2 0 3 4"
+// expect: path data: expected a command letter at character 6, found 'X', in "M 1 2 X"
+// expect: path data: expected a number at character 3, found ',', in "M1,,2"
+// expect: path data: expected a number after the comma at character 5, found the end, in "M1 2,"
+
+// -- Transforms --
+
+val t = Transform.identity.translate(50, 50).rotate(Math.pi / 2)
+print(t)   // expect: Transform([0.0, -1.0, 50.0], [1.0, 0.0, 50.0])
+val (tx, ty) = t.apply(10, 0)
+print(tx, ty, t.inverse().apply(50, 60), t.then(t.inverse()).isIdentity, t.determinant)   // expect: 50.0 60.0 Pair(first=10.0, second=0.0) true 1.0
+// Each step comes first: translate then scale scales about the moved origin; then() is the other way.
+print(Transform.identity.translate(10, 0).scale(2).apply(1, 1), Transform.scaling(2).then(Transform.translation(10, 0)).apply(1, 1))   // expect: Pair(first=12.0, second=2.0) Pair(first=12.0, second=2.0)
+print(Transform.rotation(Math.pi, 5, 5).apply(0, 0), Transform.shearing(1, 0).apply(2, 3), Transform.scaling(2, 3).scale(0.5).apply(4, 4))   // expect: Pair(first=10.0, second=10.0) Pair(first=5.0, second=3.0) Pair(first=4.0, second=6.0)
+try { Transform.scaling(1, 0).inverse() } catch (e : IllegalStateException) { print("cannot be undone") }   // expect: cannot be undone
+print(Transform.identity == Transform(), Transform.translation(1, 2) == Transform.identity.translate(1, 2))   // expect: true true
+print(arrow.transformed(Transform.translation(5, 5).scale(2)).bounds)   // expect: Rect(5, 5, 70 x 60)
+
+// -- Drawing: the image's canvas and the card's --
+
+// A canvas on an image in memory, and one on a hidden window's surface, given the same scene;
+// their pictures, to be compared.
+fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
+  val image = Image(120 * scale, 100 * scale, Color.white)
+  scene(image.canvasAt(120, 100, scale))
+  Topaz.windowOpener = HiddenWindowOpener(scale)
+  val w = Window(Component(object : Content {
+    override var owner : Component? = null
+    override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))
+    override fun paint(canvas : Canvas) {
+      canvas.color = Color.white
+      canvas.fillRect(0, 0, 120, 100)
+      scene(canvas)
+    }
+  }), "Paths", 120, 100)
+  w.show()
+  val host = w.handle as WindowHost
+  host.frame()
+  val card = host.snapshot()
+  w.close()
+  return [image, card]
+}
+// The pixels dark enough to count as drawn, in a rectangle of pixels.
+fun ink(image : Image, x0 : int, y0 : int, x1 : int, y1 : int) : int {
+  var n = 0
+  for (y in y0 ..< y1) {
+    for (x in x0 ..< x1) {
+      val c = image[x, y]
+      if (c.red.toInt() + c.green.toInt() + c.blue.toInt() < 384) { n += 1 }
+    }
+  }
+  return n
+}
+// How much of a rectangle of pixels is covered, a pixel's darkness its share: a shape's area.
+fun area(image : Image, x0 : int, y0 : int, x1 : int, y1 : int) : float {
+  var sum = 0.0
+  for (y in y0 ..< y1) {
+    for (x in x0 ..< x1) { sum += (255 - image[x, y].red.toInt()) / 255.0 }
+  }
+  return sum
+}
+// How many pixels the two pictures differ in by much.
+fun differing(a : Image, b : Image) : int {
+  var n = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      val p = a[x, y]
+      val q = b[x, y]
+      if (Math.abs(p.red.toInt() - q.red.toInt()) + Math.abs(p.green.toInt() - q.green.toInt()) + Math.abs(p.blue.toInt() - q.blue.toInt()) > 60) { n += 1 }
+    }
+  }
+  return n
+}
+
+// Two squares, the inner one going the same way: filled whole with nonZero, with a hole with
+// evenOdd, at scale 1 and 2.
+for (scale in [1, 2]) {
+  for (rule in [FillRule.nonZero, FillRule.evenOdd]) {
+    val pics = pictures(scale) { c ->
+      c.color = Color.black
+      val p = Path(rule).moveTo(10, 10).lineTo(90, 10).lineTo(90, 90).lineTo(10, 90).close()
+      p.moveTo(30, 30).lineTo(70, 30).lineTo(70, 70).lineTo(30, 70).close()
+      c.fill(p)
+    }
+    print("scale $scale", rule, pics.map { p -> ink(p, 0, 0, 120 * scale, 100 * scale) / (scale * scale) }, differing(pics[0], pics[1]))
+  }
+}
+// expect: scale 1 nonZero [6400, 6400] 0
+// expect: scale 1 evenOdd [4800, 4800] 0
+// expect: scale 2 nonZero [6400, 6400] 0
+// expect: scale 2 evenOdd [4800, 4800] 0
+
+// A circle read from path data covers its area, and the two canvases agree.
+val circles = pictures(1) { c ->
+  c.color = Color.black
+  c.fill(Path.parse("M10 50 A40 40 0 0 0 90 50 A40 40 0 0 0 10 50 Z"))
+}
+print(circles.map { p -> Math.abs(ink(p, 0, 0, 120, 100) - 5027) < 40 }, differing(circles[0], circles[1]) < 10)   // expect: [true, true] true
+
+// Through a transform that moves and stretches, rectangles stay on whole pixels: 10 by 10 units
+// stretched twice is 400 pixels exactly, from (20, 20).
+val stretched = pictures(1) { c ->
+  c.color = Color.black
+  c.translate(20, 20)
+  c.transform = c.transform.scale(2)
+  c.fillRect(0, 0, 10, 10)
+}
+for (p in stretched) { print(ink(p, 0, 0, 120, 100), ink(p, 20, 20, 40, 40), p[19, 19].red.toInt() > 200) }
+// expect: 400 400 true
+// expect: 400 400 true
+
+// Turned: a square of 40 turned an eighth of a turn about its middle still covers 1600 pixels,
+// now a diamond reaching 28 out from the middle; an oval and a slice turn with it.
+val turned = pictures(1) { c ->
+  c.color = Color.black
+  c.save()
+  c.rotate(Math.pi / 4, 40, 50)
+  c.fillRect(20, 30, 40, 40)
+  c.restore()
+  c.fillRect(100, 0, 5, 5)   // after restore(), not turned: 25 pixels
+}
+for (p in turned) {
+  print(Math.abs(area(p, 0, 0, 95, 100) - 1600) < 3, p[40, 23].red.toInt() < 128, p[40, 20].red.toInt() > 200, p[13, 50].red.toInt() < 128, ink(p, 95, 0, 120, 100))
+}
+print(differing(turned[0], turned[1]) < 10)
+// expect: true true true true 25
+// expect: true true true true 25
+// expect: true
+// Each turned about its own middle: areas of 1414, 386, 79 and 200 pixels.
+val ovals = pictures(1) { c ->
+  c.color = Color.black
+  for (k in 0 ..< 4) {
+    c.save()
+    c.rotate(Math.pi / 6, [50, 15, 60, 100][k], [30, 80, 80, 80][k])
+    if (k == 0) { c.fillOval(20, 15, 60, 30) }
+    else if (k == 1) { c.fillRoundRect(5, 70, 20, 20, 8, 8) }
+    else if (k == 2) { c.fillArc(50, 70, 20, 20, 0, 90) }
+    else { c.fillPolygon([90, 110, 90], [70, 70, 90]) }
+    c.restore()
+  }
+}
+print(ovals.map { p -> [ink(p, 0, 0, 120, 60), ink(p, 0, 60, 40, 100), ink(p, 40, 60, 80, 100), ink(p, 80, 60, 120, 100)] }, differing(ovals[0], ovals[1]) < 15)
+// expect: [[1420, 384, 79, 198], [1420, 384, 79, 198]] true
+
+// What cannot go through a turned transform yet says so; outlines go through one that moves
+// and stretches the same both ways, their lines stretched too.
+val image = Image(40, 40, Color.white)
+val canvas = image.canvas()
+canvas.rotate(0.5)
+for (attempt in [{ canvas.drawRect(0, 0, 5, 5) }, { canvas.drawString("x", 0, 10) }, { canvas.draw(image, 0, 0) }, { canvas.sub(0, 0, 5, 5) }]) {
+  try {
+    attempt()
+  } catch (e : UnsupportedOperationException) {
+    print(e.message!!.contains("comes with"))
+  }
+}
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+try { canvas.restore() } catch (e : IllegalStateException) { print(e.message) }   // expect: restore() puts back what save() kept, and nothing is kept
+try { canvas.draw(arrow) } catch (e : UnsupportedOperationException) { print(e.message) }   // expect: a Path's outline comes with strokes (N3)
+val outlined = pictures(1) { c ->
+  c.color = Color.black
+  c.transform = Transform.scaling(2)
+  c.drawRect(10, 10, 20, 20)
+}
+for (p in outlined) { print(ink(p, 0, 0, 120, 100), p[20, 20].red.toInt() < 128, p[21, 21].red.toInt() < 128, p[22, 22].red.toInt() > 200) }
+// expect: 320 true true true
+// expect: 320 true true true
+
+// A sub canvas of a moved and stretched one is where the transform puts it, and stretches too;
+// visibleBounds comes back through the transform.
+val parts = pictures(1) { c ->
+  c.color = Color.black
+  c.translate(10, 10)
+  c.transform = c.transform.scale(2)
+  val part = c.sub(5, 5, 10, 10)
+  part.fillRect(0, 0, 10, 10)
+}
+for (p in parts) { print(ink(p, 0, 0, 120, 100), ink(p, 20, 20, 40, 40)) }
+// expect: 400 400
+// expect: 400 400
+val seen = Image(100, 80, Color.white).canvas()
+seen.translate(10, 20)
+seen.transform = seen.transform.scale(2)
+print(seen.visibleBounds)   // expect: Rect(-5, -10, 50 x 40)
+
+// A recording canvas keeps a path as it lands, through its transform.
+val ops : open List<DrawOp> = []
+val recorder = RecordingCanvas(100, 100, ops)
+recorder.translate(5, 5)
+recorder.fill(Path().moveTo(0, 0).lineTo(10, 0).lineTo(0, 10).close())
+recorder.rotate(Math.pi / 2)
+recorder.fillRect(0, 0, 10, 10)
+for (op in ops) { print(op is DrawOp.Fill ? "fill ${op.path.bounds}" : "$op") }
+// expect: fill Rect(5, 5, 10 x 10)
+// expect: fill Rect(-5, 5, 10 x 10)

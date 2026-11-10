@@ -39,3 +39,17 @@ void arcStroke(Path& p, double l, double t, double r, double b, double start, do
 void polylineStroke(Path& p, const std::vector<double>& xy, bool closed, double width);
 
 }  // namespace jade::text
+
+namespace jade {
+class VM;
+struct Value;
+namespace text {
+
+// A Path a canvas fills (N3), flattened by the standard library into straight lines (Path.flatten):
+// for each contour, how many points it has and then their x and y, in units. Put into `out` in
+// pixels, each contour closed, at (originX, originY) plus `scale` pixels a unit; false if there
+// is nothing to fill. Throws for a list that is not that.
+bool pathOf(VM& vm, Value outline, double originX, double originY, double scale, Path& out);
+
+}  // namespace text
+}  // namespace jade

@@ -30,9 +30,15 @@ struct GlyphImage {
 constexpr float kGlyphFineness = 1.0f;
 constexpr float kShapeFineness = 9.0f;
 
+// Which parts of an outline whose contours cross or nest are inside (N3): with NonZero, a part
+// that the contours go round more often one way than the other, so a contour inside another
+// going the same way fills too; with EvenOdd, a part inside an odd number of them, so a contour
+// inside another makes a hole whichever way it goes.
+enum class FillRule : uint8_t { NonZero, EvenOdd };
+
 // Fills an outline that is already in pixels (y still growing upwards), with exact-area
 // antialiasing: each pixel's value is the share of it that lies inside the outline.
-GlyphImage rasterize(const Path& path, float fineness = kGlyphFineness);
+GlyphImage rasterize(const Path& path, float fineness = kGlyphFineness, FillRule rule = FillRule::NonZero);
 
 // The same with only the rows that land from `fromRow` up to `toRow` of a picture (y growing
 // downwards, the image placed with its top at -top, as blendImage places a shape): a clip's rows.
@@ -40,11 +46,11 @@ GlyphImage rasterize(const Path& path, float fineness = kGlyphFineness);
 // whole, and a big shape inside a small clip costs only the clip's rows. A shape taller than
 // 8192 pixels is drawn, its rows in the clip; one wider than that, or with more rows in the clip,
 // is not.
-GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow);
+GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, FillRule rule = FillRule::NonZero);
 
 // The same into a box given beforehand, which a colour glyph's layers share: `left` and
 // `top` say where the box sits, as in GlyphImage. Adds nothing if the path is empty.
 void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage,
-                   float fineness = kGlyphFineness);
+                   float fineness = kGlyphFineness, FillRule rule = FillRule::NonZero);
 
 }  // namespace jade::text

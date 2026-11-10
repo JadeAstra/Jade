@@ -252,12 +252,12 @@ void blendImage(const Target& t, const text::GlyphImage& image, int x, int basel
 }
 
 // An outline in the target's pixels (y growing downwards) filled in a colour.
-void fillPath(const Target& t, const text::Path& downward, uint32_t color) {
+void fillPath(const Target& t, const text::Path& downward, uint32_t color, text::FillRule rule = text::FillRule::NonZero) {
     if (downward.empty()) return;
     // The rasterizer has y growing upwards: the outline turned over, and the result put back.
     text::Path up = downward;
     for (size_t i = 1; i < up.points.size(); i += 2) up.points[i] = -up.points[i];
-    const text::GlyphImage image = text::rasterize(up, text::kShapeFineness, t.clipTop, t.clipBottom);
+    const text::GlyphImage image = text::rasterize(up, text::kShapeFineness, t.clipTop, t.clipBottom, rule);
     blendImage(t, image, 0, 0, color);
 }
 
@@ -347,6 +347,26 @@ void linePath(const Target& t, text::Path& p, double x1, double y1, double x2, d
 uint32_t engineColor(VM& vm, Value v) { return colorOf(vm, v); }
 
 }  // namespace
+
+bool text::pathOf(VM& vm, Value outline, double originX, double originY, double scale, Path& out) {
+    if (!outline.isObjType(ObjType::List)) throw vm.runtimeError(Thrown::ClassCastException, "a flattened path is a list of numbers");
+    ObjList* list = asList(outline);
+    const size_t size = list->size();
+    auto at = [&](size_t i) { return vm.toNumber(vm.listGet(list, i), "a flattened path's number"); };
+    size_t i = 0;
+    while (i < size) {
+        const double n = at(i++);
+        if (!(n >= 0) || n > static_cast<double>((size - i) / 2)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a contour has more points than the path");
+        const size_t count = static_cast<size_t>(n);
+        for (size_t k = 0; k < count; k++, i += 2) {
+            const float x = static_cast<float>(originX + at(i) * scale), y = static_cast<float>(originY + at(i + 1) * scale);
+            if (k == 0) out.moveTo(x, y);
+            else out.lineTo(x, y);
+        }
+        if (count > 0) out.close();
+    }
+    return !out.empty();
+}
 
 namespace {
 
@@ -1060,6 +1080,17 @@ void registerText(VM& vm) {
         return Value::null();
     });
 
+    // path(target..., colour, outline, evenOdd): a Path flattened into straight lines
+    // (Path.flatten) and filled (N3), each contour closed. Not on whole pixels: a path is where
+    // it says.
+    def("canvasPath", 13, 13, [](VM& vm, int, Value* args) -> Value {
+        const Target t = targetOf(vm, args);
+        text::Path p;
+        if (!text::pathOf(vm, args[11], t.originX, t.originY, t.scale, p)) return Value::null();
+        fillPath(t, p, engineColor(vm, args[10]), args[12].truthy() ? text::FillRule::EvenOdd : text::FillRule::NonZero);
+        return Value::null();
+    });
+
     // takePixels(cells, bytes): a picture's pixels taken from new bytes without a copy, the bytes
     // left holding what the cells held. For the standard library's decoders, whose bytes are
     // nowhere else.
@@ -1079,7 +1110,7 @@ void registerText(VM& vm) {
     // instant); and drawing on a canvas, which says itself what it may draw on (mayDraw).
     vm.markNotParallel("__text", {"width", "charWidth", "faceGlyph", "find", "faceInfo", "font", "fontInfo", "canvasFillRect", "canvasDrawRect",
                                   "canvasClear", "canvasRoundRect", "canvasOval", "canvasLine", "canvasPolygon", "canvasArc", "canvasText",
-                                  "canvasPicture"});
+                                  "canvasPicture", "canvasPath"});
 }
 
 }  // namespace jade

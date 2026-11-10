@@ -79,14 +79,25 @@ public:
         }
     }
 
-    // The kept rows' coverage, a byte a pixel, row after row.
-    void finish(std::vector<uint8_t>& out) const {
+    // The kept rows' coverage, a byte a pixel, row after row. The running sum is how many times
+    // the outline goes round the pixel, a part of a time at an edge: non-zero takes any of it,
+    // up to once; even-odd takes how far it is from an even number.
+    void finish(std::vector<uint8_t>& out, FillRule rule) const {
         const size_t w = static_cast<size_t>(w_);
         out.resize(w * static_cast<size_t>(to_ - from_));
         for (size_t row = 0; row < static_cast<size_t>(to_ - from_); row++) {
             const float* in = a_.data() + row * (w + 1);
             uint8_t* to = out.data() + row * w;
             float sum = 0.0f;
+            if (rule == FillRule::EvenOdd) {
+                for (size_t i = 0; i < w; i++) {
+                    sum += in[i];
+                    const float turns = std::fmod(std::fabs(sum), 2.0f);
+                    const float coverage = std::min(turns > 1.0f ? 2.0f - turns : turns, 1.0f);
+                    to[i] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+                }
+                continue;
+            }
             for (size_t i = 0; i < w; i++) {
                 sum += in[i];
                 const float coverage = std::min(std::fabs(sum), 1.0f);
@@ -182,16 +193,16 @@ void flatten(const Path& path, float fineness, Line&& line) {
 
 }  // namespace
 
-void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage, float fineness) {
+void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage, float fineness, FillRule rule) {
     coverage.assign(static_cast<size_t>(std::max(width, 0)) * static_cast<size_t>(std::max(height, 0)), 0);
     if (path.empty() || width <= 0 || height <= 0) return;
     Accumulator acc(width, height, 0, height);
     const float originX = static_cast<float>(left), originY = static_cast<float>(top);
     flatten(path, fineness, [&](float x0, float y0, float x1, float y1) { acc.line(x0 - originX, originY - y0, x1 - originX, originY - y1); });
-    acc.finish(coverage);
+    acc.finish(coverage, rule);
 }
 
-GlyphImage rasterize(const Path& path, float fineness) {
+GlyphImage rasterize(const Path& path, float fineness, FillRule rule) {
     GlyphImage image;
     float minX, minY, maxX, maxY;
     if (!path.bounds(minX, minY, maxX, maxY)) return image;
@@ -200,11 +211,11 @@ GlyphImage rasterize(const Path& path, float fineness) {
     image.width = static_cast<int>(std::ceil(maxX)) - image.left + 1;
     image.height = image.top - static_cast<int>(std::floor(minY)) + 1;
     if (image.width <= 0 || image.height <= 0 || image.width > 8192 || image.height > 8192) return GlyphImage{};
-    rasterizeInto(path, image.left, image.top, image.width, image.height, image.pixels, fineness);
+    rasterizeInto(path, image.left, image.top, image.width, image.height, image.pixels, fineness, rule);
     return image;
 }
 
-GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow) {
+GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, FillRule rule) {
     GlyphImage image;
     float minX, minY, maxX, maxY;
     if (!path.bounds(minX, minY, maxX, maxY)) return image;
@@ -221,7 +232,7 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow) {
     Accumulator acc(image.width, height, from, to);
     const float originX = static_cast<float>(image.left), originY = static_cast<float>(image.top);
     flatten(path, fineness, [&](float x0, float y0, float x1, float y1) { acc.line(x0 - originX, originY - y0, x1 - originX, originY - y1); });
-    acc.finish(image.pixels);
+    acc.finish(image.pixels, rule);
     image.top -= from;
     image.height = to - from;
     return image;
