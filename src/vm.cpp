@@ -1997,6 +1997,17 @@ bool VM::formTakes(const FunctionProto* proto, const Value* args, int positional
 // (an argument whose type was not known, or code compiled on its own): of the forms that take
 // the arguments, the one whose parameters' types fit them most narrowly; between two as
 // narrow, one without a vararg, then one that leaves fewer parameters to their defaults.
+const Value* VM::addedOperator(Value left, const Value* right, const ObjString* symbol) {
+    const Value* added = findExtension(left, symbol);
+    if (added == nullptr || !added->isObjType(ObjType::Closure)) return nullptr;
+    const ObjClosure* closure = asClosure(*added);
+    int score = 0, defaults = 0;
+    if (!closure->proto->chooser) return formTakes(closure->proto, right, 1, nullptr, 0, score, defaults) ? added : nullptr;
+    for (const ObjClosure* form : static_cast<const ObjForms*>(closure)->forms)
+        if (inReach(form->proto) && formTakes(form->proto, right, 1, nullptr, 0, score, defaults)) return added;
+    return nullptr;
+}
+
 ObjClosure* VM::chooseForm(const ObjForms* set, const Value* args, int positional, const Value* pairs, int named) {
     ObjClosure* best = nullptr;
     int bestScore = -1, bestDefaults = 0;
@@ -4796,6 +4807,14 @@ bool VM::binarySlow(Op op) {
         return false;
     }
 
+    // A built-in value on the left of an object's: the operator added to its type (op Number.*).
+    if (classOf(a) == nullptr && classOf(b) != nullptr) {
+        if (const Value* added = addedOperator(a, &sp_[-1], symbol)) {
+            callClosure(asClosure(*added), 1);
+            return true;
+        }
+    }
+
     // A byte in arithmetic is the int it holds, so byte + byte is an int (D19).
     if ((a.isByte() && (b.isNumber() || b.isByte())) || (b.isByte() && a.isNumber())) {
         if (a.isByte()) sp_[-2] = a = Value::integer(a.as.i);
@@ -4883,6 +4902,13 @@ bool VM::compareSlow(Op op) {
     if (classOf(a) != nullptr) {
         invokeOperator(a, symbol, 1);
         return true;
+    }
+    // A built-in value on the left of an object: the operator added to its type (op Number.<).
+    if (classOf(b) != nullptr) {
+        if (const Value* added = addedOperator(a, &sp_[-1], symbol)) {
+            callClosure(asClosure(*added), 1);
+            return true;
+        }
     }
 
     int order = 0;

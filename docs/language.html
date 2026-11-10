@@ -238,7 +238,11 @@ val tally = Tally()
 <pre>value Money(val cents : int) {
   op +(other : Money) : Money =&gt; Money(cents + other.cents)
 }
-Money(150) + Money(250)    // Money(cents=400)</pre></dd>
+Money(150) + Money(250)    // Money(cents=400)</pre>
+A class's own operators take the other value on their right. For a value of a built-in type on the left (<code>2 * money</code>, <code>2.0 * tensor</code>), the operator is added to that type from outside, written as an extension is, with type parameters as a function's: <code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>%</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code>, but not <code>+</code> on a string (which joins, D20) or a collection, nor <code>-</code> on a set.
+<pre>op int.*(money : Money) : Money =&gt; money * this
+op &lt;T&gt; Number.*(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt; =&gt; ...
+2 * Money(150)    // Money(cents=300)</pre></dd>
 
 <dt><code>infix</code></dt>
 <dd>A function of one parameter, a member or an extension, called between its two values with no dot or brackets.
@@ -557,7 +561,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#NoSuchElementException"><code>NoSuchElementException</code></a> (1)</li>
 <li><a href="#NotImplementedError"><code>NotImplementedError</code></a> (1)</li>
 <li><a href="#NullPointerException"><code>NullPointerException</code></a> (1)</li>
-<li><a href="#Number.roundToInt"><code>Number</code></a> (8)</li>
+<li><a href="#Number.roundToInt"><code>Number</code></a> (13)</li>
 <li><a href="#NumberFormatException"><code>NumberFormatException</code></a> (1)</li>
 <li><a href="#OutOfMemoryError"><code>OutOfMemoryError</code></a> (1)</li>
 <li><a href="#Oval"><code>Oval</code></a> (4)</li>
@@ -6780,6 +6784,22 @@ val x = m.solve(Tensor.ones&lt;float&gt;(3))           m.dot(x) is all ones
 </div>
 <div class="entry member" id="Tensor.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Tensor.toString">#</a>
 <p>Its items in nested brackets, as numpy shows them, the middle of a long axis left out: [[1, 2], [3, 4]].</p>
+</div>
+<h4>A number on the left</h4>
+<div class="entry" id="Number.+"><code class="sig">op &lt;T&gt; Number.+(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Number.+">#</a>
+<p>Item by item: the number plus each item (<code>1 + tensor</code>), as tensor + number is.</p>
+</div>
+<div class="entry" id="Number.-"><code class="sig">op &lt;T&gt; Number.-(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Number.-">#</a>
+<p>Item by item: the number minus each item (<code>1.0 - tensor</code>).</p>
+</div>
+<div class="entry" id="Number.*"><code class="sig">op &lt;T&gt; Number.*(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Number.*">#</a>
+<p>Item by item: the number times each item (<code>2.0 * tensor</code>).</p>
+</div>
+<div class="entry" id="Number./"><code class="sig">op &lt;T&gt; Number./(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Number./">#</a>
+<p>Item by item: the number divided by each item (<code>1.0 / tensor</code>); whole numbers for ints.</p>
+</div>
+<div class="entry" id="Number.%"><code class="sig">op &lt;T&gt; Number.%(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Number.%">#</a>
+<p>Item by item: what is left of the number divided by each item.</p>
 </div>
 <div class="entry" id="List.toTensor"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.toTensor() : Tensor&lt;T&gt;</code><a class="anchor" href="#List.toTensor">#</a>
 <p>The list's items as a tensor of one axis, a copy.</p>

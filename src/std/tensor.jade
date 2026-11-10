@@ -390,6 +390,12 @@ class Tensor<T> {
     binary(op, other, out.data, out.offset, out.shape, out.strides)
     return out
   }
+  // `number` and this, the number on the left: for the operators added to Number below.
+  internal fun fromLeft(op : int, number : Number) : Tensor<T> {
+    val out = blank<T>(shape)
+    __tensor.binary(op, number, null, null, null, data, offset, shape, strides, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
   private fun compare(op : int, other : any) : Tensor<bool> {
     val out = blank<bool>(shapeWith(other))
     binary(op, other, out.data, out.offset, out.shape, out.strides)
@@ -690,9 +696,21 @@ fun __broadcast(a : List<int>, b : List<int>) : List<int> {
   return out
 }
 
+// -- A number on the left --
+
+// Item by item: the number plus each item (`1 + tensor`), as tensor + number is.
+op <T> Number.+(tensor : Tensor<T>) : Tensor<T> => tensor.fromLeft(0, this)
+// Item by item: the number minus each item (`1.0 - tensor`).
+op <T> Number.-(tensor : Tensor<T>) : Tensor<T> => tensor.fromLeft(1, this)
+// Item by item: the number times each item (`2.0 * tensor`).
+op <T> Number.*(tensor : Tensor<T>) : Tensor<T> => tensor.fromLeft(2, this)
+// Item by item: the number divided by each item (`1.0 / tensor`); whole numbers for ints.
+op <T> Number./(tensor : Tensor<T>) : Tensor<T> => tensor.fromLeft(3, this)
+// Item by item: what is left of the number divided by each item.
+op <T> Number.%(tensor : Tensor<T>) : Tensor<T> => tensor.fromLeft(4, this)
+
 // The list's items as a tensor of one axis, a copy.
 fun <T : Number> List<T>.toTensor() : Tensor<T> {
-  // Made by its constructor, which keeps T, as a static function given T here would not (G71).
   val made = Tensor<T>(this.size)
   for (i in 0 ..< this.size) { made.data[i] = this[i] }
   return made

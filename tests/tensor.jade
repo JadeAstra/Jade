@@ -23,6 +23,9 @@ print(b.min(), b.max(axis = 1), b.indexOfMax(), b.indexOfMin(axis = 1), b.produc
 // Broadcast: a row added to every row; a column times a row; numbers on the right.
 print(b + Tensor.arange(0, 4), Tensor.arange(0, 3).reshaped(3, 1) * Tensor.arange(0, 4), (b.toFloat() - 5.5) / 2.0)
 // expect: [[0, 2, 4, 6], [4, 6, 8, 10], [8, 10, 12, 14]] [[0, 0, 0, 0], [0, 1, 2, 3], [0, 2, 4, 6]] [[-2.75, -2.25, -1.75, -1.25], [-0.75, -0.25, 0.25, 0.75], [1.25, 1.75, 2.25, 2.75]]
+// Numbers on the left (op Number.*, 2026-11-10).
+print(2 * b, 10 - b[0, all], 12 / (b[0, all] + 1), 7 % (b[0, all] + 1), 1.0 / (b[0, all].toFloat() + 1.0), 1.5 + b[0, all].toFloat())
+// expect: [[0, 2, 4, 6], [8, 10, 12, 14], [16, 18, 20, 22]] [10, 9, 8, 7] [12, 6, 4, 3] [0, 1, 1, 3] [1.0, 0.5, 0.3333333333333333, 0.25] [1.5, 2.5, 3.5, 4.5]
 // Views: a row set through a copy's view; transposed; a transposed one made one axis; parts.
 val v = b.copy()
 v[1, all].fill(0)
@@ -70,6 +73,8 @@ print(fails { b + Tensor.arange(0, 3) })   // expect: IllegalArgumentException: 
 val big = Tensor.full<int>([2], int.maxValue)
 print(fails { big + 1 }, big.plusWrapped(1), fails { b / 0 })
 // expect: ArithmeticException: 9223372036854775807 + 1 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around [-9223372036854775808, -9223372036854775808] ArithmeticException: division by zero
+print(fails { 1 + big }, fails { 1 / Tensor<int>(2) }, fails { 2.5 * b })
+// expect: ArithmeticException: 1 + 9223372036854775807 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around ArithmeticException: division by zero ClassCastException: a tensor of ints cannot keep the floats this gives: make it floats first, with toFloat()
 // Narrow widths are checked as storing is, or keep their low bits when asked.
 val wide = Tensor.arange(250, 260)
 print(fails { wide.toByte() }, wide.toByteWrapped(), Tensor.arange(0, 3).toByte() * 2)

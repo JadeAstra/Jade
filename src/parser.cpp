@@ -416,6 +416,14 @@ StmtPtr Parser::declaration() {
                 else if (word.text == "internal" && declared->visibility == 0) declared->visibility = 1;
                 return declared;
             }
+            // `op Number.*(t : Tensor)`, `op <T : Number> Number.*(t : Tensor<T>)`: an operator
+            // added to a type from outside; `op` is an ordinary name anywhere else.
+            if (word.text == "op" && !after.newlineBefore && p_ + 2 < toks_.size() &&
+                ((after.type == TokenType::Identifier && (toks_[p_ + 2].type == TokenType::Dot || toks_[p_ + 2].type == TokenType::Lt ||
+                                                      toks_[p_ + 2].type == TokenType::DotEq || toks_[p_ + 2].type == TokenType::QuestionDot)) ||
+                 (after.type == TokenType::Lt && toks_[p_ + 2].type == TokenType::Identifier &&
+                  p_ + 3 < toks_.size() && (toks_[p_ + 3].type == TokenType::Gt || toks_[p_ + 3].type == TokenType::Colon || toks_[p_ + 3].type == TokenType::Comma))))
+                return extensionOperator();
             if (word.text == "enum" && !after.newlineBefore &&
                 (after.type == TokenType::Class ||
                  (after.type == TokenType::Identifier && after.text == "interface" && p_ + 2 < toks_.size() &&
@@ -577,6 +585,47 @@ StmtPtr Parser::declaration() {
         default:
             return statement();
     }
+}
+
+// `op <T : Number> Number.*(tensor : Tensor<T>) : Tensor<T> => tensor * this`: an operator added
+// to a type from outside, as Kotlin's `operator fun Double.times(...)`, for a value of that type on
+// the left of one of a class's (`2.0 * tensor`), where the class's own `op` takes it on the right
+// only. Of the operators of two values, those that are not equality or bits: + - * / % < <= > >=.
+StmtPtr Parser::extensionOperator() {
+    const Token& kw = advance();  // op
+    std::vector<TypeParam> typeParams;
+    if (check(TokenType::Lt)) typeParams = typeParameters();
+    TypeParamScope typeParamsInReach(*this, typeParams);
+    const Token& receiver = expect(TokenType::Identifier, "the type the operator is added to");
+    if (const char* titled = oldTypeName(receiver.text)) throw error(receiver, oldTypeMessage(receiver.text, titled));
+    auto s = node<FunctionStmt>(kw);
+    s->receiver = receiver.text;
+    s->receiverType.line = receiver.line;
+    s->receiverType.col = receiver.col;
+    if (match(TokenType::Lt)) s->receiverType.args = typeArgumentsRest();
+    if (check(TokenType::QuestionDot))
+        throw error(peek(), "an operator is not added to a type that may be null: the value on its left is never null");
+    if (check(TokenType::DotEq)) throw error(peek(), "op == is a class's own; added to a type from outside are + - * / % < <= > >=");
+    expect(TokenType::Dot, "'.' and the operator");
+    const Token& opToken = peek();
+    const std::string op = operatorName();
+    static const char* const allowed[] = {"+", "-", "*", "/", "%", "<", "<=", ">", ">="};
+    if (std::find(std::begin(allowed), std::end(allowed), op) == std::end(allowed))
+        throw error(opToken, "op " + op + " is a class's own; added to a type from outside are + - * / % < <= > >=");
+    // What these have already: a string + anything joins them as text (D20), a collection + adds
+    // to a new one, a set - takes out.
+    const std::string& r = receiver.text;
+    if (op == "+" && (r == "string" || r == "List" || r == "Map" || r == "Set"))
+        throw error(opToken, r == "string" ? "a string + anything joins them as text (D20); op string.+ cannot be added"
+                                           : "a " + r + " + anything is a new " + r + " with it added; op " + r + ".+ cannot be added");
+    if (op == "-" && r == "Set") throw error(opToken, "a Set - anything is a new Set without it; op Set.- cannot be added");
+    s->receiverType.name = s->receiver;
+    if (isTypeParam(s->receiver) || r == "any")
+        throw error(receiver, "an operator is added to a type, not to every value: op Number." + op + "(...), op string." + op + "(...)");
+    s->fn = functionRest(op, kw);
+    if (s->fn->params.size() != 1) throw error(opToken, "op " + receiver.text + "." + op + " takes exactly one parameter: the value on its right");
+    s->fn->typeParams = std::move(typeParams);
+    return s;
 }
 
 // `val int.seconds : Duration get() => Duration(this * 1000000000)`: a property added to a type

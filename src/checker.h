@@ -197,6 +197,8 @@ public:
     // For a call of a generic function or class written in Jade: what it gives the type
     // parameters, in their order, an Unknown where that was not worked out.
     bool typeArguments(const Node& call, std::vector<RuntimeType>& out) const;
+    // Whether a binary operator calls an operator added to its left value's type (`op Number.*`).
+    bool leftOperator(const Node& binary) const;
 
     // For a call of a function the C++ provides (`external`): what its declaration says it
     // gives, its type parameters filled in, and its name; false where that is nothing, or not

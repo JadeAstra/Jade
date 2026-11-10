@@ -1431,6 +1431,9 @@ private:
     bool callValue(Value callee, int argc, bool packed = false);
     void callClosure(ObjClosure* closure, int argc, bool packed = false);
     ObjClosure* chooseForm(const ObjForms* set, const Value* args, int positional, const Value* pairs, int named);
+    // The operator added from outside to the type of `left` (op Number.*) that takes `*right`
+    // on its right, or null.
+    const Value* addedOperator(Value left, const Value* right, const ObjString* symbol);
     bool formTakes(const FunctionProto* proto, const Value* args, int positional, const Value* pairs, int named,
                    int& score, int& defaultsLeft) const;
     int paramFit(Value v, uint8_t type, const ObjString* className) const;

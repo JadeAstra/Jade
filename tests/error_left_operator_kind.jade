@@ -1,0 +1,4 @@
+// Only the operators of two values that are not equality or bits are added to a type from outside.
+value Money(val cents : int)
+op int.[](money : Money) : int => 0
+// expect compile error: error_left_operator_kind.jade:3:8: error: op [] is a class's own; added to a type from outside are + - * / % < <= > >=

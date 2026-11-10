@@ -2980,7 +2980,7 @@ private:
         emitTypeArguments(call);
     }
 
-    void emitTypeArguments(const CallExpr& call) {
+    void emitTypeArguments(const Node& call) {
         std::vector<RuntimeType> args;
         if (session_.checker == nullptr || !session_.checker->typeArguments(call, args) || args.empty() || args.size() > 9) return;
         if (emitFrameTypes(args, call)) return;
@@ -6085,6 +6085,22 @@ private:
         return op;
     }
 
+    // An operator that may be added to a type from outside, as it is written (op Number.*).
+    static std::string operatorText(TokenType type) {
+        switch (type) {
+            case TokenType::Plus: return "+";
+            case TokenType::Minus: return "-";
+            case TokenType::Star: return "*";
+            case TokenType::Slash: return "/";
+            case TokenType::Percent: return "%";
+            case TokenType::Lt: return "<";
+            case TokenType::LtEq: return "<=";
+            case TokenType::Gt: return ">";
+            case TokenType::GtEq: return ">=";
+            default: return "?";
+        }
+    }
+
     static Op binaryOp(TokenType type) {
         switch (type) {
             case TokenType::Plus:
@@ -6385,6 +6401,17 @@ private:
                     compileExpr(*e.right);
                     line_ = e.line;
                     emit(Op::MergeBundle);
+                    break;
+                }
+                if (session_.checker != nullptr && session_.checker->leftOperator(e)) {
+                    // `2.0 * tensor`: the operator added to the left value's type (op Number.*),
+                    // called as its method with the right value.
+                    compileExpr(*e.left);
+                    compileExpr(*e.right);
+                    emitTypeArguments(e);
+                    line_ = e.line;
+                    emit(Op::Invoke, stringConstant(operatorText(e.op)));
+                    emitByte(1);
                     break;
                 }
                 if (e.op == TokenType::EqEq || e.op == TokenType::BangEq) {

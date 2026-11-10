@@ -5481,8 +5481,8 @@ struct Checker::Impl {
                     escape = true;
                     return nullptr;
                 }
-            } else {
-                // A built-in type, an unknown one, or a type parameter: its members are not all known.
+            } else if (!builtinLacks(r, name)) {
+                // An unknown type, a type parameter, or a built-in type that may have it.
                 escape = true;
                 return nullptr;
             }
@@ -5607,6 +5607,68 @@ struct Checker::Impl {
         }
     }
 
+    // Each `2.0 * tensor` that calls an operator added to the left value's type from outside
+    // (`op Number.*(t : Tensor<T>)`), which the compiler calls as a method of that value.
+    std::unordered_set<const Node*> leftOperators;
+
+    // The operator added to the type of `l` (a built-in one: int, float, string and the like)
+    // that takes `r` on its right: its result, the narrowest form chosen as for a call. False
+    // when the type has none of that operator; one that does not take `r` is reported.
+    std::string leftOperatorMissing(const std::string& op, const Type& l, const Type& r) {
+        return "'" + op + "' cannot be used on " + describe(l) + " and " + describe(r) + ": " + r.cls->name + "'s own operators take " +
+               "the other value on their right; for one on the left, add the operator to its type: op " + argText(l) + "." + op +
+               "(other : " + argText(r) + ")";
+    }
+
+    bool leftOperator(const BinaryExpr& b, const Type& l, const Type& r, const std::string& op, Type& result) {
+        std::vector<FuncInfo*> forms = findExtensions(l, op);
+        // An int's or a float's own come first, then those of every number.
+        if (l.kind == Type::Int || l.kind == Type::Float)
+            for (FuncInfo* f : findExtensions(Type::of(Type::Number), op))
+                if (std::find(forms.begin(), forms.end(), f) == forms.end()) forms.push_back(f);
+        forms.erase(std::remove_if(forms.begin(), forms.end(), [](FuncInfo* f) { return !f->isExtension || f->stmt == nullptr; }), forms.end());
+        if (forms.empty()) return false;
+        struct Fit {
+            FuncInfo* f;
+            Env env;
+            std::vector<std::string> vars;
+            Type param;
+        };
+        std::vector<Fit> fitting;
+        for (FuncInfo* f : forms) {
+            resolveFunc(f);
+            if (f->params.size() != 1) continue;
+            Fit fit{f, {}, f->typeParams, {}};
+            unify(f->receiver, l, fit.env, fit.vars);
+            fixByReceiver(f->receiver, fit.env, fit.vars);
+            unify(f->params[0], r, fit.env, fit.vars);
+            Env filled = fit.env;
+            for (const std::string& v : fit.vars)
+                if (!filled.count(v)) filled[v] = unknownType();
+            fit.param = subst(f->params[0], filled);
+            if (!fits(l, subst(f->receiver, filled)) || !fits(r, fit.param)) continue;
+            fitting.push_back(std::move(fit));
+        }
+        if (fitting.empty()) {
+            report(b, leftOperatorMissing(op, l, r));
+            result = unknownType();
+            return true;
+        }
+        const Fit* chosen = &fitting[0];
+        for (const Fit& f : fitting) {
+            bool narrowest = true;
+            for (const Fit& g : fitting) narrowest = narrowest && (&f == &g || fits(f.param, g.param));
+            if (narrowest) {
+                chosen = &f;
+                break;
+            }
+        }
+        if (silent == 0) leftOperators.insert(&b);
+        noteTypeArguments(chosen->f, chosen->env, b);
+        result = finish(resultOf(chosen->f), chosen->env, chosen->vars);
+        return true;
+    }
+
     Type binary(const BinaryExpr& b) {
         const TokenType op = b.op;
         // `way == up`: an enum's entry by its bare name, compared with a value of that enum.
@@ -5684,6 +5746,11 @@ struct Checker::Impl {
             Type result = operatorResult(l, opText(op), b, {r});
             return comparison ? Type::of(Type::Bool) : result;
         }
+        // A built-in value on the left of a class's (`2.0 * tensor`): an operator added to its type.
+        if (!l.nullable && r.kind == Type::Class && !r.nullable) {
+            Type result;
+            if (leftOperator(b, l, r, opText(op), result)) return comparison ? Type::of(Type::Bool) : result;
+        }
         if (l.nullable || r.nullable) {
             report(b, "'" + opText(op) + "' cannot take " + describe(l.nullable ? l : r) +
                           ", which may be null; check it first, or give a value for null with ?:");
@@ -5714,7 +5781,10 @@ struct Checker::Impl {
                 if (op == TokenType::Minus && l.kind == Type::Set) return made(l);
                 if (op == TokenType::Plus && l.kind == Type::Bytes) return unknownType();
                 if (op == TokenType::Star && l.kind == Type::String && r.kind == Type::Int) return Type::of(Type::String);
-                report(b, "'" + opText(op) + "' cannot be used on " + describe(l) + " and " + describe(r));
+                if (r.kind == Type::Class && !r.nullable && r.cls != nullptr)
+                    report(b, leftOperatorMissing(opText(op), l, r));
+                else
+                    report(b, "'" + opText(op) + "' cannot be used on " + describe(l) + " and " + describe(r));
                 return unknownType();
             case TokenType::Lt:
             case TokenType::LtEq:
@@ -9722,6 +9792,16 @@ struct Checker::Impl {
     }
 
     // Whether an extension on every value (`fun any.name`, `fun <T> T.name`) has this name.
+    // Whether a built-in type surely has no member of the name, as `x.name()` on it is reported:
+    // a bare name in an extension of it is then not its (G71: `Tensor.blank<byte>()` in
+    // Bytes.toTensor named the class, and its type arguments were lost when it was not known).
+    bool builtinLacks(const Type& t, const std::string& name) {
+        if (t.nullable || !builtinDeclared(t)) return false;
+        if (builtinHas(t, name) || anyExtension(name) || builtinMember(name) || !fitMethods(t, name).empty()) return false;
+        Type property;
+        return !fitProperty(t, name, property);
+    }
+
     bool anyExtension(const std::string& name) const {
         for (const char* key : {"any", "<T>"}) {
             auto e = extensions.find(key);
@@ -11900,6 +11980,7 @@ bool Checker::externalResult(const Node& call, RuntimeType& out, std::string& na
 }
 
 bool Checker::addsNewValue(const Node& call) const { return impl_->newValueAdds.count(&call) != 0; }
+bool Checker::leftOperator(const Node& binary) const { return impl_->leftOperators.count(&binary) != 0; }
 
 bool Checker::isValuePlace(const Expr& e) const { return impl_->valuePlaces.count(&e) != 0; }
 bool Checker::placeLocal(const VarStmt& v) const { return impl_->placeLocals.count(&v) != 0; }

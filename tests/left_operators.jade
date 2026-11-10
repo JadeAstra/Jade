@@ -1,0 +1,41 @@
+// Operators added to a type from outside (2026-11-10): a value of a built-in type on the left of
+// one of a class's, which the class's own `op` takes on the right only. Written as an extension
+// is, `op int.*(money : Money)`, with type parameters as a function's; found when compiling where
+// the types are known, and when the program runs where they are not.
+
+value Money(val cents : int) {
+  op *(times : int) : Money => Money(cents * times)
+  op <(other : Money) : bool => cents < other.cents
+}
+op int.*(money : Money) : Money => money * this
+op int.<(money : Money) : bool => this < money.cents
+internal op float.*(money : Money) : Money => Money((money.cents * this).toInt())
+class Box<T>(val item : T)
+op <T> string.*(box : Box<T>) : List<T> => listOf<T>(box.item, box.item)
+
+print(3 * Money(5), 2.5 * Money(10), 4 < Money(5), 6 < Money(5))   // expect: Money(cents=15) Money(cents=25) true false
+// With a type parameter worked out from the right: a List<int> made.
+val twice = "x" * Box(7)
+print(twice, twice.itemType)   // expect: [7, 7] int
+// A string on the left of a string is still joined, of a class too; an int with an int still multiplied.
+print("a" + "b", "a" + Money(1), 2 * 3)   // expect: ab aMoney(cents=1) 6
+
+// Where the types are not known when compiling, found when the program runs.
+fun <A, B> product(a : A, b : B) : any => a * b
+fun <A, B> less(a : A, b : B) : bool => a < b
+print(product(3, Money(4)), less(3, Money(4)), less(5, Money(4)))   // expect: Money(cents=12) true false
+// And where there is none, said.
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+print(failing { product(3, Box(1)) })   // expect: UnsupportedOperationException: unsupported operand types for '*': int and Box
+
+// `op` is still an ordinary name.
+var op = 3
+op = op * 2
+print(op)   // expect: 6

@@ -50,6 +50,7 @@ private:
     void skipSemicolons();
     Annotations annotations();
     StmtPtr extensionProperty();
+    StmtPtr extensionOperator();
     bool annotationNext() const;
     void attachAnnotations(Stmt& declared, Annotations written, const Token& at);
     static std::string jvmAnnotation(const std::string& name);

@@ -52,3 +52,18 @@ try { doubledMade.add("x") } catch (e : Exception) { print(e.message) }   // exp
 
 // flatMap's R is worked out from what its lambda gives (G67): a List<int> here, at compile time too.
 print(ints.flatMap { [it, it] }.itemType, ints.flatMap { listOf("$it") }.itemType)   // expect: int string
+
+// A static generic function called from an extension of a built-in type (G71, 2026-11-10): the class
+// is named, not a member of the receiver, so the call has its type arguments, given or worked out.
+class Maker {
+  static {
+    fun <U> make() : List<U> => listOf<U>()
+  }
+}
+fun <T> List<T>.madeLike() : List<T> => Maker.make<T>()
+fun Bytes.madeBytes() : List<byte> => Maker.make<byte>()
+fun string.madeText() : List<string> {
+  val made = Maker.make<string>()
+  return made + this
+}
+print([1.5].madeLike().itemType, Bytes(1).madeBytes().itemType, "a".madeText().itemType, "a".madeText())   // expect: float byte string ["a"]

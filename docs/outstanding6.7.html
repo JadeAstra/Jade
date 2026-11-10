@@ -193,12 +193,11 @@ pre code { background: none; padding: 0; }
 </tbody></table></div>
 
 <h2 id="m10">Left from M9 and M10</h2>
-<p>Found or left while M9 and M10 are built (from 2026-11-08), as they are found.</p>
+<p>Found or left while M9 and M10 are built (from 2026-11-08), as they are found. Two were built at the user's word (2026-11-10): <strong id="o-g71">G71</strong>, a static generic function called from an extension of a built-in type (<code>Tensor.blank&lt;byte&gt;()</code> in <code>Bytes.toTensor</code>) running without its type arguments, as the checker could not tell the class's name from a member of the receiver (now it knows a built-in type's members, as it does for <code>x.name()</code>); and <strong id="o-m10-left">operators with a number on the left</strong>, added to the number's type from outside (<code>op &lt;T&gt; Number.*(tensor : Tensor&lt;T&gt;)</code>), which tensors have for <code>+ - * / %</code>.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-g71">G71</td><td>A static generic function called with type arguments from inside a generic function written at the top level (<code>fun &lt;T&gt; List&lt;T&gt;.f()</code> calling <code>Box.make&lt;T&gt;()</code>, or <code>Tensor.blank&lt;byte&gt;</code> from <code>Bytes.toTensor</code>) runs without them: what it makes holds anything. A constructor given them (<code>Box&lt;T&gt;()</code>) has them, and so does such a call from a member of a generic class; the standard library makes its tensors by their constructors there (2026-11-09).</td><td class="when">Before more of the standard library is generic</td></tr>
-<tr><td class="part" id="o-m10-left">Operators</td><td>A number on the left of an operator a class defines (<code>2.0 * tensor</code>, <code>2 * duration</code>) is a compile error: a class's <code>op</code> takes it on the right only. The plan has tensors take a number on either side; the right is built.</td><td class="when">The user's word on the rule</td></tr>
+<tr><td class="part" id="o-g72">G72</td><td>An empty list, set or map written in generic code (<code>fun &lt;U&gt; make() : open List&lt;U&gt; =&gt; []</code>, or a field <code>val items : open List&lt;T&gt; = []</code> of a generic class) holds anything when the program runs, where <code>listOf&lt;U&gt;()</code> holds U: the type it is given is the function's type parameter, which the literal does not read (found with G71, 2026-11-10).</td><td class="when">Before more of the standard library is generic</td></tr>
 <tr><td class="part" id="o-m10-blas">Tensor speed</td><td>A tensor's matrix product is a plain triple loop, 25 times numpy's (which calls BLAS) at 200 by 200; item by item work is 2 to 3 times numpy's, a total of every item 7 times (a call through std::function for each item).</td><td class="when">When a program's numeric work asks</td></tr>
 </tbody></table></div>
 
