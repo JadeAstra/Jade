@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan: native code</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: M9 and M10, the self-contained packages and the documents</h1>
+</head>
+<body>
+<main>
+<h1>Plan: native code while running</h1>
+<p class="lede">Written 2026-11-10, at the user's word: built now, before part two of <a href="M10-plan.html">M9 and M10</a>, after which the speed of pictures and tensors is looked at again. The timings it starts from are in <a href="M10-speed.html">M10-speed.html</a>; what is still to be done elsewhere is in <a href="outstanding6.7.html">outstanding6.7.html</a>; the plan of the whole library is <a href="gui-plan.html">gui-plan.html</a>, where M14 (native code for built programs, through a C++ compiler) is described.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#np-what">What it is</a></li>
+<li><a href="#np-today">How Jade runs code today</a></li>
+<li><a href="#np-stencils">Stencils, made from the VM's own instructions</a></li>
+<li><a href="#np-running">Running the machine code</a></li>
+<li><a href="#np-registers">Values in registers</a></li>
+<li><a href="#np-cache">Kept with the compiled program</a></li>
+<li><a href="#np-platforms">Systems, processors and the two builds</a></li>
+<li><a href="#np-speed">Speed: where it starts and the targets</a></li>
+<li><a href="#np-order">Order</a></li>
+<li><a href="#np-same">What does not change</a></li>
+<li><a href="#np-risks">Risks</a></li>
+<li><a href="#np-later">Left for later</a></li>
+<li><a href="#np-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<section id="np">
+
+<h2 id="np-what">What it is</h2>
+<p>Jade code turned into machine code as it runs, by Jade itself, with no C++ compiler on the machine that runs it: <code>jade something.jade</code>, the shell, workers, tests and programs made with <code>jade build</code> alike. Two levels, built in this order:</p>
+<ol>
+<li><strong>Copy and patch.</strong> Each instruction the VM runs becomes a piece of machine code made ahead, when <code>jade.exe</code> is built, by Clang from the VM's own <code>instructions.inc</code> (a <em>stencil</em>), with gaps where its operands go. A function's machine code is its instructions' stencils copied one after another, the gaps filled in: the slots it reads and writes, its constants, where it jumps. What the interpreter spends on each instruction besides its work (finding the next one's code, an indirect jump the processor often guesses wrong, reading the operands out of the code) is gone. Values stay where the VM keeps them, in the frame's slots, so the collector, tasks and the VM see everything as they do now; anything a stencil does not handle at once goes back to the VM at that instruction. Expected: loops 3 to 5 times as fast.</li>
+<li><strong>Values in registers.</strong> Where the checker knows a value is an int, a float or a bool (the typed instructions of M6.7 step 5), and nothing else can see it, it is kept in a processor register across the instructions of a function, not written to its slot and read back each time: loop counters, indexes, running totals. The hot typed instructions get stencils that take and give values in registers; every way out to the VM writes them back first. Expected: loops 1 to 1.5 ns an item, within 1.5 to 3 times of hand-written C++.</li>
+</ol>
+<p>The standard library and Topaz are Jade code, and gain as a program does. A program behaves the same with machine code as without it, error messages, stack traces and checks included; the tests show it by running every test both ways.</p>
+
+<h2 id="np-today">How Jade runs code today</h2>
+<p>What this stands on, as M6.7 and M9/M10 left it:</p>
+<ul>
+<li><strong>Stack code</strong>, from the compiler, kept in the program cache, and <strong>run code</strong> made from it by <code>registers.cpp</code> when a function is first called (the <code>TRANSLATE</code> instruction): stack instructions, and register instructions (<code>R_ADD_I_SS</code>, <code>R_GET_INDEX_SS</code>, <code>R_CALL</code>, ...) that name the frame's slots directly, each with a slow way, the stack code it stands for, written after the function.</li>
+<li><strong>Frames of 16-byte slots</strong> (<code>Value</code>: a kind and an 8-byte payload), which the collector reads, and which a task set aside keeps.</li>
+<li><strong>Instructions as functions</strong> in the Clang build (D160): each instruction of <code>instructions.inc</code> is a function (<code>VM::tail&lt;op&gt;</code>, <code>preserve_none</code>) that calls the next one's as its last step (<code>musttail</code>), the VM's state passed in registers: <code>ip</code>, <code>sp</code>, <code>base</code>, <code>frame</code>, <code>consts</code>, <code>caches</code>, <code>code</code>. The MSVC build has the same instructions as the cases of one switch.</li>
+<li><strong>Checks the checker could not remove</strong>: an int's overflow, an index in range, a byte's range, a narrowed type, each with the message the program gets.</li>
+</ul>
+<p>Copy and patch fits this closely: a stencil is one of those instruction functions, compiled with its operands as gaps and its last step a jump to the next stencil.</p>
+
+<h2 id="np-stencils">Stencils, made from the VM's own instructions</h2>
+<ul>
+<li><strong>Operands by name.</strong> <code>instructions.inc</code> reads an instruction's operands from the code, <code>ip[0]</code>, <code>FAST_U16(4)</code>, <code>operandI32(ip + 6)</code>. They become named reads, <code>OPERAND_U8(0)</code> and the like, which the interpreter defines as it reads them now and the stencil build defines as gaps: in Clang's machine code a gap is a reference to an outside symbol (<code>jade_hole_a</code>), filled in when the stencil is copied. The interpreter's machine code does not change; the benchmarks show it.</li>
+<li><strong>The next instruction</strong>: <code>NEXT()</code> in a stencil is a jump to a gap, filled with where the next stencil was copied, or nothing where it was copied right after (the jump left out). A jump's target, and the place of each slow way, are gaps the same way.</li>
+<li><strong>Made when <code>jade.exe</code> is built</strong>: one source file includes <code>instructions.inc</code> with the stencil macros, Clang compiles it, and a tool of our own (<code>tools/stencils</code>, in C++, no third-party code) reads the object file Clang wrote (COFF on Windows, ELF on Linux), finds each function's bytes and where each gap is and of what kind, and writes them out as a table compiled into <code>jade.exe</code>. Nothing is compiled when a program runs.</li>
+<li><strong>Rare instructions</strong> need no stencil: their stencil is a way out to the VM at that instruction, which runs it and comes back to the machine code after it.</li>
+</ul>
+
+<h2 id="np-running">Running the machine code</h2>
+<ul>
+<li><strong>When a function is given machine code</strong>: when its run code is made, at its first call, as now (question 2). Copying stencils costs about what translating does, so the first-run budget should hold; it is measured.</li>
+<li><strong>Where it goes</strong>: memory taken from the system for code, written while it is not runnable and made runnable, and no longer writable, before it runs (W^X); shared by the cores of a parallel section, read only.</li>
+<li><strong>Ways out</strong>: every slow way, every way a check fails, every instruction without a stencil leaves the machine code for the VM at that instruction, with the frame as it is, <code>frame-&gt;ip</code> pointing at the run code's instruction. The VM's own code then does what it does now (an error with its message, a call, the collector), and the function goes on in machine code after it where it can.</li>
+<li><strong>Calls</strong>: a function with machine code calls another's machine code at once, as <code>QUICK_CALL</code> enters a function now, and the VM's for one without; returns the same way.</li>
+<li><strong>Errors and stack traces</strong>: the instruction a frame is at is written before anything that can fail, as <code>SAVE_IP</code> does, so messages and traces name the same lines. Exceptions are thrown by the VM's code after the machine code has left, never through it, so no unwind tables are needed at first.</li>
+<li><strong>The collector, tasks, workers, parallel sections</strong>: values stay in the frame's slots (until step 6, where registers are written back at every way out), so each sees what it sees now. A safe point is a way out.</li>
+<li><strong>A switch</strong> to run without machine code (question 3), and a dump of a function's stencils, as <code>JADE_DUMP_RUN</code> dumps its run code.</li>
+</ul>
+
+<h2 id="np-registers">Values in registers</h2>
+<ul>
+<li><strong>Which values</strong>: a slot the checker knows to hold an int, a float or a bool everywhere in the function (what the typed instructions already rely on), not captured by a lambda, not read by name by anything the function calls. Numbers are not the collector's concern, so keeping them out of their slots for a while is safe where every way out writes them back.</li>
+<li><strong>Which registers</strong>: those <code>preserve_none</code> passes arguments in, beyond the VM's own state: on x64 some six for ints and six for floats. A pass over each function's run code chooses which slots live in them for which stretch (a loop first), by how often each is used.</li>
+<li><strong>Stencils for it</strong>: the hot typed instructions (int and float arithmetic, comparisons and their jumps, list, byte and field reads and writes, the loop's step; about 40) get variants taking an operand from a register or its slot and giving the result to a register or its slot, made by the same build; every other instruction keeps one stencil, its register values written back before it. The variants are kept to those instructions: that keeps their number in hand.</li>
+<li><strong>Ways out</strong> write every register value back to its slot first, and a way back in reads them again; a call writes back what the callee might see (nothing, for a slot no one else names).</li>
+</ul>
+
+<h2 id="np-cache">Kept with the compiled program</h2>
+<p>A program's machine code is kept in the program cache beside its compiled program, on this machine only, as D145 already allows (it never goes with the script): a second run copies it in and fills in the addresses that differ from run to run (the VM's own functions, the stencils' helpers), and starts at native speed. Made again when <code>jade.exe</code> changes, as the compiled program is. Workers' programs and a program made with <code>jade build</code> keep theirs the same way.</p>
+
+<h2 id="np-platforms">Systems, processors and the two builds</h2>
+<ul>
+<li><strong>x64 Windows first</strong> (this machine), then <strong>x64 Linux</strong>: the same stencil source and the same tool, reading ELF; the calling conventions differ, which <code>preserve_none</code> mostly hides (question 4).</li>
+<li><strong>ARM64</strong> later: the stencil source does not change; the tool learns the other machine's gaps.</li>
+<li><strong>The MSVC build</strong> has no Clang to make stencils with: it runs without machine code, as the interpreter it is now (question 5).</li>
+</ul>
+
+<h2 id="np-speed">Speed: where it starts and the targets</h2>
+<p>On this machine, in a function, 8 million items (2026-11-10); the benchmarks as <code>bench/run.ps1</code> times them; the kernels as <code>bench/kernels</code> does. The targets are estimates, to be replaced by the spike's measurements.</p>
+<div class="table"><table>
+<thead><tr><th>Work</th><th>VM now</th><th>Copy and patch</th><th>With registers</th><th>C++</th></tr></thead>
+<tbody>
+<tr><td><code>dst[i] = src[i]</code>, bytes</td><td>7.3 ns</td><td>~2</td><td>~0.7</td><td>~0.3</td></tr>
+<tr><td><code>dst[i] = ((src[i] * 3 + 7) &amp; 255).toByte()</code></td><td>10.6 ns</td><td>~3</td><td>~1</td><td>~0.5</td></tr>
+<tr><td><code>t += f[i] * 2.0</code></td><td>6.3 ns</td><td>~1.5 to 2</td><td>~0.8</td><td>~0.5</td></tr>
+<tr><td>a float held to a byte with <code>Math.min</code> and <code>max</code></td><td>17 ns</td><td>~4</td><td>~1.5</td><td>~1</td></tr>
+<tr><td><code>numeric</code> benchmark</td><td>93 ms</td><td>25 to 35</td><td>10 to 15</td><td>&mdash;</td></tr>
+<tr><td><code>calls</code>, <code>fields</code>, <code>simulation</code></td><td>114, 90, 96 ms</td><td>1.5 to 2.5&times;</td><td>2 to 4&times;</td><td>&mdash;</td></tr>
+<tr><td><code>gradient</code> kernel as a Jade loop (3840 by 2160)</td><td>353 ms</td><td>~100</td><td>~20 to 30</td><td>8</td></tr>
+<tr><td><code>blur</code> kernel as a Jade loop</td><td>2,808 ms</td><td>~700</td><td>~300 to 450</td><td>297</td></tr>
+<tr><td><code>topaz_layout</code></td><td>450 ms</td><td>1.3 to 2&times;</td><td>1.5 to 2.5&times;</td><td>&mdash;</td></tr>
+</tbody></table></div>
+<p>Code that spends its time in the library, making objects or in the collector gains least; typed loops most. Every step is benchmarked as M6.7's were, against the commit before it, and kept only where it helps. The start-up budgets are watched throughout.</p>
+
+<h2 id="np-order">Order</h2>
+<p>Each step committed with its tests; only the Clang Windows build checked step by step, the full check (MSVC, ASan, the stress settings, Linux) at the end.</p>
+<ol start="0">
+<li><strong>The spike.</strong> The machine code copy and patch would make for the <code>numeric</code> benchmark's loop and for two picture kernels (the gradient and the byte loop above), put together by hand from the handlers' machine code, with every check and way out kept, run beside the VM and C++ and timed; and the same with the loop's values in registers. Nothing in Jade changes. It says whether the targets hold before anything is built (question 8).</li>
+<li><strong>Operands by name</strong> in <code>instructions.inc</code>, a change of spelling only: the interpreter's machine code the same, the benchmarks within noise of the commit before.</li>
+<li><strong>The stencil build and the tool</strong>: stencils for the hot register instructions (about 40), the rest ways out; the table in <code>jade.exe</code>; a test that every stencil's gaps are what the tool says.</li>
+<li><strong>Running</strong>: code memory, copying and filling in, jumps, ways out to the VM and back, calls both ways, errors and traces, safe points, tasks; the switch and the dump; the suite run with machine code for the functions it covers. Benchmarks.</li>
+<li><strong>Every instruction</strong> a stencil or a way out, the stack code's own instructions included; the full suite both ways, and with the GC and thread stress settings; benchmarks and the start-up budgets.</li>
+<li><strong>The cache</strong>: machine code kept and filled in again on load; the second-run budget kept.</li>
+<li><strong>Values in registers</strong>: the choice of slots, the variant stencils, writing back at ways out; the suite both ways; benchmarks.</li>
+<li><strong>x64 Linux</strong>: the tool reading ELF, the suite both ways on WSL with GCC's and Clang's builds.</li>
+<li><strong>The timing table</strong> written up beside <a href="M10-speed.html">M10-speed.html</a>: the kernels as Jade loops with machine code beside C++, and what that means for the pieces decided as C++ for speed. Then, at the user's word, the speed of pictures and tensors looked at again.</li>
+</ol>
+
+<h2 id="np-same">What does not change</h2>
+<ul>
+<li>The language, its checks and its messages; the stack code and the cache's format for it; the VM, which still runs everything machine code leaves to it, and all of it in the MSVC build.</li>
+<li>How a program is run: <code>jade something.jade</code>, the shell, <code>jade test</code>, <code>jade build</code>. Nothing new to install; no C++ compiler on the machine that runs Jade.</li>
+<li><strong>Anyone with <code>jade.exe</code> alone can still run and build everything</strong> (the user, 2026-11-10): the stencils are made once, when <code>jade.exe</code> itself is built, and are part of it; running a program, and <code>jade build</code> making one, only copy them and fill in their gaps. A program made with <code>jade build</code> carries the same stencils and makes its machine code on the machine it runs on (kept in that machine's cache), so it too needs nothing installed. Only building <code>jade.exe</code> itself needs Clang, as it does now; only M14, if it is ever built, would need a C++ compiler, and it stays optional.</li>
+<li>M14 stays in the plan as it is, for built programs that want the last factor (question 6).</li>
+</ul>
+
+<h2 id="np-risks">Risks</h2>
+<ul>
+<li><strong>The stencil tool</strong> reads Clang's object files: well documented formats, but new code, checked by a test of every stencil.</li>
+<li><strong>What Clang makes of a handler</strong> may change with Clang's version: the stencils are made by the same Clang that builds <code>jade.exe</code>, and the tool refuses a gap it does not know, so a change shows at build time, not at run time.</li>
+<li><strong>Register variants</strong> are where the work grows; kept to the hot typed instructions.</li>
+<li><strong>Two ways of running</strong> to keep the same: every test run both ways doubles the suite's time (the runner already runs in parallel).</li>
+<li><strong>Code placement</strong>: the VM is sensitive to where its handlers lie (<code>numeric</code> moved 7% today with one new handler); step 1 is benchmarked on its own for that reason.</li>
+<li><strong>Start-up</strong>: copying stencils at the first call costs; measured against the first-run budget at step 3, and the cache answers it for later runs.</li>
+</ul>
+
+<h2 id="np-later">Left for later</h2>
+<ul>
+<li>ARM64.</li>
+<li>An optimizing level: inlining across functions, checks of indexes the loop proves in range left out, work moved out of loops, the processor's vector instructions. Where M14's C++ compiler would do this for built programs.</li>
+<li>A loop already running in the VM switched to machine code partway (on-stack replacement): with machine code made at the first call, only a function's first call misses it.</li>
+<li>Unwind tables, so that an exception may pass through machine code; not needed while the VM throws them.</li>
+<li>Machine code for the C++'s callbacks into Jade, and for workers' start.</li>
+</ul>
+
+<h2 id="np-questions">Questions for the user</h2>
+<p>Each with the recommendation.</p>
+<ol>
+<li><strong>The milestone's name and version.</strong> It goes between part one and part two of M9/M10. <em>Recommended:</em> called <strong>M9.5</strong>, with no version of its own: M9/M10 still ends at 0.10.0, which it is part of the way to.</li>
+<li><strong>When a function is given machine code.</strong> <em>Recommended:</em> at its first call, when its run code is made, as now; if the first-run budget suffers, at its second call instead (a function called once runs in the VM).</li>
+<li><strong>On by default, and the switch.</strong> <em>Recommended:</em> on for everything (scripts, the shell, workers, tests, built programs); off with <code>jade --interpret</code> or <code>JADE_NATIVE=0</code>; the test runner runs every test both ways.</li>
+<li><strong>Linux.</strong> <em>Recommended:</em> in this milestone, after Windows (step 7), so that Jade stays the same on both.</li>
+<li><strong>The MSVC build.</strong> <em>Recommended:</em> runs without machine code, as now; whether the Windows release is built with Clang (the open question <a href="outstanding6.7.html#o-clang">o-clang</a>) matters more once only the Clang build has it.</li>
+<li><strong>M14.</strong> <em>Recommended:</em> kept in the plan as it is, and looked at again with this milestone's timings.</li>
+<li><strong>Registers.</strong> <em>Recommended:</em> as many as <code>preserve_none</code> gives beyond the VM's own state (on x64 about six for ints and six for floats), for ints, floats and bools only.</li>
+<li><strong>The spike as a gate.</strong> <em>Recommended:</em> if copy and patch is less than 2.5 times as fast as the VM on the spike's loops, or registers less than 5 times, stop and report before step 1.</li>
+<li><strong>Kept in the cache.</strong> <em>Recommended:</em> yes, beside the compiled program, on this machine only, made again when <code>jade.exe</code> changes.</li>
+<li><strong>New names.</strong> <code>--interpret</code>, <code>JADE_NATIVE</code>, <code>JADE_DUMP_NATIVE</code>, and <code>tools/stencils</code>. <em>Recommended</em> as written; the user's to settle.</li>
+</ol>
+</section>
+</main>
+</body>
+</html>
