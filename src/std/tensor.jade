@@ -1,0 +1,717 @@
+// ---- Tensors (M9/M10, question 16) ----
+//
+// An array of any number of axes, for what lists and grids do not cover: a volume, a picture's
+// colour channels as an axis of their own, the frames of an animation, a batch; parts worked on
+// in place, arrays of one shape combined with another, totals along an axis, matrices. Its T is
+// int, float, a narrow width (int8 to uint32, float32, byte) or bool, its items one packed block.
+//
+//   val a = Tensor<float>(3, 4)                     3 rows of 4, all 0.0
+//   val b = Tensor.arange(0, 12).reshaped(3, 4)      0 to 11 in 3 rows
+//   val c = (b.toFloat() - 5.5) / 2.0                item by item; numbers stand for every item
+//   val rows = b.sum(axis = 1)                       each row's total
+//   val first = b[0, all]                            a view of row 0: changing it changes b
+//   val m = Tensor.random(3, 3, seed = 7)
+//   val x = m.solve(Tensor.ones<float>(3))           m.dot(x) is all ones
+//
+// Where it differs from lists and grids: +, -, *, / and % work item by item, between tensors and
+// with a number on the right (an int's overflow an ArithmeticException, the ...Wrapped forms
+// wrapping); shapes are broadcast as numpy's are, matched from the last axis, an axis of 1
+// standing for any length; indexing with ranges gives a view of the same items, not a copy; and
+// totals are taken over the whole or along one axis. An operation on two tensors gives a tensor
+// of their item type: a tensor of ints with floats in it is made floats first, with toFloat().
+
+// The whole of an axis, in a tensor's index: t[all, 0] is its first column.
+val all : Range = 0 ..< int.maxValue
+
+// An array of any number of axes, its items one packed block seen through a shape, as the notes
+// above say.
+class Tensor<T> {
+  // Its items, of which this tensor sees some, through `offset` and `strides`.
+  internal var data : open List<T>
+  // Where its first item is in `data`.
+  internal var offset = 0
+  // How far apart in `data` the items one step along each axis are.
+  internal var strides : List<int> = []
+  // Whether it may be changed (D32): not a view of something read-only.
+  internal var writable = true
+  // The length of each axis.
+  var shape : List<int>
+    private set
+
+  // A tensor of `shape` (the length of each axis), every item `fill`, or T's zero: 0, 0.0, false.
+  // An IllegalArgumentException for an axis below 0.
+  fun init(vararg shape : int, fill : T? = null) {
+    for (s in shape) {
+      if (s < 0) { throw IllegalArgumentException("a tensor's axes are 0 long or more, not $shape") }
+    }
+    this.shape = shape.toList()
+    this.strides = __tensorStrides(this.shape)
+    val n = __tensorCount(this.shape)
+    this.data = fill == null ? __grid.cells(this, n) as open List<T> : __grid.cells(this, n, fill) as open List<T>
+  }
+
+  static {
+    // A new tensor of R of a shape, its items R's zero.
+    internal fun <R> blank(shape : List<int>) : Tensor<R> {
+      val made = Tensor<R>()
+      made.shape = shape
+      made.strides = __tensorStrides(shape)
+      made.data = __grid.cells(made, __tensorCount(shape)) as open List<R>
+      return made
+    }
+    // A tensor of `shape`, every item 0 (numpy's zeros).
+    fun <R> zeros(vararg shape : int) : Tensor<R> => blank<R>(shape.toList())
+    // A tensor of `shape`, every item 1 (numpy's ones): Tensor.ones<float>(3).
+    fun <R> ones(vararg shape : int) : Tensor<R> {
+      val made = blank<R>(shape.toList())
+      __tensor.copy(1, null, null, null, made.data, made.offset, made.shape, made.strides)
+      return made
+    }
+    // A tensor of `shape`, every item `value`.
+    fun <R> full(shape : List<int>, value : R) : Tensor<R> {
+      val made = blank<R>(shape)
+      made.fill(value)
+      return made
+    }
+    // The n by n identity matrix: 1.0 on its diagonal, 0.0 elsewhere.
+    fun identity(n : int) : Tensor<float> {
+      val made = blank<float>([n, n])
+      for (i in 0 ..< n) { made[i, i] = 1.0 }
+      return made
+    }
+    // The ints from `from` up to `until`, `step` apart: Tensor.arange(0, 5) is 0 to 4.
+    fun arange(from : int, until : int, step : int = 1) : Tensor<int> {
+      if (step == 0) { throw IllegalArgumentException("arange steps by more or less than 0") }
+      val n = Math.max(0, (until - from + step - (step > 0 ? 1 : -1)) / step)
+      val made = blank<int>([n])
+      __tensor.fillWith(made.data, 0, made.shape, made.strides, 0, from, step)
+      return made
+    }
+    // The floats from `from` up to `until`, `step` apart.
+    fun arange(from : float, until : float, step : float = 1.0) : Tensor<float> {
+      if (step == 0.0) { throw IllegalArgumentException("arange steps by more or less than 0") }
+      val n = Math.max(0, Math.ceil((until - from) / step).toInt())
+      val made = blank<float>([n])
+      __tensor.fillWith(made.data, 0, made.shape, made.strides, 0, from, step)
+      return made
+    }
+    // `count` floats evenly from `from` to `to`, both of them among them.
+    fun linspace(from : Number, to : Number, count : int) : Tensor<float> {
+      if (count < 0) { throw IllegalArgumentException("linspace makes 0 numbers or more, not $count") }
+      val made = blank<float>([count])
+      val step = count > 1 ? (to.toFloat() - from.toFloat()) / (count - 1) : 0.0
+      __tensor.fillWith(made.data, 0, made.shape, made.strides, 0, from.toFloat(), step)
+      if (count > 1) { made[count - 1] = to.toFloat() }
+      return made
+    }
+    // Floats from 0 up to 1 of `shape`, the same ones for the same seed, others each time when
+    // it is null.
+    fun random(vararg shape : int, seed : int? = null) : Tensor<float> {
+      val made = blank<float>(shape.toList())
+      __tensor.fillWith(made.data, 0, made.shape, made.strides, 1, seed ?: Math.randomInt(0, int.maxValue), 0)
+      return made
+    }
+    // Tensors of one shape put together along a new axis, at `axis`.
+    fun <R> stack(arrays : List<Tensor<R>>, axis : int = 0) : Tensor<R> {
+      if (arrays.isEmpty()) { throw IllegalArgumentException("stack puts together one tensor or more") }
+      val one = arrays[0].shape
+      for (t in arrays) {
+        if (t.shape != one) { throw IllegalArgumentException("stack puts together tensors of one shape, not $one and ${t.shape}") }
+      }
+      if (axis < 0 or axis > one.size) { throw IllegalArgumentException("axis $axis is not one of the ${one.size + 1}") }
+      val shape : open List<int> = one.toOpenList()
+      shape.add(axis, arrays.size)
+      val made = blank<R>(shape)
+      for (i in 0 ..< arrays.size) { arrays[i].copyInto(made.along(axis, i, 1, true)) }
+      return made
+    }
+    // Tensors put together along an axis they have, their other axes the same.
+    fun <R> concat(arrays : List<Tensor<R>>, axis : int = 0) : Tensor<R> {
+      if (arrays.isEmpty()) { throw IllegalArgumentException("concat puts together one tensor or more") }
+      val one = arrays[0].shape
+      if (axis < 0 or axis >= one.size) { throw IllegalArgumentException("axis $axis is not one of the ${one.size}") }
+      var total = 0
+      for (t in arrays) {
+        if (t.shape.size != one.size or (0 ..< one.size).toList().any { it != axis and t.shape[it] != one[it] }) {
+          throw IllegalArgumentException("concat puts together tensors whose other axes are the same, not $one and ${t.shape}")
+        }
+        total += t.shape[axis]
+      }
+      val shape : open List<int> = one.toOpenList()
+      shape[axis] = total
+      val made = blank<R>(shape)
+      var at = 0
+      for (t in arrays) {
+        t.copyInto(made.along(axis, at, t.shape[axis], false))
+        at += t.shape[axis]
+      }
+      return made
+    }
+    // Each item `then`'s where `condition` is true, else `otherwise`'s, the three broadcast;
+    // either may be a number.
+    fun <R> where(condition : Tensor<bool>, then : Tensor<R> | Number, otherwise : Tensor<R> | Number) : Tensor<R> {
+      var shape = condition.shape
+      if (then is Tensor) { shape = __broadcast(shape, then.shape) }
+      if (otherwise is Tensor) { shape = __broadcast(shape, otherwise.shape) }
+      // Of the item type of the one that is a tensor, or of the numbers' kind.
+      val made : Tensor<R> = then is Tensor ? then.blankOf(shape) as Tensor<R> : otherwise is Tensor ? otherwise.blankOf(shape) as Tensor<R> :
+                             (then is float or otherwise is float ? blank<float>(shape) as Tensor<R> : blank<int>(shape) as Tensor<R>)
+      __tensor.where(condition.data, condition.offset, condition.shape, condition.strides,
+                     then is Tensor ? then.data : then, then is Tensor ? then.offset : null, then is Tensor ? then.shape : null, then is Tensor ? then.strides : null,
+                     otherwise is Tensor ? otherwise.data : otherwise, otherwise is Tensor ? otherwise.offset : null, otherwise is Tensor ? otherwise.shape : null,
+                     otherwise is Tensor ? otherwise.strides : null, made.data, made.offset, made.shape, made.strides)
+      return made
+    }
+  }
+
+  // How many axes it has (numpy's ndim).
+  val rank : int
+    get() => shape.size
+  // How many items it has.
+  val size : int
+    get() => __tensorCount(shape)
+
+  // A view of the items from `at` along `axis`, `count` of them (or the one, dropping the axis).
+  internal fun along(axis : int, at : int, count : int, drop : bool) : Tensor<T> {
+    val made = sharing()
+    made.offset = offset + at * strides[axis]
+    val s : open List<int> = shape.toOpenList()
+    val st : open List<int> = strides.toOpenList()
+    if (drop) {
+      s.removeAt(axis)
+      st.removeAt(axis)
+    } else {
+      s[axis] = count
+    }
+    made.shape = s
+    made.strides = st
+    return made
+  }
+  // A new tensor of this one's item type, of `shape`, its items T's zero.
+  internal fun blankOf(shape : List<int>) : Tensor<T> => blank<T>(shape)
+  // A tensor sharing these items, to be given its own view of them.
+  private fun sharing() : Tensor<T> {
+    val made = blank<T>([0])
+    made.data = data
+    made.offset = offset
+    made.strides = strides
+    made.shape = shape
+    made.writable = writable
+    return made
+  }
+
+  // -- Items --
+
+  // Where the item at `index` (one int for each axis) is in the items; an
+  // IndexOutOfBoundsException outside the shape.
+  private fun position(index : List<int>) : int {
+    if (index.size != shape.size) {
+      throw IllegalArgumentException("a tensor of ${shape.size} axes is indexed by ${shape.size} ints, not ${index.size}" + (index.size < shape.size ? ": a part of it by ranges and all" : ""))
+    }
+    var at = offset
+    for (axis in 0 ..< shape.size) {
+      val i = index[axis]
+      if (i < 0 or i >= shape[axis]) { throw IndexOutOfBoundsException("$index is outside the tensor, which is ${__shapeText(shape)}") }
+      at += i * strides[axis]
+    }
+    return at
+  }
+  private fun put(index : List<int>, value : T) {
+    if (!writable) { throw IllegalStateException("this tensor is only read here") }
+    data[position(index)] = value
+  }
+  // The item at `i` of a tensor of one axis.
+  op [](i : int) : T => data[position([i])]
+  // The item at (`i`, `j`) of a tensor of two axes.
+  op [](i : int, j : int) : T => data[position([i, j])]
+  // The item at (`i`, `j`, `k`) of a tensor of three axes.
+  op [](i : int, j : int, k : int) : T => data[position([i, j, k])]
+  // The item at (`i`, `j`, `k`, `l`) of a tensor of four axes.
+  op [](i : int, j : int, k : int, l : int) : T => data[position([i, j, k, l])]
+  // The item at `index`, one int for each axis, whatever its rank.
+  fun get(index : List<int>) : T => data[position(index)]
+  // Sets the item at `i` of a tensor of one axis.
+  op []=(i : int, value : T) {
+    put([i], value)
+  }
+  // Sets the item at (`i`, `j`).
+  op []=(i : int, j : int, value : T) {
+    put([i, j], value)
+  }
+  // Sets the item at (`i`, `j`, `k`).
+  op []=(i : int, j : int, k : int, value : T) {
+    put([i, j, k], value)
+  }
+  // Sets the item at (`i`, `j`, `k`, `l`).
+  op []=(i : int, j : int, k : int, l : int, value : T) {
+    put([i, j, k, l], value)
+  }
+  // Sets the item at `index`, one int for each axis.
+  fun set(index : List<int>, value : T) {
+    put(index, value)
+  }
+  // The one item of a tensor of one item: a dot product of two vectors, a total kept as a tensor.
+  fun item() : T {
+    if (size != 1) { throw IllegalStateException("item() is of a tensor of one item, not of ${__shapeText(shape)}") }
+    var at = offset
+    return data[at]
+  }
+
+  // -- Parts: views of the same items --
+
+  // A view: along each axis a range of it, the whole of it (all), or one place, which drops the
+  // axis; axes not given whole. Changing the view changes this tensor.
+  op [](i : Range) : Tensor<T> => view([i])
+  // A view of two axes' parts: t[0 ..< 10, all], t[all, 2].
+  op [](i : Range | int, j : Range | int) : Tensor<T> => view([i, j])
+  // A view of three axes' parts.
+  op [](i : Range | int, j : Range | int, k : Range | int) : Tensor<T> => view([i, j, k])
+  // A view of four axes' parts.
+  op [](i : Range | int, j : Range | int, k : Range | int, l : Range | int) : Tensor<T> => view([i, j, k, l])
+
+  private fun view(parts : List<any>) : Tensor<T> {
+    if (parts.size > shape.size) { throw IndexOutOfBoundsException("a tensor of ${shape.size} axes takes no more than ${shape.size} parts, not ${parts.size}") }
+    var at = offset
+    val s : open List<int> = []
+    val st : open List<int> = []
+    for (axis in 0 ..< shape.size) {
+      val p : any = axis < parts.size ? parts[axis] : __wholeAxis()
+      if (p is int) {
+        if (p < 0 or p >= shape[axis]) { throw IndexOutOfBoundsException("$p is outside axis $axis, which is ${shape[axis]} long") }
+        at += p * strides[axis]
+      } else {
+        val r = p as Range
+        if (r == __wholeAxis()) {
+          s.add(shape[axis])
+          st.add(strides[axis])
+        } else {
+          val plain = r.of(shape[axis])
+          if (plain.size > 0 and (plain.first() < 0 or plain.first() >= shape[axis] or plain.last() < 0 or plain.last() >= shape[axis])) {
+            throw IndexOutOfBoundsException("$r is not all inside axis $axis, which is ${shape[axis]} long")
+          }
+          if (plain.size > 0) { at += plain.first() * strides[axis] }
+          s.add(plain.size)
+          st.add(plain.step * strides[axis])
+        }
+      }
+    }
+    val made = sharing()
+    made.offset = at
+    made.shape = s
+    made.strides = st
+    return made
+  }
+
+  // The items where `mask` (of this tensor's shape) is true, in order, as a new tensor of one
+  // axis.
+  op [](mask : Tensor<bool>) : Tensor<T> {
+    val n = __tensor.masked(data, offset, shape, strides, mask.data, mask.offset, mask.shape, mask.strides, null) as int
+    val made = blank<T>([n])
+    __tensor.masked(data, offset, shape, strides, mask.data, mask.offset, mask.shape, mask.strides, made.data)
+    return made
+  }
+  // Sets the items where `mask` is true to `value`.
+  op []=(mask : Tensor<bool>, value : T) {
+    if (!writable) { throw IllegalStateException("this tensor is only read here") }
+    __tensor.masked(data, offset, shape, strides, mask.data, mask.offset, mask.shape, mask.strides, null, value)
+  }
+
+  // A tensor of its own with these items.
+  fun copy() : Tensor<T> {
+    val made = blank<T>(shape)
+    copyInto(made)
+    return made
+  }
+  // Every item set to `value` (through a view, every item of that part).
+  fun fill(value : T) {
+    if (!writable) { throw IllegalStateException("this tensor is only read here") }
+    __tensor.copy(value, null, null, null, data, offset, shape, strides)
+  }
+  // Its items written into `destination`, of the same shape.
+  fun copyInto(destination : Tensor<T>) {
+    if (!destination.writable) { throw IllegalStateException("the destination is only read here") }
+    if (destination.shape != shape) { throw IllegalArgumentException("the shapes differ: ${__shapeText(shape)} and ${__shapeText(destination.shape)}") }
+    __tensor.copy(data, offset, shape, strides, destination.data, destination.offset, destination.shape, destination.strides)
+  }
+
+  // -- Shape --
+
+  // The same items in another shape, the same number of them (one axis given as -1 worked out):
+  // a view where the items lie in order, a copy otherwise.
+  fun reshaped(vararg shape : int) : Tensor<T> {
+    val want : open List<int> = shape.toOpenList()
+    val unknown = want.indexOf(-1)
+    if (unknown >= 0) {
+      var known = 1
+      for (i in 0 ..< want.size) { if (i != unknown) { known *= want[i] } }
+      if (known == 0 or size % known != 0) { throw IllegalArgumentException("${__shapeText(this.shape)} cannot be made ${__shapeText(want)}") }
+      want[unknown] = size / known
+    }
+    if (__tensorCount(want) != size or want.any { it < 0 }) { throw IllegalArgumentException("${__shapeText(this.shape)} cannot be made ${__shapeText(want)}: the sizes differ") }
+    val from = strides == __tensorStrides(this.shape) ? this : copy()
+    val made = from.sharing()
+    made.shape = want
+    made.strides = __tensorStrides(want)
+    return made
+  }
+  // The same items along one axis.
+  fun flattened() : Tensor<T> => reshaped(size)
+  // A view with its axes in the order `axes` gives, the last two swapped when none are given: the
+  // transpose of a matrix.
+  fun transposed(vararg axes : int) : Tensor<T> {
+    var order : List<int> = axes.toList()
+    if (order.isEmpty()) {
+      val o : open List<int> = (0 ..< shape.size).toList().toOpenList()
+      if (o.size >= 2) {
+        o[o.size - 1] = shape.size - 2
+        o[o.size - 2] = shape.size - 1
+      }
+      order = o
+    }
+    if (order.sorted() != (0 ..< shape.size).toList()) { throw IllegalArgumentException("$order is not an order of the ${shape.size} axes") }
+    val made = sharing()
+    made.shape = order.map { shape[it] }
+    made.strides = order.map { strides[it] }
+    return made
+  }
+
+  // -- Item by item --
+
+  private fun binary(op : int, other : any, outData : any, outOffset : int, outShape : List<int>, outStrides : List<int>) {
+    if (other is Tensor) {
+      __tensor.binary(op, data, offset, shape, strides, other.data, other.offset, other.shape, other.strides, outData, outOffset, outShape, outStrides)
+    } else {
+      __tensor.binary(op, data, offset, shape, strides, other, null, null, null, outData, outOffset, outShape, outStrides)
+    }
+  }
+  private fun shapeWith(other : any) : List<int> => other is Tensor ? __broadcast(shape, other.shape) : shape
+  private fun arith(op : int, other : any) : Tensor<T> {
+    val out = blank<T>(shapeWith(other))
+    binary(op, other, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  private fun compare(op : int, other : any) : Tensor<bool> {
+    val out = blank<bool>(shapeWith(other))
+    binary(op, other, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  // Item by item, broadcast: this plus `other`, a tensor or a number.
+  op +(other : Tensor<T> | Number) : Tensor<T> => arith(0, other)
+  // Item by item: this minus `other`.
+  op -(other : Tensor<T> | Number) : Tensor<T> => arith(1, other)
+  // Item by item: this times `other`.
+  op *(other : Tensor<T> | Number) : Tensor<T> => arith(2, other)
+  // Item by item: this divided by `other`; whole numbers for ints.
+  op /(other : Tensor<T> | Number) : Tensor<T> => arith(3, other)
+  // Item by item: what is left of this divided by `other`.
+  op %(other : Tensor<T> | Number) : Tensor<T> => arith(4, other)
+  // Each item negated.
+  op -() : Tensor<T> => unary<T>(0, null, null, null)
+  // Item by item, this plus `other`, an int's overflow wrapping round as &+ does.
+  fun plusWrapped(other : Tensor<T> | Number) : Tensor<T> => arith(5, other)
+  // Item by item, this minus `other`, wrapping round as &- does.
+  fun minusWrapped(other : Tensor<T> | Number) : Tensor<T> => arith(6, other)
+  // Item by item, this times `other`, wrapping round as &* does.
+  fun timesWrapped(other : Tensor<T> | Number) : Tensor<T> => arith(7, other)
+
+  // Item by item, whether this is less than `other`.
+  fun lessThan(other : Tensor<T> | Number) : Tensor<bool> => compare(8, other)
+  // Item by item, whether this is less than or equal to `other`.
+  fun lessOrEqual(other : Tensor<T> | Number) : Tensor<bool> => compare(9, other)
+  // Item by item, whether this is greater than `other`.
+  fun greaterThan(other : Tensor<T> | Number) : Tensor<bool> => compare(10, other)
+  // Item by item, whether this is greater than or equal to `other`.
+  fun greaterOrEqual(other : Tensor<T> | Number) : Tensor<bool> => compare(11, other)
+  // Item by item, whether this equals `other`.
+  fun equalTo(other : Tensor<T> | Number) : Tensor<bool> => compare(12, other)
+  // Item by item, whether this differs from `other`.
+  fun notEqualTo(other : Tensor<T> | Number) : Tensor<bool> => compare(13, other)
+  // Of bools, item by item: both true.
+  fun and(other : Tensor<bool>) : Tensor<bool> => compare(14, other)
+  // Of bools, item by item: either true.
+  fun or(other : Tensor<bool>) : Tensor<bool> => compare(15, other)
+  // Of bools, item by item: the other way.
+  fun not() : Tensor<bool> => unary<bool>(15, null, null, null)
+
+  private fun <R> unary(op : int, p : Number?, q : Number?, into : Tensor<R>?) : Tensor<R> {
+    val out = into ?: blank<R>(shape)
+    if (!out.writable) { throw IllegalStateException("into is only read here") }
+    __tensor.unary(op, data, offset, shape, strides, out.data, out.offset, out.shape, out.strides, p, q)
+    return out
+  }
+  // Each item made positive.
+  fun abs(into : Tensor<T>? = null) : Tensor<T> => unary<T>(1, null, null, into)
+  // Each item's square root, as floats.
+  fun sqrt(into : Tensor<float>? = null) : Tensor<float> => unary<float>(2, null, null, into)
+  // e to the power of each item.
+  fun exp(into : Tensor<float>? = null) : Tensor<float> => unary<float>(3, null, null, into)
+  // Each item's natural logarithm, as Math.ln.
+  fun ln(into : Tensor<float>? = null) : Tensor<float> => unary<float>(4, null, null, into)
+  // Each item's logarithm in `base`, as Math.log.
+  fun log(base : Number, into : Tensor<float>? = null) : Tensor<float> => unary<float>(5, base, null, into)
+  // Each item's logarithm in base 10.
+  fun log10(into : Tensor<float>? = null) : Tensor<float> => unary<float>(6, null, null, into)
+  // Each item to the power `x`.
+  fun pow(x : Number, into : Tensor<float>? = null) : Tensor<float> => unary<float>(7, x, null, into)
+  // Each item's sine, in radians.
+  fun sin(into : Tensor<float>? = null) : Tensor<float> => unary<float>(8, null, null, into)
+  // Each item's cosine.
+  fun cos(into : Tensor<float>? = null) : Tensor<float> => unary<float>(9, null, null, into)
+  // Each item's tangent.
+  fun tan(into : Tensor<float>? = null) : Tensor<float> => unary<float>(10, null, null, into)
+  // Each item rounded down to a whole number.
+  fun floor(into : Tensor<T>? = null) : Tensor<T> => unary<T>(11, null, null, into)
+  // Each item rounded up to a whole number.
+  fun ceil(into : Tensor<T>? = null) : Tensor<T> => unary<T>(12, null, null, into)
+  // Each item rounded to the nearest whole number, halves away from 0.
+  fun round(into : Tensor<T>? = null) : Tensor<T> => unary<T>(13, null, null, into)
+  // Each item held from `low` to `high`.
+  fun clamp(low : Number, high : Number, into : Tensor<T>? = null) : Tensor<T> {
+    if (low.toFloat() > high.toFloat()) { throw IllegalArgumentException("low ($low) is above high ($high)") }
+    return unary<T>(14, low, high, into)
+  }
+
+  // -- Item types --
+
+  // As ints: a float cut to its whole part; a NaN, or a float too large for an int, an
+  // ArithmeticException.
+  fun toInt() : Tensor<int> => unary<int>(16, null, null, null)
+  // As floats.
+  fun toFloat() : Tensor<float> => unary<float>(16, null, null, null)
+  // As float32s.
+  fun toFloat32() : Tensor<float32> => unary<float32>(16, null, null, null)
+  // As bytes: an ArithmeticException for an item outside 0 to 255.
+  fun toByte() : Tensor<byte> => unary<byte>(16, null, null, null)
+  // As int16s, checked.
+  fun toInt16() : Tensor<int16> => unary<int16>(16, null, null, null)
+  // As int32s, checked.
+  fun toInt32() : Tensor<int32> => unary<int32>(16, null, null, null)
+  // As uint16s, checked.
+  fun toUint16() : Tensor<uint16> => unary<uint16>(16, null, null, null)
+  // As uint32s, checked.
+  fun toUint32() : Tensor<uint32> => unary<uint32>(16, null, null, null)
+  // As bytes, each keeping its low 8 bits, as toByteWrapped() does.
+  fun toByteWrapped() : Tensor<byte> => unary<byte>(17, null, null, null)
+  // As int16s, each keeping its low 16 bits.
+  fun toInt16Wrapped() : Tensor<int16> => unary<int16>(17, null, null, null)
+  // As int32s, each keeping its low 32 bits.
+  fun toInt32Wrapped() : Tensor<int32> => unary<int32>(17, null, null, null)
+  // As uint16s, each keeping its low 16 bits.
+  fun toUint16Wrapped() : Tensor<uint16> => unary<uint16>(17, null, null, null)
+  // As uint32s, each keeping its low 32 bits.
+  fun toUint32Wrapped() : Tensor<uint32> => unary<uint32>(17, null, null, null)
+
+  // -- Totals --
+
+  private fun whole(op : int) : any => __tensor.reduce(op, data, offset, shape, strides, -1, null, null, null, null)
+  private fun <R> reduced(op : int, axis : int, into : Tensor<R>?) : Tensor<R> {
+    if (axis < 0 or axis >= shape.size) { throw IllegalArgumentException("axis $axis is not one of the ${shape.size}") }
+    val rest : open List<int> = shape.toOpenList()
+    rest.removeAt(axis)
+    val out = into ?: blank<R>(rest)
+    __tensor.reduce(op, data, offset, shape, strides, axis, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  // The total of every item: an int for ints (an overflow an ArithmeticException), a float otherwise.
+  fun sum() : Number => whole(0) as Number
+  // The totals along `axis`: a tensor of one axis fewer.
+  fun sum(axis : int, into : Tensor<T>? = null) : Tensor<T> => reduced<T>(0, axis, into)
+  // The mean of every item, as a float; NaN for no items.
+  fun average() : float => whole(1) as float
+  // The means along `axis`.
+  fun average(axis : int, into : Tensor<float>? = null) : Tensor<float> => reduced<float>(1, axis, into)
+  // The least item; a NoSuchElementException for no items.
+  fun min() : Number => whole(2) as Number
+  // The least items along `axis`.
+  fun min(axis : int, into : Tensor<T>? = null) : Tensor<T> => reduced<T>(2, axis, into)
+  // The greatest item; a NoSuchElementException for no items.
+  fun max() : Number => whole(3) as Number
+  // The greatest items along `axis`.
+  fun max(axis : int, into : Tensor<T>? = null) : Tensor<T> => reduced<T>(3, axis, into)
+  // The product of every item.
+  fun product() : Number => whole(4) as Number
+  // The products along `axis`.
+  fun product(axis : int, into : Tensor<T>? = null) : Tensor<T> => reduced<T>(4, axis, into)
+  // Where the least item is, counted through the items in order (the last axis fastest), as
+  // Kotlin's lists have it; the first where several are least.
+  fun indexOfMin() : int => whole(5) as int
+  // Where the least item is along `axis`.
+  fun indexOfMin(axis : int, into : Tensor<int>? = null) : Tensor<int> => reduced<int>(5, axis, into)
+  // Where the greatest item is, counted through the items in order.
+  fun indexOfMax() : int => whole(6) as int
+  // Where the greatest item is along `axis`.
+  fun indexOfMax(axis : int, into : Tensor<int>? = null) : Tensor<int> => reduced<int>(6, axis, into)
+  // Of bools: whether any is true.
+  fun any() : bool => whole(7) as bool
+  // Of bools: whether any is true along `axis`.
+  fun any(axis : int, into : Tensor<bool>? = null) : Tensor<bool> => reduced<bool>(7, axis, into)
+  // Of bools: whether all are true.
+  fun all() : bool => whole(8) as bool
+  // Of bools: whether all are true along `axis`.
+  fun all(axis : int, into : Tensor<bool>? = null) : Tensor<bool> => reduced<bool>(8, axis, into)
+  // Of bools: how many are true.
+  fun count() : int => whole(9) as int
+  // Of bools: how many are true along `axis`.
+  fun count(axis : int, into : Tensor<int>? = null) : Tensor<int> => reduced<int>(9, axis, into)
+  // The prefix sums: along `axis`, or of all the items in order as a tensor of one axis.
+  fun runningSum(axis : int? = null) : Tensor<T> {
+    val a = axis
+    if (a != null and (a < 0 or a >= shape.size)) { throw IllegalArgumentException("axis $a is not one of the ${shape.size}") }
+    val out = blank<T>(a == null ? [size] : shape)
+    __tensor.running(data, offset, shape, strides, a ?: -1, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+
+  // -- Matrices --
+
+  // The matrix product, as numpy's dot: of two vectors a tensor of one item (item() gives it),
+  // of a matrix and a vector a vector, of two matrices a matrix. An IllegalArgumentException
+  // where the lengths summed over differ.
+  fun dot(other : Tensor<T>, into : Tensor<T>? = null) : Tensor<T> {
+    if (shape.size == 0 or other.shape.size == 0 or shape.size > 2 or other.shape.size > 2) {
+      throw IllegalArgumentException("dot is of vectors and matrices: tensors of one or two axes, not ${__shapeText(shape)} and ${__shapeText(other.shape)}")
+    }
+    val outShape : open List<int> = []
+    if (shape.size == 2) { outShape.add(shape[0]) }
+    if (other.shape.size == 2) { outShape.add(other.shape[1]) }
+    if (shape.size == 1 and other.shape.size == 1) {
+      val made = blank<T>([])
+      val v = __tensor.dot(data, offset, shape, strides, other.data, other.offset, other.shape, other.strides, null, null, null, null)
+      __tensor.copy(v, null, null, null, made.data, made.offset, made.shape, made.strides)
+      return made
+    }
+    val out = into ?: blank<T>(outShape)
+    __tensor.dot(data, offset, shape, strides, other.data, other.offset, other.shape, other.strides, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  // Of a square matrix: its inverse, as floats. An ArithmeticException for one that has none.
+  fun inverse() : Tensor<float> {
+    val out = blank<float>(shape)
+    __tensor.linear(0, data, offset, shape, strides, null, null, null, null, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  // Of a square matrix a: the x for which a.dot(x) is `b` (a vector, or a matrix of several), as
+  // floats. An ArithmeticException for a matrix that has no inverse.
+  fun solve(b : Tensor<T>) : Tensor<float> {
+    val out = blank<float>(b.shape)
+    __tensor.linear(1, data, offset, shape, strides, b.data, b.offset, b.shape, b.strides, out.data, out.offset, out.shape, out.strides)
+    return out
+  }
+  // Of a square matrix: its determinant.
+  fun determinant() : float => __tensor.linear(2, data, offset, shape, strides, null, null, null, null, null, null, null, null) as float
+
+  // -- Out --
+
+  // Its items in order (the last axis fastest), as a new list.
+  fun toList() : open List<T> => flattened().copy().data.toOpenList()
+  // A tensor of two axes as a grid: its rows the grid's rows.
+  fun toGrid() : Grid<T> {
+    if (shape.size != 2) { throw IllegalStateException("a grid is made of a tensor of two axes, not of ${__shapeText(shape)}") }
+    val made = Grid<T>(0, 0).blank<T>(shape[1], shape[0])
+    made.cells = copy().data
+    return made
+  }
+  // A tensor of height by width by 3 or 4 numbers from 0 to 255 (red, green, blue, and alpha)
+  // as a picture.
+  fun toImage() : Image {
+    if (shape.size != 3 or (shape[2] != 3 and shape[2] != 4)) { throw IllegalStateException("a picture is made of a tensor of height by width by 3 or 4, not of ${__shapeText(shape)}") }
+    val parts = shape[2]
+    val bytes = toByte().toList()
+    val n = shape[0] * shape[1]
+    val out = Bytes(n * 4)
+    for (i in 0 ..< n) {
+      out[i * 4] = bytes[i * parts]
+      out[i * 4 + 1] = bytes[i * parts + 1]
+      out[i * 4 + 2] = bytes[i * parts + 2]
+      out[i * 4 + 3] = parts == 4 ? bytes[i * parts + 3] : 255.toByte()
+    }
+    return Image.of(shape[1], shape[0], out)
+  }
+  // Whether `other` is a tensor of the same shape and items.
+  op ==(other : any?) : bool => other is Tensor and other.shape == shape and toList() == other.toList()
+  // A hash code, the same for equal tensors.
+  fun hashCode() : int => hash(shape, toList())
+  // Its items in nested brackets, as numpy shows them, the middle of a long axis left out: [[1, 2], [3, 4]].
+  override fun toString() : string {
+    if (shape.isEmpty()) { return "${data[offset]}" }
+    val items = toList()
+    val big = items.size > 1000
+    fun part(axis : int, at : int) : string {
+      val n = shape[axis]
+      var step = 1
+      for (k in axis + 1 ..< shape.size) { step *= shape[k] }
+      val shown : open List<string> = []
+      for (i in 0 ..< n) {
+        if (big and n > 6 and i == 3) { shown.add("...") }
+        if (big and n > 6 and i >= 3 and i < n - 3) { continue }
+        shown.add(axis == shape.size - 1 ? "${items[at + i]}" : part(axis + 1, at + i * step))
+      }
+      return "[" + shown.join(", ") + "]"
+    }
+    return part(0, 0)
+  }
+}
+
+// `all`, for code inside Tensor, where all() is a method.
+fun __wholeAxis() : Range => all
+
+// The strides of a shape's items laid in order, the last axis fastest.
+fun __tensorStrides(shape : List<int>) : List<int> {
+  val s : open List<int> = []
+  var step = 1
+  for (i in 0 ..< shape.size) { s.add(0) }
+  var i = shape.size - 1
+  while (i >= 0) {
+    s[i] = step
+    step *= shape[i]
+    i -= 1
+  }
+  return s
+}
+// How many items a shape has.
+fun __tensorCount(shape : List<int>) : int {
+  var n = 1
+  for (s in shape) { n *= s }
+  return n
+}
+// A shape as a tensor's is written: 3 by 4.
+fun __shapeText(shape : List<int>) : string => shape.isEmpty() ? "one item" : shape.join(" by ")
+// The shape two shapes broadcast to, matched from the last axis, an axis of 1 standing for any
+// length; an IllegalArgumentException naming both where they cannot be.
+fun __broadcast(a : List<int>, b : List<int>) : List<int> {
+  val n = Math.max(a.size, b.size)
+  val out : open List<int> = []
+  for (i in 0 ..< n) {
+    val x = i < n - a.size ? 1 : a[i - (n - a.size)]
+    val y = i < n - b.size ? 1 : b[i - (n - b.size)]
+    if (x != y and x != 1 and y != 1) { throw IllegalArgumentException("${__shapeText(a)} and ${__shapeText(b)} cannot be broadcast together") }
+    out.add(x == 1 ? y : x)
+  }
+  return out
+}
+
+// The list's items as a tensor of one axis, a copy.
+fun <T : Number> List<T>.toTensor() : Tensor<T> {
+  // Made by its constructor, which keeps T, as a static function given T here would not (G71).
+  val made = Tensor<T>(this.size)
+  for (i in 0 ..< this.size) { made.data[i] = this[i] }
+  return made
+}
+// The grid as a tensor of its rows by its columns, a copy.
+fun <T> Grid<T>.toTensor() : Tensor<T> {
+  val made = Tensor<T>(height, width)
+  this.cells.copyInto(made.data)
+  return made
+}
+// The bytes as a tensor of bytes of one axis, a copy.
+fun Bytes.toTensor() : Tensor<byte> {
+  val made = Tensor<byte>(this.size)
+  __tensor.fromBytes(this, made.data)
+  return made
+}
+// A picture's pixels as a tensor of bytes, height by width by 4: red, green, blue, alpha.
+fun Grid<Color>.toTensor() : Tensor<byte> {
+  val made = Tensor<byte>(height, width, 4)
+  __tensor.fromBytes(toBytes(), made.data)
+  return made
+}

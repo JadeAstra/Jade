@@ -11,6 +11,30 @@
 class FrameTime(val time : float, val delta : float, val frame : int)
 
 object Topaz {
+  // Whether the system is set to show its apps dark (M10): on Windows, the setting for apps in
+  // Settings, read from the registry through Jade's foreign functions (RegGetValueW of
+  // AppsUseLightTheme, 0 for dark). False where it cannot be told: another system, a sandbox
+  // that refuses foreign calls, or a Windows without the setting. Asked afresh each time.
+  //   Palette.dark = Topaz.systemDark
+  val systemDark : bool
+    get() {
+      try {
+        val getValue = Library("advapi32").function("RegGetValueW",
+          [CType.pointer, CType.wideString, CType.wideString, CType.uint32, CType.pointer, CType.pointer, CType.pointer], CType.int32)
+        return Memory(4).use { data ->
+          Memory(4).use { size ->
+            size.putInt32(0, 4)
+            // HKEY_CURRENT_USER ((LONG) 0x80000001, widened as a pointer), and RRF_RT_REG_DWORD: the
+            // value must be a 32-bit number.
+            val status = getValue.call(-2147483647, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "AppsUseLightTheme", 0x10, null, data, size)
+            status == 0 and data.int32(0) == 0
+          }
+        }
+      } catch (e : Exception) {
+        return false
+      }
+    }
+
   // Runs a task after a delay. The window that is in front sets it.
   var scheduler : ((Duration, () -> unit) -> unit)? = null
 

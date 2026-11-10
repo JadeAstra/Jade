@@ -293,3 +293,47 @@ val tall = Component(Stripes())
 val small = Surface(40, 40)
 tall.paintInto(small.canvasAt(40, largest + 100, 1))
 print(small.toImage()[5, 5] == Color.red)   // expect: true
+
+// -- A part painted again (M10) --
+
+// invalidate(area) paints only that part of the kept picture again, the content on a canvas
+// clipped to it; the rest of the picture stays as it was, and a whole invalidate() wins.
+class Shades : Content {
+  override var owner : Component? = null
+  var shade = Color.red
+  val clips : open List<Rect> = []
+  override fun sizes() => Sizes(Size(50, 20), Size(50, 20), Size(50, 20))
+  override fun paint(canvas : Canvas) {
+    clips.add(canvas.visibleBounds)
+    canvas.color = shade
+    canvas.fillRect(0, 0, canvas.width, canvas.height)
+  }
+}
+fun aPartRepaintsOnlyThatPart() {
+  failed.clear()
+  checks = 0
+  Topaz.invalidateRenderCaches()
+  val sh = Shades()
+  val comp = Component(sh)
+  val buf = Surface(50, 20)
+  comp.renderInto(buf, 50, 20, 1.0, 1.0)
+  sh.shade = Color.blue
+  comp.invalidate(Rect(10, 5, 20, 10))
+  comp.renderInto(buf, 50, 20, 1.0, 1.0)
+  same("painted again, clipped to the part", sh.clips, [Rect(0, 0, 50, 20), Rect(10, 5, 20, 10)])
+  val img = buf.toImage()
+  same("inside the part: the new colour", img[15, 10], Color.blue)
+  same("outside it: the old", img[5, 2], Color.red)
+  comp.renderInto(buf, 50, 20, 1.0, 1.0)
+  same("then from its picture again", sh.clips.size, 2)
+  comp.invalidate(Rect(0, 0, 5, 5))
+  comp.invalidate()
+  comp.renderInto(buf, 50, 20, 1.0, 1.0)
+  same("a whole invalidate paints it all", sh.clips.last(), Rect(0, 0, 50, 20))
+  same("and blue all over", buf.toImage()[5, 2], Color.blue)
+}
+aPartRepaintsOnlyThatPart()
+print("PartRepaintTest:", checks, "checks,", failed)   // expect: PartRepaintTest: 6 checks, []
+
+// The system's dark mode is read, through foreign functions on Windows (M10): a bool, whatever it is.
+print(Topaz.systemDark == true or Topaz.systemDark == false)   // expect: true

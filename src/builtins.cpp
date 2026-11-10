@@ -1410,6 +1410,7 @@ void registerBuiltins(VM& vm) {
     registerBits(vm);
     registerPicture(vm);
     registerNumeric(vm);
+    registerTensor(vm);
     registerWebp(vm);
     registerForeign(vm);
     registerWorkers(vm);

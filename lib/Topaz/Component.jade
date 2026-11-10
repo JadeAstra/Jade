@@ -43,6 +43,9 @@ class Component {
   private var cacheScaleX = 0.0
   private var cacheScaleY = 0.0
   private var cacheDirty = true
+  // The part of the kept picture to paint again, in its own units, where only a part has
+  // changed (invalidate(area)); null when none, or when all of it is to be painted again.
+  private var cacheArea : Rect? = null
 
   var parent : Component? = null
     private set
@@ -131,7 +134,26 @@ class Component {
     var c : Component? = this
     while (c != null) {
       c.cacheDirty = true
+      c.cacheArea = null
       c.sizesValid = false
+      c = c.parent
+    }
+  }
+  // Says that a part of it has to be painted again (M10): `area`, in its own units. Its kept
+  // picture keeps the rest, and only that part is painted again, the content painting on a
+  // canvas clipped to it; its sizes are not asked for again, as invalidate() asks for them. What
+  // it is in paints that part again too. For a caret, a cell, a line that changes on its own.
+  fun invalidate(area : Rect) {
+    Topaz.requestRepaint()
+    var c : Component? = this
+    var part = area
+    while (c != null) {
+      if (!c.cacheDirty) {
+        val now = c.cacheArea
+        c.cacheArea = now == null ? part : now.union(part)
+      }
+      // The same place in what it is in.
+      part = Rect(part.x + c.bounds.x, part.y + c.bounds.y, part.width, part.height)
       c = c.parent
     }
   }
@@ -181,6 +203,14 @@ class Component {
     }
     val gen = Topaz.renderGeneration
     val valid = !cacheDirty and cacheGen == gen and cacheW == w and cacheH == h and cacheScaleX == sx and cacheScaleY == sy and cacheStyle == st and cache != null
+    val area = cacheArea
+    cacheArea = null
+    if (valid and area != null) {
+      // Only a part changed: that part of the kept picture wiped and painted again.
+      val part = cache!!.canvas().clipped(area.x, area.y, area.width, area.height)
+      part.clearRect(area.x, area.y, area.width, area.height)
+      content.paint(part)
+    }
     if (!valid) {
       val old = cache
       val kept = old != null and old.deviceWidth == pw and old.deviceHeight == ph ? old : Surface(w, h, sx)

@@ -438,6 +438,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#file-string-jade">string.jade</a></li>
 <li><a href="#file-stroke-jade">stroke.jade</a></li>
 <li><a href="#file-task-jade">task.jade</a></li>
+<li><a href="#file-tensor-jade">tensor.jade</a></li>
 <li><a href="#file-test-jade">test.jade</a></li>
 <li><a href="#file-text-jade">text.jade</a></li>
 <li><a href="#file-thread-jade">thread.jade</a></li>
@@ -467,7 +468,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#BitReader"><code>BitReader</code></a> (9)</li>
 <li><a href="#BlendMode"><code>BlendMode</code></a> (1)</li>
 <li><a href="#ByteSource"><code>ByteSource</code></a> (6)</li>
-<li><a href="#Bytes.inflate"><code>Bytes</code></a> (34)</li>
+<li><a href="#Bytes.inflate"><code>Bytes</code></a> (35)</li>
 <li><a href="#CType"><code>CType</code></a> (1)</li>
 <li><a href="#CancellationException"><code>CancellationException</code></a> (1)</li>
 <li><a href="#Canvas"><code>Canvas</code></a> (66)</li>
@@ -502,13 +503,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#FileChange"><code>FileChange</code></a> (1)</li>
 <li><a href="#FilePath"><code>FilePath</code></a> (50)</li>
 <li><a href="#FillRule"><code>FillRule</code></a> (1)</li>
-<li><a href="#Font"><code>Font</code></a> (36)</li>
+<li><a href="#Font"><code>Font</code></a> (37)</li>
 <li><a href="#FontAxis"><code>FontAxis</code></a> (1)</li>
 <li><a href="#Fonts"><code>Fonts</code></a> (8)</li>
 <li><a href="#Foreign"><code>Foreign</code></a> (2)</li>
 <li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
-<li><a href="#Grid"><code>Grid</code></a> (83)</li>
+<li><a href="#Grid"><code>Grid</code></a> (85)</li>
 <li><a href="#HuffmanTable"><code>HuffmanTable</code></a> (2)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
@@ -536,7 +537,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
 <li><a href="#LineJoin"><code>LineJoin</code></a> (1)</li>
 <li><a href="#LinearGradient"><code>LinearGradient</code></a> (2)</li>
-<li><a href="#List.size"><code>List</code></a> (192)</li>
+<li><a href="#List.size"><code>List</code></a> (193)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
 <li><a href="#LocalDateTime"><code>LocalDateTime</code></a> (14)</li>
@@ -607,7 +608,9 @@ addButton(widgets)</pre></dd>
 <li><a href="#T.use"><code>T</code></a> (7)</li>
 <li><a href="#TaskScope"><code>TaskScope</code></a> (6)</li>
 <li><a href="#TempDir"><code>TempDir</code></a> (1)</li>
+<li><a href="#Tensor"><code>Tensor</code></a> (114)</li>
 <li><a href="#Test"><code>Test</code></a> (1)</li>
+<li><a href="#TextLine"><code>TextLine</code></a> (1)</li>
 <li><a href="#TextMetrics"><code>TextMetrics</code></a> (1)</li>
 <li><a href="#Thread"><code>Thread</code></a> (15)</li>
 <li><a href="#ThreadPool"><code>ThreadPool</code></a> (8)</li>
@@ -2509,6 +2512,11 @@ font.copy(size = 16, bold = false)            the same with some options changed
 <pre>font.offsets(&quot;abc&quot;)   [0, font.width(&quot;a&quot;), font.width(&quot;ab&quot;), font.width(&quot;abc&quot;)]
 </pre>
 </div>
+<div class="entry member" id="Font.breakLines"><code class="sig">fun breakLines(text : string, width : Number, scale : Number = 1, breakWords : bool = false) : List&lt;TextLine&gt;</code><a class="anchor" href="#Font.breakLines">#</a>
+<p>The lines a paragraph breaks into at <code>width</code>, as text is laid out: measured in one call to the text engine (offsets), in layout units, or with <code>scale</code> in that screen's pixels, <code>width</code> too. A line breaks after spaces, after a hyphen between letters, and between Chinese, Japanese and Korean characters, never before a closing mark (, . ! ? ) and their wide forms); a line break in the text always breaks. The spaces a line ends with hang past its width. A word wider than a line is left whole unless <code>breakWords</code> says to break it between its characters, as CSS's overflow-wrap: break-word does. An empty text is one empty line.</p>
+<pre>for (line in font.breakLines(text, 300)) { canvas.drawString(text[line.start ..&lt; line.end], 0, y); y += font.lineHeight }
+</pre>
+</div>
 <div class="entry member" id="Font.typefaceFor"><code class="sig">fun typefaceFor(character : any) : Typeface?</code><a class="anchor" href="#Font.typefaceFor">#</a>
 <p>The typeface a character is drawn from: this font's own, or another one that has it when this one does not. Null if no installed font has it.</p>
 </div>
@@ -2520,6 +2528,9 @@ font.copy(size = 16, bold = false)            the same with some options changed
 </div>
 <div class="entry member" id="Font.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Font.toString">#</a>
 <p>The font as it was asked for: &quot;Font(Segoe UI, 14, bold)&quot;, &quot;Font(Segoe UI, 14, weight 350)&quot;.</p>
+</div>
+<div class="entry" id="TextLine"><code class="sig">value TextLine(val start : int, val end : int, val width : int)</code><a class="anchor" href="#TextLine">#</a>
+<p>One line of a paragraph as Font.breakLines breaks it: its characters from <code>start</code> up to <code>end</code> (the spaces it ends with among them, a line break not), and its width without those spaces.</p>
 </div>
 </section>
 <section class="file" id="file-foreign-jade">
@@ -6410,6 +6421,377 @@ EventLoop.after(5.5.seconds) { tick.cancel() }
 </div>
 <div class="entry" id="delay"><code class="sig">suspend fun delay(time : Duration)</code><a class="anchor" href="#delay">#</a>
 <p>Waits for the time given. In a task on the main thread the task is set aside meanwhile and the event loop goes on; anywhere else the thread sleeps.</p>
+</div>
+</section>
+<section class="file" id="file-tensor-jade">
+<h2>tensor.jade</h2>
+<h3>Tensors (M9/M10, question 16)</h3>
+<p>An array of any number of axes, for what lists and grids do not cover: a volume, a picture's colour channels as an axis of their own, the frames of an animation, a batch; parts worked on in place, arrays of one shape combined with another, totals along an axis, matrices. Its T is int, float, a narrow width (int8 to uint32, float32, byte) or bool, its items one packed block.</p>
+<pre>val a = Tensor&lt;float&gt;(3, 4)                     3 rows of 4, all 0.0
+val b = Tensor.arange(0, 12).reshaped(3, 4)      0 to 11 in 3 rows
+val c = (b.toFloat() - 5.5) / 2.0                item by item; numbers stand for every item
+val rows = b.sum(axis = 1)                       each row's total
+val first = b[0, all]                            a view of row 0: changing it changes b
+val m = Tensor.random(3, 3, seed = 7)
+val x = m.solve(Tensor.ones&lt;float&gt;(3))           m.dot(x) is all ones
+</pre>
+<p>Where it differs from lists and grids: +, -, *, / and % work item by item, between tensors and with a number on the right (an int's overflow an ArithmeticException, the ...Wrapped forms wrapping); shapes are broadcast as numpy's are, matched from the last axis, an axis of 1 standing for any length; indexing with ranges gives a view of the same items, not a copy; and totals are taken over the whole or along one axis. An operation on two tensors gives a tensor of their item type: a tensor of ints with floats in it is made floats first, with toFloat().</p>
+<div class="entry" id="all"><code class="sig">val all : Range</code><a class="anchor" href="#all">#</a>
+<p>The whole of an axis, in a tensor's index: t[all, 0] is its first column.</p>
+</div>
+<div class="entry" id="Tensor"><code class="sig">class Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor">#</a>
+<p>An array of any number of axes, its items one packed block seen through a shape, as the notes above say.</p>
+</div>
+<div class="entry member" id="Tensor.shape"><code class="sig">var shape : List&lt;int&gt;</code><a class="anchor" href="#Tensor.shape">#</a>
+<p>The length of each axis.</p>
+</div>
+<div class="entry member" id="Tensor.zeros"><code class="sig">fun &lt;R&gt; zeros(vararg shape : int) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.zeros">#</a>
+<p>A tensor of <code>shape</code>, every item 0 (numpy's zeros).</p>
+</div>
+<div class="entry member" id="Tensor.ones"><code class="sig">fun &lt;R&gt; ones(vararg shape : int) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.ones">#</a>
+<p>A tensor of <code>shape</code>, every item 1 (numpy's ones): Tensor.ones&lt;float&gt;(3).</p>
+</div>
+<div class="entry member" id="Tensor.full"><code class="sig">fun &lt;R&gt; full(shape : List&lt;int&gt;, value : R) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.full">#</a>
+<p>A tensor of <code>shape</code>, every item <code>value</code>.</p>
+</div>
+<div class="entry member" id="Tensor.identity"><code class="sig">fun identity(n : int) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.identity">#</a>
+<p>The n by n identity matrix: 1.0 on its diagonal, 0.0 elsewhere.</p>
+</div>
+<div class="entry member" id="Tensor.arange"><code class="sig">fun arange(from : int, until : int, step : int = 1) : Tensor&lt;int&gt;</code><a class="anchor" href="#Tensor.arange">#</a>
+<p>The ints from <code>from</code> up to <code>until</code>, <code>step</code> apart: Tensor.arange(0, 5) is 0 to 4.</p>
+</div>
+<div class="entry member" id="Tensor.arange-2"><code class="sig">fun arange(from : float, until : float, step : float = 1.0) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.arange-2">#</a>
+<p>The floats from <code>from</code> up to <code>until</code>, <code>step</code> apart.</p>
+</div>
+<div class="entry member" id="Tensor.linspace"><code class="sig">fun linspace(from : Number, to : Number, count : int) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.linspace">#</a>
+<p><code>count</code> floats evenly from <code>from</code> to <code>to</code>, both of them among them.</p>
+</div>
+<div class="entry member" id="Tensor.random"><code class="sig">fun random(vararg shape : int, seed : int? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.random">#</a>
+<p>Floats from 0 up to 1 of <code>shape</code>, the same ones for the same seed, others each time when it is null.</p>
+</div>
+<div class="entry member" id="Tensor.stack"><code class="sig">fun &lt;R&gt; stack(arrays : List&lt;Tensor&lt;R&gt;&gt;, axis : int = 0) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.stack">#</a>
+<p>Tensors of one shape put together along a new axis, at <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.concat"><code class="sig">fun &lt;R&gt; concat(arrays : List&lt;Tensor&lt;R&gt;&gt;, axis : int = 0) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.concat">#</a>
+<p>Tensors put together along an axis they have, their other axes the same.</p>
+</div>
+<div class="entry member" id="Tensor.where"><code class="sig">fun &lt;R&gt; where(condition : Tensor&lt;bool&gt;, then : Tensor&lt;R&gt; | Number, otherwise : Tensor&lt;R&gt; | Number) : Tensor&lt;R&gt;</code><a class="anchor" href="#Tensor.where">#</a>
+<p>Each item <code>then</code>'s where <code>condition</code> is true, else <code>otherwise</code>'s, the three broadcast; either may be a number.</p>
+</div>
+<div class="entry member" id="Tensor.rank"><code class="sig">val rank : int</code><a class="anchor" href="#Tensor.rank">#</a>
+<p>How many axes it has (numpy's ndim).</p>
+</div>
+<div class="entry member" id="Tensor.size"><code class="sig">val size : int</code><a class="anchor" href="#Tensor.size">#</a>
+<p>How many items it has.</p>
+</div>
+<div class="entry member" id="Tensor.[]"><code class="sig">op [](i : int) : T</code><a class="anchor" href="#Tensor.[]">#</a>
+<p>The item at <code>i</code> of a tensor of one axis.</p>
+</div>
+<div class="entry member" id="Tensor.[]-2"><code class="sig">op [](i : int, j : int) : T</code><a class="anchor" href="#Tensor.[]-2">#</a>
+<p>The item at (<code>i</code>, <code>j</code>) of a tensor of two axes.</p>
+</div>
+<div class="entry member" id="Tensor.[]-3"><code class="sig">op [](i : int, j : int, k : int) : T</code><a class="anchor" href="#Tensor.[]-3">#</a>
+<p>The item at (<code>i</code>, <code>j</code>, <code>k</code>) of a tensor of three axes.</p>
+</div>
+<div class="entry member" id="Tensor.[]-4"><code class="sig">op [](i : int, j : int, k : int, l : int) : T</code><a class="anchor" href="#Tensor.[]-4">#</a>
+<p>The item at (<code>i</code>, <code>j</code>, <code>k</code>, <code>l</code>) of a tensor of four axes.</p>
+</div>
+<div class="entry member" id="Tensor.get"><code class="sig">fun get(index : List&lt;int&gt;) : T</code><a class="anchor" href="#Tensor.get">#</a>
+<p>The item at <code>index</code>, one int for each axis, whatever its rank.</p>
+</div>
+<div class="entry member" id="Tensor.[]="><code class="sig">op []=(i : int, value : T)</code><a class="anchor" href="#Tensor.[]=">#</a>
+<p>Sets the item at <code>i</code> of a tensor of one axis.</p>
+</div>
+<div class="entry member" id="Tensor.[]=-2"><code class="sig">op []=(i : int, j : int, value : T)</code><a class="anchor" href="#Tensor.[]=-2">#</a>
+<p>Sets the item at (<code>i</code>, <code>j</code>).</p>
+</div>
+<div class="entry member" id="Tensor.[]=-3"><code class="sig">op []=(i : int, j : int, k : int, value : T)</code><a class="anchor" href="#Tensor.[]=-3">#</a>
+<p>Sets the item at (<code>i</code>, <code>j</code>, <code>k</code>).</p>
+</div>
+<div class="entry member" id="Tensor.[]=-4"><code class="sig">op []=(i : int, j : int, k : int, l : int, value : T)</code><a class="anchor" href="#Tensor.[]=-4">#</a>
+<p>Sets the item at (<code>i</code>, <code>j</code>, <code>k</code>, <code>l</code>).</p>
+</div>
+<div class="entry member" id="Tensor.set"><code class="sig">fun set(index : List&lt;int&gt;, value : T)</code><a class="anchor" href="#Tensor.set">#</a>
+<p>Sets the item at <code>index</code>, one int for each axis.</p>
+</div>
+<div class="entry member" id="Tensor.item"><code class="sig">fun item() : T</code><a class="anchor" href="#Tensor.item">#</a>
+<p>The one item of a tensor of one item: a dot product of two vectors, a total kept as a tensor.</p>
+</div>
+<div class="entry member" id="Tensor.[]-5"><code class="sig">op [](i : Range) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.[]-5">#</a>
+<p>A view: along each axis a range of it, the whole of it (all), or one place, which drops the axis; axes not given whole. Changing the view changes this tensor.</p>
+</div>
+<div class="entry member" id="Tensor.[]-6"><code class="sig">op [](i : Range | int, j : Range | int) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.[]-6">#</a>
+<p>A view of two axes' parts: t[0 ..&lt; 10, all], t[all, 2].</p>
+</div>
+<div class="entry member" id="Tensor.[]-7"><code class="sig">op [](i : Range | int, j : Range | int, k : Range | int) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.[]-7">#</a>
+<p>A view of three axes' parts.</p>
+</div>
+<div class="entry member" id="Tensor.[]-8"><code class="sig">op [](i : Range | int, j : Range | int, k : Range | int, l : Range | int) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.[]-8">#</a>
+<p>A view of four axes' parts.</p>
+</div>
+<div class="entry member" id="Tensor.[]-9"><code class="sig">op [](mask : Tensor&lt;bool&gt;) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.[]-9">#</a>
+<p>The items where <code>mask</code> (of this tensor's shape) is true, in order, as a new tensor of one axis.</p>
+</div>
+<div class="entry member" id="Tensor.[]=-5"><code class="sig">op []=(mask : Tensor&lt;bool&gt;, value : T)</code><a class="anchor" href="#Tensor.[]=-5">#</a>
+<p>Sets the items where <code>mask</code> is true to <code>value</code>.</p>
+</div>
+<div class="entry member" id="Tensor.copy"><code class="sig">fun copy() : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.copy">#</a>
+<p>A tensor of its own with these items.</p>
+</div>
+<div class="entry member" id="Tensor.fill"><code class="sig">fun fill(value : T)</code><a class="anchor" href="#Tensor.fill">#</a>
+<p>Every item set to <code>value</code> (through a view, every item of that part).</p>
+</div>
+<div class="entry member" id="Tensor.copyInto"><code class="sig">fun copyInto(destination : Tensor&lt;T&gt;)</code><a class="anchor" href="#Tensor.copyInto">#</a>
+<p>Its items written into <code>destination</code>, of the same shape.</p>
+</div>
+<div class="entry member" id="Tensor.reshaped"><code class="sig">fun reshaped(vararg shape : int) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.reshaped">#</a>
+<p>The same items in another shape, the same number of them (one axis given as -1 worked out): a view where the items lie in order, a copy otherwise.</p>
+</div>
+<div class="entry member" id="Tensor.flattened"><code class="sig">fun flattened() : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.flattened">#</a>
+<p>The same items along one axis.</p>
+</div>
+<div class="entry member" id="Tensor.transposed"><code class="sig">fun transposed(vararg axes : int) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.transposed">#</a>
+<p>A view with its axes in the order <code>axes</code> gives, the last two swapped when none are given: the transpose of a matrix.</p>
+</div>
+<div class="entry member" id="Tensor.+"><code class="sig">op +(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.+">#</a>
+<p>Item by item, broadcast: this plus <code>other</code>, a tensor or a number.</p>
+</div>
+<div class="entry member" id="Tensor.-"><code class="sig">op -(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.-">#</a>
+<p>Item by item: this minus <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.*"><code class="sig">op *(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.*">#</a>
+<p>Item by item: this times <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor./"><code class="sig">op /(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor./">#</a>
+<p>Item by item: this divided by <code>other</code>; whole numbers for ints.</p>
+</div>
+<div class="entry member" id="Tensor.%"><code class="sig">op %(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.%">#</a>
+<p>Item by item: what is left of this divided by <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.unary-"><code class="sig">op -() : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.unary-">#</a>
+<p>Each item negated.</p>
+</div>
+<div class="entry member" id="Tensor.plusWrapped"><code class="sig">fun plusWrapped(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.plusWrapped">#</a>
+<p>Item by item, this plus <code>other</code>, an int's overflow wrapping round as &amp;+ does.</p>
+</div>
+<div class="entry member" id="Tensor.minusWrapped"><code class="sig">fun minusWrapped(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.minusWrapped">#</a>
+<p>Item by item, this minus <code>other</code>, wrapping round as &amp;- does.</p>
+</div>
+<div class="entry member" id="Tensor.timesWrapped"><code class="sig">fun timesWrapped(other : Tensor&lt;T&gt; | Number) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.timesWrapped">#</a>
+<p>Item by item, this times <code>other</code>, wrapping round as &amp;* does.</p>
+</div>
+<div class="entry member" id="Tensor.lessThan"><code class="sig">fun lessThan(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.lessThan">#</a>
+<p>Item by item, whether this is less than <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.lessOrEqual"><code class="sig">fun lessOrEqual(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.lessOrEqual">#</a>
+<p>Item by item, whether this is less than or equal to <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.greaterThan"><code class="sig">fun greaterThan(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.greaterThan">#</a>
+<p>Item by item, whether this is greater than <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.greaterOrEqual"><code class="sig">fun greaterOrEqual(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.greaterOrEqual">#</a>
+<p>Item by item, whether this is greater than or equal to <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.equalTo"><code class="sig">fun equalTo(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.equalTo">#</a>
+<p>Item by item, whether this equals <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.notEqualTo"><code class="sig">fun notEqualTo(other : Tensor&lt;T&gt; | Number) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.notEqualTo">#</a>
+<p>Item by item, whether this differs from <code>other</code>.</p>
+</div>
+<div class="entry member" id="Tensor.and"><code class="sig">fun and(other : Tensor&lt;bool&gt;) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.and">#</a>
+<p>Of bools, item by item: both true.</p>
+</div>
+<div class="entry member" id="Tensor.or"><code class="sig">fun or(other : Tensor&lt;bool&gt;) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.or">#</a>
+<p>Of bools, item by item: either true.</p>
+</div>
+<div class="entry member" id="Tensor.not"><code class="sig">fun not() : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.not">#</a>
+<p>Of bools, item by item: the other way.</p>
+</div>
+<div class="entry member" id="Tensor.abs"><code class="sig">fun abs(into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.abs">#</a>
+<p>Each item made positive.</p>
+</div>
+<div class="entry member" id="Tensor.sqrt"><code class="sig">fun sqrt(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.sqrt">#</a>
+<p>Each item's square root, as floats.</p>
+</div>
+<div class="entry member" id="Tensor.exp"><code class="sig">fun exp(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.exp">#</a>
+<p>e to the power of each item.</p>
+</div>
+<div class="entry member" id="Tensor.ln"><code class="sig">fun ln(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.ln">#</a>
+<p>Each item's natural logarithm, as Math.ln.</p>
+</div>
+<div class="entry member" id="Tensor.log"><code class="sig">fun log(base : Number, into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.log">#</a>
+<p>Each item's logarithm in <code>base</code>, as Math.log.</p>
+</div>
+<div class="entry member" id="Tensor.log10"><code class="sig">fun log10(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.log10">#</a>
+<p>Each item's logarithm in base 10.</p>
+</div>
+<div class="entry member" id="Tensor.pow"><code class="sig">fun pow(x : Number, into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.pow">#</a>
+<p>Each item to the power <code>x</code>.</p>
+</div>
+<div class="entry member" id="Tensor.sin"><code class="sig">fun sin(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.sin">#</a>
+<p>Each item's sine, in radians.</p>
+</div>
+<div class="entry member" id="Tensor.cos"><code class="sig">fun cos(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.cos">#</a>
+<p>Each item's cosine.</p>
+</div>
+<div class="entry member" id="Tensor.tan"><code class="sig">fun tan(into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.tan">#</a>
+<p>Each item's tangent.</p>
+</div>
+<div class="entry member" id="Tensor.floor"><code class="sig">fun floor(into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.floor">#</a>
+<p>Each item rounded down to a whole number.</p>
+</div>
+<div class="entry member" id="Tensor.ceil"><code class="sig">fun ceil(into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.ceil">#</a>
+<p>Each item rounded up to a whole number.</p>
+</div>
+<div class="entry member" id="Tensor.round"><code class="sig">fun round(into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.round">#</a>
+<p>Each item rounded to the nearest whole number, halves away from 0.</p>
+</div>
+<div class="entry member" id="Tensor.clamp"><code class="sig">fun clamp(low : Number, high : Number, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.clamp">#</a>
+<p>Each item held from <code>low</code> to <code>high</code>.</p>
+</div>
+<div class="entry member" id="Tensor.toInt"><code class="sig">fun toInt() : Tensor&lt;int&gt;</code><a class="anchor" href="#Tensor.toInt">#</a>
+<p>As ints: a float cut to its whole part; a NaN, or a float too large for an int, an ArithmeticException.</p>
+</div>
+<div class="entry member" id="Tensor.toFloat"><code class="sig">fun toFloat() : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.toFloat">#</a>
+<p>As floats.</p>
+</div>
+<div class="entry member" id="Tensor.toFloat32"><code class="sig">fun toFloat32() : Tensor&lt;float32&gt;</code><a class="anchor" href="#Tensor.toFloat32">#</a>
+<p>As float32s.</p>
+</div>
+<div class="entry member" id="Tensor.toByte"><code class="sig">fun toByte() : Tensor&lt;byte&gt;</code><a class="anchor" href="#Tensor.toByte">#</a>
+<p>As bytes: an ArithmeticException for an item outside 0 to 255.</p>
+</div>
+<div class="entry member" id="Tensor.toInt16"><code class="sig">fun toInt16() : Tensor&lt;int16&gt;</code><a class="anchor" href="#Tensor.toInt16">#</a>
+<p>As int16s, checked.</p>
+</div>
+<div class="entry member" id="Tensor.toInt32"><code class="sig">fun toInt32() : Tensor&lt;int32&gt;</code><a class="anchor" href="#Tensor.toInt32">#</a>
+<p>As int32s, checked.</p>
+</div>
+<div class="entry member" id="Tensor.toUint16"><code class="sig">fun toUint16() : Tensor&lt;uint16&gt;</code><a class="anchor" href="#Tensor.toUint16">#</a>
+<p>As uint16s, checked.</p>
+</div>
+<div class="entry member" id="Tensor.toUint32"><code class="sig">fun toUint32() : Tensor&lt;uint32&gt;</code><a class="anchor" href="#Tensor.toUint32">#</a>
+<p>As uint32s, checked.</p>
+</div>
+<div class="entry member" id="Tensor.toByteWrapped"><code class="sig">fun toByteWrapped() : Tensor&lt;byte&gt;</code><a class="anchor" href="#Tensor.toByteWrapped">#</a>
+<p>As bytes, each keeping its low 8 bits, as toByteWrapped() does.</p>
+</div>
+<div class="entry member" id="Tensor.toInt16Wrapped"><code class="sig">fun toInt16Wrapped() : Tensor&lt;int16&gt;</code><a class="anchor" href="#Tensor.toInt16Wrapped">#</a>
+<p>As int16s, each keeping its low 16 bits.</p>
+</div>
+<div class="entry member" id="Tensor.toInt32Wrapped"><code class="sig">fun toInt32Wrapped() : Tensor&lt;int32&gt;</code><a class="anchor" href="#Tensor.toInt32Wrapped">#</a>
+<p>As int32s, each keeping its low 32 bits.</p>
+</div>
+<div class="entry member" id="Tensor.toUint16Wrapped"><code class="sig">fun toUint16Wrapped() : Tensor&lt;uint16&gt;</code><a class="anchor" href="#Tensor.toUint16Wrapped">#</a>
+<p>As uint16s, each keeping its low 16 bits.</p>
+</div>
+<div class="entry member" id="Tensor.toUint32Wrapped"><code class="sig">fun toUint32Wrapped() : Tensor&lt;uint32&gt;</code><a class="anchor" href="#Tensor.toUint32Wrapped">#</a>
+<p>As uint32s, each keeping its low 32 bits.</p>
+</div>
+<div class="entry member" id="Tensor.sum"><code class="sig">fun sum() : Number</code><a class="anchor" href="#Tensor.sum">#</a>
+<p>The total of every item: an int for ints (an overflow an ArithmeticException), a float otherwise.</p>
+</div>
+<div class="entry member" id="Tensor.sum-2"><code class="sig">fun sum(axis : int, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.sum-2">#</a>
+<p>The totals along <code>axis</code>: a tensor of one axis fewer.</p>
+</div>
+<div class="entry member" id="Tensor.average"><code class="sig">fun average() : float</code><a class="anchor" href="#Tensor.average">#</a>
+<p>The mean of every item, as a float; NaN for no items.</p>
+</div>
+<div class="entry member" id="Tensor.average-2"><code class="sig">fun average(axis : int, into : Tensor&lt;float&gt;? = null) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.average-2">#</a>
+<p>The means along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.min"><code class="sig">fun min() : Number</code><a class="anchor" href="#Tensor.min">#</a>
+<p>The least item; a NoSuchElementException for no items.</p>
+</div>
+<div class="entry member" id="Tensor.min-2"><code class="sig">fun min(axis : int, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.min-2">#</a>
+<p>The least items along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.max"><code class="sig">fun max() : Number</code><a class="anchor" href="#Tensor.max">#</a>
+<p>The greatest item; a NoSuchElementException for no items.</p>
+</div>
+<div class="entry member" id="Tensor.max-2"><code class="sig">fun max(axis : int, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.max-2">#</a>
+<p>The greatest items along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.product"><code class="sig">fun product() : Number</code><a class="anchor" href="#Tensor.product">#</a>
+<p>The product of every item.</p>
+</div>
+<div class="entry member" id="Tensor.product-2"><code class="sig">fun product(axis : int, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.product-2">#</a>
+<p>The products along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.indexOfMin"><code class="sig">fun indexOfMin() : int</code><a class="anchor" href="#Tensor.indexOfMin">#</a>
+<p>Where the least item is, counted through the items in order (the last axis fastest), as Kotlin's lists have it; the first where several are least.</p>
+</div>
+<div class="entry member" id="Tensor.indexOfMin-2"><code class="sig">fun indexOfMin(axis : int, into : Tensor&lt;int&gt;? = null) : Tensor&lt;int&gt;</code><a class="anchor" href="#Tensor.indexOfMin-2">#</a>
+<p>Where the least item is along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.indexOfMax"><code class="sig">fun indexOfMax() : int</code><a class="anchor" href="#Tensor.indexOfMax">#</a>
+<p>Where the greatest item is, counted through the items in order.</p>
+</div>
+<div class="entry member" id="Tensor.indexOfMax-2"><code class="sig">fun indexOfMax(axis : int, into : Tensor&lt;int&gt;? = null) : Tensor&lt;int&gt;</code><a class="anchor" href="#Tensor.indexOfMax-2">#</a>
+<p>Where the greatest item is along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.any"><code class="sig">fun any() : bool</code><a class="anchor" href="#Tensor.any">#</a>
+<p>Of bools: whether any is true.</p>
+</div>
+<div class="entry member" id="Tensor.any-2"><code class="sig">fun any(axis : int, into : Tensor&lt;bool&gt;? = null) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.any-2">#</a>
+<p>Of bools: whether any is true along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.all"><code class="sig">fun all() : bool</code><a class="anchor" href="#Tensor.all">#</a>
+<p>Of bools: whether all are true.</p>
+</div>
+<div class="entry member" id="Tensor.all-2"><code class="sig">fun all(axis : int, into : Tensor&lt;bool&gt;? = null) : Tensor&lt;bool&gt;</code><a class="anchor" href="#Tensor.all-2">#</a>
+<p>Of bools: whether all are true along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.count"><code class="sig">fun count() : int</code><a class="anchor" href="#Tensor.count">#</a>
+<p>Of bools: how many are true.</p>
+</div>
+<div class="entry member" id="Tensor.count-2"><code class="sig">fun count(axis : int, into : Tensor&lt;int&gt;? = null) : Tensor&lt;int&gt;</code><a class="anchor" href="#Tensor.count-2">#</a>
+<p>Of bools: how many are true along <code>axis</code>.</p>
+</div>
+<div class="entry member" id="Tensor.runningSum"><code class="sig">fun runningSum(axis : int? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.runningSum">#</a>
+<p>The prefix sums: along <code>axis</code>, or of all the items in order as a tensor of one axis.</p>
+</div>
+<div class="entry member" id="Tensor.dot"><code class="sig">fun dot(other : Tensor&lt;T&gt;, into : Tensor&lt;T&gt;? = null) : Tensor&lt;T&gt;</code><a class="anchor" href="#Tensor.dot">#</a>
+<p>The matrix product, as numpy's dot: of two vectors a tensor of one item (item() gives it), of a matrix and a vector a vector, of two matrices a matrix. An IllegalArgumentException where the lengths summed over differ.</p>
+</div>
+<div class="entry member" id="Tensor.inverse"><code class="sig">fun inverse() : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.inverse">#</a>
+<p>Of a square matrix: its inverse, as floats. An ArithmeticException for one that has none.</p>
+</div>
+<div class="entry member" id="Tensor.solve"><code class="sig">fun solve(b : Tensor&lt;T&gt;) : Tensor&lt;float&gt;</code><a class="anchor" href="#Tensor.solve">#</a>
+<p>Of a square matrix a: the x for which a.dot(x) is <code>b</code> (a vector, or a matrix of several), as floats. An ArithmeticException for a matrix that has no inverse.</p>
+</div>
+<div class="entry member" id="Tensor.determinant"><code class="sig">fun determinant() : float</code><a class="anchor" href="#Tensor.determinant">#</a>
+<p>Of a square matrix: its determinant.</p>
+</div>
+<div class="entry member" id="Tensor.toList"><code class="sig">fun toList() : open List&lt;T&gt;</code><a class="anchor" href="#Tensor.toList">#</a>
+<p>Its items in order (the last axis fastest), as a new list.</p>
+</div>
+<div class="entry member" id="Tensor.toGrid"><code class="sig">fun toGrid() : Grid&lt;T&gt;</code><a class="anchor" href="#Tensor.toGrid">#</a>
+<p>A tensor of two axes as a grid: its rows the grid's rows.</p>
+</div>
+<div class="entry member" id="Tensor.toImage"><code class="sig">fun toImage() : Image</code><a class="anchor" href="#Tensor.toImage">#</a>
+<p>A tensor of height by width by 3 or 4 numbers from 0 to 255 (red, green, blue, and alpha) as a picture.</p>
+</div>
+<div class="entry member" id="Tensor.=="><code class="sig">op ==(other : any?) : bool</code><a class="anchor" href="#Tensor.==">#</a>
+<p>Whether <code>other</code> is a tensor of the same shape and items.</p>
+</div>
+<div class="entry member" id="Tensor.hashCode"><code class="sig">fun hashCode() : int</code><a class="anchor" href="#Tensor.hashCode">#</a>
+<p>A hash code, the same for equal tensors.</p>
+</div>
+<div class="entry member" id="Tensor.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Tensor.toString">#</a>
+<p>Its items in nested brackets, as numpy shows them, the middle of a long axis left out: [[1, 2], [3, 4]].</p>
+</div>
+<div class="entry" id="List.toTensor"><code class="sig">fun &lt;T : Number&gt; List&lt;T&gt;.toTensor() : Tensor&lt;T&gt;</code><a class="anchor" href="#List.toTensor">#</a>
+<p>The list's items as a tensor of one axis, a copy.</p>
+</div>
+<div class="entry" id="Grid.toTensor"><code class="sig">fun &lt;T&gt; Grid&lt;T&gt;.toTensor() : Tensor&lt;T&gt;</code><a class="anchor" href="#Grid.toTensor">#</a>
+<p>The grid as a tensor of its rows by its columns, a copy.</p>
+</div>
+<div class="entry" id="Bytes.toTensor"><code class="sig">fun Bytes.toTensor() : Tensor&lt;byte&gt;</code><a class="anchor" href="#Bytes.toTensor">#</a>
+<p>The bytes as a tensor of bytes of one axis, a copy.</p>
+</div>
+<div class="entry" id="Grid.toTensor-2"><code class="sig">fun Grid&lt;Color&gt;.toTensor() : Tensor&lt;byte&gt;</code><a class="anchor" href="#Grid.toTensor-2">#</a>
+<p>A picture's pixels as a tensor of bytes, height by width by 4: red, green, blue, alpha.</p>
 </div>
 </section>
 <section class="file" id="file-test-jade">

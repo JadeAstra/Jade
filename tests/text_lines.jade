@@ -1,0 +1,39 @@
+// Lines broken in a font (M10, Font.breakLines): measured in one call, broken after spaces,
+// after a hyphen between letters and between the characters of Chinese and Japanese, never
+// before a closing mark; a line break always breaks. Checked by what holds in any font, as the
+// widths are the installed fonts'.
+
+val font = Font("Dialog", 14)
+val text = "The quick brown fox jumps over the lazy dog, a well-known pangram that shows every letter.\nA second paragraph   with spaces."
+for (width in [60, 120, 250, 1000]) {
+  val lines = font.breakLines(text, width)
+  // Each line is no wider than the width, unless it is a single word too long for any line.
+  val fits = lines.all { it.width <= width or !text[it.start ..< it.end].trim().contains(" ") }
+  // The lines, put back together with the line break between paragraphs, are the text.
+  var joined = ""
+  for (i in 0 ..< lines.size) {
+    joined += text[lines[i].start ..< lines[i].end]
+    if (i + 1 < lines.size and lines[i + 1].start == lines[i].end + 1) { joined += "\n" }
+  }
+  // No word is split: every break falls after a space, a hyphen, or the paragraph's end.
+  val clean = lines.all { it.end == text.size or text[it.end] == '\n' or text[it.end - 1] == ' ' or text[it.end - 1] == '-' }
+  // Each line's width is what the font measures for its ink.
+  val measured = lines.all { it.width == font.width(text[it.start ..< it.end].trimEnd()) }
+  print(width, fits, joined == text, clean, measured, lines.size >= 2)
+}
+// expect: 60 true true true true true
+// expect: 120 true true true true true
+// expect: 250 true true true true true
+// expect: 1000 true true true true true
+
+// A hyphen breaks between letters; a word too long for a line stays whole unless asked.
+val hy = font.breakLines("well-known", font.width("well-kn"))
+print(hy.map { it.end }, font.breakLines("supercalifragilistic", 30).size, font.breakLines("supercalifragilistic", 30, breakWords = true).size > 2)   // expect: [5, 10] 1 true
+// Empty text is one empty line; a text ending with a line break has an empty last line.
+print(font.breakLines("", 50), font.breakLines("a\n", 50).size)   // expect: [TextLine(start=0, end=0, width=0)] 2
+// Japanese: a break may fall between any two characters, but never before 、 or 。.
+val jp = "日本語の文章、改行。テスト"
+val jpLines = font.breakLines(jp, font.width("日本語"))
+print(jpLines.size > 3, jpLines.all { it.start == 0 or (jp[it.start] != '、' and jp[it.start] != '。') }, jpLines.last().end)   // expect: true true 13
+// Measured at a screen's scale, in its pixels.
+print(font.breakLines("one two three", 1000, 2.0)[0].width == font.width("one two three", 2.0))   // expect: true

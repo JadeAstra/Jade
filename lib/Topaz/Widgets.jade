@@ -71,31 +71,13 @@ class WrappedLabel : Content, HeightForWidth {
     this.font = font ?: defaultFont
   }
 
-  // The lines the text makes at a width: broken between words, a word too long for a
-  // line left whole, and a line break in the text kept.
+  // The lines the text makes at a width, as Font.breakLines breaks them: between words (and
+  // between the characters of Chinese and Japanese), a word too long for a line left whole,
+  // and a line break in the text kept; each line without the spaces it ends with.
   fun wrap(width : int) : List<string> {
     if (text.isEmpty()) { return [] }
     if (width <= 0) { return [text] }
-    val fm = metrics(font)
-    val out : open List<string> = []
-    for (paragraph in text.split("\n")) {
-      if (paragraph.isEmpty()) {
-        out.add("")
-        continue
-      }
-      var line = ""
-      for (word in paragraph.split(" ")) {
-        val candidate = line.isEmpty() ? word : "$line $word"
-        if (fm.stringWidth(candidate) <= width or line.isEmpty()) {
-          line = candidate
-        } else {
-          out.add(line)
-          line = word
-        }
-      }
-      out.add(line)
-    }
-    return out
+    return font.breakLines(text, width).map { line -> text[line.start ..< line.end].trimEnd() }
   }
 
   override fun heightForWidth(width : int) : int => Math.max(wrap(width).size, 1) * metrics(font).height + 4

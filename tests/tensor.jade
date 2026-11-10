@@ -1,0 +1,102 @@
+// Tensor<T> (M9/M10, question 16): its answers beside numpy's (2.2.5) for the same arrays, the
+// expectations below printed by numpy (scratch tensor_np.py), and the rules numpy does not have:
+// an int's overflow checked, narrow widths checked, views that write through, read-only.
+
+fun fails(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+// Rounded to 9 places, as the numpy script rounds: floats that differ in their last bits agree.
+fun r9(t : Tensor<float>) : Tensor<float> => (t * 1e9).round() / 1e9 + 0.0
+
+// -- Against numpy --
+
+val b = Tensor.arange(0, 12).reshaped(3, 4)
+print(b, b.sum(), b.sum(axis = 0), b.sum(axis = 1), b.average(), b.average(axis = 0))
+// expect: [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]] 66 [12, 15, 18, 21] [6, 22, 38] 5.5 [4.0, 5.0, 6.0, 7.0]
+print(b.min(), b.max(axis = 1), b.indexOfMax(), b.indexOfMin(axis = 1), b.product(axis = 0))
+// expect: 0 [3, 7, 11] 11 [0, 0, 0] [0, 45, 120, 231]
+// Broadcast: a row added to every row; a column times a row; numbers on the right.
+print(b + Tensor.arange(0, 4), Tensor.arange(0, 3).reshaped(3, 1) * Tensor.arange(0, 4), (b.toFloat() - 5.5) / 2.0)
+// expect: [[0, 2, 4, 6], [4, 6, 8, 10], [8, 10, 12, 14]] [[0, 0, 0, 0], [0, 1, 2, 3], [0, 2, 4, 6]] [[-2.75, -2.25, -1.75, -1.25], [-0.75, -0.25, 0.25, 0.75], [1.25, 1.75, 2.25, 2.75]]
+// Views: a row set through a copy's view; transposed; a transposed one made one axis; parts.
+val v = b.copy()
+v[1, all].fill(0)
+print(v, b.transposed(), b.transposed().reshaped(12), b[0 ..< 2, 1 ..< 3], b[all, 2], b[2, all])
+// expect: [[0, 1, 2, 3], [0, 0, 0, 0], [8, 9, 10, 11]] [[0, 4, 8], [1, 5, 9], [2, 6, 10], [3, 7, 11]] [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11] [[1, 2], [5, 6]] [2, 6, 10] [8, 9, 10, 11]
+// Masks and where.
+print(b[b.greaterThan(5)], Tensor.where((b % 2).equalTo(0), b, -1), b.greaterThan(3).and(b.lessThan(8)), b.greaterThan(3).not())
+// expect: [6, 7, 8, 9, 10, 11] [[0, -1, 2, -1], [4, -1, 6, -1], [8, -1, 10, -1]] [[false, false, false, false], [true, true, true, true], [false, false, false, false]] [[true, true, true, true], [false, false, false, false], [false, false, false, false]]
+print(b.greaterThan(5).any(axis = 1), b.greaterThan(5).all(axis = 0), b.greaterThan(5).count(axis = 1))
+// expect: [false, true, true] [false, false, false, false] [0, 2, 4]
+// Functions of each item.
+val f = Tensor<float>(2, 2)
+f[0, 0] = 1.0
+f[0, 1] = 4.0
+f[1, 0] = 9.0
+f[1, 1] = 16.0
+print(f.sqrt(), r9(f.ln()), f.pow(0.5), (f / 3.0).floor(), (f / 3.0).ceil(), b.clamp(2, 9))
+// expect: [[1.0, 2.0], [3.0, 4.0]] [[0.0, 1.386294361], [2.197224577, 2.772588722]] [[1.0, 2.0], [3.0, 4.0]] [[0.0, 1.0], [3.0, 5.0]] [[1.0, 2.0], [3.0, 6.0]] [[2, 2, 2, 3], [4, 5, 6, 7], [8, 9, 9, 9]]
+print(b.runningSum(), b.runningSum(axis = 0), [-3, 4].toTensor().abs())
+// expect: [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66] [[0, 1, 2, 3], [4, 6, 8, 10], [12, 15, 18, 21]] [3, 4]
+// Matrices.
+val m = Tensor<float>(2, 2)
+m[0, 0] = 2.0
+m[0, 1] = 1.0
+m[1, 0] = 1.0
+m[1, 1] = 3.0
+print(Math.round(m.determinant() * 1e9) / 1e9, r9(m.inverse()), r9(m.solve(Tensor.ones<float>(2))), m.dot(m), b.dot(Tensor.arange(0, 4)), Tensor.arange(0, 4).dot(Tensor.arange(0, 4)).item())
+// expect: 5.0 [[0.6, -0.2], [-0.2, 0.4]] [0.4, 0.2] [[5.0, 5.0], [5.0, 10.0]] [14, 38, 62] 14
+val a3 = [4.0, -2.0, 1.0, 3.0, 6.0, -4.0, 2.0, 1.0, 8.0].toTensor().reshaped(3, 3)
+val rhs = [12.0, 1.0, -25.0, 0.0, 32.0, 2.0].toTensor().reshaped(3, 2)
+print(r9(a3.solve(rhs)), Math.round(a3.determinant() * 1e9) / 1e9, r9(a3.inverse().dot(a3)))
+// expect: [[1.0, 0.212927757], [-2.0, 0.022813688], [4.0, 0.19391635]] 263.0 [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+// Made.
+print(Tensor.linspace(0, 1, 5), Tensor.identity(2), Tensor.stack([Tensor.arange(0, 2), Tensor.arange(5, 7)]), Tensor.stack([Tensor.arange(0, 2), Tensor.arange(5, 7)], axis = 1),
+      Tensor.concat([b, b[0 ..< 1, all]], axis = 0), Tensor.zeros<float>(2, 2), Tensor.ones<float>(3))
+// expect: [0.0, 0.25, 0.5, 0.75, 1.0] [[1.0, 0.0], [0.0, 1.0]] [[0, 1], [5, 6]] [[0, 5], [1, 6]] [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [0, 1, 2, 3]] [[0.0, 0.0], [0.0, 0.0]] [1.0, 1.0, 1.0]
+print(Tensor.arange(2.0, 3.0, 0.25), Tensor.arange(10, 0, -3))
+// expect: [2.0, 2.25, 2.5, 2.75] [10, 7, 4, 1]
+
+// -- Jade's rules --
+
+// Shapes that cannot be broadcast, said.
+print(fails { b + Tensor.arange(0, 3) })   // expect: IllegalArgumentException: 3 by 4 and 3 cannot be broadcast together
+// An int's overflow is an error, as + gives it; the ...Wrapped forms wrap round.
+val big = Tensor.full<int>([2], int.maxValue)
+print(fails { big + 1 }, big.plusWrapped(1), fails { b / 0 })
+// expect: ArithmeticException: 9223372036854775807 + 1 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around [-9223372036854775808, -9223372036854775808] ArithmeticException: division by zero
+// Narrow widths are checked as storing is, or keep their low bits when asked.
+val wide = Tensor.arange(250, 260)
+print(fails { wide.toByte() }, wide.toByteWrapped(), Tensor.arange(0, 3).toByte() * 2)
+// expect: ArithmeticException: 256 does not fit in a byte, which keeps 0 to 255 [250, 251, 252, 253, 254, 255, 0, 1, 2, 3] [0, 2, 4]
+print(fails { Tensor<float>(1, fill = 0.0 / 0.0).toInt() }, Tensor<float>(2, fill = 2.7).toInt(), fails { Tensor.arange(0, 2) + Tensor<int>(2).toFloat().toInt().toFloat().toInt() * 0 })
+// expect: ArithmeticException: a NaN or a float too large has no int [2, 2] no error
+// A view writes through; a reshape of a view that is not in order is a copy.
+val base = Tensor.arange(0, 6).reshaped(2, 3)
+base[all, 1].fill(9)
+val flat = base.transposed().reshaped(6)
+flat[0] = 100
+print(base, flat)   // expect: [[0, 9, 2], [3, 9, 5]] [100, 3, 9, 9, 2, 5]
+// Items and their errors.
+print(base[1, 2], fails { base[2, 0] }, fails { base[0] }, base.get([1, 1]), base.shape, base.rank, base.size)
+// expect: 5 IndexOutOfBoundsException: [2, 0] is outside the tensor, which is 2 by 3 IllegalArgumentException: a tensor of 2 axes is indexed by 2 ints, not 1: a part of it by ranges and all 9 [2, 3] 2 6
+// Random floats, the same for the same seed.
+val r1 = Tensor.random(3, 2, seed = 42)
+print(r1 == Tensor.random(3, 2, seed = 42), r1.shape, r1.min() >= 0.0 and r1.max() < 1.0, r1 == Tensor.random(3, 2, seed = 43))   // expect: true [3, 2] true false
+// To and from lists, grids and pictures.
+val g = Grid<int>(3, 2)
+g[2, 1] = 7
+val gt = g.toTensor()
+print(gt, gt.toGrid()[2, 1], gt.toList(), Bytes(3).fill(5.toByte()).toTensor())   // expect: [[0, 0, 0], [0, 0, 7]] 7 [0, 0, 0, 0, 0, 7] [5, 5, 5]
+val pic = Image(4, 3, Color(10, 20, 30))
+val px = pic.pixels.toTensor()
+print(px.shape, px[2, 3, all], px[all, all, 0].sum(), px.toImage()[3, 2], (px.toInt() * 2).clamp(0, 255).toImage()[0, 0])
+// expect: [3, 4, 4] [10, 20, 30, 255] 120 Color(10, 20, 30) Color(20, 40, 60)
+// A big one shown with its middles left out, as numpy shows them.
+print(Tensor.arange(0, 2000))   // expect: [0, 1, 2, ..., 1997, 1998, 1999]
+print(Tensor.arange(0, 3000).reshaped(1000, 3).toString().size < 200)   // expect: true
