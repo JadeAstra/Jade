@@ -67,3 +67,20 @@ fun string.madeText() : List<string> {
   return made + this
 }
 print([1.5].madeLike().itemType, Bytes(1).madeBytes().itemType, "a".madeText().itemType, "a".madeText())   // expect: float byte string ["a"]
+
+// An empty list or map written in generic code takes the code's own type parameters (G72,
+// 2026-11-10): fixed when it runs, as listOf<U>() is. One given to a generic function whose T is
+// still to be worked out takes nothing from it.
+fun <U> emptyOf() : open List<U> => []
+fun <K, V> tableOf() : open Map<K, V> => {:}
+fun <T> nestedOf() : open List<List<T>> => [[]]
+class Holder<T> {
+  val items : open List<T> = []
+  val byName : open Map<string, T> = {:}
+}
+fun <T> handed(items : List<T>) : List<T> => items
+fun <T> handedOn(x : T) : List<T> => handed<T>([])
+print(emptyOf<int>().itemType, tableOf<string, float>().valueType, nestedOf<int>()[0].itemType, Holder<byte>().items.itemType, Holder<string>().byName.valueType, handedOn(1.5).itemType)
+// expect: int float int byte string float
+val holderItems = Holder<int>().items as open List<any>
+try { holderItems.add("x") } catch (e : Exception) { print(e.message) }   // expect: cannot put a value of type string in a List<int>, which keeps only what it was made to hold

@@ -4795,6 +4795,18 @@ struct Checker::Impl {
         return t;
     }
 
+    // Whether a type names a type parameter that is not one of the code's own here: one of a
+    // function being called, still to be worked out. The code's own are fixed when it runs, so a
+    // literal may take them (G72: `fun <U> make() : open List<U> => []` makes a List<U>).
+    bool mentionsOtherTypeParam(const Type& t) const {
+        if (t.kind == Type::TypeParam) return !typeParamHere(t.name);
+        for (const Type& a : t.args)
+            if (mentionsOtherTypeParam(a)) return true;
+        if (t.result && mentionsOtherTypeParam(*t.result)) return true;
+        if (t.receiver && mentionsOtherTypeParam(*t.receiver)) return true;
+        return false;
+    }
+
     Type exprExpectedLiteral(const Expr& e, const Type& expected) {
         if (expected.kind == Type::Byte && e.kind != ExprKind::List && e.kind != ExprKind::Map && e.kind != ExprKind::Function) {
             // A constant int that fits needs no conversion; one that does not is caught here.
@@ -4817,7 +4829,7 @@ struct Checker::Impl {
             // A list or map literal takes its item types from where it goes, unless what is
             // expected still names a type parameter being worked out from it.
             if (e.kind == ExprKind::List && expected.kind == Type::List && !expected.args.empty() && expected.args[0].known() &&
-                !mentionsTypeParam(expected)) {
+                !mentionsOtherTypeParam(expected)) {
                 const auto& l = static_cast<const ListExpr&>(e);
                 bool all = true;
                 Type item;
@@ -4829,7 +4841,7 @@ struct Checker::Impl {
                 if (all) return made(expected);
                 return openListOf(item.kind == Type::Null ? unknownType() : item);
             }
-            if (e.kind == ExprKind::Map && expected.kind == Type::Map && expected.args.size() == 2 && !mentionsTypeParam(expected)) {
+            if (e.kind == ExprKind::Map && expected.kind == Type::Map && expected.args.size() == 2 && !mentionsOtherTypeParam(expected)) {
                 const auto& m = static_cast<const MapExpr&>(e);
                 bool all = true;
                 Type keys, values;
@@ -7788,6 +7800,7 @@ struct Checker::Impl {
                 // A bare name that means nothing here reaches the parameter as a name, which only an
                 // enum's parameter settles (as one of its entries): for any other, it is reported.
                 if (!settlesBareName(want)) bareArguments.erase(args.exprs[i].get());
+                if ((args.exprs[i]->kind == ExprKind::List || args.exprs[i]->kind == ExprKind::Map) && leavesOpen(want, vars, env)) expected = unknownType();
                 types[i] = exprExpected(*args.exprs[i], expected);
                 passedUse = nullptr;
                 unify(want, types[i], env, vars);

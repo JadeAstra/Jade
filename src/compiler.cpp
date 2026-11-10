@@ -3145,6 +3145,32 @@ private:
     // A list an inline body makes with the type the call gives it (G15, G25): of a value type, kept
     // packed, and of any other the call says (`map { "$it" }` a List<string>). Lists of ints were
     // left untyped until a for over a packed one was as quick as over a list of boxes (G69).
+    // A literal's type as the code here has it: in an inline body, its function's type parameters
+    // are what the call gave them (G72: `[]` in map's body is a List<R> of the call's R); false
+    // where one is not known there, which leaves the literal to the G15 rule.
+    bool literalTypeHere(RuntimeType& t) const {
+        if (frame_ == nullptr || concrete(t)) return true;
+        RuntimeType given = t;
+        if (!fromFrame(given)) return false;
+        t = given;
+        return true;
+    }
+    // Each of the inline function's type parameters made what the call gave it; any other kept
+    // where the code here reaches it (the function around the call's).
+    bool fromFrame(RuntimeType& t) const {
+        if (t.kind == RuntimeType::TypeParam) {
+            if (!inlineTypeParam(t.typeParam)) return reachable(t);
+            const RuntimeType* given = inlineTypeArgument(t.typeParam);
+            if (given == nullptr) return false;
+            const bool nullable = t.nullable;
+            t = *given;
+            t.nullable = t.nullable || nullable;
+            return true;
+        }
+        for (RuntimeType& a : t.args)
+            if (!fromFrame(a)) return false;
+        return t.kind != RuntimeType::Unknown;
+    }
     static bool packs(const RuntimeType& t) { return t.kind == RuntimeType::List && t.args.size() == 1; }
     static bool concrete(const RuntimeType& t) {
         if (t.kind == RuntimeType::TypeParam || t.kind == RuntimeType::Unknown) return false;
@@ -6608,7 +6634,7 @@ private:
                 line_ = e.line;
                 emit(Op::BuildList, static_cast<int>(e.items.size()));
                 RuntimeType made;
-                if (session_.checker->literalType(e, made)) emitTag(made, e);
+                if (session_.checker->literalType(e, made) && literalTypeHere(made)) emitTag(made, e);
                 else if (session_.checker->declaredLiteralType(e, made) && givenInFrame(made) && packs(made)) emitTag(made, e);
                 break;
             }
@@ -6622,7 +6648,7 @@ private:
                 line_ = e.line;
                 emit(Op::BuildMap, static_cast<int>(e.entries.size()));
                 RuntimeType made;
-                if (session_.checker->literalType(e, made)) emitTag(made, e);
+                if (session_.checker->literalType(e, made) && literalTypeHere(made)) emitTag(made, e);
                 break;
             }
 
