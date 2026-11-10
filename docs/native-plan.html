@@ -192,9 +192,9 @@ pre code { background: none; padding: 0; }
 
 <h2 id="np-platforms">Systems, processors and the two builds</h2>
 <ul>
-<li><strong>x64 Windows first</strong> (this machine), then <strong>x64 Linux</strong>: the same stencil source and the same tool, reading ELF; the calling conventions differ, which <code>preserve_none</code> mostly hides (question 4).</li>
+<li><strong>x64 Windows first</strong> (this machine), then <strong>x64 Linux</strong>, both built with Clang: the same stencil source and the same tool, reading ELF; the calling conventions differ, which <code>preserve_none</code> mostly hides (question 4).</li>
 <li><strong>ARM64</strong> later: the stencil source does not change; the tool learns the other machine's gaps.</li>
-<li><strong>The MSVC build</strong> is suspended (the user, 2026-11-10): on Windows only the Clang build is built and checked, so machine code needs no answer for it. GCC's build on Linux keeps the interpreter's switch, which the MSVC build used too; it stays.</li>
+<li><strong>The MSVC and GCC builds</strong> are suspended (the user, 2026-11-10): Jade is built and checked with Clang alone, on Windows and on Linux, so machine code needs no answer for either. Their code (the interpreter's switch, and computed goto for GCC) stays, for when they come back.</li>
 </ul>
 
 <h2 id="np-speed">Speed: where it starts and the targets</h2>
@@ -225,7 +225,7 @@ pre code { background: none; padding: 0; }
 <li><strong>The cache</strong>: machine code kept and filled in again on load; the second-run budget kept.</li>
 <li><strong>Values in registers</strong>: the choice of slots, the variant stencils, writing back at ways out; the suite both ways; benchmarks.</li>
 <li><strong>Loop templates</strong>: the shapes recognised; checks done once at a loop's start, index checks left out where the range shows them needless; then the whole loops made ahead, one shape at a time, each with tests of its answers, its errors and the item they come at beside the VM, and timed beside C++.</li>
-<li><strong>x64 Linux</strong>: the tool reading ELF, the suite both ways on WSL with GCC's and Clang's builds.</li>
+<li><strong>x64 Linux</strong>: the tool reading ELF, the suite both ways on WSL with the Clang build.</li>
 <li><strong>The timing table</strong> written up beside <a href="M10-speed.html">M10-speed.html</a>: the kernels as Jade loops with machine code beside C++, and what that means for the pieces decided as C++ for speed. Then, at the user's word, the speed of pictures and tensors looked at again.</li>
 </ol>
 
