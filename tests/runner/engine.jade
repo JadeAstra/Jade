@@ -189,9 +189,11 @@ class Suite(val options : Options) {
       for (item in chosen) {
         if (stopping or item.status != Status.failed) { continue }
         val before = item.failed
+        // What it said the first time, kept: a failure that goes away alone may still be a fault.
+        val said = before.map { "[$it] ${item.results[it]}" }.join("; ")
         runItem(item, FilePath(dir, safeName(item.name) + "-alone"), onChange)
         if (item.status == Status.passed) {
-          item.note = "passed only when run alone: [${before.join(", ")}]"
+          item.note = "passed only when run alone: [${before.join(", ")}], having said the first time: $said"
           onChange(item)
         }
       }
@@ -289,9 +291,11 @@ class Suite(val options : Options) {
     val text = out.exists() ? out.readText() : ""
     var error = err.exists() ? err.readText() : ""
     if (timedOut) { error = "stopped after $limit s: past the time limit\n" + error }
-    out.deleteIfExists()
-    err.deleteIfExists()
-    inFile.deleteIfExists()
+    // Gone with the folder at the end where it cannot go now: a scanner looking at a file just
+    // written may hold it a moment, and that is no fault of the test's.
+    for (f in [out, err, inFile]) {
+      try { f.deleteIfExists() } catch (e : IOException) { }
+    }
     return Run(splitLines(text), error, code!!, timedOut)
   }
 
