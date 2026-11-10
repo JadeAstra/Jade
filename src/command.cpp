@@ -23,6 +23,7 @@
 #include "compiler.h"
 #include "run.h"
 #include "vm.h"
+#include "native/native.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -1195,6 +1196,27 @@ int dispatch(const std::vector<std::string>& args) {
         if (wrong.empty()) return 0;
         std::cerr << "jade: " << wrong << "\n";
         return 1;
+    }
+
+    if (command == "--native-check" && args.size() == 1) {
+        // The build's check of native code (M9.5): the stencils this jade.exe carries, shaped and
+        // put together into regions that are run, their answers beside C++'s.
+        if (!jade::native::available()) {
+            std::cout << "jade: no native code in this build\n";
+            return 0;
+        }
+        std::string wrong;
+        try {
+            wrong = jade::native::check();
+        } catch (const std::exception& e) {
+            wrong = e.what();
+        }
+        if (!wrong.empty()) {
+            std::cerr << "jade: native code: " << wrong << "\n";
+            return 1;
+        }
+        std::cout << "jade: native code: " << jade::native::stencilCount() << " stencils, checked\n";
+        return 0;
     }
 
     if (command == "--attach-prelude" && args.size() == 2) {

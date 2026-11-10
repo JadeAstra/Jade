@@ -1,0 +1,365 @@
+// Native code (M9.5): the stencils jade.exe carries, and putting them together into machine code.
+// See native.h, and docs/native-plan.html.
+
+#include "native.h"
+
+#include <cmath>
+#include <cstring>
+#include <stdexcept>
+#include <unordered_map>
+
+#if JADE_NATIVE
+#include "../value.h"
+#include "stencils.h"  // kStencils, made by tools/stencils when jade.exe is built
+#endif
+
+#if JADE_NATIVE && defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+namespace jade::native {
+
+#if JADE_NATIVE
+// A slot's kind as the stencils write it: the VM's.
+static_assert(static_cast<int>(ValueKind::Int) == 2 && static_cast<int>(ValueKind::Float) == 3, "src/native/stencils.cpp writes these kinds");
+static_assert(sizeof(Value) == 16, "a stencil's slot is 16 bytes");
+
+bool available() { return true; }
+size_t stencilCount() { return sizeof(kStencils) / sizeof(kStencils[0]); }
+
+const StencilCode* stencil(std::string_view name) {
+    static const std::unordered_map<std::string_view, const StencilCode*> byName = [] {
+        std::unordered_map<std::string_view, const StencilCode*> made;
+        for (const StencilCode& s : kStencils) made.emplace(s.name, &s);
+        return made;
+    }();
+    auto found = byName.find(name);
+    return found == byName.end() ? nullptr : found->second;
+}
+
+#else
+
+bool available() { return false; }
+size_t stencilCount() { return 0; }
+const StencilCode* stencil(std::string_view) { return nullptr; }
+
+#endif
+
+namespace {
+
+// ---- Code memory ----
+
+// Memory for machine code: taken from the system as the program's data is, written while it may
+// not run, and made runnable, and no longer writable, before it runs. A region has pages of its
+// own, so that none is written while another region in it may be running on another core.
+uint8_t* writableCode(size_t bytes) {
+#if defined(_WIN32)
+    return static_cast<uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+#else
+    (void)bytes;
+    return nullptr;
+#endif
+}
+bool makeRunnable(uint8_t* code, size_t bytes) {
+#if defined(_WIN32)
+    DWORD old;
+    if (!VirtualProtect(code, bytes, PAGE_EXECUTE_READ, &old)) return false;
+    FlushInstructionCache(GetCurrentProcess(), code, bytes);
+    return true;
+#else
+    (void)code, (void)bytes;
+    return false;
+#endif
+}
+
+// ---- Shaping a stencil where it is copied ----
+
+struct Piece {
+    std::vector<uint8_t> code;
+    std::vector<Hole> holes;
+};
+bool holeAt(const Piece& p, uint32_t offset, HoleKind kind) {
+    for (const Hole& h : p.holes)
+        if (h.offset == offset && h.kind == kind) return true;
+    return false;
+}
+
+// A stencil as it goes into a region. A conditional jump over a jump to a gap (`jno +5; jmp
+// exit`, or the same with a 32-bit jump) is made one jump on the other condition, straight to
+// the gap, the bytes left over no-ops: one branch where Clang wrote two; no offset moves, so the
+// stencil's own jumps still land. Where the next stencil follows: its last jump to the next is
+// left out, and a conditional jump to the next followed by a jump to the target is turned round
+// (the condition reversed, to the target), so that going on falls through.
+Piece shaped(const StencilCode& s, bool nextFollows) {
+    Piece p{std::vector<uint8_t>(s.code, s.code + s.size), std::vector<Hole>(s.holes, s.holes + s.holeCount)};
+    for (Hole& h : p.holes) {
+        if (h.after != 0 || h.offset < 3) continue;
+        const uint32_t j = h.offset - 1;  // the `jmp`'s opcode
+        if (p.code[j] != 0xE9) continue;
+        if ((p.code[j - 2] & 0xF0) == 0x70 && p.code[j - 1] == 0x05) {
+            const uint8_t cc = static_cast<uint8_t>((p.code[j - 2] & 0x0F) ^ 1);
+            p.code[j - 2] = 0x0F, p.code[j - 1] = static_cast<uint8_t>(0x80 | cc);
+            std::memmove(&p.code[j], &p.code[j + 1], 4);
+            p.code[j + 4] = 0x90;
+            h.offset = j;
+        } else if (j >= 6 && p.code[j - 6] == 0x0F && (p.code[j - 5] & 0xF0) == 0x80 && p.code[j - 4] == 0x05 && p.code[j - 3] == 0 &&
+                   p.code[j - 2] == 0 && p.code[j - 1] == 0) {
+            p.code[j - 5] ^= 1;
+            std::memmove(&p.code[j - 4], &p.code[j + 1], 4);
+            std::memset(&p.code[j], 0x90, 5);
+            h.offset = j - 4;
+        }
+    }
+    if (!nextFollows) return p;
+    const uint32_t n = s.size;
+    if (n >= 5 && p.code[n - 5] == 0xE9 && holeAt(p, n - 4, HoleNext)) {
+        p.code.resize(n - 5);
+        std::erase_if(p.holes, [&](const Hole& h) { return h.offset == n - 4; });
+    } else if (n >= 11 && p.code[n - 11] == 0x0F && (p.code[n - 10] & 0xF0) == 0x80 && holeAt(p, n - 9, HoleNext) && p.code[n - 5] == 0xE9 &&
+               holeAt(p, n - 4, HoleJump)) {
+        p.code[n - 10] ^= 1;  // jl becomes jge, and so on
+        for (Hole& h : p.holes)
+            if (h.offset == n - 9) h.kind = HoleJump;
+        p.code.resize(n - 5);
+        std::erase_if(p.holes, [&](const Hole& h) { return h.offset == n - 4; });
+    }
+    return p;
+}
+
+}  // namespace
+
+// ---- Putting a region together ----
+
+Step& Assembler::add(std::string_view stencilName) {
+    const StencilCode* code = stencil(stencilName);
+    if (code == nullptr) throw std::runtime_error("native code: no stencil " + std::string(stencilName));
+    steps_.push_back(Step{});
+    steps_.back().code = code;
+    return steps_.back();
+}
+
+void Assembler::at(int label) { labels_.emplace_back(label, steps_.size()); }
+
+void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
+    std::vector<Step> all = steps_;
+    const size_t exitAt = all.size();
+    all.insert(all.end(), exitSteps.begin(), exitSteps.end());
+    auto labelled = [&](int label) {
+        for (const auto& [l, step] : labels_)
+            if (l == label) return step;
+        throw std::runtime_error("native code: a jump to a label never placed");
+    };
+    std::vector<Piece> pieces;
+    std::vector<size_t> start(all.size() + 1);
+    size_t at = 0, words = 0;
+    for (size_t i = 0; i < all.size(); i++) {
+        // The last step of the code and of the way out goes on to nothing after it.
+        const bool nextFollows = i + 1 < all.size() && i + 1 != exitAt;
+        pieces.push_back(shaped(*all[i].code, nextFollows));
+        start[i] = at;
+        at += pieces.back().code.size();
+        for (const Hole& h : pieces.back().holes)
+            if (h.kind >= HoleFloat) words++;
+    }
+    start[all.size()] = at;
+    const size_t codeSize = (at + 15) & ~size_t{15};
+    const size_t total = codeSize + words * 8;
+    uint8_t* mem = writableCode(total);
+    if (mem == nullptr) return nullptr;
+    std::memset(mem, 0xCC, total);
+    size_t word = codeSize;
+    auto rel32 = [&](size_t place, uint32_t after, size_t target) {
+        const int64_t d = static_cast<int64_t>(target) - static_cast<int64_t>(place + 4 + after);
+        const int32_t v = static_cast<int32_t>(d);
+        std::memcpy(mem + place, &v, 4);
+    };
+    for (size_t i = 0; i < all.size(); i++) {
+        const Step& st = all[i];
+        const Piece& p = pieces[i];
+        std::memcpy(mem + start[i], p.code.data(), p.code.size());
+        for (const Hole& hole : p.holes) {
+            const size_t place = start[i] + hole.offset;
+            switch (hole.kind) {
+                case HoleNext: rel32(place, hole.after, start[i + 1]); break;
+                case HoleJump: rel32(place, hole.after, start[labelled(st.jump)]); break;
+                case HoleExit: rel32(place, hole.after, start[exitAt]); break;
+                default: {
+                    uint64_t v = 0;
+                    if (hole.kind == HoleFloat) std::memcpy(&v, &st.kf, 8);
+                    else if (hole.kind == HoleInt) v = static_cast<uint64_t>(st.ki);
+                    else if (hole.kind == HoleSlot) v = static_cast<uint64_t>(st.slot);
+                    else if (hole.kind == HoleRet) v = static_cast<uint64_t>(st.ret);
+                    else v = static_cast<uint64_t>(st.ki);  // HoleAttention: the flag's address, given as ki
+                    std::memcpy(mem + word, &v, 8);
+                    rel32(place, hole.after, word);
+                    word += 8;
+                }
+            }
+        }
+    }
+    if (!makeRunnable(mem, total)) return nullptr;
+    if (bytes != nullptr) *bytes = total;
+    return mem;
+}
+
+// ---- The build's check ----
+
+#if JADE_NATIVE
+namespace {
+
+using RegionFn = int64_t(__attribute__((preserve_none)) *)(Value*, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double,
+                                                          double, double, double, double);
+
+volatile uint8_t checkFlag = 0;
+
+int64_t run(void* code, Value* slots) {
+    return reinterpret_cast<RegionFn>(code)(slots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+// The way out the check's regions take: give back -1.
+std::vector<Step> exitGiving(int64_t value) {
+    Step ret;
+    ret.code = stencil("ret");
+    ret.ret = value;
+    return {ret};
+}
+
+// numeric's mandelbrot(size, limit), as a region would be made of its run code: slots 1 and 2
+// size and limit, slot 3 inside. See bench/spike/stencil/proof.cpp.
+void* mandelbrot(Assembler& a) {
+    const int outer = a.label(), done = a.label(), inner = a.label(), innerDone = a.label();
+    const int loop = a.label(), loopDone = a.label(), notInside = a.label();
+    const int64_t flag = static_cast<int64_t>(reinterpret_cast<uintptr_t>(&checkFlag));
+    a.add("loadi_0").slot = 1;
+    a.add("loadi_1").slot = 2;
+    a.add("setik_2").ki = 0;
+    a.add("setik_3").ki = 0;
+    a.add("cvtif_7_0");
+    a.at(outer);
+    a.add("jgeii_3_0").jump = done;
+    a.add("cvtif_6_3");
+    a.add("mulfk_6_6").kf = 2.0;
+    a.add("divf_3_6_7");
+    a.add("subfk_3_3").kf = 1.0;
+    a.add("setik_4").ki = 0;
+    a.at(inner);
+    a.add("jgeii_4_0").jump = innerDone;
+    a.add("cvtif_6_4");
+    a.add("mulfk_6_6").kf = 2.0;
+    a.add("divf_2_6_7");
+    a.add("subfk_2_2").kf = 1.5;
+    a.add("setfk_0").kf = 0.0;
+    a.add("setfk_1").kf = 0.0;
+    a.add("setik_5").ki = 0;
+    a.at(loop);
+    a.add("jgeii_5_1").jump = loopDone;
+    a.add("mulf_4_0_0");
+    a.add("mulf_5_1_1");
+    a.add("addf_4_4_5");
+    Step& escape = a.add("jgtfk_4");
+    escape.jump = loopDone, escape.kf = 4.0;
+    a.add("mulf_4_0_0");
+    a.add("mulf_5_1_1");
+    a.add("subf_4_4_5");
+    a.add("addf_4_4_2");
+    a.add("mulfkr_5_0").kf = 2.0;
+    a.add("mulf_5_5_1");
+    a.add("addf_1_5_3");
+    a.add("movf_0_4");
+    a.add("inci_5");
+    Step& back = a.add("loopback");
+    back.jump = loop, back.ki = flag;
+    a.at(loopDone);
+    a.add("jneii_5_1").jump = notInside;
+    a.add("inci_2");
+    a.at(notInside);
+    a.add("inci_4");
+    Step& back2 = a.add("loopback");
+    back2.jump = inner, back2.ki = flag;
+    a.at(innerDone);
+    a.add("inci_3");
+    Step& back3 = a.add("loopback");
+    back3.jump = outer, back3.ki = flag;
+    a.at(done);
+    a.add("storei_2").slot = 3;
+    a.add("ret").ret = 0;
+    return a.finish(exitGiving(-1));
+}
+
+int64_t mandelbrotInC(int64_t size, int64_t limit) {
+    int64_t inside = 0;
+    for (int64_t py = 0; py < size; py++) {
+        const double ci = (py * 2.0) / static_cast<double>(size) - 1.0;
+        for (int64_t px = 0; px < size; px++) {
+            const double cr = (px * 2.0) / static_cast<double>(size) - 1.5;
+            double zr = 0, zi = 0;
+            int64_t n = 0;
+            while (n < limit && zr * zr + zi * zi <= 4.0) {
+                const double t = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci;
+                zr = t;
+                n++;
+            }
+            if (n == limit) inside++;
+        }
+    }
+    return inside;
+}
+
+}  // namespace
+
+std::string check() {
+    if (stencilCount() == 0) return "no stencils";
+    // Every stencil shaped both ways, its gaps inside it.
+    for (const StencilCode& s : kStencils)
+        for (bool follows : {false, true}) {
+            const Piece p = shaped(s, follows);
+            for (const Hole& h : p.holes)
+                if (h.offset + 4 > p.code.size()) return std::string("stencil ") + s.name + ": a gap past its end";
+        }
+    // A region's answer beside C++'s.
+    std::vector<Value> slots(8);
+    {
+        Assembler a;
+        void* code = mandelbrot(a);
+        if (code == nullptr) return "no code memory";
+        slots[1] = Value::integer(60), slots[2] = Value::integer(80);
+        const int64_t gave = run(code, slots.data());
+        if (gave != 0 || slots[3].kind != ValueKind::Int || slots[3].as.i != mandelbrotInC(60, 80))
+            return "mandelbrot(60, 80) from stencils gave " + std::to_string(slots[3].as.i) + ", C++ " + std::to_string(mandelbrotInC(60, 80));
+        // The VM's flag set: the region leaves at the next loop's end.
+        checkFlag = 1;
+        const int64_t left = run(code, slots.data());
+        checkFlag = 0;
+        if (left != -1) return "the flag did not take the region out";
+    }
+    {
+        // An int's overflow leaves for the VM before the int is changed.
+        Assembler a;
+        a.add("loadi_0").slot = 1;
+        a.add("inci_0");
+        a.add("inci_0");
+        a.add("storei_0").slot = 2;
+        a.add("ret").ret = 0;
+        std::vector<Step> out = exitGiving(-1);
+        Step store;
+        store.code = stencil("storei_0");
+        store.slot = 3;
+        out.insert(out.begin(), store);
+        void* code = a.finish(out);
+        if (code == nullptr) return "no code memory";
+        slots[1] = Value::integer(INT64_MAX - 1);
+        slots[2] = Value::integer(0);
+        const int64_t gave = run(code, slots.data());
+        if (gave != -1 || slots[3].as.i != INT64_MAX || slots[2].as.i != 0) return "an overflow did not leave as it should";
+    }
+    return "";
+}
+#else
+std::string check() { return available() ? "" : ""; }
+#endif
+
+}  // namespace jade::native

@@ -88,6 +88,36 @@ add_library(jade_compiler OBJECT
   src/command.cpp
   src/doc.cpp
 )
+# Native code (M9.5, docs/native-plan.html): the register stencils compiled by Clang into an
+# object file of their own, read by tools/stencils into a table that jade.exe carries, and checked
+# by jade itself as the build's step. With clang-cl on Windows; elsewhere, until the tool reads
+# ELF, jade is built without native code (native.cpp then has no stencils).
+target_sources(jade_core PRIVATE src/native/native.cpp)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
+  add_library(jade_stencils OBJECT src/native/stencils.cpp)
+  # Each stencil in a section of its own, and nothing in them a copied stencil could not carry.
+  target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl)
+  add_executable(jade_stencil_tool tools/stencils/stencils.cpp)
+  set(JADE_STENCIL_TABLE "${CMAKE_BINARY_DIR}/native/stencils.h")
+  add_custom_command(
+    OUTPUT "${JADE_STENCIL_TABLE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/native"
+    COMMAND jade_stencil_tool "$<TARGET_OBJECTS:jade_stencils>" "${JADE_STENCIL_TABLE}"
+    DEPENDS jade_stencils jade_stencil_tool "$<TARGET_OBJECTS:jade_stencils>"
+    COMMENT "Reading the native code's stencils"
+    VERBATIM)
+  target_sources(jade_core PRIVATE "${JADE_STENCIL_TABLE}")
+  target_include_directories(jade_core PRIVATE "${CMAKE_BINARY_DIR}/native")
+  target_compile_definitions(jade_core PRIVATE JADE_NATIVE=1)
+  add_custom_target(jade_check_native ALL
+    COMMAND $<TARGET_FILE:jade> --native-check
+    DEPENDS jade
+    COMMENT "Checking the native code"
+    VERBATIM)
+else()
+  target_compile_definitions(jade_core PRIVATE JADE_NATIVE=0)
+endif()
+
 # The instruction loop (VM::run) runs as fast whatever is linked before it: with Clang, the
 # benchmarks' build, every jump target in vm.cpp starts on 32 bytes (and VM::run on 64, in
 # vm.cpp). Without this, code growing elsewhere moved numeric by 14% (G42).
