@@ -1266,8 +1266,12 @@ void translateNow(FunctionProto& f) {
 }
 
 void Program::translateAll() {
-    for (const std::unique_ptr<FunctionProto>& f : owned_)
+    // By index: a function whose body is read only now (loadBody) adds its nested functions to
+    // owned_ as it is translated, which may move the list, and they are translated too.
+    for (size_t i = 0; i < owned_.size(); i++) {
+        FunctionProto* f = owned_[i].get();
         if (f->untranslated != nullptr) translateNow(*f);
+    }
 }
 
 // ---- Disassembly ----
