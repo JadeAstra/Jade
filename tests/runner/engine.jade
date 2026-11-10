@@ -58,6 +58,7 @@ class Options {
   var parallel = 1
   var setting = Setting.plain
   var timeLimit = 0   // seconds a run of jade may take; 0: as the setting and the build say
+  var keep = false    // the folder the checks ran in left, to be looked into (its path in `kept`)
 
   fun init(jade : FilePath, tests : FilePath) {
     this.jade = jade
@@ -114,6 +115,8 @@ class Suite(val options : Options) {
   val items : List<Item>
   private var stopping = false
   private var scratch : FilePath? = null
+  // The folder the last run ran in, where options.keep left it.
+  var kept : FilePath? = null
   private val lock = Lock()
 
   fun init(options : Options) throws IOException {
@@ -195,7 +198,7 @@ class Suite(val options : Options) {
     }
     for (item in timed) { runItem(item, FilePath(dir, safeName(item.name)), onChange) }
     scratch = null
-    dir.deleteRecursively()
+    if (options.keep) { kept = dir } else { dir.deleteRecursively() }
   }
 
   // Stops the runs: the processes running are ended, and no more are started.

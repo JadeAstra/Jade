@@ -120,6 +120,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     o.parallel = howMany.value
     o.setting = Setting.entries[Math.max(0, settingBox.selected)]
     o.timeLimit = start.timeLimit
+    o.keep = start.keep
     return o
   }
 
@@ -372,7 +373,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       } else if (snapshot != null) {
         saveSnapshot()
       } else {
-        val all = said.join("\n")
+        val all = said.join("\n") + (suite.kept != null ? "\nkept: ${suite.kept}" : "")
         reportText = all
         closing = allPassed ? (closeAfter >= 0 ? ": all passed, closing in $closeAfter s" : ": all passed") :
                               ": something failed (the report is below; choose a check for its own)"

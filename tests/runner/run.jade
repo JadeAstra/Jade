@@ -16,6 +16,8 @@
 //   --time-limit <s>      seconds a run may take (120; 600 under gc-stress; 2400 for that with the
 //                         sanitizer's build)
 //   --only <a,b>          only the checks with these names (the window: run at once)
+//   --keep                the folder the checks ran in left, its path printed: the budgets'
+//                         program is in its start-up_budgets/program
 //   --run                 (window) start at once; when the run ends, print what it gave as the
 //                         console does, and close the window after --close-after seconds where
 //                         everything passed (it stays open where something failed)
@@ -48,6 +50,7 @@ var snapshot : FilePath? = null
 var runAtOnce = false
 var report : FilePath? = null
 var closeAfter = 10
+var keep = false
 var bad = ""
 
 val arguments = Program.arguments
@@ -74,6 +77,7 @@ while (i < arguments.size) {
     "--only" -> { only = value.split(",").map { it.trim() }; i += 1 }
     "--snapshot" -> { snapshot = FilePath(value); i += 1 }
     "--run" -> runAtOnce = true
+    "--keep" -> keep = true
     "--report" -> { report = FilePath(value); i += 1 }
     "--close-after" -> { closeAfter = value.toIntOrNull() ?: -2; i += 1 }
     else -> bad = "'$a' is not an option"
@@ -93,6 +97,7 @@ fun options(s : Setting, w : List<Way>?) : Options {
   o.parallel = parallel
   o.setting = s
   o.timeLimit = timeLimit
+  o.keep = keep
   return o
 }
 
@@ -103,6 +108,7 @@ suspend fun onConsole(s : Setting, w : List<Way>?) : bool {
   suite.run(chosen) { }
   val (text, ok) = reportOf(chosen)
   print(text)
+  if (suite.kept != null) { print("kept: ${suite.kept}") }
   return ok
 }
 
