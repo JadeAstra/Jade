@@ -542,7 +542,9 @@ class Suite(val options : Options) {
 
   // The start-up budgets of D145, timed on this machine: a first run, nothing cached, checked and
   // compiled in under half a second; a second run with nothing changed in under 20 ms on top of
-  // jade starting; a run after a one-line change inside a function in under 100 ms. Timed on the
+  // jade starting; a run after a one-line change inside a function in under 100 ms for each 20,000
+  // lines of the program, the size the budgets were set on (the user, 2026-11-09: the program grew
+  // 2.7 times, and what a change costs grows with it, every unchanged file put back). Timed on the
   // tests, the examples, the standard library and Topaz (some 20,000 lines), each test and example
   // in a folder of its own so that their names do not meet, imported by one main file, compiled
   // and not run (JADE_TIMES=compile). Each is the best of seven, as jade reports it: from when the
@@ -656,15 +658,17 @@ class Suite(val options : Options) {
       item.results["budgets"] = problem
       return
     }
+    // 100 ms for each 20,000 lines, and never less than 100.
+    val changeBudget = Math.max(100.0, 100.0 * lines.toFloat() / 20000.0)
     fun ms(v : any) : string => "${Math.round((v as float) * 10.0) / 10.0} ms"
     item.measured = "program: ${parts.size} tests and examples, the standard library and Topaz, $lines lines$leftOut\n" +
                     "jade starting:           ${ms(start)}\n" +
                     "first run:               ${ms(first[0])}  (budget 500)    ${first[2]}\n" +
                     "second run, unchanged:   ${ms(second[0])}, ${ms(second[1])} on top of jade starting (budget 20)    ${second[2]}\n" +
-                    "after a one-line change: ${ms(edited[0])}  (budget 100)    ${edited[2]}"
+                    "after a one-line change: ${ms(edited[0])}  (budget ${changeBudget.toInt()}, 100 per 20,000 lines)    ${edited[2]}"
     item.results["first run"] = (first[0] as float) <= 500.0 ? "" : "took ${ms(first[0])}, budget 500 ms"
     item.results["second run"] = (second[1] as float) <= 20.0 ? "" : "took ${ms(second[1])} on top of jade starting, budget 20 ms"
-    item.results["after a change"] = (edited[0] as float) <= 100.0 ? "" : "took ${ms(edited[0])}, budget 100 ms"
+    item.results["after a change"] = (edited[0] as float) <= changeBudget ? "" : "took ${ms(edited[0])}, budget ${changeBudget.toInt()} ms (100 per 20,000 lines)"
   }
 
   // A folder and all in it copied to `to`.
