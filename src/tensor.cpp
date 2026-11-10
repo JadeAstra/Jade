@@ -205,29 +205,357 @@ std::vector<int64_t> aligned(const View& v, const std::vector<int64_t>& shape) {
     return s;
 }
 
-// Calls `f` with the item index of each operand, for every item of `shape` in order (the last
-// axis fastest).
+// The axes a walk goes over: those of length 1 left out, and two next to each other made one
+// where every operand steps through them as one (a whole tensor in order is one long row).
+struct Axes {
+    std::vector<int64_t> shape;
+    std::vector<int64_t> strides[4];
+};
+inline Axes merged(const std::vector<int64_t>& shape, const std::vector<std::vector<int64_t>>& strides) {
+    Axes axes;
+    const size_t n = strides.size();
+    for (size_t axis = 0; axis < shape.size(); axis++) {
+        if (shape[axis] == 1) continue;
+        bool merge = !axes.shape.empty();
+        for (size_t o = 0; o < n && merge; o++) merge = axes.strides[o].back() == strides[o][axis] * shape[axis];
+        if (merge) {
+            axes.shape.back() *= shape[axis];
+            for (size_t o = 0; o < n; o++) axes.strides[o].back() = strides[o][axis];
+        } else {
+            axes.shape.push_back(shape[axis]);
+            for (size_t o = 0; o < n; o++) axes.strides[o].push_back(strides[o][axis]);
+        }
+    }
+    return axes;
+}
+
+// Calls `row` with where each operand's first item of a row is, how many items the row has, and
+// how far apart each operand's items in it are: for every row along the last axis, in order.
+// Four operands at most.
 template <class F>
-void walk(const std::vector<int64_t>& shape, const std::vector<std::vector<int64_t>>& strides, const std::vector<int64_t>& starts, F&& f) {
-    const size_t n = strides.size(), rank = shape.size();
+void walkRows(const std::vector<int64_t>& shape, const std::vector<std::vector<int64_t>>& strides, const std::vector<int64_t>& starts, F&& row) {
+    const size_t n = strides.size();
     size_t total = 1;
     for (int64_t s : shape) total *= static_cast<size_t>(s);
     if (total == 0) return;
-    std::vector<int64_t> at(starts), index(rank, 0);
-    for (size_t k = 0; k < total; k++) {
-        f(at.data());
-        // The next index: the last axis forward, carrying into the ones before.
-        for (size_t axis = rank; axis-- > 0;) {
+    const Axes axes = merged(shape, strides);
+    int64_t at[4] = {0, 0, 0, 0}, step[4] = {0, 0, 0, 0};
+    for (size_t o = 0; o < n; o++) at[o] = starts[o];
+    if (axes.shape.empty()) {
+        row(at, int64_t{1}, step);
+        return;
+    }
+    const size_t rank = axes.shape.size();
+    const int64_t inner = axes.shape.back();
+    for (size_t o = 0; o < n; o++) step[o] = axes.strides[o][rank - 1];
+    std::vector<int64_t> index(rank, 0);
+    const size_t rows = total / static_cast<size_t>(inner);
+    for (size_t r = 0; r < rows; r++) {
+        row(at, inner, step);
+        // The next row: the axes before the last forward, carrying into the ones before them.
+        for (size_t axis = rank - 1; axis-- > 0;) {
             index[axis]++;
-            for (size_t o = 0; o < n; o++) at[o] += strides[o][axis];
-            if (index[axis] < shape[axis]) break;
-            for (size_t o = 0; o < n; o++) at[o] -= strides[o][axis] * shape[axis];
+            for (size_t o = 0; o < n; o++) at[o] += axes.strides[o][axis];
+            if (index[axis] < axes.shape[axis]) break;
+            for (size_t o = 0; o < n; o++) at[o] -= axes.strides[o][axis] * axes.shape[axis];
             index[axis] = 0;
         }
     }
 }
 
+// Calls `f` with the item index of each operand, for every item of `shape` in order (the last
+// axis fastest).
+template <class F>
+void walk(const std::vector<int64_t>& shape, const std::vector<std::vector<int64_t>>& strides, const std::vector<int64_t>& starts, F&& f) {
+    const size_t n = strides.size();
+    walkRows(shape, strides, starts, [&](const int64_t* first, int64_t count, const int64_t* step) {
+        int64_t at[4] = {first[0], first[1], first[2], first[3]};
+        for (int64_t k = 0; k < count; k++) {
+            f(static_cast<const int64_t*>(at));
+            for (size_t o = 0; o < n; o++) at[o] += step[o];
+        }
+    });
+}
+
 enum BinOp { kAdd, kSub, kMul, kDiv, kMod, kAddW, kSubW, kMulW, kLt, kLe, kGt, kGe, kEq, kNe, kAnd, kOr };
+
+// ---- The quick way: items of a kind known before the loop ----
+
+// How an operand's items are kept, where the loops below read them straight: 8-byte ints, 8-byte
+// floats, bytes, or one number for every item. Anything else (bools, the other narrow widths)
+// goes the general way, item by item through readI and readF.
+enum class Lane { I64, F64, U8, One, Other };
+inline Lane laneOf(const View& v) {
+    if (v.single) return v.one.isBool() ? Lane::Other : Lane::One;
+    switch (v.pack->store) {
+        case ListStore::Ints: return Lane::I64;
+        case ListStore::Floats: return Lane::F64;
+        case ListStore::Narrow: return v.pack->narrow == Narrow::Byte ? Lane::U8 : Lane::Other;
+        default: return Lane::Other;
+    }
+}
+
+// An operand's items read as ints or floats, its lane fixed when compiling.
+template <Lane L>
+struct In {
+    const uint8_t* base = nullptr;
+    int64_t oneI = 0;
+    double oneF = 0;
+    explicit In(const View& v) {
+        if constexpr (L == Lane::One) {
+            oneI = v.one.isFloat() ? 0 : v.one.as.i;
+            oneF = v.one.toDouble();
+        } else {
+            base = v.pack->block.data();
+        }
+    }
+    int64_t i(int64_t at) const {
+        if constexpr (L == Lane::I64) {
+            int64_t x;
+            std::memcpy(&x, base + at * 8, 8);
+            return x;
+        } else if constexpr (L == Lane::U8) {
+            return base[at];
+        } else if constexpr (L == Lane::F64) {
+            double x;
+            std::memcpy(&x, base + at * 8, 8);
+            return static_cast<int64_t>(x);
+        } else {
+            return oneI;
+        }
+    }
+    double f(int64_t at) const {
+        if constexpr (L == Lane::F64) {
+            double x;
+            std::memcpy(&x, base + at * 8, 8);
+            return x;
+        } else if constexpr (L == Lane::I64) {
+            int64_t x;
+            std::memcpy(&x, base + at * 8, 8);
+            return static_cast<double>(x);
+        } else if constexpr (L == Lane::U8) {
+            return base[at];
+        } else {
+            return oneF;
+        }
+    }
+};
+
+// Calls `fn` with the operand's reader, its lane a constant; false for the general way.
+template <class Fn>
+bool withLane(const View& v, Fn&& fn) {
+    switch (laneOf(v)) {
+        case Lane::I64: fn(In<Lane::I64>(v)); return true;
+        case Lane::F64: fn(In<Lane::F64>(v)); return true;
+        case Lane::U8: fn(In<Lane::U8>(v)); return true;
+        case Lane::One: fn(In<Lane::One>(v)); return true;
+        default: return false;
+    }
+}
+// The same for two operands.
+template <class Fn>
+bool withLanes(const View& a, const View& b, Fn&& fn) {
+    if (laneOf(a) == Lane::Other || laneOf(b) == Lane::Other) return false;
+    withLane(a, [&](auto x) { withLane(b, [&](auto y) { fn(x, y); }); });
+    return true;
+}
+
+inline void putF(uint8_t* base, int64_t at, double x) { std::memcpy(base + at * 8, &x, 8); }
+inline void putI(uint8_t* base, int64_t at, int64_t x) { std::memcpy(base + at * 8, &x, 8); }
+[[noreturn]] void notAByte(VM& vm, int64_t x) {
+    fail(vm, Thrown::ArithmeticException, std::to_string(x) + " does not fit in a byte, which keeps 0 to 255");
+}
+// An int written into bytes: checked, or its low bits where `wrap` says.
+inline void putU8(VM& vm, uint8_t* base, int64_t at, int64_t x, bool wrap) {
+    if (!wrap && (x < 0 || x > 255)) notAByte(vm, x);
+    base[at] = static_cast<uint8_t>(x);
+}
+// A float made an int, as toInt() makes it.
+inline int64_t tensorFloatToInt(VM& vm, double d) {
+    if (std::isnan(d) || d >= 9.2233720368547758e18 || d < -9.2233720368547758e18) fail(vm, Thrown::ArithmeticException, "a NaN or a float too large has no int");
+    return static_cast<int64_t>(d);
+}
+
+// binary's quick way: + - * / % and the wrapping ones, and the comparisons, of operands of
+// known lanes into 8-byte ints, floats, bytes or bools. False where it does not apply.
+bool quickBinary(VM& vm, BinOp op, const View& a, const View& b, const View& out, const std::vector<std::vector<int64_t>>& strides) {
+    const bool ints = !a.isFloat && !b.isFloat;
+    const bool compare = op >= kLt && op <= kNe;
+    const Lane lo = laneOf(out);
+    uint8_t* o = out.pack->block.data();
+    if (compare) {
+        if (out.pack->store != ListStore::Bools) return false;
+        return withLanes(a, b, [&](auto A, auto B) {
+            walkRows(out.shape, strides, {a.offset, b.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+                const int64_t pa = at[0], pb = at[1], po = at[2], sa = st[0], sb = st[1], so = st[2];
+#define JADE_COMPARE(CMP)                                                                       \
+    if (ints) {                                                                                 \
+        for (int64_t k = 0; k < n; k++) o[po + k * so] = A.i(pa + k * sa) CMP B.i(pb + k * sb); \
+    } else {                                                                                    \
+        for (int64_t k = 0; k < n; k++) o[po + k * so] = A.f(pa + k * sa) CMP B.f(pb + k * sb); \
+    }
+                switch (op) {
+                    case kLt: JADE_COMPARE(<) break;
+                    case kLe: JADE_COMPARE(<=) break;
+                    case kGt: JADE_COMPARE(>) break;
+                    case kGe: JADE_COMPARE(>=) break;
+                    case kEq: JADE_COMPARE(==) break;
+                    default: JADE_COMPARE(!=) break;
+                }
+#undef JADE_COMPARE
+            });
+        });
+    }
+    if (op > kMulW) return false;
+    if (!ints) {
+        if (lo != Lane::F64 || op >= kAddW) return false;
+        return withLanes(a, b, [&](auto A, auto B) {
+            walkRows(out.shape, strides, {a.offset, b.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+                const int64_t pa = at[0], pb = at[1], po = at[2], sa = st[0], sb = st[1], so = st[2];
+#define JADE_FLOATS(EXPR)                                        \
+    for (int64_t k = 0; k < n; k++) {                            \
+        const double x = A.f(pa + k * sa), y = B.f(pb + k * sb); \
+        putF(o, po + k * so, EXPR);                              \
+    }
+                switch (op) {
+                    case kAdd: JADE_FLOATS(x + y) break;
+                    case kSub: JADE_FLOATS(x - y) break;
+                    case kMul: JADE_FLOATS(x * y) break;
+                    case kDiv: JADE_FLOATS(x / y) break;
+                    default: JADE_FLOATS(std::fmod(x, y)) break;
+                }
+#undef JADE_FLOATS
+            });
+        });
+    }
+    if (lo != Lane::I64 && lo != Lane::U8) return false;
+    const bool wrap = op >= kAddW;
+    return withLanes(a, b, [&](auto A, auto B) {
+        walkRows(out.shape, strides, {a.offset, b.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+            const int64_t pa = at[0], pb = at[1], po = at[2], sa = st[0], sb = st[1], so = st[2];
+            for (int64_t k = 0; k < n; k++) {
+                const int64_t x = A.i(pa + k * sa), y = B.i(pb + k * sb);
+                int64_t z = 0;
+                switch (op) {
+                    case kAdd: if (addOverflows(x, y, z)) throw vm.overflowError(Op::Add, x, y); break;
+                    case kSub: if (subOverflows(x, y, z)) throw vm.overflowError(Op::Sub, x, y); break;
+                    case kMul: if (mulOverflows(x, y, z)) throw vm.overflowError(Op::Mul, x, y); break;
+                    case kDiv:
+                    case kMod:
+                        if (y == 0) fail(vm, Thrown::ArithmeticException, "division by zero");
+                        if (y == -1 && x == INT64_MIN) {
+                            if (op == kDiv) throw vm.overflowError(Op::Div, x, y);
+                            z = 0;
+                        } else {
+                            z = op == kDiv ? x / y : x % y;
+                        }
+                        break;
+                    case kAddW: z = static_cast<int64_t>(static_cast<uint64_t>(x) + static_cast<uint64_t>(y)); break;
+                    case kSubW: z = static_cast<int64_t>(static_cast<uint64_t>(x) - static_cast<uint64_t>(y)); break;
+                    default: z = static_cast<int64_t>(static_cast<uint64_t>(x) * static_cast<uint64_t>(y)); break;
+                }
+                if (lo == Lane::I64) putI(o, po + k * so, z);
+                else putU8(vm, o, po + k * so, z, wrap);
+            }
+        });
+    });
+}
+
+// unary's quick way: a float function of each item into floats, an int one into ints, and the
+// conversions between 8-byte ints, floats and bytes. False where it does not apply.
+bool quickUnary(VM& vm, int op, const View& a, const View& out, double p, double q) {
+    const Lane li = laneOf(a), lo = laneOf(out);
+    if (li == Lane::Other || li == Lane::One || lo == Lane::Other) return false;
+    uint8_t* o = out.pack->block.data();
+    const std::vector<std::vector<int64_t>> strides = {a.strides, out.strides};
+    const bool ints = !a.isFloat && !out.isFloat;
+    auto rows = [&](auto&& item) {
+        withLane(a, [&](auto A) {
+            walkRows(a.shape, strides, {a.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+                for (int64_t k = 0; k < n; k++) item(A, at[0] + k * st[0], at[1] + k * st[1]);
+            });
+        });
+    };
+    if (op == 16 || op == 17) {
+        const bool wrap = op == 17;
+        if (lo == Lane::F64) rows([&](const auto& A, int64_t i, int64_t j) { putF(o, j, A.f(i)); });
+        else if (li == Lane::F64 && lo == Lane::I64) rows([&](const auto& A, int64_t i, int64_t j) { putI(o, j, tensorFloatToInt(vm, A.f(i))); });
+        else if (li == Lane::F64) rows([&](const auto& A, int64_t i, int64_t j) { putU8(vm, o, j, tensorFloatToInt(vm, A.f(i)), wrap); });
+        else if (lo == Lane::I64) rows([&](const auto& A, int64_t i, int64_t j) { putI(o, j, A.i(i)); });
+        else rows([&](const auto& A, int64_t i, int64_t j) { putU8(vm, o, j, A.i(i), wrap); });
+        return true;
+    }
+    if (ints) {
+        if (lo != Lane::I64 || !(op <= 1 || op == 14 || (op >= 11 && op <= 13))) return false;
+        const int64_t low = static_cast<int64_t>(p), high = static_cast<int64_t>(q);
+        rows([&](const auto& A, int64_t i, int64_t j) {
+            const int64_t x = A.i(i);
+            int64_t z = x;
+            if (op == 0 || (op == 1 && x < 0)) {
+                if (x == INT64_MIN) throw vm.overflowError(Op::Sub, 0, x);
+                z = -x;
+            } else if (op == 14) {
+                z = std::clamp(x, low, high);
+            }
+            putI(o, j, z);
+        });
+        return true;
+    }
+    if (lo != Lane::F64 || op > 14) return false;
+#define JADE_UNARY(EXPR)                                         \
+    rows([&](const auto& A, int64_t i, int64_t j) {              \
+        const double x = A.f(i);                                 \
+        putF(o, j, EXPR);                                        \
+    });                                                          \
+    break;
+    switch (op) {
+        case 0: JADE_UNARY(-x)
+        case 1: JADE_UNARY(std::fabs(x))
+        case 2: JADE_UNARY(std::sqrt(x))
+        case 3: JADE_UNARY(std::exp(x))
+        case 4: JADE_UNARY(std::log(x))
+        case 5: JADE_UNARY(std::log(x) / std::log(p))
+        case 6: JADE_UNARY(std::log10(x))
+        case 7: JADE_UNARY(std::pow(x, p))
+        case 8: JADE_UNARY(std::sin(x))
+        case 9: JADE_UNARY(std::cos(x))
+        case 10: JADE_UNARY(std::tan(x))
+        case 11: JADE_UNARY(std::floor(x))
+        case 12: JADE_UNARY(std::ceil(x))
+        case 13: JADE_UNARY(std::round(x))
+        default: JADE_UNARY(std::clamp(x, p, q))
+    }
+#undef JADE_UNARY
+    return true;
+}
+
+// copy's quick way for one number in every item (fill) of 8-byte ints, floats or bytes: the item
+// made once in their own form, then laid down. False where it does not apply (a float into
+// ints says what the general way says).
+bool fillQuickly(VM& vm, const View& a, const View& out) {
+    if (!a.single || laneOf(a) != Lane::One) return false;
+    const Lane lo = laneOf(out);
+    if (lo != Lane::I64 && lo != Lane::F64 && lo != Lane::U8) return false;
+    uint8_t item[8];
+    if (lo == Lane::F64) {
+        const double d = a.one.toDouble();
+        std::memcpy(item, &d, 8);
+    } else if (a.one.isFloat()) {
+        return false;
+    } else if (lo == Lane::I64) {
+        std::memcpy(item, &a.one.as.i, 8);
+    } else {
+        if (a.one.as.i < 0 || a.one.as.i > 255) notAByte(vm, a.one.as.i);
+        item[0] = static_cast<uint8_t>(a.one.as.i);
+    }
+    const size_t width = lo == Lane::U8 ? 1 : 8;
+    uint8_t* to = out.pack->block.data();
+    walkRows(out.shape, {out.strides}, {out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+        if (width == 1 && st[0] == 1) std::memset(to + at[0], item[0], static_cast<size_t>(n));
+        else for (int64_t k = 0; k < n; k++) std::memcpy(to + (at[0] + k * st[0]) * width, item, width);
+    });
+    return true;
+}
 
 }  // namespace
 
@@ -244,6 +572,7 @@ void registerTensor(VM& vm) {
         const auto op = static_cast<BinOp>(vm.toInt(args[0], "op"));
         const View a = operand(vm, args, 1), b = operand(vm, args, 5), out = viewOf(vm, args[9], args[10], args[11], args[12]);
         const std::vector<std::vector<int64_t>> strides = {aligned(a, out.shape), aligned(b, out.shape), out.strides};
+        if (quickBinary(vm, op, a, b, out, strides)) return Value::null();
         const bool ints = !a.isFloat && !b.isFloat;
         const bool compare = op >= kLt && op <= kNe;
         if (op == kAnd || op == kOr) {
@@ -312,6 +641,7 @@ void registerTensor(VM& vm) {
         const std::vector<std::vector<int64_t>> strides = {a.strides, out.strides};
         const bool ints = !a.isFloat && !out.isFloat;
         const double p = args[9].isNull() ? 0 : vm.toNumber(args[9], "p"), q = args[10].isNull() ? 0 : vm.toNumber(args[10], "q");
+        if (quickUnary(vm, op, a, out, p, q)) return Value::null();
         if (op == 15) {
             walk(a.shape, strides, {a.offset, out.offset}, [&](const int64_t* at) { writeI(vm, out, at[1], readI(a, at[0]) == 0); });
             return Value::null();
@@ -521,6 +851,23 @@ void registerTensor(VM& vm) {
         const View a = operand(vm, args, 0), out = viewOf(vm, args[4], args[5], args[6], args[7]);
         if (!a.single && a.shape != out.shape) fail(vm, Thrown::IllegalArgumentException, "the tensors' shapes differ");
         const bool sameKind = !a.single && a.pack->store == out.pack->store && a.pack->width == out.pack->width && a.pack->narrow == out.pack->narrow;
+        if (sameKind && (a.pack->width == 8 || a.pack->width == 1)) {
+            // Items of one width copied a row at a time, without asking what they are.
+            const uint8_t* from = a.pack->block.data();
+            uint8_t* to = out.pack->block.data();
+            const size_t width = a.pack->width;
+            walkRows(out.shape, {aligned(a, out.shape), out.strides}, {a.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
+                if (st[0] == 1 && st[1] == 1) {
+                    std::memmove(to + at[1] * width, from + at[0] * width, static_cast<size_t>(n) * width);
+                } else if (width == 8) {
+                    for (int64_t k = 0; k < n; k++) std::memcpy(to + (at[1] + k * st[1]) * 8, from + (at[0] + k * st[0]) * 8, 8);
+                } else {
+                    for (int64_t k = 0; k < n; k++) to[at[1] + k * st[1]] = from[at[0] + k * st[0]];
+                }
+            });
+            return Value::null();
+        }
+        if (fillQuickly(vm, a, out)) return Value::null();
         walk(out.shape, {aligned(a, out.shape), out.strides}, {a.offset, out.offset}, [&](const int64_t* at) {
             if (sameKind) {
                 std::memmove(out.pack->block.data() + static_cast<size_t>(at[1]) * out.pack->width, a.pack->block.data() + static_cast<size_t>(at[0]) * a.pack->width,

@@ -302,6 +302,134 @@ fun gaussian() : string {
   return "gaussian ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
 }
 
+// ---- The same work with the operations M9/M10 added (question 14's "Jade with the new
+// operations"), timed from the same inputs; the pixel shown is the same one where the method
+// gives the same answer.
+
+// A picture of the bytes, made before the clock starts.
+fun pictureOf(bytes : Bytes, w : int, h : int) : Grid<Color> => bytes.toTensor().reshaped(h, w, 4).toImage().pixels
+
+// K4 with tensors: t for every pixel by broadcasting a row and a column, then each channel.
+fun gradientOps() : string {
+  val w = 3840
+  val h = 2160
+  val started = Instant.now()
+  val t = Tensor.arange(0, w).toFloat().reshaped(1, w) * (0.6 / w) + Tensor.arange(0, h).toFloat().reshaped(h, 1) * (0.4 / h)
+  val px = Tensor.stack([(40.0 + t * 200.0).toByte(), (90.0 + t * 120.0).toByte(), (200.0 - t * 150.0).toByte(), Tensor.full<byte>([h, w], 255.toByte())], axis = 2)
+  return "gradientOps ${ms(started)} ms (pixel ${px[100, 100, 0]})"
+}
+
+// K4 as a canvas fills it: a LinearGradient of two stops over the picture, from (0, 0) along
+// the gradient's own direction.
+fun gradientPaint() : string {
+  val w = 3840
+  val h = 2160
+  val image = Image(w, h)
+  val started = Instant.now()
+  val canvas = image.canvas()
+  // t = x * 0.6 / w + y * 0.4 / h is 1 at the point along (0.6 / w, 0.4 / h) that far.
+  val ax = 0.6 / w
+  val ay = 0.4 / h
+  val len2 = ax * ax + ay * ay
+  canvas.paint = LinearGradient(0.0, 0.0, ax / len2, ay / len2, [0.0, 1.0], [Color(40, 90, 200), Color(240, 210, 50)])
+  canvas.fillRect(0, 0, w, h)
+  return "gradientPaint ${ms(started)} ms (pixel ${image[100, 100].red})"
+}
+
+// K8 with tensors.
+fun radialOps() : string {
+  val w = 3840
+  val h = 2160
+  val started = Instant.now()
+  val dx = Tensor.arange(0, w).toFloat().reshaped(1, w) - w / 2.0
+  val dy = Tensor.arange(0, h).toFloat().reshaped(h, 1) - h / 2.0
+  val t = ((dx * dx + dy * dy).sqrt() / 1500.0).clamp(0.0, 1.0)
+  val px = Tensor.stack([(30.0 + t * 200.0).toByte(), (200.0 - t * 150.0).toByte(), (90.0 + t * 60.0).toByte(), Tensor.full<byte>([h, w], 255.toByte())], axis = 2)
+  return "radialOps ${ms(started)} ms (pixel ${px[100, 100, 0]})"
+}
+
+// K5 as window(5, Reduce.mean): the mean of the 11 by 11 square, edges repeated.
+fun blurOps() : string {
+  val w = 3840
+  val h = 2160
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.window(5, Reduce.mean)
+  return "blurOps ${ms(started)} ms (pixel ${out[100, 100].red})"
+}
+
+// K9 as two convolve passes, a row of 13 weights then a column.
+fun gaussianOps() : string {
+  val w = 1920
+  val h = 1080
+  val r = 6
+  val sigma = 2.0
+  val row = Grid<float>(2 * r + 1, 1)
+  val column = Grid<float>(1, 2 * r + 1)
+  var total = 0.0
+  for (k in -r .. r) { total += Math.exp(-(k * k) / (2 * sigma * sigma)) }
+  for (k in -r .. r) {
+    row[k + r, 0] = Math.exp(-(k * k) / (2 * sigma * sigma)) / total
+    column[0, k + r] = row[k + r, 0]
+  }
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.convolve(row).convolve(column)
+  return "gaussianOps ${ms(started)} ms (pixel ${out[100, 100].red})"
+}
+
+// K6 as scaled(1000, 750): each new pixel the mean of the 4 by 4 it covers, weighed by alpha.
+fun shrinkOps() : string {
+  val w = 4000
+  val h = 3000
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 17 % 253).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.scaled(w / 4, h / 4)
+  return "shrinkOps ${ms(started)} ms (pixel ${out[10, 10].red})"
+}
+
+// K7 as floodRegion(x, y, 30).
+fun floodOps() : string {
+  val w = 2000
+  val h = 2000
+  val px = Bytes(w * h * 4)
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      val wall = (x % 97 == 0 and y % 5 != 0) or (y % 89 == 0 and x % 7 != 0)
+      val v = wall ? 0 : 200 + (x + y) % 20
+      val at = (y * w + x) * 4
+      px[at] = v.toByte()
+      px[at + 1] = v.toByte()
+      px[at + 2] = v.toByte()
+      px[at + 3] = 255.toByte()
+    }
+  }
+  val picture = pictureOf(px, w, h)
+  val started = Instant.now()
+  val region = picture.floodRegion(w / 2, h / 2, 30)
+  return "floodOps ${ms(started)} ms (filled ${region.count})"
+}
+
+// A tensor of 3840 by 2160 by 4 bytes made a picture, and a picture's pixels made a tensor.
+fun tensorImage() : string {
+  val w = 3840
+  val h = 2160
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val tensor = src.toTensor().reshaped(h, w, 4)
+  val started = Instant.now()
+  val image = tensor.toImage()
+  val there = Instant.now()
+  val back = image.pixels.toTensor()
+  return "tensorImage ${ms(started)} ms (toImage ${(there - started).inWholeMilliseconds}, back ${(Instant.now() - there).inWholeMilliseconds}, pixel ${back[100, 100, 0]})"
+}
+
 // The same 100 MB as a file, written first, a megabyte at a time (100 MB made and dropped here
 // would be freed while LineIndex is timed, as C++'s is not); the time is LineIndex reading and
 // indexing it from the system's cache. As LineIndex counts them: a last line with no line end
@@ -445,7 +573,10 @@ val which = Program.arguments.getOrNull(0) ?: "all"
 val all : Map<string, () -> string> = {"lineEnds": { lineEnds() }, "idct": { idct() }, "huffman": { huffman() }, "gradient": { gradient() },
                                        "blur": { blur() }, "shrink": { shrink() }, "flood": { flood() }, "radial": { radial() },
                                        "gaussian": { gaussian() }, "lineIndex": { lineIndex() }, "base64Encode": { base64Encode() },
-                                       "base64Decode": { base64Decode() }, "xml": { xml() }}
+                                       "base64Decode": { base64Decode() }, "xml": { xml() },
+                                       "gradientOps": { gradientOps() }, "gradientPaint": { gradientPaint() }, "radialOps": { radialOps() },
+                                       "blurOps": { blurOps() }, "gaussianOps": { gaussianOps() }, "shrinkOps": { shrinkOps() },
+                                       "floodOps": { floodOps() }, "tensorImage": { tensorImage() }}
 for (name in all.keys) {
   if (which == "all" or which == name) { print(all[name]!!()) }
 }

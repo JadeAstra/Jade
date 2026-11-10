@@ -585,7 +585,7 @@ std::vector<uint8_t> scalePlane(const uint8_t* p, size_t stride, int w, int h, i
             const int x0 = static_cast<int>(std::floor(sx));
             const double fx = sx - x0;
             const double v = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy;
-            out[static_cast<size_t>(y) * static_cast<size_t>(tw) + static_cast<size_t>(x)] = static_cast<uint8_t>(std::lround(v));
+            out[static_cast<size_t>(y) * static_cast<size_t>(tw) + static_cast<size_t>(x)] = static_cast<uint8_t>(static_cast<int>(v + 0.5));  // v is 0 or more: as lround, without its call
         }
     }
     return out;

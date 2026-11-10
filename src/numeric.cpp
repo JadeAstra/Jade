@@ -23,6 +23,10 @@ namespace jade {
 
 namespace {
 
+// A number rounded half away from zero, as std::lround, without its call (a library call on
+// Windows, which a loop over every pixel pays for). For numbers an int64 holds.
+inline int64_t rounded(double v) { return v >= 0 ? static_cast<int64_t>(v + 0.5) : -static_cast<int64_t>(-v + 0.5); }
+
 [[noreturn]] void fail(VM& vm, Thrown kind, const std::string& message) { throw vm.runtimeError(kind, message); }
 
 ObjList* listArg(VM& vm, Value v, const char* what) {
@@ -403,7 +407,7 @@ void writePlanes(VM& vm, Value out, const std::vector<std::vector<double>>& plan
         return;
     }
     uint8_t* c = colorCells(vm, out, count, "the grid written into");
-    auto byte = [](double v) { return static_cast<uint8_t>(v <= 0 ? 0 : v >= 255 ? 255 : std::lround(v)); };
+    auto byte = [](double v) { return static_cast<uint8_t>(v <= 0 ? 0 : v >= 255 ? 255 : rounded(v)); };
     for (size_t k = 0; k < count; k++) {
         const double a = std::clamp(planes[3][k], 0.0, 255.0);
         const uint8_t alpha = byte(a);
@@ -626,6 +630,67 @@ size_t discHalf(size_t radius, int64_t dy) {
 
 enum Reduce { kMin, kMax, kMedian, kMean, kSum };
 
+// A square window's mean of colours weighed by alpha (a box blur), from their bytes: each row's
+// runs of red, green and blue times alpha, and of alpha, summed in ints into a ring of the
+// window's rows, and the sums of each column kept as rows come in and go out. As writePlanes
+// gives it: alpha the mean rounded, each colour the weighted mean divided by alpha's.
+void squareMeanColours(const uint8_t* src, size_t w, size_t h, size_t radius, uint8_t* dst) {
+    const size_t span = 2 * radius + 1;
+    const size_t ring = std::min(span, h);
+    std::vector<int64_t> runs(ring * w * 4), columns(w * 4, 0), prefix((w + 1) * 4);
+    auto rowRuns = [&](size_t y, int64_t* into) {
+        const uint8_t* row = src + y * w * 4;
+        for (size_t c = 0; c < 4; c++) prefix[c] = 0;
+        for (size_t x = 0; x < w; x++) {
+            const int64_t a = row[x * 4 + 3];
+            prefix[(x + 1) * 4] = prefix[x * 4] + row[x * 4] * a;
+            prefix[(x + 1) * 4 + 1] = prefix[x * 4 + 1] + row[x * 4 + 1] * a;
+            prefix[(x + 1) * 4 + 2] = prefix[x * 4 + 2] + row[x * 4 + 2] * a;
+            prefix[(x + 1) * 4 + 3] = prefix[x * 4 + 3] + a;
+        }
+        for (size_t x = 0; x < w; x++) {
+            const size_t lo = x >= radius ? x - radius : 0, hi = std::min(w - 1, x + radius) + 1;
+            for (size_t c = 0; c < 4; c++) into[x * 4 + c] = prefix[hi * 4 + c] - prefix[lo * 4 + c];
+        }
+    };
+    auto slot = [&](size_t y) { return runs.data() + (y % ring) * w * 4; };
+    for (size_t y = 0; y < std::min(h, radius + 1); y++) {
+        rowRuns(y, slot(y));
+        for (size_t k = 0; k < w * 4; k++) columns[k] += slot(y)[k];
+    }
+    auto byte = [](double v) { return static_cast<uint8_t>(v <= 0 ? 0 : v >= 255 ? 255 : rounded(v)); };
+    for (size_t y = 0; y < h; y++) {
+        const size_t lo = y >= radius ? y - radius : 0, hi = std::min(h - 1, y + radius);
+        const size_t tall = hi - lo + 1;
+        uint8_t* out = dst + y * w * 4;
+        for (size_t x = 0; x < w; x++) {
+            const size_t wide = std::min(w - 1, x + radius) - (x >= radius ? x - radius : 0) + 1;
+            const double count = static_cast<double>(wide * tall);
+            const int64_t* sum = &columns[x * 4];
+            const double alpha = std::clamp(static_cast<double>(sum[3]) / count, 0.0, 255.0);
+            const uint8_t a = byte(alpha);
+            out[x * 4 + 3] = a;
+            // The weighted mean, (sum / 255) / count, times 255 / alpha.
+            const double m = a == 0 ? 0.0 : 1.0 / (count * alpha);
+            out[x * 4] = byte(static_cast<double>(sum[0]) * m);
+            out[x * 4 + 1] = byte(static_cast<double>(sum[1]) * m);
+            out[x * 4 + 2] = byte(static_cast<double>(sum[2]) * m);
+        }
+        if (y + 1 < h) {
+            // The row above the next window goes; the one below it comes, into the same slot.
+            if (y >= radius) {
+                const int64_t* gone = slot(y - radius);
+                for (size_t k = 0; k < w * 4; k++) columns[k] -= gone[k];
+            }
+            if (y + radius + 1 < h) {
+                int64_t* come = slot(y + radius + 1);
+                rowRuns(y + radius + 1, come);
+                for (size_t k = 0; k < w * 4; k++) columns[k] += come[k];
+            }
+        }
+    }
+}
+
 // One plane reduced over windows: square ones by separable passes (running sums; van Herk for
 // the least and greatest), discs a row of the disc at a time; the median by a running histogram
 // of 256 bins where `bytes` says the plane holds 0 to 255, else by sorting each window.
@@ -704,8 +769,9 @@ std::vector<double> reducePlane(const std::vector<double>& in, size_t w, size_t 
         for (size_t y = 0; y < h; y++)
             for (size_t x = 0; x < w; x++) prefix[y * (w + 1) + x + 1] = prefix[y * (w + 1) + x] + in[y * w + x];
         if (!disc) {
-            // Square: the row runs summed down each column, by prefix sums of them in turn.
-            std::vector<double> rows(w * h), counts(w);
+            // Square: each row's runs, then the runs of the window's rows summed for each column,
+            // the sums kept as rows come in below and go out above: read along rows only.
+            std::vector<double> rows(w * h), counts(w), columns(w, 0.0);
             for (size_t y = 0; y < h; y++)
                 for (size_t x = 0; x < w; x++) {
                     const size_t lo = static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(x) - r));
@@ -713,14 +779,18 @@ std::vector<double> reducePlane(const std::vector<double>& in, size_t w, size_t 
                     rows[y * w + x] = prefix[y * (w + 1) + hi + 1] - prefix[y * (w + 1) + lo];
                     if (y == 0) counts[x] = static_cast<double>(hi - lo + 1);
                 }
-            std::vector<double> column(h + 1);
-            for (size_t x = 0; x < w; x++) {
-                for (size_t y = 0; y < h; y++) column[y + 1] = column[y] + rows[y * w + x];
-                for (size_t y = 0; y < h; y++) {
-                    const size_t lo = static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(y) - r));
-                    const size_t hi = static_cast<size_t>(std::min<int64_t>(static_cast<int64_t>(h) - 1, static_cast<int64_t>(y) + r));
-                    const double sum = column[hi + 1] - column[lo];
-                    out[y * w + x] = reduce == kSum ? sum : sum / (counts[x] * static_cast<double>(hi - lo + 1));
+            for (size_t y = 0; y < std::min(h, radius + 1); y++)
+                for (size_t x = 0; x < w; x++) columns[x] += rows[y * w + x];
+            for (size_t y = 0; y < h; y++) {
+                const size_t lo = static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(y) - r));
+                const size_t hi = static_cast<size_t>(std::min<int64_t>(static_cast<int64_t>(h) - 1, static_cast<int64_t>(y) + r));
+                const double tall = static_cast<double>(hi - lo + 1);
+                for (size_t x = 0; x < w; x++) out[y * w + x] = reduce == kSum ? columns[x] : columns[x] / (counts[x] * tall);
+                if (y + 1 < h) {
+                    if (static_cast<int64_t>(y) - r >= 0)
+                        for (size_t x = 0; x < w; x++) columns[x] -= rows[(y - radius) * w + x];
+                    if (y + radius + 1 < h)
+                        for (size_t x = 0; x < w; x++) columns[x] += rows[(y + radius + 1) * w + x];
                 }
             }
             return out;
@@ -1375,7 +1445,7 @@ void registerNumeric(VM& vm) {
             const Numbers table = numbers(vm, t, "a channel's table");
             if (table.single || table.count != 256) fail(vm, Thrown::IllegalArgumentException, "a channel's table has 256 entries, not " + std::to_string(table.count));
             for (int v = 0; v < 256; v++) {
-                const int64_t x = table.isFloat ? std::llround(table.f(static_cast<size_t>(v))) : table.i(static_cast<size_t>(v));
+                const int64_t x = table.isFloat ? rounded(table.f(static_cast<size_t>(v))) : table.i(static_cast<size_t>(v));
                 if (x < 0 || x > 255) fail(vm, Thrown::IllegalArgumentException, "a channel's table holds 0 to 255, not " + std::to_string(x));
                 tables[c][v] = static_cast<uint8_t>(x);
             }
@@ -1418,9 +1488,9 @@ void registerNumeric(VM& vm) {
                     // The source as the mode mixes it where the backdrop is, then laid over.
                     const double cr = (1 - ab) * cs[c] + ab * mixed[c];
                     const double co = ao > 0 ? (as * cr + ab * (1 - as) * cb[c]) / ao : 0;
-                    d[c] = static_cast<uint8_t>(std::lround(std::clamp(co, 0.0, 1.0) * 255));
+                    d[c] = static_cast<uint8_t>(rounded(std::clamp(co, 0.0, 1.0) * 255));
                 }
-                d[3] = static_cast<uint8_t>(std::lround(std::clamp(ao, 0.0, 1.0) * 255));
+                d[3] = static_cast<uint8_t>(rounded(std::clamp(ao, 0.0, 1.0) * 255));
             }
         }
         return Value::null();
@@ -1479,8 +1549,8 @@ void registerNumeric(VM& vm) {
                 for (int i = 0; i < 4; i++) mixed[i] += e[i] * wgt;
             }
             uint8_t* o = out + k * 4;
-            for (int i = 0; i < 3; i++) o[i] = static_cast<uint8_t>(std::lround(std::clamp(mixed[i], 0.0, 255.0)));
-            o[3] = static_cast<uint8_t>(std::lround(std::clamp(mixed[3], 0.0, 255.0) * c[3] / 255.0));
+            for (int i = 0; i < 3; i++) o[i] = static_cast<uint8_t>(rounded(std::clamp(mixed[i], 0.0, 255.0)));
+            o[3] = static_cast<uint8_t>(rounded(std::clamp(mixed[3], 0.0, 255.0) * c[3] / 255.0));
         }
         return Value::null();
     });
@@ -1525,7 +1595,7 @@ void registerNumeric(VM& vm) {
             for (size_t p = 0; p < planes.size(); p++) {
                 double v;
                 if (interpolation == 0 || std::isnan(x) || std::isnan(y)) {
-                    v = std::isnan(x) || std::isnan(y) ? 0 : cell(p, std::llround(x), std::llround(y));
+                    v = std::isnan(x) || std::isnan(y) ? 0 : cell(p, rounded(x), rounded(y));
                 } else if (interpolation == 1) {
                     const double fx = std::floor(x), fy = std::floor(y), u = x - fx, t = y - fy;
                     const int64_t ix = static_cast<int64_t>(fx), iy = static_cast<int64_t>(fy);
@@ -1556,6 +1626,17 @@ void registerNumeric(VM& vm) {
         const bool disc = args[5].truthy(), colour = args[7].truthy();
         // A mean of colours weighs them by alpha, as a blur does; the rest work on each part as it is.
         const bool premultiply = colour && reduce == kMean;
+        if (premultiply && !disc) {
+            const uint8_t* from = colorCells(vm, args[0], w * h, "the grid");
+            uint8_t* to = colorCells(vm, args[6], w * h, "the grid written into");
+            if (from == to) {
+                const std::vector<uint8_t> copy(from, from + w * h * 4);
+                squareMeanColours(copy.data(), w, h, radius, to);
+            } else {
+                squareMeanColours(from, w, h, radius, to);
+            }
+            return Value::null();
+        }
         auto planes = planesOf(vm, args[0], w * h, colour, premultiply);
         bool bytes = colour;
         if (!colour && listArg(vm, args[0], "the grid")->packed()) {
