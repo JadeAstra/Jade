@@ -1,0 +1,70 @@
+// M9.5's spike, the VM's side: the three loops of spike.cpp in Jade, each the best of five.
+fun mandelbrot(size : int, limit : int) : int {
+  var inside = 0
+  for py in 0..<size {
+    val ci = 2.0 * py / size - 1.0
+    for px in 0..<size {
+      val cr = 2.0 * px / size - 1.5
+      var zr = 0.0
+      var zi = 0.0
+      var n = 0
+      while (n < limit and zr * zr + zi * zi <= 4.0) {
+        val t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        n += 1
+      }
+      if (n == limit) { inside += 1 }
+    }
+  }
+  return inside
+}
+fun bytesArith(src : Bytes, dst : Bytes, n : int) {
+  for (i in 0 ..< n) { dst[i] = ((src[i] * 3 + 7) & 255).toByte() }
+}
+fun gradient(px : Bytes, w : int, h : int) {
+  val dx = 0.6 / w
+  val dy = 0.4 / h
+  for (y in 0 ..< h) {
+    var at = y * w * 4
+    for (x in 0 ..< w) {
+      val t = x * dx + y * dy
+      px[at] = (40 + t * 200).toInt().toByte()
+      px[at + 1] = (90 + t * 120).toInt().toByte()
+      px[at + 2] = (200 - t * 150).toInt().toByte()
+      px[at + 3] = 255.toByte()
+      at += 4
+    }
+  }
+}
+fun ms(from : Instant) : float => Math.round((Instant.now() - from).inNanoseconds / 1e5) / 10.0
+fun main() {
+  var best = 1e9
+  for (r in 0 ..< 5) {
+    val s = Instant.now()
+    val inside = mandelbrot(400, 100)
+    best = Math.min(best, ms(s))
+    if (inside != 61854) { print("wrong", inside) }
+  }
+  print("mandelbrot", best)
+  val n = 8000000
+  val src = Bytes(n)
+  for (i in 0 ..< n) { src[i] = (i * 31 % 251).toByte() }
+  val dst = Bytes(n)
+  best = 1e9
+  for (r in 0 ..< 5) {
+    val s = Instant.now()
+    bytesArith(src, dst, n)
+    best = Math.min(best, ms(s))
+  }
+  print("bytesArith", best, dst[12345])
+  val px = Bytes(3840 * 2160 * 4)
+  best = 1e9
+  for (r in 0 ..< 5) {
+    val s = Instant.now()
+    gradient(px, 3840, 2160)
+    best = Math.min(best, ms(s))
+  }
+  print("gradient", best, px[3840 * 4 * 100 + 400])
+}
+main()

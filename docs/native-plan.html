@@ -100,6 +100,7 @@ pre code { background: none; padding: 0; }
 <li><a href="#np-cache">Kept with the compiled program</a></li>
 <li><a href="#np-platforms">Systems, processors and the two builds</a></li>
 <li><a href="#np-speed">Speed: where it starts and the targets</a></li>
+<li><a href="#np-spike">The spike, as measured</a></li>
 <li><a href="#np-order">Order</a></li>
 <li><a href="#np-same">What does not change</a></li>
 <li><a href="#np-risks">Risks</a></li>
@@ -209,6 +210,18 @@ pre code { background: none; padding: 0; }
 <tr><td><code>topaz_layout</code></td><td>450 ms</td><td>1.3 to 2&times;</td><td>1.5 to 2.5&times;</td><td>&mdash;</td></tr>
 </tbody></table></div>
 <p>Code that spends its time in the library, making objects or in the collector gains least; typed loops most. Every step is benchmarked as M6.7's were, against the commit before it, and kept only where it helps. The start-up budgets are watched throughout.</p>
+
+<h2 id="np-spike">The spike, as measured (2026-11-10)</h2>
+<p>Step 0, built as <code>bench/spike</code>: the machine code each level would run for three loops, written by hand in C++ from the VM's run code for them (<code>JADE_DUMP_RUN</code>), instruction for instruction and with the VM's checks, and timed beside the VM running the same loops in Jade (<code>spike.jade</code>) and plain C++, best of five on the fast cores (<code>spike.ps1</code>). Copy and patch is modelled as each instruction on its own, its values read from and written to the frame's slots as the VM writes them, a compiler barrier between instructions; values in registers as the typed values passed from one instruction to the next in registers, a barrier still between instructions so that nothing is combined across them; a loop template as the checks on the lists asked once and the loop compiled whole, the language's checks kept; a loop made ahead as the commonest body made for its kinds.</p>
+<div class="table"><table>
+<thead><tr><th>Loop</th><th>VM now</th><th>Copy and patch</th><th>Registers</th><th>Loop template</th><th>Made ahead</th><th>Plain C++</th></tr></thead>
+<tbody>
+<tr><td><code>numeric</code>'s mandelbrot</td><td>93 ms</td><td>78 (1.2&times;)</td><td>14.4 (6.4&times;)</td><td>13.2, compiled whole</td><td>&mdash;</td><td>13.4</td></tr>
+<tr><td><code>dst[i] = ((src[i] * 3 + 7) &amp; 255).toByte()</code>, 8 million</td><td>85 ms</td><td>77 (1.1&times;)</td><td>12.3 (6.9&times;)</td><td>1.6 (53&times;)</td><td>0.27 (310&times;)</td><td>0.27</td></tr>
+<tr><td>the gradient, 3840 by 2160</td><td>360 ms</td><td>171 (2.1&times;)</td><td>34.5 (10.4&times;)</td><td>16.5 (22&times;)</td><td>&mdash;</td><td>10.3</td></tr>
+</tbody></table></div>
+<p><strong>What it shows.</strong> With every value going through the frame's slots, each step waits for the step before it to reach memory and come back (store to load, some 4 to 5 cycles a step), and the loop is as slow as that chain: what the interpreter spends on dispatch the processor already does beside those waits, so taking it away gains little (1.1 to 2.1 times). Kept in registers, the chain is gone: 6 to 10 times as fast, mandelbrot within 8% of C++. With the checks on the lists asked once, the byte loop is within 6 times of C++ and the gradient within 1.6 times; made ahead, the byte loop is C++'s speed.</p>
+<p><strong>The gate</strong> (question 8): copy and patch on its own is below 2.5 times on all three loops, so the work stopped here for the user's word; values in registers are above 5 times on all three.</p>
 
 <h2 id="np-order">Order</h2>
 <p>Each step committed with its tests; only the Clang Windows build checked step by step, the full check (ASan, now through Clang, the stress settings, Linux) at the end.</p>
