@@ -8137,8 +8137,10 @@ int CompilerSession::putBack(const std::string& data, const std::vector<std::str
     const Renumbering into{mapped(globals), mapped(moduleIndex), mapped(numbers)};
     for (FunctionProto* proto : protos) renumber(*proto, into, vm_);
     if (missing) return 2;
+    // Jade's own making, each function checked by the verifier at its first call, as a kept
+    // program's are (a unit of bad code then fails there, rather than being compiled again).
     try {
-        for (FunctionProto* proto : protos) verifyModule(*proto, program);
+        for (FunctionProto* proto : protos) verifyModule(*proto, program, true);
     } catch (const std::exception&) {
         return 2;
     }

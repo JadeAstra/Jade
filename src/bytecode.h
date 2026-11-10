@@ -999,7 +999,9 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm);
 void writeModules(const std::vector<const FunctionProto*>& modules, std::ostream& out);
 std::vector<FunctionProto*> readModules(Program& program, VM& vm, const std::string& data);
 // Verifies a module read back and renumbered, as readProgram does every module.
-void verifyModule(FunctionProto& module, const Program& program);
+// `trusted` as for verifyFunction: a unit jade kept and puts back, each function checked at its
+// first call.
+void verifyModule(FunctionProto& module, const Program& program, bool trusted = false);
 
 // Takes out of a program the top-level declarations it can never reach, with their code
 // (M6.5 part 5): for a built program, after it is compiled whole. `globalsByName` are the

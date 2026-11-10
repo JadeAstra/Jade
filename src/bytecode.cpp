@@ -2127,10 +2127,10 @@ std::vector<FunctionProto*> readModules(Program& program, VM& vm, const std::str
     return modules;
 }
 
-void verifyModule(FunctionProto& module, const Program& program) {
+void verifyModule(FunctionProto& module, const Program& program, bool trusted) {
     if (module.arity != 0 || !module.upvalues.empty())
         throw std::runtime_error("invalid bytecode: a module cannot take arguments or capture variables");
-    verifyTree(module, program);
+    verifyTree(module, program, false, trusted);
 }
 
 void writeProgram(const Program& program, std::ostream& out) {
