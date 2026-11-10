@@ -112,6 +112,13 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   detail.wrap = true
   val table = Table(columnNames, [])
   val tableComponent = Component(table)
+  // Back to what the whole run gave, from a check chosen.
+  val summaryButton = button("Summary") {
+    chosen = null
+    table.selected = -1
+    dirty = true
+  }
+  summaryButton.enabled = false
 
   // The options the controls say now.
   fun optionsNow() : Options {
@@ -205,6 +212,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     val c = chosen
     val text = c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :
                "Choose a check to see what it gave."
+    summaryButton.enabled = c != null
     // Set only when it changes: setting it lays the pane out again, and puts the caret back.
     if (text != detailModel.text) { detailModel.setText(text) }
   }
@@ -304,6 +312,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       cell(label("  Find:"))
       cell(Component(TextField(searchModel)), fill = Fill.horizontal, weightX = 1.0)
       cell(Component(summary), anchor = Anchor.east)
+      cell(summaryButton)
     }
   }
   val ui = grid {
