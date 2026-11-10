@@ -100,6 +100,7 @@ pre code { background: none; padding: 0; }
 <li><a href="#np-stencils">Stencils, made from the VM's own instructions</a></li>
 <li><a href="#np-running">Running the machine code</a></li>
 <li><a href="#np-registers">Values in registers</a></li>
+<li><a href="#np-loops">Loop templates</a></li>
 <li><a href="#np-cache">Kept with the compiled program</a></li>
 <li><a href="#np-platforms">Systems, processors and the two builds</a></li>
 <li><a href="#np-speed">Speed: where it starts and the targets</a></li>
@@ -158,6 +159,34 @@ pre code { background: none; padding: 0; }
 <li><strong>Ways out</strong> write every register value back to its slot first, and a way back in reads them again; a call writes back what the callee might see (nothing, for a slot no one else names).</li>
 </ul>
 
+<h2 id="np-loops">Loop templates</h2>
+<p>Added at the user's word (2026-11-10): the common shapes of loops, and of the data they work on, made as machine code for the whole loop, not an instruction at a time. Once values are in registers, what a tight loop still spends is mostly what it asks again for each item: which kind of list this is, whether this core may touch it, whether the index is in range. A loop template asks once, at the loop's start, and runs the items with nothing but their work.</p>
+<h4>The shapes</h4>
+<ul>
+<li><strong>Counted</strong>: <code>for (i in a ..&lt; b)</code>, with a step or down; the counter, its end and its step in registers.</li>
+<li><strong>Over items</strong>: <code>for (x in items)</code> over a list, <code>Bytes</code>, a grid's cells or a range.</li>
+<li><strong>Rows and columns</strong>: <code>for (y in ...) { for (x in ...) { ... y * w + x ... } }</code> and the index carried along a row (<code>var at = y * w * 4</code>, <code>at += 4</code>): a picture's or a grid's pixels, row by row.</li>
+<li><strong>A queue or a search</strong>: <code>while (head &lt; queue.size)</code>, a loop left by <code>return</code> or <code>break</code> at the first item that fits.</li>
+</ul>
+<h4>What is done once, at the loop's start</h4>
+<ul>
+<li>Each list, <code>Bytes</code> or grid the body reads or writes by index: its storage kind, that this core may touch it, that no parallel band stands in the way; where its items are held in a register. Its size too, where nothing in the body can change it (no call that could reach it, no <code>add</code> or <code>remove</code> on it; another core cannot, by the ownership rules).</li>
+<li><strong>Index checks</strong>: where an index is the counter plus a constant, or the row's index, and the loop's range keeps it inside the list's size, the per-item check is left out. Where that cannot be shown, it stays.</li>
+<li>A body that turns out to do something else (a check that fails, an overflow, a slow way) leaves the loop for the VM at that item, which does that item as it does now: the same error, the same message, at the same item.</li>
+</ul>
+<h4>Whole loops made ahead</h4>
+<p>The commonest bodies are made, like the stencils, by Clang when <code>jade.exe</code> is built, as complete loops for each kind of item, the processor's vector instructions included; the translator recognises them in the run code and uses them in place of the stencils:</p>
+<ul>
+<li>copy (<code>dst[i] = src[i]</code>) and fill (<code>dst[i] = v</code>);</li>
+<li>arithmetic with a constant or another list (<code>dst[i] = src[i] * k + c</code>, two lists added), checked for an int's overflow;</li>
+<li>a value held to a range and made a byte (<code>Math.min(255, Math.max(0, v)).toByte()</code>);</li>
+<li>a lookup through a table (<code>dst[i] = table[src[i]]</code>);</li>
+<li>a total, the least or greatest, a count of those that fit (<code>sum += f[i]</code>, <code>if (x &gt; best)</code>, <code>if (p) n += 1</code>);</li>
+<li>the first that fits (<code>if (items[i] == v) return i</code>).</li>
+</ul>
+<p>An overflow found in a vector loop is found in the item it happened in, and that item left to the VM, so the message is the one the item gives now. The same templates are what a tensor expression worked out in one pass, without a tensor for each step, can be built on, when pictures and tensors are looked at again.</p>
+<p><strong>Expected</strong>: a loop with its checks done once, 0.5 to 0.8 ns an item; a loop made ahead, the speed of the same loop in C++, vector instructions and all (a byte copy some 0.05 ns a byte, against 7.3 in the VM now).</p>
+
 <h2 id="np-cache">Kept with the compiled program</h2>
 <p>A program's machine code is kept in the program cache beside its compiled program, on this machine only, as D145 already allows (it never goes with the script): a second run copies it in and fills in the addresses that differ from run to run (the VM's own functions, the stencils' helpers), and starts at native speed. Made again when <code>jade.exe</code> changes, as the compiled program is. Workers' programs and a program made with <code>jade build</code> keep theirs the same way.</p>
 
@@ -188,13 +217,14 @@ pre code { background: none; padding: 0; }
 <h2 id="np-order">Order</h2>
 <p>Each step committed with its tests; only the Clang Windows build checked step by step, the full check (MSVC, ASan, the stress settings, Linux) at the end.</p>
 <ol start="0">
-<li><strong>The spike.</strong> The machine code copy and patch would make for the <code>numeric</code> benchmark's loop and for two picture kernels (the gradient and the byte loop above), put together by hand from the handlers' machine code, with every check and way out kept, run beside the VM and C++ and timed; and the same with the loop's values in registers. Nothing in Jade changes. It says whether the targets hold before anything is built (question 8).</li>
+<li><strong>The spike.</strong> The machine code copy and patch would make for the <code>numeric</code> benchmark's loop and for two picture kernels (the gradient and the byte loop above), put together by hand from the handlers' machine code, with every check and way out kept, run beside the VM and C++ and timed; and the same with the loop's values in registers, and as a loop template (its checks done once, and the byte loop as a loop made ahead). Nothing in Jade changes. It says whether the targets hold before anything is built (question 8).</li>
 <li><strong>Operands by name</strong> in <code>instructions.inc</code>, a change of spelling only: the interpreter's machine code the same, the benchmarks within noise of the commit before.</li>
 <li><strong>The stencil build and the tool</strong>: stencils for the hot register instructions (about 40), the rest ways out; the table in <code>jade.exe</code>; a test that every stencil's gaps are what the tool says.</li>
 <li><strong>Running</strong>: code memory, copying and filling in, jumps, ways out to the VM and back, calls both ways, errors and traces, safe points, tasks; the switch and the dump; the suite run with machine code for the functions it covers. Benchmarks.</li>
 <li><strong>Every instruction</strong> a stencil or a way out, the stack code's own instructions included; the full suite both ways, and with the GC and thread stress settings; benchmarks and the start-up budgets.</li>
 <li><strong>The cache</strong>: machine code kept and filled in again on load; the second-run budget kept.</li>
 <li><strong>Values in registers</strong>: the choice of slots, the variant stencils, writing back at ways out; the suite both ways; benchmarks.</li>
+<li><strong>Loop templates</strong>: the shapes recognised; checks done once at a loop's start, index checks left out where the range shows them needless; then the whole loops made ahead, one shape at a time, each with tests of its answers, its errors and the item they come at beside the VM, and timed beside C++.</li>
 <li><strong>x64 Linux</strong>: the tool reading ELF, the suite both ways on WSL with GCC's and Clang's builds.</li>
 <li><strong>The timing table</strong> written up beside <a href="M10-speed.html">M10-speed.html</a>: the kernels as Jade loops with machine code beside C++, and what that means for the pieces decided as C++ for speed. Then, at the user's word, the speed of pictures and tensors looked at again.</li>
 </ol>
@@ -239,6 +269,7 @@ pre code { background: none; padding: 0; }
 <li><strong>The spike as a gate.</strong> <em>Recommended:</em> if copy and patch is less than 2.5 times as fast as the VM on the spike's loops, or registers less than 5 times, stop and report before step 1.</li>
 <li><strong>Kept in the cache.</strong> <em>Recommended:</em> yes, beside the compiled program, on this machine only, made again when <code>jade.exe</code> changes.</li>
 <li><strong>New names.</strong> <code>--interpret</code>, <code>JADE_NATIVE</code>, <code>JADE_DUMP_NATIVE</code>, and <code>tools/stencils</code>. <em>Recommended</em> as written; the user's to settle.</li>
+<li><strong>Loop templates</strong> (<a href="#np-loops">above</a>). <em>Recommended:</em> after values in registers (step 7), checks done once for every loop first, then the whole loops made ahead in this order: copy and fill; arithmetic with a constant or a list; held to a range and made a byte; lookup through a table; totals, least and greatest, counts; the first that fits; and the rows-and-columns shape for pictures. The order may change with what the picture code and the kernels show they use most.</li>
 </ol>
 </section>
 </main>
