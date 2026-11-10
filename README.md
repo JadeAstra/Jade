@@ -1305,8 +1305,11 @@ class Square(val side : int) : Shape("square") {
   with the initial values of the fields around them. A class has either such blocks or a
   hand-written `fun init`, not both.
 - The access words say whose code may use a member. Using one from anywhere else is an
-  error, found when the line runs:
-  `'secret' is private in class Box: only code written in that class can use it`.
+  error: `'secret' is private in class Box: only code written in that class can use it`.
+  `jade check` says so before the program runs wherever the code is written in no class at
+  or below the one that declares the member (and, for `internal`, in another library); where
+  it is, the object's own class decides, and the program says so when the line runs (a
+  subclass using a protected member on another subclass's object, say).
 
   | In front of a member | Who may use it |
   | --- | --- |

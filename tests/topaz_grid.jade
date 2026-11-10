@@ -218,9 +218,7 @@ print(nested.descendants().map { it.id ?: (it.content)#.name }, (nested.content 
 print(checks, failed)   // expect: 17 []
 
 // What JadeUI keeps to the library is kept from the program: an internal member, and the
-// setter of a property that only the component itself assigns.
-try { inner.adopt(nested) } catch (e) { print(e.message) }   // expect: 'adopt' is internal in class Component: only code of the library it belongs to can use it
-try { inner.parent = null } catch (e) { print(e.message) }   // expect: 'parent' cannot be assigned here: its setter is private in class Component, so only code written in that class can assign to it
-try { print(inner.overlayDescendants) } catch (e) { print(e.message) }   // expect: 'overlayDescendants' is internal in class Component: only code of the library it belongs to can use it
+// setter of a property that only the component itself assigns. Written out after the object's
+// name, `jade check` says so before the program runs (tests/check/access.jade).
 try { Topaz.renderGeneration = 0 } catch (e) { print(e.message) }   // expect: 'renderGeneration' cannot be assigned here: its setter is private in class Topaz, so only code written in that class can assign to it
 print(inner.parent!!.id, Topaz.renderGeneration >= 0)   // expect: middle true

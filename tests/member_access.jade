@@ -123,13 +123,8 @@ print(seen)                               // expect: the program's area
 // ---- Written out after the object's name ----
 
 // From outside the class a private member cannot be read, called or assigned.
-tell { print(box.secret) }                // expect: 'secret' is private in class Box: only code written in that class can use it
-tell { print(box.helper()) }              // expect: 'helper' is private in class Box: only code written in that class can use it
-tell { box.level = 3 }                    // expect: 'level' is private in class Box: only code written in that class can use it
-tell { box.count += 1 }                   // expect: 'count' is private in class Box: only code written in that class can use it
-tell { print(box?.secret) }               // expect: 'secret' is private in class Box: only code written in that class can use it
-tell { print(pair.left) }                 // expect: 'left' is private in class Pair: only code written in that class can use it
-tell { val f = box.helper; print(f()) }   // expect: 'helper' is private in class Box: only code written in that class can use it
+// (Written out after the object's name, these are said by `jade check` before the program runs:
+// tests/check/access.jade.)
 print(box.open, pair.right, box.reveal()) // expect: 1 2 [42, 0, 7]
 
 // The class's own code reaches it on any object of the class; a class inside it does too.
@@ -173,9 +168,6 @@ class Circle(val r : int) : Figure() {
 }
 val circle = Circle(2)
 print(circle.describe(), circle.doubled(), circle.plain(), Figure().describe())   // expect: circle of area 12 24 0 figure of area 0
-tell { print(circle.area()) }             // expect: 'area' is private in class Circle: only code written in that class can use it
-tell { print(circle.kind) }               // expect: 'kind' is private in class Circle: only code written in that class can use it
-tell { print(Figure().area()) }           // expect: 'area' is private in class Figure: only code written in that class can use it
 circle.apply { seen = area() }
 print(seen)                               // expect: the program's area
 print(Square(3).area())                   // expect: 9
@@ -208,10 +200,6 @@ class Counter {
   fun whisper() => Secret("hush").word
 }
 print(Counter.next(), Counter.next(), Counter().steps(), Counter().whisper())   // expect: 1 2 10 hush
-tell { print(Counter.total) }             // expect: 'total' is private in class Counter: only code written in that class can use it
-tell { Counter.total = 9 }                // expect: 'total' is private in class Counter: only code written in that class can use it
-tell { Counter.bump() }                   // expect: 'bump' is private in class Counter: only code written in that class can use it
-tell { print(Counter.step) }              // expect: 'step' is private in class Counter: only code written in that class can use it
 tell { print(Counter.Secret("x").word) }  // expect: 'Secret' is private in class Counter: only code written in that class can use it
 print(Counter.next())                     // expect: 3
 
@@ -221,7 +209,6 @@ data Point(private val x : int, val y : int) {
 }
 val (px, py) = Point(1, 2)
 print(Point(1, 2), Point(1, 2) == Point(1, 2), Point(1, 2).shifted(), px, py, Point(1, 2).copy(y = 5))   // expect: Point(x=1, y=2) true Point(x=2, y=2) 1 2 Point(x=1, y=5)
-tell { print(Point(1, 2).x) }             // expect: 'x' is private in class Point: only code written in that class can use it
 
 // An object declared by name keeps things to itself as a class does.
 object Registry {
@@ -229,7 +216,6 @@ object Registry {
   fun add(name : string) { names.add(name); return names.size }
 }
 print(Registry.add("a"), Registry.add("b"))   // expect: 1 2
-tell { print(Registry.names) }            // expect: 'names' is private in class Registry: only code written in that class can use it
 
 // ---- protected: the class and its subclasses ----
 
@@ -261,10 +247,6 @@ val knob = Knob()
 print(knob.show(), knob.turn())                   // expect: knob idle knob turned
 print(knob.viaThis(), knob.inLambda(), knob.cap())   // expect: knob turned, paint turned knob turned 3
 print(Dial().deep(), knob.peek(Dial()), Widget().sameAs(knob))   // expect: knob idle! idle false
-tell { print(knob.state) }                // expect: 'state' is protected in class Widget: only code written in that class or in a subclass of it can use it
-tell { print(knob.paint()) }              // expect: 'paint' is protected in class Widget: only code written in that class or in a subclass of it can use it
-tell { knob.state = "set" }               // expect: 'state' is protected in class Widget: only code written in that class or in a subclass of it can use it
-tell { print(Widget.limit) }              // expect: 'limit' is protected in class Widget: only code written in that class or in a subclass of it can use it
 // A subclass uses it on its own objects, not on those of the class above or of a sibling.
 class Slider : Widget()
 tell { print(knob.peek(Widget())) }       // expect: 'state' is protected in class Widget: only code written in that class or in a subclass of it can use it
@@ -298,7 +280,6 @@ class Sum(val a : int, val b : int) : Job() {
   override fun work() => a + b
 }
 print(Sum(2, 3).run())                    // expect: ran 5
-tell { print(Sum(2, 3).work()) }          // expect: 'work' is protected in class Job: only code written in that class or in a subclass of it can use it
 
 // ---- The setter of a property: `private set` ----
 
@@ -326,10 +307,6 @@ class FineMeter : Meter() {
 }
 val meter = Meter().tick()
 print(meter.reading, meter.total, meter.level)   // expect: 1 20 1
-tell { meter.reading = 7 }                // expect: 'reading' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
-tell { meter.reading += 1 }               // expect: 'reading' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
-tell { meter.total = 1 }                  // expect: 'total' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
-tell { meter.level = 2 }                  // expect: 'level' cannot be assigned here: its setter is protected in class Meter, so only code written in that class or in a subclass of it can assign to it
 tell { meter.apply { reading = 3 } }      // expect: 'reading' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
 tell { FineMeter().cheat() }              // expect: 'reading' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
 tell { FineMeter().cheatThis() }          // expect: 'total' cannot be assigned here: its setter is private in class Meter, so only code written in that class can assign to it
@@ -349,7 +326,6 @@ class Temp {
   }
 }
 print(Temp().warm().degrees)              // expect: 30
-tell { Temp().degrees = 1 }               // expect: 'degrees' cannot be assigned here: its setter is private in class Temp, so only code written in that class can assign to it
 class Tally {
   static {
     var count = 0
@@ -361,7 +337,6 @@ class Tally {
   }
 }
 print(Tally.add(), Tally.add(), Tally.count)   // expect: 1 2 2
-tell { Tally.count = 9 }                  // expect: 'count' cannot be assigned here: its setter is private in class Tally, so only code written in that class can assign to it
 
 // ---- internal: the library ----
 

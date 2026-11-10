@@ -231,8 +231,8 @@ same("the oldest are gone", long.length, 50)
 
 // The revision goes up with the text, not with the caret.
 val rev = SharedTextModel("abc")
-// (revision is the toolkit's own: a program outside it cannot read it)
-try { print(rev.revision) } catch (e) { print(e.message) }   // expect: 'revision' is internal in class SharedTextModel: only code of the library it belongs to can use it
+// (revision is the toolkit's own: a program outside it cannot read it; `jade check` says so,
+// tests/check/access.jade)
 
 // Pictures among the words: their tags stay in step through every edit.
 val pics = SharedTextModel("ab")

@@ -2156,6 +2156,148 @@ struct Checker::Impl {
         return m;
     }
 
+    // ---- Who may use a member ----
+    //
+    // What the program refuses as it runs (VM::accessDenied, "Who may use a member" in vm.cpp),
+    // said here where it is certain whatever object the code is given: a member written
+    // `private`, `protected` or `internal`, or with `private set` and the like under it, used by
+    // code written in no class at or below the one that declares it (and, for `internal`, in
+    // another library). Code written in such a class may be allowed or not by the object's own
+    // class, which only the running program knows, so it is left to it.
+
+    // The member being assigned, where an assignment or ++ is checking its target.
+    const Expr* assigning = nullptr;
+
+    // Whether `k` is `above` or a class below it.
+    bool atOrBelow(ClassInfo* k, ClassInfo* above) {
+        for (ClassInfo* c = k; c != nullptr; c = c->superclass) {
+            if (c == above) return true;
+            resolveSupers(c);
+        }
+        return false;
+    }
+
+    // Whether the code being checked is written inside a class at or below `owner`.
+    bool writtenAtOrBelow(ClassInfo* owner) {
+        for (FnCtx* c = ctx; c != nullptr; c = c->parent)
+            for (ClassInfo* k = c->cls; k != nullptr; k = k->outer)
+                if (atOrBelow(k, owner)) return true;
+        return false;
+    }
+
+    static std::string libraryOfUnit(const Unit* u) { return u != nullptr && u->ns != nullptr ? u->ns->library : std::string(); }
+
+    // Whether the access word `word` on a member of `owner` keeps it from the code being checked.
+    bool deniedHere(ClassInfo* owner, uint8_t word) {
+        if (owner == nullptr || word == kAccessWordNone || word == kAccessWordPublic) return false;
+        if (writtenAtOrBelow(owner)) return false;
+        if (word == kAccessWordInternal) return libraryOfUnit(unit) != libraryOfUnit(owner->unit);
+        return true;
+    }
+
+    // What the program says of it, word for word (VM::accessError).
+    static std::string accessMessage(const std::string& name, ClassInfo* owner, uint8_t word, bool setter) {
+        const char* const kind = word == kAccessWordProtected ? "protected" : word == kAccessWordInternal ? "internal" : "private";
+        const char* const who = word == kAccessWordProtected ? "only code written in that class or in a subclass of it can "
+                                : word == kAccessWordInternal ? "only code of the library it belongs to can "
+                                : "only code written in that class can ";
+        if (setter)
+            return "'" + name + "' cannot be assigned here: its setter is " + kind + " in class " + owner->name + ", so " + who + "assign to it";
+        return "'" + name + "' is " + kind + " in class " + owner->name + ": " + who + "use it";
+    }
+
+    // Says so where code may not use a member of `owner` with the access word `word` (and, where
+    // it is assigned, `setWord` under it); true if it did.
+    bool checkAccess(ClassInfo* owner, const std::string& name, uint8_t word, uint8_t setWord, bool write, const Node& at) {
+        if (deniedHere(owner, word)) {
+            report(at, accessMessage(name, owner, word, false));
+            return true;
+        }
+        if (write && deniedHere(owner, setWord)) {
+            report(at, accessMessage(name, owner, setWord, true));
+            return true;
+        }
+        return false;
+    }
+
+    // Whether a member written `override` with an access word takes the place of one open above:
+    // an error of its declaration, which the program says as the class is made, and no use of it.
+    bool narrowsOpen(ClassInfo* owner, const std::string& name, bool isOverride, uint8_t word) {
+        if (!isOverride || owner == nullptr || word == kAccessWordNone || word == kAccessWordPublic) return false;
+        resolveSupers(owner);
+        if (owner->superclass == nullptr) return false;
+        const Member above = lookupMember(classType(owner->superclass), name);
+        uint8_t was = kAccessWordNone;
+        if (above.field != nullptr && above.field->decl != nullptr) was = above.field->decl->access;
+        else if (above.getter != nullptr && above.getter->decl != nullptr) was = above.getter->decl->access;
+        else if (!above.methods.empty() && above.methods[0]->decl != nullptr) was = above.methods[0]->decl->access;
+        else return false;
+        return was == kAccessWordNone || was == kAccessWordPublic;
+    }
+
+    // A member written `override` with no access word is as it was above: protected or internal
+    // still, while what was private above is a new, open member (VM::declareAccess). The word it
+    // has, and the class that wrote it, for the error's words.
+    void asAbove(ClassInfo*& owner, const std::string& name, uint8_t& word, bool isOverride) {
+        for (int depth = 0; depth < 64 && isOverride && word == kAccessWordNone && owner != nullptr; depth++) {
+            resolveSupers(owner);
+            if (owner->superclass == nullptr) return;
+            const Member above = lookupMember(classType(owner->superclass), name);
+            ClassInfo* by = nullptr;
+            uint8_t was = kAccessWordNone;
+            bool overrides = false;
+            if (above.field != nullptr && above.field->decl != nullptr) {
+                by = above.field->owner;
+                was = above.field->decl->access;
+                overrides = above.field->decl->isOverride;
+            } else if (!above.methods.empty() && above.methods[0]->decl != nullptr) {
+                by = above.methods[0]->owner;
+                was = above.methods[0]->decl->access;
+                overrides = above.methods[0]->decl->isOverride;
+            } else {
+                return;
+            }
+            if (was == kAccessWordPrivate) return;   // a new, open member
+            owner = by;
+            word = was;
+            isOverride = overrides;
+        }
+    }
+
+    // The same for what lookupMember found.
+    void checkMemberAccess(const Member& m, const std::string& name, bool write, const Node& at) {
+        if (m.field != nullptr && m.field->decl != nullptr) {
+            if (narrowsOpen(m.field->owner, name, m.field->decl->isOverride, m.field->decl->access)) return;
+            ClassInfo* owner = m.field->owner;
+            uint8_t word = m.field->decl->access;
+            asAbove(owner, name, word, m.field->decl->isOverride);
+            checkAccess(owner, name, word, m.field->decl->setAccess, write, at);
+        } else if (m.getter != nullptr || m.setter != nullptr) {
+            // A property of accessors: the getter's word for using it, the setter's for assigning.
+            const FuncInfo* g = m.getter;
+            const FuncInfo* st = m.setter;
+            const uint8_t word = g != nullptr && g->decl != nullptr ? g->decl->access : kAccessWordNone;
+            const uint8_t setWord = st != nullptr && st->decl != nullptr ? st->decl->access : kAccessWordNone;
+            checkAccess(g != nullptr ? g->owner : st->owner, name, word, setWord, write, at);
+        } else if (!m.methods.empty() && m.methods[0]->decl != nullptr) {
+            // A method's forms: refused where every one of them is.
+            ClassInfo* first = nullptr;
+            uint8_t firstWord = kAccessWordNone;
+            for (const FuncInfo* f : m.methods) {
+                if (f->decl == nullptr || narrowsOpen(f->owner, name, f->decl->isOverride, f->decl->access)) return;
+                ClassInfo* owner = f->owner;
+                uint8_t word = f->decl->access;
+                asAbove(owner, name, word, f->decl->isOverride);
+                if (!deniedHere(owner, word)) return;
+                if (first == nullptr) {
+                    first = owner;
+                    firstWord = word;
+                }
+            }
+            checkAccess(first, name, firstWord, kAccessWordNone, false, at);
+        }
+    }
+
     // Whether a member is private to a class the code being checked is not written in.
     bool hiddenHere(const Member& m) {
         ClassInfo* owner = nullptr;
@@ -4778,7 +4920,10 @@ struct Checker::Impl {
                 atomicIncDec(i);
                 checkValueFieldWrite(*i.target);
                 if (FieldInfo* p = propertyAssigned(*i.target)) noteAccessor(p, true, *i.target);
+                const Expr* const before = assigning;
+                if (i.target->kind == ExprKind::Member) assigning = i.target.get();
                 Type t = expr(*i.target);
+                assigning = before;
                 // a?.count++ does nothing when a is null, so the null that ?. adds is not the
                 // field's own
                 if (t.nullable && safeChain(*i.target)) t = withNull(t, false);
@@ -6585,7 +6730,11 @@ struct Checker::Impl {
                 return unknownType();
             }
         }
-        return member(m);
+        const Expr* const before = assigning;
+        assigning = &m;
+        Type t = member(m);
+        assigning = before;
+        return t;
     }
 
     // The name a test on a value that cannot change is noted under: a val local or parameter,
@@ -6858,13 +7007,24 @@ struct Checker::Impl {
         for (ClassInfo* c = k; c != nullptr; c = c->superclass) {
             resolveSupers(c);
             auto s = c->statics.find(m.name);
-            if (s != c->statics.end()) return fieldType(noteConst(m, s->second));
+            if (s != c->statics.end()) {
+                if (s->second->decl != nullptr) checkAccess(c, m.name, s->second->decl->access, s->second->decl->setAccess, &m == assigning, m);
+                return fieldType(noteConst(m, s->second));
+            }
             auto n = c->nested.find(m.name);
             if (n != c->nested.end()) return n->second->isObject ? classType(n->second) : unknownType();
             auto sm = c->staticMethods.find(m.name);
-            if (sm != c->staticMethods.end()) return sm->second.size() == 1 ? functionValue(sm->second[0]) : unknownType();
+            if (sm != c->staticMethods.end()) {
+                Member found;
+                found.methods = sm->second;
+                checkMemberAccess(found, m.name, false, m);
+                return sm->second.size() == 1 ? functionValue(sm->second[0]) : unknownType();
+            }
             auto g = c->staticGetters.find(m.name);
-            if (g != c->staticGetters.end()) return resultOf(g->second);
+            if (g != c->staticGetters.end()) {
+                if (g->second->decl != nullptr) checkAccess(c, m.name, g->second->decl->access, kAccessWordNone, false, m);
+                return resultOf(g->second);
+            }
             if (c->isEnum && (m.name == "entries" || m.name == "valueOf" || m.name == "values")) return unknownType();
         }
         missingStatic(k, m.name, m, "static member");
@@ -7183,6 +7343,7 @@ struct Checker::Impl {
             ClassInfo* k = obj.cls;
             Member m = lookupMember(plain, name);
             noteKeyMember(m, name);
+            checkMemberAccess(m, name, &at == assigning, at);
             // An object's constant is folded where the object is named, so nothing is skipped.
             const bool named = at.object->kind == ExprKind::Name || at.object->kind == ExprKind::This;
             if (m.field) {
@@ -9470,7 +9631,10 @@ struct Checker::Impl {
                 if (!takes)
                     if (std::vector<FuncInfo*> ext = findExtensions(plain, m.name); !ext.empty()) return callFunctions(ext, c, m.name, {}, &plain);
             }
-            if (!mem.methods.empty()) return callFunctions(mem.methods, c, k->name + "." + m.name, mem.env, nullptr, &mem.methodEnvs);
+            if (!mem.methods.empty()) {
+                checkMemberAccess(mem, m.name, false, m);
+                return callFunctions(mem.methods, c, k->name + "." + m.name, mem.env, nullptr, &mem.methodEnvs);
+            }
             if (mem.field || mem.getter) {
                 if (c.isInfix) report(m, "'" + m.name + "' is a property, not an infix function (D72)");
                 return callValue(memberOf(plain, m.name, m, false), c, m.name);
@@ -9768,7 +9932,12 @@ struct Checker::Impl {
                         for (ClassInfo* above = k; above != nullptr; above = above->superclass) {
                             resolveSupers(above);
                             auto sm = above->staticMethods.find(m.name);
-                            if (sm != above->staticMethods.end()) return callFunctions(sm->second, c, above->name + "." + m.name, {}, nullptr);
+                            if (sm != above->staticMethods.end()) {
+                                Member found;
+                                found.methods = sm->second;
+                                checkMemberAccess(found, m.name, false, m);
+                                return callFunctions(sm->second, c, above->name + "." + m.name, {}, nullptr);
+                            }
                             auto nested = above->nested.find(m.name);
                             if (nested != above->nested.end() && !nested->second->isObject) {
                                 Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
