@@ -91,7 +91,7 @@ pre code { background: none; padding: 0; }
 <body>
 <main>
 <h1>Plan: native code while running</h1>
-<p class="lede">Written 2026-11-10, at the user's word: built now, before part two of <a href="M10-plan.html">M9 and M10</a>, after which the speed of pictures and tensors is looked at again. The timings it starts from are in <a href="M10-speed.html">M10-speed.html</a>; what is still to be done elsewhere is in <a href="outstanding6.7.html">outstanding6.7.html</a>; the plan of the whole library is <a href="gui-plan.html">gui-plan.html</a>, where M14 (native code for built programs, through a C++ compiler) is described.</p>
+<p class="lede">Written 2026-11-10, at the user's word: built now, before part two of <a href="M10-plan.html">M9 and M10</a>, after which the speed of pictures and tensors is looked at again. The timings it starts from are in <a href="M10-speed.html">M10-speed.html</a>; what is still to be done elsewhere is in <a href="outstanding.html">outstanding.html</a>; the plan of the whole library is <a href="gui-plan.html">gui-plan.html</a>, where M14 (native code for built programs, through a C++ compiler) is described.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -263,7 +263,7 @@ pre code { background: none; padding: 0; }
 <li><strong>When a function is given machine code.</strong> <em>Recommended:</em> at its first call, when its run code is made, as now; if the first-run budget suffers, at its second call instead (a function called once runs in the VM).</li>
 <li><strong>On by default, and the switch.</strong> <em>Recommended:</em> on for everything (scripts, the shell, workers, tests, built programs); off with <code>jade --interpret</code> or <code>JADE_NATIVE=0</code>; the test runner runs every test both ways.</li>
 <li><strong>Linux.</strong> <em>Recommended:</em> in this milestone, after Windows (step 7), so that Jade stays the same on both.</li>
-<li><strong>The MSVC build.</strong> <em>Recommended:</em> runs without machine code, as now; whether the Windows release is built with Clang (the open question <a href="outstanding6.7.html#o-clang">o-clang</a>) matters more once only the Clang build has it.</li>
+<li><strong>The MSVC build.</strong> <em>Recommended:</em> runs without machine code, as now; whether the Windows release is built with Clang (the open question <a href="outstanding.html#o-clang">o-clang</a>) matters more once only the Clang build has it.</li>
 <li><strong>M14.</strong> <em>Recommended:</em> kept in the plan as it is, and looked at again with this milestone's timings.</li>
 <li><strong>Registers.</strong> <em>Recommended:</em> as many as <code>preserve_none</code> gives beyond the VM's own state (on x64 about six for ints and six for floats), for ints, floats and bools only.</li>
 <li><strong>The spike as a gate.</strong> <em>Recommended:</em> if copy and patch is less than 2.5 times as fast as the VM on the spike's loops, or registers less than 5 times, stop and report before step 1.</li>

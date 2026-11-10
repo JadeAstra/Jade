@@ -3,7 +3,7 @@
 // The compiler writes stack code, which the verifier follows knowing the stack's depth before
 // each instruction (bytecode.cpp). From it, this makes the code the VM runs, with the source line
 // of each of its bytes and the ranges of the function's rights in its offsets
-// (docs/plans-and-gaps6.7.html, the M6.7 plan's "The register machine").
+// (docs/plans-and-gaps.html, the M6.7 plan's "The register machine").
 //
 // A local or a constant that the stack code pushes is not moved: the translator notes where the
 // value is, and the instruction that takes it reads it from there, by an operand naming the slot
@@ -1339,7 +1339,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
         return;
     }
     // The register code in full, unless JADE_REGISTER_CODE says otherwise, for testing and timing
-    // the other ways (the M6.7 plan, docs/plans-and-gaps6.7.html): =joined makes only the stack code's joined instructions R
+    // the other ways (the M6.7 plan, docs/plans-and-gaps.html): =joined makes only the stack code's joined instructions R
     // instructions, as the default was until part D, and =plain makes every function keep its stack
     // code, as one of more than 255 slots does. Any other value is the default.
     static const char* const asked = std::getenv("JADE_REGISTER_CODE");

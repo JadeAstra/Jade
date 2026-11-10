@@ -183,11 +183,11 @@ td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-n
 <h2 id="s-left">Left</h2>
 <ul>
 <li>Checks moved out of a loop where the compiler can prove them, as the plan's part zero names them: not built. A list's bounds are checked at each read; a read in the steps above takes about 4.5 ns, the check, the index's &amp; and the add among it.</li>
-<li>Methods put in place of their calls as small functions are: about 17 ns a call (<a href="outstanding6.7.html#o-methods">outstanding list</a>).</li>
+<li>Methods put in place of their calls as small functions are: about 17 ns a call (<a href="outstanding.html#o-methods">outstanding list</a>).</li>
 <li>A program's start: 17.4 ms from the process made to the first line run, 16.2 on the build of 3 November. It had grown to 27.8 since the register machine (M6.7), which translated every function of the standard library as the program was read; since 79d12fc a function is translated at its first call. What is left: the standard library is a quarter larger, and about 11.5 ms pass before jade.exe begins its own work (the system loading it), as on 3 November.</li>
 <li>A byte or an item written by index as a register instruction: <code>out[o] = letters[x]</code> is a stack <code>SET_INDEX</code> and four instructions about it, where a read is one R instruction. Base64's loops are about 1.3 ns an instruction, the interpreter's speed; this is the change that would shorten them.</li>
 <li>Calls from a loop, measured 2026-11-09 against bbc99e7 (ns a pass, a bare loop 3.5 rather than 5.1 once ints are written whole): a method in C++ (<code>bytes.uint16(i)</code>) 17.2 to 13.3, by R_INVOKE (3e94be4), which keeps at each place the C++ method it found last and puts its result straight where it goes; <code>bytes.size</code> and a map's or list's <code>size</code> 16.5 to 4.3, which had always gone the slow way since a class of the standard library keeps a <code>size</code> of its own private; a function of one argument 17.9 to 16.8 and of three 20.2 to 18.9, by R_CALL; a method of three arguments 22.2 to 22.0. What is left of a call to Jade is the call itself: finding the method, reading through the closure to its code, the frame, the checks of the parameters' types and the return. A place keeping the method it found was weighed and left: the class and the method do not fit in one word, and cores share the places. The benchmarks are level or faster (strings 1.12&times;, simulation 1.09&times;).</li>
-<li>Tensor expressions combined into one loop (<a href="outstanding6.7.html#o-fused">outstanding list</a>).</li>
+<li>Tensor expressions combined into one loop (<a href="outstanding.html#o-fused">outstanding list</a>).</li>
 </ul>
 </section>
 </main>

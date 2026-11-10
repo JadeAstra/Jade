@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Outstanding after M8</title>
+<title>Outstanding</title>
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
@@ -86,8 +86,8 @@ pre code { background: none; padding: 0; }
 </head>
 <body>
 <main>
-<h1>Outstanding after M8</h1>
-<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it, and brought up to date after M8 (version 0.8.0) on 2026-11-07. Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps6.7.html">plans-and-gaps6.7.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.html">gui-plan.html</a>.</p>
+<h1>Outstanding</h1>
+<p class="lede">Everything still to do, to decide or to keep in mind from the plans and gap pages of M6.6, M6.6.2 and M6.7, gathered on 2026-11-06 after version 0.6.7 and the gaps built after it, and brought up to date after M8 (version 0.8.0) on 2026-11-07. Since 2026-11-10 it is kept up to date with each commit, at the user's word, and named without a version (it was <code>outstanding6.7.html</code>). Each item was checked against the commits and the source, not only against what the pages said. Where an item came from is linked: those pages are kept together, as they were, in <a href="plans-and-gaps.html">plans-and-gaps.html</a>. Gap numbers (G9, G58, ...) and choice codes (8.1e, ...) are the ones used there and in the code. The plan for the milestones ahead is <a href="gui-plan.html">gui-plan.html</a>.</p>
 
 <nav>
 <h2>Contents</h2>
@@ -112,7 +112,7 @@ pre code { background: none; padding: 0; }
 <tr><td class="part" id="o-native">Native code</td><td>A plan written 2026-11-10 at the user's word, to be built now, before part two of M9 and M10: copy and patch from the VM's own instructions, then values in registers, with no C++ compiler on any machine that runs Jade (<a href="native-plan.html">native-plan.html</a>). Its ten questions wait for the user.</td><td class="when">The plan's recommendations</td></tr>
 <tr><td class="part" id="o-next">M9 and M10</td><td>Started 2026-11-08, done together at the user's word, from the plan in <a href="M10-plan.html">M10-plan.html</a>, every question there answered. M8 is built (version 0.8.0, <a href="gui-plan.html#s6-5">gui-plan.html, section 6.5</a>).</td><td class="when">Under way</td></tr>
 <tr><td class="part" id="o-elevated">JadeMem elevated</td><td>JadeMem has been run unelevated only. The elevated paths (the pool tag table read elevated, real ETW sessions, the raw read of a volume's file table) follow the Kotlin's layouts and were checked against made-up data, not this machine.</td><td class="when">A run as administrator, beside the Kotlin JadeMem</td></tr>
-<tr><td class="part" id="o-g17"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
+<tr><td class="part" id="o-g17"><a href="plans-and-gaps.html#g17">G17</a></td><td>Frame slots that keep only a payload, the unbuilt half of D178. Assessed after 0.6.7: the typed instructions already read only the payload, and the kind goes out in the same 16-byte store, so the saving is about one store per result; against it, the collector would need to know which slots are bare at each instruction, every general path would have to rebuild values, and mixed-size stores risk the store-forwarding stalls measured in part D.</td><td class="when">Close it as not worth building</td></tr>
 <tr><td class="part" id="o-clang">Windows build</td><td>Which compiler the Windows release is built with. MSVC cannot be made to do tail calls for certain (tried and removed, 2026-11-05), so its build keeps the switch: 3.3 times as long on <code>numeric</code>, about twice on <code>calls</code>, <code>fields</code> and <code>particles</code>, 25% faster on <code>points_values</code>.</td><td class="when">Ship the clang-cl build</td></tr>
 <tr><td class="part" id="o-pgo">MSVC PGO</td><td>Profile-guided optimisation for the MSVC build, offered for after M6.7, should the MSVC build stay in use.</td><td class="when">Only if MSVC is kept</td></tr>
 </tbody></table></div>
@@ -121,10 +121,10 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">Gap</th><th>What is left</th><th class="when">Where it stands</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-g9"><a href="plans-and-gaps6.7.html#g9">G9</a></td><td>A field read or a method run on a list item still finds the item each time (the list, its items, the item): methods on items take 1.39 times as long as on objects. Only keeping where <code>this</code> is, the item's place held in a frame slot for the whole method, would save it; a larger change.</td><td class="when">Built in part (024e060)</td></tr>
-<tr><td class="part" id="o-g58"><a href="plans-and-gaps6.7.html#g58">G58</a></td><td>A bundle (<code>params(...)</code>, D143, choice <a href="plans-and-gaps6.7.html#m66g-p9-bundle">8.9e</a>) is still a Map when the program runs. Its values are read in place now: a call given one takes 58 ns against 49 with the arguments written out. A fixed layout read by position would save the rest.</td><td class="when">Built in part (ce625aa)</td></tr>
-<tr><td class="part" id="o-g17b"><a href="plans-and-gaps6.7.html#g17">G17</a></td><td>Frame slots that keep only a payload: see <a href="#o-g17">waiting for the user</a>.</td><td class="when">Not built; closing recommended</td></tr>
-<tr><td class="part" id="o-g46"><a href="plans-and-gaps6.7.html#g46">G46</a></td><td><code>@Deprecated</code>: written now, it is an error saying it comes with 1.0 and to say so in the comment above the declaration.</td><td class="when">For 1.0</td></tr>
+<tr><td class="part" id="o-g9"><a href="plans-and-gaps.html#g9">G9</a></td><td>A field read or a method run on a list item still finds the item each time (the list, its items, the item): methods on items take 1.39 times as long as on objects. Only keeping where <code>this</code> is, the item's place held in a frame slot for the whole method, would save it; a larger change.</td><td class="when">Built in part (024e060)</td></tr>
+<tr><td class="part" id="o-g58"><a href="plans-and-gaps.html#g58">G58</a></td><td>A bundle (<code>params(...)</code>, D143, choice <a href="plans-and-gaps.html#m66g-p9-bundle">8.9e</a>) is still a Map when the program runs. Its values are read in place now: a call given one takes 58 ns against 49 with the arguments written out. A fixed layout read by position would save the rest.</td><td class="when">Built in part (ce625aa)</td></tr>
+<tr><td class="part" id="o-g17b"><a href="plans-and-gaps.html#g17">G17</a></td><td>Frame slots that keep only a payload: see <a href="#o-g17">waiting for the user</a>.</td><td class="when">Not built; closing recommended</td></tr>
+<tr><td class="part" id="o-g46"><a href="plans-and-gaps.html#g46">G46</a></td><td><code>@Deprecated</code>: written now, it is an error saying it comes with 1.0 and to say so in the comment above the declaration.</td><td class="when">For 1.0</td></tr>
 </tbody></table></div>
 
 <h2 id="text">Text fixes promised and not made</h2>
@@ -132,9 +132,9 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">From</th><th>What to change</th><th class="when">Where</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-87b"><a href="plans-and-gaps6.7.html#m66g-p8-job-all">8.7b</a></td><td><code>Job.any(jobs)</code> is of the first job to succeed, not the first to finish.</td><td class="when">README.md, the table of jobs</td></tr>
-<tr><td class="part" id="o-88c"><a href="plans-and-gaps6.7.html#m66g-p8-permissions">8.8c</a></td><td>The comment on <code>size()</code> still says it also gives when the file was last written, in milliseconds; since G54 that is <code>lastModified()</code>, an <code>Instant</code>.</td><td class="when">src/std/file.jade</td></tr>
-<tr><td class="part" id="o-89j"><a href="plans-and-gaps6.7.html#m66g-p9-shapes">8.9j</a></td><td>Glyph curves are cut to within about a sixth of a pixel at most (a twelfth for TrueType's curves), not a tenth.</td><td class="when">src/text/raster.h</td></tr>
+<tr><td class="part" id="o-87b"><a href="plans-and-gaps.html#m66g-p8-job-all">8.7b</a></td><td><code>Job.any(jobs)</code> is of the first job to succeed, not the first to finish.</td><td class="when">README.md, the table of jobs</td></tr>
+<tr><td class="part" id="o-88c"><a href="plans-and-gaps.html#m66g-p8-permissions">8.8c</a></td><td>The comment on <code>size()</code> still says it also gives when the file was last written, in milliseconds; since G54 that is <code>lastModified()</code>, an <code>Instant</code>.</td><td class="when">src/std/file.jade</td></tr>
+<tr><td class="part" id="o-89j"><a href="plans-and-gaps.html#m66g-p9-shapes">8.9j</a></td><td>Glyph curves are cut to within about a sixth of a pixel at most (a twelfth for TrueType's curves), not a tenth.</td><td class="when">src/text/raster.h</td></tr>
 <tr><td class="part" id="o-open">gui-plan</td><td>Section 8's Open list still asks about D162 to D180 and the largest value type, all decided on 2026-11-03 (the size limit fixed in f836e90). Its two items still open are real: how JadeMem samples (M8) and Sendable classes for workers (D181).</td><td class="when">gui-plan.html, section 8</td></tr>
 <tr><td class="part" id="o-d149">gui-plan</td><td>The D149 row says it was built with the frame slots that keep only a payload, in consecutive slots; it was built as places beside the stack, without them (G17). The D178 row says nothing of what was built: arithmetic chosen by type, not the payload-only slots.</td><td class="when">gui-plan.html, the decisions table</td></tr>
 <tr><td class="part" id="o-m66">gui-plan</td><td>The M6.6 parts' lists still give as M6.7's, and open, gaps built since: G4, G8, G12, G13, G14, G19, G20, G66 (the "about 1 µs a call" for G66 among them).</td><td class="when">gui-plan.html, M6.6 notes</td></tr>
@@ -145,18 +145,18 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">Choice</th><th>What is left</th><th class="when">Condition</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-83a"><a href="plans-and-gaps6.7.html#m66g-p8-lateinit">8.3a</a></td><td>Kotlin's <code>::x.isInitialized</code> has no form.</td><td class="when">When a ported program needs it</td></tr>
-<tr><td class="part" id="o-83d"><a href="plans-and-gaps6.7.html#m66g-p8-kind-names">8.3d</a></td><td>An enum entry given bare as an argument is settled as the program runs (it travels as a name and the parameter settles it), not when compiling, as kinds are.</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-83f"><a href="plans-and-gaps6.7.html#m66g-p8-alias-self">8.3f</a></td><td>A type that refers to itself is checked one level down only (shown as <code>List&lt;*&gt;</code> inside), not all the way down.</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-84b"><a href="plans-and-gaps6.7.html#m66g-p8-sam-object">8.4b</a></td><td>A lambda given where an interface goes is two objects, the lambda and one holding it, so each call is two calls. One object whose method is the lambda's own code would do. Speed work.</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-84h"><a href="plans-and-gaps6.7.html#m66g-p8-inline-copied">8.4h</a></td><td>An error in an inline function's body is reported at the call's line only; it is to name the function and its own line too ("in twice, line 3, copied in").</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-85b"><a href="plans-and-gaps6.7.html#m66g-p8-throwable-shape">8.5b</a></td><td>A program cannot read a Throwable's stack trace.</td><td class="when">Its own decision on what it costs first</td></tr>
-<tr><td class="part" id="o-87g"><a href="plans-and-gaps6.7.html#m66g-p8-section-pieces">8.7g</a></td><td>More pieces per core in a parallel section, for items that differ in cost.</td><td class="when">Measure first: more pieces use the 253 owner numbers up faster</td></tr>
-<tr><td class="part" id="o-87i"><a href="plans-and-gaps6.7.html#m66g-p8-shared-blocks">8.7i</a></td><td>Frozen packed lists of values, and long text, are copied into each message to a worker; they could be shared in one block.</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-87j"><a href="plans-and-gaps6.7.html#m66g-p8-channel-lock">8.7j</a></td><td>Giving a lock's key back could look for waiting threads and tasks inside the runtime, not through a call of its own each time. A small saving.</td><td class="when">Optional</td></tr>
-<tr><td class="part" id="o-88j"><a href="plans-and-gaps6.7.html#m66g-p8-native-declared">8.8j</a></td><td>The C++ under fonts and images, <code>__text</code>, is not declared as an <code>external object</code> (as <code>__file</code>, <code>__io</code>, <code>__sandbox</code> and <code>Math</code> are), so the standard library's calls of it are not checked. (Its <code>Fonts.load</code> half is done.)</td><td class="when">-</td></tr>
-<tr><td class="part" id="o-89b"><a href="plans-and-gaps6.7.html#m66g-p9-exact-fit">8.9b</a></td><td>A constant colour such as <code>Color(255, 128, 0)</code> is checked when compiling but made each time it is reached, not made once as a constant.</td><td class="when">Left for now by the user's choice</td></tr>
-<tr><td class="part" id="o-d175"><a href="plans-and-gaps6.7.html#m66g-d175">D175</a></td><td>A generic function compiled once for every layout of its type arguments.</td><td class="when">When a measurement asks for it</td></tr>
+<tr><td class="part" id="o-83a"><a href="plans-and-gaps.html#m66g-p8-lateinit">8.3a</a></td><td>Kotlin's <code>::x.isInitialized</code> has no form.</td><td class="when">When a ported program needs it</td></tr>
+<tr><td class="part" id="o-83d"><a href="plans-and-gaps.html#m66g-p8-kind-names">8.3d</a></td><td>An enum entry given bare as an argument is settled as the program runs (it travels as a name and the parameter settles it), not when compiling, as kinds are.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-83f"><a href="plans-and-gaps.html#m66g-p8-alias-self">8.3f</a></td><td>A type that refers to itself is checked one level down only (shown as <code>List&lt;*&gt;</code> inside), not all the way down.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-84b"><a href="plans-and-gaps.html#m66g-p8-sam-object">8.4b</a></td><td>A lambda given where an interface goes is two objects, the lambda and one holding it, so each call is two calls. One object whose method is the lambda's own code would do. Speed work.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-84h"><a href="plans-and-gaps.html#m66g-p8-inline-copied">8.4h</a></td><td>An error in an inline function's body is reported at the call's line only; it is to name the function and its own line too ("in twice, line 3, copied in").</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-85b"><a href="plans-and-gaps.html#m66g-p8-throwable-shape">8.5b</a></td><td>A program cannot read a Throwable's stack trace.</td><td class="when">Its own decision on what it costs first</td></tr>
+<tr><td class="part" id="o-87g"><a href="plans-and-gaps.html#m66g-p8-section-pieces">8.7g</a></td><td>More pieces per core in a parallel section, for items that differ in cost.</td><td class="when">Measure first: more pieces use the 253 owner numbers up faster</td></tr>
+<tr><td class="part" id="o-87i"><a href="plans-and-gaps.html#m66g-p8-shared-blocks">8.7i</a></td><td>Frozen packed lists of values, and long text, are copied into each message to a worker; they could be shared in one block.</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-87j"><a href="plans-and-gaps.html#m66g-p8-channel-lock">8.7j</a></td><td>Giving a lock's key back could look for waiting threads and tasks inside the runtime, not through a call of its own each time. A small saving.</td><td class="when">Optional</td></tr>
+<tr><td class="part" id="o-88j"><a href="plans-and-gaps.html#m66g-p8-native-declared">8.8j</a></td><td>The C++ under fonts and images, <code>__text</code>, is not declared as an <code>external object</code> (as <code>__file</code>, <code>__io</code>, <code>__sandbox</code> and <code>Math</code> are), so the standard library's calls of it are not checked. (Its <code>Fonts.load</code> half is done.)</td><td class="when">-</td></tr>
+<tr><td class="part" id="o-89b"><a href="plans-and-gaps.html#m66g-p9-exact-fit">8.9b</a></td><td>A constant colour such as <code>Color(255, 128, 0)</code> is checked when compiling but made each time it is reached, not made once as a constant.</td><td class="when">Left for now by the user's choice</td></tr>
+<tr><td class="part" id="o-d175"><a href="plans-and-gaps.html#m66g-d175">D175</a></td><td>A generic function compiled once for every layout of its type arguments.</td><td class="when">When a measurement asks for it</td></tr>
 <tr><td class="part" id="o-d181">D181</td><td>Sendable classes for workers (<a href="gui-plan.html#s8">gui-plan.html, section 8</a>, step 2).</td><td class="when">When a program needs it</td></tr>
 </tbody></table></div>
 
@@ -202,7 +202,7 @@ pre code { background: none; padding: 0; }
 </tbody></table></div>
 
 <h2 id="sandbox">The sandbox: what was left out</h2>
-<p>All seven steps of <a href="plans-and-gaps6.7.html#m662">M6.6.2</a> are built (version 0.6.6.2). Its <a href="plans-and-gaps6.7.html#m662-as-built-2026-11-04">As built</a> section lists the first six below; the rest were planned and are not in the code either. None is needed by a test yet.</p>
+<p>All seven steps of <a href="plans-and-gaps.html#m662">M6.6.2</a> are built (version 0.6.6.2). Its <a href="plans-and-gaps.html#m662-as-built-2026-11-04">As built</a> section lists the first six below; the rest were planned and are not in the code either. None is needed by a test yet.</p>
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is missing</th></tr></thead>
 <tbody>
@@ -224,39 +224,39 @@ pre code { background: none; padding: 0; }
 <div class="table"><table>
 <thead><tr><th class="part">What</th><th>What is left</th></tr></thead>
 <tbody>
-<tr><td class="part" id="o-sim">simulation</td><td>When the full register code became the default (part D6) <code>simulation</code> was 2 to 6% slower than the joined mode, left for later. Not measured since; against step 3 it is 13.7% faster overall, so the gap may be gone. One measurement settles it. (<a href="plans-and-gaps6.7.html#m67p-the-register-machine-as-built-so-far">M6.7 plan</a>)</td></tr>
-<tr><td class="part" id="o-g65"><a href="plans-and-gaps6.7.html#g65">G65</a> remedies</td><td>Of the ways listed to make timings steadier, alignment is built (Clang only). Not done: a profile-guided Clang build (tried once at the two-byte opcodes, mixed, not adopted), a comparison of several shuffled layouts of each build, and the measurement of an unused cold function added to <code>vm.cpp</code>.</td></tr>
+<tr><td class="part" id="o-sim">simulation</td><td>When the full register code became the default (part D6) <code>simulation</code> was 2 to 6% slower than the joined mode, left for later. Not measured since; against step 3 it is 13.7% faster overall, so the gap may be gone. One measurement settles it. (<a href="plans-and-gaps.html#m67p-the-register-machine-as-built-so-far">M6.7 plan</a>)</td></tr>
+<tr><td class="part" id="o-g65"><a href="plans-and-gaps.html#g65">G65</a> remedies</td><td>Of the ways listed to make timings steadier, alignment is built (Clang only). Not done: a profile-guided Clang build (tried once at the two-byte opcodes, mixed, not adopted), a comparison of several shuffled layouts of each build, and the measurement of an unused cold function added to <code>vm.cpp</code>.</td></tr>
 <tr><td class="part" id="o-g14">G14's limit</td><td>A path of field reads is one instruction only when it starts from a reference; from a plain read it made <code>fields</code> 18% slower, so it was left out.</td></tr>
-<tr><td class="part" id="o-arith">Arithmetic</td><td><code>int / int</code>, <code>int % int</code> and an int with a float in <code>+</code>, <code>-</code> and <code>*</code> are worked out at once in register code since M9 and M10's part zero (2a6d4d2), and a byte counts as an int in the quick ways. Still the general way: an int compared with a float, and an int divided by a float. (<a href="plans-and-gaps6.7.html#m67p-arithmetic-chosen-by-type-step-5">step 5</a>)</td></tr>
+<tr><td class="part" id="o-arith">Arithmetic</td><td><code>int / int</code>, <code>int % int</code> and an int with a float in <code>+</code>, <code>-</code> and <code>*</code> are worked out at once in register code since M9 and M10's part zero (2a6d4d2), and a byte counts as an int in the quick ways. Still the general way: an int compared with a float, and an int divided by a float. (<a href="plans-and-gaps.html#m67p-arithmetic-chosen-by-type-step-5">step 5</a>)</td></tr>
 <tr><td class="part" id="o-fused">Tensor expressions</td><td>Tensor arithmetic combined into one loop: <code>(a * 0.5 + b).clamp(0.0, 1.0)</code> run as one pass over the numbers rather than three, as numexpr and JAX do (<a href="M10-plan.html#m910p-later">M10-plan.html, left for later</a>). Memory, not arithmetic, is the cost of each pass.</td></tr>
 <tr><td class="part" id="o-methods">Method calls</td><td>Small functions are put in place of their calls since 5c6f235 (a call cost about three times a small body); methods are not, a call of one costing about 17 ns, as a subclass may give it another body. A method of a value type, or of a class nothing extends, could be put in place the same way.</td></tr>
 <tr><td class="part" id="o-255">255 slots</td><td>A function that needs more than 255 slots keeps plain stack code.</td></tr>
-<tr><td class="part" id="o-places">Places</td><td>A line of execution has 3,072 places for values in variables; a frame for which none are left (deep recursion) keeps boxes. (<a href="plans-and-gaps6.7.html#m67p-values-in-variables-step-6">step 6</a>)</td></tr>
-<tr><td class="part" id="o-d171"><a href="plans-and-gaps6.7.html#m66g-d171">D171</a></td><td>A C++ function is given a small value in a box, except <code>list.add</code>.</td></tr>
-<tr><td class="part" id="o-d172"><a href="plans-and-gaps6.7.html#m66g-d172">D172</a></td><td>A field of an object made before its class's field types exist keeps a box.</td></tr>
+<tr><td class="part" id="o-places">Places</td><td>A line of execution has 3,072 places for values in variables; a frame for which none are left (deep recursion) keeps boxes. (<a href="plans-and-gaps.html#m67p-values-in-variables-step-6">step 6</a>)</td></tr>
+<tr><td class="part" id="o-d171"><a href="plans-and-gaps.html#m66g-d171">D171</a></td><td>A C++ function is given a small value in a box, except <code>list.add</code>.</td></tr>
+<tr><td class="part" id="o-d172"><a href="plans-and-gaps.html#m66g-d172">D172</a></td><td>A field of an object made before its class's field types exist keeps a box.</td></tr>
 <tr><td class="part" id="o-msvc-bytes">MSVC</td><td>The MSVC build keeps the 8 address bytes threaded code puts before each instruction, but does not use them.</td></tr>
 <tr><td class="part" id="o-m13">M13</td><td>Its first measurement, a heavy slice of the simulation ported and timed against the C++, was waiting on M6.5 to M6.7 and can be made now; it belongs to M13.</td></tr>
 </tbody></table></div>
 
 <h2 id="cautions">Standing cautions</h2>
 <ul>
-<li><strong>Code placement (<a href="plans-and-gaps6.7.html#g65">G65</a>).</strong> Placement alone moves single benchmarks a few percent. Compare against a Clang build of the commit before, built the same way, count instructions where in doubt, and take differences under about 5% between builds of the same code as noise.</li>
+<li><strong>Code placement (<a href="plans-and-gaps.html#g65">G65</a>).</strong> Placement alone moves single benchmarks a few percent. Compare against a Clang build of the commit before, built the same way, count instructions where in doubt, and take differences under about 5% between builds of the same code as noise.</li>
 <li><strong>Stores and reads (part D).</strong> A 16-byte read of a value just written in two 8-byte stores waits: most of an R instruction's cost is how its result is stored and read. Writing every int and float result whole cost more than it saved.</li>
 <li><strong>Ref helpers (step 6).</strong> Any branch or call inlined into <code>refClass</code> or <code>refBytes</code> made reads of list items 75% slower, with identical run code: leave them as they are. The same goes for adding work to an instruction's hot part on Windows, where any call there gives it a frame.</li>
 <li><strong>Three ways of running.</strong> <code>JADE_REGISTER_CODE=joined</code> and <code>=plain</code> are kept for testing and timing; the suite is to keep passing in all three.</li>
-<li><strong>One graphics card (<a href="plans-and-gaps6.7.html#m0-not-tested">M0</a>).</strong> Topaz's windows have been drawn only on this machine's NVIDIA card. Intel graphics, virtual machines and Remote Desktop, where OpenGL is weakest, are untried: the risk gui-plan.html's section 9 names, which a run on another machine would settle.</li>
+<li><strong>One graphics card (<a href="plans-and-gaps.html#m0-not-tested">M0</a>).</strong> Topaz's windows have been drawn only on this machine's NVIDIA card. Intel graphics, virtual machines and Remote Desktop, where OpenGL is weakest, are untried: the risk gui-plan.html's section 9 names, which a run on another machine would settle.</li>
 </ul>
 
 <h2 id="kept">Left as they are, by decision</h2>
 <p>Not work: listed so that they are not taken up again by mistake.</p>
 <ul>
-<li><a href="plans-and-gaps6.7.html#g42">G42</a> (and <a href="plans-and-gaps6.7.html#m66g-p8-keeping">8.6g</a>): what a built program keeps for reflection is decided by types, so a <code>#</code> of <code>any</code> keeps every class's description. Costs size, never correctness; following values through the whole program was declined on 2026-11-03.</li>
-<li><a href="plans-and-gaps6.7.html#g63">G63</a>: start-up about 0.5 ms later, from reading the whole saved standard library.</li>
-<li><a href="plans-and-gaps6.7.html#g67">G67</a>: inside a generic class's method, a list made by an inline function from the class's type parameter is made without its type.</li>
-<li><a href="plans-and-gaps6.7.html#m66g-p8-union-infer">8.3e</a>: where one side of <code>flag ? a : b</code> is <code>any</code> or <code>unit</code>, the result is still the unchecked unknown type.</li>
-<li><a href="plans-and-gaps6.7.html#m66g-p8-permissions">8.8c</a>: Windows has no <code>setExecutable</code>.</li>
-<li><a href="plans-and-gaps6.7.html#m66g-p9-grid">8.9f</a>: a grid cannot be a map key, and a part of a grid taken by ranges takes no step.</li>
-<li><a href="plans-and-gaps6.7.html#m66g-p9-opaque">8.9l</a>: there is no flag for an opaque image; a ported RGB image is one filled with a solid colour.</li>
+<li><a href="plans-and-gaps.html#g42">G42</a> (and <a href="plans-and-gaps.html#m66g-p8-keeping">8.6g</a>): what a built program keeps for reflection is decided by types, so a <code>#</code> of <code>any</code> keeps every class's description. Costs size, never correctness; following values through the whole program was declined on 2026-11-03.</li>
+<li><a href="plans-and-gaps.html#g63">G63</a>: start-up about 0.5 ms later, from reading the whole saved standard library.</li>
+<li><a href="plans-and-gaps.html#g67">G67</a>: inside a generic class's method, a list made by an inline function from the class's type parameter is made without its type.</li>
+<li><a href="plans-and-gaps.html#m66g-p8-union-infer">8.3e</a>: where one side of <code>flag ? a : b</code> is <code>any</code> or <code>unit</code>, the result is still the unchecked unknown type.</li>
+<li><a href="plans-and-gaps.html#m66g-p8-permissions">8.8c</a>: Windows has no <code>setExecutable</code>.</li>
+<li><a href="plans-and-gaps.html#m66g-p9-grid">8.9f</a>: a grid cannot be a map key, and a part of a grid taken by ranges takes no step.</li>
+<li><a href="plans-and-gaps.html#m66g-p9-opaque">8.9l</a>: there is no flag for an opaque image; a ported RGB image is one filled with a solid colour.</li>
 <li>The sandbox: the suite's own tests stay on the real system on purpose; there is no <code>files.write</code> (files are set up through <code>FilePath</code>), and the clock moves with <code>Sandbox.advance(time)</code>.</li>
 </ul>
 </main>
