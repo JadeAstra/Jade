@@ -3820,6 +3820,39 @@ COLD(RGetPath) {
     NEXT();
 }
 }
+CASES(RGetIndexPropSS, RGetIndexPropSK) {
+    {
+    // `items[i].x` (2026-11-10): item i of a list of a value type's items, in range and not null,
+    // its field read where it is when GetProp's cache knows the class; anything else the slow
+    // way, GetIndexRef and GetProp. u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
+    const Value& obj = R_S(1);
+    const Value& index = opAt(ip - kOpBytes) == Op::RGetIndexPropSK ? R_K(2) : R_S(2);
+    if (caches != nullptr && obj.isObjType(ObjType::List) && index.isInt()) {
+        const ObjList* list = asList(obj);
+        const uint64_t i = static_cast<uint64_t>(index.as.i);
+        if (i < list->size() && list->store() == ListStore::Items && obj.as.obj != bandObject_ &&
+            (obj.as.obj->core == coreId_ || obj.as.obj->core == 0)) {
+            const PackedItems& pack = *list->pack;
+            const uint64_t seen = caches[FAST_U16(5)].load(std::memory_order_relaxed);
+            if (static_cast<uint32_t>(seen >> 32) == pack.itemClass->shape && !(pack.nullable && (pack.nulls[i / 64] >> (i % 64) & 1))) {
+                const ValueField& field = pack.itemClass->layout.load(std::memory_order_relaxed)->fields[(seen >> 16) & 0xFFFF];
+                if (readPlain(pack.block.data() + i * pack.width + field.offset, field, base[ip[0]])) {
+                    sp = base + ip[3];
+                    ip += 11;
+                    NEXT();
+                }
+            }
+        }
+    }
+    const Value objHere = obj, indexHere = index;
+    Value* const at = base + ip[4];
+    at[0] = objHere;
+    at[1] = indexHere;
+    sp = sp_ = at + 2;
+    ip = code + operandI32(ip + 7);
+    NEXT();
+}
+}
 CASE(Count_) {
     throw runtimeError(Thrown::InternalError, "invalid instruction");
 }

@@ -8,6 +8,7 @@ value Rgb(val r : byte, val g : byte, val b : byte, val a : byte = 255)
 value Pair16(val low : int16, val high : uint16)
 value Wide(val x : int, val y : int, val name : string = "w")
 value Flagged(val on : bool = true, val n : int = -3, val f : float = 0.5, val c : char = 'q')
+class Box(val n : int)
 value Nudged(var step : int = 2) {
   // A val keeps its value; a var's place is changed by a mutating method.
   mutating fun nudge() { step += 1 }
@@ -50,6 +51,16 @@ fun loops() {
     sum += p.low + p.high
   }
   print(sum)   // expect: 120006
+
+  // A field of a list's item read where it is (R_GET_INDEX_PROP): of small items, of wider
+  // ones, of a list of objects (the slow way), past the end, of a null item.
+  val wides : List<Wide> = [Wide(1, 10), Wide(2, 20, "b")]
+  val objects : List<Box> = [Box(5), Box(6)]
+  val gaps : List<Color?> = [Color(9, 9, 9), null]
+  var picked = 0
+  for (k in 0 ..< 6) { picked += table[k & 3].green + wides[k % 2].y + objects[k % 2].n + wides[k % 2].name.size }
+  print(picked, failing { table[4].red }, failing { gaps[1]!!.red }, gaps[0]!!.blue)
+  // expect: 1652 IndexOutOfBoundsException: list index 4 is out of range (size 4) NullPointerException: '!!' was used on a value that is null 9
 
   // Made from the whole header, in a loop; with literal defaults left out; with a default
   // that is no literal (the initializer gives it).

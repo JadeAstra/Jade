@@ -164,6 +164,8 @@ bool storesResult(Op r) {
         case Op::RGetGlobal:
         case Op::RGetIndexSS:
         case Op::RGetIndexSK:
+        case Op::RGetIndexPropSS:
+        case Op::RGetIndexPropSK:
         case Op::RNeg:
         case Op::RNot:
         case Op::RShlSK:
@@ -880,6 +882,36 @@ private:
                 top_ = s + 1;
                 return true;
             }
+            case Op::GetIndexRef: {
+                // `items[i].x`, the field a plain one, read on (not a field of it next): one R
+                // instruction, its slow way the two of the stack code.
+                const size_t next = at + size;
+                if (next >= n_ || leader_[next]) break;
+                const Op read = static_cast<Op>(code_[next]);
+                if (read != Op::GetProp && read != Op::GetOwn) break;
+                const size_t readSize = instructionSize(code_, next);
+                if (readsOn(next + readSize)) break;
+                const Entry obj = stack_[stack_.size() - 2], index = stack_.back();
+                if (!inASlot(obj) || !byByte(index)) break;
+                const int s = depth - 2;
+                placeBelow(s);
+                take(2);
+                const int objOperand = operand(obj, s), indexOperand = operand(index, s + 1);
+                Slow& slow = newSlow(s, at);
+                copyInto(slow, o, at, size);
+                copyInto(slow, read, next, readSize);
+                skip_ = next;
+                // u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow.
+                op(isConstant(index) ? Op::RGetIndexPropSK : Op::RGetIndexPropSS);
+                u8(s);
+                u8(objOperand);
+                u8(indexOperand);
+                u8(s + 1);
+                u8(s);
+                u16(readU16(code_, next + 3));
+                endR(slow, s);
+                return true;
+            }
             case Op::GetIndex: {
                 const Entry obj = stack_[stack_.size() - 2], index = stack_.back();
                 if (!inASlot(obj) || !byByte(index)) break;
@@ -1135,7 +1167,9 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RInvoke: return {14, 18};
         case Op::RCall: return {10, 14};
         case Op::RSetPropSS:
-        case Op::RSetPropSK: return {7};
+        case Op::RSetPropSK:
+        case Op::RGetIndexPropSS:
+        case Op::RGetIndexPropSK: return {7};
         case Op::RGetGlobal:
         case Op::RGetIndexSS:
         case Op::RGetIndexSK: return {5};
@@ -1254,7 +1288,9 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::RInvoke: return kOpBytes + 22;
         case Op::RCall: return kOpBytes + 18;
         case Op::RSetPropSS:
-        case Op::RSetPropSK: return kOpBytes + 11;
+        case Op::RSetPropSK:
+        case Op::RGetIndexPropSS:
+        case Op::RGetIndexPropSK: return kOpBytes + 11;
         case Op::RGetUpvalue: return kOpBytes + 4;
         case Op::RNeg:
         case Op::RNot: return kOpBytes + 8;

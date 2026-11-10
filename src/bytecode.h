@@ -495,6 +495,11 @@ enum class Op : uint16_t {
     // any other call goes the slow way, Call's stack code. u8 A, u8 F, u8 T, u8 S, u8 argc, u8
     // flags (bit k-1: Xk a constant), u8 X1, X2, X3, X4, i32 slow, i32 resume (as RInvoke's).
     RCall,
+    // `items[i].x`: field x of item i of a list of a value type's items, read where the item is,
+    // as GetIndexRef and the GetProp after it do; the field where GetProp's cache says. u8 A, u8 B
+    // (the list), u8 C (the index: a slot, or a constant for SK), u8 T, u8 S, u16 cache, i32 slow.
+    RGetIndexPropSS,
+    RGetIndexPropSK,
     // A function's whole run code until it is first called (M9/M10): its run code is made then,
     // from its stack code, and run from its start. No operands.
     Translate,
