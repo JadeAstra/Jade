@@ -90,15 +90,27 @@ add_library(jade_compiler OBJECT
 )
 # Native code (M9.5, docs/native-plan.html): the register stencils compiled by Clang into an
 # object file of their own, read by tools/stencils into a table that jade.exe carries, and checked
-# by jade itself as the build's step. With clang-cl on Windows; elsewhere, until the tool reads
-# ELF, jade is built without native code (native.cpp then has no stencils).
+# by jade itself as the build's step. With Clang on x64 Windows (clang-cl, COFF) and on x86-64
+# Linux (ELF); elsewhere jade is built without native code (native.cpp then has no stencils).
 target_sources(jade_core PRIVATE src/native/native.cpp src/native/regions.cpp)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
+set(JADE_NATIVE_HERE OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64)$" AND
+   (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+  set(JADE_NATIVE_HERE ON)
+endif()
+if(JADE_NATIVE_HERE)
   add_library(jade_stencils OBJECT src/native/stencils.cpp)
   # Each stencil in a section of its own, and nothing in them a copied stencil could not carry
-  # (no library function called: /Oi- keeps Clang from making a loop a call of memcpy; and no
-  # table of where a switch goes, which would be data of its own).
-  target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables)
+  # (no library function called: no builtins, which keeps Clang from making a loop a call of
+  # memcpy; no table of where a switch goes, which would be data of its own; on Linux no code
+  # reached through a table either, and nothing for unwinding or stack checks).
+  if(WIN32)
+    target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables)
+  else()
+    target_compile_options(jade_stencils PRIVATE -O2 -fno-pic -fno-pie -ffunction-sections -fno-builtin -fno-jump-tables
+                           -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-exceptions -fcf-protection=none)
+    set_target_properties(jade_stencils PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+  endif()
   add_executable(jade_stencil_tool tools/stencils/stencils.cpp)
   set(JADE_STENCIL_TABLE "${CMAKE_BINARY_DIR}/native/stencils.h")
   add_custom_command(

@@ -631,10 +631,14 @@ class Suite(val options : Options) {
       var kept : List<any> = [1000000.0, 1000000.0, ""]
       for (r in 0 ..< 7) {
         before()
+        val from = clock()
         val run = jade(item, [main.text], dir, cache, extra = compile)
+        val wall = (clock() - from) * 1000.0
         if (run.code != 0) { problem = "jade failed: ${run.error.trim()} ${run.lines.join(" ")}" }
         val said = splitLines(run.error).filter { it.startsWith("jade:") }
-        var ms = 1000000.0
+        // Where jade cannot say when its process was made (off Windows), the whole run as
+        // timed here: more than jade's start, never less.
+        var ms = said.any { it.contains("process was made") } ? 1000000.0 : wall
         var work = 1000000.0
         for (line in said) {
           val made = Regex("ready to run ([\\d.]+) ms after the process was made").find(line)

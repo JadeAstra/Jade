@@ -24,6 +24,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif JADE_NATIVE
+#include <sys/mman.h>
 #endif
 
 namespace jade::native {
@@ -98,18 +100,25 @@ namespace {
 // not run, and made runnable, and no longer writable, before it runs. A region has pages of its
 // own, so that none is written while another region in it may be running on another core.
 uint8_t* writableCode(size_t bytes) {
-#if defined(_WIN32)
+#if JADE_NATIVE && defined(_WIN32)
     return static_cast<uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+#elif JADE_NATIVE
+    void* at = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return at == MAP_FAILED ? nullptr : static_cast<uint8_t*>(at);
 #else
     (void)bytes;
     return nullptr;
 #endif
 }
 bool makeRunnable(uint8_t* code, size_t bytes) {
-#if defined(_WIN32)
+#if JADE_NATIVE && defined(_WIN32)
     DWORD old;
     if (!VirtualProtect(code, bytes, PAGE_EXECUTE_READ, &old)) return false;
     FlushInstructionCache(GetCurrentProcess(), code, bytes);
+    return true;
+#elif JADE_NATIVE
+    if (mprotect(code, bytes, PROT_READ | PROT_EXEC) != 0) return false;
+    __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code + bytes));
     return true;
 #else
     (void)code, (void)bytes;

@@ -6,8 +6,9 @@
 //
 //   stencils <object file> <header written>
 //
-// The object file is COFF (Windows, x64). A stencil is a function whose name starts with "st_",
-// each in a section of its own (clang-cl /Gy).
+// The object file is COFF (Windows, x64; clang-cl /Gy) or ELF (Linux, x86-64; clang
+// -ffunction-sections). A stencil is a function whose name starts with "st_", each in a section
+// of its own.
 
 #include <algorithm>
 #include <cstdint>
@@ -51,12 +52,8 @@ struct Stencil {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc != 3) fail("usage: stencils <object file> <header written>");
-    std::ifstream in(argv[1], std::ios::binary);
-    if (!in) fail(std::string("cannot read ") + argv[1]);
-    const std::vector<uint8_t> obj((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (obj.size() < 20 || u16(obj, 0) != 0x8664) fail("not an x64 COFF object file");
+// An x64 COFF object file (Windows, clang-cl).
+void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     const uint16_t sectionCount = u16(obj, 2);
     const uint32_t symbolTable = u32(obj, 8), symbolCount = u32(obj, 12);
     const uint16_t optionalHeader = u16(obj, 16);
@@ -84,7 +81,6 @@ int main(int argc, char** argv) {
         i += aux;
     }
 
-    std::vector<Stencil> stencils;
     for (uint16_t s = 1; s <= sectionCount; s++) {
         const size_t h = sections + static_cast<size_t>(s - 1) * 40;
         const uint32_t characteristics = u32(obj, h + 36);
@@ -134,6 +130,112 @@ int main(int argc, char** argv) {
         }
         stencils.push_back(std::move(st));
     }
+}
+
+uint64_t u64(const std::vector<uint8_t>& b, size_t at) { return u32(b, at) | (static_cast<uint64_t>(u32(b, at + 4)) << 32); }
+
+// An x86-64 ELF relocatable object file (Linux, clang), its stencils each in a section of its own
+// (-ffunction-sections), compiled without position-independent code: every gap a PC-relative
+// reference to its name (R_X86_64_PC32, or PLT32 for a jump), whose addend says how many bytes
+// of the instruction follow the 32 bits (-4 less them). A constant of Clang's is in a section of
+// merged constants (.rodata.cst8, .cst16), reached through the section's own symbol, its place
+// there the addend plus 4: Clang's SSE instructions end with the 32 bits.
+void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
+    if (obj.size() < 64 || obj[4] != 2 || obj[5] != 1 || u16(obj, 16) != 1 || u16(obj, 18) != 62)
+        fail("not an x86-64 little-endian ELF relocatable object file");
+    const uint64_t sectionTable = u64(obj, 0x28);
+    const uint16_t entry = u16(obj, 0x3A), count = u16(obj, 0x3C);
+    struct Section {
+        uint32_t name, type;
+        uint64_t flags, offset, size, entsize;
+        uint32_t link, info;
+    };
+    std::vector<Section> sections(count);
+    for (uint16_t i = 0; i < count; i++) {
+        const size_t h = sectionTable + static_cast<size_t>(i) * entry;
+        sections[i] = Section{u32(obj, h), u32(obj, h + 4), u64(obj, h + 8), u64(obj, h + 24), u64(obj, h + 32), u64(obj, h + 56), u32(obj, h + 40), u32(obj, h + 44)};
+    }
+    constexpr uint32_t kSymtab = 2, kRela = 4;
+    constexpr uint64_t kAlloc = 2, kExec = 4, kWrite = 1;
+    size_t symtab = 0;
+    for (size_t i = 0; i < sections.size(); i++)
+        if (sections[i].type == kSymtab) symtab = i;
+    if (symtab == 0) fail("no symbol table");
+    const Section& syms = sections[symtab];
+    const Section& names = sections[syms.link];
+    auto nameAt = [&](uint32_t at) { return std::string(reinterpret_cast<const char*>(&obj[names.offset + at])); };
+    struct Symbol {
+        std::string name;
+        uint8_t type;
+        uint16_t section;
+        uint64_t value, size;
+    };
+    std::vector<Symbol> symbols(syms.size / 24);
+    for (size_t i = 0; i < symbols.size(); i++) {
+        const size_t at = syms.offset + i * 24;
+        symbols[i] = Symbol{nameAt(u32(obj, at)), static_cast<uint8_t>(obj[at + 4] & 0xF), u16(obj, at + 6), u64(obj, at + 8), u64(obj, at + 16)};
+    }
+    // Each stencil's section, and its relocations.
+    std::map<size_t, size_t> stencilOf;  // section -> symbol
+    for (size_t i = 0; i < symbols.size(); i++)
+        if (symbols[i].type == 2 && symbols[i].section != 0 && symbols[i].name.rfind("st_", 0) == 0) stencilOf[symbols[i].section] = i;
+    std::map<size_t, size_t> relaOf;
+    for (size_t i = 0; i < sections.size(); i++)
+        if (sections[i].type == kRela) relaOf[sections[i].info] = i;
+    for (size_t s = 1; s < sections.size(); s++) {
+        const Section& sec = sections[s];
+        auto named = stencilOf.find(s);
+        if (named == stencilOf.end()) {
+            // Nothing else may hold code a stencil could need.
+            if ((sec.flags & kExec) != 0 && sec.size > 0) fail("code that is no stencil, in section " + std::to_string(s));
+            continue;
+        }
+        const Symbol& fn = symbols[named->second];
+        if (fn.value != 0 || fn.size != sec.size) fail("stencil " + fn.name + " is not a section of its own");
+        Stencil st;
+        st.name = fn.name.substr(3);
+        st.code.assign(obj.begin() + static_cast<std::ptrdiff_t>(sec.offset), obj.begin() + static_cast<std::ptrdiff_t>(sec.offset + sec.size));
+        auto rela = relaOf.find(s);
+        if (rela != relaOf.end()) {
+            const Section& rs = sections[rela->second];
+            for (uint64_t at = rs.offset; at < rs.offset + rs.size; at += 24) {
+                const uint64_t offset = u64(obj, at), info = u64(obj, at + 8);
+                const int64_t addend = static_cast<int64_t>(u64(obj, at + 16));
+                const uint32_t type = static_cast<uint32_t>(info), symbol = static_cast<uint32_t>(info >> 32);
+                if (type != 2 && type != 4) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
+                const Symbol& target = symbols[symbol];
+                auto hole = kHoles.find(target.name);
+                if (hole != kHoles.end()) {
+                    if (addend > -4 || addend < -9) fail("stencil " + st.name + ": a gap whose instruction does not end within 5 bytes of it");
+                    st.holes.push_back(Hole{static_cast<uint32_t>(offset), hole->second, static_cast<uint32_t>(-addend - 4), {}});
+                    continue;
+                }
+                // A constant of merged read-only data, its bytes carried with the stencil.
+                if (target.section == 0 || target.section >= sections.size()) fail("stencil " + st.name + " refers to " + target.name + ", which is no gap");
+                const Section& data = sections[target.section];
+                const int64_t place = static_cast<int64_t>(target.value) + addend + 4;
+                const uint64_t width = data.entsize == 4 || data.entsize == 8 || data.entsize == 16 ? data.entsize : 0;
+                if ((data.flags & kAlloc) == 0 || (data.flags & (kExec | kWrite)) != 0 || relaOf.count(target.section) != 0 || width == 0 || place < 0 ||
+                    static_cast<uint64_t>(place) + width > data.size)
+                    fail("stencil " + st.name + " refers to " + target.name + ", which is no gap nor a constant it can carry");
+                std::vector<uint8_t> bytes(obj.begin() + static_cast<std::ptrdiff_t>(data.offset + static_cast<uint64_t>(place)),
+                                           obj.begin() + static_cast<std::ptrdiff_t>(data.offset + static_cast<uint64_t>(place) + width));
+                st.holes.push_back(Hole{static_cast<uint32_t>(offset), "HoleData", 0, bytes});
+            }
+        }
+        stencils.push_back(std::move(st));
+    }
+}
+
+int main(int argc, char** argv) {
+    if (argc != 3) fail("usage: stencils <object file> <header written>");
+    std::ifstream in(argv[1], std::ios::binary);
+    if (!in) fail(std::string("cannot read ") + argv[1]);
+    const std::vector<uint8_t> obj((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<Stencil> stencils;
+    if (obj.size() >= 4 && obj[0] == 0x7F && obj[1] == 'E' && obj[2] == 'L' && obj[3] == 'F') readElf(obj, stencils);
+    else if (obj.size() >= 20 && u16(obj, 0) == 0x8664) readCoff(obj, stencils);
+    else fail("not an x64 COFF nor an x86-64 ELF object file");
     if (stencils.empty()) fail("no stencils found");
     // In name order, which jade looks them up by.
     std::sort(stencils.begin(), stencils.end(), [](const Stencil& a, const Stencil& b) { return a.name < b.name; });
