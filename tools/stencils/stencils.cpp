@@ -9,6 +9,7 @@
 // The object file is COFF (Windows, x64). A stencil is a function whose name starts with "st_",
 // each in a section of its own (clang-cl /Gy).
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -33,13 +34,14 @@ uint32_t u32(const std::vector<uint8_t>& b, size_t at) { return u16(b, at) | (st
 const std::map<std::string, std::string> kHoles = {
     {"jade_next", "HoleNext"},   {"jade_jump", "HoleJump"},   {"jade_exit", "HoleExit"},
     {"jade_kf", "HoleFloat"},    {"jade_ki", "HoleInt"},      {"jade_slot", "HoleSlot"},
-    {"jade_ret", "HoleRet"},     {"jade_attention", "HoleAttention"},
+    {"jade_ret", "HoleRet"},     {"jade_attention", "HoleAttention"}, {"jade_slot2", "HoleSlot2"},
 };
 
 struct Hole {
     uint32_t offset;   // of the 32 bits filled in, in the stencil
     std::string kind;
     uint32_t after;    // bytes of the instruction after the 32 bits (REL32_1 to _5), which the offset is counted from
+    std::vector<uint8_t> data;  // HoleData: the constant Clang put in read-only data (a float's bound, a sign's mask)
 };
 struct Stencil {
     std::string name;
@@ -93,10 +95,9 @@ int main(int argc, char** argv) {
         std::string sectionName(reinterpret_cast<const char*>(&obj[h]), 8);
         sectionName = sectionName.substr(0, sectionName.find('\0'));
         if (named == stencilOf.end()) {
-            // Nothing else may hold code or data a stencil could need.
+            // Nothing else may hold code a stencil could need; data it needs is a gap of its own,
+            // or a constant copied with it (below).
             if (code && rawSize > 0) fail("code that is no stencil, in section " + std::to_string(s));
-            if ((sectionName == ".rdata" || sectionName == ".data") && rawSize > 0)
-                fail("a stencil needs data of its own (" + sectionName + "): make it a gap");
             continue;
         }
         Stencil st;
@@ -107,16 +108,35 @@ int main(int argc, char** argv) {
             const uint32_t offset = u32(obj, at), symbol = u32(obj, at + 4);
             const uint16_t type = u16(obj, at + 8);
             const std::string target = symbolName(symbol);
-            auto hole = kHoles.find(target);
-            if (hole == kHoles.end()) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
             // IMAGE_REL_AMD64_REL32 and REL32_1 to REL32_5: 32 bits, counted from the end of the
             // instruction, which is that many bytes past them.
             if (type < 4 || type > 9) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
-            st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(type - 4)});
+            auto hole = kHoles.find(target);
+            if (hole != kHoles.end()) {
+                st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(type - 4), {}});
+                continue;
+            }
+            // A constant of read-only data (Clang's __real@ and __xmm@): its bytes go with the
+            // stencil, at most 16, and are placed beside the region's code.
+            const size_t sym = symbolTable + static_cast<size_t>(symbol) * 18;
+            const int16_t dataSection = static_cast<int16_t>(u16(obj, sym + 12));
+            const uint32_t value = u32(obj, sym + 8);
+            if (dataSection <= 0) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
+            const size_t dh = sections + static_cast<size_t>(dataSection - 1) * 40;
+            const uint32_t dataCharacteristics = u32(obj, dh + 36);
+            const uint32_t dataSize = u32(obj, dh + 16), dataRaw = u32(obj, dh + 20);
+            // Initialized data, not writable, with no relocations of its own.
+            if ((dataCharacteristics & 0x40) == 0 || (dataCharacteristics & 0x80000000) != 0 || u16(obj, dh + 32) != 0 || value >= dataSize ||
+                dataSize - value > 16)
+                fail("stencil " + st.name + " refers to " + target + ", which is no gap nor a constant it can carry");
+            std::vector<uint8_t> bytes(obj.begin() + dataRaw + value, obj.begin() + dataRaw + dataSize);
+            st.holes.push_back(Hole{offset, "HoleData", static_cast<uint32_t>(type - 4), bytes});
         }
         stencils.push_back(std::move(st));
     }
     if (stencils.empty()) fail("no stencils found");
+    // In name order, which jade looks them up by.
+    std::sort(stencils.begin(), stencils.end(), [](const Stencil& a, const Stencil& b) { return a.name < b.name; });
 
     std::ostringstream out;
     out << "// Made by tools/stencils from src/native/stencils.cpp: do not edit.\n";
@@ -129,8 +149,12 @@ int main(int argc, char** argv) {
         out << "};\n";
         if (!st.holes.empty()) {
             out << "static const Hole kHoles" << k << "[] = {";
-            for (size_t i = 0; i < st.holes.size(); i++)
-                out << (i ? ", " : "") << "{" << st.holes[i].offset << ", " << st.holes[i].kind << ", " << st.holes[i].after << "}";
+            for (size_t i = 0; i < st.holes.size(); i++) {
+                out << (i ? ", " : "") << "{" << st.holes[i].offset << ", " << st.holes[i].kind << ", " << st.holes[i].after << ", "
+                    << st.holes[i].data.size() << ", {";
+                for (size_t b = 0; b < st.holes[i].data.size(); b++) out << (b ? "," : "") << static_cast<int>(st.holes[i].data[b]);
+                out << "}}";
+            }
             out << "};\n";
         }
     }

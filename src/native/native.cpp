@@ -9,9 +9,14 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include <algorithm>
+#include <cstddef>
+
 #if JADE_NATIVE
+#include "../bytecode.h"
 #include "../value.h"
-#include "stencils.h"  // kStencils, made by tools/stencils when jade.exe is built
+#include "layout.h"
+#include "stencils.h"  // kStencils, made by tools/stencils when jade.exe is built, in name order
 #endif
 
 #if JADE_NATIVE && defined(_WIN32)
@@ -28,17 +33,43 @@ namespace jade::native {
 static_assert(static_cast<int>(ValueKind::Int) == 2 && static_cast<int>(ValueKind::Float) == 3, "src/native/stencils.cpp writes these kinds");
 static_assert(sizeof(Value) == 16, "a stencil's slot is 16 bytes");
 
+// What the stencils read of objects (layout.h), as the VM's structures have it.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+namespace L = layout;
+static_assert(sizeof(Value) == L::kValueSize && offsetof(Value, as) == L::kValuePayload, "layout.h: a value");
+static_assert(static_cast<int>(ValueKind::Bool) == L::kKindBool && static_cast<int>(ValueKind::Int) == L::kKindInt &&
+                  static_cast<int>(ValueKind::Float) == L::kKindFloat && static_cast<int>(ValueKind::Obj) == L::kKindObj &&
+                  static_cast<int>(ValueKind::Byte) == L::kKindByte,
+              "layout.h: the kinds of value");
+static_assert(offsetof(Obj, type) == L::kObjType && offsetof(Obj, core) == L::kObjCore && offsetof(Obj, frozen) == L::kObjFrozen,
+              "layout.h: an object");
+static_assert(sizeof(ObjType) == 1 && static_cast<int>(ObjType::List) == L::kTypeList && static_cast<int>(ObjType::Bytes) == L::kTypeBytes,
+              "layout.h: the kinds of object");
+static_assert(offsetof(ObjList, pack) == L::kListPack && sizeof(std::unique_ptr<PackedItems>) == 8, "layout.h: a list");
+static_assert(offsetof(PackedItems, store) == L::kPackStore && offsetof(PackedItems, nullable) == L::kPackNullable &&
+                  offsetof(PackedItems, count) == L::kPackCount && offsetof(PackedItems, block) == L::kPackBlock && sizeof(ListStore) == 1 &&
+                  static_cast<int>(ListStore::Ints) == L::kStoreInts && static_cast<int>(ListStore::Floats) == L::kStoreFloats,
+              "layout.h: a list's packed items");
+static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
+static_assert(offsetof(ObjIterator, source) == L::kIterSource && offsetof(ObjIterator, index) == L::kIterIndex &&
+                  sizeof(ObjIterator::index) == 8 && static_cast<int>(ObjType::Iterator) == L::kTypeIterator,
+              "layout.h: an iterator");
+static_assert(offsetof(ObjInstance, shape) == L::kInstShape && sizeof(ObjInstance) == L::kInstData &&
+                  static_cast<int>(ObjType::Instance) == L::kTypeInstance,
+              "layout.h: an object of a class");
+static_assert(static_cast<int>(ValueKind::Undefined) == L::kKindUndefined && static_cast<int>(ValueKind::Ref) == L::kKindRef &&
+                  kTypeInt == L::kTypeIdInt && kTypeFloat == L::kTypeIdFloat,
+              "layout.h: kinds and types");
+#pragma clang diagnostic pop
+
 bool available() { return true; }
 size_t stencilCount() { return sizeof(kStencils) / sizeof(kStencils[0]); }
 
 const StencilCode* stencil(std::string_view name) {
-    static const std::unordered_map<std::string_view, const StencilCode*> byName = [] {
-        std::unordered_map<std::string_view, const StencilCode*> made;
-        for (const StencilCode& s : kStencils) made.emplace(s.name, &s);
-        return made;
-    }();
-    auto found = byName.find(name);
-    return found == byName.end() ? nullptr : found->second;
+    const StencilCode* const end = kStencils + stencilCount();
+    const StencilCode* found = std::lower_bound(kStencils, end, name, [](const StencilCode& s, std::string_view n) { return std::string_view(s.name) < n; });
+    return found != end && std::string_view(found->name) == name ? found : nullptr;
 }
 
 #else
@@ -165,23 +196,28 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
     };
     std::vector<Piece> pieces;
     std::vector<size_t> start(all.size() + 1);
-    size_t at = 0, words = 0;
+    size_t at = 0, words = 0, constants = 0;
     for (size_t i = 0; i < all.size(); i++) {
         // The last step of the code and of the way out goes on to nothing after it.
         const bool nextFollows = i + 1 < all.size() && i + 1 != exitAt;
         pieces.push_back(shaped(*all[i].code, nextFollows));
         start[i] = at;
         at += pieces.back().code.size();
-        for (const Hole& h : pieces.back().holes)
-            if (h.kind >= HoleFloat) words++;
+        for (const Hole& h : pieces.back().holes) {
+            if (h.kind == HoleData) constants++;
+            else if (h.kind >= HoleFloat) words++;
+        }
     }
     start[all.size()] = at;
+    // After the code, the stencils' constants, 16 bytes each and on 16 (as SSE reads a mask),
+    // then the gaps' words.
     const size_t codeSize = (at + 15) & ~size_t{15};
-    const size_t total = codeSize + words * 8;
+    const size_t total = codeSize + constants * 16 + words * 8;
     uint8_t* mem = writableCode(total);
     if (mem == nullptr) return nullptr;
     std::memset(mem, 0xCC, total);
-    size_t word = codeSize;
+    size_t constant = codeSize;
+    size_t word = codeSize + constants * 16;
     auto rel32 = [&](size_t place, uint32_t after, size_t target) {
         const int64_t d = static_cast<int64_t>(target) - static_cast<int64_t>(place + 4 + after);
         const int32_t v = static_cast<int32_t>(d);
@@ -197,11 +233,18 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
                 case HoleNext: rel32(place, hole.after, start[i + 1]); break;
                 case HoleJump: rel32(place, hole.after, start[labelled(st.jump)]); break;
                 case HoleExit: rel32(place, hole.after, st.exit >= 0 ? start[labelled(st.exit)] : start[exitAt]); break;
+                case HoleData:
+                    std::memset(mem + constant, 0, 16);
+                    std::memcpy(mem + constant, hole.data, hole.size);
+                    rel32(place, hole.after, constant);
+                    constant += 16;
+                    break;
                 default: {
                     uint64_t v = 0;
                     if (hole.kind == HoleFloat) std::memcpy(&v, &st.kf, 8);
                     else if (hole.kind == HoleInt) v = static_cast<uint64_t>(st.ki);
                     else if (hole.kind == HoleSlot) v = static_cast<uint64_t>(st.slot);
+                    else if (hole.kind == HoleSlot2) v = static_cast<uint64_t>(st.slot2);
                     else if (hole.kind == HoleRet) v = static_cast<uint64_t>(st.ret);
                     else throw std::runtime_error("native code: a gap of a kind no step fills");
                     std::memcpy(mem + word, &v, 8);
@@ -213,7 +256,19 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
     }
     if (!makeRunnable(mem, total)) return nullptr;
     if (bytes != nullptr) *bytes = total;
+    code_ = mem;
+    starts_.clear();
+    for (const auto& [label, step] : labels_) {
+        if (starts_.size() <= static_cast<size_t>(label)) starts_.resize(static_cast<size_t>(label) + 1, SIZE_MAX);
+        starts_[static_cast<size_t>(label)] = start[step];
+    }
     return mem;
+}
+
+void* Assembler::address(int label) const {
+    if (code_ == nullptr || label < 0 || static_cast<size_t>(label) >= starts_.size() || starts_[static_cast<size_t>(label)] == SIZE_MAX)
+        throw std::runtime_error("native code: the address of a label not placed");
+    return code_ + starts_[static_cast<size_t>(label)];
 }
 
 // ---- The build's check ----
@@ -223,7 +278,22 @@ namespace {
 
 volatile uint8_t checkFlag = 0;
 
-int64_t run(void* code, Value* slots) { return runRegion(code, slots, &checkFlag); }
+int64_t run(void* code, Value* slots) {
+    const RegionContext context{&checkFlag, 0, nullptr};
+    return runRegion(code, slots, &context);
+}
+
+// std::vector as the stencils read it (layout.h): its first item's address, then the end's.
+bool vectorAsRead() {
+    ObjBytes bytes;
+    bytes.data = {1, 2, 3};
+    const uint8_t* words[2];
+    std::memcpy(words, reinterpret_cast<const uint8_t*>(&bytes) + layout::kBytesData, sizeof words);
+    if (words[0] != bytes.data.data() || words[1] != bytes.data.data() + 3) return false;
+    // A list's own items, where the list keeps them (a private member, so asked of the list).
+    ObjList list;
+    return reinterpret_cast<const uint8_t*>(&list.values()) - reinterpret_cast<const uint8_t*>(&list) == layout::kListItems;
+}
 
 // The way out the check's regions take: give back -1.
 std::vector<Step> exitGiving(int64_t value) {
@@ -315,6 +385,9 @@ int64_t mandelbrotInC(int64_t size, int64_t limit) {
 
 std::string check() {
     if (stencilCount() == 0) return "no stencils";
+    for (size_t i = 1; i < stencilCount(); i++)
+        if (!(std::string_view(kStencils[i - 1].name) < std::string_view(kStencils[i].name))) return "the stencils are not in name order";
+    if (!vectorAsRead()) return "std::vector is not laid out as layout.h reads it";
     // Every stencil shaped both ways, its gaps inside it.
     for (const StencilCode& s : kStencils)
         for (bool follows : {false, true}) {

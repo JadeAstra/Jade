@@ -1,0 +1,170 @@
+// Native code's regions, step 4 (docs/native-plan.html): loops over ranges reading and writing
+// lists and bytes, the conversions and Math's functions, division, bits, and instructions left to
+// the VM inside a region (a call, a field), which comes back in after them. Every way the
+// stencils leave for the VM (an item out of range, a list not packed, a division by 0, a byte out
+// of range, a kind guessed wrong) gives what `jade --interpret` gives, error and line alike: the
+// test runner runs every test both ways.
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+// Ranges: up, down, with their ends, inside each other, and empty.
+fun ranges() : string {
+  var a = 0
+  for (i in 0..<10) { a = a + i }
+  var b = 0
+  for (i in 10 downTo 1) { b = b * 2 + i }
+  var c = 0
+  for (i in 1..5) { for (j in i..<6) { c = c + i * j } }
+  var d = 0
+  for (i in 5..<5) { d = d + 1 }
+  return "$a $b $c $d"
+}
+print(ranges())   // expect: 45 9217 140 0
+
+// Floats from a list, into another; a sum.
+fun blend(a : List<float>, b : List<float>, out : open List<float>, t : float) : float {
+  var sum = 0.0
+  for (i in 0..<a.size) {
+    out[i] = a[i] * (1.0 - t) + b[i] * t
+    sum += out[i]
+  }
+  return sum
+}
+val xs = List(100) { it * 0.5 }
+val ys = List(100) { 10.0 - it }
+val blended = List(100) { 0.0 }.toOpenList()
+print(blend(xs, ys, blended, 0.25), blended[3], blended[99])   // expect: 868.75 2.875 14.875
+
+// Bytes: read, added to, kept in range, written back; and grey from three bytes a pixel.
+fun brighten(pixels : Bytes, amount : int) {
+  for (i in 0..<pixels.size) {
+    val v = pixels[i] + amount
+    pixels[i] = (v > 255 ? 255 : v).toByte()
+  }
+}
+fun gray(px : Bytes, out : Bytes) {
+  for (i in 0..<out.size) {
+    val r = px[i * 3]
+    val g = px[i * 3 + 1]
+    val b = px[i * 3 + 2]
+    out[i] = ((r * 77 + g * 150 + b * 29) >> 8).toByte()
+  }
+}
+val pixels = Bytes(300)
+for (i in 0..<300) { pixels[i] = (i * 7 % 256).toByte() }
+brighten(pixels, 30)
+print(pixels[0], pixels[10], pixels[36], pixels[299])   // expect: 30 100 255 75
+val grey = Bytes(100)
+gray(pixels, grey)
+print(grey[0], grey[1], grey[50])   // expect: 35 56 61
+
+// Ints from a list, and the int's own operations: division and remainder (a constant and a
+// slot), the bits, shifts, negation, the less and the more.
+fun ints(xs : List<int>, d : int) : string {
+  var q = 0
+  var r = 0
+  var bits = 0
+  var lo = 1000
+  var hi = -1000
+  for (i in 0..<xs.size) {
+    val x = xs[i]
+    q = q + x / 3 + x / d
+    r = r + x % 7 + x % d
+    bits = bits + ((x << 2) & 255 | 1) + (x >> 1)
+    lo = Math.min(lo, -x)
+    hi = Math.max(hi, x)
+  }
+  return "$q $r $bits $lo $hi"
+}
+val ix = List(20) { it * 13 - 40 }
+print(ints(ix, 4))   // expect: 966 57 3178 -207 207
+
+// Conversions and Math's functions on floats: toInt, floor, ceil, round, sqrt, abs, min, max.
+fun floats(xs : List<float>) : string {
+  var a = 0
+  var b = 0
+  var c = 0
+  var d = 0
+  var e = 0.0
+  var f = 0.0
+  var lo = 1e9
+  var hi = -1e9
+  for (i in 0..<xs.size) {
+    val x = xs[i]
+    a += x.toInt()
+    b += Math.floor(x)
+    c += Math.ceil(x)
+    d += Math.round(x)
+    e += Math.sqrt(Math.abs(x))
+    f += i.toFloat() * 0.5
+    lo = Math.min(lo, x)
+    hi = Math.max(hi, x)
+  }
+  return "$a $b $c $d ${Math.round(e * 1000.0)} $f $lo $hi"
+}
+print(floats(List(12) { it * 0.75 - 4.5 }))   // expect: -4 -9 0 -5 16640 33.0 -4.5 3.75
+
+// An int beside a float: a float, as the VM makes it.
+fun mixed(n : int) : float {
+  var t = 0.0
+  for (i in 0..<n) { t = t + i * 0.5 + 1 }
+  return t
+}
+print(mixed(10))   // expect: 32.5
+
+// Ways out: an item out of range, a division by 0, a byte out of range, and a list that is not
+// packed (a list of anything): the VM's errors, and its answers.
+fun outOfRange(xs : List<float>) : float {
+  var t = 0.0
+  for (i in 0..xs.size) { t += xs[i] }
+  return t
+}
+print(failing { outOfRange(xs) })   // expect: IndexOutOfBoundsException: list index 100 is out of range (size 100)
+fun divide(xs : List<int>, by : int) : int {
+  var t = 0
+  for (i in 0..<xs.size) { t += xs[i] / (by - i) }
+  return t
+}
+print(failing { divide(ix, 5) })   // expect: ArithmeticException: division by zero
+fun tooBig(out : Bytes) {
+  for (i in 0..<out.size) { out[i] = (i * 40).toByte() }
+}
+print(failing { tooBig(Bytes(10)) })   // expect: IllegalArgumentException: 280 does not fit in a byte, which holds 0 to 255; toByteWrapped() keeps the low 8 bits
+fun anyList(xs : List<any>) : int {
+  var n = 0
+  for (i in 0..<xs.size) { n = n + (xs[i] as int) }
+  return n
+}
+print(anyList([1, 2, 3, 4]))   // expect: 10
+
+// A call and a field inside a loop: left to the VM, which comes back into the region after them.
+class Box(var v : float)
+fun step(x : float) : float => x * 0.5 + 1.0
+fun calls(n : int, box : Box) : float {
+  var t = 0.0
+  for (i in 0..<n) {
+    t = t + step(i * 1.0) + box.v
+    t = t * 0.5 + 1.0
+    t = t + i
+  }
+  return t
+}
+print(calls(20, Box(2.0)))   // expect: 50.0
+
+// A guess wrong every time: a string taken for an int where nothing says what it is. The region
+// leaves as it is entered each time round, and after enough of that the VM stops going in.
+fun joined(n : int) : string {
+  var s = ""
+  for (i in 0..<n) { s = s + i }
+  return s
+}
+var all = ""
+for (k in 0..<200) { all = joined(4) + k }
+print(all)   // expect: 0123199

@@ -792,6 +792,9 @@ struct FunctionProto {
     struct NativeRegion {
         uint32_t head;
         void* code;
+        // How often the region's quick ways have not done what they do (an item of another
+        // kind, a guess wrong), shared by its ways in: past a limit, the VM stops going in.
+        uint32_t* misses;
     };
     std::vector<NativeRegion> regions;
     std::vector<DeclarationSpan> spans;    // a module's: the code of each top-level declaration

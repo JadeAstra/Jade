@@ -13,13 +13,15 @@
 namespace jade::native {
 
 // What fills a stencil's gap (src/native/stencils.cpp names them jade_next and so on).
-enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention };
+enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData };
 // A gap: where its 32 bits are in the stencil, and how many bytes of the instruction follow them
 // (what its offset is counted from: REL32_1 to REL32_5).
 struct Hole {
     uint32_t offset;
     HoleKind kind;
     uint32_t after;
+    uint8_t size;  // HoleData: a constant of the stencil's own, placed beside the code
+    uint8_t data[16];
 };
 struct StencilCode {
     const char* name;
@@ -33,7 +35,7 @@ struct StencilCode {
 // reads ELF, jade runs without native code).
 bool available();
 size_t stencilCount();
-const StencilCode* stencil(std::string_view name);  // null where there is none of that name
+const StencilCode* stencil(std::string_view name);  // null where there is none of that name (the table is in name order)
 
 // A region being put together: steps, each a stencil with what fills its gaps, and labels
 // jumps go to. Finished, it is machine code in code memory, run as `RegionFn`.
@@ -42,6 +44,7 @@ struct Step {
     double kf = 0;
     int64_t ki = 0;
     int64_t slot = 0;
+    int64_t slot2 = 0;
     int64_t ret = 0;
     int jump = -1;  // a label
     int exit = -1;  // the label of this step's own way out, or -1 for the region's
@@ -56,24 +59,38 @@ public:
     // The region's machine code, the way out being steps given by `exitSteps` (written after the
     // rest; the overflow and the flag go there). Null where the code memory could not be had.
     void* finish(const std::vector<Step>& exitSteps, size_t* bytes = nullptr);
+    // Where a label is in the finished code (a region's other ways in).
+    void* address(int label) const;
 
 private:
     std::vector<Step> steps_;
     std::vector<std::pair<int, size_t>> labels_;
     int nextLabel_ = 0;
+    uint8_t* code_ = nullptr;
+    std::vector<size_t> starts_;
 };
 
-// A region's machine code, run: the frame's slots, the VM's flag (a collection or another
-// thread waiting), then the registers (all 0 as it starts). It gives back where the VM goes on.
+// What a region is given besides the frame's slots: the VM's flag (a collection or another
+// thread waiting), and for its reads and writes of objects, the core of a parallel section it
+// runs on (0 outside one) and the object lent to that core, which only the VM reads.
+struct RegionContext {
+    const volatile uint8_t* attention;
+    uint64_t core;
+    const void* band;
+};
+
+// A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it
+// starts). It gives back where the VM goes on: the instruction, and the stack's top above it.
 #if defined(__clang__)
 #define JADE_REGION_CALL __attribute__((preserve_none))
 #else
 #define JADE_REGION_CALL
 #endif
-using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, const volatile uint8_t* flag, int64_t, int64_t, int64_t, int64_t,
-                                                          int64_t, int64_t, double, double, double, double, double, double, double, double);
-inline int64_t runRegion(void* code, void* slots, const volatile uint8_t* flag) {
-    return reinterpret_cast<RegionFn>(code)(slots, flag, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, const RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
+                                                          int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double, double,
+                                                          double, double, double);
+inline int64_t runRegion(void* code, void* slots, const RegionContext* context) {
+    return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 // Whether regions are made (jade --interpret, or JADE_NATIVE=0, says not).

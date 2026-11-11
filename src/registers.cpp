@@ -264,8 +264,9 @@ public:
             }
             if (static_cast<int>(stack_.size()) != depth) fail("the depth does not match");
             newAt_[at] = static_cast<uint32_t>(out_.size());
-            // Where it is jumped to, the VM's top is the stack's depth: kept for native code.
-            if (leader_[at] && depth >= 0 && depth <= 0xFFFF) f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(depth));
+            // Where the VM's top is as this instruction's run code starts (where it is jumped to,
+            // the stack's depth): kept for native code, which may go in at any instruction.
+            if (top_ >= 0 && top_ <= 0xFFFF) f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(top_));
             known = one(at, size, depth);
             // A function's result checked just after an instruction that gives one of that type
             // always (an int from AddI, whose operands the checker knew, D178): nothing to check.
@@ -1261,6 +1262,9 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     f.runLines = std::move(lines);
     f.regions.clear();
     if (opBytes == kOpBytes && !f.runTops.empty()) {
+        // Each where an instruction starts; one inside an instruction (a comparison the jump
+        // after it was joined to) is dropped.
+        std::erase_if(f.runTops, [&](const auto& t) { return t.first >= moved.size() || moved[t.first] == UINT32_MAX; });
         for (auto& [at, top] : f.runTops) at = where(at);
         if (makeNativeRegions != nullptr) makeNativeRegions(f);
     }

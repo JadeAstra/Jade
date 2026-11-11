@@ -6820,29 +6820,48 @@ const TailFn* TailTable::get() {
     return table.data();
 }
 
-// Into a native code region (M9.5): the loop's machine code run on this frame's slots, and on,
-// where it gives back, with the stack's top it gives. `ip` is just past the loop's first
-// instruction's opcode, where the instruction before put it.
+// How often a region's quick ways may not do what they do before the VM stops going in.
+constexpr uint32_t kNativeMissLimit = 256;
+
+// Into a native code region (M9.5): its machine code run on this frame's slots from the
+// instruction here, one of its ways in, and on where it gives back, with the stack's top it
+// gives. `ip` is just past the instruction's opcode, where the instruction before put it.
 JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
-    void* region = nullptr;
+    const FunctionProto::NativeRegion* region = nullptr;
     for (const FunctionProto::NativeRegion& r : frame->closure->proto->regions)
         if (r.head == head) {
-            region = r.code;
+            region = &r;
             break;
         }
-    TailFn to_;
     if (region != nullptr) {
-        const int64_t out = native::runRegion(region, base, reinterpret_cast<const volatile uint8_t*>(&attention_));
-        const uint32_t at = static_cast<uint32_t>(out);
-        sp = base + static_cast<uint32_t>(static_cast<uint64_t>(out) >> 32);
-        ip = code + at;
-        // Going on at the loop's first instruction itself: its own function, not this one again.
-        to_ = at == head ? TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))] : tailAt(ip);
+        const native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_};
+        const int64_t out = native::runRegion(region->code, base, &context);
+        static const bool traceExits = std::getenv("JADE_TRACE_EXITS") != nullptr;
+        static int traced = 0;
+        if (traceExits && traced < 30) {
+            traced++;
+            std::fprintf(stderr, "region %s: in at %u, out at %u\n", frame->closure->proto->name.c_str(), head, static_cast<uint32_t>(out));
+        }
+        sp = base + ((static_cast<uint64_t>(out) >> 32) & 0xFFFF);
+        ip = code + static_cast<uint32_t>(out);
+        // A quick way that could not: past a limit, the region's ways in are the VM's own
+        // instructions again (one aligned word each, as the run code's addresses are written).
+        if (((static_cast<uint64_t>(out) >> 48) & 1) != 0 && ++*region->misses == kNativeMissLimit) {
+            const FunctionProto* proto = frame->closure->proto;
+            for (const FunctionProto::NativeRegion& r : proto->regions)
+                if (r.misses == region->misses) {
+                    uint8_t* at = const_cast<uint8_t*>(code) + r.head;
+                    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(at + kThreaded))];
+                    std::memcpy(at, &own, kThreaded);
+                }
+        }
     } else {
         ip = code + head;
-        to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
     }
+    // The VM does the instruction the region left at: its own function, never this one again,
+    // where the instruction is another way into the region.
+    const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
     sp_ = sp;
     frame->ip = ip += kThreaded + kOpBytes;
     [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);
