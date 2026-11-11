@@ -21,6 +21,7 @@
 // written, from each way in, says what that way in loads.
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -70,6 +72,7 @@ constexpr uint16_t kWhole = 32;   // an int or a byte read from the list or byte
 constexpr uint16_t kCopy = 64;    // a copy of slot `src` as it was entered, read there
 constexpr uint16_t kCopyI = 128;  // the same, its payload in an int register as well (a whole number)
 constexpr uint16_t kCopyF = 256;  // the same, in a float register
+constexpr uint16_t kMem = 512;    // in its slot, which the region wrote (an item, a field): read there
 constexpr uint16_t kWholes = kInt | kByte | kWhole | kCopyI;
 constexpr uint16_t kCopies = kCopy | kCopyI | kCopyF;
 
@@ -87,10 +90,43 @@ K constantInt(int64_t v) {
     return k;
 }
 
+// Slots and their kinds, in slot order: a sorted array, which a state is copied as often as the
+// analysis goes on (a tree's nodes each made anew were most of its time).
+class Kinds {
+public:
+    using Item = std::pair<int, K>;
+    using iterator = std::vector<Item>::iterator;
+    using const_iterator = std::vector<Item>::const_iterator;
+    iterator begin() { return items_.begin(); }
+    iterator end() { return items_.end(); }
+    const_iterator begin() const { return items_.begin(); }
+    const_iterator end() const { return items_.end(); }
+    size_t size() const { return items_.size(); }
+    const_iterator find(int slot) const {
+        auto at = std::lower_bound(items_.begin(), items_.end(), slot, [](const Item& i, int s) { return i.first < s; });
+        return at != items_.end() && at->first == slot ? at : items_.end();
+    }
+    K& operator[](int slot) {
+        auto at = std::lower_bound(items_.begin(), items_.end(), slot, [](const Item& i, int s) { return i.first < s; });
+        if (at == items_.end() || at->first != slot) at = items_.insert(at, Item{slot, K{}});
+        return at->second;
+    }
+    iterator erase(iterator at) { return items_.erase(at); }
+    void erase(int slot) {
+        auto at = std::lower_bound(items_.begin(), items_.end(), slot, [](const Item& i, int s) { return i.first < s; });
+        if (at != items_.end() && at->first == slot) items_.erase(at);
+    }
+    std::vector<Item>& items() { return items_; }
+    const std::vector<Item>& items() const { return items_; }
+
+private:
+    std::vector<Item> items_;
+};
+
 struct State {
     bool known = false;
     int top = -1;
-    std::map<int, K> kinds;  // slots the region has written on some way here; the rest kEntry
+    Kinds kinds;  // slots the region has written on some way here; the rest kEntry
     int flag = -1;           // the slot whose bool the flag register holds, or -1
     K kind(int slot) const {
         auto f = kinds.find(slot);
@@ -114,22 +150,32 @@ bool join(State& into, const State& from) {
     }
     if (into.top != from.top) refuse("two depths of the stack meet");
     bool changed = false;
-    std::set<int> slots;
-    for (const auto& [s, k] : into.kinds) slots.insert(s);
-    for (const auto& [s, k] : from.kinds) slots.insert(s);
-    for (int s : slots) {
-        const K a = into.kind(s), b = from.kind(s);
+    // The two in slot order, merged.
+    const auto& as = into.kinds.items();
+    const auto& bs = from.kinds.items();
+    std::vector<Kinds::Item> merged;
+    merged.reserve(as.size() + bs.size());
+    size_t i = 0, k = 0;
+    while (i < as.size() || k < bs.size()) {
+        int s;
+        K a, b;
+        if (k == bs.size() || (i < as.size() && as[i].first < bs[k].first)) {
+            s = as[i].first, a = as[i++].second;
+        } else if (i == as.size() || bs[k].first < as[i].first) {
+            s = bs[k].first, b = bs[k++].second;
+        } else {
+            s = as[i].first, a = as[i++].second, b = bs[k++].second;
+        }
         K j{static_cast<uint16_t>(a.bits | b.bits), a.src};
         const bool aSrc = (a.bits & (kWhole | kCopies)) != 0, bSrc = (b.bits & (kWhole | kCopies)) != 0;
         if (!aSrc) j.src = b.src;
         else if (bSrc && a.src != b.src) j.src = -2;
         j.known = a.known && b.known && a.value == b.value;
         j.value = j.known ? a.value : 0;
-        if (!(j == a)) {
-            into.kinds[s] = j;
-            changed = true;
-        }
+        if (!(j == a)) changed = true;
+        merged.push_back(Kinds::Item{s, j});
     }
+    if (changed) into.kinds.items() = std::move(merged);
     const int flag = into.flag == from.flag ? into.flag : -1;
     if (flag != into.flag) {
         into.flag = flag;
@@ -140,11 +186,19 @@ bool join(State& into, const State& from) {
 
 bool sameState(const State& a, const State& b) {
     if (a.known != b.known || a.top != b.top || a.flag != b.flag) return false;
-    std::set<int> slots;
-    for (const auto& [s, k] : a.kinds) slots.insert(s);
-    for (const auto& [s, k] : b.kinds) slots.insert(s);
-    for (int s : slots)
-        if (!(a.kind(s) == b.kind(s))) return false;
+    const auto& as = a.kinds.items();
+    const auto& bs = b.kinds.items();
+    size_t i = 0, k = 0;
+    const K none{};
+    while (i < as.size() || k < bs.size()) {
+        if (k == bs.size() || (i < as.size() && as[i].first < bs[k].first)) {
+            if (!(as[i++].second == none)) return false;
+        } else if (i == as.size() || bs[k].first < as[i].first) {
+            if (!(bs[k++].second == none)) return false;
+        } else if (!(as[i++].second == bs[k++].second)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -161,6 +215,9 @@ State asInMemory(const State& st) {
     }
     return m;
 }
+
+// Held in memory, as entered or as the region wrote it there: read from the slot.
+bool inMemory(const K& k) { return (k.bits & kMem) != 0 && (k.bits & ~(kEntry | kMem)) == 0; }
 
 // The class a slot is read as where the region knows what it holds: an int (or a byte) or a
 // float; -1 where it does not (as entered); -2 where two kinds meet.
@@ -333,6 +390,13 @@ struct Region {
     std::vector<Result> results;               // each instruction's, in its state
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
+
+    // The address of a place's cache (GetProp's and the like), which the stencils read as the VM
+    // fills it: there as long as the run code is.
+    int64_t cacheAddress(int cache) const {
+        if (f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) island();
+        return static_cast<int64_t>(reinterpret_cast<uintptr_t>(f.caches.get() + cache));
+    }
 
     // A way to an instruction the VM comes back in at, with what is known there.
     void cameBy(int e, const State& st) {
@@ -514,8 +578,8 @@ struct Region {
                                 const Value& v = constant(other);
                                 return v.isFloat() ? CF : (v.isInt() || v.isByte()) ? CI : -1;
                             }
-                            auto h = hints.find(other);
-                            return h == hints.end() ? -1 : h->second == kInt ? CI : h->second == kFloat ? CF : -1;
+                            (void)other;  // a slot's hints may be another variable's, where slots are shared
+                            return -1;
                         }
                         if (u8(x, 0) == slot || readsB || readsC) return -1;
                         top = u8(x, 3);
@@ -546,6 +610,7 @@ struct Region {
             if ((w & kCopyF) && (w & ~kCopyF) == kFloat) w = kFloat;
             LOp l;
             l.slot = slot;
+            if (w == kMem) continue;  // in its slot already
             if (w == kCopy || w == kCopyI || w == kCopyF) {
                 if ((k.bits & kEntry) || k.src < 0) refuse("slot " + std::to_string(slot) + ", a copy of " + std::to_string(k.src) + " (" + std::to_string(k.bits) + "), written back on some ways only, at " + std::to_string(at));
                 l.stem = "copyslot";
@@ -581,27 +646,33 @@ struct Region {
         const Ins& x;
         State s;
         Result out;
+        // Whether the steps are made: only once the analysis is done, which follows the states
+        // alone (the steps of its every time round were most of its time).
+        bool lowering = true;
+        LOp scratch;
 
         // The region leaves for the VM at this instruction, where a step cannot do its part.
         int exitHere() { return exitTo(x.at, s); }
         int exitTo(uint32_t at, const State& st) {
-            out.exits.push_back(ExitPoint{at, st, {}, {}, false, -1});
-            out.exits.back().stores = r.stores(st, at, out.exits.back().bad);
+            if (!lowering) return 0;
+            out.exits.push_back(ExitPoint{at, st, {}, {}, false, -1});  // what it writes back, worked out once the analysis is done
             return static_cast<int>(out.exits.size()) - 1;
         }
         // A step that may leave for the VM, which then does the instruction (and the rest of the
         // time round).
         void leaves(LOp& l) {
             l.exit = exitHere();
-            out.exits.back().miss = true;
+            if (lowering) out.exits.back().miss = true;
         }
-        LOp& op(const std::string& stem, std::vector<Reg> named = {}, std::vector<Reg> uses = {}, std::vector<Reg> defs = {}) {
+        LOp& op(std::string_view stem, std::initializer_list<Reg> named = {}, std::initializer_list<Reg> uses = {},
+                std::initializer_list<Reg> defs = {}) {
+            if (!lowering) return scratch;
             out.ops.push_back(LOp{});
             LOp& l = out.ops.back();
             l.stem = stem;
-            l.named = std::move(named);
-            l.uses = std::move(uses);
-            l.defs = std::move(defs);
+            l.named = named;
+            l.uses = uses;
+            l.defs = defs;
             return l;
         }
         void go(uint32_t target, const State& st, LOp& jumping) {
@@ -610,7 +681,7 @@ struct Region {
                 jumping.jumpExit = exitTo(target, st);
             } else if (r.resumed.count(found->second)) {
                 jumping.jumpExit = exitTo(target, st);
-                out.exits.back().toEntry = found->second;
+                if (lowering) out.exits.back().toEntry = found->second;
                 r.cameBy(found->second, asInMemory(st));
             } else {
                 jumping.jumpTo = found->second;
@@ -620,7 +691,8 @@ struct Region {
         void fall(const State& st) {
             if (r.resumed.count(i + 1)) {
                 out.fallExit = exitTo(r.ins[static_cast<size_t>(i) + 1].at, st);
-                out.exits.back().toEntry = i + 1;
+                if (lowering) out.exits.back().toEntry = i + 1;
+                else out.fallExit = -1;
                 r.cameBy(i + 1, asInMemory(st));
             } else {
                 out.edges.push_back(Edge{i + 1, st});
@@ -631,8 +703,17 @@ struct Region {
         // and only guesses what it holds (`checked`), the slot's kind is checked first, and the
         // VM does the instruction where the guess is wrong.
         Reg read(int slot, Cls cls, bool checked) {
-            // A copy of a slot as entered: that slot's register.
-            if (const K k = s.kind(slot); k.bits == kCopy && k.src >= 0 && s.kind(k.src).bits == kEntry) slot = k.src;
+            // A copy of a slot as entered: that slot's register; or as memory holds it.
+            if (const K k = s.kind(slot); k.bits == kCopy && k.src >= 0 && (s.kind(k.src).bits == kEntry || inMemory(s.kind(k.src)))) slot = k.src;
+            if (inMemory(s.kind(slot))) {
+                if (checked) {
+                    LOp& l = op(cls == CI ? "chki" : "chkf");
+                    l.slot = slot;
+                    leaves(l);
+                }
+                op(cls == CI ? "loadi" : "loadf", {Reg{slot, cls}}, {}, {Reg{slot, cls}}).slot = slot;
+                return Reg{slot, cls};
+            }
             const int known = classOf(s.kind(slot));
             if (known >= 0) {
                 if (known != cls) island();
@@ -649,8 +730,8 @@ struct Region {
         // The class an operand of an untyped instruction is read as: what the region knows, or
         // the typed instructions' guess.
         Cls guess(int slot) {
-            if (const K k = s.kind(slot); k.bits == kCopy && k.src >= 0 && s.kind(k.src).bits == kEntry) slot = k.src;
-            const int known = classOf(s.kind(slot));
+            if (const K k = s.kind(slot); k.bits == kCopy && k.src >= 0 && (s.kind(k.src).bits == kEntry || inMemory(s.kind(k.src)))) slot = k.src;
+            const int known = inMemory(s.kind(slot)) ? -1 : classOf(s.kind(slot));
             if (known >= 0) return static_cast<Cls>(known);
             if (known == -2) island();
             auto h = r.hints.find(slot);
@@ -664,10 +745,28 @@ struct Region {
             if (k.bits == kBool) s.flag = slot;
             else if (s.flag == slot) s.flag = -1;
         }
+        // A slot about to be written in memory (an item, a field): a copy of it still wanted is
+        // made a copy in fact first, in its own slot; a whole number read from the list there is
+        // no longer told int or byte by it.
+        void writeMemory(int slot) {
+            for (auto& [y, k] : s.kinds) {
+                if (y == slot || y >= s.top) continue;
+                if ((k.bits & (kCopies | kWhole)) == 0 || k.src != slot) continue;
+                if ((k.bits & ~kCopies) == 0) {
+                    LOp& l = op("copyslot");
+                    l.slot = y;
+                    l.slot2 = slot;
+                    k = K{kMem};
+                } else {
+                    k.bits = static_cast<uint16_t>(k.bits | kInt | kFloat);  // two kinds: read by the VM
+                }
+            }
+            write(slot, K{kMem});
+        }
         // The slot an object is read from: the slot itself, as entered, or the one it copies.
         int objectSlot(int slot) {
             const K k = s.kind(slot);
-            if (k.bits == kEntry) return slot;
+            if (k.bits == kEntry || inMemory(k)) return slot;
             if ((k.bits & ~kCopies) == 0 && k.src >= 0) return k.src;
             island();
         }
@@ -675,7 +774,7 @@ struct Region {
         void flagOf(int slot) {
             const K k = s.kind(slot);
             if (k.bits == kBool && s.flag == slot) return;
-            if (k.bits != kEntry) island();
+            if (k.bits != kEntry && !inMemory(k)) island();
             LOp& l = op("loadflag");
             l.slot = slot;
             leaves(l);
@@ -693,12 +792,16 @@ struct Region {
         Reg number(int slot, Cls cls, bool exact) {
             const K k = s.kind(slot);
             int from = -1;
-            if ((k.bits == kCopy || k.bits == kCopyI || k.bits == kCopyF) && k.src >= 0 && s.kind(k.src).bits == kEntry) from = k.src;
-            else if (k.bits == kEntry) from = slot;
+            if ((k.bits == kCopy || k.bits == kCopyI || k.bits == kCopyF) && k.src >= 0 && (s.kind(k.src).bits == kEntry || inMemory(s.kind(k.src))))
+                from = k.src;
+            else if (k.bits == kEntry || inMemory(k)) from = slot;
             if (from >= 0) {
                 LOp& l = op(cls == CF ? "chkf" : exact ? "chkint" : "chki");
                 l.slot = from;
                 leaves(l);
+                // Written in memory by the region: loaded here (as entered, its register is loaded
+                // where the region is entered).
+                if (inMemory(s.kind(from))) op(cls == CI ? "loadi" : "loadf", {Reg{from, cls}}, {}, {Reg{from, cls}}).slot = from;
                 return Reg{from, cls};
             }
             if (classOf(k) != cls) island();
@@ -714,19 +817,21 @@ struct Region {
         }
     };
 
-    Result transfer(int i, const State& start) {
+    Result transfer(int i, const State& start, bool lowering = true) {
         const Ins& x = ins[static_cast<size_t>(i)];
-        Ctx c{*this, i, x, start, {}};
+        Ctx c{*this, i, x, start, {}, true, {}};
+        c.lowering = lowering;
         try {
             step(c);
         } catch (const Island&) {
             static const bool trace = std::getenv("JADE_TRACE_ISLANDS") != nullptr;
-            if (trace) std::fprintf(stderr, "  island: %s at %u (%s)\n", opName(x.op), x.at, f.name.c_str());
+            if (trace)
+                std::fprintf(stderr, "  island: %s at %u (%s), first slots %d:%d %d:%d\n", opName(x.op), x.at, f.name.c_str(), x.o[0], start.kind(x.o[0]).bits,
+                             x.o[1], start.kind(x.o[1]).bits);
             Result out;
             out.island = true;
             out.fallsThrough = false;
             out.exits.push_back(ExitPoint{x.at, start, {}, {}, false, -1});
-            out.exits.back().stores = stores(start, x.at, out.exits.back().bad);
             out.ops.push_back(LOp{});
             out.ops.back().stem = "jump";
             out.ops.back().jumpExit = 0;
@@ -738,7 +843,7 @@ struct Region {
             }
             return out;
         }
-        c.out.after = c.s;
+        if (lowering) c.out.after = c.s;
         return std::move(c.out);
     }
 
@@ -909,6 +1014,112 @@ struct Region {
                 return;
             }
             case Op::Numeric: numeric(c); return;
+            case Op::Null:
+            case Op::True:
+            case Op::False: {  // pushed, in memory
+                c.writeMemory(s.top);
+                c.op(x.op == Op::Null ? "setnull" : x.op == Op::True ? "settrue" : "setfalse").slot = s.top;
+                s.top++;
+                c.fall(s);
+                return;
+            }
+            case Op::IterNext: {  // u16 slot, i32 target: the next item pushed, or to the target
+                const int it = c.objectSlot(u16(x, 0));
+                const int top = s.top;
+                int cls = useClass(c.i, top, top + 1);
+                if (cls < 0) cls = useClass(c.i, top, top + 1, 0, true);
+                const State none = s;  // no more: nothing pushed
+                LOp* l;
+                if (cls >= 0) {
+                    const Reg dst{top, static_cast<Cls>(cls)};
+                    l = &c.op(cls == CF ? "iterf" : "iteri", {dst}, {}, {dst});
+                    l->slot = it;
+                    c.go(static_cast<uint32_t>(i32(x, 2)), none, *l);
+                    c.leaves(*l);
+                    c.write(top, K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)});
+                } else {
+                    c.writeMemory(top);
+                    l = &c.op("iterv");
+                    l->slot = it;
+                    l->slot2 = top;
+                    c.go(static_cast<uint32_t>(i32(x, 2)), none, *l);
+                    c.leaves(*l);
+                }
+                s.top = top + 1;
+                c.fall(s);
+                return;
+            }
+            case Op::RGetProp: {  // u8 A, u8 B, u8 T, u8 S, u16 cache, i32 slow
+                const int a = u8(x, 0);
+                const int obj = c.objectSlot(u8(x, 1));
+                const int64_t cache = cacheAddress(u16(x, 4));
+                int cls = useClass(c.i, a, u8(x, 2));
+                if (cls < 0) {
+                    // What the place's cache saw, where the VM has read the field before (the
+                    // regions are made as a loop starts the second time): a field kept as its
+                    // payload alone says its kind; one kept as a value may hold anything, and is
+                    // read as it is. A guess the step checks; and where the cache saw nothing,
+                    // how the value is used next.
+                    const uint64_t seen = f.caches[u16(x, 4)].load(std::memory_order_relaxed);
+                    if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Float)) cls = CF;
+                    else if ((seen & 0x80) != 0 && (seen & 3) == static_cast<uint64_t>(ValueKind::Int)) cls = CI;
+                    else if (seen == 0) cls = useClass(c.i, a, u8(x, 2), 0, true);
+                }
+                LOp* l;
+                if (cls >= 0) {
+                    const Reg dst{a, static_cast<Cls>(cls)};
+                    l = &c.op(cls == CF ? "getpf" : "getpi", {dst}, {}, {dst});
+                    c.write(a, K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)});
+                } else {
+                    c.writeMemory(a);
+                    l = &c.op("getpv");
+                    l->slot2 = a;
+                }
+                l->slot = obj;
+                l->ki = cache;
+                c.leaves(*l);
+                s.top = u8(x, 2);
+                c.fall(s);
+                return;
+            }
+            case Op::RSetPropSS:
+            case Op::RSetPropSK: {  // u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow: B's field = C, and A
+                const int a = u8(x, 0);
+                const int obj = c.objectSlot(u8(x, 1));
+                const int64_t cache = cacheAddress(u16(x, 5));
+                Reg value{};
+                K kind;
+                if (x.op == Op::RSetPropSK) {
+                    const Value& v = constant(u8(x, 2));
+                    if (v.isFloat()) {
+                        value = Reg{kScratchF, CF};
+                        c.op("setfk", {value}, {}, {value}).kf = v.as.d;
+                        kind = K{kFloat};
+                    } else if (v.isInt()) {
+                        value = Reg{kScratchI, CI};
+                        c.op("setik", {value}, {}, {value}).ki = v.as.i;
+                        kind = constantInt(v.as.i);
+                    } else {
+                        island();
+                    }
+                } else {
+                    // As the VM's quick way: an int or a float (as entered, checked as the region is).
+                    const uint16_t w = static_cast<uint16_t>(s.kind(u8(x, 2)).bits & ~kEntry);
+                    if (w != kFloat && w != kInt) island();
+                    kind = K{w};
+                    value = Reg{u8(x, 2), w == kFloat ? CF : CI};
+                }
+                LOp& l = c.op(value.cls == CF ? "setpf" : "setpi", {value}, {value});
+                l.slot = obj;
+                l.ki = cache;
+                c.leaves(l);
+                const Reg result{a, value.cls};
+                if (!(result == value)) c.op(value.cls == CF ? "movf" : "movi", {result, value}, {value}, {result});
+                c.write(a, kind);
+                s.top = u8(x, 3);
+                c.fall(s);
+                return;
+            }
             case Op::RNeg: {  // u8 A, u8 B, u8 T, u8 S, i32 slow
                 const int a = u8(x, 0);
                 const Cls cls = c.guess(u8(x, 1));
@@ -930,25 +1141,38 @@ struct Region {
         }
     }
 
+    // A value whose kind the region does not know (an object, say), moved as memory holds it:
+    // copied whole, slot to slot, the copy then held in memory as its source is.
+    static void copyInMemory(Ctx& c, int from, int to) {
+        if (from == to) return;
+        c.writeMemory(to);
+        LOp& l = c.op("copyslot");
+        l.slot = to;
+        l.slot2 = from;
+    }
+
     // A move of a slot, or its push: what it holds goes with it.
     void move(Ctx& c, int from, int to) {
         const K k = c.s.kind(from);
+        if (inMemory(k)) {
+            // Written in memory: a copy, read there; or, read next as a number, loaded and checked.
+            int cls = useClass(c.i, to, to >= c.s.top ? to + 1 : c.s.top);
+            if (cls < 0) return copyInMemory(c, from, to);
+            const Reg src = c.number(from, static_cast<Cls>(cls), cls == CI), dst{to, static_cast<Cls>(cls)};
+            if (!(src == dst)) c.op(cls == CF ? "movf" : "movi", {dst, src}, {src}, {dst});
+            c.write(to, K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)});
+            return;
+        }
         if (k.bits == kEntry) {
             // As entered: a copy, read where it is, its payload in a register where it is read
             // next as a number.
             // An int or a float as read next by a typed instruction, or as the typed instructions
             // read and write the slot elsewhere (a guess): checked in memory to be one (an int,
             // not a byte), so that it is one here as it is once the region has written the slot.
-            int cls = useClass(c.i, to, to >= c.s.top ? to + 1 : c.s.top);
-            bool sure = cls >= 0;
-            if (cls < 0) {
-                auto h = hints.find(from);
-                if (h != hints.end() && (h->second == kInt || h->second == kFloat)) cls = h->second == kFloat ? CF : CI;
-            }
-            if (cls < 0) {
-                c.write(to, K{kCopy, static_cast<int16_t>(from)});
-                return;
-            }
+            // (Not the slot's hints: where slots are shared, they may be another variable's.)
+            const int cls = useClass(c.i, to, to >= c.s.top ? to + 1 : c.s.top);
+            const bool sure = cls >= 0;
+            if (cls < 0) return copyInMemory(c, from, to);
             if (!(sure && cls == CF)) {
                 LOp& l = c.op(cls == CF ? "chkf" : "chkint");
                 l.slot = from;
@@ -1251,11 +1475,11 @@ struct Region {
             work.push_back(e);
         }
         for (long steps = 0; !work.empty(); steps++) {
-            if (steps > 200000) refuse("the analysis does not settle");
+            if (steps > 40 * static_cast<long>(n) + 2000) refuse("the analysis takes too long");
             const int i = work.back();
             work.pop_back();
             done[static_cast<size_t>(i)] = true;
-            Result r = transfer(i, in[static_cast<size_t>(i)]);
+            Result r = transfer(i, in[static_cast<size_t>(i)], false);
             std::map<int, State> gives;
             for (const Edge& e : r.edges) {
                 if (e.to < 0 || e.to >= static_cast<int>(n)) refuse("a way past the loop's end");
@@ -1316,7 +1540,8 @@ struct Region {
             // Where the VM comes back in: after an island, where the region knows the top and does
             // the instruction itself; knowing there what is known after each island coming there,
             // and on each way within the region.
-            std::set<int> more{0};
+            // Growing only, so that the rounds end: ways in kept, what is known there joined.
+            std::set<int> more = entries;
             for (size_t i = 0; i < ins.size(); i++) {
                 if (!in[i].known || !results[i].island) continue;
                 for (int e : results[i].resumes) {
@@ -1326,6 +1551,7 @@ struct Region {
                     join(nextComeBack[e], afterIsland(in[i], static_cast<int>(i), topAt(e)));
                 }
             }
+            for (const auto& [e, st] : comeBack) join(nextComeBack[e], st);
             for (auto c = nextComeBack.begin(); c != nextComeBack.end();) {
                 if (!more.count(c->first)) c = nextComeBack.erase(c);
                 else ++c;
@@ -1347,10 +1573,16 @@ struct Region {
             else ++e;
         }
         if (results[0].island) refuse("its first instruction is the VM's");
+        // The steps, made once, from the states the analysis settled on.
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known) results[i] = transfer(static_cast<int>(i), in[i]);
+        // What each way out writes back.
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known)
-                for (const ExitPoint& e : results[i].exits)
+                for (ExitPoint& e : results[i].exits) {
+                    e.stores = stores(e.state, e.at, e.bad);
                     if (!e.bad.empty()) refuse(e.bad);
+                }
     }
 
     // ---- Liveness: which registers each instruction reads before writing ----
@@ -1723,13 +1955,89 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
     return out;
 }
 
+// Whether a region may do an instruction itself, as far as its kind says (it may still leave it
+// to the VM, as the analysis finds what its operands are).
+bool mayDo(Op op) {
+    if (typed(op).kind != Typed::None || untyped(op).kind != Typed::None) return true;
+    switch (op) {
+        case Op::MoveS:
+        case Op::GetLocal:
+        case Op::MoveK:
+        case Op::Const:
+        case Op::Null:
+        case Op::True:
+        case Op::False:
+        case Op::SetTop:
+        case Op::Pop:
+        case Op::RNot:
+        case Op::RJumpIfFalse:
+        case Op::And:
+        case Op::Or:
+        case Op::Jump:
+        case Op::Loop:
+        case Op::RangeNext:
+        case Op::RangeLoop:
+        case Op::RGetIndexSS:
+        case Op::RGetIndexSK:
+        case Op::SetIndex:
+        case Op::Numeric:
+        case Op::RNeg:
+        case Op::RShlSK:
+        case Op::RShrSK:
+        case Op::RBitAndSS:
+        case Op::RBitAndSK:
+        case Op::RBitOrSS:
+        case Op::RBitOrSK:
+        case Op::IterNext:
+        case Op::RGetProp:
+        case Op::RSetPropSS:
+        case Op::RSetPropSK: return true;
+        default: return false;
+    }
+}
+
 // The loops of a function's run code: each Loop jumping back, with where it jumps.
 struct Candidate {
     int first, last;  // instructions, the loop's start and its Loop
 };
 
+void makeRegionsTimed(FunctionProto& f);
+
+// How long making regions took, said as the program ends where JADE_TIME_NATIVE is set.
+double phaseTimes[4] = {};  // each phase's time, for JADE_TIME_NATIVE
+long refusals = 0;
+double setupTime = 0;
+struct NativeTimes {
+    double seconds = 0;
+    long functions = 0;
+    ~NativeTimes() {
+        if (std::getenv("JADE_TIME_NATIVE") != nullptr)
+            std::fprintf(stderr, "  hints %.1f, analysis %.1f, liveness %.1f, registers %.1f ms; %ld refused; setup %.1f ms\n", phaseTimes[0] * 1000, phaseTimes[1] * 1000, phaseTimes[2] * 1000, phaseTimes[3] * 1000, refusals, setupTime * 1000);
+        if (std::getenv("JADE_TIME_NATIVE") != nullptr) std::fprintf(stderr, "native code: %ld functions, %.1f ms making regions\n", functions, seconds * 1000);
+    }
+} nativeTimes;
+
 void makeRegions(FunctionProto& f) {
+    const auto start = std::chrono::steady_clock::now();
+    makeRegionsTimed(f);
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    nativeTimes.seconds += took;
+    static const bool each = std::getenv("JADE_TIME_NATIVE") != nullptr && std::string(std::getenv("JADE_TIME_NATIVE")) == "each";
+    if (each && took > 0.0003) std::fprintf(stderr, "  %.1f ms %s (%zu bytes of run code)\n", took * 1000, f.name.c_str(), f.run.size());
+    nativeTimes.functions++;
+}
+
+void makeRegionsTimed(FunctionProto& f) {
     if (!enabled()) return;
+    // A function with no loop: nothing to make, found at once.
+    bool anyLoop = false;
+    for (size_t at = 0; at < f.run.size() && !anyLoop;) {
+        const char* name = nullptr;
+        anyLoop = opAt(f.run.data() + at + kThreaded) == Op::Loop;
+        at += kThreaded + runSize(f.run, at + kThreaded, name);
+    }
+    if (!anyLoop) return;
+    const auto setupStart = std::chrono::steady_clock::now();
     std::vector<Ins> all;
     std::unordered_map<uint32_t, int> index;
     for (size_t at = 0; at < f.run.size();) {
@@ -1760,6 +2068,7 @@ void makeRegions(FunctionProto& f) {
     // The outermost first: a loop inside one made into a region is in it already.
     std::sort(loops.begin(), loops.end(), [](const Candidate& x, const Candidate& y) { return x.last - x.first > y.last - y.first; });
     std::vector<Candidate> made;
+    setupTime += std::chrono::duration<double>(std::chrono::steady_clock::now() - setupStart).count();
     static const char* const dump = std::getenv("JADE_DUMP_NATIVE");
     const bool dumping = dump != nullptr && (f.name == dump || std::strcmp(dump, "*") == 0);
     for (const Candidate& c : loops) {
@@ -1768,6 +2077,22 @@ void makeRegions(FunctionProto& f) {
         if (inside) continue;
         auto headTop = tops.find(all[static_cast<size_t>(c.first)].at);
         if (headTop == tops.end() || headTop->second < 0) continue;
+        // At a glance, before the analysis: a loop that starts with an instruction no region does,
+        // or has too many of them for what it would do itself (Region::worthIt), stays the VM's.
+        {
+            int can = 0, cannot = 0;
+            for (int i = c.first; i <= c.last; i++) (mayDo(all[static_cast<size_t>(i)].op) ? can : cannot)++;
+            if (!mayDo(all[static_cast<size_t>(c.first)].op) || can < 3 || cannot * 6 > can) {
+                if (dumping)
+                    std::fprintf(stderr, "== %s: no region for the loop at %u: %d of its instructions the VM's, %d a region's\n", f.name.c_str(),
+                                 all[static_cast<size_t>(c.first)].at, cannot, can);
+                continue;
+            }
+        }
+        if (c.last - c.first > 600) {
+            if (dumping) std::fprintf(stderr, "== %s: no region for the loop at %u: more than 600 instructions\n", f.name.c_str(), all[static_cast<size_t>(c.first)].at);
+            continue;
+        }
         Region r(f);
         r.tops = tops;
         // A range counted through, made just before the loop: its step, where none is given, is 1
@@ -1781,14 +2106,24 @@ void makeRegions(FunctionProto& f) {
             r.ins.push_back(all[static_cast<size_t>(i)]);
         }
         try {
+            auto t0 = std::chrono::steady_clock::now();
+            auto lap = [&](int k) {
+                const auto t1 = std::chrono::steady_clock::now();
+                phaseTimes[k] += std::chrono::duration<double>(t1 - t0).count();
+                t0 = t1;
+            };
             r.learnHints();
+            lap(0);
             r.analyse(headTop->second);
+            lap(1);
             if (!r.worthIt()) refuse("too little done between what the VM does");
             r.findLive();
+            lap(2);
             while (!r.giveRegisters()) {
                 if (!r.spillOne()) refuse("more values at once than registers, and none can be kept in its slot");
                 r.findLive();
             }
+            lap(3);
             std::vector<std::string> names;
             const auto ways = make(r, dumping ? &names : nullptr);
             if (ways.empty()) continue;
@@ -1806,6 +2141,7 @@ void makeRegions(FunctionProto& f) {
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
             }
         } catch (const std::exception& e) {
+            refusals++;
             if (dumping) {
                 std::fprintf(stderr, "== %s: no region for the loop at %u: %s\n", f.name.c_str(), all[static_cast<size_t>(c.first)].at, e.what());
                 for (size_t i = 0; i < r.results.size() && i < r.in.size(); i++)
@@ -1815,8 +2151,27 @@ void makeRegions(FunctionProto& f) {
     }
 }
 
+// Where a function's loops start, found as its run code is finished: their regions are made the
+// first time one of them starts (VM::nativeFirst).
+bool findLoops(FunctionProto& f) {
+    if (!enabled()) return false;
+    for (size_t at = 0; at < f.run.size();) {
+        const char* name = nullptr;
+        const size_t size = runSize(f.run, at + kThreaded, name);
+        if (opAt(f.run.data() + at + kThreaded) == Op::Loop) {
+            int32_t target;
+            std::memcpy(&target, f.run.data() + at + kThreaded + kOpBytes, 4);
+            if (target >= 0 && static_cast<size_t>(target) <= at &&
+                std::find(f.nativeHeads.begin(), f.nativeHeads.end(), static_cast<uint32_t>(target)) == f.nativeHeads.end())
+                f.nativeHeads.push_back(static_cast<uint32_t>(target));
+        }
+        at += kThreaded + size;
+    }
+    return !f.nativeHeads.empty();
+}
+
 #if JADE_NATIVE
-const bool hooked = (makeNativeRegions = &makeRegions, true);
+const bool hooked = (findNativeLoops = &findLoops, makeNativeRegions = &makeRegions, true);
 #endif
 
 }  // namespace

@@ -5770,6 +5770,7 @@ JADE_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
 struct TailTable {
     static const TailFn* get();
     static TailFn nativeEntry() { return &VM::nativeEnter; }
+    static TailFn nativeFirstEntry() { return &VM::nativeFirst; }
 };
 namespace {
 // Writes into run code each instruction's function (D160), as the code is made: the functions,
@@ -5782,7 +5783,12 @@ void addressCode(FunctionProto& f) {
         std::memcpy(f.run.data() + at, &table[static_cast<size_t>(opAt(f.run.data() + at + kThreaded))], kThreaded);
         at += kThreaded + size;
     }
-    // A native code region's loop goes in through VM::nativeEnter (M9.5).
+    // A loop whose native code regions are not made yet starts with VM::nativeFirst, which makes
+    // them; a region's ways in are VM::nativeEnter's (M9.5).
+    if (!f.nativeMade) {
+        const TailFn first = TailTable::nativeFirstEntry();
+        for (uint32_t head : f.nativeHeads) std::memcpy(f.run.data() + head, &first, kThreaded);
+    }
     const TailFn enter = TailTable::nativeEntry();
     for (const FunctionProto::NativeRegion& r : f.regions) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
     f.addressed.done.store(true, std::memory_order_release);
@@ -6822,6 +6828,49 @@ const TailFn* TailTable::get() {
 
 // How often a region's quick ways may not do what they do before the VM stops going in.
 constexpr uint32_t kNativeMissLimit = 256;
+
+// The second time one of a function's loops starts (once the VM has run it a time round, and
+// its places' caches have seen what they read): its regions made (once, by one thread or core
+// at a time), and its loops' first instructions addressed anew: a region's way in, or the
+// instruction's own function. A core running the function meanwhile reads either address, each
+// one aligned word, and either goes on rightly; the regions are all made before any is reached.
+JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
+    FunctionProto& counted = *const_cast<FunctionProto*>(frame->closure->proto);
+    if (counted.nativeArrivals < 1) {
+        counted.nativeArrivals++;  // racing cores may count it once or twice: either is well
+        ip -= kThreaded + kOpBytes;
+        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
+        sp_ = sp;
+        frame->ip = ip += kThreaded + kOpBytes;
+        [[clang::musttail]] return (this->*own)(JADE_TAIL_ARGS);
+    }
+    {
+        static std::mutex making;
+        std::lock_guard<std::mutex> hold(making);
+        FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
+        if (!f.nativeMade) {
+            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f);
+            std::atomic_thread_fence(std::memory_order_release);
+            uint8_t* const run = const_cast<uint8_t*>(code);
+            const TailFn* const table = TailTable::get();
+            for (uint32_t head : f.nativeHeads) {
+                const TailFn own = table[static_cast<size_t>(opAt(run + head + kThreaded))];
+                std::memcpy(run + head, &own, kThreaded);
+            }
+            const TailFn enter = TailTable::nativeEntry();
+            for (const FunctionProto::NativeRegion& r : f.regions) std::memcpy(run + r.head, &enter, kThreaded);
+            f.nativeMade = true;
+            f.runTops.clear();
+            f.runTops.shrink_to_fit();
+        }
+    }
+    // On at this instruction, as it is now addressed.
+    ip -= kThreaded + kOpBytes;
+    const TailFn to_ = tailAt(ip);
+    sp_ = sp;
+    frame->ip = ip += kThreaded + kOpBytes;
+    [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);
+}
 
 // Into a native code region (M9.5): its machine code run on this frame's slots from the
 // instruction here, one of its ways in, and on where it gives back, with the stack's top it

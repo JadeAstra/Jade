@@ -1261,21 +1261,29 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     f.run = std::move(run);
     f.runLines = std::move(lines);
     f.regions.clear();
+    f.nativeHeads.clear();
+    f.nativeMade = false;
+    f.nativeArrivals = 0;
+    bool loops = false;
     if (opBytes == kOpBytes && !f.runTops.empty()) {
         // Each where an instruction starts; one inside an instruction (a comparison the jump
         // after it was joined to) is dropped.
         std::erase_if(f.runTops, [&](const auto& t) { return t.first >= moved.size() || moved[t.first] == UINT32_MAX; });
         for (auto& [at, top] : f.runTops) at = where(at);
-        if (makeNativeRegions != nullptr) makeNativeRegions(f);
+        loops = findNativeLoops != nullptr && findNativeLoops(f);
     }
-    f.runTops.clear();
-    f.runTops.shrink_to_fit();
+    // Kept for the regions only where there are loops to make them of.
+    if (!loops) {
+        f.runTops.clear();
+        f.runTops.shrink_to_fit();
+    }
     if (writeRunAddresses != nullptr) writeRunAddresses(f);
 }
 
 }  // namespace
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
+bool (*findNativeLoops)(FunctionProto& f) = nullptr;
 void (*makeNativeRegions)(FunctionProto& f) = nullptr;
 
 void runLater(FunctionProto& f) {

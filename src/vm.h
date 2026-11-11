@@ -1388,6 +1388,7 @@ private:
     // The way into a native code region (M9.5, src/native/regions.cpp): the code holds its
     // address before the first instruction of the loop the region was made of.
     JADE_TAIL_FN int nativeEnter(JADE_TAIL_PARAMS);
+    JADE_TAIL_FN int nativeFirst(JADE_TAIL_PARAMS);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif

@@ -633,3 +633,173 @@ STENCIL(chkbyk) {
     if (base[jade_slot].kind != kKindByte) EXIT;
     NEXT;
 }
+
+// ---- Fields ----
+
+// A field of the object of a class in slot jade_slot, where the cache word at jade_ki (an
+// address: the place's cache, which the VM fills) says it is, its layout the one the cache
+// saw; read where the object's core may read it (or change it, `change`: its own core's).
+// Null where not: the VM's.
+INLINE uint8_t* fieldAt(const Slot& s, const Ctx* ctx, bool change, uint64_t& seen) {
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeInstance) return nullptr;
+    seen = *reinterpret_cast<const volatile uint64_t*>(jade_ki);
+    if (static_cast<uint32_t>(seen >> 32) != word<uint32_t>(s.p + kInstShape)) return nullptr;
+    const uint8_t core = s.p[kObjCore];
+    if (change ? core != ctx->core : (core != 0 && core != ctx->core)) return nullptr;
+    return const_cast<uint8_t*>(s.p) + ((seen >> 16) & 0xFFFF);
+}
+// A field read as a number of kind `kind`: kept as its payload alone, or as a value.
+INLINE bool numberField(const uint8_t* at, uint64_t seen, uint8_t kind, uint64_t& bits) {
+    if ((seen & 0x80) != 0) {
+        if ((seen & 3) != kind) return false;
+    } else {
+        if (at[0] != kind) return false;
+        at += 8;
+    }
+    std::memcpy(&bits, at, 8);
+    return true;
+}
+// A number written to a field, as the VM's SetProp does at once: kept as its payload alone (its
+// kind the field's, the field not one set only once and set already), or as a value of a field
+// declared with no type or that number's type; anything else the VM's.
+INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t typeId, uint64_t bits) {
+    uint64_t seen;
+    uint8_t* at = fieldAt(s, ctx, true, seen);
+    if (at == nullptr) return false;
+    if ((seen & 0x80) != 0) {
+        if ((seen & 3) != kind) return false;
+        const uint32_t bit = (seen >> 8) & 0xFF;
+        uint8_t* data = const_cast<uint8_t*>(s.p) + kInstData;
+        const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
+        if ((seen & 0x40) != 0 && hasOne) return false;
+        std::memcpy(at, &bits, 8);
+        if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+        return true;
+    }
+    if ((seen & 2) != 0 || ((seen & 1) != 0 && at[0] != kKindUndefined)) return false;
+    const uint8_t type = static_cast<uint8_t>(seen >> 8);
+    if (type != 0 && type != typeId) return false;
+    Slot v;
+    std::memset(&v, 0, sizeof v);
+    v.kind = kind;
+    std::memcpy(&v.i, &bits, 8);
+    std::memcpy(at, &v, sizeof v);
+    return true;
+}
+#define GETPF(a, ...)                                                           \
+    STENCIL(getpf_##a) {                                                        \
+        uint64_t seen, bits;                                                    \
+        const uint8_t* at = fieldAt(base[jade_slot], ctx, false, seen);         \
+        if (at == nullptr || !numberField(at, seen, kKindFloat, bits)) EXIT;    \
+        std::memcpy(&f##a, &bits, 8);                                           \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(setpf_##a) {                                                        \
+        uint64_t bits;                                                          \
+        std::memcpy(&bits, &f##a, 8);                                           \
+        if (!setNumberField(base[jade_slot], ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
+        NEXT;                                                                   \
+    }
+F_A(GETPF, x)
+#define GETPI(a, ...)                                                           \
+    STENCIL(getpi_##a) {                                                        \
+        uint64_t seen, bits;                                                    \
+        const uint8_t* at = fieldAt(base[jade_slot], ctx, false, seen);         \
+        if (at == nullptr || !numberField(at, seen, kKindInt, bits)) EXIT;      \
+        i##a = static_cast<int64_t>(bits);                                      \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(setpi_##a) {                                                        \
+        if (!setNumberField(base[jade_slot], ctx, kKindInt, kTypeIdInt, static_cast<uint64_t>(i##a))) EXIT; \
+        NEXT;                                                                   \
+    }
+I_A(GETPI, x)
+// A field of any kind copied to slot jade_slot2, as the VM copies it (no value held elsewhere).
+STENCIL(getpv) {
+    uint64_t seen;
+    const uint8_t* at = fieldAt(base[jade_slot], ctx, false, seen);
+    if (at == nullptr) EXIT;
+    if ((seen & 0x80) != 0) {
+        uint64_t bits;
+        std::memcpy(&bits, at, 8);
+        storeSlot(base, jade_slot2, static_cast<uint8_t>(seen & 3), bits);
+        NEXT;
+    }
+    if (at[0] == kKindRef || at[0] == kKindUndefined) EXIT;
+    std::memcpy(&base[jade_slot2], at, sizeof(Slot));
+    NEXT;
+}
+
+// ---- A for over a list ----
+
+// The iterator in slot jade_slot over a list: the iterator, and the list in `list`.
+INLINE uint8_t* listIterator(const Slot& s, const uint8_t*& list) {
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeIterator) return nullptr;
+    const Slot& source = *reinterpret_cast<const Slot*>(s.p + kIterSource);
+    if (source.kind != kKindObj || source.p[kObjType] != kTypeList) return nullptr;
+    list = source.p;
+    return const_cast<uint8_t*>(s.p);
+}
+// The next item of a list kept as values, to slot jade_slot2; to the jump's target where there
+// are no more.
+STENCIL(iterv) {
+    const uint8_t* list;
+    uint8_t* it = listIterator(base[jade_slot], list);
+    if (it == nullptr || word<const uint8_t*>(list + kListPack) != nullptr) EXIT;
+    const Slot* first = word<const Slot*>(list + kListItems);
+    const Slot* last = word<const Slot*>(list + kListItems + 8);
+    const uint64_t index = word<uint64_t>(it + kIterIndex);
+    if (index >= static_cast<uint64_t>(last - first)) JUMP;
+    std::memcpy(&base[jade_slot2], first + index, sizeof(Slot));
+    const uint64_t next = index + 1;
+    std::memcpy(it + kIterIndex, &next, 8);
+    NEXT;
+}
+// The next item of a packed list of floats (ints), none null, into fa (ia), where the list is
+// not the one lent to a parallel section's core.
+INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, const Ctx* ctx, uint8_t*& it) {
+    const uint8_t* list;
+    it = listIterator(s, list);
+    if (it == nullptr || list == ctx->band) return nullptr;
+    return packOf(list, store);
+}
+#define ITERF(a, ...)                                                           \
+    STENCIL(iterf_##a) {                                                        \
+        uint8_t* it;                                                            \
+        const uint8_t* pack = packedIterator(base[jade_slot], kStoreFloats, ctx, it); \
+        if (pack == nullptr) EXIT;                                              \
+        const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
+        if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
+        f##a = word<double>(word<const uint8_t*>(pack + kPackBlock) + index * 8); \
+        const uint64_t next = index + 1;                                        \
+        std::memcpy(it + kIterIndex, &next, 8);                                 \
+        NEXT;                                                                   \
+    }
+F_A(ITERF, x)
+#define ITERI(a, ...)                                                           \
+    STENCIL(iteri_##a) {                                                        \
+        uint8_t* it;                                                            \
+        const uint8_t* pack = packedIterator(base[jade_slot], kStoreInts, ctx, it); \
+        if (pack == nullptr) EXIT;                                              \
+        const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
+        if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
+        i##a = word<int64_t>(word<const uint8_t*>(pack + kPackBlock) + index * 8); \
+        const uint64_t next = index + 1;                                        \
+        std::memcpy(it + kIterIndex, &next, 8);                                 \
+        NEXT;                                                                   \
+    }
+I_A(ITERI, x)
+
+// null, true or false pushed: written to slot jade_slot as the VM writes them.
+STENCIL(setnull) {
+    storeSlot(base, jade_slot, 0, 0);
+    NEXT;
+}
+STENCIL(settrue) {
+    storeSlot(base, jade_slot, kKindBool, 1);
+    NEXT;
+}
+STENCIL(setfalse) {
+    storeSlot(base, jade_slot, kKindBool, 0);
+    NEXT;
+}
