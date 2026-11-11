@@ -1379,6 +1379,9 @@ private:
     // that runs makes no call. Built for Windows, a function that calls anything at all sets up
     // its stack frame as it starts, whichever way it then goes.
     template <Op op> JADE_TAIL_FN int cold(JADE_TAIL_PARAMS);
+    // The way into a native code region (M9.5, src/native/regions.cpp): the code holds its
+    // address before the first instruction of the loop the region was made of.
+    JADE_TAIL_FN int nativeEnter(JADE_TAIL_PARAMS);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif

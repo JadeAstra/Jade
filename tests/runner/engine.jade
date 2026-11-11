@@ -28,7 +28,7 @@ enum Kind { file, checker, testing, shell, cache, whole, described, icon, budget
 // The runtime's stress settings (D163), each run with its variable set: a list's value items read
 // as copies, a change of thread at every safe point, each C++ function's result checked against
 // its declaration, a collection at every safe point.
-enum Setting { plain, copyReads, threadStress, nativeResults, gcStress }
+enum Setting { plain, copyReads, threadStress, nativeResults, gcStress, interpret }
 
 // The variable a setting sets, and what it is called.
 fun settingVariable(s : Setting) : string? => when (s) {
@@ -36,13 +36,17 @@ fun settingVariable(s : Setting) : string? => when (s) {
   Setting.threadStress -> "JADE_THREAD_STRESS"
   Setting.nativeResults -> "JADE_CHECK_NATIVE_RESULTS"
   Setting.gcStress -> "JADE_GC_STRESS"
+  Setting.interpret -> "JADE_NATIVE"
   else -> null
 }
+// What the variable is set to: 1, but for the VM's own way alone (no native code, M9.5), 0.
+fun settingValue(s : Setting) : string => s == Setting.interpret ? "0" : "1"
 fun settingName(s : Setting) : string => when (s) {
   Setting.copyReads -> "copy-reads"
   Setting.threadStress -> "thread-stress"
   Setting.nativeResults -> "native-results"
   Setting.gcStress -> "gc-stress"
+  Setting.interpret -> "interpret"
   else -> "plain"
 }
 fun settingNamed(name : string) : Setting? => Setting.entries.firstOrNull { settingName(it) == name }
@@ -259,11 +263,12 @@ class Suite(val options : Options) {
   private fun jade(item : Item?, arguments : List<string>, dir : FilePath, cache : FilePath, input : string? = null,
                    program : FilePath? = null, extra : Map<string, string?> = {:}) : Run throws IOException {
     if (stopping) { return Run([], "stopped", -1, false) }
-    val environment : open Map<string, string?> = {"JADE_CACHE": cache.text}
+    // Windows the tests open show without taking the focus from the window the user is in.
+    val environment : open Map<string, string?> = {"JADE_CACHE": cache.text, "JADE_QUIET_WINDOWS": "1"}
     // The setting asked for, and none of the others, whatever this program was started with.
     for (s in Setting.entries) {
       val v = settingVariable(s)
-      if (v != null) { environment[v] = s == options.setting ? "1" : null }
+      if (v != null) { environment[v] = s == options.setting ? settingValue(s) : null }
     }
     for ((k, v) in extra) { environment[k] = v }
     val stamp = lock.useKey {

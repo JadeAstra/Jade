@@ -784,6 +784,16 @@ struct FunctionProto {
         uint32_t which;       // the rights it has, in `rights`
     };
     std::vector<RunRights> runRights;
+    // Native code (M9.5, src/native/regions.cpp): the stack's depth at each place in `run` that
+    // is jumped to, as the translator had it, kept only while the regions are made from it; and
+    // the regions made, each where in `run` its first instruction starts (whose address in the
+    // code is then the VM's way into it) and its machine code.
+    std::vector<std::pair<uint32_t, uint16_t>> runTops;
+    struct NativeRegion {
+        uint32_t head;
+        void* code;
+    };
+    std::vector<NativeRegion> regions;
     std::vector<DeclarationSpan> spans;    // a module's: the code of each top-level declaration
     std::vector<Value> constants;          // ints, floats and interned strings
     std::vector<FunctionProto*> protos;    // nested functions
@@ -922,6 +932,9 @@ size_t operandBytes(Op op);
 // Where the VM's instructions are functions (vm.cpp, M6.7), what writes each one's address into
 // run code as it is made; null where they are known only once the VM runs.
 extern void (*writeRunAddresses)(FunctionProto& f);
+// What makes a function's native code regions (src/native/regions.cpp, M9.5) as its run code is
+// finished, before its addresses are written; null where jade has no native code.
+extern void (*makeNativeRegions)(FunctionProto& f);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,

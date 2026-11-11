@@ -4,6 +4,7 @@
 #include "native.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
@@ -47,6 +48,16 @@ size_t stencilCount() { return 0; }
 const StencilCode* stencil(std::string_view) { return nullptr; }
 
 #endif
+
+namespace {
+bool regionsOn = [] {
+    const char* asked = std::getenv("JADE_NATIVE");
+    return asked == nullptr || std::string(asked) != "0";
+}();
+}  // namespace
+
+bool enabled() { return regionsOn && available(); }
+void setEnabled(bool on) { regionsOn = on; }
 
 namespace {
 
@@ -185,14 +196,14 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
             switch (hole.kind) {
                 case HoleNext: rel32(place, hole.after, start[i + 1]); break;
                 case HoleJump: rel32(place, hole.after, start[labelled(st.jump)]); break;
-                case HoleExit: rel32(place, hole.after, start[exitAt]); break;
+                case HoleExit: rel32(place, hole.after, st.exit >= 0 ? start[labelled(st.exit)] : start[exitAt]); break;
                 default: {
                     uint64_t v = 0;
                     if (hole.kind == HoleFloat) std::memcpy(&v, &st.kf, 8);
                     else if (hole.kind == HoleInt) v = static_cast<uint64_t>(st.ki);
                     else if (hole.kind == HoleSlot) v = static_cast<uint64_t>(st.slot);
                     else if (hole.kind == HoleRet) v = static_cast<uint64_t>(st.ret);
-                    else v = static_cast<uint64_t>(st.ki);  // HoleAttention: the flag's address, given as ki
+                    else throw std::runtime_error("native code: a gap of a kind no step fills");
                     std::memcpy(mem + word, &v, 8);
                     rel32(place, hole.after, word);
                     word += 8;
@@ -210,14 +221,9 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
 #if JADE_NATIVE
 namespace {
 
-using RegionFn = int64_t(__attribute__((preserve_none)) *)(Value*, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double,
-                                                          double, double, double, double);
-
 volatile uint8_t checkFlag = 0;
 
-int64_t run(void* code, Value* slots) {
-    return reinterpret_cast<RegionFn>(code)(slots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-}
+int64_t run(void* code, Value* slots) { return runRegion(code, slots, &checkFlag); }
 
 // The way out the check's regions take: give back -1.
 std::vector<Step> exitGiving(int64_t value) {
@@ -232,7 +238,6 @@ std::vector<Step> exitGiving(int64_t value) {
 void* mandelbrot(Assembler& a) {
     const int outer = a.label(), done = a.label(), inner = a.label(), innerDone = a.label();
     const int loop = a.label(), loopDone = a.label(), notInside = a.label();
-    const int64_t flag = static_cast<int64_t>(reinterpret_cast<uintptr_t>(&checkFlag));
     a.add("loadi_0").slot = 1;
     a.add("loadi_1").slot = 2;
     a.add("setik_2").ki = 0;
@@ -270,19 +275,16 @@ void* mandelbrot(Assembler& a) {
     a.add("addf_1_5_3");
     a.add("movf_0_4");
     a.add("inci_5");
-    Step& back = a.add("loopback");
-    back.jump = loop, back.ki = flag;
+    a.add("loopback").jump = loop;
     a.at(loopDone);
     a.add("jneii_5_1").jump = notInside;
     a.add("inci_2");
     a.at(notInside);
     a.add("inci_4");
-    Step& back2 = a.add("loopback");
-    back2.jump = inner, back2.ki = flag;
+    a.add("loopback").jump = inner;
     a.at(innerDone);
     a.add("inci_3");
-    Step& back3 = a.add("loopback");
-    back3.jump = outer, back3.ki = flag;
+    a.add("loopback").jump = outer;
     a.at(done);
     a.add("storei_2").slot = 3;
     a.add("ret").ret = 0;

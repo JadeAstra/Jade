@@ -14,6 +14,7 @@
 #include <shobjidl.h>
 #include <windowsx.h>
 
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -203,8 +204,18 @@ public:
         if (onEvent) onEvent(event);
     }
 
+    // Under the test runner (JADE_QUIET_WINDOWS=1, which it sets for what it starts), a window
+    // is shown and brought up without taking the focus: the window the user is working in keeps
+    // it, and does not flash as tests open and close theirs.
+    static bool quiet() {
+        static const bool asked = [] {
+            const char* v = std::getenv("JADE_QUIET_WINDOWS");
+            return v != nullptr && v[0] == '1';
+        }();
+        return asked;
+    }
     void show() override {
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, quiet() ? SW_SHOWNOACTIVATE : SW_SHOW);
         UpdateWindow(hwnd);
     }
     void hide() override { ShowWindow(hwnd, SW_HIDE); }
@@ -250,6 +261,11 @@ public:
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }
     void toFront() override {
+        if (quiet()) {
+            if (IsIconic(hwnd)) ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            return;
+        }
         if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
         SetForegroundWindow(hwnd);
     }

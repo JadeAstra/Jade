@@ -24,7 +24,11 @@ print(Program.processId > 0, Program.hostName.size > 0)   // expect: true true
 val roots = FilePath.roots()
 print(roots.size >= 1)   // expect: true
 val top = roots[0]
-print(top.totalSpace > 0, top.totalSpace >= top.freeSpace, top.freeSpace >= top.usableSpace)   // expect: true true true
+// Each is asked of the system on its own: other programs (the other tests) writing and deleting
+// between the two asks move them, so usable may pass free by what was freed meanwhile.
+val usable = top.usableSpace
+val free = top.freeSpace
+print(top.totalSpace > 0, top.totalSpace >= free, free + 1000000000 >= usable)   // expect: true true true
 val nowhere = windows ? "Q:\\jade\\nowhere" : "/jade/nowhere/at/all"
 try {
   print(FilePath(nowhere).totalSpace)

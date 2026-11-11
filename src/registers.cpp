@@ -222,6 +222,7 @@ public:
         : f_(f), code_(f.code), depths_(depths), n_(f.code.size()), notes_(mode == Mode::Full), rs_(mode != Mode::Plain), joinedOnly_(mode == Mode::Joined) {}
 
     void translate() {
+        f_.runTops.clear();
         if (rs_ && f_.maxStack > 255) fail("more than 255 slots");
         findLeaders();
         findCaptured();
@@ -263,6 +264,8 @@ public:
             }
             if (static_cast<int>(stack_.size()) != depth) fail("the depth does not match");
             newAt_[at] = static_cast<uint32_t>(out_.size());
+            // Where it is jumped to, the VM's top is the stack's depth: kept for native code.
+            if (leader_[at] && depth >= 0 && depth <= 0xFFFF) f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(depth));
             known = one(at, size, depth);
             // A function's result checked just after an instruction that gives one of that type
             // always (an int from AddI, whose operands the checker knew, D178): nothing to check.
@@ -1256,12 +1259,20 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     }
     f.run = std::move(run);
     f.runLines = std::move(lines);
+    f.regions.clear();
+    if (opBytes == kOpBytes && !f.runTops.empty()) {
+        for (auto& [at, top] : f.runTops) at = where(at);
+        if (makeNativeRegions != nullptr) makeNativeRegions(f);
+    }
+    f.runTops.clear();
+    f.runTops.shrink_to_fit();
     if (writeRunAddresses != nullptr) writeRunAddresses(f);
 }
 
 }  // namespace
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
+void (*makeNativeRegions)(FunctionProto& f) = nullptr;
 
 void runLater(FunctionProto& f) {
     std::vector<uint8_t> run(kThreaded, 0);

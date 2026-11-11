@@ -243,6 +243,7 @@ const char* const kUsage =
     "                                        comments written above them; --template <page.html>\n"
     "                                        puts it where that page says <!-- jade doc -->,\n"
     "                                        --missing lists what has none\n"
+    "  jade --interpret <any of the above>   the same, run by the VM alone, with no native code\n"
     "  jade --version\n"
     "  jade --help\n";
 
@@ -1137,7 +1138,13 @@ int testFilesCommand(const std::vector<std::string>& given) {
     return counts();
 }
 
-int dispatch(const std::vector<std::string>& args) {
+int dispatch(const std::vector<std::string>& given) {
+    // `jade --interpret ...`: everything the VM's own way, no native code made (M9.5).
+    std::vector<std::string> args = given;
+    if (!args.empty() && args[0] == "--interpret") {
+        jade::native::setEnabled(false);
+        args.erase(args.begin());
+    }
     if (args.empty()) return shell();
 
     const std::string& command = args[0];

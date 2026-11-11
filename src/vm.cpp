@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "native/native.h"
 
 #include "builtins.h"  // addOverflows and the like (D27)
 
@@ -5768,6 +5769,7 @@ JADE_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
 }
 struct TailTable {
     static const TailFn* get();
+    static TailFn nativeEntry() { return &VM::nativeEnter; }
 };
 namespace {
 // Writes into run code each instruction's function (D160), as the code is made: the functions,
@@ -5780,10 +5782,15 @@ void addressCode(FunctionProto& f) {
         std::memcpy(f.run.data() + at, &table[static_cast<size_t>(opAt(f.run.data() + at + kThreaded))], kThreaded);
         at += kThreaded + size;
     }
+    // A native code region's loop goes in through VM::nativeEnter (M9.5).
+    const TailFn enter = TailTable::nativeEntry();
+    for (const FunctionProto::NativeRegion& r : f.regions) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
     f.addressed.done.store(true, std::memory_order_release);
 }
 const bool addressesWritten = (writeRunAddresses = &addressCode, true);
 }  // namespace
+
+
 #define ADDRESS_CODE(proto)
 #elif defined(__clang__) || defined(__GNUC__)
 namespace {
@@ -6811,6 +6818,34 @@ const TailFn* TailTable::get() {
         return made;
     }(std::make_index_sequence<kOpCount>{});
     return table.data();
+}
+
+// Into a native code region (M9.5): the loop's machine code run on this frame's slots, and on,
+// where it gives back, with the stack's top it gives. `ip` is just past the loop's first
+// instruction's opcode, where the instruction before put it.
+JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
+    const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
+    void* region = nullptr;
+    for (const FunctionProto::NativeRegion& r : frame->closure->proto->regions)
+        if (r.head == head) {
+            region = r.code;
+            break;
+        }
+    TailFn to_;
+    if (region != nullptr) {
+        const int64_t out = native::runRegion(region, base, reinterpret_cast<const volatile uint8_t*>(&attention_));
+        const uint32_t at = static_cast<uint32_t>(out);
+        sp = base + static_cast<uint32_t>(static_cast<uint64_t>(out) >> 32);
+        ip = code + at;
+        // Going on at the loop's first instruction itself: its own function, not this one again.
+        to_ = at == head ? TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))] : tailAt(ip);
+    } else {
+        ip = code + head;
+        to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
+    }
+    sp_ = sp;
+    frame->ip = ip += kThreaded + kOpBytes;
+    [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);
 }
 
 #undef CASE

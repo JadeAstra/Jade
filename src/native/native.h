@@ -44,6 +44,7 @@ struct Step {
     int64_t slot = 0;
     int64_t ret = 0;
     int jump = -1;  // a label
+    int exit = -1;  // the label of this step's own way out, or -1 for the region's
 };
 
 class Assembler {
@@ -61,6 +62,23 @@ private:
     std::vector<std::pair<int, size_t>> labels_;
     int nextLabel_ = 0;
 };
+
+// A region's machine code, run: the frame's slots, the VM's flag (a collection or another
+// thread waiting), then the registers (all 0 as it starts). It gives back where the VM goes on.
+#if defined(__clang__)
+#define JADE_REGION_CALL __attribute__((preserve_none))
+#else
+#define JADE_REGION_CALL
+#endif
+using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, const volatile uint8_t* flag, int64_t, int64_t, int64_t, int64_t,
+                                                          int64_t, int64_t, double, double, double, double, double, double, double, double);
+inline int64_t runRegion(void* code, void* slots, const volatile uint8_t* flag) {
+    return reinterpret_cast<RegionFn>(code)(slots, flag, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+// Whether regions are made (jade --interpret, or JADE_NATIVE=0, says not).
+bool enabled();
+void setEnabled(bool on);
 
 // The build's check (jade --native-check): every stencil shaped as the copier shapes it, and
 // regions put together and run, their answers beside C++'s; what is wrong, or "".

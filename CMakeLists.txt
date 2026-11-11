@@ -92,7 +92,7 @@ add_library(jade_compiler OBJECT
 # object file of their own, read by tools/stencils into a table that jade.exe carries, and checked
 # by jade itself as the build's step. With clang-cl on Windows; elsewhere, until the tool reads
 # ELF, jade is built without native code (native.cpp then has no stencils).
-target_sources(jade_core PRIVATE src/native/native.cpp)
+target_sources(jade_core PRIVATE src/native/native.cpp src/native/regions.cpp)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
   add_library(jade_stencils OBJECT src/native/stencils.cpp)
   # Each stencil in a section of its own, and nothing in them a copied stencil could not carry.
