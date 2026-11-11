@@ -51,6 +51,7 @@ struct Ctx {  // native.h's RegionContext
     const volatile uint8_t* attention;
     uint64_t core;
     const void* band;
+    uint64_t lists[24];
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -84,7 +85,7 @@ INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
 }  // namespace
 
 #define PARAMS                                                                                                         \
-    Slot *base, const Ctx *ctx, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, int64_t i5, int64_t i6,    \
+    Slot *base, Ctx *ctx, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, int64_t i5, int64_t i6,    \
         int64_t i7, int64_t i8, int64_t i9, double f0, double f1, double f2, double f3, double f4, double f5, double f6, \
         double f7
 #define ARGS base, ctx, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, f0, f1, f2, f3, f4, f5, f6, f7
@@ -803,3 +804,101 @@ STENCIL(setfalse) {
     storeSlot(base, jade_slot, kKindBool, 0);
     NEXT;
 }
+
+// ---- Lists looked at once, as a region starts ----
+
+// A list's or bytes' items, looked at once where nothing in the region can change where they are
+// or how many (no instruction the VM's in it; and the region is entered afresh after each way
+// out): in the context's words 4k to 4k+3, its items' address, how many may be read, how many
+// changed (0 where the object may not be, or is not what the region reads as), and what they are
+// (1 ints, 2 floats, 3 bytes). slot: the object; jade_ki: k.
+INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
+    uint64_t* h = ctx->lists + 4 * k;
+    h[0] = h[1] = h[2] = h[3] = 0;
+    if (s.kind != kKindObj) return;
+    const uint8_t* o = s.p;
+    if (o[kObjType] == kTypeList) {
+        const uint8_t* pack = packOf(o, floats ? kStoreFloats : kStoreInts);
+        if (pack == nullptr) return;
+        const uint64_t count = word<uint64_t>(pack + kPackCount);
+        h[0] = word<uint64_t>(pack + kPackBlock);
+        if (mayRead(o, ctx)) h[1] = count;
+        if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+        h[3] = floats ? 2 : 1;
+    } else if (!floats && o[kObjType] == kTypeBytes) {
+        const uint8_t* first = word<const uint8_t*>(o + kBytesData);
+        const uint8_t* end = word<const uint8_t*>(o + kBytesData + 8);
+        const uint64_t count = static_cast<uint64_t>(end - first);
+        h[0] = reinterpret_cast<uint64_t>(first);
+        if (mayRead(o, ctx)) h[1] = count;
+        if (o[kObjCore] == ctx->core) h[2] = count;
+        h[3] = 3;
+    }
+}
+STENCIL(lookf) {
+    lookAt(base[jade_slot], ctx, jade_ki, true);
+    NEXT;
+}
+STENCIL(lookw) {
+    lookAt(base[jade_slot], ctx, jade_ki, false);
+    NEXT;
+}
+// Items read and written through what was looked at (k in jade_slot): the index checked
+// against the count, nothing else.
+#define HIDXF_B(c, a)                                                           \
+    STENCIL(hidxf_##a##_##c) {                                                  \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        f##a = reinterpret_cast<const double*>(h[0])[i##c];                     \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetf_##a##_##c) {                                                  \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        reinterpret_cast<double*>(h[0])[i##c] = f##a;                           \
+        NEXT;                                                                   \
+    }
+#define HIDXF_A(a, ...) I_B(HIDXF_B, a)
+F_A(HIDXF_A, x)
+#define HIDXFK(a, ...)                                                          \
+    STENCIL(hidxfk_##a) {                                                       \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(jade_ki) >= h[1]) EXIT;                       \
+        f##a = reinterpret_cast<const double*>(h[0])[jade_ki];                  \
+        NEXT;                                                                   \
+    }
+F_A(HIDXFK, x)
+#define HIDXW_B(c, a)                                                           \
+    STENCIL(hidxw_##a##_##c) {                                                  \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        i##a = h[3] == 3 ? reinterpret_cast<const uint8_t*>(h[0])[i##c] : reinterpret_cast<const int64_t*>(h[0])[i##c]; \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetwi_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        if (h[3] == 3) {                                                        \
+            if (static_cast<uint64_t>(i##a) > 255) EXIT;                        \
+            reinterpret_cast<uint8_t*>(h[0])[i##c] = static_cast<uint8_t>(i##a); \
+        } else {                                                                \
+            reinterpret_cast<int64_t*>(h[0])[i##c] = i##a;                      \
+        }                                                                       \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetwb_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2] || h[3] != 3) EXIT;             \
+        reinterpret_cast<uint8_t*>(h[0])[i##c] = static_cast<uint8_t>(i##a);    \
+        NEXT;                                                                   \
+    }
+#define HIDXW_A(a, ...) I_B(HIDXW_B, a)
+I_A(HIDXW_A, x)
+#define HIDXWK(a, ...)                                                          \
+    STENCIL(hidxwk_##a) {                                                       \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(jade_ki) >= h[1]) EXIT;                       \
+        i##a = h[3] == 3 ? reinterpret_cast<const uint8_t*>(h[0])[jade_ki] : reinterpret_cast<const int64_t*>(h[0])[jade_ki]; \
+        NEXT;                                                                   \
+    }
+I_A(HIDXWK, x)

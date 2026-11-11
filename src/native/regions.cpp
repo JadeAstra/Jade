@@ -167,7 +167,7 @@ bool join(State& into, const State& from) {
             s = as[i].first, a = as[i++].second, b = bs[k++].second;
         }
         K j{static_cast<uint16_t>(a.bits | b.bits), a.src};
-        const bool aSrc = (a.bits & (kWhole | kCopies)) != 0, bSrc = (b.bits & (kWhole | kCopies)) != 0;
+        const bool aSrc = (a.bits & (kWhole | kCopies | kMem)) != 0, bSrc = (b.bits & (kWhole | kCopies | kMem)) != 0;
         if (!aSrc) j.src = b.src;
         else if (bSrc && a.src != b.src) j.src = -2;
         j.known = a.known && b.known && a.value == b.value;
@@ -1145,10 +1145,14 @@ struct Region {
     // copied whole, slot to slot, the copy then held in memory as its source is.
     static void copyInMemory(Ctx& c, int from, int to) {
         if (from == to) return;
+        // What it copies, as entered: the slot itself, or the one it was copied from.
+        const K fk = c.s.kind(from);
+        const int16_t root = fk.bits == kEntry ? static_cast<int16_t>(from) : inMemory(fk) && fk.src >= 0 ? fk.src : static_cast<int16_t>(-1);
         c.writeMemory(to);
         LOp& l = c.op("copyslot");
         l.slot = to;
         l.slot2 = from;
+        c.write(to, K{kMem, root});
     }
 
     // A move of a slot, or its push: what it holds goes with it.
@@ -1172,7 +1176,15 @@ struct Region {
             // (Not the slot's hints: where slots are shared, they may be another variable's.)
             const int cls = useClass(c.i, to, to >= c.s.top ? to + 1 : c.s.top);
             const bool sure = cls >= 0;
-            if (cls < 0) return copyInMemory(c, from, to);
+            if (cls < 0) {
+                // Pushed (a list for its item to be set, say): a copy of the slot as entered,
+                // read there, and made in fact only where the region leaves while it stands.
+                if (to >= c.s.top) {
+                    c.write(to, K{kCopy, static_cast<int16_t>(from)});
+                    return;
+                }
+                return copyInMemory(c, from, to);
+            }
             if (!(sure && cls == CF)) {
                 LOp& l = c.op(cls == CF ? "chkf" : "chkint");
                 l.slot = from;
@@ -1585,6 +1597,65 @@ struct Region {
                 }
     }
 
+    // ---- Lists looked at once ----
+
+    // In a region where nothing is the VM's, nothing can change where a list's items are or how
+    // many there are, and it is entered afresh after each way out: each list read or written by
+    // index is looked at once as it starts (its kind, its core, its items), and each read and
+    // write then checks the index alone. A list as entered, never written in the region, its
+    // slot's own or the one a copy of it is of; at most kRegionLists of them.
+    std::vector<LOp> prologue;
+
+    void lookAtListsOnce() {
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known && results[i].island) return;
+        if (entries.size() != 1) return;
+        // The slot each list step reads, as entered.
+        auto rootOf = [&](size_t i, int slot) -> int {
+            const K k = in[i].kind(slot);
+            if (k.bits == kEntry) return slot;
+            if ((inMemory(k) || (k.bits & ~kCopies) == 0) && k.src >= 0) return k.src;
+            return -1;
+        };
+        auto isRead = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "idxw" || stem == "idxwk"; };
+        auto isWrite = [](const std::string& stem) { return stem == "setf" || stem == "setwi" || stem == "setwb"; };
+        auto isFloat = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "setf"; };
+        std::map<int, int> kindOf;  // root -> 1 floats, 2 whole numbers, 3 both (not looked at)
+        std::vector<std::pair<LOp*, int>> steps;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (LOp& l : results[i].ops) {
+                if (!isRead(l.stem) && !isWrite(l.stem)) continue;
+                const int root = rootOf(i, static_cast<int>(l.slot));
+                if (root < 0) continue;
+                kindOf[root] |= isFloat(l.stem) ? 1 : 2;
+                steps.emplace_back(&l, root);
+            }
+        }
+        // Never written in the region: as entered everywhere.
+        std::map<int, int> index;
+        for (const auto& [root, kind] : kindOf) {
+            if (kind == 3 || static_cast<int>(index.size()) == kRegionLists) continue;
+            bool untouched = true;
+            for (size_t i = 0; i < ins.size() && untouched; i++)
+                if (in[i].known) untouched = in[i].kind(root).bits == kEntry && (!results[i].fallsThrough || results[i].after.kind(root).bits == kEntry);
+            if (!untouched) continue;
+            const int k = static_cast<int>(index.size());
+            index[root] = k;
+            LOp look;
+            look.stem = kind == 1 ? "lookf" : "lookw";
+            look.slot = root;
+            look.ki = k;
+            prologue.push_back(look);
+        }
+        for (auto& [l, root] : steps) {
+            auto k = index.find(root);
+            if (k == index.end()) continue;
+            l->stem = "h" + l->stem;
+            l->slot = k->second;
+        }
+    }
+
     // ---- Liveness: which registers each instruction reads before writing ----
 
     std::vector<std::set<Reg>> liveIn;
@@ -1882,6 +1953,11 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
     };
     const int start = a.label();
     a.at(start);
+    for (const LOp& l : r.prologue) {
+        Step& st = add(l.stem);
+        st.slot = l.slot;
+        st.ki = l.ki;
+    }
     loads(a, r, 0, names, leaveAt(0));
     for (size_t i = 0; i < r.ins.size(); i++) {
         a.at(labels[i]);
@@ -2117,6 +2193,7 @@ void makeRegionsTimed(FunctionProto& f) {
             r.analyse(headTop->second);
             lap(1);
             if (!r.worthIt()) refuse("too little done between what the VM does");
+            r.lookAtListsOnce();
             r.findLive();
             lap(2);
             while (!r.giveRegisters()) {

@@ -22,9 +22,12 @@ class Engine {
   }
 }
 
+// As many as it takes to meet the race without the stress settings; under the collector's,
+// which collects at every safe point, a hundredth (the threads' setting meets it at once).
+val scale = Program.environment["JADE_GC_STRESS"] == null ? 100 : 1
 val box = Box()
-val a = Thread(task = { for (i in 0..<300000) { box.many() } }).start()
-val b = Thread(task = { print("engine ${Engine().go(3000000)}") }).start()   // expect: engine 6000000
+val a = Thread(task = { for (i in 0..<3000 * scale) { box.many() } }).start()
+val b = Thread(task = { print("engine ${Engine().go(30000 * scale) / scale}") }).start()   // expect: engine 60000
 a.join()
 b.join()
-print("box ${box.n}")   // expect: box 3000000
+print("box ${box.n / scale}")   // expect: box 30000

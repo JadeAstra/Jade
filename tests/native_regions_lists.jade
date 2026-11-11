@@ -168,3 +168,18 @@ fun joined(n : int) : string {
 var all = ""
 for (k in 0..<200) { all = joined(4) + k }
 print(all)   // expect: 0123199
+
+// Two lists of whole numbers looked at once as the region starts, of two kinds: ints read,
+// bytes written; and an index past the end found where it is.
+fun pack(xs : List<int>, out : Bytes, n : int) : int {
+  var sum = 0
+  for (i in 0..<n) {
+    out[i] = (xs[i] % 256).toByte()
+    sum = sum + out[i]
+  }
+  return sum
+}
+val packedOut = Bytes(50)
+print(pack(List(50) { it * 37 }, packedOut, 50), packedOut[49])   // expect: 5901 21
+print(failing { pack(List(10) { it }, Bytes(10), 11) })   // expect: IndexOutOfBoundsException: list index 10 is out of range (size 10)
+

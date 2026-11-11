@@ -70,6 +70,8 @@ private:
     std::vector<size_t> starts_;
 };
 
+constexpr int kRegionLists = 6;
+
 // What a region is given besides the frame's slots: the VM's flag (a collection or another
 // thread waiting), and for its reads and writes of objects, the core of a parallel section it
 // runs on (0 outside one) and the object lent to that core, which only the VM reads.
@@ -77,6 +79,9 @@ struct RegionContext {
     const volatile uint8_t* attention;
     uint64_t core;
     const void* band;
+    // The lists a region looks at once as it starts (src/native/stencils.cpp, lookAt): for each,
+    // its items' address, how many may be read, how many changed, and what they are.
+    uint64_t lists[kRegionLists * 4];
 };
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it
@@ -86,10 +91,10 @@ struct RegionContext {
 #else
 #define JADE_REGION_CALL
 #endif
-using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, const RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
+using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
                                                           int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double, double,
                                                           double, double, double);
-inline int64_t runRegion(void* code, void* slots, const RegionContext* context) {
+inline int64_t runRegion(void* code, void* slots, RegionContext* context) {
     return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
