@@ -785,15 +785,14 @@ struct FunctionProto {
     };
     std::vector<RunRights> runRights;
     // Native code (M9.5, src/native/regions.cpp): the VM's top where each instruction of `run`
-    // starts, as the translator had it, kept until the regions are made from it; where each of
-    // its loops starts (whose address in the code is VM::nativeFirst's until the regions are
-    // made, the first time one of them starts); whether they are; and the regions made, each
-    // way in where in `run` its instruction starts (whose address in the code is then the VM's
-    // way into it) with its machine code.
+    // starts, as the translator had it, kept for the regions to be made from; where each of its
+    // loops starts (whose address in the code is VM::nativeFirst's until that loop's regions are
+    // made, the second time it starts), and for each how far it has got (1 started once, 2 its
+    // regions made); and the regions made, each way in where in `run` its instruction starts
+    // (whose address in the code is then the VM's way into it) with its machine code.
     std::vector<std::pair<uint32_t, uint16_t>> runTops;
     std::vector<uint32_t> nativeHeads;
-    bool nativeMade = false;
-    uint8_t nativeArrivals = 0;  // how often its loops have started, until the regions are made
+    std::vector<uint8_t> nativeArrivals;
     struct NativeRegion {
         uint32_t head;
         void* code;
@@ -801,7 +800,22 @@ struct FunctionProto {
         // kind, a guess wrong), shared by its ways in: past a limit, the VM stops going in.
         uint32_t* misses;
     };
-    std::vector<NativeRegion> regions;
+    // The regions made so far as published: a list never changed once published, replaced whole
+    // as a loop's regions are added (under VM::nativeFirst's lock), so that a core reading it as
+    // another adds reads a whole one; every list kept for as long as the function is.
+    struct RegionsNow {
+        std::atomic<const std::vector<NativeRegion>*> list{nullptr};
+        RegionsNow() = default;
+        RegionsNow(RegionsNow&& other) noexcept : list(other.list.load()) {}  // a function read later is moved in
+        RegionsNow& operator=(RegionsNow&& other) noexcept {
+            list.store(other.list.load());
+            return *this;
+        }
+        const std::vector<NativeRegion>* load(std::memory_order order) const { return list.load(order); }
+        void store(const std::vector<NativeRegion>* to, std::memory_order order) { list.store(to, order); }
+    };
+    RegionsNow regionsNow;
+    std::vector<std::unique_ptr<std::vector<NativeRegion>>> regionLists;
     std::vector<DeclarationSpan> spans;    // a module's: the code of each top-level declaration
     std::vector<Value> constants;          // ints, floats and interned strings
     std::vector<FunctionProto*> protos;    // nested functions
@@ -945,7 +959,10 @@ extern void (*writeRunAddresses)(FunctionProto& f);
 // nativeHeads), true where it has any. The first time one of them starts (VM::nativeFirst):
 // its regions.
 extern bool (*findNativeLoops)(FunctionProto& f);
-extern void (*makeNativeRegions)(FunctionProto& f);
+// The regions of the loop starting at `head` in `run` are added to `made`. `frame`: the slots of
+// the call running the function as they are made, which say what its lists hold (a guess the
+// regions check); null where there is none.
+extern void (*makeNativeRegions)(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,

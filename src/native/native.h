@@ -82,6 +82,8 @@ struct RegionContext {
     // The lists a region looks at once as it starts (src/native/stencils.cpp, lookAt): for each,
     // its items' address, how many may be read, how many changed, and what they are.
     uint64_t lists[kRegionLists * 4];
+    // A loop template's words (stencils.cpp, runLoop): its shape, counter, lists and parameters.
+    uint64_t t[16];
 };
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it

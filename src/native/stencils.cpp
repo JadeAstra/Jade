@@ -52,6 +52,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t core;
     const void* band;
     uint64_t lists[24];
+    uint64_t t[16];
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -66,7 +67,7 @@ INLINE bool mayRead(const uint8_t* o, const Ctx* ctx) {
 template <typename T>
 INLINE T word(const uint8_t* at) {
     T v;
-    std::memcpy(&v, at, sizeof v);
+    __builtin_memcpy(&v, at, sizeof v);
     return v;
 }
 // A packed list's block of items of the kind `store`, none of them null, or null.
@@ -77,10 +78,10 @@ INLINE const uint8_t* packOf(const uint8_t* list, uint8_t store) {
 }
 INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
     Slot s;
-    std::memset(&s, 0, sizeof s);
+    __builtin_memset(&s, 0, sizeof s);
     s.kind = kind;
-    std::memcpy(&s.i, &bits, 8);
-    std::memcpy(&base[slot], &s, sizeof s);
+    __builtin_memcpy(&s.i, &bits, 8);
+    __builtin_memcpy(&base[slot], &s, sizeof s);
 }
 }  // namespace
 
@@ -479,7 +480,7 @@ INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
     STENCIL(setf_##v##_##c) {                                                   \
         uint8_t* at = listToChange(base[jade_slot], i##c, kStoreFloats, ctx);   \
         if (at == nullptr) EXIT;                                                \
-        std::memcpy(at, &f##v, 8);                                              \
+        __builtin_memcpy(at, &f##v, 8);                                              \
         NEXT;                                                                   \
     }
 #define SETF_A(v, ...) I_B(SETF_B, v)
@@ -495,7 +496,7 @@ F_A(SETF_A, x)
         }                                                                       \
         uint8_t* at = listToChange(s, i##c, kStoreInts, ctx);                   \
         if (at == nullptr) EXIT;                                                \
-        std::memcpy(at, &i##v, 8);                                              \
+        __builtin_memcpy(at, &i##v, 8);                                              \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setwb_##v##_##c) {                                                  \
@@ -535,7 +536,7 @@ I_A(ILOAD, x)
     STENCIL(loadf_##a) { f##a = base[jade_slot].d; NEXT; }                      \
     STENCIL(storef_##a) {                                                       \
         uint64_t bits;                                                          \
-        std::memcpy(&bits, &f##a, 8);                                           \
+        __builtin_memcpy(&bits, &f##a, 8);                                           \
         storeSlot(base, jade_slot, kKindFloat, bits);                           \
         NEXT;                                                                   \
     }
@@ -545,7 +546,7 @@ STENCIL(storeb) {
     NEXT;
 }
 STENCIL(copyslot) {
-    std::memcpy(&base[jade_slot], &base[jade_slot2], sizeof(Slot));
+    __builtin_memcpy(&base[jade_slot], &base[jade_slot2], sizeof(Slot));
     NEXT;
 }
 
@@ -657,7 +658,7 @@ INLINE bool numberField(const uint8_t* at, uint64_t seen, uint8_t kind, uint64_t
         if (at[0] != kind) return false;
         at += 8;
     }
-    std::memcpy(&bits, at, 8);
+    __builtin_memcpy(&bits, at, 8);
     return true;
 }
 // A number written to a field, as the VM's SetProp does at once: kept as its payload alone (its
@@ -673,7 +674,7 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
         uint8_t* data = const_cast<uint8_t*>(s.p) + kInstData;
         const bool hasOne = (seen & 0x20) != 0 && (data[bit / 8] >> (bit % 8) & 1) != 0;
         if ((seen & 0x40) != 0 && hasOne) return false;
-        std::memcpy(at, &bits, 8);
+        __builtin_memcpy(at, &bits, 8);
         if ((seen & 0x20) != 0) data[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
         return true;
     }
@@ -681,10 +682,10 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
     const uint8_t type = static_cast<uint8_t>(seen >> 8);
     if (type != 0 && type != typeId) return false;
     Slot v;
-    std::memset(&v, 0, sizeof v);
+    __builtin_memset(&v, 0, sizeof v);
     v.kind = kind;
-    std::memcpy(&v.i, &bits, 8);
-    std::memcpy(at, &v, sizeof v);
+    __builtin_memcpy(&v.i, &bits, 8);
+    __builtin_memcpy(at, &v, sizeof v);
     return true;
 }
 #define GETPF(a, ...)                                                           \
@@ -692,12 +693,12 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
         uint64_t seen, bits;                                                    \
         const uint8_t* at = fieldAt(base[jade_slot], ctx, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindFloat, bits)) EXIT;    \
-        std::memcpy(&f##a, &bits, 8);                                           \
+        __builtin_memcpy(&f##a, &bits, 8);                                           \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setpf_##a) {                                                        \
         uint64_t bits;                                                          \
-        std::memcpy(&bits, &f##a, 8);                                           \
+        __builtin_memcpy(&bits, &f##a, 8);                                           \
         if (!setNumberField(base[jade_slot], ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
         NEXT;                                                                   \
     }
@@ -722,12 +723,12 @@ STENCIL(getpv) {
     if (at == nullptr) EXIT;
     if ((seen & 0x80) != 0) {
         uint64_t bits;
-        std::memcpy(&bits, at, 8);
+        __builtin_memcpy(&bits, at, 8);
         storeSlot(base, jade_slot2, static_cast<uint8_t>(seen & 3), bits);
         NEXT;
     }
     if (at[0] == kKindRef || at[0] == kKindUndefined) EXIT;
-    std::memcpy(&base[jade_slot2], at, sizeof(Slot));
+    __builtin_memcpy(&base[jade_slot2], at, sizeof(Slot));
     NEXT;
 }
 
@@ -751,9 +752,9 @@ STENCIL(iterv) {
     const Slot* last = word<const Slot*>(list + kListItems + 8);
     const uint64_t index = word<uint64_t>(it + kIterIndex);
     if (index >= static_cast<uint64_t>(last - first)) JUMP;
-    std::memcpy(&base[jade_slot2], first + index, sizeof(Slot));
+    __builtin_memcpy(&base[jade_slot2], first + index, sizeof(Slot));
     const uint64_t next = index + 1;
-    std::memcpy(it + kIterIndex, &next, 8);
+    __builtin_memcpy(it + kIterIndex, &next, 8);
     NEXT;
 }
 // The next item of a packed list of floats (ints), none null, into fa (ia), where the list is
@@ -773,7 +774,7 @@ INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, const Ctx* ct
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
         f##a = word<double>(word<const uint8_t*>(pack + kPackBlock) + index * 8); \
         const uint64_t next = index + 1;                                        \
-        std::memcpy(it + kIterIndex, &next, 8);                                 \
+        __builtin_memcpy(it + kIterIndex, &next, 8);                                 \
         NEXT;                                                                   \
     }
 F_A(ITERF, x)
@@ -786,7 +787,7 @@ F_A(ITERF, x)
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
         i##a = word<int64_t>(word<const uint8_t*>(pack + kPackBlock) + index * 8); \
         const uint64_t next = index + 1;                                        \
-        std::memcpy(it + kIterIndex, &next, 8);                                 \
+        __builtin_memcpy(it + kIterIndex, &next, 8);                                 \
         NEXT;                                                                   \
     }
 I_A(ITERI, x)
@@ -902,3 +903,326 @@ I_A(HIDXW_A, x)
         NEXT;                                                                   \
     }
 I_A(HIDXWK, x)
+
+// ---- Whole loops made ahead (loop templates) ----
+
+// A loop of the region recognised as one of the shapes below (regions.cpp, Region::makeAhead) is
+// run here, every item, before its own steps: its words in the context's t, set by the steps
+// before (ctxk, ctxs*): 0 its shape, 1 the counter's next value, 2 how many are left, 3 an
+// accumulator, 4 to 6 the lists it writes and reads (k, as looked at once; -1 for none), 7 to 11
+// its parameters. Where anything is not as the shape wants (a list of another kind, an index
+// out of range, storage shared in part), it does nothing, and the loop's own steps run as they
+// would. Where an item fails (an int's overflow, a byte out of range), it stops before that item:
+// the loop's own steps do it, and leave for the VM there. Each item is worked out with the same
+// operations, in the same order, as the steps would: the same answer to the bit.
+enum : uint64_t {
+    kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup,
+};
+// Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
+// of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
+
+INLINE double bitsF(uint64_t b) {
+    double d;
+    __builtin_memcpy(&d, &b, 8);
+    return d;
+}
+// A list looked at once: its items as doubles, int64s or bytes; its count read and changed.
+struct Items {
+    uint64_t* h;
+    bool ok() const { return h != nullptr; }
+    uint64_t kind() const { return h[3]; }
+    uint8_t* bytes() const { return reinterpret_cast<uint8_t*>(h[0]); }
+    int64_t* ints() const { return reinterpret_cast<int64_t*>(h[0]); }
+    double* floats() const { return reinterpret_cast<double*>(h[0]); }
+    uint64_t width() const { return h[3] == 3 ? 1 : 8; }
+    int64_t whole(int64_t j) const { return h[3] == 3 ? bytes()[j] : ints()[j]; }
+};
+// The second's storage shared with the first's in part: not the same items, and not apart.
+INLINE bool sharedInPart(const Items& a, const Items& b, int64_t end) {
+    if (!a.ok() || !b.ok() || a.h[0] == b.h[0]) return false;
+    const uint64_t a0 = a.h[0], a1 = a0 + static_cast<uint64_t>(end) * a.width();
+    const uint64_t b0 = b.h[0], b1 = b0 + static_cast<uint64_t>(end) * b.width();
+    return a0 < b1 && b0 < a1;
+}
+// An int's value stored where a whole number goes: into bytes, from 0 to 255 only.
+INLINE bool storeWhole(const Items& out, int64_t j, int64_t v) {
+    if (out.kind() == 3) {
+        if (static_cast<uint64_t>(v) > 255) return false;
+        out.bytes()[j] = static_cast<uint8_t>(v);
+    } else {
+        out.ints()[j] = v;
+    }
+    return true;
+}
+INLINE int64_t wholeMap(const Ctx* ctx, int64_t v, bool& fine) {
+    const uint64_t* t = ctx->t;
+    int64_t r;
+    if (__builtin_mul_overflow(v, static_cast<int64_t>(t[7]), &r) || __builtin_add_overflow(r, static_cast<int64_t>(t[8]), &r)) {
+        fine = false;
+        return 0;
+    }
+    for (int s = 0; s < 2; s++) {
+        const uint64_t op = t[9 + 2 * s];
+        const int64_t k = static_cast<int64_t>(t[10 + 2 * s]);
+        if (op == 1 && k < r) r = k;
+        else if (op == 2 && k > r) r = k;
+    }
+    return r;
+}
+
+INLINE Items itemsOf(Ctx* ctx, int which) {
+    const int64_t k = static_cast<int64_t>(ctx->t[4 + which]);
+    return Items{k < 0 || k >= 6 ? nullptr : ctx->lists + 4 * k};
+}
+// Of the kind (0: a whole number's, ints or bytes), with `end` items to be read (changed).
+INLINE bool itemsFit(const Items& x, uint64_t kind, int64_t end, int count) {
+    return x.ok() && (kind == 0 ? (x.kind() == 1 || x.kind() == 3) : x.kind() == kind) && static_cast<uint64_t>(end) <= x.h[count];
+}
+#define reads(x, kind) itemsFit(x, kind, end, 1)
+#define writes(x, kind) itemsFit(x, kind, end, 2)
+
+INLINE bool small(uint64_t w) { return static_cast<int64_t>(w) > -(1 << 20) && static_cast<int64_t>(w) < (1 << 20); }
+
+INLINE void runLoop(Slot* base, Ctx* ctx) {
+    uint64_t* t = ctx->t;
+    // A variable the loop reads and never writes, checked as its steps check it each time round
+    // (14: its slot, or all ones; 15: 1 a float, 2 an int, 3 an int or a byte).
+    if (t[14] != ~uint64_t{0}) {
+        const uint8_t k = base[t[14]].kind;
+        if (t[15] == 1 ? k != kKindFloat : t[15] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
+    }
+    const int64_t next = static_cast<int64_t>(t[1]), left = static_cast<int64_t>(t[2]);
+    if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
+    const int64_t end = next + left;
+    const Items out = itemsOf(ctx, 0), a = itemsOf(ctx, 1), b = itemsOf(ctx, 2);
+    if (t[13] != 0 && (!out.ok() || out.kind() != 3)) return;  // a byte's value: into bytes alone
+    if (sharedInPart(out, a, end) || sharedInPart(out, b, end)) return;
+    const double c1 = bitsF(t[7]), c2 = bitsF(t[8]);
+    const uint64_t op = t[9];
+    int64_t done = left;
+    switch (t[0]) {
+        case kLoopFCopy: {
+            if (!reads(a, 2) || !writes(out, 2)) return;
+            double* o = out.floats();
+            const double* x = a.floats();
+            for (int64_t j = next; j < end; j++) o[j] = x[j];
+            break;
+        }
+        case kLoopFFill: {
+            if (!writes(out, 2)) return;
+            double* o = out.floats();
+            for (int64_t j = next; j < end; j++) o[j] = c1;
+            break;
+        }
+        case kLoopFOpK:
+        case kLoopFKOp: {
+            if (!reads(a, 2) || !writes(out, 2)) return;
+            double* o = out.floats();
+            const double* x = a.floats();
+            const bool kFirst = t[0] == kLoopFKOp;
+            if (op == '+') for (int64_t j = next; j < end; j++) o[j] = kFirst ? c1 + x[j] : x[j] + c1;
+            else if (op == '-') for (int64_t j = next; j < end; j++) o[j] = kFirst ? c1 - x[j] : x[j] - c1;
+            else if (op == '*') for (int64_t j = next; j < end; j++) o[j] = kFirst ? c1 * x[j] : x[j] * c1;
+            else if (op == '/') for (int64_t j = next; j < end; j++) o[j] = kFirst ? c1 / x[j] : x[j] / c1;
+            else return;
+            break;
+        }
+        case kLoopFOp: {
+            if (!reads(a, 2) || !reads(b, 2) || !writes(out, 2)) return;
+            double* o = out.floats();
+            const double *x = a.floats(), *y = b.floats();
+            if (op == '+') for (int64_t j = next; j < end; j++) o[j] = x[j] + y[j];
+            else if (op == '-') for (int64_t j = next; j < end; j++) o[j] = x[j] - y[j];
+            else if (op == '*') for (int64_t j = next; j < end; j++) o[j] = x[j] * y[j];
+            else if (op == '/') for (int64_t j = next; j < end; j++) o[j] = x[j] / y[j];
+            else return;
+            break;
+        }
+        case kLoopFAffine: {  // a * c1 + c2
+            if (!reads(a, 2) || !writes(out, 2)) return;
+            double* o = out.floats();
+            const double* x = a.floats();
+            for (int64_t j = next; j < end; j++) {
+                const double m = x[j] * c1;
+                o[j] = m + c2;
+            }
+            break;
+        }
+        case kLoopFBlend: {  // a * c1 + b * c2
+            if (!reads(a, 2) || !reads(b, 2) || !writes(out, 2)) return;
+            double* o = out.floats();
+            const double *x = a.floats(), *y = b.floats();
+            for (int64_t j = next; j < end; j++) {
+                const double m = x[j] * c1;
+                const double n = y[j] * c2;
+                o[j] = m + n;
+            }
+            break;
+        }
+        case kLoopFSum: {  // in order, as the steps add
+            if (!reads(a, 2)) return;
+            double acc = bitsF(t[3]);
+            const double* x = a.floats();
+            for (int64_t j = next; j < end; j++) acc += x[j];
+            __builtin_memcpy(&t[3], &acc, 8);
+            break;
+        }
+        case kLoopWCopy: {
+            if (!reads(a, 0) || !writes(out, 0)) return;
+            if (a.kind() == 3 && out.kind() == 3) {
+                uint8_t* o = out.bytes();
+                const uint8_t* x = a.bytes();
+                for (int64_t j = next; j < end; j++) o[j] = x[j];
+            } else if (a.kind() == 1 && out.kind() == 1) {
+                int64_t* o = out.ints();
+                const int64_t* x = a.ints();
+                for (int64_t j = next; j < end; j++) o[j] = x[j];
+            } else {
+                for (int64_t j = next; j < end; j++)
+                    if (!storeWhole(out, j, a.whole(j))) {
+                        done = j - next;
+                        break;
+                    }
+            }
+            break;
+        }
+        case kLoopWFill: {
+            if (!writes(out, 0)) return;
+            const int64_t v = static_cast<int64_t>(t[7]);
+            if (out.kind() == 3) {
+                if (static_cast<uint64_t>(v) > 255) return;
+                uint8_t* o = out.bytes();
+                for (int64_t j = next; j < end; j++) o[j] = static_cast<uint8_t>(v);
+            } else {
+                int64_t* o = out.ints();
+                for (int64_t j = next; j < end; j++) o[j] = v;
+            }
+            break;
+        }
+        case kLoopWSum: {  // an overflow stops it before the item
+            if (!reads(a, 0)) return;
+            int64_t acc = static_cast<int64_t>(t[3]);
+            if (a.kind() == 3) {
+                const uint8_t* x = a.bytes();
+                for (int64_t j = next; j < end; j++)
+                    if (__builtin_add_overflow(acc, static_cast<int64_t>(x[j]), &acc)) {
+                        done = j - next;
+                        break;
+                    }
+            } else {
+                const int64_t* x = a.ints();
+                for (int64_t j = next; j < end; j++) {
+                    int64_t s;
+                    if (__builtin_add_overflow(acc, x[j], &s)) {
+                        done = j - next;
+                        break;
+                    }
+                    acc = s;
+                }
+            }
+            t[3] = static_cast<uint64_t>(acc);
+            break;
+        }
+        case kLoopWMap: {
+            if (!reads(a, 0) || !writes(out, 0)) return;
+            if (a.kind() == 3 && out.kind() == 3 && small(t[7]) && small(t[8]) && small(t[10]) && small(t[12])) {
+                // Bytes to bytes, a block at a time: worked out whole, stored where every item
+                // of it fits; the block an item does not fit in done an item at a time, to it.
+                const uint8_t* x = a.bytes();
+                uint8_t* o = out.bytes();
+                // Each clamp a min and a max of constants (a bound of no effect where it has none),
+                // so that no branch is left in the block's loop.
+                const int32_t sign = static_cast<int32_t>(t[7]), c = static_cast<int32_t>(t[8]);
+                int32_t lo[2], hi[2];
+                for (int s = 0; s < 2; s++) {
+                    const uint64_t op = t[9 + 2 * s];
+                    const int32_t k = static_cast<int32_t>(t[10 + 2 * s]);
+                    hi[s] = op == 1 ? k : INT32_MAX;
+                    lo[s] = op == 2 ? k : INT32_MIN;
+                }
+                int64_t j = next;
+                while (j < end) {
+                    const int64_t n = end - j < 64 ? end - j : 64;
+                    int32_t v[64];
+                    int32_t bad = 0;
+                    for (int64_t q = 0; q < n; q++) {
+                        int32_t r = sign * static_cast<int32_t>(x[j + q]) + c;
+                        r = r < hi[0] ? r : hi[0];
+                        r = r > lo[0] ? r : lo[0];
+                        r = r < hi[1] ? r : hi[1];
+                        r = r > lo[1] ? r : lo[1];
+                        v[q] = r;
+                        bad |= static_cast<int32_t>(static_cast<uint32_t>(r) > 255u);
+                    }
+                    if (bad != 0) {
+                        int64_t q = 0;
+                        while (static_cast<uint32_t>(v[q]) <= 255u) {
+                            o[j + q] = static_cast<uint8_t>(v[q]);
+                            q++;
+                        }
+                        done = j + q - next;
+                        break;
+                    }
+                    for (int64_t q = 0; q < n; q++) o[j + q] = static_cast<uint8_t>(v[q]);
+                    j += n;
+                }
+                break;
+            }
+            for (int64_t j = next; j < end; j++) {
+                bool fine = true;
+                const int64_t v = wholeMap(ctx, a.whole(j), fine);
+                if (!fine || !storeWhole(out, j, v)) {
+                    done = j - next;
+                    break;
+                }
+            }
+            break;
+        }
+        case kLoopWLookup: {  // out = table b at a's item
+            if (!reads(a, 0) || !b.ok() || (b.kind() != 1 && b.kind() != 3) || !writes(out, 0)) return;
+            for (int64_t j = next; j < end; j++) {
+                const int64_t at = a.whole(j);
+                if (static_cast<uint64_t>(at) >= b.h[1] || !storeWhole(out, j, b.whole(at))) {
+                    done = j - next;
+                    break;
+                }
+            }
+            break;
+        }
+        default: return;
+    }
+    t[1] = static_cast<uint64_t>(next + done);
+    t[2] = static_cast<uint64_t>(left - done);
+}
+#undef reads
+#undef writes
+STENCIL(tloop) {
+    runLoop(base, ctx);
+    NEXT;
+}
+// The template's words set: a constant (word jade_slot = jade_ki), a register stored, or loaded.
+STENCIL(ctxk) {
+    ctx->t[jade_slot] = static_cast<uint64_t>(jade_ki);
+    NEXT;
+}
+#define CTXI(a, ...)                                                            \
+    STENCIL(ctxsi_##a) {                                                        \
+        ctx->t[jade_slot] = static_cast<uint64_t>(i##a);                        \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(ctxli_##a) {                                                        \
+        i##a = static_cast<int64_t>(ctx->t[jade_slot]);                         \
+        NEXT;                                                                   \
+    }
+I_A(CTXI, x)
+#define CTXF(a, ...)                                                            \
+    STENCIL(ctxsf_##a) {                                                        \
+        __builtin_memcpy(&ctx->t[jade_slot], &f##a, 8);                              \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(ctxlf_##a) {                                                        \
+        __builtin_memcpy(&f##a, &ctx->t[jade_slot], 8);                              \
+        NEXT;                                                                   \
+    }
+F_A(CTXF, x)

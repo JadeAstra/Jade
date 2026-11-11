@@ -5785,12 +5785,12 @@ void addressCode(FunctionProto& f) {
     }
     // A loop whose native code regions are not made yet starts with VM::nativeFirst, which makes
     // them; a region's ways in are VM::nativeEnter's (M9.5).
-    if (!f.nativeMade) {
-        const TailFn first = TailTable::nativeFirstEntry();
-        for (uint32_t head : f.nativeHeads) std::memcpy(f.run.data() + head, &first, kThreaded);
-    }
+    const TailFn first = TailTable::nativeFirstEntry();
+    for (size_t k = 0; k < f.nativeHeads.size(); k++)
+        if (f.nativeArrivals[k] < 2) std::memcpy(f.run.data() + f.nativeHeads[k], &first, kThreaded);
     const TailFn enter = TailTable::nativeEntry();
-    for (const FunctionProto::NativeRegion& r : f.regions) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
+    if (const auto* regions = f.regionsNow.load(std::memory_order_acquire))
+        for (const FunctionProto::NativeRegion& r : *regions) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
     f.addressed.done.store(true, std::memory_order_release);
 }
 const bool addressesWritten = (writeRunAddresses = &addressCode, true);
@@ -6829,39 +6829,42 @@ const TailFn* TailTable::get() {
 // How often a region's quick ways may not do what they do before the VM stops going in.
 constexpr uint32_t kNativeMissLimit = 256;
 
-// The second time one of a function's loops starts (once the VM has run it a time round, and
-// its places' caches have seen what they read): its regions made (once, by one thread or core
-// at a time), and its loops' first instructions addressed anew: a region's way in, or the
-// instruction's own function. A core running the function meanwhile reads either address, each
-// one aligned word, and either goes on rightly; the regions are all made before any is reached.
+// The second time a loop starts (once the VM has run it a time round, its places' caches have
+// seen what they read, and its lists are in the frame): its regions made (by one thread or core
+// at a time), published, and addressed: its first instruction a region's way in, or the
+// instruction's own function again. A core running the function meanwhile reads either address,
+// each one aligned word, and either goes on rightly; a region is made whole before any way into
+// it is written.
 JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
-    FunctionProto& counted = *const_cast<FunctionProto*>(frame->closure->proto);
-    if (counted.nativeArrivals < 1) {
-        counted.nativeArrivals++;  // racing cores may count it once or twice: either is well
+    FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
+    const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
+    size_t which = 0;
+    while (which < f.nativeHeads.size() && f.nativeHeads[which] != head) which++;
+    if (which < f.nativeHeads.size() && f.nativeArrivals[which] < 1) {
+        f.nativeArrivals[which] = 1;  // racing cores may each set it: as well
         ip -= kThreaded + kOpBytes;
         const TailFn own = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
         sp_ = sp;
         frame->ip = ip += kThreaded + kOpBytes;
         [[clang::musttail]] return (this->*own)(JADE_TAIL_ARGS);
     }
-    {
+    if (which < f.nativeHeads.size()) {
         static std::mutex making;
         std::lock_guard<std::mutex> hold(making);
-        FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
-        if (!f.nativeMade) {
-            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f);
-            std::atomic_thread_fence(std::memory_order_release);
+        if (f.nativeArrivals[which] < 2) {
+            std::vector<FunctionProto::NativeRegion> made;
+            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, head, made);
+            auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
+            if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
+            list->insert(list->end(), made.begin(), made.end());
+            f.regionsNow.store(list.get(), std::memory_order_release);
+            f.regionLists.push_back(std::move(list));
             uint8_t* const run = const_cast<uint8_t*>(code);
-            const TailFn* const table = TailTable::get();
-            for (uint32_t head : f.nativeHeads) {
-                const TailFn own = table[static_cast<size_t>(opAt(run + head + kThreaded))];
-                std::memcpy(run + head, &own, kThreaded);
-            }
+            const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
+            std::memcpy(run + head, &own, kThreaded);
             const TailFn enter = TailTable::nativeEntry();
-            for (const FunctionProto::NativeRegion& r : f.regions) std::memcpy(run + r.head, &enter, kThreaded);
-            f.nativeMade = true;
-            f.runTops.clear();
-            f.runTops.shrink_to_fit();
+            for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+            f.nativeArrivals[which] = 2;
         }
     }
     // On at this instruction, as it is now addressed.
@@ -6878,13 +6881,15 @@ JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
 JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
     const FunctionProto::NativeRegion* region = nullptr;
-    for (const FunctionProto::NativeRegion& r : frame->closure->proto->regions)
-        if (r.head == head) {
-            region = &r;
-            break;
-        }
+    const std::vector<FunctionProto::NativeRegion>* regions = frame->closure->proto->regionsNow.load(std::memory_order_acquire);
+    if (regions != nullptr)
+        for (const FunctionProto::NativeRegion& r : *regions)
+            if (r.head == head) {
+                region = &r;
+                break;
+            }
     if (region != nullptr) {
-        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}};
+        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}, {}};
         const int64_t out = native::runRegion(region->code, base, &context);
         static const bool traceExits = std::getenv("JADE_TRACE_EXITS") != nullptr;
         static int traced = 0;
@@ -6897,8 +6902,7 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
         // A quick way that could not: past a limit, the region's ways in are the VM's own
         // instructions again (one aligned word each, as the run code's addresses are written).
         if (((static_cast<uint64_t>(out) >> 48) & 1) != 0 && ++*region->misses == kNativeMissLimit) {
-            const FunctionProto* proto = frame->closure->proto;
-            for (const FunctionProto::NativeRegion& r : proto->regions)
+            for (const FunctionProto::NativeRegion& r : *regions)
                 if (r.misses == region->misses) {
                     uint8_t* at = const_cast<uint8_t*>(code) + r.head;
                     const TailFn own = TailTable::get()[static_cast<size_t>(opAt(at + kThreaded))];

@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -391,6 +392,18 @@ struct Region {
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
 
+    // The slots of the call the regions are made in (VM::nativeFirst), or null: the list in a slot
+    // there says what a list read from that slot is likely to hold. A guess the steps check.
+    const Value* frame = nullptr;
+    int frameClass(int slot) const {
+        if (frame == nullptr || slot < 0 || slot >= f.maxStack) return -1;
+        const Value& v = frame[slot];
+        if (v.isObjType(ObjType::Bytes)) return CI;
+        if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
+        const ListStore store = asList(v)->store();
+        return store == ListStore::Floats ? CF : store == ListStore::Ints ? CI : -1;
+    }
+
     // The address of a place's cache (GetProp's and the like), which the stencils read as the VM
     // fills it: there as long as the run code is.
     int64_t cacheAddress(int cache) const {
@@ -536,7 +549,9 @@ struct Region {
                 }
                 case Op::RGetIndexSS:
                 case Op::RGetIndexSK:
-                    // u8 A, u8 B, u8 C, u8 T: reads B and C as no number it says.
+                    // u8 A, u8 B, u8 C, u8 T: reads C as an index (a whole number, a guess the
+                    // step reading it checks), B as no number.
+                    if (guessing && x.op == Op::RGetIndexSS && u8(x, 2) == slot && u8(x, 1) != slot) return CI;
                     if (u8(x, 0) == slot || u8(x, 1) == slot || (x.op == Op::RGetIndexSS && u8(x, 2) == slot)) return -1;
                     top = u8(x, 3);
                     j++;
@@ -974,9 +989,11 @@ struct Region {
             case Op::RGetIndexSK: {  // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow
                 const int a = u8(x, 0);
                 const int list = c.objectSlot(u8(x, 1));
-                // As read next; or a guess, which the step checks (an item of another kind leaves).
+                // As read next; or a guess, which the step checks (an item of another kind leaves):
+                // how it is used, or what the list holds in the call the region is made in.
                 int cls = useClass(c.i, a, u8(x, 3));
                 if (cls < 0) cls = useClass(c.i, a, u8(x, 3), 0, true);
+                if (cls < 0) cls = frameClass(list);
                 if (cls < 0) island();
                 const Reg dst{a, static_cast<Cls>(cls)};
                 LOp* l;
@@ -1000,15 +1017,29 @@ struct Region {
                 const int list = c.objectSlot(top - 3);
                 const Reg index = c.read(top - 2, CI, true);
                 const K v = s.kind(top - 1);
-                const char* stem = (v.bits == kFloat || v.bits == kCopyF) ? "setf" : v.bits == kInt ? "setwi" : v.bits == kByte ? "setwb" : nullptr;
-                if (stem == nullptr) island();
-                const Reg value{top - 1, stem[3] == 'f' ? CF : CI};
+                // (A whole number read from a list, an int or a byte, goes as an int: into bytes
+                // where it is from 0 to 255, into a list of ints as the int it is.)
+                const char* stem = (v.bits == kFloat || v.bits == kCopyF) ? "setf" : (v.bits == kInt || v.bits == kWhole) ? "setwi" : v.bits == kByte ? "setwb" : nullptr;
+                Reg value{top - 1, stem != nullptr && stem[3] == 'f' ? CF : CI};
+                K result = v;
+                if (stem == nullptr) {
+                    // A value the region did not make (a variable pushed): what the list holds in
+                    // the call the region is made in says what it is taken to be, checked in memory.
+                    int root = list;
+                    if (const K lk = s.kind(list); (lk.bits & ~kCopies) == 0 && lk.src >= 0) root = lk.src;
+                    const int cls = frameClass(root);
+                    const K vk = s.kind(top - 1);
+                    if (cls < 0 || !(vk.bits == kEntry || inMemory(vk) || ((vk.bits & ~kCopies) == 0 && vk.src >= 0))) island();
+                    value = c.number(top - 1, static_cast<Cls>(cls), cls == CI);
+                    stem = cls == CF ? "setf" : "setwi";
+                    result = K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)};
+                }
                 LOp& l = c.op(stem, {value, index}, {value, index});
                 l.slot = list;
                 c.leaves(l);
-                const Reg result{top - 3, value.cls};
-                c.op(value.cls == CF ? "movf" : "movi", {result, value}, {value}, {result});
-                c.write(top - 3, value.cls == CF ? K{kFloat} : v);
+                const Reg resultReg{top - 3, value.cls};
+                if (!(resultReg == value)) c.op(value.cls == CF ? "movf" : "movi", {resultReg, value}, {value}, {resultReg});
+                c.write(top - 3, value.cls == CF ? K{kFloat} : result);
                 s.top = top - 2;
                 c.fall(s);
                 return;
@@ -1656,6 +1687,454 @@ struct Region {
         }
     }
 
+    // ---- Whole loops made ahead (loop templates) ----
+
+    // A loop's body followed through its steps, each register's value an expression of what the
+    // loop starts with: the counter, a register it does not change, a constant, an item of a list
+    // looked at once, and the arithmetic of them. Where a loop stores one such expression a time
+    // round to a list, or adds one to a total, in one of the shapes stencils.cpp's runLoop knows,
+    // the whole loop is run there, before its own steps (which then find nothing left, or do the
+    // item it stopped at).
+    struct Expr {
+        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte } kind;
+        Cls cls = CI;
+        Reg reg{0, CI};  // Inv
+        int64_t ki = 0;  // KInt
+        double kf = 0;   // KFloat
+        int list = -1;   // Load: which list looked at once
+        char op = 0;     // Bin: + - * /
+        const Expr* a = nullptr;
+        const Expr* b = nullptr;  // Load: the index
+    };
+    std::deque<Expr> exprs;
+    const Expr* mk(Expr e) {
+        exprs.push_back(e);
+        return &exprs.back();
+    }
+    static bool same(const Expr* x, const Expr* y) {
+        if (x == y) return true;
+        if (x == nullptr || y == nullptr || x->kind != y->kind || x->cls != y->cls) return false;
+        switch (x->kind) {
+            case Expr::Counter: return true;
+            case Expr::Inv: return x->reg == y->reg;
+            case Expr::KInt: return x->ki == y->ki;
+            case Expr::KFloat: return std::memcmp(&x->kf, &y->kf, 8) == 0;
+            case Expr::Load: return x->list == y->list && same(x->b, y->b);
+            default: return x->op == y->op && same(x->a, y->a) && same(x->b, y->b);
+        }
+    }
+    // Whether an expression is the same each time round: no counter, no item in it.
+    static bool invariant(const Expr* e) {
+        if (e == nullptr) return false;
+        if (e->kind == Expr::Counter || e->kind == Expr::Load) return false;
+        return (e->a == nullptr || invariant(e->a)) && (e->b == nullptr || invariant(e->b));
+    }
+    static bool usesReg(const Expr* e, const Reg& r) {
+        if (e == nullptr) return false;
+        if (e->kind == Expr::Inv && e->reg == r) return true;
+        return usesReg(e->a, r) || usesReg(e->b, r);
+    }
+    static bool itemAtCounter(const Expr* e, Cls cls) { return e != nullptr && e->kind == Expr::Load && e->cls == cls && e->b != nullptr && e->b->kind == Expr::Counter; }
+
+    // The body's steps, followed: each register's value; the stores (list, index, value, the
+    // step's stem); false where a step is one this does not follow.
+    struct Followed {
+        std::map<Reg, const Expr*> val;
+        struct Store {
+            int list;
+            const Expr* index;
+            const Expr* value;
+            std::string stem;
+        };
+        std::vector<Store> stores;
+    };
+    const Expr* valueOf(Followed& fw, const Reg& r) {
+        auto v = fw.val.find(r);
+        if (v != fw.val.end()) return v->second;
+        Expr e{Expr::Inv};
+        e.cls = r.cls;
+        e.reg = r;
+        return mk(e);
+    }
+    bool follow(Followed& fw, const LOp& l) {
+        const std::string& s = l.stem;
+        auto set = [&](const Reg& d, const Expr* e) { fw.val[d] = e; };
+        auto bin = [&](char op, Cls cls, const Expr* x, const Expr* y) {
+            Expr e{Expr::Bin};
+            e.cls = cls, e.op = op, e.a = x, e.b = y;
+            return mk(e);
+        };
+        auto kint = [&](int64_t v) {
+            Expr e{Expr::KInt};
+            e.ki = v;
+            return mk(e);
+        };
+        auto kfloat = [&](double v) {
+            Expr e{Expr::KFloat};
+            e.cls = CF, e.kf = v;
+            return mk(e);
+        };
+        const auto& n = l.named;
+        auto arith = [&](const std::string& stem, char& op) {
+            if (stem.rfind("add", 0) == 0) op = '+';
+            else if (stem.rfind("sub", 0) == 0) op = '-';
+            else if (stem.rfind("mul", 0) == 0) op = '*';
+            else if (stem.rfind("div", 0) == 0) op = '/';
+            else return false;
+            return true;
+        };
+        char op = 0;
+        if (s == "setik") return set(n[0], kint(l.ki)), true;
+        if (s == "setfk") return set(n[0], kfloat(l.kf)), true;
+        if (s == "movi" || s == "movf") return set(n[0], valueOf(fw, n[1])), true;
+        if (s == "inci") return set(n[0], bin('+', CI, valueOf(fw, n[0]), kint(1))), true;
+        if ((s == "addi" || s == "subi" || s == "muli" || s == "addf" || s == "subf" || s == "mulf" || s == "divf") && arith(s, op))
+            return set(n[0], bin(op, s.back() == 'f' ? CF : CI, valueOf(fw, n[1]), valueOf(fw, n[2]))), true;
+        if ((s == "addik" || s == "subik" || s == "mulik") && arith(s, op)) return set(n[0], bin(op, CI, valueOf(fw, n[1]), kint(l.ki))), true;
+        if ((s == "addikr" || s == "subikr" || s == "mulikr") && arith(s, op)) return set(n[0], bin(op, CI, kint(l.ki), valueOf(fw, n[1]))), true;
+        if ((s == "addfk" || s == "subfk" || s == "mulfk" || s == "divfk") && arith(s, op)) return set(n[0], bin(op, CF, valueOf(fw, n[1]), kfloat(l.kf))), true;
+        if ((s == "addfkr" || s == "subfkr" || s == "mulfkr" || s == "divfkr") && arith(s, op)) return set(n[0], bin(op, CF, kfloat(l.kf), valueOf(fw, n[1]))), true;
+        if (s == "mini" || s == "maxi") {
+            Expr e{s == "mini" ? Expr::Min : Expr::Max};
+            e.a = valueOf(fw, n[0]), e.b = valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "chkbyte") {
+            Expr e{Expr::ToByte};
+            e.a = valueOf(fw, n[0]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "hidxf" || s == "hidxw" || s == "hidxfk" || s == "hidxwk") {
+            Expr e{Expr::Load};
+            e.cls = s[4] == 'f' ? CF : CI;
+            e.list = static_cast<int>(l.slot);
+            e.b = s.back() == 'k' ? kint(l.ki) : valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "hsetf" || s == "hsetwi" || s == "hsetwb") {
+            fw.stores.push_back(Followed::Store{static_cast<int>(l.slot), valueOf(fw, n[1]), valueOf(fw, n[0]), s});
+            return true;
+        }
+        return false;
+    }
+
+    // The template, its words and where it goes, for the loop from head h to its Loop e.
+    struct Ahead {
+        uint64_t shape = 0;
+        int out = -1, a = -1, b = -1;
+        const Expr* p1 = nullptr;  // parameters, worked out before the loop
+        const Expr* p2 = nullptr;
+        int64_t words[6] = {0, 0, 0, 0, 0, 0};  // 7 to 12, where they are constants
+        bool bytesOut = false;
+        Reg acc{0, CI};
+        bool hasAcc = false;
+        const Expr* addend = nullptr;
+        int checkSlot = -1, checkKind = 0;  // a variable's kind the body checks each time round  // kLoopWMap: c where it is a register the loop does not change
+    };
+
+    // The loop from head h (its RangeNext, the step 1) to its Loop e: a template where it fits.
+    bool recognise(int h, int e, Ahead& ah, Reg& next, Reg& left) {
+        const Result& head = results[static_cast<size_t>(h)];
+        if (head.ops.size() != 4 || head.ops[0].stem != "jngtik" || head.ops[2].stem != "movi" || head.ops[3].stem != "addwik" || head.ops[3].ki != 1)
+            return false;
+        left = head.ops[0].named[0];
+        const Reg counter = head.ops[2].named[0];
+        next = head.ops[2].named[1];
+        Followed fw;
+        {
+            Expr c{Expr::Counter};
+            fw.val[counter] = mk(c);
+        }
+        std::set<Reg> defined;
+        for (int i = h + 1; i < e;) {
+            const Result& r = results[static_cast<size_t>(i)];
+            if (!in[static_cast<size_t>(i)].known || r.island || r.fallExit >= 0) return false;
+            // An int chosen by a comparison with a constant: x > K ? K : x and the like.
+            const LOp* last = r.ops.empty() ? nullptr : &r.ops.back();
+            if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && last->stem.substr(4) == "ik" && last->jumpTo > i && last->jumpTo < e) {
+                for (size_t k = 0; k + 1 < r.ops.size(); k++)
+                    if (!follow(fw, r.ops[k])) return false;
+                for (const LOp& l : r.ops)
+                    for (const Reg& d : l.defs) defined.insert(d);
+                const int x = last->jumpTo;
+                // The way it falls: to a jump past the other way.
+                int t = i + 1, y = -1;
+                Followed then = fw, other = fw;
+                std::set<Reg> thenDefs, otherDefs;
+                for (; t < x; t++) {
+                    const Result& b = results[static_cast<size_t>(t)];
+                    if (!in[static_cast<size_t>(t)].known || b.island) return false;
+                    for (const LOp& l : b.ops) {
+                        if (l.stem == "jump") {
+                            if (t != x - 1 || l.jumpTo <= x || l.jumpTo >= e) return false;
+                            y = l.jumpTo;
+                            continue;
+                        }
+                        if (!follow(then, l)) return false;
+                        for (const Reg& d : l.defs) thenDefs.insert(d);
+                    }
+                }
+                if (y < 0) return false;
+                for (int u = x; u < y; u++) {
+                    const Result& b = results[static_cast<size_t>(u)];
+                    if (!in[static_cast<size_t>(u)].known || b.island) return false;
+                    for (const LOp& l : b.ops) {
+                        if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+                        if (!follow(other, l)) return false;
+                        for (const Reg& d : l.defs) otherDefs.insert(d);
+                    }
+                }
+                if (thenDefs.size() != 1 || thenDefs != otherDefs || then.stores.size() != fw.stores.size() || other.stores.size() != fw.stores.size()) return false;
+                const Reg d = *thenDefs.begin();
+                const Expr* subject = valueOf(fw, last->named[0]);
+                const Expr* vThen = then.val[d];
+                const Expr* vOther = other.val[d];
+                const std::string cmp = last->stem.substr(2, 2);
+                // Falls where `subject cmp K` holds: then K, otherwise the subject.
+                if (vThen->kind != Expr::KInt || vThen->ki != last->ki || !same(vOther, subject)) return false;
+                Expr pick{cmp == "gt" || cmp == "ge" ? Expr::Min : cmp == "lt" || cmp == "le" ? Expr::Max : Expr::Bin};
+                if (pick.kind == Expr::Bin) return false;
+                pick.a = subject;
+                pick.b = vThen;
+                fw.val[d] = mk(pick);
+                defined.insert(d);
+                i = y;
+                continue;
+            }
+            for (const LOp& l : r.ops) {
+                if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+                if (l.stem == "chkf" || l.stem == "chkint" || l.stem == "chki") {
+                    // Of a variable the loop never writes: checked once, by the template.
+                    const int slot = static_cast<int>(l.slot);
+                    for (int u = h; u <= e; u++)
+                        if (in[static_cast<size_t>(u)].kind(slot).bits != kEntry) return false;
+                    const int kind = l.stem == "chkf" ? 1 : l.stem == "chkint" ? 2 : 3;
+                    if (ah.checkSlot >= 0 && (ah.checkSlot != slot || ah.checkKind != kind)) return false;
+                    ah.checkSlot = slot, ah.checkKind = kind;
+                    continue;
+                }
+                if (!follow(fw, l)) return false;
+                for (const Reg& d : l.defs) defined.insert(d);
+            }
+            i++;
+        }
+        if (defined.count(next) || defined.count(left) || defined.count(counter)) return false;
+        // What goes on round the loop: at most one total.
+        const std::set<Reg>& live = liveIn[static_cast<size_t>(h)];
+        for (const Reg& d : defined) {
+            if (d == counter || !live.count(d)) continue;
+            if (ah.hasAcc) return false;
+            ah.acc = d;
+            ah.hasAcc = true;
+        }
+        // A value of an earlier time round read: the total's alone, by itself.
+        for (const auto& [r, v] : fw.val)
+            for (const Reg& d : defined)
+                if (!(ah.hasAcc && d == ah.acc) && usesReg(v, d)) return false;
+        for (const auto& st : fw.stores)
+            for (const Reg& d : defined)
+                if (usesReg(st.value, d) || usesReg(st.index, d)) return false;
+        if (ah.hasAcc) {
+            if (!fw.stores.empty()) return false;
+            const Expr* v = fw.val[ah.acc];
+            if (v->kind != Expr::Bin || v->op != '+' || v->a->kind != Expr::Inv || !(v->a->reg == ah.acc) || !itemAtCounter(v->b, ah.acc.cls)) return false;
+            ah.shape = ah.acc.cls == CF ? 8 /* kLoopFSum */ : 11 /* kLoopWSum */;
+            ah.a = v->b->list;
+            return true;
+        }
+        if (fw.stores.size() != 1) return false;
+        const Followed::Store& st = fw.stores[0];
+        if (st.index->kind != Expr::Counter) return false;
+        ah.out = st.list;
+        const Expr* v = st.value;
+        if (st.stem == "hsetf") {
+            auto bin = [&](const Expr* e, char op) { return e->kind == Expr::Bin && e->cls == CF && e->op == op; };
+            if (itemAtCounter(v, CF)) {
+                ah.shape = 1, ah.a = v->list;
+            } else if (invariant(v)) {
+                ah.shape = 2, ah.p1 = v;
+            } else if (v->kind == Expr::Bin && itemAtCounter(v->a, CF) && invariant(v->b)) {
+                ah.shape = 3, ah.a = v->a->list, ah.p1 = v->b, ah.words[2] = v->op;
+            } else if (v->kind == Expr::Bin && invariant(v->a) && itemAtCounter(v->b, CF)) {
+                ah.shape = 4, ah.a = v->b->list, ah.p1 = v->a, ah.words[2] = v->op;
+            } else if (v->kind == Expr::Bin && itemAtCounter(v->a, CF) && itemAtCounter(v->b, CF)) {
+                ah.shape = 5, ah.a = v->a->list, ah.b = v->b->list, ah.words[2] = v->op;
+            } else if (bin(v, '+') && bin(v->a, '*') && itemAtCounter(v->a->a, CF) && invariant(v->a->b) && invariant(v->b)) {
+                ah.shape = 6, ah.a = v->a->a->list, ah.p1 = v->a->b, ah.p2 = v->b;
+            } else if (bin(v, '+') && bin(v->a, '*') && bin(v->b, '*') && itemAtCounter(v->a->a, CF) && invariant(v->a->b) && itemAtCounter(v->b->a, CF) &&
+                       invariant(v->b->b)) {
+                ah.shape = 7, ah.a = v->a->a->list, ah.b = v->b->a->list, ah.p1 = v->a->b, ah.p2 = v->b->b;
+            } else {
+                return false;
+            }
+            return true;
+        }
+        // Whole numbers: into bytes (a byte's value, setwb) or a list of ints or bytes (setwi).
+        if (st.stem == "hsetwb") {
+            if (v->kind != Expr::ToByte) return false;
+            ah.bytesOut = true;
+            v = v->a;
+        }
+        if (itemAtCounter(v, CI)) {
+            ah.shape = 9, ah.a = v->list;
+            return true;
+        }
+        if (v->kind == Expr::KInt) {
+            ah.shape = 10, ah.words[0] = v->ki;
+            return true;
+        }
+        if (v->kind == Expr::Load && v->cls == CI && itemAtCounter(v->b, CI)) {
+            ah.shape = 13, ah.a = v->b->list, ah.b = v->list;
+            return true;
+        }
+        // sign * item + c, then up to two of min and max with constants.
+        std::vector<std::pair<int, int64_t>> clamps;
+        while ((v->kind == Expr::Min || v->kind == Expr::Max) && v->b->kind == Expr::KInt && clamps.size() < 2) {
+            clamps.insert(clamps.begin(), {v->kind == Expr::Min ? 1 : 2, v->b->ki});
+            v = v->a;
+        }
+        int64_t sign = 1, c = 0;
+        auto addend = [](const Expr* e) { return e->kind == Expr::Inv && e->cls == CI; };
+        if (itemAtCounter(v, CI)) {
+        } else if (v->kind == Expr::Bin && v->op == '+' && itemAtCounter(v->a, CI) && addend(v->b)) {
+            ah.addend = v->b, v = v->a;
+        } else if (v->kind == Expr::Bin && v->op == '+' && addend(v->a) && itemAtCounter(v->b, CI)) {
+            ah.addend = v->a, v = v->b;
+        } else if (v->kind == Expr::Bin && v->op == '-' && addend(v->a) && itemAtCounter(v->b, CI)) {
+            sign = -1, ah.addend = v->a, v = v->b;
+        } else if (v->kind == Expr::Bin && v->op == '+' && itemAtCounter(v->a, CI) && v->b->kind == Expr::KInt) {
+            c = v->b->ki, v = v->a;
+        } else if (v->kind == Expr::Bin && v->op == '+' && v->a->kind == Expr::KInt && itemAtCounter(v->b, CI)) {
+            c = v->a->ki, v = v->b;
+        } else if (v->kind == Expr::Bin && v->op == '-' && itemAtCounter(v->a, CI) && v->b->kind == Expr::KInt && v->b->ki != INT64_MIN) {
+            c = -v->b->ki, v = v->a;
+        } else if (v->kind == Expr::Bin && v->op == '-' && v->a->kind == Expr::KInt && itemAtCounter(v->b, CI)) {
+            sign = -1, c = v->a->ki, v = v->b;
+        } else {
+            return false;
+        }
+        ah.shape = 12, ah.a = v->list;
+        ah.words[0] = sign, ah.words[1] = c;
+        for (size_t k = 0; k < clamps.size(); k++) ah.words[2 + 2 * k] = clamps[k].first, ah.words[3 + 2 * k] = clamps[k].second;
+        return true;
+    }
+
+    // An invariant float worked out before the loop: a constant, or a register (its steps added
+    // to `ops`, scratch registers below -200).
+    bool workOut(const Expr* e, std::vector<LOp>& ops, bool& isConst, double& k, Reg& reg) {
+        if (e->kind == Expr::KFloat) return isConst = true, k = e->kf, true;
+        if (e->kind == Expr::Inv && e->cls == CF) return isConst = false, reg = e->reg, true;
+        if (e->kind != Expr::Bin || e->cls != CF) return false;
+        bool ca, cb;
+        double ka = 0, kb = 0;
+        Reg ra{0, CF}, rb{0, CF};
+        if (!workOut(e->a, ops, ca, ka, ra) || !workOut(e->b, ops, cb, kb, rb)) return false;
+        const char* stem = e->op == '+' ? "add" : e->op == '-' ? "sub" : e->op == '*' ? "mul" : "div";
+        if (ca && cb) {
+            k = e->op == '+' ? ka + kb : e->op == '-' ? ka - kb : e->op == '*' ? ka * kb : ka / kb;
+            return isConst = true, true;
+        }
+        const Reg d{-200 - static_cast<int>(exprs.size()), CF};
+        LOp l;
+        l.defs = {d};
+        if (!ca && !cb) {
+            l.stem = std::string(stem) + "f", l.named = {d, ra, rb}, l.uses = {ra, rb};
+        } else if (!ca) {
+            l.stem = std::string(stem) + "fk", l.named = {d, ra}, l.uses = {ra}, l.kf = kb;
+        } else {
+            l.stem = std::string(stem) + "fkr", l.named = {d, rb}, l.uses = {rb}, l.kf = ka;
+        }
+        ops.push_back(l);
+        return isConst = false, reg = d, true;
+    }
+
+    // The steps that run a recognised loop's template, before it: its words set, the template,
+    // the counter and the total read back.
+    bool templateSteps(const Ahead& ah, const Reg& next, const Reg& left, std::vector<LOp>& ops) {
+        auto word = [&](int at, int64_t v) {
+            LOp l;
+            l.stem = "ctxk", l.slot = at, l.ki = v;
+            ops.push_back(l);
+        };
+        auto store = [&](int at, const Reg& r) {
+            LOp l;
+            l.stem = r.cls == CF ? "ctxsf" : "ctxsi", l.named = {r}, l.uses = {r}, l.slot = at;
+            ops.push_back(l);
+        };
+        auto load = [&](int at, const Reg& r) {
+            LOp l;
+            l.stem = r.cls == CF ? "ctxlf" : "ctxli", l.named = {r}, l.defs = {r}, l.slot = at;
+            ops.push_back(l);
+        };
+        auto param = [&](int at, const Expr* e) {
+            bool isConst;
+            double k;
+            Reg r{0, CF};
+            if (!workOut(e, ops, isConst, k, r)) return false;
+            if (isConst) {
+                int64_t bits;
+                std::memcpy(&bits, &k, 8);
+                word(at, bits);
+            } else {
+                store(at, r);
+            }
+            return true;
+        };
+        word(0, static_cast<int64_t>(ah.shape));
+        word(4, ah.out), word(5, ah.a), word(6, ah.b);
+        for (int k = 0; k < 6; k++) word(7 + k, ah.words[k]);
+        word(13, ah.bytesOut ? 1 : 0);
+        word(14, ah.checkSlot), word(15, ah.checkKind);
+        if (ah.p1 != nullptr && !param(7, ah.p1)) return false;
+        if (ah.p2 != nullptr && !param(8, ah.p2)) return false;
+        if (ah.addend != nullptr) store(8, ah.addend->reg);
+        store(1, next), store(2, left);
+        if (ah.hasAcc) store(3, ah.acc);
+        LOp run;
+        run.stem = "tloop";
+        ops.push_back(run);
+        load(1, next), load(2, left);
+        if (ah.hasAcc) load(3, ah.acc);
+        return true;
+    }
+
+    // Each loop of the region (a for over a range, step 1, nothing of the VM's in the region)
+    // whose body fits a template: its template's steps put where the loop is entered, before its
+    // first instruction (headOps, for the region's own loop; the end of the instruction before,
+    // for a loop inside it, entered by falling into it alone).
+    std::vector<LOp> headOps;
+    int templates = 0;
+
+    void makeAhead() {
+        if (prologue.empty()) return;  // lists looked at once: none, or the VM's in the region
+        for (size_t e = 0; e < ins.size(); e++) {
+            if (!in[e].known || ins[e].op != Op::Loop) continue;
+            const LOp& back = results[e].ops.back();
+            const int h = back.jumpTo;
+            if (h < 0 || static_cast<size_t>(h) >= e || ins[static_cast<size_t>(h)].op != Op::RangeNext) continue;
+            // Entered by falling in from the instruction before alone (or the region's start).
+            bool alone = true;
+            for (size_t i = 0; i < ins.size() && alone; i++) {
+                if (!in[i].known || i == e) continue;
+                for (const LOp& l : results[i].ops)
+                    if (l.jumpTo == h) alone = false;
+            }
+            if (!alone) continue;
+            if (h > 0) {
+                const Result& pre = results[static_cast<size_t>(h) - 1];
+                if (!in[static_cast<size_t>(h) - 1].known || pre.island || !pre.fallsThrough || pre.fallExit >= 0) continue;
+            }
+            Ahead ah;
+            Reg next{0, CI}, left{0, CI};
+            if (!recognise(h, static_cast<int>(e), ah, next, left)) continue;
+            std::vector<LOp> ops;
+            if (!templateSteps(ah, next, left, ops)) continue;
+            if (h == 0) headOps = ops;
+            else results[static_cast<size_t>(h) - 1].ops.insert(results[static_cast<size_t>(h) - 1].ops.end(), ops.begin(), ops.end());
+            templates++;
+        }
+    }
+
     // ---- Liveness: which registers each instruction reads before writing ----
 
     std::vector<std::set<Reg>> liveIn;
@@ -1689,10 +2168,18 @@ struct Region {
                 }
             }
         }
+        // Where the region starts, before its first instruction: the steps of its loop's template.
+        liveStart = liveIn.empty() ? std::set<Reg>{} : liveIn[0];
+        for (auto l = headOps.rbegin(); l != headOps.rend(); ++l) {
+            for (const Reg& d : l->defs) liveStart.erase(d);
+            liveStart.insert(l->uses.begin(), l->uses.end());
+        }
         for (int e : entries)
-            for (const Reg& r : liveIn[static_cast<size_t>(e)])
+            for (const Reg& r : e == 0 ? liveStart : liveIn[static_cast<size_t>(e)])
                 if (r.slot < 0) refuse("a scratch register read before it is written");
     }
+    std::set<Reg> liveStart;
+    const std::set<Reg>& liveAt(int entry) const { return entry == 0 ? liveStart : liveIn[static_cast<size_t>(entry)]; }
 
     // ---- Registers ----
 
@@ -1718,8 +2205,20 @@ struct Region {
                 for (const Reg& b : live) meet(a, b);
             }
         };
-        // What each way in loads, at once.
-        for (int e : entries) together(liveIn[static_cast<size_t>(e)]);
+        // What each way in loads, at once; and the steps before the region's first instruction.
+        for (int e : entries) together(liveAt(e));
+        {
+            std::set<Reg> live = liveIn.empty() ? std::set<Reg>{} : liveIn[0];
+            for (auto l = headOps.rbegin(); l != headOps.rend(); ++l) {
+                for (const Reg& d : l->defs) {
+                    note(d);
+                    for (const Reg& x : live) meet(d, x);
+                }
+                for (const Reg& d : l->defs) live.erase(d);
+                live.insert(l->uses.begin(), l->uses.end());
+                for (const Reg& u : l->named) note(u);
+            }
+        }
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             const Result& r = results[i];
@@ -1821,6 +2320,10 @@ struct Region {
                 }
             }
         }
+        // The steps before the region's first instruction are not rewritten: what they use stays.
+        for (const LOp& l : headOps)
+            for (const auto* list : {&l.named, &l.uses, &l.defs})
+                for (const Reg& r : *list) barred.insert(r);
         const Reg* best = nullptr;
         double bestScore = -1;
         for (const auto& [r, others] : clash) {
@@ -1908,7 +2411,7 @@ struct Region {
 // `leave`): what it made may rest on a guess, which says nothing of what it is entered with.
 void loads(Assembler& a, const Region& r, int entry, std::vector<std::string>* names, int leave) {
     const State& st = r.in[static_cast<size_t>(entry)];
-    for (const Reg& reg : r.liveIn[static_cast<size_t>(entry)]) {
+    for (const Reg& reg : r.liveAt(entry)) {
         const K k = st.kind(reg.slot);
         const uint16_t w = static_cast<uint16_t>(k.bits & ~kEntry);
         if (!(k.bits & kEntry) || w == 0) continue;
@@ -1923,7 +2426,7 @@ void loads(Assembler& a, const Region& r, int entry, std::vector<std::string>* n
         c.slot = reg.slot;
         c.exit = leave;
     }
-    for (const Reg& reg : r.liveIn[static_cast<size_t>(entry)]) {
+    for (const Reg& reg : r.liveAt(entry)) {
         const std::string n = std::string(reg.cls == CI ? "loadi_" : "loadf_") + std::to_string(r.regs.at(reg));
         if (names != nullptr) names->push_back(n);
         a.add(n).slot = reg.slot;
@@ -1959,6 +2462,13 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         st.ki = l.ki;
     }
     loads(a, r, 0, names, leaveAt(0));
+    for (const LOp& l : r.headOps) {
+        if ((l.stem == "movi" || l.stem == "movf") && l.named.size() == 2 && r.regs.at(l.named[0]) == r.regs.at(l.named[1])) continue;
+        Step& st = add(r.name(l));
+        st.ki = l.ki;
+        st.kf = l.kf;
+        st.slot = l.slot;
+    }
     for (size_t i = 0; i < r.ins.size(); i++) {
         a.at(labels[i]);
         if (!r.in[i].known) continue;
@@ -2077,7 +2587,7 @@ struct Candidate {
     int first, last;  // instructions, the loop's start and its Loop
 };
 
-void makeRegionsTimed(FunctionProto& f);
+void makeRegionsTimed(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
 // How long making regions took, said as the program ends where JADE_TIME_NATIVE is set.
 double phaseTimes[4] = {};  // each phase's time, for JADE_TIME_NATIVE
@@ -2093,9 +2603,9 @@ struct NativeTimes {
     }
 } nativeTimes;
 
-void makeRegions(FunctionProto& f) {
+void makeRegions(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     const auto start = std::chrono::steady_clock::now();
-    makeRegionsTimed(f);
+    makeRegionsTimed(f, frame, head, out);
     const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     nativeTimes.seconds += took;
     static const bool each = std::getenv("JADE_TIME_NATIVE") != nullptr && std::string(std::getenv("JADE_TIME_NATIVE")) == "each";
@@ -2103,7 +2613,7 @@ void makeRegions(FunctionProto& f) {
     nativeTimes.functions++;
 }
 
-void makeRegionsTimed(FunctionProto& f) {
+void makeRegionsTimed(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     if (!enabled()) return;
     // A function with no loop: nothing to make, found at once.
     bool anyLoop = false;
@@ -2151,6 +2661,7 @@ void makeRegionsTimed(FunctionProto& f) {
         bool inside = false;
         for (const Candidate& m : made) inside = inside || (c.first <= m.last && c.last >= m.first);
         if (inside) continue;
+        if (all[static_cast<size_t>(c.first)].at != head) continue;  // another loop's: made as it starts
         auto headTop = tops.find(all[static_cast<size_t>(c.first)].at);
         if (headTop == tops.end() || headTop->second < 0) continue;
         // At a glance, before the analysis: a loop that starts with an instruction no region does,
@@ -2170,6 +2681,7 @@ void makeRegionsTimed(FunctionProto& f) {
             continue;
         }
         Region r(f);
+        r.frame = frame;
         r.tops = tops;
         // A range counted through, made just before the loop: its step, where none is given, is 1
         // (or -1, going down), as the VM's RangeLoop sets it.
@@ -2195,6 +2707,14 @@ void makeRegionsTimed(FunctionProto& f) {
             if (!r.worthIt()) refuse("too little done between what the VM does");
             r.lookAtListsOnce();
             r.findLive();
+            static const bool ahead = [] {
+                const char* asked = std::getenv("JADE_NATIVE_TEMPLATES");
+                return asked == nullptr || std::string(asked) != "0";
+            }();
+            if (ahead) {
+                r.makeAhead();
+                if (r.templates > 0) r.findLive();
+            }
             lap(2);
             while (!r.giveRegisters()) {
                 if (!r.spillOne()) refuse("more values at once than registers, and none can be kept in its slot");
@@ -2205,7 +2725,7 @@ void makeRegionsTimed(FunctionProto& f) {
             const auto ways = make(r, dumping ? &names : nullptr);
             if (ways.empty()) continue;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
-            for (const auto& [at, code] : ways) f.regions.push_back(FunctionProto::NativeRegion{at, code, misses});
+            for (const auto& [at, code] : ways) out.push_back(FunctionProto::NativeRegion{at, code, misses});
             made.push_back(c);
             if (dumping) {
                 int islands = 0;
@@ -2244,6 +2764,7 @@ bool findLoops(FunctionProto& f) {
         }
         at += kThreaded + size;
     }
+    f.nativeArrivals.assign(f.nativeHeads.size(), 0);
     return !f.nativeHeads.empty();
 }
 

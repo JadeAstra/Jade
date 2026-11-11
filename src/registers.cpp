@@ -1260,10 +1260,9 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     }
     f.run = std::move(run);
     f.runLines = std::move(lines);
-    f.regions.clear();
+    f.regionsNow.store(nullptr, std::memory_order_release);
     f.nativeHeads.clear();
-    f.nativeMade = false;
-    f.nativeArrivals = 0;
+    f.nativeArrivals.clear();
     bool loops = false;
     if (opBytes == kOpBytes && !f.runTops.empty()) {
         // Each where an instruction starts; one inside an instruction (a comparison the jump
@@ -1284,7 +1283,7 @@ void threadCode(FunctionProto& f, size_t opBytes) {
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
 bool (*findNativeLoops)(FunctionProto& f) = nullptr;
-void (*makeNativeRegions)(FunctionProto& f) = nullptr;
+void (*makeNativeRegions)(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made) = nullptr;
 
 void runLater(FunctionProto& f) {
     std::vector<uint8_t> run(kThreaded, 0);

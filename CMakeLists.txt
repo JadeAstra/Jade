@@ -95,8 +95,10 @@ add_library(jade_compiler OBJECT
 target_sources(jade_core PRIVATE src/native/native.cpp src/native/regions.cpp)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND WIN32)
   add_library(jade_stencils OBJECT src/native/stencils.cpp)
-  # Each stencil in a section of its own, and nothing in them a copied stencil could not carry.
-  target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl)
+  # Each stencil in a section of its own, and nothing in them a copied stencil could not carry
+  # (no library function called: /Oi- keeps Clang from making a loop a call of memcpy; and no
+  # table of where a switch goes, which would be data of its own).
+  target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables)
   add_executable(jade_stencil_tool tools/stencils/stencils.cpp)
   set(JADE_STENCIL_TABLE "${CMAKE_BINARY_DIR}/native/stencils.h")
   add_custom_command(
