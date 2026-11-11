@@ -12,6 +12,7 @@
 // The Jade side of all this is in src/std/thread.jade and src/std/task.jade.
 
 #include <algorithm>
+#include <utility>
 #include <cstdlib>
 #include <new>
 #include <thread>
@@ -210,6 +211,10 @@ void VM::saveContext() {
     c.nativeDepth = nativeDepth_;
     c.nativeBase = nativeBase_;
     c.pendingTypeArgs = pendingTypeArgs_;
+    std::copy(implicitFirst_, implicitFirst_ + implicitFirstCount_, c.implicitFirst);
+    c.implicitFirstCount = std::exchange(implicitFirstCount_, uint8_t{0});
+    c.implicitOnly = std::exchange(implicitOnly_, false);
+    c.implicitTried = std::exchange(implicitTried_, uint8_t{0});
 }
 
 void VM::loadContext(Context* c) {
@@ -227,6 +232,10 @@ void VM::loadContext(Context* c) {
     nativeDepth_ = c->nativeDepth;
     nativeBase_ = c->nativeBase;
     pendingTypeArgs_ = c->pendingTypeArgs;
+    std::copy(c->implicitFirst, c->implicitFirst + c->implicitFirstCount, implicitFirst_);
+    implicitFirstCount_ = std::exchange(c->implicitFirstCount, uint8_t{0});
+    implicitOnly_ = std::exchange(c->implicitOnly, false);
+    implicitTried_ = std::exchange(c->implicitTried, uint8_t{0});
 }
 
 // ---- The lock ----

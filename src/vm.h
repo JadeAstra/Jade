@@ -89,6 +89,12 @@ struct Context {
     // The type arguments a call about to be made was given (Op::WithTypes): a thread may give
     // way between them and the call, so they are its own.
     const ObjTypeInfo* pendingTypeArgs = nullptr;
+    // What ImplicitFirst gave the next lookup of a bare name (D58, D59): a thread may give way
+    // between them (at InvokeImplicit's safe point), so they too are its own.
+    Value implicitFirst[8];
+    uint8_t implicitFirstCount = 0;
+    bool implicitOnly = false;
+    uint8_t implicitTried = 0;
     Context* parent = nullptr;  // the one waiting for this one to finish or be set aside
     // The frame the innermost run() on this line of execution started with: where it ends. Kept
     // here, not in the VM, as the VM's threads take turns with it (instructions.inc, M6.7).
@@ -1464,7 +1470,8 @@ private:
 
     Value callWithReceiver(Value receiver, ObjClosure* method);
     Value implicitReceiver(const CallFrame* frame, const Value* base, const ObjString* name) const;
-    // What ImplicitFirst gave the next lookup of a bare name (D58, D59).
+    // What ImplicitFirst gave the next lookup of a bare name (D58, D59), for the running
+    // context: saved with it when threads take turns (saveContext).
     mutable Value implicitFirst_[8];
     mutable uint8_t implicitFirstCount_ = 0;
     mutable bool implicitOnly_ = false;
