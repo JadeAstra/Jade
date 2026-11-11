@@ -119,6 +119,9 @@ td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-n
 </tbody></table></div>
 <p>What the numbers say. A loop in Jade over bytes or pixels is now 8 to 240 times as long as the same loop in C++: least where the work is a few steps on each item (line ends, Huffman decoding, the flood fill, the box blur's running sums), most where it is many small steps of arithmetic on floats (the DCT, the Gaussian blur) or very little work on many items that C++ does in vector registers (shrinking, the gradients). An interpreter cannot close that; the whole-list, grid and picture operations of questions 15 to 17 move the loop itself into C++, which is why that column is expected near C++'s where an operation fits.</p>
 
+<h3>With native code (M9.5)</h3>
+<p>The same kernels as Jade loops, with jade 0.9.5's native code (<a href="native-plan.html#np-measured">native-plan.html, as measured</a>), ms against the VM alone: <code>idct</code> 444 against 3,351, <code>gaussian</code> 854 against 5,845, <code>blur</code> 625 against 2,835, <code>gradient</code> 65 against 339, <code>radial</code> 122 against 436, <code>shrink</code> 77 against 361, <code>lineEnds</code> 138 against 430; <code>huffman</code> 269 against 320 and <code>flood</code> 597 against 603, whose time is in calls. Against C++ they are now 2 to 32 times as long, where they were 8 to 240; the operations of questions 15 to 17 are still the quicker way where one fits.</p>
+
 <h2 id="s-steps">Steps in a loop</h2>
 <p>What each kind of step costs, in a function, 50 million times, the loop's own time taken off but in its first line (<code>bench/kernels/ops_fn.jade</code>, <code>ops_call.jade</code>; one run each). Milliseconds.</p>
 <div class="table"><table>
