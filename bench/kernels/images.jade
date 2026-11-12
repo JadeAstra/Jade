@@ -1,0 +1,486 @@
+// Every picture operation timed (2026-11-12): an image's own, a grid of colours', a canvas's, text,
+// and the formats, on a 1000 by 1000 photo. Each the best of three, in milliseconds.
+//
+//   jade bench/kernels/images.jade <a photo>              all of them
+//   jade bench/kernels/images.jade <a photo> <name> ...   the ones whose names start so
+
+val args = Program.arguments
+if (args.size < 1) {
+  print("give a photo to work on")
+  exit(1)
+}
+val photo = Image.load(args[0]).scaled(1000, 1000)
+val only = args.drop(1)
+val W = 1000
+
+fun lcg(seed : int) : int => (seed * 1103515245 + 12345) & 0x7fffffff
+
+// The best of three runs of `work`, which is set up afresh by `setup` each time, outside the time.
+fun time(name : string, what : string, setup : () -> any? = { null }, work : (any?) -> any?) {
+  if (only.size > 0 and !only.any { name.startsWith(it) }) { return }
+  var best = 1e300
+  var said = ""
+  for (round in 0 ..< 3) {
+    val given = setup()
+    val started = Instant.now()
+    val result = work(given)
+    val took = (Instant.now() - started).inNanoseconds / 1e6
+    if (took < best) { best = took }
+    if (result != null) { said = result.toString() }
+  }
+  val shown = best < 10 ? Math.round(best * 100) / 100.0 : Math.round(best * 10) / 10.0
+  print("${name.padEnd(24)} ${shown.toString().padStart(9)} ms   $what")
+}
+
+val fresh : () -> any? = { photo.copy().canvas() }
+
+// --- An image's own operations ---
+time("new", "Image(1000, 1000) clear") { Image(W, W) }
+time("newFilled", "Image(1000, 1000, Color.red)") { Image(W, W, Color.red) }
+time("copy", "copy()") { photo.copy() }
+time("crop", "crop of 500 by 500") { photo.crop(250, 250, 500, 500) }
+time("blurred1", "blurred(1)") { photo.blurred(1) }
+time("blurred4", "blurred(4)") { photo.blurred(4) }
+time("blurred20", "blurred(20)") { photo.blurred(20) }
+time("scaledDown", "scaled to 250 by 250") { photo.scaled(250, 250) }
+time("scaledOdd", "scaled to 777 by 555") { photo.scaled(777, 555) }
+time("scaledUp", "scaled to 2000 by 2000, bilinear") { photo.scaled(2000, 2000) }
+time("scaledUpCubic", "scaled to 2000 by 2000, bicubic") { photo.scaled(2000, 2000, Interpolation.bicubic) }
+time("scaledUpNearest", "scaled to 2000 by 2000, nearest") { photo.scaled(2000, 2000, Interpolation.nearest) }
+time("transformed", "transformed by a turn of 0.3, bilinear") { photo.transformed(Transform.rotation(0.3)) }
+time("transformedCubic", "transformed by a turn of 0.3, bicubic") { photo.transformed(Transform.rotation(0.3), Interpolation.bicubic) }
+time("adjusted", "adjusted(1.2, 1.1)") { photo.adjusted(1.2, 1.1) }
+time("adjustedSat", "adjusted(1.2, 1.1, 1.3)") { photo.adjusted(1.2, 1.1, 1.3) }
+time("greyscale", "greyscale()") { photo.greyscale() }
+time("inverted", "inverted()") { photo.inverted() }
+time("floodRegion", "floodRegion from the middle, tolerance 30") { photo.floodRegion(500, 500, 30).count }
+time("inkBox", "inkBox()") { photo.inkBox() }
+val twin = photo.copy()
+time("equals", "== a copy") { photo == twin }
+time("hashCode", "hashCode()") { photo.hashCode() }
+time("rgbaBytes", "rgbaBytes()") { photo.rgbaBytes().size }
+time("toPlanes", "toPlanes(ycbcr)") { photo.toPlanes(ColorSpace.ycbcr).size }
+time("toTensor", "pixels.toTensor()") { photo.pixels.toTensor().size }
+val tensor = photo.pixels.toTensor()
+time("tensorToImage", "a tensor's toImage()") { tensor.toImage().width }
+
+// --- A pixel at a time, in Jade ---
+time("readPixels", "every image[x, y] read, its red summed") {
+  var total = 0
+  for (y in 0 ..< W) { for (x in 0 ..< W) { total += photo[x, y].red } }
+  total
+}
+time("readGrid", "every pixels[x, y] read, its red summed") {
+  val px = photo.pixels
+  var total = 0
+  for (y in 0 ..< W) { for (x in 0 ..< W) { total += px[x, y].red } }
+  total
+}
+time("writePixels", "every image[x, y] written", { photo.copy() }) { given ->
+  val image = given as Image
+  for (y in 0 ..< W) { for (x in 0 ..< W) { image[x, y] = Color(x & 255, y & 255, 128) } }
+  null
+}
+time("editPixels", "every pixel written in editPixels", { photo.copy() }) { given ->
+  (given as Image).editPixels { g ->
+    for (y in 0 ..< W) { for (x in 0 ..< W) { g[x, y] = Color(x & 255, y & 255, 128) } }
+  }
+  null
+}
+time("editPixelsMap", "each pixel's red and blue swapped in editPixels", { photo.copy() }) { given ->
+  (given as Image).editPixels { g ->
+    for (y in 0 ..< W) {
+      for (x in 0 ..< W) {
+        val c = g[x, y]
+        g[x, y] = Color(c.blue, c.green, c.red, c.alpha)
+      }
+    }
+  }
+  null
+}
+time("gridMap", "pixels.map { swapped }") { photo.pixels.map { c -> Color(c.blue, c.green, c.red, c.alpha) }.width }
+
+// --- A grid of colours ---
+val levels : open List<int> = []
+for (v in 0 .. 255) { levels.add(Math.min(255, v * 5 / 4)) }
+time("mapChannels", "mapChannels, three tables") { photo.pixels.mapChannels(levels, levels, levels).width }
+time("colorLookupMade", "ColorLookup made from a Jade function") { ColorLookup { c -> Color(c.blue, c.green, c.red) } }
+val lookup = ColorLookup { c -> Color(c.blue, c.green, c.red) }
+time("mapColors", "mapColors through it") { photo.pixels.mapColors(lookup).width }
+time("windowMean", "window(2, mean)") { photo.pixels.window(2, Reduce.mean).width }
+time("windowMedian", "window(2, median)") { photo.pixels.window(2, Reduce.median).width }
+time("windowMaxDisc", "window(5, max, disc)") { photo.pixels.window(5, Reduce.max, WindowShape.disc).width }
+val sharpen = Grid<float>(3, 3)
+sharpen[1, 1] = 5.0
+sharpen[0, 1] = -1.0
+sharpen[2, 1] = -1.0
+sharpen[1, 0] = -1.0
+sharpen[1, 2] = -1.0
+time("convolve3", "convolve by a 3 by 3 sharpen") { photo.pixels.convolve(sharpen).width }
+time("histogram", "histogram()") { photo.pixels.histogram().size }
+time("regions", "regions(10)") { photo.pixels.regions(10).width }
+time("palette", "palette(256)") { photo.pixels.palette(256).size }
+val palette = photo.pixels.palette(256)
+time("dither", "dither by Floyd-Steinberg") { photo.pixels.dither(palette).width }
+time("ditherNone", "dither, none") { photo.pixels.dither(palette, Dither.none).width }
+val over = photo.scaled(500, 500).pixels
+time("blendNormal", "blend 500 by 500, normal", { photo.copy() }) { given ->
+  (given as Image).editPixels { it.blend(over, 100, 100, 0.7) }
+  null
+}
+time("blendSoftLight", "blend 500 by 500, softLight", { photo.copy() }) { given ->
+  (given as Image).editPixels { it.blend(over, 100, 100, 0.7, BlendMode.softLight) }
+  null
+}
+time("blendHue", "blend 500 by 500, hue", { photo.copy() }) { given ->
+  (given as Image).editPixels { it.blend(over, 100, 100, 0.7, BlendMode.hue) }
+  null
+}
+val region = photo.floodRegion(500, 500, 30)
+time("fillMask", "fill(color, where = a flood's mask)", { photo.copy() }) { given ->
+  (given as Image).editPixels { it.fill(Color.red, region) }
+  null
+}
+
+// --- A canvas ---
+time("fillRectWhole", "fillRect over it all, 100 times", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 100) {
+    c.color = Color(i, 0, 0)
+    c.fillRect(0, 0, W, W)
+  }
+  null
+}
+time("fillRectAlpha", "fillRect over it all, alpha 128, 100 times", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 100) {
+    c.color = Color(i, 0, 0, 128)
+    c.fillRect(0, 0, W, W)
+  }
+  null
+}
+time("fillRectSmall", "10,000 fillRect of 10 by 10", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 10000) {
+    s = lcg(s)
+    c.fillRect(s % 990, (s / 1000) % 990, 10, 10)
+  }
+  null
+}
+time("drawRect", "10,000 drawRect of 50 by 50", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 10000) {
+    s = lcg(s)
+    c.drawRect(s % 950, (s / 1000) % 950, 50, 50)
+  }
+  null
+}
+time("drawLineSlant", "10,000 slanted lines, 1 wide", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 10000) {
+    s = lcg(s)
+    val t = lcg(s)
+    c.drawLine(s % W, (s / 1000) % W, t % W, (t / 1000) % W)
+  }
+  null
+}
+time("drawLineStraight", "10,000 lines across, 1 wide", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 10000) { c.drawLine(0, i % W, W, i % W) }
+  null
+}
+time("drawLineWide", "1,000 slanted lines, 5 wide", fresh) { given ->
+  val c = given as ImageCanvas
+  c.lineWidth = 5
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    val t = lcg(s)
+    c.drawLine(s % W, (s / 1000) % W, t % W, (t / 1000) % W)
+  }
+  null
+}
+time("drawLineRound", "1,000 slanted lines, 5 wide, round ends", fresh) { given ->
+  val c = given as ImageCanvas
+  c.stroke = Stroke(5, LineCap.round, LineJoin.round)
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    val t = lcg(s)
+    c.drawLine(s % W, (s / 1000) % W, t % W, (t / 1000) % W)
+  }
+  null
+}
+time("drawLineDashed", "1,000 slanted lines, 2 wide, dashed", fresh) { given ->
+  val c = given as ImageCanvas
+  c.stroke = Stroke(2, dashes = [6, 4])
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    val t = lcg(s)
+    c.drawLine(s % W, (s / 1000) % W, t % W, (t / 1000) % W)
+  }
+  null
+}
+time("fillOval", "1,000 fillOval of 60 by 40", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillOval(s % 940, (s / 1000) % 960, 60, 40)
+  }
+  null
+}
+time("fillOvalBig", "100 fillOval of 800 by 600", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 100) { c.fillOval(i, i, 800, 600) }
+  null
+}
+time("drawOval", "1,000 drawOval of 60 by 40", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.drawOval(s % 940, (s / 1000) % 960, 60, 40)
+  }
+  null
+}
+time("fillRoundRect", "1,000 fillRoundRect of 80 by 50", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillRoundRect(s % 920, (s / 1000) % 950, 80, 50, 16, 16)
+  }
+  null
+}
+time("fillArc", "1,000 pie fillArc of 60 by 60", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillArc(s % 940, (s / 1000) % 940, 60, 60, 30, 250)
+  }
+  null
+}
+time("drawArc", "1,000 drawArc of 60 by 60", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.drawArc(s % 940, (s / 1000) % 940, 60, 60, 30, 250)
+  }
+  null
+}
+val starX : open List<Number> = []
+val starY : open List<Number> = []
+for (k in 0 ..< 10) {
+  val r = k % 2 == 0 ? 30.0 : 12.0
+  starX.add(30 + r * Math.cos(k * Math.pi / 5))
+  starY.add(30 + r * Math.sin(k * Math.pi / 5))
+}
+time("fillPolygon", "1,000 fillPolygon, a star of 10 points", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.translate(s % 940, (s / 1000) % 940)
+    c.fillPolygon(starX, starY)
+    c.translate(-(s % 940), -((s / 1000) % 940))
+  }
+  null
+}
+time("drawPolyline", "1,000 drawPolyline of 10 points", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 1000) { c.drawPolyline(starX, starY) }
+  null
+}
+fun curvy(x : float, y : float) : Path =>
+  Path().moveTo(x, y).curveTo(x + 40, y - 30, x + 80, y + 30, x + 120, y).quadTo(x + 60, y + 80, x, y).close()
+time("fillPath", "1,000 fill of a path of curves", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fill(curvy((s % 870).toFloat(), ((s / 1000) % 900 + 40).toFloat()))
+  }
+  null
+}
+time("drawPath", "1,000 draw of a path of curves, 3 wide", fresh) { given ->
+  val c = given as ImageCanvas
+  c.lineWidth = 3
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.draw(curvy((s % 870).toFloat(), ((s / 1000) % 900 + 40).toFloat()))
+  }
+  null
+}
+time("pathMade", "1,000 paths of curves made, not drawn") {
+  var s = 1
+  var n = 0
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    n += curvy((s % 870).toFloat(), ((s / 1000) % 900 + 40).toFloat()).flatten(1.0).size
+  }
+  n
+}
+time("fillTurned", "1,000 fillRect turned 0.3", fresh) { given ->
+  val c = given as ImageCanvas
+  c.rotate(0.3, 500, 500)
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillRect(s % 900, (s / 1000) % 900, 60, 40)
+  }
+  null
+}
+time("linearGradient", "10 fillRect over it all, a linear gradient", fresh) { given ->
+  val c = given as ImageCanvas
+  c.paint = LinearGradient(0, 0, W, W, [0, 0.5, 1], [Color.red, Color.green, Color.blue])
+  for (i in 0 ..< 10) { c.fillRect(0, 0, W, W) }
+  null
+}
+time("radialGradient", "10 fillRect over it all, a radial gradient", fresh) { given ->
+  val c = given as ImageCanvas
+  c.paint = RadialGradient(500, 500, 500, [0, 1], [Color.white, Color.black])
+  for (i in 0 ..< 10) { c.fillRect(0, 0, W, W) }
+  null
+}
+time("gradientSmall", "1,000 fillOval of 60 by 40, a linear gradient", fresh) { given ->
+  val c = given as ImageCanvas
+  c.paint = LinearGradient(0, 0, W, W, [0, 1], [Color.red, Color.blue])
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillOval(s % 940, (s / 1000) % 960, 60, 40)
+  }
+  null
+}
+time("clipCircle", "10 fillRect over it all, clipped to a circle", fresh) { given ->
+  val c = (given as ImageCanvas).clipped(Oval(100.0, 100.0, 800.0, 800.0))
+  for (i in 0 ..< 10) { c.fillRect(0, 0, W, W) }
+  null
+}
+time("clipSmall", "1,000 fillOval of 60 by 40, clipped to a circle", fresh) { given ->
+  val c = (given as ImageCanvas).clipped(Oval(100.0, 100.0, 800.0, 800.0))
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillOval(s % 940, (s / 1000) % 960, 60, 40)
+  }
+  null
+}
+time("compositeClear", "1,000 fillOval of 60 by 40, clearing", fresh) { given ->
+  val c = given as ImageCanvas
+  c.composite = Composite.clear
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.fillOval(s % 940, (s / 1000) % 960, 60, 40)
+  }
+  null
+}
+val sprite = photo.scaled(100, 100)
+time("drawPicture", "1,000 pictures of 100 by 100 drawn", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.draw(sprite, s % 900, (s / 1000) % 900)
+  }
+  null
+}
+time("drawPictureAlpha", "1,000 pictures drawn, alpha 0.5", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.draw(sprite, s % 900, (s / 1000) % 900, alpha = 0.5)
+  }
+  null
+}
+time("drawPictureScaled", "1,000 pictures drawn 150 by 150", fresh) { given ->
+  val c = given as ImageCanvas
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.draw(sprite, s % 850, (s / 1000) % 850, 150, 150)
+  }
+  null
+}
+time("drawPictureTurned", "1,000 pictures drawn turned 0.3", fresh) { given ->
+  val c = given as ImageCanvas
+  c.rotate(0.3, 500, 500)
+  var s = 1
+  for (i in 0 ..< 1000) {
+    s = lcg(s)
+    c.draw(sprite, s % 900, (s / 1000) % 900)
+  }
+  null
+}
+time("drawPhoto", "the photo drawn over it all, 10 times", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 10) { c.draw(photo, 0, 0) }
+  null
+}
+time("drawPhotoHalf", "the photo drawn at 500 by 500, 10 times", fresh) { given ->
+  val c = given as ImageCanvas
+  for (i in 0 ..< 10) { c.draw(photo, 0, 0, 500, 500) }
+  null
+}
+
+// --- Text ---
+val line = "The quick brown fox jumps over the lazy dog"
+time("drawString", "1,000 lines of 43 characters, Dialog 14", fresh) { given ->
+  val c = given as ImageCanvas
+  c.font = Font("Dialog", 14)
+  for (i in 0 ..< 1000) { c.drawString(line, 10, 20 + i % 960) }
+  null
+}
+time("drawStringBig", "100 lines in Dialog 48", fresh) { given ->
+  val c = given as ImageCanvas
+  c.font = Font("Dialog", 48)
+  for (i in 0 ..< 100) { c.drawString(line, 10, 60 + i * 9) }
+  null
+}
+time("drawStringTurned", "100 lines turned 0.3", fresh) { given ->
+  val c = given as ImageCanvas
+  c.font = Font("Dialog", 14)
+  c.rotate(0.3, 500, 500)
+  for (i in 0 ..< 100) { c.drawString(line, 10, 20 + i * 9) }
+  null
+}
+time("drawStringGradient", "100 lines, a linear gradient", fresh) { given ->
+  val c = given as ImageCanvas
+  c.font = Font("Dialog", 14)
+  c.paint = LinearGradient(0, 0, W, 0, [0, 1], [Color.red, Color.blue])
+  for (i in 0 ..< 100) { c.drawString(line, 10, 20 + i * 9) }
+  null
+}
+time("measure", "10,000 measure of a line") { given ->
+  val c = photo.canvas()
+  var n = 0
+  for (i in 0 ..< 10000) { n += c.measure(line).width }
+  n
+}
+time("fontMade", "100 Font(\"Dialog\", 13 + i % 20) used") { given ->
+  val c = photo.canvas()
+  var n = 0
+  for (i in 0 ..< 100) { n += c.measure(line, Font("Dialog", 13 + i % 20)).width }
+  n
+}
+
+// --- The formats ---
+for (format in [ImageFormat.png, ImageFormat.jpeg, ImageFormat.gif, ImageFormat.bmp, ImageFormat.webp]) {
+  val name = format.toString()
+  time("${name}Write", "written as $name") { photo.encode(format).size }
+  val data = photo.encode(format)
+  time("${name}Read", "read from $name, ${data.size / 1024} KB") { Image.load(data).width }
+}
+time("webpLossyWrite", "written as lossy webp, quality 0.75") { photo.encode(ImageFormat.webp, 0.75).size }
+val lossy = photo.encode(ImageFormat.webp, 0.75)
+time("webpLossyRead", "read from lossy webp, ${lossy.size / 1024} KB") { Image.load(lossy).width }

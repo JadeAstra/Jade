@@ -64,6 +64,28 @@ int32_t i32(const Ins& i, int k) {
 struct Island {};
 [[noreturn]] void island() { throw Island{}; }
 
+// An instruction that ends the function (a return, or a throw), where a region leaves for the VM
+// for good: what is left of the function is the VM's.
+bool endsFunction(Op op) { return op == Op::Return || op == Op::ReturnInit || op == Op::CheckReturn || op == Op::Throw; }
+// Whether an instruction may go anywhere but on to the next.
+bool mayJump(Op op) {
+    if (targetOperand(op) > 0 || op == Op::Loop) return true;
+    const std::string_view name = opName(op);
+    return name.find("JUMP") != std::string_view::npos;
+}
+// For each of `count` instructions (their ops by `opAt(i)`), whether it goes straight on, with no
+// jump, to one that ends the function: a loop's way out by `return` or `throw`, its work (the
+// message made, the exception) done once, not each time round.
+template <typename OpAt>
+std::vector<bool> endingRuns(int count, OpAt opAt) {
+    std::vector<bool> ending(static_cast<size_t>(count), false);
+    for (int i = count - 1; i >= 0; i--) {
+        const Op op = opAt(i);
+        ending[static_cast<size_t>(i)] = endsFunction(op) || (!mayJump(op) && i + 1 < count && ending[static_cast<size_t>(i) + 1]);
+    }
+    return ending;
+}
+
 // ---- Kinds ----
 
 // What a slot may hold where the region is: bits. Entry: what it held as the region was entered
@@ -368,6 +390,7 @@ struct Result {
     std::vector<LOp> ops;
     std::vector<ExitPoint> exits;
     bool island = false;       // the VM's: the region leaves for the VM here
+    bool ends = false;         // one that ends the function (a return in the loop): the VM's, never back
     bool fallsThrough = true;  // whether its last step goes on to the next instruction
     int fallExit = -1;         // where it does, and that is a way in: the exit written on the way
     std::vector<int> resumes;  // where the VM, having done its part, comes back in
@@ -447,6 +470,14 @@ struct Region {
             at += kThreaded + runSize(f.run, at + kThreaded, name);
         }
         return nullptr;
+    }
+    // Whether a GetProp reads `size` of a list or bytes the frame holds in slot `objSlot`.
+    bool sizeRead(int objSlot, int32_t slow) const {
+        if (frame == nullptr || objSlot < 0 || objSlot >= frameSlots || objSlot >= f.maxStack) return false;
+        const Value& v = frame[objSlot];
+        if (!v.isObjType(ObjType::List) && !v.isObjType(ObjType::Bytes)) return false;
+        const ObjString* const name = slowName(slow);
+        return name != nullptr && name->utf8() == "size";
     }
     int fieldClass(int objSlot, int cache, int32_t slow) const {
         if (frame == nullptr || objSlot < 0 || objSlot >= frameSlots || objSlot >= f.maxStack) return -1;
@@ -598,6 +629,16 @@ struct Region {
                 case Op::Const:
                     if (top == slot) return -1;
                     top++;
+                    j++;
+                    continue;
+                case Op::Dup2:
+                    // The two on top copied (`items[i] += v`): how the copy is read; or, where that
+                    // says nothing, the slot itself later.
+                    if (slot == top - 2 || slot == top - 1) {
+                        const int copy = useClass(j, slot + 2, top + 2, depth + 1, guessing);
+                        if (copy >= 0) return copy;
+                    }
+                    top += 2;
                     j++;
                     continue;
                 case Op::Pop:
@@ -924,6 +965,11 @@ struct Region {
             out.ops.push_back(LOp{});
             out.ops.back().stem = "jump";
             out.ops.back().jumpExit = 0;
+            // A return or a throw: the VM goes on from here and never comes back into the loop.
+            if (endsFunction(x.op)) {
+                out.ends = true;
+                return out;
+            }
             // The VM comes back in after it, or where it jumps.
             out.resumes.push_back(i + 1);
             if (const int t = targetOperand(x.op); t > 0 && static_cast<int>(kOpBytes) + (t - 1) + 4 <= static_cast<int>(x.next - x.at - kThreaded)) {
@@ -950,6 +996,15 @@ struct Region {
                 const int to = x.op == Op::MoveS ? u8(x, 0) : s.top;
                 move(c, from, to);
                 if (x.op == Op::GetLocal) s.top++;
+                c.fall(s);
+                return;
+            }
+            case Op::Dup2: {  // the list and the index of `items[i] += v`, for the read and the write
+                const int t = s.top;
+                move(c, t - 2, t);
+                s.top = t + 1;
+                move(c, t - 1, t + 1);
+                s.top = t + 2;
                 c.fall(s);
                 return;
             }
@@ -1166,6 +1221,18 @@ struct Region {
                 const int a = u8(x, 0);
                 const int obj = c.objectSlot(u8(x, 1));
                 const int64_t cache = cacheAddress(u16(x, 4));
+                // A list's or bytes' size (a while loop's `i < items.size`), where the frame holds
+                // one as the region is made: read from the object, which the step checks.
+                if (sizeRead(obj, i32(x, 6))) {
+                    const Reg dst{a, CI};
+                    LOp& l = c.op("sizew", {dst}, {}, {dst});
+                    c.write(a, K{static_cast<uint16_t>(kInt)});
+                    l.slot = obj;
+                    c.leaves(l);
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                }
                 int cls = useClass(c.i, a, u8(x, 2));
                 if (cls < 0) {
                     // What the place's cache saw, where the VM has read the field before (the
@@ -2663,10 +2730,11 @@ struct Region {
     // would leave too often for what it does between, the VM alone is as quick.
     bool worthIt() const {
         int work = 0, islands = 0;
+        const std::vector<bool> ending = endingRuns(static_cast<int>(ins.size()), [&](int i) { return ins[static_cast<size_t>(i)].op; });
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             if (results[i].island) {
-                islands++;
+                if (!ending[i]) islands++;  // on a way out of the loop by return or throw: not its work
                 continue;
             }
             for (const LOp& l : results[i].ops)
@@ -2832,6 +2900,7 @@ bool mayDo(Op op) {
         case Op::False:
         case Op::SetTop:
         case Op::Pop:
+        case Op::Dup2:
         case Op::RNot:
         case Op::RJumpIfFalse:
         case Op::And:
@@ -2947,7 +3016,9 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
         // or has too many of them for what it would do itself (Region::worthIt), stays the VM's.
         {
             int can = 0, cannot = 0;
-            for (int i = c.first; i <= c.last; i++) (mayDo(all[static_cast<size_t>(i)].op) ? can : cannot)++;
+            const std::vector<bool> ending = endingRuns(c.last - c.first + 1, [&](int i) { return all[static_cast<size_t>(c.first + i)].op; });
+            for (int i = c.first; i <= c.last; i++)
+                if (!ending[static_cast<size_t>(i - c.first)]) (mayDo(all[static_cast<size_t>(i)].op) ? can : cannot)++;
             if (!mayDo(all[static_cast<size_t>(c.first)].op) || can < 3 || cannot * 6 > can) {
                 if (dumping)
                     std::fprintf(stderr, "== %s: no region for the loop at %u: %d of its instructions the VM's, %d a region's\n", f.name.c_str(),

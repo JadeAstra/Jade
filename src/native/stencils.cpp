@@ -734,6 +734,34 @@ F_A(GETPF, x)
         NEXT;                                                                   \
     }
 I_A(GETPI, x)
+// ia = the size of the list or bytes in slot jade_slot, as `size` gives it (a while loop's
+// `i < items.size`); anything else the VM's.
+INLINE bool sizeOf(const Slot& s, const Ctx* ctx, int64_t& out) {
+    if (s.kind != kKindObj) return false;
+    const uint8_t* o = s.p;
+    if (!mayRead(o, ctx)) return false;
+    if (o[kObjType] == kTypeBytes) {
+        out = word<const uint8_t*>(o + kBytesData + 8) - word<const uint8_t*>(o + kBytesData);
+        return true;
+    }
+    if (o[kObjType] != kTypeList) return false;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);
+    if (pack != nullptr) {
+        out = static_cast<int64_t>(word<uint64_t>(pack + kPackCount));
+        return true;
+    }
+    out = (word<const uint8_t*>(o + kListItems + 8) - word<const uint8_t*>(o + kListItems)) / kValueSize;
+    return true;
+}
+#define SIZEW(a, ...)                                                           \
+    STENCIL(sizew_##a) {                                                        \
+        int64_t v;                                                              \
+        if (!sizeOf(base[jade_slot], ctx, v)) EXIT;                             \
+        i##a = v;                                                               \
+        NEXT;                                                                   \
+    }
+I_A(SIZEW, x)
+
 // A field of any kind copied to slot jade_slot2, as the VM copies it (no value held elsewhere).
 STENCIL(getpv) {
     uint64_t seen;
