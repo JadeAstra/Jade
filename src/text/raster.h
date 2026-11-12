@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "face.h"
@@ -47,6 +48,15 @@ GlyphImage rasterize(const Path& path, float fineness = kGlyphFineness, FillRule
 // 8192 pixels is drawn, its rows in the clip; one wider than that, or with more rows in the clip,
 // is not.
 GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, FillRule rule = FillRule::NonZero);
+
+// The same, a row at a time, as each row's coverage is worked out: span(row, left, count,
+// coverage) for each row that has any, `row` and `left` the picture's (y growing downwards, as
+// blendImage places the image), `coverage` the bytes of its `count` pixels from `left`; the
+// pixels of the row outside them covered by nothing. Every byte as rasterize(path, fineness,
+// fromRow, toRow, rule) gives it, but only the cells the outline's edges reach in each row are
+// worked on: a slanted line across a big picture costs its length, not its box.
+using RowSpan = std::function<void(int row, int left, int count, const uint8_t* coverage)>;
+void rasterizeRows(const Path& path, float fineness, int fromRow, int toRow, FillRule rule, const RowSpan& span);
 
 // The same into a box given beforehand, which a colour glyph's layers share: `left` and
 // `top` say where the box sits, as in GlyphImage. Adds nothing if the path is empty.

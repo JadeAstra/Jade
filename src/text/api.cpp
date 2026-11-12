@@ -257,8 +257,19 @@ void fillPath(const Target& t, const text::Path& downward, uint32_t color, text:
     // The rasterizer has y growing upwards: the outline turned over, and the result put back.
     text::Path up = downward;
     for (size_t i = 1; i < up.points.size(); i += 2) up.points[i] = -up.points[i];
-    const text::GlyphImage image = text::rasterize(up, text::kShapeFineness, t.clipTop, t.clipBottom, rule);
-    blendImage(t, image, 0, 0, color);
+    // A row at a time, only the pixels the shape's edges reach worked on (a slanted line across
+    // the picture was its whole box, about 1 ms); the same pixels as rasterize and blendImage.
+    const uint32_t red = (color >> 24) & 0xFF, green = (color >> 16) & 0xFF, blue = (color >> 8) & 0xFF, alpha = color & 0xFF;
+    text::rasterizeRows(up, text::kShapeFineness, t.clipTop, t.clipBottom, rule, [&](int row, int left, int count, const uint8_t* coverage) {
+        if (row < t.clipTop || row >= t.clipBottom) return;
+        const int from = std::max(left, t.clipLeft), to = std::min(left + count, t.clipRight);
+        if (from >= to) return;
+        uint8_t* d = t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(from)) * 4;
+        for (int col = from; col < to; col++, d += 4) {
+            const uint32_t c = coverage[col - left];
+            if (c != 0) blendPixel(d, red, green, blue, (c * alpha + 127) / 255);
+        }
+    });
 }
 
 // A rectangle in pixels, (l, t) to (r, b), clockwise; or anticlockwise to cut it out of another.

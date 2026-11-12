@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
@@ -11,9 +12,94 @@ namespace jade::text {
 
 namespace {
 
-// Accumulates exact area coverage: each edge adds, along its length, how much of every pixel
-// lies to its right. A running sum along each row then gives the coverage of every pixel.
-// (The method of font-rs. Nothing here depends on which way a contour winds.)
+// Exact area coverage: each edge adds, along its length, how much of every pixel lies to its
+// right. A running sum along each row then gives the coverage of every pixel. (The method of
+// font-rs. Nothing here depends on which way a contour winds.)
+//
+// An edge, followed down a row at a time from its first row: where it has got to (x), and how
+// it adds to a row's cells. Both ways of filling below step edges with this alone, so they give
+// the same numbers to the last bit.
+struct Edge {
+    float x = 0, dxdy = 0, y0 = 0, y1 = 0, dir = 1;
+    int first = 0, last = 0;  // the rows it crosses, last not included
+
+    // The edge from (x0, y0) to (x1, y1) in a box `h` rows high, rows from `to` on not wanted;
+    // false where it crosses no row.
+    bool make(float x0, float y0Given, float x1, float y1Given, int h, int to) {
+        y0 = y0Given;
+        y1 = y1Given;
+        if (y0 == y1) return false;
+        dir = 1.0f;
+        if (y0 > y1) {
+            std::swap(x0, x1);
+            std::swap(y0, y1);
+            dir = -1.0f;
+        }
+        dxdy = (x1 - x0) / (y1 - y0);
+        x = x0;
+        if (y0 < 0) x -= y0 * dxdy;
+        first = std::max(0, static_cast<int>(std::floor(y0)));
+        last = std::min({h, to, static_cast<int>(std::ceil(y1))});
+        return first < last;
+    }
+
+    // Row `row`, the next of the edge's: what it adds to the row's cells, by add(cell, amount),
+    // where `keep` (above the rows kept, only where the edge gets to); x moved on either way.
+    template <class Add>
+    void step(int row, bool keep, Add&& add) {
+        const float dy = std::min(static_cast<float>(row + 1), y1) - std::max(static_cast<float>(row), y0);
+        const float xNext = x + dxdy * dy;
+        if (!keep) {
+            x = xNext;
+            return;
+        }
+        const float d = dy * dir;
+        const float left = std::min(x, xNext), right = std::max(x, xNext);
+        const float leftFloor = std::floor(left);
+        const int leftCell = static_cast<int>(leftFloor);
+        const float rightCeil = std::ceil(right);
+        const int rightCell = static_cast<int>(rightCeil);
+
+        if (rightCell <= leftCell + 1) {
+            const float mid = 0.5f * (x + xNext) - leftFloor;
+            add(leftCell, d - d * mid);
+            add(leftCell + 1, d * mid);
+        } else {
+            const float s = 1.0f / (right - left);
+            const float leftPart = left - leftFloor;
+            const float a0 = 0.5f * s * (1.0f - leftPart) * (1.0f - leftPart);
+            const float rightPart = right - rightCeil + 1.0f;
+            const float am = 0.5f * s * rightPart * rightPart;
+            add(leftCell, d * a0);
+            if (rightCell == leftCell + 2) {
+                add(leftCell + 1, d * (1.0f - a0 - am));
+            } else {
+                const float a1 = s * (1.5f - leftPart);
+                add(leftCell + 1, d * (a1 - a0));
+                for (int cell = leftCell + 2; cell < rightCell - 1; cell++) add(cell, d * s);
+                const float a2 = a1 + static_cast<float>(rightCell - leftCell - 3) * s;
+                add(rightCell - 1, d * (1.0f - a2 - am));
+            }
+            add(rightCell, d * am);
+        }
+        x = xNext;
+    }
+};
+
+// A pixel's coverage from the running sum, how many times the outline goes round it, a part
+// of a time at an edge: non-zero takes any of it, up to once; even-odd takes how far it is from
+// an even number.
+inline uint8_t coverageOf(float sum, FillRule rule) {
+    if (rule == FillRule::EvenOdd) {
+        const float turns = std::fmod(std::fabs(sum), 2.0f);
+        const float coverage = std::min(turns > 1.0f ? 2.0f - turns : turns, 1.0f);
+        return static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+    }
+    const float coverage = std::min(std::fabs(sum), 1.0f);
+    return static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+}
+
+// The coverage of a whole box, every edge added in turn.
 //
 // Only the rows from `from` up to `to` are kept: a shape drawn inside a clip is worked out for
 // the clip's rows alone. An edge is still followed from its first row, so every row kept comes
@@ -25,84 +111,33 @@ public:
         : w_(width), h_(height), from_(from), to_(to), a_(static_cast<size_t>(width + 1) * static_cast<size_t>(to - from), 0.0f) {}
 
     void line(float x0, float y0, float x1, float y1) {
-        if (y0 == y1) return;
-        float dir = 1.0f;
-        if (y0 > y1) {
-            std::swap(x0, x1);
-            std::swap(y0, y1);
-            dir = -1.0f;
-        }
-        const float dxdy = (x1 - x0) / (y1 - y0);
-        float x = x0;
-        if (y0 < 0) x -= y0 * dxdy;
+        Edge e;
+        if (e.make(x0, y0, x1, y1, h_, to_)) edge(e);
+    }
 
-        const int firstRow = std::max(0, static_cast<int>(std::floor(y0)));
-        const int lastRow = std::min({h_, to_, static_cast<int>(std::ceil(y1))});
-        for (int row = firstRow; row < lastRow; row++) {
-            const float dy = std::min(static_cast<float>(row + 1), y1) - std::max(static_cast<float>(row), y0);
-            const float xNext = x + dxdy * dy;
-            if (row < from_) {
-                x = xNext;  // above the rows kept: only where the edge has got to
-                continue;
-            }
-            const size_t start = static_cast<size_t>(row - from_) * static_cast<size_t>(w_ + 1);
-            const float d = dy * dir;
-            const float left = std::min(x, xNext), right = std::max(x, xNext);
-            const float leftFloor = std::floor(left);
-            const int leftCell = static_cast<int>(leftFloor);
-            const float rightCeil = std::ceil(right);
-            const int rightCell = static_cast<int>(rightCeil);
-
-            if (rightCell <= leftCell + 1) {
-                const float mid = 0.5f * (x + xNext) - leftFloor;
-                add(start, leftCell, d - d * mid);
-                add(start, leftCell + 1, d * mid);
-            } else {
-                const float s = 1.0f / (right - left);
-                const float leftPart = left - leftFloor;
-                const float a0 = 0.5f * s * (1.0f - leftPart) * (1.0f - leftPart);
-                const float rightPart = right - rightCeil + 1.0f;
-                const float am = 0.5f * s * rightPart * rightPart;
-                add(start, leftCell, d * a0);
-                if (rightCell == leftCell + 2) {
-                    add(start, leftCell + 1, d * (1.0f - a0 - am));
-                } else {
-                    const float a1 = s * (1.5f - leftPart);
-                    add(start, leftCell + 1, d * (a1 - a0));
-                    for (int cell = leftCell + 2; cell < rightCell - 1; cell++) add(start, cell, d * s);
-                    const float a2 = a1 + static_cast<float>(rightCell - leftCell - 3) * s;
-                    add(start, rightCell - 1, d * (1.0f - a2 - am));
-                }
-                add(start, rightCell, d * am);
-            }
-            x = xNext;
+    // An edge made for this box (by Edge::make with its height and last row kept).
+    void edge(Edge e) {
+        for (int row = e.first; row < e.last; row++) {
+            const size_t start = row >= from_ ? static_cast<size_t>(row - from_) * static_cast<size_t>(w_ + 1) : 0;
+            e.step(row, row >= from_, [&](int cell, float amount) { add(start, cell, amount); });
         }
     }
 
-    // The kept rows' coverage, a byte a pixel, row after row. The running sum is how many times
-    // the outline goes round the pixel, a part of a time at an edge: non-zero takes any of it,
-    // up to once; even-odd takes how far it is from an even number.
+    // The kept rows' coverage, a byte a pixel, row after row.
     void finish(std::vector<uint8_t>& out, FillRule rule) const {
         const size_t w = static_cast<size_t>(w_);
         out.resize(w * static_cast<size_t>(to_ - from_));
-        for (size_t row = 0; row < static_cast<size_t>(to_ - from_); row++) {
-            const float* in = a_.data() + row * (w + 1);
-            uint8_t* to = out.data() + row * w;
-            float sum = 0.0f;
-            if (rule == FillRule::EvenOdd) {
-                for (size_t i = 0; i < w; i++) {
-                    sum += in[i];
-                    const float turns = std::fmod(std::fabs(sum), 2.0f);
-                    const float coverage = std::min(turns > 1.0f ? 2.0f - turns : turns, 1.0f);
-                    to[i] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
-                }
-                continue;
-            }
-            for (size_t i = 0; i < w; i++) {
-                sum += in[i];
-                const float coverage = std::min(std::fabs(sum), 1.0f);
-                to[i] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
-            }
+        for (size_t row = 0; row < static_cast<size_t>(to_ - from_); row++) finishRow(row, out.data() + row * w, rule);
+    }
+
+    // One kept row's coverage (counted from the first kept), its pixels' bytes into .
+    void finishRow(size_t row, uint8_t* to, FillRule rule) const {
+        const size_t w = static_cast<size_t>(w_);
+        const float* in = a_.data() + row * (w + 1);
+        float sum = 0.0f;
+        for (size_t i = 0; i < w; i++) {
+            sum += in[i];
+            to[i] = coverageOf(sum, rule);
         }
     }
 
@@ -236,6 +271,120 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, F
     image.top -= from;
     image.height = to - from;
     return image;
+}
+
+void rasterizeRows(const Path& path, float fineness, int fromRow, int toRow, FillRule rule, const RowSpan& span) {
+    // The box, the rows kept and the limits exactly as rasterize's above.
+    float minX, minY, maxX, maxY;
+    if (!path.bounds(minX, minY, maxX, maxY)) return;
+    const float far = 1 << 24;
+    if (!(minX > -far && maxX < far && minY > -far && maxY < far)) return;
+    const int left = static_cast<int>(std::floor(minX));
+    const int top = static_cast<int>(std::ceil(maxY));
+    const int width = static_cast<int>(std::ceil(maxX)) - left + 1;
+    const int height = top - static_cast<int>(std::floor(minY)) + 1;
+    const int from = std::max(0, fromRow + top), to = std::min(height, toRow + top);
+    if (width <= 0 || width > 8192 || from >= to || to - from > 8192) return;
+
+    const float originX = static_cast<float>(left), originY = static_cast<float>(top);
+    auto eachEdge = [&](auto&& use) {
+        flatten(path, fineness, [&](float x0, float y0, float x1, float y1) {
+            Edge e;
+            if (e.make(x0 - originX, originY - y0, x1 - originX, originY - y1, height, to)) use(e);
+        });
+    };
+
+    // Which way costs less: the whole box, as rasterize works (a cell's three passes), or the
+    // edges a row at a time (a step of each edge in each row it crosses, the edges ordered by
+    // row). A shape whose edges are many for its box, text and fine curves, goes the first way;
+    // one whose box is mostly empty, a slanted line or an outline across a picture, the second.
+    // Counted in a pass of their own, which keeps nothing; not where the box is small, or small
+    // for the outline's points alone (each point an edge at least, once cut).
+    const size_t area = static_cast<size_t>(width) * static_cast<size_t>(to - from);
+    size_t count = 0, crossings = 0;
+    const bool boxWay = area <= 4096 || area <= 16 * path.points.size();
+    if (!boxWay) {
+        eachEdge([&](const Edge& e) {
+            count++;
+            crossings += static_cast<size_t>(e.last - e.first);
+        });
+        if (count == 0) return;
+    }
+    if (boxWay || area <= 4 * crossings + 32 * count) {
+        Accumulator acc(width, height, from, to);
+        eachEdge([&](const Edge& e) { acc.edge(e); });
+        std::vector<uint8_t> row(static_cast<size_t>(width));
+        for (int r = from; r < to; r++) {
+            acc.finishRow(static_cast<size_t>(r - from), row.data(), rule);
+            span(r - top, left, width, row.data());
+        }
+        return;
+    }
+
+    // The edges, in the outline's order, then by the row each starts at (in the outline's order
+    // among those starting at one row).
+    std::vector<Edge> edges;
+    edges.reserve(count);
+    eachEdge([&](const Edge& e) { edges.push_back(e); });
+    std::vector<uint32_t> starts(static_cast<size_t>(to) + 1, 0);
+    for (const Edge& e : edges) starts[static_cast<size_t>(e.first) + 1]++;
+    for (size_t r = 1; r < starts.size(); r++) starts[r] += starts[r - 1];
+    std::vector<uint32_t> order(edges.size());
+    {
+        std::vector<uint32_t> at(starts.begin(), starts.end() - 1);
+        for (size_t i = 0; i < edges.size(); i++) order[at[static_cast<size_t>(edges[i].first)]++] = static_cast<uint32_t>(i);
+    }
+
+    // A row at a time: the edges crossing it added to its cells in the outline's order, as the
+    // Accumulator adds them (so each cell's sum is the same to the bit); then only the cells they
+    // reached summed, handed on, and cleared. Left of them the sum is 0; right of them it stays
+    // as it is, which is nothing for a closed outline but is handed on where it is not.
+    std::vector<float> cells(static_cast<size_t>(width) + 1, 0.0f);
+    std::vector<uint8_t> out(static_cast<size_t>(width));
+    std::vector<uint32_t> active, merged, starting;
+    size_t next = 0;
+    for (int row = edges[order[0]].first; row < to; row++) {
+        starting.clear();
+        while (next < order.size() && edges[order[next]].first == row) starting.push_back(order[next++]);
+        if (!starting.empty()) {
+            merged.clear();
+            std::merge(active.begin(), active.end(), starting.begin(), starting.end(), std::back_inserter(merged));
+            active.swap(merged);
+        }
+        if (active.empty()) {
+            if (next == order.size()) break;
+            row = edges[order[next]].first - 1;  // on to the next edge's first row
+            continue;
+        }
+        const bool keep = row >= from;
+        int lo = width + 1, hi = -1;
+        for (uint32_t k : active)
+            edges[k].step(row, keep, [&](int cell, float amount) {
+                if (cell < 0) cell = 0;
+                if (cell > width) cell = width;
+                cells[static_cast<size_t>(cell)] += amount;
+                lo = std::min(lo, cell);
+                hi = std::max(hi, cell);
+            });
+        active.erase(std::remove_if(active.begin(), active.end(), [&](uint32_t k) { return edges[k].last <= row + 1; }), active.end());
+        if (!keep || hi < 0) continue;
+        float sum = 0.0f;
+        const int end = std::min(hi, width - 1);
+        for (int i = lo; i <= end; i++) {
+            sum += cells[static_cast<size_t>(i)];
+            out[static_cast<size_t>(i)] = coverageOf(sum, rule);
+        }
+        int count = end - lo + 1;
+        if (hi < width - 1) {
+            const uint8_t rest = coverageOf(sum, rule);
+            if (rest != 0) {
+                std::fill(out.begin() + hi + 1, out.end(), rest);
+                count = width - lo;
+            }
+        }
+        if (count > 0) span(row - top, left + lo, count, out.data() + lo);
+        std::fill(cells.begin() + lo, cells.begin() + hi + 1, 0.0f);
+    }
 }
 
 }  // namespace jade::text
