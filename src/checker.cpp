@@ -3514,6 +3514,7 @@ struct Checker::Impl {
     void stmtItself(const Stmt& s) {
         switch (s.kind) {
             case StmtKind::Expr:
+                wholeStatements.insert(static_cast<const ExprStmt&>(s).expr.get());
                 expr(*static_cast<const ExprStmt&>(s).expr);
                 unusedCopy(*static_cast<const ExprStmt&>(s).expr);
                 break;
@@ -3778,6 +3779,7 @@ struct Checker::Impl {
     }
 
     void returnStmt(const ReturnStmt& r) {
+        if (r.implicit && r.value) wholeStatements.insert(r.value.get());  // a lambda's last line
         if (ctx == nullptr) return;
         // `return item` of a loop's variable, leaving the function: the compiler copies what an
         // inline function gives back (G15).
@@ -5214,7 +5216,10 @@ struct Checker::Impl {
     }
 
     Type statementValueOf(const Stmt& body) {
-        if (body.kind == StmtKind::Expr) return expr(*static_cast<const ExprStmt&>(body).expr);
+        if (body.kind == StmtKind::Expr) {
+            wholeStatements.insert(static_cast<const ExprStmt&>(body).expr.get());
+            return expr(*static_cast<const ExprStmt&>(body).expr);
+        }
         if (body.kind == StmtKind::Block) {
             const auto& b = static_cast<const BlockStmt&>(body);
             push();
@@ -6645,7 +6650,20 @@ struct Checker::Impl {
     // The targets of the `.=` being checked, innermost last: what CurrentExpr stands for.
     std::vector<Type> currentTargets;
 
+    // The expressions that are all of a statement (a lambda's last line among them): an
+    // assignment is a statement, and gives no value (2026-11-12, G73), so one anywhere else is an
+    // error. (As the value of a block, a when's branch or a lambda's last line, it gives unit.)
+    std::unordered_set<const Expr*> wholeStatements;
+
     Type assign(const AssignExpr& a) {
+        // Used as a value: said once, and of no type, so that what it is given to says nothing more.
+        if (wholeStatements.count(&a)) return assignment(a);
+        report(a, "an assignment gives no value; write it as a statement of its own");
+        assignment(a);
+        return unknownType();
+    }
+
+    Type assignment(const AssignExpr& a) {
         atomicAssign(a);
         noteStaticAssigned(*a.target);
         checkValueFieldWrite(*a.target);

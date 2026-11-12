@@ -686,7 +686,8 @@ public:
                 continue;
             }
             if (shell && i + 1 == statements.size() && stmt.kind == StmtKind::Expr &&
-                static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::IncDec) {
+                static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::IncDec &&
+                static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::Assign) {
                 compileExpr(*static_cast<const ExprStmt&>(stmt).expr);
                 emit(Op::Return);
             } else {
@@ -1274,7 +1275,13 @@ private:
         if (last != nullptr && last->kind == StmtKind::Return && static_cast<const ReturnStmt&>(*last).implicit &&
             static_cast<const ReturnStmt&>(*last).value) {
             line_ = last->line;
-            compileExpr(*static_cast<const ReturnStmt&>(*last).value);
+            const Expr& value = *static_cast<const ReturnStmt&>(*last).value;
+            if (value.kind == ExprKind::Assign) {
+                compileAssignStatement(value);  // an assignment gives no value: unit
+                emit(Op::Null);
+            } else {
+                compileExpr(value);
+            }
         } else {
             if (last != nullptr) compileStmt(*last);
             emit(Op::Null);
@@ -3455,8 +3462,8 @@ private:
                 const Expr& expr = *static_cast<const ExprStmt&>(stmt).expr;
                 if (expr.kind == ExprKind::IncDec) {
                     compileIncDec(static_cast<const IncDecExpr&>(expr));  // a statement; leaves no value
-                } else if (compileIndexSetForm(expr)) {
-                    // `grid[x, y] = v` as a statement, by the form of op []= the checker chose
+                } else if (expr.kind == ExprKind::Assign) {
+                    compileAssignStatement(expr);
                 } else {
                     compileExpr(expr);
                     emit(Op::Pop);
@@ -3632,6 +3639,12 @@ private:
                 } else if (s.value && !inExpression && tailReturnHere() && hasSelfCall(*s.value)) {
                     compileTailReturn(*s.value, s);
                     break;
+                } else if (s.value && s.implicit && s.value->kind == ExprKind::Assign) {
+                    // A lambda ending in an assignment, which gives no value: unit.
+                    compileAssignStatement(*s.value);
+                    line_ = s.line;
+                    emitReturnCheck(kStaticNull, s);
+                    emit(Op::Null);
                 } else if (s.value) {
                     // A function given where its result goes passes that on to a call it returns
                     // the result of (M6.6 part 4).
@@ -6962,7 +6975,9 @@ private:
             for (size_t i = 0; i + 1 < statements.size(); i++) compileStmt(*statements[i]);
             compileStatementValue(*statements.back(), tail);
             endScopeKeepingValue();
-        } else if (stmt.kind == StmtKind::Expr && static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::IncDec) {
+        } else if (stmt.kind == StmtKind::Expr && static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::IncDec &&
+                   static_cast<const ExprStmt&>(stmt).expr->kind != ExprKind::Assign) {
+            // (An assignment gives no value: done as a statement, then unit, below.)
             line_ = stmt.line;
             const Expr& value = *static_cast<const ExprStmt&>(stmt).expr;
             if (tail != nullptr && hasSelfCall(value)) {
@@ -7474,6 +7489,13 @@ private:
         if (!several) return op;
         const FunctionDecl* root = session_.checker->formRoot(*chosen);
         return root != nullptr ? op + signatureText(*root) : "";
+    }
+
+    // An assignment, which is a statement and gives no value (G73): nothing left on the stack.
+    void compileAssignStatement(const Expr& expr) {
+        if (compileIndexSetForm(expr)) return;  // `grid[x, y] = v` by the form of op []= the checker chose
+        compileExpr(expr);
+        emit(Op::Pop);
     }
 
     // `grid[x, y] = v` as a statement on a class whose op []= has several forms: a call of the one

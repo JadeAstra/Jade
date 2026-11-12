@@ -1,0 +1,35 @@
+// An assignment is a statement and gives no value (2026-11-12, G73). Where a statement's value
+// is taken (a lambda's last line, a when's branch), one gives unit, whatever it assigns to: a
+// variable, a list's item, or a class's op []=, which once gave what the operator returned while
+// a list gave the value assigned.
+
+class Board {
+  private val cells : open List<int> = List(9) { 0 }
+  op [](r : int, c : int) : int => cells[r * 3 + c]
+  op []=(r : int, c : int, v : int) { cells[r * 3 + c] = v }
+}
+
+val board = Board()
+val list : open List<int> = [0, 0]
+var n = 0
+
+val toVariable : () -> any = { n = 5 }
+val toBoard : () -> any = { board[1, 1] = 6 }
+val toList : () -> any = { list[0] = 7 }
+val adding : () -> any = { n += 1 }
+print(toVariable(), toBoard(), toList(), adding())   // expect: null null null null
+print(n, board[1, 1], list)   // expect: 6 6 [7, 0]
+
+// A when's branch, taken as the when's value.
+val picked : any = when (n) {
+  6 -> list[1] = 8
+  else -> 0
+}
+print(picked, list)   // expect: null [7, 8]
+
+// Lambdas copied in place (forEach), ending in an assignment.
+var total = 0
+list.forEach { total += it }
+board[0, 0] = 1
+for (r in 0 ..< 3) { board[r, 0] = board[r, 0] + 1 }
+print(total, board[0, 0], board[1, 0])   // expect: 15 2 1

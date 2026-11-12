@@ -73,7 +73,7 @@ th { color: var(--muted); font-weight: 600; }
 <h3 id="kw-declarations">Declaring things</h3>
 <dl class="kw">
 <dt><code>val</code>, <code>var</code></dt>
-<dd>A variable: <code>val</code> is given its value once, <code>var</code> may be given another. The type comes from the value unless it is written after a colon; a variable of type <code>any</code> holds anything, and needs a cast before most uses.
+<dd>A variable: <code>val</code> is given its value once, <code>var</code> may be given another. The type comes from the value unless it is written after a colon; a variable of type <code>any</code> holds anything, and needs a cast before most uses. An assignment (<code>=</code>, <code>+=</code> and the rest, to a variable, a field or an index) is a statement and gives no value: <code>b = a = 3</code> and <code>val x = (a = 3)</code> are errors. Where a statement's value is taken, as a lambda's last line or a <code>when</code>'s branch, one gives unit.
 <pre>val fixed = 3
 var count : int = 0
 count += fixed</pre></dd>

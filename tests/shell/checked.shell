@@ -29,3 +29,11 @@ const rows = 40
 fun cells() : int => rows * 2
 cells()
 // expect: 80
+var held = 1
+held = 5
+held
+// expect: 5
+val given = (held = 2)
+// expect error: <shell>:1:19: error: an assignment gives no value; write it as a statement of its own
+held
+// expect: 5

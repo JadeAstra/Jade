@@ -64,7 +64,10 @@ missing?.visits++
 a?.visits = 2
 a?.visits += 3
 a?.visits++
-print(calls, a.visits, (a?.visits = 10), (missing?.visits = 10))   // expect: 0 6 10 null
+print(calls, a.visits)                           // expect: 0 6
+a?.visits = 10
+missing?.visits = 10
+print(a.visits, missing?.visits)                 // expect: 10 null
 
 // return and throw as the other side of ?:
 fun nameOf(node : Node?) {

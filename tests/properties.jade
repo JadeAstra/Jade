@@ -14,7 +14,8 @@ t.fahrenheit = 32
 print(t.celsius)                                 // expect: 0
 t.fahrenheit += 18
 print(t.celsius, t.fahrenheit)                   // expect: 10 50
-print((t.fahrenheit = 212), t.celsius)           // expect: 212 100
+t.fahrenheit = 212
+print(t.fahrenheit, t.celsius)                   // expect: 212 100
 
 // A value whose type the checker does not see, for testing the checks made when running.
 val unknown = { value -> value }

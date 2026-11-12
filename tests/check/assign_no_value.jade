@@ -1,0 +1,43 @@
+// An assignment is a statement and gives no value (2026-11-12, G73): one used as a value is an
+// error, said once, on a variable, a field, a list's item, a class's op []= and += alike. As a
+// statement of its own, a lambda's last line or a when's branch, it is what it always was.
+
+class Board {
+  private val cells : open List<int> = List(9) { 0 }
+  op [](r : int, c : int) : int => cells[r * 3 + c]
+  op []=(r : int, c : int, v : int) { cells[r * 3 + c] = v }
+}
+class Holder {
+  var size = 0
+}
+
+val board = Board()
+val holder = Holder()
+val list : open List<int> = [0, 0]
+var a = 0
+var b = 0
+
+val x = (a = 3)               // check: an assignment gives no value; write it as a statement of its own
+b = a = 4                     // check: an assignment gives no value; write it as a statement of its own
+val y = (board[1, 2] = 5)     // check: an assignment gives no value; write it as a statement of its own
+val z = (list[0] = 6)         // check: an assignment gives no value; write it as a statement of its own
+val w = (holder.size = 7)     // check: an assignment gives no value; write it as a statement of its own
+val v = (a += 1)              // check: an assignment gives no value; write it as a statement of its own
+if ((a = 2) > 1) { b = 1 }    // check: an assignment gives no value; write it as a statement of its own
+print((a = 9))                // check: an assignment gives no value; write it as a statement of its own
+val s = "${a = 1}"            // check: an assignment gives no value; write it as a statement of its own
+
+// Statements: no report.
+a = 1
+board[0, 0] = 2
+list[1] = 3
+holder.size = 4
+a += 5
+if (a > 0) { a = 0 } else { b = 0 }
+val set : () -> unit = { board[2, 2] = 1 }
+val given : () -> any = { list[0] = 1 }
+list.forEach { b += it }
+when (a) {
+  0 -> b = 1
+  else -> board[1, 1] = 2
+}

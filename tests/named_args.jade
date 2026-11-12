@@ -84,6 +84,7 @@ print(named, named.join(postfix = "!", separator = "-"))   // expect: [0, 1, 2] 
 print(attempt(fun() => unknown(Empty)(x = 1)))   // expect: Empty() takes no arguments
 print(attempt(fun() => unknown(5)(x = 1)))       // expect: cannot call a value of type int
 
-// an assignment as an argument now needs parentheses
+// an assignment gives no value (G73), so is never an argument; print(assigned = 7) is a named one
 var assigned = 0
-print((assigned = 7), assigned)                  // expect: 7 7
+assigned = 7
+print(assigned)                                  // expect: 7
