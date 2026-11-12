@@ -3109,6 +3109,8 @@ R_INTS(RBitAndSS, R_S, R_S, true, x & y)
 R_INTS(RBitAndSK, R_S, R_K, true, x & y)
 R_INTS(RBitOrSS, R_S, R_S, true, x | y)
 R_INTS(RBitOrSK, R_S, R_K, true, x | y)
+R_INTS(RShlSS, R_S, R_S, c.as.i >= 0 && c.as.i < 64, static_cast<int64_t>(static_cast<uint64_t>(x) << y))
+R_INTS(RShrSS, R_S, R_S, c.as.i >= 0 && c.as.i < 64, x >> y)
 R_DIVIDE(RDivKS, R_K, R_S, x / y, x / y, plainDiv)
 HAS_COLD(RSetPropSS)
 CASES(RSetPropSS, RSetPropSK) {

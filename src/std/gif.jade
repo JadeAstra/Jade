@@ -426,80 +426,85 @@ class __GifOut {
 // frame put in it, by (code, next index) as a list rather than a map, for speed.
 class __LzwTable {
   // Zeros made at once by a grid's cells, rather than a million added one at a time.
-  private val child : open List<int> = Grid<int>(4096 * 256, 1).cells
-  private val used : open List<int> = []
+  private val children : open List<int> = Grid<int>(4096 * 256, 1).cells
+  // The keys put in the table since it was emptied: fewer than 4096.
+  private val keys : open List<int> = Grid<int>(4096, 1).cells
 
   // The indices as codes, lowest bit first, from `minSize` + 1 bits up to 12, a clear code when the
-  // table is full.
+  // table is full. One loop, the codes put out in it, for native code to make whole: the lists
+  // read into variables, no calls, no list grown.
   fun encode(indices : Bytes, minSize : int) : Bytes {
+    val child = children
+    val used = keys
     val clear = 1 << minSize
     val end = clear + 1
-    val out = __GifBits()
+    val n = indices.size
+    // Room for every code at 12 bits, and a clear code each time the table fills.
+    val out = Bytes((n + n / 2048 + 4) * 3 / 2 + 4)
+    var size = 0
+    // The bits not yet put out, lowest first: the clear code to begin.
+    var acc = clear
+    var bits = minSize + 1
     var codeSize = minSize + 1
+    var limit = 1 << codeSize
     var next = end + 1
-    out.put(clear, codeSize)
-    if (indices.size == 0) {
-      out.put(end, codeSize)
-      return out.bytes()
-    }
-    var prefix = indices[0].toInt()
-    for (i in 1 ..< indices.size) {
-      val k = indices[i].toInt()
-      val key = (prefix << 8) | k
-      val found = child[key]
-      if (found != 0) {
-        prefix = found
-        continue
+    var count = 0
+    if (n > 0) {
+      var prefix = indices[0].toInt()
+      for (i in 1 ..< n) {
+        val k = indices[i].toInt()
+        val key = (prefix << 8) | k
+        val found = child[key]
+        if (found != 0) {
+          prefix = found
+          continue
+        }
+        acc = acc | (prefix << bits)
+        bits += codeSize
+        while (bits >= 8) {
+          out[size] = (acc & 255).toByte()
+          size += 1
+          acc = acc >> 8
+          bits -= 8
+        }
+        child[key] = next
+        used[count] = key
+        count += 1
+        next += 1
+        if (next == limit + 1 and codeSize < 12) {
+          codeSize += 1
+          limit = limit * 2
+        }
+        if (next == 4096) {
+          acc = acc | (clear << bits)
+          bits += codeSize
+          while (bits >= 8) {
+            out[size] = (acc & 255).toByte()
+            size += 1
+            acc = acc >> 8
+            bits -= 8
+          }
+          for (j in 0 ..< count) { child[used[j]] = 0 }
+          count = 0
+          codeSize = minSize + 1
+          limit = 1 << codeSize
+          next = end + 1
+        }
+        prefix = k
       }
-      out.put(prefix, codeSize)
-      child[key] = next
-      used.add(key)
-      next += 1
-      if (next == (1 << codeSize) + 1 and codeSize < 12) { codeSize += 1 }
-      if (next == 4096) {
-        out.put(clear, codeSize)
-        reset()
-        codeSize = minSize + 1
-        next = end + 1
-      }
-      prefix = k
+      acc = acc | (prefix << bits)
+      bits += codeSize
     }
-    out.put(prefix, codeSize)
-    out.put(end, codeSize)
-    reset()
-    return out.bytes()
-  }
-
-  private fun reset() {
-    for (key in used) { child[key] = 0 }
-    used.clear()
-  }
-}
-
-// Codes put together lowest bit first.
-class __GifBits {
-  private var data = Bytes(4096)
-  private var size = 0
-  private var accumulated = 0
-  private var bits = 0
-
-  fun put(code : int, length : int) {
-    accumulated = accumulated | (code << bits)
-    bits += length
-    while (bits >= 8) {
-      if (size == data.size) { data = Bytes(data.size * 2).copyFrom(data, 0, 1, 0, 1, size) }
-      data[size] = accumulated.toByteWrapped()
+    acc = acc | (end << bits)
+    bits += codeSize
+    while (bits > 0) {
+      out[size] = (acc & 255).toByte()
       size += 1
-      accumulated = accumulated >> 8
+      acc = acc >> 8
       bits -= 8
     }
-  }
-
-  fun bytes() : Bytes {
-    if (bits > 0) {
-      put(0, 8 - bits)
-    }
-    return data[0 ..< size]
+    for (j in 0 ..< count) { child[used[j]] = 0 }
+    return out[0 ..< size]
   }
 }
 

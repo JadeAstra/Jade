@@ -464,6 +464,9 @@ enum class Op : uint16_t {
     RBitAndSK,
     RBitOrSS,
     RBitOrSK,
+    // A shift by a count in a slot, from 0 to 63 (any other the stack instruction's way).
+    RShlSS,
+    RShrSS,
     // On operands of the kinds the checker knows (M6.7 step 5): as RAddSS, RLtSS and RJumpLtSS,
     // testing nothing; an int's overflow alone goes the slow way.
     RAddISS, RAddISK, RAddIKS, RSubISS, RSubISK, RSubIKS,

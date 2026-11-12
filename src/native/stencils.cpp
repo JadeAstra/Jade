@@ -284,14 +284,20 @@ I_A(IBINK_A, muli, __builtin_mul_overflow)
 I_A(IINC, x)
 
 // Two operands, the first changed: ia = ia / ib and ia % ib (the divisor checked before, by
-// chkdivi), ia = ia & ib and ia | ib, ia = -ib (leaving where it does not fit), the less or the
-// more of ia and ib (as the floats'). With a constant: ia = ib / K, ib % K (K neither 0 nor -1),
+// chkdivi), ia = ia & ib and ia | ib, ia << ib and ia >> ib (the count checked before, by chkshift),
+// ia = -ib (leaving where it does not fit), the less or the more of ia and ib (as the floats'). With
+// a constant: ia = ib / K, ib % K (K neither 0 nor -1),
 // ib & K, ib | K, ib << K, ib >> K (K from 0 to 63).
 #define ITWO_B(b, a)                                                            \
     STENCIL(divi_##a##_##b) { i##a = i##a / i##b; NEXT; }                       \
     STENCIL(modi_##a##_##b) { i##a = i##a % i##b; NEXT; }                       \
     STENCIL(andi_##a##_##b) { i##a = i##a & i##b; NEXT; }                       \
     STENCIL(ori_##a##_##b) { i##a = i##a | i##b; NEXT; }                        \
+    STENCIL(shli_##a##_##b) {                                                   \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##a) << (i##b & 63)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(shri_##a##_##b) { i##a = i##a >> (i##b & 63); NEXT; }               \
     STENCIL(negi_##a##_##b) {                                                   \
         if (i##b == INT64_MIN) EXIT;                                            \
         i##a = -i##b;                                                           \
@@ -312,10 +318,15 @@ I_A(IINC, x)
 I_A(ITWO_A, x)
 
 // Checks of one int, leaving for the VM where they fail: a divisor that is 0 or -1 (which the
-// VM's division has rules for), an int's toByte() outside 0 to 255, |ia| that does not fit.
+// VM's division has rules for), a shift's count outside 0 to 63, an int's toByte() outside 0 to
+// 255, |ia| that does not fit.
 #define ICHECK(a, ...)                                                          \
     STENCIL(chkdivi_##a) {                                                      \
         if (static_cast<uint64_t>(i##a) + 1 <= 1) EXIT;                         \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(chkshift_##a) {                                                     \
+        if (static_cast<uint64_t>(i##a) > 63) EXIT;                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(chkbyte_##a) {                                                      \

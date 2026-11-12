@@ -6511,6 +6511,8 @@ void VM::run(int baseFrame) {
             JADE_DISPATCH_TO(RBitAndSK)
             JADE_DISPATCH_TO(RBitOrSS)
             JADE_DISPATCH_TO(RBitOrSK)
+            JADE_DISPATCH_TO(RShlSS)
+            JADE_DISPATCH_TO(RShrSS)
             // Since M6.7 step 5: typed arithmetic, places, type slots, RGetPath (G14).
             JADE_DISPATCH_TO(AddI)
             JADE_DISPATCH_TO(SubI)

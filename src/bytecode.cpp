@@ -1504,7 +1504,7 @@ const char* opName(Op op) {
                                       "R_JUMP_GE_SK", "R_JUMP_EQ_SS", "R_JUMP_EQ_SK", "R_GET_PROP",   "R_MOD_SS",     "R_MOD_SK",
                                       "R_SUB_KS",     "R_DIV_KS",     "R_SET_PROP_SS", "R_SET_PROP_SK", "R_GET_GLOBAL", "R_GET_UPVALUE",
                                       "R_GET_INDEX_SS", "R_GET_INDEX_SK", "R_NEG",     "R_NOT",        "R_JUMP_IF_FALSE", "R_SHL_SK",
-                                      "R_SHR_SK",     "R_BIT_AND_SS", "R_BIT_AND_SK", "R_BIT_OR_SS",  "R_BIT_OR_SK",
+                                      "R_SHR_SK",     "R_BIT_AND_SS", "R_BIT_AND_SK", "R_BIT_OR_SS",  "R_BIT_OR_SK", "R_SHL_SS", "R_SHR_SS",
                                       "R_ADD_I_SS", "R_ADD_I_SK", "R_ADD_I_KS", "R_SUB_I_SS", "R_SUB_I_SK",
                                       "R_SUB_I_KS", "R_MUL_I_SS", "R_MUL_I_SK", "R_MUL_I_KS", "R_ADD_F_SS",
                                       "R_ADD_F_SK", "R_ADD_F_KS", "R_SUB_F_SS", "R_SUB_F_SK", "R_SUB_F_KS",

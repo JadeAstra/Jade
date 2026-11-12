@@ -404,6 +404,12 @@ struct Region {
     // has freed since.
     const Value* frame = nullptr;
     int frameSlots = 0;
+    // What a number in the frame's slot is now, where the region is made: CI, CF, or -1.
+    int numberClass(int slot) const {
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
+        const Value& v = frame[slot];
+        return v.isInt() ? CI : v.isFloat() ? CF : -1;
+    }
     int frameClass(int slot) const {
         if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
         const Value& v = frame[slot];
@@ -762,7 +768,15 @@ struct Region {
             if (known >= 0) return static_cast<Cls>(known);
             if (known == -2) island();
             auto h = r.hints.find(slot);
-            if (h == r.hints.end()) island();
+            if (h == r.hints.end()) {
+                // No typed instruction says (a value only shifted, say): as entered, what the
+                // frame holds now, where the region is made; checked where it is read, as a hint.
+                if (s.kind(slot).bits == kEntry) {
+                    const int now = r.numberClass(slot);
+                    if (now >= 0) return static_cast<Cls>(now);
+                }
+                island();
+            }
             if (h->second == kInt) return CI;
             if (h->second == kFloat) return CF;
             island();
@@ -1187,7 +1201,9 @@ struct Region {
             case Op::RBitAndSS:
             case Op::RBitAndSK:
             case Op::RBitOrSS:
-            case Op::RBitOrSK: bitwise(c); return;
+            case Op::RBitOrSK:
+            case Op::RShlSS:
+            case Op::RShrSS: bitwise(c); return;
             default: island();
         }
     }
@@ -1403,7 +1419,7 @@ struct Region {
         c.fall(after);
     }
 
-    // Shifts by a constant, and & and | of whole numbers.
+    // Shifts, and & and | of whole numbers.
     void bitwise(Ctx& c) {
         const Ins& x = c.x;
         const int a = u8(x, 0);
@@ -1416,6 +1432,24 @@ struct Region {
             if (shift && (v < 0 || v >= 64)) island();
             const char* stem = x.op == Op::RShlSK ? "shlik" : x.op == Op::RShrSK ? "shrik" : x.op == Op::RBitAndSK ? "andik" : "orik";
             c.op(stem, {dst, b}, {b}, {dst}).ki = v;
+        } else if (x.op == Op::RShlSS || x.op == Op::RShrSS) {
+            // A count from 0 to 63 (any other left to the VM), then the shift of b by it: into
+            // dst from b, or through the scratch register where dst is the count.
+            if (c.guess(u8(x, 2)) != CI) island();
+            const Reg r = c.read(u8(x, 2), CI, true);
+            const char* stem = x.op == Op::RShlSS ? "shli" : "shri";
+            c.leaves(c.op("chkshift", {r}, {r}));
+            if (dst == b) {
+                c.op(stem, {dst, r}, {dst, r}, {dst});
+            } else if (dst != r) {
+                c.op("movi", {dst, b}, {b}, {dst});
+                c.op(stem, {dst, r}, {dst, r}, {dst});
+            } else {
+                const Reg scratch{kScratchI, CI};
+                c.op("movi", {scratch, b}, {b}, {scratch});
+                c.op(stem, {scratch, r}, {scratch, r}, {scratch});
+                c.op("movi", {dst, scratch}, {scratch}, {dst});
+            }
         } else {
             if (c.guess(u8(x, 2)) != CI) island();
             const Reg r = c.read(u8(x, 2), CI, true);
@@ -2607,6 +2641,8 @@ bool mayDo(Op op) {
         case Op::RBitAndSK:
         case Op::RBitOrSS:
         case Op::RBitOrSK:
+        case Op::RShlSS:
+        case Op::RShrSS:
         case Op::IterNext:
         case Op::RGetProp:
         case Op::RSetPropSS:

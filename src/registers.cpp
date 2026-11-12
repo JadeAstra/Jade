@@ -72,8 +72,8 @@ const Family* familyOf(Op plain) {
     static const Family gt{Op::RGtSS, Op::RGtSK, Op::Count_};
     static const Family ge{Op::RGeSS, Op::RGeSK, Op::Count_};
     static const Family eq{Op::REqSS, Op::REqSK, Op::Count_};
-    static const Family shl{Op::Count_, Op::RShlSK, Op::Count_};
-    static const Family shr{Op::Count_, Op::RShrSK, Op::Count_};
+    static const Family shl{Op::RShlSS, Op::RShlSK, Op::Count_};
+    static const Family shr{Op::RShrSS, Op::RShrSK, Op::Count_};
     static const Family bitAnd{Op::RBitAndSS, Op::RBitAndSK, Op::Count_};
     static const Family bitOr{Op::RBitOrSS, Op::RBitOrSK, Op::Count_};
     // On operands the checker knows (M6.7 step 5).
@@ -170,6 +170,8 @@ bool storesResult(Op r) {
         case Op::RNot:
         case Op::RShlSK:
         case Op::RShrSK:
+        case Op::RShlSS:
+        case Op::RShrSS:
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
@@ -1186,6 +1188,8 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RDivKS:
         case Op::RShlSK:
         case Op::RShrSK:
+        case Op::RShlSS:
+        case Op::RShrSS:
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
@@ -1326,6 +1330,8 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::RDivKS:
         case Op::RShlSK:
         case Op::RShrSK:
+        case Op::RShlSS:
+        case Op::RShrSS:
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:

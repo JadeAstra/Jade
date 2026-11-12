@@ -1,0 +1,75 @@
+// Native code (M9.5), 2026-11-11: shifts by a count in a variable, as the register code's
+// R_SHL_SS and R_SHR_SS and the regions' shli and shri. A count from 0 to 63 is shifted at once;
+// 64 or more, or below 0, goes back to the VM, whose rules for them hold. A value only ever
+// shifted (no typed instruction says it is an int) is taken as what it was where the loop began.
+
+// Codes of changing widths packed lowest bit first, as GIF's LZW writer does.
+fun pack(n : int) : int {
+  var acc = 0
+  var bits = 0
+  var width = 3
+  var t = 0
+  for (i in 0 ..< n) {
+    acc = acc | ((i & ((1 << width) - 1)) << bits)
+    bits += width
+    while (bits >= 8) {
+      t = (t * 31 + (acc & 255)) % 1000000007
+      acc = acc >> 8
+      bits -= 8
+    }
+    width = width == 12 ? 3 : width + 1
+  }
+  return t
+}
+print(pack(100000))   // expect: 878097195
+
+// Counts from 0 to 69: past 63 the VM's (a left shift leaves 0, a right one 0 or -1).
+fun counts(n : int) : string {
+  var left = 0
+  var right = 0
+  var negative = 0
+  for (i in 0 ..< n) {
+    val c = i % 70
+    left += (1 << c) % 1000
+    right += (1000000 >> c)
+    negative += ((-5) >> c)
+  }
+  return "$left $right $negative"
+}
+print(counts(700))   // expect: 289990 19999930 -770
+
+// The count's register written by the shift itself: b << b, and a count in the result's slot.
+fun same(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    var s = i & 7
+    s = i << s
+    t += s & 1023
+    var u = i % 5
+    u = u << u
+    t += u
+  }
+  return t
+}
+print(same(10000))   // expect: 5940444
+
+// A value only shifted, never in a typed instruction: guessed from what it is where the loop
+// begins, and checked.
+fun onlyShifted(base : int, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += base << (i % 8) }
+  return t
+}
+print(onlyShifted(3, 1000), onlyShifted(-7, 999))   // expect: 95625 -222229
+
+// A negative count: the VM's error, from inside the loop.
+fun negative(n : int) : string {
+  var t = 0
+  try {
+    for (i in 0 ..< n) { t += 1 << (40 - i) }
+  } catch (e) {
+    return "$t ${e.message}"
+  }
+  return "$t"
+}
+print(negative(100))   // expect: 2199023255551 cannot shift by a negative amount (-1)
