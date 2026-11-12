@@ -1291,7 +1291,15 @@ std::string constantText(const Value& v) {
 }
 
 void disassembleFunction(const FunctionProto& f, const Program& program, std::ostream& out) {
-    if (f.deferred != nullptr) loadDeferred(const_cast<FunctionProto&>(f));
+    // A function of a kept program has its body read, and is checked and its stack's size found,
+    // when first asked for (at its first call, translateNow): here, listing it.
+    FunctionProto& own = const_cast<FunctionProto&>(f);
+    if (f.laterBody != nullptr) loadBody(own);
+    if (f.deferred != nullptr) loadDeferred(own);
+    if (f.unverified) {
+        analyzeStack(own, program, false);
+        own.unverified = false;
+    }
     std::string arity = std::to_string(f.arity);
     if (f.requiredArgs() != f.arity) arity = std::to_string(f.requiredArgs()) + ".." + arity;
     out << "== " << f.name << " (" << f.source << ")  arity=" << arity << " upvalues=" << f.upvalues.size()

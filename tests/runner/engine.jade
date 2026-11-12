@@ -522,18 +522,30 @@ class Suite(val options : Options) {
         file.parent!!.mkdir()
         file.writeText(content)
       }
+      var first = ""
       for (which in ["first", "again"]) {
         // The first run says what it compiled and what it put back; the second starts from the
         // program the first kept.
         val counted = step.units != "" and which == "first"
-        val got = jade(null, [main.text], dir, cache, extra = counted ? {"JADE_TIMES": "1"} : {:})
+        val arguments : open List<string> = []
+        for (a in step.command) { arguments.add(a) }
+        arguments.add(main.text)
+        val got = jade(null, arguments, dir, cache, extra = counted ? {"JADE_TIMES": "1"} : {:})
         var error = got.error
         if (counted) {
           if (!got.error.contains(step.units)) { return "step $number, $which run:\n      expected: ${step.units}\n      got: ${got.error}" }
           error = splitLines(got.error).filter { !it.startsWith("jade:") }.join("\n")
         }
         val said = got.lines.join(" ")
-        if (step.error != "") {
+        if (step.sameAgain) {
+          // What the first run said, said again from the program it kept.
+          if (got.code != 0 or said == "") { return "step $number, $which run: exit code ${got.code}, said: $said ${error.trim()}" }
+          if (which == "first") {
+            first = said
+          } else if (said != first) {
+            return "step $number, again from what was kept:\n      expected: $first\n      got: $said"
+          }
+        } else if (step.error != "") {
           if (got.code != 65 or error.trim() != step.error) { return "step $number, $which run:\n      expected the error: ${step.error}\n      got: ${error.trim()} $said" }
         } else if (got.code != 0 or said != step.out) {
           return "step $number, $which run:\n      expected: ${step.out}\n      got: $said ${error.trim()}"
@@ -825,8 +837,10 @@ val stressSettings : List<Setting> = Setting.entries
 // A scenario of the cache's: its steps in order.
 class Scenario(val name : string, val steps : List<Step>)
 // A step: the files it writes, and what main.jade then prints (out), or the compile error it gives
-// (error); `units` what the first run must say it compiled and put back.
-class Step(val files : List<Pair<string, string>>, val out : string = "", val error : string = "", val units : string = "")
+// (error); `units` what the first run must say it compiled and put back. `command`: what jade is
+// given before main.jade (`dis`, say); `sameAgain`: the second run must say what the first said.
+class Step(val files : List<Pair<string, string>>, val out : string = "", val error : string = "", val units : string = "",
+           val command : List<string> = [], val sameAgain : bool = false)
 
 fun cacheScenarios() : List<Scenario> => [
   Scenario("a body changes in an imported file", [
@@ -880,4 +894,10 @@ fun cacheScenarios() : List<Scenario> => [
   Scenario("a constant changes in an imported file", [
     Step([Pair("lib.jade", "const limit = 10"), Pair("main.jade", "import lib.*\nfun twice() : int => limit * 2\nprint(twice())")], out = "20"),
     Step([Pair("lib.jade", "const limit = 11")], out = "22")]),
+  // `jade dis` of a program kept: its functions' bodies, read only when asked for, listed as a
+  // first compile lists them (2026-11-12: it listed none).
+  Scenario("jade dis of a program kept", [
+    Step([Pair("lib.jade", "fun twice(n : int) : int => n * 2"),
+          Pair("main.jade", "import lib.*\nclass Box(val n : int) {\n  fun more() : int {\n    var t = 0\n    for (i in 0 ..< n) { t += twice(i) }\n    return t\n  }\n}\nprint(Box(4).more())")],
+         command = ["dis"], sameAgain = true)]),
 ]
