@@ -1554,6 +1554,30 @@ void registerNumeric(VM& vm) {
         }
         return Value::null();
     });
+    // mixColors(cells, matrix, out): each colour's red, green and blue made sums of its own,
+    // weighed by a 3 by 3 matrix given row by row (the new red's weights first), held to 0 to 255
+    // and rounded; alpha kept. Greyscale and saturation, as CSS's filters work them out.
+    def("mixColors", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        const size_t n = listArg(vm, args[0], "the grid")->size();
+        const uint8_t* in = colorCells(vm, args[0], n, "the grid");
+        uint8_t* out = colorCells(vm, args[2], n, "the grid written into");
+        const Numbers m = numbers(vm, args[1], "the matrix");
+        if (m.count != 9) fail(vm, Thrown::IllegalArgumentException, "the matrix has 9 numbers, not " + std::to_string(m.count));
+        double w[9];
+        for (int i = 0; i < 9; i++) w[i] = m.f(static_cast<size_t>(i));
+        for (size_t k = 0; k < n; k++) {
+            const uint8_t* c = in + k * 4;
+            uint8_t* o = out + k * 4;
+            const double r = c[0], g = c[1], b = c[2];
+            const uint8_t a = c[3];
+            for (int i = 0; i < 3; i++) {
+                const double v = w[i * 3] * r + w[i * 3 + 1] * g + w[i * 3 + 2] * b;
+                o[i] = static_cast<uint8_t>(std::clamp<int64_t>(rounded(v), 0, 255));
+            }
+            o[3] = a;
+        }
+        return Value::null();
+    });
     // sample(cells, width, height, xs, ys, interpolation, outside, out, colour): each cell of
     // the result read from the place (xs[k], ys[k]) of the grid, whole numbers the middles of its
     // cells; outside the grid `outside`, or the nearest edge where it is null.

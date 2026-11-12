@@ -1024,15 +1024,15 @@ class Image : Drawable {
     val sat = saturation.toFloat()
     if (sat != 1.0) {
       // CSS's saturate() matrix, from Filter Effects.
-      made = made.mapColors(ColorLookup { p -> __mix(p, 0.213 + 0.787 * sat, 0.715 - 0.715 * sat, 0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 + 0.285 * sat,
-                                                        0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 - 0.715 * sat, 0.072 + 0.928 * sat) })
+      made = __mixed(made, [0.213 + 0.787 * sat, 0.715 - 0.715 * sat, 0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 + 0.285 * sat,
+                            0.072 - 0.072 * sat, 0.213 - 0.213 * sat, 0.715 - 0.715 * sat, 0.072 + 0.928 * sat])
     }
     return of(made)
   }
 
   // The picture in greys, as CSS's grayscale(1): each pixel 0.2126 of its red, 0.7152 of its green
   // and 0.0722 of its blue, as the eye weighs them; alpha kept.
-  fun greyscale() : Image => of(pixels.mapColors(ColorLookup { p -> __mix(p, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722) }))
+  fun greyscale() : Image => of(__mixed(pixels, [0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722]))
 
   // The picture with its colours turned round, each part 255 less itself; alpha kept.
   fun inverted() : Image {
@@ -1302,14 +1302,14 @@ class ImageCanvas : Canvas {
   }
 }
 
-// A colour through a 3 by 3 matrix of its red, green and blue, rounded and held from 0 to 255;
-// alpha kept.
-fun __mix(c : Color, rr : float, rg : float, rb : float, gr : float, gg : float, gb : float, br : float, bg : float, bb : float) : Color {
-  val r = c.red.toInt()
-  val g = c.green.toInt()
-  val b = c.blue.toInt()
-  fun part(v : float) : int => Math.min(255, Math.max(0, Math.round(v).toInt()))
-  return Color(part(rr * r + rg * g + rb * b), part(gr * r + gg * g + gb * b), part(br * r + bg * g + bb * b), c.alpha.toInt())
+// Each colour's red, green and blue made sums of its own, weighed by `m`, a 3 by 3 matrix row by
+// row (the new red's weights first), held to 0 to 255 and rounded; alpha kept. In one pass in C++
+// (2026-11-11): through a ColorLookup, its table of 35,937 colours made by a Jade function, it
+// took 46 ms a megapixel and was off by up to a level.
+fun __mixed(grid : Grid<Color>, m : List<float>) : Grid<Color> {
+  val out = Grid<Color>(grid.width, grid.height)
+  __num.mixColors(grid.cells, m, __gridInto(out, grid.width, grid.height))
+  return out
 }
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another

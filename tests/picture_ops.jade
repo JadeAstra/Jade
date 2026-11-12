@@ -163,7 +163,17 @@ print(worst(swapped, px.map { c -> Color(c.blue, c.green, c.red, c.alpha) }) <= 
 val grey = pic.greyscale()
 val p = pic[5, 3]
 val want = Math.round(0.2126 * p.red.toInt() + 0.7152 * p.green.toInt() + 0.0722 * p.blue.toInt()).toInt()
-print(Math.abs(grey[5, 3].red.toInt() - want) <= 1, grey[5, 3].red == grey[5, 3].green, grey[5, 3].alpha == p.alpha)   // expect: true true true
+print(grey[5, 3].red.toInt() == want, grey[5, 3].red == grey[5, 3].green, grey[5, 3].alpha == p.alpha)   // expect: true true true
+// Every pixel exactly the weighed sum, rounded (since 2026-11-11 a mix of the channels, not a table).
+var greyOff = 0
+for (y in 0 ..< pic.height) {
+  for (x in 0 ..< pic.width) {
+    val c = pic[x, y]
+    val g = Math.min(255, Math.round(0.2126 * c.red.toInt() + 0.7152 * c.green.toInt() + 0.0722 * c.blue.toInt()).toInt())
+    if (grey[x, y].red.toInt() != g or grey[x, y].blue.toInt() != g or grey[x, y].alpha != c.alpha) { greyOff += 1 }
+  }
+}
+print(greyOff)   // expect: 0
 print(rgba(pic.inverted()[5, 3]) == "${255 - p.red.toInt()} ${255 - p.green.toInt()} ${255 - p.blue.toInt()} ${p.alpha}")   // expect: true
 print(rgba(pic.adjusted(brightness = 0)[5, 3]), rgba(pic.adjusted(contrast = 0)[5, 3]), pic.adjusted(saturation = 0)[5, 3].red == pic.adjusted(saturation = 0)[5, 3].blue,
       worst(pic.adjusted().pixels, px))   // expect: 0 0 0 128 128 128 128 128 true 0
