@@ -53,6 +53,7 @@ struct Ctx {  // native.h's RegionContext
     const void* band;
     uint64_t lists[24];
     uint64_t t[16];
+    const uint8_t* globals;
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -612,6 +613,66 @@ I_A(IREF, x)
         NEXT;                                                                   \
     }
 I_A(IDXSM, x)
+// Slot jade_slot2 = global jade_ki, as the VM reads it (B3); one not worked out yet the VM's.
+STENCIL(getg) {
+    const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + jade_ki;
+    if (g->kind == kKindUndefined) EXIT;
+    __builtin_memcpy(&base[jade_slot2], g, sizeof(Slot));
+    NEXT;
+}
+// Making a value of a value type kept in the value itself, from its header's byte fields (B3:
+// `Color(r, g, b, a)`): ia |= the byte in ic, jade_ki bits up; then slot (jade_slot2 &
+// 0xFFFFFFFF) = a value of the type numbered (jade_slot2 >> 32) holding ia, where slot jade_slot
+// holds the class jade_ki (what is called); anything else the VM's.
+#define PACKB_B(c, a) STENCIL(packb_##a##_##c) { i##a |= (static_cast<uint64_t>(i##c) & 0xFF) << jade_ki; NEXT; }
+#define PACKB_A(a, ...) I_B(PACKB_B, a)
+I_A(PACKB_A, x)
+#define MKSM(a, ...)                                                            \
+    STENCIL(mksm_##a) {                                                         \
+        const Slot& f = base[jade_slot];                                        \
+        if (f.kind != kKindObj || reinterpret_cast<int64_t>(f.p) != jade_ki) EXIT; \
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);                \
+        putValue(&base[what & 0xFFFFFFFF], kKindSmall | (what >> 32) << 32, static_cast<uint64_t>(i##a)); \
+        NEXT;                                                                   \
+    }
+I_A(MKSM, x)
+// Slot jade_slot2 = a Ref to item ic of the list of a value type's items in slot jade_slot, to be
+// changed there (PlaceIndex, B3): the list its core's own and not frozen, none null, the item in
+// range. Anything else the VM's.
+#define PLACEI(c, ...)                                                          \
+    STENCIL(placei_##c) {                                                       \
+        const Slot& s = base[jade_slot];                                        \
+        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
+        const uint8_t* pack = packOf(s.p, kStoreItems);                         \
+        if (pack == nullptr || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
+        putValue(&base[jade_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(s.p)); \
+        NEXT;                                                                   \
+    }
+I_A(PLACEI, x)
+// Item ic of the list in slot jade_slot set to the value in slot (jade_slot2 & 0xFFFFFF) (B3): the
+// list its core's own and not frozen, of the class jade_ki's items kept in the value itself, none
+// null and none with a type of its own, the item in range; the value a Small one of the type
+// numbered (jade_slot2 >> 32), its first ((jade_slot2 >> 24) & 0xFF) bytes copied; or a Ref to
+// that item itself (made there already). Anything else the VM's.
+#define SETSM(c, ...)                                                           \
+    STENCIL(setsm_##c) {                                                        \
+        const Slot& s = base[jade_slot];                                        \
+        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
+        const uint8_t* pack = packOf(s.p, kStoreItems);                         \
+        if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki || word<const void*>(pack + kPackItemType) != nullptr || \
+            word<uint32_t>(pack + kPackTypeSlot) != 0 || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) \
+            EXIT;                                                               \
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);                \
+        const Slot& v = base[what & 0xFFFFFF];                                  \
+        const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v)); \
+        if ((head & 0xFFFFFFFF) == kKindRef && v.p == s.p && (head >> 32) == static_cast<uint64_t>(i##c)) NEXT; \
+        if ((head & 0xFF) != kKindSmall || (head >> 32) != what >> 32) EXIT;    \
+        uint8_t* to = word<uint8_t*>(pack + kPackBlock) + i##c * static_cast<int64_t>(word<uint32_t>(pack + kPackWidth)); \
+        const uint64_t bits = static_cast<uint64_t>(v.i);                       \
+        for (uint32_t k = 0; k < ((what >> 24) & 0xFF); k++) to[k] = static_cast<uint8_t>(bits >> (8 * k)); \
+        NEXT;                                                                   \
+    }
+I_A(SETSM, x)
 // OwnLocal where slot jade_slot is in memory (B2): a Ref, none deep, to an item of a list of the
 // class jade_ki's items kept in the value itself, none with a type of its own, made a copy of its
 // first (jade_slot2 & 0xFF) bytes, of the type numbered (jade_slot2 >> 32); anything but a Ref

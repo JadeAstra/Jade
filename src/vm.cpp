@@ -6855,7 +6855,9 @@ JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
         std::lock_guard<std::mutex> hold(making);
         if (f.nativeArrivals[which] < 2) {
             std::vector<FunctionProto::NativeRegion> made;
+            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size()};
             if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), head, made);
+            nativeGlobalsSeen = GlobalsSeen{};
             auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
             if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
             list->insert(list->end(), made.begin(), made.end());
@@ -6891,7 +6893,7 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
                 break;
             }
     if (region != nullptr) {
-        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}, {}};
+        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}, {}, globals_.data()};
         const int64_t out = native::runRegion(region->code, base, &context);
         static const bool traceExits = std::getenv("JADE_TRACE_EXITS") != nullptr;
         static int traced = 0;

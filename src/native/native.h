@@ -84,6 +84,8 @@ struct RegionContext {
     uint64_t lists[kRegionLists * 4];
     // A loop template's words (stencils.cpp, runLoop): its shape, counter, lists and parameters.
     uint64_t t[16];
+    // The VM's globals, as a region reads one (B3: the class called to make a value).
+    const void* globals;
 };
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it

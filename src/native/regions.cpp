@@ -493,6 +493,39 @@ struct Region {
         if (ending_.size() != ins.size()) ending_ = endingRuns(static_cast<int>(ins.size()), [&](int k) { return ins[static_cast<size_t>(k)].op; });
         return i >= 0 && static_cast<size_t>(i) < ending_.size() && ending_[static_cast<size_t>(i)];
     }
+    // What global `k` holds as the region is made (nativeGlobalsSeen); null where not known.
+    static const Value* globalSeen(int k) {
+        if (nativeGlobalsSeen.values == nullptr || k < 0 || static_cast<size_t>(k) >= nativeGlobalsSeen.count) return nullptr;
+        return nativeGlobalsSeen.values + k;
+    }
+    // The class an RCall at `i` makes a value of from its header alone, as the VM's RCall does at
+    // once, where slot `callee` holds it as the region is made: kept in the value itself, every
+    // field of its header a byte; nothing of a type given right before. Null for anything else.
+    const ObjClass* madeValue(int callee, int argc, int i) const {
+        const Value* v = knownValue(callee);
+        if (v == nullptr || !v->isObjType(ObjType::Class)) return nullptr;
+        const ObjClass* const cls = asClass(*v);
+        if (!cls->isValue || !cls->madeFromHeader || cls->staticInit != nullptr || cls->fieldTypesMaker != nullptr || cls->smallId == 0 ||
+            cls->components.size() != static_cast<size_t>(argc))
+            return nullptr;
+        const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+        if (layout == nullptr || layout->size > 8) return nullptr;
+        for (int k = 0; k < argc; k++) {
+            const ValueField* field = headerFieldOf(cls, layout, k);
+            if (field == nullptr || field->kind != ValueField::Narrow || field->narrow != Narrow::Byte) return nullptr;
+        }
+        for (int back = 1; back <= 2 && i - back >= 0; back++)
+            if (ins[static_cast<size_t>(i - back)].op == Op::WithTypes) return nullptr;
+        return cls;
+    }
+    // The field of a value type's header's component `k`: the field of its name.
+    static const ValueField* headerFieldOf(const ObjClass* cls, const ValueLayout* layout, int k) {
+        if (layout == nullptr || k < 0 || static_cast<size_t>(k) >= cls->components.size()) return nullptr;
+        const ObjString* const name = cls->components[static_cast<size_t>(k)];
+        for (const ValueField& field : layout->fields)
+            if (field.name == name || (field.name != nullptr && name != nullptr && field.name->utf8() == name->utf8())) return &field;
+        return nullptr;
+    }
     // Whether the region makes a closure, which may hold slots of the frame open.
     bool makesClosures() const {
         for (const Ins& x : ins)
@@ -792,6 +825,18 @@ struct Region {
                     continue;
                 case Op::KeepLocal:
                 case Op::OwnLocal:
+                case Op::WithDestinationAt:
+                    j++;
+                    continue;
+                case Op::PlaceIndex:
+                    if (slot == top - 1) return guessing ? CI : -1;
+                    if (slot == top - 2) return -1;
+                    top--;
+                    j++;
+                    continue;
+                case Op::RGetGlobal:
+                    if (u8(x, 0) == slot) return -1;
+                    top = u8(x, 1);
                     j++;
                     continue;
                 case Op::PopUnder: {
@@ -1182,6 +1227,10 @@ struct Region {
                 } else if (v.isInt()) {
                     c.op("setik", {Reg{to, CI}}, {}, {Reg{to, CI}}).ki = v.as.i;
                     c.write(to, constantInt(v.as.i));
+                } else if (v.isByte()) {
+                    // A byte (a Color's part written as a number, B3): in a register, a byte.
+                    c.op("setik", {Reg{to, CI}}, {}, {Reg{to, CI}}).ki = v.as.i;
+                    c.write(to, K{kByte});
                 } else {
                     island();
                 }
@@ -1370,6 +1419,87 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::RGetGlobal: {  // u8 A, u8 T, u8 S, u16 global, i32 slow: slot A = the global (B3)
+                const int a = u8(x, 0);
+                c.writeMemory(a);
+                LOp& l = c.op("getg");
+                l.ki = u16(x, 3);
+                l.slot2 = a;
+                c.leaves(l);
+                if (const Value* g = globalSeen(u16(x, 3)); g != nullptr && g->kind == ValueKind::Obj) noteFieldValue(a, *g);
+                s.top = u8(x, 1);
+                c.fall(s);
+                return;
+            }
+            case Op::RCall: {  // u8 A, u8 F, u8 T, u8 S, u8 argc, u8 flags, u8 X1..X4, i32 slow, i32 resume
+                // A value of a value type kept in the value itself, made from its header's byte
+                // fields (`Color(r, g, b, a)`, B3), where slot F holds its class as the region is
+                // made (the step checks it), nothing of a type given right before, and each part a
+                // byte the region knows: its bytes put together. Any other call the VM's.
+                const int a = u8(x, 0), argc = u8(x, 4), flags = u8(x, 5);
+                const int callee = c.objectSlot(u8(x, 1));
+                const ObjClass* const cls = madeValue(callee, argc, c.i);
+                if (cls == nullptr) island();
+                const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+                uint64_t constant = 0;
+                std::vector<std::pair<Reg, int>> parts;  // a byte's register, and its offset
+                for (int k = 0; k < argc; k++) {
+                    const ValueField* field = headerFieldOf(cls, layout, k);
+                    if (field == nullptr) island();
+                    const int xk = u8(x, 6 + k);
+                    if (flags & (1 << k)) {
+                        const int64_t v = c.intConstant(xk);
+                        if (v < 0 || v > 255) island();
+                        constant |= static_cast<uint64_t>(v) << (8 * field->offset);
+                    } else {
+                        if (s.kind(xk).bits != kByte) island();
+                        parts.emplace_back(c.read(xk, CI, false), static_cast<int>(field->offset));
+                    }
+                }
+                const Reg acc{kScratchI, CI};
+                c.op("setik", {acc}, {}, {acc}).ki = static_cast<int64_t>(constant);
+                for (const auto& [reg, offset] : parts) c.op("packb", {acc, reg}, {acc, reg}, {acc}).ki = 8 * offset;
+                c.writeMemory(a);
+                LOp& l = c.op("mksm", {acc}, {acc});
+                l.slot = callee;
+                l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | static_cast<uint64_t>(a));
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                c.leaves(l);
+                noteValue(a, cls);
+                s.top = u8(x, 2);
+                c.fall(s);
+                return;
+            }
+            case Op::WithDestinationAt:
+                // The place the call after it makes its value in: the VM's way of making it where it
+                // goes. A value the region makes (RCall) is put there by the SetIndex after; the VM,
+                // given none, makes the same value as a value of its own.
+                if (c.i + 1 >= static_cast<int>(ins.size()) || ins[static_cast<size_t>(c.i + 1)].op != Op::RCall) island();
+                c.fall(s);
+                return;
+            case Op::PlaceIndex: {  // list index -> place: an item of a list of a value type's items, to be changed (B3)
+                const int top = s.top;
+                const int list = c.objectSlot(top - 2);
+                if (itemsClass(list) == nullptr || c.copiedElsewhere(top - 2)) island();
+                const Reg index = c.read(top - 1, CI, true);
+                LOp& l = c.op("placei", {index}, {index});
+                l.slot = list;
+                l.slot2 = top - 2;
+                c.leaves(l);
+                c.write(top - 2, K{kMem});
+                s.top = top - 1;
+                c.fall(s);
+                return;
+            }
+            case Op::Swap: {
+                // The two on top changed round, where the next instruction pops the one on top
+                // (`a[i] = V(...)`: the place under the value, dropped): the value moved down.
+                const int top = s.top;
+                if (c.i + 1 >= static_cast<int>(ins.size()) || ins[static_cast<size_t>(c.i + 1)].op != Op::Pop || top < 2) island();
+                move(c, top - 1, top - 2);
+                c.fall(s);
+                return;
+            }
             case Op::GetProp: {  // u16 name, u16 cache: obj -> value
                 // A byte, int or float field of a value of a value type (B2: read off what an
                 // inline op [] gave); anything else the VM's.
@@ -1460,6 +1590,24 @@ struct Region {
             case Op::SetIndex: {  // list index value -> value
                 const int top = s.top;
                 const int list = c.objectSlot(top - 3);
+                if (const ObjClass* const cls = itemsClass(list)) {
+                    // An item of a list of a value type's items kept in the value itself (B3): the
+                    // value's bytes, where the region holds a value of the type in memory.
+                    const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+                    const K vk = s.kind(top - 1);
+                    if (cls->smallId == 0 || layout == nullptr || layout->size > 8 || !(vk.bits == kEntry || inMemory(vk))) island();
+                    const Reg index = c.read(top - 2, CI, true);
+                    LOp& l = c.op("setsm", {index}, {index});
+                    l.slot = list;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | (static_cast<uint64_t>(layout->size) << 24) |
+                                                   static_cast<uint64_t>(top - 1));
+                    l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    c.leaves(l);
+                    move(c, top - 1, top - 3);
+                    s.top = top - 2;
+                    c.fall(s);
+                    return;
+                }
                 const Reg index = c.read(top - 2, CI, true);
                 const K v = s.kind(top - 1);
                 // (A whole number read from a list, an int or a byte, goes as an int: into bytes
@@ -3354,6 +3502,11 @@ bool mayDo(Op op) {
         case Op::OwnLocal:
         case Op::PopUnder:
         case Op::GetProp:
+        case Op::RGetGlobal:
+        case Op::RCall:
+        case Op::WithDestinationAt:
+        case Op::PlaceIndex:
+        case Op::Swap:
         case Op::SetIndex:
         case Op::Numeric:
         case Op::RNeg:

@@ -1,4 +1,4 @@
-// Native code reading lists of a value type's items where they are (M9.5 B1, 2026-11-12): a field
+// Native code reading lists of a value type's items where they are (M9.5 B1, 2026-11-12), and setting them (B3): a field
 // of an item (`items[i].x`), an item kept in a variable as itself (`val c = items[i]`, or a for
 // over the list) or as a copy (where the loop changes the list), and its fields read from there;
 // bytes, ints and floats; a value too large to be kept in a value, one of a generic type, a list
@@ -175,3 +175,69 @@ fun overflow(xs : List<Cell>) : int {
   return t
 }
 print(failing { thrice { overflow(cells) } })   // expect: ArithmeticException: 9223372036854775780 + 40 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around
+
+// Items made and set where they are (B3): `items[i] = Color(...)` from bytes and constants.
+fun inverted(xs : open List<Color>) : List<Color> {
+  for (i in 0 ..< xs.size) {
+    val c = xs[i]
+    xs[i] = Color((255 - c.red).toByte(), (255 - c.green).toByte(), (255 - c.blue).toByte(), c.alpha)
+  }
+  return xs
+}
+print(thrice { inverted(List(6) { Color(it * 40, 200 - it * 30, it, 255 - it) }) })   // expect: [Color(255, 55, 255), Color(215, 85, 254, 254), Color(175, 115, 253, 253), Color(135, 145, 252, 252), Color(95, 175, 251, 251), Color(55, 205, 250, 250)]
+fun stamped(xs : open List<Color>) : string {
+  for (i in 0 ..< xs.size) { xs[i] = Color(7, xs[i].green, 0, 255) }
+  return "${xs[0]} ${xs[xs.size - 1]}"
+}
+print(thrice { stamped(List(50) { Color(it, it * 2, it * 3) }) })   // expect: Color(7, 0, 0) Color(7, 98, 0)
+fun swapped(xs : open List<Color>) : List<Color> {
+  for (i in 0 ..< xs.size / 2) {
+    val a = xs[i]
+    val b = xs[xs.size - 1 - i]
+    xs[i] = Color(b.red, b.green, b.blue, b.alpha)
+    xs[xs.size - 1 - i] = Color(a.red, a.green, a.blue, a.alpha)
+  }
+  return xs
+}
+print(thrice { swapped(List(5) { Color(it, it + 10, it + 20, it + 30) }) })   // expect: [Color(4, 14, 24, 34), Color(3, 13, 23, 33), Color(2, 12, 22, 32), Color(1, 11, 21, 31), Color(0, 10, 20, 30)]
+
+// Errors where they come: the index before the parts are worked out, a part out of a byte's range.
+fun setBeyond(xs : open List<Color>, n : int) {
+  for (i in 0 ..< n) { xs[i] = Color(1, 2, 3, 4) }
+}
+print(failing { thrice { setBeyond(List(10) { Color.black }, 11) } })   // expect: IndexOutOfBoundsException: list index 10 is out of range (size 10)
+var worked = 0
+fun part(v : int) : int {
+  worked += 1
+  return v
+}
+fun orderOf(xs : open List<Color>) {
+  for (i in 0 ..< 12) { xs[i] = Color(part(i).toByte(), 0, 0, 0) }
+}
+print(failing { orderOf(List(10) { Color.black }) }, worked)   // expect: IndexOutOfBoundsException: list index 10 is out of range (size 10) 10
+fun tooBright(xs : open List<Color>) {
+  for (i in 0 ..< xs.size) { xs[i] = Color((xs[i].red + 100).toByte(), 0, 0, 255) }
+}
+val bright : open List<Color> = List(8) { Color(it * 30, 0, 0) }
+print(failing { thrice { tooBright(bright) } }, bright[0], bright[7])   // expect: IllegalArgumentException: 280 does not fit in a byte, which holds 0 to 255; toByteWrapped() keeps the low 8 bits Color(100, 0, 0) Color(210, 0, 0)
+
+// A frozen list, a generic value type's, a list that may hold null: the VM's, the same answers.
+fun setAll(xs : open List<Color>) {
+  for (i in 0 ..< xs.size) { xs[i] = Color(5, 5, 5, 5) }
+}
+print(failing { setAll(List(3) { Color.white }.frozen() as open List<Color>) })   // expect: ClassCastException: cannot cast a frozen list to open List: toOpenList() makes a copy that can be changed
+fun setBoxes(xs : open List<Box<int>>) : int {
+  for (i in 0 ..< xs.size) { xs[i] = Box(i, i * 2) }
+  var t = 0
+  for (b in xs) { t += b.item + b.n }
+  return t
+}
+print(thrice { setBoxes(List(10) { Box(0, 0) }) })   // expect: 135
+fun setMaybe(xs : open List<Color?>) : int {
+  for (i in 0 ..< xs.size) { xs[i] = Color(i.toByte(), 0, 0, 0) }
+  var t = 0
+  for (c in xs) { t += c!!.red }
+  return t
+}
+print(thrice { setMaybe(List(10) { null }) })   // expect: 45
+
