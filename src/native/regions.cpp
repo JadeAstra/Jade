@@ -394,9 +394,12 @@ struct Region {
 
     // The slots of the call the regions are made in (VM::nativeFirst), or null: the list in a slot
     // there says what a list read from that slot is likely to hold. A guess the steps check.
+    // Only the slots below the VM's top are read: those above may hold values the collector
+    // has freed since.
     const Value* frame = nullptr;
+    int frameSlots = 0;
     int frameClass(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= f.maxStack) return -1;
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
         const Value& v = frame[slot];
         if (v.isObjType(ObjType::Bytes)) return CI;
         if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
@@ -2587,7 +2590,7 @@ struct Candidate {
     int first, last;  // instructions, the loop's start and its Loop
 };
 
-void makeRegionsTimed(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
+void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
 // How long making regions took, said as the program ends where JADE_TIME_NATIVE is set.
 double phaseTimes[4] = {};  // each phase's time, for JADE_TIME_NATIVE
@@ -2603,9 +2606,9 @@ struct NativeTimes {
     }
 } nativeTimes;
 
-void makeRegions(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
+void makeRegions(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     const auto start = std::chrono::steady_clock::now();
-    makeRegionsTimed(f, frame, head, out);
+    makeRegionsTimed(f, frame, frameSlots, head, out);
     const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     nativeTimes.seconds += took;
     static const bool each = std::getenv("JADE_TIME_NATIVE") != nullptr && std::string(std::getenv("JADE_TIME_NATIVE")) == "each";
@@ -2613,7 +2616,7 @@ void makeRegions(FunctionProto& f, const Value* frame, uint32_t head, std::vecto
     nativeTimes.functions++;
 }
 
-void makeRegionsTimed(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
+void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     if (!enabled()) return;
     // A function with no loop: nothing to make, found at once.
     bool anyLoop = false;
@@ -2682,6 +2685,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, uint32_t head, std::
         }
         Region r(f);
         r.frame = frame;
+        r.frameSlots = frameSlots;
         r.tops = tops;
         // A range counted through, made just before the loop: its step, where none is given, is 1
         // (or -1, going down), as the VM's RangeLoop sets it.

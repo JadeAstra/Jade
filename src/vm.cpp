@@ -6853,7 +6853,7 @@ JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
         std::lock_guard<std::mutex> hold(making);
         if (f.nativeArrivals[which] < 2) {
             std::vector<FunctionProto::NativeRegion> made;
-            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, head, made);
+            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), head, made);
             auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
             if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
             list->insert(list->end(), made.begin(), made.end());

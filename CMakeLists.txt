@@ -103,12 +103,14 @@ if(JADE_NATIVE_HERE)
   # Each stencil in a section of its own, and nothing in them a copied stencil could not carry
   # (no library function called: no builtins, which keeps Clang from making a loop a call of
   # memcpy; no table of where a switch goes, which would be data of its own; on Linux no code
-  # reached through a table either, and nothing for unwinding or stack checks).
+  # reached through a table either, and nothing for unwinding or stack checks; and never a
+  # sanitizer's checks, in a build that has them, which would call its library).
   if(WIN32)
-    target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables)
+    target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables /clang:-fno-sanitize=all)
   else()
     target_compile_options(jade_stencils PRIVATE -O2 -fno-pic -fno-pie -ffunction-sections -fno-builtin -fno-jump-tables
-                           -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-exceptions -fcf-protection=none)
+                           -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-exceptions -fcf-protection=none
+                           -fno-sanitize=all)
     set_target_properties(jade_stencils PROPERTIES POSITION_INDEPENDENT_CODE OFF)
   endif()
   add_executable(jade_stencil_tool tools/stencils/stencils.cpp)

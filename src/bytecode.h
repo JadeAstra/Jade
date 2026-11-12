@@ -961,8 +961,9 @@ extern void (*writeRunAddresses)(FunctionProto& f);
 extern bool (*findNativeLoops)(FunctionProto& f);
 // The regions of the loop starting at `head` in `run` are added to `made`. `frame`: the slots of
 // the call running the function as they are made, which say what its lists hold (a guess the
-// regions check); null where there is none.
-extern void (*makeNativeRegions)(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
+// regions check); null where there is none. `frameSlots`: how many of them are live (below the
+// VM's top); the rest may hold values already collected.
+extern void (*makeNativeRegions)(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,

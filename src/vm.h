@@ -271,7 +271,14 @@ enum class Thrown : uint8_t {
 #if defined(__clang__) && !defined(JADE_OP_COUNTS)
 #if __has_attribute(preserve_none)  // Clang 19 on
 #define JADE_TAIL_CALLS 1
+#if __has_feature(address_sanitizer)
+// Under AddressSanitizer (clang-cl), Windows' C++ unwinder cannot read the state of an
+// instrumented preserve_none function and crashes passing one: the instructions themselves go
+// unchecked, what they call is checked.
+#define JADE_TAIL_FN __attribute__((preserve_none, no_stack_protector, no_sanitize("address")))
+#else
 #define JADE_TAIL_FN __attribute__((preserve_none, no_stack_protector))
+#endif
 #define JADE_TAIL_PARAMS                                                                                              \
     [[maybe_unused]] const uint8_t *ip, [[maybe_unused]] Value *sp, [[maybe_unused]] Value *base, [[maybe_unused]] CallFrame *frame,                     \
         [[maybe_unused]] const Value *consts, [[maybe_unused]] std::atomic<uint64_t> *caches, [[maybe_unused]] const uint8_t *code

@@ -1283,7 +1283,7 @@ void threadCode(FunctionProto& f, size_t opBytes) {
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
 bool (*findNativeLoops)(FunctionProto& f) = nullptr;
-void (*makeNativeRegions)(FunctionProto& f, const Value* frame, uint32_t head, std::vector<FunctionProto::NativeRegion>& made) = nullptr;
+void (*makeNativeRegions)(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made) = nullptr;
 
 void runLater(FunctionProto& f) {
     std::vector<uint8_t> run(kThreaded, 0);
