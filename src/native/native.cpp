@@ -203,13 +203,27 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
             if (l == label) return step;
         throw std::runtime_error("native code: a jump to a label never placed");
     };
+    // Where a loop goes back to starts on 32 bytes, as compilers place a loop: the time a loop
+    // takes then does not change with the length of the code before it (the processor fetches
+    // and caches its instructions by aligned blocks). The bytes before are no-ops, run once
+    // each time the loop is come to from before.
+    std::vector<bool> loopHead(all.size() + 1, false);
+    if (const StencilCode* const back = stencil("loopback"))
+        for (const Step& st : all)
+            if (st.code == back && st.jump >= 0) loopHead[labelled(st.jump)] = true;
     std::vector<Piece> pieces;
     std::vector<size_t> start(all.size() + 1);
+    std::vector<std::pair<size_t, size_t>> padding;  // where no-ops go, and how many bytes
     size_t at = 0, words = 0, constants = 0;
     for (size_t i = 0; i < all.size(); i++) {
         // The last step of the code and of the way out goes on to nothing after it.
         const bool nextFollows = i + 1 < all.size() && i + 1 != exitAt;
         pieces.push_back(shaped(*all[i].code, nextFollows));
+        if (loopHead[i] && (at & 31) != 0) {
+            const size_t aligned = (at + 31) & ~size_t{31};
+            padding.emplace_back(at, aligned - at);
+            at = aligned;
+        }
         start[i] = at;
         at += pieces.back().code.size();
         for (const Hole& h : pieces.back().holes) {
@@ -225,6 +239,13 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
     uint8_t* mem = writableCode(total);
     if (mem == nullptr) return nullptr;
     std::memset(mem, 0xCC, total);
+    for (const auto& [from, n] : padding) {
+        // The fewest no-ops: 8-byte ones (nopl 0(%rax,%rax,1)), then 1-byte ones.
+        static const uint8_t long8[8] = {0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+        size_t k = 0;
+        for (; k + 8 <= n; k += 8) std::memcpy(mem + from + k, long8, 8);
+        for (; k < n; k++) mem[from + k] = 0x90;
+    }
     size_t constant = codeSize;
     size_t word = codeSize + constants * 16;
     auto rel32 = [&](size_t place, uint32_t after, size_t target) {

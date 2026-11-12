@@ -382,6 +382,9 @@ struct Region {
     std::unordered_map<uint32_t, int> index;   // where an instruction starts -> its place in `ins`
     std::unordered_map<uint32_t, int> tops;    // the VM's top where each run instruction starts (-1: not known)
     std::map<int, uint16_t> hints;             // what each slot is read and written as by the typed instructions
+    // Slots a field holding a list is read into in the loop, and what that list holds where the
+    // region is made (-2: fields of two kinds into one slot): a guess, checked as the frame's.
+    mutable std::map<int, int> fieldLists;
     std::vector<State> in;                     // the state each instruction starts in
     std::set<int> entries;                     // where the VM comes in
     std::set<int> resumed;                     // of them, those after an island: known only as memory holds them
@@ -410,13 +413,58 @@ struct Region {
         const Value& v = frame[slot];
         return v.isInt() ? CI : v.isFloat() ? CF : -1;
     }
-    int frameClass(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
-        const Value& v = frame[slot];
+    // What a list (or bytes) holds: CI, CF, or -1 (not one, or of values).
+    static int listClass(const Value& v) {
         if (v.isObjType(ObjType::Bytes)) return CI;
         if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
         const ListStore store = asList(v)->store();
         return store == ListStore::Floats ? CF : store == ListStore::Ints ? CI : -1;
+    }
+    // What the list in a slot holds, in the call the region is made in: read by the region from a
+    // field (fieldLists), what that field holds; otherwise the frame's slot.
+    int frameClass(int slot) const {
+        if (auto it = fieldLists.find(slot); it != fieldLists.end() && it->second >= 0) return it->second;
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
+        return listClass(frame[slot]);
+    }
+    // What the list in a field holds, where the region is made: the field of the object in slot
+    // `objSlot` (as the frame holds it) where the place's cache says, if the cache saw that
+    // object's layout and a field kept as a value.
+    // Where the cache has seen nothing (the read not made yet: a loop inside that has not run),
+    // the field named by the instruction's own way, at `slow` in the run code.
+    // The name a GetProp or GetOwn uses, where an R instruction's own way (at `slow`) holds it.
+    const ObjString* slowName(int32_t slow) const {
+        if (slow < 0) return nullptr;
+        for (size_t at = static_cast<size_t>(slow), n = 0; n < 4 && at + kThreaded + kOpBytes + 2 <= f.run.size(); n++) {
+            const uint8_t* const p = f.run.data() + at + kThreaded;
+            const Op o = opAt(p);
+            if (o == Op::GetProp || o == Op::GetOwn) {
+                const size_t k = static_cast<size_t>(p[kOpBytes] | (p[kOpBytes + 1] << 8));
+                if (k >= f.constants.size() || !f.constants[k].isObjType(ObjType::String)) return nullptr;
+                return asString(f.constants[k]);
+            }
+            const char* name = nullptr;
+            at += kThreaded + runSize(f.run, at + kThreaded, name);
+        }
+        return nullptr;
+    }
+    int fieldClass(int objSlot, int cache, int32_t slow) const {
+        if (frame == nullptr || objSlot < 0 || objSlot >= frameSlots || objSlot >= f.maxStack) return -1;
+        const Value& v = frame[objSlot];
+        if (!v.isObjType(ObjType::Instance) || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return -1;
+        const uint64_t seen = f.caches[cache].load(std::memory_order_relaxed);
+        const ObjInstance* const inst = asInstance(v);
+        if (seen == 0) {
+            const ObjString* const name = slowName(slow);
+            const Value* const field = name == nullptr ? nullptr : inst->field(name);
+            return field == nullptr ? -1 : listClass(*field);
+        }
+        if ((seen & 0x80) != 0 || static_cast<uint32_t>(seen >> 32) != inst->shape) return -1;
+        const size_t at = static_cast<size_t>((seen >> 16) & 0xFFFF);
+        if (at < sizeof(ObjInstance)) return -1;
+        Value field;
+        std::memcpy(static_cast<void*>(&field), reinterpret_cast<const uint8_t*>(inst) + at, sizeof(Value));
+        return listClass(field);
     }
 
     // The address of a place's cache (GetProp's and the like), which the stencils read as the VM
@@ -1139,6 +1187,12 @@ struct Region {
                     c.writeMemory(a);
                     l = &c.op("getpv");
                     l->slot2 = a;
+                    // A list read from a field: what it holds, for the items read from it.
+                    const int held = fieldClass(obj, u16(x, 4), i32(x, 6));
+                    if (held >= 0) {
+                        auto [it, added] = fieldLists.emplace(a, held);
+                        if (!added && it->second != held) it->second = -2;
+                    }
                 }
                 l->slot = obj;
                 l->ki = cache;
@@ -2212,6 +2266,113 @@ struct Region {
         for (const LOp& l : e.stores) live.insert(l.uses.begin(), l.uses.end());
     }
 
+    // Each value written to a slot and read only on the straight way after, before anything
+    // else comes in, leaves or writes the slot again (the stack's slots, mostly, which every
+    // expression of the loop shares), given a register name of its own: one slot's values then
+    // no longer clash as one wherever any of them is wanted. A value a way out writes back, or
+    // that is wanted where a jump goes, keeps the slot's name.
+    int renamed = 0;
+    void renameValues() {
+        std::vector<bool> joined(ins.size(), false);
+        if (!joined.empty()) joined[0] = true;
+        for (int e : entries)
+            if (e >= 0 && static_cast<size_t>(e) < joined.size()) joined[static_cast<size_t>(e)] = true;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            const Result& r = results[i];
+            for (const LOp& l : r.ops)
+                if (l.jumpTo >= 0) joined[static_cast<size_t>(l.jumpTo)] = true;
+            for (const ExitPoint& e : r.exits)
+                if (e.toEntry >= 0) joined[static_cast<size_t>(e.toEntry)] = true;
+            for (const Edge& e : r.edges)
+                if (e.to >= 0 && static_cast<size_t>(e.to) != i + 1) joined[static_cast<size_t>(e.to)] = true;
+        }
+        auto has = [](const std::vector<Reg>& v, const Reg& d) { return std::find(v.begin(), v.end(), d) != v.end(); };
+        auto exitReads = [&](const ExitPoint& e, const Reg& d) {
+            for (const LOp& l : e.stores)
+                if (has(l.uses, d)) return true;
+            return false;
+        };
+        // The value written at (i, p): the steps reading it, the ways out writing it back, and
+        // for each instruction it is in, the steps it is the slot's value at (`hi` past the last
+        // step: on falling through, or out by the fall's way out). A way out that writes it back
+        // is renamed with it where every step leaving by it is one of those.
+        struct Web {
+            std::vector<std::pair<size_t, size_t>> sites;
+            std::set<std::pair<size_t, int>> outs;
+            std::map<size_t, std::pair<size_t, size_t>> cover;
+        };
+        auto follow = [&](size_t i, size_t p, const Reg& d, Web& w) {
+            size_t ii = i, pp = p + 1;
+            for (;;) {
+                const Result& r = results[ii];
+                const size_t lo = pp;
+                for (; pp < r.ops.size(); pp++) {
+                    const LOp& l = r.ops[pp];
+                    const bool reads = has(l.uses, d), writes = has(l.defs, d);
+                    if (reads) w.sites.emplace_back(ii, pp);
+                    if (l.exit >= 0 && exitReads(r.exits[static_cast<size_t>(l.exit)], d)) w.outs.emplace(ii, l.exit);
+                    if (writes && !reads) {
+                        w.cover[ii] = {lo, pp};  // its way out is before the write; its jump after
+                        return true;
+                    }
+                    if (l.jumpTo >= 0 && liveIn[static_cast<size_t>(l.jumpTo)].count(d)) return false;
+                    if (l.jumpExit >= 0 && exitReads(r.exits[static_cast<size_t>(l.jumpExit)], d)) w.outs.emplace(ii, l.jumpExit);
+                }
+                w.cover[ii] = {lo, r.ops.size()};
+                if (r.fallExit >= 0) {
+                    if (exitReads(r.exits[static_cast<size_t>(r.fallExit)], d)) w.outs.emplace(ii, r.fallExit);
+                    return true;
+                }
+                if (!r.fallsThrough || ii + 1 >= ins.size()) return true;
+                if (!liveIn[ii + 1].count(d)) return true;
+                if (joined[ii + 1] || !in[ii + 1].known || results[ii + 1].island) return false;
+                ii++;
+                pp = 0;
+            }
+        };
+        // Every step leaving by a way out the value is written back on is one it is the value at.
+        auto outsHold = [&](const Web& w, const Reg& d) {
+            for (const auto& [ii, k] : w.outs) {
+                const Result& r = results[ii];
+                if (r.exits[static_cast<size_t>(k)].toEntry >= 0) return false;
+                const auto [lo, hi] = w.cover.at(ii);
+                for (size_t q = 0; q < r.ops.size(); q++) {
+                    const LOp& l = r.ops[q];
+                    if (l.exit == k && (q < lo || q > hi)) return false;
+                    // A jump goes after the step's writes: past the value where the step writes it.
+                    if (l.jumpExit == k && (q < lo || q > hi || (q == hi && has(l.defs, d)))) return false;
+                }
+                if (r.fallExit == k && hi != r.ops.size()) return false;
+            }
+            return true;
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known || results[i].island) continue;
+            for (size_t p = 0; p < results[i].ops.size(); p++) {
+                const std::vector<Reg> defs = results[i].ops[p].defs;
+                for (const Reg& d : defs) {
+                    if (d.slot < 0 || has(results[i].ops[p].uses, d)) continue;
+                    Web w;
+                    if (!follow(i, p, d, w) || w.sites.empty() || !outsHold(w, d)) continue;
+                    const Reg to{-1000000 - renamed++, d.cls};
+                    auto rename = [&](LOp& l) {
+                        for (auto* list : {&l.named, &l.uses, &l.defs})
+                            for (Reg& x : *list)
+                                if (x == d) x = to;
+                    };
+                    // The write, each read (one that writes it again, as an increment does, keeps
+                    // it the same value), and the ways out writing it back (to its slot, as before).
+                    for (Reg& x : results[i].ops[p].named) if (x == d) x = to;
+                    for (Reg& x : results[i].ops[p].defs) if (x == d) x = to;
+                    for (const auto& [si, sp] : w.sites) rename(results[si].ops[sp]);
+                    for (const auto& [ii, k] : w.outs)
+                        for (LOp& l : results[ii].exits[static_cast<size_t>(k)].stores) rename(l);
+                }
+            }
+        }
+    }
+
     void findLive() {
         liveIn.assign(ins.size(), {});
         for (bool changed = true; changed;) {
@@ -2320,10 +2481,37 @@ struct Region {
                 for (const LOp& l : e.stores)
                     for (const Reg& u : l.named) note(u);
         }
-        // The most clashing first, each the lowest register none of those it meets has.
+        // The order (Chaitin's, as Briggs has it): one clashing with fewer than there are
+        // registers set aside, those it meets then clashing with one fewer, and again; where
+        // none is, the one clashing most set aside all the same, in hope. Registers given the
+        // other way round, each the lowest none of those it meets has: one set aside with fewer
+        // clashes than registers always finds one, and the hoped-for often do.
         std::vector<Reg> order;
-        for (const auto& [r, others] : clash) order.push_back(r);
-        std::stable_sort(order.begin(), order.end(), [&](const Reg& a, const Reg& b) { return clash[a].size() > clash[b].size(); });
+        {
+            std::map<Reg, int> degree;
+            std::set<Reg> left;
+            for (const auto& [r, others] : clash) {
+                degree[r] = static_cast<int>(others.size());
+                left.insert(r);
+            }
+            while (!left.empty()) {
+                auto pick = left.end();
+                for (auto it = left.begin(); it != left.end(); ++it)
+                    if (degree[*it] < (it->cls == CI ? 9 : 8)) {
+                        pick = it;
+                        break;
+                    }
+                if (pick == left.end())
+                    for (auto it = left.begin(); it != left.end(); ++it)
+                        if (pick == left.end() || degree[*it] > degree[*pick]) pick = it;
+                const Reg r = *pick;
+                left.erase(pick);
+                order.push_back(r);
+                for (const Reg& o : clash[r])
+                    if (left.count(o)) degree[o]--;
+            }
+            std::reverse(order.begin(), order.end());
+        }
         for (const Reg& r : order) {
             const int limit = r.cls == CI ? 9 : 8;
             std::vector<bool> taken(static_cast<size_t>(limit), false);
@@ -2370,12 +2558,34 @@ struct Region {
         return l;
     }
 
+    // The slots some state takes another slot to be a copy of, as entered: their memory must
+    // hold what was entered until a way out has copied it, so none of them is written there
+    // early.
+    std::set<int> copySources() const {
+        std::set<int> from;
+        auto add = [&](const State& st) {
+            for (const auto& [slot, k] : st.kinds)
+                if ((k.bits & kCopies) != 0 && k.src >= 0) from.insert(k.src);
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            add(in[i]);
+            add(results[i].after);
+            for (const ExitPoint& e : results[i].exits) add(e.state);
+        }
+        return from;
+    }
+
     // One more value kept in its slot: of those that can be (a slot's, one kind wherever it is
-    // written, not changed in place by Math's functions), the one clashing most for how often it
-    // is used. False where there is none.
+    // written, not changed in place by Math's functions, not one another is a copy of as
+    // entered), the one clashing most for how often it is used. False where there is none.
     bool spillOne() {
         std::map<Reg, int> used;
         std::set<Reg> barred;
+        for (const int slot : copySources()) {
+            barred.insert(Reg{slot, CI});
+            barred.insert(Reg{slot, CF});
+        }
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             const Result& res = results[i];
@@ -2789,6 +2999,8 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
                 r.makeAhead();
                 if (r.templates > 0) r.findLive();
             }
+            r.renameValues();
+            r.findLive();
             lap(2);
             while (!r.giveRegisters()) {
                 if (!r.spillOne()) refuse("more values at once than registers, and none can be kept in its slot");

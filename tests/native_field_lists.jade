@@ -1,0 +1,71 @@
+// Native code (M9.5), 2026-11-11: a list read from a field inside a loop (`items[i]`, where
+// `items` is the object's field). What the field holds where the region is made says what its
+// items are (ints, floats, or bytes); found by the field's cache, or by its name where that read
+// has not been made yet (a loop inside that has not run). A guess the reads check: a field
+// holding another kind of list later goes back to the VM, with the same answers.
+
+class Table {
+  private val counts : open List<int> = List(64) { 0 }
+  private val weights : open List<float> = List(64) { it * 0.5 }
+  private val marks = Bytes(64)
+  private val seen : open List<int> = List(64) { 0 }
+  var other : open List<any> = [1, 2.5, "three"]
+
+  // Ints and floats read and written in the loop, from the fields.
+  fun tally(n : int) : float {
+    var total = 0.0
+    for (i in 0 ..< n) {
+      val k = (i * 7) % 64
+      counts[k] = counts[k] + 1
+      total += weights[k] * counts[k]
+      marks[k] = (counts[k] & 255).toByte()
+    }
+    return total
+  }
+
+  // A loop inside that runs only now and then: its field read has not been made when the
+  // outer loop's region is.
+  fun withReset(n : int) : int {
+    var used = 0
+    var sum = 0
+    for (i in 0 ..< n) {
+      seen[used] = i
+      used += 1
+      if (used == 64) {
+        for (j in 0 ..< used) { sum += seen[j] % 7 }
+        used = 0
+      }
+    }
+    return sum + used
+  }
+
+  // A field of values: read as the VM reads it.
+  fun mixed(n : int) : string {
+    var ints = 0
+    for (i in 0 ..< n) {
+      if (other[i % 3] is int) { ints += 1 }
+    }
+    return "$ints"
+  }
+}
+
+val t = Table()
+print(t.tally(10000), t.withReset(10000), t.mixed(3000))   // expect: 12379764.0 29963 1000
+
+// A field of values of any kind, read in a loop that tests each one's kind (the VM's work), and
+// later holding floats where it held ints: the same answers as the VM alone gives.
+class Box {
+  var values : open List<any> = List<any>(16) { it }
+  fun sum(n : int) : string {
+    var t = 0.0
+    for (i in 0 ..< n) {
+      val v = values[i % 16]
+      if (v is int) { t += v as int } else { t += v as float }
+    }
+    return "$t"
+  }
+}
+val b = Box()
+val first = b.sum(1000)
+b.values = List<any>(16) { it * 1.5 }
+print(first, b.sum(1000))   // expect: 7468.0 11202.0

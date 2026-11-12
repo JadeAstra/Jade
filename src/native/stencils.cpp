@@ -153,7 +153,14 @@ F_A(FSETK, x)
 
 // fa = ib, an int made a float; ia = fb made an int, its whole part, or its floor, ceiling or
 // nearest (half away from 0), leaving for the VM where it does not fit (or is NaN).
-#define CVT_B(b, a) STENCIL(cvtif_##a##_##b) { f##a = static_cast<double>(i##b); NEXT; }
+// (Into a register cleared first: cvtsi2sd keeps the register's upper half, and so would wait
+// for whatever last wrote it, a chain of the loop's float work perhaps. Written out, as the
+// compiler drops a clearing it sees no use for.)
+#define CVT_B(b, a)                                                             \
+    STENCIL(cvtif_##a##_##b) {                                                  \
+        __asm__("xorps %0, %0\n\tcvtsi2sdq %1, %0" : "=&x"(f##a) : "r"(i##b));  \
+        NEXT;                                                                   \
+    }
 #define CVT_A(a, ...) I_B(CVT_B, a)
 F_A(CVT_A, x)
 #define TOINT_B(b, a)                                                           \
