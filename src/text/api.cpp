@@ -1023,25 +1023,6 @@ void registerText(VM& vm) {
         }
         return Value::null();
     });
-    // inkBox(pixels, width, height, background): [x, y, w, h] of the smallest rectangle outside
-    // which every pixel is the background (0xAARRGGBB); null if every one is.
-    def("imageInkBox", 4, 4, [](VM& vm, int, Value* args) -> Value {
-        const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
-        const std::vector<uint8_t>& px = rgbaOf(vm, args[0], w, h);
-        const uint32_t bg = colorOf(vm, args[3]);
-        const uint8_t want[4] = {static_cast<uint8_t>(bg >> 24), static_cast<uint8_t>(bg >> 16), static_cast<uint8_t>(bg >> 8), static_cast<uint8_t>(bg)};
-        int64_t minX = w, minY = h, maxX = -1, maxY = -1;
-        for (int64_t y = 0; y < h; y++)
-            for (int64_t x = 0; x < w; x++)
-                if (std::memcmp(&px[static_cast<size_t>((y * w + x) * 4)], want, 4) != 0) {
-                    minX = std::min(minX, x);
-                    maxX = std::max(maxX, x);
-                    minY = std::min(minY, y);
-                    maxY = std::max(maxY, y);
-                }
-        if (maxX < 0) return Value::null();
-        return listOf(vm, {Value::integer(minX), Value::integer(minY), Value::integer(maxX - minX + 1), Value::integer(maxY - minY + 1)});
-    });
     // samePixels(a, b): whether two pictures' pixels are the same, byte for byte.
     def("imageSame", 2, 2, [](VM&, int, Value* args) -> Value {
         auto bytesOf = [&](Value v) -> const std::vector<uint8_t>* {

@@ -1184,53 +1184,34 @@ void registerNumeric(VM& vm) {
         }
         return Value::null();
     });
-    // histogram(cells, bins, from, to, colour): how many items fall in each of `bins` equal parts
-    // of `from` to `to` (the least and the most when null; 0 to 256 for colours, a bin a level),
-    // the last part taking `to` itself; for colours a list of four, red, green, blue, alpha.
-    def("histogram", 5, 5, [](VM& vm, int, Value* args) -> Value {
+    // histogram(cells, bins, from, to): how many items fall in each of `bins` equal parts of
+    // `from` to `to` (the least and the most when null), the last part taking `to` itself. A
+    // picture's is Jade's (numeric.jade).
+    def("histogram", 4, 4, [](VM& vm, int, Value* args) -> Value {
         const size_t bins = sizeArg(vm, args[1], "bins");
         if (bins == 0) fail(vm, Thrown::IllegalArgumentException, "a histogram has 1 bin or more");
-        const bool colour = args[4].truthy();
-        std::vector<std::vector<int64_t>> counts;
-        auto count = [&](const std::vector<double>& plane, double lo, double hi, std::vector<int64_t>& into) {
-            into.assign(bins, 0);
-            const double span = hi - lo;
-            for (double v : plane) {
-                if (std::isnan(v) || v < lo || v > hi) continue;
-                size_t b = span > 0 ? static_cast<size_t>((v - lo) / span * static_cast<double>(bins)) : 0;
-                if (b >= bins) b = bins - 1;
-                into[b]++;
-            }
-        };
-        if (colour) {
-            const size_t n = asList(args[0])->size();
-            const auto planes = planesOf(vm, args[0], n, true, false);
-            const double lo = args[2].isNull() ? 0 : vm.toNumber(args[2], "from"), hi = args[3].isNull() ? 256 : vm.toNumber(args[3], "to");
-            counts.resize(4);
-            for (int c = 0; c < 4; c++) count(planes[static_cast<size_t>(c)], lo, hi, counts[static_cast<size_t>(c)]);
-        } else {
-            const Numbers n = numbers(vm, args[0], "the grid");
-            std::vector<double> plane(n.count);
-            double lo = std::numeric_limits<double>::infinity(), hi = -lo;
-            for (size_t k = 0; k < n.count; k++) {
-                plane[k] = n.f(k);
-                if (!std::isnan(plane[k])) lo = std::min(lo, plane[k]), hi = std::max(hi, plane[k]);
-            }
-            if (!args[2].isNull()) lo = vm.toNumber(args[2], "from");
-            if (!args[3].isNull()) hi = vm.toNumber(args[3], "to");
-            if (!(lo <= hi)) lo = hi = 0;
-            counts.resize(1);
-            count(plane, lo, hi, counts[0]);
+        const Numbers n = numbers(vm, args[0], "the grid");
+        std::vector<double> plane(n.count);
+        double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+        for (size_t k = 0; k < n.count; k++) {
+            plane[k] = n.f(k);
+            if (!std::isnan(plane[k])) lo = std::min(lo, plane[k]), hi = std::max(hi, plane[k]);
         }
-        ObjList* all = newList(vm);
-        TempRoot keepAll(vm, Value::object(all));
-        for (auto& c : counts) {
-            ObjList* made = newNumbers(vm, false, c.size());
-            const Value v = Value::object(made);
-            vm.listInsert(all, all->size(), &v, 1);
-            store(vm, made, c);
+        if (!args[2].isNull()) lo = vm.toNumber(args[2], "from");
+        if (!args[3].isNull()) hi = vm.toNumber(args[3], "to");
+        if (!(lo <= hi)) lo = hi = 0;
+        std::vector<int64_t> counts(bins, 0);
+        const double span = hi - lo;
+        for (double v : plane) {
+            if (std::isnan(v) || v < lo || v > hi) continue;
+            size_t b = span > 0 ? static_cast<size_t>((v - lo) / span * static_cast<double>(bins)) : 0;
+            if (b >= bins) b = bins - 1;
+            counts[b]++;
         }
-        return colour ? Value::object(all) : vm.listGet(all, 0);
+        ObjList* made = newNumbers(vm, false, counts.size());
+        TempRoot keep(vm, Value::object(made));
+        store(vm, made, counts);
+        return Value::object(made);
     });
 
     // ---- Grids ----

@@ -134,7 +134,7 @@ fun open List<float>.addAt(indices : List<int>, values : List<Number> | Number) 
 // How many items fall in each of `bins` equal parts of `from` to `to` (the least and the most
 // item when they are null), the last part taking `to` itself; items outside are not counted.
 fun <T : Number> List<T>.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List<int> =>
-  __num.histogram(this, bins, from, to, false) as List<int>
+  __num.histogram(this, bins, from, to) as List<int>
 
 // --- Grids of numbers ---
 
@@ -331,7 +331,7 @@ fun <T> __gridIndices(grid : Grid<T>, xs : List<int>, ys : List<int>) : List<int
 // How many cells fall in each of `bins` equal parts of `from` to `to` (the least and the most cell
 // when they are null).
 fun <T : Number> Grid<T>.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List<int> =>
-  __num.histogram(cells, bins, from, to, false) as List<int>
+  __num.histogram(cells, bins, from, to) as List<int>
 
 // Every connected area of cells numbered from 0, in the order their first cells come row by row:
 // two neighbours (across and down, and corner to corner with `diagonal`) in one area where they
@@ -412,8 +412,35 @@ fun Grid<Color>.sample(xs : Grid<float>, ys : Grid<float>, interpolation : Inter
 // How the pixels' parts fall in each of `bins` equal parts of `from` to `to` (0 to 256, a bin a
 // level, when they are null): four lists, red, green, blue, alpha. Auto-levels, equalising,
 // counting colours.
-fun Grid<Color>.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List<List<int>> =>
-  __num.histogram(cells, bins, from, to, true) as List<List<int>>
+fun Grid<Color>.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List<List<int>> {
+  if (bins < 0) { throw IllegalArgumentException("bins is below 0") }
+  if (bins == 0) { throw IllegalArgumentException("a histogram has 1 bin or more") }
+  // How many of each part are at each level, red's 256 first, then green's, blue's and alpha's.
+  val px = __text.imagePixels(cells) as Bytes
+  val levels : open List<int> = List(1024) { 0 }
+  for (p in 0 ..< width * height) {
+    val i = p * 4
+    levels[px[i]] += 1
+    levels[256 + px[i + 1]] += 1
+    levels[512 + px[i + 2]] += 1
+    levels[768 + px[i + 3]] += 1
+  }
+  // Then the levels shared among the bins, the last bin taking `to` itself.
+  val lo = from?.toFloat() ?: 0.0
+  val hi = to?.toFloat() ?: 256.0
+  val span = hi - lo
+  val made : open List<List<int>> = []
+  for (c in 0 ..< 4) {
+    val counts : open List<int> = List(bins) { 0 }
+    for (v in 0 ..< 256) {
+      if (v < lo or v > hi) { continue }
+      val at = span > 0 ? (v - lo) / span * bins : 0.0
+      counts[at >= bins ? bins - 1 : at.toInt()] += levels[c * 256 + v]
+    }
+    made.add(counts)
+  }
+  return made
+}
 
 // Every connected area of pixels numbered from 0, two neighbours in one area where no part of
 // their colours (alpha too) differs by more than `tolerance`.

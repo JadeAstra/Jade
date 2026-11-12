@@ -1036,9 +1036,14 @@ class Image : Drawable {
 
   // The picture with its colours turned round, each part 255 less itself; alpha kept.
   fun inverted() : Image {
-    val table : open List<int> = []
-    for (v in 0 .. 255) { table.add(255 - v) }
-    return of(pixels.mapChannels(table, table, table))
+    val px = rgbaBytes()
+    for (p in 0 ..< width * height) {
+      val i = p * 4
+      px[i] = (255 - px[i]).toByte()
+      px[i + 1] = (255 - px[i + 1]).toByte()
+      px[i + 2] = (255 - px[i + 2]).toByte()
+    }
+    return Image.taking(width, height, px)
   }
 
   // The pixels joined to (x, y) through pixels whose colour differs from its own by no more than
@@ -1057,8 +1062,54 @@ class Image : Drawable {
 
   // The smallest rectangle outside which every pixel is `background`; null if all of them are.
   fun inkBox(background : Color = Color.clear) : Rect? {
-    val box : List<int>? = __text.imageInkBox(cells.cells, width, height, background.argb)
-    return box == null ? null : Rect(box[0], box[1], box[2], box[3])
+    if (width == 0 or height == 0) { return null }
+    val px = rgbaBytes()
+    val r = background.red
+    val g = background.green
+    val b = background.blue
+    val a = background.alpha
+    val w = width
+    val n = width * height
+    // The first pixel of ink from the top and the last from the bottom: its top and bottom rows.
+    var first = -1
+    for (p in 0 ..< n) {
+      val i = p * 4
+      if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+        first = p
+        break
+      }
+    }
+    if (first < 0) { return null }
+    var last = first
+    for (k in 0 ..< n - first) {
+      val i = (n - 1 - k) * 4
+      if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+        last = n - 1 - k
+        break
+      }
+    }
+    // Then each row between, looked at only left of the leftmost ink found so far and right of
+    // the rightmost: a picture inked to its edges is done at once.
+    var left = first % w
+    var right = last % w
+    for (y in first / w .. last / w) {
+      val row = y * w * 4
+      for (x in 0 ..< left) {
+        val i = row + x * 4
+        if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+          left = x
+          break
+        }
+      }
+      for (k in 0 ..< w - 1 - right) {
+        val i = row + (w - 1 - k) * 4
+        if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+          right = w - 1 - k
+          break
+        }
+      }
+    }
+    return Rect(left, first / w, right - left + 1, last / w - first / w + 1)
   }
 
   // Writes it as a picture file of the format its name's extension asks for (ImageFormat.ofName),
