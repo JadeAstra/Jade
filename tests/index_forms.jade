@@ -1,0 +1,53 @@
+// A class's op [] and op []=, called by the form the checker chose (index reads and index
+// assignments as statements), with the same results as when the form is chosen as it runs.
+
+class Board(val w : int, val h : int) {
+  val cells : open List<int> = List(w * h) { 0 }
+  op [](x : int, y : int) : int => cells[y * w + x]
+  op [](row : Range | int, y : Range | int) : string => "a part"
+  op []=(x : int, y : int, value : int) { cells[y * w + x] = value }
+  op []=(i : int, value : int) { cells[i] = value * 2 }
+  op [](i : int) : int => cells[i]
+}
+
+val b = Board(4, 3)
+b[1, 2] = 7
+b[10] = 2
+print(b[1, 2], b[2, 2], b[0 ..< 2, 1], b[9])          // expect: 7 4 a part 7
+b[3, 0] = 5
+print(b[3, 0], b[3])                                  // expect: 5 5
+
+class Base {
+  op [](i : int) : string => "base $i"
+}
+class Derived : Base {
+  override op [](i : int) : string => "derived $i"
+}
+val things : List<Base> = [Base(), Derived()]
+for (t in things) { print(t[3]) }
+// expect: base 3
+// expect: derived 3
+
+// A value type's op [].
+value Pair(val a : int, val b : int) {
+  op [](i : int) : int => i == 0 ? a : b
+}
+val p = Pair(10, 20)
+print(p[0] + p[1])                                    // expect: 30
+
+// The tensor's items, read and written, and an index outside it.
+val t = Tensor<int>(2, 3)
+t[1, 2] = 9
+val row = t[1, all]
+row[0] = 4
+print(t[1, 2], row[2], t[1, 0], t.reshaped(6)[5])     // expect: 9 9 4 9
+try {
+  print(t[2, 0])
+} catch (e : IndexOutOfBoundsException) {
+  print(e.message)                                    // expect: [2, 0] is outside the tensor, which is 2 by 3
+}
+try {
+  t[0, 0, 0] = 1
+} catch (e : IllegalArgumentException) {
+  print(e.message)                                    // expect: a tensor of 2 axes is indexed by 2 ints, not 3
+}

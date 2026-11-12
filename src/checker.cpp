@@ -5597,6 +5597,7 @@ struct Checker::Impl {
             return unknownType();
         }
         FuncInfo* f = found.size() == 1 ? found[0] : operatorForm(found, m.env, args);
+        if (f != nullptr && !m.methods.empty() && op == "[]" && !left.nullable) chosenOperators[&at] = {f, found.size() > 1};
         if (f == nullptr) {
             bool known = true, anyFits = false;
             for (const Type& a : args) known = known && !a.unknown();
@@ -5619,6 +5620,21 @@ struct Checker::Impl {
                 report(at, left.cls->name + "'s operator " + op + " takes " + describe(want) + ", not " + describe(args[i]));
         }
         return subst(resultOf(f), m.env);
+    }
+
+    // `grid[x, y] = v` on a class with several forms of op []=: the one its indexes and value fit.
+    void indexSetForm(const AssignExpr& a, const Type& value) {
+        const auto& ix = static_cast<const IndexExpr&>(*a.target);
+        if (ix.defaultValue) return;
+        const Type holder = typeQuietly(*ix.object);
+        if (holder.kind != Type::Class || holder.cls == nullptr || holder.nullable) return;
+        Member m = lookupMember(holder, "[]=");
+        if (m.methods.empty()) return;
+        std::vector<Type> args{typeQuietly(*ix.index)};
+        for (const ExprPtr& more : ix.more) args.push_back(typeQuietly(*more));
+        args.push_back(value);
+        FuncInfo* f = m.methods.size() == 1 ? m.methods[0] : operatorForm(m.methods, m.env, args);
+        if (f != nullptr && f->params.size() == args.size()) chosenOperators[&a] = {f, m.methods.size() > 1};
     }
 
     static std::string opText(TokenType op) {
@@ -6723,6 +6739,7 @@ struct Checker::Impl {
         }
         if (targetPlace != nullptr) notePlaceLocalChange(targetPlace, &a);
         else if (local != nullptr && valueClass(value) && silent == 0) keptStores.insert(&a);
+        if (a.op == TokenType::Eq && a.target->kind == ExprKind::Index) indexSetForm(a, value);
         if (local != nullptr) {
             forget(targetName);
             // `next = Dog("Fido")`: from here on it is that value, not null.
@@ -9138,6 +9155,10 @@ struct Checker::Impl {
     // goes first. Null where none fits or several do, which is reported, and where an argument
     // or a parameter has a type not known well enough to choose by, which is not.
     std::unordered_map<const CallExpr*, FuncInfo*> chosenForms;
+    // The form of a class's op [] an index chose, or of its op []= an assignment to one did, and
+    // whether the class has several: called by its name (with the form's signature where there are
+    // several), with nothing to look up or choose as it runs.
+    std::unordered_map<const Node*, std::pair<FuncInfo*, bool>> chosenOperators;
     // Calls of an extension function with one form in reach, which the program finds by its
     // name when it runs; code copied in from an inline function names it whole (G31).
     std::unordered_map<const CallExpr*, FuncInfo*> extensionCalls;
@@ -12285,6 +12306,13 @@ const FunctionDecl* Checker::chosenForm(const CallExpr& call) const {
     // A built-in's forms are told apart by the C++ itself, under its one name.
     if (found == impl_->chosenForms.end() || found->second->isExternal) return nullptr;
     return found->second->decl;
+}
+
+const FunctionDecl* Checker::chosenOperator(const Node& at, bool& several) const {
+    auto found = impl_->chosenOperators.find(&at);
+    if (found == impl_->chosenOperators.end() || found->second.first->isExternal) return nullptr;
+    several = found->second.second;
+    return found->second.first->decl;
 }
 
 void Checker::run() {

@@ -3455,6 +3455,8 @@ private:
                 const Expr& expr = *static_cast<const ExprStmt&>(stmt).expr;
                 if (expr.kind == ExprKind::IncDec) {
                     compileIncDec(static_cast<const IncDecExpr&>(expr));  // a statement; leaves no value
+                } else if (compileIndexSetForm(expr)) {
+                    // `grid[x, y] = v` as a statement, by the form of op []= the checker chose
                 } else {
                     compileExpr(expr);
                     emit(Op::Pop);
@@ -6625,7 +6627,10 @@ private:
                 for (const ExprPtr& m : e.more) compileExpr(*m);
                 if (e.defaultValue) compileExpr(*e.defaultValue);
                 line_ = e.line;
-                if (!e.more.empty()) {
+                if (const std::string form = operatorFormName(e, "[]"); !e.defaultValue && !form.empty()) {
+                    emit(Op::Invoke, stringConstant(form));  // the form the checker chose, called by its name
+                    emitByte(static_cast<uint8_t>(e.more.size() + 1));
+                } else if (!e.more.empty()) {
                     emit(Op::IndexN);
                     emitByte(static_cast<uint8_t>(e.more.size() + 1));
                 } else if (e.defaultValue) emit(Op::GetIndexOr);
@@ -7457,6 +7462,41 @@ private:
         line_ = at.line;
         emit(Op::AtomicField, stringConstant(op.field));
         emitByte(op.kind);
+    }
+
+    // The name a class's op [] (`op` "[]") or op []= is called by where the checker chose one of
+    // its several forms for `at`: the method's name with that form's signature; "" otherwise.
+    std::string operatorFormName(const Node& at, const std::string& op) {
+        if (session_.checker == nullptr) return "";
+        bool several = false;
+        const FunctionDecl* chosen = session_.checker->chosenOperator(at, several);
+        if (chosen == nullptr) return "";
+        if (!several) return op;
+        const FunctionDecl* root = session_.checker->formRoot(*chosen);
+        return root != nullptr ? op + signatureText(*root) : "";
+    }
+
+    // `grid[x, y] = v` as a statement on a class whose op []= has several forms: a call of the one
+    // the checker chose, its result dropped (as a statement's is), rather than SetIndexN choosing
+    // as it runs. False for any other statement.
+    bool compileIndexSetForm(const Expr& expr) {
+        if (expr.kind != ExprKind::Assign) return false;
+        const auto& a = static_cast<const AssignExpr&>(expr);
+        if (a.op != TokenType::Eq || a.target->kind != ExprKind::Index) return false;
+        const auto& target = static_cast<const IndexExpr&>(*a.target);
+        if (target.defaultValue) return false;
+        const std::string form = operatorFormName(a, "[]=");
+        if (form.empty()) return false;
+        if (Checker::AtomicFieldOp atomic; session_.checker->atomicField(a, atomic)) return false;
+        compileExpr(*target.object);
+        compileExpr(*target.index);
+        compileMoreIndexes(target);
+        compileExpr(*a.value);
+        line_ = a.line;
+        emit(Op::Invoke, stringConstant(form));
+        emitByte(static_cast<uint8_t>(target.more.size() + 2));
+        emit(Op::Pop);
+        return true;
     }
 
     void compileAssign(const AssignExpr& e) {

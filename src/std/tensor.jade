@@ -220,31 +220,72 @@ class Tensor<T> {
     if (!writable) { throw IllegalStateException("this tensor is only read here") }
     data[position(index)] = value
   }
+  // The items by index, worked out in place where the index fits; anything else goes through
+  // position(), which gives the error. A list for the index each time cost about 250 ns an item.
   // The item at `i` of a tensor of one axis.
-  op [](i : int) : T => data[position([i])]
+  op [](i : int) : T {
+    val s = shape
+    if (s.size == 1 and i >= 0 and i < s[0]) { return data[offset + i * strides[0]] }
+    return data[position([i])]
+  }
   // The item at (`i`, `j`) of a tensor of two axes.
-  op [](i : int, j : int) : T => data[position([i, j])]
+  op [](i : int, j : int) : T {
+    val s = shape
+    if (s.size == 2 and i >= 0 and i < s[0] and j >= 0 and j < s[1]) {
+      val st = strides
+      return data[offset + i * st[0] + j * st[1]]
+    }
+    return data[position([i, j])]
+  }
   // The item at (`i`, `j`, `k`) of a tensor of three axes.
-  op [](i : int, j : int, k : int) : T => data[position([i, j, k])]
+  op [](i : int, j : int, k : int) : T {
+    val s = shape
+    if (s.size == 3 and i >= 0 and i < s[0] and j >= 0 and j < s[1] and k >= 0 and k < s[2]) {
+      val st = strides
+      return data[offset + i * st[0] + j * st[1] + k * st[2]]
+    }
+    return data[position([i, j, k])]
+  }
   // The item at (`i`, `j`, `k`, `l`) of a tensor of four axes.
-  op [](i : int, j : int, k : int, l : int) : T => data[position([i, j, k, l])]
+  op [](i : int, j : int, k : int, l : int) : T {
+    val s = shape
+    if (s.size == 4 and i >= 0 and i < s[0] and j >= 0 and j < s[1] and k >= 0 and k < s[2] and l >= 0 and l < s[3]) {
+      val st = strides
+      return data[offset + i * st[0] + j * st[1] + k * st[2] + l * st[3]]
+    }
+    return data[position([i, j, k, l])]
+  }
   // The item at `index`, one int for each axis, whatever its rank.
   fun get(index : List<int>) : T => data[position(index)]
   // Sets the item at `i` of a tensor of one axis.
   op []=(i : int, value : T) {
-    put([i], value)
+    val s = shape
+    if (writable and s.size == 1 and i >= 0 and i < s[0]) { data[offset + i * strides[0]] = value }
+    else { put([i], value) }
   }
   // Sets the item at (`i`, `j`).
   op []=(i : int, j : int, value : T) {
-    put([i, j], value)
+    val s = shape
+    if (writable and s.size == 2 and i >= 0 and i < s[0] and j >= 0 and j < s[1]) {
+      val st = strides
+      data[offset + i * st[0] + j * st[1]] = value
+    } else { put([i, j], value) }
   }
   // Sets the item at (`i`, `j`, `k`).
   op []=(i : int, j : int, k : int, value : T) {
-    put([i, j, k], value)
+    val s = shape
+    if (writable and s.size == 3 and i >= 0 and i < s[0] and j >= 0 and j < s[1] and k >= 0 and k < s[2]) {
+      val st = strides
+      data[offset + i * st[0] + j * st[1] + k * st[2]] = value
+    } else { put([i, j, k], value) }
   }
   // Sets the item at (`i`, `j`, `k`, `l`).
   op []=(i : int, j : int, k : int, l : int, value : T) {
-    put([i, j, k, l], value)
+    val s = shape
+    if (writable and s.size == 4 and i >= 0 and i < s[0] and j >= 0 and j < s[1] and k >= 0 and k < s[2] and l >= 0 and l < s[3]) {
+      val st = strides
+      data[offset + i * st[0] + j * st[1] + k * st[2] + l * st[3]] = value
+    } else { put([i, j, k, l], value) }
   }
   // Sets the item at `index`, one int for each axis.
   fun set(index : List<int>, value : T) {

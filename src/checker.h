@@ -143,6 +143,10 @@ public:
     // For a call of a name with several forms (overloads, D56): the declaration of the form it
     // means, where that could be told; null otherwise, and the form is chosen when it runs.
     const FunctionDecl* chosenForm(const CallExpr& call) const;
+    // For `grid[x, y]` (the IndexExpr) or `grid[x, y] = v` (the AssignExpr) on a class with an
+    // op [] or op []= of its own: the declaration of the form it means, and whether there are
+    // several; null otherwise.
+    const FunctionDecl* chosenOperator(const Node& at, bool& several) const;
     // For a call of an extension function: the declaration the checker found, whether or not
     // the name has other forms; null for any other call.
     const FunctionDecl* extensionCalled(const CallExpr& call) const;
