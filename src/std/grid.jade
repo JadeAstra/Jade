@@ -39,8 +39,9 @@ class Grid<T> {
 
   // -- One cell --
 
-  // The cell in column `x` of row `y`; an IndexOutOfBoundsException outside the grid.
-  op [](x : int, y : int) : T {
+  // The cell in column `x` of row `y`; an IndexOutOfBoundsException outside the grid. Put in
+  // place where it is used (B2).
+  inline op [](x : int, y : int) : T {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw __outside(x, y) }
     return cells[y * width + x]
   }

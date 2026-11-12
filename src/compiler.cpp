@@ -1021,10 +1021,58 @@ private:
         return &found->second;
     }
 
+    // Where an inline function's body is put: a call, or `a[i]` of an inline op [] (B2): the
+    // object it is called on, written (`object`) or the code's own (`bareThis`), the arguments
+    // in the order they are written, and the line.
+    struct InlineSite {
+        const Node* node = nullptr;
+        const CallExpr* call = nullptr;  // a call: its type arguments
+        const Expr* object = nullptr;
+        int objectLine = 0;
+        bool safe = false;               // `a?.f()`
+        bool bareThis = false;
+        std::vector<const Expr*> args;
+        std::vector<char> spread;
+        int line = 0;
+    };
     bool compileInlineCall(const CallExpr& e) {
         if (session_.checker == nullptr || inlineDepth_ >= 48) return false;
         Checker::InlineCall info;
         if (!session_.checker->inlineCall(e, info)) return false;
+        const MemberExpr* member = e.callee->kind == ExprKind::Member ? static_cast<const MemberExpr*>(e.callee.get()) : nullptr;
+        if (member != nullptr && importedMember(*member->object, member->name, *member) != nullptr) member = nullptr;
+        // A static member has no object: `Class.f()` names its class, which there is nothing to work out of (G34).
+        const bool hasReceiver = info.extension || (info.owner != nullptr && !info.fn->isStatic);
+        if (hasReceiver && member == nullptr && e.callee->kind != ExprKind::Name) return false;
+        InlineSite site;
+        site.node = &e;
+        site.call = &e;
+        if (member != nullptr) {
+            site.object = member->object.get();
+            site.objectLine = member->line;
+            site.safe = member->safe;
+        }
+        site.bareThis = member == nullptr;
+        for (const ExprPtr& a : e.args) site.args.push_back(a.get());
+        site.spread = e.spread;
+        site.line = e.line;
+        return compileInlined(site, info);
+    }
+    // `a[i]` where the checker chose an inline op [] (B2): its body in place.
+    bool compileInlineIndex(const IndexExpr& e) {
+        if (session_.checker == nullptr || inlineDepth_ >= 48 || e.defaultValue) return false;
+        Checker::InlineCall info;
+        if (!session_.checker->inlineCall(e, info) || info.owner == nullptr || info.fn->isStatic) return false;
+        InlineSite site;
+        site.node = &e;
+        site.object = e.object.get();
+        site.objectLine = e.line;
+        site.args.push_back(e.index.get());
+        for (const ExprPtr& m : e.more) site.args.push_back(m.get());
+        site.line = e.line;
+        return compileInlined(site, info);
+    }
+    bool compileInlined(const InlineSite& e, const Checker::InlineCall& info) {
         const FunctionDecl& fn = *info.fn;
         if (fn.isAbstract) return false;
         if (info.automatic) {
@@ -1033,11 +1081,7 @@ private:
             for (const FunctionState* state = fs_; state != nullptr; state = state->enclosing)
                 if (state->decl == &fn) return false;
         }
-        const MemberExpr* member = e.callee->kind == ExprKind::Member ? static_cast<const MemberExpr*>(e.callee.get()) : nullptr;
-        if (member != nullptr && importedMember(*member->object, member->name, *member) != nullptr) member = nullptr;
-        // A static member has no object: `Class.f()` names its class, which there is nothing to work out of (G34).
         const bool hasReceiver = info.extension || (info.owner != nullptr && !fn.isStatic);
-        if (hasReceiver && member == nullptr && e.callee->kind != ExprKind::Name) return false;
 
         const int saved = enterValueBlock();
         beginScope();
@@ -1045,14 +1089,14 @@ private:
         int toNull = -1;
         int receiver = -1;
         if (hasReceiver) {
-            if (member != nullptr) {
-                compileExpr(*member->object);
-                line_ = member->line;
-                if (member->safe) toNull = emitJump(Op::JumpIfNull);
+            if (e.object != nullptr) {
+                compileExpr(*e.object);
+                line_ = e.objectLine;
+                if (e.safe) toNull = emitJump(Op::JumpIfNull);
             } else {
-                emitGet("this", e);  // a member called bare, on the object of the code calling it
+                emitGet("this", *e.node);  // a member called bare, on the object of the code calling it
             }
-            receiver = addLocal("(inline receiver)", true, e, true);
+            receiver = addLocal("(inline receiver)", true, *e.node, true);
         }
         // The arguments, in the order they are written; a lambda the body only calls is kept, not made.
         const size_t n = fn.params.size();
@@ -1062,7 +1106,7 @@ private:
         // given locals and literals alone: a local is read where it is, as nothing can change it
         // before the body is done with it.
         bool readInPlace = info.automatic && info.pure;
-        for (const ExprPtr& arg : e.args)
+        for (const Expr* arg : e.args)
             if (arg->kind != ExprKind::Name && arg->kind != ExprKind::Literal) readInPlace = false;
         for (size_t i = 0; i < e.args.size(); i++) {
             const int p = i < info.paramOf.size() ? info.paramOf[i] : -1;
@@ -1140,7 +1184,7 @@ private:
             if (!bound[p] && (t == nullptr || t->name.empty() || t->name == "Function" || !t->result.empty())) frame.everyFunctionBound = false;
         }
         frame.owner = ++nextOwner_;
-        if (std::vector<RuntimeType> args; session_.checker->typeArguments(e, args))
+        if (std::vector<RuntimeType> args; e.call != nullptr && session_.checker->typeArguments(*e.call, args))
             for (size_t i = 0; i < fn.typeParams.size() && i < args.size(); i++)
                 if (RuntimeType typeArg = args[i]; fromCall(typeArg)) frame.typeArgs[fn.typeParams[i].name] = typeArg;
         inlineBodies_.insert(frame.owner);
@@ -6635,6 +6679,7 @@ private:
 
             case ExprKind::Index: {
                 const auto& e = static_cast<const IndexExpr&>(expr);
+                if (compileInlineIndex(e)) break;  // an inline op [] (B2)
                 compileExpr(*e.object);
                 compileExpr(*e.index);
                 for (const ExprPtr& m : e.more) compileExpr(*m);

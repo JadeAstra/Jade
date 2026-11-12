@@ -1,0 +1,108 @@
+// An inline op [] (B2, 2026-11-12): its body put where `a[i]` is used, as an inline function's is
+// where it is called; Grid's and Image's are, so that reading pixels costs no call. The same
+// answers and errors as a call, run three times (a loop's region is made the second time it
+// starts); every answer what `jade --interpret` gives.
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+// One index and two, a field of the object, a check that throws, another inline op [] inside.
+class Ring(val items : List<int>) {
+  inline op [](i : int) : int {
+    val n = items.size
+    return items[((i % n) + n) % n]
+  }
+}
+class Table(val width : int, val height : int) {
+  internal val cells : open List<float> = List(width * height) { it * 0.5 }
+  inline op [](x : int, y : int) : float {
+    if (x < 0 or y < 0 or x >= width or y >= height) { throw IndexOutOfBoundsException("($x, $y) is outside the table, which is $width by $height") }
+    return cells[y * width + x]
+  }
+}
+class Shelf(val table : Table) {
+  inline op [](i : int) : float => table[i % table.width, i / table.width]
+}
+val ring = Ring([10, 20, 30])
+print(ring[0], ring[4], ring[-1], ring[-7])   // expect: 10 20 30 30
+val table = Table(4, 3)
+print(table[0, 0], table[3, 2], Shelf(table)[6])   // expect: 0.0 5.5 3.0
+print(failing { table[4, 0] }, failing { table[0, -1] })   // expect: IndexOutOfBoundsException: (4, 0) is outside the table, which is 4 by 3 IndexOutOfBoundsException: (0, -1) is outside the table, which is 4 by 3
+
+// Arguments worked out once each, in order; the object too.
+var said = ""
+fun note(s : string, v : int) : int {
+  said += s
+  return v
+}
+fun ringOf(s : string) : Ring {
+  said += s
+  return ring
+}
+print(ringOf("r")[note("i", 2)], said)   // expect: 30 ri
+said = ""
+print(table[note("x", 1), note("y", 2)], said)   // expect: 4.5 xy
+
+// In loops: a grid of Colors, of ints, an image's pixels and the image itself.
+fun reds(g : Grid<Color>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) {
+      val c = g[x, y]
+      t += c.red + c.green - c.blue + c.alpha
+    }
+  }
+  return t
+}
+val grid = Grid<Color>(30, 20)
+for (y in 0 ..< 20) {
+  for (x in 0 ..< 30) { grid[x, y] = Color(x * 8, y * 12, (x + y) * 4, 255 - x) }
+}
+print(thrice { reds(grid) })   // expect: 224700
+fun total(g : Grid<int>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) { t += g[x, y] * (x + 1) }
+  }
+  return t
+}
+val ints = Grid<int>(7, 5, fill = 3)
+print(thrice { total(ints) })   // expect: 420
+val picture = Image(25, 16, Color(9, 8, 7))
+picture[3, 4] = Color.red
+fun redsOf(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) { t += im[x, y].red }
+  }
+  return t
+}
+print(thrice { redsOf(picture) }, thrice { reds(picture.pixels) })   // expect: 3846 106245
+fun tableSum(t : Table) : float {
+  var s = 0.0
+  for (y in 0 ..< t.height) {
+    for (x in 0 ..< t.width) { s += t[x, y] }
+  }
+  return s
+}
+print(thrice { tableSum(Table(40, 30)) })   // expect: 359700.0
+
+// Outside, from a loop: the error the op [] throws, at the cell it comes at.
+fun past(g : Grid<Color>, n : int) : int {
+  var t = 0
+  for (x in 0 ..< n) { t += g[x, 1].red }
+  return t
+}
+print(failing { thrice { past(grid, 31) } })   // expect: IndexOutOfBoundsException: (30, 1) is outside the grid, which is 30 by 20
+print(failing { thrice { picture[25, 0] } })   // expect: IndexOutOfBoundsException: pixel (25, 0) is outside the image, which is 25 by 16

@@ -5602,7 +5602,15 @@ struct Checker::Impl {
             return unknownType();
         }
         FuncInfo* f = found.size() == 1 ? found[0] : operatorForm(found, m.env, args);
-        if (f != nullptr && !m.methods.empty() && op == "[]" && !left.nullable) chosenOperators[&at] = {f, found.size() > 1};
+        if (f != nullptr && !m.methods.empty() && op == "[]" && !left.nullable) {
+            chosenOperators[&at] = {f, found.size() > 1};
+            // An inline op [] (B2): its body put in place of `a[i]`, the indexes its parameters in order.
+            if (f->decl != nullptr && f->decl->isInline && silent == 0 && f->params.size() == args.size()) {
+                Binding b;
+                for (size_t i = 0; i < args.size(); i++) b.paramOf.push_back(static_cast<int>(i));
+                noteInlineCall(f, b, at);
+            }
+        }
         if (f == nullptr) {
             bool known = true, anyFits = false;
             for (const Type& a : args) known = known && !a.unknown();
@@ -9116,7 +9124,7 @@ struct Checker::Impl {
                         for (size_t j = 0; j <= cycle.size(); j++) text += (j > 0 ? " -> " : "") + cycle[(i + j) % cycle.size()]->name;
                         Unit* saved = unit;
                         unit = p->unit;
-                        report(*p->decl, "inline fun " + p->name + " calls itself (" + text +
+                        report(*p->decl, std::string(p->name == "[]" ? "inline op " : "inline fun ") + p->name + " calls itself (" + text +
                                              "): copied into each call, it would never end; take 'inline' from one of them (D59)");
                         unit = saved;
                     }
@@ -11834,7 +11842,7 @@ bool Checker::samConversion(const Expr& lambda, RuntimeType& iface, std::string&
 
 bool Checker::samCall(const CallExpr& call) const { return impl_->samCalls.count(&call) != 0; }
 
-bool Checker::inlineCall(const CallExpr& call, InlineCall& out) const {
+bool Checker::inlineCall(const Node& call, InlineCall& out) const {
     auto found = impl_->inlineCalls.find(&call);
     if (found == impl_->inlineCalls.end()) return false;
     const FuncInfo* f = found->second.fn;

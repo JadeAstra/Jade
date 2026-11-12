@@ -320,7 +320,8 @@ public:
         // characters or text, by operators: nothing the program writes runs meanwhile.
         bool pure = false;
     };
-    bool inlineCall(const CallExpr& call, InlineCall& out) const;
+    // A call (or `a[i]` of an inline op [], B2) put in place.
+    bool inlineCall(const Node& call, InlineCall& out) const;
     // Whether a lambda given for this parameter of an inline function is copied in with it: the
     // body only calls it, or passes it on to an inline function that copies it in (D59).
     bool copiedIn(const FunctionDecl& fn, int param) const;

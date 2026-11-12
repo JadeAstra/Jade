@@ -892,8 +892,9 @@ class Image : Drawable {
 
   // -- Its pixels --
 
-  // A pixel, as a Color (D141); outside the image an IndexOutOfBoundsException, or null for getOrNull.
-  op [](x : int, y : int) : Color {
+  // A pixel, as a Color (D141); outside the image an IndexOutOfBoundsException, or null for
+  // getOrNull. Put in place where it is used (B2).
+  inline op [](x : int, y : int) : Color {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw outside(x, y) }
     return cells[x, y]
   }

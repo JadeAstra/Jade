@@ -945,9 +945,13 @@ CASE(GetIndexRef) {
 }
 CASE(OwnLocal) {
     {
-    // A Ref to a frame's place is the variable's own value already (D149), and stays.
+    // A Ref to a frame's place is the variable's own value already (D149), and stays. A value
+    // kept in the value itself (a Color) is a copy there, with no box (B2: `grid[x, y]` put in place).
     Value& slot = base[READ_U16()];
-    if (slot.isRef() && slot.as.obj->type != ObjType::Places) slot = ownRef(slot);
+    if (slot.isRef() && slot.as.obj->type != ObjType::Places) {
+        ObjClass* cls = refClass(slot);
+        slot = cls->smallId != 0 ? smallFrom(cls, refAt(slot, false), layoutOf(cls).size, refType(slot)) : ownRef(slot);
+    }
     DONE();
 }
 }

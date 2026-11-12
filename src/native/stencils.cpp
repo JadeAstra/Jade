@@ -612,6 +612,28 @@ I_A(IREF, x)
         NEXT;                                                                   \
     }
 I_A(IDXSM, x)
+// OwnLocal where slot jade_slot is in memory (B2): a Ref, none deep, to an item of a list of the
+// class jade_ki's items kept in the value itself, none with a type of its own, made a copy of its
+// first (jade_slot2 & 0xFF) bytes, of the type numbered (jade_slot2 >> 32); anything but a Ref
+// as it is. Any other Ref the VM's (a box, or a frame's place, which stays).
+STENCIL(ownsm) {
+    Slot& s = base[jade_slot];
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
+    if ((head & 0xFF) != kKindRef) NEXT;
+    if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) EXIT;
+    const uint8_t* pack = packOf(o, kStoreItems);
+    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki || word<const void*>(pack + kPackItemType) != nullptr ||
+        word<uint32_t>(pack + kPackTypeSlot) != 0 || (head >> 32) >= word<uint64_t>(pack + kPackCount))
+        EXIT;
+    const uint64_t what = static_cast<uint64_t>(jade_slot2);
+    const uint8_t* from = word<const uint8_t*>(pack + kPackBlock) + (head >> 32) * word<uint32_t>(pack + kPackWidth);
+    uint64_t bits = 0;
+    for (uint32_t k = 0; k < (what & 0xFF); k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k);
+    putValue(&s, kKindSmall | (what >> 32) << 32, bits);
+    NEXT;
+}
 // KeepLocal where slot jade_slot is in memory: nothing, unless it holds a Ref to a place of the
 // frame's, which the VM copies.
 STENCIL(keepl) {

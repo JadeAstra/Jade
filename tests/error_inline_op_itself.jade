@@ -1,0 +1,8 @@
+// An inline op [] that uses itself would be copied into itself without end, as an inline function would (B2).
+class Down(val n : int) {
+  inline op [](i : int) : int {   // expect compile error: inline op [] calls itself ([] -> []): copied into each call, it would never end; take 'inline' from one of them (D59)
+    if (i <= 0) { return 0 }
+    return i + this[i - 1]
+  }
+}
+print(Down(3)[4])
