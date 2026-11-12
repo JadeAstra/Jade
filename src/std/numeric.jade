@@ -415,15 +415,15 @@ fun Grid<Color>.sample(xs : Grid<float>, ys : Grid<float>, interpolation : Inter
 fun Grid<Color>.histogram(bins : int = 256, from : Number? = null, to : Number? = null) : List<List<int>> {
   if (bins < 0) { throw IllegalArgumentException("bins is below 0") }
   if (bins == 0) { throw IllegalArgumentException("a histogram has 1 bin or more") }
-  // How many of each part are at each level, red's 256 first, then green's, blue's and alpha's.
-  val px = __text.imagePixels(cells) as Bytes
+  // How many of each part are at each level, red's 256 first, then green's, blue's and alpha's:
+  // the pixels read where they are.
+  val px = cells
   val levels : open List<int> = List(1024) { 0 }
-  for (p in 0 ..< width * height) {
-    val i = p * 4
-    levels[px[i]] += 1
-    levels[256 + px[i + 1]] += 1
-    levels[512 + px[i + 2]] += 1
-    levels[768 + px[i + 3]] += 1
+  for (p in 0 ..< px.size) {
+    levels[px[p].red] += 1
+    levels[256 + px[p].green] += 1
+    levels[512 + px[p].blue] += 1
+    levels[768 + px[p].alpha] += 1
   }
   // Then the levels shared among the bins, the last bin taking `to` itself.
   val lo = from?.toFloat() ?: 0.0

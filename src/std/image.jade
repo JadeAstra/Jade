@@ -1063,7 +1063,8 @@ class Image : Drawable {
   // The smallest rectangle outside which every pixel is `background`; null if all of them are.
   fun inkBox(background : Color = Color.clear) : Rect? {
     if (width == 0 or height == 0) { return null }
-    val px = rgbaBytes()
+    // Its pixels where they are, each part against the background's.
+    val px = cells.cells
     val r = background.red
     val g = background.green
     val b = background.blue
@@ -1073,8 +1074,7 @@ class Image : Drawable {
     // The first pixel of ink from the top and the last from the bottom: its top and bottom rows.
     var first = -1
     for (p in 0 ..< n) {
-      val i = p * 4
-      if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+      if (px[p].red != r or px[p].green != g or px[p].blue != b or px[p].alpha != a) {
         first = p
         break
       }
@@ -1082,9 +1082,9 @@ class Image : Drawable {
     if (first < 0) { return null }
     var last = first
     for (k in 0 ..< n - first) {
-      val i = (n - 1 - k) * 4
-      if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
-        last = n - 1 - k
+      val p = n - 1 - k
+      if (px[p].red != r or px[p].green != g or px[p].blue != b or px[p].alpha != a) {
+        last = p
         break
       }
     }
@@ -1093,17 +1093,17 @@ class Image : Drawable {
     var left = first % w
     var right = last % w
     for (y in first / w .. last / w) {
-      val row = y * w * 4
+      val row = y * w
       for (x in 0 ..< left) {
-        val i = row + x * 4
-        if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+        val p = row + x
+        if (px[p].red != r or px[p].green != g or px[p].blue != b or px[p].alpha != a) {
           left = x
           break
         }
       }
       for (k in 0 ..< w - 1 - right) {
-        val i = row + (w - 1 - k) * 4
-        if (px[i] != r or px[i + 1] != g or px[i + 2] != b or px[i + 3] != a) {
+        val p = row + w - 1 - k
+        if (px[p].red != r or px[p].green != g or px[p].blue != b or px[p].alpha != a) {
           right = w - 1 - k
           break
         }

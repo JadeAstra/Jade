@@ -1,0 +1,177 @@
+// Native code reading lists of a value type's items where they are (M9.5 B1, 2026-11-12): a field
+// of an item (`items[i].x`), an item kept in a variable as itself (`val c = items[i]`, or a for
+// over the list) or as a copy (where the loop changes the list), and its fields read from there;
+// bytes, ints and floats; a value too large to be kept in a value, one of a generic type, a list
+// that may hold null. Each is run three times, as a loop's region is made the second time it
+// starts; every answer and error is what `jade --interpret` gives (the test runner runs it both
+// ways).
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+value Cell(val count : int, val weight : float, val tag : byte)
+value Wide(val a : int, val b : int, val c : float, val d : byte)
+value Box<T>(val item : T, val n : int)
+
+val colors : List<Color> = List(1000) { Color(it % 256, (it * 3) % 256, (it * 7) % 256, 255 - it % 200) }
+val cells : List<Cell> = List(500) { Cell(it * 2 - 300, it * 0.25, (it % 250).toByte()) }
+val wides : List<Wide> = List(300) { Wide(it, -it * 5, it / 4.0, (it % 7).toByte()) }
+
+// Fields of items, read where they are.
+fun parts(xs : List<Color>) : List<int> {
+  var r = 0
+  var g = 0
+  var b = 0
+  var a = 0
+  for (i in 0 ..< xs.size) {
+    r += xs[i].red
+    g += xs[i].green
+    b += xs[i].blue
+    a += xs[i].alpha
+  }
+  return [r, g, b, a]
+}
+print(thrice { parts(colors) })   // expect: [124716, 125316, 126516, 155500]
+
+fun cellSums(xs : List<Cell>) : string {
+  var counts = 0
+  var weights = 0.0
+  var tags = 0
+  for (i in 0 ..< xs.size) {
+    counts += xs[i].count
+    weights += xs[i].weight * 2.0
+    tags += xs[i].tag
+  }
+  return "$counts $weights $tags"
+}
+print(thrice { cellSums(cells) })   // expect: 99500 62375.0 62250
+
+fun wideSums(xs : List<Wide>) : string {
+  var t = 0
+  var f = 0.0
+  for (i in 0 ..< xs.size) {
+    t += xs[i].a + xs[i].b + xs[i].d
+    f += xs[i].c
+  }
+  return "$t $f"
+}
+print(thrice { wideSums(wides) })   // expect: -178503 11212.5
+
+// The same item each time: a constant index.
+fun third(xs : List<Cell>) : int {
+  var t = 0
+  for (i in 0 ..< 10) { t += xs[3].count + i }
+  return t
+}
+print(thrice { third(cells) })   // expect: -2895
+
+// An item kept in a variable as itself, its fields read from there.
+fun kept(xs : List<Color>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) {
+    val c = xs[i]
+    t += c.red * 3 + c.green - c.blue + c.alpha
+  }
+  return t
+}
+print(thrice { kept(colors) })   // expect: 528448
+
+fun keptCells(xs : List<Cell>) : float {
+  var t = 0.0
+  for (i in 0 ..< xs.size) {
+    val c = xs[i]
+    t += c.count * c.weight + c.tag
+  }
+  return t
+}
+print(thrice { keptCells(cells) })   // expect: 11476875.0
+
+// A for over the items, each where it is.
+fun walked(xs : List<Color>) : int {
+  var t = 0
+  for (c in xs) { t += c.red - c.alpha }
+  return t
+}
+print(thrice { walked(colors) })   // expect: -30784
+fun walkedWide(xs : List<Wide>) : float {
+  var t = 0.0
+  for (w in xs) { t += w.c * w.d - w.b }
+  return t
+}
+print(thrice { walkedWide(wides) })   // expect: 257963.5
+
+// A copy, where the loop changes the list: the copy keeps what the item was.
+fun replaced(xs : open List<Color>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) {
+    val c = xs[i]
+    xs[i] = Color(1, 2, 3)
+    t += c.red + c.blue
+  }
+  return t + xs[5].blue
+}
+print(thrice { replaced(List(10) { Color(it * 5, it * 10, it * 20) }) })   // expect: 1128
+fun copies(xs : open List<Color>) : int {
+  var t = 0
+  var k = 0
+  for (c in xs) {
+    xs[k] = Color(9, 9, 9)
+    t += c.red
+    k += 1
+  }
+  return t + xs[99].red
+}
+print(thrice { copies(List(100) { Color(it, 0, 0) }) })   // expect: 4959
+
+// A generic value type's items, and a list that may hold null: left to the VM, the same answers.
+fun boxes(xs : List<Box<string>>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) { t += xs[i].n + xs[i].item.size }
+  for (b in xs) { t += b.n }
+  return t
+}
+val words = ["", "a", "bb", "ccc"]
+print(thrice { boxes(List(20) { Box(words[it % 4], it) }) })   // expect: 410
+fun maybe(xs : List<Color?>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) {
+    val c = xs[i]
+    if (c != null) { t += c.red }
+  }
+  return t
+}
+print(thrice { maybe(List(30) { it % 3 == 0 ? null : Color(it, 0, 0) }) })   // expect: 300
+
+// Errors at the item they come at.
+fun beyond(xs : List<Color>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += xs[i].red }
+  return t
+}
+print(failing { thrice { beyond(colors, 1001) } })   // expect: IndexOutOfBoundsException: list index 1000 is out of range (size 1000)
+fun beyondKept(xs : List<Cell>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    val c = xs[i]
+    t += c.count
+  }
+  return t
+}
+print(failing { thrice { beyondKept(cells, 501) } })   // expect: IndexOutOfBoundsException: list index 500 is out of range (size 500)
+fun overflow(xs : List<Cell>) : int {
+  var t = 9223372036854775000
+  for (c in xs) { t += c.tag }
+  return t
+}
+print(failing { thrice { overflow(cells) } })   // expect: ArithmeticException: 9223372036854775780 + 40 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around

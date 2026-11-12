@@ -24,6 +24,9 @@ constexpr int kListPack = 32;
 // and the block holding them (a std::vector: its first item's address first).
 constexpr int kPackStore = 0, kPackNullable = 1, kPackCount = 24, kPackBlock = 48;
 constexpr uint8_t kStoreInts = 1, kStoreFloats = 2;
+// A list of a value type's items: the bytes an item takes, and the value type (an ObjClass).
+constexpr int kPackWidth = 4, kPackItemClass = 32;
+constexpr uint8_t kStoreItems = 5;
 
 // Bytes (ObjBytes): a std::vector of bytes, its first byte's address, then the end's.
 constexpr int kBytesData = 24;
@@ -42,6 +45,14 @@ constexpr uint8_t kTypeIterator = 11;
 constexpr uint8_t kTypeInstance = 8;
 constexpr int kInstShape = 32, kInstData = 48;
 constexpr uint8_t kKindUndefined = 5, kKindRef = 7;
+// A value of a value type (M9.5 B1): a Ref (the object holding it, a list of items say, the item's
+// position, the place in the item and how deep it is) or a Small value (its bytes in the payload,
+// its type's number); a list's items' own type and where in an item it is kept (G4); and the
+// object a frame keeps its variables' values in.
+constexpr uint8_t kKindSmall = 8;
+constexpr int kRefDepth = 1, kRefOffset = 2, kRefIndex = 4;
+constexpr int kPackItemType = 16, kPackTypeSlot = 8;
+constexpr uint8_t kTypePlaces = 19;
 constexpr uint8_t kTypeIdInt = 1, kTypeIdFloat = 2;
 
 }  // namespace jade::native::layout

@@ -2998,6 +2998,19 @@ LABEL(iterNext) {
                 }
                 NEXT();
             }
+            // A value type's items kept in the value itself (a Color), none null and none with a
+            // type of its own (M9.5 B1): each a copy of its bytes, as RGetIndex gives it.
+            if (const PackedItems& pack = *list->pack; source != bandObject_ && !pack.nullable && pack.itemType == nullptr && pack.typeSlot == 0 &&
+                                                       pack.itemClass->smallId != 0) {
+                if (it->index < pack.count) {
+                    *sp++ = smallFrom(pack.itemClass, pack.block.data() + it->index * pack.width, pack.itemClass->layout.load(std::memory_order_relaxed)->size);
+                    it->index++;
+                    ip += 6;
+                } else {
+                    ip = code + FAST_I32(2);
+                }
+                NEXT();
+            }
         }
     }
     int slot = READ_U16();

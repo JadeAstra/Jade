@@ -53,6 +53,14 @@ static_assert(offsetof(PackedItems, store) == L::kPackStore && offsetof(PackedIt
                   offsetof(PackedItems, count) == L::kPackCount && offsetof(PackedItems, block) == L::kPackBlock && sizeof(ListStore) == 1 &&
                   static_cast<int>(ListStore::Ints) == L::kStoreInts && static_cast<int>(ListStore::Floats) == L::kStoreFloats,
               "layout.h: a list's packed items");
+static_assert(offsetof(PackedItems, width) == L::kPackWidth && sizeof(PackedItems::width) == 4 && offsetof(PackedItems, itemClass) == L::kPackItemClass &&
+                  static_cast<int>(ListStore::Items) == L::kStoreItems,
+              "layout.h: a list of a value type's items");
+static_assert(static_cast<int>(ValueKind::Small) == L::kKindSmall && offsetof(Value, refDepth) == L::kRefDepth &&
+                  offsetof(Value, refOffset) == L::kRefOffset && offsetof(Value, refIndex) == L::kRefIndex &&
+                  offsetof(PackedItems, itemType) == L::kPackItemType && offsetof(PackedItems, typeSlot) == L::kPackTypeSlot &&
+                  sizeof(PackedItems::typeSlot) == 4 && static_cast<int>(ObjType::Places) == L::kTypePlaces,
+              "layout.h: values of value types");
 static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
 static_assert(offsetof(ObjIterator, source) == L::kIterSource && offsetof(ObjIterator, index) == L::kIterIndex &&
                   sizeof(ObjIterator::index) == 8 && static_cast<int>(ObjType::Iterator) == L::kTypeIterator,

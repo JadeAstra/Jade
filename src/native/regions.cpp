@@ -471,6 +471,97 @@ struct Region {
         }
         return nullptr;
     }
+    // The value type of the items of the list the frame's iterator in slot `itSlot` goes through,
+    // where they are kept in the value itself (a Color) with no type of their own; null for any other.
+    // With `where`, of a list of any value type's items, none null, read where they are.
+    const ObjClass* iteratedClass(int itSlot, bool where = false) const {
+        if (frame == nullptr || itSlot < 0 || itSlot >= frameSlots || itSlot >= f.maxStack) return nullptr;
+        const Value& v = frame[itSlot];
+        if (!v.isObjType(ObjType::Iterator)) return nullptr;
+        const Value& source = asIterator(v)->source;
+        if (!source.isObjType(ObjType::List) || asList(source)->store() != ListStore::Items) return nullptr;
+        const PackedItems& pack = *asList(source)->pack;
+        const ObjClass* const cls = pack.itemClass;
+        if (where) return pack.nullable ? nullptr : cls;
+        if (cls == nullptr || cls->smallId == 0 || pack.itemType != nullptr || pack.typeSlot != 0) return nullptr;
+        const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+        return layout != nullptr && layout->size <= 8 ? cls : nullptr;
+    }
+    // Whether the frame's iterator in slot `itSlot` goes through a list of a value type's items.
+    bool iteratesItems(int itSlot) const {
+        if (frame == nullptr || itSlot < 0 || itSlot >= frameSlots || itSlot >= f.maxStack) return false;
+        const Value& v = frame[itSlot];
+        if (!v.isObjType(ObjType::Iterator)) return false;
+        const Value& source = asIterator(v)->source;
+        return source.isObjType(ObjType::List) && asList(source)->store() == ListStore::Items;
+    }
+    // The value type of the items of the list the frame holds in slot `listSlot`, where it holds a
+    // list of a value type's items; null for anything else.
+    const ObjClass* itemsClass(int listSlot) const {
+        if (frame == nullptr || listSlot < 0 || listSlot >= frameSlots || listSlot >= f.maxStack) return nullptr;
+        const Value& v = frame[listSlot];
+        if (!v.isObjType(ObjType::List) || asList(v)->store() != ListStore::Items) return nullptr;
+        return asList(v)->pack->itemClass;
+    }
+    // The value type of the value a slot holds (M9.5 B1): as an item read in the region left it
+    // there (valueSlots: a Ref or a Small value, of the list's items' type), or as the frame holds
+    // it where the region is made (a parameter, say). A guess the steps check; null for none.
+    mutable std::map<int, const ObjClass*> valueSlots;
+    void noteValue(int slot, const ObjClass* cls) const {
+        auto [it, added] = valueSlots.emplace(slot, cls);
+        if (!added && it->second != cls) it->second = nullptr;
+    }
+    const ObjClass* valueClass(int slot) const {
+        if (auto it = valueSlots.find(slot); it != valueSlots.end()) return it->second;
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return nullptr;
+        const Value& v = frame[slot];
+        if (v.isSmall()) return smallClassOf(v);
+        if (v.isRef() && v.refDepth == 0 && v.refOffset == 0 && v.as.obj->type == ObjType::List && asList(v)->store() == ListStore::Items)
+            return asList(v)->pack->itemClass;
+        return nullptr;
+    }
+    // The field a GetProp (whose cache is `cache`) reads of a value of the type `cls`, where the
+    // cache saw that type: a byte, an int or a float; null for any other.
+    const ValueField* plainField(const ObjClass* cls, int cache, int32_t slow) const {
+        const ValueField* const found = fieldOf(cls, cache, slow);
+        if (found == nullptr) return nullptr;
+        const ValueField& field = *found;
+        const bool isByte = field.kind == ValueField::Narrow && field.narrow == Narrow::Byte;
+        return isByte || field.kind == ValueField::Int || field.kind == ValueField::Float ? &field : nullptr;
+    }
+    // The field `items[i].x` reads (RGetIndexProp), where the frame holds a list of a value type's
+    // items in slot `listSlot` and the place's cache knows the field: its class in `cls`. Null for
+    // anything else.
+    const ValueField* itemField(int listSlot, int cache, int32_t slow, const ObjClass*& cls) const {
+        if (frame == nullptr || listSlot < 0 || listSlot >= frameSlots || listSlot >= f.maxStack) return nullptr;
+        const Value& v = frame[listSlot];
+        if (!v.isObjType(ObjType::List)) return nullptr;
+        const ObjList* list = asList(v);
+        if (list->store() != ListStore::Items || list->pack->itemClass == nullptr) return nullptr;
+        const ObjClass* const c = list->pack->itemClass;
+        const ValueField* const field = fieldOf(c, cache, slow);
+        if (field != nullptr) cls = c;
+        return field;
+    }
+    // The field of a value type `cls` a place reads: where its cache says, where the cache saw
+    // that type; or, where the cache has seen nothing (a read the VM has not come to yet: the
+    // second part of an `or`), the field named by the instruction's own way, at `slow`.
+    const ValueField* fieldOf(const ObjClass* cls, int cache, int32_t slow) const {
+        if (cls == nullptr || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return nullptr;
+        const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+        if (layout == nullptr) return nullptr;
+        const uint64_t seen = f.caches[cache].load(std::memory_order_relaxed);
+        if (seen == 0) {
+            const ObjString* const name = slowName(slow);
+            if (name == nullptr) return nullptr;
+            for (const ValueField& field : layout->fields)
+                if (field.name != nullptr && field.name->utf8() == name->utf8()) return &field;
+            return nullptr;
+        }
+        if (static_cast<uint32_t>(seen >> 32) != cls->shape) return nullptr;
+        const size_t k = (seen >> 16) & 0xFFFF;
+        return k < layout->fields.size() ? &layout->fields[k] : nullptr;
+    }
     // Whether a GetProp reads `size` of a list or bytes the frame holds in slot `objSlot`.
     bool sizeRead(int objSlot, int32_t slow) const {
         if (frame == nullptr || objSlot < 0 || objSlot >= frameSlots || objSlot >= f.maxStack) return false;
@@ -651,15 +742,29 @@ struct Region {
                     j = to->second;
                     continue;
                 }
+                case Op::GetIndexRef:
+                    // list index -> item: reads the index as a whole number (a guess), the list as none.
+                    if (slot == top - 1) return guessing ? CI : -1;
+                    if (slot == top - 2) return -1;
+                    top--;
+                    j++;
+                    continue;
+                case Op::KeepLocal:
+                    j++;
+                    continue;
                 case Op::RGetIndexSS:
                 case Op::RGetIndexSK:
+                case Op::RGetIndexPropSS:
+                case Op::RGetIndexPropSK: {
                     // u8 A, u8 B, u8 C, u8 T: reads C as an index (a whole number, a guess the
                     // step reading it checks), B as no number.
-                    if (guessing && x.op == Op::RGetIndexSS && u8(x, 2) == slot && u8(x, 1) != slot) return CI;
-                    if (u8(x, 0) == slot || u8(x, 1) == slot || (x.op == Op::RGetIndexSS && u8(x, 2) == slot)) return -1;
+                    const bool indexSlot = x.op == Op::RGetIndexSS || x.op == Op::RGetIndexPropSS;
+                    if (guessing && indexSlot && u8(x, 2) == slot && u8(x, 1) != slot) return CI;
+                    if (u8(x, 0) == slot || u8(x, 1) == slot || (indexSlot && u8(x, 2) == slot)) return -1;
                     top = u8(x, 3);
                     j++;
                     continue;
+                }
                 case Op::Numeric: {
                     const NumericOp w = static_cast<NumericOp>(u8(x, 0));
                     const bool two = w == NumericOp::MinInt || w == NumericOp::MaxInt || w == NumericOp::MinFloat || w == NumericOp::MaxFloat;
@@ -893,6 +998,13 @@ struct Region {
             }
             write(slot, K{kMem});
         }
+        // Whether another slot below the top is a copy of `slot`, or a whole number read from the
+        // list there: what a step writing the slot in place of writeMemory leaves out.
+        bool copiedElsewhere(int slot) const {
+            for (const auto& [y, k] : s.kinds)
+                if (y != slot && y < s.top && (k.bits & (kCopies | kWhole)) != 0 && k.src == slot) return true;
+            return false;
+        }
         // The slot an object is read from: the slot itself, as entered, or the one it copies.
         int objectSlot(int slot) {
             const K k = s.kind(slot);
@@ -1118,6 +1230,29 @@ struct Region {
             case Op::RGetIndexSK: {  // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow
                 const int a = u8(x, 0);
                 const int list = c.objectSlot(u8(x, 1));
+                if (const ObjClass* const cls = itemsClass(list)) {
+                    // An item of a list of a value type's items (M9.5 B1): a copy of it, where it
+                    // is kept in the value itself (a Color), in memory; anything else the VM's.
+                    const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+                    if (cls->smallId == 0 || layout == nullptr || layout->size > 8 || c.copiedElsewhere(a)) island();
+                    Reg index{};
+                    if (x.op == Op::RGetIndexSK) {
+                        index = Reg{kScratchI, CI};
+                        c.op("setik", {index}, {}, {index}).ki = c.intConstant(u8(x, 2));
+                    } else {
+                        index = c.read(u8(x, 2), CI, true);
+                    }
+                    LOp& l = c.op("idxsm", {index}, {index});
+                    l.slot = list;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | (static_cast<uint64_t>(a) << 8) | layout->size);
+                    l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    c.leaves(l);
+                    c.write(a, K{kMem});
+                    noteValue(a, cls);
+                    s.top = u8(x, 3);
+                    c.fall(s);
+                    return;
+                }
                 // As read next; or a guess, which the step checks (an item of another kind leaves):
                 // how it is used, or what the list holds in the call the region is made in.
                 int cls = useClass(c.i, a, u8(x, 3));
@@ -1145,6 +1280,71 @@ struct Region {
                 } else {
                     c.write(a, cls == CF ? K{kFloat} : K{kWhole, static_cast<int16_t>(list)});
                 }
+                s.top = u8(x, 3);
+                c.fall(s);
+                return;
+            }
+            case Op::GetIndexRef: {  // list index -> item, where it is (M9.5 B1)
+                // An item of a list of a value type's items, as the frame's list is where the
+                // region is made: a Ref to it, in memory. Anything else the VM's.
+                const int top = s.top;
+                const int list = c.objectSlot(top - 2);
+                const ObjClass* const cls = itemsClass(list);
+                if (cls == nullptr || c.copiedElsewhere(top - 2)) island();
+                const Reg index = c.read(top - 1, CI, true);
+                LOp& l = c.op("iref", {index}, {index});
+                l.slot = list;
+                l.slot2 = top - 2;
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                c.leaves(l);
+                c.write(top - 2, K{kMem});
+                noteValue(top - 2, cls);
+                s.top = top - 1;
+                c.fall(s);
+                return;
+            }
+            case Op::KeepLocal: {  // u16 slot
+                // Nothing to a number in a register; for one in memory, nothing unless it is a Ref
+                // to a place of the frame's (the VM copies it).
+                const int slot = u16(x, 0);
+                const K k = s.kind(slot);
+                if (k.bits == kEntry || inMemory(k)) {
+                    LOp& l = c.op("keepl");
+                    l.slot = slot;
+                    c.leaves(l);
+                } else if ((k.bits & (kInt | kFloat | kByte | kBool)) == 0 || (k.bits & ~(kInt | kFloat | kByte | kBool)) != 0) {
+                    island();
+                }
+                c.fall(s);
+                return;
+            }
+            case Op::RGetIndexPropSS:
+            case Op::RGetIndexPropSK: {  // u8 A, u8 B, u8 C, u8 T, u8 S, u16 cache, i32 slow
+                // `items[i].x`: a byte, an int or a float field of an item of a list of a value
+                // type's items, read where it is, of the class the frame's list has as the region
+                // is made (the step checks it); anything else the VM's.
+                const int a = u8(x, 0);
+                const int list = c.objectSlot(u8(x, 1));
+                const ObjClass* cls = nullptr;
+                const ValueField* field = itemField(list, u16(x, 5), i32(x, 7), cls);
+                if (field == nullptr) island();
+                const bool isByte = field->kind == ValueField::Narrow && field->narrow == Narrow::Byte;
+                if (!isByte && field->kind != ValueField::Int && field->kind != ValueField::Float) island();
+                const bool isFloat = field->kind == ValueField::Float;
+                Reg index{};
+                if (x.op == Op::RGetIndexPropSK) {
+                    index = Reg{kScratchI, CI};
+                    c.op("setik", {index}, {}, {index}).ki = c.intConstant(u8(x, 2));
+                } else {
+                    index = c.read(u8(x, 2), CI, true);
+                }
+                const Reg dst{a, isFloat ? CF : CI};
+                LOp& l = c.op(isFloat ? "idxpf" : isByte ? "idxpb" : "idxpi", {dst, index}, {index}, {dst});
+                l.slot = list;
+                l.slot2 = field->offset;
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                c.leaves(l);
+                c.write(a, K{static_cast<uint16_t>(isFloat ? kFloat : isByte ? kByte : kInt)});
                 s.top = u8(x, 3);
                 c.fall(s);
                 return;
@@ -1191,9 +1391,47 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::IterNextRef:
             case Op::IterNext: {  // u16 slot, i32 target: the next item pushed, or to the target
                 const int it = c.objectSlot(u16(x, 0));
                 const int top = s.top;
+                if (x.op == Op::IterNextRef) {
+                    // A list of a value type's items: each item where it is, a Ref (M9.5 B1). Any
+                    // other list as IterNext, which the VM's IterNextRef is for it.
+                    if (const ObjClass* const cls = iteratedClass(it, true)) {
+                        const State none = s;
+                        c.writeMemory(top);
+                        LOp& l = c.op("iterref");
+                        l.slot = it;
+                        l.slot2 = top;
+                        l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                        c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
+                        c.leaves(l);
+                        noteValue(top, cls);
+                        s.top = top + 1;
+                        c.fall(s);
+                        return;
+                    }
+                    if (iteratesItems(it)) island();
+                }
+                if (const ObjClass* const cls = x.op == Op::IterNext ? iteratedClass(it) : nullptr) {
+                    // A list of a value type's items kept in the value itself (a Color), as the
+                    // frame's iterator goes through as the region is made (M9.5 B1): each item a
+                    // copy, in memory.
+                    const State none = s;
+                    c.writeMemory(top);
+                    LOp& l = c.op("itersm");
+                    l.slot = it;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | (static_cast<uint64_t>(top) << 8) |
+                                                   cls->layout.load(std::memory_order_acquire)->size);
+                    l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
+                    c.leaves(l);
+                    noteValue(top, cls);
+                    s.top = top + 1;
+                    c.fall(s);
+                    return;
+                }
                 int cls = useClass(c.i, top, top + 1);
                 if (cls < 0) cls = useClass(c.i, top, top + 1, 0, true);
                 const State none = s;  // no more: nothing pushed
@@ -1232,6 +1470,23 @@ struct Region {
                     s.top = u8(x, 2);
                     c.fall(s);
                     return;
+                }
+                // A field of a value of a value type (M9.5 B1): a Small value or a Ref to an item,
+                // of the type the region or the frame says, the field the cache saw.
+                if (const ObjClass* const vcls = valueClass(obj)) {
+                    if (const ValueField* const field = plainField(vcls, u16(x, 4), i32(x, 6))) {
+                        const bool isFloat = field->kind == ValueField::Float, isByte = field->kind == ValueField::Narrow;
+                        const Reg dst{a, isFloat ? CF : CI};
+                        LOp& l = c.op(isFloat ? "valpf" : isByte ? "valpb" : "valpi", {dst}, {}, {dst});
+                        l.slot = obj;
+                        l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(vcls->smallId) << 32) | field->offset);
+                        l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(vcls));
+                        c.leaves(l);
+                        c.write(a, K{static_cast<uint16_t>(isFloat ? kFloat : isByte ? kByte : kInt)});
+                        s.top = u8(x, 2);
+                        c.fall(s);
+                        return;
+                    }
                 }
                 int cls = useClass(c.i, a, u8(x, 2));
                 if (cls < 0) {
@@ -1824,10 +2079,16 @@ struct Region {
     // write then checks the index alone. A list as entered, never written in the region, its
     // slot's own or the one a copy of it is of; at most kRegionLists of them.
     std::vector<LOp> prologue;
+    // Looked at where the VM's only work is the way to a return or a throw, which leaves the
+    // region for good: no loop made ahead then.
+    bool lookedBeforeEnds = false;
 
     void lookAtListsOnce() {
-        for (size_t i = 0; i < ins.size(); i++)
-            if (in[i].known && results[i].island) return;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known || !results[i].island) continue;
+            if (!results[i].ends) return;
+            lookedBeforeEnds = true;
+        }
         if (entries.size() != 1) return;
         // The slot each list step reads, as entered.
         auto rootOf = [&](size_t i, int slot) -> int {
@@ -1839,11 +2100,37 @@ struct Region {
         auto isRead = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "idxw" || stem == "idxwk"; };
         auto isWrite = [](const std::string& stem) { return stem == "setf" || stem == "setwi" || stem == "setwb"; };
         auto isFloat = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "setf"; };
-        std::map<int, int> kindOf;  // root -> 1 floats, 2 whole numbers, 3 both (not looked at)
+        // A list of a value type's items (M9.5 B1): its items' fields read, or a Ref to one made,
+        // and the fields of the values those Refs are in read (valp).
+        auto isItems = [](const std::string& stem) { return stem.rfind("idxp", 0) == 0 || stem == "iref" || stem == "iterref"; };
+        // root -> 1 floats, 2 whole numbers, 4 items, 8 an iterator through items; any two not looked at
+        std::map<int, int> kindOf;
+        std::map<int, const ObjClass*> itemClass;  // root -> its items' class (null for two)
+        std::map<int, int> valueRoot;              // a slot a Ref is made in -> the list's root (-1 for two)
+        std::vector<LOp*> values;
         std::vector<std::pair<LOp*, int>> steps;
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             for (LOp& l : results[i].ops) {
+                if (isItems(l.stem)) {
+                    const int root = rootOf(i, static_cast<int>(l.slot));
+                    if (root < 0) continue;
+                    kindOf[root] |= l.stem == "iterref" ? 8 : 4;
+                    const auto* const cls = reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l.ki));
+                    if (auto [it, added] = itemClass.emplace(root, cls); !added && it->second != cls) it->second = nullptr;
+                    if (l.stem == "iterref") {
+                        if (auto [it, added] = valueRoot.emplace(static_cast<int>(l.slot2), root); !added && it->second != root) it->second = -1;
+                        continue;  // itself as it is: the iterator moves on
+                    }
+                    if (l.stem == "iref")
+                        if (auto [it, added] = valueRoot.emplace(static_cast<int>(l.slot2), root); !added && it->second != root) it->second = -1;
+                    steps.emplace_back(&l, root);
+                    continue;
+                }
+                if (l.stem.rfind("valp", 0) == 0) {
+                    values.push_back(&l);
+                    continue;
+                }
                 if (!isRead(l.stem) && !isWrite(l.stem)) continue;
                 const int root = rootOf(i, static_cast<int>(l.slot));
                 if (root < 0) continue;
@@ -1854,7 +2141,10 @@ struct Region {
         // Never written in the region: as entered everywhere.
         std::map<int, int> index;
         for (const auto& [root, kind] : kindOf) {
-            if (kind == 3 || static_cast<int>(index.size()) == kRegionLists) continue;
+            if ((kind != 1 && kind != 2 && kind != 4 && kind != 8) || static_cast<int>(index.size()) == kRegionLists) continue;
+            const ObjClass* const cls = kind >= 4 ? itemClass[root] : nullptr;
+            const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
+            if (kind >= 4 && (layout == nullptr || layout->size == 0 || layout->size > 0xFFFF)) continue;
             bool untouched = true;
             for (size_t i = 0; i < ins.size() && untouched; i++)
                 if (in[i].known) untouched = in[i].kind(root).bits == kEntry && (!results[i].fallsThrough || results[i].after.kind(root).bits == kEntry);
@@ -1862,16 +2152,36 @@ struct Region {
             const int k = static_cast<int>(index.size());
             index[root] = k;
             LOp look;
-            look.stem = kind == 1 ? "lookf" : "lookw";
+            look.stem = kind == 1 ? "lookf" : kind == 2 ? "lookw" : kind == 4 ? "looki" : "lookit";
             look.slot = root;
             look.ki = k;
+            if (kind >= 4) {
+                look.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                look.slot2 = static_cast<int64_t>(static_cast<uint64_t>(layout->size) << 32 | static_cast<uint64_t>(k));
+            }
             prologue.push_back(look);
         }
+        // The width of a root's items, where it is looked at as a list of items.
+        auto widthOf = [&](int root) -> uint64_t { return itemClass[root]->layout.load(std::memory_order_acquire)->size; };
         for (auto& [l, root] : steps) {
             auto k = index.find(root);
             if (k == index.end()) continue;
+            if (l->stem.rfind("idxp", 0) == 0) l->slot2 = static_cast<int64_t>(static_cast<uint64_t>(l->slot2) | widthOf(root) << 32);
             l->stem = "h" + l->stem;
             l->slot = k->second;
+        }
+        // A field of a Ref made from a list looked at once: read through what was looked at, where
+        // the field is within the first 64 KB of its item.
+        for (LOp* l : values) {
+            auto v = valueRoot.find(static_cast<int>(l->slot));
+            if (v == valueRoot.end() || v->second < 0) continue;
+            auto k = index.find(v->second);
+            if (k == index.end() || reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l->ki)) != itemClass[v->second]) continue;
+            const uint64_t what = static_cast<uint64_t>(l->slot2), offset = what & 0xFFFFFFFF;
+            if (offset > 0xFFFF) continue;
+            l->stem = "h" + l->stem;
+            l->ki = k->second;
+            l->slot2 = static_cast<int64_t>((what & 0xFFFFFFFF00000000ull) | widthOf(v->second) << 16 | offset);
         }
     }
 
@@ -2294,7 +2604,7 @@ struct Region {
     int templates = 0;
 
     void makeAhead() {
-        if (prologue.empty()) return;  // lists looked at once: none, or the VM's in the region
+        if (prologue.empty() || lookedBeforeEnds) return;  // lists looked at once: none, or the VM's in the region
         for (size_t e = 0; e < ins.size(); e++) {
             if (!in[e].known || ins[e].op != Op::Loop) continue;
             const LOp& back = results[e].ops.back();
@@ -2805,6 +3115,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         Step& st = add(l.stem);
         st.slot = l.slot;
         st.ki = l.ki;
+        st.slot2 = l.slot2;
     }
     loads(a, r, 0, names, leaveAt(0));
     for (const LOp& l : r.headOps) {
@@ -2911,6 +3222,10 @@ bool mayDo(Op op) {
         case Op::RangeLoop:
         case Op::RGetIndexSS:
         case Op::RGetIndexSK:
+        case Op::RGetIndexPropSS:
+        case Op::RGetIndexPropSK:
+        case Op::GetIndexRef:
+        case Op::KeepLocal:
         case Op::SetIndex:
         case Op::Numeric:
         case Op::RNeg:
@@ -2923,6 +3238,7 @@ bool mayDo(Op op) {
         case Op::RShlSS:
         case Op::RShrSS:
         case Op::IterNext:
+        case Op::IterNextRef:
         case Op::RGetProp:
         case Op::RSetPropSS:
         case Op::RSetPropSK: return true;

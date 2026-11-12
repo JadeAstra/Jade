@@ -526,6 +526,142 @@ F_A(SETF_A, x)
 #define SETW_A(v, ...) I_B(SETW_B, v)
 I_A(SETW_A, x)
 
+// ia (or fa) = a field of item ic of a list of a value type's items, in slot jade_slot, read where
+// it is (`items[i].x`, M9.5 B1): the list's items of the class jade_ki, none null, the item in
+// range, the field jade_slot2 bytes into it; a byte (idxpb), an int (idxpi) or a float (idxpf).
+// Anything else the VM's.
+INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
+    if (s.kind != kKindObj) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    const uint8_t* pack = packOf(o, kStoreItems);
+    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki) return nullptr;
+    if (static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    return word<const uint8_t*>(pack + kPackBlock) + index * static_cast<int64_t>(word<uint32_t>(pack + kPackWidth)) + jade_slot2;
+}
+#define IDXP_B(c, a)                                                            \
+    STENCIL(idxpb_##a##_##c) {                                                  \
+        const uint8_t* at = itemField(base[jade_slot], i##c, ctx);              \
+        if (at == nullptr) EXIT;                                                \
+        i##a = *at;                                                             \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(idxpi_##a##_##c) {                                                  \
+        const uint8_t* at = itemField(base[jade_slot], i##c, ctx);              \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<int64_t>(at);                                               \
+        NEXT;                                                                   \
+    }
+#define IDXP_A(a, ...) I_B(IDXP_B, a)
+I_A(IDXP_A, x)
+#define IDXPF_B(c, a)                                                           \
+    STENCIL(idxpf_##a##_##c) {                                                  \
+        const uint8_t* at = itemField(base[jade_slot], i##c, ctx);              \
+        if (at == nullptr) EXIT;                                                \
+        f##a = word<double>(at);                                                \
+        NEXT;                                                                   \
+    }
+#define IDXPF_A(a, ...) I_B(IDXPF_B, a)
+F_A(IDXPF_A, x)
+
+// Slot jade_slot2 = a Ref to item ic of the list of a value type's items in slot jade_slot, none
+// null, the item in range: the item where it is, as GetIndexRef gives it. Anything else the VM's.
+// A value written as two words, its kind and the rest first and its payload after, and read back
+// the same way: what the processor hands on from a store to a load of the same place and size,
+// where a load of part of one 16-byte store waits for the store to reach the cache.
+INLINE void putValue(Slot* at, uint64_t head, uint64_t payload) {
+    uint8_t* const p = reinterpret_cast<uint8_t*>(at);
+    __builtin_memcpy(p, &head, 8);
+    __asm__ volatile("" ::: "memory");
+    __builtin_memcpy(p + 8, &payload, 8);
+}
+INLINE const uint8_t* itemsList(const Slot& s, const Ctx* ctx) {
+    if (s.kind != kKindObj) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    return packOf(o, kStoreItems) != nullptr ? o : nullptr;
+}
+#define IREF(c, ...)                                                            \
+    STENCIL(iref_##c) {                                                         \
+        const uint8_t* list = itemsList(base[jade_slot], ctx);                  \
+        if (list == nullptr) EXIT;                                              \
+        const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
+        if (static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
+        putValue(&base[jade_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(list)); \
+        NEXT;                                                                   \
+    }
+I_A(IREF, x)
+// Slot (jade_slot2 >> 8 & 0xFFFFFF) = a copy of item ic of the list in slot jade_slot, a value kept
+// in the value itself (a Color): the list's items of the class jade_ki, kept with no type of their
+// own, none null, the item in range; the item's first (jade_slot2 & 0xFF) bytes, and the type's
+// number (jade_slot2 >> 32). Anything else the VM's.
+#define IDXSM(c, ...)                                                           \
+    STENCIL(idxsm_##c) {                                                        \
+        const uint8_t* list = itemsList(base[jade_slot], ctx);                  \
+        if (list == nullptr) EXIT;                                              \
+        const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
+        if (word<int64_t>(pack + kPackItemClass) != jade_ki || word<const void*>(pack + kPackItemType) != nullptr || \
+            word<uint32_t>(pack + kPackTypeSlot) != 0 || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) \
+            EXIT;                                                               \
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);                \
+        const uint32_t size = static_cast<uint32_t>(what & 0xFF), id = static_cast<uint32_t>(what >> 32); \
+        const uint8_t* from = word<const uint8_t*>(pack + kPackBlock) + i##c * static_cast<int64_t>(word<uint32_t>(pack + kPackWidth)); \
+        uint64_t bits = 0;                                                      \
+        for (uint32_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k); \
+        putValue(&base[(what >> 8) & 0xFFFFFF], kKindSmall | static_cast<uint64_t>(id) << 32, bits); \
+        NEXT;                                                                   \
+    }
+I_A(IDXSM, x)
+// KeepLocal where slot jade_slot is in memory: nothing, unless it holds a Ref to a place of the
+// frame's, which the VM copies.
+STENCIL(keepl) {
+    const Slot& s = base[jade_slot];
+    if ((word<uint64_t>(reinterpret_cast<const uint8_t*>(&s)) & 0xFF) == kKindRef && s.p[kObjType] == kTypePlaces) EXIT;
+    NEXT;
+}
+// ia (or fa) = a field of the value of a value type in slot jade_slot: a Small value of the type
+// numbered (jade_slot2 >> 32), or a Ref, none deep, to an item of a list of the class jade_ki's
+// items; the field (jade_slot2 & 0xFFFFFFFF) bytes into it. Anything else the VM's.
+INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
+    // Its kind, how deep, where in the item and the index or type number, in one word.
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
+    const uint32_t offset = static_cast<uint32_t>(jade_slot2);
+    if ((head & 0xFF) == kKindSmall) {
+        if ((head >> 32) != static_cast<uint64_t>(jade_slot2) >> 32) return nullptr;
+        return reinterpret_cast<const uint8_t*>(&s.i) + offset;
+    }
+    if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;  // a Ref none deep, at its item's start
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    const uint8_t* pack = packOf(o, kStoreItems);
+    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki) return nullptr;
+    const uint64_t index = head >> 32;
+    if (index >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    return word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth) + offset;
+}
+#define VALP(a, ...)                                                            \
+    STENCIL(valpb_##a) {                                                        \
+        const uint8_t* at = valueField(base[jade_slot], ctx);                   \
+        if (at == nullptr) EXIT;                                                \
+        i##a = *at;                                                             \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(valpi_##a) {                                                        \
+        const uint8_t* at = valueField(base[jade_slot], ctx);                   \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<int64_t>(at);                                               \
+        NEXT;                                                                   \
+    }
+I_A(VALP, x)
+#define VALPF(a, ...)                                                           \
+    STENCIL(valpf_##a) {                                                        \
+        const uint8_t* at = valueField(base[jade_slot], ctx);                   \
+        if (at == nullptr) EXIT;                                                \
+        f##a = word<double>(at);                                                \
+        NEXT;                                                                   \
+    }
+F_A(VALPF, x)
+
 // ---- Slots, and going on ----
 
 // A register read from its slot, as a region begins; written back as it leaves (kind and
@@ -837,6 +973,39 @@ F_A(ITERF, x)
         NEXT;                                                                   \
     }
 I_A(ITERI, x)
+// The next item of a list of a value type's items, none null, where it is: a Ref to it in slot
+// jade_slot2, as IterNextRef gives it (M9.5 B1).
+STENCIL(iterref) {
+    const uint8_t* list;
+    uint8_t* it = listIterator(base[jade_slot], list);
+    if (it == nullptr || list == ctx->band || packOf(list, kStoreItems) == nullptr) EXIT;
+    const uint64_t index = word<uint64_t>(it + kIterIndex);
+    if (index >= word<uint64_t>(word<const uint8_t*>(list + kListPack) + kPackCount)) JUMP;
+    putValue(&base[jade_slot2], kKindRef | index << 32, reinterpret_cast<uint64_t>(list));
+    const uint64_t next = index + 1;
+    __builtin_memcpy(it + kIterIndex, &next, 8);
+    NEXT;
+}
+// The next item of a list of the class jade_ki's items kept in the value itself (a Color), none
+// null and none with a type of its own: a copy of its first (jade_slot2 & 0xFF) bytes, of the
+// type numbered (jade_slot2 >> 32), to slot (jade_slot2 >> 8 & 0xFFFFFF) (M9.5 B1).
+STENCIL(itersm) {
+    uint8_t* it;
+    const uint8_t* pack = packedIterator(base[jade_slot], kStoreItems, ctx, it);
+    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki || word<const void*>(pack + kPackItemType) != nullptr ||
+        word<uint32_t>(pack + kPackTypeSlot) != 0)
+        EXIT;
+    const uint64_t index = word<uint64_t>(it + kIterIndex);
+    if (index >= word<uint64_t>(pack + kPackCount)) JUMP;
+    const uint64_t what = static_cast<uint64_t>(jade_slot2);
+    const uint8_t* from = word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth);
+    uint64_t bits = 0;
+    for (uint32_t k = 0; k < (what & 0xFF); k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k);
+    putValue(&base[(what >> 8) & 0xFFFFFF], kKindSmall | (what >> 32) << 32, bits);
+    const uint64_t next = index + 1;
+    __builtin_memcpy(it + kIterIndex, &next, 8);
+    NEXT;
+}
 
 // null, true or false pushed: written to slot jade_slot as the VM writes them.
 STENCIL(setnull) {
@@ -949,6 +1118,115 @@ I_A(HIDXW_A, x)
         NEXT;                                                                   \
     }
 I_A(HIDXWK, x)
+
+// A list of a value type's items looked at once (M9.5 B1), as lookAt: in the context's words 4k
+// to 4k+3, its items' address, how many may be read, how many changed, and the list itself (what
+// a Ref read later must be into). Only a list of the class jade_ki's items, none null, each
+// (jade_slot2 >> 32) bytes wide; anything else leaves all four 0, and every step through them
+// leaves for the VM. jade_slot: the list; jade_slot2 & 0xFF: k.
+INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
+    uint64_t* h = ctx->lists + 4 * (static_cast<uint64_t>(jade_slot2) & 0xFF);
+    h[0] = h[1] = h[2] = h[3] = 0;
+    if (s.kind == kKindObj && s.p[kObjType] == kTypeList) {
+        const uint8_t* o = s.p;
+        const uint8_t* pack = packOf(o, kStoreItems);
+        if (pack != nullptr && word<int64_t>(pack + kPackItemClass) == jade_ki &&
+            word<uint32_t>(pack + kPackWidth) == static_cast<uint64_t>(jade_slot2) >> 32) {
+            const uint64_t count = word<uint64_t>(pack + kPackCount);
+            h[0] = word<uint64_t>(pack + kPackBlock);
+            if (mayRead(o, ctx)) h[1] = count;
+            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+            h[3] = reinterpret_cast<uint64_t>(o);
+        }
+    }
+}
+STENCIL(looki) {
+    lookAtItems(base[jade_slot], ctx);
+    NEXT;
+}
+// The same for the list the iterator in slot jade_slot goes through (a for over it).
+STENCIL(lookit) {
+    const Slot& s = base[jade_slot];
+    if (s.kind == kKindObj && s.p[kObjType] == kTypeIterator) {
+        lookAtItems(*reinterpret_cast<const Slot*>(s.p + kIterSource), ctx);
+    } else {
+        uint64_t* h = ctx->lists + 4 * (static_cast<uint64_t>(jade_slot2) & 0xFF);
+        h[0] = h[1] = h[2] = h[3] = 0;
+    }
+    NEXT;
+}
+// Through a list of items looked at once (k in jade_slot): ia (or fa) = item ic's field, the
+// field (jade_slot2 & 0xFFFFFFFF) bytes into an item (jade_slot2 >> 32) bytes wide; the index
+// checked against the count, nothing else.
+#define HIDXP_B(c, a)                                                           \
+    STENCIL(hidxpb_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        i##a = reinterpret_cast<const uint8_t*>(h[0])[i##c * (static_cast<uint64_t>(jade_slot2) >> 32) + static_cast<uint32_t>(jade_slot2)]; \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hidxpi_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        i##a = word<int64_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * (static_cast<uint64_t>(jade_slot2) >> 32) + static_cast<uint32_t>(jade_slot2)); \
+        NEXT;                                                                   \
+    }
+#define HIDXP_A(a, ...) I_B(HIDXP_B, a)
+I_A(HIDXP_A, x)
+#define HIDXPF_B(c, a)                                                          \
+    STENCIL(hidxpf_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        f##a = word<double>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * (static_cast<uint64_t>(jade_slot2) >> 32) + static_cast<uint32_t>(jade_slot2)); \
+        NEXT;                                                                   \
+    }
+#define HIDXPF_A(a, ...) I_B(HIDXPF_B, a)
+F_A(HIDXPF_A, x)
+// Slot jade_slot2 = a Ref to item ic of a list of items looked at once (k in jade_slot).
+#define HIREF(c, ...)                                                           \
+    STENCIL(hiref_##c) {                                                        \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        putValue(&base[jade_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
+        NEXT;                                                                   \
+    }
+I_A(HIREF, x)
+// ia (or fa) = a field of the value in slot jade_slot, as valp: a Small value of the type numbered
+// (jade_slot2 >> 32), or a Ref, none deep, to an item of the list looked at once as k (jade_ki);
+// the field (jade_slot2 & 0xFFFF) bytes into an item ((jade_slot2 >> 16) & 0xFFFF) bytes wide.
+INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
+    const uint64_t what = static_cast<uint64_t>(jade_slot2);
+    if ((head & 0xFF) == kKindSmall) {
+        if ((head >> 32) != what >> 32) return nullptr;
+        return reinterpret_cast<const uint8_t*>(&s.i) + (what & 0xFFFF);
+    }
+    const uint64_t* h = ctx->lists + 4 * jade_ki;
+    if ((head & 0xFFFFFFFF) != kKindRef || s.p != reinterpret_cast<const uint8_t*>(h[3]) || (head >> 32) >= h[1]) return nullptr;
+    return reinterpret_cast<const uint8_t*>(h[0]) + (head >> 32) * ((what >> 16) & 0xFFFF) + (what & 0xFFFF);
+}
+#define HVALP(a, ...)                                                           \
+    STENCIL(hvalpb_##a) {                                                       \
+        const uint8_t* at = lookedField(base[jade_slot], ctx);                  \
+        if (at == nullptr) EXIT;                                                \
+        i##a = *at;                                                             \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hvalpi_##a) {                                                       \
+        const uint8_t* at = lookedField(base[jade_slot], ctx);                  \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<int64_t>(at);                                               \
+        NEXT;                                                                   \
+    }
+I_A(HVALP, x)
+#define HVALPF(a, ...)                                                          \
+    STENCIL(hvalpf_##a) {                                                       \
+        const uint8_t* at = lookedField(base[jade_slot], ctx);                  \
+        if (at == nullptr) EXIT;                                                \
+        f##a = word<double>(at);                                                \
+        NEXT;                                                                   \
+    }
+F_A(HVALPF, x)
 
 // ---- Whole loops made ahead (loop templates) ----
 
