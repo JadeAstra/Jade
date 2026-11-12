@@ -1,0 +1,75 @@
+// Native code (M9.5), after the pictures were looked at again (2026-11-11): a loop whose ways
+// back in after the VM's work take many rounds to settle (GIF's LZW writer took 24), an int the
+// region made meeting an item read from a list in one variable (written back as an int, the
+// items then read as ints, a byte left to the VM), and an outer loop with the VM's work in its
+// inner loop (the inner loop's own region). The same answers as the VM alone gives.
+
+val seen : open List<int> = []
+fun note(v : int) { seen.add(v) }
+
+// Many calls one after another in the loop, each a way back in.
+fun manyCalls(n : int) : int {
+  var a = 0
+  var b = 1
+  for (i in 0 ..< n) {
+    a += i * 3 + (i >> 2) - (i & 7) + 1
+    if (i % 2 == 0) { note(a) }
+    b = (b * 3 + a % 17 + (i << 1)) % 1000 + (b & 15) * 2
+    if (i % 3 == 0) { note(b) }
+    a = (a + b * 5 - (a >> 3)) % 100000 + (i & 3) * 7
+    if (i % 5 == 0) { note(a + b) }
+    b += i * 2 + (a & 31) - (b >> 4) + (i % 9) * 3
+    if (i % 7 == 0) { note(b) }
+    a += b % 13 + (i & 63) * 2 - (a & 7) + (b >> 2) % 11
+    if (i % 11 == 0) { note(a) }
+  }
+  return a * 1000 + b
+}
+print(manyCalls(5000), seen.size, seen[seen.size - 1])   // expect: 17831062 6337 10670
+
+// An item of a list of ints, or an int worked out, in one variable, live across a call.
+fun meet(items : List<int>, n : int) : int {
+  var p = 0
+  var t = 0
+  for (i in 0 ..< n) {
+    val found = items[i % items.size]
+    if (found != 0) { p = found } else { p = i * 2 }
+    note(p)
+    t += p
+  }
+  return t
+}
+seen.clear()
+val items : List<int> = List(64) { it % 4 == 0 ? 0 : it * 3 }
+print(meet(items, 10000), seen[5], seen[8])   // expect: 25709136 15 16
+
+// The same with bytes: an item of them stays a byte where it is kept.
+fun meetBytes(b : Bytes, n : int) : string {
+  var p = 0
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i % 3 == 0) { p = i } else { p = b[i % b.size] }
+    note(p)
+    t += p
+  }
+  return "$t ${p is byte} ${p is int}"
+}
+val bytes = Bytes(50)
+for (i in 0 ..< 50) { bytes[i] = (i * 7 % 256).toByte() }
+print(meetBytes(bytes, 1000), meetBytes(bytes, 999))   // expect: 236764 false true 235765 true false
+
+// The VM's work in an inner loop: that loop's own region; the outer's work the VM's.
+fun nested(rows : int, cols : int) : int {
+  var total = 0
+  for (r in 0 ..< rows) {
+    var row = 0
+    for (c in 0 ..< cols) {
+      row += r * c
+      if (c % 16 == 0) { note(row) }
+    }
+    total += row % 1000
+  }
+  return total
+}
+seen.clear()
+print(nested(200, 300), seen.size)   // expect: 95000 3800

@@ -388,6 +388,12 @@ struct Region {
     std::map<int, int64_t> headConstants;      // slots known as the loop starts (a range's step)
     std::map<int, State> comeBack;             // what a way in after an island starts knowing, this round
     std::map<int, State> nextComeBack;         // and for the next round, from this round's islands and ways
+    // Lists whose items are read as ints, each read checking the object is no bytes (chklist):
+    // where such an item meets an int the region made in one variable, it is written back as an
+    // int on every way (a byte is written back as a byte). Found when the stores at a way out
+    // meet one (wantInts), and the region made again with them.
+    std::set<int> intLists;
+    mutable std::set<int> wantInts;
     std::vector<Result> results;               // each instruction's, in its state
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
@@ -649,6 +655,9 @@ struct Region {
                 l.stem = "storeb";
                 rest.push_back(l);
             } else {
+                // An int the region made meeting an item read from the list in slot `src`, an int or
+                // a byte: made again with that list's items read as ints (intLists).
+                if (w == (kInt | kWhole) && k.src >= 0 && !intLists.count(k.src)) wantInts.insert(k.src);
                 refuse("slot " + std::to_string(slot) + " of two kinds (" + std::to_string(k.bits) + ") at a way out, at " + std::to_string(at));
             }
         }
@@ -1010,7 +1019,15 @@ struct Region {
                 }
                 l->slot = list;
                 c.leaves(*l);
-                c.write(a, cls == CF ? K{kFloat} : K{kWhole, static_cast<int16_t>(list)});
+                if (cls == CI && c.r.intLists.count(list)) {
+                    // No bytes, so an int (a byte is left to the VM): kInt, written back as one.
+                    LOp& chk = c.op("chklist");
+                    chk.slot = list;
+                    c.leaves(chk);
+                    c.write(a, K{kInt});
+                } else {
+                    c.write(a, cls == CF ? K{kFloat} : K{kWhole, static_cast<int16_t>(list)});
+                }
                 s.top = u8(x, 3);
                 c.fall(s);
                 return;
@@ -1561,7 +1578,10 @@ struct Region {
     void analyse(int headTop) {
         entries = {0};
         tops[ins[0].at] = headTop;
-        for (int round = 0; round < 8; round++) {
+        // A round finds the ways in after the islands its states reach, often one more each round
+        // (GIF's LZW writer takes 24): up to 32, the analysis's time held as everywhere else.
+        constexpr int kRounds = 32;
+        for (int round = 0; round < kRounds; round++) {
             resumed = entries;
             resumed.erase(0);
             nextComeBack.clear();
@@ -1608,9 +1628,19 @@ struct Region {
                 same = same && old != comeBack.end() && sameState(old->second, st);
             }
             if (same) break;
-            if (round == 7) refuse("what is known where the VM comes back in does not settle");
+            if (round == kRounds - 1) refuse("what is known where the VM comes back in does not settle");
             entries = std::move(more);
             comeBack = nextComeBack;
+        }
+        // The VM's work inside an inner loop: that loop's own region, made as it starts, leaves for
+        // it with a few registers to load again; this one would load all of its own each time
+        // round the inner loop (Path.flatten's whole loop, once it settled, 35 ms to 41).
+        for (size_t j = 0; j < ins.size(); j++) {
+            if (ins[j].op != Op::Loop || !in[j].known) continue;
+            const auto t = index.find(static_cast<uint32_t>(i32(ins[j], 0)));
+            if (t == index.end() || t->second <= 0) continue;
+            for (size_t k = static_cast<size_t>(t->second); k <= j; k++)
+                if (in[k].known && results[k].island) refuse("the VM's work inside an inner loop, which has a region of its own");
         }
         // No way in at an island: the VM runs it as it comes to it. (Its ways there within the
         // region, made as to a way in, still write back and load: so it may stay one.)
@@ -2683,10 +2713,14 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             if (dumping) std::fprintf(stderr, "== %s: no region for the loop at %u: more than 600 instructions\n", f.name.c_str(), all[static_cast<size_t>(c.first)].at);
             continue;
         }
+        // Made a second time where the first found lists whose items must be read as ints.
+        std::set<int> intLists;
+        for (int attempt = 0; attempt < 2; attempt++) {
         Region r(f);
         r.frame = frame;
         r.frameSlots = frameSlots;
         r.tops = tops;
+        r.intLists = intLists;
         // A range counted through, made just before the loop: its step, where none is given, is 1
         // (or -1, going down), as the VM's RangeLoop sets it.
         if (all[static_cast<size_t>(c.first)].op == Op::RangeNext && c.first > 0 && all[static_cast<size_t>(c.first) - 1].op == Op::RangeLoop) {
@@ -2727,7 +2761,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             lap(3);
             std::vector<std::string> names;
             const auto ways = make(r, dumping ? &names : nullptr);
-            if (ways.empty()) continue;
+            if (ways.empty()) break;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
             for (const auto& [at, code] : ways) out.push_back(FunctionProto::NativeRegion{at, code, misses});
             made.push_back(c);
@@ -2742,12 +2776,18 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
             }
         } catch (const std::exception& e) {
+            if (attempt == 0 && !r.wantInts.empty()) {
+                intLists = r.wantInts;
+                continue;
+            }
             refusals++;
             if (dumping) {
                 std::fprintf(stderr, "== %s: no region for the loop at %u: %s\n", f.name.c_str(), all[static_cast<size_t>(c.first)].at, e.what());
                 for (size_t i = 0; i < r.results.size() && i < r.in.size(); i++)
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
             }
+        }
+        break;
         }
     }
 }
