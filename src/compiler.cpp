@@ -1339,6 +1339,23 @@ private:
     void compileInlineBody(const std::vector<StmtPtr>& body) {
         for (size_t i = 0; i + 1 < body.size(); i++) compileStmt(*body[i]);
         const Stmt* last = body.empty() ? nullptr : body.back().get();
+        if (last != nullptr && last->kind == StmtKind::Return && !static_cast<const ReturnStmt&>(*last).implicit &&
+            static_cast<const ReturnStmt&>(*last).value && static_cast<const ReturnStmt&>(*last).label.empty() && frame_ != nullptr &&
+            fs_->owner == frame_->owner && fs_->finally == frame_->finallyAtEntry && fs_->tryDepth == frame_->tryDepth &&
+            static_cast<const ReturnStmt&>(*last).value->kind != ExprKind::Assign) {
+            // `return value` last (`return cells[y * width + x]` in Grid's op []): the value left
+            // where the body's goes, as `=> value` leaves it, rather than kept as a local of its
+            // own, pushed again and jumped with to the end (three copies of it, 2026-11-12).
+            // Nothing is open to leave: no finally, no try begun in the body.
+            const Expr& value = *static_cast<const ReturnStmt&>(*last).value;
+            line_ = last->line;
+            compileExpr(value);
+            line_ = last->line;
+            // An item of a list read where it is, given back: a copy (G15), as compileInlineReturn
+            // makes. A value made here is one already.
+            if (!madeFresh(value)) emit(Op::OwnLocal, fs_->slotTop);
+            return;
+        }
         if (last != nullptr && last->kind == StmtKind::Return && static_cast<const ReturnStmt&>(*last).implicit &&
             static_cast<const ReturnStmt&>(*last).value) {
             line_ = last->line;
@@ -1352,6 +1369,19 @@ private:
         } else {
             if (last != nullptr) compileStmt(*last);
             emit(Op::Null);
+        }
+    }
+
+    // Whether an expression's value is one of its own, never an item of a list where it is: a
+    // call's, a literal, arithmetic, or an index read in a body put in place (inPlaceOff: a copy).
+    bool madeFresh(const Expr& e) const {
+        switch (e.kind) {
+            case ExprKind::Literal:
+            case ExprKind::Call:
+            case ExprKind::Binary:
+            case ExprKind::Unary: return true;
+            case ExprKind::Index: return inPlaceOff();
+            default: return false;
         }
     }
 

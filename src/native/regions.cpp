@@ -2377,6 +2377,7 @@ struct Region {
         // The steps, made once, from the states the analysis settled on.
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known) results[i] = transfer(static_cast<int>(i), in[i]);
+        madeWhereMoved();
         // What each way out writes back.
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known)
@@ -2384,6 +2385,56 @@ struct Region {
                     e.stores = stores(e.state, e.at, e.bad);
                     if (!e.bad.empty()) refuse(e.bad);
                 }
+    }
+
+    // ---- Values made where they are moved to ----
+
+    // A value made in memory, then moved down by one POP_UNDER or more (the end of a body put in
+    // place: `val c = grid[x, y]` is an item copied out, then moved over the body's receiver and
+    // indexes, and over Image's as well for `image[x, y]`), is made where it ends up: the step
+    // that makes it, the last of its instruction, writes the slot the last move takes it to, and
+    // the moves (a copyslot each, nothing else) go. Only where each POP_UNDER is come to from the
+    // instruction before alone, so that nothing reads the slot in between; the slot moved from
+    // is above the stack's top after, which nothing reads.
+    static bool madeAt(const LOp& l, int64_t& slot) {
+        if (l.stem == "idxsm") slot = (static_cast<uint64_t>(l.slot2) >> 8) & 0xFFFFFF;
+        else if (l.stem == "mksm") slot = static_cast<int64_t>(static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF);
+        else if (l.stem == "getpv") slot = l.slot2;
+        else return false;
+        return true;
+    }
+    static void makeAt(LOp& l, int64_t slot) {
+        const uint64_t was = static_cast<uint64_t>(l.slot2), to = static_cast<uint64_t>(slot);
+        if (l.stem == "idxsm") l.slot2 = static_cast<int64_t>((was & ~(0xFFFFFFull << 8)) | to << 8);
+        else if (l.stem == "mksm") l.slot2 = static_cast<int64_t>((was & ~0xFFFFFFFFull) | to);
+        else l.slot2 = slot;
+    }
+    void madeWhereMoved() {
+        std::vector<int> into(ins.size(), 0);
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known)
+                for (const Edge& e : results[i].edges)
+                    if (e.to >= 0 && static_cast<size_t>(e.to) < ins.size()) into[static_cast<size_t>(e.to)]++;
+        for (size_t j = 0; j + 1 < ins.size(); j++) {
+            const Result& made = results[j];
+            if (!in[j].known || made.island || made.ops.empty() || !made.fallsThrough || made.fallExit >= 0) continue;
+            int64_t at;
+            if (!madeAt(made.ops.back(), at)) continue;
+            std::vector<size_t> moves;
+            int64_t to = at;
+            for (size_t k = j + 1; k < ins.size(); k++) {
+                const Result& r = results[k];
+                if (ins[k].op != Op::PopUnder || !in[k].known || r.island || into[k] != 1 || entries.count(static_cast<int>(k)) ||
+                    resumed.count(static_cast<int>(k)) || r.ops.size() != 1 || r.ops[0].stem != "copyslot" || r.ops[0].slot2 != to ||
+                    !r.fallsThrough || r.fallExit >= 0)
+                    break;
+                to = r.ops[0].slot;
+                moves.push_back(k);
+            }
+            if (moves.empty()) continue;
+            makeAt(results[j].ops.back(), to);
+            for (size_t m : moves) results[m].ops.clear();
+        }
     }
 
     // ---- Lists and fields looked at once ----

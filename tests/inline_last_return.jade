@@ -1,0 +1,87 @@
+// An inline function whose last statement is `return value` leaves the value where the body's
+// goes, as `=> value` does (2026-11-12), rather than keeping it as a local of its own and jumping
+// with it to the end. The same answers as before: an item given back is a copy, and the other
+// returns of the body come to the same place.
+value Point(var x : int, var y : int)
+fun fresh() : open List<Point> => [Point(1, 2), Point(3, 4), Point(5, 6)]
+
+// The item a loop goes through, given back: a copy, which a change to the list leaves as it is.
+inline fun <T> lastOf(items : List<T>) : T {
+  var found = items[0]
+  for (item in items) { found = item }
+  return found
+}
+val pts = fresh()
+val last = lastOf(pts)
+pts[2] = Point(0, 0)
+print(last, pts[2])   // expect: Point(x=5, y=6) Point(x=0, y=0)
+
+// An item read by index, given back, then changed: the list's own is not.
+inline fun <T> at(items : List<T>, i : int) : T {
+  if (i < 0) { throw IllegalArgumentException("below 0") }
+  return items[i]
+}
+var p = at(pts, 1)
+p.x = 100
+print(p, pts[1])   // expect: Point(x=100, y=4) Point(x=3, y=4)
+
+// Several returns: an early one and the last, in a loop, their values the same place's.
+inline fun sign(n : int) : string {
+  if (n < 0) { return "minus" }
+  if (n == 0) { return "zero" }
+  return "plus"
+}
+var signs = ""
+for (n in -1 .. 1) { signs += sign(n) + " " }
+print(signs.trim())   // expect: minus zero plus
+
+// Locals of the body under the value; a value made, a field read, a call.
+class Box(val items : List<Point>) {
+  inline fun spread() : Point {
+    val first = items[0]
+    val end = items[items.size - 1]
+    return Point(end.x - first.x, end.y - first.y)
+  }
+  inline fun firstX() : int {
+    val f = items[0]
+    return f.x
+  }
+}
+val box = Box(fresh())
+var total = 0
+for (k in 0 ..< 3) { total += box.spread().x + box.spread().y + box.firstX() }
+print(total)   // expect: 27
+
+// Inside a try in the caller, and a finally of the body's own around the return (the return
+// is then no last statement: the value kept and the finally run as before).
+inline fun guarded(items : List<Point>, log : open List<string>) : int {
+  try {
+    return items[0].x
+  } finally {
+    log.add("done")
+  }
+}
+val log : open List<string> = []
+try {
+  print(guarded(pts, log), log)   // expect: 1 ["done"]
+} catch (e : Exception) {
+  print("no")
+}
+
+// Pixels: a colour from grid[x, y] and image[x, y], kept, then the pixel changed.
+val g = Grid<Color>(3, 2, fill = Color(1, 2, 3))
+val im = Image(3, 2, Color(4, 5, 6))
+fun sums(g : Grid<Color>, im : Image) : int {
+  var t = 0
+  for (y in 0 ..< 2) {
+    for (x in 0 ..< 3) {
+      val c = g[x, y]
+      val d = im[x, y]
+      g[x, y] = Color(9, 9, 9)
+      im[x, y] = Color(8, 8, 8)
+      t += c.red + c.green + c.blue + d.red + d.green + d.blue
+    }
+  }
+  return t
+}
+print(sums(g, im), sums(g, im), sums(g, im), g[2, 1], im[2, 1])   // expect: 126 306 306 Color(9, 9, 9) Color(8, 8, 8)
