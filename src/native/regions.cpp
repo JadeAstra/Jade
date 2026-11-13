@@ -2387,7 +2387,7 @@ struct Region {
                 }
     }
 
-    // ---- Values made where they are moved to ----
+    // ---- Values made where they are moved to, and none written for nothing ----
 
     // A value made in memory, then moved down by one POP_UNDER or more (the end of a body put in
     // place: `val c = grid[x, y]` is an item copied out, then moved over the body's receiver and
@@ -2435,6 +2435,21 @@ struct Region {
             makeAt(results[j].ops.back(), to);
             for (size_t m : moves) results[m].ops.clear();
         }
+        // And a value written to a slot (a copy, a null) that the POP right after takes off, come
+        // to from there alone: written for nothing (`a[i] = v`'s value, a body's null, as a
+        // statement), so not written.
+        for (size_t j = 0; j + 1 < ins.size(); j++) {
+            Result& wrote = results[j];
+            const size_t k = j + 1;
+            if (!in[j].known || wrote.island || wrote.ops.empty() || !wrote.fallsThrough || wrote.fallExit >= 0) continue;
+            const LOp& last = wrote.ops.back();
+            const bool plain = last.stem == "copyslot" || last.stem == "setnull" || last.stem == "settrue" || last.stem == "setfalse";
+            if (!plain || last.exit >= 0 || last.jumpTo >= 0 || last.jumpExit >= 0) continue;
+            if (ins[k].op != Op::Pop || !in[k].known || results[k].island || into[k] != 1 || entries.count(static_cast<int>(k)) ||
+                resumed.count(static_cast<int>(k)) || !results[k].ops.empty() || in[k].top - 1 != last.slot)
+                continue;
+            wrote.ops.pop_back();
+        }
     }
 
     // ---- Lists and fields looked at once ----
@@ -2465,8 +2480,19 @@ struct Region {
     // (lookp, lookph: as getpv reads it, into the context's `held`), and each read of it then
     // takes it from there with nothing checked but its kind (hgetpi, hgetpf, hgetpv). Another
     // thread changes nothing meanwhile: one waiting stops the loop at its end, and the region is
-    // entered afresh. At most kRegionFields of them. `heldBy`: each getpv's instruction looked at
-    // so, and where its field is held.
+    // entered afresh.
+    //
+    // A field the region writes, where every step that reads or writes a field of that name does
+    // so of the one object (2026-11-12: an image's changed rectangle, which `image[x, y] = c`
+    // widens for each pixel), is held the same way, looked at as one that may be written as SET_PROP
+    // writes it (lookpw, lookpwh: its object its core's own, the field a number of no other kind
+    // or set once); each read and write of it is of what is held (hsetpi, hsetpf), and each way
+    // out writes it back (putp) before the VM goes on. Nothing reads it meanwhile: no other step
+    // reads a field of its name, the VM does nothing in the region, and another thread looks only
+    // once the loop has stopped. So a loop that sets many pixels writes the rectangle once.
+    //
+    // At most kRegionFields of them. `heldBy`: each getpv's instruction looked at so, and where
+    // its field is held.
     void lookAtFieldsOnce(std::map<int, int>& heldBy) {
         std::vector<const ObjString*> written;
         for (size_t i = 0; i < ins.size(); i++) {
@@ -2485,43 +2511,83 @@ struct Region {
         // (source, field) -> where it is held; a source >= 0 a slot, else -2 - k for held k.
         std::map<std::pair<int, std::string>, int> held;
         std::map<int, bool> asEntered;
+        // A field written: each step of its name, and the object each is of (-1: not known).
+        std::map<std::string, std::vector<std::pair<LOp*, int>>> changed;
+        auto sourceOf = [&](size_t i, const LOp& l) -> int {
+            const int slot = static_cast<int>(l.slot);
+            const K k = in[i].kind(slot);
+            int source = -1;
+            if (k.bits == kEntry) {
+                source = slot;
+            } else if ((inMemory(k) || (k.bits & ~kCopies) == 0) && k.src >= 0) {
+                source = k.src;
+            } else if (const Fact* known = factOf(in[i], slot); known != nullptr && known->from >= 0) {
+                if (auto h = heldBy.find(known->from); h != heldBy.end()) source = -2 - h->second;
+            }
+            if (source >= 0) {
+                auto e = asEntered.find(source);
+                if (e == asEntered.end()) e = asEntered.emplace(source, untouched(source)).first;
+                if (!e->second) source = -1;
+            }
+            return source;
+        };
+        auto holding = [&](int source, const LOp& l, bool changes) -> int {
+            const auto key = std::make_pair(source, l.field->utf8());
+            auto found = held.find(key);
+            if (found != held.end()) return found->second;
+            if (static_cast<int>(held.size()) == kRegionFields) return -1;
+            found = held.emplace(key, static_cast<int>(held.size())).first;
+            LOp look;
+            look.stem = std::string(changes ? "lookpw" : "lookp") + (source >= 0 ? "" : "h");
+            look.slot = source >= 0 ? source : -2 - source;
+            look.ki = l.ki;  // the place's cache: where the field is in an object of its layout
+            look.slot2 = found->second;
+            prologue.push_back(look);
+            return found->second;
+        };
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             for (LOp& l : results[i].ops) {
-                if (l.stem != "getpi" && l.stem != "getpf" && l.stem != "getpv") continue;
-                if (l.field == nullptr || writes(l.field)) continue;
-                const int slot = static_cast<int>(l.slot);
-                const K k = in[i].kind(slot);
-                int source = -1;
-                if (k.bits == kEntry) {
-                    source = slot;
-                } else if ((inMemory(k) || (k.bits & ~kCopies) == 0) && k.src >= 0) {
-                    source = k.src;
-                } else if (const Fact* known = factOf(in[i], slot); known != nullptr && known->from >= 0) {
-                    if (auto h = heldBy.find(known->from); h != heldBy.end()) source = -2 - h->second;
+                const bool reads = l.stem == "getpi" || l.stem == "getpf" || l.stem == "getpv";
+                if (!reads && l.stem != "setpi" && l.stem != "setpf") continue;
+                if (l.field == nullptr) continue;
+                if (writes(l.field)) {
+                    changed[l.field->utf8()].emplace_back(&l, sourceOf(i, l));
+                    continue;
                 }
+                const int source = sourceOf(i, l);
                 if (source == -1) continue;
-                if (source >= 0) {
-                    auto e = asEntered.find(source);
-                    if (e == asEntered.end()) e = asEntered.emplace(source, untouched(source)).first;
-                    if (!e->second) continue;
-                }
-                const auto key = std::make_pair(source, l.field->utf8());
-                auto found = held.find(key);
-                if (found == held.end()) {
-                    if (static_cast<int>(held.size()) == kRegionFields) continue;
-                    found = held.emplace(key, static_cast<int>(held.size())).first;
-                    LOp look;
-                    look.stem = source >= 0 ? "lookp" : "lookph";
-                    look.slot = source >= 0 ? source : -2 - source;
-                    look.ki = l.ki;  // the place's cache: where the field is in an object of its layout
-                    look.slot2 = found->second;
-                    prologue.push_back(look);
-                }
-                if (l.stem == "getpv") heldBy[static_cast<int>(i)] = found->second;
+                const int k = holding(source, l, false);
+                if (k < 0) continue;
+                if (l.stem == "getpv") heldBy[static_cast<int>(i)] = k;
                 l.stem = "h" + l.stem;
-                l.slot = found->second;
+                l.slot = k;
             }
+        }
+        std::vector<int> putBack;
+        for (auto& [name, steps] : changed) {
+            const int source = steps[0].second;
+            bool one = source != -1;
+            for (const auto& [l, s] : steps) one = one && s == source;
+            if (!one) continue;
+            const int k = holding(source, *steps[0].first, true);
+            if (k < 0) continue;
+            for (auto& [l, s] : steps) {
+                l->stem = "h" + l->stem;
+                l->slot = k;
+            }
+            putBack.push_back(k);
+        }
+        if (putBack.empty()) return;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (ExitPoint& e : results[i].exits)
+                for (int k : putBack) {
+                    LOp put;
+                    put.stem = "putp";
+                    put.slot = k;
+                    e.stores.push_back(put);
+                }
         }
     }
 

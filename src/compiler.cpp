@@ -1034,7 +1034,12 @@ private:
         std::vector<const Expr*> args;
         std::vector<char> spread;
         int line = 0;
+        bool unused = false;             // a statement of its own: what the body gives is dropped
     };
+    // The call compiled as a statement of its own (compileStmt), whose value no one takes; and the
+    // body put in place that dropped its value itself, rather than leaving it to be popped.
+    const Node* unusedCall_ = nullptr;
+    const Node* droppedValue_ = nullptr;
     bool compileInlineCall(const CallExpr& e) {
         if (session_.checker == nullptr || inlineDepth_ >= 48) return false;
         Checker::InlineCall info;
@@ -1056,6 +1061,7 @@ private:
         for (const ExprPtr& a : e.args) site.args.push_back(a.get());
         site.spread = e.spread;
         site.line = e.line;
+        site.unused = unusedCall_ == &e;
         return compileInlined(site, info);
     }
     // `a[i]` where the checker chose an inline op [] (B2): its body in place.
@@ -1091,8 +1097,10 @@ private:
         for (const ExprPtr& m : target.more) site.args.push_back(m.get());
         site.args.push_back(a.value.get());
         site.line = a.line;
+        site.unused = true;
         if (!compileInlined(site, info)) return false;
-        emit(Op::Pop);
+        if (droppedValue_ != &a) emit(Op::Pop);
+        droppedValue_ = nullptr;
         return true;
     }
     bool compileInlined(const InlineSite& e, const Checker::InlineCall& info) {
@@ -1291,7 +1299,15 @@ private:
         if (info.automatic) smallInlined_.pop_back();
         enterScope(caller);
         line_ = e.line;
-        endScopeKeepingValue();
+        if (e.unused && toNull < 0) {
+            // A statement of its own: what the body gives dropped first, then the receiver and the
+            // arguments, rather than it moved down over them and then dropped (a copy, for a value).
+            emit(Op::Pop);
+            endScope();
+            droppedValue_ = e.node;
+        } else {
+            endScopeKeepingValue();
+        }
         if (toNull >= 0) patchJump(toNull);
         leaveValueBlock(saved);
         return true;
@@ -3570,8 +3586,12 @@ private:
                 } else if (expr.kind == ExprKind::Assign) {
                     compileAssignStatement(expr);
                 } else {
+                    const Node* const savedUnused = unusedCall_;
+                    unusedCall_ = &expr;
                     compileExpr(expr);
-                    emit(Op::Pop);
+                    unusedCall_ = savedUnused;
+                    if (droppedValue_ != &expr) emit(Op::Pop);  // an inline call's body dropped it already
+                    droppedValue_ = nullptr;
                 }
                 break;
             }

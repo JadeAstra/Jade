@@ -1,0 +1,149 @@
+// Fields a loop reads and writes, of one object, held by native code while the loop runs and
+// written back as it leaves (2026-11-12: an image's changed rectangle, widened by each
+// `image[x, y] = c`); and an inline call as a statement of its own, its value dropped. Each loop
+// runs three times (its region is made the second time it starts); every answer the VM's alone,
+// and `jade --interpret`'s.
+
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+class Area {
+  var count = 0
+  var left = 0
+  var top = 0
+  var right = 0
+  var bottom = 0
+  var weight = 0.0
+  inline fun widen(l : int, t : int, r : int, b : int) {
+    if (right <= left or bottom <= top) {
+      left = l; top = t; right = r; bottom = b
+    } else {
+      if (l < left) { left = l }
+      if (t < top) { top = t }
+      if (r > right) { right = r }
+      if (b > bottom) { bottom = b }
+    }
+    count += 1
+  }
+  fun text() : string => "$count $left,$top-$right,$bottom $weight"
+}
+
+// Read and written in the loop, of one object: written back once it ends.
+fun cover(a : Area, x0 : int, y0 : int, n : int) {
+  for (y in y0 ..< y0 + n) {
+    for (x in x0 ..< x0 + n) {
+      a.widen(x, y, x + 1, y + 1)
+      a.weight += 0.5
+    }
+  }
+}
+val area = Area()
+thrice { cover(area, 3, 4, 5) }
+print(area.text())   // expect: 75 3,4-8,9 37.5
+cover(area, 1, 10, 2)
+print(area.text())   // expect: 79 1,4-8,12 39.5
+
+// Left by an exception part way: what was done written back before it is thrown.
+fun coverUntil(a : Area, items : List<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    a.widen(i, 0, i + 1, 1)
+    t += items[i]
+  }
+  return t
+}
+val partly = Area()
+print(failing { thrice { coverUntil(partly, [1, 2, 3], 5) } }, partly.text())   // expect: IndexOutOfBoundsException: list index 3 is out of range (size 3) 4 0,0-4,1 0.0
+
+// Two objects, or one through two names: each read where it is.
+fun both(a : Area, b : Area, n : int) {
+  for (i in 0 ..< n) {
+    a.count += 1
+    b.count += 2
+  }
+}
+val one = Area()
+val other = Area()
+thrice { both(one, other, 10) }
+both(one, one, 10)
+print(one.count, other.count)   // expect: 60 60
+
+// Changed by a call in the loop as well: the VM's work there, nothing held.
+fun bump(a : Area) {
+  a.count += 100
+}
+fun withCall(a : Area, n : int) {
+  for (i in 0 ..< n) {
+    a.count += 1
+    bump(a)
+  }
+}
+val called = Area()
+thrice { withCall(called, 4) }
+print(called.count)   // expect: 1212
+
+// A field of no type given another kind in the loop: the VM's for that, then held again.
+class Loose {
+  var v : any = 0
+}
+fun loosen(l : Loose, n : int) : string {
+  for (i in 0 ..< n) {
+    if (i == 3) { l.v = 1.5 }
+  }
+  return "${l.v}"
+}
+print(thrice { loosen(Loose(), 6) })   // expect: 1.5
+
+// Inline calls as statements: what they give dropped, with an early return, a lambda kept,
+// and a call through ?.
+inline fun twice(n : int) : int {
+  if (n < 0) { return 0 }
+  return n * 2
+}
+inline fun keep(n : int, into : open List<() -> int>) : int {
+  into.add { n }
+  return n
+}
+class Counter {
+  var n = 0
+  inline fun step() : int {
+    n += 1
+    return n
+  }
+}
+fun statements(c : Counter?, k : int) : int {
+  val kept : open List<() -> int> = []
+  var t = 0
+  for (i in 0 ..< k) {
+    twice(i)
+    twice(-i)
+    keep(i, kept)
+    c?.step()
+    t += i
+  }
+  for (f in kept) { t += f() }
+  return t
+}
+val counter = Counter()
+print(thrice { statements(counter, 5) }, statements(null, 3), counter.n)   // expect: 20 6 15
+
+// Pixels: an image painted in a loop, and in a loop left part way.
+fun paint(im : Image, l : int, t : int, w : int, h : int, c : Color) {
+  for (y in t ..< t + h) {
+    for (x in l ..< l + w) { im[x, y] = c }
+  }
+}
+val im = Image(20, 10)
+for (k in 0 ..< 3) { paint(im, 2 + k, 1, 6, 4, Color(k, 1, 2)) }
+print(im[2, 1], im[9, 4], im[10, 4], failing { thrice { paint(im, 17, 0, 5, 1, Color.red) } }, im[19, 0])   // expect: Color(0, 1, 2) Color(2, 1, 2) Color(0, 0, 0, 0) IndexOutOfBoundsException: pixel (20, 0) is outside the image, which is 20 by 10 Color(255, 0, 0)

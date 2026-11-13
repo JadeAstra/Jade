@@ -1168,7 +1168,9 @@ class Image : Drawable {
   // the graphics card among them) sees it half done (G64). Keep calls and loops out of it: a
   // Math.min of two ints is no call today, but nothing here should hang on that. Inline, so that
   // image[x, y] = c costs no call (its body is put where it is used, which has no loop's end in
-  // the middle of it either).
+  // the middle of it either). In a loop native code runs, these fields are held while it runs
+  // and written back as it leaves (before another thread can look), so a loop setting many
+  // pixels writes the rectangle once.
   internal inline fun changed(left : int, top : int, right : int, bottom : int) {
     if (changedRight <= changedLeft or changedBottom <= changedTop) {
       changedLeft = left; changedTop = top; changedRight = right; changedBottom = bottom

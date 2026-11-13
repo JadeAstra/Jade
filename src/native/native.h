@@ -71,7 +71,7 @@ private:
 };
 
 constexpr int kRegionLists = 6;
-constexpr int kRegionFields = 8;
+constexpr int kRegionFields = 16;
 
 // What a region is given besides the frame's slots: the VM's flag (a collection or another
 // thread waiting), and for its reads and writes of objects, the core of a parallel section it
@@ -87,8 +87,10 @@ struct RegionContext {
     uint64_t t[16];
     // The VM's globals, as a region reads one (B3: the class called to make a value).
     const void* globals;
-    // The fields a region looks at once as it starts (stencils.cpp, lookp): each a value, two words.
+    // The fields a region looks at once as it starts (stencils.cpp, lookp): each a value, two words;
+    // and of those it writes (lookpw), where each is written back as it leaves (0: nowhere).
     uint64_t held[kRegionFields * 2];
+    uint64_t heldAt[kRegionFields];
 };
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it

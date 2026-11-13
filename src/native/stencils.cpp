@@ -54,7 +54,8 @@ struct Ctx {  // native.h's RegionContext
     uint64_t lists[24];
     uint64_t t[16];
     const uint8_t* globals;
-    uint64_t held[16];
+    uint64_t held[32];
+    uint64_t heldAt[16];
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -1257,6 +1258,76 @@ STENCIL(lookph) {
     lookAtField(from, ctx);
     NEXT;
 }
+// A field the region writes, looked at once (lookpw, lookpwh): held as lookp holds it, where it
+// may be written back as SET_PROP's setp writes it (the object its core's own; a number kept as
+// its payload alone, set any number of times; or kept as a value, an int or a float of a field
+// of no type or that number's, not one set only once), and its address in heldAt[k] (bit 0: kept
+// as its payload alone). One that may not is held as Undefined, and each read and write of it is
+// the VM's.
+INLINE void lookAtFieldToChange(const Slot& s, Ctx* ctx) {
+    Slot* const held = reinterpret_cast<Slot*>(ctx->held);
+    storeSlot(held, jade_slot2, kKindUndefined, 0);
+    ctx->heldAt[jade_slot2] = 0;
+    uint64_t seen;
+    uint8_t* at = fieldAt(s, ctx, true, seen);
+    if (at == nullptr) return;
+    if ((seen & 0x80) != 0) {
+        const uint8_t kind = static_cast<uint8_t>(seen & 3);
+        if ((seen & 0x60) != 0 || (kind != kKindInt && kind != kKindFloat)) return;
+        uint64_t bits;
+        __builtin_memcpy(&bits, at, 8);
+        storeSlot(held, jade_slot2, kind, bits);
+        ctx->heldAt[jade_slot2] = reinterpret_cast<uint64_t>(at) | 1;
+        return;
+    }
+    if ((seen & 3) != 0) return;
+    const uint8_t type = static_cast<uint8_t>(seen >> 8);
+    if (at[0] == kKindInt) {
+        if (type != 0 && type != kTypeIdInt) return;
+    } else if (at[0] == kKindFloat) {
+        if (type != 0 && type != kTypeIdFloat) return;
+    } else {
+        return;
+    }
+    __builtin_memcpy(&held[jade_slot2], at, sizeof(Slot));
+    ctx->heldAt[jade_slot2] = reinterpret_cast<uint64_t>(at);
+}
+STENCIL(lookpw) {
+    lookAtFieldToChange(base[jade_slot], ctx);
+    NEXT;
+}
+STENCIL(lookpwh) {
+    const Slot from = heldSlot(ctx, jade_slot);
+    lookAtFieldToChange(from, ctx);
+    NEXT;
+}
+// A field held so written back to its object (a way out): where it may be.
+STENCIL(putp) {
+    const uint64_t at = ctx->heldAt[jade_slot];
+    if (at != 0) {
+        const Slot& h = heldSlot(ctx, jade_slot);
+        if ((at & 1) != 0) __builtin_memcpy(reinterpret_cast<uint8_t*>(at & ~uint64_t{1}), &h.i, 8);
+        else __builtin_memcpy(reinterpret_cast<uint8_t*>(at), &h, sizeof(Slot));
+    }
+    NEXT;
+}
+// Writes of a field held so (held as jade_slot): the number it holds, of its kind.
+#define HSETPI(a, ...)                                                          \
+    STENCIL(hsetpi_##a) {                                                       \
+        Slot& h = reinterpret_cast<Slot*>(ctx->held)[jade_slot];                \
+        if (h.kind != kKindInt) EXIT;                                           \
+        h.i = i##a;                                                             \
+        NEXT;                                                                   \
+    }
+I_A(HSETPI, x)
+#define HSETPF(a, ...)                                                          \
+    STENCIL(hsetpf_##a) {                                                       \
+        Slot& h = reinterpret_cast<Slot*>(ctx->held)[jade_slot];                \
+        if (h.kind != kKindFloat) EXIT;                                         \
+        h.d = f##a;                                                             \
+        NEXT;                                                                   \
+    }
+F_A(HSETPF, x)
 // Reads of a field looked at once (held as jade_slot): its kind checked, nothing else.
 #define HGETPI(a, ...)                                                          \
     STENCIL(hgetpi_##a) {                                                       \
