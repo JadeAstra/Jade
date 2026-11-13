@@ -1561,11 +1561,15 @@ struct Region {
             case Op::PlaceIndex: {  // list index -> place: an item of a list of a value type's items, to be changed (B3)
                 const int top = s.top;
                 const int list = c.objectSlot(top - 2);
-                if (itemsClass(s, list) == nullptr || c.copiedElsewhere(top - 2)) island();
+                const ObjClass* const cls = itemsClass(s, list);
+                if (cls == nullptr || c.copiedElsewhere(top - 2)) island();
                 const Reg index = c.read(top - 1, CI, true);
                 LOp& l = c.op("placei", {index}, {index});
                 l.slot = list;
                 l.slot2 = top - 2;
+                // Its items' class, as the list's other steps give theirs (lookAtListsOnce: one
+                // class for every step, or the list is not looked at once).
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 c.leaves(l);
                 c.write(top - 2, K{kMem});
                 s.top = top - 1;
@@ -1694,12 +1698,27 @@ struct Region {
                 const int top = s.top;
                 LOp& l = c.op("clsflag");
                 l.slot = c.objectSlot(top - 1);
+                // A copy of a slot as entered (`this`, pushed for the check): that slot, the same object.
+                if (const K k = s.kind(static_cast<int>(l.slot)); k.bits == kCopy && k.src >= 0 && s.kind(k.src).bits == kEntry) l.slot = k.src;
                 l.ki = u16(x, 0);
                 State after = s;
                 after.top = top - 1;
                 after.flag = -1;  // the flag holds the answer, no slot's bool
+                // An object as the region was entered (an extension's `this`: no step before it
+                // writes the slot) is of the class every time round or none (2026-11-13): where it
+                // is not, a way out, the VM's way left to the VM, not taken into the region as an
+                // island (which would bar lists looked at once and loop templates).
+                // A miss where it is not, as a guess that fails is: past the VM's limit of them the
+                // region is left to the VM (whose own lookup of the call does as well).
+                const bool entered = s.kind(static_cast<int>(l.slot)).bits == kEntry;
                 s = after;
-                c.go(static_cast<uint32_t>(i32(x, 2)), after, c.op("jfalse"));
+                if (entered) {
+                    LOp& j = c.op("jfalse");
+                    j.jumpExit = c.exitTo(static_cast<uint32_t>(i32(x, 2)), after);
+                    if (c.lowering) c.out.exits.back().miss = true;
+                } else {
+                    c.go(static_cast<uint32_t>(i32(x, 2)), after, c.op("jfalse"));
+                }
                 c.fall(after);
                 return;
             }
@@ -2995,6 +3014,9 @@ struct Region {
             int64_t id, cls, global;
         };
         std::map<int64_t, Made> made;
+        // Places made at items to be set (hplacei: `to[i] = Color(...)`, the value made where the
+        // item is): the list and the index, each the item a store of the body's sets.
+        std::vector<std::pair<int, const Expr*>> places;
     };
     const Expr* valueOf(Followed& fw, const Reg& r) {
         auto v = fw.val.find(r);
@@ -3136,7 +3158,19 @@ struct Region {
             fw.slots.push_back(to);
             return true;
         }
+        if (s == "hplacei") {
+            // Its check of the index is the store's at the same item, which recognise asks for.
+            fw.places.emplace_back(static_cast<int>(l.slot), valueOf(fw, n[0]));
+            fw.slots.push_back(l.slot2);
+            return true;
+        }
         if (s == "copyslot") {
+            if (auto m = fw.made.find(l.slot2); m != fw.made.end()) {  // a value made, moved down
+                const Followed::Made copied = m->second;
+                fw.made[l.slot] = copied;
+                fw.slots.push_back(l.slot);
+                return true;
+            }
             auto value = fw.values.find(l.slot2);
             if (value != fw.values.end()) {
                 const Followed::Value v = value->second;
@@ -3238,6 +3272,9 @@ struct Region {
         std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
         int64_t mixDivisor = 1;         // kLoopWMix: words 61 and 62
         bool mixDivideFirst = false;
+        // Objects as the loop entered them, each to be of exactly a class (clsflag, the way where
+        // it is not out of the region): the slot and the global holding the class; words 112 on.
+        std::vector<std::pair<int64_t, int64_t>> classChecks;
     };
     // How a mix ends (2026-11-13): `>> shift`, `/ divisor` (a constant of 1 or more, which truncates
     // toward zero as C++'s does), or both in either order; `v` the sum before them.
@@ -3628,7 +3665,25 @@ struct Region {
                 continue;
             }
             int skipTo = -1;
+            const LOp* classCheck = nullptr;
             for (const LOp& l : r.ops) {
+                // A class check of an object as the loop entered it, the way where it fails out of
+                // the region: checked once, by the template (2026-11-13).
+                if (l.stem == "clsflag") {
+                    const int slot = static_cast<int>(l.slot);
+                    for (int u = h; u <= e; u++)
+                        if (in[static_cast<size_t>(u)].kind(slot).bits != kEntry) return false;
+                    classCheck = &l;
+                    continue;
+                }
+                if (classCheck != nullptr) {
+                    if (l.stem != "jfalse" || l.jumpExit < 0) return false;
+                    const std::pair<int64_t, int64_t> check{classCheck->slot, classCheck->ki};
+                    if (std::find(ah.classChecks.begin(), ah.classChecks.end(), check) == ah.classChecks.end()) ah.classChecks.push_back(check);
+                    if (ah.classChecks.size() > 2) return false;
+                    classCheck = nullptr;
+                    continue;
+                }
                 // A guard (2026-11-13): comparisons joined by `or`, each true one jumping on to the
                 // next `or` (or to the last jump), the last jump going on where none holds and
                 // falling into a way to a throw or a return otherwise. None may hold anywhere in
@@ -3652,6 +3707,14 @@ struct Region {
                     skipTo = l.jumpTo;
                     continue;
                 }
+                // A jump on over steps the region never reaches (the VM's way past a class check
+                // that leaves the region where it fails).
+                if (l.stem == "jump" && &l == &r.ops.back() && l.jumpExit < 0 && l.jumpTo > i + 1 && l.jumpTo < e) {
+                    for (int u = i + 1; u < l.jumpTo; u++)
+                        if (in[static_cast<size_t>(u)].known) return false;
+                    skipTo = l.jumpTo;
+                    continue;
+                }
                 if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
                 if ((l.stem.rfind("hsetp", 0) == 0 && l.stem.rfind("hsetpi", 0) != 0) || l.stem == "putp") return false;
                 if (l.stem == "chkf" || l.stem == "chkint" || l.stem == "chki") {
@@ -3668,6 +3731,12 @@ struct Region {
         auto changed = [&](const Expr* e) { return e != nullptr && e->kind == Expr::Inv && defined.count(e->reg) != 0; };
         for (const Followed::Cmp& g : ah.guards)
             if (!guardSide(g.a) || !guardSide(g.b) || changed(g.a) || changed(g.b)) return false;
+        // A place made at an item: of an item a store sets, its index checked there.
+        for (const auto& [list, index] : fw.places) {
+            bool stored = false;
+            for (const Followed::Store& st : fw.stores) stored = stored || (st.list == list && same(st.index, index));
+            if (!stored) return false;
+        }
         // The slots the body writes beside its registers: temporaries above the loop's own.
         for (int64_t slot : fw.slots)
             if (slot < in[static_cast<size_t>(h)].top) return false;
@@ -3935,6 +4004,8 @@ struct Region {
             operandWords(at + 1, ah.guards[g].a, 0);
             operandWords(at + 3, ah.guards[g].b, 0);
         }
+        word(112, static_cast<int64_t>(ah.classChecks.size()));
+        for (size_t k = 0; k < ah.classChecks.size(); k++) word(113 + 2 * static_cast<int>(k), ah.classChecks[k].first), word(114 + 2 * static_cast<int>(k), ah.classChecks[k].second);
         word(70, static_cast<int64_t>(ah.updates.size()));
         for (size_t u = 0; u < ah.updates.size(); u++) {
             const int at = 71 + 4 * static_cast<int>(u);

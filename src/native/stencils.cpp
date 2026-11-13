@@ -1764,6 +1764,14 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         const uint8_t k = base[t[14]].kind;
         if (t[15] == 1 ? k != kKindFloat : t[15] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
     }
+    // Objects as the loop entered them, each of exactly a class (112: how many; 113 on: the slot
+    // and the global holding the class, two words each), as clsflag checks; where one is not, the
+    // loop's own steps leave the region (2026-11-13: an extension's bare call of a global).
+    for (uint64_t k = 0; k < t[112]; k++) {
+        const Slot& s = base[t[113 + 2 * k]];
+        const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[114 + 2 * k];
+        if (s.kind != kKindObj || s.p[kObjType] != kTypeInstance || g->kind != kKindObj || word<const uint8_t*>(s.p + kInstClass) != g->p) return;
+    }
     // A for over a list of items (word 60 the iterator's slot): from the iterator's index to the
     // list's end, the list the one looked at once as word 5's; the iterator left after the last
     // item done (2026-11-13).

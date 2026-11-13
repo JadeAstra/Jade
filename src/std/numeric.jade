@@ -374,17 +374,12 @@ fun Grid<Color>.mapChannels(red : List<int>? = null, green : List<int>? = null, 
   val g = __channelTable(green)
   val b = __channelTable(blue)
   val a = __channelTable(alpha)
-  __mapChannels(cells, to, r, g, b, a)
-  return out
-}
-// The pixels through the tables: a function of its own, where `Color` is the class and nothing of
-// a grid's (in an extension of Grid a bare name is looked for on the grid first, as it runs).
-fun __mapChannels(px : List<Color>, to : open List<Color>, r : Bytes, g : Bytes, b : Bytes, a : Bytes) {
+  val px = cells
   for (i in 0 ..< px.size) {
     val c = px[i]
-    val made = Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])
-    to[i] = made
+    to[i] = Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])
   }
+  return out
 }
 // A channel's table as bytes: 256 entries, each 0 to 255; with none, each level itself.
 fun __channelTable(table : List<int>?) : Bytes {
