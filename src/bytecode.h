@@ -806,6 +806,9 @@ struct FunctionProto {
         // How often the region's quick ways have not done what they do (an item of another
         // kind, a guess wrong), shared by its ways in: past a limit, the VM stops going in.
         uint32_t* misses;
+        // The region's start, whose prologue looks at lists and fields once; any other way in
+        // (after an island) reads none of what the context keeps for that (VM::nativeEnter).
+        bool first = false;
     };
     // The regions made so far as published: a list never changed once published, replaced whole
     // as a loop's regions are added (under VM::nativeFirst's lock), so that a core reading it as

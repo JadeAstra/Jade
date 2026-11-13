@@ -4114,7 +4114,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             const auto ways = make(r, dumping ? &names : nullptr);
             if (ways.empty()) break;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
-            for (const auto& [at, code] : ways) out.push_back(FunctionProto::NativeRegion{at, code, misses});
+            for (size_t w = 0; w < ways.size(); w++) out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0});
             made.push_back(c);
             if (dumping) {
                 int islands = 0;
