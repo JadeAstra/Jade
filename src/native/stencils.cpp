@@ -81,11 +81,10 @@ INLINE const uint8_t* packOf(const uint8_t* list, uint8_t store) {
     return pack;
 }
 INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
-    Slot s;
-    __builtin_memset(&s, 0, sizeof s);
-    s.kind = kind;
-    __builtin_memcpy(&s.i, &bits, 8);
-    __builtin_memcpy(&base[slot], &s, sizeof s);
+    // One store of the whole slot (2026-11-13): what reads it whole after (the VM's copies of a
+    // value) is given it at once, where four stores of its parts had the read wait for them all
+    // to reach memory.
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(&base[slot]), _mm_set_epi64x(static_cast<int64_t>(bits), kind));
 }
 }  // namespace
 
