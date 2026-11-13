@@ -103,6 +103,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#cp-same">What does not change</a></li>
 <li><a href="#cp-risks">Risks</a></li>
 <li><a href="#cp-questions">Questions for the user</a></li>
+<li><a href="#cp-spike">The spike: failed its gate</a></li>
 </ul>
 </nav>
 
@@ -284,6 +285,22 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 </ul>
 <p><em>Recommended:</em> a gate, as for native code itself. The whole gain rests on the call costing no more than the VM's, which is not known yet.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: a gate.</span></div>
+</section>
+
+<section id="cp-spike">
+<h2>The spike: failed its gate</h2>
+<p>Built and timed 2026-11-13, at the user's word ("yes, start the spike"); kept on the local branch <code>spike-native-calls</code> (ba72db3), not merged. A call step for R_CALL: the way out's stores, a stencil (<code>callvm</code>) calling a C++ helper through the region's context, then the loads of the instruction after the call and on to it; where the helper cannot make the call, the region leaves for the VM at it as before. <code>JADE_NATIVE_CALLS</code> chose the way: 1 the frame pushed as QUICK_CALL pushes it and the VM's loop run anew until it returns (question 1's own way); 2 through <code>VM::call</code>; 3 the frame pushed by the helper and the callee's first instruction's function called from the stencil itself, no new run of the loop (no exception may be thrown in it: the region's code has no unwind information). Every answer was the VM's.</p>
+<p>The loops: a call by name of a function not put in place (it calls itself, never here), and some work with such a call every time round; 10 million times round, best of three, the Clang build, on the performance cores:</p>
+<div class="table"><table>
+<thead><tr><th>Loop</th><th class="num">VM alone</th><th class="num">Native code today: out and back in</th><th class="num">Way 1</th><th class="num">Way 2</th><th class="num">Way 3</th><th class="num">Way 3, slots stored whole</th></tr></thead>
+<tbody>
+<tr><td>a call by name</td><td class="num">133</td><td class="num">180</td><td class="num">251</td><td class="num">333</td><td class="num">219</td><td class="num">205</td></tr>
+<tr><td>work, and a call every time round</td><td class="num">297</td><td class="num">231</td><td class="num">299</td><td class="num">370</td><td class="num">251</td><td class="num">242</td></tr>
+</tbody></table></div>
+<p>Where the time goes, a call by name, a round: the VM alone does all of it, the loop, its quick call, the callee and its return, in 13 ns. The region's side of a call made from native code (written back, the stencil's call of the helper, loaded again) is 8 ns with the helper doing nothing (6 ns with the slots stored whole: <code>storei</code> wrote a slot in four stores of its parts, which a read of the whole slot after it waits for); the helper's checks and the arguments put, 3 ns; the frame pushed, the loop run anew, the callee and its return, 14 ns (way 1), less by calling the callee's instructions from the stencil (way 3).</p>
+<p>The gate: a call made from native code is to cost no more than the VM's quick call, and the loop with a call every time round is to be faster than the VM alone. The first fails by far (some 20 ns a round against 13); the second holds for way 3 (242 against 297), but native code today, leaving the region and coming back, does better still (231). What the plan rests on, that a call made from native code costs no more than the VM's, does not hold: the VM's quick call keeps everything where it is, in the frame's slots, and the region pays to write its registers back and load them again around any call, besides the call itself.</p>
+<p>Found on the way: a misleading first measure. A callee with a loop of its own (<code>while</code>) has a region of its own, entered and left at every call (nativeEnter, its context made anew), which made every native column slower; timed with a callee of no loop. And <code>storei</code>'s four stores (above): one store of the whole slot is 1 to 2% faster on today's ways out, a change of its own.</p>
+<p>The user's choice, at the gate: stop here; or make leaving and coming back cheaper (question 1's third way: the region found at once and its context not made anew, which today's 180 against 133 says is where a loop around calls loses); or a loop that is mostly calls left to the VM (Region::worthIt counting a call as the VM's, where today the loop of a call by name is made a region and runs 35% slower than the VM alone).</p>
 </section>
 
 </section>
