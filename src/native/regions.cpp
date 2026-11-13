@@ -2982,6 +2982,15 @@ struct Region {
         std::map<int64_t, Value> values;
         // Held int fields the body writes (hsetpi), each the value it last writes.
         std::map<int64_t, const Expr*> heldWrites;
+        // Slots a global was read into (getg), by the global; and values of a value type made
+        // from their bytes into slots (mksm): the bytes, the type's number, the class and the
+        // global it was checked against.
+        std::map<int64_t, int64_t> globals;
+        struct Made {
+            const Expr* bytes;
+            int64_t id, cls, global;
+        };
+        std::map<int64_t, Made> made;
     };
     const Expr* valueOf(Followed& fw, const Reg& r) {
         auto v = fw.val.find(r);
@@ -3083,9 +3092,30 @@ struct Region {
             fw.heldWrites[l.slot] = valueOf(fw, n[0]);
             return true;
         }
+        if (s == "getg") {
+            fw.globals[l.slot2] = l.ki;
+            fw.slots.push_back(l.slot2);
+            return true;
+        }
+        if (s == "packb") {  // a byte into a value's bytes, ki bits up
+            Expr e{Expr::Bin};
+            e.op = 'p';
+            e.a = valueOf(fw, n[0]);
+            e.b = valueOf(fw, n[1]);
+            e.ki = l.ki;
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "mksm") {
+            auto g = fw.globals.find(l.slot);
+            if (g == fw.globals.end()) return false;
+            const int64_t to = static_cast<int64_t>(static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF);
+            fw.made[to] = Followed::Made{valueOf(fw, n[0]), static_cast<int64_t>(static_cast<uint64_t>(l.slot2) >> 32), l.ki, g->second};
+            fw.slots.push_back(to);
+            return true;
+        }
         if (s == "hsetsm") {
             const int64_t from = l.slot2 & 0xFFFFFF;
-            if (fw.values.count(from) == 0) return false;
+            if (fw.values.count(from) == 0 && fw.made.count(from) == 0) return false;
             Followed::Store st{static_cast<int>(l.slot), valueOf(fw, n[0]), nullptr, s};
             st.what = l.slot2, st.width = l.ki, st.source = from;
             fw.stores.push_back(st);
@@ -3127,7 +3157,7 @@ struct Region {
             auto value = fw.values.find(l.slot);
             if (value != fw.values.end()) value->second.cls = l.ki;
         }
-        if (s == "keepl" || s == "ownsm" || s == "notnull") return fw.refs.count(l.slot) != 0 || fw.values.count(l.slot) != 0;
+        if (s == "keepl" || s == "ownsm" || s == "notnull") return fw.refs.count(l.slot) != 0 || fw.values.count(l.slot) != 0 || fw.made.count(l.slot) != 0;
         if (s == "hvalpb" || s == "hvalpi") {
             auto ref = fw.refs.find(l.slot);
             if (ref == fw.refs.end()) return false;
@@ -3200,7 +3230,118 @@ struct Region {
         };
         std::vector<Update> updates;  // held int fields the loop changes
         std::vector<int64_t> fill;    // kLoopWFillItems: the items' width, where the value is (kind, which), what hsetsm is given
+        std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
     };
+    // A guard, where it is not one already.
+    void addGuard(Ahead& ah, const Followed::Cmp& g) {
+        for (const Followed::Cmp& h : ah.guards)
+            if (h.op == g.op && same(h.a, g.a) && same(h.b, g.b)) return;
+        ah.guards.push_back(g);
+    }
+    // A value of a value type made from bytes, each one mix of byte fields of an item, a byte
+    // field of that item, or a constant, stored into that item, or into another list's item at the
+    // counter (kLoopWMixItems, 2026-11-13: a greyscale by image[x, y] = Color(v, v, v, c.alpha), in
+    // editPixels, or by map). Words from 96: 96 how (bit 0: into another list), 97 the global the
+    // value's class is and 98 that class, 99 the type's number, 100 the size stored (bytes) and the
+    // items' widths read and written (bits 8 and 32 on), 101 the constant bits, 102 the bytes' kinds
+    // (8 a byte: 0 the constant's, 1 the mix, 2 + the field's offset), 103 the mix's shift and
+    // how many it reads, 104 its constant, 105 to 108 each read's weight (high half) and offset.
+    bool mixItems(const Followed& fw, Ahead& ah) {
+        const Followed::Store& st = fw.stores[0];
+        const Followed::Made& made = fw.made.at(st.source);
+        if ((static_cast<uint64_t>(st.what) >> 32) != static_cast<uint64_t>(made.id)) return false;
+        const uint64_t size = (static_cast<uint64_t>(st.what) >> 24) & 0xFF;
+        if (size == 0 || size > 8 || st.width <= 0 || st.width > 0xFFFF || static_cast<uint64_t>(st.width) < size) return false;
+        // The bytes, down to the constant they start from.
+        std::vector<std::pair<int64_t, const Expr*>> lanes;
+        const Expr* v = made.bytes;
+        while (v->kind == Expr::Bin && v->op == 'p') {
+            lanes.push_back({v->ki, v->b});
+            v = v->a;
+        }
+        if (v->kind != Expr::KInt || lanes.empty()) return false;
+        const uint64_t constant = static_cast<uint64_t>(v->ki);
+        // The item read: the one list and index every field is of.
+        int list = -1;
+        const Expr* index = nullptr;
+        int64_t readWidth = 0;
+        auto field = [&](const Expr* f) {
+            if (f->kind != Expr::Field || (f->ki & 0xFF) != 1) return false;
+            if (list < 0) list = f->list, index = f->b, readWidth = f->ki >> 32;
+            return f->list == list && same(f->b, index) && (f->ki >> 32) == readWidth;
+        };
+        const Expr* theMix = nullptr;
+        uint64_t kinds = 0;
+        for (const auto& [shift, e] : lanes) {
+            if (shift < 0 || shift % 8 != 0 || static_cast<uint64_t>(shift) / 8 >= size) return false;
+            const uint64_t at = static_cast<uint64_t>(shift) / 8;
+            if (((kinds >> (8 * at)) & 0xFF) != 0) return false;
+            uint64_t kind;
+            if (e->kind == Expr::Field) {
+                if (!field(e)) return false;
+                kind = 2 + ((static_cast<uint64_t>(e->ki) >> 8) & 0xFFFFFF);
+                if (kind > 0xFF) return false;
+            } else if (e->kind == Expr::ToByte) {
+                if (theMix != nullptr && !same(theMix, e)) return false;
+                theMix = e;
+                kind = 1;
+            } else {
+                return false;
+            }
+            kinds |= kind << (8 * at);
+        }
+        // The mix: (a sum of byte fields of the item, each times a constant, plus a constant) >> a
+        // constant, as a byte.
+        int64_t shift = 0, c = 0;
+        std::vector<std::pair<int64_t, int64_t>> terms;  // weight, offset
+        if (theMix != nullptr) {
+            const Expr* m = theMix->a;
+            if (m->kind == Expr::Bin && m->op == '>' && m->b->kind == Expr::KInt) {
+                shift = m->b->ki;
+                m = m->a;
+            }
+            if (shift < 0 || shift > 31) return false;
+            std::function<bool(const Expr*)> sum = [&](const Expr* e) -> bool {
+                if (e->cls != CI) return false;
+                if (e->kind == Expr::KInt) return c += e->ki, true;
+                if (e->kind == Expr::Bin && e->op == '+') return sum(e->a) && sum(e->b);
+                const Expr* f = e;
+                int64_t w = 1;
+                if (e->kind == Expr::Bin && e->op == '*') {
+                    const Expr* k = e->a->kind == Expr::KInt ? e->a : e->b;
+                    f = k == e->a ? e->b : e->a;
+                    if (k->kind != Expr::KInt) return false;
+                    w = k->ki;
+                }
+                if (!field(f) || w < -(1 << 20) || w > (1 << 20)) return false;
+                terms.push_back({w, (f->ki >> 8) & 0xFFFFFF});
+                return true;
+            };
+            if (!sum(m) || terms.empty() || terms.size() > 4 || c < -(1 << 28) || c > (1 << 28)) return false;
+            for (const auto& t : terms)
+                if (t.second >= readWidth) return false;
+        }
+        if (list < 0) return false;
+        // Into the item read, or into another list's item at the counter (read at the counter too).
+        bool into = false;
+        if (st.list == list && same(st.index, index)) {
+            if (st.width != readWidth) return false;
+        } else if (st.list != list && st.index->kind == Expr::Counter && index->kind == Expr::Counter) {
+            into = true;
+        } else {
+            return false;
+        }
+        if (!fieldIndex(index, ah)) return false;
+        ah.shape = 19;  // kLoopWMixItems
+        ah.a = list;
+        ah.out = st.list;
+        ah.mixWords = {into ? 1 : 0, made.global, made.cls, made.id,
+                       static_cast<int64_t>(size | static_cast<uint64_t>(readWidth) << 8 | static_cast<uint64_t>(st.width) << 32),
+                       static_cast<int64_t>(constant), static_cast<int64_t>(kinds),
+                       static_cast<int64_t>(static_cast<uint64_t>(shift) | static_cast<uint64_t>(terms.size()) << 8), c};
+        for (const auto& t : terms) ah.mixWords.push_back(static_cast<int64_t>(static_cast<uint64_t>(t.first) << 32 | static_cast<uint64_t>(t.second)));
+        return true;
+    }
 
     // An item's index of base + counter, base none, an operand, or one operand times another.
     static bool fieldIndex(const Expr* e, Ahead& ah) {
@@ -3396,7 +3537,7 @@ struct Region {
                     g.op = op;
                     g.a = valueOf(fw, last->named[0]);
                     g.b = last->stem.substr(4) == "ik" ? kintOf(last->ki) : valueOf(fw, last->named[1]);
-                    ah.guards.push_back(g);
+                    addGuard(ah, g);
                     i = last->jumpTo;
                     continue;
                 }
@@ -3471,7 +3612,7 @@ struct Region {
                     // getOrNull's null, joining later) is never run where the template runs: it
                     // runs only where none of them holds anywhere in the loop.
                     if (l.jumpTo == i + 1) return false;
-                    ah.guards.insert(ah.guards.end(), pending.begin(), pending.end());
+                    for (const Followed::Cmp& g : pending) addGuard(ah, g);
                     pending.clear();
                     skipTo = l.jumpTo;
                     continue;
@@ -3581,6 +3722,9 @@ struct Region {
             return true;
         }
         if (mix(fw, ah)) return true;
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && fw.made.count(fw.stores[0].source) != 0 && ah.iterSlot < 0 &&
+            mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)))
+            return true;
         // One value into items at base + counter (2026-11-13: image[x, y] = c, a grid's in editPixels).
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fieldIndex(fw.stores[0].index, ah) &&
             !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB))) {
@@ -3763,6 +3907,12 @@ struct Region {
             word(at + 1, ah.updates[u].how);
             if (ah.updates[u].how == 3) word(at + 3, ah.updates[u].constant);
             else operandWords(at + 2, ah.updates[u].with, 0);
+        }
+        if (ah.shape == 19) {
+            word(50, ah.baseMode);
+            if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
+            if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
+            for (size_t k = 0; k < ah.mixWords.size(); k++) word(96 + static_cast<int>(k), ah.mixWords[k]);
         }
         if (ah.shape == 18) {
             word(50, ah.baseMode);

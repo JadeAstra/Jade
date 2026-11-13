@@ -1570,7 +1570,7 @@ F_A(HVALPF, x)
 // operations, in the same order, as the steps would: the same answer to the bit.
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
-    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -1973,6 +1973,85 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     done = j - next;
                     break;
                 }
+            }
+            break;
+        }
+        case kLoopWMixItems: {
+            // Each item set to a value made of bytes: one mix of byte fields of the item read, a
+            // byte field of it, or a constant (regions.cpp, mixItems, says the words from 96).
+            if (!a.ok() || !out.ok()) return;
+            const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
+            if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
+            const bool into = (t[96] & 1) != 0;
+            const uint64_t size = t[100] & 0xFF, rw = (t[100] >> 8) & 0xFFFFFF, ww = t[100] >> 32;
+            const uint64_t constant = t[101], kinds = t[102];
+            const int64_t shift = static_cast<int64_t>(t[103] & 0xFF);
+            const int nr = static_cast<int>((t[103] >> 8) & 0xFF);
+            const int32_t c = static_cast<int32_t>(static_cast<int64_t>(t[104]));
+            if (size == 0 || size > 8 || rw == 0 || ww < size || nr > 4 || shift > 31) return;
+            int32_t weight[4] = {0, 0, 0, 0};
+            uint64_t from[4] = {0, 0, 0, 0};
+            for (int k = 0; k < nr; k++) {
+                weight[k] = static_cast<int32_t>(static_cast<int64_t>(t[105 + k]) >> 32);
+                from[k] = t[105 + k] & 0xFFFFFF;
+                if (from[k] >= rw) return;
+            }
+            int64_t at = 0, first, last;
+            if (!into && !itemBase(ctx, at)) return;
+            if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1] ||
+                static_cast<uint64_t>(last) >= out.h[2])
+                return;
+            if (into && a.h[0] == out.h[0]) return;  // another list: not the same one
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * rw;
+            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * ww;
+            int32_t least = c, most = c;
+            for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
+            const bool alwaysByte = nr == 0 || ((least >> shift) >= 0 && (most >> shift) <= 255);
+            // A greyscale's: three bytes read with weights, the mix three times and the fourth byte kept.
+            const bool grey = constant == 0 && rw == 4 && ww == 4 && size == 4 && nr == 3 && from[0] == 0 && from[1] == 1 && from[2] == 2 && kinds == (1u | 1u << 8 | 1u << 16 | 5u << 24);
+            if (grey && alwaysByte) {
+                // Its own loop, nothing to decide in it, which Clang does several at a time.
+                const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + j * 4;
+                    uint8_t* d = o + j * 4;
+                    const uint8_t keep = p[3];
+                    const uint8_t v = static_cast<uint8_t>((w0 * p[0] + w1 * p[1] + w2 * p[2] + c) >> shift);
+                    d[0] = v;
+                    d[1] = v;
+                    d[2] = v;
+                    d[3] = keep;
+                }
+                break;
+            }
+            for (int64_t j = 0; j < left; j++) {
+                const uint8_t* p = x + static_cast<uint64_t>(j) * rw;
+                int32_t v = c;
+                if (grey) {
+                    v += weight[0] * p[0] + weight[1] * p[1] + weight[2] * p[2];
+                } else {
+                    for (int k = 0; k < nr; k++) v += weight[k] * p[from[k]];
+                }
+                v >>= shift;
+                if (!alwaysByte && static_cast<uint32_t>(v) > 255u) {
+                    done = j;
+                    break;
+                }
+                uint8_t* d = o + static_cast<uint64_t>(j) * ww;
+                if (grey) {
+                    const uint8_t keep = p[3];
+                    d[0] = d[1] = d[2] = static_cast<uint8_t>(v);
+                    d[3] = keep;
+                    continue;
+                }
+                uint64_t bits = constant;
+                for (uint64_t b = 0; b < size; b++) {
+                    const uint64_t kind = (kinds >> (8 * b)) & 0xFF;
+                    if (kind == 0) continue;
+                    const uint64_t byte = kind == 1 ? static_cast<uint64_t>(v) & 0xFF : p[kind - 2];
+                    bits |= byte << (8 * b);  // as packb lays it on the constant
+                }
+                for (uint64_t b = 0; b < size; b++) d[b] = static_cast<uint8_t>(bits >> (8 * b));
             }
             break;
         }

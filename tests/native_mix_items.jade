@@ -1,0 +1,114 @@
+// Each pixel set to a colour made of bytes, run whole by native code's loop template for it
+// (2026-11-13): each byte one mix of the pixel's bytes (weights, a constant, a shift), a byte of
+// the pixel, or a constant; into the pixel read (image[x, y] = ..., in editPixels) or into a new
+// grid (map). Where a mix might not be a byte, worked out a pixel at a time and the loop's own
+// steps throw at the pixel that is not. The same pixels and errors as the VM's. Each loop runs
+// three times (its region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun picture() : Image {
+  val im = Image(60, 40)
+  im.editPixels { g ->
+    for (y in 0 ..< 40) { for (x in 0 ..< 60) { g[x, y] = Color((x * 7 + y) % 256, (y * 11 + x * 3) % 256, (x * y) % 256, 255 - (x + y) % 50) } }
+  }
+  return im
+}
+fun shown(im : Image) : string => "${im.hashCode()} ${im[0, 0]} ${im[59, 39]} ${im[30, 20]} ${im[7, 33]}"
+
+fun grey(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red * 54 + c.green * 183 + c.blue * 19 + 128) >> 8).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun greyEdit(im : Image) {
+  im.editPixels { g ->
+    for (y in 0 ..< g.height) {
+      for (x in 0 ..< g.width) {
+        val c = g[x, y]
+        val v = ((c.red * 77 + c.green * 150 + c.blue * 29) >> 8).toByte()
+        g[x, y] = Color(v, v, v, c.alpha)
+      }
+    }
+  }
+}
+fun greyMap(im : Image) : Grid<Color> => im.pixels.map { c ->
+  val v = ((c.red * 54 + c.green * 183 + c.blue * 19 + 128) >> 8).toByte()
+  Color(v, v, v, c.alpha)
+}
+val a = picture()
+thrice { grey(a) }
+val b = picture()
+thrice { greyEdit(b) }
+val m = thrice { greyMap(picture()) } as Grid<Color>
+print(shown(a))   // expect: 1329545691 Color(0, 0, 0) Color(127, 127, 127, 207) Color(94, 94, 94) Color(126, 126, 126, 215)
+print(shown(b))   // expect: 1945120396 Color(0, 0, 0) Color(142, 142, 142, 207) Color(110, 110, 110) Color(125, 125, 125, 215)
+print(m.hashCode(), m[0, 0], m[59, 39], m[30, 20])   // expect: 343944365 Color(0, 0, 0) Color(127, 127, 127, 207) Color(94, 94, 94)
+
+// The channels swapped, no mix; and a constant alpha.
+fun swapped(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      im[x, y] = Color(c.blue, c.green, c.red, c.alpha)
+    }
+  }
+}
+fun opaqueGrey(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red + c.green + c.blue) / 3).toByte()
+      im[x, y] = Color(v, v, v)
+    }
+  }
+}
+val s = picture()
+thrice { swapped(s) }
+val o = picture()
+thrice { opaqueGrey(o) }
+print(shown(s))   // expect: 741383564 Color(0, 0, 0) Color(253, 94, 196, 207) Color(88, 54, 230) Color(231, 128, 82, 215)
+print(shown(o))   // expect: 1341114330 Color(0, 0, 0) Color(181, 181, 181) Color(124, 124, 124) Color(147, 147, 147)
+
+// A mix that leaves a byte's range: the pixels before it set, toByte's error at its pixel.
+fun harsh(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red * 3 - c.green * 2 + 40) >> 1).toByte()
+      im[x, y] = Color(v, c.green, c.blue, c.alpha)
+    }
+  }
+}
+val h = picture()
+print(failing { thrice { harsh(h) } }, shown(h))   // expect: IllegalArgumentException: 260 does not fit in a byte, which holds 0 to 255; toByteWrapped() keeps the low 8 bits 1428382841 Color(20, 0, 0) Color(196, 94, 253, 207) Color(230, 54, 88) Color(82, 128, 231, 215)
+
+// Part of the image, and past its edge.
+fun part(im : Image, x0 : int, x1 : int) {
+  for (y in 5 ..< 25) {
+    for (x in x0 ..< x1) {
+      val c = im[x, y]
+      val v = ((c.red * 54 + c.green * 183 + c.blue * 19 + 128) >> 8).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+val p = picture()
+thrice { part(p, 10, 40) }
+print(shown(p), p[9, 5], p[10, 5], p[39, 24], p[40, 24])   // expect: 1679621330 Color(0, 0, 0) Color(196, 94, 253, 207) Color(94, 94, 94) Color(82, 128, 231, 215) Color(68, 82, 45, 241) Color(80, 80, 80, 240) Color(110, 110, 110, 242) Color(48, 128, 192, 241)
+val q = picture()
+print(failing { part(q, 50, 61) }, q[59, 5], q[49, 5], q[59, 6])   // expect: IndexOutOfBoundsException: pixel (60, 5) is outside the image, which is 60 by 40 Color(203, 203, 203, 241) Color(92, 202, 245, 251) Color(163, 243, 98, 240)
