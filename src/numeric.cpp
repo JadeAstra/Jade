@@ -1424,35 +1424,6 @@ void registerNumeric(VM& vm) {
         writePlanes(vm, args[6], result, nw * nh, colour, true);
         return Value::null();
     });
-    // channels(cells, red, green, blue, alpha, out): each part of each colour through a table of
-    // 256 (a List<int> of 0 to 255), or kept where a table is null.
-    def("channels", 6, 6, [](VM& vm, int, Value* args) -> Value {
-        const size_t n = listArg(vm, args[0], "the grid")->size();
-        const uint8_t* in = colorCells(vm, args[0], n, "the grid");
-        uint8_t* out = colorCells(vm, args[5], n, "the grid written into");
-        uint8_t tables[4][256];
-        for (int c = 0; c < 4; c++) {
-            const Value t = args[1 + c];
-            if (t.isNull()) {
-                for (int v = 0; v < 256; v++) tables[c][v] = static_cast<uint8_t>(v);
-                continue;
-            }
-            const Numbers table = numbers(vm, t, "a channel's table");
-            if (table.single || table.count != 256) fail(vm, Thrown::IllegalArgumentException, "a channel's table has 256 entries, not " + std::to_string(table.count));
-            for (int v = 0; v < 256; v++) {
-                const int64_t x = table.isFloat ? rounded(table.f(static_cast<size_t>(v))) : table.i(static_cast<size_t>(v));
-                if (x < 0 || x > 255) fail(vm, Thrown::IllegalArgumentException, "a channel's table holds 0 to 255, not " + std::to_string(x));
-                tables[c][v] = static_cast<uint8_t>(x);
-            }
-        }
-        for (size_t k = 0; k < n * 4; k += 4) {
-            out[k] = tables[0][in[k]];
-            out[k + 1] = tables[1][in[k + 1]];
-            out[k + 2] = tables[2][in[k + 2]];
-            out[k + 3] = tables[3][in[k + 3]];
-        }
-        return Value::null();
-    });
     // blend(to, toWidth, toHeight, from, fromWidth, fromHeight, x, y, opacity, mode): a grid of
     // colours laid over another at (x, y), by its alpha times `opacity`, in a blend mode (0
     // normal ... 15 luminosity, as BlendMode's order).

@@ -2036,6 +2036,35 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
             mixEnd.prepare(least, most);
             const bool alwaysByte = nr == 0 || (mixEnd(least) >= 0 && mixEnd(most) <= 255);
+            // Bytes of tables at bytes of the item (kinds from 0x80: the table's list, the byte's
+            // offset): each table bytes with 256 of them at least, so that any byte is a place in it.
+            const uint8_t* table[8] = {};
+            bool tables = false;
+            for (uint64_t lane = 0; lane < size; lane++) {
+                const uint64_t kind = (kinds >> (8 * lane)) & 0xFF;
+                if (kind < 0x80) continue;
+                const uint64_t k = (kind >> 3) & 0xF;
+                if (k >= 6 || (kind & 7) >= rw) return;
+                const uint64_t* h = ctx->lists + 4 * k;
+                if (h[3] != 3 || h[1] < 256) return;
+                table[lane] = reinterpret_cast<const uint8_t*>(h[0]);
+                tables = true;
+            }
+            if (tables && size == 4 && rw == 4 && ww == 4 && constant == 0 && ((kinds & 0x80808080u) == 0x80808080u) && (kinds >> 32) == 0) {
+                // Every byte a table's: its own loop.
+                const uint8_t *t0 = table[0], *t1 = table[1], *t2 = table[2], *t3 = table[3];
+                const uint64_t o0 = kinds & 7, o1 = (kinds >> 8) & 7, o2 = (kinds >> 16) & 7, o3 = (kinds >> 24) & 7;
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + j * 4;
+                    uint8_t* d = o + j * 4;
+                    const uint8_t v0 = t0[p[o0]], v1 = t1[p[o1]], v2 = t2[p[o2]], v3 = t3[p[o3]];
+                    d[0] = v0;
+                    d[1] = v1;
+                    d[2] = v2;
+                    d[3] = v3;
+                }
+                break;
+            }
             // A greyscale's: three bytes read with weights, the mix three times and the fourth byte kept.
             // The mix three times and the fourth byte the item's own or a constant (a greyscale).
             const uint64_t fourth = kinds >> 24;
@@ -2079,7 +2108,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (uint64_t b = 0; b < size; b++) {
                     const uint64_t kind = (kinds >> (8 * b)) & 0xFF;
                     if (kind == 0) continue;
-                    const uint64_t byte = kind == 1 ? static_cast<uint64_t>(v) & 0xFF : p[kind - 2];
+                    const uint64_t byte = kind == 1 ? static_cast<uint64_t>(v) & 0xFF : kind >= 0x80 ? table[b][p[kind & 7]] : p[kind - 2];
                     bits |= byte << (8 * b);  // as packb lays it on the constant
                 }
                 for (uint64_t b = 0; b < size; b++) d[b] = static_cast<uint8_t>(bits >> (8 * b));

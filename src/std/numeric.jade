@@ -366,9 +366,40 @@ fun <T> Grid<T>.countDifferent(other : Grid<T>) : int => __num.countDifferent(ce
 // table is null): brightness, contrast, gamma, levels, inverting, together in one pass.
 fun Grid<Color>.mapChannels(red : List<int>? = null, green : List<int>? = null, blue : List<int>? = null, alpha : List<int>? = null,
                             into : Grid<Color>? = null) : Grid<Color> {
+  // In Jade (2026-11-13, was C++'s): each table made bytes once, then a pixel at a time, which
+  // native code runs whole as a loop template (each part of a colour a table's byte at a part).
   val out = into ?: Grid<Color>(width, height)
-  __num.channels(cells, red, green, blue, alpha, __gridInto(out, width, height))
+  val to = __gridInto(out, width, height)
+  val r = __channelTable(red)
+  val g = __channelTable(green)
+  val b = __channelTable(blue)
+  val a = __channelTable(alpha)
+  __mapChannels(cells, to, r, g, b, a)
   return out
+}
+// The pixels through the tables: a function of its own, where `Color` is the class and nothing of
+// a grid's (in an extension of Grid a bare name is looked for on the grid first, as it runs).
+fun __mapChannels(px : List<Color>, to : open List<Color>, r : Bytes, g : Bytes, b : Bytes, a : Bytes) {
+  for (i in 0 ..< px.size) {
+    val c = px[i]
+    val made = Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])
+    to[i] = made
+  }
+}
+// A channel's table as bytes: 256 entries, each 0 to 255; with none, each level itself.
+fun __channelTable(table : List<int>?) : Bytes {
+  val made = Bytes(256)
+  if (table == null) {
+    for (v in 0 ..< 256) { made[v] = v.toByte() }
+    return made
+  }
+  if (table.size != 256) { throw IllegalArgumentException("a channel's table has 256 entries, not ${table.size}") }
+  for (v in 0 ..< 256) {
+    val x = table[v]
+    if (x < 0 or x > 255) { throw IllegalArgumentException("a channel's table holds 0 to 255, not $x") }
+    made[v] = x.toByte()
+  }
+  return made
 }
 
 // Each colour the sum of its neighbours' weighted by `kernel`, each part on its own, multiplied by

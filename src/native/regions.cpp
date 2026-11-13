@@ -1529,8 +1529,12 @@ struct Region {
                         if (v < 0 || v > 255) island();
                         constant |= static_cast<uint64_t>(v) << (8 * field->offset);
                     } else {
-                        if (s.kind(xk).bits != kByte) island();
-                        parts.emplace_back(c.read(xk, CI, false), static_cast<int>(field->offset));
+                        // A byte; or a whole number of a list (an item of bytes, mapChannels' table
+                        // read, 2026-11-13), checked to be one first, the VM's where it is not.
+                        if (s.kind(xk).bits != kByte && s.kind(xk).bits != kWhole) island();
+                        const Reg part = c.read(xk, CI, false);
+                        if (s.kind(xk).bits == kWhole) c.leaves(c.op("chkbyte", {part}, {part}));
+                        parts.emplace_back(part, static_cast<int>(field->offset));
                     }
                 }
                 const Reg acc{kScratchI, CI};
@@ -3304,6 +3308,15 @@ struct Region {
                 if (!field(e)) return false;
                 kind = 2 + ((static_cast<uint64_t>(e->ki) >> 8) & 0xFFFFFF);
                 if (kind > 0xFF) return false;
+            } else if (const Expr* t = e->kind == Expr::ToByte ? e->a : e;
+                       t->kind == Expr::Load && t->cls == CI && t->b != nullptr && t->b->kind == Expr::Field && t->list >= 0 && t->list < 6) {
+                // A table's byte at a byte of the item (2026-11-13: mapChannels): 0x80, the table's
+                // list (as looked at once) times 8, plus the byte's offset. The template takes only
+                // a table of bytes, every item a byte, so a check that it is one holds.
+                if (!field(t->b)) return false;
+                const uint64_t offset = (static_cast<uint64_t>(t->b->ki) >> 8) & 0xFFFFFF;
+                if (offset > 7) return false;
+                kind = 0x80 | static_cast<uint64_t>(t->list) << 3 | offset;
             } else if (e->kind == Expr::ToByte) {
                 if (theMix != nullptr && !same(theMix, e)) return false;
                 theMix = e;
@@ -3311,6 +3324,7 @@ struct Region {
             } else {
                 return false;
             }
+            if (kind < 0x80 && kind >= 0x7E) return false;  // a field's offset too far for its kind
             kinds |= kind << (8 * at);
         }
         // The mix: (a sum of byte fields of the item, each times a constant, plus a constant) >> a

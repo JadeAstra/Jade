@@ -152,8 +152,8 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tr class="note-row slow"><td colspan="6">The same loop in a lambda: <code>Color(...)</code> was looked up by name as it ran (INVOKE_IMPLICIT), the VM's. A bare name in a lambda that runs on no object, inside functions that run on none, is now compiled as the checker found it. Was 245.6 ms; now as above.</td></tr>
 <tr class="has-note slow"><td class="op">by <code>pixels.map { ... }</code></td><td class="num">1031.8</td><td class="num">16.6</td><td class="num">1.4</td><td class="num">18.8</td><td class="num">0.9×</td></tr>
 <tr class="note-row slow"><td colspan="6">Was a call of the lambda for each pixel. Now <code>map</code> is inline. Was 176.4 ms; now as above, into the new grid at the counter.</td></tr>
-<tr class="has-note"><td class="op"><code>pixels.mapChannels(t, t, t)</code></td><td class="num">16.3</td><td class="num">19.6</td><td class="num">1.6</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
-<tr class="note-row"><td colspan="6">One call into C++ with a table for each channel.</td></tr>
+<tr class="has-note slow"><td class="op"><code>pixels.mapChannels(t, t, t)</code></td><td class="num">16.3</td><td class="num">16.1</td><td class="num">1.3</td><td class="num">15.5</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="6">Was one call into C++ with a table for each channel (19.6 ms, the C++ column its time then). Now written in Jade (2026-11-13): each table made bytes once, then a loop over the pixels, <code>Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])</code>, which native code runs whole as a loop template, each byte of the new colour a table's byte at a byte of the pixel. The same pixels and errors; the C++ is gone.</td></tr>
 </tbody></table></div>
 
 <h2 id="whole">Whole pictures</h2>
