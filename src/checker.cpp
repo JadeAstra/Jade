@@ -5635,6 +5635,43 @@ struct Checker::Impl {
         return subst(resultOf(f), m.env);
     }
 
+    // What `holder[i] = v` takes, where the holder is a class with an op []= and no op []: the
+    // value parameter of the forms of op []= its indexes fit, where they agree (setting by index
+    // needs no op [], 2026-11-12: it asked for one before). Otherwise what holder[i] gives.
+    Type indexSetTarget(const IndexExpr& ix, const Type& holder) {
+        if (ix.defaultValue || holder.kind != Type::Class || holder.cls == nullptr || holder.nullable) return index(ix);
+        const Type plain = withNull(holder, false);
+        if (!lookupMember(plain, "[]").methods.empty() || !findExtensions(plain, "[]").empty()) return index(ix);
+        Member m = lookupMember(plain, "[]=");
+        if (m.methods.empty()) return index(ix);
+        std::vector<Type> args{expr(*ix.index)};
+        for (const ExprPtr& more : ix.more) args.push_back(expr(*more));
+        Type found = unknownType();
+        bool any = false, agree = true;
+        for (FuncInfo* f : m.methods) {
+            resolveFunc(f);
+            if (f->params.size() != args.size() + 1) continue;
+            bool ok = true;
+            for (size_t k = 0; k < args.size() && ok; k++) ok = fits(args[k], subst(f->params[k], m.env));
+            if (!ok) continue;
+            const Type v = subst(f->params.back(), m.env);
+            if (!any) found = v;
+            else if (describe(found) != describe(v)) agree = false;
+            any = true;
+        }
+        if (!any) {
+            bool known = true;
+            for (const Type& t : args) known = known && !t.unknown();
+            if (known) {
+                std::string given;
+                for (const Type& t : args) given += (given.empty() ? "" : ", ") + describe(t);
+                report(ix, "no form of " + holder.cls->name + "'s operator []= takes the index " + given);
+            }
+            return unknownType();
+        }
+        return agree ? found : unknownType();
+    }
+
     // `grid[x, y] = v` on a class with several forms of op []=: the one its indexes and value fit.
     void indexSetForm(const AssignExpr& a, const Type& value) {
         const auto& ix = static_cast<const IndexExpr&>(*a.target);
@@ -6741,7 +6778,7 @@ struct Checker::Impl {
             if (holder.frozen) report(*a.target, frozenChange(holder));
             else if (readOnly(holder)) report(*a.target, readOnlyChange(holder, *ix.object));
             else if (holder.kind == Type::Map && a.op == TokenType::Eq) noteKey(*ix.index, typeQuietly(*ix.index));
-            target = index(ix);
+            target = a.op == TokenType::Eq ? indexSetTarget(ix, holder) : index(ix);
         } else {
             expr(*a.target);
         }

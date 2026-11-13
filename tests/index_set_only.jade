@@ -1,0 +1,26 @@
+// A class with an op []= and no op [] is set by index (2026-11-12; the checker asked for an
+// op [] before): what it takes is what op []= takes, form by form.
+class Log(val size : int) {
+  internal val lines : open List<string> = List(size) { "" }
+  op []=(i : int, line : string) { lines[i] = line }
+}
+class Marks(val width : int) {
+  internal val cells : open List<int> = List(width * 2) { 0 }
+  inline op []=(x : int, y : int, value : int) { cells[y * width + x] = value }
+  op []=(x : int, value : int) { cells[x] = value * 10 }
+}
+val log = Log(3)
+log[1] = "one"
+log[2] = "two"
+print(log.lines)   // expect: ["", "one", "two"]
+val marks = Marks(3)
+marks[2, 1] = 7
+marks[1] = 4
+for (x in 0 ..< 3) { marks[x, 0] = marks.cells[x + 3] + 1 }
+print(marks.cells)   // expect: [1, 1, 8, 0, 0, 7]
+fun clear(m : Marks) {
+  for (i in 0 ..< m.width * 2) { m[i % m.width, i / m.width] = 0 }
+}
+clear(marks)
+clear(marks)
+print(marks.cells)   // expect: [0, 0, 0, 0, 0, 0]

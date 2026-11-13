@@ -234,7 +234,7 @@ val tally = Tally()
 (0 ..&lt; 1000).toList().parallelStream().forEach { tally.hits += 1 }    // tally.hits is 1000</pre></dd>
 
 <dt><code>op</code></dt>
-<dd>An operator of a class or value type: <code>op +(other)</code>, <code>op [](index)</code>, <code>op ==(other)</code> and the others, used as the operator is.
+<dd>An operator of a class or value type: <code>op +(other)</code>, <code>op [](index)</code>, <code>op ==(other)</code> and the others, used as the operator is. <code>a[i] = v</code> needs an <code>op []=(index, value)</code> alone; <code>a[i] += v</code> needs <code>op []</code> as well, to read it first.
 <pre>value Money(val cents : int) {
   op +(other : Money) : Money =&gt; Money(cents + other.cents)
 }

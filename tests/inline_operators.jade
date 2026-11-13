@@ -122,7 +122,6 @@ class Slots(val size : int) {
 }
 class Board(val width : int, val height : int) {
   internal val cells : open List<int> = List(width * height) { 0 }
-  op [](x : int, y : int) : int => cells[y * width + x]
   inline op []=(x : int, y : int, value : int) {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw IndexOutOfBoundsException("($x, $y) is off the board") }
     cells[y * width + x] = value

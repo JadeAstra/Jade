@@ -1,6 +1,5 @@
 // An inline op []= that sets through itself would be copied into itself without end, as an inline function would (B2).
 class Stack(val items : open List<int>) {
-  op [](i : int) : int => items[i]
   inline op []=(i : int, value : int) {   // expect compile error: inline op []= calls itself ([]= -> []=): copied into each call, it would never end; take 'inline' from one of them (D59)
     if (i > 0) { this[i - 1] = value }
     items[i] = value

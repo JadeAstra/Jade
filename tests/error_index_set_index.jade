@@ -1,0 +1,7 @@
+// A class with an op []= and no op []: an index none of its forms takes.
+class Log(val size : int) {
+  internal val lines : open List<string> = List(size) { "" }
+  op []=(i : int, line : string) { lines[i] = line }
+}
+val log = Log(3)
+log["a"] = "x"   // expect compile error: no form of Log's operator []= takes the index a string

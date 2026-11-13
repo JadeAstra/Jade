@@ -1,0 +1,7 @@
+// A class with an op []= and no op []: a value its op []= does not take.
+class Log(val size : int) {
+  internal val lines : open List<string> = List(size) { "" }
+  op []=(i : int, line : string) { lines[i] = line }
+}
+val log = Log(3)
+log[1] = 5   // expect compile error: this place is a string; it cannot be given an int
