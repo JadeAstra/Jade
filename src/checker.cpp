@@ -5647,7 +5647,16 @@ struct Checker::Impl {
         for (const ExprPtr& more : ix.more) args.push_back(typeQuietly(*more));
         args.push_back(value);
         FuncInfo* f = m.methods.size() == 1 ? m.methods[0] : operatorForm(m.methods, m.env, args);
-        if (f != nullptr && f->params.size() == args.size()) chosenOperators[&a] = {f, m.methods.size() > 1};
+        if (f != nullptr && f->params.size() == args.size()) {
+            chosenOperators[&a] = {f, m.methods.size() > 1};
+            // An inline op []= (B2): its body put in place of `a[i] = v`, the indexes and the value
+            // its parameters in order.
+            if (f->decl != nullptr && f->decl->isInline && silent == 0) {
+                Binding b;
+                for (size_t i = 0; i < args.size(); i++) b.paramOf.push_back(static_cast<int>(i));
+                noteInlineCall(f, b, a);
+            }
+        }
     }
 
     static std::string opText(TokenType op) {
@@ -9124,7 +9133,7 @@ struct Checker::Impl {
                         for (size_t j = 0; j <= cycle.size(); j++) text += (j > 0 ? " -> " : "") + cycle[(i + j) % cycle.size()]->name;
                         Unit* saved = unit;
                         unit = p->unit;
-                        report(*p->decl, std::string(p->name == "[]" ? "inline op " : "inline fun ") + p->name + " calls itself (" + text +
+                        report(*p->decl, std::string(p->name == "[]" || p->name == "[]=" ? "inline op " : "inline fun ") + p->name + " calls itself (" + text +
                                              "): copied into each call, it would never end; take 'inline' from one of them (D59)");
                         unit = saved;
                     }

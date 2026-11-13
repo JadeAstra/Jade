@@ -1,7 +1,8 @@
-// An inline op [] (B2, 2026-11-12): its body put where `a[i]` is used, as an inline function's is
-// where it is called; Grid's and Image's are, so that reading pixels costs no call. The same
-// answers and errors as a call, run three times (a loop's region is made the second time it
-// starts); every answer what `jade --interpret` gives.
+// An inline op [] and op []= (B2, 2026-11-12): its body put where `a[i]` is used or set, as an
+// inline function's is where it is called; Grid's and Image's are, so that reading and setting
+// pixels costs no call. The same answers and errors as a call, run three times (a loop's region
+// is made the second time it starts); every answer what `jade --interpret` gives, and what the
+// same file with no `inline` gives.
 
 fun failing(block : () -> any?) : string {
   try {
@@ -106,3 +107,108 @@ fun past(g : Grid<Color>, n : int) : int {
 }
 print(failing { thrice { past(grid, 31) } })   // expect: IndexOutOfBoundsException: (30, 1) is outside the grid, which is 30 by 20
 print(failing { thrice { picture[25, 0] } })   // expect: IndexOutOfBoundsException: pixel (25, 0) is outside the image, which is 25 by 16
+
+// An inline op []= (B2): its body put where `a[i] = v` is, the indexes and the value its
+// parameters in order; Grid's and Image's are, and Image's work for the card, `changed`, too.
+class Slots(val size : int) {
+  internal val items : open List<int> = List(size) { 0 }
+  var sets = 0
+  inline op [](i : int) : int => items[i]
+  inline op []=(i : int, value : int) {
+    if (i < 0 or i >= size) { throw IndexOutOfBoundsException("slot $i of $size") }
+    items[i] = value
+    sets++
+  }
+}
+class Board(val width : int, val height : int) {
+  internal val cells : open List<int> = List(width * height) { 0 }
+  op [](x : int, y : int) : int => cells[y * width + x]
+  inline op []=(x : int, y : int, value : int) {
+    if (x < 0 or y < 0 or x >= width or y >= height) { throw IndexOutOfBoundsException("($x, $y) is off the board") }
+    cells[y * width + x] = value
+  }
+}
+val slots = Slots(4)
+slots[1] = 7
+slots[3] = slots[1] * 2
+print(slots[1], slots[3], slots.sets, failing { slots[4] = 1 }, slots.sets)   // expect: 7 14 2 IndexOutOfBoundsException: slot 4 of 4 2
+val board = Board(3, 2)
+board[2, 1] = 9
+print(board.cells, failing { board[3, 0] = 1 })   // expect: [0, 0, 0, 0, 0, 9] IndexOutOfBoundsException: (3, 0) is off the board
+
+// The object, the indexes and the value worked out once each, in order.
+said = ""
+fun slotsOf(s : string) : Slots {
+  said += s
+  return slots
+}
+slotsOf("s")[note("i", 0)] = note("v", 5)
+print(slots[0], said)   // expect: 5 siv
+
+// In loops: a grid set from a value made there and from one passed in; an image; a grid that
+// may only be read.
+fun greyed(g : Grid<Color>) {
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) {
+      val c = g[x, y]
+      val v = ((c.red * 54 + c.green * 183 + c.blue * 19 + 128) >> 8).toByte()
+      g[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun filled(g : Grid<Color>, c : Color) {
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) { g[x, y] = c }
+  }
+}
+fun sumOf(g : Grid<Color>) : int {
+  var t = 0
+  for (c in g.toList()) { t += c.red * 3 + c.green * 5 + c.blue * 7 + c.alpha }
+  return t
+}
+val g2 = Grid<Color>(30, 20)
+thrice { filled(g2, Color(10, 20, 30, 40)) }
+print(sumOf(g2), g2[29, 19])   // expect: 228000 Color(10, 20, 30, 40)
+for (y in 0 ..< 20) {
+  for (x in 0 ..< 30) { g2[x, y] = Color(x * 8, y * 12, (x + y) * 4, 255 - x) }
+}
+greyed(g2)
+print(sumOf(g2), g2[7, 3], g2[29, 19])   // expect: 1162275 Color(41, 41, 41, 248) Color(226, 226, 226, 226)
+fun paint(im : Image, left : int, top : int, w : int, h : int, c : Color) {
+  for (y in top ..< top + h) {
+    for (x in left ..< left + w) { im[x, y] = c }
+  }
+}
+val canvas = Image(40, 30)
+for (k in 0 ..< 3) { paint(canvas, 5 + k, 4, 10, 6, Color(k, 2, 3)) }
+print(canvas[5, 4], canvas[7, 9], canvas[16, 9], canvas[17, 9], canvas[7, 10])   // expect: Color(0, 2, 3) Color(2, 2, 3) Color(2, 2, 3) Color(0, 0, 0, 0) Color(0, 0, 0, 0)
+print(failing { thrice { paint(canvas, 35, 0, 6, 1, Color.red) } }, canvas[39, 0])   // expect: IndexOutOfBoundsException: pixel (40, 0) is outside the image, which is 40 by 30 Color(255, 0, 0)
+print(failing { canvas.pixels[0, 0] = Color.red })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }
+fun keyed(s : Slots, n : int) : int {
+  for (i in 0 ..< n) { s[i % s.size] = s[i % s.size] + i }
+  return s.sets
+}
+print(thrice { keyed(Slots(5), 100) }, failing { keyed(Slots(0), 1) })   // expect: 100 ArithmeticException: division by zero
+
+// A field set in a method: the object first, then the value, as the value is worked out
+// before the field is read for +=, and a field counted up with ++.
+class Tally {
+  var n = 0
+  var low = 100
+  fun bump() : int {
+    n += 10
+    return 1
+  }
+  fun run() : int {
+    n += bump()
+    return n
+  }
+  fun lows(xs : List<int>) : int {
+    for (x in xs) {
+      if (x < low) { low = x }
+      n++
+    }
+    return low * 1000 + n
+  }
+}
+print(Tally().run(), thrice { Tally().lows([5, 3, 9, 1, 4]) })   // expect: 1 1005

@@ -252,8 +252,9 @@ op &lt;T&gt; Number.*(tensor : Tensor&lt;T&gt;) : Tensor&lt;T&gt; =&gt; ...
 <dt><code>inline</code></dt>
 <dd>A function copied into each place it is called, with the lambdas given to it, so a lambda costs nothing and a <code>return</code> in it leaves the function around the call.
 <pre>inline fun twice(action : () -&gt; unit) { action(); action() }</pre>
-A class's <code>op []</code> may be inline too, its body put where <code>a[i]</code> is (a <code>Grid</code>'s and an <code>Image</code>'s are, so reading a pixel costs no call); no other operator.
-<pre>inline op [](x : int, y : int) : T =&gt; cells[y * width + x]</pre></dd>
+A class's <code>op []</code> and <code>op []=</code> may be inline too, their bodies put where <code>a[i]</code> is read or set (a <code>Grid</code>'s and an <code>Image</code>'s are, so reading or setting a pixel costs no call); no other operator.
+<pre>inline op [](x : int, y : int) : T =&gt; cells[y * width + x]
+inline op []=(x : int, y : int, value : T) { cells[y * width + x] = value }</pre></dd>
 
 <dt><code>tail</code></dt>
 <dd>Says that each call the function makes of itself is its last step. A function calling itself as its last step is made a loop with or without the word; with it, a call that is not its last step is an error, and so is a function that never calls itself.

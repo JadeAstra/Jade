@@ -47,7 +47,7 @@ class Grid<T> {
   }
   // Sets the cell in column `x` of row `y`: an IndexOutOfBoundsException outside the grid, an
   // IllegalStateException on a grid that may only be read (an image's pixels).
-  op []=(x : int, y : int, value : T) {
+  inline op []=(x : int, y : int, value : T) {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw __outside(x, y) }
     if (!writable) { throw __readOnly() }
     cells[y * width + x] = value

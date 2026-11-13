@@ -104,7 +104,10 @@ struct K {
     int16_t src = -1;      // for kWhole and the copies; -2 where two meet
     bool known = false;    // an int whose value is known on every way here: `value`
     int64_t value = 0;
-    bool operator==(const K& o) const { return bits == o.bits && src == o.src && known == o.known && (!known || value == o.value); }
+    int16_t fact = -1;     // what the region knows the slot holds on every way here (Region::facts)
+    bool operator==(const K& o) const {
+        return bits == o.bits && src == o.src && known == o.known && (!known || value == o.value) && fact == o.fact;
+    }
 };
 K constantInt(int64_t v) {
     K k{kInt};
@@ -195,6 +198,7 @@ bool join(State& into, const State& from) {
         else if (bSrc && a.src != b.src) j.src = -2;
         j.known = a.known && b.known && a.value == b.value;
         j.value = j.known ? a.value : 0;
+        j.fact = a.fact == b.fact ? a.fact : static_cast<int16_t>(-1);
         if (!(j == a)) changed = true;
         merged.push_back(Kinds::Item{s, j});
     }
@@ -501,8 +505,8 @@ struct Region {
     // The class an RCall at `i` makes a value of from its header alone, as the VM's RCall does at
     // once, where slot `callee` holds it as the region is made: kept in the value itself, every
     // field of its header a byte; nothing of a type given right before. Null for anything else.
-    const ObjClass* madeValue(int callee, int argc, int i) const {
-        const Value* v = knownValue(callee);
+    const ObjClass* madeValue(const State& s, int callee, int argc, int i) const {
+        const Value* v = knownValue(s, callee);
         if (v == nullptr || !v->isObjType(ObjType::Class)) return nullptr;
         const ObjClass* const cls = asClass(*v);
         if (!cls->isValue || !cls->madeFromHeader || cls->staticInit != nullptr || cls->fieldTypesMaker != nullptr || cls->smallId == 0 ||
@@ -542,23 +546,60 @@ struct Region {
     }
     // The value type of the items of the list the frame holds in slot `listSlot`, where it holds a
     // list of a value type's items; null for anything else.
-    const ObjClass* itemsClass(int listSlot) const {
-        if (auto it = fieldItemLists.find(listSlot); it != fieldItemLists.end()) return it->second;
+    const ObjClass* itemsClass(const State& s, int listSlot) const {
+        if (const Fact* known = factOf(s, listSlot); known != nullptr && known->items != nullptr) return known->items;
         if (frame == nullptr || listSlot < 0 || listSlot >= frameSlots || listSlot >= f.maxStack) return nullptr;
         const Value& v = frame[listSlot];
         if (!v.isObjType(ObjType::List) || asList(v)->store() != ListStore::Items) return nullptr;
         return asList(v)->pack->itemClass;
     }
-    // The value type of the value a slot holds (M9.5 B1): as an item read in the region left it
-    // there (valueSlots: a Ref or a Small value, of the list's items' type), or as the frame holds
-    // it where the region is made (a parameter, say). A guess the steps check; null for none.
-    mutable std::map<int, const ObjClass*> valueSlots;
-    void noteValue(int slot, const ObjClass* cls) const {
-        auto [it, added] = valueSlots.emplace(slot, cls);
-        if (!added && it->second != cls) it->second = nullptr;
+    // What the region knows a slot holds on the way to a step (K::fact): a value of a value type,
+    // made or read there, of that type (an item read: a Ref or a Small value, B1); an object read
+    // from a field or a global, as it was where the region is made (`image.cells.cells`, B2; the
+    // class called to make a value, B3); a list of a value type's items, their type. Each kept
+    // once, by what it says, so that two ways that know the same meet knowing it; two that know
+    // otherwise meet knowing nothing, and the frame's slot is the guess again. Guesses all, which
+    // the steps check. Before (to 2026-11-12) they were kept by the slot alone, for the whole
+    // region, and a slot that held two things on two stretches (the image's pixels, then the image,
+    // in `im[x, y] = Color(...)`) was known as neither.
+    struct Fact {
+        bool hasObject = false;
+        Value object{};
+        const ObjClass* items = nullptr;
+        const ObjClass* value = nullptr;
+        bool operator==(const Fact& o) const {
+            return hasObject == o.hasObject && (!hasObject || (object.kind == o.object.kind && object.as.i == o.object.as.i)) && items == o.items &&
+                   value == o.value;
+        }
+    };
+    mutable std::vector<Fact> facts;
+    const Fact* factOf(const State& s, int slot) const {
+        K k = s.kind(slot);
+        // A copy of a slot as entered: what is known of that slot.
+        if (k.fact < 0 && (k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) k = s.kind(k.src);
+        return k.fact >= 0 && static_cast<size_t>(k.fact) < facts.size() ? &facts[static_cast<size_t>(k.fact)] : nullptr;
     }
-    const ObjClass* valueClass(int slot) const {
-        if (auto it = valueSlots.find(slot); it != valueSlots.end()) return it->second;
+    template <class Change>
+    void noteFact(State& s, int slot, Change change) const {
+        const K k = s.kind(slot);
+        Fact f = k.fact >= 0 ? facts[static_cast<size_t>(k.fact)] : Fact{};
+        change(f);
+        auto found = std::find(facts.begin(), facts.end(), f);
+        if (found == facts.end()) {
+            if (facts.size() >= 32000) return;
+            facts.push_back(f);
+            found = facts.end() - 1;
+        }
+        s.kinds[slot].fact = static_cast<int16_t>(found - facts.begin());
+    }
+    void noteValue(State& s, int slot, const ObjClass* cls) const {
+        noteFact(s, slot, [&](Fact& f) { f.value = cls; });
+    }
+    void noteItems(State& s, int slot, const ObjClass* items) const {
+        noteFact(s, slot, [&](Fact& f) { f.items = items; });
+    }
+    const ObjClass* valueClass(const State& s, int slot) const {
+        if (const Fact* known = factOf(s, slot); known != nullptr && known->value != nullptr) return known->value;
         if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return nullptr;
         const Value& v = frame[slot];
         if (v.isSmall()) return smallClassOf(v);
@@ -616,13 +657,13 @@ struct Region {
         const ObjString* const name = slowName(slow);
         return name != nullptr && name->utf8() == "size";
     }
-    int fieldClass(int objSlot, int cache, int32_t slow) const {
+    int fieldClass(const State& s, int objSlot, int cache, int32_t slow) const {
         Value field;
-        return fieldValue(objSlot, cache, slow, field) ? listClass(field) : -1;
+        return fieldValue(s, objSlot, cache, slow, field) ? listClass(field) : -1;
     }
     // The field itself, as the frame's object holds it where the region is made.
-    bool fieldValue(int objSlot, int cache, int32_t slow, Value& out) const {
-        const Value* const known = knownValue(objSlot);
+    bool fieldValue(const State& s, int objSlot, int cache, int32_t slow, Value& out) const {
+        const Value* const known = knownValue(s, objSlot);
         if (known == nullptr) return false;
         const Value& v = *known;
         if (!v.isObjType(ObjType::Instance) || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return false;
@@ -641,27 +682,19 @@ struct Region {
         std::memcpy(static_cast<void*>(&out), reinterpret_cast<const uint8_t*>(inst) + at, sizeof(Value));
         return true;
     }
-    // What a slot holds where the region is made: what a field read in the region held then
-    // (fieldValues: `image.cells.cells`, B2), or the frame's slot. A guess the steps check.
-    mutable std::map<int, Value> fieldValues;
-    mutable std::set<int> fieldValuesTwo;
-    void noteFieldValue(int slot, const Value& v) const {
-        if (fieldValuesTwo.count(slot)) return;
-        auto [it, added] = fieldValues.emplace(slot, v);
-        if (!added && !(it->second.kind == v.kind && it->second.as.i == v.as.i)) {
-            fieldValues.erase(it);
-            fieldValuesTwo.insert(slot);
-        }
+    // What a slot holds where the region is made: what a field or global read in the region held
+    // then (a Fact), or the frame's slot. A guess the steps check.
+    void noteFieldValue(State& s, int slot, const Value& v) const {
+        noteFact(s, slot, [&](Fact& f) {
+            f.hasObject = true;
+            f.object = v;
+        });
     }
-    const Value* knownValue(int slot) const {
-        if (auto it = fieldValues.find(slot); it != fieldValues.end()) return &it->second;
-        if (fieldValuesTwo.count(slot)) return nullptr;
+    const Value* knownValue(const State& s, int slot) const {
+        if (const Fact* known = factOf(s, slot); known != nullptr && known->hasObject) return &known->object;
         if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return nullptr;
         return &frame[slot];
     }
-    // A list of a value type's items read from a field in the region (`cells` in an inline op []
-    // put in place, B2): its items' class, by the slot it is read to; null where two.
-    mutable std::map<int, const ObjClass*> fieldItemLists;
 
     // The address of a place's cache (GetProp's and the like), which the stencils read as the VM
     // fills it: there as long as the run code is.
@@ -1331,7 +1364,7 @@ struct Region {
             case Op::RGetIndexSK: {  // u8 A, u8 B, u8 C, u8 T, u8 S, i32 slow
                 const int a = u8(x, 0);
                 const int list = c.objectSlot(u8(x, 1));
-                if (const ObjClass* const cls = itemsClass(list)) {
+                if (const ObjClass* const cls = itemsClass(s, list)) {
                     // An item of a list of a value type's items (M9.5 B1): a copy of it, where it
                     // is kept in the value itself (a Color), in memory; anything else the VM's.
                     const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
@@ -1349,7 +1382,7 @@ struct Region {
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                     c.leaves(l);
                     c.write(a, K{kMem});
-                    noteValue(a, cls);
+                    noteValue(s, a, cls);
                     s.top = u8(x, 3);
                     c.fall(s);
                     return;
@@ -1390,7 +1423,7 @@ struct Region {
                 // region is made: a Ref to it, in memory. Anything else the VM's.
                 const int top = s.top;
                 const int list = c.objectSlot(top - 2);
-                const ObjClass* const cls = itemsClass(list);
+                const ObjClass* const cls = itemsClass(s, list);
                 if (cls == nullptr || c.copiedElsewhere(top - 2)) island();
                 const Reg index = c.read(top - 1, CI, true);
                 LOp& l = c.op("iref", {index}, {index});
@@ -1399,7 +1432,7 @@ struct Region {
                 l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 c.leaves(l);
                 c.write(top - 2, K{kMem});
-                noteValue(top - 2, cls);
+                noteValue(s, top - 2, cls);
                 s.top = top - 1;
                 c.fall(s);
                 return;
@@ -1426,7 +1459,7 @@ struct Region {
                 l.ki = u16(x, 3);
                 l.slot2 = a;
                 c.leaves(l);
-                if (const Value* g = globalSeen(u16(x, 3)); g != nullptr && g->kind == ValueKind::Obj) noteFieldValue(a, *g);
+                if (const Value* g = globalSeen(u16(x, 3)); g != nullptr && g->kind == ValueKind::Obj) noteFieldValue(s, a, *g);
                 s.top = u8(x, 1);
                 c.fall(s);
                 return;
@@ -1438,7 +1471,7 @@ struct Region {
                 // byte the region knows: its bytes put together. Any other call the VM's.
                 const int a = u8(x, 0), argc = u8(x, 4), flags = u8(x, 5);
                 const int callee = c.objectSlot(u8(x, 1));
-                const ObjClass* const cls = madeValue(callee, argc, c.i);
+                const ObjClass* const cls = madeValue(s, callee, argc, c.i);
                 if (cls == nullptr) island();
                 const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
                 uint64_t constant = 0;
@@ -1465,7 +1498,7 @@ struct Region {
                 l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | static_cast<uint64_t>(a));
                 l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 c.leaves(l);
-                noteValue(a, cls);
+                noteValue(s, a, cls);
                 s.top = u8(x, 2);
                 c.fall(s);
                 return;
@@ -1480,7 +1513,7 @@ struct Region {
             case Op::PlaceIndex: {  // list index -> place: an item of a list of a value type's items, to be changed (B3)
                 const int top = s.top;
                 const int list = c.objectSlot(top - 2);
-                if (itemsClass(list) == nullptr || c.copiedElsewhere(top - 2)) island();
+                if (itemsClass(s, list) == nullptr || c.copiedElsewhere(top - 2)) island();
                 const Reg index = c.read(top - 1, CI, true);
                 LOp& l = c.op("placei", {index}, {index});
                 l.slot = list;
@@ -1506,7 +1539,7 @@ struct Region {
                 const int top = s.top;
                 const int obj = c.objectSlot(top - 1);
                 const Value& name = constant(u16(x, 0));
-                const ObjClass* const vcls = valueClass(obj);
+                const ObjClass* const vcls = valueClass(s, obj);
                 const ValueField* const field = name.isObjType(ObjType::String) ? plainField(vcls, u16(x, 2), -1, asString(name)) : nullptr;
                 if (field == nullptr) island();
                 const bool isFloat = field->kind == ValueField::Float, isByte = field->kind == ValueField::Narrow;
@@ -1540,7 +1573,7 @@ struct Region {
                 const int slot = u16(x, 0);
                 const K k = s.kind(slot);
                 if (k.bits == kEntry || inMemory(k)) {
-                    const ObjClass* const cls = valueClass(slot);
+                    const ObjClass* const cls = valueClass(s, slot);
                     const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
                     if (cls == nullptr || cls->smallId == 0 || layout == nullptr || layout->size > 8) island();
                     LOp& l = c.op("ownsm");
@@ -1549,7 +1582,7 @@ struct Region {
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                     c.leaves(l);
                     c.write(slot, K{kMem});
-                    noteValue(slot, cls);
+                    noteValue(s, slot, cls);
                 } else if ((k.bits & (kInt | kFloat | kByte | kBool)) == 0 || (k.bits & ~(kInt | kFloat | kByte | kBool)) != 0) {
                     island();
                 }
@@ -1590,17 +1623,18 @@ struct Region {
             case Op::SetIndex: {  // list index value -> value
                 const int top = s.top;
                 const int list = c.objectSlot(top - 3);
-                if (const ObjClass* const cls = itemsClass(list)) {
+                if (const ObjClass* const cls = itemsClass(s, list)) {
                     // An item of a list of a value type's items kept in the value itself (B3): the
-                    // value's bytes, where the region holds a value of the type in memory.
+                    // value's bytes, where the region holds a value of the type in memory (or a
+                    // copy of a slot as it was entered: a parameter, read there).
                     const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
-                    const K vk = s.kind(top - 1);
-                    if (cls->smallId == 0 || layout == nullptr || layout->size > 8 || !(vk.bits == kEntry || inMemory(vk))) island();
+                    if (cls->smallId == 0 || layout == nullptr || layout->size > 8) island();
+                    const int valueSlot = c.objectSlot(top - 1);
                     const Reg index = c.read(top - 2, CI, true);
                     LOp& l = c.op("setsm", {index}, {index});
                     l.slot = list;
                     l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | (static_cast<uint64_t>(layout->size) << 24) |
-                                                   static_cast<uint64_t>(top - 1));
+                                                   static_cast<uint64_t>(valueSlot));
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                     c.leaves(l);
                     move(c, top - 1, top - 3);
@@ -1663,7 +1697,7 @@ struct Region {
                         l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                         c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
                         c.leaves(l);
-                        noteValue(top, cls);
+                        noteValue(s, top, cls);
                         s.top = top + 1;
                         c.fall(s);
                         return;
@@ -1683,7 +1717,7 @@ struct Region {
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                     c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
                     c.leaves(l);
-                    noteValue(top, cls);
+                    noteValue(s, top, cls);
                     s.top = top + 1;
                     c.fall(s);
                     return;
@@ -1729,7 +1763,7 @@ struct Region {
                 }
                 // A field of a value of a value type (M9.5 B1): a Small value or a Ref to an item,
                 // of the type the region or the frame says, the field the cache saw.
-                if (const ObjClass* const vcls = valueClass(obj)) {
+                if (const ObjClass* const vcls = valueClass(s, obj)) {
                     if (const ValueField* const field = plainField(vcls, u16(x, 4), i32(x, 6))) {
                         const bool isFloat = field->kind == ValueField::Float, isByte = field->kind == ValueField::Narrow;
                         const Reg dst{a, isFloat ? CF : CI};
@@ -1766,18 +1800,15 @@ struct Region {
                     l = &c.op("getpv");
                     l->slot2 = a;
                     // A list read from a field: what it holds, for the items read from it.
-                    const int held = fieldClass(obj, u16(x, 4), i32(x, 6));
+                    const int held = fieldClass(s, obj, u16(x, 4), i32(x, 6));
                     if (held >= 0) {
                         auto [it, added] = fieldLists.emplace(a, held);
                         if (!added && it->second != held) it->second = -2;
                     }
-                    if (Value field; fieldValue(obj, u16(x, 4), i32(x, 6), field)) {
-                        if (field.kind == ValueKind::Obj) noteFieldValue(a, field);
-                        if (field.isObjType(ObjType::List) && asList(field)->store() == ListStore::Items) {
-                            const ObjClass* const items = asList(field)->pack->itemClass;
-                            auto [it, added] = fieldItemLists.emplace(a, items);
-                            if (!added && it->second != items) it->second = nullptr;
-                        }
+                    if (Value field; fieldValue(s, obj, u16(x, 4), i32(x, 6), field)) {
+                        if (field.kind == ValueKind::Obj) noteFieldValue(s, a, field);
+                        if (field.isObjType(ObjType::List) && asList(field)->store() == ListStore::Items && asList(field)->pack->itemClass != nullptr)
+                            noteItems(s, a, asList(field)->pack->itemClass);
                     }
                 }
                 l->slot = obj;
@@ -1808,11 +1839,18 @@ struct Region {
                         island();
                     }
                 } else {
-                    // As the VM's quick way: an int or a float (as entered, checked as the region is).
+                    // As the VM's quick way: an int or a float (as entered, checked as the region is);
+                    // one the region has not typed (a parameter of an inline body, copied) as the
+                    // typed instructions or the frame say, checked.
                     const uint16_t w = static_cast<uint16_t>(s.kind(u8(x, 2)).bits & ~kEntry);
-                    if (w != kFloat && w != kInt) island();
-                    kind = K{w};
-                    value = Reg{u8(x, 2), w == kFloat ? CF : CI};
+                    if (w == kFloat || w == kInt) {
+                        kind = K{w};
+                        value = Reg{u8(x, 2), w == kFloat ? CF : CI};
+                    } else {
+                        const Cls cls = c.guess(u8(x, 2));
+                        value = c.read(u8(x, 2), cls, true);
+                        kind = K{cls == CF ? kFloat : kInt};
+                    }
                 }
                 LOp& l = c.op(value.cls == CF ? "setpf" : "setpi", {value}, {value});
                 l.slot = obj;
@@ -1862,15 +1900,13 @@ struct Region {
         c.write(to, K{kMem, root});
     }
 
-    // A move of a slot, or its push: what it holds goes with it, and the value type a value of
-    // one there is of (valueSlots).
+    // A move of a slot, or its push: what it holds goes with it, and what the region knows of it
+    // (a Fact).
     void move(Ctx& c, int from, int to) {
-        if (auto it = valueSlots.find(from); it != valueSlots.end() && it->second != nullptr) noteValue(to, it->second);
-        if (auto it = fieldValues.find(from); it != fieldValues.end()) noteFieldValue(to, it->second);
-        auto items = fieldItemLists.find(from);
-        if (items != fieldItemLists.end() && items->second != nullptr)
-            if (auto [it, added] = fieldItemLists.emplace(to, items->second); !added && it->second != items->second) it->second = nullptr;
+        const Fact* known = factOf(c.s, from);
+        const int16_t fact = known != nullptr ? static_cast<int16_t>(known - facts.data()) : static_cast<int16_t>(-1);
         moveSlot(c, from, to);
+        if (fact >= 0) c.s.kinds[to].fact = fact;
     }
     void moveSlot(Ctx& c, int from, int to) {
         const K k = c.s.kind(from);

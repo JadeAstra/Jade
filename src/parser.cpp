@@ -1480,7 +1480,8 @@ void Parser::classMemberBody(ClassStmt& s, bool inStatic) {
         AbstractMember(bool& f, bool value) : flag(f), saved(f) { flag = value; }
         ~AbstractMember() { flag = saved; }
     } abstractMember(abstractMember_, abstracts);
-    // `inline op [](x, y)`: an operator put in place of its use, as an inline function is (B2).
+    // `inline op [](x, y)`, `inline op []=(x, y, v)`: an operator put in place of its use, as an
+    // inline function is (B2).
     const bool inlineOperator = inlines && !infix && !tail && word("op") && peekNext().type != TokenType::LParen;
     if ((infix || inlines || tail) && !check(TokenType::Fun) && !inlineOperator)
         throw error(peek(), "'infix', 'inline' and 'tail' go in front of a function, and 'inline' in front of an operator too");
@@ -1627,7 +1628,8 @@ void Parser::classMemberBody(ClassStmt& s, bool inStatic) {
         if (inStatic && word("op")) throw error(peek(), "operators cannot be static");
         const Token& start = peek();
         auto member = method();
-        if (inlineOperator && member->name != "[]") throw error(start, "only op [] can be inline: inline op [](index) puts its body where a[i] is (B2)");
+        if (inlineOperator && member->name != "[]" && member->name != "[]=")
+            throw error(start, "only op [] and op []= can be inline: their bodies put where a[i] is read or set (B2)");
         if (inStatic) member->isStatic = true;
         if (infix) {
             if (member->isStatic) throw error(start, "an infix function is called on a value, value " + member->name + " other: it cannot be static (D72)");

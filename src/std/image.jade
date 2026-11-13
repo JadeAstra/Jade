@@ -900,7 +900,7 @@ class Image : Drawable {
   }
   // Sets a pixel to `color`, which takes its place, alpha and all, rather than being laid over it;
   // an IndexOutOfBoundsException outside the image.
-  op []=(x : int, y : int, color : Color) {
+  inline op []=(x : int, y : int, color : Color) {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw outside(x, y) }
     cells[x, y] = color
     changed(x, y, x + 1, y + 1)
@@ -1165,16 +1165,18 @@ class Image : Drawable {
   //
   // Done in one step for other threads: a thread gives the others a turn only at a call or at
   // the end of a loop's body, and this has neither, so none of them (Topaz sending the changes to
-  // the graphics card among them) sees it half done (G64). Keep calls out of it: a Math.min of
-  // two ints is no call today, but nothing here should hang on that.
-  internal fun changed(left : int, top : int, right : int, bottom : int) {
+  // the graphics card among them) sees it half done (G64). Keep calls and loops out of it: a
+  // Math.min of two ints is no call today, but nothing here should hang on that. Inline, so that
+  // image[x, y] = c costs no call (its body is put where it is used, which has no loop's end in
+  // the middle of it either).
+  internal inline fun changed(left : int, top : int, right : int, bottom : int) {
     if (changedRight <= changedLeft or changedBottom <= changedTop) {
       changedLeft = left; changedTop = top; changedRight = right; changedBottom = bottom
     } else {
-      changedLeft = left < changedLeft ? left : changedLeft
-      changedTop = top < changedTop ? top : changedTop
-      changedRight = right > changedRight ? right : changedRight
-      changedBottom = bottom > changedBottom ? bottom : changedBottom
+      if (left < changedLeft) { changedLeft = left }
+      if (top < changedTop) { changedTop = top }
+      if (right > changedRight) { changedRight = right }
+      if (bottom > changedBottom) { changedBottom = bottom }
     }
     changes += 1
   }

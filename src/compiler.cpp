@@ -1072,6 +1072,29 @@ private:
         site.line = e.line;
         return compileInlined(site, info);
     }
+    // `a[i] = v` as a statement where the checker chose an inline op []= (B2): its body in place,
+    // its result dropped.
+    bool compileInlineIndexSet(const Expr& expr) {
+        if (expr.kind != ExprKind::Assign || session_.checker == nullptr || inlineDepth_ >= 48) return false;
+        const auto& a = static_cast<const AssignExpr&>(expr);
+        if (a.op != TokenType::Eq || a.target->kind != ExprKind::Index) return false;
+        const auto& target = static_cast<const IndexExpr&>(*a.target);
+        if (target.defaultValue) return false;
+        if (Checker::AtomicFieldOp atomic; session_.checker->atomicField(a, atomic)) return false;
+        Checker::InlineCall info;
+        if (!session_.checker->inlineCall(a, info) || info.owner == nullptr || info.fn->isStatic) return false;
+        InlineSite site;
+        site.node = &a;
+        site.object = target.object.get();
+        site.objectLine = target.line;
+        site.args.push_back(target.index.get());
+        for (const ExprPtr& m : target.more) site.args.push_back(m.get());
+        site.args.push_back(a.value.get());
+        site.line = a.line;
+        if (!compileInlined(site, info)) return false;
+        emit(Op::Pop);
+        return true;
+    }
     bool compileInlined(const InlineSite& e, const Checker::InlineCall& info) {
         const FunctionDecl& fn = *info.fn;
         if (fn.isAbstract) return false;
@@ -2413,6 +2436,14 @@ private:
         return kindHasThis(fs_->kind) && implicitSlots_.empty();
     }
     void emitThisValue() { emit(Op::GetLocal, thisSlot_ >= 0 ? thisSlot_ : 0); }
+    // Whether `name = v` sets a field of the object the code runs on directly, as emitSet's
+    // SetOwn on `this` does: no local, captured variable or property's backing field of the name.
+    bool ownFieldTarget(const std::string& name, const Node& at) {
+        VarInfo info;
+        if (resolveLocal(fs_, name, at, info) != -1 || resolveUpvalue(fs_, name, at, info) != -1) return false;
+        if (name == "field" && !backingFieldHere(at).empty()) return false;
+        return classSide() == ClassSide::Instance && class_->members.count(name) != 0 && directThis();
+    }
 
     // A lookup of a bare name when the program runs, told first of the objects of the blocks
     // copied in place around it, innermost last; in an inline function's body, of its receiver
@@ -7409,6 +7440,17 @@ private:
         switch (e.target->kind) {
             case ExprKind::Name: {
                 const auto& target = static_cast<const NameExpr&>(*e.target);
+                if (!e.nullSafe && ownFieldTarget(target.name, target)) {
+                    // A field of the object the code runs on: `this` under it, nothing swapped round.
+                    emitThisValue();
+                    emit(Op::Dup);
+                    emit(Op::GetOwn, stringConstant(target.name));
+                    emit(Op::Const, intConstant(1));
+                    line_ = e.line;
+                    emit(change);
+                    emit(Op::SetOwn, stringConstant(target.name));
+                    break;
+                }
                 emitGet(target.name, target);
                 const int skip = beginNullSafe(e.nullSafe);
                 emit(Op::Const, intConstant(1));
@@ -7538,6 +7580,7 @@ private:
 
     // An assignment, which is a statement and gives no value (G73): nothing left on the stack.
     void compileAssignStatement(const Expr& expr) {
+        if (compileInlineIndexSet(expr)) return;  // `grid[x, y] = v` of an inline op []= (B2)
         if (compileIndexSetForm(expr)) return;  // `grid[x, y] = v` by the form of op []= the checker chose
         compileExpr(expr);
         emit(Op::Pop);
@@ -7585,6 +7628,23 @@ private:
                     emit(Op::FieldDestination, stringConstant(target.name));
                     compileWhereItGoes(e);
                     emitSet(target.name, target);
+                    break;
+                }
+                if (!(compound && e.nullSafe) && !dotEq && ownFieldTarget(target.name, target)) {
+                    // A field of the object the code runs on: `this` first, then the value, so that
+                    // nothing need be swapped round to set it (B2). `this` cannot change meanwhile.
+                    emitThisValue();
+                    if (compound) {
+                        emit(Op::Dup);
+                        emit(Op::GetOwn, stringConstant(target.name));
+                        compileExpr(*e.value);
+                        line_ = e.line;
+                        emit(typedOp(binaryOp(e.op), e));
+                    } else {
+                        compileExprFor(*e.value, declaredTypeOf(target.name));
+                        line_ = e.line;
+                    }
+                    emit(Op::SetOwn, stringConstant(target.name));
                     break;
                 }
                 if (compound) emitGet(target.name, target);

@@ -1,4 +1,4 @@
-// Only op [] can be inline: its body put where a[i] is (B2).
+// Only op [] and op []= can be inline: their bodies put where a[i] is read or set (B2).
 class Money(val cents : int) {
-  inline op +(other : Money) : Money => Money(cents + other.cents)   // expect compile error: only op [] can be inline: inline op [](index) puts its body where a[i] is (B2)
+  inline op +(other : Money) : Money => Money(cents + other.cents)   // expect compile error: only op [] and op []= can be inline: their bodies put where a[i] is read or set (B2)
 }
