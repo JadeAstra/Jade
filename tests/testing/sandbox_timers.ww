@@ -1,0 +1,22 @@
+// ww test: in a test's sandbox, a pool's timed jobs come due. The sandbox's clock moves only
+// when the program waits, and the pool's timer thread waits for a time on that clock; a timed wait
+// that runs out now lets its time pass there too, as a sleep does (M8: they never ran).
+
+@Test @Timeout(5.seconds) suspend fun afterRuns() {
+  val q = JobQueue("after", daemon = true)
+  assertEquals(42, q.after(200.milliseconds) { 42 }.get())
+  q.close()
+}
+
+@Test @Timeout(5.seconds) suspend fun everyRuns() {
+  val q = JobQueue("every", daemon = true)
+  val ticks = Countdown(3)
+  val job = q.every(100.milliseconds) { ticks.countDown() }
+  assertTrue(ticks.await(3.seconds))
+  job.cancel()
+  q.close()
+}
+
+// expect:   ok    afterRuns
+// expect:   ok    everyRuns
+// expect: 2 tests: 2 passed, 0 failed

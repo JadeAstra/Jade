@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace jade::image {
+namespace ww::image {
 
 // Writes a picture as the bytes of a PNG file, compressed.
 std::vector<uint8_t> encodePng(const uint8_t* rgba, int width, int height);
@@ -21,4 +21,4 @@ bool decodePng(const uint8_t* data, size_t size, std::vector<uint8_t>& rgba, int
 
 // The compression and checks are codec.h's.
 
-}  // namespace jade::image
+}  // namespace ww::image

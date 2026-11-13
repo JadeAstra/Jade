@@ -1,0 +1,13 @@
+// A test may start a worker, as a program may: `ww test` gives the workers the program to load,
+// as a run does. (Before, Worker() in a test was "workers cannot be started here".)
+
+@Test @RealHost suspend fun aTestStartsAWorker() {
+  val answered = Job<any?>()
+  val echo = Worker("../workers/echo.ww")
+  echo.onMessage = { message -> answered.complete(message) }
+  assertEquals("ready, in a worker: true", answered.get())
+  echo.terminate()
+}
+
+// expect:   ok    aTestStartsAWorker
+// expect: 1 test: 1 passed, 0 failed

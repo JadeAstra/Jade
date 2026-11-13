@@ -1,4 +1,4 @@
-// `jade doc`: a reference page for Jade source files, the standard library's among them.
+// `ww doc`: a reference page for WinterWolf source files, the standard library's among them.
 //
 // Each file is parsed with the compiler's own parser, which finds its declarations and what
 // each belongs to. What a declaration says of itself is the comment written right above it,
@@ -6,16 +6,16 @@
 // (`// ---- Lists ----`, `// -- string --`) or prose between the declarations. A declaration is
 // shown as it is written, up to its body, with `external` left out. Private and internal members,
 // and names beginning with two underscores, are the code's own and are left out.
-// So is a comment standing on its own whose first line begins `Inside Jade:`, a note for
+// So is a comment standing on its own whose first line begins `Inside WinterWolf:`, a note for
 // whoever works on the code (where the C++ is, how it is reached); and the starting value of a
 // variable, but for a `const`'s, which is part of what it is.
 //
-//   jade doc <file>... [-o page.html] [--template page.html] [--title text]
-//   jade doc --missing <file>...     the declarations nothing is written about, file:line name
+//   ww doc <file>... [-o page.html] [--template page.html] [--title text]
+//   ww doc --missing <file>...     the declarations nothing is written about, file:line name
 //
-// With --template, the page is that file with the reference put where it says <!-- jade doc -->;
+// With --template, the page is that file with the reference put where it says <!-- ww doc -->;
 // otherwise it is a page of its own. docs/language.html is made this way from
-// docs/language-template.html and src/std/*.jade.
+// docs/language-template.html and src/std/*.ww.
 
 #include <algorithm>
 #include <fstream>
@@ -30,7 +30,7 @@
 #include "lexer.h"
 #include "parser.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -67,7 +67,7 @@ std::string commentText(const std::string& line) {
 }
 
 // Prose with `code` in backticks, as HTML.
-// The references to Jade's design records a comment carries for its maintainers, `(D35)`,
+// The references to WinterWolf's design records a comment carries for its maintainers, `(D35)`,
 // `(D99, D102 to D105)`, `(M6.6 part 4)`, `(L14)`, mean nothing to a reader of the reference:
 // left out of it.
 std::string withoutReferences(const std::string& s) {
@@ -316,7 +316,7 @@ public:
             std::vector<std::string> texts;
             while (at < lines.size() && isComment(lines[at])) texts.push_back(commentText(lines[at++]));
             if (at < lines.size() && !isBlank(lines[at])) continue;  // a declaration's own
-            if (trim(texts[0]).rfind("Inside Jade:", 0) == 0) continue;  // a note for the code's workers
+            if (trim(texts[0]).rfind("Inside WinterWolf:", 0) == 0) continue;  // a note for the code's workers
             // `---- Title ----` opens a part of the file, `-- Title --` a group in it; what
             // follows the title is prose.
             std::string first = trim(texts[0]);
@@ -425,7 +425,7 @@ std::string render(const std::vector<FileDoc>& files, int& missing, int& total) 
 
 int docCommand(const std::vector<std::string>& args) {
     std::vector<std::string> paths;
-    std::string output, templatePath, title = "Jade reference";
+    std::string output, templatePath, title = "WinterWolf reference";
     bool listMissing = false;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "-o" && i + 1 < args.size()) output = args[++i];
@@ -433,21 +433,21 @@ int docCommand(const std::vector<std::string>& args) {
         else if (args[i] == "--title" && i + 1 < args.size()) title = args[++i];
         else if (args[i] == "--missing") listMissing = true;
         else if (!args[i].empty() && args[i][0] == '-') {
-            std::cerr << "jade: usage: jade doc <file>... [-o page.html] [--template page.html] [--title text]\n";
+            std::cerr << "ww: usage: ww doc <file>... [-o page.html] [--template page.html] [--title text]\n";
             return 64;
         } else {
             paths.push_back(args[i]);
         }
     }
     if (paths.empty()) {
-        std::cerr << "jade: usage: jade doc <file>... [-o page.html] [--template page.html] [--title text]\n";
+        std::cerr << "ww: usage: ww doc <file>... [-o page.html] [--template page.html] [--title text]\n";
         return 64;
     }
     std::vector<FileDoc> files;
     for (const std::string& path : paths) {
         std::ifstream in(path, std::ios::binary);
         if (!in) {
-            std::cerr << "jade: cannot read " << path << "\n";
+            std::cerr << "ww: cannot read " << path << "\n";
             return 66;
         }
         std::stringstream buffer;
@@ -496,16 +496,16 @@ int docCommand(const std::vector<std::string>& args) {
     if (!templatePath.empty()) {
         std::ifstream in(templatePath, std::ios::binary);
         if (!in) {
-            std::cerr << "jade: cannot read " << templatePath << "\n";
+            std::cerr << "ww: cannot read " << templatePath << "\n";
             return 66;
         }
         std::stringstream buffer;
         buffer << in.rdbuf();
         page = buffer.str();
-        const std::string marker = "<!-- jade doc -->";
+        const std::string marker = "<!-- ww doc -->";
         const size_t at = page.find(marker);
         if (at == std::string::npos) {
-            std::cerr << "jade: " << templatePath << " has no " << marker << " to put the reference at\n";
+            std::cerr << "ww: " << templatePath << " has no " << marker << " to put the reference at\n";
             return 65;
         }
         page.replace(at, marker.size(), reference);
@@ -520,7 +520,7 @@ int docCommand(const std::vector<std::string>& args) {
         std::ofstream out(output, std::ios::binary);
         out << page;
         if (!out) {
-            std::cerr << "jade: cannot write " << output << "\n";
+            std::cerr << "ww: cannot write " << output << "\n";
             return 73;
         }
     }
@@ -528,4 +528,4 @@ int docCommand(const std::vector<std::string>& args) {
     return 0;
 }
 
-}  // namespace jade
+}  // namespace ww

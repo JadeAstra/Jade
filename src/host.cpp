@@ -16,7 +16,7 @@
 #include <filesystem>
 #include <fstream>
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -232,4 +232,4 @@ Host& realHost() {
     return host;
 }
 
-}  // namespace jade
+}  // namespace ww

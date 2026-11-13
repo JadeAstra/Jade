@@ -1,0 +1,133 @@
+// Fields native code reads once as a loop's region starts (2026-11-12): a field no step of the
+// region writes, of an object the region never changes, or of what such a field holds
+// (`image.cells.cells`). Each loop here runs three times (its region is made the second time it
+// starts); every answer the VM's alone, and `ww --interpret`'s.
+
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+class Shelf(var width : int, var items : open List<int>) {
+  var count = 0
+}
+class Room(var shelf : Shelf) {
+  var name = "room"
+}
+
+// Read only: read once.
+fun sum(s : Shelf) : int {
+  var t = 0
+  for (i in 0 ..< s.items.size) { t += s.items[i] * s.width }
+  return t
+}
+print(thrice { sum(Shelf(3, [1, 2, 3, 4])) })   // expect: 30
+
+// A field the loop writes, by its own name or through another variable: read each time.
+fun widen(s : Shelf, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += s.width
+    s.width += 1
+  }
+  return t
+}
+print(thrice { widen(Shelf(2, []), 5) })   // expect: 20
+fun widenOther(s : Shelf, other : Shelf, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += s.width
+    other.width = other.width + 2
+  }
+  return t
+}
+val same = Shelf(1, [])
+print(thrice { widenOther(Shelf(1, []), Shelf(1, []), 4) }, widenOther(same, same, 4), same.width)   // expect: 4 16 9
+
+// A list field replaced in the loop: the new list read after.
+fun swapped(s : Shelf, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += s.items[0]
+    if (i == 1) { s.items = [100, 200] }
+  }
+  return t
+}
+print(thrice { swapped(Shelf(0, [1, 2]), 4) })   // expect: 202
+
+// A field of what a field holds: the shelf in a room, read once; the room given another shelf,
+// read each time.
+fun roomSum(r : Room) : int {
+  var t = 0
+  for (i in 0 ..< r.shelf.items.size) { t += r.shelf.items[i] + r.shelf.width }
+  return t
+}
+print(thrice { roomSum(Room(Shelf(10, [1, 2, 3]))) })   // expect: 36
+fun moved(r : Room, other : Shelf, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += r.shelf.width
+    if (i == 2) { r.shelf = other }
+  }
+  return t
+}
+print(thrice { moved(Room(Shelf(1, [])), Shelf(50, []), 5) })   // expect: 103
+
+// A field changed by a call in the loop: the VM's work in the region, nothing read once.
+fun bump(s : Shelf) {
+  s.width += 10
+}
+fun called(s : Shelf, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += s.width
+    bump(s)
+  }
+  return t
+}
+print(thrice { called(Shelf(1, []), 3) })   // expect: 33
+
+// A field holding something else on another start: read afresh each time the region starts.
+val shelves = [Shelf(1, [5]), Shelf(2, [6, 7]), Shelf(3, [])]
+var all = 0
+for (s in shelves) { all += thrice { sum(s) } as int }
+print(all)   // expect: 31
+
+// Pixels: a grid set and read through its fields, a picture's through two; a grid that may only
+// be read; an image's pixels set from a parallel section.
+fun checker(g : Grid<Color>) {
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) { g[x, y] = (x + y) % 2 == 0 ? Color.white : Color(x, y, 0) }
+  }
+}
+fun brightness(g : Grid<Color>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) {
+      val c = g[x, y]
+      t += c.red + c.green + c.blue
+    }
+  }
+  return t
+}
+val board = Grid<Color>(16, 9)
+thrice { checker(board) }
+print(thrice { brightness(board) })   // expect: 55912
+val photo = Image(16, 9)
+fun copyIn(im : Image, g : Grid<Color>) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) { im[x, y] = g[x, y] }
+  }
+}
+thrice { copyIn(photo, board) }
+print(thrice { brightness(photo.pixels) }, photo[3, 2], photo[4, 2])   // expect: 55912 Color(3, 2, 0) Color(255, 255, 255)
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+print(failing { thrice { checker(photo.pixels) } })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }

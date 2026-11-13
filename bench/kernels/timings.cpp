@@ -4,8 +4,8 @@
 //   timings.bat, then timings.exe <the photo as raw RGBA bytes, 4000 by 3000>
 //
 // Plain loops over the bytes, one thread, no intrinsics (Clang may vectorise what it can), built
-// as jade.exe is (clang-cl /O2). Each operation the best of three, in milliseconds, its result
-// made new where Jade's is (the allocation counted, as Jade's is), on the performance cores.
+// as ww.exe is (clang-cl /O2). Each operation the best of three, in milliseconds, its result
+// made new where WinterWolf's is (the allocation counted, as WinterWolf's is), on the performance cores.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -313,7 +313,7 @@ static uint64_t encodeBmp(const Image& im) {
     const int bits = seeThrough ? 32 : 24, size = bits / 8;
     const size_t stride = (static_cast<size_t>(im.w) * bits + 31) / 32 * 4, at = 14 + (seeThrough ? 108 : 40);
     Bytes out(at + stride * im.h);
-    out[0] = 'B', out[1] = 'M';  // the rest of the header as Jade's; its cost is nothing beside the pixels
+    out[0] = 'B', out[1] = 'M';  // the rest of the header as WinterWolf's; its cost is nothing beside the pixels
     for (int row = 0; row < im.h; row++) {
         uint8_t* o = &out[at + static_cast<size_t>(im.h - 1 - row) * stride];
         const uint8_t* p = im.at(0, row);

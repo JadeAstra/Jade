@@ -1,0 +1,17 @@
+// walk() gives a symbolic link but does not go into it, as Java's Files.walk does (8.8a): one to
+// a directory above would go round for ever. On Windows the link is a junction, which needs no
+// rights a program may lack.
+val onWindows = FilePath.separator == "\\"
+val root = FilePath("ww-walk-links-test")
+root.deleteRecursively()
+FilePath(root, "inner").mkdir(parents = true)
+FilePath(root, "inner/a.txt").writeText("a")
+val back = FilePath(FilePath(root, "inner"), "back")
+val made = onWindows ? Process.run(["cmd", "/c", "mklink", "/J", back.text, root.absolute.text]) : Process.run(["ln", "-s", root.absolute.text, back.text])
+print(made.exitCode, back.isSymbolicLink(), back.isDirectory(), FilePath(root, "inner").isSymbolicLink(), FilePath(root, "inner/a.txt").isSymbolicLink(), FilePath(root, "none").isSymbolicLink())   // expect: 0 true true false false false
+print(root.walk().map { it.text.replace(FilePath.separator, "/") }.toList())   // expect: ["ww-walk-links-test/inner", "ww-walk-links-test/inner/a.txt", "ww-walk-links-test/inner/back"]
+print(back.list().map { it.name })                            // expect: ["inner"]
+back.delete()
+print(FilePath(root, "inner/a.txt").exists())                     // expect: true
+root.deleteRecursively()
+print(root.exists())                                          // expect: false

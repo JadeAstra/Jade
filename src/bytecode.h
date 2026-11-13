@@ -10,11 +10,11 @@
 
 #include "value.h"
 
-namespace jade {
+namespace ww {
 
 class Program;
 
-// Instruction set of the Jade VM. Operands are little-endian: u8, u16, or i32 (absolute
+// Instruction set of the WinterWolf VM. Operands are little-endian: u8, u16, or i32 (absolute
 // jump targets within the function).
 enum class Op : uint16_t {
     Const,         // u16 constant                  -> value
@@ -292,7 +292,7 @@ enum class Op : uint16_t {
     TypeArg,            // u8 index                        -> type
     InstanceTypeArg,    // u8 index                        object class -> type  (of the class's own type parameters)
     SupertypeMaker,     //                                 class function -> class  (ObjClass::supertypeMakers)
-    CheckResult,        // u16 name                        value type -> value  (JADE_CHECK_NATIVE_RESULTS: throws on a mismatch)
+    CheckResult,        // u16 name                        value type -> value  (WW_CHECK_NATIVE_RESULTS: throws on a mismatch)
     // `pts.add(Point(1, 2))` (M6.6 part 3): where the list keeps its items packed and the value
     // type is made from its header alone, the arguments are written into a new item at the
     // end, and on at target with true; otherwise on, the stack as it was, to the call and the add.
@@ -561,7 +561,7 @@ inline uint8_t frozenTypeId(uint8_t id) {
     return id == kTypeList ? kTypeFrozenList : id == kTypeMap ? kTypeFrozenMap : id == kTypeSet ? kTypeFrozenSet : 0;
 }
 
-// A type written `jade.Range` (the built-in Range, where the program has its own class of that
+// A type written `ww.Range` (the built-in Range, where the program has its own class of that
 // name): the built-in name, Range; any other name as it is.
 std::string builtinSpelling(const std::string& name);
 
@@ -856,7 +856,7 @@ struct FunctionProto {
     // The set of a name's forms, made by MakeForms: it has no code of its own; calling it
     // calls the form the arguments fit (VM::chooseForm).
     bool chooser = false;
-    // Read from a program jade itself made (its cache, a worker's image) and not checked yet:
+    // Read from a program ww itself made (its cache, a worker's image) and not checked yet:
     // checked by the verifier at its first call, before its code runs, its maxStack and caches
     // found then (translateNow; VM's Translate makes room for its stack).
     bool unverified = false;
@@ -925,7 +925,7 @@ struct FunctionProto {
     };
     std::unique_ptr<Deferred> deferred;
 
-    // Of a function read from a program jade made and kept (its cache, a worker's image): its
+    // Of a function read from a program ww made and kept (its cache, a worker's image): its
     // body, all after its header (code, constants, lines, nested functions), left as the bytes
     // it was written in until something first asks for it (loadBody): a program's start reads
     // many functions it never calls, and most of reading one is its body (2026-11-09).
@@ -964,7 +964,7 @@ size_t operandBytes(Op op);
 // Where the VM's instructions are functions (vm.cpp, M6.7), what writes each one's address into
 // run code as it is made; null where they are known only once the VM runs.
 extern void (*writeRunAddresses)(FunctionProto& f);
-// Native code (src/native/regions.cpp, M9.5), null where jade has none. As a function's run code
+// Native code (src/native/regions.cpp, M9.5), null where ww has none. As a function's run code
 // is finished, before its addresses are written: where its loops start (FunctionProto::
 // nativeHeads), true where it has any. The first time one of them starts (VM::nativeFirst):
 // its regions.
@@ -1012,7 +1012,7 @@ private:
 // all paths, and records the function's stack requirement. The VM relies on both.
 // Throws std::runtime_error if the bytecode is malformed. Its run code is made at its first
 // call (Translate) unless `now`: a program's start makes only what it runs.
-// `trusted`: the code is jade's own making (a kept program, a worker's image), and a function
+// `trusted`: the code is ww's own making (a kept program, a worker's image), and a function
 // translated at its first call is checked by the verifier then, rather than now.
 void verifyFunction(FunctionProto& f, const Program& program, bool now = false, bool trusted = false);
 // The run code of a function verified but not yet translated, made now (Op::Translate).
@@ -1043,7 +1043,7 @@ const char* opName(Op op);
 // on a malformed file.
 void writeProgram(const Program& program, std::ostream& out);
 // `trusted` as for verifyFunction: a program kept in the cache, or a worker's image, both made by
-// this jade; a bytecode file or a built program's own is checked whole as it is read.
+// this ww; a bytecode file or a built program's own is checked whole as it is read.
 void readProgram(Program& program, VM& vm, const std::string& data, bool trusted = false);
 bool looksLikeBytecode(const std::string& data);
 
@@ -1065,7 +1065,7 @@ void renumber(FunctionProto& f, const Renumbering& r, VM& vm);
 void writeModules(const std::vector<const FunctionProto*>& modules, std::ostream& out);
 std::vector<FunctionProto*> readModules(Program& program, VM& vm, const std::string& data);
 // Verifies a module read back and renumbered, as readProgram does every module.
-// `trusted` as for verifyFunction: a unit jade kept and puts back, each function checked at its
+// `trusted` as for verifyFunction: a unit ww kept and puts back, each function checked at its
 // first call.
 void verifyModule(FunctionProto& module, const Program& program, bool trusted = false);
 
@@ -1087,4 +1087,4 @@ bool namesGlobal(const Program& program, const std::vector<std::string>& names);
 // the signature of a form after it; null for an instruction that uses none.
 const std::string* memberNameAt(const FunctionProto& f, size_t at);
 
-}  // namespace jade
+}  // namespace ww

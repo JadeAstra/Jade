@@ -1,14 +1,14 @@
 # Runs one program on the fastest kind of core (bench\fastcores.ps1), for a timing taken by hand:
-# what it prints is shown as it is. Any timing of Jade on a processor with cores of two kinds is
+# what it prints is shown as it is. Any timing of WinterWolf on a processor with cores of two kinds is
 # taken this way, or by bench\run.ps1; one left to the system may land on a slow core.
 #
-#   powershell -ExecutionPolicy Bypass -File bench\pinned.ps1 [-Jade build\clang\jade.exe] x.jade [args...]
+#   powershell -ExecutionPolicy Bypass -File bench\pinned.ps1 [-WinterWolf build\clang\ww.exe] x.ww [args...]
 
-param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'),
+param([string]$WinterWolf = (Join-Path $PSScriptRoot '..\build\ww.exe'),
       [Parameter(Mandatory = $true, Position = 0)][string]$Script,
       [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 
 . (Join-Path $PSScriptRoot 'fastcores.ps1')
 $mask = Get-FastCoreMask
 Write-Host ("on logical processors {0:X}" -f $mask)
-Invoke-Pinned $Jade (@($Script) + @($Rest | Where-Object { $_ })) $mask
+Invoke-Pinned $WinterWolf (@($Script) + @($Rest | Where-Object { $_ })) $mask

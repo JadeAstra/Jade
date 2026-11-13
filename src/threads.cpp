@@ -1,7 +1,7 @@
 // Threads, locks, the event loop and tasks: everything that has more than one line of
 // execution in it.
 //
-// Threads are real operating-system threads that share one heap. Only one of them runs Jade
+// Threads are real operating-system threads that share one heap. Only one of them runs WinterWolf
 // code at a time, the one holding the VM's lock, so a program can get a wrong answer from a
 // race but cannot damage the VM. A thread gives the lock up at a safe point (a call or the
 // end of a loop body) once another has waited for it, and around anything that blocks.
@@ -9,7 +9,7 @@
 // A task is a function with a stack of its own (ObjFiber), which lets it stop in the middle
 // of a call and go on later. It needs no thread: it runs on whichever thread takes it up.
 //
-// The Jade side of all this is in src/std/thread.jade and src/std/task.jade.
+// The WinterWolf side of all this is in src/std/thread.ww and src/std/task.ww.
 
 #include <algorithm>
 #include <utility>
@@ -29,7 +29,7 @@
 #include "sandbox.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 using Clock = std::chrono::steady_clock;
 
@@ -377,7 +377,7 @@ void VM::threadMain(ThreadState* me) {
     acquireLock(me);
     try {
         call(me->function, 0, nullptr);
-    } catch (JadeThrow& thrown) {
+    } catch (WwThrow& thrown) {
         // A thread { }'s Job fails with the error first (its Thread's whenFailed), which then is
         // reported where it was thrown, not where something caught it and threw it again (8.7a).
         // thread { }'s: the error is its job's, as a task's is, and an error nobody caught only
@@ -389,7 +389,7 @@ void VM::threadMain(ThreadState* me) {
                 try {
                     call(whenFailed, 1, &thrown.value);
                     toJob = true;
-                } catch (JadeThrow&) {
+                } catch (WwThrow&) {
                     // The job could not take it: reported below as the thread's.
                 }
             }
@@ -409,17 +409,17 @@ void VM::threadMain(ThreadState* me) {
             // otherwise reported, and the program's exit code is 70.
             try {
                 call(uncaughtHandler, 1, &thrown.value);
-            } catch (JadeThrow& again) {
+            } catch (WwThrow& again) {
                 uncaughtReported = true;
                 if (onThreadError) onThreadError(*this, again, me->name);
-            } catch (const JadeExit& exit) {
+            } catch (const WwExit& exit) {
                 if (onThreadExit) onThreadExit(exit.code);
             }
         } else {
             uncaughtReported = true;
             if (onThreadError) onThreadError(*this, thrown, me->name);
         }
-    } catch (const JadeExit& exit) {
+    } catch (const WwExit& exit) {
         if (onThreadExit) onThreadExit(exit.code);
     } catch (const FiberSuspend&) {
         // Cannot happen: a thread's own context is not a task.
@@ -904,7 +904,7 @@ Value VM::blocking(std::function<void()> work, std::function<Value(VM&)> finish)
                 Value result;
                 try {
                     result = finish(vm);
-                } catch (JadeThrow& thrown) {
+                } catch (WwThrow& thrown) {
                     ok = false;
                     result = thrown.value;
                 }
@@ -1002,7 +1002,7 @@ void VM::runFiber(ObjFiber* fiber, bool ok, Value value) {
             if (ok) {
                 *sp_++ = value;
             } else {
-                JadeThrow thrown;
+                WwThrow thrown;
                 thrown.value = value;
                 if (handlers_.empty()) {
                     thrown.trace = captureTrace();
@@ -1081,7 +1081,7 @@ void registerThreads(VM& vm) {
     // program's exit code is 70.
     define(vm, thread, "reportUncaught", 1, 1, [](VM& vm, int, Value* args) -> Value {
         vm.uncaughtReported = true;
-        JadeThrow thrown{args[0]};
+        WwThrow thrown{args[0]};
         if (args[0].isObj())
             if (auto kept = vm.failureTraces.find(args[0].as.obj); kept != vm.failureTraces.end()) {
                 thrown.trace = std::move(kept->second);  // a thread { }'s: where it was thrown
@@ -1306,7 +1306,7 @@ void registerThreads(VM& vm) {
             const Value answer = fiber->early;
             fiber->early = Value::null();
             if (fiber->earlyOk) return answer;
-            JadeThrow thrown;
+            WwThrow thrown;
             thrown.value = answer;
             throw thrown;
         }
@@ -1365,4 +1365,4 @@ void registerThreads(VM& vm) {
     });
 }
 
-}  // namespace jade
+}  // namespace ww

@@ -1,0 +1,74 @@
+// Native code's regions, step 4's second part (docs/native-plan.html): fields read and written
+// where a place's cache says, and a for over a list (of objects, of ints, of floats). The same
+// answers as `ww --interpret`: the test runner runs every test both ways.
+
+class P {
+  var x = 0.0
+  var y = 0.0
+  var vx = 1.0
+  var vy = 0.5
+  var hits = 0
+}
+
+// Fields of floats and of an int, read and written, over a list of objects.
+fun move(ps : List<P>, dt : float, steps : int) {
+  for (s in 0..<steps) {
+    for (p in ps) {
+      p.x += p.vx * dt
+      p.y += p.vy * dt
+      if (p.x > 10.0) {
+        p.vx = -p.vx
+        p.hits += 1
+      }
+      if (p.x < 0.0) { p.vx = 1.5 }
+    }
+  }
+}
+val ps = List(5) { P() }
+for (i in 0..<5) { ps[i].vx = i + 0.5 }
+move(ps, 0.25, 40)
+print(ps[0].x, ps[2].x, ps[4].x, ps[4].hits)   // expect: 5.0 1.25 6.75 1
+
+// A for over ints and over floats.
+fun sums(xs : List<int>, fs : List<float>) : string {
+  var a = 0
+  var b = 0.0
+  for (x in xs) { a = a + x * x }
+  for (f in fs) { b = b + f / 2.0 }
+  return "$a $b"
+}
+print(sums(List(10) { it }, List(8) { it * 1.5 }))   // expect: 285 21.0
+
+// A field holding an object, read in a loop: the object, as the VM reads it.
+class Node(var value : int, var next : Node?)
+fun chain(n : Node, k : int) : int {
+  var total = 0
+  var at = n
+  for (i in 0..<k) {
+    total = total + at.value
+    val after = at.next
+    if (after != null) { at = after }
+  }
+  return total
+}
+val nodes = Node(1, Node(2, Node(3, null)))
+print(chain(nodes, 6))   // expect: 15
+
+// Strings in a list: items of any kind, copied as the VM copies them.
+fun lengths(names : List<string>) : int {
+  var n = 0
+  for (s in names) { n = n + s.size }
+  return n
+}
+print(lengths(["ab", "cde", "", "fghij"]))   // expect: 10
+
+// A field set to a constant, and the value an assignment gives.
+class Counter { var n = 0; var total = 0.0 }
+fun count(c : Counter, k : int) : float {
+  for (i in 0..<k) {
+    c.n = 7
+    c.total = c.total + 0.5
+  }
+  return c.total + c.n
+}
+print(count(Counter(), 10))   // expect: 12.0

@@ -7,7 +7,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::text {
+namespace ww::text {
 
 std::unique_ptr<Variations> Variations::read(const Face& face, std::vector<Axis>& axes) {
     size_t fvar = 0, length = 0;
@@ -385,4 +385,4 @@ std::vector<float> regionScalars(const Reader& r, size_t store, uint32_t set, co
     return scalars;
 }
 
-}  // namespace jade::text
+}  // namespace ww::text

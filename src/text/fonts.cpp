@@ -8,7 +8,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::text {
+namespace ww::text {
 
 std::string lowerCase(const std::string& s) {
     std::string out = s;
@@ -318,4 +318,4 @@ Match FontBook::fallback(uint32_t codepoint, int weight, bool italic) {
     return Match();
 }
 
-}  // namespace jade::text
+}  // namespace ww::text

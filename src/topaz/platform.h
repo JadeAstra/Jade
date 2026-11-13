@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace jade::topaz {
+namespace ww::topaz {
 
 // The physical keys, in the order of the toolkit's KeyCode. The names are in keyName().
 enum class Key : int {
@@ -171,4 +171,4 @@ public:
     virtual double screenScale() = 0;
 };
 
-}  // namespace jade::topaz
+}  // namespace ww::topaz

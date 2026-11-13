@@ -14,7 +14,7 @@
 #include <new>
 #include <stdexcept>
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -40,10 +40,10 @@ VM::VM(bool worker) : output(&std::cout), errorOutput(&std::cerr), input(&std::c
     threads_.push_back(&mainThread_);
     loadContext(&mainThread_.base);
 
-    if (const char* stress = std::getenv("JADE_THREAD_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0')
+    if (const char* stress = std::getenv("WW_THREAD_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0')
         threadStress_ = true;
 
-    if (const char* stress = std::getenv("JADE_GC_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0') {
+    if (const char* stress = std::getenv("WW_GC_STRESS"); stress != nullptr && *stress != '\0' && *stress != '0') {
         gcStress_ = true;
         nextGC_ = 0;
     }
@@ -282,7 +282,7 @@ void VM::deliverUnasked(bool atEnd) {
     for (Value error : pending) {
         try {
             call(unaskedDeliver, 1, &error);
-        } catch (JadeThrow& thrown) {
+        } catch (WwThrow& thrown) {
             uncaughtReported = true;
             if (onUnaskedError) onUnaskedError(*this, thrown);
         }
@@ -1090,7 +1090,7 @@ Value VM::call(Value callee, int argc, const Value* args) {
 }
 
 Value VM::callOn(Value receiver, Value callee, int argc, const Value* args) {
-    // Only a function written in Jade can be given an object to run on.
+    // Only a function written in WinterWolf can be given an object to run on.
     if (!callee.isObjType(ObjType::Closure)) return call(callee, argc, args);
     if (nativeDepth_ >= kMaxNativeDepth || !roomFor(sp_ + argc + 1)) throw runtimeError(Thrown::StackOverflowError, "stack overflow");
 
@@ -1549,7 +1549,7 @@ bool VM::rightsAllow(Value target, const ObjString* name, const FunctionProto* p
 }
 
 // What is said of a member used by code that may not.
-JadeThrow VM::accessError(Value target, const ObjString* name, const FunctionProto* proto) {
+WwThrow VM::accessError(Value target, const ObjString* name, const FunctionProto* proto) {
     const bool isStatic = target.isObjType(ObjType::Class);
     const ObjClass* cls = isStatic ? asClass(target) : asInstance(target)->cls;
     const Value* mark = (isStatic ? cls->staticAccessMarks : cls->accessMarks).find(name);
@@ -1615,7 +1615,7 @@ Value VM::implicitReceiver(const CallFrame* frame, const Value* base, const ObjS
 
 // A bare name that is neither a member the code may use nor a variable: said plainly when
 // it is a member of the object the code runs on that the code may not use.
-JadeThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global) {
+WwThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global) {
     const FunctionProto* proto = frame->closure->proto;
     auto kept = [&](Value candidate) { return hasMember(candidate, name) && accessDenied(candidate, name, proto, false); };
     for (int i = std::exchange(implicitTried_, uint8_t{0}); i-- > 0;)
@@ -1645,14 +1645,14 @@ Value VM::callWithReceiver(Value receiver, ObjClosure* method) {
 
 // ---- Errors ----
 
-JadeThrow VM::runtimeError(const std::string& message) { return runtimeError(Thrown::RuntimeException, message); }
+WwThrow VM::runtimeError(const std::string& message) { return runtimeError(Thrown::RuntimeException, message); }
 
 namespace {
 Value traceList(VM& vm, const std::vector<std::string>& lines);  // below, with the traces
 }
 
-JadeThrow VM::runtimeError(Thrown kind, const std::string& message) {
-    JadeThrow t;
+WwThrow VM::runtimeError(Thrown kind, const std::string& message) {
+    WwThrow t;
     ObjClass* cls = thrownClasses_[static_cast<size_t>(kind)];
     if (cls == nullptr) cls = errorClass_;
     if (cls == nullptr) {
@@ -1662,7 +1662,7 @@ JadeThrow VM::runtimeError(Thrown kind, const std::string& message) {
         error->setField(names.message, str(message));
         error->setField(names.cause, Value::null());
         error->setField(intern("setAside"), Value::null());  // Throwable's errors set aside for it (G40)
-        // Where it was made (Throwable.stackTrace): here, as an error made in Jade code keeps
+        // Where it was made (Throwable.stackTrace): here, as an error made in WinterWolf code keeps
         // its maker's place. Not for running out of memory, which the strings would take more of.
         error->setField(intern("frames"), kind == Thrown::OutOfMemoryError ? Value::null() : traceList(*this, captureTrace()));
         t.value = Value::object(error);
@@ -1689,7 +1689,7 @@ std::vector<std::string> VM::membersFoundByName() const {
     return found;
 }
 
-JadeThrow VM::errorOf(const char* className, const std::string& message) {
+WwThrow VM::errorOf(const char* className, const std::string& message) {
     const std::vector<std::string>& known = globalsFoundByName();
     if (std::find(known.begin(), known.end(), className) == known.end())
         return runtimeError(Thrown::InternalError, std::string("internal error: ") + className + " is not among VM::globalsFoundByName()");
@@ -1699,7 +1699,7 @@ JadeThrow VM::errorOf(const char* className, const std::string& message) {
 }
 
 // What the program is told when memory runs out: an OutOfMemoryError, which it can catch.
-JadeThrow VM::outOfMemory() {
+WwThrow VM::outOfMemory() {
     return runtimeError(Thrown::OutOfMemoryError, "out of memory");
 }
 
@@ -1851,7 +1851,7 @@ void VM::checkArity(const std::string& name, int minArgs, int maxArgs, int argc)
 }
 
 // A bare name was passed where nothing says which enum it could belong to.
-JadeThrow VM::unsettledName(Value pending) {
+WwThrow VM::unsettledName(Value pending) {
     pendingEnums_--;
     return runtimeError(Thrown::IllegalStateException, "undefined variable '" + static_cast<ObjString*>(pending.as.obj)->utf8() + "'");
 }
@@ -1941,7 +1941,7 @@ bool VM::formTakes(const FunctionProto* proto, const Value* args, int positional
     auto fit = [&](int param, Value v) {
         if (!typed || param == vararg) return 0;
         const int f = paramFit(v, proto->paramTypes[static_cast<size_t>(param)], proto->paramClasses[static_cast<size_t>(param)]);
-        // A function written in Jade, given for a parameter of a function type: it has to
+        // A function written in WinterWolf, given for a parameter of a function type: it has to
         // take as many arguments as the type gives.
         const size_t counted = proto->paramCounts.size() > static_cast<size_t>(param) ? proto->paramCounts[static_cast<size_t>(param)] : 0;
         if (f >= 0 && counted > 0) {
@@ -2188,7 +2188,7 @@ void VM::callTrailing(ObjClosure* closure, int argc) {
     callClosure(closure, arity, packed);
 }
 
-// callValue for such a call. Only a function written in Jade has parameters to look at; to
+// callValue for such a call. Only a function written in WinterWolf has parameters to look at; to
 // anything else the lambda is simply the last argument.
 bool VM::callValueTrailing(Value callee, int argc) {
     if (callee.isObjType(ObjType::Closure)) {
@@ -2656,7 +2656,7 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
     }
 
     const NativeMethod* method = findNativeMethod(receiver, name);
-    // An object of a class as the first argument: the standard library's form in Jade beside
+    // An object of a class as the first argument: the standard library's form in WinterWolf beside
     // the built-in one ("text".replace(regex, ...), M8), as the built-in methods take built-in
     // values only.
     if (method != nullptr && argc >= 1 && sp_[-argc].isObjType(ObjType::Instance)) {
@@ -2708,7 +2708,7 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
 }
 
 Value VM::tailCallOn(Value receiver, Value function) {
-    if (!function.isObjType(ObjType::Closure)) throw runtimeError(Thrown::ClassCastException, "expected a function written in Jade, got a value of type " + typeName(function));
+    if (!function.isObjType(ObjType::Closure)) throw runtimeError(Thrown::ClassCastException, "expected a function written in WinterWolf, got a value of type " + typeName(function));
     // The built-in's own call goes: the receiver takes the place it was called at, and the
     // function is called there with nothing else.
     TempRoot keep(*this, function);
@@ -2741,7 +2741,7 @@ int VM::scopeFunction(ObjString* name, int argc) {
         return callValue(block, 1) ? 2 : 1;
     }
     if (!block.isObjType(ObjType::Closure)) {
-        // Something that is not a function written in Jade is simply called.
+        // Something that is not a function written in WinterWolf is simply called.
         Value result = n == "also" ? call(block, 1, &receiver) : call(block, 0, nullptr);
         if (n != "run") result = receiver;
         sp_ -= 2;
@@ -3172,7 +3172,7 @@ const ValueLayout& VM::layoutOf(ObjClass* cls) {
     return *cls->layoutOwned;
 }
 
-#ifdef JADE_OP_COUNTS
+#ifdef WW_OP_COUNTS
 // In the build that counts instructions: how many values were put in boxes of their own (M6.6
 // part 4), shown when the program ends.
 namespace {
@@ -3189,7 +3189,7 @@ std::atomic<uint64_t> VM::objectsMade{0};
 
 // A box for a value of `cls`, its fields zero: 0, 0.0, false and null.
 ObjValue* VM::newValue(ObjClass* cls) {
-#ifdef JADE_OP_COUNTS
+#ifdef WW_OP_COUNTS
     boxCount.made.fetch_add(1, std::memory_order_relaxed);
 #endif
     const ValueLayout& layout = layoutOf(cls);
@@ -3873,7 +3873,7 @@ void VM::layInline(ObjClass* cls) {
         try {
             if (type == nullptr) type = fieldClass(declared);
             if (type->isValue) layout = &layoutOf(type);
-        } catch (JadeThrow&) {
+        } catch (WwThrow&) {
             waiting = true;  // not there yet
             continue;
         }
@@ -4582,7 +4582,7 @@ bool VM::position(Value index, size_t size, size_t& out, const char* what) {
     return resolveIndex(toInt(index, what), size, out);
 }
 
-JadeThrow VM::outOfRange(const char* what, Value index, size_t size) {
+WwThrow VM::outOfRange(const char* what, Value index, size_t size) {
     std::string message = std::string(what) + " " + stringify(index) + " is out of range (size " + std::to_string(size) + ")";
     if (index.isInt() && index.as.i < 0) message += ": a negative number is no position; the last is [^1]";
     return runtimeError(Thrown::IndexOutOfBoundsException, message);
@@ -4607,7 +4607,7 @@ void VM::sliceBounds(const ObjRange* range, size_t size, size_t& begin, size_t& 
 }
 
 // A range with an end counted from the end, used where its own numbers are wanted.
-JadeThrow VM::rangeFromEnd(const ObjRange* range, const std::string& use) {
+WwThrow VM::rangeFromEnd(const ObjRange* range, const std::string& use) {
     const std::string shown = stringify(Value::object(const_cast<ObjRange*>(range)));
     return runtimeError(Thrown::IllegalArgumentException, "the range " + shown + " has an end counted from the end (^), which " + use +
                         " cannot work with: slice with it, items[" + shown + "], or make it plain with of(size)");
@@ -4727,7 +4727,7 @@ bool VM::addsMany(const ObjTypeInfo* itemType, Value right) {
     return collection && !(itemType != nullptr && fitsType(right, itemType));
 }
 
-JadeThrow VM::notAnItem(const char* kind, const ObjTypeInfo* type, const ObjTypeInfo* itemType, Value item) {
+WwThrow VM::notAnItem(const char* kind, const ObjTypeInfo* type, const ObjTypeInfo* itemType, Value item) {
     return runtimeError(Thrown::ClassCastException, std::string("'+' adds to a ") + (type != nullptr ? typeInfoText(type) : kind) + " an item of type " +
                                                         typeInfoText(itemType) + ", or the items of a collection of them; not " + typeName(item));
 }
@@ -4791,7 +4791,7 @@ ObjMap* VM::mapPlus(ObjMap* left, Value right) {
                 entries.push_back(e.key);
                 entries.push_back(e.value);
             }
-    } else if (cls != nullptr && cls->name->utf8() == "Pair" && cls->origin != nullptr && cls->origin->utf8() == "jade") {
+    } else if (cls != nullptr && cls->name->utf8() == "Pair" && cls->origin != nullptr && cls->origin->utf8() == "ww") {
         entries.push_back(componentOf(right, 0));
         entries.push_back(componentOf(right, 1));
     } else {
@@ -5048,14 +5048,14 @@ std::string VM::declaredTypeText(uint8_t type, const ObjClass* cls) const {
     return typeText(type, cls != nullptr ? cls->name->utf8() : std::string());
 }
 
-JadeThrow VM::typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v) {
+WwThrow VM::typeMismatch(const std::string& variable, uint8_t type, const ObjClass* cls, Value v) {
     checkRange(type, v, "'" + variable + "'");
     return runtimeError(Thrown::ClassCastException, "cannot assign a value of type " + typeName(v) + " to '" + variable + "', which is declared as " +
                         declaredTypeText(type, cls));
 }
 
 // An int sum, difference, product or quotient whose result does not fit in an int (D27).
-JadeThrow VM::overflowError(Op op, int64_t a, int64_t b) {
+WwThrow VM::overflowError(Op op, int64_t a, int64_t b) {
     const char* symbol = op == Op::Add ? "+" : op == Op::Sub ? "-" : op == Op::Mul ? "*" : "/";
     const std::string sum = op == Op::Sub && a == 0 ? "-(" + std::to_string(b) + ")" : std::to_string(a) + " " + symbol + " " + std::to_string(b);
     std::string message = sum + " does not fit in an int, which holds -9223372036854775808 to 9223372036854775807";
@@ -5254,7 +5254,7 @@ bool VM::setContains(const ObjSet* set, Value item) {
     return held != nullptr && equals(*held, value);
 }
 
-JadeThrow VM::viewChanged(const ObjSet* view) {
+WwThrow VM::viewChanged(const ObjSet* view) {
     return runtimeError(Thrown::UnsupportedOperationException, std::string("a map's ") + (view->values ? "values" : view->entries ? "entries" : "keys") +
                         " show the map and cannot be changed through it: change the map, with remove, removeAll { (k, v) -> } or retainAll");
 }
@@ -5678,7 +5678,7 @@ static inline int64_t quickSize(const Value& v) {
     }
 }
 
-#ifdef JADE_OP_COUNTS
+#ifdef WW_OP_COUNTS
 #include <intrin.h>
 // A build for finding where a program's instructions go (M6.5 part 4): how often each runs,
 // and each pair one after the other, shown when the program ends.
@@ -5757,14 +5757,14 @@ inline int32_t operandI32(const uint8_t* at) {
     return static_cast<int32_t>(v);
 }
 
-#if JADE_TAIL_CALLS
+#if WW_TAIL_CALLS
 // An instruction's function (VM::tail), whose address the code holds before each instruction.
-using TailFn = JADE_TAIL_FN int (VM::*)(JADE_TAIL_PARAMS);
+using TailFn = WW_TAIL_FN int (VM::*)(WW_TAIL_PARAMS);
 // The code keeps a function's address, kThreaded bytes. Microsoft's C++ has a member function's
 // pointer be that alone; the Itanium C++ of Linux and macOS, that and how far to move `this`,
 // which for these, functions of VM itself and none virtual, is always 0 (TailTable::get checks).
 static_assert(sizeof(TailFn) == kThreaded || sizeof(TailFn) == 2 * kThreaded, "an instruction's function is one address, or two words");
-JADE_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
+WW_ALWAYS_INLINE TailFn tailAt(const uint8_t* at) {
     TailFn f;
     if constexpr (sizeof(TailFn) == kThreaded) {
         std::memcpy(&f, at, sizeof f);
@@ -5854,7 +5854,7 @@ void VM::run(int baseFrame) {
     Value* base = nullptr;
     const Value* consts = nullptr;
     std::atomic<uint64_t>* caches = nullptr;
-#if JADE_TAIL_CALLS
+#if WW_TAIL_CALLS
     // The instructions, functions of their own, know where this run() started: in the line of
     // execution it runs on, which another thread's turn leaves as it was.
     struct RunBase {
@@ -5958,13 +5958,13 @@ void VM::run(int baseFrame) {
 
 // Each instruction's case in the loop's switch, and with Clang or GCC its label as well, which
 // the dispatch table points to (D160). MSVC, which has no computed goto, goes by the switch alone.
-#if !JADE_TAIL_CALLS && (defined(__clang__) || defined(__GNUC__))
-#define JADE_GOTO_DISPATCH 1
+#if !WW_TAIL_CALLS && (defined(__clang__) || defined(__GNUC__))
+#define WW_GOTO_DISPATCH 1
 #define CASE(name) \
     case Op::name: \
     op_##name:
 #else
-#define JADE_GOTO_DISPATCH 0
+#define WW_GOTO_DISPATCH 0
 #define CASE(name) case Op::name:
 #endif
 
@@ -5972,7 +5972,7 @@ void VM::run(int baseFrame) {
 // ends of instructions into one: each instruction's own jump to the next is predicted apart from
 // the others' (D160), which is what makes going on from each instruction pay. (With the address
 // read from the code, clang merged them, and numeric was 10% slower than with the table.)
-#define JADE_APART() asm volatile("" ::"i"(__COUNTER__))
+#define WW_APART() asm volatile("" ::"i"(__COUNTER__))
 
 // An instruction's ways out in instructions.inc, as the switch's cases have them (see there).
 #define DONE() break
@@ -5983,41 +5983,41 @@ void VM::run(int baseFrame) {
 #define COLD(op) cold_##op:
 #define JUMP_LABEL(l) goto l
 #define LABEL(l) l:
-// CASES(a, b, ...): CASE(a) CASE(b) ..., up to 16 (JADE_EXPAND for MSVC's preprocessor).
-#define JADE_EXPAND(x) x
-#define JADE_CAT_(a, b) a##b
-#define JADE_CAT(a, b) JADE_CAT_(a, b)
-#define JADE_COUNT_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) n
-#define JADE_COUNT(...) JADE_EXPAND(JADE_COUNT_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))
-#define JADE_EACH_1(m, a) m(a)
-#define JADE_EACH_2(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_1(m, __VA_ARGS__))
-#define JADE_EACH_3(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_2(m, __VA_ARGS__))
-#define JADE_EACH_4(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_3(m, __VA_ARGS__))
-#define JADE_EACH_5(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_4(m, __VA_ARGS__))
-#define JADE_EACH_6(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_5(m, __VA_ARGS__))
-#define JADE_EACH_7(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_6(m, __VA_ARGS__))
-#define JADE_EACH_8(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_7(m, __VA_ARGS__))
-#define JADE_EACH_9(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_8(m, __VA_ARGS__))
-#define JADE_EACH_10(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_9(m, __VA_ARGS__))
-#define JADE_EACH_11(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_10(m, __VA_ARGS__))
-#define JADE_EACH_12(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_11(m, __VA_ARGS__))
-#define JADE_EACH_13(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_12(m, __VA_ARGS__))
-#define JADE_EACH_14(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_13(m, __VA_ARGS__))
-#define JADE_EACH_15(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_14(m, __VA_ARGS__))
-#define JADE_EACH_16(m, a, ...) m(a) JADE_EXPAND(JADE_EACH_15(m, __VA_ARGS__))
-#define JADE_EACH(m, ...) JADE_EXPAND(JADE_CAT(JADE_EACH_, JADE_COUNT(__VA_ARGS__))(m, __VA_ARGS__))
-#define CASES(...) JADE_EACH(CASE, __VA_ARGS__)
+// CASES(a, b, ...): CASE(a) CASE(b) ..., up to 16 (WW_EXPAND for MSVC's preprocessor).
+#define WW_EXPAND(x) x
+#define WW_CAT_(a, b) a##b
+#define WW_CAT(a, b) WW_CAT_(a, b)
+#define WW_COUNT_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) n
+#define WW_COUNT(...) WW_EXPAND(WW_COUNT_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))
+#define WW_EACH_1(m, a) m(a)
+#define WW_EACH_2(m, a, ...) m(a) WW_EXPAND(WW_EACH_1(m, __VA_ARGS__))
+#define WW_EACH_3(m, a, ...) m(a) WW_EXPAND(WW_EACH_2(m, __VA_ARGS__))
+#define WW_EACH_4(m, a, ...) m(a) WW_EXPAND(WW_EACH_3(m, __VA_ARGS__))
+#define WW_EACH_5(m, a, ...) m(a) WW_EXPAND(WW_EACH_4(m, __VA_ARGS__))
+#define WW_EACH_6(m, a, ...) m(a) WW_EXPAND(WW_EACH_5(m, __VA_ARGS__))
+#define WW_EACH_7(m, a, ...) m(a) WW_EXPAND(WW_EACH_6(m, __VA_ARGS__))
+#define WW_EACH_8(m, a, ...) m(a) WW_EXPAND(WW_EACH_7(m, __VA_ARGS__))
+#define WW_EACH_9(m, a, ...) m(a) WW_EXPAND(WW_EACH_8(m, __VA_ARGS__))
+#define WW_EACH_10(m, a, ...) m(a) WW_EXPAND(WW_EACH_9(m, __VA_ARGS__))
+#define WW_EACH_11(m, a, ...) m(a) WW_EXPAND(WW_EACH_10(m, __VA_ARGS__))
+#define WW_EACH_12(m, a, ...) m(a) WW_EXPAND(WW_EACH_11(m, __VA_ARGS__))
+#define WW_EACH_13(m, a, ...) m(a) WW_EXPAND(WW_EACH_12(m, __VA_ARGS__))
+#define WW_EACH_14(m, a, ...) m(a) WW_EXPAND(WW_EACH_13(m, __VA_ARGS__))
+#define WW_EACH_15(m, a, ...) m(a) WW_EXPAND(WW_EACH_14(m, __VA_ARGS__))
+#define WW_EACH_16(m, a, ...) m(a) WW_EXPAND(WW_EACH_15(m, __VA_ARGS__))
+#define WW_EACH(m, ...) WW_EXPAND(WW_CAT(WW_EACH_, WW_COUNT(__VA_ARGS__))(m, __VA_ARGS__))
+#define CASES(...) WW_EACH(CASE, __VA_ARGS__)
 
 // The end of an instruction that goes on to the next at once: with Clang or GCC, straight to the
 // next one's code from here, as the loop's head would; with MSVC, round the loop.
-#if JADE_GOTO_DISPATCH && !defined(JADE_OP_COUNTS)
+#if WW_GOTO_DISPATCH && !defined(WW_OP_COUNTS)
 #define NEXT()                                \
     do {                                      \
         sp_ = sp;                             \
         const void* to_;                      \
         std::memcpy(&to_, ip, sizeof to_);    \
         frame->ip = ip += kThreaded + kOpBytes;      \
-        JADE_APART();                        \
+        WW_APART();                        \
         goto* to_;                            \
     } while (0)
 #else
@@ -6253,7 +6253,7 @@ void VM::run(int baseFrame) {
     // none in this run, it goes on to whoever called. Returns false in that case.
     // The frame that was running knows where it was: each instruction, as it starts, writes down
     // where it is (M6.5 part 4), so that the loop's own `ip` can stay in a register.
-    auto handled = [&](JadeThrow& thrown) {
+    auto handled = [&](WwThrow& thrown) {
         if (!thrown.hasTrace && handlers_.empty()) {
             thrown.trace = captureTrace();
             thrown.hasTrace = true;
@@ -6263,7 +6263,7 @@ void VM::run(int baseFrame) {
         return false;
     };
 
-#if JADE_GOTO_DISPATCH
+#if WW_GOTO_DISPATCH
     // The table of where each instruction's code is, above, filled the first time.
     static std::atomic<bool> dispatchMade{false};
     if (!dispatchMade.load(std::memory_order_acquire)) {
@@ -6271,350 +6271,350 @@ void VM::run(int baseFrame) {
         std::lock_guard<std::mutex> hold(filling);
         if (!dispatchMade.load(std::memory_order_relaxed)) {
             for (const void*& at : dispatch) at = &&viaSwitch;
-#define JADE_DISPATCH_TO(name) dispatch[static_cast<size_t>(Op::name)] = &&op_##name;
-            JADE_DISPATCH_TO(Const)
-            JADE_DISPATCH_TO(Null)
-            JADE_DISPATCH_TO(True)
-            JADE_DISPATCH_TO(False)
-            JADE_DISPATCH_TO(Pop)
-            JADE_DISPATCH_TO(Dup)
-            JADE_DISPATCH_TO(Dup2)
-            JADE_DISPATCH_TO(GetLocal)
-            JADE_DISPATCH_TO(SetLocal)
-            JADE_DISPATCH_TO(GetGlobal)
-            JADE_DISPATCH_TO(SetGlobal)
-            JADE_DISPATCH_TO(DefineGlobal)
-            JADE_DISPATCH_TO(GetImplicit)
-            JADE_DISPATCH_TO(TryImplicit)
-            JADE_DISPATCH_TO(InvokeImplicit)
-            JADE_DISPATCH_TO(SetImplicit)
-            JADE_DISPATCH_TO(DefineTypedGlobal)
-            JADE_DISPATCH_TO(IndexN)
-            JADE_DISPATCH_TO(SetIndexN)
-            JADE_DISPATCH_TO(BundleValues)
-            JADE_DISPATCH_TO(MergeBundle)
-            JADE_DISPATCH_TO(DupN)
-            JADE_DISPATCH_TO(SettleEnum)
-            JADE_DISPATCH_TO(CheckParam)
-            JADE_DISPATCH_TO(CheckReturn)
-            JADE_DISPATCH_TO(CheckType)
-            JADE_DISPATCH_TO(GetUpvalue)
-            JADE_DISPATCH_TO(GetUpvalueChecked)
-            JADE_DISPATCH_TO(MakeType)
-            JADE_DISPATCH_TO(CachedType)
-            JADE_DISPATCH_TO(CacheType)
-            JADE_DISPATCH_TO(TypeCollection)
-            JADE_DISPATCH_TO(IsFull)
-            JADE_DISPATCH_TO(CastFull)
-            JADE_DISPATCH_TO(WithTypes)
-            JADE_DISPATCH_TO(FrameTypes)
-            JADE_DISPATCH_TO(TypeArg)
-            JADE_DISPATCH_TO(InstanceTypeArg)
-            JADE_DISPATCH_TO(SupertypeMaker)
-            JADE_DISPATCH_TO(CheckResult)
-            JADE_DISPATCH_TO(ClassOf)
-            JADE_DISPATCH_TO(ClassMeta)
-            JADE_DISPATCH_TO(AtomicField)
-            JADE_DISPATCH_TO(GetCaptured)
-            JADE_DISPATCH_TO(SetCaptured)
-            JADE_DISPATCH_TO(ObjectClass)
-            JADE_DISPATCH_TO(StoreClass)
-            JADE_DISPATCH_TO(ObjectClassTyped)
-            JADE_DISPATCH_TO(StoreClassTyped)
-            JADE_DISPATCH_TO(Capture)
-            JADE_DISPATCH_TO(NewObject)
-            JADE_DISPATCH_TO(Unset)
-            JADE_DISPATCH_TO(SetUpvalue)
-            JADE_DISPATCH_TO(GetOwn)
-            JADE_DISPATCH_TO(GetProp)
-            JADE_DISPATCH_TO(GetOwnRef)
-            JADE_DISPATCH_TO(GetPropRef)
-            JADE_DISPATCH_TO(SetOwn)
-            JADE_DISPATCH_TO(SetProp)
-            JADE_DISPATCH_TO(GetIndexRef)
-            JADE_DISPATCH_TO(OwnLocal)
-            JADE_DISPATCH_TO(GetIndex)
-            JADE_DISPATCH_TO(SetIndex)
-            JADE_DISPATCH_TO(SetSuper)
-            JADE_DISPATCH_TO(GetSuper)
-            JADE_DISPATCH_TO(Add)
-            JADE_DISPATCH_TO(Sub)
-            JADE_DISPATCH_TO(Mul)
-            JADE_DISPATCH_TO(StoreLocal)
-            JADE_DISPATCH_TO(CopyLocal)
-            JADE_DISPATCH_TO(CheckLocal)
-            JADE_DISPATCH_TO(Div)
-            JADE_DISPATCH_TO(Mod)
-            JADE_DISPATCH_TO(AddWrap)
-            JADE_DISPATCH_TO(SubWrap)
-            JADE_DISPATCH_TO(MulWrap)
-            JADE_DISPATCH_TO(Shl)
-            JADE_DISPATCH_TO(Shr)
-            JADE_DISPATCH_TO(Ushr)
-            JADE_DISPATCH_TO(BitAnd)
-            JADE_DISPATCH_TO(BitOr)
-            JADE_DISPATCH_TO(BitXor)
-            JADE_DISPATCH_TO(BitNot)
-            JADE_DISPATCH_TO(Neg)
-            JADE_DISPATCH_TO(Not)
-            JADE_DISPATCH_TO(Eq)
-            JADE_DISPATCH_TO(Identical)
-            JADE_DISPATCH_TO(Lt)
-            JADE_DISPATCH_TO(Le)
-            JADE_DISPATCH_TO(Gt)
-            JADE_DISPATCH_TO(Ge)
-            JADE_DISPATCH_TO(Is)
-            JADE_DISPATCH_TO(Jump)
-            JADE_DISPATCH_TO(Loop)
-            JADE_DISPATCH_TO(JumpIfFalse)
-            JADE_DISPATCH_TO(And)
-            JADE_DISPATCH_TO(Or)
-            JADE_DISPATCH_TO(JumpIfNull)
-            JADE_DISPATCH_TO(JumpIfNotNull)
-            JADE_DISPATCH_TO(AssertNotNull)
-            JADE_DISPATCH_TO(Swap)
-            JADE_DISPATCH_TO(PopUnder)
-            JADE_DISPATCH_TO(IsType)
-            JADE_DISPATCH_TO(Cast)
-            JADE_DISPATCH_TO(CastOrNull)
-            JADE_DISPATCH_TO(Settle)
-            JADE_DISPATCH_TO(Call)
-            JADE_DISPATCH_TO(CallNamed)
-            JADE_DISPATCH_TO(Spread)
-            JADE_DISPATCH_TO(CallSpread)
-            JADE_DISPATCH_TO(InvokeOwn)
-            JADE_DISPATCH_TO(Invoke)
-            JADE_DISPATCH_TO(InvokeOwnTrailing)
-            JADE_DISPATCH_TO(InvokeTrailing)
-            JADE_DISPATCH_TO(SuperInvoke)
-            JADE_DISPATCH_TO(SuperInvokeTrailing)
-            JADE_DISPATCH_TO(SuperInit)
-            JADE_DISPATCH_TO(Closure)
-            JADE_DISPATCH_TO(MakeForms)
-            JADE_DISPATCH_TO(MethodForms)
-            JADE_DISPATCH_TO(StaticForms)
-            JADE_DISPATCH_TO(GetIndexOr)
-            JADE_DISPATCH_TO(CloseUpvalue)
-            JADE_DISPATCH_TO(CallOn)
-            JADE_DISPATCH_TO(ImplicitFirst)
-            JADE_DISPATCH_TO(TailLoop)
-            JADE_DISPATCH_TO(ReturnInit)
-            JADE_DISPATCH_TO(Return)
-            JADE_DISPATCH_TO(Class)
-            JADE_DISPATCH_TO(Inherit)
-            JADE_DISPATCH_TO(ClassInit)
-            JADE_DISPATCH_TO(EnsureClassInit)
-            JADE_DISPATCH_TO(MissingArg)
-            JADE_DISPATCH_TO(DataField)
-            JADE_DISPATCH_TO(Extend)
-            JADE_DISPATCH_TO(Bridge)
-            JADE_DISPATCH_TO(BridgeMethod)
-            JADE_DISPATCH_TO(Lazy)
-            JADE_DISPATCH_TO(UnstableKey)
-            JADE_DISPATCH_TO(Component)
-            JADE_DISPATCH_TO(IterNextPair)
-            JADE_DISPATCH_TO(MarkInterface)
-            JADE_DISPATCH_TO(Extension)
-            JADE_DISPATCH_TO(MarkAbstract)
-            JADE_DISPATCH_TO(ClassOrigin)
-            JADE_DISPATCH_TO(MarkValue)
-            JADE_DISPATCH_TO(Numeric)
-            JADE_DISPATCH_TO(WithRefResult)
-            JADE_DISPATCH_TO(FieldDestination)
-            JADE_DISPATCH_TO(PlaceLocal)
-            JADE_DISPATCH_TO(PlaceUpvalue)
-            JADE_DISPATCH_TO(PlaceGlobal)
-            JADE_DISPATCH_TO(PlaceField)
-            JADE_DISPATCH_TO(PlaceIndex)
-            JADE_DISPATCH_TO(InsertNew)
-            JADE_DISPATCH_TO(AddNew)
-            JADE_DISPATCH_TO(WithDestinationAt)
-            JADE_DISPATCH_TO(WithFrameDestination)
-            JADE_DISPATCH_TO(CheckOverride)
-            JADE_DISPATCH_TO(Require)
-            JADE_DISPATCH_TO(ClassNumber)
-            JADE_DISPATCH_TO(MemberAccess)
-            JADE_DISPATCH_TO(StaticAccess)
-            JADE_DISPATCH_TO(FinishClass)
-            JADE_DISPATCH_TO(Getter)
-            JADE_DISPATCH_TO(Setter)
-            JADE_DISPATCH_TO(PendingEnum)
-            JADE_DISPATCH_TO(EnumNext)
-            JADE_DISPATCH_TO(EnumEntry)
-            JADE_DISPATCH_TO(EnumSeal)
-            JADE_DISPATCH_TO(StaticGetter)
-            JADE_DISPATCH_TO(StaticSetter)
-            JADE_DISPATCH_TO(StaticField)
-            JADE_DISPATCH_TO(DeclareField)
-            JADE_DISPATCH_TO(FieldInit)
-            JADE_DISPATCH_TO(Method)
-            JADE_DISPATCH_TO(StaticMethod)
-            JADE_DISPATCH_TO(BuildList)
-            JADE_DISPATCH_TO(TagCollection)
-            JADE_DISPATCH_TO(BuildMap)
-            JADE_DISPATCH_TO(BuildString)
-            JADE_DISPATCH_TO(Range)
-            JADE_DISPATCH_TO(FromEnd)
-            JADE_DISPATCH_TO(IterInit)
-            JADE_DISPATCH_TO(RangeLoop)
-            JADE_DISPATCH_TO(RangeNext)
-            JADE_DISPATCH_TO(DefaultArg)
-            JADE_DISPATCH_TO(IterNextRef)
-            JADE_DISPATCH_TO(IterNext)
-            JADE_DISPATCH_TO(TryBegin)
-            JADE_DISPATCH_TO(TryEnd)
-            JADE_DISPATCH_TO(Throw)
-            JADE_DISPATCH_TO(Import)
-            JADE_DISPATCH_TO(Count_)
-            JADE_DISPATCH_TO(MoveS)
-            JADE_DISPATCH_TO(MoveK)
-            JADE_DISPATCH_TO(SetTop)
-            JADE_DISPATCH_TO(RAddSS)
-            JADE_DISPATCH_TO(RAddSK)
-            JADE_DISPATCH_TO(RAddKS)
-            JADE_DISPATCH_TO(RSubSS)
-            JADE_DISPATCH_TO(RSubSK)
-            JADE_DISPATCH_TO(RMulSS)
-            JADE_DISPATCH_TO(RMulSK)
-            JADE_DISPATCH_TO(RMulKS)
-            JADE_DISPATCH_TO(RDivSS)
-            JADE_DISPATCH_TO(RDivSK)
-            JADE_DISPATCH_TO(RLtSS)
-            JADE_DISPATCH_TO(RLtSK)
-            JADE_DISPATCH_TO(RJumpLtSS)
-            JADE_DISPATCH_TO(RJumpLtSK)
-            JADE_DISPATCH_TO(RLeSS)
-            JADE_DISPATCH_TO(RLeSK)
-            JADE_DISPATCH_TO(RJumpLeSS)
-            JADE_DISPATCH_TO(RJumpLeSK)
-            JADE_DISPATCH_TO(RGtSS)
-            JADE_DISPATCH_TO(RGtSK)
-            JADE_DISPATCH_TO(RJumpGtSS)
-            JADE_DISPATCH_TO(RJumpGtSK)
-            JADE_DISPATCH_TO(RGeSS)
-            JADE_DISPATCH_TO(RGeSK)
-            JADE_DISPATCH_TO(RJumpGeSS)
-            JADE_DISPATCH_TO(RJumpGeSK)
-            JADE_DISPATCH_TO(REqSS)
-            JADE_DISPATCH_TO(REqSK)
-            JADE_DISPATCH_TO(RJumpEqSS)
-            JADE_DISPATCH_TO(RJumpEqSK)
-            JADE_DISPATCH_TO(RGetProp)
-            JADE_DISPATCH_TO(RModSS)
-            JADE_DISPATCH_TO(RModSK)
-            JADE_DISPATCH_TO(RSubKS)
-            JADE_DISPATCH_TO(RDivKS)
-            JADE_DISPATCH_TO(RSetPropSS)
-            JADE_DISPATCH_TO(RSetPropSK)
-            JADE_DISPATCH_TO(RGetGlobal)
-            JADE_DISPATCH_TO(RGetUpvalue)
-            JADE_DISPATCH_TO(RGetIndexSS)
-            JADE_DISPATCH_TO(RGetIndexSK)
-            JADE_DISPATCH_TO(RNeg)
-            JADE_DISPATCH_TO(RNot)
-            JADE_DISPATCH_TO(RJumpIfFalse)
-            JADE_DISPATCH_TO(RShlSK)
-            JADE_DISPATCH_TO(RShrSK)
-            JADE_DISPATCH_TO(RBitAndSS)
-            JADE_DISPATCH_TO(RBitAndSK)
-            JADE_DISPATCH_TO(RBitOrSS)
-            JADE_DISPATCH_TO(RBitOrSK)
-            JADE_DISPATCH_TO(RShlSS)
-            JADE_DISPATCH_TO(RShrSS)
+#define WW_DISPATCH_TO(name) dispatch[static_cast<size_t>(Op::name)] = &&op_##name;
+            WW_DISPATCH_TO(Const)
+            WW_DISPATCH_TO(Null)
+            WW_DISPATCH_TO(True)
+            WW_DISPATCH_TO(False)
+            WW_DISPATCH_TO(Pop)
+            WW_DISPATCH_TO(Dup)
+            WW_DISPATCH_TO(Dup2)
+            WW_DISPATCH_TO(GetLocal)
+            WW_DISPATCH_TO(SetLocal)
+            WW_DISPATCH_TO(GetGlobal)
+            WW_DISPATCH_TO(SetGlobal)
+            WW_DISPATCH_TO(DefineGlobal)
+            WW_DISPATCH_TO(GetImplicit)
+            WW_DISPATCH_TO(TryImplicit)
+            WW_DISPATCH_TO(InvokeImplicit)
+            WW_DISPATCH_TO(SetImplicit)
+            WW_DISPATCH_TO(DefineTypedGlobal)
+            WW_DISPATCH_TO(IndexN)
+            WW_DISPATCH_TO(SetIndexN)
+            WW_DISPATCH_TO(BundleValues)
+            WW_DISPATCH_TO(MergeBundle)
+            WW_DISPATCH_TO(DupN)
+            WW_DISPATCH_TO(SettleEnum)
+            WW_DISPATCH_TO(CheckParam)
+            WW_DISPATCH_TO(CheckReturn)
+            WW_DISPATCH_TO(CheckType)
+            WW_DISPATCH_TO(GetUpvalue)
+            WW_DISPATCH_TO(GetUpvalueChecked)
+            WW_DISPATCH_TO(MakeType)
+            WW_DISPATCH_TO(CachedType)
+            WW_DISPATCH_TO(CacheType)
+            WW_DISPATCH_TO(TypeCollection)
+            WW_DISPATCH_TO(IsFull)
+            WW_DISPATCH_TO(CastFull)
+            WW_DISPATCH_TO(WithTypes)
+            WW_DISPATCH_TO(FrameTypes)
+            WW_DISPATCH_TO(TypeArg)
+            WW_DISPATCH_TO(InstanceTypeArg)
+            WW_DISPATCH_TO(SupertypeMaker)
+            WW_DISPATCH_TO(CheckResult)
+            WW_DISPATCH_TO(ClassOf)
+            WW_DISPATCH_TO(ClassMeta)
+            WW_DISPATCH_TO(AtomicField)
+            WW_DISPATCH_TO(GetCaptured)
+            WW_DISPATCH_TO(SetCaptured)
+            WW_DISPATCH_TO(ObjectClass)
+            WW_DISPATCH_TO(StoreClass)
+            WW_DISPATCH_TO(ObjectClassTyped)
+            WW_DISPATCH_TO(StoreClassTyped)
+            WW_DISPATCH_TO(Capture)
+            WW_DISPATCH_TO(NewObject)
+            WW_DISPATCH_TO(Unset)
+            WW_DISPATCH_TO(SetUpvalue)
+            WW_DISPATCH_TO(GetOwn)
+            WW_DISPATCH_TO(GetProp)
+            WW_DISPATCH_TO(GetOwnRef)
+            WW_DISPATCH_TO(GetPropRef)
+            WW_DISPATCH_TO(SetOwn)
+            WW_DISPATCH_TO(SetProp)
+            WW_DISPATCH_TO(GetIndexRef)
+            WW_DISPATCH_TO(OwnLocal)
+            WW_DISPATCH_TO(GetIndex)
+            WW_DISPATCH_TO(SetIndex)
+            WW_DISPATCH_TO(SetSuper)
+            WW_DISPATCH_TO(GetSuper)
+            WW_DISPATCH_TO(Add)
+            WW_DISPATCH_TO(Sub)
+            WW_DISPATCH_TO(Mul)
+            WW_DISPATCH_TO(StoreLocal)
+            WW_DISPATCH_TO(CopyLocal)
+            WW_DISPATCH_TO(CheckLocal)
+            WW_DISPATCH_TO(Div)
+            WW_DISPATCH_TO(Mod)
+            WW_DISPATCH_TO(AddWrap)
+            WW_DISPATCH_TO(SubWrap)
+            WW_DISPATCH_TO(MulWrap)
+            WW_DISPATCH_TO(Shl)
+            WW_DISPATCH_TO(Shr)
+            WW_DISPATCH_TO(Ushr)
+            WW_DISPATCH_TO(BitAnd)
+            WW_DISPATCH_TO(BitOr)
+            WW_DISPATCH_TO(BitXor)
+            WW_DISPATCH_TO(BitNot)
+            WW_DISPATCH_TO(Neg)
+            WW_DISPATCH_TO(Not)
+            WW_DISPATCH_TO(Eq)
+            WW_DISPATCH_TO(Identical)
+            WW_DISPATCH_TO(Lt)
+            WW_DISPATCH_TO(Le)
+            WW_DISPATCH_TO(Gt)
+            WW_DISPATCH_TO(Ge)
+            WW_DISPATCH_TO(Is)
+            WW_DISPATCH_TO(Jump)
+            WW_DISPATCH_TO(Loop)
+            WW_DISPATCH_TO(JumpIfFalse)
+            WW_DISPATCH_TO(And)
+            WW_DISPATCH_TO(Or)
+            WW_DISPATCH_TO(JumpIfNull)
+            WW_DISPATCH_TO(JumpIfNotNull)
+            WW_DISPATCH_TO(AssertNotNull)
+            WW_DISPATCH_TO(Swap)
+            WW_DISPATCH_TO(PopUnder)
+            WW_DISPATCH_TO(IsType)
+            WW_DISPATCH_TO(Cast)
+            WW_DISPATCH_TO(CastOrNull)
+            WW_DISPATCH_TO(Settle)
+            WW_DISPATCH_TO(Call)
+            WW_DISPATCH_TO(CallNamed)
+            WW_DISPATCH_TO(Spread)
+            WW_DISPATCH_TO(CallSpread)
+            WW_DISPATCH_TO(InvokeOwn)
+            WW_DISPATCH_TO(Invoke)
+            WW_DISPATCH_TO(InvokeOwnTrailing)
+            WW_DISPATCH_TO(InvokeTrailing)
+            WW_DISPATCH_TO(SuperInvoke)
+            WW_DISPATCH_TO(SuperInvokeTrailing)
+            WW_DISPATCH_TO(SuperInit)
+            WW_DISPATCH_TO(Closure)
+            WW_DISPATCH_TO(MakeForms)
+            WW_DISPATCH_TO(MethodForms)
+            WW_DISPATCH_TO(StaticForms)
+            WW_DISPATCH_TO(GetIndexOr)
+            WW_DISPATCH_TO(CloseUpvalue)
+            WW_DISPATCH_TO(CallOn)
+            WW_DISPATCH_TO(ImplicitFirst)
+            WW_DISPATCH_TO(TailLoop)
+            WW_DISPATCH_TO(ReturnInit)
+            WW_DISPATCH_TO(Return)
+            WW_DISPATCH_TO(Class)
+            WW_DISPATCH_TO(Inherit)
+            WW_DISPATCH_TO(ClassInit)
+            WW_DISPATCH_TO(EnsureClassInit)
+            WW_DISPATCH_TO(MissingArg)
+            WW_DISPATCH_TO(DataField)
+            WW_DISPATCH_TO(Extend)
+            WW_DISPATCH_TO(Bridge)
+            WW_DISPATCH_TO(BridgeMethod)
+            WW_DISPATCH_TO(Lazy)
+            WW_DISPATCH_TO(UnstableKey)
+            WW_DISPATCH_TO(Component)
+            WW_DISPATCH_TO(IterNextPair)
+            WW_DISPATCH_TO(MarkInterface)
+            WW_DISPATCH_TO(Extension)
+            WW_DISPATCH_TO(MarkAbstract)
+            WW_DISPATCH_TO(ClassOrigin)
+            WW_DISPATCH_TO(MarkValue)
+            WW_DISPATCH_TO(Numeric)
+            WW_DISPATCH_TO(WithRefResult)
+            WW_DISPATCH_TO(FieldDestination)
+            WW_DISPATCH_TO(PlaceLocal)
+            WW_DISPATCH_TO(PlaceUpvalue)
+            WW_DISPATCH_TO(PlaceGlobal)
+            WW_DISPATCH_TO(PlaceField)
+            WW_DISPATCH_TO(PlaceIndex)
+            WW_DISPATCH_TO(InsertNew)
+            WW_DISPATCH_TO(AddNew)
+            WW_DISPATCH_TO(WithDestinationAt)
+            WW_DISPATCH_TO(WithFrameDestination)
+            WW_DISPATCH_TO(CheckOverride)
+            WW_DISPATCH_TO(Require)
+            WW_DISPATCH_TO(ClassNumber)
+            WW_DISPATCH_TO(MemberAccess)
+            WW_DISPATCH_TO(StaticAccess)
+            WW_DISPATCH_TO(FinishClass)
+            WW_DISPATCH_TO(Getter)
+            WW_DISPATCH_TO(Setter)
+            WW_DISPATCH_TO(PendingEnum)
+            WW_DISPATCH_TO(EnumNext)
+            WW_DISPATCH_TO(EnumEntry)
+            WW_DISPATCH_TO(EnumSeal)
+            WW_DISPATCH_TO(StaticGetter)
+            WW_DISPATCH_TO(StaticSetter)
+            WW_DISPATCH_TO(StaticField)
+            WW_DISPATCH_TO(DeclareField)
+            WW_DISPATCH_TO(FieldInit)
+            WW_DISPATCH_TO(Method)
+            WW_DISPATCH_TO(StaticMethod)
+            WW_DISPATCH_TO(BuildList)
+            WW_DISPATCH_TO(TagCollection)
+            WW_DISPATCH_TO(BuildMap)
+            WW_DISPATCH_TO(BuildString)
+            WW_DISPATCH_TO(Range)
+            WW_DISPATCH_TO(FromEnd)
+            WW_DISPATCH_TO(IterInit)
+            WW_DISPATCH_TO(RangeLoop)
+            WW_DISPATCH_TO(RangeNext)
+            WW_DISPATCH_TO(DefaultArg)
+            WW_DISPATCH_TO(IterNextRef)
+            WW_DISPATCH_TO(IterNext)
+            WW_DISPATCH_TO(TryBegin)
+            WW_DISPATCH_TO(TryEnd)
+            WW_DISPATCH_TO(Throw)
+            WW_DISPATCH_TO(Import)
+            WW_DISPATCH_TO(Count_)
+            WW_DISPATCH_TO(MoveS)
+            WW_DISPATCH_TO(MoveK)
+            WW_DISPATCH_TO(SetTop)
+            WW_DISPATCH_TO(RAddSS)
+            WW_DISPATCH_TO(RAddSK)
+            WW_DISPATCH_TO(RAddKS)
+            WW_DISPATCH_TO(RSubSS)
+            WW_DISPATCH_TO(RSubSK)
+            WW_DISPATCH_TO(RMulSS)
+            WW_DISPATCH_TO(RMulSK)
+            WW_DISPATCH_TO(RMulKS)
+            WW_DISPATCH_TO(RDivSS)
+            WW_DISPATCH_TO(RDivSK)
+            WW_DISPATCH_TO(RLtSS)
+            WW_DISPATCH_TO(RLtSK)
+            WW_DISPATCH_TO(RJumpLtSS)
+            WW_DISPATCH_TO(RJumpLtSK)
+            WW_DISPATCH_TO(RLeSS)
+            WW_DISPATCH_TO(RLeSK)
+            WW_DISPATCH_TO(RJumpLeSS)
+            WW_DISPATCH_TO(RJumpLeSK)
+            WW_DISPATCH_TO(RGtSS)
+            WW_DISPATCH_TO(RGtSK)
+            WW_DISPATCH_TO(RJumpGtSS)
+            WW_DISPATCH_TO(RJumpGtSK)
+            WW_DISPATCH_TO(RGeSS)
+            WW_DISPATCH_TO(RGeSK)
+            WW_DISPATCH_TO(RJumpGeSS)
+            WW_DISPATCH_TO(RJumpGeSK)
+            WW_DISPATCH_TO(REqSS)
+            WW_DISPATCH_TO(REqSK)
+            WW_DISPATCH_TO(RJumpEqSS)
+            WW_DISPATCH_TO(RJumpEqSK)
+            WW_DISPATCH_TO(RGetProp)
+            WW_DISPATCH_TO(RModSS)
+            WW_DISPATCH_TO(RModSK)
+            WW_DISPATCH_TO(RSubKS)
+            WW_DISPATCH_TO(RDivKS)
+            WW_DISPATCH_TO(RSetPropSS)
+            WW_DISPATCH_TO(RSetPropSK)
+            WW_DISPATCH_TO(RGetGlobal)
+            WW_DISPATCH_TO(RGetUpvalue)
+            WW_DISPATCH_TO(RGetIndexSS)
+            WW_DISPATCH_TO(RGetIndexSK)
+            WW_DISPATCH_TO(RNeg)
+            WW_DISPATCH_TO(RNot)
+            WW_DISPATCH_TO(RJumpIfFalse)
+            WW_DISPATCH_TO(RShlSK)
+            WW_DISPATCH_TO(RShrSK)
+            WW_DISPATCH_TO(RBitAndSS)
+            WW_DISPATCH_TO(RBitAndSK)
+            WW_DISPATCH_TO(RBitOrSS)
+            WW_DISPATCH_TO(RBitOrSK)
+            WW_DISPATCH_TO(RShlSS)
+            WW_DISPATCH_TO(RShrSS)
             // Since M6.7 step 5: typed arithmetic, places, type slots, RGetPath (G14).
-            JADE_DISPATCH_TO(AddI)
-            JADE_DISPATCH_TO(SubI)
-            JADE_DISPATCH_TO(MulI)
-            JADE_DISPATCH_TO(DivF)
-            JADE_DISPATCH_TO(AddF)
-            JADE_DISPATCH_TO(SubF)
-            JADE_DISPATCH_TO(MulF)
-            JADE_DISPATCH_TO(LtI)
-            JADE_DISPATCH_TO(LeI)
-            JADE_DISPATCH_TO(GtI)
-            JADE_DISPATCH_TO(GeI)
-            JADE_DISPATCH_TO(EqI)
-            JADE_DISPATCH_TO(LtF)
-            JADE_DISPATCH_TO(LeF)
-            JADE_DISPATCH_TO(GtF)
-            JADE_DISPATCH_TO(GeF)
-            JADE_DISPATCH_TO(EqF)
-            JADE_DISPATCH_TO(EnterPlaces)
-            JADE_DISPATCH_TO(SetPlace)
-            JADE_DISPATCH_TO(WithPlace)
-            JADE_DISPATCH_TO(KeepLocal)
-            JADE_DISPATCH_TO(KeepTop)
-            JADE_DISPATCH_TO(FieldTypesMaker)
-            JADE_DISPATCH_TO(TypeSlots)
-            JADE_DISPATCH_TO(JumpIfNotClass)
-            JADE_DISPATCH_TO(RGetPath)
-            JADE_DISPATCH_TO(Translate)
-            JADE_DISPATCH_TO(RAddISS)
-            JADE_DISPATCH_TO(RAddISK)
-            JADE_DISPATCH_TO(RAddIKS)
-            JADE_DISPATCH_TO(RSubISS)
-            JADE_DISPATCH_TO(RSubISK)
-            JADE_DISPATCH_TO(RSubIKS)
-            JADE_DISPATCH_TO(RMulISS)
-            JADE_DISPATCH_TO(RMulISK)
-            JADE_DISPATCH_TO(RMulIKS)
-            JADE_DISPATCH_TO(RAddFSS)
-            JADE_DISPATCH_TO(RAddFSK)
-            JADE_DISPATCH_TO(RAddFKS)
-            JADE_DISPATCH_TO(RSubFSS)
-            JADE_DISPATCH_TO(RSubFSK)
-            JADE_DISPATCH_TO(RSubFKS)
-            JADE_DISPATCH_TO(RMulFSS)
-            JADE_DISPATCH_TO(RMulFSK)
-            JADE_DISPATCH_TO(RMulFKS)
-            JADE_DISPATCH_TO(RDivFSS)
-            JADE_DISPATCH_TO(RDivFSK)
-            JADE_DISPATCH_TO(RDivFKS)
-            JADE_DISPATCH_TO(RLtISS)
-            JADE_DISPATCH_TO(RLtISK)
-            JADE_DISPATCH_TO(RLeISS)
-            JADE_DISPATCH_TO(RLeISK)
-            JADE_DISPATCH_TO(RGtISS)
-            JADE_DISPATCH_TO(RGtISK)
-            JADE_DISPATCH_TO(RGeISS)
-            JADE_DISPATCH_TO(RGeISK)
-            JADE_DISPATCH_TO(REqISS)
-            JADE_DISPATCH_TO(REqISK)
-            JADE_DISPATCH_TO(RLtFSS)
-            JADE_DISPATCH_TO(RLtFSK)
-            JADE_DISPATCH_TO(RLeFSS)
-            JADE_DISPATCH_TO(RLeFSK)
-            JADE_DISPATCH_TO(RGtFSS)
-            JADE_DISPATCH_TO(RGtFSK)
-            JADE_DISPATCH_TO(RGeFSS)
-            JADE_DISPATCH_TO(RGeFSK)
-            JADE_DISPATCH_TO(REqFSS)
-            JADE_DISPATCH_TO(REqFSK)
-            JADE_DISPATCH_TO(RJumpLtISS)
-            JADE_DISPATCH_TO(RJumpLtISK)
-            JADE_DISPATCH_TO(RJumpLeISS)
-            JADE_DISPATCH_TO(RJumpLeISK)
-            JADE_DISPATCH_TO(RJumpGtISS)
-            JADE_DISPATCH_TO(RJumpGtISK)
-            JADE_DISPATCH_TO(RJumpGeISS)
-            JADE_DISPATCH_TO(RJumpGeISK)
-            JADE_DISPATCH_TO(RJumpEqISS)
-            JADE_DISPATCH_TO(RJumpEqISK)
-            JADE_DISPATCH_TO(RJumpLtFSS)
-            JADE_DISPATCH_TO(RJumpLtFSK)
-            JADE_DISPATCH_TO(RJumpLeFSS)
-            JADE_DISPATCH_TO(RJumpLeFSK)
-            JADE_DISPATCH_TO(RJumpGtFSS)
-            JADE_DISPATCH_TO(RJumpGtFSK)
-            JADE_DISPATCH_TO(RJumpGeFSS)
-            JADE_DISPATCH_TO(RJumpGeFSK)
-            JADE_DISPATCH_TO(RJumpEqFSS)
-            JADE_DISPATCH_TO(RJumpEqFSK)
-            JADE_DISPATCH_TO(RInvoke)
-            JADE_DISPATCH_TO(RCall)
-            JADE_DISPATCH_TO(RGetIndexPropSS)
-            JADE_DISPATCH_TO(RGetIndexPropSK)
-#undef JADE_DISPATCH_TO
+            WW_DISPATCH_TO(AddI)
+            WW_DISPATCH_TO(SubI)
+            WW_DISPATCH_TO(MulI)
+            WW_DISPATCH_TO(DivF)
+            WW_DISPATCH_TO(AddF)
+            WW_DISPATCH_TO(SubF)
+            WW_DISPATCH_TO(MulF)
+            WW_DISPATCH_TO(LtI)
+            WW_DISPATCH_TO(LeI)
+            WW_DISPATCH_TO(GtI)
+            WW_DISPATCH_TO(GeI)
+            WW_DISPATCH_TO(EqI)
+            WW_DISPATCH_TO(LtF)
+            WW_DISPATCH_TO(LeF)
+            WW_DISPATCH_TO(GtF)
+            WW_DISPATCH_TO(GeF)
+            WW_DISPATCH_TO(EqF)
+            WW_DISPATCH_TO(EnterPlaces)
+            WW_DISPATCH_TO(SetPlace)
+            WW_DISPATCH_TO(WithPlace)
+            WW_DISPATCH_TO(KeepLocal)
+            WW_DISPATCH_TO(KeepTop)
+            WW_DISPATCH_TO(FieldTypesMaker)
+            WW_DISPATCH_TO(TypeSlots)
+            WW_DISPATCH_TO(JumpIfNotClass)
+            WW_DISPATCH_TO(RGetPath)
+            WW_DISPATCH_TO(Translate)
+            WW_DISPATCH_TO(RAddISS)
+            WW_DISPATCH_TO(RAddISK)
+            WW_DISPATCH_TO(RAddIKS)
+            WW_DISPATCH_TO(RSubISS)
+            WW_DISPATCH_TO(RSubISK)
+            WW_DISPATCH_TO(RSubIKS)
+            WW_DISPATCH_TO(RMulISS)
+            WW_DISPATCH_TO(RMulISK)
+            WW_DISPATCH_TO(RMulIKS)
+            WW_DISPATCH_TO(RAddFSS)
+            WW_DISPATCH_TO(RAddFSK)
+            WW_DISPATCH_TO(RAddFKS)
+            WW_DISPATCH_TO(RSubFSS)
+            WW_DISPATCH_TO(RSubFSK)
+            WW_DISPATCH_TO(RSubFKS)
+            WW_DISPATCH_TO(RMulFSS)
+            WW_DISPATCH_TO(RMulFSK)
+            WW_DISPATCH_TO(RMulFKS)
+            WW_DISPATCH_TO(RDivFSS)
+            WW_DISPATCH_TO(RDivFSK)
+            WW_DISPATCH_TO(RDivFKS)
+            WW_DISPATCH_TO(RLtISS)
+            WW_DISPATCH_TO(RLtISK)
+            WW_DISPATCH_TO(RLeISS)
+            WW_DISPATCH_TO(RLeISK)
+            WW_DISPATCH_TO(RGtISS)
+            WW_DISPATCH_TO(RGtISK)
+            WW_DISPATCH_TO(RGeISS)
+            WW_DISPATCH_TO(RGeISK)
+            WW_DISPATCH_TO(REqISS)
+            WW_DISPATCH_TO(REqISK)
+            WW_DISPATCH_TO(RLtFSS)
+            WW_DISPATCH_TO(RLtFSK)
+            WW_DISPATCH_TO(RLeFSS)
+            WW_DISPATCH_TO(RLeFSK)
+            WW_DISPATCH_TO(RGtFSS)
+            WW_DISPATCH_TO(RGtFSK)
+            WW_DISPATCH_TO(RGeFSS)
+            WW_DISPATCH_TO(RGeFSK)
+            WW_DISPATCH_TO(REqFSS)
+            WW_DISPATCH_TO(REqFSK)
+            WW_DISPATCH_TO(RJumpLtISS)
+            WW_DISPATCH_TO(RJumpLtISK)
+            WW_DISPATCH_TO(RJumpLeISS)
+            WW_DISPATCH_TO(RJumpLeISK)
+            WW_DISPATCH_TO(RJumpGtISS)
+            WW_DISPATCH_TO(RJumpGtISK)
+            WW_DISPATCH_TO(RJumpGeISS)
+            WW_DISPATCH_TO(RJumpGeISK)
+            WW_DISPATCH_TO(RJumpEqISS)
+            WW_DISPATCH_TO(RJumpEqISK)
+            WW_DISPATCH_TO(RJumpLtFSS)
+            WW_DISPATCH_TO(RJumpLtFSK)
+            WW_DISPATCH_TO(RJumpLeFSS)
+            WW_DISPATCH_TO(RJumpLeFSK)
+            WW_DISPATCH_TO(RJumpGtFSS)
+            WW_DISPATCH_TO(RJumpGtFSK)
+            WW_DISPATCH_TO(RJumpGeFSS)
+            WW_DISPATCH_TO(RJumpGeFSK)
+            WW_DISPATCH_TO(RJumpEqFSS)
+            WW_DISPATCH_TO(RJumpEqFSK)
+            WW_DISPATCH_TO(RInvoke)
+            WW_DISPATCH_TO(RCall)
+            WW_DISPATCH_TO(RGetIndexPropSS)
+            WW_DISPATCH_TO(RGetIndexPropSK)
+#undef WW_DISPATCH_TO
             dispatchMade.store(true, std::memory_order_release);
         }
     }
@@ -6624,7 +6624,7 @@ void VM::run(int baseFrame) {
         try {
             LOAD_FRAME();
 
-#if JADE_TAIL_CALLS
+#if WW_TAIL_CALLS
             {
                 // The first instruction's function, which calls the next one's, and so on until
                 // one returns: where run() ends. An error thrown in one comes here, as below.
@@ -6641,11 +6641,11 @@ void VM::run(int baseFrame) {
             // of those, it is read back. The quick ones work on it here and go straight on.
             Value* sp = sp_;
             for (;;) {
-#ifdef JADE_OP_COUNTS
+#ifdef WW_OP_COUNTS
                 countOp(opAt(ip + kThreaded));
 #endif
                 sp_ = sp;
-#if JADE_GOTO_DISPATCH
+#if WW_GOTO_DISPATCH
                 {
                     // Straight to the instruction's code, its address in the code (D160); the
                     // compiler copies the jump to the end of each instruction, where each is
@@ -6669,23 +6669,23 @@ void VM::run(int baseFrame) {
                 sp = sp_;
             }
 #endif
-        } catch (JadeThrow& thrown) {
+        } catch (WwThrow& thrown) {
             if (!handled(thrown)) throw;
         } catch (const std::bad_alloc&) {
             // Asking for memory failed. That is almost always one large request (a list, a
             // string, a buffer), so what is left is plenty for the error itself; if even that
             // fails, the program ends as before.
-            JadeThrow thrown = outOfMemory();
+            WwThrow thrown = outOfMemory();
             if (!handled(thrown)) throw thrown;
         } catch (const std::length_error&) {
-            JadeThrow thrown = outOfMemory();  // more than a list or a string can ever hold
+            WwThrow thrown = outOfMemory();  // more than a list or a string can ever hold
             if (!handled(thrown)) throw thrown;
         }
     }
 
 }
 
-#if JADE_TAIL_CALLS
+#if WW_TAIL_CALLS
 // ---- The instructions as functions (M6.7) ----
 // instructions.inc again, each instruction a function of its own: VM::tail<op>. Its ways out:
 // NEXT calls the next instruction's function as its last step, and EXIT_RUN returns, to run().
@@ -6701,35 +6701,35 @@ void VM::run(int baseFrame) {
 #undef RUN_BASE
 #undef R_SLOW2
 #undef R_PLAIN2
-#define JADE_TAIL_ARGS ip, sp, base, frame, consts, caches, code
-#define CASE(name) template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS)
-#define JADE_DECLARE(name) template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS);
-#define JADE_FORWARD(to, name) \
-    template <> JADE_TAIL_FN int VM::tail<Op::name>(JADE_TAIL_PARAMS) { [[clang::musttail]] return tail<Op::to>(JADE_TAIL_ARGS); }
+#define WW_TAIL_ARGS ip, sp, base, frame, consts, caches, code
+#define CASE(name) template <> WW_TAIL_FN int VM::tail<Op::name>(WW_TAIL_PARAMS)
+#define WW_DECLARE(name) template <> WW_TAIL_FN int VM::tail<Op::name>(WW_TAIL_PARAMS);
+#define WW_FORWARD(to, name) \
+    template <> WW_TAIL_FN int VM::tail<Op::name>(WW_TAIL_PARAMS) { [[clang::musttail]] return tail<Op::to>(WW_TAIL_ARGS); }
 // CASES(a, b, ...): the code is a's; b and the rest go to it.
-#define JADE_CASES_1(a0) CASE(a0)
-#define JADE_CASES_2(a0, a1) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) CASE(a0)
-#define JADE_CASES_3(a0, a1, a2) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) CASE(a0)
-#define JADE_CASES_4(a0, a1, a2, a3) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) CASE(a0)
-#define JADE_CASES_5(a0, a1, a2, a3, a4) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) CASE(a0)
-#define JADE_CASES_6(a0, a1, a2, a3, a4, a5) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) CASE(a0)
-#define JADE_CASES_7(a0, a1, a2, a3, a4, a5, a6) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) CASE(a0)
-#define JADE_CASES_8(a0, a1, a2, a3, a4, a5, a6, a7) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) CASE(a0)
-#define JADE_CASES_9(a0, a1, a2, a3, a4, a5, a6, a7, a8) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) CASE(a0)
-#define JADE_CASES_10(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) CASE(a0)
-#define JADE_CASES_11(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) CASE(a0)
-#define JADE_CASES_12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) CASE(a0)
-#define JADE_CASES_13(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) CASE(a0)
-#define JADE_CASES_14(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) CASE(a0)
-#define JADE_CASES_15(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) JADE_FORWARD(a0, a14) CASE(a0)
-#define JADE_CASES_16(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) JADE_DECLARE(a0) JADE_FORWARD(a0, a1) JADE_FORWARD(a0, a2) JADE_FORWARD(a0, a3) JADE_FORWARD(a0, a4) JADE_FORWARD(a0, a5) JADE_FORWARD(a0, a6) JADE_FORWARD(a0, a7) JADE_FORWARD(a0, a8) JADE_FORWARD(a0, a9) JADE_FORWARD(a0, a10) JADE_FORWARD(a0, a11) JADE_FORWARD(a0, a12) JADE_FORWARD(a0, a13) JADE_FORWARD(a0, a14) JADE_FORWARD(a0, a15) CASE(a0)
-#define CASES(...) JADE_EXPAND(JADE_CAT(JADE_CASES_, JADE_COUNT(__VA_ARGS__))(__VA_ARGS__))
+#define WW_CASES_1(a0) CASE(a0)
+#define WW_CASES_2(a0, a1) WW_DECLARE(a0) WW_FORWARD(a0, a1) CASE(a0)
+#define WW_CASES_3(a0, a1, a2) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) CASE(a0)
+#define WW_CASES_4(a0, a1, a2, a3) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) CASE(a0)
+#define WW_CASES_5(a0, a1, a2, a3, a4) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) CASE(a0)
+#define WW_CASES_6(a0, a1, a2, a3, a4, a5) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) CASE(a0)
+#define WW_CASES_7(a0, a1, a2, a3, a4, a5, a6) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) CASE(a0)
+#define WW_CASES_8(a0, a1, a2, a3, a4, a5, a6, a7) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) CASE(a0)
+#define WW_CASES_9(a0, a1, a2, a3, a4, a5, a6, a7, a8) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) CASE(a0)
+#define WW_CASES_10(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) CASE(a0)
+#define WW_CASES_11(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) CASE(a0)
+#define WW_CASES_12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) WW_FORWARD(a0, a11) CASE(a0)
+#define WW_CASES_13(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) WW_FORWARD(a0, a11) WW_FORWARD(a0, a12) CASE(a0)
+#define WW_CASES_14(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) WW_FORWARD(a0, a11) WW_FORWARD(a0, a12) WW_FORWARD(a0, a13) CASE(a0)
+#define WW_CASES_15(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) WW_FORWARD(a0, a11) WW_FORWARD(a0, a12) WW_FORWARD(a0, a13) WW_FORWARD(a0, a14) CASE(a0)
+#define WW_CASES_16(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) WW_DECLARE(a0) WW_FORWARD(a0, a1) WW_FORWARD(a0, a2) WW_FORWARD(a0, a3) WW_FORWARD(a0, a4) WW_FORWARD(a0, a5) WW_FORWARD(a0, a6) WW_FORWARD(a0, a7) WW_FORWARD(a0, a8) WW_FORWARD(a0, a9) WW_FORWARD(a0, a10) WW_FORWARD(a0, a11) WW_FORWARD(a0, a12) WW_FORWARD(a0, a13) WW_FORWARD(a0, a14) WW_FORWARD(a0, a15) CASE(a0)
+#define CASES(...) WW_EXPAND(WW_CAT(WW_CASES_, WW_COUNT(__VA_ARGS__))(__VA_ARGS__))
 #define NEXT()                                                            \
     do {                                                                  \
         const TailFn to_ = tailAt(ip);                                    \
         sp_ = sp;                                                         \
         frame->ip = ip += kThreaded + kOpBytes;                           \
-        [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);         \
+        [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);         \
     } while (0)
 #define DONE()     \
     do {           \
@@ -6737,63 +6737,63 @@ void VM::run(int baseFrame) {
         NEXT();    \
     } while (0)
 #define EXIT_RUN() return 0
-#define FALL_INTO(op) [[clang::musttail]] return tail<Op::op>(JADE_TAIL_ARGS)
+#define FALL_INTO(op) [[clang::musttail]] return tail<Op::op>(WW_TAIL_ARGS)
 #undef HAS_COLD
 #undef GO_COLD
 #undef COLD
-#define HAS_COLD(op) template <> JADE_TAIL_FN int VM::cold<Op::op>(JADE_TAIL_PARAMS);
-#define GO_COLD(op) [[clang::musttail]] return cold<Op::op>(JADE_TAIL_ARGS)
-#define COLD(op) template <> __attribute__((noinline)) JADE_TAIL_FN int VM::cold<Op::op>(JADE_TAIL_PARAMS)
+#define HAS_COLD(op) template <> WW_TAIL_FN int VM::cold<Op::op>(WW_TAIL_PARAMS);
+#define GO_COLD(op) [[clang::musttail]] return cold<Op::op>(WW_TAIL_ARGS)
+#define COLD(op) template <> __attribute__((noinline)) WW_TAIL_FN int VM::cold<Op::op>(WW_TAIL_PARAMS)
 #define RUN_BASE context_->runBase
 #define LABEL(l)
 // The instruction whose code a label of instructions.inc is in, or at the start of.
-#define JADE_OP_OF_getIndex GetIndex
-#define JADE_OP_OF_iterNext IterNext
-#define JADE_OP_OF_plainAdd Add
-#define JADE_OP_OF_plainDiv Div
-#define JADE_OP_OF_plainEq Eq
-#define JADE_OP_OF_plainGe Ge
-#define JADE_OP_OF_plainGt Gt
-#define JADE_OP_OF_plainLe Le
-#define JADE_OP_OF_plainLt Lt
-#define JADE_OP_OF_plainMod Mod
-#define JADE_OP_OF_plainMul Mul
-#define JADE_OP_OF_plainNeg Neg
-#define JADE_OP_OF_plainNot Not
-#define JADE_OP_OF_plainSub Sub
-#define JUMP_LABEL(l) [[clang::musttail]] return tail<Op::JADE_OP_OF_##l>(JADE_TAIL_ARGS)
+#define WW_OP_OF_getIndex GetIndex
+#define WW_OP_OF_iterNext IterNext
+#define WW_OP_OF_plainAdd Add
+#define WW_OP_OF_plainDiv Div
+#define WW_OP_OF_plainEq Eq
+#define WW_OP_OF_plainGe Ge
+#define WW_OP_OF_plainGt Gt
+#define WW_OP_OF_plainLe Le
+#define WW_OP_OF_plainLt Lt
+#define WW_OP_OF_plainMod Mod
+#define WW_OP_OF_plainMul Mul
+#define WW_OP_OF_plainNeg Neg
+#define WW_OP_OF_plainNot Not
+#define WW_OP_OF_plainSub Sub
+#define JUMP_LABEL(l) [[clang::musttail]] return tail<Op::WW_OP_OF_##l>(WW_TAIL_ARGS)
 #define R_SLOW2(b, c, sAt, slowAt)                                                   \
     {                                                                                \
         slowB_ = &(b);                                                               \
         slowC_ = &(c);                                                               \
-        [[clang::musttail]] return slowTwo<sAt, slowAt>(JADE_TAIL_ARGS);            \
+        [[clang::musttail]] return slowTwo<sAt, slowAt>(WW_TAIL_ARGS);            \
     }
 #define R_PLAIN2(b, c, plain)                                                        \
     if (ip[0] == ip[4]) {                                                            \
         slowB_ = &(b);                                                               \
         slowC_ = &(c);                                                               \
-        [[clang::musttail]] return plainTwo<Op::JADE_OP_OF_##plain>(JADE_TAIL_ARGS); \
+        [[clang::musttail]] return plainTwo<Op::WW_OP_OF_##plain>(WW_TAIL_ARGS); \
     }
 
 // What is jumped into before its own code comes.
-JADE_DECLARE(Return)
-JADE_DECLARE(Add)
-JADE_DECLARE(Div)
-JADE_DECLARE(Eq)
-JADE_DECLARE(Ge)
-JADE_DECLARE(GetIndex)
-JADE_DECLARE(Gt)
-JADE_DECLARE(IterNext)
-JADE_DECLARE(Le)
-JADE_DECLARE(Lt)
-JADE_DECLARE(Mod)
-JADE_DECLARE(Mul)
-JADE_DECLARE(Neg)
-JADE_DECLARE(Not)
-JADE_DECLARE(Sub)
+WW_DECLARE(Return)
+WW_DECLARE(Add)
+WW_DECLARE(Div)
+WW_DECLARE(Eq)
+WW_DECLARE(Ge)
+WW_DECLARE(GetIndex)
+WW_DECLARE(Gt)
+WW_DECLARE(IterNext)
+WW_DECLARE(Le)
+WW_DECLARE(Lt)
+WW_DECLARE(Mod)
+WW_DECLARE(Mul)
+WW_DECLARE(Neg)
+WW_DECLARE(Not)
+WW_DECLARE(Sub)
 
 template <int sAt, int slowAt>
-__attribute__((noinline)) JADE_TAIL_FN int VM::slowTwo(JADE_TAIL_PARAMS) {
+__attribute__((noinline)) WW_TAIL_FN int VM::slowTwo(WW_TAIL_PARAMS) {
     const Value b_ = *slowB_, c_ = *slowC_;
     Value* const at = base + ip[sAt];
     at[0] = b_;
@@ -6804,21 +6804,21 @@ __attribute__((noinline)) JADE_TAIL_FN int VM::slowTwo(JADE_TAIL_PARAMS) {
 }
 
 template <Op plain>
-__attribute__((noinline)) JADE_TAIL_FN int VM::plainTwo(JADE_TAIL_PARAMS) {
+__attribute__((noinline)) WW_TAIL_FN int VM::plainTwo(WW_TAIL_PARAMS) {
     const Value b_ = *slowB_, c_ = *slowC_;
     Value* const at = base + ip[4];
     at[0] = b_;
     at[1] = c_;
     sp = sp_ = at + 2;
     ip += 9;
-    [[clang::musttail]] return tail<plain>(JADE_TAIL_ARGS);
+    [[clang::musttail]] return tail<plain>(WW_TAIL_ARGS);
 }
 
 #include "instructions.inc"
 
 // An instruction run code never has.
 template <Op op>
-JADE_TAIL_FN int VM::tail(JADE_TAIL_PARAMS) {
+WW_TAIL_FN int VM::tail(WW_TAIL_PARAMS) {
     throw runtimeError(Thrown::InternalError, "invalid instruction");
 }
 
@@ -6846,7 +6846,7 @@ constexpr uint32_t kNativeMissLimit = 256;
 // instruction's own function again. A core running the function meanwhile reads either address,
 // each one aligned word, and either goes on rightly; a region is made whole before any way into
 // it is written.
-JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
+WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
     FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
     size_t which = 0;
@@ -6857,7 +6857,7 @@ JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
         const TailFn own = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
         sp_ = sp;
         frame->ip = ip += kThreaded + kOpBytes;
-        [[clang::musttail]] return (this->*own)(JADE_TAIL_ARGS);
+        [[clang::musttail]] return (this->*own)(WW_TAIL_ARGS);
     }
     if (which < f.nativeHeads.size()) {
         static std::mutex making;
@@ -6885,13 +6885,13 @@ JADE_TAIL_FN int VM::nativeFirst(JADE_TAIL_PARAMS) {
     const TailFn to_ = tailAt(ip);
     sp_ = sp;
     frame->ip = ip += kThreaded + kOpBytes;
-    [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);
+    [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
 }
 
 // Into a native code region (M9.5): its machine code run on this frame's slots from the
 // instruction here, one of its ways in, and on where it gives back, with the stack's top it
 // gives. `ip` is just past the instruction's opcode, where the instruction before put it.
-JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
+WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
     const FunctionProto::NativeRegion* region = nullptr;
     const std::vector<FunctionProto::NativeRegion>* regions = frame->closure->proto->regionsNow.load(std::memory_order_acquire);
@@ -6920,7 +6920,7 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
         }
         std::memset(context.heldAt, 0, sizeof context.heldAt);
         const int64_t out = native::runRegion(region->code, base, &context);
-        static const bool traceExits = std::getenv("JADE_TRACE_EXITS") != nullptr;
+        static const bool traceExits = std::getenv("WW_TRACE_EXITS") != nullptr;
         static int traced = 0;
         if (traceExits && traced < 30) {
             traced++;
@@ -6946,12 +6946,12 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
     const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
     sp_ = sp;
     frame->ip = ip += kThreaded + kOpBytes;
-    [[clang::musttail]] return (this->*to_)(JADE_TAIL_ARGS);
+    [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
 }
 
 #undef CASE
-#undef JADE_DECLARE
-#undef JADE_FORWARD
+#undef WW_DECLARE
+#undef WW_FORWARD
 #undef NEXT
 #undef DONE
 #undef EXIT_RUN
@@ -7696,7 +7696,7 @@ void VM::collectGarbage() {
             it = it->first->marked || it->first->immortal ? std::next(it) : extras_.erase(it);
     }
     // A failed job nothing asked about, now nothing can (8.7a): its error is reported on the
-    // event loop, where Jade code may run.
+    // event loop, where WinterWolf code may run.
     for (auto it = unaskedFailures.begin(); it != unaskedFailures.end();) {
         if (it->first->marked || it->first->immortal) {
             ++it;
@@ -8017,4 +8017,4 @@ void VM::valueTooBig(const ObjClass* cls, uint32_t size) {
                                                           " bytes, and a value type is at most 64 KB (65,536 bytes), as it is copied whole: make it a class");
 }
 
-}  // namespace jade
+}  // namespace ww

@@ -1,0 +1,418 @@
+// ---- JPEG ----
+
+// JPEG read and written in WinterWolf (M9/M10 part one, step 3): the markers, tables, EXIF and errors in
+// WinterWolf, the work for every block in general C++ (Dct, Image.fromPlanes and toPlanes, scaledPlane),
+// and a scan's Huffman-coded runs and sizes, which are JPEG's alone, in C++ of JPEG's own. Read:
+// baseline and progressive (refinement scans included), restart intervals, any sampling, one
+// component (grey), three (YCbCr, or RGB where Adobe's marker says so) or four (CMYK, YCCK), the
+// chroma upsampled as libjpeg does (a triangle filter for twice), and the EXIF orientation applied.
+// Written: baseline at a quality from 0 to 1 (IJG's tables scaled as libjpeg scales them), colour
+// as YCbCr with the chroma halved each way (4:2:0), a see-through pixel laid over white first.
+object __Jpeg {
+  fun decode(data : Bytes) : Image throws IOException => __JpegReader(data).read()
+  fun encode(image : Image, quality : Number) : Bytes => __JpegWriter(image, quality).write()
+}
+
+// Where each of the 64 coefficients a block's data gives in zigzag order goes in the block.
+val __jpegNatural : List<int> = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+  35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+
+class __JpegComponent {
+  var id = 0
+  var h = 1
+  var v = 1
+  var quant = 0
+  var dc = 0
+  var ac = 0
+  var blocksW = 0   // in whole MCUs
+  var blocksH = 0
+  var usedW = 0     // the blocks the picture covers, which a scan of this component alone reads
+  var usedH = 0
+  var coefs = Bytes(0)   // 64 coefficients a block, 16 bits each, natural order, as read (quantized)
+}
+
+class __JpegReader {
+  private val data : Bytes
+  private var pos = 2
+  private val quant : open List<List<int>> = [[], [], [], []]   // each in natural order
+  private val dcTables : open List<HuffmanTable?> = [null, null, null, null]
+  private val acTables : open List<HuffmanTable?> = [null, null, null, null]
+  private val components : open List<__JpegComponent> = []
+  private var width = 0
+  private var height = 0
+  private var progressive = false
+  private var hMax = 1
+  private var vMax = 1
+  private var mcusX = 0
+  private var mcusY = 0
+  private var restartInterval = 0
+  private var orientation = 1
+  private var adobe = -1     // Adobe's colour transform: 0 none, 1 YCbCr, 2 YCCK; -1 no Adobe marker
+  private var scans = 0
+
+  internal fun init(data : Bytes) {
+    this.data = data
+  }
+
+  fun read() : Image throws IOException {
+    if (data.size < 4 or data[0].toInt() != 0xFF or data[1].toInt() != 0xD8) { throw failure("it does not start with a JPEG marker") }
+    try {
+      while (pos < data.size) {
+        if (data[pos].toInt() != 0xFF) { throw failure("something other than a marker at byte $pos") }
+        while (pos < data.size and data[pos].toInt() == 0xFF) { pos += 1 }
+        if (pos >= data.size) { break }
+        val marker = data[pos].toInt()
+        pos += 1
+        if (marker == 0xD9) { break }   // the end of the picture
+        if (marker == 0xD8 or (marker >= 0xD0 and marker <= 0xD7) or marker == 0x01) { continue }
+        if (pos + 2 > data.size) { throw failure("a segment is cut short") }
+        val length = data.uint16(pos, true)
+        val start = pos + 2
+        val end = pos + length
+        if (length < 2 or end > data.size) { throw failure("a segment of $length bytes past the end") }
+        if (marker == 0xC0 or marker == 0xC1 or marker == 0xC2) {
+          frame(start, marker == 0xC2)
+        } else if (marker == 0xC4) {
+          huffmanTables(start, end)
+        } else if (marker == 0xDB) {
+          quantTables(start, end)
+        } else if (marker == 0xDD) {
+          restartInterval = data.uint16(start, true)
+        } else if (marker == 0xDA) {
+          pos = end
+          scan(start)
+          continue
+        } else if (marker == 0xE1) {
+          exif(start, end)
+        } else if (marker == 0xEE and length >= 14 and data[start ..< start + 5].decodeToString(Charset.latin1) == "Adobe") {
+          adobe = data[start + 11].toInt()
+        } else if (marker == 0xC3 or marker >= 0xC5 and marker <= 0xCF and marker != 0xC8 and marker != 0xCC) {
+          throw failure(marker >= 0xC9 ? "arithmetic coding, which is not read" : marker == 0xC3 or marker == 0xC7 ? "lossless JPEG, which is not read" : "a hierarchical JPEG, which is not read")
+        }
+        pos = end
+      }
+    } catch (e : DataFormatException) {
+      if (scans == 0) { throw failure(e.message ?: "damaged data") }
+      // Damaged or cut short after a scan: what was read is kept, as browsers keep it.
+    }
+    if (components.isEmpty() or scans == 0) { throw failure("it has no picture") }
+    return orient(colors())
+  }
+
+  // ---- Segments ----
+
+  private fun frame(at : int, isProgressive : bool) throws IOException {
+    if (components.isNotEmpty()) { throw failure("a second frame") }
+    if (data[at].toInt() != 8) { throw failure("${data[at].toInt()} bits a sample, where 8 are read") }
+    height = data.uint16(at + 1, true)
+    width = data.uint16(at + 3, true)
+    val count = data[at + 5].toInt()
+    if (width == 0 or height == 0) { throw failure("a size of $width by $height") }
+    if (width > 32768 or height > 32768) { throw failure("a size of $width by $height, more than 32768 either way") }
+    if (count != 1 and count != 3 and count != 4) { throw failure("$count components") }
+    progressive = isProgressive
+    for (i in 0 ..< count) {
+      val c = __JpegComponent()
+      c.id = data[at + 6 + i * 3].toInt()
+      c.h = data[at + 7 + i * 3].toInt() >> 4
+      c.v = data[at + 7 + i * 3].toInt() & 15
+      c.quant = data[at + 8 + i * 3].toInt()
+      if (c.h < 1 or c.h > 4 or c.v < 1 or c.v > 4 or c.quant > 3) { throw failure("a component's sampling or table is out of range") }
+      components.add(c)
+      hMax = Math.max(hMax, c.h)
+      vMax = Math.max(vMax, c.v)
+    }
+    mcusX = (width + 8 * hMax - 1) / (8 * hMax)
+    mcusY = (height + 8 * vMax - 1) / (8 * vMax)
+    for (c in components) {
+      c.blocksW = mcusX * c.h
+      c.blocksH = mcusY * c.v
+      c.usedW = ((width * c.h + hMax - 1) / hMax + 7) / 8
+      c.usedH = ((height * c.v + vMax - 1) / vMax + 7) / 8
+      c.coefs = Bytes(c.blocksW * c.blocksH * 128)
+    }
+  }
+
+  private fun huffmanTables(at : int, end : int) throws IOException {
+    var p = at
+    while (p < end) {
+      val kind = data[p].toInt() >> 4
+      val index = data[p].toInt() & 15
+      if (kind > 1 or index > 3 or p + 17 > end) { throw failure("a Huffman table out of range") }
+      val lengths : open List<int> = []
+      var total = 0
+      for (length in 1 .. 16) {
+        val n = data[p + length].toInt()
+        for (k in 0 ..< n) { lengths.add(length) }
+        total += n
+      }
+      if (p + 17 + total > end) { throw failure("a Huffman table is cut short") }
+      val symbols = (0 ..< total).map { data[p + 17 + it].toInt() }
+      val table = HuffmanTable(lengths, symbols)
+      if (kind == 0) { dcTables[index] = table } else { acTables[index] = table }
+      p += 17 + total
+    }
+  }
+
+  private fun quantTables(at : int, end : int) throws IOException {
+    var p = at
+    while (p < end) {
+      val wide = data[p].toInt() >> 4 == 1
+      val index = data[p].toInt() & 15
+      if (index > 3 or p + 1 + (wide ? 128 : 64) > end) { throw failure("a quantization table out of range") }
+      val table = List(64) { 0 }
+      for (k in 0 ..< 64) { table[__jpegNatural[k]] = wide ? data.uint16(p + 1 + k * 2, true) : data[p + 1 + k].toInt() }
+      quant[index] = table
+      p += 1 + (wide ? 128 : 64)
+    }
+  }
+
+  // EXIF's orientation, tag 0x112 of its first directory; the rest is left.
+  private fun exif(at : int, end : int) {
+    if (end - at < 14 or data[at ..< at + 6].decodeToString(Charset.latin1) != "Exif\u{0}\u{0}") { return }
+    val tiff = at + 6
+    val big = data[tiff].toInt() == 0x4D
+    val first = tiff + data.uint32(tiff + 4, big)
+    if (first + 2 > end) { return }
+    val count = data.uint16(first, big)
+    for (i in 0 ..< count) {
+      val entry = first + 2 + i * 12
+      if (entry + 12 > end) { return }
+      if (data.uint16(entry, big) == 0x112) {
+        val value = data.uint16(entry + 8, big)
+        if (value >= 1 and value <= 8) { orientation = value }
+        return
+      }
+    }
+  }
+
+  // ---- Scans ----
+
+  private fun scan(at : int) throws IOException | DataFormatException {
+    if (components.isEmpty()) { throw failure("a scan before its frame") }
+    val count = data[at].toInt()
+    val inScan : open List<List<any?>> = []
+    for (i in 0 ..< count) {
+      val id = data[at + 1 + i * 2].toInt()
+      val c = components.firstOrNull { it.id == id }
+      if (c == null) { throw failure("a scan of component $id, which the frame has not") }
+      val tables = data[at + 2 + i * 2].toInt()
+      inScan.add([c!!.coefs, c!!.blocksW, c!!.h, c!!.v, c!!.usedW, c!!.usedH, dcTables[tables >> 4]?.table, acTables[tables & 15]?.table])
+    }
+    val p = at + 1 + count * 2
+    val first = data[p].toInt()
+    val last = data[p + 1].toInt()
+    val high = data[p + 2].toInt() >> 4
+    val low = data[p + 2].toInt() & 15
+    if (progressive and (first > last or last > 63 or (first == 0) != (last == 0) or first > 0 and count != 1)) { throw failure("a progressive scan's bands are out of range") }
+    val result = __jpeg.decodeScan(data, pos, inScan, mcusX, mcusY, restartInterval, progressive, first, last, high, low)
+    if (result is string) { throw DataFormatException(result as string) }
+    pos = result as int
+    scans += 1
+  }
+
+  // ---- Colour ----
+
+  private fun colors() : Image {
+    // Each component's samples, through the inverse DCT, at its own size: scaled to the picture's
+    // a row at a time as the colours are worked out (one, three), or first (four).
+    val planes : open List<Plane> = []
+    for (c in components) {
+      val stride = c.blocksW * 8
+      val plane = Bytes(stride * c.blocksH * 8)
+      Dct.inverse8x8(c.coefs, c.blocksW, c.blocksH, plane, stride, quant[c.quant].isEmpty() ? null : quant[c.quant])
+      c.coefs = Bytes(0)   // free to go
+      planes.add(Plane(plane, (width * c.h + hMax - 1) / hMax, (height * c.v + vMax - 1) / vMax, stride))
+    }
+    if (components.size == 1) { return Image.fromScaledPlanes(width, height, planes, ColorSpace.grey) }
+    // Adobe's marker says; else three components are YCbCr unless their ids are R, G and B.
+    val rgbIds = components.size == 3 and components[0].id == 82 and components[1].id == 71 and components[2].id == 66
+    val transform = adobe >= 0 ? adobe : components.size == 3 and !rgbIds ? 1 : 0
+    if (components.size == 3) { return Image.fromScaledPlanes(width, height, planes, transform == 0 ? ColorSpace.rgb : ColorSpace.ycbcr) }
+    // Four: CMYK as Adobe writes it (inverted), or YCCK, its first three YCbCr for C, M and Y.
+    val full = planes.map { it.bytes.scaledPlane(it.width, it.height, width, height, it.stride) }
+    val cmy = transform == 2 ? Image.fromPlanes(width, height, full[0 ..< 3], ColorSpace.ycbcr).toPlanes() : full[0 ..< 3]
+    val k = full[3]
+    val out = Bytes(width * height * 4)
+    var o = 0
+    for (i in 0 ..< width * height) {
+      val kk = k[i].toInt()
+      for (ch in 0 ..< 3) {
+        val v = cmy[ch][i].toInt()
+        out[o + ch] = ((transform == 2 ? 255 - v : v) * kk / 255).toByte()
+      }
+      out[o + 3] = 255.toByte()
+      o += 4
+    }
+    return Image.taking(width, height, out)
+  }
+
+  // The picture turned as EXIF's orientation says (1 as it is; 2 to 8 mirrored and turned).
+  private fun orient(image : Image) : Image {
+    if (orientation == 1) { return image }
+    val w = image.width
+    val h = image.height
+    val turned = orientation >= 5
+    val ow = turned ? h : w
+    val oh = turned ? w : h
+    val from = image.rgbaBytes()
+    val out = Bytes(w * h * 4)
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        // Where pixel (x, y) of the stored picture goes.
+        var nx = x
+        var ny = y
+        if (orientation == 2) { nx = w - 1 - x }
+        else if (orientation == 3) { nx = w - 1 - x; ny = h - 1 - y }
+        else if (orientation == 4) { ny = h - 1 - y }
+        else if (orientation == 5) { nx = y; ny = x }
+        else if (orientation == 6) { nx = h - 1 - y; ny = x }
+        else if (orientation == 7) { nx = h - 1 - y; ny = w - 1 - x }
+        else if (orientation == 8) { nx = y; ny = w - 1 - x }
+        out.copyFrom(from, (y * w + x) * 4, 1, (ny * ow + nx) * 4, 1, 4)
+      }
+    }
+    return Image.taking(ow, oh, out)
+  }
+
+  private fun failure(why : string) : IOException => IOException("not a JPEG file that can be read: $why")
+}
+
+// ---- Writing ----
+
+class __JpegWriter {
+  private val image : Image
+  private val quality : int
+  private var data = Bytes(65536)
+  private var size = 0
+
+  internal fun init(image : Image, quality : Number) {
+    this.image = image
+    val q = Math.round(quality.toFloat() * 100).toInt()
+    this.quality = q < 1 ? 1 : q > 100 ? 100 : q
+  }
+
+  fun write() : Bytes {
+    val w = image.width
+    val h = image.height
+    if (w == 0 or h == 0) { throw IllegalArgumentException("an image with no pixels is not written as a JPEG") }
+    // The tables, scaled for the quality as libjpeg scales them, in zigzag order.
+    val scale = quality < 50 ? 5000 / quality : 200 - quality * 2
+    val tables = [__jpegLuma, __jpegChroma].map { std -> (0 ..< 64).map { k -> Math.max(1, Math.min(255, (std[k] * scale + 50) / 100)) } }
+    val natural = tables.map { zz -> List(64) { 0 }.also { for (k in 0 ..< 64) { it[__jpegNatural[k]] = zz[k] } } }
+    // Laid over white where something is see-through; then Y, Cb and Cr, the last two halved each way.
+    var solid = image
+    if (!__picture.isOpaque(image.cells.cells)) {
+      solid = Image(w, h, Color.white)
+      solid.canvas().draw(image, 0, 0)
+    }
+    val planes = solid.toPlanes(ColorSpace.ycbcr)
+    val mw = (w + 15) / 16 * 16
+    val mh = (h + 15) / 16 * 16
+    val cw = (w + 1) / 2
+    val ch = (h + 1) / 2
+    val luma = padded(planes[0], w, h, mw, mh)
+    val cb = padded(planes[1].scaledPlane(w, h, cw, ch), cw, ch, mw / 2, mh / 2)
+    val cr = padded(planes[2].scaledPlane(w, h, cw, ch), cw, ch, mw / 2, mh / 2)
+    val codes = [__JpegCodes(__jpegDcLumaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcLumaCounts, __jpegAcLumaSymbols),
+                 __JpegCodes(__jpegDcChromaCounts, __jpegDcSymbols), __JpegCodes(__jpegAcChromaCounts, __jpegAcChromaSymbols)]
+    val scan = __jpeg.encodeScan([
+      [Dct.forward8x8(luma, mw, mw / 8, mh / 8, natural[0]), mw / 8, 2, 2, codes[0].code, codes[0].length, codes[1].code, codes[1].length],
+      [Dct.forward8x8(cb, mw / 2, mw / 16, mh / 16, natural[1]), mw / 16, 1, 1, codes[2].code, codes[2].length, codes[3].code, codes[3].length],
+      [Dct.forward8x8(cr, mw / 2, mw / 16, mh / 16, natural[1]), mw / 16, 1, 1, codes[2].code, codes[2].length, codes[3].code, codes[3].length]],
+      mw / 16, mh / 16)
+    // Markers: the start, JFIF, the tables, the frame, the Huffman tables, the scan, the end.
+    marker(0xD8)
+    segment(0xE0, [0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0])
+    for (t in 0 ..< 2) { segment(0xDB, [t] + tables[t]) }
+    segment(0xC0, [8, h >> 8, h & 255, w >> 8, w & 255, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])
+    segment(0xC4, [0x00] + __jpegDcLumaCounts + __jpegDcSymbols)
+    segment(0xC4, [0x10] + __jpegAcLumaCounts + __jpegAcLumaSymbols)
+    segment(0xC4, [0x01] + __jpegDcChromaCounts + __jpegDcSymbols)
+    segment(0xC4, [0x11] + __jpegAcChromaCounts + __jpegAcChromaSymbols)
+    segment(0xDA, [3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0])
+    val head = data[0 ..< size]
+    return head + scan + Bytes([0xFF, 0xD9])
+  }
+
+  // A plane `w` by `h` made `pw` by `ph`, its last column and row repeated.
+  private fun padded(plane : Bytes, w : int, h : int, pw : int, ph : int) : Bytes {
+    if (w == pw and h == ph) { return plane }
+    val out = Bytes(pw * ph)
+    for (y in 0 ..< ph) {
+      val from = Math.min(y, h - 1) * w
+      out.copyFrom(plane, from, 1, y * pw, 1, w)
+      if (pw > w) { out.copyFrom(plane, from + w - 1, 0, y * pw + w, 1, pw - w) }
+    }
+    return out
+  }
+
+  private fun byte(value : int) {
+    if (size == data.size) { data = Bytes(data.size * 2).copyFrom(data, 0, 1, 0, 1, size) }
+    data[size] = value.toByteWrapped()
+    size += 1
+  }
+
+  private fun marker(m : int) {
+    byte(0xFF)
+    byte(m)
+  }
+
+  private fun segment(m : int, body : List<int>) {
+    marker(m)
+    byte((body.size + 2) >> 8)
+    byte((body.size + 2) & 255)
+    for (v in body) { byte(v) }
+  }
+}
+
+// A Huffman table's codes and lengths by symbol, from its counts of each length and its symbols.
+class __JpegCodes(counts : List<int>, symbols : List<int>) {
+  val code : open List<int> = List(256) { 0 }
+  val length : open List<int> = List(256) { 0 }
+
+  init {
+    var c = 0
+    var k = 0
+    for (len in 1 .. 16) {
+      for (i in 0 ..< counts[len - 1]) {
+        code[symbols[k]] = c
+        length[symbols[k]] = len
+        c += 1
+        k += 1
+      }
+      c = c << 1
+    }
+  }
+}
+
+// IJG's tables (the JPEG standard's Annex K), zigzag order, and its Huffman tables.
+val __jpegLuma : List<int> = [16, 11, 12, 14, 12, 10, 16, 14, 13, 14, 18, 17, 16, 19, 24, 40, 26, 24, 22, 22, 24, 49, 35, 37, 29, 40, 58, 51, 61, 60, 57, 51,
+  56, 55, 64, 72, 92, 78, 64, 68, 87, 69, 55, 56, 80, 109, 81, 87, 95, 98, 103, 104, 103, 62, 77, 113, 121, 112, 100, 120, 92, 101, 103, 99]
+val __jpegChroma : List<int> = [17, 18, 18, 24, 21, 24, 47, 26, 26, 47, 99, 66, 56, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]
+val __jpegDcLumaCounts : List<int> = [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+val __jpegDcChromaCounts : List<int> = [0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+val __jpegDcSymbols : List<int> = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+val __jpegAcLumaCounts : List<int> = [0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7D]
+val __jpegAcLumaSymbols : List<int> = [0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32,
+  0x81, 0x91, 0xA1, 0x08, 0x23, 0x42, 0xB1, 0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x25, 0x26,
+  0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+  0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92,
+  0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
+  0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8,
+  0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA]
+val __jpegAcChromaCounts : List<int> = [0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77]
+val __jpegAcChromaSymbols : List<int> = [0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81,
+  0x08, 0x14, 0x42, 0x91, 0xA1, 0xB1, 0xC1, 0x09, 0x23, 0x33, 0x52, 0xF0, 0x15, 0x62, 0x72, 0xD1, 0x0A, 0x16, 0x24, 0x34, 0xE1, 0x25, 0xF1, 0x17, 0x18, 0x19,
+  0x1A, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+  0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+  0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8,
+  0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+  0xE8, 0xE9, 0xEA, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA]
+
+external object __jpeg {
+  fun decodeScan(data : Bytes, at : int, components : List<List<any?>>, mcusX : int, mcusY : int, restartInterval : int, progressive : bool,
+                 first : int, last : int, high : int, low : int) : any
+  fun encodeScan(components : List<List<any>>, mcusX : int, mcusY : int) : Bytes
+}

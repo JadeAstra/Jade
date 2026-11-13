@@ -1,5 +1,5 @@
-// The text engine and pictures as Jade programs see them: the built-in __text, which
-// src/std/fonts.jade is written on.
+// The text engine and pictures as WinterWolf programs see them: the built-in __text, which
+// src/std/fonts.ww is written on.
 //
 // Fonts are known to a program by number. A font file once read stays read, and a font at a
 // size keeps the pictures of its glyphs, for as long as the program runs: there are only as
@@ -23,7 +23,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -1224,4 +1224,4 @@ void registerText(VM& vm) {
                                   "canvasPicture", "canvasPath", "canvasLay", "textOutline"});
 }
 
-}  // namespace jade
+}  // namespace ww

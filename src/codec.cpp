@@ -7,7 +7,7 @@
 #include <bit>
 #include <cstring>
 
-namespace jade::codec {
+namespace ww::codec {
 
 uint32_t crc32(const uint8_t* data, size_t size, uint32_t crc) {
     // Eight tables, so that eight bytes are taken at a time ("slicing by 8").
@@ -742,4 +742,4 @@ std::vector<uint8_t> deflate(const uint8_t* data, size_t size, int level, bool r
     return out;
 }
 
-}  // namespace jade::codec
+}  // namespace ww::codec

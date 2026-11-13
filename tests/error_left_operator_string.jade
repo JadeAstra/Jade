@@ -1,4 +1,0 @@
-// A string + anything joins them as text (D20), which an operator added to string cannot change.
-class Box(val item : int)
-op string.+(box : Box) : int => box.item
-// expect compile error: error_left_operator_string.jade:3:11: error: a string + anything joins them as text (D20); op string.+ cannot be added

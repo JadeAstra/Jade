@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: calls made from native code</h1>
-<p class="lede">Written 2026-11-13, at the user's word ("do 3 and 2", the third of the ways to make loops with calls faster): native code that calls a Jade function or method itself, without leaving the loop for the VM and coming back. A plan with its questions for the user, all decided 2026-11-13 as recommended but question 3: an exception goes through the region's machine code by unwind information for the stencils, not kept and thrown at the call. It follows <a href="native-plan.html">the native code plan</a> (M9.5), whose regions it extends; the timings behind it are in <a href="timings.html">timings.html</a> and <a href="M10-speed.html">M10-speed.html</a>. Item 2, more calls put in place automatically (small methods behind a class check, small bodies of a few statements, from other files too), is built meanwhile: what this plan is for is the calls that stay calls.</p>
+<p class="lede">Written 2026-11-13, at the user's word ("do 3 and 2", the third of the ways to make loops with calls faster): native code that calls a WinterWolf function or method itself, without leaving the loop for the VM and coming back. A plan with its questions for the user, all decided 2026-11-13 as recommended but question 3: an exception goes through the region's machine code by unwind information for the stencils, not kept and thrown at the call. It follows <a href="native-plan.html">the native code plan</a> (M9.5), whose regions it extends; the timings behind it are in <a href="timings.html">timings.html</a> and <a href="M10-speed.html">M10-speed.html</a>. Item 2, more calls put in place automatically (small methods behind a class check, small bodies of a few statements, from other files too), is built meanwhile: what this plan is for is the calls that stay calls.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -144,9 +144,9 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <ul>
 <li><strong>Quick calls.</strong> <code>CALL</code>, <code>R_CALL</code>, <code>INVOKE</code>, <code>INVOKE_OWN</code> and <code>R_INVOKE</code> enter a closure at once (<code>QUICK_CALL</code>) where nothing is to be done first: the arguments fit, no enum to settle, room for the frame, no collection due (<code>bytesAllocated_ &lt;= nextGC_</code>) and no other thread waiting (<code>attention_</code>). The caller's <code>frame-&gt;ip</code> is set to the instruction after the call, a frame pushed, and the callee's run code goes on in the same loop; its <code>RETURN</code> pops the frame and goes on in the caller. A method is found by name in the object's class (<code>cls-&gt;methods</code>), the place's cache remembering nothing yet for calls.</li>
 <li><strong>Anything else</strong> takes the cold way: a safe point (<code>GC_SAFE_POINT</code>, where the collector runs and another thread may take its turn), then <code>callValue</code>: a C++ function, a bound method, a class made, an object's method found by its interface, defaults and named arguments.</li>
-<li><strong>C++ calling Jade</strong> (<code>VM::call</code>, <code>callOn</code>): the arguments pushed at <code>sp_</code>, <code>callValue</code>, and a run of the VM's loop of its own (<code>run(base)</code>) until the frame count is back where it was; <code>NativeCallGuard</code> counts the depth (<code>nativeDepth_</code>, at most <code>kMaxNativeDepth</code>, 200, a stack overflow past it). It is the way a sort's comparison or a list's <code>forEach</code> given by C++ calls a lambda; it has never been timed as a hot way.</li>
-<li><strong>Exceptions</strong> are C++ exceptions (<code>JadeThrow</code>) from where they are thrown to the <code>run</code> whose frames they are in: <code>handled</code> asks <code>tryHandle</code> for the innermost handler (<code>handlers_</code>: a frame, a stack top, an ip), which belongs to that run only if its frame is the run's or above it; otherwise the exception goes on out of the run, to the C++ that called it.</li>
-<li><strong>Tasks that wait</strong> are set aside by throwing <code>FiberSuspend</code> through the C++ stack to <code>runFiber</code>, which a task may do only where nothing of C++ is between (<code>canSetAside</code>: <code>nativeDepth_ == 0</code>). A Jade function called by C++ cannot wait.</li>
+<li><strong>C++ calling WinterWolf</strong> (<code>VM::call</code>, <code>callOn</code>): the arguments pushed at <code>sp_</code>, <code>callValue</code>, and a run of the VM's loop of its own (<code>run(base)</code>) until the frame count is back where it was; <code>NativeCallGuard</code> counts the depth (<code>nativeDepth_</code>, at most <code>kMaxNativeDepth</code>, 200, a stack overflow past it). It is the way a sort's comparison or a list's <code>forEach</code> given by C++ calls a lambda; it has never been timed as a hot way.</li>
+<li><strong>Exceptions</strong> are C++ exceptions (<code>WwThrow</code>) from where they are thrown to the <code>run</code> whose frames they are in: <code>handled</code> asks <code>tryHandle</code> for the innermost handler (<code>handlers_</code>: a frame, a stack top, an ip), which belongs to that run only if its frame is the run's or above it; otherwise the exception goes on out of the run, to the C++ that called it.</li>
+<li><strong>Tasks that wait</strong> are set aside by throwing <code>FiberSuspend</code> through the C++ stack to <code>runFiber</code>, which a task may do only where nothing of C++ is between (<code>canSetAside</code>: <code>nativeDepth_ == 0</code>). A WinterWolf function called by C++ cannot wait.</li>
 <li><strong>Threads</strong> take turns holding the VM's lock: a thread gives the others a turn only at a call or at the end of a loop's body (G64); native code checks the attention flag at its loops' ends and leaves.</li>
 </ul>
 
@@ -170,7 +170,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 
 <h2 id="cp-which">Which calls</h2>
 <ul>
-<li><strong>Jade closures</strong>: a function called by name, a lambda a function was given, a method of an object's class found by name as <code>QUICK_CALL</code> finds it. These are the calls item 2 leaves.</li>
+<li><strong>WinterWolf closures</strong>: a function called by name, a lambda a function was given, a method of an object's class found by name as <code>QUICK_CALL</code> finds it. These are the calls item 2 leaves.</li>
 <li><strong>C++ functions</strong> (<code>Math</code>, a list's own methods, the text and picture libraries): the VM calls most of them at once already (<code>quickNative</code>), and many are steps of native code (a list's size, an item). Left to the VM at first (question 7).</li>
 <li><strong>Not</strong>: calls with named arguments or a spread, of a class (an object made), of a function that may wait, of a value the region knows nothing of where its call would not be quick in the VM either.</li>
 </ul>
@@ -190,12 +190,12 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li>What a program does, its errors and their messages, stack traces, the order things are worked out in.</li>
 <li>When other threads take their turns, and that a task that waits is set aside.</li>
 <li>How deep recursion may go before a stack overflow.</li>
-<li>The run code and the VM's own calls; <code>jade --interpret</code> and <code>JADE_NATIVE=0</code>.</li>
+<li>The run code and the VM's own calls; <code>ww --interpret</code> and <code>WW_NATIVE=0</code>.</li>
 </ul>
 
 <h2 id="cp-risks">Risks</h2>
 <ul>
-<li><strong><code>VM::call</code> is slow for this.</strong> It was made for C++ calling Jade now and then: a guard, room checked, <code>callValue</code>, the loop's setup and its <code>try</code>. If it costs more than the way out and back in it saves, the call needs a way of its own (question 1), or the gain is the once-looks alone.</li>
+<li><strong><code>VM::call</code> is slow for this.</strong> It was made for C++ calling WinterWolf now and then: a guard, room checked, <code>callValue</code>, the loop's setup and its <code>try</code>. If it costs more than the way out and back in it saves, the call needs a way of its own (question 1), or the gain is the once-looks alone.</li>
 <li><strong>The C++ stack.</strong> Native code calling the VM calling native code: each level a run of the loop on the C++ stack, which a deep recursion through loops could use up before the VM's own frame limit. The depth limit (question 6) is what keeps it as today.</li>
 <li><strong>A slot the region has not written.</strong> A copy made only at a way out (a slot as entered, read where it is) must be made before a call, as at a way out, or a callee reading it through an upvalue sees what was there before.</li>
 <li><strong>Exceptions kept across the region's return</strong>: one kept and never thrown, or thrown twice, would lose an error or report one twice. Each way the step leaves is tested.</li>
@@ -208,7 +208,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <section class="decision">
 <h3><span class="code">1</span>How the call is made</h3>
 <ul>
-<li><strong>Through <code>VM::call</code></strong>, as C++ calls Jade now: nothing new in the VM, but untimed as a hot way, and it may cost more than it saves.</li>
+<li><strong>Through <code>VM::call</code></strong>, as C++ calls WinterWolf now: nothing new in the VM, but untimed as a hot way, and it may cost more than it saves.</li>
 <li><strong>A way of its own</strong>: the frame pushed as <code>QUICK_CALL</code> pushes it, the loop run until it returns, no guard or <code>callValue</code> on the way. More code in the VM; as fast as the VM's own call can be.</li>
 <li><strong>Leave and come back, made cheaper</strong>: the VM still makes the call, but the region found at once, its context not made anew, its once-looks kept. Smallest; keeps the call's cost and part of the round trip.</li>
 </ul>
@@ -261,7 +261,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <h3><span class="code">6</span>How deep calls from native code may go</h3>
 <ul>
 <li><strong>A limit of its own</strong> (say 64 runs of the loop on the C++ stack, below <code>kMaxNativeDepth</code>), past which the VM makes the call as now.</li>
-<li><strong><code>kMaxNativeDepth</code></strong> (200), as C++ calling Jade has it: past it, a stack overflow where the VM alone would go deeper.</li>
+<li><strong><code>kMaxNativeDepth</code></strong> (200), as C++ calling WinterWolf has it: past it, a stack overflow where the VM alone would go deeper.</li>
 </ul>
 <p><em>Recommended:</em> a limit of its own, falling back to the VM: recursion goes as deep as it does today, whatever native code does.</p>
 <div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: a limit of its own, falling back to the VM.</span></div>
@@ -270,11 +270,11 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <section class="decision">
 <h3><span class="code">7</span>Which calls first</h3>
 <ul>
-<li><strong>Jade functions, lambdas and methods</strong>, as <code>QUICK_CALL</code> enters them; C++ functions left to the VM.</li>
+<li><strong>WinterWolf functions, lambdas and methods</strong>, as <code>QUICK_CALL</code> enters them; C++ functions left to the VM.</li>
 <li><strong>C++ functions too</strong>, called by the helper as <code>quickNative</code> calls them.</li>
 </ul>
-<p><em>Recommended:</em> Jade's first. They are what item 2 leaves; the VM's quick way for C++ functions already costs little, and many are steps of native code.</p>
-<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: Jade's first; C++ functions left to the VM.</span></div>
+<p><em>Recommended:</em> WinterWolf's first. They are what item 2 leaves; the VM's quick way for C++ functions already costs little, and many are steps of native code.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: WinterWolf's first; C++ functions left to the VM.</span></div>
 </section>
 
 <section class="decision">
@@ -289,7 +289,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 
 <section id="cp-spike">
 <h2>The spike: failed its gate</h2>
-<p>Built and timed 2026-11-13, at the user's word ("yes, start the spike"); kept on the local branch <code>spike-native-calls</code> (ba72db3), not merged. A call step for R_CALL: the way out's stores, a stencil (<code>callvm</code>) calling a C++ helper through the region's context, then the loads of the instruction after the call and on to it; where the helper cannot make the call, the region leaves for the VM at it as before. <code>JADE_NATIVE_CALLS</code> chose the way: 1 the frame pushed as QUICK_CALL pushes it and the VM's loop run anew until it returns (question 1's own way); 2 through <code>VM::call</code>; 3 the frame pushed by the helper and the callee's first instruction's function called from the stencil itself, no new run of the loop (no exception may be thrown in it: the region's code has no unwind information). Every answer was the VM's.</p>
+<p>Built and timed 2026-11-13, at the user's word ("yes, start the spike"); kept on the local branch <code>spike-native-calls</code> (ba72db3), not merged. A call step for R_CALL: the way out's stores, a stencil (<code>callvm</code>) calling a C++ helper through the region's context, then the loads of the instruction after the call and on to it; where the helper cannot make the call, the region leaves for the VM at it as before. <code>WW_NATIVE_CALLS</code> chose the way: 1 the frame pushed as QUICK_CALL pushes it and the VM's loop run anew until it returns (question 1's own way); 2 through <code>VM::call</code>; 3 the frame pushed by the helper and the callee's first instruction's function called from the stencil itself, no new run of the loop (no exception may be thrown in it: the region's code has no unwind information). Every answer was the VM's.</p>
 <p>The loops: a call by name of a function not put in place (it calls itself, never here), and some work with such a call every time round; 10 million times round, best of three, the Clang build, on the performance cores:</p>
 <div class="table"><table>
 <thead><tr><th>Loop</th><th class="num">VM alone</th><th class="num">Native code today: out and back in</th><th class="num">Way 1</th><th class="num">Way 2</th><th class="num">Way 3</th><th class="num">Way 3, slots stored whole</th></tr></thead>

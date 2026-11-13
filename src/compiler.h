@@ -13,7 +13,7 @@
 #include "bytecode.h"
 #include "cache.h"
 
-namespace jade {
+namespace ww {
 
 class VM;
 class Checker;
@@ -74,32 +74,32 @@ inline std::string libraryKey(const Namespace* ns, const std::string& fileKey, u
     return (visibility == 1 ? "i:" : "p:") + ns->directory;
 }
 
-// How long compiling took, by part, in milliseconds: shown when JADE_TIMES is set, for the
+// How long compiling took, by part, in milliseconds: shown when WW_TIMES is set, for the
 // budgets of D145. A part inside another of the same kind is counted once.
 struct CompileTimes {
     double parse = 0, check = 0, compile = 0;
     double cacheCheck = 0, cacheRead = 0;  // a kept program: its files looked at, and it read in
     int unitsReused = 0, unitsCompiled = 0;  // units of the program put back from the cache, and compiled
-    bool preludeAttached = false;            // the standard library came compiled with jade.exe
+    bool preludeAttached = false;            // the standard library came compiled with ww.exe
     // Where a program is compiled with units put back: the kept units read (planReuse), their code
     // put back (part of compiling), and the program loaded into the VM after.
     double unitsRead = 0, putBack = 0, load = 0;
 };
 extern CompileTimes compileTimes;
 
-// Set by `jade --attach-prelude`, which compiles the standard library to attach to jade.exe:
+// Set by `ww --attach-prelude`, which compiles the standard library to attach to ww.exe:
 // the copy already attached, if any, is not used for that.
 extern bool compilingPrelude;
 
 // Reads a whole file; returns false if it cannot be opened. Strips a UTF-8 byte order mark.
 bool readFile(const std::string& path, std::string& out);
 
-// JADE_CHECK_NATIVE_RESULTS: every value a function of the C++'s gives is checked against its
+// WW_CHECK_NATIVE_RESULTS: every value a function of the C++'s gives is checked against its
 // `external` declaration when the program runs (M6.6 part 1). The standard library is then
 // compiled from its source, and compiled programs are kept apart from the others.
 bool checkingNativeResults();
 
-// JADE_COPY_READS (M6.6 part 4, value-lists.html section 12): every read of an item of a list of
+// WW_COPY_READS (M6.6 part 4, value-lists.html section 12): every read of an item of a list of
 // values that the compiler found could be made where the item is is made as a copy instead; what
 // a loop hands on to a function, which may change it through its place, stays the item. The
 // suite run so must print what it prints without.
@@ -111,7 +111,7 @@ class CompilerSession {
 public:
     // The VM supplies interned strings for the constants; it must outlive the program.
     // Every file is parsed and handed to the checker before anything is compiled; without a
-    // checker given (`jade check` gives one, to read what it found) the session has its own.
+    // checker given (`ww check` gives one, to read what it found) the session has its own.
     explicit CompilerSession(VM& vm, Checker* checker = nullptr);
     ~CompilerSession();
 
@@ -120,7 +120,7 @@ public:
     Program program;
 
     // Whether what the type checker finds in the program is a compile error (true but for
-    // `jade check`, which lists everything it finds).
+    // `ww check`, which lists everything it finds).
     bool stopAtTypeErrors = true;
 
     // Directories searched for an import that is not found next to the importing file.
@@ -134,12 +134,12 @@ public:
     // Compiles a file and everything it imports. Returns the entry module index.
     int compileFile(const std::string& path);
 
-    // For `jade test` (D153): a compiled file's statements, and the global a name at its top
+    // For `ww test` (D153): a compiled file's statements, and the global a name at its top
     // level is kept in; null and -1 where there is none.
     const std::vector<StmtPtr>* statementsOf(const std::string& path) const;
     int globalOf(const std::string& path, const std::string& name);
 
-    // The standard library compiled, as its image to be attached to jade.exe (D145, point 3);
+    // The standard library compiled, as its image to be attached to ww.exe (D145, point 3);
     // empty if it cannot be made.
     std::string preludeImage();
 
@@ -300,4 +300,4 @@ private:
     void checkConstAssignments();
 };
 
-}  // namespace jade
+}  // namespace ww

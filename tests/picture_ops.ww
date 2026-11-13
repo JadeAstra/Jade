@@ -1,0 +1,195 @@
+// Picture operations (M9/M10, questions 5 and 17): grids of colours worked on in C++, each
+// answer beside a loop in WinterWolf doing the same; the blend modes against the W3C's formulas; and
+// the Image methods built on them.
+
+fun rgba(c : Color) : string => "${c.red} ${c.green} ${c.blue} ${c.alpha}"
+// A picture of every sort of colour, see-through parts among them.
+val pic = Image(16, 12)
+pic.editPixels { g ->
+  for (y in 0 ..< 12) {
+    for (x in 0 ..< 16) { g[x, y] = Color((x * 17) % 256, (y * 23) % 256, (x * y * 7) % 256, (x + y) % 4 == 0 ? 128 : 255) }
+  }
+}
+val px = pic.pixels
+// The most any part of any pixel differs between two grids of colours.
+fun worst(a : Grid<Color>, b : Grid<Color>) : int {
+  var most = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      val p = a[x, y]
+      val q = b[x, y]
+      most = Math.max(most, Math.max(Math.max(Math.abs(p.red - q.red), Math.abs(p.green - q.green)), Math.max(Math.abs(p.blue - q.blue), Math.abs(p.alpha - q.alpha))))
+    }
+  }
+  return most
+}
+
+// -- Each part through a table --
+
+val gamma : List<int> = (0 .. 255).map { Math.round(Math.pow(it / 255.0, 0.5) * 255).toInt() }
+val mapped = px.mapChannels(gamma, null, gamma)
+val byLoop = px.map { c -> Color(gamma[c.red.toInt()], c.green.toInt(), gamma[c.blue.toInt()], c.alpha.toInt()) }
+print(worst(mapped, byLoop))   // expect: 0
+try { px.mapChannels([1, 2]) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a channel's table has 256 entries, not 2
+
+// -- Convolution, weighed by alpha --
+
+val box = Grid<float>(3, 1, fill = 1.0 / 3)
+val blurredRow = px.convolve(box)
+val rowLoop = Grid<Color>(16, 12)
+for (y in 0 ..< 12) {
+  for (x in 0 ..< 16) {
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    var a = 0.0
+    for (dx in -1 .. 1) {
+      val c = px[Math.max(0, Math.min(15, x + dx)), y]
+      val w = c.alpha.toInt() / 3.0
+      r += c.red.toInt() * w / 255
+      g += c.green.toInt() * w / 255
+      b += c.blue.toInt() * w / 255
+      a += w
+    }
+    fun part(v : float) : int => Math.min(255, Math.round(v * 255 / a).toInt())
+    rowLoop[x, y] = Color(part(r), part(g), part(b), Math.round(a).toInt())
+  }
+}
+print(worst(blurredRow, rowLoop) <= 1)   // expect: true
+
+// -- Scaled --
+
+// Halved, each pixel the mean of four, weighed by alpha; doubled with nearest, each pixel four.
+val half = px.scaled(8, 6)
+val c00 = [px[0, 0], px[1, 0], px[0, 1], px[1, 1]]
+val alphaSum = c00.sumOf { it.alpha.toInt() }
+print(half.width, half.height, half[0, 0].alpha.toInt() == Math.round(alphaSum / 4.0).toInt(),
+      Math.abs(half[0, 0].red.toInt() - Math.round(c00.sumOf { it.red.toInt() * it.alpha.toInt() } / alphaSum.toFloat()).toInt()) <= 1)   // expect: 8 6 true true
+val twice = px.scaled(32, 24, Interpolation.nearest)
+print(twice[5, 7] == px[2, 3], twice[31, 23] == px[15, 11], worst(px.scaled(16, 12), px))   // expect: true true 0
+
+// -- Windows --
+
+for (reduce in [Reduce.min, Reduce.max, Reduce.median]) {
+  val got = px.window(1, reduce)
+  var ok = true
+  for (y in 0 ..< 12) {
+    for (x in 0 ..< 16) {
+      val near : open List<Color> = []
+      for (dy in -1 .. 1) { for (dx in -1 .. 1) { if (x + dx >= 0 and x + dx < 16 and y + dy >= 0 and y + dy < 12) { near.add(px[x + dx, y + dy]) } } }
+      fun pick(parts : List<int>) : int {
+        val sorted = parts.sorted()
+        return reduce == Reduce.min ? sorted.first() : reduce == Reduce.max ? sorted.last() : sorted[(sorted.size - 1) / 2]
+      }
+      val want = Color(pick(near.map { it.red.toInt() }), pick(near.map { it.green.toInt() }), pick(near.map { it.blue.toInt() }), pick(near.map { it.alpha.toInt() }))
+      if (want != got[x, y]) { ok = false }
+    }
+  }
+  print(reduce, ok)
+}
+// expect: min true
+// expect: max true
+// expect: median true
+
+// -- Sampled --
+
+val xs = Grid<float>(3, 1)
+val ys = Grid<float>(3, 1)
+xs[0, 0] = 2.0
+xs[1, 0] = 20.0
+xs[2, 0] = 2.5
+ys[2, 0] = 1.0
+val sampled = px.sample(xs, ys, Interpolation.nearest, outside = Color.red)
+print(sampled[0, 0] == px[2, 0], rgba(sampled[1, 0]), sampled[2, 0] == px[3, 1])   // expect: true 255 0 0 255 true
+
+// -- Histograms, regions, flood fills, filling a mask --
+
+val counts = px.histogram()
+print(counts.size, counts[3][128] + counts[3][255], counts[0].sum(), counts[0][17])   // expect: 4 192 192 12
+val patches = Grid<Color>(4, 2, fill = Color.white)
+patches[0, 0] = Color(250, 250, 250)
+patches[3, 1] = Color.black
+print(patches.regions().toList(), patches.regions(tolerance = 5).toList())   // expect: [0, 1, 1, 1, 1, 1, 1, 2] [0, 0, 0, 0, 0, 0, 0, 1]
+val wand = patches.floodRegion(1, 0, tolerance = 5)
+print(wand.count, wand[0, 0], wand[3, 1])   // expect: 7 true false
+val painted = Grid<Color>(4, 2, fill = Color.white)
+painted.fill(Color.red, where = wand)
+print(painted.countDifferent(patches), rgba(painted[3, 1]), rgba(painted[0, 1]))   // expect: 8 255 255 255 255 255 0 0 255
+
+// -- Blend modes, against the W3C's formulas --
+
+fun blended(base : Color, over : Color, mode : BlendMode, opacity : Number = 1.0) : string {
+  val g = Grid<Color>(1, 1, fill = base)
+  g.blend(Grid<Color>(1, 1, fill = over), mode = mode, opacity = opacity)
+  return rgba(g[0, 0])
+}
+val b = Color(200, 100, 50)
+val s = Color(100, 150, 250)
+for (mode in [BlendMode.normal, BlendMode.multiply, BlendMode.screen, BlendMode.darken, BlendMode.lighten, BlendMode.difference, BlendMode.exclusion]) {
+  // Each part on its own, from 0 to 1: the W3C's B(cb, cs).
+  fun formula(cb : float, cs : float) : float {
+    if (mode == BlendMode.multiply) { return cb * cs }
+    if (mode == BlendMode.screen) { return cb + cs - cb * cs }
+    if (mode == BlendMode.darken) { return Math.min(cb, cs) }
+    if (mode == BlendMode.lighten) { return Math.max(cb, cs) }
+    if (mode == BlendMode.difference) { return Math.abs(cb - cs) }
+    if (mode == BlendMode.exclusion) { return cb + cs - 2 * cb * cs }
+    return cs
+  }
+  fun part(x : byte, y : byte) : int => Math.round(formula(x / 255.0, y / 255.0) * 255).toInt()
+  print(mode, blended(b, s, mode) == "${part(b.red, s.red)} ${part(b.green, s.green)} ${part(b.blue, s.blue)} 255")
+}
+// expect: normal true
+// expect: multiply true
+// expect: screen true
+// expect: darken true
+// expect: lighten true
+// expect: difference true
+// expect: exclusion true
+print(blended(b, s, BlendMode.normal, 0.5), blended(Color.clear, s, BlendMode.multiply), blended(b, Color.clear, BlendMode.screen))   // expect: 150 125 150 255 100 150 250 255 200 100 50 255
+// The non-separable modes keep the backdrop's brightness (luminosity) or take the source's.
+print(blended(Color(128, 128, 128), Color(255, 0, 0), BlendMode.color), blended(Color(255, 0, 0), Color(128, 128, 128), BlendMode.luminosity), blended(Color(255, 0, 0), Color(128, 128, 128), BlendMode.saturation))   // expect: 255 74 74 255 255 74 74 255 77 77 77 255
+
+// -- Colour tables --
+
+val same = ColorLookup { it }
+print(worst(px.mapColors(same), px) <= 1)   // expect: true
+val swap = ColorLookup { c -> Color(c.blue.toInt(), c.green.toInt(), c.red.toInt(), 255) }
+val swapped = px.mapColors(swap)
+print(worst(swapped, px.map { c -> Color(c.blue, c.green, c.red, c.alpha) }) <= 1)   // expect: true
+
+// -- The Image methods --
+
+val grey = pic.greyscale()
+val p = pic[5, 3]
+val want = Math.round(0.2126 * p.red.toInt() + 0.7152 * p.green.toInt() + 0.0722 * p.blue.toInt()).toInt()
+print(grey[5, 3].red.toInt() == want, grey[5, 3].red == grey[5, 3].green, grey[5, 3].alpha == p.alpha)   // expect: true true true
+// Every pixel exactly the weighed sum, rounded (since 2026-11-11 a mix of the channels, not a table).
+var greyOff = 0
+for (y in 0 ..< pic.height) {
+  for (x in 0 ..< pic.width) {
+    val c = pic[x, y]
+    val g = Math.min(255, Math.round(0.2126 * c.red.toInt() + 0.7152 * c.green.toInt() + 0.0722 * c.blue.toInt()).toInt())
+    if (grey[x, y].red.toInt() != g or grey[x, y].blue.toInt() != g or grey[x, y].alpha != c.alpha) { greyOff += 1 }
+  }
+}
+print(greyOff)   // expect: 0
+print(rgba(pic.inverted()[5, 3]) == "${255 - p.red.toInt()} ${255 - p.green.toInt()} ${255 - p.blue.toInt()} ${p.alpha}")   // expect: true
+print(rgba(pic.adjusted(brightness = 0)[5, 3]), rgba(pic.adjusted(contrast = 0)[5, 3]), pic.adjusted(saturation = 0)[5, 3].red == pic.adjusted(saturation = 0)[5, 3].blue,
+      worst(pic.adjusted().pixels, px))   // expect: 0 0 0 128 128 128 128 128 true 0
+val small = pic.scaled(4, 3)
+print(small.width, small.height, pic.scaled(0, 0).width)   // expect: 4 3 0
+// A quarter turn is exact with nearest; the picture's size turns with it.
+val turned = pic.transformed(Transform.rotation(Math.pi / 2), Interpolation.nearest)
+print(turned.width, turned.height, turned[11, 0] == pic[0, 0], turned[0, 15] == pic[15, 11])   // expect: 12 16 true true
+// An eighth of a turn: larger, its corners clear, its middle the picture's.
+val tilted = pic.transformed(Transform.rotation(Math.pi / 4))
+print(tilted.width, tilted.height, tilted[0, 0].alpha, tilted[10, 10].alpha.toInt() > 0)   // expect: 21 20 0 true
+val dot = Image(41, 41)
+dot[20, 20] = Color.black
+val soft = dot.blurred(3)
+var total = 0.0
+for (y in 0 ..< 41) { for (x in 0 ..< 41) { total += soft[x, y].alpha.toInt() } }
+print(total > 200 and total <= 260, soft[20, 20].alpha.toInt() > soft[23, 20].alpha.toInt(), soft[23, 20].alpha == soft[20, 23].alpha, Image(5, 5, Color.red).blurred(2)[0, 0] == Color.red)   // expect: true true true true
+val region = pic.floodRegion(0, 0, tolerance = 255)
+print(region.count, region.bounds)   // expect: 192 Rect(0, 0, 16 x 12)

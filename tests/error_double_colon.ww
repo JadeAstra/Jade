@@ -1,0 +1,3 @@
+// Kotlin's `::class` says what WinterWolf writes (D48).
+class Box
+print(Box::class)   // expect compile error: Kotlin's X::class is written X# in WinterWolf, and x::class x# (D48)

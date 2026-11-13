@@ -1,9 +1,9 @@
-# Every kernel, best of $Runs, in C++ (kernels.exe, from build.bat) and in Jade on each build
+# Every kernel, best of $Runs, in C++ (kernels.exe, from build.bat) and in WinterWolf on each build
 # given, all kept on the fast cores (bench\fastcores.ps1): a line per kernel, its time on each,
 # for docs/M10-speed.html.
-#   powershell -ExecutionPolicy Bypass -File bench\kernels\time.ps1 -Jade build\clang\jade.exe[,other\jade.exe] [-Runs 3] [-Only blur,flood]
-param([string[]]$Jade = @('build\clang\jade.exe'), [int]$Runs = 3, [string]$Only = '')
-$Jade = $Jade | ForEach-Object { $_ -split ',' }   # one string, from -File
+#   powershell -ExecutionPolicy Bypass -File bench\kernels\time.ps1 -WinterWolf build\clang\ww.exe[,other\ww.exe] [-Runs 3] [-Only blur,flood]
+param([string[]]$WinterWolf = @('build\clang\ww.exe'), [int]$Runs = 3, [string]$Only = '')
+$WinterWolf = $WinterWolf | ForEach-Object { $_ -split ',' }   # one string, from -File
 $here = $PSScriptRoot
 $repo = Split-Path (Split-Path $here)
 . (Join-Path $repo 'bench\fastcores.ps1')
@@ -11,9 +11,9 @@ $mask = Get-FastCoreMask
 $kernels = @('lineEnds', 'idct', 'huffman', 'gradient', 'radial', 'blur', 'gaussian', 'shrink', 'flood', 'lineIndex', 'lineWorker', 'base64Encode', 'base64Decode', 'xml')
 if ($Only) { $kernels = $kernels | Where-Object { ($Only -split ',') -contains $_ } }
 $programs = @(@{ name = 'C++'; exe = (Join-Path $here 'kernels.exe'); args = @() })
-foreach ($j in $Jade) {
+foreach ($j in $WinterWolf) {
     $exe = if ([IO.Path]::IsPathRooted($j)) { $j } else { Join-Path $repo $j }
-    $programs += @{ name = $j; exe = $exe; args = @((Join-Path $here 'kernels.jade')) }
+    $programs += @{ name = $j; exe = $exe; args = @((Join-Path $here 'kernels.ww')) }
 }
 "pinned to the fast cores, mask {0:X}; best of $Runs" -f $mask
 "{0,-10} {1}" -f 'kernel', (($programs | ForEach-Object { '{0,12}' -f (Split-Path (Split-Path $_.exe) -Leaf) }) -join '')

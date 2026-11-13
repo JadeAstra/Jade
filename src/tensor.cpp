@@ -1,8 +1,8 @@
-// What Tensor<T> (src/std/tensor.jade, M9/M10 question 16) is built on: the built-in __tensor. A
+// What Tensor<T> (src/std/tensor.ww, M9/M10 question 16) is built on: the built-in __tensor. A
 // tensor is a packed list of its items (a List<int>, List<float>, List<bool>, a narrow width's)
 // seen through an offset, a shape and a stride for each axis, so that a view, a transposed or
 // reshaped tensor, shares the items it came from. Each operation here walks such views, the
-// operands broadcast against each other as numpy does, with the answers Jade's arithmetic gives:
+// operands broadcast against each other as numpy does, with the answers WinterWolf's arithmetic gives:
 // an int's overflow an ArithmeticException unless the ...Wrapped forms are asked for, a float
 // with anything a float, a value written into a narrow width checked against its range.
 
@@ -17,7 +17,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -388,21 +388,21 @@ bool quickBinary(VM& vm, BinOp op, const View& a, const View& b, const View& out
         return withLanes(a, b, [&](auto A, auto B) {
             walkRows(out.shape, strides, {a.offset, b.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
                 const int64_t pa = at[0], pb = at[1], po = at[2], sa = st[0], sb = st[1], so = st[2];
-#define JADE_COMPARE(CMP)                                                                       \
+#define WW_COMPARE(CMP)                                                                       \
     if (ints) {                                                                                 \
         for (int64_t k = 0; k < n; k++) o[po + k * so] = A.i(pa + k * sa) CMP B.i(pb + k * sb); \
     } else {                                                                                    \
         for (int64_t k = 0; k < n; k++) o[po + k * so] = A.f(pa + k * sa) CMP B.f(pb + k * sb); \
     }
                 switch (op) {
-                    case kLt: JADE_COMPARE(<) break;
-                    case kLe: JADE_COMPARE(<=) break;
-                    case kGt: JADE_COMPARE(>) break;
-                    case kGe: JADE_COMPARE(>=) break;
-                    case kEq: JADE_COMPARE(==) break;
-                    default: JADE_COMPARE(!=) break;
+                    case kLt: WW_COMPARE(<) break;
+                    case kLe: WW_COMPARE(<=) break;
+                    case kGt: WW_COMPARE(>) break;
+                    case kGe: WW_COMPARE(>=) break;
+                    case kEq: WW_COMPARE(==) break;
+                    default: WW_COMPARE(!=) break;
                 }
-#undef JADE_COMPARE
+#undef WW_COMPARE
             });
         });
     }
@@ -412,19 +412,19 @@ bool quickBinary(VM& vm, BinOp op, const View& a, const View& b, const View& out
         return withLanes(a, b, [&](auto A, auto B) {
             walkRows(out.shape, strides, {a.offset, b.offset, out.offset}, [&](const int64_t* at, int64_t n, const int64_t* st) {
                 const int64_t pa = at[0], pb = at[1], po = at[2], sa = st[0], sb = st[1], so = st[2];
-#define JADE_FLOATS(EXPR)                                        \
+#define WW_FLOATS(EXPR)                                        \
     for (int64_t k = 0; k < n; k++) {                            \
         const double x = A.f(pa + k * sa), y = B.f(pb + k * sb); \
         putF(o, po + k * so, EXPR);                              \
     }
                 switch (op) {
-                    case kAdd: JADE_FLOATS(x + y) break;
-                    case kSub: JADE_FLOATS(x - y) break;
-                    case kMul: JADE_FLOATS(x * y) break;
-                    case kDiv: JADE_FLOATS(x / y) break;
-                    default: JADE_FLOATS(std::fmod(x, y)) break;
+                    case kAdd: WW_FLOATS(x + y) break;
+                    case kSub: WW_FLOATS(x - y) break;
+                    case kMul: WW_FLOATS(x * y) break;
+                    case kDiv: WW_FLOATS(x / y) break;
+                    default: WW_FLOATS(std::fmod(x, y)) break;
                 }
-#undef JADE_FLOATS
+#undef WW_FLOATS
             });
         });
     }
@@ -502,30 +502,30 @@ bool quickUnary(VM& vm, int op, const View& a, const View& out, double p, double
         return true;
     }
     if (lo != Lane::F64 || op > 14) return false;
-#define JADE_UNARY(EXPR)                                         \
+#define WW_UNARY(EXPR)                                         \
     rows([&](const auto& A, int64_t i, int64_t j) {              \
         const double x = A.f(i);                                 \
         putF(o, j, EXPR);                                        \
     });                                                          \
     break;
     switch (op) {
-        case 0: JADE_UNARY(-x)
-        case 1: JADE_UNARY(std::fabs(x))
-        case 2: JADE_UNARY(std::sqrt(x))
-        case 3: JADE_UNARY(std::exp(x))
-        case 4: JADE_UNARY(std::log(x))
-        case 5: JADE_UNARY(std::log(x) / std::log(p))
-        case 6: JADE_UNARY(std::log10(x))
-        case 7: JADE_UNARY(std::pow(x, p))
-        case 8: JADE_UNARY(std::sin(x))
-        case 9: JADE_UNARY(std::cos(x))
-        case 10: JADE_UNARY(std::tan(x))
-        case 11: JADE_UNARY(std::floor(x))
-        case 12: JADE_UNARY(std::ceil(x))
-        case 13: JADE_UNARY(std::round(x))
-        default: JADE_UNARY(std::clamp(x, p, q))
+        case 0: WW_UNARY(-x)
+        case 1: WW_UNARY(std::fabs(x))
+        case 2: WW_UNARY(std::sqrt(x))
+        case 3: WW_UNARY(std::exp(x))
+        case 4: WW_UNARY(std::log(x))
+        case 5: WW_UNARY(std::log(x) / std::log(p))
+        case 6: WW_UNARY(std::log10(x))
+        case 7: WW_UNARY(std::pow(x, p))
+        case 8: WW_UNARY(std::sin(x))
+        case 9: WW_UNARY(std::cos(x))
+        case 10: WW_UNARY(std::tan(x))
+        case 11: WW_UNARY(std::floor(x))
+        case 12: WW_UNARY(std::ceil(x))
+        case 13: WW_UNARY(std::round(x))
+        default: WW_UNARY(std::clamp(x, p, q))
     }
-#undef JADE_UNARY
+#undef WW_UNARY
     return true;
 }
 
@@ -1091,4 +1091,4 @@ void registerTensor(VM& vm) {
     vm.defineGlobal("__tensor", Value::object(lib));
 }
 
-}  // namespace jade
+}  // namespace ww

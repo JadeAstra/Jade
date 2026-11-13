@@ -1,0 +1,54 @@
+// ww test (D153, G45): a test held in a wait past its @Timeout is stopped then, not once the
+// wait ends: a sleep, a join, a lock another thread holds, the event loop, a read. On the real
+// system: in a sandbox, a sleep takes no real time (M6.6.2).
+
+fun daemon(task : suspend () -> any?) : Thread {
+  val t = Thread(task = task)
+  t.isDaemon = true
+  return t.start()
+}
+
+@Test @RealHost @Timeout(200.milliseconds) suspend fun sleeps() {
+  Thread.sleep(60.seconds)
+}
+@Test @RealHost @Timeout(200.milliseconds) suspend fun joins() {
+  daemon { Thread.sleep(60.seconds) }.join()
+}
+@Test @RealHost @Timeout(200.milliseconds) suspend fun locks() {
+  val key = Lock()
+  daemon { key.useKey { Thread.sleep(60.seconds) } }
+  Thread.sleep(50.milliseconds)
+  key.useKey { }
+}
+@Test @RealHost @Timeout(200.milliseconds) fun loops() {
+  val far = EventLoop.after(60.seconds) { }
+  try {
+    EventLoop.run()
+  } finally {
+    far.cancel()
+  }
+}
+@Test @RealHost @Timeout(0.5.seconds) suspend fun reads() {
+  // A program that writes nothing for half a minute: by Windows's ping, or elsewhere sleep (G56).
+  val quiet = FilePath.separator == "\\" ? Process("cmd", "/c", "ping -n 30 127.0.0.1 >nul") : Process("sleep", "30")
+  quiet.output.readLine()
+}
+@Test fun after() { assertEquals(2, 1 + 1) }
+
+// expect:   FAIL  sleeps
+// expect:         AssertionError: the test ran longer than its time limit, 200 ms
+// expect:           at sleeps (waits.ww:12)
+// expect:   FAIL  joins
+// expect:         AssertionError: the test ran longer than its time limit, 200 ms
+// expect:           at joins (waits.ww:15)
+// expect:   FAIL  locks
+// expect:         AssertionError: the test ran longer than its time limit, 200 ms
+// expect:           at locks (waits.ww:21)
+// expect:   FAIL  loops
+// expect:         AssertionError: the test ran longer than its time limit, 200 ms
+// expect:           at loops (waits.ww:28)
+// expect:   FAIL  reads
+// expect:         AssertionError: the test ran longer than its time limit, 500 ms
+// expect:           at reads (waits.ww:34)
+// expect:   ok    after
+// expect: 6 tests: 1 passed, 5 failed

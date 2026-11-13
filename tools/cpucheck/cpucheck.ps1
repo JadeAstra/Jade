@@ -1,23 +1,23 @@
-# Runs cpucheck.jade for a while on the chosen cores, restarting it after each failure, and
+# Runs cpucheck.ww for a while on the chosen cores, restarting it after each failure, and
 # says how many times it failed. The program always computes the same thing, so it should never
-# fail; every error listed is wrong, whether the cause is Jade or the processor.
+# fail; every error listed is wrong, whether the cause is WinterWolf or the processor.
 #
-#   powershell -ExecutionPolicy Bypass -File tools\cpucheck\cpucheck.ps1 [-Seconds 30] [-Cores fast|slow|all] [-Priority Normal|BelowNormal] [-Script file] [-Jade path]
+#   powershell -ExecutionPolicy Bypass -File tools\cpucheck\cpucheck.ps1 [-Seconds 30] [-Cores fast|slow|all] [-Priority Normal|BelowNormal] [-Script file] [-WinterWolf path]
 #
 # -Cores fast (the default) keeps it on the performance cores, where the errors happen, leaving
 # the efficient cores to everything else; slow on the efficient cores, all on every core, to
 # compare. -Priority BelowNormal keeps the machine responsive but makes the errors very rare.
-# -Script runs another program in place of cpucheck.jade.
-param([int]$Seconds = 30, [ValidateSet('fast', 'slow', 'all')][string]$Cores = 'fast', [string]$Jade = '', [string]$Script = '', [ValidateSet('Normal', 'BelowNormal')][string]$Priority = 'Normal')
+# -Script runs another program in place of cpucheck.ww.
+param([int]$Seconds = 30, [ValidateSet('fast', 'slow', 'all')][string]$Cores = 'fast', [string]$WinterWolf = '', [string]$Script = '', [ValidateSet('Normal', 'BelowNormal')][string]$Priority = 'Normal')
 
 $repo = Split-Path (Split-Path $PSScriptRoot)
 . (Join-Path $repo 'bench\fastcores.ps1')
-if (-not $Jade) {
-    foreach ($candidate in @('build\clang\jade.exe', 'build\jade.exe')) {
-        if (Test-Path (Join-Path $repo $candidate)) { $Jade = Join-Path $repo $candidate; break }
+if (-not $WinterWolf) {
+    foreach ($candidate in @('build\clang\ww.exe', 'build\ww.exe')) {
+        if (Test-Path (Join-Path $repo $candidate)) { $WinterWolf = Join-Path $repo $candidate; break }
     }
 }
-$script = if ($Script) { $Script } else { Join-Path $PSScriptRoot 'cpucheck.jade' }
+$script = if ($Script) { $Script } else { Join-Path $PSScriptRoot 'cpucheck.ww' }
 $fast = Get-FastCoreMask
 $all = [long]0
 for ($i = 0; $i -lt [Environment]::ProcessorCount; $i++) { $all = $all -bor ([long]1 -shl $i) }
@@ -26,13 +26,13 @@ if ($mask -eq 0) { $mask = $all }
 
 $cpu = (Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0').ProcessorNameString.Trim()
 "cpucheck: $cpu"
-"cores: $Cores (mask {0:X}), {1} seconds, with {2}" -f $mask, $Seconds, $Jade
+"cores: $Cores (mask {0:X}), {1} seconds, with {2}" -f $mask, $Seconds, $WinterWolf
 
 $deadline = (Get-Date).AddSeconds($Seconds)
 $runs = 0; $failures = 0
 while ((Get-Date) -lt $deadline) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Jade
+    $psi.FileName = $WinterWolf
     $psi.Arguments = '"' + $script + '"'
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true

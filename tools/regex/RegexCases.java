@@ -44,7 +44,7 @@ public class RegexCases {
         return b.toString();
     }
 
-    // Positions in code points, as Jade counts them.
+    // Positions in code points, as WinterWolf counts them.
     static int cp(String s, int unit) { return s.codePointCount(0, unit); }
 
     public static void main(String[] args) throws Exception {

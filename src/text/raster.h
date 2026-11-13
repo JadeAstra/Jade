@@ -7,7 +7,7 @@
 
 #include "face.h"
 
-namespace jade::text {
+namespace ww::text {
 
 // A small picture of one glyph and where it sits. With the pen on the baseline at (x, y),
 // y growing downwards, its top-left pixel goes at (x + left, y - top).
@@ -74,4 +74,4 @@ Path clipped(const Path& path, float fineness, float minX, float minY, float max
 void rasterizeInto(const Path& path, int left, int top, int width, int height, std::vector<uint8_t>& coverage,
                    float fineness = kGlyphFineness, FillRule rule = FillRule::NonZero);
 
-}  // namespace jade::text
+}  // namespace ww::text

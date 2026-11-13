@@ -1,4 +1,4 @@
-// What the Regex class (src/std/regex.jade) is built on: compiling a pattern, finding a match,
+// What the Regex class (src/std/regex.ww) is built on: compiling a pattern, finding a match,
 // replacing and splitting, over the engine in regex.cpp.
 
 #include <cstring>
@@ -10,7 +10,7 @@
 #include "regex.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -241,4 +241,4 @@ void registerRegex(VM& vm) {
     vm.defineGlobal("__regex", Value::object(holder));
 }
 
-}  // namespace jade
+}  // namespace ww

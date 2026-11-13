@@ -2,14 +2,14 @@ What this is
 ------------
 A check of whether a computer runs a small program reliably.
 
-test.jade is a small program, run by jade.exe on one thread: it builds the string "string"
+test.ww is a small program, run by ww.exe on one thread: it builds the string "string"
 from four pieces 60 million times and compares it with "string". The two are always equal, so a
 working computer never prints a WRONG line, and the program always ends with "done".
 
 burst.exe is a separate program that loads the processor in bursts: 32 threads wake every 50 ms,
 compute for 20 ms, and go back to sleep. The two programs share nothing.
 
-run.bat runs run.jade, which runs test.jade over and over for 3 minutes on its own, then 3
+run.bat runs run.ww, which runs test.ww over and over for 3 minutes on its own, then 3
 minutes beside burst.exe, and says how many runs failed in each phase: a run fails when it
 prints a WRONG line, stops with an error, or ends without "done". It uses all logical
 processors; on a processor with two kinds of core (Intel 12th gen and later), give the fast ones
@@ -21,21 +21,21 @@ often (about half of them) and the runs alone never do.
 
 How to run
 ----------
-Copy the whole folder anywhere and double-click run.bat (or run: jade.exe run.jade
-[--seconds 180] [--mask HEX]). Nothing is installed; jade.exe and burst.exe need only Windows
+Copy the whole folder anywhere and double-click run.bat (or run: ww.exe run.ww
+[--seconds 180] [--mask HEX]). Nothing is installed; ww.exe and burst.exe need only Windows
 itself.
 
 Files
 -----
-jade.exe        the Jade interpreter (Windows, 64-bit)
-test.jade       the program that is checked
+ww.exe        the WinterWolf interpreter (Windows, 64-bit)
+test.ww       the program that is checked
 burst.exe        the load; burst.cpp is its source, build-burst.bat builds it again
-run.jade        the check, written in Jade
+run.ww        the check, written in WinterWolf
 run.bat          runs it
 
-The C++ check (no Jade)
+The C++ check (no WinterWolf)
 ------------------------
-cpudetect.exe does the same kind of test with no Jade in it: a small interpreter and a
+cpudetect.exe does the same kind of test with no WinterWolf in it: a small interpreter and a
 garbage-collected heap written in C++ (cpudetect.cpp), building the string "string" from four
 pieces and comparing it, 60 million times per run. It starts its own burst load as a second
 process. Double-click run-cpudetect.bat: 3 minutes without load, then 3 minutes with it (or run
@@ -49,5 +49,5 @@ corruption).
 In the repository
 -----------------
 The .exe files are not kept in git. Build burst.exe and cpudetect.exe with build-burst.bat and
-build-cpudetect.bat, and copy jade.exe from build\clang (or build) to make the folder
+build-cpudetect.bat, and copy ww.exe from build\clang (or build) to make the folder
 complete; zipping the folder gives cpucheck-other-pc.zip.

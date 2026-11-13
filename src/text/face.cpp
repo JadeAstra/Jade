@@ -14,7 +14,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::text {
+namespace ww::text {
 
 // ---- Paths ----
 
@@ -628,4 +628,4 @@ bool Face::glyfOutline(int glyph, const Coords& coords, Path& path, int depth, f
     return any;
 }
 
-}  // namespace jade::text
+}  // namespace ww::text

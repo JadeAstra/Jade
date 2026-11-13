@@ -34,7 +34,7 @@
 
 #include "bytecode.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -404,7 +404,7 @@ private:
         byte(static_cast<int>(o) & 0xFF);
         byte(static_cast<int>(o) >> 8);
     }
-    Op opAt(size_t start) const { return jade::opAt(&out_[start]); }
+    Op opAt(size_t start) const { return ww::opAt(&out_[start]); }
     // Where operand k (from 1) of the instruction written at `start` is.
     static size_t operandAt(size_t start, int k) { return start + kOpBytes - 1 + static_cast<size_t>(k); }
     void putI32(size_t place, int32_t v) {
@@ -1208,7 +1208,7 @@ CodeOffsets codeOffsets(Op o) {
 // a byte), the code made of kOpBytes.
 void threadCode(FunctionProto& f, size_t opBytes) {
     const std::vector<uint8_t>& old = f.run;
-    auto opOf = [&](size_t at) { return opBytes == 1 ? static_cast<Op>(old[at]) : jade::opAt(&old[at]); };
+    auto opOf = [&](size_t at) { return opBytes == 1 ? static_cast<Op>(old[at]) : ww::opAt(&old[at]); };
     auto sizeOf = [&](size_t at) {
         const char* name = nullptr;
         return opBytes == 1 ? instructionSize(old, at) : runSize(old, at, name);
@@ -1303,7 +1303,7 @@ void runLater(FunctionProto& f) {
 
 // The length of the run code's instruction whose opcode is at `at`, and its name.
 size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
-    const Op o = jade::opAt(&run[at]);
+    const Op o = ww::opAt(&run[at]);
     name = opName(o);
     switch (o) {
         case Op::MoveS:
@@ -1345,10 +1345,10 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
     return kOpBytes + operandBytes(o);
 }
 
-// JADE_DUMP_RUN=name: the run code made for each function of that name, to standard error, for
+// WW_DUMP_RUN=name: the run code made for each function of that name, to standard error, for
 // looking at what the translator does.
 void dump(const FunctionProto& f) {
-    static const char* const wanted = std::getenv("JADE_DUMP_RUN");
+    static const char* const wanted = std::getenv("WW_DUMP_RUN");
     if (wanted == nullptr || f.name != wanted) return;
     std::fprintf(stderr, "== %s: %zu bytes of stack code, %zu of run code\n", f.name.c_str(), f.code.size(), f.run.size());
     for (size_t at = 0; at + kThreaded < f.run.size();) {
@@ -1367,11 +1367,11 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
         threadCode(f, 1);
         return;
     }
-    // The register code in full, unless JADE_REGISTER_CODE says otherwise, for testing and timing
+    // The register code in full, unless WW_REGISTER_CODE says otherwise, for testing and timing
     // the other ways (the M6.7 plan, docs/plans-and-gaps.html): =joined makes only the stack code's joined instructions R
     // instructions, as the default was until part D, and =plain makes every function keep its stack
     // code, as one of more than 255 slots does. Any other value is the default.
-    static const char* const asked = std::getenv("JADE_REGISTER_CODE");
+    static const char* const asked = std::getenv("WW_REGISTER_CODE");
     static const Mode mode = asked == nullptr                    ? Mode::Full
                              : std::string(asked) == "joined"    ? Mode::Joined
                              : std::string(asked) == "plain"     ? Mode::Plain
@@ -1383,9 +1383,9 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
         return;
     } catch (const std::exception& e) {
         // Code the translator does not expect keeps its stack code, which runs as before; with
-        // JADE_TRANSLATE_STRICT set, a test of the translator, it is an error. A function needing
+        // WW_TRANSLATE_STRICT set, a test of the translator, it is an error. A function needing
         // more than 255 slots keeps its stack code either way.
-        if (std::getenv("JADE_TRANSLATE_STRICT") != nullptr && f.maxStack <= 255)
+        if (std::getenv("WW_TRANSLATE_STRICT") != nullptr && f.maxStack <= 255)
             throw std::runtime_error(std::string("cannot translate ") + f.name + ": " + e.what());
     }
     Translator(f, depths, Mode::Plain).translate();
@@ -1393,4 +1393,4 @@ void translate(FunctionProto& f, const std::vector<int>& depths) {
     dump(f);
 }
 
-}  // namespace jade
+}  // namespace ww

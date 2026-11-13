@@ -1,5 +1,5 @@
 # The benchmarks of M6.5 part 4: a numeric loop, calls, field access and a JadeGate-style
-# simulation slice. Each times its own work (not jade.exe starting) and prints a check value;
+# simulation slice. Each times its own work (not ww.exe starting) and prints a check value;
 # this runs each a few times and takes the best. With -Save, the times are kept as the
 # baseline; afterwards each run is shown against it.
 #
@@ -10,7 +10,7 @@
 # the core. There is no way to run them anywhere else; a processor whose kinds of core cannot be
 # read stops the run.
 
-param([string]$Jade = (Join-Path $PSScriptRoot '..\build\jade.exe'), [int]$Runs = 5, [switch]$Save)
+param([string]$WinterWolf = (Join-Path $PSScriptRoot '..\build\ww.exe'), [int]$Runs = 5, [switch]$Save)
 
 . (Join-Path $PSScriptRoot 'fastcores.ps1')
 $mask = Get-FastCoreMask
@@ -25,11 +25,11 @@ if (Test-Path $baselineFile) {
 }
 
 $results = @()
-foreach ($bench in Get-ChildItem (Join-Path $PSScriptRoot '*.jade') | Sort-Object Name) {
+foreach ($bench in Get-ChildItem (Join-Path $PSScriptRoot '*.ww') | Sort-Object Name) {
     $best = $null
     $check = $null
     for ($r = 0; $r -lt $Runs; $r++) {
-        $out = (Invoke-Pinned $Jade @($bench.FullName) $mask | Select-Object -Last 1) -split ' '
+        $out = (Invoke-Pinned $WinterWolf @($bench.FullName) $mask | Select-Object -Last 1) -split ' '
         $seconds = [double]$out[-1]
         $check = $out[1..($out.Count - 2)] -join ' '
         if ($null -eq $best -or $seconds -lt $best) { $best = $seconds }

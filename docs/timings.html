@@ -93,15 +93,15 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 </nav>
 
 <h2 id="how">How they are timed</h2>
-<p>The picture is a 4000 by 3000 photo, 12 million pixels, read from raw RGBA bytes. Each operation runs three times and the best time is kept, in milliseconds, on the Clang build of <code>jade.exe</code>, an i9-14900KF held at 5 GHz. Per-pixel loops are written as a program would write them, in functions of their own, so that native code makes them regions (the second time a loop starts).</p>
+<p>The picture is a 4000 by 3000 photo, 12 million pixels, read from raw RGBA bytes. Each operation runs three times and the best time is kept, in milliseconds, on the Clang build of <code>ww.exe</code>, an i9-14900KF held at 5 GHz. Per-pixel loops are written as a program would write them, in functions of their own, so that native code makes them regions (the second time a loop starts).</p>
 <p>ns a pixel is the time now divided by the pixels the operation goes through: 12 million unless the work column says otherwise.</p>
-<p><strong>100% C++</strong> (added 2026-11-13, at the user's word): the same work done by a C++ program of its own, <code>bench/kernels/timings.cpp</code> (<code>timings.bat</code> builds it as <code>jade.exe</code> is built, clang-cl /O2): plain loops over the picture's bytes, one thread, no intrinsics (Clang vectorises what it can), its results made new where Jade's are, on the same photo, the best of three on the performance cores. Jade ÷ C++ is how many times longer Jade takes now. <em>already C++</em>: Jade does the work for each pixel in C++ itself, a call or a few from Jade, so a program all in C++ would take what Jade takes. Where a plain C++ loop doing the same was clearly quicker than Jade's C++, its time is given beside it (<em>plain</em>): <code>copy()</code> and <code>toTensor()</code> copied the pixels once more than they needed, <code>pixels[a..b, c..d]</code> grew its list a row at a time, and a canvas's <code>fillRect</code> went through the shape rasterizer; all four fixed on 2026-11-13, at the user's word ("fix the four easy ones"). Plain loops written as simply for the others (greyscale(), blurred, scaled, transformed, blend) were slower than Jade's C++ (rounding with <code>std::round</code> and working in doubles), and are not given.</p>
-<p>Where Jade is quicker than C++ (a copy, or <code>map</code>, each making a new result), it is not its code but memory: the C++ program gives a result of 12 to 48 MB back to the system after each round and gets fresh pages the next, each first touched paying a fault, where Jade's collector keeps the memory and uses it again. A C++ <code>map</code> into a new result each round took 5.1 ms, into one used again 2.5; a copy 8.1 against 2.6 (2026-11-13).</p>
+<p><strong>100% C++</strong> (added 2026-11-13, at the user's word): the same work done by a C++ program of its own, <code>bench/kernels/timings.cpp</code> (<code>timings.bat</code> builds it as <code>ww.exe</code> is built, clang-cl /O2): plain loops over the picture's bytes, one thread, no intrinsics (Clang vectorises what it can), its results made new where WinterWolf's are, on the same photo, the best of three on the performance cores. WinterWolf ÷ C++ is how many times longer WinterWolf takes now. <em>already C++</em>: WinterWolf does the work for each pixel in C++ itself, a call or a few from WinterWolf, so a program all in C++ would take what WinterWolf takes. Where a plain C++ loop doing the same was clearly quicker than WinterWolf's C++, its time is given beside it (<em>plain</em>): <code>copy()</code> and <code>toTensor()</code> copied the pixels once more than they needed, <code>pixels[a..b, c..d]</code> grew its list a row at a time, and a canvas's <code>fillRect</code> went through the shape rasterizer; all four fixed on 2026-11-13, at the user's word ("fix the four easy ones"). Plain loops written as simply for the others (greyscale(), blurred, scaled, transformed, blend) were slower than WinterWolf's C++ (rounding with <code>std::round</code> and working in doubles), and are not given.</p>
+<p>Where WinterWolf is quicker than C++ (a copy, or <code>map</code>, each making a new result), it is not its code but memory: the C++ program gives a result of 12 to 48 MB back to the system after each round and gets fresh pages the next, each first touched paying a fault, where WinterWolf's collector keeps the memory and uses it again. A C++ <code>map</code> into a new result each round took 5.1 ms, into one used again 2.5; a copy 8.1 against 2.6 (2026-11-13).</p>
 
 <h2 id="yardstick">The yardstick</h2>
-<p>The same work on the picture's bytes (<code>rgbaBytes()</code>, four to a pixel) in a plain Jade loop: what a pixel loop can come near.</p>
+<p>The same work on the picture's bytes (<code>rgbaBytes()</code>, four to a pixel) in a plain WinterWolf loop: what a pixel loop can come near.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op">bytes: read red</td><td class="num">3.7</td><td class="num">0.3</td><td class="num">3.6</td><td class="num">1.0×</td></tr>
 <tr class="note-row slow"><td colspan="5"><code>t += px[i * 4].toInt()</code>. Was 12.3 ms, a step at a time (5 cycles a pixel). Native code's sum template, which runs such a loop whole, took only <code>t += xs[i]</code>; now it takes an item at counter &times; K + C too, and sums bytes with no check of each where none can take the total past the largest int, which Clang does several at a time (2026-11-13). On the way: the template's checked sum of bytes left an overflowing total wrapped round, and the loop went on from there, where it should have thrown.</td></tr>
@@ -111,7 +111,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 
 <h2 id="read">Reading pixels</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">3.3</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
 <tr class="note-row slow"><td colspan="6">Inline op [], the pixel read where it is; was 67.2 ms, 25 steps a pixel, most of them the check that (x, y) is in the image. Now native code runs the inner loop whole as a loop template (2026-11-13): a total of a field of items at base + counter (here <code>y * width + x</code>), and loop templates now take bodies holding a guard, a way to a throw or a return on a condition (op []'s check, or an <code>if</code> that throws), checking first that the guard holds nowhere from the loop's first counter to its last; where it might, the loop's own steps run and throw at the pixel they would.</td></tr>
@@ -131,7 +131,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 
 <h2 id="write">Writing pixels</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op"><code>image[x, y] = c</code>, <code>c</code> a parameter</td><td class="num">652.9</td><td class="num">3.1</td><td class="num">0.3</td><td class="num">3.2</td><td class="num">1.0×</td></tr>
 <tr class="note-row slow"><td colspan="6">op []='s own copy of its argument (OWN_LOCAL) was the VM's where the argument was a parameter passed on unchanged. Now native code makes the copy. Was 145.1 ms: some 30 steps a pixel kept the image's changed rectangle. Now an empty rectangle is kept as the largest left and top and the smallest right and bottom, so that a change widens each side by an if of its own, no case for an empty rectangle; and a loop template fills the items at base + counter with the one colour and works out the held fields such an if (a min or a max) or an add changes for the whole loop at once (2026-11-13). A colour made at the call (in the caller's place) is taken as one in a slot.</td></tr>
@@ -144,7 +144,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <h2 id="change">Reading, changing and writing</h2>
 <p>A greyscale: each pixel read, its grey worked out, the pixel set to it.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op">by <code>image[x, y] = Color(...)</code></td><td class="num">320.7</td><td class="num">8.7</td><td class="num">0.7</td><td class="num">7.4</td><td class="num">1.2×</td></tr>
 <tr class="note-row slow"><td colspan="6">Native throughout; each set also widens the image's changed rectangle, held for the loop and written back once. Was 296.4 ms; now a loop template sets each pixel to a value made of bytes, each one mix of the pixel's bytes (here the grey), a byte of the pixel or a constant, the class Color(...) calls checked to be the one the loop made it of; a mix that might leave a byte's range worked out a pixel at a time, the loop's own steps throwing at the pixel that does (2026-11-13).</td></tr>
@@ -153,12 +153,12 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tr class="has-note slow"><td class="op">by <code>pixels.map { ... }</code></td><td class="num">1031.8</td><td class="num">16.6</td><td class="num">1.4</td><td class="num">18.8</td><td class="num">0.9×</td></tr>
 <tr class="note-row slow"><td colspan="6">Was a call of the lambda for each pixel. Now <code>map</code> is inline. Was 176.4 ms; now as above, into the new grid at the counter.</td></tr>
 <tr class="has-note slow"><td class="op"><code>pixels.mapChannels(t, t, t)</code></td><td class="num">16.3</td><td class="num">16.1</td><td class="num">1.3</td><td class="num">15.5</td><td class="num">1.0×</td></tr>
-<tr class="note-row slow"><td colspan="6">Was one call into C++ with a table for each channel (19.6 ms, the C++ column its time then). Now written in Jade (2026-11-13): each table made bytes once, then a loop over the pixels, <code>Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])</code>, which native code runs whole as a loop template, each byte of the new colour a table's byte at a byte of the pixel. The same pixels and errors; the C++ is gone. Since the same day the loop is written plainly in the extension function, <code>to[i] = Color(...)</code> (a bare global call there and a value made where the item is now both native code's), 16.5 ms.</td></tr>
+<tr class="note-row slow"><td colspan="6">Was one call into C++ with a table for each channel (19.6 ms, the C++ column its time then). Now written in WinterWolf (2026-11-13): each table made bytes once, then a loop over the pixels, <code>Color(r[c.red], g[c.green], b[c.blue], a[c.alpha])</code>, which native code runs whole as a loop template, each byte of the new colour a table's byte at a byte of the pixel. The same pixels and errors; the C++ is gone. Since the same day the loop is written plainly in the extension function, <code>to[i] = Color(...)</code> (a bare global call there and a value made where the item is now both native code's), 16.5 ms.</td></tr>
 </tbody></table></div>
 
 <h2 id="whole">Whole pictures</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op"><code>copy()</code></td><td>12 M</td><td class="num">13.4</td><td class="num">6.8</td><td class="num">0.6</td><td class="num cpp">already C++; plain 8.4</td><td class="num">0.8×</td></tr>
 <tr class="note-row slow"><td colspan="7">Was a crop of the whole picture: a clear image made first, then written over. Now the pixels are copied once, onto the end of an empty list (2026-11-13).</td></tr>
@@ -168,7 +168,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tr class="has-note"><td class="op"><code>greyscale()</code></td><td>12 M</td><td class="num">41.0</td><td class="num">39.5</td><td class="num">3.3</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr class="note-row"><td colspan="7">C++ (<code>__mixed</code>)</td></tr>
 <tr class="has-note slow"><td class="op"><code>inverted()</code></td><td>12 M</td><td class="num">70.6</td><td class="num">18.5</td><td class="num">1.5</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
-<tr class="note-row slow"><td colspan="7">Was a Jade loop over the bytes (since 2026-11-12). Now through <code>mapChannels</code>, as before that.</td></tr>
+<tr class="note-row slow"><td colspan="7">Was a WinterWolf loop over the bytes (since 2026-11-12). Now through <code>mapChannels</code>, as before that.</td></tr>
 <tr><td class="op"><code>adjusted(1.1, 1.2, 0.8)</code></td><td>12 M</td><td class="num">57.0</td><td class="num">59.8</td><td class="num">5.0</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr class="has-note slow"><td class="op"><code>blurred(3)</code></td><td>12 M</td><td class="num">564.8</td><td class="num">399.3</td><td class="num">33.3</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr class="note-row slow"><td colspan="7">Two passes of a general convolution, 19 taps each. It made the whole picture as floats (192 MB) and its answer apart, and walked each row's sums 19 times. Now rows are made as floats in a ring as wanted, each pixel summed once with its four parts together, and the answer written in place. The same pixels. A blur of its own, not rounding between its passes, would be faster but give other pixels.</td></tr>
@@ -178,7 +178,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tr class="has-note slow"><td class="op"><code>transformed(rotation(0.3))</code></td><td>19 M out</td><td class="num">992.7</td><td class="num">313.8</td><td class="num">16.5</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr class="note-row slow"><td colspan="7">Made two grids of floats as large as the result (where each new pixel comes from), then sampled through them, the picture made into planes of doubles first: some 900 MB written and read again. Now each place is worked out as it is sampled, from the colours themselves, in one pass (<code>sampleAffine</code>). The same pixels.</td></tr>
 <tr class="has-note"><td class="op"><code>histogram()</code></td><td>12 M</td><td class="num">68.4</td><td class="num">70.8</td><td class="num">5.9</td><td class="num">17.8</td><td class="num">4.0×</td></tr>
-<tr class="note-row"><td colspan="7">Jade, reading the pixels where they are.</td></tr>
+<tr class="note-row"><td colspan="7">WinterWolf, reading the pixels where they are.</td></tr>
 <tr class="has-note"><td class="op"><code>inkBox()</code> of a photo</td><td>—</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr class="note-row"><td colspan="7">Stops at the first pixel in from each side.</td></tr>
 <tr><td class="op"><code>floodRegion(10, 10, 20)</code></td><td>its region</td><td class="num">3.7</td><td class="num">3.8</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
@@ -192,7 +192,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 
 <h2 id="io">Conversions and files</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr><td class="op"><code>rgbaBytes()</code></td><td class="num">7.3</td><td class="num">7.5</td><td class="num">0.6</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr><td class="op"><code>Image.of(w, h, bytes)</code></td><td class="num">12.2</td><td class="num">11.4</td><td class="num">1.0</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
@@ -213,7 +213,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <h2 id="draw">Drawing</h2>
 <p>On an image's canvas (<code>image.canvas()</code>), 4000 by 3000.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr class="has-note slow"><td class="op">10,000 <code>fillRect</code>, 100 by 100</td><td>100 M</td><td class="num">190.9</td><td class="num">17.0</td><td class="num">0.2</td><td class="num cpp">already C++; plain 7.8</td><td class="num">2.2×</td></tr>
 <tr class="note-row slow"><td colspan="7">Went through the shape rasterizer, which worked out each pixel's coverage. A rectangle's edges are always whole pixels (they are rounded), so it covers every pixel inside it whole: now its rows are filled directly, an opaque colour as whole words, a see-through one blended as before. The same pixels, but for a rectangle reaching thousands of pixels past the picture, of which the rasterizer drew nothing (that mended for every shape the same day: a shape too large or too far off is cut to the clip first). About 6 ms of what is left is the 10,000 calls (2026-11-13).</td></tr>
@@ -230,7 +230,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <h2 id="draw-size">Drawing, by size</h2>
 <p>How lines and pictures grow with their size, on the same canvas.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel now</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel now</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr><td class="op">1,000 lines, 10 px long</td><td class="num">1.3</td><td class="num">1.3</td><td class="num">130 a pixel of length (mostly the call)</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
 <tr><td class="op">1,000 lines, 100 px long</td><td class="num">6.7</td><td class="num">6.6</td><td class="num">66</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
@@ -251,7 +251,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <h2 id="history">The pixel loops, from 2026-11-12 to now</h2>
 <p>The same loops at the start of 2026-11-12 and now: Colors read and written where they are by native code (B1 to B3), inline op [] and op []=, fields read once or held for a loop, the copies out of bodies put in place gone, an image's pixels checked once, and the fixes below. See <a href="M10-speed.html">the speed table</a> for each step.</p>
 <div class="table"><table>
-<thead><tr><th>Loop</th><th class="num">Start of 2026-11-12, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
+<thead><tr><th>Loop</th><th class="num">Start of 2026-11-12, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th><th class="num">100% C++, ms</th><th class="num">WinterWolf ÷ C++</th></tr></thead>
 <tbody>
 <tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">3.2</td><td class="num">27×</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
 <tr><td class="op"><code>val c = colors[i]</code>, four parts</td><td class="num">274</td><td class="num">72</td><td class="num">3.8×</td><td class="num">5.4</td><td class="num">13×</td></tr>
@@ -281,7 +281,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <li><strong><code>scaled</code> up</strong> (7 ns a pixel) and <strong>smoothed lines</strong> (22 ns a pixel of length) could be faster; not looked into.</li>
 <li><strong>A half see-through picture</strong> drawn costs 4 ns a pixel, the blend's division for each part.</li>
 <li><strong>PNG and WebP encoding</strong>: the compressors' own work, not looked into.</li>
-<li><strong>Against C++</strong> (the 100% C++ columns): a pixel loop written in Jade takes 4 to 47 times what the same loop takes in C++, most of them 16 to 47 times (3 to 7 ms for 12 million pixels there, vectorised by Clang), the yardstick's loops over bytes now as quick as C++'s (both run whole by loop templates), <code>histogram()</code> 4 times; what Jade does in C++ already is C++'s. <code>copy()</code>, <code>toTensor()</code>, a region of a grid and <code>fillRect</code> were 1.5 to 25 times a plain C++ loop, and are now as quick or quicker (fillRect 2.2 times, its calls from Jade). A see-through <code>fillRect</code> blends at 3.6 ns a pixel, three divisions each; not looked into.</li>
+<li><strong>Against C++</strong> (the 100% C++ columns): a pixel loop written in WinterWolf takes 4 to 47 times what the same loop takes in C++, most of them 16 to 47 times (3 to 7 ms for 12 million pixels there, vectorised by Clang), the yardstick's loops over bytes now as quick as C++'s (both run whole by loop templates), <code>histogram()</code> 4 times; what WinterWolf does in C++ already is C++'s. <code>copy()</code>, <code>toTensor()</code>, a region of a grid and <code>fillRect</code> were 1.5 to 25 times a plain C++ loop, and are now as quick or quicker (fillRect 2.2 times, its calls from WinterWolf). A see-through <code>fillRect</code> blends at 3.6 ns a pixel, three divisions each; not looked into.</li>
 </ul>
 </main>
 </body>

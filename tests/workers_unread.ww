@@ -1,0 +1,16 @@
+// Messages a worker never reads let go of the frozen data they share (G48): once the worker
+// has ended, only this program holds the block, as before anything was sent.
+val table = [(1..100).toList(), "text"].frozen()
+val deaf = Worker("workers/deaf.ww")
+deaf.post(table)
+deaf.post(table)
+fun check() {
+  if (deaf.isAlive) {
+    EventLoop.after(5.milliseconds) { check() }
+    return
+  }
+  // Sent to a worker that has ended: not sent, and nothing held for it.
+  print(deaf.post(table), Worker.sharedHoldsForTest(table))
+}
+check()
+// expect: false 1

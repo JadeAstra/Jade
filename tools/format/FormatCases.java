@@ -1,5 +1,5 @@
-// Writes tests/format_java.jade: String.format's fractions (f, e, g) as Java 23 writes them, for
-// Jade's format to match. Run: java tools/format/FormatCases.java > tests/format_java.jade
+// Writes tests/format_java.ww: String.format's fractions (f, e, g) as Java 23 writes them, for
+// WinterWolf's format to match. Run: java tools/format/FormatCases.java > tests/format_java.ww
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -17,7 +17,7 @@ public class FormatCases {
         for (int i = 0; i < 20; i++) values.add((double) Math.round(random.nextDouble() * 100000) / 1000.0);
         String[] patterns = {"%f", "%.0f", "%.1f", "%.2f", "%.3f", "%.10f", "%e", "%.0e", "%.2e", "%.4E", "%g", "%.0g", "%.1g", "%.4g", "%.6G",
                              "%,.2f", "%010.3f", "%+.1e", "%12.4g", "%-12.2f|", "% .3f", "%,g"};
-        System.out.println("// Jade's format writes fractions (f, e, g) as Java's String.format does: from the shortest digits");
+        System.out.println("// WinterWolf's format writes fractions (f, e, g) as Java's String.format does: from the shortest digits");
         System.out.println("// that give the number back, rounded half up, %g keeping its zeros. Made by");
         System.out.println("// tools/format/FormatCases.java on Java 23; do not edit by hand.");
         System.out.println();

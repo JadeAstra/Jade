@@ -1,0 +1,2 @@
+// Java's comma between the classes a function throws says WinterWolf's | (8.5k).
+fun load() : string throws IOException, TimeoutException { return "" }   // expect compile error: the classes a function throws are joined with |: throws IOException | TimeoutException (D52)

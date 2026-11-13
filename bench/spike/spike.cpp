@@ -1,9 +1,9 @@
 // M9.5's spike (docs/native-plan.html, step 0): the machine code each level of native code would
-// run for three loops, written by hand in C++ and timed beside the VM (the same loops in Jade,
-// spike.jade) and plain C++. Nothing in Jade uses this; it says whether the plan's targets hold.
+// run for three loops, written by hand in C++ and timed beside the VM (the same loops in WinterWolf,
+// spike.ww) and plain C++. Nothing in WinterWolf uses this; it says whether the plan's targets hold.
 //
-// The loops are the VM's run code for them (JADE_DUMP_RUN), instruction for instruction:
-//   mandelbrot   bench/numeric.jade's: typed float and int arithmetic, a while loop.
+// The loops are the VM's run code for them (WW_DUMP_RUN), instruction for instruction:
+//   mandelbrot   bench/numeric.ww's: typed float and int arithmetic, a while loop.
 //   bytes        dst[i] = ((src[i] * 3 + 7) & 255).toByte() over 8 million bytes.
 //   gradient     bench/kernels' K4: four bytes a pixel over 3840 by 2160.
 //
@@ -22,8 +22,8 @@
 //             source lets the compiler see cannot overflow; vector instructions.
 //   c++       the same work in plain C++, no checks.
 //
-// Built with the same Clang as jade.exe: build.bat. Run pinned: bench\pinned.ps1 is for Jade;
-// spike.ps1 runs this and spike.jade on the fast cores.
+// Built with the same Clang as ww.exe: build.bat. Run pinned: bench\pinned.ps1 is for WinterWolf;
+// spike.ps1 runs this and spike.ww on the fast cores.
 
 #include <chrono>
 #include <cstdint>

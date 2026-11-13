@@ -6,7 +6,7 @@
 #include "ast.h"
 #include "lexer.h"
 
-namespace jade {
+namespace ww {
 
 // Recursive-descent parser. Statements end at a line break or ';'. A line break also stops
 // an expression from continuing with '(', '[', binary '-', '++' or '--', the forms that could
@@ -145,4 +145,4 @@ private:
     bool trailingLambdaNext() const;
 };
 
-}  // namespace jade
+}  // namespace ww

@@ -1,5 +1,5 @@
 // A sandbox's host (M6.6.2): files kept in memory, faults that make their rare failures happen,
-// and nothing of the system reached. What `Sandbox` in the standard library (sandbox.jade) is
+// and nothing of the system reached. What `Sandbox` in the standard library (sandbox.ww) is
 // built on; see the M6.6.2 plan, in docs/plans-and-gaps.html.
 #include "sandbox.h"
 
@@ -15,7 +15,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -763,4 +763,4 @@ void registerSandbox(VM& vm) {
     vm.defineGlobal("__sandbox", Value::object(box));
 }
 
-}  // namespace jade
+}  // namespace ww

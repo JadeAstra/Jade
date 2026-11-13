@@ -38,7 +38,7 @@
 #include "../value.h"
 #include "native.h"
 
-namespace jade::native {
+namespace ww::native {
 
 namespace {
 
@@ -1239,7 +1239,7 @@ struct Region {
         try {
             step(c);
         } catch (const Island&) {
-            static const bool trace = std::getenv("JADE_TRACE_ISLANDS") != nullptr;
+            static const bool trace = std::getenv("WW_TRACE_ISLANDS") != nullptr;
             if (trace)
                 std::fprintf(stderr, "  island: %s at %u (%s), first slots %d:%d %d:%d\n", opName(x.op), x.at, f.name.c_str(), x.o[0], start.kind(x.o[0]).bits,
                              x.o[1], start.kind(x.o[1]).bits);
@@ -4521,11 +4521,11 @@ struct Region {
                 if (l.stem != "jump" && l.stem != "movi" && l.stem != "movf") work++;
         }
         static const int ratio = [] {
-            const char* given = std::getenv("JADE_NATIVE_RATIO");
+            const char* given = std::getenv("WW_NATIVE_RATIO");
             return given != nullptr ? std::atoi(given) : 6;
         }();
-        // JADE_WORTH: what each loop does itself and leaves to the VM, as weighed here.
-        static const bool show = std::getenv("JADE_WORTH") != nullptr;
+        // WW_WORTH: what each loop does itself and leaves to the VM, as weighed here.
+        static const bool show = std::getenv("WW_WORTH") != nullptr;
         if (show) std::fprintf(stderr, "worth %s at %u: work %d islands %d\n", f.name.c_str(), ins[0].at, work, islands);
         return work >= 3 && work >= ratio * islands;
     }
@@ -4779,17 +4779,17 @@ struct Candidate {
 
 void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
-// How long making regions took, said as the program ends where JADE_TIME_NATIVE is set.
-double phaseTimes[4] = {};  // each phase's time, for JADE_TIME_NATIVE
+// How long making regions took, said as the program ends where WW_TIME_NATIVE is set.
+double phaseTimes[4] = {};  // each phase's time, for WW_TIME_NATIVE
 long refusals = 0;
 double setupTime = 0;
 struct NativeTimes {
     double seconds = 0;
     long functions = 0;
     ~NativeTimes() {
-        if (std::getenv("JADE_TIME_NATIVE") != nullptr)
+        if (std::getenv("WW_TIME_NATIVE") != nullptr)
             std::fprintf(stderr, "  hints %.1f, analysis %.1f, liveness %.1f, registers %.1f ms; %ld refused; setup %.1f ms\n", phaseTimes[0] * 1000, phaseTimes[1] * 1000, phaseTimes[2] * 1000, phaseTimes[3] * 1000, refusals, setupTime * 1000);
-        if (std::getenv("JADE_TIME_NATIVE") != nullptr) std::fprintf(stderr, "native code: %ld functions, %.1f ms making regions\n", functions, seconds * 1000);
+        if (std::getenv("WW_TIME_NATIVE") != nullptr) std::fprintf(stderr, "native code: %ld functions, %.1f ms making regions\n", functions, seconds * 1000);
     }
 } nativeTimes;
 
@@ -4798,7 +4798,7 @@ void makeRegions(FunctionProto& f, const Value* frame, int frameSlots, uint32_t 
     makeRegionsTimed(f, frame, frameSlots, head, out);
     const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     nativeTimes.seconds += took;
-    static const bool each = std::getenv("JADE_TIME_NATIVE") != nullptr && std::string(std::getenv("JADE_TIME_NATIVE")) == "each";
+    static const bool each = std::getenv("WW_TIME_NATIVE") != nullptr && std::string(std::getenv("WW_TIME_NATIVE")) == "each";
     if (each && took > 0.0003) std::fprintf(stderr, "  %.1f ms %s (%zu bytes of run code)\n", took * 1000, f.name.c_str(), f.run.size());
     nativeTimes.functions++;
 }
@@ -4845,7 +4845,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
     std::sort(loops.begin(), loops.end(), [](const Candidate& x, const Candidate& y) { return x.last - x.first > y.last - y.first; });
     std::vector<Candidate> made;
     setupTime += std::chrono::duration<double>(std::chrono::steady_clock::now() - setupStart).count();
-    static const char* const dump = std::getenv("JADE_DUMP_NATIVE");
+    static const char* const dump = std::getenv("WW_DUMP_NATIVE");
     const bool dumping = dump != nullptr && (f.name == dump || std::strcmp(dump, "*") == 0);
     for (const Candidate& c : loops) {
         bool inside = false;
@@ -4905,7 +4905,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             r.lookAtListsOnce();
             r.findLive();
             static const bool ahead = [] {
-                const char* asked = std::getenv("JADE_NATIVE_TEMPLATES");
+                const char* asked = std::getenv("WW_NATIVE_TEMPLATES");
                 return asked == nullptr || std::string(asked) != "0";
             }();
             if (ahead) {
@@ -4973,10 +4973,10 @@ bool findLoops(FunctionProto& f) {
     return !f.nativeHeads.empty();
 }
 
-#if JADE_NATIVE
+#if WW_NATIVE
 const bool hooked = (findNativeLoops = &findLoops, makeNativeRegions = &makeRegions, true);
 #endif
 
 }  // namespace
 
-}  // namespace jade::native
+}  // namespace ww::native

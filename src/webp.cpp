@@ -1,6 +1,6 @@
-// What WebP (src/std/webp.jade) is built on: the work for every pixel of its two codecs, VP8L
+// What WebP (src/std/webp.ww) is built on: the work for every pixel of its two codecs, VP8L
 // (lossless) and VP8 (lossy), in C++ of WebP's own, as JPEG's scans are (the user, 2026-11-08).
-// The RIFF container, the extended header, alpha's chunk, animation's frames and errors are Jade.
+// The RIFF container, the extended header, alpha's chunk, animation's frames and errors are WinterWolf.
 // Written from the WebP specification (RFC 9649) and the VP8 one (RFC 6386).
 
 #include <algorithm>
@@ -14,7 +14,7 @@
 #include "vm.h"
 #include "vp8_tables.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -2253,4 +2253,4 @@ void registerWebp(VM& vm) {
     vm.defineGlobal("__webp", Value::object(holder));
 }
 
-}  // namespace jade
+}  // namespace ww

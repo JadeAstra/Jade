@@ -13,7 +13,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::text {
+namespace ww::text {
 
 namespace {
 
@@ -374,4 +374,4 @@ int drawText(uint8_t* rgba, int width, int height, Font& font, std::string_view 
     return total;
 }
 
-}  // namespace jade::text
+}  // namespace ww::text

@@ -1,0 +1,104 @@
+// Native code's regions (M9.5, docs/native-plan.html, step 3): loops of typed int and float
+// work run as machine code, every value in a register written back at each way out, and
+// anything the stencils do not do (an int's overflow, the VM's flag at a loop's end) left to the
+// VM at that instruction. The same answers, errors and lines as `ww --interpret` gives them:
+// the test runner runs every test both ways.
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+// A count with `and`, its values read after the loop.
+fun collatz(start : int) : string {
+  var n = start
+  var steps = 0
+  var peak = start
+  while (n != 1 and steps < 1000) {
+    if (n % 2 == 0) { n = n / 2 } else { n = 3 * n + 1 }
+    if (n > peak) { peak = n }
+    steps += 1
+  }
+  return "$steps $peak $n"
+}
+print(collatz(27), collatz(1), collatz(97))   // expect: 111 9232 1 0 1 1 118 9232 1
+
+// Floats: a sum, a product, constants on either side of - and /, and `or`.
+fun series(limit : int) : string {
+  var i = 0
+  var sum = 0.0
+  var alt = 1.0
+  var back = 0.0
+  while (i < limit or sum < 0.0) {
+    val x = i * 1.0
+    sum = sum + 1.0 / (x + 1.0)
+    alt = alt * -0.5
+    back = 10.0 - back / 3.0
+    i += 1
+  }
+  return "${Math.round(sum * 1e9) / 1e9} $alt ${Math.round(back * 1e9) / 1e9} $i"
+}
+print(series(10), series(0))   // expect: 2.928968254 0.0009765625 7.499872987 10 0.0 1.0 0.0 0
+
+// NaN: every comparison with it fails, so a loop on one ends at once.
+fun nan(start : float) : int {
+  var x = start
+  var n = 0
+  while (x < 100.0) {
+    x = x * 2.0 + 1.0
+    n += 1
+  }
+  return n
+}
+print(nan(1.0), nan(0.0 / 0.0), nan(0.25))   // expect: 6 0 7
+
+// break and continue, and a loop inside a loop.
+fun grid(w : int, h : int) : int {
+  var y = 0
+  var total = 0
+  while (y < h) {
+    var x = 0
+    while (x < w) {
+      x += 1
+      if (x % 3 == 0) { continue }
+      if (x * y > 40) { break }
+      total = total + x * y
+    }
+    y += 1
+  }
+  return total
+}
+print(grid(10, 8), grid(0, 5), grid(5, 0))   // expect: 661 0 0
+
+// An int's overflow inside a loop: the VM reports it, at its line.
+fun overflow() : int {
+  var x = int.maxValue - 3
+  var n = 0
+  while (n < 10) {
+    x = x + 1
+    n += 1
+  }
+  return x
+}
+print(failing { overflow() })
+// expect: ArithmeticException: 9223372036854775807 + 1 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around
+
+// Subtraction and multiplication by constants, the int's own form of each.
+fun ints(limit : int) : string {
+  var a = 0
+  var b = 100
+  var c = 1
+  var i = 0
+  while (i < limit) {
+    a = a + i * 3
+    b = 7 - b
+    c = c * 2 - 1 + i
+    i = i + 1
+  }
+  return "$a $b $c"
+}
+print(ints(12), ints(1))   // expect: 198 100 4084 0 -93 1

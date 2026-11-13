@@ -1,12 +1,12 @@
 #pragma once
 
 // A script's compiled program, kept on this machine for its next run (D145, point 6). Running
-// `jade something.jade` keeps the program it compiled, with what it was made from: each
-// file's size, time and hash, the files of each folder it imported, and jade.exe's own size
+// `ww something.ww` keeps the program it compiled, with what it was made from: each
+// file's size, time and hash, the files of each folder it imported, and ww.exe's own size
 // and time. A run with all of that unchanged loads the program and starts at once.
 //
-// The cache is this machine's own: %LOCALAPPDATA%\Jade\cache on Windows, ~/.cache/jade
-// elsewhere, or the directory JADE_CACHE names. It is never beside the script. Entries are
+// The cache is this machine's own: %LOCALAPPDATA%\WinterWolf\cache on Windows, ~/.cache/ww
+// elsewhere, or the directory WW_CACHE names. It is never beside the script. Entries are
 // written whole or not at all, a damaged one counts as missing, and past 500 MB the entries
 // used longest ago go first, so the cache can only ever cost a slower start.
 
@@ -16,12 +16,12 @@
 #include <string>
 #include <vector>
 
-namespace jade {
+namespace ww {
 
 // Reads a whole file into `out`, in one read. False if it cannot be read.
 bool readWholeFile(const std::filesystem::path& path, std::string& out);
 
-// The standard library compiled when jade.exe was built (D145, point 3), attached to the end
+// The standard library compiled when ww.exe was built (D145, point 3), attached to the end
 // of the file with its size and a marker: read from there without reading the rest, made into
 // a copy of the file with it attached, and taken off a file's image (for a built program,
 // which carries what it needs of it in its own code).
@@ -37,7 +37,7 @@ struct SourceRead {
     long long time = 0;
 };
 
-// A folder whose .jade files a program took: its time, and the hash of their names, when
+// A folder whose .ww files a program took: its time, and the hash of their names, when
 // they were listed.
 struct FolderRead {
     std::string path;
@@ -49,7 +49,7 @@ struct FolderRead {
 // looked at.
 bool fileStamp(const std::string& path, uintmax_t& size, long long& time);
 
-// The hash the cache keeps of a folder's .jade files: of their names, in name order.
+// The hash the cache keeps of a folder's .ww files: of their names, in name order.
 uint64_t namesHash(std::vector<std::string> names);
 
 // The hash the cache keeps of a file's text (64-bit FNV-1a).
@@ -62,7 +62,7 @@ bool cachedProgram(const std::string& path, std::string& bytecode);
 // Keeps a script's program for its next run. `bytecode` makes the program's bytes; it is
 // called, and the entry written, on a thread of its own, as the program starts, so the
 // program must not change meanwhile (a running program never changes its code).
-// finishKeeping waits for that thread before jade.exe ends.
+// finishKeeping waits for that thread before ww.exe ends.
 void keepProgram(const std::string& path, std::vector<SourceRead> files, std::vector<FolderRead> folders,
                  std::function<std::string()> bytecode);
 void finishKeeping();
@@ -86,4 +86,4 @@ bool keptUnit(const std::string& unit, KeptUnit& out);
 // Keeps a unit, written with the program's entry by the same thread (`image` is called there).
 void keepUnit(const std::string& unit, KeptUnit entry, std::function<std::string()> image);
 
-}  // namespace jade
+}  // namespace ww

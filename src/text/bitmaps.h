@@ -12,7 +12,7 @@
 #include "face.h"
 #include "raster.h"
 
-namespace jade::text {
+namespace ww::text {
 
 struct BitmapGlyphs {
     // Null if the font has no glyphs of this kind.
@@ -47,4 +47,4 @@ private:
 // Scales a picture of four bytes a pixel (colours multiplied by alpha) to another size.
 void scalePicture(const std::vector<uint8_t>& from, int fromWidth, int fromHeight, std::vector<uint8_t>& to, int toWidth, int toHeight);
 
-}  // namespace jade::text
+}  // namespace ww::text

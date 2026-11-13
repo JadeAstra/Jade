@@ -1,0 +1,911 @@
+// The test suite's runner (replacing tests/run.ps1 and tests/run.py): what there is to check in
+// tests/ found, run the ways asked for, a few at a time, each told as it ends. run.ww shows it in
+// a window, or on the console with --console.
+//
+// A test file says what it should do in comments:
+//
+//   // expect: <line>                  the next line of standard output
+//   // expect runtime error: <text>    the program fails (exit code 70) and reports <text>
+//   // expect compile error: <text>    compilation fails (exit code 65) and reports <text>
+//   // expect error output: <text>     the program finishes normally, having reported <text>
+//   // windows only: <why>             passed over elsewhere, and counted apart
+//
+// Besides the tests/*.ww files: tests/check (`ww check`), tests/testing (`ww test`),
+// tests/shell (the shell), the cache's scenarios, the standard library and the examples checked
+// whole, the standard library described (`ww doc --missing`), `ww build --icon`, and the
+// start-up budgets of D145, timed last, alone.
+
+// The ways a test file is run: from source, again from the program the first run kept, again
+// from the units it kept, compiled to a bytecode file, and built into a program of its own.
+enum Way { script, cached, units, compiled, program }
+
+// Where a check is.
+enum Status { waiting, running, passed, failed, skipped }
+
+// What a check is.
+enum Kind { file, checker, testing, shell, cache, whole, described, icon, budgets }
+
+// The runtime's stress settings (D163), each run with its variable set: a list's value items read
+// as copies, a change of thread at every safe point, each C++ function's result checked against
+// its declaration, a collection at every safe point.
+enum Setting { plain, copyReads, threadStress, nativeResults, gcStress, interpret }
+
+// The variable a setting sets, and what it is called.
+fun settingVariable(s : Setting) : string? => when (s) {
+  Setting.copyReads -> "WW_COPY_READS"
+  Setting.threadStress -> "WW_THREAD_STRESS"
+  Setting.nativeResults -> "WW_CHECK_NATIVE_RESULTS"
+  Setting.gcStress -> "WW_GC_STRESS"
+  Setting.interpret -> "WW_NATIVE"
+  else -> null
+}
+// What the variable is set to: 1, but for the VM's own way alone (no native code, M9.5), 0.
+fun settingValue(s : Setting) : string => s == Setting.interpret ? "0" : "1"
+fun settingName(s : Setting) : string => when (s) {
+  Setting.copyReads -> "copy-reads"
+  Setting.threadStress -> "thread-stress"
+  Setting.nativeResults -> "native-results"
+  Setting.gcStress -> "gc-stress"
+  Setting.interpret -> "interpret"
+  else -> "plain"
+}
+fun settingNamed(name : string) : Setting? => Setting.entries.firstOrNull { settingName(it) == name }
+
+// Whether this is Windows, where a program can be built and a process's whole tree stopped.
+val onWindows : bool = FilePath.separator == "\\"
+
+// What a run is asked to do.
+class Options {
+  var ww : FilePath
+  var tests : FilePath
+  var ways : List<Way> = onWindows ? Way.entries : Way.entries.filter { it != Way.program }
+  var parallel = 1
+  var setting = Setting.plain
+  var timeLimit = 0   // seconds a run of ww may take; 0: as the setting and the build say
+  var keep = false    // the folder the checks ran in left, to be looked into (its path in `kept`)
+
+  fun init(ww : FilePath, tests : FilePath) {
+    this.ww = ww
+    this.tests = tests
+  }
+
+  // The seconds each run of ww may take before it is stopped and fails: 120; 600 under the GC
+  // stress setting, which collects at every safe point; 2400 for that with the sanitizer's build
+  // (the one with its runtime, clang_rt.asan_dynamic-x86_64.dll, beside it), where the slowest
+  // tests take about 21 minutes (2026-11-09). A test that hangs then costs minutes, not hours.
+  fun limit() : int {
+    if (timeLimit > 0) { return timeLimit }
+    if (setting != Setting.gcStress) { return 120 }
+    return sanitized() ? 2400 : 600
+  }
+
+  // Whether the ww tested is the sanitizer's build.
+  fun sanitized() : bool {
+    val folder = ww.absolute.parent
+    return folder != null and FilePath(folder, "clang_rt.asan_dynamic-x86_64.dll").exists()
+  }
+}
+
+// One check: a test file run the ways asked for, or one of the suite's other checks. What it
+// gave is kept by label (the way, or "check", "shell" and so on): "" where it passed.
+class Item(val kind : Kind, val name : string, val path : FilePath?) {
+  var status = Status.waiting
+  val results : open Map<string, string> = {:}
+  val running : open Set<string> = setOf()
+  var seconds = 0.0
+  var started = 0.0                 // clock() when it started, while it runs
+  var note = ""                     // why it was passed over, or that it passed only alone
+  var measured = ""                 // what it timed, for the budgets
+  internal var process : Process? = null
+
+  // The labels that failed.
+  val failed : List<string>
+    get() => results.keys.filter { results[it] != "" }
+
+  // What it gave, for a person: each failure, or the note.
+  fun detail() : string {
+    val parts : open List<string> = []
+    for (label in failed) { parts.add("[$label]\n    ${results[label]}") }
+    if (note != "") { parts.add(note) }
+    if (measured != "") { parts.add(measured) }
+    return parts.join("\n\n")
+  }
+}
+
+// What one run of ww (or a program) gave.
+class Run(val lines : List<string>, val error : string, val code : int, val timedOut : bool)
+
+class Suite(val options : Options) {
+  val items : List<Item>
+  private var stopping = false
+  private var scratch : FilePath? = null
+  // The folder the last run ran in, where options.keep left it.
+  var kept : FilePath? = null
+  private val lock = Lock()
+
+  fun init(options : Options) throws IOException {
+    this.options = options
+    this.items = find()
+  }
+
+  // ---- What there is ----
+
+  private fun find() : List<Item> throws IOException {
+    val found : open List<Item> = []
+    val t = options.tests
+    // Left out under the GC stress setting, which collects at every safe point: gc.ww counts
+    // collections, and topaz_treemap_big.ww's 200,000 nodes, xml_big.ww's 20,000 elements
+    // and million characters of entities, and testing/io_files.ww's 400,000-line file would
+    // take hours.
+    val leftOut = options.setting == Setting.gcStress ? ["gc.ww", "topaz_treemap_big.ww", "xml_big.ww", "io_files.ww"] : []
+    for (f in wwFiles(t)) {
+      if (f.name !in leftOut) { found.add(Item(Kind.file, f.name, f)) }
+    }
+    for (f in wwFiles(FilePath(t, "check"))) { found.add(Item(Kind.checker, "check/${f.name}", f)) }
+    for (f in wwFiles(FilePath(t, "testing"))) {
+      if (f.name !in leftOut) { found.add(Item(Kind.testing, "testing/${f.name}", f)) }
+    }
+    for (f in filesEnding(FilePath(t, "shell"), ".shell")) { found.add(Item(Kind.shell, "shell/${f.name}", f)) }
+    for (s in cacheScenarios()) { found.add(Item(Kind.cache, "cache: ${s.name}", null)) }
+    // The standard library, Topaz and the examples pass the checker as they are (M6.5); the
+    // examples are not there when the tests are copied elsewhere, nor the standard library.
+    if (FilePath(t, "basics.ww").exists()) { found.add(Item(Kind.whole, "basics.ww with the standard library", FilePath(t, "basics.ww"))) }
+    for (f in wwFiles(FilePath(t, "../examples"))) { found.add(Item(Kind.whole, "examples/${f.name}", f)) }
+    if (FilePath(t, "../src/std").isDirectory()) { found.add(Item(Kind.described, "the standard library described", FilePath(t, "../src/std"))) }
+    if (onWindows) { found.add(Item(Kind.icon, "ww build --icon", null)) }
+    // Timed only where the times mean something: no stress setting, not the sanitizer's build.
+    if (options.setting == Setting.plain and !options.sanitized()) { found.add(Item(Kind.budgets, "start-up budgets", null)) }
+    return found
+  }
+
+  private fun wwFiles(dir : FilePath) : List<FilePath> throws IOException => filesEnding(dir, ".ww")
+  private fun filesEnding(dir : FilePath, end : string) : List<FilePath> throws IOException {
+    if (!dir.isDirectory()) { return [] }
+    return dir.list().filter { it.name.endsWith(end) and !it.isDirectory() }.sortedBy { it.name }
+  }
+
+  // ---- Running ----
+
+  // Runs the items given, `options.parallel` at a time, onChange told of each as it starts and
+  // ends; then, where more than one ran at once, each that failed again alone: a failure that goes
+  // away is the load of the others, not the test. Returns once they are done or stop() is called.
+  // Call it from a thread of its own where the caller has other work, a window say.
+  suspend fun run(chosen : List<Item>, onChange : (Item) -> unit) throws IOException | ExecutionException {
+    stopping = false
+    val dir = FilePath.createTempDirectory("ww-tests")
+    scratch = dir
+    for (item in chosen) {
+      item.status = Status.waiting
+      item.results.clear()
+      item.running.clear()
+      item.note = ""
+      item.measured = ""
+      item.seconds = 0.0
+      onChange(item)
+    }
+    // The budgets after everything else, alone: they are times.
+    val timed = chosen.filter { it.kind == Kind.budgets }
+    val pool = ThreadPool(Math.max(1, options.parallel), daemon = true)
+    val jobs = chosen.filter { it.kind != Kind.budgets }.map { item -> pool.submit { runItem(item, FilePath(dir, safeName(item.name)), onChange) } }
+    for (job in jobs) { job.get() }
+    pool.close()
+    if (options.parallel > 1) {
+      for (item in chosen) {
+        if (stopping or item.status != Status.failed) { continue }
+        val before = item.failed
+        // What it said the first time, kept: a failure that goes away alone may still be a fault.
+        val said = before.map { "[$it] ${item.results[it]}" }.join("; ")
+        runItem(item, FilePath(dir, safeName(item.name) + "-alone"), onChange)
+        if (item.status == Status.passed) {
+          item.note = "passed only when run alone: [${before.join(", ")}], having said the first time: $said"
+          onChange(item)
+        }
+      }
+    }
+    for (item in timed) { runItem(item, FilePath(dir, safeName(item.name)), onChange) }
+    scratch = null
+    if (options.keep) { kept = dir } else { dir.deleteRecursively() }
+  }
+
+  // Stops the runs: the processes running are ended, and no more are started.
+  fun stop() {
+    stopping = true
+    for (item in items) {
+      val p = item.process
+      if (p != null) { endTree(p) }
+    }
+  }
+
+  private fun safeName(name : string) : string => Regex("[^A-Za-z0-9._-]").replace(name, "_")
+
+  private fun runItem(item : Item, dir : FilePath, onChange : (Item) -> unit) {
+    if (stopping) { return }
+    item.results.clear()
+    item.note = ""
+    if (item.kind == Kind.file or item.kind == Kind.checker or item.kind == Kind.testing) {
+      val why = marker(item.path!!.readText(), "// windows only: ")
+      if (why != "" and !onWindows) {
+        item.status = Status.skipped
+        item.note = "windows only: $why"
+        onChange(item)
+        return
+      }
+    }
+    val start = clock()
+    item.started = start
+    item.status = Status.running
+    onChange(item)
+    dir.mkdir()
+    try {
+      when (item.kind) {
+        Kind.file -> runFile(item, dir, onChange)
+        Kind.checker -> item.results["check"] = runCheck(item, dir)
+        Kind.testing -> item.results["ww test"] = runTesting(item, dir)
+        Kind.shell -> item.results["shell"] = runShell(item, dir)
+        Kind.cache -> item.results["cache"] = runScenario(cacheScenarios().first { "cache: ${it.name}" == item.name }, dir)
+        Kind.whole -> item.results["checked whole"] = runWhole(item, dir)
+        Kind.described -> item.results["ww doc --missing"] = runDescribed(item, dir)
+        Kind.icon -> item.results["program"] = runIcon(dir)
+        Kind.budgets -> runBudgets(item, dir)
+      }
+    } catch (e : Exception) {
+      item.results["runner"] = "the runner failed: ${e.message}"
+    }
+    item.running.clear()
+    item.seconds = clock() - start
+    item.status = stopping and item.results.isEmpty() ? Status.waiting : item.failed.isEmpty() ? Status.passed : Status.failed
+    onChange(item)
+  }
+
+  // Runs ww with `arguments` (or the program `program`) in `dir`, with the cache `cache`, its
+  // input `input` where given: what it wrote, stopped after the time limit with whatever it
+  // started.
+  private fun ww(item : Item?, arguments : List<string>, dir : FilePath, cache : FilePath, input : string? = null,
+                   program : FilePath? = null, extra : Map<string, string?> = {:}) : Run throws IOException {
+    if (stopping) { return Run([], "stopped", -1, false) }
+    // Windows the tests open show without taking the focus from the window the user is in.
+    val environment : open Map<string, string?> = {"WW_CACHE": cache.text, "WW_QUIET_WINDOWS": "1"}
+    // The setting asked for, and none of the others, whatever this program was started with.
+    for (s in Setting.entries) {
+      val v = settingVariable(s)
+      if (v != null) { environment[v] = s == options.setting ? settingValue(s) : null }
+    }
+    for ((k, v) in extra) { environment[k] = v }
+    val stamp = lock.useKey {
+      Suite.runs += 1
+      Suite.runs
+    }
+    val out = FilePath(dir, "out-$stamp.txt")
+    val err = FilePath(dir, "err-$stamp.txt")
+    val inFile = FilePath(dir, "in-$stamp.txt")
+    if (input != null) { inFile.writeText(input) }
+    val command : open List<string> = [(program ?: options.ww).text]
+    command.addAll(arguments)
+    val p = Process(command, directory = dir, environment = environment, input = input != null ? inFile : Stream.discard,
+                    output = out, error = err)
+    if (item != null) { item.process = p }
+    val limit = options.limit()
+    var code = p.waitFor(limit.seconds)
+    var timedOut = false
+    if (code == null) {
+      timedOut = true
+      endTree(p)
+      code = p.waitFor()
+    }
+    if (item != null) { item.process = null }
+    val text = out.exists() ? out.readText() : ""
+    var error = err.exists() ? err.readText() : ""
+    if (timedOut) { error = "stopped after $limit s: past the time limit\n" + error }
+    // Gone with the folder at the end where it cannot go now: a scanner looking at a file just
+    // written may hold it a moment, and that is no fault of the test's.
+    for (f in [out, err, inFile]) {
+      try { f.deleteIfExists() } catch (e : IOException) { }
+    }
+    return Run(splitLines(text), error, code!!, timedOut)
+  }
+
+  static {
+    var runs = 0
+  }
+
+  // A process and those it started ended: on Windows by taskkill, elsewhere the process alone.
+  private fun endTree(p : Process) {
+    if (onWindows) {
+      try { Process.run("taskkill", "/PID", "${p.pid}", "/T", "/F", timeout = 30.seconds) } catch (e : Exception) { p.kill() }
+    } else {
+      p.kill()
+    }
+  }
+
+  private fun splitLines(text : string) : List<string> {
+    val lines = text.split("\n").map { it.endsWith("\r") ? it.dropLast(1) : it }.toOpenList()
+    if (lines.isNotEmpty() and lines.last() == "") { lines.removeLast() }
+    return lines
+  }
+
+  // "" where the run matches, else the first difference.
+  private fun compare(run : Run, expected : List<string>, errorText : string, exitCode : int) : string {
+    if (run.timedOut) { return run.error.lines().first() }
+    val actual = run.lines
+    for (i in 0 ..< Math.max(expected.size, actual.size)) {
+      val want = i < expected.size ? expected[i].trimEnd() : "<no more output>"
+      val got = i < actual.size ? actual[i].trimEnd() : "<no more output>"
+      if (want != got) { return "output line ${i + 1}:\n      expected: $want\n      actual:   $got" }
+    }
+    if (run.code != exitCode) { return "exit code ${run.code}, expected $exitCode\n      stderr: ${run.error.trim()}" }
+    if (errorText != "" and !run.error.contains(errorText)) { return "stderr does not contain: $errorText\n      stderr: ${run.error.trim()}" }
+    if (errorText == "" and run.error.trim() != "") { return "unexpected stderr: ${run.error.trim()}" }
+    return ""
+  }
+
+  // What the first line holding `start` says after it, its end trimmed; "" where none does.
+  private fun marker(text : string, start : string) : string {
+    for (line in text.lines()) {
+      val at = line.indexOf(start)
+      if (at >= 0) { return line[at + start.size ..< line.size].trimEnd() }
+    }
+    return ""
+  }
+
+  // Every `// expect:` line's text, the space after the colon left out.
+  private fun expectations(text : string) : List<string> {
+    val found : open List<string> = []
+    for (line in text.lines()) {
+      val at = line.indexOf("// expect:")
+      if (at >= 0) {
+        val rest = line[at + 10 ..< line.size]
+        found.add(rest.startsWith(" ") ? rest.drop(1) : rest)
+      }
+    }
+    return found
+  }
+
+  // A tests/*.ww file, the ways asked for, each in turn in its own directory with its own cache.
+  private fun runFile(item : Item, dir : FilePath, onChange : (Item) -> unit) throws IOException {
+    val path = item.path!!
+    val text = path.readText()
+    val name = path.nameWithoutExtension
+    val cache = FilePath(dir, "cache")
+    val ways = options.ways
+    val bytecode = FilePath(dir, "$name.wwc")
+    val compileError = marker(text, "// expect compile error: ")
+    fun way(w : Way, check : () -> string throws IOException) throws IOException {
+      if (w !in ways or stopping) { return }
+      item.running.add(w.name)
+      onChange(item)
+      item.results[w.name] = check()
+      item.running.remove(w.name)
+      onChange(item)
+    }
+    if (compileError != "") {
+      way(Way.script) { compare(ww(item, [path.text], dir, cache), [], compileError, 65) }
+      way(Way.compiled) { compare(ww(item, ["build", path.text, "-o", bytecode.text], dir, cache), [], compileError, 65) }
+      return
+    }
+    val expected = expectations(text)
+    val runtimeError = marker(text, "// expect runtime error: ")
+    // `// expect error output: <text>`: the program goes on to its end, having reported <text>
+    // (an error that ended one of its threads, say).
+    val errorText = runtimeError != "" ? runtimeError : marker(text, "// expect error output: ")
+    val exitCode = runtimeError != "" ? 70 : 0
+    // The first run compiles it and keeps the program; cached and units start from what it kept.
+    var first = ""
+    if (Way.script in ways or Way.cached in ways or Way.units in ways) {
+      val wanted = Way.script in ways
+      if (wanted) { item.running.add("script"); onChange(item) }
+      first = compare(ww(item, [path.text], dir, cache), expected, errorText, exitCode)
+      if (wanted) {
+        item.results["script"] = first
+        item.running.remove("script")
+        onChange(item)
+      }
+    }
+    // Run again, it starts from the program the first run kept.
+    way(Way.cached) { compare(ww(item, [path.text], dir, cache), expected, errorText, exitCode) }
+    // And without the program, it is compiled again from the units the first run kept.
+    way(Way.units) {
+      if (cache.isDirectory()) {
+        for (f in cache.list()) { if (f.name.endsWith(".program")) { f.deleteIfExists() } }
+      }
+      compare(ww(item, [path.text], dir, cache), expected, errorText, exitCode)
+    }
+    way(Way.compiled) {
+      val build = ww(item, ["build", path.text, "-o", bytecode.text], dir, cache)
+      build.code != 0 ? "build failed: ${build.error.trim()}" : compare(ww(item, [bytecode.text], dir, cache), expected, errorText, exitCode)
+    }
+    way(Way.program) {
+      val program = FilePath(dir, "$name.exe")
+      val build = ww(item, ["build", path.text, "--exe", "-o", program.text], dir, cache)
+      build.code != 0 ? "build failed: ${build.error.trim()}" : compare(ww(item, [], dir, cache, program = program), expected, errorText, exitCode)
+    }
+  }
+
+  // The type checker (M6.5): `ww check` on a tests/check file. A line ending in
+  // `// check: <message>` must be reported with that message, on that line; nothing else may be.
+  private fun runCheck(item : Item, dir : FilePath) : string throws IOException {
+    val wanted : open Set<string> = setOf()
+    var number = 0
+    for (line in item.path!!.readText().lines()) {
+      number += 1
+      val at = line.indexOf("// check: ")
+      if (at >= 0) { wanted.add("$number: ${line[at + 10 ..< line.size].trimEnd()}") }
+    }
+    val run = ww(item, ["check", item.path!!.text], dir, FilePath(dir, "cache"))
+    val problems : open List<string> = []
+    val found : open Set<string> = setOf()
+    val reported = Regex("^[^:]+:(\\d+):\\d+: error: (.*)$")
+    for (line in run.lines) {
+      val m = reported.find(line)
+      if (m != null) {
+        val key = "${m.groupValues[1]}: ${m.groupValues[2].trimEnd()}"
+        found.add(key)
+        if (key !in wanted) { problems.add("unexpected: $key") }
+      } else if (line.trim() != "") {
+        problems.add("unexpected output: $line")
+      }
+    }
+    for (key in wanted) { if (key !in found) { problems.add("not reported: $key") } }
+    val exitCode = wanted.isEmpty() ? 0 : 65
+    if (run.code != exitCode) { problems.add("exit code ${run.code}, expected $exitCode; stderr: ${run.error.trim()}") }
+    return problems.join("\n    ")
+  }
+
+  // `ww test` (D153) on a tests/testing file: its `// expect:` lines are what it prints after the
+  // line naming the file, and it fails where one of them says FAIL.
+  private fun runTesting(item : Item, dir : FilePath) : string throws IOException {
+    val expected = expectations(item.path!!.readText())
+    val run = ww(item, ["test", item.path!!.text], dir, FilePath(dir, "cache"))
+    val after = Run(run.lines.drop(1), run.error, run.code, run.timedOut)
+    return compare(after, expected, "", expected.any { it.trimStart().startsWith("FAIL") } ? 1 : 0)
+  }
+
+  // The shell: a tests/shell file typed into it, line by line. Its `// expect:` lines are what the
+  // shell prints, and its `// expect error:` lines the errors, each in order.
+  private fun runShell(item : Item, dir : FilePath) : string throws IOException {
+    val text = item.path!!.readText()
+    val run = ww(item, [], dir, FilePath(dir, "cache"), input = text)
+    if (run.timedOut) { return run.error.lines().first() }
+    val outputs = run.lines.filter { it != "" }
+    val errors = splitLines(run.error).filter { it != "" }
+    val wantOut : open List<string> = []
+    val wantErr : open List<string> = []
+    for (line in text.lines()) {
+      if (line.startsWith("// expect: ")) { wantOut.add(line.drop(11)) }
+      if (line.startsWith("// expect error: ")) { wantErr.add(line.drop(17)) }
+    }
+    for (i in 0 ..< Math.max(wantOut.size, outputs.size)) {
+      val want = i < wantOut.size ? wantOut[i] : "<no more output>"
+      val got = i < outputs.size ? outputs[i].trimEnd() : "<no more output>"
+      if (want != got) { return "output ${i + 1}:\n      expected: $want\n      actual:   $got" }
+    }
+    for (i in 0 ..< Math.max(wantErr.size, errors.size)) {
+      val want = i < wantErr.size ? wantErr[i] : "<no more errors>"
+      val got = i < errors.size ? errors[i].trimEnd() : "<no more errors>"
+      if (want != got) { return "error ${i + 1}:\n      expected: $want\n      actual:   $got" }
+    }
+    return ""
+  }
+
+  // A file checked whole: `ww check --std` for basics.ww (the standard library's bodies too,
+  // which are otherwise put back unchecked), `ww check` for an example.
+  private fun runWhole(item : Item, dir : FilePath) : string throws IOException {
+    val path = item.path!!
+    val arguments = item.name.startsWith("basics.ww") ? ["check", "--std", path.text] : ["check", path.text]
+    val run = ww(item, arguments, dir, FilePath(dir, "cache"))
+    if (run.code == 0) { return "" }
+    return "exit code ${run.code}: ${(run.lines + [run.error]).join(" ").trim()}"
+  }
+
+  // Every public declaration of the standard library is described by a comment above it, which
+  // `ww doc` puts in docs/language.html: one with none is listed.
+  private fun runDescribed(item : Item, dir : FilePath) : string throws IOException {
+    val files = wwFiles(item.path!!).map { it.text }
+    val run = ww(item, ["doc", "--missing"] + files, dir, FilePath(dir, "cache"))
+    val undescribed = run.lines.filter { it != "" }
+    if (run.code == 0 and undescribed.isEmpty()) { return "" }
+    return (undescribed + [run.error]).join("\n    ")
+  }
+
+  // ---- The cache's scenarios ----
+
+  // What is put back and what is compiled again (D145). Each scenario writes a few files and runs
+  // main.ww, then changes some and runs it again, each step with what it should print, or the
+  // compile error it should give. Each step runs twice: as compiled, then as put back.
+  private fun runScenario(scenario : Scenario, dir : FilePath) : string throws IOException {
+    val cache = FilePath(dir, "cache")
+    val main = FilePath(dir, "main.ww")
+    var number = 0
+    for (step in scenario.steps) {
+      number += 1
+      for ((name, content) in step.files) {
+        val file = FilePath(dir, name)
+        file.parent!!.mkdir()
+        file.writeText(content)
+      }
+      var first = ""
+      for (which in ["first", "again"]) {
+        // The first run says what it compiled and what it put back; the second starts from the
+        // program the first kept.
+        val counted = step.units != "" and which == "first"
+        val arguments : open List<string> = []
+        for (a in step.command) { arguments.add(a) }
+        arguments.add(main.text)
+        val got = ww(null, arguments, dir, cache, extra = counted ? {"WW_TIMES": "1"} : {:})
+        var error = got.error
+        if (counted) {
+          if (!got.error.contains(step.units)) { return "step $number, $which run:\n      expected: ${step.units}\n      got: ${got.error}" }
+          error = splitLines(got.error).filter { !it.startsWith("ww:") }.join("\n")
+        }
+        val said = got.lines.join(" ")
+        if (step.sameAgain) {
+          // What the first run said, said again from the program it kept.
+          if (got.code != 0 or said == "") { return "step $number, $which run: exit code ${got.code}, said: $said ${error.trim()}" }
+          if (which == "first") {
+            first = said
+          } else if (said != first) {
+            return "step $number, again from what was kept:\n      expected: $first\n      got: $said"
+          }
+        } else if (step.error != "") {
+          if (got.code != 65 or error.trim() != step.error) { return "step $number, $which run:\n      expected the error: ${step.error}\n      got: ${error.trim()} $said" }
+        } else if (got.code != 0 or said != step.out) {
+          return "step $number, $which run:\n      expected: ${step.out}\n      got: $said ${error.trim()}"
+        }
+      }
+    }
+    return ""
+  }
+
+  // ---- The start-up budgets ----
+
+  // The start-up budgets of D145, timed on this machine: a first run, nothing cached, checked and
+  // compiled in under 500 ms for each 20,000 lines of the program (the user, 2026-11-10: it grows
+  // with the program, as a change's does); a second run with nothing changed in under 20 ms on top
+  // of ww starting; a run after a one-line change inside a function in under 100 ms for each
+  // 20,000 lines, the size the budgets were set on (the user, 2026-11-09: the program grew 2.7
+  // times, and what a change costs grows with it, every unchanged file put back). Timed on the
+  // tests, the examples, the standard library and Topaz (some 20,000 lines), each test and example
+  // in a folder of its own so that their names do not meet, imported by one main file, compiled
+  // and not run (WW_TIMES=compile). Each is the best of seven, as ww reports it: from when the
+  // system made the process to when the program is ready to run.
+  private fun runBudgets(item : Item, dir : FilePath) throws IOException {
+    val t = options.tests
+    val program = FilePath(dir, "program")
+    program.mkdir()
+    // Every test that compiles (not those that test an error of the compiler's) and every
+    // example, each with what it imports from beside it: a folder of the tests', or another example.
+    val sources : open List<FilePath> = wwFiles(t).filter { !it.name.startsWith("error_") and !it.readText().contains("// expect compile error") }.toOpenList()
+    val examples = wwFiles(FilePath(t, "../examples"))
+    sources.addAll(examples.filter { !it.name.startsWith("bounce_worker") })
+    val folders = t.list().filter { it.isDirectory() and it.name !in ["check", "testing", "shell", "runner"] }
+    val partOf : open Map<string, string> = {:}    // each file's name, and its part
+    val parts : open List<string> = []
+    val linesOf : open Map<string, int> = {:}
+    for (k in 0 ..< sources.size) {
+      val part = "part${"$k".padStart(3, '0')}"
+      val folder = FilePath(program, part)
+      folder.mkdir()
+      val text = sources[k].readText()
+      sources[k].copyTo(FilePath(folder, sources[k].name))
+      partOf[sources[k].name] = part
+      for (f in folders) {
+        if (text.contains("import ${f.name}") or text.contains("\"${f.name}")) { copyTree(f, FilePath(folder, f.name)) }
+      }
+      for (e in examples) {
+        if (e != sources[k] and text.contains("import \"${e.nameWithoutExtension}\"")) { e.copyTo(FilePath(folder, e.name), overwrite = true) }
+      }
+      parts.add(part)
+      linesOf[part] = text.lines().size
+    }
+    val main = FilePath(program, "main.ww")
+    val cache = FilePath(dir, "cache")
+    // Parts that do not go together (two tests' extensions of the same name, say) left out, as
+    // the checker names them, until the rest compiles.
+    val dropped : open List<string> = []
+    for (round in 0 ..< 8) {
+      main.writeText(parts.map { "import $it" }.join("\n") + "\nprint(\"ready\")\n")
+      val checked = ww(item, ["check", main.text], dir, cache)
+      if (checked.code == 0) { break }
+      val bad : open Set<string> = setOf()
+      for (line in checked.lines + splitLines(checked.error)) {
+        val brings = Regex("^main\\.ww:\\d+:\\d+: error: import (part\\d+) brings in").find(line)
+        if (brings != null) { bad.add(brings.groupValues[1]) }
+        val inFile = Regex("^([^:\\\\/]+\\.ww):\\d+:\\d+: error").find(line)
+        if (inFile != null) {
+          val p = partOf[inFile.groupValues[1]]
+          if (p != null) { bad.add(p) }
+        }
+      }
+      if (bad.isEmpty()) { break }
+      for (p in bad) {
+        parts.remove(p)
+        dropped.add(p)
+      }
+    }
+    var lines = 0
+    for (p in parts) { lines += linesOf[p]!! }
+    for (d in [FilePath(t, "../src/std"), FilePath(t, "../lib/Topaz")]) {
+      for (f in wwFiles(d)) { lines += f.readLines().size }
+    }
+    val leftOut = dropped.isEmpty() ? "" : " (${dropped.size} left out that do not go with the rest: " +
+                  dropped.map { p -> partOf.keys.firstOrNull { partOf[it] == p } ?: p }.join(", ") + ")"
+    val compile = {"WW_TIMES": "compile"}
+
+    // ww starting and doing nothing, timed here; the rest as ww reports it.
+    var start = 1000000.0
+    for (r in 0 ..< 7) {
+      val from = clock()
+      ww(item, ["--version"], dir, cache)
+      start = Math.min(start, (clock() - from) * 1000.0)
+    }
+    var problem = ""
+    // The best of seven: [ms from the process made, ms of ww's own work, what ww said].
+    fun best(before : () -> unit throws IOException) : List<any> throws IOException {
+      var kept : List<any> = [1000000.0, 1000000.0, ""]
+      for (r in 0 ..< 7) {
+        before()
+        val from = clock()
+        val run = ww(item, [main.text], dir, cache, extra = compile)
+        val wall = (clock() - from) * 1000.0
+        if (run.code != 0) { problem = "ww failed: ${run.error.trim()} ${run.lines.join(" ")}" }
+        val said = splitLines(run.error).filter { it.startsWith("ww:") }
+        // Where ww cannot say when its process was made (off Windows), the whole run as
+        // timed here: more than ww's start, never less.
+        var ms = said.any { it.contains("process was made") } ? 1000000.0 : wall
+        var work = 1000000.0
+        for (line in said) {
+          val made = Regex("ready to run ([\\d.]+) ms after the process was made").find(line)
+          if (made != null) { ms = made.groupValues[1].toFloat() }
+          val own = Regex("ready to run ([\\d.]+) ms after ww.exe started its work").find(line)
+          if (own != null) { work = own.groupValues[1].toFloat() }
+        }
+        if (ms < (kept[0] as float)) { kept = [ms, work, said.filter { !it.contains("waited") and !it.contains("process was made") }.join(" ")] }
+      }
+      return kept
+    }
+    // A first run: nothing cached.
+    val first = best { cache.deleteRecursively() }
+    // A second run with nothing changed.
+    ww(item, [main.text], dir, cache, extra = compile)
+    val second = best { }
+    // A run after a one-line change inside a function: a test's function body gains a line.
+    val changed = wwFiles(FilePath(program, "part000"))[0]
+    val original = changed.readText()
+    var probe = 0
+    val edited = best {
+      probe += 1
+      changed.writeText(original + "\nfun budgetProbe() : int { val n = ${clock().toInt()}$probe\n return n }\n")
+    }
+    changed.writeText(original)
+    if (problem != "") {
+      item.results["budgets"] = problem
+      return
+    }
+    // 500 and 100 ms for each 20,000 lines, and never less than 500 and 100.
+    val firstBudget = Math.max(500.0, 500.0 * lines.toFloat() / 20000.0)
+    val changeBudget = Math.max(100.0, 100.0 * lines.toFloat() / 20000.0)
+    fun ms(v : any) : string => "${Math.round((v as float) * 10.0) / 10.0} ms"
+    item.measured = "program: ${parts.size} tests and examples, the standard library and Topaz, $lines lines$leftOut\n" +
+                    "ww starting:           ${ms(start)}\n" +
+                    "first run:               ${ms(first[0])}  (budget ${firstBudget.toInt()}, 500 per 20,000 lines)    ${first[2]}\n" +
+                    "second run, unchanged:   ${ms(second[0])}, ${ms(second[1])} on top of ww starting (budget 20)    ${second[2]}\n" +
+                    "after a one-line change: ${ms(edited[0])}  (budget ${changeBudget.toInt()}, 100 per 20,000 lines)    ${edited[2]}"
+    item.results["first run"] = (first[0] as float) <= firstBudget ? "" : "took ${ms(first[0])}, budget ${firstBudget.toInt()} ms (500 per 20,000 lines)"
+    item.results["second run"] = (second[1] as float) <= 20.0 ? "" : "took ${ms(second[1])} on top of ww starting, budget 20 ms"
+    item.results["after a change"] = (edited[0] as float) <= changeBudget ? "" : "took ${ms(edited[0])}, budget ${changeBudget.toInt()} ms (100 per 20,000 lines)"
+  }
+
+  // A folder and all in it copied to `to`.
+  private fun copyTree(from : FilePath, to : FilePath) throws IOException {
+    to.mkdir()
+    for (f in from.list()) {
+      if (f.isDirectory()) { copyTree(f, FilePath(to, f.name)) } else { f.copyTo(FilePath(to, f.name), overwrite = true) }
+    }
+  }
+
+  // ---- ww build --icon ----
+
+  // A program built with an icon runs as before, and the icon is in the file, where Windows looks
+  // for it: one 32 pixel picture in a single colour, written as an icon file here.
+  private fun runIcon(dir : FilePath) : string throws IOException {
+    val red = 220
+    val green = 30
+    val blue = 40
+    val icon = Bytes(6 + 16 + 40 + 32 * 32 * 4 + 32 * 4)
+    icon.putUint16(2, 1)                       // an icon file
+    icon.putUint16(4, 1)                       // with one picture
+    icon[6] = 32.toByte()
+    icon[7] = 32.toByte()
+    icon.putUint16(10, 1)
+    icon.putUint16(12, 32)
+    icon.putUint32(14, 40 + 32 * 32 * 4 + 32 * 4)   // its size
+    icon.putUint32(18, 22)                          // and where it starts
+    icon.putUint32(22, 40)
+    icon.putUint32(26, 32)
+    icon.putUint32(30, 64)
+    icon.putUint16(34, 1)
+    icon.putUint16(36, 32)
+    for (i in 0 ..< 32 * 32) {
+      val at = 62 + i * 4
+      icon[at] = blue.toByte()
+      icon[at + 1] = green.toByte()
+      icon[at + 2] = red.toByte()
+      icon[at + 3] = 255.toByte()
+    }
+    val iconFile = FilePath(dir, "test.ico")
+    iconFile.writeBytes(icon)
+    val source = FilePath(dir, "icon.ww")
+    source.writeText("print(\"has an icon\")")
+    val program = FilePath(dir, "icon.exe")
+    val cache = FilePath(dir, "cache")
+    val build = ww(null, ["build", source.text, "--icon", iconFile.text, "-o", program.text], dir, cache)
+    if (build.code != 0) { return "build failed: ${build.error.trim()}" }
+    val ran = compare(ww(null, [], dir, cache, program = program), ["has an icon"], "", 0)
+    if (ran != "") { return ran }
+    val found = iconColor(program.readBytes())
+    if (found == null) { return "the program has no icon that can be read" }
+    if (found != [red, green, blue]) { return "the program's icon is coloured $found, expected ${[red, green, blue]}" }
+    return ""
+  }
+
+  // The colour of the middle of the first icon in a Windows program's resources (its RT_ICON),
+  // read as Windows reads them; null where there is none.
+  private fun iconColor(exe : Bytes) : List<int>? {
+    if (exe.size < 64) { return null }
+    val pe = exe.uint32(0x3C)
+    if (pe + 24 > exe.size or exe.uint32(pe) != 0x4550) { return null }
+    val sections = exe.uint16(pe + 6)
+    val optional = pe + 24
+    val optionalSize = exe.uint16(pe + 20)
+    val directories = optional + (exe.uint16(optional) == 0x20B ? 112 : 96)
+    val resources = exe.uint32(directories + 16)
+    if (resources == 0) { return null }
+    // A place in the image, as a place in the file.
+    fun fileAt(rva : int) : int {
+      for (s in 0 ..< sections) {
+        val h = optional + optionalSize + s * 40
+        val start = exe.uint32(h + 12)
+        if (rva >= start and rva < start + Math.max(exe.uint32(h + 8), exe.uint32(h + 16))) { return exe.uint32(h + 20) + rva - start }
+      }
+      return -1
+    }
+    val root = fileAt(resources)
+    if (root < 0) { return null }
+    // The entry of a directory with this id, or its first where id is null: where it leads.
+    fun entry(directory : int, id : int?) : int {
+      val count = exe.uint16(directory + 12) + exe.uint16(directory + 14)
+      for (k in 0 ..< count) {
+        val e = directory + 16 + k * 8
+        if (id == null or exe.uint32(e) == id) { return exe.uint32(e + 4) }
+      }
+      return -1
+    }
+    val icons = entry(root, 3)                       // RT_ICON
+    if (icons < 0) { return null }
+    val first = entry(root + (icons & 0x7FFFFFFF), null)
+    if (first < 0) { return null }
+    val language = entry(root + (first & 0x7FFFFFFF), null)
+    if (language < 0) { return null }
+    val data = fileAt(exe.uint32(root + (language & 0x7FFFFFFF)))
+    val size = exe.uint32(root + (language & 0x7FFFFFFF) + 4)
+    if (data < 0) { return null }
+    val picture = exe[data ..< data + size]
+    if (picture.size > 8 and picture[0].toInt() == 0x89 and picture[1].toInt() == 0x50) {
+      val image = Image.load(picture)
+      val c = image[image.width / 2, image.height / 2]
+      return [c.red.toInt(), c.green.toInt(), c.blue.toInt()]
+    }
+    // A bitmap of 32 bits a pixel, its rows from the bottom up.
+    val width = picture.uint32(4)
+    val height = picture.uint32(8) / 2
+    val at = picture.uint32(0) + ((height - 1 - height / 2) * width + width / 2) * 4
+    return [picture[at + 2].toInt(), picture[at + 1].toInt(), picture[at].toInt()]
+  }
+}
+
+// What a run of `items` gave, as the console prints it: each failure, `FAIL <name> [<way>]` and what
+// was wrong; the checks that passed only alone; those passed over; then `<n> passed, <m> failed`.
+// Each way a check passed is counted. And whether nothing failed.
+fun reportOf(items : List<Item>) : Pair<string, bool> {
+  val lines : open List<string> = []
+  var passed = 0
+  var failures = 0
+  for (item in items) {
+    for (label in item.results.keys) {
+      if (item.results[label] == "") {
+        passed += 1
+      } else {
+        failures += 1
+        lines.add("FAIL ${item.name} [$label]\n    ${item.results[label]}")
+      }
+    }
+  }
+  for (item in items) {
+    if (item.note.startsWith("passed only when run alone")) { lines.add("passed only when run alone: ${item.name} ${item.note.substringAfter(": ")}") }
+  }
+  val skipped = items.filter { it.status == Status.skipped }
+  for (item in skipped) { lines.add("${item.note.substringBefore(":")}: ${item.name}: ${item.note.substringAfter(": ")}") }
+  for (item in items) {
+    if (item.measured != "") { lines.add("${item.name}:\n    " + item.measured.lines().join("\n    ")) }
+  }
+  lines.add("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} windows only"))
+  return Pair(lines.join("\n"), failures == 0)
+}
+
+// The settings a run under --stress goes through: none, then each stress setting.
+val stressSettings : List<Setting> = Setting.entries
+
+// A scenario of the cache's: its steps in order.
+class Scenario(val name : string, val steps : List<Step>)
+// A step: the files it writes, and what main.ww then prints (out), or the compile error it gives
+// (error); `units` what the first run must say it compiled and put back. `command`: what ww is
+// given before main.ww (`dis`, say); `sameAgain`: the second run must say what the first said.
+class Step(val files : List<Pair<string, string>>, val out : string = "", val error : string = "", val units : string = "",
+           val command : List<string> = [], val sameAgain : bool = false)
+
+// A body too large to be put in place of a call by itself (more than 192 tokens), ending in `last`.
+fun largeBody(last : int) : string => "fun f() : int {\n  var t = 0\n" + (0 ..< 70).map { "  t += 1\n" }.join("") + "  return t + $last\n}"
+
+fun cacheScenarios() : List<Scenario> => [
+  Scenario("a body changes in an imported file", [
+    Step([Pair("lib.ww", largeBody(1)), Pair("main.ww", "import lib.*\nprint(f())")], out = "71"),
+    // Only lib.ww is compiled again: main.ww was compiled against what lib.ww declares,
+    // which a body leaves as it was.
+    Step([Pair("lib.ww", largeBody(2))], out = "72", units = "units put back 1, compiled 1")]),
+  // A small body is put in place of its calls in other files too (2026-11-13): it is part of what
+  // its file declares, and main.ww is compiled again.
+  Scenario("a small body changes in an imported file", [
+    Step([Pair("lib.ww", "fun f() : int => 1"), Pair("main.ww", "import lib.*\nprint(f())")], out = "1"),
+    Step([Pair("lib.ww", "fun f() : int => 2")], out = "2", units = "units put back 0, compiled 2")]),
+  Scenario("a body changes a result type not written", [
+    Step([Pair("lib.ww", "fun f() => 1"), Pair("main.ww", "import lib.*\nval x : int = f()\nprint(x)")], out = "1"),
+    Step([Pair("lib.ww", "fun f() => \"s\"")], error = "main.ww:2:16: error: 'x' is an int; it cannot start as a string")]),
+  Scenario("a type changes in an imported file", [
+    Step([Pair("lib.ww", "fun f() : int => 1"), Pair("main.ww", "import lib.*\nval x : int = f()\nprint(x)")], out = "1"),
+    Step([Pair("lib.ww", "fun f() : string => \"s\"")], error = "main.ww:2:16: error: 'x' is an int; it cannot start as a string")]),
+  Scenario("R1: a lambda kept by an unchanged file", [
+    Step([Pair("lib.ww", "val held : open List<() -> unit> = []\nfun keep(action : () -> unit) { held.add(action) }\nfun run(action : () -> unit) { action() }"),
+          Pair("main.ww", "import lib.*\nrun { print(1) }")], out = "1"),
+    Step([Pair("main.ww", "import lib.*\nsuspend fun waits() { run { delay(1.milliseconds) } }\nsuspend fun stores() { keep { delay(1.milliseconds) } }\nprint(2)")],
+         error = "main.ww:3:36: error: 'delay' may wait (it is a suspend function), and 'keep' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }")]),
+  Scenario("R1: a function that comes to keep its lambda", [
+    Step([Pair("lib.ww", "fun run(action : () -> unit) { action() }"), Pair("main.ww", "import lib.*\nsuspend fun waits() { run { delay(1.milliseconds) } }\nprint(1)")], out = "1"),
+    Step([Pair("lib.ww", "val held : open List<() -> unit> = []\nfun run(action : () -> unit) { held.add(action) }")],
+         error = "main.ww:2:34: error: 'delay' may wait (it is a suspend function), and 'run' does not run this lambda there and then: it keeps it or hands it on, and nothing waits for it. Start a task in it: task { delay() }")]),
+  Scenario("a folder gains a file", [
+    Step([Pair("parts/a.ww", "fun a() : int => 1"), Pair("main.ww", "import parts.*\nprint(a())")], out = "1"),
+    Step([Pair("parts/b.ww", "fun b() : int => 2"), Pair("main.ww", "import parts.*\nprint(a() + b())")], out = "3"),
+    Step([Pair("parts/b.ww", "fun b() : int => 20")], out = "21")]),
+  // G26: whether a class may be a key comes with its file from the cache, and a change to a body
+  // its == reads through (in another file) makes the files that use it be checked again.
+  Scenario("G26: a key class from an unchanged file", [
+    Step([Pair("bank/account.ww", "class Account(var balance : int, val id : int) {\n  op ==(other : any?) : bool => other is Account and other.balance == balance\n  fun hashCode() : int => id\n}"),
+          Pair("main.ww", "import bank.*\nprint(Account(1, 2).id)")], out = "2"),
+    Step([Pair("main.ww", "import bank.*\nval byAccount : open Map<Account, string> = {:}\nbyAccount[Account(5, 1)] = \"first\"")],
+         error = "main.ww:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)")]),
+  Scenario("G26: a body an == reads through changes", [
+    Step([Pair("bank/account.ww", "class Account(var balance : int, val id : int) {\n  op ==(other : any?) : bool => other is Account and Helpers.same(this, other)\n  fun hashCode() : int => id\n}"),
+          Pair("bank/helpers.ww", "object Helpers {\n  fun same(a : Account, b : Account) : bool => a.id == b.id\n}"),
+          Pair("main.ww", "import bank.*\nval byAccount : open Map<Account, string> = {:}\nbyAccount[Account(5, 1)] = \"first\"\nprint(byAccount.size)")], out = "1"),
+    Step([Pair("bank/helpers.ww", "object Helpers {\n  fun same(a : Account, b : Account) : bool => a.balance == b.balance\n}")],
+         error = "main.ww:3:18: error: an Account cannot be a key: its == or hashCode reads the var 'balance', which can change (D26)")]),
+  // M8: a folder reached first through an importer kept compiled, where the importer was compiled
+  // after the folder had been loaded by another: the folder's names are made all the same.
+  Scenario("a folder first reached through a kept importer", [
+    Step([Pair("lower/l.ww", "enum Kind { a, b }\nfun low() : string => \"low \${Kind.b}\""),
+          Pair("upper/u.ww", "import \"../lower\".*\nfun up() : string => \"up \" + low()"),
+          Pair("main.ww", "import lower.*\nimport upper.*\nprint(up())")], out = "up low b"),
+    Step([Pair("main.ww", "import upper.*\nprint(up())")], out = "up low b")]),
+  // M8: a file importing its own folder runs nothing, so that the folder's classes are made first.
+  Scenario("a file imports its own folder", [
+    Step([Pair("lib/a.ww", "class R {\n  static { val k = 3 }\n}"), Pair("lib/p.ww", "import \"../lib\".*\nfun p() : int => R.k"),
+          Pair("main.ww", "import lib.*\nprint(R.k + p())")], out = "6")]),
+  Scenario("a constant changes in an imported file", [
+    Step([Pair("lib.ww", "const limit = 10"), Pair("main.ww", "import lib.*\nfun twice() : int => limit * 2\nprint(twice())")], out = "20"),
+    Step([Pair("lib.ww", "const limit = 11")], out = "22")]),
+  // `ww dis` of a program kept: its functions' bodies, read only when asked for, listed as a
+  // first compile lists them (2026-11-12: it listed none).
+  Scenario("ww dis of a program kept", [
+    Step([Pair("lib.ww", "fun twice(n : int) : int => n * 2"),
+          Pair("main.ww", "import lib.*\nclass Box(val n : int) {\n  fun more() : int {\n    var t = 0\n    for (i in 0 ..< n) { t += twice(i) }\n    return t\n  }\n}\nprint(Box(4).more())")],
+         command = ["dis"], sameAgain = true)]),
+]

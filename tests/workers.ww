@@ -1,0 +1,104 @@
+// Workers: a second copy of the runtime on a thread and core of its own, running a script of
+// its own (tests/workers/echo.ww). The two share nothing and exchange copied messages.
+
+// What a worker sends arrives on the event loop, whenever it comes. These make the test read
+// top to bottom: next(worker) is the worker's next message, waited for if it is not there yet.
+val arrived = {:}          // worker -> the messages that have come and not been looked at
+val awaited = {:}          // worker -> the resume of a task that is waiting for one
+
+fun listenTo(worker : Worker) {
+  arrived[worker] = Deck()
+  worker.onMessage = { message ->
+    val waiting = awaited.remove(worker)
+    if (waiting == null) { arrived[worker].addLast(message) } else { waiting(message) }
+  }
+  return worker
+}
+
+suspend fun next(worker : Worker) {
+  if (arrived[worker].isNotEmpty()) { return arrived[worker].removeFirst() }
+  return suspendTask<any?> { resume -> awaited[worker] = resume }
+}
+
+suspend fun failureOf(worker : Worker) => suspendTask<string> { resume -> worker.onError = { text -> resume(text as string) } }
+suspend fun endOf(worker : Worker) {
+  while (worker.isAlive) { delay(5.milliseconds) }
+}
+
+print(Worker.parent)                                         // expect: null
+
+task {
+  val echo = listenTo(Worker("workers/echo.ww"))
+  print(echo.path, echo.isAlive, next(echo))                 // expect: workers/echo.ww true ready, in a worker: true
+  // A daemon worker does not keep the program alive. This one is left running to the end.
+  val idle = listenTo(Worker("workers/echo.ww", isDaemon = true))
+  print(next(idle))                                          // expect: ready, in a worker: true
+
+  // Every kind of value a message can hold comes back as it was sent.
+  for value in [42, 2.5, "naïve", true, null, Bytes([1, 255]), [1, [2, "three"]], {"k": {"deep": [null]}, 7: 8}] {
+    echo.post(value)
+    print(next(echo))
+  }
+  // expect: ["int", 42]
+  // expect: ["float", 2.5]
+  // expect: ["string", "naïve"]
+  // expect: ["bool", true]
+  // expect: ["null", null]
+  // expect: ["Bytes", Bytes[1, 255]]
+  // expect: ["List", [1, [2, "three"]]]
+  // expect: ["Map", {"k": {"deep": [null]}, 7: 8}]
+
+  // A message is a copy: what the worker does to it does not reach the original.
+  val original = ["keep", 1]
+  echo.post(original)
+  print(next(echo), original)                                // expect: 1 ["keep", 1]
+  original.add(2)
+  echo.post(original)
+  print(next(echo), original)                                // expect: 2 ["keep", 1, 2]
+
+  // What cannot be copied is refused where it is sent.
+  class Point(val x : int, val y : int)
+  try { echo.post(Point(1, 2)) } catch (e) { print(e.message) }
+  // expect: a message to or from a worker can hold numbers, strings, booleans, null, bytes, objects of data classes and value types, and lists, maps and sets of those, not an object of Point, an ordinary class: the worker would have a copy, not the object; make it a data class, or send its fields
+  try { echo.post([{ 1 }]) } catch (e) { print(e.message!!.endsWith("not a value of type Function: the two share no objects")) }   // expect: true
+
+  // A worker has an event loop, threads and tasks of its own.
+  echo.post("inside")
+  print(next(echo))                                          // expect: a task and a thread inside the worker: 42, on its loop: true
+
+  // close() in the worker ends it once it has nothing left to do.
+  echo.post("close")
+  print(next(echo))                                          // expect: closing after 12 messages
+  endOf(echo)
+  print(echo.isAlive, echo.post("too late"))                 // expect: false false
+
+  // Several at once: each has a core to itself, so four take about as long as one.
+  val pool = (1..4).map { listenTo(Worker("workers/echo.ww")) }
+  pool.forEach { next(it) }
+  pool.forEach { it.post({"primes": 20000}) }
+  print(pool.map { next(it) })                               // expect: [2262, 2262, 2262, 2262]
+
+  // An error that nothing catches ends the worker and is told to the program.
+  pool[0].post("fail")
+  print(failureOf(pool[0]).lines().first())                  // expect: RuntimeException: the worker was asked to fail
+  endOf(pool[0])
+  print(pool[0].isAlive, pool[1].isAlive)                    // expect: false true
+
+  // A worker that will not stop is stopped.
+  pool[1].post("spin")
+  print(next(pool[1]))                                       // expect: spinning
+  pool[1].terminate()
+  endOf(pool[1])
+  print(pool[1].isAlive)                                     // expect: false
+
+  // The script has to be named in the call itself, so that it is built into the program.
+  val name = "workers/echo.ww"
+  try { Worker(name) } catch (e) { print(e.message) }
+  // expect: a worker's script is named by a string written in the call itself, as in Worker("physics.ww"), so that the script is built into the program
+
+  pool[2].post("close")
+  pool[3].terminate()
+  endOf(pool[2])
+  endOf(pool[3])
+  print("done; the daemon worker is still there:", idle.isAlive)   // expect: done; the daemon worker is still there: true
+}

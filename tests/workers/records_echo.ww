@@ -1,0 +1,20 @@
+// A worker for tests/worker_data.ww: it sends back what it is sent, with what it is here.
+import records.*
+
+fun describe(m : any?) : string {
+  if (m is List) { return "${m#} of ${m.size}" }
+  if (m is Map) { return "${m#}" }
+  if (m is Set) { return "${m#}" }
+  if (m is Student) { return "a Student here" }
+  if (m is Course) {
+    val c = m as Course
+    return "a Course of ${c.students.size}, ${c.students#}"
+  }
+  if (m is Point) { return "a Point here" }
+  if (m is Id<Student>) { return "an Id<Student> here" }
+  if (m is Id<Course>) { return "an Id<Course> here" }
+  return "something else"
+}
+Worker.parent!!.onMessage = { message ->
+  Worker.parent!!.post([message, describe(message)])
+}

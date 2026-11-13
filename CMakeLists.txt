@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 # The version goes up with each milestone of docs/gui-plan.html: M1 is 0.1.0, M2 is 0.2.0,
 # M3.5 is 0.3.5, M4 is 0.4.0, M5 is 0.5.0, M6 is 0.6.0, M6.5 is 0.6.5, M6.6 is 0.6.6, M6.6.2 is
 # 0.6.6.2, M6.7 is 0.6.7, M7 is 0.7.0, M8 is 0.8.0, M9.5 (native code, docs/native-plan.html) is 0.9.5.
-project(Jade VERSION 0.9.5 LANGUAGES CXX)
+project(WinterWolf VERSION 0.9.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,27 +12,27 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Link the C++ runtime into the executable: jade.exe, and the programs that
-# `jade build --exe` makes from it, then run on machines without Visual Studio's runtime.
+# Link the C++ runtime into the executable: ww.exe, and the programs that
+# `ww build --exe` makes from it, then run on machines without Visual Studio's runtime.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# The standard library is written in Jade (src/std/*.jade) and carried inside jade.exe.
-file(GLOB JADE_STD CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/std/*.jade")
-list(SORT JADE_STD)
-string(REPLACE ";" "|" JADE_STD_ARG "${JADE_STD}")
+# The standard library is written in WinterWolf (src/std/*.ww) and carried inside ww.exe.
+file(GLOB WW_STD CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/std/*.ww")
+list(SORT WW_STD)
+string(REPLACE ";" "|" WW_STD_ARG "${WW_STD}")
 add_custom_command(
   OUTPUT "${CMAKE_BINARY_DIR}/std_source.cpp"
-  COMMAND ${CMAKE_COMMAND} "-DOUT=${CMAKE_BINARY_DIR}/std_source.cpp" "-DFILES=${JADE_STD_ARG}"
+  COMMAND ${CMAKE_COMMAND} "-DOUT=${CMAKE_BINARY_DIR}/std_source.cpp" "-DFILES=${WW_STD_ARG}"
           -P "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
-  DEPENDS ${JADE_STD} "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
+  DEPENDS ${WW_STD} "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
   COMMENT "Packing the standard library"
   VERBATIM)
 
 # The executable in three parts (M6.5 part 5, D161): what every program needs to run, Topaz's
-# window with the text engine and the image codecs, and the compiler side with the jade command.
-# The last two are compiled into sections of their own (src/section_*.h), which `jade build`
+# window with the text engine and the image codecs, and the compiler side with the ww command.
+# The last two are compiled into sections of their own (src/section_*.h), which `ww build`
 # leaves out of a built program that does not need them.
-add_library(jade_core OBJECT
+add_library(ww_core OBJECT
   src/value.cpp
   src/bytecode.cpp
   src/vm.cpp
@@ -60,7 +60,7 @@ add_library(jade_core OBJECT
   src/parallel.cpp
   src/run.cpp
 )
-add_library(jade_window OBJECT
+add_library(ww_window OBJECT
   src/topaz/platform_win.cpp
   src/topaz/gl.cpp
   src/topaz/render.cpp
@@ -78,7 +78,7 @@ add_library(jade_window OBJECT
   src/text/api.cpp
   src/image/png.cpp
 )
-add_library(jade_compiler OBJECT
+add_library(ww_compiler OBJECT
   "${CMAKE_BINARY_DIR}/std_source.cpp"
   src/lexer.cpp
   src/parser.cpp
@@ -89,49 +89,49 @@ add_library(jade_compiler OBJECT
   src/doc.cpp
 )
 # Native code (M9.5, docs/native-plan.html): the register stencils compiled by Clang into an
-# object file of their own, read by tools/stencils into a table that jade.exe carries, and checked
-# by jade itself as the build's step. With Clang on x64 Windows (clang-cl, COFF) and on x86-64
-# Linux (ELF); elsewhere jade is built without native code (native.cpp then has no stencils).
-target_sources(jade_core PRIVATE src/native/native.cpp src/native/regions.cpp)
-set(JADE_NATIVE_HERE OFF)
+# object file of their own, read by tools/stencils into a table that ww.exe carries, and checked
+# by ww itself as the build's step. With Clang on x64 Windows (clang-cl, COFF) and on x86-64
+# Linux (ELF); elsewhere ww is built without native code (native.cpp then has no stencils).
+target_sources(ww_core PRIVATE src/native/native.cpp src/native/regions.cpp)
+set(WW_NATIVE_HERE OFF)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64)$" AND
    (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-  set(JADE_NATIVE_HERE ON)
+  set(WW_NATIVE_HERE ON)
 endif()
-if(JADE_NATIVE_HERE)
-  add_library(jade_stencils OBJECT src/native/stencils.cpp)
+if(WW_NATIVE_HERE)
+  add_library(ww_stencils OBJECT src/native/stencils.cpp)
   # Each stencil in a section of its own, and nothing in them a copied stencil could not carry
   # (no library function called: no builtins, which keeps Clang from making a loop a call of
   # memcpy; no table of where a switch goes, which would be data of its own; on Linux no code
   # reached through a table either, and nothing for unwinding or stack checks; and never a
   # sanitizer's checks, in a build that has them, which would call its library).
   if(WIN32)
-    target_compile_options(jade_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables /clang:-fno-sanitize=all)
+    target_compile_options(ww_stencils PRIVATE /O2 /GS- /Gy /Zl /Oi- /clang:-fno-jump-tables /clang:-fno-sanitize=all)
   else()
-    target_compile_options(jade_stencils PRIVATE -O2 -fno-pic -fno-pie -ffunction-sections -fno-builtin -fno-jump-tables
+    target_compile_options(ww_stencils PRIVATE -O2 -fno-pic -fno-pie -ffunction-sections -fno-builtin -fno-jump-tables
                            -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-exceptions -fcf-protection=none
                            -fno-sanitize=all)
-    set_target_properties(jade_stencils PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+    set_target_properties(ww_stencils PROPERTIES POSITION_INDEPENDENT_CODE OFF)
   endif()
-  add_executable(jade_stencil_tool tools/stencils/stencils.cpp)
-  set(JADE_STENCIL_TABLE "${CMAKE_BINARY_DIR}/native/stencils.h")
+  add_executable(ww_stencil_tool tools/stencils/stencils.cpp)
+  set(WW_STENCIL_TABLE "${CMAKE_BINARY_DIR}/native/stencils.h")
   add_custom_command(
-    OUTPUT "${JADE_STENCIL_TABLE}"
+    OUTPUT "${WW_STENCIL_TABLE}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/native"
-    COMMAND jade_stencil_tool "$<TARGET_OBJECTS:jade_stencils>" "${JADE_STENCIL_TABLE}"
-    DEPENDS jade_stencils jade_stencil_tool "$<TARGET_OBJECTS:jade_stencils>"
+    COMMAND ww_stencil_tool "$<TARGET_OBJECTS:ww_stencils>" "${WW_STENCIL_TABLE}"
+    DEPENDS ww_stencils ww_stencil_tool "$<TARGET_OBJECTS:ww_stencils>"
     COMMENT "Reading the native code's stencils"
     VERBATIM)
-  target_sources(jade_core PRIVATE "${JADE_STENCIL_TABLE}")
-  target_include_directories(jade_core PRIVATE "${CMAKE_BINARY_DIR}/native")
-  target_compile_definitions(jade_core PRIVATE JADE_NATIVE=1)
-  add_custom_target(jade_check_native ALL
-    COMMAND $<TARGET_FILE:jade> --native-check
-    DEPENDS jade
+  target_sources(ww_core PRIVATE "${WW_STENCIL_TABLE}")
+  target_include_directories(ww_core PRIVATE "${CMAKE_BINARY_DIR}/native")
+  target_compile_definitions(ww_core PRIVATE WW_NATIVE=1)
+  add_custom_target(ww_check_native ALL
+    COMMAND $<TARGET_FILE:ww> --native-check
+    DEPENDS ww
     COMMENT "Checking the native code"
     VERBATIM)
 else()
-  target_compile_definitions(jade_core PRIVATE JADE_NATIVE=0)
+  target_compile_definitions(ww_core PRIVATE WW_NATIVE=0)
 endif()
 
 # The instruction loop (VM::run) runs as fast whatever is linked before it: with Clang, the
@@ -140,77 +140,77 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   set_source_files_properties(src/vm.cpp PROPERTIES COMPILE_OPTIONS "-mllvm;-align-all-nofallthru-blocks=5")
 endif()
-add_executable(jade src/main.cpp $<TARGET_OBJECTS:jade_core> $<TARGET_OBJECTS:jade_window> $<TARGET_OBJECTS:jade_compiler>)
+add_executable(ww src/main.cpp $<TARGET_OBJECTS:ww_core> $<TARGET_OBJECTS:ww_window> $<TARGET_OBJECTS:ww_compiler>)
 
 # The proof that what a built program keeps needs nothing left out of it: the core and the
 # window linked without the compiler side, and the core alone, the window's two entry points
 # (which the core calls only when the window's section is there) standing in. Either fails to
 # link if anything kept names what is left out. Neither is shipped.
-add_executable(jade_proof src/proof_main.cpp $<TARGET_OBJECTS:jade_core> $<TARGET_OBJECTS:jade_window>)
-add_executable(jade_proof_plain src/proof_main.cpp src/window_absent.cpp $<TARGET_OBJECTS:jade_core>)
-foreach(proof jade_proof jade_proof_plain)
+add_executable(ww_proof src/proof_main.cpp $<TARGET_OBJECTS:ww_core> $<TARGET_OBJECTS:ww_window>)
+add_executable(ww_proof_plain src/proof_main.cpp src/window_absent.cpp $<TARGET_OBJECTS:ww_core>)
+foreach(proof ww_proof ww_proof_plain)
   set_target_properties(${proof} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/proof")
 endforeach()
-foreach(part jade jade_core jade_window jade_compiler jade_proof jade_proof_plain)
-  target_compile_definitions(${part} PRIVATE JADE_VERSION="${PROJECT_VERSION}")
+foreach(part ww ww_core ww_window ww_compiler ww_proof ww_proof_plain)
+  target_compile_definitions(${part} PRIVATE WW_VERSION="${PROJECT_VERSION}")
 endforeach()
 if(WIN32)
-  foreach(linked jade jade_proof jade_proof_plain)
+  foreach(linked ww ww_proof ww_proof_plain)
     target_link_libraries(${linked} PRIVATE opengl32 ws2_32 shell32 ole32)
   endforeach()
   # __HrLoadAllImportsForDll, which the native layer calls whether or not the program
-  # delay-loads OpenGL (only jade does, below).
-  target_link_libraries(jade_proof PRIVATE delayimp)
+  # delay-loads OpenGL (only ww does, below).
+  target_link_libraries(ww_proof PRIVATE delayimp)
 endif()
 
-# jade looks for libraries such as Topaz only in the lib folder beside itself, so every
+# ww looks for libraries such as Topaz only in the lib folder beside itself, so every
 # build puts a copy of lib/ next to the executable.
-add_custom_target(jade_lib ALL
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/lib" "$<TARGET_FILE_DIR:jade>/lib"
-  COMMENT "Copying lib next to jade"
+add_custom_target(ww_lib ALL
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/lib" "$<TARGET_FILE_DIR:ww>/lib"
+  COMMENT "Copying lib next to ww"
   VERBATIM)
 
 if(MSVC)
-  foreach(part jade jade_core jade_window jade_compiler jade_proof jade_proof_plain)
+  foreach(part ww ww_core ww_window ww_compiler ww_proof ww_proof_plain)
     target_compile_options(${part} PRIVATE /W4 /utf-8 /permissive-)
     target_compile_definitions(${part} PRIVATE _CRT_SECURE_NO_WARNINGS)
   endforeach()
   # The parser and compiler recurse over nested source; give them room.
-  target_link_options(jade PRIVATE /STACK:16777216)
-  # OpenGL and the shell are loaded when first used, not when jade starts: loading
+  target_link_options(ww PRIVATE /STACK:16777216)
+  # OpenGL and the shell are loaded when first used, not when ww starts: loading
   # opengl32.dll costs about 57 ms, which every script paid, window or not. A delay-loaded DLL
   # whose functions take float arguments is loaded whole before any is called
   # (__HrLoadAllImportsForDll): lld-link's stub for a first call can lose the second float
   # argument (src/topaz/platform_win.cpp, WinPlatform::start).
-  target_link_libraries(jade PRIVATE delayimp)
-  target_link_options(jade PRIVATE /DELAYLOAD:opengl32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:ole32.dll)
+  target_link_libraries(ww PRIVATE delayimp)
+  target_link_options(ww PRIVATE /DELAYLOAD:opengl32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:ole32.dll)
 else()
-  foreach(part jade jade_core jade_window jade_compiler jade_proof jade_proof_plain)
+  foreach(part ww ww_core ww_window ww_compiler ww_proof ww_proof_plain)
     target_compile_options(${part} PRIVATE -Wall -Wextra)
   endforeach()
 endif()
 
 # The check of what a built program leaves out (D161): nothing of it runs as the program starts,
-# and every function the proofs need is in jade.exe in a section a built program keeps.
+# and every function the proofs need is in ww.exe in a section a built program keeps.
 if(MSVC)
-  foreach(linked jade jade_proof jade_proof_plain)
+  foreach(linked ww ww_proof ww_proof_plain)
     target_link_options(${linked} PRIVATE "/MAP:$<TARGET_FILE_DIR:${linked}>/${linked}.map")
   endforeach()
-  add_custom_target(jade_check_sections ALL
-    COMMAND $<TARGET_FILE:jade> --check-sections "$<TARGET_FILE_DIR:jade>/jade.map"
-            "$<TARGET_FILE_DIR:jade_proof>/jade_proof.map" "$<TARGET_FILE_DIR:jade_proof_plain>/jade_proof_plain.map"
-    DEPENDS jade jade_proof jade_proof_plain
+  add_custom_target(ww_check_sections ALL
+    COMMAND $<TARGET_FILE:ww> --check-sections "$<TARGET_FILE_DIR:ww>/ww.map"
+            "$<TARGET_FILE_DIR:ww_proof>/ww_proof.map" "$<TARGET_FILE_DIR:ww_proof_plain>/ww_proof_plain.map"
+    DEPENDS ww ww_proof ww_proof_plain
     COMMENT "Checking what a built program leaves out"
     VERBATIM)
 endif()
 
-# The standard library, compiled once as the build's last step and attached to jade.exe, so
-# that no script compiles it or checks it again (D145). Off, jade compiles it at each start.
-option(JADE_ATTACH_PRELUDE "Attach the compiled standard library to jade.exe" ON)
-if(JADE_ATTACH_PRELUDE)
-  add_custom_command(TARGET jade POST_BUILD
-    COMMAND $<TARGET_FILE:jade> --attach-prelude $<TARGET_FILE_DIR:jade>/jade-attached.exe
-    COMMAND ${CMAKE_COMMAND} -E rename $<TARGET_FILE_DIR:jade>/jade-attached.exe $<TARGET_FILE:jade>
+# The standard library, compiled once as the build's last step and attached to ww.exe, so
+# that no script compiles it or checks it again (D145). Off, ww compiles it at each start.
+option(WW_ATTACH_PRELUDE "Attach the compiled standard library to ww.exe" ON)
+if(WW_ATTACH_PRELUDE)
+  add_custom_command(TARGET ww POST_BUILD
+    COMMAND $<TARGET_FILE:ww> --attach-prelude $<TARGET_FILE_DIR:ww>/ww-attached.exe
+    COMMAND ${CMAKE_COMMAND} -E rename $<TARGET_FILE_DIR:ww>/ww-attached.exe $<TARGET_FILE:ww>
     COMMENT "Attaching the compiled standard library"
     VERBATIM)
 endif()

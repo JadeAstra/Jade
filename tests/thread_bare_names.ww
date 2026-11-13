@@ -1,0 +1,33 @@
+// A bare name looked up while threads take turns (o-runner-name). Inside an inline extension's
+// body a bare name is looked up on its receiver alone, told so by the instruction before the
+// lookup; a thread may give way between the two, at the call's safe point. What it was told is
+// the thread's own, kept with it: before, the other thread's next bare name read it, looked on
+// the wrong object and reported an undefined variable ('bump' here, or 'compare'), as the test
+// runner did now and then with 24 tests at once.
+class Box {
+  var n = 0
+  fun bump() { n += 1 }
+}
+inline fun Box.many() {
+  bump(); bump(); bump(); bump(); bump(); bump(); bump(); bump(); bump(); bump()
+}
+
+class Engine {
+  private fun compare(x : int) : int => x + 1
+  fun go(times : int) : int {
+    var total = 0
+    val f = { -> compare(1) }
+    for (i in 0..<times) { total += f() }
+    return total
+  }
+}
+
+// As many as it takes to meet the race without the stress settings; under the collector's,
+// which collects at every safe point, a hundredth (the threads' setting meets it at once).
+val scale = Program.environment["WW_GC_STRESS"] == null ? 100 : 1
+val box = Box()
+val a = Thread(task = { for (i in 0..<3000 * scale) { box.many() } }).start()
+val b = Thread(task = { print("engine ${Engine().go(30000 * scale) / scale}") }).start()   // expect: engine 60000
+a.join()
+b.join()
+print("box ${box.n / scale}")   // expect: box 30000

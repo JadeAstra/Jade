@@ -10,7 +10,7 @@
 #include <cstring>
 #include <functional>
 
-namespace jade {
+namespace ww {
 
 std::atomic<ObjClass*> smallClasses[kMaxSmallClasses];
 
@@ -951,10 +951,10 @@ Characters ObjString::slice(size_t begin, size_t end) const {
 namespace objectMemory {
 
 #if defined(__SANITIZE_ADDRESS__)
-#define JADE_OBJECT_HEAP 1
+#define WW_OBJECT_HEAP 1
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define JADE_OBJECT_HEAP 1
+#define WW_OBJECT_HEAP 1
 #endif
 #endif
 
@@ -1027,7 +1027,7 @@ Pool& ownPool() {
 }  // namespace
 
 void* take(size_t size) {
-#ifdef JADE_OBJECT_HEAP
+#ifdef WW_OBJECT_HEAP
     return ::operator new(size);
 #else
     if (size > kLargest) {
@@ -1063,7 +1063,7 @@ void* take(size_t size) {
 
 void give(void* p, size_t size) noexcept {
     if (p == nullptr) return;
-#ifdef JADE_OBJECT_HEAP
+#ifdef WW_OBJECT_HEAP
     (void)size;
     ::operator delete(p);
 #else
@@ -1267,32 +1267,32 @@ bool ObjRange::contains(int64_t i) const {
     return offset % magnitude == 0;
 }
 
-}  // namespace jade
+}  // namespace ww
 
-#ifndef JADE_OBJECT_HEAP
+#ifndef WW_OBJECT_HEAP
 // Every other `new` in the program, the standard library's included (the C++ runtime is linked
 // in, not shared): the buffers of strings, vectors and maps from the same lists as objects,
 // with their size kept in front of them, as an unsized delete needs it.
-void* operator new(size_t size) { return jade::objectMemory::takeSized(size); }
-void* operator new[](size_t size) { return jade::objectMemory::takeSized(size); }
+void* operator new(size_t size) { return ww::objectMemory::takeSized(size); }
+void* operator new[](size_t size) { return ww::objectMemory::takeSized(size); }
 void* operator new(size_t size, const std::nothrow_t&) noexcept {
     try {
-        return jade::objectMemory::takeSized(size);
+        return ww::objectMemory::takeSized(size);
     } catch (...) {
         return nullptr;
     }
 }
 void* operator new[](size_t size, const std::nothrow_t&) noexcept {
     try {
-        return jade::objectMemory::takeSized(size);
+        return ww::objectMemory::takeSized(size);
     } catch (...) {
         return nullptr;
     }
 }
-void operator delete(void* p) noexcept { jade::objectMemory::giveSized(p); }
-void operator delete[](void* p) noexcept { jade::objectMemory::giveSized(p); }
-void operator delete(void* p, size_t) noexcept { jade::objectMemory::giveSized(p); }
-void operator delete[](void* p, size_t) noexcept { jade::objectMemory::giveSized(p); }
-void operator delete(void* p, const std::nothrow_t&) noexcept { jade::objectMemory::giveSized(p); }
-void operator delete[](void* p, const std::nothrow_t&) noexcept { jade::objectMemory::giveSized(p); }
+void operator delete(void* p) noexcept { ww::objectMemory::giveSized(p); }
+void operator delete[](void* p) noexcept { ww::objectMemory::giveSized(p); }
+void operator delete(void* p, size_t) noexcept { ww::objectMemory::giveSized(p); }
+void operator delete[](void* p, size_t) noexcept { ww::objectMemory::giveSized(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { ww::objectMemory::giveSized(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { ww::objectMemory::giveSized(p); }
 #endif

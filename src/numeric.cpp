@@ -1,10 +1,10 @@
 // Whole-list, grid and picture operations (M9/M10 part one, questions 15 and 17): numpy's kind of
-// work on the lists, Bytes and grids Jade has, each a loop in C++ over a list's packed block,
+// work on the lists, Bytes and grids WinterWolf has, each a loop in C++ over a list's packed block,
 // and the general picture operations (a window reduced, a grid sampled, values scattered, a
 // colour table, blend modes, distances, regions). The built-in __num; what each is to a program
-// is in src/std/numeric.jade.
+// is in src/std/numeric.ww.
 //
-// Every operation gives what Jade's own arithmetic gives: an int with an int stays an int, its
+// Every operation gives what WinterWolf's own arithmetic gives: an int with an int stays an int, its
 // overflow an ArithmeticException as + gives, unless the ...Wrapped form is asked for; a float
 // with anything a float; a result written into a list of a narrow width checked against its
 // range as storing it is.
@@ -19,7 +19,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -322,7 +322,7 @@ size_t matched(VM& vm, const Numbers& a, const Numbers& b) {
 enum EachOp { kPlus, kMinus, kTimes, kDiv, kPlusWrap, kMinusWrap, kTimesWrap };
 
 // Whether a value is a list kept as values (a List<Number> of ints and floats together), which
-// is worked on an item at a time, each as Jade's arithmetic takes it.
+// is worked on an item at a time, each as WinterWolf's arithmetic takes it.
 bool anyNumbers(Value v) { return v.isObjType(ObjType::List) && !asList(v)->packed(); }
 
 // Item `k` of a list, or the one number standing for every item: an int or a float.
@@ -334,7 +334,7 @@ Value numberAt(VM& vm, Value v, size_t k, const char* what) {
     return item;
 }
 
-// One step of arithmetic on two numbers, as Jade's operators give it.
+// One step of arithmetic on two numbers, as WinterWolf's operators give it.
 Value arith(VM& vm, EachOp op, Value a, Value b) {
     if (a.isInt() && b.isInt()) {
         const int64_t x = a.as.i, y = b.as.i;
@@ -1186,7 +1186,7 @@ void registerNumeric(VM& vm) {
     });
     // histogram(cells, bins, from, to): how many items fall in each of `bins` equal parts of
     // `from` to `to` (the least and the most when null), the last part taking `to` itself. A
-    // picture's is Jade's (numeric.jade).
+    // picture's is WinterWolf's (numeric.ww).
     def("histogram", 4, 4, [](VM& vm, int, Value* args) -> Value {
         const size_t bins = sizeArg(vm, args[1], "bins");
         if (bins == 0) fail(vm, Thrown::IllegalArgumentException, "a histogram has 1 bin or more");
@@ -1883,7 +1883,7 @@ void registerNumeric(VM& vm) {
         return Value::null();
     });
 
-    // ---- What a canvas does to a layer's pixels (src/std/paint.jade), each pixel as the Jade
+    // ---- What a canvas does to a layer's pixels (src/std/paint.ww), each pixel as the WinterWolf
     // that came before did it (2026-11-10, the user's choice of C++ for these) ----
 
     // paintCells(cells, width, height, table, cycle, linear, gx, gy, ox, oy, f0, f1, qx, qy, qq,
@@ -2055,4 +2055,4 @@ void registerNumeric(VM& vm) {
     vm.defineGlobal("__num", Value::object(lib));
 }
 
-}  // namespace jade
+}  // namespace ww

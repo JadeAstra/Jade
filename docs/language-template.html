@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Jade language</title>
-<!-- docs/language.html is made from this page: jade doc src/std/*.jade --template docs/language-template.html -o docs/language.html
+<title>The WinterWolf language</title>
+<!-- docs/language.html is made from this page: ww doc src/std/*.ww --template docs/language-template.html -o docs/language.html
      Edit this page, and the comments in src/std, never docs/language.html itself. -->
 <style>
 :root {
@@ -49,8 +49,8 @@ th { color: var(--muted); font-weight: 600; }
 </head>
 <body>
 <main>
-<h1>The Jade language</h1>
-<p class="lede">Every keyword of Jade, what it does and how it is written, then every function, type and value of the standard library. The library part is made from the comments in its source (<code>src/std</code>) by <code>jade doc</code>, so it says what the library does as it stands.</p>
+<h1>The WinterWolf language</h1>
+<p class="lede">Every keyword of WinterWolf, what it does and how it is written, then every function, type and value of the standard library. The library part is made from the comments in its source (<code>src/std</code>) by <code>ww doc</code>, so it says what the library does as it stands.</p>
 
 <nav>
 <ul>
@@ -276,7 +276,7 @@ task { print(later(21)) }    // 42</pre></dd>
 <pre>fun readConfig(path : string) : string throws IOException =&gt; FilePath(path).readText()</pre></dd>
 
 <dt><code>external</code></dt>
-<dd>Only in the standard library: a function, property or object written in C++, declared in Jade so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>
+<dd>Only in the standard library: a function, property or object written in C++, declared in WinterWolf so that its types and parameter names are known. It has no body. The reference below leaves the word out.</dd>
 </dl>
 
 <h3 id="kw-control">Choosing and repeating</h3>
@@ -316,7 +316,7 @@ task { print(later(21)) }    // 42</pre></dd>
 <h3 id="kw-errors">Errors</h3>
 <dl class="kw">
 <dt><code>throw</code></dt>
-<dd>Stops the code with an exception, any <code>Throwable</code>: one of the standard library's (see <code>errors.jade</code> below) or a class of the program's own that extends <code>Exception</code>.</dd>
+<dd>Stops the code with an exception, any <code>Throwable</code>: one of the standard library's (see <code>errors.ww</code> below) or a class of the program's own that extends <code>Exception</code>.</dd>
 
 <dt><code>try</code>, <code>catch</code>, <code>finally</code></dt>
 <dd><code>try</code> runs a block; a <code>catch (e : Kind)</code> after it runs when the block throws an exception of that kind (<code>catch (e)</code> catches any <code>Exception</code>); <code>finally</code> runs last in every case, after any value to return is worked out.
@@ -373,13 +373,13 @@ addButton(widgets)</pre></dd>
 <h3 id="kw-modules">Files and libraries</h3>
 <dl class="kw">
 <dt><code>import</code></dt>
-<dd>Brings in another file or library: <code>import NsText</code> reaches its names as <code>NsText.Block</code>, <code>import NsText.*</code> by their bare names, <code>import NsText as text</code> under a name of the importer's choosing. A path of folders is written with dots, or in quotes (<code>import "modules/strutil.jade"</code>). The standard library needs no import: every program has all of it.</dd>
+<dd>Brings in another file or library: <code>import NsText</code> reaches its names as <code>NsText.Block</code>, <code>import NsText.*</code> by their bare names, <code>import NsText as text</code> under a name of the importer's choosing. A path of folders is written with dots, or in quotes (<code>import "modules/strutil.ww"</code>). The standard library needs no import: every program has all of it.</dd>
 </dl>
 
 <h3 id="kw-refused">Words from other languages</h3>
-<p>These are not Jade's, and each is an error that says what Jade writes instead.</p>
+<p>These are not WinterWolf's, and each is an error that says what WinterWolf writes instead.</p>
 <table>
-<thead><tr><th>Written</th><th>What Jade says</th></tr></thead>
+<thead><tr><th>Written</th><th>What WinterWolf says</th></tr></thead>
 <tbody>
 <tr><td><code>let x = 1</code></td><td>declare variables with <code>val</code> (immutable) or <code>var</code></td></tr>
 <tr><td><code>fn f() {}</code></td><td>declare functions with <code>fun</code></td></tr>
@@ -396,7 +396,7 @@ addButton(widgets)</pre></dd>
 
 <h2>The standard library</h2>
 <p>Every program has all of it, without an import. Each file below is shown in the order it is written, with its own headings; <a href="#api-types">Types and what they have</a> lists, for each type, where its members are. A declaration is shown as it is written, up to its body.</p>
-<!-- jade doc -->
+<!-- ww doc -->
 </main>
 </body>
 </html>

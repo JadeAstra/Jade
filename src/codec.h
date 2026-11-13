@@ -1,5 +1,5 @@
 // Compression and checks that codecs share (M9/M10 part one, step 3): zlib's deflate both
-// ways, CRC-32 and Adler-32. PNG uses them, and Jade has them as Bytes.inflate, Bytes.deflate
+// ways, CRC-32 and Adler-32. PNG uses them, and WinterWolf has them as Bytes.inflate, Bytes.deflate
 // and the bit readers of src/bits_api.cpp.
 #pragma once
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace jade::codec {
+namespace ww::codec {
 
 // CRC-32 as PNG, ZIP and gzip have it, carried on from `crc` (0 to start).
 uint32_t crc32(const uint8_t* data, size_t size, uint32_t crc = 0);
@@ -26,4 +26,4 @@ bool inflate(const uint8_t* data, size_t size, std::vector<uint8_t>& out, size_t
 // zlib's levels are; 6 is zlib's own default. With zlib's header and check unless `raw`.
 std::vector<uint8_t> deflate(const uint8_t* data, size_t size, int level = 6, bool raw = false);
 
-}  // namespace jade::codec
+}  // namespace ww::codec

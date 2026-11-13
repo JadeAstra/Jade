@@ -1,4 +1,4 @@
-// M9.5 step 1: the register stencils proven on their own. bench/numeric.jade's mandelbrot, as a
+// M9.5 step 1: the register stencils proven on their own. bench/numeric.ww's mandelbrot, as a
 // region would make it, put together from the stencils tools/stencils read out of Clang's object
 // file (stencils.h, made by build.bat): copied into code memory end to end, its gaps filled in,
 // run, and timed beside the spike's numbers (bench/spike: the VM 93 ms, registers 14.4, C++ 13.4).
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace jade::native {
+namespace ww::native {
 enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention };
 struct Hole {
     uint32_t offset;
@@ -32,11 +32,11 @@ struct StencilCode {
     const Hole* holes;
     uint32_t holeCount;
 };
-}  // namespace jade::native
+}  // namespace ww::native
 
 #include "stencils.h"
 
-using namespace jade::native;
+using namespace ww::native;
 
 namespace {
 

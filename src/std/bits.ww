@@ -1,0 +1,125 @@
+// ---- Bits ----
+
+// What codecs read and write bytes with (M9/M10 part one, step 3): bits from any place in bytes,
+// Huffman codes, and deflate both ways. The bit by bit work is C++; a codec's structure, its
+// headers and blocks, is WinterWolf over them.
+
+// The order bits are taken from a byte in: its lowest first, as deflate (PNG, ZIP), GIF and
+// WebP's lossless form have them, or its highest first, as JPEG has them. A value of several bits
+// is read the same way: lsbFirst, its first bit is its lowest.
+enum BitOrder { lsbFirst, msbFirst }
+
+// Reads bits from bytes, one value of up to 32 bits at a time, from any place.
+//
+//   val reader = BitReader(data, 2)          // from byte 2, lowest bits first
+//   val last = reader.readBits(1)
+//   val kind = reader.readBits(2)
+class BitReader {
+  // The bytes it reads.
+  val bytes : Bytes
+  // The order it takes bits in.
+  val order : BitOrder
+  // Where the next bit is, counted in bits from the start of the bytes; it may be set, to read
+  // from another place.
+  var position : int
+  internal val msbFirst : bool
+
+  // A reader of `bytes` from byte `at`.
+  fun init(bytes : Bytes, at : int = 0, order : BitOrder = BitOrder.lsbFirst) {
+    this.bytes = bytes
+    this.order = order
+    this.msbFirst = order == BitOrder.msbFirst
+    this.position = at * 8
+  }
+
+  // The bits after the position.
+  val bitsLeft : int
+    get() => bytes.size * 8 - position
+
+  // The next `n` bits (0 to 32) as a number, the position moved past them. A DataFormatException
+  // where they go past the end of the bytes.
+  fun readBits(n : int) : int throws DataFormatException {
+    if (position + n > bytes.size * 8) { throw DataFormatException("$n bits read at bit $position, past the end of ${bytes.size} bytes") }
+    val value = __bits.peek(bytes, position, n, msbFirst)
+    position += n
+    return value
+  }
+
+  // The next `n` bits (0 to 32), the position left where it is; zeros for bits past the end.
+  fun peekBits(n : int) : int => __bits.peek(bytes, position, n, msbFirst)
+
+  // The position moved past the next `n` bits. A DataFormatException where they go past the end.
+  fun skipBits(n : int) throws DataFormatException {
+    if (n < 0 or position + n > bytes.size * 8) { throw DataFormatException("$n bits skipped at bit $position, past the end of ${bytes.size} bytes") }
+    position += n
+  }
+
+  // The position moved on to the start of the next byte, if it is not at one.
+  fun alignToByte() {
+    position = (position + 7) / 8 * 8
+  }
+}
+
+// A Huffman code, decoded a code at a time from a BitReader.
+//
+//   val codes = HuffmanTable([2, 1, 3, 3])   // symbol 1 is 0, symbol 0 is 10, 2 is 110, 3 is 111
+//   val symbol = codes.decode(reader)
+class HuffmanTable {
+  internal val table : any
+
+  // The code from each symbol's code length, 0 for a symbol that has none, numbered as deflate
+  // numbers them: shorter codes first, and those of one length in the order of their symbols.
+  // With `symbols`, the lengths are given in the order of the codes and `symbols` says each one's
+  // symbol, as JPEG gives its tables. Lengths are 0 to 16. An IllegalArgumentException where the
+  // lengths are more than a code has room for.
+  fun init(lengths : List<int>, symbols : List<int>? = null) {
+    val made = __bits.huffman(lengths, symbols)
+    if (made is string) { throw IllegalArgumentException("not a Huffman code: ${made as string}") }
+    this.table = made
+  }
+
+  // The symbol of the next code `reader` has, its position moved past it. A DataFormatException
+  // where the bits there are no code of the table.
+  fun decode(reader : BitReader) : int throws DataFormatException {
+    val found = __bits.decode(table, reader.bytes, reader.position, reader.msbFirst)
+    if (found < 0 or reader.position + (found & 31) > reader.bytes.size * 8) {
+      throw DataFormatException("bits that are no code of the Huffman table, at bit ${reader.position}")
+    }
+    reader.position += found & 31
+    return found >> 5
+  }
+}
+
+// The bytes deflate-compressed data expands to: with zlib's header and check, as PNG holds it,
+// or `raw` (deflate alone, as ZIP and gzip hold it). No more than `limit` bytes, so that a little
+// data made to expand to a great deal is refused. A DataFormatException where the data is damaged,
+// ends early, or expands past the limit (null, none).
+//
+//   val packed = "hello hello hello".toBytes().deflate()
+//   print(packed.inflate().decodeToString())   // hello hello hello
+fun Bytes.inflate(raw : bool = false, limit : int? = null) : Bytes throws DataFormatException {
+  val made = __bits.inflate(this, raw, limit ?: -1)
+  if (made is string) { throw DataFormatException(made as string) }
+  return made as Bytes
+}
+
+// The bytes deflate-compressed, at `level` 0 (stored as they are, as fast as copying) to 9
+// (smallest, slowest), as zlib's levels are; 6 is zlib's own default. With zlib's header and check
+// unless `raw`.
+fun Bytes.deflate(level : int = 6, raw : bool = false) : Bytes => __bits.deflate(this, level, raw)
+
+// The CRC-32 of the bytes, as PNG, ZIP and gzip have it, carried on from `crc` for data in parts.
+fun Bytes.crc32(crc : int = 0) : int => __bits.crc32(this, crc)
+
+// The Adler-32 of the bytes, as zlib has it, carried on from `adler` for data in parts.
+fun Bytes.adler32(adler : int = 1) : int => __bits.adler32(this, adler)
+
+external object __bits {
+  fun peek(bytes : Bytes, position : int, count : int, msbFirst : bool) : int
+  fun huffman(lengths : List<int>, symbols : List<int>?) : any
+  fun decode(table : any, bytes : Bytes, position : int, msbFirst : bool) : int
+  fun inflate(bytes : Bytes, raw : bool, limit : int) : any
+  fun deflate(bytes : Bytes, level : int, raw : bool) : Bytes
+  fun crc32(bytes : Bytes, crc : int) : int
+  fun adler32(bytes : Bytes, adler : int) : int
+}

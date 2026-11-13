@@ -35,7 +35,7 @@
 
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -1838,10 +1838,10 @@ struct Checker::Impl {
             for (const TypeAnnotation& m : a.unionOf) members.push_back(resolve(m, u));
             return makeUnion(members, a.nullable);
         } else {
-            // `jade.Range`: the built-in type, even where the program has a class of that name.
+            // `ww.Range`: the built-in type, even where the program has a class of that name.
             const std::string n = builtinSpelling(a.name);
-            const bool jadeName = n != a.name;
-            if (ClassInfo* own = u.prelude || jadeName ? nullptr : ownClassNamed(u, n)) {
+            const bool wwName = n != a.name;
+            if (ClassInfo* own = u.prelude || wwName ? nullptr : ownClassNamed(u, n)) {
                 // A class of the program's own named as a built-in type is (Index, Range, Values):
                 // where it is in reach, the name means it, as a file's own names come first.
                 t.kind = Type::Class;
@@ -2892,7 +2892,7 @@ struct Checker::Impl {
         return found == gone.end() ? std::string() : found->second;
     }
 
-    // What Java's and Kotlin's names for threads and waiting are in Jade (D81 to D90, D118):
+    // What Java's and Kotlin's names for threads and waiting are in WinterWolf (D81 to D90, D118):
     // each a compile error saying what to write, where nothing of the program declares the name.
     // Whether a name written as a type is a variable, a parameter or a field in reach, or starts
     // with one (`shapes.kind`): one may hold a class, which the program tests against as it runs.
@@ -2905,7 +2905,7 @@ struct Checker::Impl {
     }
 
     // A type name that names nothing in reach. Kotlin's and Java's names of the basic types are
-    // said in Jade's spelling (Int is int), as the lowercase names are its own.
+    // said in WinterWolf's spelling (Int is int), as the lowercase names are its own.
     static std::string unknownTypeName(const std::string& name) {
         static const std::unordered_map<std::string, std::string> spelled = {
             {"Int", "int"}, {"Long", "int"}, {"Short", "int16"}, {"Integer", "int"}, {"Double", "float"}, {"Float", "float"},
@@ -2913,7 +2913,7 @@ struct Checker::Impl {
             {"Any", "any"}, {"Object", "any"}, {"ByteArray", "Bytes"}, {"Void", "unit"}, {"Int16", "int16"}, {"Int32", "int32"},
             {"UInt16", "uint16"}, {"UInt32", "uint32"}, {"Float32", "float32"}};
         if (auto found = spelled.find(name); found != spelled.end())
-            return "'" + name + "' is written " + found->second + " in Jade: the types of numbers, text, truth values and any value " +
+            return "'" + name + "' is written " + found->second + " in WinterWolf: the types of numbers, text, truth values and any value " +
                    "are lowercase (int, float, string, bool, char, byte, any)";
         return "there is no type named '" + name + "' here: no class, interface, enum or type alias of that name is in reach";
     }
@@ -2931,60 +2931,60 @@ struct Checker::Impl {
             {"mutableSetOf", "mutableSetOf(...) is written setOf(...), which gives a set that can be changed: one name for each thing (D74)"},
             {"hashSetOf", "hashSetOf(...) is written setOf(...), which gives a set that can be changed: one name for each thing (D74)"},
             {"linkedSetOf", "linkedSetOf(...) is written setOf(...), which gives a set that can be changed, in the order its items came: one name for each thing (D74)"},
-            {"Future", "a result to come is a Job<T> in Jade, from task { }, thread { } or a pool's submit { }: then { }, get(timeout = ...) (D89)"},
-            {"CompletableFuture", "a result to come is a Job<T> in Jade, made by hand as Job<T>() and given its value with complete(v) or fail(e) (D89)"},
-            {"Executor", "threads that take jobs are a ThreadPool(threads = n) in Jade, and one thread taking them in order a JobQueue(name): submit { } gives a Job (D88)"},
-            {"ExecutorService", "threads that take jobs are a ThreadPool(threads = n) in Jade, and one thread taking them in order a JobQueue(name): submit { } gives a Job (D88)"},
-            {"ScheduledExecutorService", "a ThreadPool runs timed jobs in Jade: pool.after(1.seconds) { }, pool.every(5.seconds) { } (D88)"},
-            {"Executors", "Executors.newFixedThreadPool(n) is ThreadPool(threads = n) in Jade, newSingleThreadExecutor() a JobQueue(name) (D88)"},
-            {"BlockingQueue", "a queue threads hand things over on is a Channel in Jade: Channel<T>.unbounded(), or Channel<T>(capacity = n) holding n at most (D87)"},
-            {"LinkedBlockingQueue", "a LinkedBlockingQueue is Channel<T>.unbounded() in Jade: send, receive, and a for over it (D87)"},
-            {"ArrayBlockingQueue", "an ArrayBlockingQueue is a Channel<T>(capacity = n) in Jade (D87)"},
-            {"ConcurrentLinkedQueue", "a ConcurrentLinkedQueue is a Channel<T>.unbounded() in Jade, used with trySend and tryReceive (D87)"},
-            {"CountDownLatch", "a CountDownLatch is Countdown(n) in Jade: countDown(), await(timeout = ...), count (D118)"},
-            {"AtomicInteger", "Java's atomics are one Atomic<T> in Jade: Atomic(0), with get, set, update { }, exchange, compareAndSet, and increment, decrement and add on an int (D85)"},
-            {"AtomicLong", "Java's atomics are one Atomic<T> in Jade: Atomic(0), an int being 64 bits (D85)"},
-            {"AtomicBoolean", "Java's atomics are one Atomic<T> in Jade: Atomic(false) (D85)"},
-            {"AtomicReference", "Java's atomics are one Atomic<T> in Jade: Atomic<Frame?>(null) (D85)"},
-            {"TimeUnit", "a time is a Duration in Jade: 16.milliseconds, 2.seconds, 5.minutes (D90)"},
-            {"synchronized", "synchronized(x) { } is a Lock's useKey in Jade: val lock = Lock(), then lock.useKey { ... }; data reached only with the key is a LockBox(value) (D86)"},
-            {"ReentrantLock", "a ReentrantLock is a Lock() in Jade, used with useKey { } (D86)"},
-            {"startCoroutine", "startCoroutine is task { ... } in Jade, which gives a Job of what the block returns (D81)"},
+            {"Future", "a result to come is a Job<T> in WinterWolf, from task { }, thread { } or a pool's submit { }: then { }, get(timeout = ...) (D89)"},
+            {"CompletableFuture", "a result to come is a Job<T> in WinterWolf, made by hand as Job<T>() and given its value with complete(v) or fail(e) (D89)"},
+            {"Executor", "threads that take jobs are a ThreadPool(threads = n) in WinterWolf, and one thread taking them in order a JobQueue(name): submit { } gives a Job (D88)"},
+            {"ExecutorService", "threads that take jobs are a ThreadPool(threads = n) in WinterWolf, and one thread taking them in order a JobQueue(name): submit { } gives a Job (D88)"},
+            {"ScheduledExecutorService", "a ThreadPool runs timed jobs in WinterWolf: pool.after(1.seconds) { }, pool.every(5.seconds) { } (D88)"},
+            {"Executors", "Executors.newFixedThreadPool(n) is ThreadPool(threads = n) in WinterWolf, newSingleThreadExecutor() a JobQueue(name) (D88)"},
+            {"BlockingQueue", "a queue threads hand things over on is a Channel in WinterWolf: Channel<T>.unbounded(), or Channel<T>(capacity = n) holding n at most (D87)"},
+            {"LinkedBlockingQueue", "a LinkedBlockingQueue is Channel<T>.unbounded() in WinterWolf: send, receive, and a for over it (D87)"},
+            {"ArrayBlockingQueue", "an ArrayBlockingQueue is a Channel<T>(capacity = n) in WinterWolf (D87)"},
+            {"ConcurrentLinkedQueue", "a ConcurrentLinkedQueue is a Channel<T>.unbounded() in WinterWolf, used with trySend and tryReceive (D87)"},
+            {"CountDownLatch", "a CountDownLatch is Countdown(n) in WinterWolf: countDown(), await(timeout = ...), count (D118)"},
+            {"AtomicInteger", "Java's atomics are one Atomic<T> in WinterWolf: Atomic(0), with get, set, update { }, exchange, compareAndSet, and increment, decrement and add on an int (D85)"},
+            {"AtomicLong", "Java's atomics are one Atomic<T> in WinterWolf: Atomic(0), an int being 64 bits (D85)"},
+            {"AtomicBoolean", "Java's atomics are one Atomic<T> in WinterWolf: Atomic(false) (D85)"},
+            {"AtomicReference", "Java's atomics are one Atomic<T> in WinterWolf: Atomic<Frame?>(null) (D85)"},
+            {"TimeUnit", "a time is a Duration in WinterWolf: 16.milliseconds, 2.seconds, 5.minutes (D90)"},
+            {"synchronized", "synchronized(x) { } is a Lock's useKey in WinterWolf: val lock = Lock(), then lock.useKey { ... }; data reached only with the key is a LockBox(value) (D86)"},
+            {"ReentrantLock", "a ReentrantLock is a Lock() in WinterWolf, used with useKey { } (D86)"},
+            {"startCoroutine", "startCoroutine is task { ... } in WinterWolf, which gives a Job of what the block returns (D81)"},
             {"bytes", "'bytes' is now written 'Bytes', as its type is (type names are Title case)"},
             {"args", "args() is written Program.arguments: what the program was started with (D184)"},
             {"type", "type(x) is written x#.name, the name of x's class; x# is the class itself (D74, G24)"},
             {"Deque", "a Deque is now written Deck: a queue open at both ends, with addFirst, addLast, removeFirst and removeLast (D183)"},
-            {"ArrayDeque", "an ArrayDeque is a Deck in Jade: a queue open at both ends, with addFirst, addLast, removeFirst and removeLast (D183)"},
+            {"ArrayDeque", "an ArrayDeque is a Deck in WinterWolf: a queue open at both ends, with addFirst, addLast, removeFirst and removeLast (D183)"},
             {"range", "'range' is now written 'Range', as its type is (type names are Title case)"},
-            {"suspendCoroutine", "suspendCoroutine is suspendTask { resume -> ... } in Jade: resume(value) takes the task up again, resume.fail(e) throws e there (D81)"},
-            {"Continuation", "a Continuation is suspendTask's resume in Jade, a plain function: resume(value), resume.fail(e) (D81)"},
-            {"EmptyCoroutineContext", "a task needs no context in Jade: task { ... } (D81)"},
+            {"suspendCoroutine", "suspendCoroutine is suspendTask { resume -> ... } in WinterWolf: resume(value) takes the task up again, resume.fail(e) throws e there (D81)"},
+            {"Continuation", "a Continuation is suspendTask's resume in WinterWolf, a plain function: resume(value), resume.fail(e) (D81)"},
+            {"EmptyCoroutineContext", "a task needs no context in WinterWolf: task { ... } (D81)"},
             // Files and input and output (D91, D107, D119, D127, D131, D136).
-            {"File", "a file or directory is a FilePath in Jade: FilePath(\"notes.txt\"), FilePath(directory, name); FilePath(p).readText(), writeText(text), appendText(text) and exists() in place of File.read, write, append and exists (D107, D136)"},
-            {"Files", "Files.x(p) is p.x() in Jade, on the FilePath: p.readText(), p.readBytes(), p.mkdir(), a.moveTo(b), p.list(), p.walk() (D131)"},
-            {"Paths", "Paths.get(s) is FilePath(s) in Jade (D131)"},
-            {"InputStream", "something to read from is a Reader in Jade, bytes and text alike: path.reader(), process.output, socket.reader (D119)"},
-            {"OutputStream", "something to write to is a Writer in Jade, bytes and text alike: path.writer(append = ...), process.input, socket.writer (D119)"},
-            {"BufferedReader", "a Reader in Jade reads ahead already: path.reader() (D119)"},
-            {"BufferedWriter", "a Writer in Jade: path.writer() (D119)"},
-            {"PrintWriter", "a Writer in Jade has print and println: path.writer() (D119)"},
-            {"ProcessBuilder", "a program is started with Process(command..., directory = ..., environment = {...}, input = ..., output = ..., error = ...) in Jade, or run to its end with Process.run(...) (D91)"},
-            {"Charsets", "a character set is a Charset in Jade: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
-            {"StandardCharsets", "a character set is a Charset in Jade: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
+            {"File", "a file or directory is a FilePath in WinterWolf: FilePath(\"notes.txt\"), FilePath(directory, name); FilePath(p).readText(), writeText(text), appendText(text) and exists() in place of File.read, write, append and exists (D107, D136)"},
+            {"Files", "Files.x(p) is p.x() in WinterWolf, on the FilePath: p.readText(), p.readBytes(), p.mkdir(), a.moveTo(b), p.list(), p.walk() (D131)"},
+            {"Paths", "Paths.get(s) is FilePath(s) in WinterWolf (D131)"},
+            {"InputStream", "something to read from is a Reader in WinterWolf, bytes and text alike: path.reader(), process.output, socket.reader (D119)"},
+            {"OutputStream", "something to write to is a Writer in WinterWolf, bytes and text alike: path.writer(append = ...), process.input, socket.writer (D119)"},
+            {"BufferedReader", "a Reader in WinterWolf reads ahead already: path.reader() (D119)"},
+            {"BufferedWriter", "a Writer in WinterWolf: path.writer() (D119)"},
+            {"PrintWriter", "a Writer in WinterWolf has print and println: path.writer() (D119)"},
+            {"ProcessBuilder", "a program is started with Process(command..., directory = ..., environment = {...}, input = ..., output = ..., error = ...) in WinterWolf, or run to its end with Process.run(...) (D91)"},
+            {"Charsets", "a character set is a Charset in WinterWolf: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
+            {"StandardCharsets", "a character set is a Charset in WinterWolf: Charset.utf8, latin1, ascii, utf16le, utf16be, utf16, windows1252, latin9 (D127)"},
             // Graphics (D99, D101 to D106, L79 to L86, L101, L102).
-            {"Dimension", "a width and a height are a Size in Jade, a value type: Size(width, height) (L82)"},
-            {"Rectangle", "a rectangle is a Rect in Jade, a value type: Rect(x, y, width, height) (L84)"},
-            {"BufferedImage", "pixels in memory are an Image in Jade: Image(width, height), image[x, y] a Color, image.canvas() to draw on it (L86, L101)"},
-            {"Picture", "a Picture is an Image in Jade: Image(width, height, color), image[x, y], image.canvas() (L101)"},
-            {"FontMetrics", "a font measures itself in Jade: font.width(text), font.ascent, font.descent, font.leading, font.lineHeight, and font.width(text, scale) in a screen's pixels (L81)"},
-            {"Bitmap", "pixels in memory are an Image in Jade: its pixels are changed in image.editPixels { pixels -> pixels[x, y] = color } (L110)"},
-            {"Graphics", "what draws is a Canvas in Jade: image.canvas(), surface.canvas(), or the one a widget paints on (D123)"},
-            {"Graphics2D", "what draws is a Canvas in Jade: image.canvas(), surface.canvas(), or the one a widget paints on (D123)"},
+            {"Dimension", "a width and a height are a Size in WinterWolf, a value type: Size(width, height) (L82)"},
+            {"Rectangle", "a rectangle is a Rect in WinterWolf, a value type: Rect(x, y, width, height) (L84)"},
+            {"BufferedImage", "pixels in memory are an Image in WinterWolf: Image(width, height), image[x, y] a Color, image.canvas() to draw on it (L86, L101)"},
+            {"Picture", "a Picture is an Image in WinterWolf: Image(width, height, color), image[x, y], image.canvas() (L101)"},
+            {"FontMetrics", "a font measures itself in WinterWolf: font.width(text), font.ascent, font.descent, font.leading, font.lineHeight, and font.width(text, scale) in a screen's pixels (L81)"},
+            {"Bitmap", "pixels in memory are an Image in WinterWolf: its pixels are changed in image.editPixels { pixels -> pixels[x, y] = color } (L110)"},
+            {"Graphics", "what draws is a Canvas in WinterWolf: image.canvas(), surface.canvas(), or the one a widget paints on (D123)"},
+            {"Graphics2D", "what draws is a Canvas in WinterWolf: image.canvas(), surface.canvas(), or the one a widget paints on (D123)"},
         };
         auto found = gone.find(name);
         return found == gone.end() ? std::string() : found->second;
     }
-    // What Java's members of a file, a stream, a process or a socket are in Jade (D91, D107,
+    // What Java's members of a file, a stream, a process or a socket are in WinterWolf (D91, D107,
     // D119, D120, D126, D128 to D131, D135, D137, D138), by the class of the standard library
     // they were asked of.
     static std::string ioAdvice(const std::string& cls, const std::string& name) {
@@ -3003,8 +3003,8 @@ struct Checker::Impl {
             {"walkTopDown", "walkTopDown() is written walk(): every path below, as a sequence (D138)"},
             {"mkdirs", "mkdirs() is written mkdir(), which makes any missing directories above too (D126)"},
             {"renameTo", "renameTo is written moveTo(target), which throws an IOException where it cannot move (D129)"},
-            {"toPath", "there is one type for a path in Jade, FilePath: the call goes (D131)"},
-            {"toFile", "there is one type for a path in Jade, FilePath: the call goes (D131)"},
+            {"toPath", "there is one type for a path in WinterWolf, FilePath: the call goes (D131)"},
+            {"toFile", "there is one type for a path in WinterWolf, FilePath: the call goes (D131)"},
             {"inputStream", "a file is read with path.reader() (D119)"},
             {"bufferedReader", "a file is read with path.reader(), which reads ahead already (D119)"},
             {"outputStream", "a file is written with path.writer(append = ...) (D119)"},
@@ -3052,7 +3052,7 @@ struct Checker::Impl {
         return found == table->end() ? std::string() : found->second;
     }
 
-    // What Java's members of the graphics types are in Jade (D99, D101 to D106, D141, D144,
+    // What Java's members of the graphics types are in WinterWolf (D99, D101 to D106, D141, D144,
     // L79 to L86, L101, L102, L109), by the class of the standard library they were asked of.
     static std::string graphicsAdvice(const std::string& cls, const std::string& name) {
         static const std::unordered_map<std::string, std::string> color = {
@@ -3093,8 +3093,8 @@ struct Checker::Impl {
             {"drawImagePart", "a part of a picture is drawn with canvas.drawPart(picture, sx, sy, sw, sh, x, y, w, h) (L86)"},
             {"getFontMetrics", "a font measures itself: canvas.font.width(text), or canvas.measure(text) for its width, ascent, descent and height (L81)"},
             {"fontMetrics", "a font measures itself: canvas.font.width(text), or canvas.measure(text) for its width, ascent, descent and height (L81)"},
-            {"style", "a canvas has no style in Jade: a widget's content paints in owner.paintStyle (L109)"},
-            {"withStyle", "a canvas has no style in Jade: a widget's content paints in owner.paintStyle (L109)"},
+            {"style", "a canvas has no style in WinterWolf: a widget's content paints in owner.paintStyle (L109)"},
+            {"withStyle", "a canvas has no style in WinterWolf: a widget's content paints in owner.paintStyle (L109)"},
             {"setColor", "the colour is a property: canvas.color = Color.red"},
             {"getColor", "the colour is a property: canvas.color"},
             {"setFont", "the font is a property: canvas.font = Font(name, size)"},
@@ -7007,7 +7007,7 @@ struct Checker::Impl {
         if (m.object->kind == ExprKind::Name) {
             const std::string& base = static_cast<const NameExpr&>(*m.object).name;
             if (findLocal(base) == nullptr && !nameIsMember(base) && classNamed(base) == nullptr) {
-                // `int.maxValue` and the other limits of Jade's numbers (D76): constants.
+                // `int.maxValue` and the other limits of WinterWolf's numbers (D76): constants.
                 if (base == "int" || base == "float") {
                     ConstValue limit;
                     if (numberLimit(base, m.name, limit)) {
@@ -7018,7 +7018,7 @@ struct Checker::Impl {
                                   (base == "int" ? "maxValue and minValue" : "maxValue, minValue, minPositive, nan, positiveInfinity and negativeInfinity"));
                     return unknownType();
                 }
-                // Kotlin's holders, whose numbers are not Jade's (D76).
+                // Kotlin's holders, whose numbers are not WinterWolf's (D76).
                 if ((base == "Int" || base == "Long" || base == "Double" || base == "Float") && findGlobal(*unit, base) == nullptr) {
                     report(m, oldLimitAdvice(base, m.name));
                     return unknownType();
@@ -7064,7 +7064,7 @@ struct Checker::Impl {
         return result;
     }
 
-    // The limits of Jade's numbers (D76): `int.maxValue` and the rest, at their real values.
+    // The limits of WinterWolf's numbers (D76): `int.maxValue` and the rest, at their real values.
     bool numberLimit(const std::string& type, const std::string& name, ConstValue& limit) {
         limit = ConstValue{};
         if (type == "int") {
@@ -7080,9 +7080,9 @@ struct Checker::Impl {
         }
         return limit.kind != ConstValue::None;
     }
-    // What `Int.MAX_VALUE`, `Double.MIN_VALUE` and the like are in Jade.
+    // What `Int.MAX_VALUE`, `Double.MIN_VALUE` and the like are in WinterWolf.
     static std::string oldLimitAdvice(const std::string& holder, const std::string& name) {
-        // MAX_VALUE as Kotlin writes it, or maxValue as Jade's holders had it.
+        // MAX_VALUE as Kotlin writes it, or maxValue as WinterWolf's holders had it.
         const bool screaming = name.find('_') != std::string::npos || name == "NaN";
         std::string camel = screaming ? "" : name;
         bool up = false;
@@ -7097,7 +7097,7 @@ struct Checker::Impl {
         const bool whole = holder == "Int" || holder == "Long";
         std::string to = (whole ? "int." : "float.") + camel;
         if (!whole && camel == "minValue") to = "float.minPositive (Kotlin's " + holder + ".MIN_VALUE is the smallest above 0; float.minValue is the most negative)";
-        std::string text = holder + " is Kotlin's; Jade's numbers are int and float: write " + to;
+        std::string text = holder + " is Kotlin's; WinterWolf's numbers are int and float: write " + to;
         if (holder == "Int" && (camel == "maxValue" || camel == "minValue"))
             text += ", which is " + std::string(camel == "maxValue" ? "9223372036854775807" : "-9223372036854775808") + ", an int being 64 bits";
         return text;
@@ -7267,7 +7267,7 @@ struct Checker::Impl {
         if (k->unit != nullptr && k->unit->prelude && javaConstant(name)) {
             const std::string camel = camelName(name);
             if (hasStatic(k, camel)) {
-                report(at, k->name + "." + name + " is written " + k->name + "." + camel + ": Jade's names of members are camelCase");
+                report(at, k->name + "." + name + " is written " + k->name + "." + camel + ": WinterWolf's names of members are camelCase");
                 return;
             }
             if (const std::string advice = preludeAdvice(k, camel); !advice.empty()) {
@@ -8045,7 +8045,7 @@ struct Checker::Impl {
         return false;
     }
 
-    // Only a function written in Jade takes them: the C++'s have none.
+    // Only a function written in WinterWolf takes them: the C++'s have none.
     void noteTypeArguments(const FuncInfo* f, const Env& env, const Node& at) {
         if (!f->typeParams.empty() && f->decl != nullptr && !f->isExternal) noteTypeArguments(f->typeParams, env, at);
     }
@@ -8054,7 +8054,7 @@ struct Checker::Impl {
     // a List<string> does not make T something both fit, as an argument would. Where it says
     // nothing of one (a Map written with no type arguments), that one is unknown: the arguments
     // cannot tell what the object holds, and `data.get(key, "missing")` is not a string? for it
-    // (M6.6 part 1, found by JADE_CHECK_NATIVE_RESULTS).
+    // (M6.6 part 1, found by WW_CHECK_NATIVE_RESULTS).
     static void fixByReceiver(const Type& declared, Env& env, std::vector<std::string>& vars) {
         std::vector<std::string> named;
         typeParamsIn(declared, named);
@@ -8093,7 +8093,7 @@ struct Checker::Impl {
             std::all_of(args.names.begin(), args.names.end(), [](const std::string& n) { return n.empty(); }) &&
             withNull(typeQuietly(*args.exprs[1]), false).kind == Type::Int) {
             for (const ExprPtr& a : args.exprs) expr(*a);
-            report(at, "Java's Font(name, style, size) is Font(name, size, bold = true, italic = true) in Jade: a style is said by name (L80)");
+            report(at, "Java's Font(name, style, size) is Font(name, size, bold = true, italic = true) in WinterWolf: a style is said by name (L80)");
             return classType(k);
         }
         // Grid<Label>(w, h): a grid of objects has no zero to start its cells from (8.9f).
@@ -8410,7 +8410,7 @@ struct Checker::Impl {
         throwScopes.emplace_back();
         return &throwScopes.back();
     }
-    // Code of a file put back as it was kept, the standard library's attached to jade.exe among
+    // Code of a file put back as it was kept, the standard library's attached to ww.exe among
     // them: its inline functions' bodies are checked, being copied where they are called, but
     // what its functions may throw its kept facts say (D145), so nothing of it is noted (G41).
     bool keptCode() const { return unit != nullptr && unit->skipBodies; }
@@ -10221,7 +10221,7 @@ struct Checker::Impl {
         return unknownType();
     }
 
-    // Whether the methods of a built-in type are all declared (src/std/builtins.jade), so
+    // Whether the methods of a built-in type are all declared (src/std/builtins.ww), so
     // one that is not there does not exist.
     bool builtinDeclared(const Type& t) const {
         switch (t.kind) {
@@ -10997,9 +10997,9 @@ struct Checker::Impl {
     // says what to do, where the program declares no annotation of that name.
     static std::string kotlinAnnotation(const std::string& name) {
         if (name == "Target" || name == "Retention" || name == "MustBeDocumented")
-            return "@" + name + " tells Kotlin's compiler how an annotation is used; Jade's need no such word: delete it (D153)";
-        if (name == "Repeatable") return "@Repeatable is Kotlin's: an Jade annotation is written once on a declaration; delete it (D153)";
-        if (name == "OptIn") return "@OptIn accepts one of Kotlin's experimental APIs, and Jade has none to accept: delete it (D153)";
+            return "@" + name + " tells Kotlin's compiler how an annotation is used; WinterWolf's need no such word: delete it (D153)";
+        if (name == "Repeatable") return "@Repeatable is Kotlin's: a WinterWolf annotation is written once on a declaration; delete it (D153)";
+        if (name == "OptIn") return "@OptIn accepts one of Kotlin's experimental APIs, and WinterWolf has none to accept: delete it (D153)";
         if (name == "Deprecated") return "@Deprecated comes with 1.0 (G46); until then, say so in the comment above the declaration";
         return "";
     }
@@ -11017,14 +11017,14 @@ struct Checker::Impl {
             for (const Annotation& other : written)
                 if (&other < &a && annotationClass(other) == k) report(a, "@" + a.name + " is written twice here");
             if (k->unit != nullptr && k->unit->prelude) {
-                // The standard library's own, read by `jade test`, each for one place.
+                // The standard library's own, read by `ww test`, each for one place.
                 const std::string& n = k->name;
                 const bool onFunction = n == "Test" || n == "BeforeTest" || n == "AfterTest" || n == "BeforeAll" || n == "AfterAll" || n == "Timeout";
-                if (onFunction && place != AnnotationPlace::Function) report(a, "@" + n + " goes on a function, for jade test (D153)");
+                if (onFunction && place != AnnotationPlace::Function) report(a, "@" + n + " goes on a function, for ww test (D153)");
                 if (n == "TempDir" && place != AnnotationPlace::Parameter)
                     report(a, "@TempDir goes on a test's parameter, a FilePath given a directory of its own (D153)");
                 if ((n == "RealHost" || n == "Sandboxed") && place != AnnotationPlace::Function && place != AnnotationPlace::Class)
-                    report(a, "@" + n + " goes on a test or a class of tests, for jade test (M6.6.2)");
+                    report(a, "@" + n + " goes on a test or a class of tests, for ww test (M6.6.2)");
                 if (n == "Sandboxed")
                     for (const Annotation& other : written)
                         if (other.name == "RealHost") report(a, "@Sandboxed and @RealHost are both written here: a test runs in a sandbox or on the real system");
@@ -12685,4 +12685,4 @@ void Checker::run() {
     impl_->runAll();
 }
 
-}  // namespace jade
+}  // namespace ww

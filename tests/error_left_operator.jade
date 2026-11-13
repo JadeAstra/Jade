@@ -1,7 +1,0 @@
-// A value of a built-in type on the left of a class's operator, with no operator added to its type.
-value Money(val cents : int) {
-  op *(times : int) : Money => Money(cents * times)
-}
-print(Money(2) * 3)
-print(3 * Money(2))
-// expect compile error: error_left_operator.jade:6:9: error: '*' cannot be used on an int and a Money: Money's own operators take the other value on their right; for one on the left, add the operator to its type: op int.*(other : Money)

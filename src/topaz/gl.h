@@ -18,8 +18,8 @@
 #include <windows.h>
 #include <GL/gl.h>
 #else
-// Elsewhere OpenGL comes from a library found when a window first needs one, not one jade is
-// linked with, so that jade runs where there is none (G56): the types and the few names of
+// Elsewhere OpenGL comes from a library found when a window first needs one, not one ww is
+// linked with, so that ww runs where there is none (G56): the types and the few names of
 // OpenGL 1.1 used here are declared below, and its functions are reached through `gl` as the
 // later ones are (the gl* names below stand for them).
 #define APIENTRY
@@ -56,12 +56,12 @@ using GLbitfield = unsigned int;
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_WRAP_S 0x2802
 #define GL_TEXTURE_WRAP_T 0x2803
-#define JADE_GL_TABLE_1_1 1
+#define WW_GL_TABLE_1_1 1
 #endif
 
 #include <cstddef>
 
-namespace jade::topaz {
+namespace ww::topaz {
 
 const GLenum kFragmentShader = 0x8B30, kVertexShader = 0x8B31, kCompileStatus = 0x8B81, kLinkStatus = 0x8B82;
 const GLenum kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kTexture0 = 0x84C0, kClampToEdge = 0x812F;
@@ -99,7 +99,7 @@ struct GlApi {
     GLenum(APIENTRY* CheckFramebufferStatus)(GLenum);
     void(APIENTRY* DeleteFramebuffers)(GLsizei, const GLuint*);
     void(APIENTRY* BlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
-#ifdef JADE_GL_TABLE_1_1
+#ifdef WW_GL_TABLE_1_1
     // OpenGL 1.1's, which Windows' own library gives by name and elsewhere are fetched too.
     void(APIENTRY* PixelStorei)(GLenum, GLint);
     void(APIENTRY* TexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*);
@@ -122,27 +122,27 @@ struct GlApi {
 
 extern GlApi gl;
 
-#ifdef JADE_GL_TABLE_1_1
-#define glPixelStorei ::jade::topaz::gl.PixelStorei
-#define glTexImage2D ::jade::topaz::gl.TexImage2D
-#define glTexSubImage2D ::jade::topaz::gl.TexSubImage2D
-#define glBindTexture ::jade::topaz::gl.BindTexture
-#define glTexParameteri ::jade::topaz::gl.TexParameteri
-#define glGenTextures ::jade::topaz::gl.GenTextures
-#define glDeleteTextures ::jade::topaz::gl.DeleteTextures
-#define glEnable ::jade::topaz::gl.Enable
-#define glDisable ::jade::topaz::gl.Disable
-#define glClearColor ::jade::topaz::gl.ClearColor
-#define glClear ::jade::topaz::gl.Clear
-#define glViewport ::jade::topaz::gl.Viewport
-#define glScissor ::jade::topaz::gl.Scissor
-#define glReadPixels ::jade::topaz::gl.ReadPixels
-#define glGetIntegerv ::jade::topaz::gl.GetIntegerv
-#define glGetString ::jade::topaz::gl.GetString
+#ifdef WW_GL_TABLE_1_1
+#define glPixelStorei ::ww::topaz::gl.PixelStorei
+#define glTexImage2D ::ww::topaz::gl.TexImage2D
+#define glTexSubImage2D ::ww::topaz::gl.TexSubImage2D
+#define glBindTexture ::ww::topaz::gl.BindTexture
+#define glTexParameteri ::ww::topaz::gl.TexParameteri
+#define glGenTextures ::ww::topaz::gl.GenTextures
+#define glDeleteTextures ::ww::topaz::gl.DeleteTextures
+#define glEnable ::ww::topaz::gl.Enable
+#define glDisable ::ww::topaz::gl.Disable
+#define glClearColor ::ww::topaz::gl.ClearColor
+#define glClear ::ww::topaz::gl.Clear
+#define glViewport ::ww::topaz::gl.Viewport
+#define glScissor ::ww::topaz::gl.Scissor
+#define glReadPixels ::ww::topaz::gl.ReadPixels
+#define glGetIntegerv ::ww::topaz::gl.GetIntegerv
+#define glGetString ::ww::topaz::gl.GetString
 #endif
 
 // Fills `gl` through a function that finds an OpenGL function by name (the window system's
 // own). False, with the name of the first one missing, if the driver lacks any.
 bool loadGl(void* (*find)(const char* name), const char*& missing);
 
-}  // namespace jade::topaz
+}  // namespace ww::topaz

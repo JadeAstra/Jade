@@ -1822,7 +1822,7 @@ CASE(CallOn) {
     const Value callee = at[0];
     SAVE_IP();
     if (!callee.isObjType(ObjType::Closure)) {
-        // Only a function written in Jade runs on an object: any other is given the arguments alone.
+        // Only a function written in WinterWolf runs on an object: any other is given the arguments alone.
         for (int i = 0; i < argc; i++) at[1 + i] = at[2 + i];
         sp_--;
         if (callValue(callee, argc)) LOAD_FRAME();
@@ -3056,7 +3056,7 @@ CASE(Throw) {
     const ObjClass* throwable = thrownClasses_[static_cast<size_t>(Thrown::Throwable)];
     if (throwable != nullptr && (classOf(value) == nullptr || !classOf(value)->isSubclassOf(throwable)))
         throw runtimeError(Thrown::ClassCastException, "only a Throwable can be thrown, not a value of type " + typeName(value));
-    JadeThrow thrown;
+    WwThrow thrown;
     thrown.value = *--sp_;
     throw thrown;
 }
@@ -3662,7 +3662,7 @@ COLD(RGetProp) {
         R_CALL_ARGUMENT(1)                                  \
     }                                                       \
     if (ip[1] != ip[3]) Value::copyWhole(at, &base[ip[1]]);
-// Where a function written in Jade, called by an RCall or RInvoke of `size` bytes, its resume
+// Where a function written in WinterWolf, called by an RCall or RInvoke of `size` bytes, its resume
 // place at ip + `resume`, returns to: the instruction after it, where its result is to stay
 // where the call leaves it (slot S, A being S); else, into its slow way just after the call,
 // which stores it where it goes and comes back.

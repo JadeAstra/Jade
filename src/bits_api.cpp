@@ -1,4 +1,4 @@
-// What BitReader, HuffmanTable and Bytes.inflate and deflate (src/std/bits.jade) are built on:
+// What BitReader, HuffmanTable and Bytes.inflate and deflate (src/std/bits.ww) are built on:
 // bits read from any place in bytes, either order; a Huffman code decoded at a place; and
 // codec.cpp's deflate both ways.
 
@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(JADE_NO_SSE2)
-#define JADE_SSE2_SCAN 1
+#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(WW_NO_SSE2)
+#define WW_SSE2_SCAN 1
 #include <emmintrin.h>
 #endif
 
@@ -18,7 +18,7 @@
 #include "codec.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -574,7 +574,7 @@ void registerBits(VM& vm) {
                                 put((c.dcCode[ds] << ds) | valueBits(diff, ds), c.dcLength[ds] + ds);
                                 // Which of the 63 others are not 0, a bit each.
                                 uint64_t nonzero = 0;
-#ifdef JADE_SSE2_SCAN
+#ifdef WW_SSE2_SCAN
                                 const __m128i zero = _mm_setzero_si128();
                                 for (int k = 0; k < 64; k += 16) {
                                     const __m128i a = _mm_cmpeq_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(zz + k)), zero);
@@ -726,4 +726,4 @@ void registerBits(VM& vm) {
 
 }
 
-}  // namespace jade
+}  // namespace ww

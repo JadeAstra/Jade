@@ -14,7 +14,7 @@
 
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -328,7 +328,7 @@ void decodeOperands(const std::vector<uint8_t>& code, size_t ip, Operand operand
 }  // namespace
 
 std::string builtinSpelling(const std::string& name) {
-    static const std::string prefix = "jade.";
+    static const std::string prefix = "ww.";
     if (name.rfind(prefix, 0) != 0) return name;
     const std::string rest = name.substr(prefix.size());
     for (uint8_t id = kTypeInt; id < kTypeCount_; id++)
@@ -1229,7 +1229,7 @@ void verifyFunction(FunctionProto& f, const Program& program, bool now, bool tru
     f.quickArity = !f.chooser && f.varargIndex < 0 && (f.typeArgs & ~(kTakesDestination | kHasPlaces)) == 0 ? f.arity : -1;
     f.quickFewest = f.quickArity >= 0 ? f.requiredArgs() : 0;
     std::vector<int> depths;
-    // Code of jade's own making translated at its first call is checked then (translateNow):
+    // Code of ww's own making translated at its first call is checked then (translateNow):
     // a program's start reads many functions it never calls (a quarter of a kept program's
     // start went to checking them, 2026-11-09).
     const bool later = !now && !f.chooser && (bodyLater || !f.code.empty());
@@ -2174,10 +2174,10 @@ bool looksLikeBytecode(const std::string& data) {
 }
 
 void readProgram(Program& program, VM& vm, const std::string& data, bool trusted) {
-    if (!looksLikeBytecode(data)) throw std::runtime_error("not an Jade bytecode file");
+    if (!looksLikeBytecode(data)) throw std::runtime_error("not a WinterWolf bytecode file");
     Reader r{data, program, vm, sizeof kMagic};
     r.defer = true;
-    r.lazyBodies = trusted;  // jade's own making: each function's body read when it is first asked for
+    r.lazyBodies = trusted;  // ww's own making: each function's body read when it is first asked for
 
     uint8_t version = r.u8();
     if (version != kFormatVersion)
@@ -2819,4 +2819,4 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
     return result;
 }
 
-}  // namespace jade
+}  // namespace ww

@@ -1,0 +1,71 @@
+// What a program learns of the system it runs on (M8): its environment, its process id, the
+// computer's name, the tops of the file system and the room on them; and 64-bit numbers in
+// bytes. A sandbox answers the same everywhere, and refuses what it has no form of.
+
+// The environment: read like a map, null for a name that is not set. On Windows a name is the
+// same in any case, as the system has it.
+val env = Program.environment
+val path = env["PATH"] ?: env["FilePath"]
+print(path != null and path.size > 0)   // expect: true
+print(env["WW_NO_SUCH_VARIABLE_HERE"])   // expect: null
+print(env.containsKey("WW_NO_SUCH_VARIABLE_HERE"))   // expect: false
+print(env.size == env.names.size and env.size == env.toMap().size and env.size > 0)   // expect: true
+val windows = FilePath.separator == "\\"
+if (windows) {
+  print(env["systemroot"] == env["SYSTEMROOT"] and env["SystemRoot"] != null)
+} else {
+  print(true)
+}   // expect: true
+
+// The process id and the computer's name.
+print(Program.processId > 0, Program.hostName.size > 0)   // expect: true true
+
+// The tops of the file system, and the room on them.
+val roots = FilePath.roots()
+print(roots.size >= 1)   // expect: true
+val top = roots[0]
+// Each is asked of the system on its own: other programs (the other tests) writing and deleting
+// between the two asks move them, so usable may pass free by what was freed meanwhile.
+val usable = top.usableSpace
+val free = top.freeSpace
+print(top.totalSpace > 0, top.totalSpace >= free, free + 1000000000 >= usable)   // expect: true true true
+val nowhere = windows ? "Q:\\ww\\nowhere" : "/ww/nowhere/at/all"
+try {
+  print(FilePath(nowhere).totalSpace)
+} catch (e : IOException) {
+  print("on no volume")
+}   // expect: on no volume
+
+// 64-bit numbers in bytes, either way round.
+val b = Bytes(16)
+b.putInt64(0, -2)
+b.putInt64(8, 9007199254740993)
+print(b.int64(0), b.int64(8))   // expect: -2 9007199254740993
+print(b[0], b[7], b[8])   // expect: 254 255 1
+b.putInt64(0, 0x0102030405060708, bigEndian = true)
+print(b[0], b[7], b.int64(0, bigEndian = true) == 0x0102030405060708)   // expect: 1 8 true
+b.putFloat64(8, 3.25)
+print(b.float64(8), b.int64(8) == 0x400A000000000000)   // expect: 3.25 true
+b.putFloat64(0, -0.1, bigEndian = true)
+print(b.float64(0, bigEndian = true))   // expect: -0.1
+try {
+  b.int64(9)
+} catch (e : IndexOutOfBoundsException) {
+  print(e.message)
+}   // expect: a 64-bit number at 9 runs past the end of 16 bytes
+
+// In a sandbox: no environment, process 1, a computer called sandbox, no volumes.
+Sandbox.run {
+  print(Program.environment.size, Program.environment["PATH"], Program.processId, Program.hostName)   // expect: 0 null 1 sandbox
+  try {
+    FilePath.roots()
+  } catch (e : UnsupportedOperationException) {
+    print(e.message)
+  }   // expect: a sandbox has no volumes to list
+  // The space of a volume is an IOException there, as the properties say they throw.
+  try {
+    print(FilePath("/").totalSpace)
+  } catch (e : IOException) {
+    print(e.message)
+  }   // expect: a sandbox has no volumes to ask the space of
+}

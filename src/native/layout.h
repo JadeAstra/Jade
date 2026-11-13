@@ -1,13 +1,13 @@
 // What the stencils (src/native/stencils.cpp) read of the VM's objects, as byte offsets: the
 // stencils are compiled on their own, without the VM's headers, so they are told here. Each
-// number is checked against the VM's own structures when jade.exe is built (native.cpp, by
-// static_assert; and std::vector's layout by `jade --native-check`), so a change to an object
+// number is checked against the VM's own structures when ww.exe is built (native.cpp, by
+// static_assert; and std::vector's layout by `ww --native-check`), so a change to an object
 // stops the build rather than reading the wrong bytes.
 #pragma once
 
 #include <cstdint>
 
-namespace jade::native::layout {
+namespace ww::native::layout {
 
 // A value: its kind in the first byte, its payload 8 bytes in.
 constexpr int kValueSize = 16, kValuePayload = 8;
@@ -64,4 +64,4 @@ constexpr uint8_t kTypeIdInt = 1, kTypeIdFloat = 2;
 // for none), and where its bytes start (2026-11-13: a value made where a call leaves it).
 constexpr int kPlaceClass = 24, kPlaceType = 32, kPlaceData = 40;
 
-}  // namespace jade::native::layout
+}  // namespace ww::native::layout

@@ -1,0 +1,5 @@
+// A name a file declares that a .* import brings in too: a bare use could mean either, so
+// the declaration is an error, whether or not the name is used.
+import NsText.*
+fun title() : string => "mine"
+// expect compile error: error_ns_name_defined.ww:4:1: error: 'title' is declared here and by NsText, which this file imports: a bare use could mean either; import NsText without .* and write NsText. in front of its names, or give one of them another name

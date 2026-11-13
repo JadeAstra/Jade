@@ -1,6 +1,6 @@
 // Native code (M9.5, docs/native-plan.html): machine code made as a program runs, from the
 // register stencils that tools/stencils read out of Clang's object file of src/native/stencils.cpp
-// when jade.exe was built. This part knows the stencils and puts them together: a region's steps
+// when ww.exe was built. This part knows the stencils and puts them together: a region's steps
 // copied end to end into code memory, their gaps filled in. What a region is made of, and when,
 // is the VM's (registers.cpp and vm.cpp, from step 3 on).
 #pragma once
@@ -10,9 +10,9 @@
 #include <string_view>
 #include <vector>
 
-namespace jade::native {
+namespace ww::native {
 
-// What fills a stencil's gap (src/native/stencils.cpp names them jade_next and so on).
+// What fills a stencil's gap (src/native/stencils.cpp names them ww_next and so on).
 enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData };
 // A gap: where its 32 bits are in the stencil, and how many bytes of the instruction follow them
 // (what its offset is counted from: REL32_1 to REL32_5).
@@ -31,8 +31,8 @@ struct StencilCode {
     uint32_t holeCount;
 };
 
-// Whether this jade.exe has stencils: built with clang-cl on Windows (elsewhere, until the tool
-// reads ELF, jade runs without native code).
+// Whether this ww.exe has stencils: built with clang-cl on Windows (elsewhere, until the tool
+// reads ELF, ww runs without native code).
 bool available();
 size_t stencilCount();
 const StencilCode* stencil(std::string_view name);  // null where there is none of that name (the table is in name order)
@@ -100,23 +100,23 @@ struct RegionContext {
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it
 // starts). It gives back where the VM goes on: the instruction, and the stack's top above it.
 #if defined(__clang__)
-#define JADE_REGION_CALL __attribute__((preserve_none))
+#define WW_REGION_CALL __attribute__((preserve_none))
 #else
-#define JADE_REGION_CALL
+#define WW_REGION_CALL
 #endif
-using RegionFn = int64_t(JADE_REGION_CALL *)(void* slots, RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
+using RegionFn = int64_t(WW_REGION_CALL *)(void* slots, RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
                                                           int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double, double,
                                                           double, double, double);
 inline int64_t runRegion(void* code, void* slots, RegionContext* context) {
     return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
-// Whether regions are made (jade --interpret, or JADE_NATIVE=0, says not).
+// Whether regions are made (ww --interpret, or WW_NATIVE=0, says not).
 bool enabled();
 void setEnabled(bool on);
 
-// The build's check (jade --native-check): every stencil shaped as the copier shapes it, and
+// The build's check (ww --native-check): every stencil shaped as the copier shapes it, and
 // regions put together and run, their answers beside C++'s; what is wrong, or "".
 std::string check();
 
-}  // namespace jade::native
+}  // namespace ww::native

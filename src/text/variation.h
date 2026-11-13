@@ -15,7 +15,7 @@
 
 #include "face.h"
 
-namespace jade::text {
+namespace ww::text {
 
 struct Variations {
     // Null if the font is not variable. Fills in the face's list of axes.
@@ -52,4 +52,4 @@ private:
 size_t regionCount(const Reader& r, size_t store, uint32_t set);
 std::vector<float> regionScalars(const Reader& r, size_t store, uint32_t set, const Coords& coords);
 
-}  // namespace jade::text
+}  // namespace ww::text

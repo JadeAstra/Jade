@@ -1,0 +1,583 @@
+// M9/M10 part zero: the byte and pixel kernels that would otherwise be C++, written as a WinterWolf
+// program would write them, a loop over the items, each timed. kernels.cpp is the same work in
+// C++; docs/M10-speed.html has the timings.
+//   ww kernels.ww [name]
+fun ms(from : Instant) : int => (Instant.now() - from).inWholeMilliseconds
+
+fun lcg(seed : int) : int => (seed * 1103515245 + 12345) & 0x7fffffff
+
+// 100 MB of lines of 20 to 99 bytes.
+fun lineData() : Bytes {
+  val n = 100_000_000
+  val data = Bytes(n)
+  var s = 1
+  var i = 0
+  while (i < n) {
+    s = lcg(s)
+    i += 20 + s % 80
+    if (i < n) { data[i] = 10.toByte() }
+  }
+  return data
+}
+
+// K1: line ends over 100 MB: count them, and keep the offset of every 4096th, as LineIndex does.
+fun lineEnds() : string {
+  val data = lineData()
+  val n = data.size
+  val started = Instant.now()
+  var lines = 0
+  val checkpoints : open List<int> = []
+  for (k in 0 ..< n) {
+    if (data[k] == 10) {
+      lines += 1
+      if (lines % 4096 == 0) { checkpoints.add(k + 1) }
+    }
+  }
+  return "lineEnds ${ms(started)} ms (lines $lines, checkpoints ${checkpoints.size})"
+}
+
+// K2: the inverse DCT of 200,000 8x8 blocks, separable, in floats, as a JPEG decoder does.
+fun idct() : string {
+  val c : open List<float> = []
+  for (u in 0 ..< 8) {
+    for (x in 0 ..< 8) {
+      val cu = u == 0 ? Math.sqrt(0.125) : 0.5
+      c.add(cu * Math.cos((2 * x + 1) * u * Math.pi / 16))
+    }
+  }
+  val block = List(64) { (it * 7 % 23 - 11).toFloat() }
+  val tmp = List(64) { 0.0 }
+  val out = List(64) { 0.0 }
+  val started = Instant.now()
+  var check = 0.0
+  for (b in 0 ..< 200_000) {
+    block[b % 64] = (b % 31 - 15).toFloat()
+    for (y in 0 ..< 8) {
+      for (x in 0 ..< 8) {
+        var sum = 0.0
+        for (u in 0 ..< 8) { sum += c[u * 8 + x] * block[y * 8 + u] }
+        tmp[y * 8 + x] = sum
+      }
+    }
+    for (x in 0 ..< 8) {
+      for (y in 0 ..< 8) {
+        var sum = 0.0
+        for (v in 0 ..< 8) { sum += c[v * 8 + y] * tmp[v * 8 + x] }
+        out[y * 8 + x] = sum
+      }
+    }
+    check += out[b % 64]
+  }
+  return "idct ${ms(started)} ms (check ${(check * 1000).toInt()})"
+}
+
+// K3: Huffman decoding of 5 MB through a bit reader and a 9-bit lookup table, as JPEG and PNG do.
+fun huffman() : string {
+  val n = 5_000_000
+  val data = Bytes(n)
+  var s = 7
+  for (i in 0 ..< n) {
+    s = lcg(s)
+    data[i] = (s >> 8 & 255).toByte()
+  }
+  // A table of 512 entries: the symbol and how many bits its code takes (1 to 9).
+  val symbol = List(512) { it % 200 }
+  val length = List(512) { 1 + it % 9 }
+  val started = Instant.now()
+  var bits = 0
+  var count = 0
+  var pos = 0
+  var decoded = 0
+  var sum = 0
+  while (pos < n or count >= 9) {
+    while (count < 9 and pos < n) {
+      bits = (bits << 8) | data[pos]
+      pos += 1
+      count += 8
+    }
+    if (count < 9) { break }
+    val peek = (bits >> (count - 9)) & 511
+    count -= length[peek]
+    bits = bits & ((1 << count) - 1)
+    sum += symbol[peek]
+    decoded += 1
+  }
+  return "huffman ${ms(started)} ms (decoded $decoded, sum $sum)"
+}
+
+// K4: a linear gradient over a 3840x2160 RGBA buffer.
+fun gradient() : string {
+  val w = 3840
+  val h = 2160
+  val px = Bytes(w * h * 4)
+  val started = Instant.now()
+  val dx = 0.6 / w
+  val dy = 0.4 / h
+  for (y in 0 ..< h) {
+    var at = y * w * 4
+    for (x in 0 ..< w) {
+      val t = x * dx + y * dy
+      px[at] = (40 + t * 200).toInt().toByte()
+      px[at + 1] = (90 + t * 120).toInt().toByte()
+      px[at + 2] = (200 - t * 150).toInt().toByte()
+      px[at + 3] = 255.toByte()
+      at += 4
+    }
+  }
+  return "gradient ${ms(started)} ms (pixel ${px[w * 4 * 100 + 400]})"
+}
+
+// K5: a box blur of radius 5 over a 3840x2160 RGBA buffer, across then down, with running sums.
+fun blur() : string {
+  val w = 3840
+  val h = 2160
+  val r = 5
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val mid = Bytes(w * h * 4)
+  val dst = Bytes(w * h * 4)
+  val started = Instant.now()
+  val span = 2 * r + 1
+  for (y in 0 ..< h) {
+    for (ch in 0 ..< 4) {
+      var sum = 0
+      for (k in -r .. r) { sum += src[(y * w + Math.max(0, Math.min(w - 1, k))) * 4 + ch] }
+      for (x in 0 ..< w) {
+        mid[(y * w + x) * 4 + ch] = (sum / span).toByte()
+        val out = Math.max(0, x - r)
+        val inn = Math.min(w - 1, x + r + 1)
+        sum += src[(y * w + inn) * 4 + ch] - src[(y * w + out) * 4 + ch]
+      }
+    }
+  }
+  for (x in 0 ..< w) {
+    for (ch in 0 ..< 4) {
+      var sum = 0
+      for (k in -r .. r) { sum += mid[(Math.max(0, Math.min(h - 1, k)) * w + x) * 4 + ch] }
+      for (y in 0 ..< h) {
+        dst[(y * w + x) * 4 + ch] = (sum / span).toByte()
+        val out = Math.max(0, y - r)
+        val inn = Math.min(h - 1, y + r + 1)
+        sum += mid[(inn * w + x) * 4 + ch] - mid[(out * w + x) * 4 + ch]
+      }
+    }
+  }
+  return "blur ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
+}
+
+// K6: a 4000x3000 RGBA picture shrunk to 1000x750 by averaging each 4x4 square.
+fun shrink() : string {
+  val w = 4000
+  val h = 3000
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 17 % 253).toByte() }
+  val ow = w / 4
+  val oh = h / 4
+  val dst = Bytes(ow * oh * 4)
+  val started = Instant.now()
+  for (oy in 0 ..< oh) {
+    for (ox in 0 ..< ow) {
+      for (ch in 0 ..< 4) {
+        var sum = 0
+        for (sy in 0 ..< 4) {
+          val row = ((oy * 4 + sy) * w + ox * 4) * 4 + ch
+          sum += src[row] + src[row + 4] + src[row + 8] + src[row + 12]
+        }
+        dst[(oy * ow + ox) * 4 + ch] = (sum / 16).toByte()
+      }
+    }
+  }
+  return "shrink ${ms(started)} ms (pixel ${dst[ow * 4 * 10 + 40]})"
+}
+
+// K7: a flood fill from the middle of a 2000x2000 RGBA picture with a tolerance, by a queue.
+fun flood() : string {
+  val w = 2000
+  val h = 2000
+  val px = Bytes(w * h * 4)
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      val wall = (x % 97 == 0 and y % 5 != 0) or (y % 89 == 0 and x % 7 != 0)
+      val v = wall ? 0 : 200 + (x + y) % 20
+      val at = (y * w + x) * 4
+      px[at] = v.toByte()
+      px[at + 1] = v.toByte()
+      px[at + 2] = v.toByte()
+      px[at + 3] = 255.toByte()
+    }
+  }
+  val started = Instant.now()
+  val seen = Bytes(w * h)
+  val queue : open List<int> = []
+  val start = (h / 2) * w + w / 2
+  val target = px[start * 4]
+  queue.add(start)
+  seen[start] = 1.toByte()
+  var head = 0
+  var filled = 0
+  while (head < queue.size) {
+    val p = queue[head]
+    head += 1
+    filled += 1
+    val x = p % w
+    val y = p / w
+    for (d in 0 ..< 4) {
+      val nx = d == 0 ? x - 1 : d == 1 ? x + 1 : x
+      val ny = d == 2 ? y - 1 : d == 3 ? y + 1 : y
+      if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
+        val q = ny * w + nx
+        if (seen[q] == 0 and Math.abs(px[q * 4] - target) <= 30) {
+          seen[q] = 1.toByte()
+          queue.add(q)
+        }
+      }
+    }
+  }
+  return "flood ${ms(started)} ms (filled $filled)"
+}
+
+// K8: a radial gradient over a 3840x2160 RGBA buffer, from the middle out to a radius.
+fun radial() : string {
+  val w = 3840
+  val h = 2160
+  val px = Bytes(w * h * 4)
+  val started = Instant.now()
+  val cx = w / 2.0
+  val cy = h / 2.0
+  val radius = 1500.0
+  for (y in 0 ..< h) {
+    var at = y * w * 4
+    val dy = y - cy
+    for (x in 0 ..< w) {
+      val dx = x - cx
+      val t = Math.min(Math.sqrt(dx * dx + dy * dy) / radius, 1.0)
+      px[at] = (30 + t * 200).toInt().toByte()
+      px[at + 1] = (200 - t * 150).toInt().toByte()
+      px[at + 2] = (90 + t * 60).toInt().toByte()
+      px[at + 3] = 255.toByte()
+      at += 4
+    }
+  }
+  return "radial ${ms(started)} ms (pixel ${px[w * 4 * 100 + 400]})"
+}
+
+// K9: a Gaussian blur (sigma 2, 13 weights) over a 1920x1080 RGBA buffer, across into floats,
+// then down into bytes, the edge pixels repeated past the edge.
+fun gaussian() : string {
+  val w = 1920
+  val h = 1080
+  val r = 6
+  val sigma = 2.0
+  val weights : open List<float> = []
+  var total = 0.0
+  for (k in -r .. r) {
+    val v = Math.exp(-(k * k) / (2 * sigma * sigma))
+    weights.add(v)
+    total += v
+  }
+  for (k in 0 ..< weights.size) { weights[k] = weights[k] / total }
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val mid = List(w * h * 4) { 0.0 }
+  val dst = Bytes(w * h * 4)
+  val started = Instant.now()
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      for (ch in 0 ..< 4) {
+        var sum = 0.0
+        for (k in -r .. r) { sum += src[(y * w + Math.max(0, Math.min(w - 1, x + k))) * 4 + ch] * weights[k + r] }
+        mid[(y * w + x) * 4 + ch] = sum
+      }
+    }
+  }
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      for (ch in 0 ..< 4) {
+        var sum = 0.0
+        for (k in -r .. r) { sum += mid[(Math.max(0, Math.min(h - 1, y + k)) * w + x) * 4 + ch] * weights[k + r] }
+        dst[(y * w + x) * 4 + ch] = (sum + 0.5).toInt().toByte()
+      }
+    }
+  }
+  return "gaussian ${ms(started)} ms (pixel ${dst[w * 4 * 100 + 400]})"
+}
+
+// ---- The same work with the operations M9/M10 added (question 14's "WinterWolf with the new
+// operations"), timed from the same inputs; the pixel shown is the same one where the method
+// gives the same answer.
+
+// A picture of the bytes, made before the clock starts.
+fun pictureOf(bytes : Bytes, w : int, h : int) : Grid<Color> => bytes.toTensor().reshaped(h, w, 4).toImage().pixels
+
+// K4 with tensors: t for every pixel by broadcasting a row and a column, then each channel.
+fun gradientOps() : string {
+  val w = 3840
+  val h = 2160
+  val started = Instant.now()
+  val t = Tensor.arange(0, w).toFloat().reshaped(1, w) * (0.6 / w) + Tensor.arange(0, h).toFloat().reshaped(h, 1) * (0.4 / h)
+  val px = Tensor.stack([(40.0 + t * 200.0).toByte(), (90.0 + t * 120.0).toByte(), (200.0 - t * 150.0).toByte(), Tensor.full<byte>([h, w], 255.toByte())], axis = 2)
+  return "gradientOps ${ms(started)} ms (pixel ${px[100, 100, 0]})"
+}
+
+// K4 as a canvas fills it: a LinearGradient of two stops over the picture, from (0, 0) along
+// the gradient's own direction.
+fun gradientPaint() : string {
+  val w = 3840
+  val h = 2160
+  val image = Image(w, h)
+  val started = Instant.now()
+  val canvas = image.canvas()
+  // t = x * 0.6 / w + y * 0.4 / h is 1 at the point along (0.6 / w, 0.4 / h) that far.
+  val ax = 0.6 / w
+  val ay = 0.4 / h
+  val len2 = ax * ax + ay * ay
+  canvas.paint = LinearGradient(0.0, 0.0, ax / len2, ay / len2, [0.0, 1.0], [Color(40, 90, 200), Color(240, 210, 50)])
+  canvas.fillRect(0, 0, w, h)
+  return "gradientPaint ${ms(started)} ms (pixel ${image[100, 100].red})"
+}
+
+// K8 with tensors.
+fun radialOps() : string {
+  val w = 3840
+  val h = 2160
+  val started = Instant.now()
+  val dx = Tensor.arange(0, w).toFloat().reshaped(1, w) - w / 2.0
+  val dy = Tensor.arange(0, h).toFloat().reshaped(h, 1) - h / 2.0
+  val t = ((dx * dx + dy * dy).sqrt() / 1500.0).clamp(0.0, 1.0)
+  val px = Tensor.stack([(30.0 + t * 200.0).toByte(), (200.0 - t * 150.0).toByte(), (90.0 + t * 60.0).toByte(), Tensor.full<byte>([h, w], 255.toByte())], axis = 2)
+  return "radialOps ${ms(started)} ms (pixel ${px[100, 100, 0]})"
+}
+
+// K5 as window(5, Reduce.mean): the mean of the 11 by 11 square, edges repeated.
+fun blurOps() : string {
+  val w = 3840
+  val h = 2160
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.window(5, Reduce.mean)
+  return "blurOps ${ms(started)} ms (pixel ${out[100, 100].red})"
+}
+
+// K9 as two convolve passes, a row of 13 weights then a column.
+fun gaussianOps() : string {
+  val w = 1920
+  val h = 1080
+  val r = 6
+  val sigma = 2.0
+  val row = Grid<float>(2 * r + 1, 1)
+  val column = Grid<float>(1, 2 * r + 1)
+  var total = 0.0
+  for (k in -r .. r) { total += Math.exp(-(k * k) / (2 * sigma * sigma)) }
+  for (k in -r .. r) {
+    row[k + r, 0] = Math.exp(-(k * k) / (2 * sigma * sigma)) / total
+    column[0, k + r] = row[k + r, 0]
+  }
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.convolve(row).convolve(column)
+  return "gaussianOps ${ms(started)} ms (pixel ${out[100, 100].red})"
+}
+
+// K6 as scaled(1000, 750): each new pixel the mean of the 4 by 4 it covers, weighed by alpha.
+fun shrinkOps() : string {
+  val w = 4000
+  val h = 3000
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 17 % 253).toByte() }
+  val picture = pictureOf(src, w, h)
+  val started = Instant.now()
+  val out = picture.scaled(w / 4, h / 4)
+  return "shrinkOps ${ms(started)} ms (pixel ${out[10, 10].red})"
+}
+
+// K7 as floodRegion(x, y, 30).
+fun floodOps() : string {
+  val w = 2000
+  val h = 2000
+  val px = Bytes(w * h * 4)
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      val wall = (x % 97 == 0 and y % 5 != 0) or (y % 89 == 0 and x % 7 != 0)
+      val v = wall ? 0 : 200 + (x + y) % 20
+      val at = (y * w + x) * 4
+      px[at] = v.toByte()
+      px[at + 1] = v.toByte()
+      px[at + 2] = v.toByte()
+      px[at + 3] = 255.toByte()
+    }
+  }
+  val picture = pictureOf(px, w, h)
+  val started = Instant.now()
+  val region = picture.floodRegion(w / 2, h / 2, 30)
+  return "floodOps ${ms(started)} ms (filled ${region.count})"
+}
+
+// A tensor of 3840 by 2160 by 4 bytes made a picture, and a picture's pixels made a tensor.
+fun tensorImage() : string {
+  val w = 3840
+  val h = 2160
+  val src = Bytes(w * h * 4)
+  for (i in 0 ..< w * h * 4) { src[i] = (i * 31 % 251).toByte() }
+  val tensor = src.toTensor().reshaped(h, w, 4)
+  val started = Instant.now()
+  val image = tensor.toImage()
+  val there = Instant.now()
+  val back = image.pixels.toTensor()
+  return "tensorImage ${ms(started)} ms (toImage ${(there - started).inWholeMilliseconds}, back ${(Instant.now() - there).inWholeMilliseconds}, pixel ${back[100, 100, 0]})"
+}
+
+// The same 100 MB as a file, written first, a megabyte at a time (100 MB made and dropped here
+// would be freed while LineIndex is timed, as C++'s is not); the time is LineIndex reading and
+// indexing it from the system's cache. As LineIndex counts them: a last line with no line end
+// is a line, and the first line's start is a checkpoint.
+fun lineFile() : FilePath throws IOException {
+  val f = FilePath.createTempFile("lines", ".txt")
+  val n = 100_000_000
+  val chunk = Bytes(1048576)
+  var s = 1
+  var next = 0          // the next line end, as lineData() places them
+  s = lcg(s)
+  next += 20 + s % 80
+  RandomAccessFile(f, "rw").use { file ->
+    var base = 0
+    while (base < n) {
+      val size = Math.min(chunk.size, n - base)
+      chunk.fill(0.toByte())
+      while (next < base + size) {
+        chunk[next - base] = 10.toByte()
+        s = lcg(s)
+        next += 20 + s % 80
+      }
+      file.writeAt(base, chunk, 0, size)
+      base += size
+    }
+  }
+  return f
+}
+fun indexed(name : string, idx : LineIndex, started : Instant) : string =>
+  "$name ${ms(started)} ms (lines ${idx.lineCount}, checkpoints ${idx.checkpointCount})"
+
+// K10: LineIndex.build(), where it is called.
+fun lineIndex() : string {
+  try {
+    val f = lineFile()
+    val idx = LineIndex(f)
+    val started = Instant.now()
+    idx.build()
+    val line = indexed("lineIndex", idx, started)
+    f.deleteIfExists()
+    return line
+  } catch (e : IOException) {
+    return "lineIndex failed: ${e.message}"
+  }
+}
+
+// K11: LineIndex.buildInBackground(), its worker started and waited for.
+suspend fun lineWorker() : string throws IOException | ExecutionException {
+  val f = lineFile()
+  val idx = LineIndex(f)
+  val started = Instant.now()
+  idx.buildInBackground().get()
+  val line = indexed("lineWorker", idx, started)
+  f.deleteIfExists()
+  return line
+}
+
+// 5 MB of bytes for Base64, as a picture's would be: no pattern to them.
+fun pictureBytes() : Bytes {
+  val data = Bytes(5_000_000)
+  var s = 3
+  for (i in 0 ..< data.size) {
+    s = lcg(s)
+    data[i] = (s >> 7).toByteWrapped()
+  }
+  return data
+}
+
+// K12: Base64.encode of 5 MB.
+fun base64Encode() : string {
+  val data = pictureBytes()
+  val started = Instant.now()
+  val text = Base64.encode(data)
+  return "base64Encode ${ms(started)} ms (characters ${text.size}, last ${text[text.size - 5 ..< text.size]})"
+}
+
+// K13: Base64.decode of the 6.7 MB of text 5 MB make, in lines of 76 as MIME writes them.
+fun base64Decode() : string {
+  val text = Base64.encode(pictureBytes())
+  val lines = StringBuilder()
+  var at = 0
+  while (at < text.size) {
+    lines.append(text[at ..< Math.min(at + 76, text.size)]).append("\r\n")
+    at += 76
+  }
+  val mime = lines.toString()
+  val started = Instant.now()
+  val data = Base64.decode(mime)
+  return "base64Decode ${ms(started)} ms (bytes ${data.size}, last ${data[data.size - 1]})"
+}
+
+// About 1 MB of SVG: 200 groups of 25 paths, each with a long path, a colour and a stroke, and a
+// label with an entity in each group.
+fun svgText() : string {
+  val out = StringBuilder()
+  out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"1000\">\n")
+  var s = 5
+  for (g in 0 ..< 200) {
+    out.append("  <g id=\"g").append(g).append("\" transform=\"translate(").append(g).append(",").append(g).append(")\">\n")
+    for (k in 0 ..< 25) {
+      out.append("    <path d=\"M")
+      for (p in 0 ..< 14) {
+        s = lcg(s)
+        out.append(p == 0 ? "" : " L").append(s % 1000).append(" ").append((s >> 10) % 1000)
+      }
+      s = lcg(s)
+      out.append(" Z\" fill=\"#").append(s % 900000 + 100000).append("\" stroke=\"black\" stroke-width=\"1.5\"/>\n")
+    }
+    out.append("    <text x=\"10\" y=\"20\">Label ").append(g).append(" &amp; more</text>\n  </g>\n")
+  }
+  out.append("</svg>\n")
+  return out.toString()
+}
+
+// K14: Xml.parse of about 1 MB of SVG.
+fun xml() : string {
+  val text = svgText()
+  val started = Instant.now()
+  try {
+    val root = Xml.parse(text).root
+    val took = ms(started)
+    var elements = 0
+    var attributes = 0
+    var characters = 0
+    val pending : open List<XmlElement> = [root]
+    while (pending.isNotEmpty()) {
+      val e = pending.removeLast()
+      elements += 1
+      attributes += e.attributes.size
+      for (child in e.children) {
+        if (child is XmlElement) { pending.add(child as XmlElement) } else { characters += child.text.size }
+      }
+    }
+    return "xml $took ms (bytes ${text.size}, elements $elements, attributes $attributes, text $characters)"
+  } catch (e : XmlException) {
+    return "xml failed: ${e.message}"
+  }
+}
+
+val which = Program.arguments.getOrNull(0) ?: "all"
+val all : Map<string, () -> string> = {"lineEnds": { lineEnds() }, "idct": { idct() }, "huffman": { huffman() }, "gradient": { gradient() },
+                                       "blur": { blur() }, "shrink": { shrink() }, "flood": { flood() }, "radial": { radial() },
+                                       "gaussian": { gaussian() }, "lineIndex": { lineIndex() }, "base64Encode": { base64Encode() },
+                                       "base64Decode": { base64Decode() }, "xml": { xml() },
+                                       "gradientOps": { gradientOps() }, "gradientPaint": { gradientPaint() }, "radialOps": { radialOps() },
+                                       "blurOps": { blurOps() }, "gaussianOps": { gaussianOps() }, "shrinkOps": { shrinkOps() },
+                                       "floodOps": { floodOps() }, "tensorImage": { tensorImage() }}
+for (name in all.keys) {
+  if (which == "all" or which == name) { print(all[name]!!()) }
+}
+if (which == "all" or which == "lineWorker") { print(lineWorker()) }

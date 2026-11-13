@@ -1,5 +1,0 @@
-// Two imports giving the same extension function: the second is an error (G32).
-import ExtLib
-import ExtLoud
-print("a".shout())
-// expect compile error: error_extension_imported_twice.jade:3:1: error: import ExtLoud brings in string.shout(), which import ExtLib brings in too: a call could not tell them apart; give one another name

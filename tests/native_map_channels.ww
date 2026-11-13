@@ -1,0 +1,55 @@
+// mapChannels written in WinterWolf (2026-11-13, was C++'s): each table made bytes once, then each
+// pixel's parts through them, which native code runs whole as a loop template (a colour of four
+// bytes, each a table's byte at a byte of the pixel). The same pixels and errors as before, the
+// tables checked in order (red, green, blue, alpha) after `into`. Each loop runs three times (its
+// region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun picture() : Image {
+  val im = Image(60, 40)
+  im.editPixels { g ->
+    for (y in 0 ..< 40) { for (x in 0 ..< 60) { g[x, y] = Color((x * 7 + y) % 256, (y * 11 + x * 3) % 256, (x * y) % 256, 255 - (x + y) % 50) } }
+  }
+  return im
+}
+val inv : open List<int> = []
+for (v in 0 .. 255) { inv.add(255 - v) }
+val gamma : open List<int> = []
+for (v in 0 .. 255) { gamma.add((v * v) / 255) }
+val im = picture()
+fun shown(g : Grid<Color>) : string => "${g.hashCode()} ${g[0, 0]} ${g[59, 39]} ${g[30, 20]}"
+
+print(shown(thrice { im.pixels.mapChannels(inv, inv, inv) } as Grid<Color>))   // expect: 1349241863 Color(255, 255, 255) Color(59, 161, 2, 207) Color(25, 201, 167)
+print(shown(thrice { im.pixels.mapChannels(gamma, null, gamma) } as Grid<Color>))   // expect: -2129614587 Color(0, 0, 0) Color(150, 94, 251, 207) Color(207, 54, 30)
+print(shown(thrice { im.pixels.mapChannels(null, null, null, inv) } as Grid<Color>))   // expect: 1295642539 Color(0, 0, 0, 0) Color(196, 94, 253, 48) Color(230, 54, 88, 0)
+print(shown(thrice { im.pixels.mapChannels() } as Grid<Color>) == shown(im.pixels))   // expect: true
+
+// Into another grid, and into the image's own pixels.
+val into = Grid<Color>(60, 40)
+thrice { im.pixels.mapChannels(gamma, gamma, inv, null, into) }
+print(shown(into))   // expect: 66664253 Color(0, 0, 255) Color(150, 34, 2, 207) Color(207, 11, 167)
+val own = picture()
+own.editPixels { g -> g.mapChannels(inv, null, null, null, g) }
+print(shown(own.pixels))   // expect: 1971777640 Color(255, 0, 0) Color(59, 94, 253, 207) Color(25, 54, 88)
+
+// What uses it: inverted and adjusted.
+print(shown((thrice { im.inverted() } as Image).pixels), shown((thrice { im.adjusted(1.1, 1.2, 0.8) } as Image).pixels))   // expect: 1349241863 Color(255, 255, 255) Color(59, 161, 2, 207) Color(25, 201, 167) 1156657499 Color(0, 0, 0) Color(214, 107, 232, 207) Color(223, 56, 92)
+
+// Errors, in order: into first, then each table.
+print(failing { im.pixels.mapChannels([1, 2]) })   // expect: IllegalArgumentException: a channel's table has 256 entries, not 2
+val bad : open List<int> = []
+for (v in 0 .. 255) { bad.add(v == 77 ? 300 : v) }
+print(failing { im.pixels.mapChannels(null, bad) }, failing { im.pixels.mapChannels(bad, [1]) })   // expect: IllegalArgumentException: a channel's table holds 0 to 255, not 300 IllegalArgumentException: a channel's table holds 0 to 255, not 300
+print(failing { im.pixels.mapChannels(null, null, null, null, Grid<Color>(3, 3)) })   // expect: IllegalArgumentException: into is 3 by 3, not 60 by 40
+print(failing { im.pixels.mapChannels(inv, null, null, null, im.pixels) })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }

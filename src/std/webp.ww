@@ -1,0 +1,242 @@
+// ---- WebP ----
+
+// WebP read and written (M9/M10 part one, step 3): the RIFF container, the extended header (VP8X),
+// alpha's chunk (ALPH) and animation's (ANIM, ANMF) in WinterWolf; the work for every pixel of its two
+// codecs, VP8L (lossless) and VP8 (lossy), in C++ of WebP's own (src/webp.cpp), as the user chose.
+object __Webp {
+  // The animation in `data` (a still picture as one frame); with `firstOnly`, its first frame alone.
+  fun decode(data : Bytes, firstOnly : bool) : Animation throws IOException {
+    if (data.size < 20 or ImageFormat.of(data) != ImageFormat.webp) { throw failure("it does not start with RIFF and WEBP") }
+    val chunks = chunksOf(data, 12, Math.min(data.size, 8 + data.uint32(4)))
+    val first = chunks[0]
+    if (first.name == "VP8L" or first.name == "VP8 ") {
+      return Animation([AnimationFrame(still(data, chunks, 0), 0.seconds)])
+    }
+    if (first.name != "VP8X") { throw failure("its first chunk is ${first.name}") }
+    val flags = data[first.at].toInt()
+    val width = __webpU24(data, first.at + 4) + 1
+    val height = __webpU24(data, first.at + 7) + 1
+    if (flags & 0x02 == 0) {   // no animation: one picture, maybe with alpha of its own
+      val at = chunks.indexOfFirst { it.name == "VP8 " or it.name == "VP8L" or it.name == "ALPH" }
+      if (at < 0) { throw failure("it has no picture") }
+      return Animation([AnimationFrame(still(data, chunks, at), 0.seconds)])
+    }
+    // An animation: each frame laid on the canvas, blended or not, its rectangle cleared after or not.
+    var loops = 0
+    val anim = chunks.firstOrNull { it.name == "ANIM" }
+    if (anim != null) { loops = data.uint16(anim!!.at + 4) }
+    val canvas = Image(width, height)
+    val frames : open List<AnimationFrame> = []
+    for (chunk in chunks) {
+      if (chunk.name != "ANMF") { continue }
+      if (chunk.size < 16) { throw failure("an animation frame is cut short") }
+      val x = __webpU24(data, chunk.at) * 2
+      val y = __webpU24(data, chunk.at + 3) * 2
+      val duration = __webpU24(data, chunk.at + 12)
+      val frameFlags = data[chunk.at + 15].toInt()
+      val inner = chunksOf(data, chunk.at + 16, chunk.at + chunk.size)
+      val at = inner.indexOfFirst { it.name == "VP8 " or it.name == "VP8L" or it.name == "ALPH" }
+      if (at < 0) { throw failure("an animation frame has no picture") }
+      val picture = still(data, inner, at)
+      if (frameFlags & 0x02 != 0) {   // not blended: its pixels take the place of what is there
+        val pixels = picture.rgbaBytes()
+        canvas.editPixels { p ->
+          for (row in 0 ..< picture.height) {
+            for (col in 0 ..< picture.width) {
+              if (x + col < width and y + row < height) { p[x + col, y + row] = picture[col, row] }
+            }
+          }
+        }
+      } else {
+        canvas.canvas().draw(picture, x, y)
+      }
+      frames.add(AnimationFrame(canvas.copy(), duration.milliseconds))
+      if (firstOnly) { break }
+      if (frameFlags & 0x01 != 0) { canvas.canvas().clearRect(x, y, picture.width, picture.height) }
+    }
+    if (frames.isEmpty()) { throw failure("an animation with no frames") }
+    return Animation(frames, loops)
+  }
+
+  // The picture of chunks[at] on: VP8L, or VP8 with the ALPH before it, if any.
+  private fun still(data : Bytes, chunks : List<__WebpChunk>, at : int) : Image throws IOException {
+    val chunk = chunks[at]
+    if (chunk.name == "VP8L") {
+      val read = __webp.decodeLossless(data, chunk.at, chunk.at + chunk.size, 0, 0)
+      if (read is string) { throw failure(read as string) }
+      val parts = read as List<any>
+      return Image.taking(parts[0] as int, parts[1] as int, parts[2] as Bytes)
+    }
+    // Lossy: VP8, its alpha in the ALPH chunk just before it, if there is one.
+    val alpha = chunk.name == "ALPH" ? chunk : null
+    val picture = chunk.name == "ALPH" ? (at + 1 < chunks.size ? chunks[at + 1] : null) : chunk
+    if (picture == null or picture!!.name != "VP8 ") { throw failure("its alpha has no picture after it") }
+    val read = __webp.decodeLossy(data, picture!!.at, picture!!.at + picture!!.size, alpha?.at ?: 0, alpha == null ? 0 : alpha!!.at + alpha!!.size)
+    if (read is string) { throw failure(read as string) }
+    val parts = read as List<any>
+    return Image.taking(parts[0] as int, parts[1] as int, parts[2] as Bytes)
+  }
+
+  // The chunks from `from` to `to`: each a name of four letters, a size, and that many bytes (and
+  // one more where the size is odd).
+  private fun chunksOf(data : Bytes, from : int, to : int) : List<__WebpChunk> throws IOException {
+    val chunks : open List<__WebpChunk> = []
+    var at = from
+    while (at + 8 <= to) {
+      val size = data.uint32(at + 4)
+      if (at + 8 + size > data.size) { throw failure("a chunk of $size bytes past the end") }
+      chunks.add(__WebpChunk(data[at ..< at + 4].decodeToString(Charset.latin1), at + 8, size))
+      at += 8 + size + size % 2
+    }
+    if (chunks.isEmpty()) { throw failure("it has no chunks") }
+    return chunks
+  }
+
+  private fun failure(why : string) : IOException => IOException("not a WebP file that can be read: $why")
+
+  // ---- Writing ----
+
+  // A picture as a WebP file: lossless (VP8L) at quality 1, else lossy (VP8) at that quality, its
+  // alpha (if any pixel is see-through) kept losslessly in an ALPH chunk under an extended header.
+  fun encodeImage(image : Image, quality : Number) : Bytes {
+    if (image.width == 0 or image.height == 0) { throw IllegalArgumentException("an image with no pixels is not written as a WebP") }
+    if (quality < 0 or quality > 1) { throw IllegalArgumentException("a WebP's quality is from 0 to 1, not $quality") }
+    checkSize(image.width, image.height, quality)
+    val picture = pictureChunks(image.rgbaBytes(), image.width, image.height, quality)
+    if (picture.size == 1) { return riff(picture) }
+    val head = Bytes(10)
+    head[0] = 0x10   // alpha
+    __webpPutU24(head, 4, image.width - 1)
+    __webpPutU24(head, 7, image.height - 1)
+    return riff([chunk("VP8X", head)] + picture)
+  }
+
+  private fun checkSize(width : int, height : int, quality : Number) {
+    if (quality == 1 and (width > 16384 or height > 16384)) { throw IllegalArgumentException("a WebP is up to 16384 pixels each way") }
+    if (quality < 1 and (width > 16383 or height > 16383)) { throw IllegalArgumentException("a lossy WebP is up to 16383 pixels each way") }
+  }
+
+  // A picture's chunks: VP8L at quality 1; else VP8, after an ALPH chunk where any pixel is see-through.
+  private fun pictureChunks(rgba : Bytes, width : int, height : int, quality : Number) : List<Bytes> {
+    if (quality == 1) { return [chunk("VP8L", __webp.encodeLossless(rgba, width, height, false))] }
+    val parts = __webp.encodeLossy(rgba, width, height, quality)
+    val picture = chunk("VP8 ", parts[0] as Bytes)
+    return parts[1] == null ? [picture] : [chunk("ALPH", parts[1] as Bytes), picture]
+  }
+
+  // An animation as a WebP file: each frame the rectangle it changes (the whole of the first), put
+  // in place of what is there rather than blended, so that a pixel may become see-through again;
+  // lossless at quality 1, else lossy at that quality.
+  fun encode(animation : Animation, quality : Number) : Bytes {
+    val width = animation.width
+    val height = animation.height
+    if (quality < 0 or quality > 1) { throw IllegalArgumentException("a WebP's quality is from 0 to 1, not $quality") }
+    checkSize(width, height, quality)
+    val parts : open List<Bytes> = []
+    val head = Bytes(10)
+    head[0] = 0x12   // animation, and alpha
+    __webpPutU24(head, 4, width - 1)
+    __webpPutU24(head, 7, height - 1)
+    parts.add(chunk("VP8X", head))
+    val anim = Bytes(6)
+    anim.putUint16(4, animation.loops)
+    parts.add(chunk("ANIM", anim))
+    var previous : Bytes? = null
+    for (frame in animation.frames) {
+      val pixels = frame.image.rgbaBytes()
+      var left = 0
+      var top = 0
+      var right = width
+      var bottom = height
+      if (previous != null) {
+        val box = __webpChangedBox(previous!!, pixels, width, height)
+        if (box != null) {
+          left = box!![0] / 2 * 2   // frames start at even places
+          top = box!![1] / 2 * 2
+          right = box!![2]
+          bottom = box!![3]
+        } else {
+          right = 1
+          bottom = 1
+        }
+      }
+      val w = right - left
+      val h = bottom - top
+      val part = Bytes(w * h * 4)
+      for (y in 0 ..< h) { part.copyFrom(pixels, ((top + y) * width + left) * 4, 1, y * w * 4, 1, w * 4) }
+      val header = Bytes(16)
+      __webpPutU24(header, 0, left / 2)
+      __webpPutU24(header, 3, top / 2)
+      __webpPutU24(header, 6, w - 1)
+      __webpPutU24(header, 9, h - 1)
+      __webpPutU24(header, 12, Math.min(frame.delay.inWholeMilliseconds, 0xFFFFFF))
+      header[15] = 0x02   // not blended, not cleared after
+      var body = header
+      for (c in pictureChunks(part, w, h, quality)) { body = body + c }
+      parts.add(chunk("ANMF", body))
+      previous = pixels
+    }
+    return riff(parts)
+  }
+
+  private fun chunk(name : string, body : Bytes) : Bytes {
+    val out = Bytes(8 + body.size + body.size % 2)
+    for (i in 0 ..< 4) { out[i] = name[i].code.toByte() }
+    out.putUint32(4, body.size)
+    out.copyFrom(body, 0, 1, 8, 1, body.size)
+    return out
+  }
+
+  private fun riff(chunks : List<Bytes>) : Bytes {
+    var size = 4
+    for (c in chunks) { size += c.size }
+    val out = Bytes(8 + size)
+    for (i in 0 ..< 4) { out[i] = "RIFF"[i].code.toByte() }
+    out.putUint32(4, size)
+    for (i in 0 ..< 4) { out[8 + i] = "WEBP"[i].code.toByte() }
+    var at = 12
+    for (c in chunks) {
+      out.copyFrom(c, 0, 1, at, 1, c.size)
+      at += c.size
+    }
+    return out
+  }
+}
+
+fun __webpPutU24(data : Bytes, at : int, value : int) {
+  data[at] = (value & 255).toByte()
+  data[at + 1] = ((value >> 8) & 255).toByte()
+  data[at + 2] = ((value >> 16) & 255).toByte()
+}
+
+// The smallest rectangle (left, top, right, bottom) outside which `a` and `b` are the same, or null.
+fun __webpChangedBox(a : Bytes, b : Bytes, width : int, height : int) : List<int>? {
+  var top = 0
+  while (top < height and a[top * width * 4 ..< (top + 1) * width * 4] == b[top * width * 4 ..< (top + 1) * width * 4]) { top += 1 }
+  if (top == height) { return null }
+  var bottom = height
+  while (a[(bottom - 1) * width * 4 ..< bottom * width * 4] == b[(bottom - 1) * width * 4 ..< bottom * width * 4]) { bottom -= 1 }
+  var left = width
+  var right = 0
+  for (y in top ..< bottom) {
+    var x = 0
+    while (x < left and a.int32((y * width + x) * 4) == b.int32((y * width + x) * 4)) { x += 1 }
+    if (x < left) { left = x }
+    x = width - 1
+    while (x >= right and a.int32((y * width + x) * 4) == b.int32((y * width + x) * 4)) { x -= 1 }
+    if (x + 1 > right) { right = x + 1 }
+  }
+  return [left, top, right, bottom]
+}
+
+// A chunk of a RIFF file: its name, where its bytes start, how many there are.
+class __WebpChunk(val name : string, val at : int, val size : int)
+
+fun __webpU24(data : Bytes, at : int) : int => data[at].toInt() | (data[at + 1].toInt() << 8) | (data[at + 2].toInt() << 16)
+
+external object __webp {
+  fun decodeLossless(data : Bytes, from : int, to : int, width : int, height : int) : any
+  fun decodeLossy(data : Bytes, from : int, to : int, alphaFrom : int, alphaTo : int) : any
+  fun encodeLossless(rgba : Bytes, width : int, height : int, headerless : bool) : Bytes
+  fun encodeLossy(rgba : Bytes, width : int, height : int, quality : Number) : List<Bytes?>
+}

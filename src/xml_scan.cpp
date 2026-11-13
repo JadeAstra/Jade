@@ -1,6 +1,6 @@
-// What Xml.scan (src/std/xml.jade) is built on: one pass in C++ over an element and all that
+// What Xml.scan (src/std/xml.ww) is built on: one pass in C++ over an element and all that
 // is inside it, giving where each part is as numbers in one List<int>, from which the XML
-// reader in Jade builds its tree. The pass takes well-formed XML of ASCII names only; at
+// reader in WinterWolf builds its tree. The pass takes well-formed XML of ASCII names only; at
 // anything else (a malformed tag, a name past ASCII, `]]>` in text, an end tag that closes
 // the wrong element) it stops and says where, and the reader goes on from there a part at a
 // time, to read it or to say what is wrong with it.
@@ -15,7 +15,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -319,4 +319,4 @@ void registerXml(VM& vm) {
     vm.defineGlobal("__xml", Value::object(holder));
 }
 
-}  // namespace jade
+}  // namespace ww

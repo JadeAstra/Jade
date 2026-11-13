@@ -1,0 +1,9 @@
+// A default taken from above is worked out with the parameters before it, so they must keep
+// their names.
+class Base {
+  fun line(width : int, height : int = width * 2) : int => height
+}
+class Renamed : Base() {
+  override fun line(w : int, height : int) : int => height
+}
+// expect compile error: error_override_default_renamed.ww:7:12: error: 'line' in class Renamed takes a default it leaves out from what it overrides, which is worked out with the parameters before it, and they have other names here: give them the names they have there, or write the default

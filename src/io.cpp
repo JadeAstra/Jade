@@ -1,4 +1,4 @@
-// Streams, child processes and sockets: the built-in __io, which src/std/io.jade is
+// Streams, child processes and sockets: the built-in __io, which src/std/io.ww is
 // written on.
 //
 // Everything here that can wait (a read, a write, an accept, waiting for a process to end)
@@ -52,11 +52,11 @@ extern char** environ;
 #include "sandbox.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
-JadeThrow ioError(VM& vm, const std::string& message) { return vm.errorOf("IOException", message); }
+WwThrow ioError(VM& vm, const std::string& message) { return vm.errorOf("IOException", message); }
 
 // What a blocking piece of work leaves for the function that turns it into a value.
 struct Stream;
@@ -71,7 +71,7 @@ struct Outcome {
 
 // A read that ran past a socket's readTimeout is a SocketTimeoutException, an IOException as in
 // Java (D120), told by the mark the wait left, not by the message's text (8.8f).
-JadeThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
+WwThrow ioError(VM& vm, const Outcome& out) { return vm.errorOf(out.timedOut ? "SocketTimeoutException" : "IOException", out.error); }
 
 // The buffers a read into the program's bytes goes through (RandomAccessFile.readAt into a
 // buffer), kept for the next read: a file read a megabyte at a time would otherwise take new
@@ -270,7 +270,7 @@ struct SandboxListener {
     int port = 0;
 };
 
-// A program of a sandbox's: an Jade thread running what the test declared, its end told here.
+// A program of a sandbox's: a WinterWolf thread running what the test declared, its end told here.
 struct SimulatedProcess {
     std::mutex mutex;
     std::condition_variable changed;
@@ -2037,7 +2037,7 @@ void registerIo(VM& vm) {
 
     def("currentPid", 0, 0, [](VM&, int, Value*) -> Value { return Value::integer(currentProcessId()); });
 
-    // What started this program: the path of its executable and, when jade is running a
+    // What started this program: the path of its executable and, when ww is running a
     // script, the script. Starting that list again starts this program again.
     def("selfCommand", 0, 0, [](VM& vm, int, Value*) -> Value {
         ObjList* list = newList(vm);
@@ -2208,4 +2208,4 @@ void registerIo(VM& vm) {
     vm.defineGlobal("__io", Value::object(io));
 }
 
-}  // namespace jade
+}  // namespace ww

@@ -10,7 +10,7 @@
 #include "../codec.h"
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::image {
+namespace ww::image {
 
 // ---- PNG ----
 
@@ -288,4 +288,4 @@ bool decodePng(const uint8_t* data, size_t size, std::vector<uint8_t>& rgba, int
     return true;
 }
 
-}  // namespace jade::image
+}  // namespace ww::image

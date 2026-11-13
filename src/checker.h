@@ -6,7 +6,7 @@
 
 #include "ast.h"
 
-namespace jade {
+namespace ww {
 
 struct Namespace;
 
@@ -51,7 +51,7 @@ struct CheckDiagnostic {
 // what cannot be right (a wrong argument, a member that does not exist, an int put where a
 // string goes, a value that may be null used as if it could not be).
 //
-// What it finds is a compile error: the program does not run (M6.5 part 3, step 5). `jade
+// What it finds is a compile error: the program does not run (M6.5 part 3, step 5). `ww
 // check` lists all of it. A parameter has its type written; a local's type is worked out from
 // its first value, and a value whose type cannot be known is `any`, used through a cast.
 // How many nanoseconds one of a Duration's units is (`seconds`, as `2.seconds` writes it); 0
@@ -115,7 +115,7 @@ public:
 
     std::vector<CheckDiagnostic> diagnostics;
 
-    // Whether what is found in the standard library is reported too (`jade check --std`).
+    // Whether what is found in the standard library is reported too (`ww check --std`).
     bool reportStandardLibrary = false;
 
     // A parameter of a named function, a method or a class header has a type written (M6.5
@@ -205,7 +205,7 @@ public:
     // `val out : open List<T> = []`: the type it is declared as, which names a type parameter.
     bool declaredLiteralType(const Expr& literal, RuntimeType& out) const;
 
-    // For a call of a generic function or class written in Jade: what it gives the type
+    // For a call of a generic function or class written in WinterWolf: what it gives the type
     // parameters, in their order, an Unknown where that was not worked out.
     bool typeArguments(const Node& call, std::vector<RuntimeType>& out) const;
     // Whether a binary operator calls an operator added to its left value's type (`op Number.*`).
@@ -385,4 +385,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace jade
+}  // namespace ww

@@ -1,0 +1,90 @@
+// get, set and getOrNull of Image and Grid, and Grid.map, put in place where they are called
+// (2026-11-13): the same answers, errors and types as calls. Each loop runs three times (its
+// region is made the second time it starts); every answer the VM's alone, and `ww --interpret`'s.
+
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+val im = Image(6, 4, Color(10, 20, 30))
+im.set(2, 1, Color.red)
+print(im.get(2, 1), im.get(0, 0), im.getOrNull(6, 0), im.getOrNull(-1, 2), im.getOrNull(5, 3))   // expect: Color(255, 0, 0) Color(10, 20, 30) null null Color(10, 20, 30)
+print(failing { im.get(6, 0) }, failing { im.set(0, 4, Color.red) })   // expect: IndexOutOfBoundsException: pixel (6, 0) is outside the image, which is 6 by 4 IndexOutOfBoundsException: pixel (0, 4) is outside the image, which is 6 by 4
+
+// In loops: get and set, getOrNull at the edges (null outside), a colour passed in.
+fun reds(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im.get(x, y).red } }
+  return t
+}
+fun around(im : Image) : int {
+  var t = 0
+  for (y in -1 ..< im.height + 1) {
+    for (x in -1 ..< im.width + 1) {
+      val c = im.getOrNull(x, y)
+      t += c == null ? 1000 : c.green
+    }
+  }
+  return t
+}
+fun forced(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height + 1) { for (x in 0 ..< im.width) { t += im.getOrNull(x, y)!!.blue } }
+  return t
+}
+fun paint(im : Image, c : Color) {
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { im.set(x, y, c) } }
+}
+fun paintIndex(im : Image, c : Color) {
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { im[x, y] = c } }
+}
+print(thrice { reds(im) }, thrice { around(im) })   // expect: 485 24460
+print(failing { thrice { forced(im) } })   // expect: NullPointerException: '!!' was used on a value that is null
+thrice { paint(im, Color(1, 2, 3)) }
+print(im[0, 0], im[5, 3], thrice { reds(im) })   // expect: Color(1, 2, 3) Color(1, 2, 3) 24
+thrice { paintIndex(im, Color(4, 5, 6, 7)) }
+print(im[3, 2])   // expect: Color(4, 5, 6, 7)
+print(failing { im.pixels.set(0, 0, Color.red) })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }
+
+// Grid's own, of ints and of objects.
+val g = Grid<int>(3, 2, fill = 7)
+g.set(1, 1, 9)
+print(g.get(1, 1), g.getOrNull(3, 0), g.getOrNull(2, 1))   // expect: 9 null 7
+
+// map: the grid it gives of the type the lambda gives, each cell's; of objects, which have no zero.
+val colours = Grid<Color>(4, 3)
+for (y in 0 ..< 3) { for (x in 0 ..< 4) { colours[x, y] = Color(x * 50, y * 80, 7) } }
+fun mapped(cs : Grid<Color>) : Grid<byte> => cs.map { it.red }
+val bytes = thrice { mapped(colours) } as Grid<byte>
+print(bytes#, bytes[3, 2], bytes.width, bytes.height)   // expect: Grid<byte> 150 4 3
+val ints = colours.map { it.green.toInt() * 1000 }
+print(ints#, ints[1, 2])   // expect: Grid<int> 160000
+val names = colours.map { "(${it.red}, ${it.green})" }
+print(names#, names[2, 1])   // expect: Grid<string> (100, 80)
+val maybe = colours.map { it.red > 100 ? it : null }
+print(maybe#, maybe[0, 0], maybe[3, 0])   // expect: Grid<Color?> null Color(150, 0, 7)
+var seen = 0
+val counted = colours.map { seen += 1; seen }
+print(counted[3, 2], seen)   // expect: 12 12
+
+// A generic class's inline method gives its own type parameter what the call gives it.
+class Box<T>(val v : T) {
+  inline fun <R> mapped(f : (T) -> R) : Box<R> => Box<R>(f(v))
+  fun <R> made() : List<R> => []
+  inline fun <R> listed(f : (T) -> R) : List<R> {
+    val l = made<R>()
+    return l
+  }
+}
+val box = Box<int>(3)
+print(box.mapped { it * 2 }#, box.mapped { "x$it" }.v, box.listed { it.toFloat() }#)   // expect: Box<int> x3 List<float>

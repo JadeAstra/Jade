@@ -1,4 +1,4 @@
-// Native code (M9.5): the stencils jade.exe carries, and putting them together into machine code.
+// Native code (M9.5): the stencils ww.exe carries, and putting them together into machine code.
 // See native.h, and docs/native-plan.html.
 
 #include "native.h"
@@ -12,25 +12,25 @@
 #include <algorithm>
 #include <cstddef>
 
-#if JADE_NATIVE
+#if WW_NATIVE
 #include "../bytecode.h"
 #include "../value.h"
 #include "layout.h"
-#include "stencils.h"  // kStencils, made by tools/stencils when jade.exe is built, in name order
+#include "stencils.h"  // kStencils, made by tools/stencils when ww.exe is built, in name order
 #endif
 
-#if JADE_NATIVE && defined(_WIN32)
+#if WW_NATIVE && defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
-#elif JADE_NATIVE
+#elif WW_NATIVE
 #include <sys/mman.h>
 #endif
 
-namespace jade::native {
+namespace ww::native {
 
-#if JADE_NATIVE
+#if WW_NATIVE
 // A slot's kind as the stencils write it: the VM's.
 static_assert(static_cast<int>(ValueKind::Int) == 2 && static_cast<int>(ValueKind::Float) == 3, "src/native/stencils.cpp writes these kinds");
 static_assert(sizeof(Value) == 16, "a stencil's slot is 16 bytes");
@@ -100,7 +100,7 @@ const StencilCode* stencil(std::string_view) { return nullptr; }
 
 namespace {
 bool regionsOn = [] {
-    const char* asked = std::getenv("JADE_NATIVE");
+    const char* asked = std::getenv("WW_NATIVE");
     return asked == nullptr || std::string(asked) != "0";
 }();
 }  // namespace
@@ -116,9 +116,9 @@ namespace {
 // not run, and made runnable, and no longer writable, before it runs. A region has pages of its
 // own, so that none is written while another region in it may be running on another core.
 uint8_t* writableCode(size_t bytes) {
-#if JADE_NATIVE && defined(_WIN32)
+#if WW_NATIVE && defined(_WIN32)
     return static_cast<uint8_t*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-#elif JADE_NATIVE
+#elif WW_NATIVE
     void* at = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return at == MAP_FAILED ? nullptr : static_cast<uint8_t*>(at);
 #else
@@ -127,12 +127,12 @@ uint8_t* writableCode(size_t bytes) {
 #endif
 }
 bool makeRunnable(uint8_t* code, size_t bytes) {
-#if JADE_NATIVE && defined(_WIN32)
+#if WW_NATIVE && defined(_WIN32)
     DWORD old;
     if (!VirtualProtect(code, bytes, PAGE_EXECUTE_READ, &old)) return false;
     FlushInstructionCache(GetCurrentProcess(), code, bytes);
     return true;
-#elif JADE_NATIVE
+#elif WW_NATIVE
     if (mprotect(code, bytes, PROT_READ | PROT_EXEC) != 0) return false;
     __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(code + bytes));
     return true;
@@ -319,7 +319,7 @@ void* Assembler::address(int label) const {
 
 // ---- The build's check ----
 
-#if JADE_NATIVE
+#if WW_NATIVE
 namespace {
 
 volatile uint8_t checkFlag = 0;
@@ -483,4 +483,4 @@ std::string check() {
 std::string check() { return available() ? "" : ""; }
 #endif
 
-}  // namespace jade::native
+}  // namespace ww::native

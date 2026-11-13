@@ -1,5 +1,5 @@
 @echo off
-rem Builds build\jade.exe with the MSVC toolchain from the newest Visual Studio install.
+rem Builds build\ww.exe with the MSVC toolchain from the newest Visual Studio install.
 setlocal
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"

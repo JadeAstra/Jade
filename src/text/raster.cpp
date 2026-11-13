@@ -8,7 +8,7 @@
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade::text {
+namespace ww::text {
 
 namespace {
 
@@ -445,4 +445,4 @@ void rasterizeRows(const Path& path, float fineness, int fromRow, int toRow, Fil
     }
 }
 
-}  // namespace jade::text
+}  // namespace ww::text

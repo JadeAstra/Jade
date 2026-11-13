@@ -1,0 +1,34 @@
+// An entry of an enum may be written bare where that enum is expected. Anywhere else the full
+// name is needed, and a bare one is found when the program is checked (before, only when the
+// program came to it). tests/enum_bare.ww has the cases that are right.
+
+enum Way { up, down, left, right }
+enum Fill { NONE, HORIZONTAL, VERTICAL, BOTH }
+fun step(way : Way, fill : Fill = NONE) => "$way/$fill"
+class Cell(val content : string, var fill : Fill = NONE, var anchor : Way = up)
+fun untyped(x : any?) => x
+fun typedOther(n : int) => n
+fun takesShape(s : Cell) => s
+fun many(vararg ways : any) => ways
+
+untyped(up)          // check: there is nothing named 'up' here: no variable, function or class of that name is in reach
+print(up)            // check: there is nothing named 'up' here: no variable, function or class of that name is in reach
+typedOther(up)       // check: there is nothing named 'up' here: no variable, function or class of that name is in reach
+takesShape(up)       // check: there is nothing named 'up' here: no variable, function or class of that name is in reach
+many(left)           // check: there is nothing named 'left' here: no variable, function or class of that name is in reach
+step(sideways)       // check: 'sideways' is not an entry of enum Way, nor a variable
+step(up, left)       // check: 'left' is not an entry of enum Fill, nor a variable
+Cell("z", up)        // check: 'up' is not an entry of enum Fill, nor a variable
+step(up, NONE)
+Cell("y", BOTH, down)
+
+// A union holding enums (8.8i): one enum takes its entries by their bare names, checked as for a
+// parameter of the enum itself; with two or more, a bare name could be any one's.
+fun wayOrText(w : Way | string) => "$w"
+fun wayOrFill(w : Way | Fill) => "$w"
+wayOrText(up)
+wayOrText("text")
+wayOrText(upp)       // check: 'upp' is not an entry of enum Way, nor a variable
+wayOrFill(Way.left)
+wayOrFill(left)      // check: 'left' is a bare name where enum Way or Fill may go, and a bare name is an entry of one enum alone: write Way.left
+wayOrFill(nowhere)   // check: 'nowhere' is not an entry of enum Way or Fill, nor a variable

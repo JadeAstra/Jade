@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jade lists of values</title>
+<title>WinterWolf lists of values</title>
 <style>
 :root {
   --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
@@ -273,7 +273,7 @@ ol li { margin: 6px 0; }
 <ul>
 <li><strong>Bounds:</strong> reading through a reference into a list checks its position against the list's size, so a mistake in the compiler's analysis gives an error, never a read outside the block.</li>
 <li><strong>A stress setting</strong>, beside the thread and collector ones, that makes every read a copy. The test suite runs both ways and must print the same.</li>
-<li><strong>The shell</strong> (what <code>jade</code> starts with no file): code there is compiled one entry at a time, so a class entered later can add an override that earlier code did not know of. In the shell, calls through methods that can be overridden count as keeping.</li>
+<li><strong>The shell</strong> (what <code>ww</code> starts with no file): code there is compiled one entry at a time, so a class entered later can add an override that earlier code did not know of. In the shell, calls through methods that can be overridden count as keeping.</li>
 </ul>
 </section>
 
@@ -292,7 +292,7 @@ ol li { margin: 6px 0; }
 
 <section class="part" id="bounce">
 <h2>14. A worked case: the bounce example on every core</h2>
-<p><code>examples/bounce_parallel.jade</code> moves 50,000 balls a frame on every core and draws them on one. Today each ball is an object that <code>move</code> changes in place:</p>
+<p><code>examples/bounce_parallel.ww</code> moves 50,000 balls a frame on every core and draws them on one. Today each ball is an object that <code>move</code> changes in place:</p>
 <pre><code>class Ball(var x : number, var y : number, var dx : number, var dy : number, val radius : number, val color) {
   fun move(width : number, height : number, steps : number) {
     x += dx * steps

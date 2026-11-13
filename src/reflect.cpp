@@ -1,10 +1,10 @@
 // Reflection (M6.6 part 8, group 6; D38, D48 to D50): what the standard library's Class,
-// Field and Method (src/std/reflect.jade) read of the program's classes as it runs.
+// Field and Method (src/std/reflect.ww) read of the program's classes as it runs.
 #include <algorithm>
 
 #include "builtins.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -206,11 +206,11 @@ void registerReflection(VM& vm) {
         return vm.callWithTypes(Value::object(t->cls), t->args, static_cast<int>(values.size()), values.data());
     });
 
-    // The library a type comes from: "jade" for a built-in type, a library's class its library's
+    // The library a type comes from: "ww" for a built-in type, a library's class its library's
     // name; null for a class of the program's own, whose origin is the program's name (D184).
     vm.defineNative("__typeOrigin", 1, 1, [](VM& vm, int, Value* args) -> Value {
         const ObjTypeInfo* t = typeGiven(vm, args[0]);
-        if (t->id != kTypeInstance) return vm.str("jade");
+        if (t->id != kTypeInstance) return vm.str("ww");
         return t->cls->origin != nullptr ? Value::object(t->cls->origin) : Value::null();
     });
 
@@ -258,4 +258,4 @@ void registerReflection(VM& vm) {
     });
 }
 
-}  // namespace jade
+}  // namespace ww

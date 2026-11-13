@@ -12,7 +12,7 @@
 
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 // Clamps a possibly negative position into [0, length], as slice() bounds.
 size_t clampPosition(int64_t position, size_t length);
@@ -74,4 +74,4 @@ void registerStdlib(VM& vm);
 // Reflection, what Class and the rest read of the classes (D38): reflect.cpp.
 void registerReflection(VM& vm);
 
-}  // namespace jade
+}  // namespace ww

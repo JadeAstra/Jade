@@ -14,7 +14,7 @@
 
 #include "face.h"
 
-namespace jade::text {
+namespace ww::text {
 
 // ---- What is asked of the system (system.cpp) ----
 
@@ -96,4 +96,4 @@ private:
 
 std::string lowerCase(const std::string& s);
 
-}  // namespace jade::text
+}  // namespace ww::text

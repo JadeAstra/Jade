@@ -4,13 +4,13 @@
 
 #include "section_compiler.h"  // last: this file's own code goes in its section (D161)
 
-namespace jade {
+namespace ww {
 
 namespace {
 
 const int kMaxNesting = 256;
 
-// Kotlin's `open`, `final` and `sealed` are not words of Jade: every class can be subclassed
+// Kotlin's `open`, `final` and `sealed` are not words of WinterWolf: every class can be subclassed
 // and every member overridden, and a fixed set of kinds is an `enum class`. Written in front
 // of a declaration, any of them is an error.
 bool kotlinOnlyWord(const std::string& word) {
@@ -20,9 +20,9 @@ bool kotlinOnlyWord(const std::string& word) {
 // The words that may stand in front of `fun` (D29, D59, D72).
 bool functionWord(const std::string& word) { return word == "infix" || word == "inline" || word == "tail"; }
 
-std::string notJadeWord(const std::string& word) {
+std::string notWinterWolfWord(const std::string& word) {
     if (word == "tailrec")
-        return "Kotlin's tailrec is written tail in Jade: tail fun name(...); a function calling itself as its last "
+        return "Kotlin's tailrec is written tail in WinterWolf: tail fun name(...); a function calling itself as its last "
                "step is made a loop with or without it, and the word asks for an error where a call is not its last step (D29)";
     if (word == "sealed")
         return "'sealed' is not a keyword; a fixed set of kinds is an 'enum class', and an 'abstract class' "
@@ -161,20 +161,20 @@ const Token& Parser::expectName(const char* what) {
     return expect(TokenType::Identifier, what);
 }
 
-// What Jade writes in place of one of Kotlin's annotations for the JVM; "" for any other.
+// What WinterWolf writes in place of one of Kotlin's annotations for the JVM; "" for any other.
 std::string Parser::jvmAnnotation(const std::string& name) {
     if (name == "Volatile")
-        return "@Volatile is for the JVM: one thread runs Jade code at a time, so a variable is always seen whole; delete it (D153)";
+        return "@Volatile is for the JVM: one thread runs WinterWolf code at a time, so a variable is always seen whole; delete it (D153)";
     if (name == "Synchronized") return "@Synchronized is for the JVM: guard what it guards with a Lock, lock.useKey { ... } (D86, D153)";
     if (name == "JvmStatic") return "@JvmStatic is for the JVM: a static member is written in the class's static { } block (D67, D153)";
     if (name == "Throws") return "@Throws is written throws after the result type: fun load() : string throws IOException (D54, D153)";
     if (name == "Suppress" || name == "SuppressWarnings")
-        return "@" + name + " silences Kotlin's warnings, and Jade's compiler has none to silence: delete it (D153)";
+        return "@" + name + " silences Kotlin's warnings, and WinterWolf's compiler has none to silence: delete it (D153)";
     static const char* const jvm[] = {"JvmField", "JvmName", "JvmOverloads", "JvmInline", "JvmDefault", "JvmSuppressWildcards",
                                       "JvmWildcard", "JvmRecord", "JvmMultifileClass", "JvmSynthetic", "PublishedApi", "Strictfp",
                                       "Transient", "JvmSerializableLambda"};
     for (const char* word : jvm)
-        if (name == word) return "@" + name + " is for the JVM, and means nothing in Jade: delete it (D153)";
+        if (name == word) return "@" + name + " is for the JVM, and means nothing in WinterWolf: delete it (D153)";
     return "";
 }
 
@@ -189,7 +189,7 @@ Annotations Parser::annotations() {
         const Token& first = advance();
         if (std::string advice = jvmAnnotation(first.text); !advice.empty()) throw error(at, advice);
         if (check(TokenType::Colon) && adjacentToPrevious())
-            throw error(at, "@" + first.text + ": is Kotlin's way of saying where an annotation goes; in Jade it goes on the declaration it is written in front of (D153)");
+            throw error(at, "@" + first.text + ": is Kotlin's way of saying where an annotation goes; in WinterWolf it goes on the declaration it is written in front of (D153)");
         Annotation a;
         a.line = at.line;
         a.col = at.col;
@@ -379,7 +379,7 @@ StmtPtr Parser::declaration() {
                                   (word.text == "suspend" && (after.type == TokenType::Fun || after.type == TokenType::Identifier));
             const bool declares = after.type == TokenType::Val || after.type == TokenType::Var || after.type == TokenType::Fun ||
                                   after.type == TokenType::Class || after.type == TokenType::Identifier;
-            if (kotlinOnlyWord(word.text) && declares && !after.newlineBefore) throw error(word, notJadeWord(word.text));
+            if (kotlinOnlyWord(word.text) && declares && !after.newlineBefore) throw error(word, notWinterWolfWord(word.text));
             if (word.text == "external" && !after.newlineBefore &&
                 (after.type == TokenType::Fun || after.type == TokenType::Val ||
                  (after.type == TokenType::Identifier && after.text == "object")))
@@ -430,7 +430,7 @@ StmtPtr Parser::declaration() {
                   toks_[p_ + 2].type == TokenType::Identifier))) {
                 // `enum class Event { ... }`, `enum interface Shape` (D39): a fixed set of kinds.
                 const bool isInterface = after.type != TokenType::Class;
-                // Kotlin's `enum class Color { RED, GREEN }` is Jade's enum.
+                // Kotlin's `enum class Color { RED, GREEN }` is WinterWolf's enum.
                 size_t at = p_ + 3;
                 int depth = 0;
                 for (; at < toks_.size(); at++) {
@@ -898,7 +898,7 @@ std::vector<TypeParam> Parser::typeParameters() {
     std::vector<TypeParam> params;
     typeParamScopes_.emplace_back();
     do {
-        // Kotlin's `reified` marks what Jade always does (R1).
+        // Kotlin's `reified` marks what WinterWolf always does (R1).
         if (check(TokenType::Identifier) && peek().text == "reified" && peekNext().type == TokenType::Identifier)
             throw error(peek(), "'reified' is not needed: type arguments are kept when the program runs (L14), so "
                                 "x is T works in any generic function");
@@ -1123,7 +1123,7 @@ StmtPtr Parser::classDeclaration(bool isEnum, bool isInterface, const Token* ano
                    (peekNext().type == TokenType::Val || peekNext().type == TokenType::Var || peekNext().type == TokenType::Identifier) &&
                    (peek().text == "override" || peek().text == "private" || peek().text == "internal" || peek().text == "public" ||
                     peek().text == "protected" || kotlinOnlyWord(peek().text))) {
-                if (kotlinOnlyWord(peek().text)) throw error(peek(), notJadeWord(peek().text));
+                if (kotlinOnlyWord(peek().text)) throw error(peek(), notWinterWolfWord(peek().text));
                 overrides = overrides || peek().text == "override";
                 if (accessWord(peek().text) != 0) access = accessWord(peek().text);
                 advance();
@@ -1422,7 +1422,7 @@ void Parser::classMember(ClassStmt& s, bool inStatic) {
 // every declaration is a static member.
 void Parser::classMemberBody(ClassStmt& s, bool inStatic) {
     if (word("companion") && nextWord("object"))
-        throw error(peek(), "Kotlin's companion object is written static { } in Jade, holding the same members (D67)");
+        throw error(peek(), "Kotlin's companion object is written static { } in WinterWolf, holding the same members (D67)");
     if (!inStatic && word("static") && peekNext().type == TokenType::LBrace) {
         if (s.hasStaticBlock)
             throw error(peek(), "a class has one static { } block, and this is a second: put its members in the first (D67)");
@@ -1458,7 +1458,7 @@ void Parser::classMemberBody(ClassStmt& s, bool inStatic) {
            (peekNext().type == TokenType::Val || peekNext().type == TokenType::Var || peekNext().type == TokenType::Fun ||
             peekNext().type == TokenType::Class || peekNext().type == TokenType::Identifier);
          advance()) {
-        if (kotlinOnlyWord(peek().text)) throw error(peek(), notJadeWord(peek().text));
+        if (kotlinOnlyWord(peek().text)) throw error(peek(), notWinterWolfWord(peek().text));
         overrides = overrides || peek().text == "override";
         suspends = suspends || peek().text == "suspend";
         abstracts = abstracts || peek().text == "abstract";
@@ -2105,7 +2105,7 @@ StmtPtr Parser::statement() {
                 s->path = advance().stringValue;
                 // The name it goes by is the path with dots, when that makes one.
                 std::string name = s->path;
-                static const std::string extension = ".jade";
+                static const std::string extension = ".ww";
                 if (name.size() > extension.size() && name.compare(name.size() - extension.size(), extension.size(), extension) == 0)
                     name.resize(name.size() - extension.size());
                 bool usable = !name.empty();
@@ -2580,8 +2580,8 @@ ExprPtr Parser::postfix(ExprPtr start) {
             toks_[p_ + 1].line == t.line && toks_[p_ + 1].col == t.col + 1) {
             // Kotlin's `Box::class` and `::name`.
             const bool isClass = p_ + 2 < toks_.size() && toks_[p_ + 2].type == TokenType::Class;
-            throw error(t, isClass ? "Kotlin's X::class is written X# in Jade, and x::class x# (D48)"
-                                   : "Jade has no '::': a class is written Name# (D48), and a function is passed as a lambda, { f(it) }");
+            throw error(t, isClass ? "Kotlin's X::class is written X# in WinterWolf, and x::class x# (D48)"
+                                   : "WinterWolf has no '::': a class is written Name# (D48), and a function is passed as a lambda, { f(it) }");
         }
         if (t.type == TokenType::Hash && !t.newlineBefore) {
             // `Image#`, `x#`, `items[0]#`: a class (D48), binding as tightly as a member.
@@ -3211,4 +3211,4 @@ ExprPtr Parser::lambdaLiteral(const Token& open, bool hasParams) {
     return e;
 }
 
-}  // namespace jade
+}  // namespace ww

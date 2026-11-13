@@ -1,0 +1,8 @@
+// Assigning a property calls its setter, and what that may throw goes where a call's would (G38).
+class Doc {
+  var saved : string = ""
+    set(v) { throw IOException("read-only disk") }
+}
+val d = Doc()
+val saver : () -> unit = { d.saved = "x" }
+// expect compile error: error_setter_throws_kept.ww:7:26: error: this lambda may throw IOException, which nothing can catch where it is called: it is kept as a () -> unit, which throws nothing checked; catch it inside the lambda (D35)

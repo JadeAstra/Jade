@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace jade {
+namespace ww {
 
 enum class TokenType {
     // Punctuation
@@ -124,4 +124,4 @@ private:
     size_t skipString(size_t p) const;
 };
 
-}  // namespace jade
+}  // namespace ww

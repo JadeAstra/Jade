@@ -1,0 +1,156 @@
+// Small functions and methods put in place of their calls by themselves (2026-11-13): bodies of a
+// few statements, from other files, and methods: a class's behind a check that the object is of
+// exactly that class (a subclass's may be another), a value type's with none (a static one stays a call).
+// The same answers and errors as calls; each loop runs three times (its region is made the second
+// time it starts).
+import smallcalls.helpers.*
+
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+// A few statements: a val, an early return, a throw, a function of unit changing a global.
+var log = 0
+fun clamped(x : int, lo : int, hi : int) : int {
+  if (x < lo) { return lo }
+  if (x > hi) { return hi }
+  val inside = x
+  return inside
+}
+fun checked(x : int) : int {
+  if (x < 0) { throw IllegalArgumentException("$x is below 0") }
+  return x * 2
+}
+fun record(x : int) {
+  log += x
+}
+fun factorial(n : int) : int {
+  if (n <= 1) { return 1 }
+  return n * factorial(n - 1)
+}
+fun loop(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += clamped(i - 5, 0, 10) + checked(i)
+    record(i)
+  }
+  return t
+}
+print(thrice { loop(30) }, log, factorial(10))   // expect: 1065 1305 3628800
+print(failing { checked(-3) }, failing { thrice { loop(3) + checked(-1) } })   // expect: IllegalArgumentException: -3 is below 0 IllegalArgumentException: -1 is below 0
+
+// Another file's: its private value and global, and a class of it.
+fun helping(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += scaled(i)
+    noteHelp(1)
+  }
+  return t
+}
+print(thrice { helping(10) }, helped)   // expect: 325 30
+// Its lines in a stack trace are its file's, as are the standard library's (which a test's report leaves out).
+fun bounded(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += atMost(i, 5) }
+  return t
+}
+fun boundedTrace() : List<string> {
+  try {
+    thrice { bounded(5) }
+    bounded(8)
+  } catch (e : IllegalStateException) {
+    return e.stackTrace.take(2)
+  }
+  return []
+}
+print(boundedTrace())   // expect: ["at atMost (helpers.ww:16)", "at bounded (small_calls_inlined.ww:65)"]
+fun equalsTrace() : List<string> {
+  try {
+    for (i in 0 ..< 3) { assertEquals(i, 1) }
+  } catch (e : AssertionError) {
+    return e.stackTrace.take(2)
+  }
+  return []
+}
+print(equalsTrace()[1].contains("<std>"))   // expect: true
+val meter = Meter(0)
+fun metered(m : Meter, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += m.advance(1) }
+  return t
+}
+print(thrice { metered(meter, 5) }, meter.reading)   // expect: 455 105
+
+// A class's method, on objects of that class and of subclasses with and without their own.
+class Shape(val size : int) {
+  fun area() : int => size * size
+  fun twiceArea() : int => area() * 2
+}
+class Wide(size : int) : Shape(size) {
+  override fun area() : int => size * size * 3
+}
+class Same(size : int) : Shape(size)
+fun areas(shapes : List<Shape>) : int {
+  var t = 0
+  for (s in shapes) { t += s.area() + s.twiceArea() }
+  return t
+}
+val shapes : List<Shape> = [Shape(2), Wide(2), Same(2), Shape(3), Wide(1)]
+print(thrice { areas(shapes) })   // expect: 96
+fun oneArea(s : Shape) : int => s.area()
+print(oneArea(Shape(4)), oneArea(Wide(4)), oneArea(Same(4)))   // expect: 16 48 16
+
+// A value type's method, and a static one (left a call: its names are its class's statics).
+value Vec(val x : int, val y : int) {
+  fun dot(o : Vec) : int => x * o.x + y * o.y
+  fun scaledBy(k : int) : Vec {
+    val nx = x * k
+    return Vec(nx, y * k)
+  }
+}
+class Units {
+  static {
+    fun inches(cm : int) : int {
+      val tenths = cm * 10
+      return tenths / 25
+    }
+  }
+}
+fun vectors(n : int) : int {
+  var t = 0
+  val v = Vec(1, 2)
+  for (i in 0 ..< n) { t += v.scaledBy(i).dot(Vec(3, 4)) + Units.inches(i) }
+  return t
+}
+print(thrice { vectors(10) })   // expect: 509
+
+// A small method calling another of its object, and one changing a field; a call on what a field holds.
+class Counter(var count : int) {
+  fun bump() {
+    count += 1
+  }
+  fun bumpTwice() : int {
+    bump()
+    bump()
+    return count
+  }
+}
+class Holder(val counter : Counter)
+fun counting(h : Holder, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += h.counter.bumpTwice() }
+  return t
+}
+val holder = Holder(Counter(0))
+print(thrice { counting(holder, 4) }, holder.counter.count)   // expect: 84 24

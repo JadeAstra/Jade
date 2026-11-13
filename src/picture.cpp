@@ -1,4 +1,4 @@
-// What general picture operations (src/std/picture.jade) are built on, over a picture's pixels as
+// What general picture operations (src/std/picture.ww) are built on, over a picture's pixels as
 // kept in a Grid<Color> or an Image (four bytes each: red, green, blue, alpha): the colours that
 // stand best for a picture, and the picture put into them, dithered or not (M9/M10 part one).
 
@@ -17,12 +17,12 @@
 
 // SSE2, which every x64 processor has, for the loops over every sample; each has a plain twin
 // that gives the same numbers, for other processors.
-#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(JADE_NO_SSE2)
-#define JADE_SSE2 1
+#if (defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)) && !defined(WW_NO_SSE2)
+#define WW_SSE2 1
 #include <emmintrin.h>
 #endif
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -303,7 +303,7 @@ inline void inverseEight(const int16_t* in, int step, int16_t* out, int bias, in
         for (int x = 0; x < 8; x++) out[static_cast<size_t>(y) * stride + static_cast<size_t>(x)] = clampSample(b[y * 8 + x]);
 }
 
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
 // Eight rows of 8 16-bit values turned about the diagonal.
 inline void transpose8x16(__m128i (&r)[8]) {
     const __m128i a0 = _mm_unpacklo_epi16(r[0], r[1]), a1 = _mm_unpackhi_epi16(r[0], r[1]);
@@ -399,7 +399,7 @@ constexpr float kC707 = 0.707106781f, kC382 = 0.382683433f, kC541 = 0.541196100f
     }
 }
 
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
 // Four floats in a register, with the operators forwardEight uses.
 struct F4 {
     __m128 v;
@@ -509,7 +509,7 @@ public:
             if (twiceX_) {
                 const int pairs = tw / 2;
                 int k0 = 0;
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
                 // Eight pairs at a time: 3 parts each sample and 1 the one before (or after).
                 const __m128i eight = _mm_set1_epi16(8);
                 for (; k0 + 8 <= pairs; k0 += 8) {
@@ -604,7 +604,7 @@ inline uint8_t lumaOf(int r, int g, int b) { return static_cast<uint8_t>((kYr * 
 // `n` RGBA pixels to Y, Cb and Cr (or Y alone where cb is null).
 void rgbToYcc(const uint8_t* px, size_t n, uint8_t* y, uint8_t* cb, uint8_t* cr) {
     size_t i = 0;
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
     const __m128i lowBytes = _mm_set1_epi32(0x00FF00FF);
     // Pairs of factors for (R, B) and (G, A) in each 32-bit pixel.
     const __m128i yRB = _mm_set1_epi32((kYb << 16) | kYr), yGA = _mm_set1_epi32(kYg);
@@ -640,7 +640,7 @@ void rgbToYcc(const uint8_t* px, size_t n, uint8_t* y, uint8_t* cb, uint8_t* cr)
 // `n` pixels of Y, Cb and Cr to RGBA, alpha 255.
 void yccToRgb(const uint8_t* y, const uint8_t* cb, const uint8_t* cr, size_t n, uint8_t* out) {
     size_t i = 0;
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
     const __m128i zero = _mm_setzero_si128(), c128 = _mm_set1_epi16(128), opaque = _mm_set1_epi8(static_cast<char>(0xFF));
     const __m128i rPair = _mm_set1_epi32(kRcr << 16), gPair = _mm_set1_epi32((kGcr << 16) | (kGcb & 0xFFFF)), bPair = _mm_set1_epi32(kBcb & 0xFFFF);
     const __m128i round = _mm_set1_epi32(kHalf);
@@ -732,7 +732,7 @@ void registerPicture(VM& vm) {
                 int16_t c[64];
                 std::memcpy(c, &coefs[static_cast<size_t>((by * bw + bx) * 128)], 128);
                 uint8_t* out = &plane[static_cast<size_t>(by * 8 * stride + bx * 8)];
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
                 inverseBlockSse(c, steps16, out, static_cast<size_t>(stride));
 #else
                 inverseBlock(c, steps16, out, static_cast<size_t>(stride));
@@ -757,7 +757,7 @@ void registerPicture(VM& vm) {
             for (int64_t bx = 0; bx < bw; bx++) {
                 const uint8_t* p = &plane[static_cast<size_t>(by * 8 * stride + bx * 8)];
                 int16_t q[64];
-#ifdef JADE_SSE2
+#ifdef WW_SSE2
                 forwardBlockSse(p, static_cast<size_t>(stride), factor.data(), q);
 #else
                 float block[64];
@@ -916,4 +916,4 @@ void registerPicture(VM& vm) {
     vm.defineGlobal("__picture", Value::object(holder));
 }
 
-}  // namespace jade
+}  // namespace ww

@@ -1,0 +1,68 @@
+// A sandbox's network (M6.6.2 step 5): a connection is to one of its hosts, a far side written in
+// WinterWolf on a thread of its own; a ServerSocket listens on a port of its own; nothing reaches the
+// network.
+Sandbox.run {
+  network.host("example.test", 80) { peer ->
+    val request = peer.reader.readLine()
+    peer.send("HTTP/1.1 200 OK\r\n\r\nyou asked: $request")
+    peer.socket.close()
+  }
+  network.host("flaky.test", 80) { peer ->
+    peer.send("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n")
+    peer.send("x".repeat(100))
+    peer.reset()                         // the far side goes away 100 bytes in
+  }
+  network.host("silent.test", 80) { peer -> peer.waitForever() }
+
+  // An answer read to its end.
+  Socket("example.test", 80).use { socket ->
+    socket.writer.write("GET /\n")
+    print(socket.reader.readText().lines().last(), socket.remoteAddress, socket.port)   // expect: you asked: GET / example.test 80
+  }
+
+  // A far side that goes away part of the way.
+  Socket("flaky.test", 80).use { socket ->
+    var got = 0
+    try {
+      while (true) {
+        val part = socket.reader.read(64)
+        if (part == null) { break }
+        got += part.size
+      }
+    } catch (e : IOException) {
+      print(e.message, got > 0)                               // expect: the connection was reset true
+    }
+  }
+
+  // One that never answers: a read with a time limit is up at once, by the sandbox's clock.
+  Socket("silent.test", 80).use { socket ->
+    socket.readTimeout = 30.seconds
+    val start = clock()
+    try { socket.reader.readLine() } catch (e : SocketTimeoutException) { print(e.message, clock() - start) }   // expect: the read timed out 30.0
+  }
+
+  // A host that is not there, a port that is not open, a connection that a fault stops.
+  try { Socket("nowhere.test", 80) } catch (e : IOException) { print(e.message) }   // expect: cannot find host 'nowhere.test'
+  try { Socket("example.test", 81) } catch (e : IOException) { print(e.message) }   // expect: cannot connect to example.test:81: the connection was refused
+  faults.add(Fault.connect("example.test"))
+  try { Socket("example.test", 80) } catch (e : IOException) { print(e.message) }   // expect: cannot connect to example.test:80: the connection timed out
+}
+
+// A server in the sandbox, and a client the test is.
+Sandbox.run {
+  val server = ServerSocket(0)
+  val serving = thread {
+    server.accept().use { client ->
+      val name = client.reader.readLine()
+      client.writer.write("hello, $name\n")
+    }
+  }
+  network.connect(server.localPort).use { socket ->
+    socket.writer.write("Ann\n")
+    print(socket.reader.readLine())                           // expect: hello, Ann
+  }
+  serving.get()
+  val port = server.localPort
+  server.close()
+  try { network.connect(port) } catch (e : IOException) { print(e.message) }   // expect: cannot connect to port 40000: the connection was refused
+}

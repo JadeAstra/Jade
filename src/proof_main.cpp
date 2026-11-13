@@ -2,4 +2,4 @@
 
 #include "run.h"
 
-int main(int argc, char** argv) { return jade::startExecutable(argc, argv, nullptr); }
+int main(int argc, char** argv) { return ww::startExecutable(argc, argv, nullptr); }

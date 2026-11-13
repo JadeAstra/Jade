@@ -1,5 +1,5 @@
 // Regular expressions (N5, M8): Java's syntax, as Kotlin's Regex takes it, matched by code point
-// over Jade's strings. A pattern is compiled once into a small program; matching runs it with
+// over WinterWolf's strings. A pattern is compiled once into a small program; matching runs it with
 // backtracking on a stack of its own, so a long text cannot run the C++ stack out.
 #pragma once
 
@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace jade {
+namespace ww {
 
 struct ObjString;
 
@@ -60,4 +60,4 @@ private:
 };
 
 }  // namespace regex
-}  // namespace jade
+}  // namespace ww

@@ -1,11 +1,11 @@
 import re
 import sys
 
-# Makes tests/regex_java.jade: every case of tests/regex_cases.txt, with what Java answers (as
+# Makes tests/regex_java.ww: every case of tests/regex_cases.txt, with what Java answers (as
 # Kotlin's Regex would) as its expect line. From the repository's top:
 #
 #   java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 tools/regex/RegexCases.java tests/regex_cases.txt > java.txt
-#   py tools/regex/make_test.py java.txt tests/regex_cases.txt tests/regex_java.jade
+#   py tools/regex/make_test.py java.txt tests/regex_cases.txt tests/regex_java.ww
 #
 # A case file line is a pattern, its options (i m s x d l) and a text, between tabs; in the text
 # \n, \t, \r, \\ and \u{hex} stand for what they say.

@@ -5,7 +5,7 @@
 #pragma once
 #include <cstdint>
 
-namespace jade::vp8 {
+namespace ww::vp8 {
 
 const uint8_t kCoeffUpdateProbs[1056] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -160,4 +160,4 @@ const int16_t kAcQuant[128] = {
     213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284,
 };
 
-}  // namespace jade::vp8
+}  // namespace ww::vp8

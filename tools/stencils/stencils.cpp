@@ -1,6 +1,6 @@
 // tools/stencils (M9.5, docs/native-plan.html): reads the object file Clang made of
 // src/native/stencils.cpp and writes the stencils as a C++ table: each one's machine code and its
-// gaps, where in the code each is and what fills it. Run when jade.exe is built; no third-party
+// gaps, where in the code each is and what fills it. Run when ww.exe is built; no third-party
 // code. It refuses anything it does not know (a reference to a name that is no gap, a kind of
 // relocation it does not fill), so that a change in what Clang makes shows when building.
 //
@@ -33,9 +33,9 @@ uint32_t u32(const std::vector<uint8_t>& b, size_t at) { return u16(b, at) | (st
 
 // The gaps a stencil may have, by the name it refers to (see src/native/stencils.cpp).
 const std::map<std::string, std::string> kHoles = {
-    {"jade_next", "HoleNext"},   {"jade_jump", "HoleJump"},   {"jade_exit", "HoleExit"},
-    {"jade_kf", "HoleFloat"},    {"jade_ki", "HoleInt"},      {"jade_slot", "HoleSlot"},
-    {"jade_ret", "HoleRet"},     {"jade_attention", "HoleAttention"}, {"jade_slot2", "HoleSlot2"},
+    {"ww_next", "HoleNext"},   {"ww_jump", "HoleJump"},   {"ww_exit", "HoleExit"},
+    {"ww_kf", "HoleFloat"},    {"ww_ki", "HoleInt"},      {"ww_slot", "HoleSlot"},
+    {"ww_ret", "HoleRet"},     {"ww_attention", "HoleAttention"}, {"ww_slot2", "HoleSlot2"},
 };
 
 struct Hole {
@@ -237,13 +237,13 @@ int main(int argc, char** argv) {
     else if (obj.size() >= 20 && u16(obj, 0) == 0x8664) readCoff(obj, stencils);
     else fail("not an x64 COFF nor an x86-64 ELF object file");
     if (stencils.empty()) fail("no stencils found");
-    // In name order, which jade looks them up by.
+    // In name order, which ww looks them up by.
     std::sort(stencils.begin(), stencils.end(), [](const Stencil& a, const Stencil& b) { return a.name < b.name; });
 
     std::ostringstream out;
     out << "// Made by tools/stencils from src/native/stencils.cpp: do not edit.\n";
     out << "// " << stencils.size() << " stencils.\n\n";
-    out << "namespace jade::native {\n\n";
+    out << "namespace ww::native {\n\n";
     for (size_t k = 0; k < stencils.size(); k++) {
         const Stencil& st = stencils[k];
         out << "static const uint8_t kCode" << k << "[] = {";
@@ -266,7 +266,7 @@ int main(int argc, char** argv) {
         out << "    {\"" << st.name << "\", kCode" << k << ", " << st.code.size() << ", " << (st.holes.empty() ? "nullptr" : "kHoles" + std::to_string(k))
             << ", " << st.holes.size() << "},\n";
     }
-    out << "};\n\n}  // namespace jade::native\n";
+    out << "};\n\n}  // namespace ww::native\n";
     std::ofstream header(argv[2], std::ios::binary);
     header << out.str();
     if (!header) fail(std::string("cannot write ") + argv[2]);

@@ -1,0 +1,9 @@
+// An extend of a type to an interface with a fun, and another in a folder this file does not
+// have in reach: no file has both, but when the program runs a range would fit the interface in
+// two ways (G31, D188).
+import ExtFit.*
+extend Range : AutoCloseable {
+  fun close() { print("closed here") }
+}
+closeIt(1..2)
+// expect compile error: closer.ww:3:1: error: an extend of Range : AutoCloseable is declared here and in error_extend_program_twice.ww, of another folder: a value would fit the interface in two ways, and a program has one way a type fits an interface (D33, D188)

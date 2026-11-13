@@ -6,9 +6,9 @@
 
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 void registerText(VM&) { std::abort(); }
 void registerTopaz(VM&) { std::abort(); }
 
-}  // namespace jade
+}  // namespace ww

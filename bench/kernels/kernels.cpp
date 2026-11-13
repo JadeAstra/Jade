@@ -1,4 +1,4 @@
-// M9/M10 part zero: kernels.jade's kernels in C++, the same work the same way, for comparison.
+// M9/M10 part zero: kernels.ww's kernels in C++, the same work the same way, for comparison.
 //   build.bat, then kernels.exe [name]
 #include <algorithm>
 #include <chrono>
@@ -136,7 +136,7 @@ static void base64Decode() {
     printf("base64Decode %lld ms (bytes %zu, last %d)\n", ms(t), data.size(), data.back());
 }
 
-// About 1 MB of SVG, made as kernels.jade makes it, read into a tree of elements, attributes and
+// About 1 MB of SVG, made as kernels.ww makes it, read into a tree of elements, attributes and
 // text with the predefined entities read: the work of Xml.parse without its checks.
 static std::string svgText() {
     std::string out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"1000\">\n";

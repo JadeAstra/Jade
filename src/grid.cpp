@@ -1,4 +1,4 @@
-// What Grid<T> (src/std/grid.jade, D155) is built on: the built-in __grid. A grid keeps its
+// What Grid<T> (src/std/grid.ww, D155) is built on: the built-in __grid. A grid keeps its
 // cells row by row in a List<T>, packed by T as any list is (a Color 4 bytes a cell, a bool 1);
 // the list is made here from the grid's own type argument, which the object keeps, since a list
 // made in generic code would not know T. The bulk work (filling, copying a region, writing one
@@ -9,7 +9,7 @@
 #include "builtins.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -172,4 +172,4 @@ void registerGrid(VM& vm) {
     vm.defineGlobal("__grid", Value::object(grid));
 }
 
-}  // namespace jade
+}  // namespace ww

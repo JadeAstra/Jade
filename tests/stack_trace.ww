@@ -1,0 +1,74 @@
+// Throwable.stackTrace and stackTraceToString() (the user's names, 2026-11-08, as Kotlin's): where
+// an error was made, kept as it is made, its own constructors left out.
+class MyError(message : string) : Exception(message)
+
+fun inner(n : int) : int {
+  if (n == 0) { throw MyError("deep") }
+  return inner(n - 1)
+}
+
+fun outer() {
+  try {
+    inner(2)
+  } catch (e : MyError) {
+    throw IllegalStateException("outer failed", e)
+  }
+}
+
+try {
+  outer()
+} catch (e : IllegalStateException) {
+  print(e.stackTrace)   // expect: ["at outer (stack_trace.ww:14)", "at <script> (stack_trace.ww:19)"]
+  // A call of itself as its last step is one line, with how many times.
+  print(e.cause!!.stackTrace)   // expect: ["at inner (stack_trace.ww:6), 3 times", "at outer (stack_trace.ww:12)", "at <script> (stack_trace.ww:19)"]
+  write(e.stackTraceToString())
+}
+// expect: IllegalStateException: outer failed
+// expect:   at outer (stack_trace.ww:14)
+// expect:   at <script> (stack_trace.ww:19)
+// expect: Caused by: MyError: deep
+// expect:   at inner (stack_trace.ww:6), 3 times
+// expect:   at outer (stack_trace.ww:12)
+// expect:   at <script> (stack_trace.ww:19)
+
+// An error the VM makes has where it was made too.
+fun index(xs : List<int>) : int => xs[5]
+try {
+  index([1])
+} catch (e : IndexOutOfBoundsException) {
+  print(e.stackTrace)   // expect: ["at index (stack_trace.ww:35)", "at <script> (stack_trace.ww:37)"]
+}
+
+// Thrown again, it keeps where it was made; one made and not thrown has its maker's place.
+fun make() : Throwable => IllegalArgumentException("made")
+val made = make()
+fun rethrow() { throw made }
+try {
+  rethrow()
+} catch (e : IllegalArgumentException) {
+  print(e === made, e.stackTrace)   // expect: true ["at make (stack_trace.ww:43)", "at <script> (stack_trace.ww:44)"]
+}
+
+// What was set aside for it, indented.
+val first = IllegalStateException("first")
+first.addSuppressed(RuntimeException("closing"))
+write(first.stackTraceToString())
+// expect: IllegalStateException: first
+// expect:   at <script> (stack_trace.ww:53)
+// expect:   Suppressed: RuntimeException: closing
+// expect:     at <script> (stack_trace.ww:54)
+
+// A deep stack keeps its ten innermost calls and its two outermost.
+fun down(n : int) : Throwable {
+  if (n == 0) { return RuntimeException("bottom") }
+  val e = down(n - 1)
+  return e
+}
+val deep = down(30).stackTrace
+print(deep.size, deep[0], deep[10], deep.last())   // expect: 13 at down (stack_trace.ww:63) ... 20 more calls ... at <script> (stack_trace.ww:67)
+
+// An error met twice, set aside for one and its cause as well, is shown once and then named.
+val shared = RuntimeException("shared")
+val top = IllegalStateException("top", shared)
+top.addSuppressed(shared)
+print(top.stackTraceToString().lines().filter { !it.trim().startsWith("at ") })   // expect: ["IllegalStateException: top", "  Suppressed: RuntimeException: shared", "Caused by: [already shown] RuntimeException: shared", ""]

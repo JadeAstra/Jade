@@ -1,4 +1,4 @@
-// Foreign functions (M8): what Library, Memory and Foreign (src/std/foreign.jade) are built on.
+// Foreign functions (M8): what Library, Memory and Foreign (src/std/foreign.ww) are built on.
 // A program loads a library of the system's, finds a function in it, and calls it with whole
 // numbers, pointers and text; structures are blocks of native memory, read and written at
 // offsets with every access checked against the block's size.
@@ -28,7 +28,7 @@
 #include "sandbox.h"
 #include "vm.h"
 
-namespace jade {
+namespace ww {
 
 namespace {
 
@@ -388,4 +388,4 @@ void registerForeign(VM& vm) {
     vm.defineGlobal("__foreign", Value::object(holder));
 }
 
-}  // namespace jade
+}  // namespace ww

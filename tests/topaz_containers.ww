@@ -1,0 +1,561 @@
+// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// The containers: a split and its divider, tabs and their chrome (the ∗, the ×, the choosing
+// click, the deck without its bar), the layout pass placing what is inside them, the layout
+// asked for when tabs change, which containers keep a picture of themselves, the toolbar's
+// disabled icon button, its rule and the tabs' tips, who gets the keyboard on a press, and the
+// wheel and repaints through a split and tabs. These are JadeUI's own tests (SplitTest,
+// JadeTabsChromeTest, LayoutPassTest, LayoutRequestTest, ContainerCacheTest, ToolbarChromeTest,
+// FocusAfterPressTest, and the legs of WheelRoutingTest needing a split or tabs), carried over
+// with their names. Some bookkeeping (Split.draggingDivider, Component.overlayDescendants) is
+// internal to Topaz: where JadeUI reads it, these read what it does instead.
+import Topaz.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts a component draws.
+fun texts(ops : List<DrawOp>) : List<DrawOp.Text> => ops.filter { it is DrawOp.Text }.map { it as DrawOp.Text }
+
+// -- SplitTest --
+
+// layoutSplitsByRatioWithDividerBetween
+fun layoutSplitsByRatioWithDividerBetween() {
+  val sp = Split(label("L"), label("R"), ratio = 0.5)
+  Component(sp).layout(206, 100)                 // 206 - 6 divider = 200 to share, half each
+  same("the first's width", sp.first.bounds.width, 100)
+  same("the second's width", sp.second.bounds.width, 100)
+  same("the first at the left", sp.first.bounds.x, 0)
+  same("the second after the divider", sp.second.bounds.x, 106)
+  same("the other way they fill", sp.first.bounds.height, 100)
+}
+layoutSplitsByRatioWithDividerBetween()
+
+// draggingDividerChangesRatioAndCaptures: the divider holds the pointer, so a drag goes on off
+// its few pixels. JadeUI reads draggingDivider; here, while it is held a point over a pane is
+// the split's own (componentAt gives the root), and after the release it is the pane's.
+fun draggingDividerChangesRatioAndCaptures() {
+  val root = split(label("L"), label("R"))
+  val sp = root.content as Split
+  root.layout(206, 100)
+  root.dispatch(Event.Click(101, 50))            // a press on the divider (100..106)
+  yes("the divider is held: the pane is not under the pointer", root.componentAt(30, 50) === root)
+  root.dispatch(Event.Drag(151, 50))             // dragged right by about 50
+  yes("the first pane grew (${sp.first.bounds.width})", sp.first.bounds.width > 120)
+  root.dispatch(Event.Release(151, 50))
+  yes("let go: the pane is under the pointer again", root.componentAt(30, 50) === sp.first)
+}
+draggingDividerChangesRatioAndCaptures()
+
+// dividerRespectsChildMinimums: a pane cannot be dragged to nothing.
+fun dividerRespectsChildMinimums() {
+  val big = label("wide").minimumSize(Size(80, 20))
+  val sp = Split(big, label("R").minimumSize(Size(70, 20)))
+  val root = Component(sp)
+  root.layout(206, 100)
+  root.dispatch(Event.Click(101, 50))
+  root.dispatch(Event.Drag(-100, 50))            // the divider pulled far left
+  yes("the left pane keeps its 80 (${sp.first.bounds.width})", sp.first.bounds.width >= 80)
+  yes("the right pane keeps its 70 (${sp.second.bounds.width})", sp.second.bounds.width >= 70)
+}
+dividerRespectsChildMinimums()
+
+// verticalSplitStacksPanes
+fun verticalSplitStacksPanes() {
+  val sp = Split(label("T"), label("B"), vertical = true, ratio = 0.25)
+  Component(sp).layout(100, 106)                 // 106 - 6 = 100 to share, 25 / 75
+  same("the first's height", sp.first.bounds.height, 25)
+  same("the second's height", sp.second.bounds.height, 75)
+  same("the second below the divider", sp.second.bounds.y, 31)
+}
+verticalSplitStacksPanes()
+
+// dividerReportsResizeCursor
+fun dividerReportsResizeCursor() {
+  val h = split(label("L"), label("R"))          // side by side: the sideways pointer
+  h.layout(206, 100)
+  same("over the divider", h.cursorAt(102, 50), CursorKind.resizeH)
+  same("over a pane", h.cursorAt(40, 50), CursorKind.default)
+  val v = split(label("T"), label("B"), vertical = true)
+  v.layout(100, 206)
+  same("over a vertical split's divider", v.cursorAt(50, 102), CursorKind.resizeV)
+}
+dividerReportsResizeCursor()
+
+// focusAndFindRecurseIntoBothPanes
+fun focusAndFindRecurseIntoBothPanes() {
+  val left = textField(SharedTextModel("a")).withId("l")
+  val right = textField(SharedTextModel("b")).withId("r")
+  val root = split(left, right)
+  root.layout(206, 100)
+  same("the keyboard reaches both panes", root.focusables().map { it.id }, ["l", "r"])
+  same("finding reaches the second", root.find("r")?.id, "r")
+}
+focusAndFindRecurseIntoBothPanes()
+print("SplitTest:", checks, "checks,", failed)   // expect: SplitTest: 18 checks, []
+
+// -- JadeTabsChromeTest --
+
+fun tabsOf(vararg titles : string) : Pair<Tabs, Component> {
+  val jt = Tabs(titles.map { it to Component(Label(it)) })
+  return jt to Component(jt)
+}
+
+// The first tab starts at x = 0; its × after its title and padding: a point a few pixels into it.
+fun closeXofFirstTab(jt : Tabs) : int => jt.font.width(jt.tabs[0].title) + 12 * 2 + 4
+
+// clickingACloseButtonFiresOnCloseNotSelect
+fun clickingACloseButtonFiresOnCloseNotSelect() {
+  val (jt, comp) = tabsOf("Alpha", "Beta", "Gamma")
+  val closed = []
+  val selected = []
+  jt.onClose = { i -> closed.add(i) }
+  jt.onSelect = { i -> selected.add(i) }
+  comp.record(500, 120)
+  comp.dispatch(Event.Click(closeXofFirstTab(jt), 10))
+  same("the × told onClose of tab 0", closed, [0])
+  yes("closing did not also choose ($selected)", selected.isEmpty())
+}
+clickingACloseButtonFiresOnCloseNotSelect()
+
+// dirtyTabRendersALeadingStar: a blue bold ∗ ahead of the name.
+fun dirtyTabRendersALeadingStar() {
+  val (jt, comp) = tabsOf("Doc")
+  jt.dirty = { true }
+  val drawn = texts(comp.record(300, 120))
+  val star = drawn.first { it.text.trim() == "∗" }
+  val name = drawn.first { it.text == "Doc" }
+  yes("ahead of the name", star.x < name.x)
+  yes("blue and bold: ${star.color} ${star.font}", star.font.isBold and star.color.blue > star.color.red + 60)
+  yes("the name itself is not bold", !name.font.isBold)
+  same("the mark says what it means", jt.tooltipAt(star.x.toInt() + 2, 10), "Changed since loaded")
+  same("the name says what the tab is", jt.tooltipAt(name.x.toInt() + 4, 10), "Doc")
+  jt.dirty = { false }
+  yes("and a clean tab has none", !texts(comp.record(300, 120)).any { it.text.trim() == "∗" })
+}
+dirtyTabRendersALeadingStar()
+
+// theCloseCrossTurnsRedUnderThePointer: only the hovered tab's ×, and only while hovered.
+fun theCloseCrossTurnsRedUnderThePointer() {
+  val (jt, comp) = tabsOf("Alpha", "Beta")
+  jt.onClose = { i -> }
+  val crosses = { texts(comp.record(500, 120)).filter { it.text == "×" }.map { it.color } }
+  val before = crosses()
+  comp.dispatch(Event.Hover(closeXofFirstTab(jt), 10))
+  val over = crosses()
+  yes("the first × is red: ${over[0]}", over[0].red > 0xB0 and over[0].red > over[0].blue + 80)
+  same("the other is not", over[1], before[1])
+  comp.dispatch(Event.Hover(5, 10))
+  same("and it goes back when the pointer leaves it", crosses(), before)
+}
+theCloseCrossTurnsRedUnderThePointer()
+
+// addAndRemoveGrowAndShrinkTheTabList
+fun addAndRemoveGrowAndShrinkTheTabList() {
+  val (jt, comp) = tabsOf("A")
+  val i = jt.add("B", Component(Label("B")))
+  same("added at the end", i, 1)
+  same("and brought to the front", jt.active, 1)
+  same("the titles", jt.tabs.map { it.title }, ["A", "B"])
+  jt.remove(1)
+  same("the titles after a remove", jt.tabs.map { it.title }, ["A"])
+  same("the front fell back onto the tab left", jt.active, 0)
+}
+addAndRemoveGrowAndShrinkTheTabList()
+
+// clickingATabBodyFiresOnSelect
+fun clickingATabBodyFiresOnSelect() {
+  val (jt, comp) = tabsOf("Alpha", "Beta")
+  val selected = []
+  jt.onSelect = { i -> selected.add(i) }
+  comp.record(400, 120)
+  comp.dispatch(Event.Click(6, 10))              // inside tab 0's title
+  same("chosen", selected, [0])
+  same("in front", jt.active, 0)
+}
+clickingATabBodyFiresOnSelect()
+
+// withoutTheBarThePaneFillsTheArea: a deck. The pane shown fills the whole area from the top,
+// no titles are drawn, and a click at the top reaches the pane.
+fun withoutTheBarThePaneFillsTheArea() {
+  val (jt, comp) = tabsOf("Alpha", "Beta")
+  jt.showBar = false
+  val selected = []
+  jt.onSelect = { i -> selected.add(i) }
+  jt.active = 1
+  same("only the pane's own label, no titles", texts(comp.record(300, 120)).map { it.text }, ["Beta"])
+  same("the pane from the top", jt.tabs[1].content.bounds.y, 0)
+  same("the pane all the way down", jt.tabs[1].content.bounds.height, 120)
+  comp.dispatch(Event.Click(5, 5))
+  yes("no row of tabs to click ($selected)", selected.isEmpty())
+}
+withoutTheBarThePaneFillsTheArea()
+print("JadeTabsChromeTest:", checks, "checks,", failed)   // expect: JadeTabsChromeTest: 40 checks, []
+
+// -- LayoutPassTest --
+// The layout pass alone places the whole tree, through every container. JadeUI's panels are
+// JadeSheets (not built yet); here grids of labels stand in for them.
+
+fun cellOf(child : Component) : Component => grid { row { cell(child, fill = Fill.both, weightX = 1.0, weightY = 1.0) } }
+fun placed(c : Component) : bool => c.bounds.width > 0 and c.bounds.height > 0
+fun panel() : Component => grid {
+  for (r in 0 ..< 5) { row { for (c in 0 ..< 3) { cell(label("r${r}c$c")) } } }
+}
+
+// aLayoutPassPlacesTabsPanelInsideAGridCell
+fun aLayoutPassPlacesTabsPanelInsideAGridCell() {
+  val p = panel()
+  val root = cellOf(Component(Tabs(["one" to p])))
+  root.layout(500, 320)
+  yes("the front tab's panel is placed by the layout pass, not by painting (${p.bounds})", placed(p))
+}
+aLayoutPassPlacesTabsPanelInsideAGridCell()
+
+// aLayoutPassPlacesSplitPanesInsideAGridCell
+fun aLayoutPassPlacesSplitPanesInsideAGridCell() {
+  val first = panel()
+  val second = label("side")
+  val root = cellOf(Component(Split(first, second)))
+  root.layout(500, 320)
+  yes("both panes are placed by the layout pass (${first.bounds}, ${second.bounds})", placed(first) and placed(second))
+}
+aLayoutPassPlacesSplitPanesInsideAGridCell()
+
+// aLayoutPassPlacesDocumentBlocksInsideAGridCell: waits for the document view (DocView, M10).
+print("LayoutPassTest:", checks, "checks,", failed)   // expect: LayoutPassTest: 42 checks, []
+
+// -- LayoutRequestTest --
+
+fun layoutsCausedBy(action : () -> unit) : int {
+  var n = 0
+  val hook = { n += 1 }
+  Topaz.onLayoutNeeded(hook)
+  try {
+    action()
+  } finally {
+    Topaz.removeLayoutHook(hook)
+  }
+  return n
+}
+
+// replacingTheBlocksAsksForALayout: waits for the document view (DocView, M10).
+// openingAndClosingAPopupAsksForALayout: in tests/topaz_screen.ww.
+
+// addingAndRemovingATabAsksForALayout
+fun addingAndRemovingATabAsksForALayout() {
+  val t = Tabs([])
+  yes("adding a tab asks for a layout", layoutsCausedBy { t.add("one", label("a")) } > 0)
+  yes("removing one asks for a layout", layoutsCausedBy { t.remove(0) } > 0)
+}
+addingAndRemovingATabAsksForALayout()
+
+// switchingTheActiveTabAsksForALayout
+fun switchingTheActiveTabAsksForALayout() {
+  val t = Tabs(["A" to label("a"), "B" to label("b")])
+  yes("choosing a tab lays its panel out", layoutsCausedBy { t.active = 1 } > 0)
+}
+switchingTheActiveTabAsksForALayout()
+print("LayoutRequestTest:", checks, "checks,", failed)   // expect: LayoutRequestTest: 45 checks, []
+
+// -- ContainerCacheTest --
+// JadeUI reads overlayDescendants, internal here. What it decides is whether a container keeps
+// a picture of itself, and that shows: a container that keeps one blits it on the next frame
+// without painting its children, so a child's paintStyle (set as it paints) stays as the test
+// left it. The container is a split, with a label as that probe beside what is tested.
+
+fun keptOnASecondFrame(root : Component, probe : Component) : bool {
+  val target = Surface(300, 120)
+  root.renderInto(target, 300, 120, 1.0, 1.0)
+  val untouched = Style(Color.red, null, false)
+  probe.paintStyle = untouched
+  root.renderInto(target, 300, 120, 1.0, 1.0)
+  return probe.paintStyle == untouched
+}
+
+// aContainerWithATextDescendantIsNotCacheable: a scroll is never kept itself, so here it is put
+// in a split, which may be kept but for the caret below it.
+fun aContainerWithATextDescendantIsNotCacheable() {
+  val editable = Component(Scroll(Component(TextField(SharedTextModel("hi")))))
+  val probe = label("probe")
+  yes("a sub-tree with a caret is counted, so it is never kept", !keptOnASecondFrame(Component(Split(editable, probe)), probe))
+}
+aContainerWithATextDescendantIsNotCacheable()
+
+// aStaticContainerIsCacheable
+fun aStaticContainerIsCacheable() {
+  val probe = label("right")
+  yes("a sub-tree of labels has no caret, so it may be kept", keptOnASecondFrame(Component(Split(label("left"), probe)), probe))
+}
+aStaticContainerIsCacheable()
+
+// parentLinksExistBeforeAnyLayoutOrPaint
+fun parentLinksExistBeforeAnyLayoutOrPaint() {
+  val field = Component(TextField(SharedTextModel("hi")))
+  val inner = Component(Split(field, label("right")))
+  val outer = Component(Scroll(inner))
+  yes("a child is linked when its container is made", field.parent === inner)
+  yes("and so is the container itself", inner.parent === outer)
+}
+parentLinksExistBeforeAnyLayoutOrPaint()
+
+// attachingAndDetachingKeepsTheOverlayCountExact: the tabs in a split beside the probe.
+fun attachingAndDetachingKeepsTheOverlayCountExact() {
+  val t = Tabs([])
+  val probe = label("probe")
+  val root = Component(Split(Component(t), probe))
+  yes("no caret: kept", keptOnASecondFrame(root, probe))
+  t.add("edit", Component(TextField(SharedTextModel("hi"))))   // gains a caret
+  yes("adding an editable tab counts its caret", !keptOnASecondFrame(root, probe))
+  t.remove(0)                                                   // loses it again
+  yes("taking it out takes the count back down, not stuck high", keptOnASecondFrame(root, probe))
+}
+attachingAndDetachingKeepsTheOverlayCountExact()
+
+// aFrozenGridSelfInvalidatesWhenTheScrollPinMoves: waits for the sheet (JadeSheet).
+// anUnfrozenGridDoesNotInvalidateOnScroll: waits for the sheet (JadeSheet).
+print("ContainerCacheTest:", checks, "checks,", failed)   // expect: ContainerCacheTest: 52 checks, []
+
+// -- ToolbarChromeTest --
+
+fun glyph() : Image => Image(16, 16, Color.black)
+
+// aDisabledButtonDoesNotFire
+fun aDisabledButtonDoesNotFire() {
+  var clicks = 0
+  val b = IconButton(glyph(), onClick = { clicks += 1 })
+  val c = Component(b)
+  c.record(30, 30)
+  b.enabled = false
+  c.click(10, 10)
+  same("the click is refused, not queued", clicks, 0)
+}
+aDisabledButtonDoesNotFire()
+
+// anEnabledButtonStillFires
+fun anEnabledButtonStillFires() {
+  var clicks = 0
+  val b = IconButton(glyph(), onClick = { clicks += 1 })
+  val c = Component(b)
+  c.record(30, 30)
+  c.click(10, 10)
+  same("an enabled button fires", clicks, 1)
+}
+anEnabledButtonStillFires()
+
+// aDisabledButtonPaintsFaded
+fun aDisabledButtonPaintsFaded() {
+  val b = IconButton(glyph())
+  val c = Component(b)
+  val opaque = c.renderToImage(30, 30)[15, 15]
+  b.enabled = false
+  val faded = c.renderToImage(30, 30)[15, 15]
+  yes("a disabled glyph looks different from a live one ($opaque, $faded)", faded != opaque)
+}
+aDisabledButtonPaintsFaded()
+
+// disablingMidPressDropsThePress
+fun disablingMidPressDropsThePress() {
+  var clicks = 0
+  val b = IconButton(glyph(), onClick = { clicks += 1 })
+  val c = Component(b)
+  c.record(30, 30)
+  c.dispatch(Event.Click(10, 10))
+  b.enabled = false
+  c.dispatch(Event.Release(10, 10))
+  same("disabled while held: no click on the release", clicks, 0)
+}
+disablingMidPressDropsThePress()
+
+// aDisabledButtonDoesNotPaintAHoverHighlight
+fun aDisabledButtonDoesNotPaintAHoverHighlight() {
+  val b = IconButton(glyph())
+  val c = Component(b)
+  c.record(30, 30)
+  b.enabled = false
+  c.dispatch(Event.Hover(10, 10))
+  val ops = c.record(30, 30)
+  yes("no hover chip under a dead button", !ops.any { it is DrawOp.RoundRect and it.fill })
+}
+aDisabledButtonDoesNotPaintAHoverHighlight()
+
+// aSeparatorDrawsAThinVerticalRule
+fun aSeparatorDrawsAThinVerticalRule() {
+  val ops = Component(ToolbarSeparator()).record(9, 30)
+  val rule = ops.firstOrNull { it is DrawOp.Rect and it.fill } as DrawOp.Rect?
+  yes("a rule is drawn", rule != null)
+  same("one pixel wide", rule?.w, 1)
+  yes("as tall as there is room for, at most (${rule?.h})", rule != null and rule.h >= 1 and rule.h <= 30)
+}
+aSeparatorDrawsAThinVerticalRule()
+
+// aSeparatorIsFixedWidthSoItCannotEatTheToolbar
+fun aSeparatorIsFixedWidthSoItCannotEatTheToolbar() {
+  val s = ToolbarSeparator().sizes()
+  same("it never stretches sideways", s.max.width, s.pref.width)
+}
+aSeparatorIsFixedWidthSoItCannotEatTheToolbar()
+
+fun strip() : Tabs {
+  val t = Tabs(["one" to Component(Label("A")), "two" to Component(Label("B"))])
+  Component(t).record(400, 200)
+  return t
+}
+
+// theTabUnderThePointerIsIdentified
+fun theTabUnderThePointerIsIdentified() {
+  val t = strip()
+  same("the first tab at the left", t.tabAt(5, 5), 0)
+  yes("far right is another tab, or none", t.tabAt(200, 5) != 0)
+}
+theTabUnderThePointerIsIdentified()
+
+// belowTheBarIsNoTab
+same("the panel is not the row of tabs", strip().tabAt(5, 100), -1)
+
+// theHoverTextDefaultsToTheTabsTitle
+same("the tip is the tab's title", strip().tooltipAt(5, 5), "one")
+
+// aHostCanAnswerWithSomethingElse
+fun aHostCanAnswerWithSomethingElse() {
+  val t = strip()
+  t.tabTooltip = { i -> "/some/where/$i.html" }
+  same("the program's own tip", t.tooltipAt(5, 5), "/some/where/0.html")
+}
+aHostCanAnswerWithSomethingElse()
+
+// twoTabsGiveTwoDifferentAnswers: one component, many answers.
+fun twoTabsGiveTwoDifferentAnswers() {
+  val t = strip()
+  t.tabTooltip = { i -> "tab$i" }
+  val first = t.tooltipAt(5, 5)
+  var second : string? = null
+  for (x in 0 ..< 400) {
+    val tip = t.tooltipAt(x, 5)
+    if (second == null and tip != null and tip != first) { second = tip }
+  }
+  same("the second tab's tip", second, "tab1")
+}
+twoTabsGiveTwoDifferentAnswers()
+
+// offTheStripThereIsNoHoverText
+same("no tab, no tip", strip().tooltipAt(5, 100), null)
+print("ToolbarChromeTest:", checks, "checks,", failed)   // expect: ToolbarChromeTest: 68 checks, []
+
+// -- FocusAfterPressTest --
+
+// Holds the keyboard through a press on `holdsFor`, and writes down what it was asked.
+class Holder : Content, FocusTarget, FocusHolder {
+  override var owner : Component? = null
+  var holdsFor : Component? = null
+  val asked = []
+  override fun sizes() => Sizes(Size(10, 10), Size(10, 10), Size(10, 10))
+  override fun paint(canvas : Canvas) {}
+  override fun holdsFocusOnPress(pressed : Component, x : int, y : int) : bool {
+    asked.add([pressed, x, y])
+    return pressed === holdsFor
+  }
+}
+
+// A field, another field in a tab, and a button, as each test of JadeUI's makes afresh.
+class PressRig {
+  val field = Component(TextField(SharedTextModel("text")))
+  val other = Component(TextField(SharedTextModel("other")))
+  val button = Component(Button("Save"))
+  val tabs = Component(Tabs(["A" to other]))
+  val root : Component
+  val drawn : List<DrawOp.Text>
+
+  fun init() {
+    val b = button                       // named apart: in the grid's block `button` is the function
+    val f = field
+    val t = tabs
+    root = grid {
+      row { cell(b) }
+      row { cell(f, fill = Fill.horizontal, weightX = 1.0) }
+      row { cell(t, fill = Fill.both, weightX = 1.0, weightY = 1.0) }
+    }
+    drawn = texts(root.record(400, 300))
+  }
+
+  // Where a text is drawn, in the window: where the host presses.
+  fun at(s : string) : Point {
+    val t = drawn.first { it.text == s }
+    return Point(t.x.toInt() + 2, t.y.toInt() - 3)
+  }
+  fun press(p : Point, focused : Component?) : Component? => focusAfterPress(focused, root.componentPathAt(p.x, p.y), p.x, p.y)
+}
+
+// aPressFocusesOnlyWhatTakesKeys: the button and the row of tabs leave the field with the
+// keyboard; the field and the other field take it.
+fun aPressFocusesOnlyWhatTakesKeys() {
+  val r = PressRig()
+  yes("a text field takes the keyboard", r.press(r.at("text"), null) === r.field)
+  yes("the button leaves it where it was", r.press(r.at("Save"), r.field) === r.field)
+  yes("and so does the row of tabs", r.press(r.at("A"), r.field) === r.field)
+  yes("another field takes it", r.press(r.at("other"), r.field) === r.other)
+  yes("and a button never takes it, even from nothing", r.press(r.at("Save"), null) === null)
+}
+aPressFocusesOnlyWhatTakesKeys()
+
+// aFocusHolderKeepsItThroughThePressesItHolds: told what was pressed, in that one's own
+// coordinates, and let go for any other press.
+fun aFocusHolderKeepsItThroughThePressesItHolds() {
+  val r = PressRig()
+  val h = Holder()
+  h.holdsFor = r.other
+  val holder = Component(h)
+  val o = r.at("other")
+  yes("held through a press on the field it points at", r.press(o, holder) === holder)
+  val path = r.root.componentPathAt(o.x, o.y)!!
+  yes("asked about the field pressed", h.asked.single()[0] === r.other)
+  same("asked in the pressed one's own coordinates", [h.asked.single()[1], h.asked.single()[2]], [o.x - path.offsetX, o.y - path.offsetY])
+  yes("(which differ from the window's here)", path.offsetY > 0)
+  yes("and let go for any other", r.press(r.at("text"), holder) === r.field)
+}
+aFocusHolderKeepsItThroughThePressesItHolds()
+
+// theFormulaBarHoldsItOnlyWhilePointing: waits for the formula bar (FormulaBar).
+print("FocusAfterPressTest:", checks, "checks,", failed)   // expect: FocusAfterPressTest: 78 checks, []
+
+// -- WheelRoutingTest --
+// The legs needing a split or tabs; tests/topaz_scroll.ww has the rest.
+
+fun tall80() : Component => grid {
+  for (i in 0 ..< 80) { row { cell(label("row $i")) } }
+}
+fun scrollOf(c : Component) : Scroll => c.content as Scroll
+
+// the wheel reaches a viewport inside a split
+fun theWheelReachesAViewportInsideASplit() {
+  val viewport = scroll(tall80())
+  val root = split(viewport, label("other"))
+  root.layout(400, 200)
+  root.dispatch(Event.Wheel(50, 100, 60))
+  yes("a split did not route the wheel to its child", scrollOf(viewport).scrollY > 0)
+}
+theWheelReachesAViewportInsideASplit()
+
+// the wheel reaches a viewport inside a tab
+fun theWheelReachesAViewportInsideATab() {
+  val viewport = scroll(tall80())
+  val root = tabs("One" to viewport, "Two" to label("other"))
+  root.layout(300, 300)
+  root.dispatch(Event.Wheel(100, 200, 60))
+  yes("a tab's panel did not route the wheel to its child", scrollOf(viewport).scrollY > 0)
+}
+theWheelReachesAViewportInsideATab()
+
+// the wheel reaches a viewport inside a screen, through a whole application tree: in
+//   tests/topaz_screen.ww.
+print("WheelRoutingTest:", checks, "checks,", failed)   // expect: WheelRoutingTest: 80 checks, []
+
+// -- ScrollRepaintTest --
+// it works through the nesting a real window has: in tests/topaz_screen.ww; the rest is in
+//   tests/topaz_scroll.ww, and the table's in tests/topaz_tables.ww.

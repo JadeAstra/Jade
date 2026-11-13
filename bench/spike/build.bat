@@ -1,5 +1,5 @@
 @echo off
-rem spike.cpp built with clang-cl, as spike.exe beside it (not kept in git): the flags of jade.exe's Release build.
+rem spike.cpp built with clang-cl, as spike.exe beside it (not kept in git): the flags of ww.exe's Release build.
 setlocal
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
