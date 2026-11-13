@@ -1536,6 +1536,7 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::GetOwn:
             case Op::GetProp: {  // u16 name, u16 cache: obj -> value
                 // A byte, int or float field of a value of a value type (B2: read off what an
                 // inline op [] gave); anything else the VM's.
@@ -1543,6 +1544,28 @@ struct Region {
                 const int obj = c.objectSlot(top - 1);
                 const Value& name = constant(u16(x, 0));
                 const ObjClass* const vcls = valueClass(s, obj);
+                if (vcls == nullptr) {
+                    // An object a field holds, read on through (`cells.cells`: the field of what a
+                    // field holds, which the VM reads through for a value kept in the object):
+                    // copied as RGetProp's getpv copies it, where the field held an object as the
+                    // region was made (a copy of an object is the object), and known as RGetProp's
+                    // is, to be looked at once. Anything else the VM's.
+                    Value held;
+                    if (!fieldValue(s, obj, u16(x, 2), -1, held) || held.kind != ValueKind::Obj) island();
+                    c.writeMemory(top - 1);
+                    LOp& l = c.op("getpv");
+                    l.slot = obj;
+                    l.slot2 = top - 1;
+                    l.ki = cacheAddress(u16(x, 2));
+                    l.field = name.isObjType(ObjType::String) ? asString(name) : nullptr;
+                    c.leaves(l);
+                    noteFact(s, top - 1, [&](Fact& f) { f.from = c.i; });
+                    noteFieldValue(s, top - 1, held);
+                    if (held.isObjType(ObjType::List) && asList(held)->store() == ListStore::Items && asList(held)->pack->itemClass != nullptr)
+                        noteItems(s, top - 1, asList(held)->pack->itemClass);
+                    c.fall(s);
+                    return;
+                }
                 const ValueField* const field = name.isObjType(ObjType::String) ? plainField(vcls, u16(x, 2), -1, asString(name)) : nullptr;
                 if (field == nullptr) island();
                 const bool isFloat = field->kind == ValueField::Float, isByte = field->kind == ValueField::Narrow;
@@ -1919,7 +1942,16 @@ struct Region {
         if (inMemory(k)) {
             // Written in memory: a copy, read there; or, read next as a number, loaded and checked.
             int cls = useClass(c.i, to, to >= c.s.top ? to + 1 : c.s.top);
-            if (cls < 0) return copyInMemory(c, from, to);
+            if (cls < 0) {
+                // Pushed for the SET_INDEX right after to set (`cells.cells[i] = color` in a body
+                // put in place, its argument pushed): a copy of the slot, read there, and made in
+                // fact only where the region leaves while it stands, as a slot as entered is.
+                if (to >= c.s.top && c.i + 1 < static_cast<int>(ins.size()) && ins[static_cast<size_t>(c.i + 1)].op == Op::SetIndex) {
+                    c.write(to, K{kCopy, static_cast<int16_t>(from)});
+                    return;
+                }
+                return copyInMemory(c, from, to);
+            }
             const Reg src = c.number(from, static_cast<Cls>(cls), cls == CI), dst{to, static_cast<Cls>(cls)};
             if (!(src == dst)) c.op(cls == CF ? "movf" : "movi", {dst, src}, {src}, {dst});
             c.write(to, K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)});
@@ -2391,7 +2423,8 @@ struct Region {
 
     // A value made in memory, then moved down by one POP_UNDER or more (the end of a body put in
     // place: `val c = grid[x, y]` is an item copied out, then moved over the body's receiver and
-    // indexes, and over Image's as well for `image[x, y]`), is made where it ends up: the step
+    // indexes, and over Image's as well for `image[x, y]`; `image[x, y].red` a Ref to it, read
+    // through), is made where it ends up: the step
     // that makes it, the last of its instruction, writes the slot the last move takes it to, and
     // the moves (a copyslot each, nothing else) go. Only where each POP_UNDER is come to from the
     // instruction before alone, so that nothing reads the slot in between; the slot moved from
@@ -2399,7 +2432,7 @@ struct Region {
     static bool madeAt(const LOp& l, int64_t& slot) {
         if (l.stem == "idxsm") slot = (static_cast<uint64_t>(l.slot2) >> 8) & 0xFFFFFF;
         else if (l.stem == "mksm") slot = static_cast<int64_t>(static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF);
-        else if (l.stem == "getpv") slot = l.slot2;
+        else if (l.stem == "getpv" || l.stem == "iref") slot = l.slot2;
         else return false;
         return true;
     }
@@ -3745,6 +3778,7 @@ bool mayDo(Op op) {
         case Op::OwnLocal:
         case Op::PopUnder:
         case Op::GetProp:
+        case Op::GetOwn:
         case Op::RGetGlobal:
         case Op::RCall:
         case Op::WithDestinationAt:

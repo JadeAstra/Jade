@@ -1365,7 +1365,12 @@ private:
             // Nothing is open to leave: no finally, no try begun in the body.
             const Expr& value = *static_cast<const ReturnStmt&>(*last).value;
             line_ = last->line;
+            // An item given back by index is read as a copy (the checker's reading in place is for
+            // the body's own statement, and the item goes on past it), so nothing need copy it after.
+            const Expr* const savedCopied = copiedIndex_;
+            if (value.kind == ExprKind::Index) copiedIndex_ = &value;
             compileExpr(value);
+            copiedIndex_ = savedCopied;
             line_ = last->line;
             // An item of a list read where it is, given back: a copy (G15), as compileInlineReturn
             // makes. A value made here is one already.
@@ -1389,17 +1394,20 @@ private:
     }
 
     // Whether an expression's value is one of its own, never an item of a list where it is: a
-    // call's, a literal, arithmetic, or an index read in a body put in place (inPlaceOff: a copy).
+    // call's, a literal, arithmetic, or an index read as a copy (copiedIndex_).
     bool madeFresh(const Expr& e) const {
         switch (e.kind) {
             case ExprKind::Literal:
             case ExprKind::Call:
             case ExprKind::Binary:
-            case ExprKind::Unary: return true;
-            case ExprKind::Index: return inPlaceOff();
+            case ExprKind::Unary:
+            case ExprKind::Index: return true;
             default: return false;
         }
     }
+    // An index read as a copy wherever the checker would have it read in place: the item an
+    // inline function's last `return` gives back.
+    const Expr* copiedIndex_ = nullptr;
 
     // `return` in an inline function's body: the value of the call, after the finally blocks
     // entered since it began.
@@ -6773,7 +6781,7 @@ private:
                     emit(Op::IndexN);
                     emitByte(static_cast<uint8_t>(e.more.size() + 1));
                 } else if (e.defaultValue) emit(Op::GetIndexOr);
-                else if (session_.checker != nullptr && !copyReadsHere() && session_.checker->readsInPlace(e)) emit(Op::GetIndexRef);  // M6.6 part 4
+                else if (session_.checker != nullptr && !copyReadsHere() && copiedIndex_ != &e && session_.checker->readsInPlace(e)) emit(Op::GetIndexRef);  // M6.6 part 4
                 else emit(Op::GetIndex);
                 break;
             }

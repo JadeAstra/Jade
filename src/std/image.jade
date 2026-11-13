@@ -805,6 +805,9 @@ class Image : Drawable {
   // Its height, in pixels.
   override var height : int
     private set
+  // Its pixels: a grid of its own, always one that may be changed, of its width and height (made
+  // by init, or handed over new by `of`). op [] and op []= read and set its list where it is,
+  // having checked the pixel is in the image themselves.
   internal var cells : Grid<Color>
   // A number raised by every change, and the rectangle changed since the card's copy was made:
   // what Topaz's native layer sends again (D124).
@@ -893,16 +896,18 @@ class Image : Drawable {
   // -- Its pixels --
 
   // A pixel, as a Color (D141); outside the image an IndexOutOfBoundsException, or null for
-  // getOrNull. Put in place where it is used (B2).
+  // getOrNull. Put in place where it is used (B2), and read from the grid's list where it is:
+  // the pixel checked here once, not again by the grid.
   inline op [](x : int, y : int) : Color {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw outside(x, y) }
-    return cells[x, y]
+    return cells.cells[y * width + x]
   }
   // Sets a pixel to `color`, which takes its place, alpha and all, rather than being laid over it;
-  // an IndexOutOfBoundsException outside the image.
+  // an IndexOutOfBoundsException outside the image. Set in the grid's list where it is, as op []
+  // reads it.
   inline op []=(x : int, y : int, color : Color) {
     if (x < 0 or y < 0 or x >= width or y >= height) { throw outside(x, y) }
-    cells[x, y] = color
+    cells.cells[y * width + x] = color
     changed(x, y, x + 1, y + 1)
   }
   // The pixel at (`x`, `y`), as image[x, y] gives it.
