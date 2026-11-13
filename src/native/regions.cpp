@@ -370,6 +370,7 @@ struct LOp {
     int jumpTo = -1;     // an instruction of the region
     int jumpExit = -1;   // or a way out (an index into the instruction's exits)
     int exit = -1;       // where it leaves for the VM when it cannot do what it does (an exit's index)
+    const ObjString* field = nullptr;  // the field a getp or setp step reads or writes, where its name is known
 };
 
 // A way out: where the VM goes on, and the state there, which says what is written back.
@@ -459,13 +460,14 @@ struct Region {
     // object's layout and a field kept as a value.
     // Where the cache has seen nothing (the read not made yet: a loop inside that has not run),
     // the field named by the instruction's own way, at `slow` in the run code.
-    // The name a GetProp or GetOwn uses, where an R instruction's own way (at `slow`) holds it.
-    const ObjString* slowName(int32_t slow) const {
+    // The name a GetProp or GetOwn uses, where an R instruction's own way (at `slow`) holds it;
+    // with `sets`, a SetProp's or SetOwn's.
+    const ObjString* slowName(int32_t slow, bool sets = false) const {
         if (slow < 0) return nullptr;
         for (size_t at = static_cast<size_t>(slow), n = 0; n < 4 && at + kThreaded + kOpBytes + 2 <= f.run.size(); n++) {
             const uint8_t* const p = f.run.data() + at + kThreaded;
             const Op o = opAt(p);
-            if (o == Op::GetProp || o == Op::GetOwn) {
+            if (sets ? (o == Op::SetProp || o == Op::SetOwn) : (o == Op::GetProp || o == Op::GetOwn)) {
                 const size_t k = static_cast<size_t>(p[kOpBytes] | (p[kOpBytes + 1] << 8));
                 if (k >= f.constants.size() || !f.constants[k].isObjType(ObjType::String)) return nullptr;
                 return asString(f.constants[k]);
@@ -567,9 +569,10 @@ struct Region {
         Value object{};
         const ObjClass* items = nullptr;
         const ObjClass* value = nullptr;
+        int from = -1;  // the instruction whose field read (getpv) put it there: one looked at once is held
         bool operator==(const Fact& o) const {
             return hasObject == o.hasObject && (!hasObject || (object.kind == o.object.kind && object.as.i == o.object.as.i)) && items == o.items &&
-                   value == o.value;
+                   value == o.value && from == o.from;
         }
     };
     mutable std::vector<Fact> facts;
@@ -1799,6 +1802,7 @@ struct Region {
                     c.writeMemory(a);
                     l = &c.op("getpv");
                     l->slot2 = a;
+                    noteFact(s, a, [&](Fact& f) { f.from = c.i; });
                     // A list read from a field: what it holds, for the items read from it.
                     const int held = fieldClass(s, obj, u16(x, 4), i32(x, 6));
                     if (held >= 0) {
@@ -1813,6 +1817,7 @@ struct Region {
                 }
                 l->slot = obj;
                 l->ki = cache;
+                l->field = slowName(i32(x, 6));
                 c.leaves(*l);
                 s.top = u8(x, 2);
                 c.fall(s);
@@ -1855,6 +1860,7 @@ struct Region {
                 LOp& l = c.op(value.cls == CF ? "setpf" : "setpi", {value}, {value});
                 l.slot = obj;
                 l.ki = cache;
+                l.field = slowName(i32(x, 7), true);
                 c.leaves(l);
                 const Reg result{a, value.cls};
                 if (!(result == value)) c.op(value.cls == CF ? "movf" : "movi", {result, value}, {value}, {result});
@@ -2380,17 +2386,93 @@ struct Region {
                 }
     }
 
-    // ---- Lists looked at once ----
+    // ---- Lists and fields looked at once ----
 
     // In a region where nothing is the VM's, nothing can change where a list's items are or how
     // many there are, and it is entered afresh after each way out: each list read or written by
     // index is looked at once as it starts (its kind, its core, its items), and each read and
     // write then checks the index alone. A list as entered, never written in the region, its
-    // slot's own or the one a copy of it is of; at most kRegionLists of them.
+    // slot's own or the one a copy of it is of, or one a field looked at once holds; at most
+    // kRegionLists of them.
     std::vector<LOp> prologue;
     // Looked at where the VM's only work is the way to a return or a throw, which leaves the
     // region for good: no loop made ahead then.
     bool lookedBeforeEnds = false;
+
+    // Whether slot `root` is as entered everywhere in the region: never written in it.
+    bool untouched(int root) const {
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known && !(in[i].kind(root).bits == kEntry && (!results[i].fallsThrough || results[i].after.kind(root).bits == kEntry)))
+                return false;
+        return true;
+    }
+
+    // In such a region, too, a field that no step writes (by its name, of any object: SET_PROP's
+    // setpi and setpf, the only steps that write a field) of an object the region never changes
+    // (a slot as entered, never written in it, or what another such field holds: `image.cells`,
+    // then its `cells`) is the same each time round. Each is read once as the region starts
+    // (lookp, lookph: as getpv reads it, into the context's `held`), and each read of it then
+    // takes it from there with nothing checked but its kind (hgetpi, hgetpf, hgetpv). Another
+    // thread changes nothing meanwhile: one waiting stops the loop at its end, and the region is
+    // entered afresh. At most kRegionFields of them. `heldBy`: each getpv's instruction looked at
+    // so, and where its field is held.
+    void lookAtFieldsOnce(std::map<int, int>& heldBy) {
+        std::vector<const ObjString*> written;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops)
+                if (l.stem == "setpi" || l.stem == "setpf") {
+                    if (l.field == nullptr) return;  // a field not known by its name: none looked at
+                    written.push_back(l.field);
+                }
+        }
+        auto writes = [&](const ObjString* name) {
+            for (const ObjString* w : written)
+                if (w == name || w->utf8() == name->utf8()) return true;
+            return false;
+        };
+        // (source, field) -> where it is held; a source >= 0 a slot, else -2 - k for held k.
+        std::map<std::pair<int, std::string>, int> held;
+        std::map<int, bool> asEntered;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (LOp& l : results[i].ops) {
+                if (l.stem != "getpi" && l.stem != "getpf" && l.stem != "getpv") continue;
+                if (l.field == nullptr || writes(l.field)) continue;
+                const int slot = static_cast<int>(l.slot);
+                const K k = in[i].kind(slot);
+                int source = -1;
+                if (k.bits == kEntry) {
+                    source = slot;
+                } else if ((inMemory(k) || (k.bits & ~kCopies) == 0) && k.src >= 0) {
+                    source = k.src;
+                } else if (const Fact* known = factOf(in[i], slot); known != nullptr && known->from >= 0) {
+                    if (auto h = heldBy.find(known->from); h != heldBy.end()) source = -2 - h->second;
+                }
+                if (source == -1) continue;
+                if (source >= 0) {
+                    auto e = asEntered.find(source);
+                    if (e == asEntered.end()) e = asEntered.emplace(source, untouched(source)).first;
+                    if (!e->second) continue;
+                }
+                const auto key = std::make_pair(source, l.field->utf8());
+                auto found = held.find(key);
+                if (found == held.end()) {
+                    if (static_cast<int>(held.size()) == kRegionFields) continue;
+                    found = held.emplace(key, static_cast<int>(held.size())).first;
+                    LOp look;
+                    look.stem = source >= 0 ? "lookp" : "lookph";
+                    look.slot = source >= 0 ? source : -2 - source;
+                    look.ki = l.ki;  // the place's cache: where the field is in an object of its layout
+                    look.slot2 = found->second;
+                    prologue.push_back(look);
+                }
+                if (l.stem == "getpv") heldBy[static_cast<int>(i)] = found->second;
+                l.stem = "h" + l.stem;
+                l.slot = found->second;
+            }
+        }
+    }
 
     void lookAtListsOnce() {
         for (size_t i = 0; i < ins.size(); i++) {
@@ -2399,22 +2481,29 @@ struct Region {
             lookedBeforeEnds = true;
         }
         if (entries.size() != 1) return;
-        // The slot each list step reads, as entered.
+        std::map<int, int> heldBy;
+        lookAtFieldsOnce(heldBy);
+        // The slot each list step reads, as entered; or -2 - k, where a field held as k holds it.
         auto rootOf = [&](size_t i, int slot) -> int {
             const K k = in[i].kind(slot);
             if (k.bits == kEntry) return slot;
             if ((inMemory(k) || (k.bits & ~kCopies) == 0) && k.src >= 0) return k.src;
+            if (const Fact* known = factOf(in[i], slot); known != nullptr && known->from >= 0)
+                if (auto h = heldBy.find(known->from); h != heldBy.end()) return -2 - h->second;
             return -1;
         };
         auto isRead = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "idxw" || stem == "idxwk"; };
         auto isWrite = [](const std::string& stem) { return stem == "setf" || stem == "setwi" || stem == "setwb"; };
         auto isFloat = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "setf"; };
         // A list of a value type's items (M9.5 B1): its items' fields read, or a Ref to one made,
-        // and the fields of the values those Refs are in read (valp).
-        auto isItems = [](const std::string& stem) { return stem.rfind("idxp", 0) == 0 || stem == "iref" || stem == "iterref"; };
+        // and the fields of the values those Refs are in read (valp); an item copied out, set to
+        // a value, or a Ref to one made to be changed (B2 for op []=).
+        auto isPlain = [](const std::string& stem) { return stem == "idxsm" || stem == "setsm" || stem == "placei"; };
+        auto isItems = [&](const std::string& stem) { return stem.rfind("idxp", 0) == 0 || stem == "iref" || stem == "iterref" || isPlain(stem); };
         // root -> 1 floats, 2 whole numbers, 4 items, 8 an iterator through items; any two not looked at
         std::map<int, int> kindOf;
         std::map<int, const ObjClass*> itemClass;  // root -> its items' class (null for two)
+        std::set<int> plain;                       // roots whose items are copied out or set: none of a type of its own
         std::map<int, int> valueRoot;              // a slot a Ref is made in -> the list's root (-1 for two)
         std::vector<LOp*> values;
         std::vector<std::pair<LOp*, int>> steps;
@@ -2423,10 +2512,11 @@ struct Region {
             for (LOp& l : results[i].ops) {
                 if (isItems(l.stem)) {
                     const int root = rootOf(i, static_cast<int>(l.slot));
-                    if (root < 0) continue;
+                    if (root == -1) continue;
                     kindOf[root] |= l.stem == "iterref" ? 8 : 4;
                     const auto* const cls = reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l.ki));
                     if (auto [it, added] = itemClass.emplace(root, cls); !added && it->second != cls) it->second = nullptr;
+                    if (isPlain(l.stem)) plain.insert(root);
                     if (l.stem == "iterref") {
                         if (auto [it, added] = valueRoot.emplace(static_cast<int>(l.slot2), root); !added && it->second != root) it->second = -1;
                         continue;  // itself as it is: the iterator moves on
@@ -2442,31 +2532,30 @@ struct Region {
                 }
                 if (!isRead(l.stem) && !isWrite(l.stem)) continue;
                 const int root = rootOf(i, static_cast<int>(l.slot));
-                if (root < 0) continue;
+                if (root == -1) continue;
                 kindOf[root] |= isFloat(l.stem) ? 1 : 2;
                 steps.emplace_back(&l, root);
             }
         }
-        // Never written in the region: as entered everywhere.
+        // Never written in the region: as entered everywhere (a field's, as it is held).
         std::map<int, int> index;
         for (const auto& [root, kind] : kindOf) {
             if ((kind != 1 && kind != 2 && kind != 4 && kind != 8) || static_cast<int>(index.size()) == kRegionLists) continue;
+            if (kind == 8 && root < 0) continue;
             const ObjClass* const cls = kind >= 4 ? itemClass[root] : nullptr;
             const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
             if (kind >= 4 && (layout == nullptr || layout->size == 0 || layout->size > 0xFFFF)) continue;
-            bool untouched = true;
-            for (size_t i = 0; i < ins.size() && untouched; i++)
-                if (in[i].known) untouched = in[i].kind(root).bits == kEntry && (!results[i].fallsThrough || results[i].after.kind(root).bits == kEntry);
-            if (!untouched) continue;
+            if (root >= 0 && !untouched(root)) continue;
             const int k = static_cast<int>(index.size());
             index[root] = k;
             LOp look;
             look.stem = kind == 1 ? "lookf" : kind == 2 ? "lookw" : kind == 4 ? "looki" : "lookit";
-            look.slot = root;
+            if (root < 0) look.stem += "h";  // from a field held as -2 - root
+            look.slot = root >= 0 ? root : -2 - root;
             look.ki = k;
             if (kind >= 4) {
                 look.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
-                look.slot2 = static_cast<int64_t>(static_cast<uint64_t>(layout->size) << 32 | static_cast<uint64_t>(k));
+                look.slot2 = static_cast<int64_t>(static_cast<uint64_t>(layout->size) << 32 | (plain.count(root) ? 0x100u : 0u) | static_cast<uint64_t>(k));
             }
             prologue.push_back(look);
         }
@@ -2476,6 +2565,7 @@ struct Region {
             auto k = index.find(root);
             if (k == index.end()) continue;
             if (l->stem.rfind("idxp", 0) == 0) l->slot2 = static_cast<int64_t>(static_cast<uint64_t>(l->slot2) | widthOf(root) << 32);
+            if (isPlain(l->stem)) l->ki = static_cast<int64_t>(widthOf(root));  // the class checked as it was looked at
             l->stem = "h" + l->stem;
             l->slot = k->second;
         }
@@ -2483,7 +2573,7 @@ struct Region {
         // the field is within the first 64 KB of its item.
         for (LOp* l : values) {
             auto v = valueRoot.find(static_cast<int>(l->slot));
-            if (v == valueRoot.end() || v->second < 0) continue;
+            if (v == valueRoot.end() || v->second == -1) continue;
             auto k = index.find(v->second);
             if (k == index.end() || reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l->ki)) != itemClass[v->second]) continue;
             const uint64_t what = static_cast<uint64_t>(l->slot2), offset = what & 0xFFFFFFFF;

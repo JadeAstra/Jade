@@ -54,6 +54,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t lists[24];
     uint64_t t[16];
     const uint8_t* globals;
+    uint64_t held[16];
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -1205,8 +1206,10 @@ I_A(HIDXWK, x)
 // A list of a value type's items looked at once (M9.5 B1), as lookAt: in the context's words 4k
 // to 4k+3, its items' address, how many may be read, how many changed, and the list itself (what
 // a Ref read later must be into). Only a list of the class jade_ki's items, none null, each
-// (jade_slot2 >> 32) bytes wide; anything else leaves all four 0, and every step through them
-// leaves for the VM. jade_slot: the list; jade_slot2 & 0xFF: k.
+// (jade_slot2 >> 32) bytes wide, and with jade_slot2's bit 8, none with a type of its own (items
+// copied out or set as the bytes they are); anything else leaves all four 0, and every step
+// through them leaves for the VM. How many changed: 0 for the object lent to a parallel section,
+// whose parts are the VM's to check. jade_slot: the list; jade_slot2 & 0xFF: k.
 INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
     uint64_t* h = ctx->lists + 4 * (static_cast<uint64_t>(jade_slot2) & 0xFF);
     h[0] = h[1] = h[2] = h[3] = 0;
@@ -1214,14 +1217,84 @@ INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
         const uint8_t* o = s.p;
         const uint8_t* pack = packOf(o, kStoreItems);
         if (pack != nullptr && word<int64_t>(pack + kPackItemClass) == jade_ki &&
-            word<uint32_t>(pack + kPackWidth) == static_cast<uint64_t>(jade_slot2) >> 32) {
+            word<uint32_t>(pack + kPackWidth) == static_cast<uint64_t>(jade_slot2) >> 32 &&
+            ((static_cast<uint64_t>(jade_slot2) & 0x100) == 0 ||
+             (word<const void*>(pack + kPackItemType) == nullptr && word<uint32_t>(pack + kPackTypeSlot) == 0))) {
             const uint64_t count = word<uint64_t>(pack + kPackCount);
             h[0] = word<uint64_t>(pack + kPackBlock);
             if (mayRead(o, ctx)) h[1] = count;
-            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0 && o != ctx->band) h[2] = count;
             h[3] = reinterpret_cast<uint64_t>(o);
         }
     }
+}
+// A field looked at once (of an object the region never changes, a field none of its steps
+// writes): as getpv reads it, into the context's held words 2k and 2k+1 (k: jade_slot2), from the
+// object in slot jade_slot (lookp) or held as jade_slot (lookph), where the place's cache at
+// jade_ki says. One it cannot read so is held as Undefined, and each read of it is the VM's.
+INLINE const Slot& heldSlot(const Ctx* ctx, int64_t k) { return reinterpret_cast<const Slot*>(ctx->held)[k]; }
+INLINE void lookAtField(const Slot& s, Ctx* ctx) {
+    Slot* const held = reinterpret_cast<Slot*>(ctx->held);
+    storeSlot(held, jade_slot2, kKindUndefined, 0);
+    uint64_t seen;
+    const uint8_t* at = fieldAt(s, ctx, false, seen);
+    if (at == nullptr) return;
+    if ((seen & 0x80) != 0) {
+        uint64_t bits;
+        __builtin_memcpy(&bits, at, 8);
+        storeSlot(held, jade_slot2, static_cast<uint8_t>(seen & 3), bits);
+        return;
+    }
+    if (at[0] == kKindRef || at[0] == kKindUndefined) return;
+    __builtin_memcpy(&held[jade_slot2], at, sizeof(Slot));
+}
+STENCIL(lookp) {
+    lookAtField(base[jade_slot], ctx);
+    NEXT;
+}
+STENCIL(lookph) {
+    const Slot from = heldSlot(ctx, jade_slot);
+    lookAtField(from, ctx);
+    NEXT;
+}
+// Reads of a field looked at once (held as jade_slot): its kind checked, nothing else.
+#define HGETPI(a, ...)                                                          \
+    STENCIL(hgetpi_##a) {                                                       \
+        const Slot& h = heldSlot(ctx, jade_slot);                               \
+        if (h.kind != kKindInt) EXIT;                                           \
+        i##a = h.i;                                                             \
+        NEXT;                                                                   \
+    }
+I_A(HGETPI, x)
+#define HGETPF(a, ...)                                                          \
+    STENCIL(hgetpf_##a) {                                                       \
+        const Slot& h = heldSlot(ctx, jade_slot);                               \
+        if (h.kind != kKindFloat) EXIT;                                         \
+        f##a = h.d;                                                             \
+        NEXT;                                                                   \
+    }
+F_A(HGETPF, x)
+STENCIL(hgetpv) {
+    const Slot& h = heldSlot(ctx, jade_slot);
+    if (h.kind == kKindUndefined) EXIT;
+    __builtin_memcpy(&base[jade_slot2], &h, sizeof(Slot));
+    NEXT;
+}
+// Lists a field looked at once holds (held as jade_slot), looked at as a slot's are.
+STENCIL(lookfh) {
+    const Slot from = heldSlot(ctx, jade_slot);
+    lookAt(from, ctx, jade_ki, true);
+    NEXT;
+}
+STENCIL(lookwh) {
+    const Slot from = heldSlot(ctx, jade_slot);
+    lookAt(from, ctx, jade_ki, false);
+    NEXT;
+}
+STENCIL(lookih) {
+    const Slot from = heldSlot(ctx, jade_slot);
+    lookAtItems(from, ctx);
+    NEXT;
 }
 STENCIL(looki) {
     lookAtItems(base[jade_slot], ctx);
@@ -1274,6 +1347,42 @@ F_A(HIDXPF_A, x)
         NEXT;                                                                   \
     }
 I_A(HIREF, x)
+// Items copied out, set, and made a place to be set (idxsm, setsm, placei) through a list of
+// items looked at once (k in jade_slot), each jade_ki bytes wide: the index checked against the
+// count, and a value set its type's; nothing else (the list's class, and that its items have no
+// type of their own, checked as it was looked at).
+#define HIDXSM(c, ...)                                                          \
+    STENCIL(hidxsm_##c) {                                                       \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);                \
+        const uint32_t size = static_cast<uint32_t>(what & 0xFF), id = static_cast<uint32_t>(what >> 32); \
+        const uint8_t* from = reinterpret_cast<const uint8_t*>(h[0]) + i##c * jade_ki; \
+        uint64_t bits = 0;                                                      \
+        for (uint32_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k); \
+        putValue(&base[(what >> 8) & 0xFFFFFF], kKindSmall | static_cast<uint64_t>(id) << 32, bits); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetsm_##c) {                                                       \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);                \
+        const Slot& v = base[what & 0xFFFFFF];                                  \
+        const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v)); \
+        if ((head & 0xFFFFFFFF) == kKindRef && v.p == reinterpret_cast<const uint8_t*>(h[3]) && (head >> 32) == static_cast<uint64_t>(i##c)) NEXT; \
+        if ((head & 0xFF) != kKindSmall || (head >> 32) != what >> 32) EXIT;    \
+        uint8_t* to = reinterpret_cast<uint8_t*>(h[0]) + i##c * jade_ki;        \
+        const uint64_t bits = static_cast<uint64_t>(v.i);                       \
+        for (uint32_t k = 0; k < ((what >> 24) & 0xFF); k++) to[k] = static_cast<uint8_t>(bits >> (8 * k)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hplacei_##c) {                                                      \
+        const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        putValue(&base[jade_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
+        NEXT;                                                                   \
+    }
+I_A(HIDXSM, x)
 // ia (or fa) = a field of the value in slot jade_slot, as valp: a Small value of the type numbered
 // (jade_slot2 >> 32), or a Ref, none deep, to an item of the list looked at once as k (jade_ki);
 // the field (jade_slot2 & 0xFFFF) bytes into an item ((jade_slot2 >> 16) & 0xFFFF) bytes wide.
