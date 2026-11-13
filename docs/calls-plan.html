@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: calls made from native code</h1>
-<p class="lede">Written 2026-11-13, at the user's word ("do 3 and 2", the third of the ways to make loops with calls faster): native code that calls a Jade function or method itself, without leaving the loop for the VM and coming back. A plan with its questions for the user; nothing is built until they are decided. It follows <a href="native-plan.html">the native code plan</a> (M9.5), whose regions it extends; the timings behind it are in <a href="timings.html">timings.html</a> and <a href="M10-speed.html">M10-speed.html</a>. Item 2, more calls put in place automatically (small methods behind a class check, small bodies of a few statements, from other files too), is built meanwhile: what this plan is for is the calls that stay calls.</p>
+<p class="lede">Written 2026-11-13, at the user's word ("do 3 and 2", the third of the ways to make loops with calls faster): native code that calls a Jade function or method itself, without leaving the loop for the VM and coming back. A plan with its questions for the user, all decided 2026-11-13 as recommended but question 3: an exception goes through the region's machine code by unwind information for the stencils, not kept and thrown at the call. It follows <a href="native-plan.html">the native code plan</a> (M9.5), whose regions it extends; the timings behind it are in <a href="timings.html">timings.html</a> and <a href="M10-speed.html">M10-speed.html</a>. Item 2, more calls put in place automatically (small methods behind a class check, small bodies of a few statements, from other files too), is built meanwhile: what this plan is for is the calls that stay calls.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -155,7 +155,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Before the call</strong>, what the callee could see written back: the frame's slots up to the call's arguments (a captured local is read and written through an open upvalue pointing at its slot; the collector reads the slots), and every field held for the loop (<code>putp</code>). The simplest is everything an island's way out would write (question 2).</li>
 <li><strong>The call</strong>, by a helper in C++ called from the step: <code>frame-&gt;ip</code> set to the call's instruction (for stack traces and for a handler in this frame), <code>sp_</code> set past the arguments, then the call made and run to its return. Two ways to run it (question 1): through <code>VM::call</code>, the VM's loop run anew for it; or by a way of its own that pushes the frame as <code>QUICK_CALL</code> does and runs the loop until it returns. The callee's own loops have regions of their own as now, entered from its run code.</li>
 <li><strong>After it</strong>, the result in the call's slot, and what the region keeps in registers loaded again, as a way in loads it; lists and fields looked at once looked at again (question 5).</li>
-<li><strong>An exception</strong> cannot go through the region's machine code: a stencil has no unwind information, and on Windows an exception thrown through it ends the program. The helper catches it, keeps it (<code>RegionContext</code>), and the step leaves at the call's instruction with the exception kept; <code>nativeEnter</code> throws it there, as the call would have, and the VM's <code>run</code> finds the handler as for any throw. Its stack trace was taken where it was thrown, the region's frame at the call's line.</li>
+<li><strong>An exception</strong> cannot go through the region's machine code: a stencil has no unwind information, and on Windows an exception thrown through it ends the program. The helper catches it, keeps it (<code>RegionContext</code>), and the step leaves at the call's instruction with the exception kept; <code>nativeEnter</code> throws it there, as the call would have, and the VM's <code>run</code> finds the handler as for any throw. Its stack trace was taken where it was thrown, the region's frame at the call's line. <strong>Decided otherwise (question 3):</strong> the region's machine code is given unwind information (on Windows a function table for the region's code, RtlAddFunctionTable; on Linux its frame description registered), so that an exception thrown in the callee goes through it to the VM's run as through any C++ frame. The frame's slots are what a handler in the region's own function then sees: with everything written back before a call (question 2) they are right; once only what the callee can see is written back, a call inside a try of the region's own function still writes back everything.</li>
 <li><strong>Waiting and other threads' turns.</strong> A call of a function that may wait (R1) leaves for the VM, as now; a task cannot be set aside with the region's machine code on the C++ stack. Where the attention flag is up or a collection is due, the step leaves too, and the VM's cold way gives the turn or collects, as it does now (question 4).</li>
 <li><strong>Depth.</strong> Each call made from native code is a run of the VM on the C++ stack. Past a depth (question 6) the step leaves, and the VM makes the call as it does now, so that deep recursion through loops ends where it does today.</li>
 </ol>
@@ -212,7 +212,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Leave and come back, made cheaper</strong>: the VM still makes the call, but the region found at once, its context not made anew, its once-looks kept. Smallest; keeps the call's cost and part of the round trip.</li>
 </ul>
 <p><em>Recommended:</em> a way of its own, after the spike times it against <code>VM::call</code>: a call made from native code should cost no more than the VM's quick call, which <code>VM::call</code> is not built for.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: A way of its own, as recommended: the frame pushed as QUICK_CALL pushes it, after the spike times it against VM::call.</span></div>
 </section>
 
 <section class="decision">
@@ -222,7 +222,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Only what the callee can see</strong>: captured locals (slots with an open upvalue), held fields, copies not made yet; numbers in registers that nothing else can see kept there across the call.</li>
 </ul>
 <p><em>Recommended:</em> everything at first (the stores and loads exist and are tested), then only what the callee can see once the step works, as its own step: the second saves most where a loop keeps a few numbers in registers, but needs the slots a closure may see known exactly.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: everything a way out writes back at first, then only what the callee can see as its own step.</span></div>
 </section>
 
 <section class="decision">
@@ -232,7 +232,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Unwind information for the stencils</strong>, so that an exception may go through the region's machine code: a table for every stencil on Windows and Linux, and every way through checked.</li>
 </ul>
 <p><em>Recommended:</em> kept and thrown at the call. It needs nothing of the system's unwinding, and the VM finds the handler as for any throw.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: Not as recommended: unwind information for the stencils, so that an exception goes through the region's machine code; a table for every stencil on Windows and Linux, every way through checked.</span></div>
 </section>
 
 <section class="decision">
@@ -242,7 +242,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Done from native code</strong>: the turn given and the collection made by the helper, the region going on after; a task that waits set aside with native frames under it (not possible as tasks are set aside now).</li>
 </ul>
 <p><em>Recommended:</em> left to the VM. They are rare in a hot loop, and what they do (a task set aside, a turn given) stays exactly as it is.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: left to the VM.</span></div>
 </section>
 
 <section class="decision">
@@ -253,7 +253,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Nothing kept</strong>: once-looks off in a loop with a call, as now.</li>
 </ul>
 <p><em>Recommended:</em> looked at again after each call. It is right whatever the callee does, costs a few loads, and the calls this plan is for (lambdas, overridable methods, large functions) are those the checker knows least about.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: looked at again after each call.</span></div>
 </section>
 
 <section class="decision">
@@ -263,7 +263,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong><code>kMaxNativeDepth</code></strong> (200), as C++ calling Jade has it: past it, a stack overflow where the VM alone would go deeper.</li>
 </ul>
 <p><em>Recommended:</em> a limit of its own, falling back to the VM: recursion goes as deep as it does today, whatever native code does.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: a limit of its own, falling back to the VM.</span></div>
 </section>
 
 <section class="decision">
@@ -273,7 +273,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>C++ functions too</strong>, called by the helper as <code>quickNative</code> calls them.</li>
 </ul>
 <p><em>Recommended:</em> Jade's first. They are what item 2 leaves; the VM's quick way for C++ functions already costs little, and many are steps of native code.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: Jade's first; C++ functions left to the VM.</span></div>
 </section>
 
 <section class="decision">
@@ -283,7 +283,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>No gate</strong>: build it all and time it at the end.</li>
 </ul>
 <p><em>Recommended:</em> a gate, as for native code itself. The whole gain rests on the call costing no more than the VM's, which is not known yet.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-13, the user: As recommended: a gate.</span></div>
 </section>
 
 </section>
