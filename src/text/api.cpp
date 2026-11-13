@@ -260,16 +260,39 @@ void fillPath(const Target& t, const text::Path& downward, uint32_t color, text:
     // A row at a time, only the pixels the shape's edges reach worked on (a slanted line across
     // the picture was its whole box, about 1 ms); the same pixels as rasterize and blendImage.
     const uint32_t red = (color >> 24) & 0xFF, green = (color >> 16) & 0xFF, blue = (color >> 8) & 0xFF, alpha = color & 0xFF;
-    text::rasterizeRows(up, text::kShapeFineness, t.clipTop, t.clipBottom, rule, [&](int row, int left, int count, const uint8_t* coverage) {
-        if (row < t.clipTop || row >= t.clipBottom) return;
-        const int from = std::max(left, t.clipLeft), to = std::min(left + count, t.clipRight);
-        if (from >= to) return;
-        uint8_t* d = t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(from)) * 4;
-        for (int col = from; col < to; col++, d += 4) {
-            const uint32_t c = coverage[col - left];
-            if (c != 0) blendPixel(d, red, green, blue, (c * alpha + 127) / 255);
+    auto lay = [&](const text::Path& path, int fromRow, int toRow, int fromCol, int toCol) {
+        text::rasterizeRows(path, text::kShapeFineness, fromRow, toRow, rule, [&](int row, int left, int count, const uint8_t* coverage) {
+            if (row < fromRow || row >= toRow) return;
+            const int from = std::max(left, fromCol), to = std::min(left + count, toCol);
+            if (from >= to) return;
+            uint8_t* d = t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(from)) * 4;
+            for (int col = from; col < to; col++, d += 4) {
+                const uint32_t c = coverage[col - left];
+                if (c != 0) blendPixel(d, red, green, blue, (c * alpha + 127) / 255);
+            }
+        });
+    };
+    if (text::rasterizesRows(up, t.clipTop, t.clipBottom)) {
+        lay(up, t.clipTop, t.clipBottom, t.clipLeft, t.clipRight);
+        return;
+    }
+    // Too large or too far off for the rasterizer as it is (2026-11-13: drawn as nothing): drawn
+    // in pieces of the clip, at most 4096 pixels each way, the outline cut to each (a pixel round
+    // it to spare, which is not laid on); those it does not reach left out.
+    float minX, minY, maxX, maxY;
+    up.bounds(minX, minY, maxX, maxY);
+    constexpr int kPiece = 4096;
+    for (int r0 = t.clipTop; r0 < t.clipBottom; r0 += kPiece) {
+        const int r1 = std::min(t.clipBottom, r0 + kPiece);
+        if (!(minY < static_cast<float>(-r0) + 1 && maxY > static_cast<float>(-r1) - 1)) continue;  // rows r0 to r1 are y -r1 to -r0, upwards
+        for (int c0 = t.clipLeft; c0 < t.clipRight; c0 += kPiece) {
+            const int c1 = std::min(t.clipRight, c0 + kPiece);
+            if (!(minX < static_cast<float>(c1) + 1 && maxX > static_cast<float>(c0) - 1)) continue;
+            const text::Path piece = text::clipped(up, text::kShapeFineness, static_cast<float>(c0 - 1), static_cast<float>(-r1 - 1),
+                                                   static_cast<float>(c1 + 1), static_cast<float>(-r0 + 1));
+            lay(piece, r0, r1, c0, c1);
         }
-    });
+    }
 }
 
 // A rectangle in pixels, (l, t) to (r, b), clockwise; or anticlockwise to cut it out of another.

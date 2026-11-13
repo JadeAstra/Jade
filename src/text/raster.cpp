@@ -273,6 +273,64 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, F
     return image;
 }
 
+bool rasterizesRows(const Path& path, int fromRow, int toRow) {
+    float minX, minY, maxX, maxY;
+    if (!path.bounds(minX, minY, maxX, maxY)) return true;
+    for (float p : path.points)
+        if (!std::isfinite(p)) return true;
+    const float far = 1 << 24;
+    if (!(minX > -far && maxX < far && minY > -far && maxY < far)) return false;
+    const int left = static_cast<int>(std::floor(minX));
+    const int top = static_cast<int>(std::ceil(maxY));
+    const int width = static_cast<int>(std::ceil(maxX)) - left + 1;
+    const int height = top - static_cast<int>(std::floor(minY)) + 1;
+    const int from = std::max(0, fromRow + top), to = std::min(height, toRow + top);
+    return !(width > 8192 || (from < to && to - from > 8192));
+}
+
+Path clipped(const Path& path, float fineness, float minX, float minY, float maxX, float maxY) {
+    Path out;
+    bool open = false, any = false;
+    float lastX = 0, lastY = 0, endX = 0, endY = 0;
+    auto put = [&](double x, double y) {
+        const float fx = static_cast<float>(std::clamp(x, static_cast<double>(minX), static_cast<double>(maxX)));
+        const float fy = static_cast<float>(std::clamp(y, static_cast<double>(minY), static_cast<double>(maxY)));
+        if (!open) {
+            out.moveTo(fx, fy);
+            open = true;
+        } else if (fx != lastX || fy != lastY) {
+            out.lineTo(fx, fy);
+        }
+        lastX = fx;
+        lastY = fy;
+    };
+    flatten(path, fineness, [&](float x0, float y0, float x1, float y1) {
+        // A piece not starting where the last ended: the next contour.
+        if (!any || x0 != endX || y0 != endY) {
+            if (open) out.close();
+            open = false;
+            put(x0, y0);
+        }
+        any = true;
+        endX = x1;
+        endY = y1;
+        // Where along it the piece crosses a side, in order; between two of them it is all on one
+        // side of each, and its ends pulled onto the box make a straight piece of what it covers.
+        const double ax = x0, ay = y0, dx = static_cast<double>(x1) - x0, dy = static_cast<double>(y1) - y0;
+        double at[6];
+        int n = 0;
+        for (double side : {static_cast<double>(minX), static_cast<double>(maxX)})
+            if ((ax - side) * (ax + dx - side) < 0) at[n++] = (side - ax) / dx;
+        for (double side : {static_cast<double>(minY), static_cast<double>(maxY)})
+            if ((ay - side) * (ay + dy - side) < 0) at[n++] = (side - ay) / dy;
+        std::sort(at, at + n);
+        for (int k = 0; k < n; k++) put(ax + dx * at[k], ay + dy * at[k]);
+        put(x1, y1);
+    });
+    if (open) out.close();
+    return out;
+}
+
 void rasterizeRows(const Path& path, float fineness, int fromRow, int toRow, FillRule rule, const RowSpan& span) {
     // The box, the rows kept and the limits exactly as rasterize's above.
     float minX, minY, maxX, maxY;

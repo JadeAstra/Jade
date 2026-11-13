@@ -57,6 +57,17 @@ GlyphImage rasterize(const Path& path, float fineness, int fromRow, int toRow, F
 // worked on: a slanted line across a big picture costs its length, not its box.
 using RowSpan = std::function<void(int row, int left, int count, const uint8_t* coverage)>;
 void rasterizeRows(const Path& path, float fineness, int fromRow, int toRow, FillRule rule, const RowSpan& span);
+// Whether rasterizeRows takes the outline as it is (2026-11-13): not wider than 8192 pixels, nor
+// with more rows than that from `fromRow` to `toRow`, nor reaching 2^24 pixels out. One with a
+// point that is no number (NaN, infinite) is taken, and drawn as nothing.
+bool rasterizesRows(const Path& path, int fromRow, int toRow);
+// The outline cut to a box, its curves made straight pieces as `fineness` cuts them, each piece
+// cut where it crosses a side of the box and what is outside the box pulled onto it: beside the
+// box, a piece runs up or down the box's side, which adds to the pixels right of it what the
+// piece did; above or below, it runs along the top or bottom, which adds nothing. Every pixel
+// inside the box is covered as it was; the outline's points all lie in the box. For a shape too
+// large or too far off to be rasterized whole (2026-11-13).
+Path clipped(const Path& path, float fineness, float minX, float minY, float maxX, float maxY);
 
 // The same into a box given beforehand, which a colour glyph's layers share: `left` and
 // `top` say where the box sits, as in GlyphImage. Adds nothing if the path is empty.

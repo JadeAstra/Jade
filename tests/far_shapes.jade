@@ -1,0 +1,68 @@
+// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// Shapes far larger than the picture, or reaching far beyond it (2026-11-13): the rasterizer drew
+// nothing of a shape wider than 8192 pixels or with a point 2^24 pixels off; now what of it is on
+// the picture is drawn, cut to the clip first. On an image's canvas and on the card's alike.
+import Topaz.*
+
+fun pictures(scene : (Canvas) -> unit) : List<Image> {
+  val image = Image(120, 100, Color.white)
+  scene(image.canvas())
+  Topaz.windowOpener = HiddenWindowOpener(1)
+  val w = Window(Component(object : Content {
+    override var owner : Component? = null
+    override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))
+    override fun paint(canvas : Canvas) {
+      canvas.color = Color.white
+      canvas.fillRect(0, 0, 120, 100)
+      scene(canvas)
+    }
+  }), "Far shapes", 120, 100)
+  w.show()
+  val host = w.handle as WindowHost
+  host.frame()
+  val card = host.snapshot()
+  w.close()
+  return [image, card]
+}
+// The pixels dark enough to count as drawn, in a rectangle of pixels.
+fun ink(image : Image, x0 : int, y0 : int, x1 : int, y1 : int) : int {
+  var n = 0
+  for (y in y0 ..< y1) {
+    for (x in x0 ..< x1) {
+      val c = image[x, y]
+      if (c.red.toInt() + c.green.toInt() + c.blue.toInt() < 384) { n += 1 }
+    }
+  }
+  return n
+}
+fun show(name : string, scene : (Canvas) -> unit) {
+  val pics = pictures(scene)
+  print(name, ink(pics[0], 0, 0, 120, 100), ink(pics[1], 0, 0, 120, 100))
+}
+
+// An oval 200,000 pixels across, the picture inside it: all of it.
+show("huge oval") { c ->
+  c.color = Color.black
+  c.fillOval(-100000, -100000, 200120, 200100)
+}   // expect: huge oval 12000 12000
+// Its edge across the picture: the half below the line through its middle.
+show("huge oval's edge") { c ->
+  c.color = Color.black
+  c.fillOval(-100000, 50, 200120, 200000)
+}   // expect: huge oval's edge 6000 6000
+// A triangle with a point a million pixels off to the right: the wedge from the left.
+show("far point") { c ->
+  c.color = Color.black
+  c.fillPolygon([10, 1000000, 10], [10, 50, 90])
+}   // expect: far point 8800 8800
+// A thick line 40,000 pixels long across the picture.
+show("long line") { c ->
+  c.color = Color.black
+  c.lineWidth = 6
+  c.drawLine(-20000, 50, 20000, 50)
+}   // expect: long line 720 720
+// A path all of it far off: nothing.
+show("far off") { c ->
+  c.color = Color.black
+  c.fill(Path().moveTo(1e7, 1e7).lineTo(1e7 + 50, 1e7).lineTo(1e7, 1e7 + 50).close())
+}   // expect: far off 0 0

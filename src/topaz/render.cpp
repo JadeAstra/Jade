@@ -506,7 +506,18 @@ void Renderer::polygon(const std::vector<float>& points, uint32_t rgba) {
     shape(path, rgba);
 }
 
-void Renderer::shape(const text::Path& downward, uint32_t rgba, text::FillRule rule) {
+void Renderer::shape(const text::Path& given, uint32_t rgba, text::FillRule rule) {
+    if (given.points.size() < 6) return;
+    // Too large for the rasterizer, or far off (2026-11-13: drawn as nothing): cut to the clip,
+    // a pixel round it to spare, every pixel inside it covered as it was.
+    text::Path cut;
+    {
+        float gx0, gy0, gx1, gy1;
+        given.bounds(gx0, gy0, gx1, gy1);
+        if (!(gx1 - gx0 < 8000 && gy1 - gy0 < 8000) && std::isfinite(gx0) && std::isfinite(gy0) && std::isfinite(gx1) && std::isfinite(gy1))
+            cut = text::clipped(given, text::kShapeFineness, clip_[0] - 1, clip_[1] - 1, clip_[2] + 1, clip_[3] + 1);
+    }
+    const text::Path& downward = cut.empty() ? given : cut;
     const std::vector<float>& points = downward.points;
     if (points.size() < 6) return;
     float minX = points[0], minY = points[1], maxX = minX, maxY = minY;
