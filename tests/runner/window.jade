@@ -400,7 +400,16 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
         print(all)
         Program.output.flush()
         if (report != null) {
-          try { report!!.writeText(all + "\n") } catch (e : IOException) { print("could not write the report:", e.message) }
+          // Written whole as the run ends, the window left open where something failed: a file
+          // beside it, then moved into place, so that whatever waits for the report (rather
+          // than for the window to close) never reads half of it.
+          try {
+            val part = FilePath("${report!!}.part")
+            part.writeText(all + "\n")
+            part.moveTo(report!!, overwrite = true)
+          } catch (e : IOException) {
+            print("could not write the report:", e.message)
+          }
         }
         dirty = true
         if (allPassed and closeAfter >= 0) { EventLoop.after(closeAfter.seconds) { window.close() } }

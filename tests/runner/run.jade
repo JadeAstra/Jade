@@ -22,7 +22,9 @@
 //   --run                 (window) start at once; when the run ends, print what it gave as the
 //                         console does, and close the window after --close-after seconds where
 //                         everything passed (it stays open where something failed)
-//   --report <file>       (window, with --run) what the run gave written there too, once it ends
+//   --report <file>       (window, with --run) what the run gave written there too, once it ends,
+//                         whole (moved into place), while the window stays open where something
+//                         failed: wait for the file, not for the window to close
 //   --close-after <s>     (window, with --run) 10 if not given; -1 keeps it open
 //   --snapshot <png>      (window) a test of the window: hidden, it runs the checks, saves a
 //                         picture of itself and ends
