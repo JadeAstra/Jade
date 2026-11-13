@@ -2950,9 +2950,15 @@ struct Region {
             const Expr* b = nullptr;
         };
         Cmp last;
-        // Item Refs made into slots (hiref): the list and the index; and the slots the body writes
-        // values into, beside its registers (each a temporary of the VM's stack).
-        std::map<int64_t, std::pair<int, const Expr*>> refs;
+        // Items in slots: a Ref (hiref) or a copy (hidxsm, and copyslot of either), by the list,
+        // the index and the item's width where known; and the slots the body writes values into,
+        // beside its registers (each a temporary of the VM's stack, or a variable of the body's).
+        struct Ref {
+            int list;
+            const Expr* index;
+            int64_t width;
+        };
+        std::map<int64_t, Ref> refs;
         std::vector<int64_t> slots;
     };
     const Expr* valueOf(Followed& fw, const Reg& r) {
@@ -3024,18 +3030,46 @@ struct Region {
         }
         if (s == "hgetpv") return fw.slots.push_back(l.slot2), true;
         if (s == "hiref") {
-            fw.refs[l.slot2] = {static_cast<int>(l.slot), valueOf(fw, n[0])};
+            fw.refs[l.slot2] = Followed::Ref{static_cast<int>(l.slot), valueOf(fw, n[0]), 0};
             fw.slots.push_back(l.slot2);
             return true;
         }
+        if (s == "hidxsm") {  // an item copied out into a slot: its fields as an item's (2026-11-13)
+            const int64_t to = (l.slot2 >> 8) & 0xFFFFFF;
+            fw.refs[to] = Followed::Ref{static_cast<int>(l.slot), valueOf(fw, n[0]), l.ki};
+            fw.slots.push_back(to);
+            return true;
+        }
+        if (s == "copyslot") {
+            auto from = fw.refs.find(l.slot2);
+            if (from == fw.refs.end()) return false;
+            const Followed::Ref copied = from->second;
+            fw.refs[l.slot] = copied;
+            fw.slots.push_back(l.slot);
+            return true;
+        }
+        // On an item in a slot: nothing to the item (it is no place of the frame's, never null).
+        if (s == "keepl" || s == "ownsm" || s == "notnull") return fw.refs.count(l.slot) != 0;
         if (s == "hvalpb" || s == "hvalpi") {
             auto ref = fw.refs.find(l.slot);
-            if (ref == fw.refs.end() || ref->second.first != l.ki) return false;
+            if (ref == fw.refs.end()) return false;
+            if (ref->second.list == -2) ref->second.list = static_cast<int>(l.ki);  // the iterated list, looked at once as k
+            if (ref->second.list != l.ki) return false;
             const uint64_t what = static_cast<uint64_t>(l.slot2);
             Expr e{Expr::Field};
-            e.list = ref->second.first;
-            e.b = ref->second.second;
+            e.list = ref->second.list;
+            e.b = ref->second.index;
             e.ki = static_cast<int64_t>(((what >> 16) & 0xFFFF) << 32 | (what & 0xFFFF) << 8 | (s == "hvalpb" ? 1u : 8u));
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "valpb" || s == "valpi") {
+            auto ref = fw.refs.find(l.slot);
+            const uint64_t offset = static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF;
+            if (ref == fw.refs.end() || ref->second.width <= 0 || ref->second.width > 0xFFFF || offset >= 0xFFFFFF) return false;
+            Expr e{Expr::Field};
+            e.list = ref->second.list;
+            e.b = ref->second.index;
+            e.ki = static_cast<int64_t>(static_cast<uint64_t>(ref->second.width) << 32 | offset << 8 | (s == "valpb" ? 1u : 8u));
             return set(n[0], mk(e)), true;
         }
         if (s == "shrik") {
@@ -3078,7 +3112,8 @@ struct Region {
         int baseMode = 0;                   // kLoopWSumField: base + counter, base none (0), a (1), a * b (2)
         const Expr* baseA = nullptr;
         const Expr* baseB = nullptr;
-        int64_t field = 0;
+        std::vector<int64_t> fields;  // kLoopWSumField: each field's width, offset and size
+        int64_t iterSlot = -1;        // a for over a list of items: the iterator's slot
     };
 
     // An item's index of base + counter, base none, an operand, or one operand times another.
@@ -3171,13 +3206,21 @@ struct Region {
     // The loop from head h (its RangeNext, the step 1) to its Loop e: a template where it fits.
     bool recognise(int h, int e, Ahead& ah, Reg& next, Reg& left) {
         const Result& head = results[static_cast<size_t>(h)];
-        if (head.ops.size() != 4 || head.ops[0].stem != "jngtik" || head.ops[2].stem != "movi" || head.ops[3].stem != "addwik" || head.ops[3].ki != 1)
-            return false;
-        left = head.ops[0].named[0];
-        const Reg counter = head.ops[2].named[0];
-        next = head.ops[2].named[1];
         Followed fw;
-        {
+        Reg counter{-101, CI};
+        if (head.ops.size() == 1 && head.ops[0].stem == "iterref") {
+            // A for over a list of items, each a Ref (2026-11-13): the counter the item's index,
+            // which the template reads from the iterator and leaves it at.
+            ah.iterSlot = head.ops[0].slot;
+            next = left = Reg{-100, CI};
+            Expr c{Expr::Counter};
+            fw.refs[head.ops[0].slot2] = Followed::Ref{-2, mk(c), 0};
+        } else {
+            if (head.ops.size() != 4 || head.ops[0].stem != "jngtik" || head.ops[2].stem != "movi" || head.ops[3].stem != "addwik" || head.ops[3].ki != 1)
+                return false;
+            left = head.ops[0].named[0];
+            counter = head.ops[2].named[0];
+            next = head.ops[2].named[1];
             Expr c{Expr::Counter};
             fw.val[counter] = mk(c);
         }
@@ -3279,10 +3322,9 @@ struct Region {
                         continue;
                     }
                     if (&l != &r.ops.back()) return false;
-                    // Every instruction it falls into on the way to a throw or a return (one after
-                    // an island, which the analysis never reaches, as well).
-                    for (int u = i + 1; u < l.jumpTo; u++)
-                        if (!endingAt(u)) return false;
+                    // What it falls into where a comparison holds (a way to a throw or a return, or
+                    // getOrNull's null, joining later) is never run where the template runs: it
+                    // runs only where none of them holds anywhere in the loop.
                     if (l.jumpTo == i + 1) return false;
                     ah.guards.insert(ah.guards.end(), pending.begin(), pending.end());
                     pending.clear();
@@ -3339,12 +3381,25 @@ struct Region {
                 ah.a = v->b->list;
                 return true;
             }
-            // A field of items at base + counter (2026-11-13: image[x, y].red).
-            if (ah.acc.cls == CI && v->b->kind == Expr::Field && fieldIndex(v->b->b, ah) && !changed(ah.baseA) && !changed(ah.baseB)) {
-                ah.shape = 15;  // kLoopWSumField
-                ah.a = v->b->list;
-                ah.field = v->b->ki;
-                return true;
+            // Fields of items at base + counter (2026-11-13: image[x, y].red): one, or up to four
+            // bytes of one item added together (a pixel's four parts).
+            std::vector<const Expr*> parts;
+            std::function<bool(const Expr*)> fields = [&](const Expr* f) -> bool {
+                if (f->kind == Expr::Field) return parts.push_back(f), true;
+                return f->kind == Expr::Bin && f->op == '+' && f->cls == CI && fields(f->a) && fields(f->b);
+            };
+            if (ah.acc.cls == CI && fields(v->b) && !parts.empty() && parts.size() <= 4) {
+                bool fit = fieldIndex(parts[0]->b, ah) && !changed(ah.baseA) && !changed(ah.baseB);
+                for (const Expr* p : parts)
+                    fit = fit && p->list == parts[0]->list && same(p->b, parts[0]->b) && ((p->ki >> 32) == (parts[0]->ki >> 32)) &&
+                          (parts.size() == 1 || (p->ki & 0xFF) == 1);
+                if (fit && ah.iterSlot >= 0 && ah.baseMode != 0) fit = false;
+                if (fit) {
+                    ah.shape = ah.iterSlot >= 0 ? 16 /* kLoopWIterSumField */ : 15 /* kLoopWSumField */;
+                    ah.a = parts[0]->list;
+                    for (const Expr* p : parts) ah.fields.push_back(p->ki);
+                    return true;
+                }
             }
             // Whole numbers at counter * K + C (2026-11-13): one part of each pixel's four, say.
             int64_t stride = 0, offset = 0;
@@ -3357,9 +3412,18 @@ struct Region {
         if (mix(fw, ah)) return true;
         if (fw.stores.size() != 1) return false;
         const Followed::Store& st = fw.stores[0];
-        if (st.index->kind != Expr::Counter) return false;
+        if (st.index->kind != Expr::Counter || ah.iterSlot >= 0) return false;
         ah.out = st.list;
         const Expr* v = st.value;
+        // A field of each item, a byte, into a list of bytes or ints at the same index (2026-11-13:
+        // pixels.map { it.red }).
+        if ((st.stem == "hsetwb" || st.stem == "hsetwi") && v->kind == Expr::Field && (v->ki & 0xFF) == 1 && fieldIndex(v->b, ah) && ah.baseMode == 0) {
+            ah.shape = 17;  // kLoopWField
+            ah.a = v->list;
+            ah.fields = {v->ki};
+            ah.bytesOut = st.stem == "hsetwb";
+            return true;
+        }
         if (st.stem == "hsetf") {
             auto bin = [&](const Expr* e, char op) { return e->kind == Expr::Bin && e->cls == CF && e->op == op; };
             if (itemAtCounter(v, CF)) {
@@ -3511,11 +3575,12 @@ struct Region {
             operandWords(at + 1, ah.guards[g].a);
             operandWords(at + 3, ah.guards[g].b);
         }
-        if (ah.shape == 15) {
+        if (ah.shape >= 15 && ah.shape <= 17) {
             word(40, ah.baseMode);
             if (ah.baseMode >= 1) operandWords(41, ah.baseA);
             if (ah.baseMode == 2) operandWords(43, ah.baseB);
-            word(45, ah.field);
+            for (size_t k = 0; k < ah.fields.size(); k++) word(45 + static_cast<int>(k), ah.fields[k]);
+            word(49, static_cast<int64_t>(ah.fields.size()));
         }
         word(0, static_cast<int64_t>(ah.shape));
         word(4, ah.out), word(5, ah.a), word(6, ah.b);
@@ -3525,12 +3590,16 @@ struct Region {
         if (ah.p1 != nullptr && !param(7, ah.p1)) return false;
         if (ah.p2 != nullptr && !param(8, ah.p2)) return false;
         if (ah.addend != nullptr) store(8, ah.addend->reg);
-        store(1, next), store(2, left);
+        if (ah.iterSlot >= 0) {
+            word(50, ah.iterSlot);
+        } else {
+            store(1, next), store(2, left);
+        }
         if (ah.hasAcc) store(3, ah.acc);
         LOp run;
         run.stem = "tloop";
         ops.push_back(run);
-        load(1, next), load(2, left);
+        if (ah.iterSlot < 0) load(1, next), load(2, left);
         if (ah.hasAcc) load(3, ah.acc);
         return true;
     }
@@ -3551,7 +3620,7 @@ struct Region {
             if (!in[e].known || ins[e].op != Op::Loop) continue;
             const LOp& back = results[e].ops.back();
             const int h = back.jumpTo;
-            if (h < 0 || static_cast<size_t>(h) >= e || ins[static_cast<size_t>(h)].op != Op::RangeNext) continue;
+            if (h < 0 || static_cast<size_t>(h) >= e || (ins[static_cast<size_t>(h)].op != Op::RangeNext && ins[static_cast<size_t>(h)].op != Op::IterNextRef)) continue;
             // Entered by falling in from the instruction before alone (or the region's start).
             bool alone = true;
             for (size_t i = 0; i < ins.size() && alone; i++) {

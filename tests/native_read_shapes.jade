@@ -1,0 +1,89 @@
+// The ways of reading pixels in timings.html, run whole by native code's loop templates
+// (2026-11-13): a copy of an item (val c = image[x, y], get, a grid's op []) and its fields, up to
+// four bytes of one item added together, getOrNull's other way (null, then !!) as a guard, a for
+// over a list of items (the iterator read and left at the end), and a byte field of each item into
+// another list (map). The same answers and errors as the VM's. Each loop runs three times (its
+// region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+val im = Image(50, 30)
+im.editPixels { g ->
+  for (y in 0 ..< 30) { for (x in 0 ..< 50) { g[x, y] = Color((x * 7 + y) % 256, (y * 11 + x * 3) % 256, (x * y) % 256, 255 - (x + y) % 50) } }
+}
+
+fun four(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      t += c.red + c.green + c.blue + c.alpha
+    }
+  }
+  return t
+}
+fun three(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      t += c.blue + c.red + c.blue
+    }
+  }
+  return t
+}
+fun gets(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im.get(x, y).green } }
+  return t
+}
+fun grids(g : Grid<Color>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) { for (x in 0 ..< g.width) { t += g[x, y].alpha } }
+  return t
+}
+print(thrice { four(im) }, thrice { three(im) }, thrice { gets(im) }, thrice { grids(im.pixels) })   // expect: 853045 484078 183612 345750
+
+// getOrNull: inside, its pixel; outside, null, which !! throws at.
+fun orNull(im : Image, more : int) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width + more) { t += im.getOrNull(x, y)!!.red } }
+  return t
+}
+print(thrice { orNull(im, 0) }, failing { thrice { orNull(im, 1) } })   // expect: 163288 NullPointerException: '!!' was used on a value that is null
+
+// A for over a list of colours: whole, empty, and a total that overflows at its item.
+fun reds(xs : List<Color>, start : int) : int {
+  var t = start
+  for (c in xs) { t += c.red }
+  return t
+}
+val colors = im.pixels.toList()
+val empty : List<Color> = []
+print(thrice { reds(colors, 0) }, thrice { reds(empty, 5) })   // expect: 163288 5
+val total = reds(colors, 0)
+print(thrice { reds(colors, 9223372036854775807 - total) }, failing { thrice { reds(colors, 9223372036854775807 - total + 1) } })   // expect: 9223372036854775807 ArithmeticException: 9223372036854775692 + 116 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around
+
+// map: a byte field into bytes, and into ints.
+fun alphas(g : Grid<Color>) : Grid<byte> => g.map { it.alpha }
+fun greens(g : Grid<Color>) : Grid<int> => g.map { it.green.toInt() }
+val a = thrice { alphas(im.pixels) } as Grid<byte>
+val gr = thrice { greens(im.pixels) } as Grid<int>
+print(a.hashCode(), a[0, 0], a[49, 29], gr.hashCode(), gr[3, 4], gr[49, 29])   // expect: -1452113673 255 227 -1928636924 53 210
+
+// A value type of ints: its field is no byte, and stays the loop's own steps'.
+value Pair2(val a : int, val b : int)
+val ps = Grid<Pair2>(10, 10, fill = Pair2(1, 2))
+fun bs(g : Grid<Pair2>) : Grid<int> => g.map { it.b * 3 }
+print((thrice { bs(ps) } as Grid<int>).hashCode())   // expect: -1006719695

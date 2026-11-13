@@ -1560,7 +1560,7 @@ F_A(HVALPF, x)
 // operations, in the same order, as the steps would: the same answer to the bit.
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
-    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -1680,6 +1680,20 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     if (t[14] != ~uint64_t{0}) {
         const uint8_t k = base[t[14]].kind;
         if (t[15] == 1 ? k != kKindFloat : t[15] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
+    }
+    // A for over a list of items (word 50 the iterator's slot): from the iterator's index to the
+    // list's end, the list the one looked at once as word 5's; the iterator left after the last
+    // item done (2026-11-13).
+    uint8_t* iterator = nullptr;
+    if (t[0] == kLoopWIterSumField) {
+        const uint8_t* list;
+        iterator = listIterator(base[t[50]], list);
+        const Items items = itemsOf(ctx, 1);
+        if (iterator == nullptr || list == ctx->band || !items.ok() || reinterpret_cast<const uint8_t*>(items.h[3]) != list) return;
+        const uint64_t index = word<uint64_t>(iterator + kIterIndex);
+        if (index >= items.h[1]) return;
+        t[1] = index;
+        t[2] = items.h[1] - index;
     }
     const int64_t next = static_cast<int64_t>(t[1]), left = static_cast<int64_t>(t[2]);
     if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
@@ -1901,11 +1915,29 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             break;
         }
+        case kLoopWField: {
+            // A byte field of each item into bytes or ints at the same index (pixels.map { it.red }).
+            if (!a.ok() || !out.ok() || (out.kind() != 1 && out.kind() != 3)) return;
+            const uint64_t f = t[45], width = f >> 32, offset = (f >> 8) & 0xFFFFFF;
+            if ((f & 0xFF) != 1 || width == 0 || offset >= width || static_cast<uint64_t>(end) > a.h[1] || static_cast<uint64_t>(end) > out.h[2]) return;
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + offset;
+            if (out.kind() == 3) {
+                uint8_t* o = out.bytes();
+                if (width == 4) for (int64_t j = next; j < end; j++) o[j] = x[j * 4];
+                else for (int64_t j = next; j < end; j++) o[j] = x[static_cast<uint64_t>(j) * width];
+            } else {
+                int64_t* o = out.ints();
+                for (int64_t j = next; j < end; j++) o[j] = x[static_cast<uint64_t>(j) * width];
+            }
+            break;
+        }
+        case kLoopWIterSumField:
         case kLoopWSumField: {
             // A total of a field of items of a list looked at once (2026-11-13: image[x, y].red), the
             // items at base + counter: base from words 40 to 44 (0 none, 1 an operand, 2 one times
-            // another, each two words); word 45 the item's width (high half), the field's offset
-            // (bits 8 on) and 1 for a byte, 8 for an int. An overflow stops it before the item.
+            // another, each two words); words 45 to 48 each field's item width (high half), offset
+            // (bits 8 on) and size (1 a byte, 8 an int); word 49 how many fields, more than one
+            // bytes alone, added together for each item. An overflow stops it before the item.
             if (!a.ok()) return;
             int64_t at = 0;
             if (t[40] == 1 || t[40] == 2) {
@@ -1923,6 +1955,42 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             if (width == 0 || offset + size > width) return;
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * width + offset;
             int64_t acc = static_cast<int64_t>(t[3]);
+            const uint64_t fields = t[49];
+            if (fields > 1) {
+                // Bytes of each item added together, then to the total.
+                if (fields > 4) return;
+                uint64_t at[4] = {0, 0, 0, 0};
+                for (uint64_t k = 0; k < fields; k++) {
+                    const uint64_t f = t[45 + k];
+                    if ((f >> 32) != width || (f & 0xFF) != 1 || ((f >> 8) & 0xFFFFFF) >= width) return;
+                    at[k] = (f >> 8) & 0xFFFFFF;
+                }
+                const uint8_t* p = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * width;
+                const int64_t most = 255 * static_cast<int64_t>(fields);
+                if (left <= INT64_MAX / most && acc <= INT64_MAX - most * left) {
+                    int64_t s = 0;
+                    if (width == 4 && fields == 4 && at[0] + at[1] + at[2] + at[3] == 6 && at[0] != at[1] && at[0] != at[2] && at[0] != at[3] &&
+                        at[1] != at[2] && at[1] != at[3] && at[2] != at[3])
+                        for (int64_t j = 0; j < left * 4; j++) s += p[j];  // every byte of every item, once
+                    else
+                        for (int64_t j = 0; j < left; j++)
+                            for (uint64_t k = 0; k < fields; k++) s += p[static_cast<uint64_t>(j) * width + at[k]];
+                    acc += s;
+                } else {
+                    for (int64_t j = 0; j < left; j++) {
+                        int64_t item = 0;
+                        for (uint64_t k = 0; k < fields; k++) item += p[static_cast<uint64_t>(j) * width + at[k]];
+                        int64_t s;
+                        if (__builtin_add_overflow(acc, item, &s)) {
+                            done = j;
+                            break;
+                        }
+                        acc = s;
+                    }
+                }
+                t[3] = static_cast<uint64_t>(acc);
+                break;
+            }
             if (size == 1) {
                 if (left <= INT64_MAX / 255 && acc <= INT64_MAX - 255 * left) {
                     int64_t s = 0;
@@ -2070,6 +2138,10 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     }
     t[1] = static_cast<uint64_t>(next + done);
     t[2] = static_cast<uint64_t>(left - done);
+    if (iterator != nullptr) {
+        const uint64_t at = static_cast<uint64_t>(next + done);
+        __builtin_memcpy(iterator + kIterIndex, &at, 8);
+    }
 }
 #undef reads
 #undef writes

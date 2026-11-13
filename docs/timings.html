@@ -114,18 +114,18 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tbody>
 <tr class="has-note slow"><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">3.3</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
 <tr class="note-row slow"><td colspan="6">Inline op [], the pixel read where it is; was 67.2 ms, 25 steps a pixel, most of them the check that (x, y) is in the image. Now native code runs the inner loop whole as a loop template (2026-11-13): a total of a field of items at base + counter (here <code>y * width + x</code>), and loop templates now take bodies holding a guard, a way to a throw or a return on a condition (op []'s check, or an <code>if</code> that throws), checking first that the guard holds nowhere from the loop's first counter to its last; where it might, the loop's own steps run and throw at the pixel they would.</td></tr>
-<tr class="has-note"><td class="op"><code>val c = image[x, y]</code>, four parts</td><td class="num">121.5</td><td class="num">119.3</td><td class="num">9.9</td><td class="num">5.4</td><td class="num">22×</td></tr>
-<tr class="note-row"><td colspan="6">As above, the colour copied out once.</td></tr>
-<tr class="has-note"><td class="op"><code>pixels[x, y].red</code></td><td class="num">92.4</td><td class="num">85.8</td><td class="num">7.2</td><td class="num">3.3</td><td class="num">26×</td></tr>
-<tr class="note-row"><td colspan="6">Grid's inline op [].</td></tr>
-<tr class="has-note"><td class="op"><code>pixels.toList()</code>, then <code>for (c in list)</code></td><td class="num">54.5</td><td class="num">52.2</td><td class="num">4.4</td><td class="num">11.9</td><td class="num">4.4×</td></tr>
-<tr class="note-row"><td colspan="6">One copy of the list, then the fastest loop there is over Colors.</td></tr>
-<tr class="has-note slow"><td class="op"><code>image.get(x, y).red</code></td><td class="num">973.6</td><td class="num">94.6</td><td class="num">7.9</td><td class="num">3.3</td><td class="num">29×</td></tr>
-<tr class="note-row slow"><td colspan="6">Was a call for each pixel (only a top-level function in the same file is put in place by itself). Now <code>inline</code>.</td></tr>
-<tr class="has-note slow"><td class="op"><code>image.getOrNull(x, y)!!.red</code></td><td class="num">1204.7</td><td class="num">137.1</td><td class="num">11.4</td><td class="num">3.3</td><td class="num">42×</td></tr>
-<tr class="note-row slow"><td colspan="6">Was two calls for each pixel. Now inline, and native code does <code>!!</code> and knows a value that is a colour or null.</td></tr>
-<tr class="has-note slow"><td class="op"><code>pixels.map { it.red }</code></td><td class="num">500.6</td><td class="num">95.5</td><td class="num">8.0</td><td class="num">6.1</td><td class="num">16×</td></tr>
-<tr class="note-row slow"><td colspan="6">Was a call of the lambda for each pixel. Now <code>map</code> is inline, the new grid's cells made first and set by index; and native code now does loops over a <code>List&lt;byte&gt;</code> (the result's cells), which it left to the VM item by item.</td></tr>
+<tr class="has-note slow"><td class="op"><code>val c = image[x, y]</code>, four parts</td><td class="num">121.5</td><td class="num">5.5</td><td class="num">0.5</td><td class="num">5.4</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="6">As above, the colour copied out once. Was 119.3 ms. Now run whole by a loop template: the copy followed as an item of the pixels (hidxsm, valpb), up to four bytes of one item added together, the bounds check a guard checked first (2026-11-13).</td></tr>
+<tr class="has-note slow"><td class="op"><code>pixels[x, y].red</code></td><td class="num">92.4</td><td class="num">3.2</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="6">Grid's inline op []. Was 85.8 ms. Now run whole by a loop template, as image[x, y].red (2026-11-13).</td></tr>
+<tr class="has-note slow"><td class="op"><code>pixels.toList()</code>, then <code>for (c in list)</code></td><td class="num">54.5</td><td class="num">10.4</td><td class="num">0.9</td><td class="num">11.9</td><td class="num">0.9×</td></tr>
+<tr class="note-row slow"><td colspan="6">One copy of the list, then the fastest loop there is over Colors. Was 52.2 ms. The copy is 7.0 of it now; the for, 3.2: a loop template takes a for over a list of items, reading the iterator's index, totalling to the list's end and leaving the iterator there (2026-11-13).</td></tr>
+<tr class="has-note slow"><td class="op"><code>image.get(x, y).red</code></td><td class="num">973.6</td><td class="num">3.3</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="6">Was a call for each pixel (only a top-level function in the same file is put in place by itself). Now <code>inline</code>. Was 94.6 ms; now run whole by a loop template, the copy of the pixel followed (2026-11-13).</td></tr>
+<tr class="has-note slow"><td class="op"><code>image.getOrNull(x, y)!!.red</code></td><td class="num">1204.7</td><td class="num">3.5</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.1×</td></tr>
+<tr class="note-row slow"><td colspan="6">Was two calls for each pixel. Now inline, and native code does <code>!!</code> and knows a value that is a colour or null. Was 137.1 ms; now run whole by a loop template: the way to getOrNull's null (then !!) is a guard's, checked first never to be taken (2026-11-13).</td></tr>
+<tr class="has-note slow"><td class="op"><code>pixels.map { it.red }</code></td><td class="num">500.6</td><td class="num">4.8</td><td class="num">0.4</td><td class="num">6.1</td><td class="num">0.8×</td></tr>
+<tr class="note-row slow"><td colspan="6">Was a call of the lambda for each pixel. Now <code>map</code> is inline, the new grid's cells made first and set by index; and native code now does loops over a <code>List&lt;byte&gt;</code> (the result's cells), which it left to the VM item by item. Was 95.5 ms; now run whole by a loop template that copies a byte field of each item into another list at the same index (2026-11-13).</td></tr>
 </tbody></table></div>
 
 <h2 id="write">Writing pixels</h2>
@@ -252,7 +252,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <div class="table"><table>
 <thead><tr><th>Loop</th><th class="num">Start of 2026-11-12, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
 <tbody>
-<tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">42</td><td class="num">2.0×</td><td class="num">3.3</td><td class="num">13×</td></tr>
+<tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">3.2</td><td class="num">27×</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
 <tr><td class="op"><code>val c = colors[i]</code>, four parts</td><td class="num">274</td><td class="num">72</td><td class="num">3.8×</td><td class="num">5.4</td><td class="num">13×</td></tr>
 <tr><td class="op"><code>pixels[x, y]</code>, four parts</td><td class="num">770</td><td class="num">118</td><td class="num">6.5×</td><td class="num">5.4</td><td class="num">22×</td></tr>
 <tr><td class="op"><code>image[x, y].red</code></td><td class="num">1,363</td><td class="num">3.3</td><td class="num">413×</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
