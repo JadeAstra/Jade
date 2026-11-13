@@ -3690,14 +3690,21 @@ struct Region {
     }
 
     // How much the region does itself, beside what it leaves to the VM each time round: where it
-    // would leave too often for what it does between, the VM alone is as quick.
+    // would leave too often for what it does between, the VM alone is as quick. A call counts as
+    // two (2026-11-13, docs/calls-plan.html): the VM's quick call keeps everything in the frame's
+    // slots, where the region writes its registers back and loads them again around it; a loop of
+    // a call by name and six steps of its own ran 35% slower as a region than in the VM alone.
+    // But one as one alone: the call a small method put in place makes where its object is of
+    // another class (behind JUMP_IF_NOT_CLASS), which is seldom made, if ever.
     bool worthIt() const {
         int work = 0, islands = 0;
         const std::vector<bool> ending = endingRuns(static_cast<int>(ins.size()), [&](int i) { return ins[static_cast<size_t>(i)].op; });
+        const std::vector<bool> otherClass = behindClassChecks();
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             if (results[i].island) {
-                if (!ending[i]) islands++;  // on a way out of the loop by return or throw: not its work
+                // On a way out of the loop by return or throw: not its work.
+                if (!ending[i]) islands += isCall(ins[i].op) && !otherClass[i] ? 2 : 1;
                 continue;
             }
             for (const LOp& l : results[i].ops)
@@ -3707,7 +3714,49 @@ struct Region {
             const char* given = std::getenv("JADE_NATIVE_RATIO");
             return given != nullptr ? std::atoi(given) : 6;
         }();
+        // JADE_WORTH: what each loop does itself and leaves to the VM, as weighed here.
+        static const bool show = std::getenv("JADE_WORTH") != nullptr;
+        if (show) std::fprintf(stderr, "worth %s at %u: work %d islands %d\n", f.name.c_str(), ins[0].at, work, islands);
         return work >= 3 && work >= ratio * islands;
+    }
+    // The instructions run only where a small method's object is of another class: from where a
+    // JUMP_IF_NOT_CLASS jumps to, the call made as before, up to where the JUMP over them (the end
+    // of the body put in place, just before) goes (ModuleCompiler::compileGuardedCall).
+    std::vector<bool> behindClassChecks() const {
+        std::vector<bool> out(ins.size(), false);
+        auto targetOf = [&](size_t k) -> int {
+            const Ins& x = ins[k];
+            const int t = targetOperand(x.op);
+            if (t <= 0) return -1;
+            auto to = index.find(static_cast<uint32_t>(i32(x, t - 1)));
+            return to == index.end() ? -1 : to->second;
+        };
+        for (size_t k = 0; k < ins.size(); k++) {
+            if (ins[k].op != Op::JumpIfNotClass) continue;
+            const int slow = targetOf(k);
+            if (slow <= static_cast<int>(k) + 1 || ins[static_cast<size_t>(slow) - 1].op != Op::Jump) continue;
+            const int end = targetOf(static_cast<size_t>(slow) - 1);
+            for (int i = slow; i < end; i++) out[static_cast<size_t>(i)] = true;
+        }
+        return out;
+    }
+    static bool isCall(Op op) {
+        switch (op) {
+            case Op::Call:
+            case Op::CallNamed:
+            case Op::CallOn:
+            case Op::CallSpread:
+            case Op::Invoke:
+            case Op::InvokeImplicit:
+            case Op::InvokeOwn:
+            case Op::InvokeOwnTrailing:
+            case Op::InvokeTrailing:
+            case Op::RCall:
+            case Op::RInvoke:
+            case Op::SuperInvoke:
+            case Op::SuperInvokeTrailing: return true;
+            default: return false;
+        }
     }
 };
 
