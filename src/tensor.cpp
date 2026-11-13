@@ -1073,6 +1073,21 @@ void registerTensor(VM& vm) {
         return Value::null();
     });
 
+    // takeBytes(cells, data): a packed list's bytes, one after another, as the items of an
+    // empty list of bytes (Grid<Color>.toTensor: the pixels copied once, never set to zero first).
+    def("takeBytes", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::List) || !asList(args[1])->packed() ||
+            asList(args[1])->pack->width != 1 || asList(args[1])->pack->count != 0 || asList(args[1])->pack->nullable)
+            fail(vm, Thrown::ClassCastException, "a packed list's bytes into an empty list of bytes");
+        const PackedItems& from = *asList(args[0])->pack;
+        PackedItems& to = *asList(args[1])->pack;
+        const size_t n = from.count * from.width;
+        to.block.assign(from.block.data(), from.block.data() + n);
+        to.count = n;
+        vm.account(n);
+        return Value::null();
+    });
+
     vm.defineGlobal("__tensor", Value::object(lib));
 }
 

@@ -189,6 +189,11 @@ class Tensor<T> {
   }
   // A new tensor of this one's item type, of `shape`, its items T's zero.
   internal fun blankOf(shape : List<int>) : Tensor<T> => blank<T>(shape)
+  // Its shape set, its items made already to fit it (Grid<Color>.toTensor).
+  internal fun takeShape(shape : List<int>) {
+    this.shape = shape
+    this.strides = __tensorStrides(shape)
+  }
   // A tensor sharing these items, to be given its own view of them.
   private fun sharing() : Tensor<T> {
     val made = blank<T>([0])
@@ -769,7 +774,10 @@ fun Bytes.toTensor() : Tensor<byte> {
 }
 // A picture's pixels as a tensor of bytes, height by width by 4: red, green, blue, alpha.
 fun Grid<Color>.toTensor() : Tensor<byte> {
-  val made = Tensor<byte>(height, width, 4)
-  __tensor.fromBytes(toBytes(), made.data)
+  // The pixels' bytes copied once, as the items of a tensor made with none (2026-11-13: made
+  // with zeros, then the bytes copied out and in again, 19.5 ms for 12 million pixels).
+  val made = Tensor<byte>(0)
+  __tensor.takeBytes(cells, made.data)
+  made.takeShape([height, width, 4])
   return made
 }

@@ -788,9 +788,33 @@ void registerText(VM& vm) {
         const Target t = targetOf(vm, args);
         const double x = num(vm, args[11]), y = num(vm, args[12]), w = num(vm, args[13]), h = num(vm, args[14]);
         if (!(w > 0) || !(h > 0)) return Value::null();
-        text::Path p;
-        rectPath(p, edgeX(t, x), edgeY(t, y), edgeX(t, x + w), edgeY(t, y + h));
-        fillPath(t, p, engineColor(vm, args[10]));
+        // Its edges are on whole pixels (edgeX rounds), so it covers every pixel inside it whole and
+        // none outside: each laid on as fillPath lays a pixel it covers whole, a row at a time,
+        // without the rasterizer (2026-11-13: 10,000 of 100 by 100, 198 ms; a plain fill, 8). The
+        // edges kept as rectPath keeps them, in floats.
+        const double l = static_cast<float>(edgeX(t, x)), tp = static_cast<float>(edgeY(t, y));
+        const double r = static_cast<float>(edgeX(t, x + w)), b = static_cast<float>(edgeY(t, y + h));
+        const double fromX = std::max(l, static_cast<double>(t.clipLeft)), toX = std::min(r, static_cast<double>(t.clipRight));
+        const double fromY = std::max(tp, static_cast<double>(t.clipTop)), toY = std::min(b, static_cast<double>(t.clipBottom));
+        if (!(fromX < toX) || !(fromY < toY)) return Value::null();
+        const uint32_t color = engineColor(vm, args[10]);
+        const uint32_t red = (color >> 24) & 0xFF, green = (color >> 16) & 0xFF, blue = (color >> 8) & 0xFF, alpha = color & 0xFF;
+        if (alpha == 0) return Value::null();
+        const int x0 = static_cast<int>(fromX), x1 = static_cast<int>(toX), y0 = static_cast<int>(fromY), y1 = static_cast<int>(toY);
+        const uint8_t whole[4] = {static_cast<uint8_t>(red), static_cast<uint8_t>(green), static_cast<uint8_t>(blue), 255};
+        for (int row = y0; row < y1; row++) {
+            uint8_t* d = t.rgba + (static_cast<size_t>(row) * static_cast<size_t>(t.width) + static_cast<size_t>(x0)) * 4;
+            if (alpha == 255) {
+                // As whole words, which Clang writes several at a time, where a pixel's four bytes
+                // copied one pixel at a time took 0.5 ns a pixel. A picture's pixels start on a
+                // word (a vector's block, four bytes a pixel).
+                uint32_t word;
+                std::memcpy(&word, whole, 4);
+                std::fill_n(reinterpret_cast<uint32_t*>(d), static_cast<size_t>(x1 - x0), word);
+            } else {
+                for (int col = x0; col < x1; col++, d += 4) blendPixel(d, red, green, blue, alpha);
+            }
+        }
         return Value::null();
     });
     def("canvasDrawRect", 16, 16, [](VM& vm, int, Value* args) -> Value {

@@ -3739,8 +3739,16 @@ void VM::listCopyRange(ObjList* to, const ObjList* from, size_t start, size_t co
         return;
     }
     const size_t old = to->pack->count;
-    to->pack->block.resize((old + count) * to->pack->width);
-    std::memcpy(to->pack->block.data() + old * to->pack->width, from->pack->block.data() + start * from->pack->width, count * from->pack->width);
+    if (to != from) {
+        // Copied onto the end at once (2026-11-13): a resize first set the new bytes to zero,
+        // writing them twice.
+        const uint8_t* const src = from->pack->block.data() + start * from->pack->width;
+        to->pack->block.resize(old * to->pack->width);
+        to->pack->block.insert(to->pack->block.end(), src, src + count * from->pack->width);
+    } else {
+        to->pack->block.resize((old + count) * to->pack->width);
+        std::memcpy(to->pack->block.data() + old * to->pack->width, from->pack->block.data() + start * from->pack->width, count * from->pack->width);
+    }
     if (to->pack->nullable) {
         to->pack->nulls.resize((old + count + 63) / 64, 0);
         for (size_t i = 0; i < count; i++) setNullAt(to, old + i, nullAt(from, start + i));

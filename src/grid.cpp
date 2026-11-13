@@ -89,6 +89,12 @@ bool appendZeros(VM& vm, ObjList* list, size_t count) {
 // Rows `y` to `y + h` of the columns `x` to `x + w` of a grid `srcWidth` wide, added to the end
 // of `to`.
 void appendRegion(VM& vm, ObjList* to, ObjList* from, size_t srcWidth, size_t x, size_t y, size_t w, size_t h) {
+    // Its room made once (2026-11-13: grown a row at a time, the block was moved as it grew).
+    if (to->packed() && from->packed() && to != from) to->pack->block.reserve((to->pack->count + w * h) * to->pack->width);
+    if (x == 0 && w == srcWidth) {
+        vm.listCopyRange(to, from, y * srcWidth, w * h);  // whole rows, one after another: one copy
+        return;
+    }
     for (size_t row = 0; row < h; row++) vm.listCopyRange(to, from, (y + row) * srcWidth + x, w);
 }
 

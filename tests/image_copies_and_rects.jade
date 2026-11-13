@@ -1,0 +1,66 @@
+// An image's copy, a grid's region and a grid of colours as a tensor, each copied once; and
+// fillRect laid on a row at a time, its edges being whole pixels (2026-11-13). The same pixels as
+// before, but for a rectangle reaching far beyond the picture, which the rasterizer drew nothing
+// of (one 10,000 pixels wide on a picture 300 wide).
+val im = Image(6, 4)
+im.editPixels { g ->
+  for (y in 0 ..< 4) { for (x in 0 ..< 6) { g[x, y] = Color(x * 40, y * 60, 7, 255 - x) } }
+}
+
+// A copy: the same pixels, its own.
+val c = im.copy()
+print(c.width, c.height, c == im, c.hashCode() == im.hashCode())   // expect: 6 4 true true
+c[0, 0] = Color.red
+print(im[0, 0], c[0, 0])   // expect: Color(0, 0, 7) Color(255, 0, 0)
+print(Image(0, 0).copy().width, Image(5, 0).copy().width, Image(0, 7).copy().height)   // expect: 0 5 7
+
+// Regions: part of each row, whole rows, one cell; of ints and of ints or null.
+val px = im.pixels
+print(px[1 .. 2, 2 .. 3].toList())   // expect: [Color(40, 120, 7, 254), Color(80, 120, 7, 253), Color(40, 180, 7, 254), Color(80, 180, 7, 253)]
+print(px[0 .. 5, 3 .. 3].toList().map { it.red })   // expect: [0, 40, 80, 120, 160, 200]
+print(px[5 .. 5, 0 .. 0].toList())   // expect: [Color(200, 0, 7, 250)]
+val ints = Grid<int>(7, 5)
+for (y in 0 ..< 5) { for (x in 0 ..< 7) { ints[x, y] = x * 10 + y } }
+print(ints[2 .. 5, 1 .. 3].toList())   // expect: [21, 31, 41, 51, 22, 32, 42, 52, 23, 33, 43, 53]
+print(ints[0 .. 6, 2 .. 3].toList())   // expect: [2, 12, 22, 32, 42, 52, 62, 3, 13, 23, 33, 43, 53, 63]
+val maybe = Grid<int?>(4, 3)
+for (y in 0 ..< 3) { for (x in 0 ..< 4) { maybe[x, y] = (x + y) % 2 == 0 ? null : x } }
+print(maybe[1 .. 3, 0 .. 2].toList(), maybe[0 .. 3, 1 .. 2].toList())   // expect: [1, null, 3, null, 2, null, 1, null, 3] [0, null, 2, null, null, 1, null, 3]
+
+// As a tensor: height by width by four bytes.
+val t = px.toTensor()
+print(t.shape, t[0, 0, 0], t[3, 5, 1], t[2, 4, 3])   // expect: [4, 6, 4] 0 180 251
+print(Image(3, 2, Color(1, 2, 3, 4)).pixels.toTensor()[1, 2, 3], Image(0, 0).pixels.toTensor().shape)   // expect: 4 [0, 0, 4]
+
+// fillRect: opaque and see-through, its edges rounded to whole pixels, clipped, scaled, moved.
+fun board() : Image => Image(30, 20, Color(30, 60, 90, 200))
+var b = board()
+var cv = b.canvas()
+cv.color = Color(200, 10, 10, 128)
+cv.fillRect(2.4, 2.6, 5.5, 3.49)
+print(b[2, 2], b[2, 3], b[7, 5], b[8, 5], b[7, 6])   // expect: Color(30, 60, 90, 200) Color(125, 32, 45, 228) Color(125, 32, 45, 228) Color(30, 60, 90, 200) Color(30, 60, 90, 200)
+cv.color = Color.black
+cv.fillRect(25, 15, 50, 50)
+print(b[29, 19], b[24, 19])   // expect: Color(0, 0, 0) Color(30, 60, 90, 200)
+cv.color = Color(0, 255, 0, 0)
+cv.fillRect(0, 0, 30, 20)
+cv.fillRect(10, 10, 0, 5)
+cv.fillRect(10, 10, 5, -1)
+cv.fillRect(0.0 / 0.0, 1, 2, 3)
+print(b[0, 0], b[10, 10])   // expect: Color(30, 60, 90, 200) Color(30, 60, 90, 200)
+b = board()
+cv = b.canvasAt(20, 13, 1.5)
+cv.color = Color(5, 6, 7, 255)
+cv.fillRect(1, 1, 2, 2)
+print(b[1, 1], b[2, 2], b[4, 4], b[5, 5])   // expect: Color(30, 60, 90, 200) Color(5, 6, 7) Color(5, 6, 7) Color(30, 60, 90, 200)
+b = board()
+val inside = b.canvas().clipped(5, 5, 10, 10)
+inside.color = Color.white
+inside.fillRect(0, 0, 100, 100)
+print(b[4, 4], b[5, 5], b[14, 14], b[15, 15])   // expect: Color(30, 60, 90, 200) Color(255, 255, 255) Color(255, 255, 255) Color(30, 60, 90, 200)
+// Far beyond the picture each way: what of it is on the picture is drawn.
+b = board()
+cv = b.canvas()
+cv.color = Color(200, 10, 10, 128)
+cv.fillRect(-5000, 2, 10000, 3)
+print(b[0, 2], b[29, 4], b[0, 5])   // expect: Color(125, 32, 45, 228) Color(125, 32, 45, 228) Color(30, 60, 90, 200)

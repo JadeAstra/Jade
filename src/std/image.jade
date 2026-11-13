@@ -953,8 +953,9 @@ class Image : Drawable {
     __text.imageCrop(cells.cells, width, height, x, y, made.width, made.height, made.cells.cells)
     return made
   }
-  // A new image of the same size with the same pixels, changed apart from this one.
-  fun copy() : Image => crop(0, 0, width, height)
+  // A new image of the same size with the same pixels, changed apart from this one. Its pixels
+  // copied once (2026-11-13: as a crop, a clear image was made first and then written over).
+  fun copy() : Image => of(cells.copied())
 
   // -- Picture operations (question 5): each gives a new image, the work for each pixel in C++ --
 

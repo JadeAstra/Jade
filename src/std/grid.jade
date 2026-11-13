@@ -211,6 +211,13 @@ class Grid<T> {
     return made
   }
 
+  // A grid of the same cells, its own, copied at once (Image.copy).
+  internal fun copied() : Grid<T> {
+    val made = blank<T>(width, height)
+    __grid.region(cells, width, 0, 0, width, height, made.cells)
+    return made
+  }
+
   // The same cells, to be read and not changed: what image.pixels gives.
   internal fun readOnly() : Grid<T> {
     val view = blank<T>(width, height)
