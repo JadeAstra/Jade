@@ -7029,9 +7029,12 @@ struct Checker::Impl {
                 // `node.sizes().pref`: what the call gives is read at once, with nothing run in
                 // between, so it may be where the function found it (M6.6 part 5). So is a field
                 // read for a field of its own (`e.insets.left`), whatever the function around may
-                // run before or after (G70); not through a getter, which runs code on it.
+                // run before or after (G70); not through a getter, which runs code on it. So is
+                // what an inline op [] gives (`image[x, y].red`, 2026-11-12): its body is done
+                // before the field is read, and nothing runs between the two.
                 if (obj.cls->isValue && f->getterFn == nullptr &&
-                    (m.object->kind == ExprKind::Call || m.object->kind == ExprKind::Member || m.object->kind == ExprKind::Name))
+                    (m.object->kind == ExprKind::Call || m.object->kind == ExprKind::Member || m.object->kind == ExprKind::Name ||
+                     (m.object->kind == ExprKind::Index && inlineCalls.count(m.object.get()) != 0)))
                     readAtOnce.insert(m.object.get());
             }
         }

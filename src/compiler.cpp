@@ -872,6 +872,7 @@ private:
         int owner = 0;
         std::unordered_map<std::string, BoundLambda> lambdas;  // parameters given lambdas copied in
         bool everyFunctionBound = true;                        // no parameter of a function type given a function value
+        bool givesInPlace = false;                             // what it gives back read at once by a field read: an item may be where it is
         std::vector<int> exits;                                // its returns, to the end
         int baseSlot = 0;                                      // where its own locals start
         FinallyState* finallyAtEntry = nullptr;
@@ -1035,6 +1036,7 @@ private:
         std::vector<char> spread;
         int line = 0;
         bool unused = false;             // a statement of its own: what the body gives is dropped
+        bool inPlace = false;            // what it gives read at once by a field read (`image[x, y].red`)
     };
     // The call compiled as a statement of its own (compileStmt), whose value no one takes; and the
     // body put in place that dropped its value itself, rather than leaving it to be popped.
@@ -1076,6 +1078,9 @@ private:
         site.args.push_back(e.index.get());
         for (const ExprPtr& m : e.more) site.args.push_back(m.get());
         site.line = e.line;
+        // `image[x, y].red`: a field of what it gives read at once, nothing run in between (the
+        // checker's readAtOnce), so the item it gives back may be where it is.
+        site.inPlace = !copyReadsHere() && session_.checker->readsFieldInPlace(e);
         return compileInlined(site, info);
     }
     // `a[i] = v` as a statement where the checker chose an inline op []= (B2): its body in place,
@@ -1215,6 +1220,7 @@ private:
             if (!bound[p] && (t == nullptr || t->name.empty() || t->name == "Function" || !t->result.empty())) frame.everyFunctionBound = false;
         }
         frame.owner = ++nextOwner_;
+        frame.givesInPlace = e.inPlace;
         if (std::vector<RuntimeType> args; e.call != nullptr && session_.checker->typeArguments(*e.call, args))
             for (size_t i = 0; i < fn.typeParams.size() && i < args.size(); i++)
                 if (RuntimeType typeArg = args[i]; fromCall(typeArg)) frame.typeArgs[fn.typeParams[i].name] = typeArg;
@@ -1366,15 +1372,18 @@ private:
             const Expr& value = *static_cast<const ReturnStmt&>(*last).value;
             line_ = last->line;
             // An item given back by index is read as a copy (the checker's reading in place is for
-            // the body's own statement, and the item goes on past it), so nothing need copy it after.
+            // the body's own statement, and the item goes on past it), so nothing need copy it
+            // after; but where what the body gives is read at once by a field read
+            // (`image[x, y].red`), it may be where it is, as the checker has it for the body.
+            const bool inPlace = frame_->givesInPlace;
             const Expr* const savedCopied = copiedIndex_;
-            if (value.kind == ExprKind::Index) copiedIndex_ = &value;
+            if (value.kind == ExprKind::Index && !inPlace) copiedIndex_ = &value;
             compileExpr(value);
             copiedIndex_ = savedCopied;
             line_ = last->line;
             // An item of a list read where it is, given back: a copy (G15), as compileInlineReturn
             // makes. A value made here is one already.
-            if (!madeFresh(value)) emit(Op::OwnLocal, fs_->slotTop);
+            if (!inPlace && !madeFresh(value)) emit(Op::OwnLocal, fs_->slotTop);
             return;
         }
         if (last != nullptr && last->kind == StmtKind::Return && static_cast<const ReturnStmt&>(*last).implicit &&

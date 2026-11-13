@@ -85,3 +85,48 @@ fun sums(g : Grid<Color>, im : Image) : int {
   return t
 }
 print(sums(g, im), sums(g, im), sums(g, im), g[2, 1], im[2, 1])   // expect: 126 306 306 Color(9, 9, 9) Color(8, 8, 8)
+
+// Read at once by a field read (`image[x, y].red`): the item given back where it is, read
+// before anything runs; through a getter, a method or a variable: a copy.
+class Store(val items : open List<Cell>) {
+  inline op [](i : int) : Cell {
+    if (i < 0) { throw IllegalArgumentException("below 0") }
+    return items[i]
+  }
+}
+val store = Store([])
+value Cell(var n : int) {
+  val changing : int
+    get() {
+      store.items[0] = Cell(99)
+      return n
+    }
+  fun same() : int {
+    store.items[0] = Cell(77)
+    return n
+  }
+}
+store.items.add(Cell(5))
+fun reads(s : Store) : string {
+  var t = 0
+  for (i in 0 ..< 3) { t += s[0].n }
+  val a = s[0].changing
+  val b = s[0].same()
+  val kept = s[0]
+  s.items[0] = Cell(1)
+  return "$t $a $b ${kept.n} ${s[0].n}"
+}
+print(reads(store), reads(store))   // expect: 15 5 99 77 1 3 1 99 77 1
+val pic = Image(4, 3, Color(10, 20, 30))
+fun redsAndAfter(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      t += im[x, y].red
+      im[x, y] = Color(1, 2, 3)
+      t += im[x, y].green
+    }
+  }
+  return t
+}
+print(redsAndAfter(pic), redsAndAfter(pic), redsAndAfter(pic))   // expect: 144 36 36
