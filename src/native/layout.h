@@ -11,7 +11,7 @@ namespace jade::native::layout {
 
 // A value: its kind in the first byte, its payload 8 bytes in.
 constexpr int kValueSize = 16, kValuePayload = 8;
-constexpr uint8_t kKindBool = 1, kKindInt = 2, kKindFloat = 3, kKindObj = 4, kKindByte = 10;
+constexpr uint8_t kKindNull = 0, kKindBool = 1, kKindInt = 2, kKindFloat = 3, kKindObj = 4, kKindByte = 10;
 
 // Every object (Obj): what it is, the core of a parallel section that owns it (0: shared), and
 // whether it is frozen.
@@ -27,6 +27,11 @@ constexpr uint8_t kStoreInts = 1, kStoreFloats = 2;
 // A list of a value type's items: the bytes an item takes, and the value type (an ObjClass).
 constexpr int kPackWidth = 4, kPackItemClass = 32;
 constexpr uint8_t kStoreItems = 5;
+// A list of narrow items (List<byte>, ...): ListStore::Narrow, what each is at kPackNarrow.
+constexpr uint8_t kStoreNarrow = 4, kNarrowByte = 1;
+// A captured variable's cell (ObjUpvalue): where its value is.
+constexpr int kUpvalueLocation = 24;
+constexpr int kPackNarrow = 40;
 
 // Bytes (ObjBytes): a std::vector of bytes, its first byte's address, then the end's.
 constexpr int kBytesData = 24;

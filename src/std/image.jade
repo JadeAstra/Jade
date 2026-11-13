@@ -911,14 +911,14 @@ class Image : Drawable {
     changed(x, y, x + 1, y + 1)
   }
   // The pixel at (`x`, `y`), as image[x, y] gives it.
-  fun get(x : int, y : int) : Color => this[x, y]
+  inline fun get(x : int, y : int) : Color => this[x, y]
   private fun outside(x : int, y : int) : IndexOutOfBoundsException => IndexOutOfBoundsException("pixel ($x, $y) is outside the image, which is $width by $height")
   // Sets the pixel at (`x`, `y`) to `color`, as image[x, y] = color does.
-  fun set(x : int, y : int, color : Color) {
+  inline fun set(x : int, y : int, color : Color) {
     this[x, y] = color
   }
   // The pixel at (`x`, `y`), or null outside the image.
-  fun getOrNull(x : int, y : int) : Color? => cells.getOrNull(x, y)
+  inline fun getOrNull(x : int, y : int) : Color? => cells.getOrNull(x, y)
 
   // All of them, to be read (D133): the same grid as the image's, costing no copy.
   val pixels : Grid<Color>
@@ -1007,12 +1007,14 @@ class Image : Drawable {
     val w = Math.max(0, Math.ceil(maxX - 1e-9).toInt() - left.toInt())
     val h = Math.max(0, Math.ceil(maxY - 1e-9).toInt() - top.toInt())
     if (w == 0 or h == 0 or width == 0 or height == 0) { return Image(w, h) }
-    // A new pixel's middle, back to where it was, as a place among this picture's pixels.
+    // A new pixel's middle, back to where it was, as a place among this picture's pixels: each
+    // worked out as it is sampled, in one pass (2026-11-13: two grids of places first, then
+    // pixels.sample through them, took 993 ms for 12 million pixels turned).
     val m = Transform.translation(left + 0.5, top + 0.5).then(back).then(Transform.translation(-0.5, -0.5))
-    val xs = Grid<float>(w, h)
-    val ys = Grid<float>(w, h)
-    __num.places(w, h, m.scaleX, m.shearY, m.shearX, m.scaleY, m.translateX, m.translateY, xs.cells, ys.cells)
-    return of(pixels.sample(xs, ys, interpolation, Color.clear))
+    val made = Grid<Color>(w, h)
+    __num.sampleAffine(cells.cells, width, height, m.scaleX, m.shearY, m.shearX, m.scaleY, m.translateX, m.translateY, w, h,
+                       interpolation.ordinal, [0, 0, 0, 0], made.cells)
+    return of(made)
   }
 
   // The picture with its brightness, contrast and saturation changed, as CSS's brightness(),
@@ -1040,16 +1042,13 @@ class Image : Drawable {
   // and 0.0722 of its blue, as the eye weighs them; alpha kept.
   fun greyscale() : Image => of(__mixed(pixels, [0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722, 0.2126, 0.7152, 0.0722]))
 
-  // The picture with its colours turned round, each part 255 less itself; alpha kept.
+  // The picture with its colours turned round, each part 255 less itself; alpha kept. Through
+  // mapChannels, a table for each part (2026-11-13: a loop over the bytes took 71 ms for 12
+  // million pixels, this 16).
   fun inverted() : Image {
-    val px = rgbaBytes()
-    for (p in 0 ..< width * height) {
-      val i = p * 4
-      px[i] = (255 - px[i]).toByte()
-      px[i + 1] = (255 - px[i + 1]).toByte()
-      px[i + 2] = (255 - px[i + 2]).toByte()
-    }
-    return Image.taking(width, height, px)
+    val table : open List<int> = []
+    for (v in 0 .. 255) { table.add(255 - v) }
+    return of(pixels.mapChannels(table, table, table))
   }
 
   // The pixels joined to (x, y) through pixels whose colour differs from its own by no more than

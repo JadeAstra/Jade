@@ -1276,45 +1276,59 @@ void registerNumeric(VM& vm) {
             if (w == 0 || h == 0) return Value::null();
             std::vector<float> weights(kw * kh);
             for (size_t i = 0; i < kw * kh; i++) weights[i] = static_cast<float>(k.f(i));
-            // Every row multiplied by alpha once; the answer written apart, as `out` may be `in`.
-            std::vector<float> rows(w * h * 4), acc(w * 4);
-            for (size_t y = 0; y < h; y++) premultipliedRow(in + y * w * 4, w, &rows[y * w * 4]);
-            std::vector<uint8_t> done(w * h * 4);
+            // Rows multiplied by alpha as they are first wanted, into a ring of the kernel's height
+            // (row r in place r % kh): the rows a pixel's window takes are kh in a run, so never
+            // two in one place, and a row leaves only once no window takes it again. Each answer
+            // row written straight into `out`, which may be `in`: a row is in the ring before
+            // its answer is written over it (2026-11-13: the whole picture as floats, 192 MB for
+            // 12 million pixels, and the answer apart, took 127 ms for a 1 by 1 kernel).
             const int64_t cx = static_cast<int64_t>(kw / 2), cy = static_cast<int64_t>(kh / 2);
+            std::vector<float> ring(kh * w * 4), acc(w * 4);
+            std::vector<int64_t> held(kh, -1);
+            std::vector<const float*> rows(kh);
             // The columns whose whole window is inside the grid: no edge to repeat.
             const int64_t inFrom = cx, inTo = static_cast<int64_t>(w) - static_cast<int64_t>(kw) + cx;
+            // A pixel's four parts side by side, worked out together: each part the same
+            // multiplications and additions, in the same order, as one at a time.
+            using F4 = float __attribute__((vector_size(16)));
+            auto load4 = [](const float* p) {
+                F4 v;
+                std::memcpy(&v, p, sizeof v);
+                return v;
+            };
             for (size_t y = 0; y < h; y++) {
-                std::fill(acc.begin(), acc.end(), 0.0f);
                 for (size_t j = 0; j < kh; j++) {
-                    const size_t yy = static_cast<size_t>(std::clamp<int64_t>(static_cast<int64_t>(y + j) - cy, 0, static_cast<int64_t>(h) - 1));
-                    const float* row = &rows[yy * w * 4];
-                    const float* kr = &weights[j * kw];
-                    for (int64_t x = 0; x < static_cast<int64_t>(w); x++) {
-                        float r = 0, g = 0, b = 0, a = 0;
+                    const int64_t yy = std::clamp<int64_t>(static_cast<int64_t>(y + j) - cy, 0, static_cast<int64_t>(h) - 1);
+                    const size_t place = static_cast<size_t>(yy) % kh;
+                    if (held[place] != yy) {
+                        premultipliedRow(in + static_cast<size_t>(yy) * w * 4, w, &ring[place * w * 4]);
+                        held[place] = yy;
+                    }
+                    rows[j] = &ring[place * w * 4];
+                }
+                // Each pixel: its window's rows in order, each row's taps in order, as before
+                // (an answer the sum over rows of each row's sum).
+                for (int64_t x = 0; x < static_cast<int64_t>(w); x++) {
+                    F4 total = {0, 0, 0, 0};
+                    for (size_t j = 0; j < kh; j++) {
+                        const float* row = rows[j];
+                        const float* kr = &weights[j * kw];
+                        F4 sum = {0, 0, 0, 0};
                         if (x >= inFrom && x <= inTo) {
                             const float* at = row + (x - cx) * 4;
-                            for (size_t i = 0; i < kw; i++, at += 4) {
-                                r += at[0] * kr[i];
-                                g += at[1] * kr[i];
-                                b += at[2] * kr[i];
-                                a += at[3] * kr[i];
-                            }
+                            for (size_t i = 0; i < kw; i++, at += 4) sum += load4(at) * kr[i];
                         } else {
                             for (size_t i = 0; i < kw; i++) {
                                 const float* at = row + std::clamp<int64_t>(x + static_cast<int64_t>(i) - cx, 0, static_cast<int64_t>(w) - 1) * 4;
-                                r += at[0] * kr[i];
-                                g += at[1] * kr[i];
-                                b += at[2] * kr[i];
-                                a += at[3] * kr[i];
+                                sum += load4(at) * kr[i];
                             }
                         }
-                        float* to = &acc[static_cast<size_t>(x) * 4];
-                        to[0] += r, to[1] += g, to[2] += b, to[3] += a;
+                        total += sum;
                     }
+                    std::memcpy(&acc[static_cast<size_t>(x) * 4], &total, sizeof total);
                 }
-                colorRow(acc.data(), w, &done[y * w * 4]);
+                colorRow(acc.data(), w, out + y * w * 4);
             }
-            std::memcpy(out, done.data(), done.size());
             return Value::null();
         }
         auto planes = planesOf(vm, args[0], w * h, colour, true);
@@ -1557,6 +1571,105 @@ void registerNumeric(VM& vm) {
             }
             o[3] = a;
         }
+        return Value::null();
+    });
+    // sampleAffine(cells, width, height, m0, m1, m2, m3, m4, m5, outWidth, outHeight,
+    // interpolation, outside, out): a grid of colours `outWidth` by `outHeight`, each cell (x, y)
+    // read as sample reads one from the place (m0 x + m2 y + m4, m1 x + m3 y + m5), which places
+    // works out: the two in one pass, each place and each cell's colours (multiplied by alpha)
+    // worked out as they are wanted (2026-11-13: an image turned took some 300 MB of places and
+    // planes of doubles, and a second, through them). The same arithmetic in the same order as
+    // places, planesOf, sample and writePlanes, so the same colours.
+    def("sampleAffine", 14, 14, [](VM& vm, int, Value* args) -> Value {
+        const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
+        double m[6];
+        for (int i = 0; i < 6; i++) m[i] = vm.toNumber(args[3 + i], "a transform's number");
+        const size_t ow = sizeArg(vm, args[9], "width"), oh = sizeArg(vm, args[10], "height");
+        const int interpolation = static_cast<int>(vm.toInt(args[11], "interpolation"));
+        if (w == 0 || h == 0) fail(vm, Thrown::IllegalArgumentException, "an empty grid has nothing to sample");
+        const uint8_t* c = colorCells(vm, args[0], w * h, "the grid");
+        double outside[4] = {0, 0, 0, 0};
+        const bool hasOutside = !args[12].isNull();
+        if (hasOutside) {
+            const Numbers o = numbers(vm, args[12], "outside");
+            if (o.count != 4) fail(vm, Thrown::IllegalArgumentException, "outside is a colour");
+            const double a = o.f(3);
+            outside[0] = o.f(0) * a / 255;
+            outside[1] = o.f(1) * a / 255;
+            outside[2] = o.f(2) * a / 255;
+            outside[3] = a;
+        }
+        uint8_t* out = colorCells(vm, args[13], ow * oh, "the grid written into");
+        const double W = static_cast<double>(w), H = static_cast<double>(h);
+        // A cell's plane p as planesOf makes it: red, green, blue multiplied by alpha / 255; alpha.
+        auto cell = [&](size_t p, int64_t cx, int64_t cy) -> double {
+            cx = std::clamp<int64_t>(cx, 0, static_cast<int64_t>(w) - 1);
+            cy = std::clamp<int64_t>(cy, 0, static_cast<int64_t>(h) - 1);
+            const uint8_t* at = c + (static_cast<size_t>(cy) * w + static_cast<size_t>(cx)) * 4;
+            const double a = at[3];
+            if (p == 3) return a;
+            const double mul = a / 255.0;
+            return at[p] * mul;
+        };
+        auto byte = [](double v) { return static_cast<uint8_t>(v <= 0 ? 0 : v >= 255 ? 255 : rounded(v)); };
+        for (size_t oy = 0; oy < oh; oy++)
+            for (size_t ox = 0; ox < ow; ox++) {
+                const double px = static_cast<double>(ox), py = static_cast<double>(oy);
+                const double x = m[0] * px + m[2] * py + m[4];
+                const double y = m[1] * px + m[3] * py + m[5];
+                double v[4];
+                if (hasOutside && !(x >= -0.5 && x < W - 0.5 && y >= -0.5 && y < H - 0.5)) {
+                    for (int p = 0; p < 4; p++) v[p] = outside[p];
+                } else if (interpolation == 1 && !std::isnan(x) && !std::isnan(y)) {
+                    // Bilinear: the four cells round it fetched once, each part as cell() gives it.
+                    const double fx = std::floor(x), fy = std::floor(y), u = x - fx, t = y - fy;
+                    const int64_t ix = static_cast<int64_t>(fx), iy = static_cast<int64_t>(fy);
+                    double q[4][4];
+                    const int64_t qx[4] = {ix, ix + 1, ix, ix + 1}, qy[4] = {iy, iy, iy + 1, iy + 1};
+                    for (int k = 0; k < 4; k++) {
+                        const int64_t cx = std::clamp<int64_t>(qx[k], 0, static_cast<int64_t>(w) - 1);
+                        const int64_t cy = std::clamp<int64_t>(qy[k], 0, static_cast<int64_t>(h) - 1);
+                        const uint8_t* at = c + (static_cast<size_t>(cy) * w + static_cast<size_t>(cx)) * 4;
+                        const double a = at[3];
+                        const double mul = a / 255.0;
+                        q[k][0] = at[0] * mul;
+                        q[k][1] = at[1] * mul;
+                        q[k][2] = at[2] * mul;
+                        q[k][3] = a;
+                    }
+                    for (int p = 0; p < 4; p++) v[p] = (q[0][p] * (1 - u) + q[1][p] * u) * (1 - t) + (q[2][p] * (1 - u) + q[3][p] * u) * t;
+                } else {
+                    for (size_t p = 0; p < 4; p++) {
+                        if (interpolation == 0 || std::isnan(x) || std::isnan(y)) {
+                            v[p] = std::isnan(x) || std::isnan(y) ? 0 : cell(p, rounded(x), rounded(y));
+                        } else if (interpolation == 1) {
+                            const double fx = std::floor(x), fy = std::floor(y), u = x - fx, t = y - fy;
+                            const int64_t ix = static_cast<int64_t>(fx), iy = static_cast<int64_t>(fy);
+                            v[p] = (cell(p, ix, iy) * (1 - u) + cell(p, ix + 1, iy) * u) * (1 - t) +
+                                   (cell(p, ix, iy + 1) * (1 - u) + cell(p, ix + 1, iy + 1) * u) * t;
+                        } else {
+                            const double fx = std::floor(x), fy = std::floor(y);
+                            double wx[4], wy[4];
+                            cubicWeights(x - fx, wx);
+                            cubicWeights(y - fy, wy);
+                            const int64_t ix = static_cast<int64_t>(fx), iy = static_cast<int64_t>(fy);
+                            double s = 0;
+                            for (int j = 0; j < 4; j++)
+                                for (int i = 0; i < 4; i++) s += cell(p, ix - 1 + i, iy - 1 + j) * wx[i] * wy[j];
+                            v[p] = s;
+                        }
+                    }
+                }
+                // As writePlanes writes a colour multiplied by alpha.
+                uint8_t* d = out + (oy * ow + ox) * 4;
+                const double a = std::clamp(v[3], 0.0, 255.0);
+                const uint8_t alpha = byte(a);
+                d[3] = alpha;
+                const double mul = alpha == 0 ? 0.0 : 255.0 / a;
+                d[0] = byte(v[0] * mul);
+                d[1] = byte(v[1] * mul);
+                d[2] = byte(v[2] * mul);
+            }
         return Value::null();
     });
     // sample(cells, width, height, xs, ys, interpolation, outside, out, colour): each cell of

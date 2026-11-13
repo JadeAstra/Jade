@@ -6893,7 +6893,7 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
                 break;
             }
     if (region != nullptr) {
-        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}, {}, globals_.data(), {}, {}};
+        native::RegionContext context{reinterpret_cast<const volatile uint8_t*>(&attention_), coreId_, bandObject_, {}, {}, globals_.data(), {}, {}, frame->closure->upvalues.data()};
         const int64_t out = native::runRegion(region->code, base, &context);
         static const bool traceExits = std::getenv("JADE_TRACE_EXITS") != nullptr;
         static int traced = 0;

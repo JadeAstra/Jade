@@ -233,6 +233,10 @@ struct FunctionState {
     // A lambda literal: a name it cannot find among its variables may be a member of the
     // object it is run on, which is only known when it runs.
     bool isLambda = false;
+    bool onObject = false;  // a lambda its type says runs on an object (`Grid.() -> unit`, D58)
+    // Made inside an inline function's body or a block copied in place, whose objects it looks
+    // in first (outerReceivers from implicitSlots_).
+    bool inBlockObjects = false;
     std::string label, calleeLabel;  // what `return@name` may call it
 
     // An extension function: it runs on a value, as a lambda may, so a name it cannot find
@@ -2489,7 +2493,21 @@ private:
     // names can mean: a lambda, or an extension function.
     bool namesFromReceiver() const {
         if (frame_ != nullptr) return !implicitSlots_.empty();  // an inline function's body: its own receiver's alone
-        return fs_->isLambda || fs_->isExtension || !implicitSlots_.empty();
+        if (fs_->isExtension || !implicitSlots_.empty()) return true;
+        return fs_->isLambda && !runsOnNothing();
+    }
+    // A lambda that no object can lend a name to when it runs (2026-11-13): run on none (its slot
+    // 0 the function itself, which has no members), nor are the functions around it that it
+    // would look in (VM::implicitReceiver, proto->outerReceivers): lambdas run on none, and a
+    // plain function at the end. A bare name in it is then what the checker found, a variable or
+    // a global, and is compiled as one, not looked up as it runs (`Color(...)` in a lambda given
+    // to editPixels: a call of the global, which native code makes the value of).
+    bool runsOnNothing() const {
+        for (const FunctionState* s = fs_; s != nullptr; s = s->enclosing) {
+            if (s->onObject || s->inBlockObjects || s->isExtension || s->object != nullptr || kindHasThis(s->kind)) return false;
+            if (s->kind != FunctionKind::Function) break;  // where the walk for outerReceivers stops
+        }
+        return true;
     }
 
     // `this` of the code being compiled reached directly: a method's own, or that of an inline
@@ -3132,9 +3150,14 @@ private:
         std::string shape = "A";
         shape += static_cast<char>('0' + args.size());
         std::vector<TypeOperand> operands;
-        for (const RuntimeType& arg : args) {
+        for (const RuntimeType& written : args) {
             std::string part;
             std::vector<TypeOperand> partOperands;
+            // In an inline function's body put in place, its own type parameters what its call
+            // gave them, as everywhere else in such a body (fromCall): `blank<R>(...)` in Grid's
+            // inline map makes a Grid of what the lambda gives (2026-11-13; it was any).
+            RuntimeType arg = written;
+            if (frame_ != nullptr && !fromCall(arg)) arg = RuntimeType{};
             if (arg.kind == RuntimeType::Unknown || !shapeOf(arg, part, partOperands)) {
                 shape += 'a';  // not worked out: any value fits it
                 continue;
@@ -5612,6 +5635,7 @@ private:
         // Slot 0 holds the receiver in methods and the callee itself otherwise. A lambda run on
         // an object its type says has that object there, which is what `this` means in it (D58).
         const bool onObject = decl.isLambda && session_.checker != nullptr && session_.checker->runsOnObject(decl);
+        state.onObject = onObject;
         bool hasThis = kind == FunctionKind::Method || kind == FunctionKind::Initializer || kind == FunctionKind::Setter;
         state.add(Local{hasThis || onObject ? "this" : "", 1, VarInfo{}});
         // Given a function type that takes nothing, a lambda without an arrow has no `it`: the
@@ -5645,6 +5669,7 @@ private:
 
         // Inside an inline function's body or a block copied in place, the objects they run on
         // come first, kept as upvalues; and nothing of their scope is the new function's (D59).
+        state.inBlockObjects = state.object == nullptr && !implicitSlots_.empty();
         if (state.object == nullptr)
             for (size_t i = implicitSlots_.size(); i-- > 0;) {
                 for (Local& local : fs_->locals)

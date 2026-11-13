@@ -62,6 +62,11 @@ static_assert(static_cast<int>(ValueKind::Small) == L::kKindSmall && offsetof(Va
                   sizeof(PackedItems::typeSlot) == 4 && static_cast<int>(ObjType::Places) == L::kTypePlaces,
               "layout.h: values of value types");
 static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
+static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
+static_assert(offsetof(ObjUpvalue, location) == L::kUpvalueLocation && sizeof(Value*) == 8, "layout.h: a captured variable's cell");
+static_assert(static_cast<int>(ListStore::Narrow) == L::kStoreNarrow && static_cast<int>(Narrow::Byte) == L::kNarrowByte &&
+                  offsetof(PackedItems, narrow) == L::kPackNarrow && sizeof(Narrow) == 1,
+              "layout.h: a list of narrow items");
 static_assert(offsetof(ObjIterator, source) == L::kIterSource && offsetof(ObjIterator, index) == L::kIterIndex &&
                   sizeof(ObjIterator::index) == 8 && static_cast<int>(ObjType::Iterator) == L::kTypeIterator,
               "layout.h: an iterator");
@@ -317,7 +322,7 @@ namespace {
 volatile uint8_t checkFlag = 0;
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}};
+    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, nullptr};
     return runRegion(code, slots, &context);
 }
 

@@ -167,6 +167,21 @@ State fresh(int top) {
     return s;
 }
 
+// What the region analysed now knows of a value that may also be null (Region::facts): for
+// each fact, the one that says the same of a value that may be null (what it holds a guess the
+// steps check, null among what they leave to the VM); fact 0 is null itself.
+thread_local const std::vector<int16_t>* maybeNullFacts = nullptr;
+int16_t joinFacts(int16_t a, int16_t b) {
+    if (a == b) return a;
+    if (a < 0 || b < 0 || maybeNullFacts == nullptr) return -1;
+    const auto& n = *maybeNullFacts;
+    if (static_cast<size_t>(a) >= n.size() || static_cast<size_t>(b) >= n.size()) return -1;
+    // Null on one way, something known on the other (`x < 0 ? null : cells[i]`): that, or null.
+    if (a == 0) return n[static_cast<size_t>(b)];
+    if (b == 0) return n[static_cast<size_t>(a)];
+    return n[static_cast<size_t>(a)] == n[static_cast<size_t>(b)] ? n[static_cast<size_t>(a)] : static_cast<int16_t>(-1);
+}
+
 // Joining two ways into one place: the same top, every slot's kinds together.
 bool join(State& into, const State& from) {
     if (!into.known) {
@@ -198,7 +213,7 @@ bool join(State& into, const State& from) {
         else if (bSrc && a.src != b.src) j.src = -2;
         j.known = a.known && b.known && a.value == b.value;
         j.value = j.known ? a.value : 0;
-        j.fact = a.fact == b.fact ? a.fact : static_cast<int16_t>(-1);
+        j.fact = joinFacts(a.fact, b.fact);
         if (!(j == a)) changed = true;
         merged.push_back(Kinds::Item{s, j});
     }
@@ -446,6 +461,7 @@ struct Region {
         if (v.isObjType(ObjType::Bytes)) return CI;
         if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
         const ListStore store = asList(v)->store();
+        if (store == ListStore::Narrow && asList(v)->pack->narrow == Narrow::Byte) return CI;  // a List<byte>, read as bytes are
         return store == ListStore::Floats ? CF : store == ListStore::Ints ? CI : -1;
     }
     // What the list in a slot holds, in the call the region is made in: read by the region from a
@@ -570,12 +586,36 @@ struct Region {
         const ObjClass* items = nullptr;
         const ObjClass* value = nullptr;
         int from = -1;  // the instruction whose field read (getpv) put it there: one looked at once is held
+        bool isNull = false;  // null itself (fact 0)
         bool operator==(const Fact& o) const {
             return hasObject == o.hasObject && (!hasObject || (object.kind == o.object.kind && object.as.i == o.object.as.i)) && items == o.items &&
-                   value == o.value && from == o.from;
+                   value == o.value && from == o.from && isNull == o.isNull;
         }
     };
-    mutable std::vector<Fact> facts;
+    static Fact nullFact() {
+        Fact f;
+        f.isNull = true;
+        return f;
+    }
+    mutable std::vector<Fact> facts = std::vector<Fact>(1, nullFact());
+    // For each fact, the one for a value that may be null as well (joinFacts): the same but for
+    // `from`, as a slot that may be null is no field looked at once.
+    mutable std::vector<int16_t> maybeNull = std::vector<int16_t>(1, 0);
+    int16_t intern(const Fact& f) const {
+        auto found = std::find(facts.begin(), facts.end(), f);
+        if (found != facts.end()) return static_cast<int16_t>(found - facts.begin());
+        if (facts.size() >= 32000) return -1;
+        facts.push_back(f);
+        const int16_t id = static_cast<int16_t>(facts.size() - 1);
+        maybeNull.push_back(id);
+        if (f.from >= 0) {
+            Fact g = f;
+            g.from = -1;
+            const int16_t other = intern(g);
+            maybeNull[static_cast<size_t>(id)] = other;
+        }
+        return id;
+    }
     const Fact* factOf(const State& s, int slot) const {
         K k = s.kind(slot);
         // A copy of a slot as entered: what is known of that slot.
@@ -586,14 +626,10 @@ struct Region {
     void noteFact(State& s, int slot, Change change) const {
         const K k = s.kind(slot);
         Fact f = k.fact >= 0 ? facts[static_cast<size_t>(k.fact)] : Fact{};
+        f.isNull = false;
         change(f);
-        auto found = std::find(facts.begin(), facts.end(), f);
-        if (found == facts.end()) {
-            if (facts.size() >= 32000) return;
-            facts.push_back(f);
-            found = facts.end() - 1;
-        }
-        s.kinds[slot].fact = static_cast<int16_t>(found - facts.begin());
+        const int16_t id = intern(f);
+        if (id >= 0) s.kinds[slot].fact = id;
     }
     void noteValue(State& s, int slot, const ObjClass* cls) const {
         noteFact(s, slot, [&](Fact& f) { f.value = cls; });
@@ -1536,6 +1572,8 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::GetOwnRef:
+            case Op::GetPropRef:  // (where it is: for a number or an object, the same as a read)
             case Op::GetOwn:
             case Op::GetProp: {  // u16 name, u16 cache: obj -> value
                 // A byte, int or float field of a value of a value type (B2: read off what an
@@ -1598,10 +1636,38 @@ struct Region {
                 // a copy of it; a number in a register as it is. Anything else the VM's.
                 const int slot = u16(x, 0);
                 const K k = s.kind(slot);
-                if (k.bits == kEntry || inMemory(k)) {
-                    const ObjClass* const cls = valueClass(s, slot);
+                if (k.bits == kCopy && k.src >= 0) {
+                    // A copy of a slot as entered, not made yet (an argument of an inline body
+                    // that is a parameter passed on: `image[x, y] = c`, 2026-11-13): made now,
+                    // then taken as its own as one in memory is.
+                    const ObjClass* const cls = valueClass(s, k.src) != nullptr ? valueClass(s, k.src) : valueClass(s, slot);
                     const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
                     if (cls == nullptr || cls->smallId == 0 || layout == nullptr || layout->size > 8) island();
+                    c.writeMemory(slot);
+                    LOp& copy = c.op("copyslot");
+                    copy.slot = slot;
+                    copy.slot2 = k.src;
+                    LOp& l = c.op("ownsm");
+                    l.slot = slot;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | layout->size);
+                    l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    c.leaves(l);
+                    c.write(slot, K{kMem});
+                    noteValue(s, slot, cls);
+                } else if (k.bits == kEntry || inMemory(k)) {
+                    const ObjClass* const cls = valueClass(s, slot);
+                    const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
+                    if (cls == nullptr) {
+                        // What the slot holds not known (null on one way, a value on another:
+                        // `getOrNull`'s, 2026-11-13): anything but a Ref as it is, a Ref the VM's.
+                        LOp& l = c.op("ownsm");
+                        l.slot = slot;
+                        c.leaves(l);
+                        c.write(slot, K{kMem});
+                        c.fall(s);
+                        return;
+                    }
+                    if (cls->smallId == 0 || layout == nullptr || layout->size > 8) island();
                     LOp& l = c.op("ownsm");
                     l.slot = slot;
                     l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | layout->size);
@@ -1612,6 +1678,29 @@ struct Region {
                 } else if ((k.bits & (kInt | kFloat | kByte | kBool)) == 0 || (k.bits & ~(kInt | kFloat | kByte | kBool)) != 0) {
                     island();
                 }
+                c.fall(s);
+                return;
+            }
+            case Op::RGetUpvalue: {  // u8 A, u8 T, u16 upvalue: slot A = what the captured variable holds
+                const int a = u8(x, 0);
+                c.writeMemory(a);
+                LOp& l = c.op("getuv");
+                l.slot2 = a;
+                l.ki = u16(x, 2);
+                s.top = u8(x, 1);
+                c.fall(s);
+                return;
+            }
+            case Op::AssertNotNull: {  // value -> value, null thrown for by the VM
+                const int top = s.top;
+                const K k = s.kind(top - 1);
+                if ((k.bits & (kInt | kFloat | kByte | kBool)) != 0 && (k.bits & ~(kInt | kFloat | kByte | kBool)) == 0) {
+                    c.fall(s);  // a number in a register: never null
+                    return;
+                }
+                LOp& l = c.op("notnull");
+                l.slot = c.objectSlot(top - 1);
+                c.leaves(l);
                 c.fall(s);
                 return;
             }
@@ -1703,6 +1792,7 @@ struct Region {
             case Op::False: {  // pushed, in memory
                 c.writeMemory(s.top);
                 c.op(x.op == Op::Null ? "setnull" : x.op == Op::True ? "settrue" : "setfalse").slot = s.top;
+                if (x.op == Op::Null) s.kinds[s.top].fact = 0;  // null itself (joinFacts)
                 s.top++;
                 c.fall(s);
                 return;
@@ -2333,6 +2423,7 @@ struct Region {
     }
 
     void analyse(int headTop) {
+        maybeNullFacts = &maybeNull;
         entries = {0};
         tops[ins[0].at] = headTop;
         // A round finds the ways in after the islands its states reach, often one more each round
@@ -3779,6 +3870,10 @@ bool mayDo(Op op) {
         case Op::PopUnder:
         case Op::GetProp:
         case Op::GetOwn:
+        case Op::GetPropRef:
+        case Op::GetOwnRef:
+        case Op::AssertNotNull:
+        case Op::RGetUpvalue:
         case Op::RGetGlobal:
         case Op::RCall:
         case Op::WithDestinationAt:

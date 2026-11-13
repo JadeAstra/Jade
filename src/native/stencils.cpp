@@ -56,6 +56,7 @@ struct Ctx {  // native.h's RegionContext
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
+    const uint8_t* const* upvalues;
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -441,6 +442,11 @@ F_A(IDXFK, x)
 // ia = item ic of a whole number's list: a packed list of ints, none null, or bytes; the item in
 // range. Which it was the region tells by the object, where it writes the item to its slot
 // (storew: a byte from bytes, an int from a list).
+// A List<byte>'s items, kept as a Bytes keeps them (one byte each, 2026-11-13): its pack, or null.
+INLINE const uint8_t* bytesPack(const uint8_t* list) {
+    const uint8_t* pack = packOf(list, kStoreNarrow);
+    return pack != nullptr && pack[kPackNarrow] == kNarrowByte ? pack : nullptr;
+}
 INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out) {
     if (s.kind != kKindObj) return false;
     const uint8_t* o = s.p;
@@ -453,6 +459,11 @@ INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out
         return true;
     }
     if (o[kObjType] != kTypeList) return false;
+    if (const uint8_t* bytes = bytesPack(o)) {
+        if (static_cast<uint64_t>(index) >= word<uint64_t>(bytes + kPackCount)) return false;
+        out = word<const uint8_t*>(bytes + kPackBlock)[index];
+        return true;
+    }
     const uint8_t* pack = packOf(o, kStoreInts);
     if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return false;
     out = word<int64_t>(word<const uint8_t*>(pack + kPackBlock) + index * 8);
@@ -491,6 +502,13 @@ INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, const 
 INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
+    if (o[kObjType] == kTypeList) {
+        // A List<byte>: its core's own and not frozen, as a list to change is.
+        if (o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
+        const uint8_t* bytes = bytesPack(o);
+        if (bytes == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(bytes + kPackCount)) return nullptr;
+        return word<uint8_t*>(bytes + kPackBlock) + index;
+    }
     if (o[kObjType] != kTypeBytes || o[kObjCore] != ctx->core) return nullptr;
     uint8_t* first = word<uint8_t*>(o + kBytesData);
     const uint8_t* end = word<const uint8_t*>(o + kBytesData + 8);
@@ -509,7 +527,7 @@ F_A(SETF_A, x)
 #define SETW_B(c, v)                                                            \
     STENCIL(setwi_##v##_##c) {                                                  \
         const Slot& s = base[jade_slot];                                        \
-        if (s.kind == kKindObj && s.p[kObjType] == kTypeBytes) {                \
+        if (s.kind == kKindObj && (s.p[kObjType] == kTypeBytes || (s.p[kObjType] == kTypeList && bytesPack(s.p) != nullptr))) { \
             uint8_t* at = byteToChange(s, i##c, ctx);                           \
             if (at == nullptr || static_cast<uint64_t>(i##v) > 255) EXIT;       \
             *at = static_cast<uint8_t>(i##v);                                   \
@@ -522,7 +540,13 @@ F_A(SETF_A, x)
     }                                                                           \
     STENCIL(setwb_##v##_##c) {                                                  \
         uint8_t* at = byteToChange(base[jade_slot], i##c, ctx);                 \
-        if (at == nullptr) EXIT;                                                \
+        if (at == nullptr) {                                                    \
+            /* a byte into a list of ints: the int it is */                     \
+            uint8_t* item = listToChange(base[jade_slot], i##c, kStoreInts, ctx); \
+            if (item == nullptr) EXIT;                                          \
+            __builtin_memcpy(item, &i##v, 8);                                   \
+            NEXT;                                                               \
+        }                                                                       \
         *at = static_cast<uint8_t>(i##v);                                       \
         NEXT;                                                                   \
     }
@@ -695,6 +719,18 @@ STENCIL(ownsm) {
     uint64_t bits = 0;
     for (uint32_t k = 0; k < (what & 0xFF); k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k);
     putValue(&s, kKindSmall | (what >> 32) << 32, bits);
+    NEXT;
+}
+// Slot jade_slot2 = the variable the function captures as its upvalue jade_ki, as the VM's
+// R_GET_UPVALUE reads it (2026-11-13: a loop in a lambda reading a variable around it).
+STENCIL(getuv) {
+    const uint8_t* cell = ctx->upvalues[jade_ki];
+    __builtin_memcpy(&base[jade_slot2], word<const Slot*>(cell + kUpvalueLocation), sizeof(Slot));
+    NEXT;
+}
+// `value!!` where slot jade_slot is in memory: nothing, unless it is null, which the VM throws for.
+STENCIL(notnull) {
+    if (base[jade_slot].kind == kKindNull) EXIT;
     NEXT;
 }
 // KeepLocal where slot jade_slot is in memory: nothing, unless it holds a Ref to a place of the
@@ -1112,7 +1148,8 @@ STENCIL(setfalse) {
 // or how many (no instruction the VM's in it; and the region is entered afresh after each way
 // out): in the context's words 4k to 4k+3, its items' address, how many may be read, how many
 // changed (0 where the object may not be, or is not what the region reads as), and what they are
-// (1 ints, 2 floats, 3 bytes). slot: the object; jade_ki: k.
+// (1 ints, 2 floats, 3 bytes: a Bytes, or a List<byte>, whose items are kept as a Bytes keeps
+// them, 2026-11-13). slot: the object; jade_ki: k.
 INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
     uint64_t* h = ctx->lists + 4 * k;
     h[0] = h[1] = h[2] = h[3] = 0;
@@ -1120,6 +1157,17 @@ INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
     const uint8_t* o = s.p;
     if (o[kObjType] == kTypeList) {
         const uint8_t* pack = packOf(o, floats ? kStoreFloats : kStoreInts);
+        if (pack == nullptr && !floats) {
+            const uint8_t* narrow = packOf(o, kStoreNarrow);
+            if (narrow != nullptr && narrow[kPackNarrow] == kNarrowByte) {
+                const uint64_t count = word<uint64_t>(narrow + kPackCount);
+                h[0] = word<uint64_t>(narrow + kPackBlock);
+                if (mayRead(o, ctx)) h[1] = count;
+                if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+                h[3] = 3;
+            }
+            return;
+        }
         if (pack == nullptr) return;
         const uint64_t count = word<uint64_t>(pack + kPackCount);
         h[0] = word<uint64_t>(pack + kPackBlock);
@@ -1189,8 +1237,9 @@ F_A(HIDXFK, x)
     }                                                                           \
     STENCIL(hsetwb_##a##_##c) {                                                 \
         const uint64_t* h = ctx->lists + 4 * jade_slot;                         \
-        if (static_cast<uint64_t>(i##c) >= h[2] || h[3] != 3) EXIT;             \
-        reinterpret_cast<uint8_t*>(h[0])[i##c] = static_cast<uint8_t>(i##a);    \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        if (h[3] == 3) reinterpret_cast<uint8_t*>(h[0])[i##c] = static_cast<uint8_t>(i##a); \
+        else reinterpret_cast<int64_t*>(h[0])[i##c] = i##a; /* a byte into ints: the int it is */ \
         NEXT;                                                                   \
     }
 #define HIDXW_A(a, ...) I_B(HIDXW_B, a)

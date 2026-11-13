@@ -91,6 +91,9 @@ struct RegionContext {
     // and of those it writes (lookpw), where each is written back as it leaves (0: nowhere).
     uint64_t held[kRegionFields * 2];
     uint64_t heldAt[kRegionFields];
+    // The cells of the variables the function the region runs in captures (its closure's
+    // upvalues), as a region reads one (R_GET_UPVALUE, 2026-11-13).
+    const void* upvalues;
 };
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it

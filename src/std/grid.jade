@@ -53,13 +53,13 @@ class Grid<T> {
     cells[y * width + x] = value
   }
   // The cell at (`x`, `y`), as grid[x, y] gives it.
-  fun get(x : int, y : int) : T => this[x, y]
+  inline fun get(x : int, y : int) : T => this[x, y]
   // Sets the cell at (`x`, `y`) to `value`, as grid[x, y] = value does.
-  fun set(x : int, y : int, value : T) {
+  inline fun set(x : int, y : int, value : T) {
     this[x, y] = value
   }
   // The cell, or null outside the grid: for work near the edges.
-  fun getOrNull(x : int, y : int) : T? => x < 0 or y < 0 or x >= width or y >= height ? null : cells[y * width + x]
+  inline fun getOrNull(x : int, y : int) : T? => x < 0 or y < 0 or x >= width or y >= height ? null : cells[y * width + x]
 
   // -- A part --
 
@@ -83,10 +83,18 @@ class Grid<T> {
     __grid.paste(cells, width, across.first(), down.first(), from.cells, from.width, from.width, from.height)
   }
 
-  // Each cell made into another, as a grid of the same size: pixels.map { it.alpha }.
-  fun <R> map(transform : (T) -> R) : Grid<R> {
+  // Each cell made into another, as a grid of the same size: pixels.map { it.alpha }. Inline,
+  // the lambda put in place (2026-11-13); the new grid's cells made first, each its type's zero,
+  // and each set where it is, so that the loop is a plain one (a grid of objects, which have no
+  // zero, has its cells added one by one).
+  inline fun <R> map(transform : (T) -> R) : Grid<R> {
     val made = blank<R>(width, height)
-    for cell in cells { made.cells.add(transform(cell)) }
+    val out = made.cells
+    if (__grid.zeros(out, width * height)) {
+      for (i in 0 ..< width * height) { out[i] = transform(cells[i]) }
+    } else {
+      for cell in cells { out.add(transform(cell)) }
+    }
     return made
   }
 
