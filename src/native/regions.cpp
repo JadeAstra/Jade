@@ -3180,6 +3180,7 @@ struct Region {
             e.ki = static_cast<int64_t>(static_cast<uint64_t>(ref->second.width) << 32 | offset << 8 | (s == "valpb" ? 1u : 8u));
             return set(n[0], mk(e)), true;
         }
+        if (s == "divik" && l.ki > 0) return set(n[0], bin('/', CI, valueOf(fw, n[1]), kint(l.ki))), true;
         if (s == "shrik") {
             Expr e{Expr::Bin};
             e.cls = CI, e.op = '>', e.a = valueOf(fw, n[1]), e.b = kint(l.ki);
@@ -3231,7 +3232,29 @@ struct Region {
         std::vector<Update> updates;  // held int fields the loop changes
         std::vector<int64_t> fill;    // kLoopWFillItems: the items' width, where the value is (kind, which), what hsetsm is given
         std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
+        int64_t mixDivisor = 1;         // kLoopWMix: words 61 and 62
+        bool mixDivideFirst = false;
     };
+    // How a mix ends (2026-11-13): `>> shift`, `/ divisor` (a constant of 1 or more, which truncates
+    // toward zero as C++'s does), or both in either order; `v` the sum before them.
+    static bool mixEnd(const Expr*& v, int64_t& shift, int64_t& divisor, bool& divideFirst) {
+        shift = 0, divisor = 1, divideFirst = false;
+        bool shifted = false, divided = false, shiftOutside = false;
+        for (int k = 0; k < 2; k++) {
+            if (!shifted && v->kind == Expr::Bin && v->op == '>' && v->b->kind == Expr::KInt) {
+                shift = v->b->ki, shifted = true, shiftOutside = !divided;
+                v = v->a;
+            } else if (!divided && v->kind == Expr::Bin && v->op == '/' && v->cls == CI && v->b->kind == Expr::KInt) {
+                divisor = v->b->ki, divided = true;
+                v = v->a;
+            } else {
+                break;
+            }
+        }
+        // Divided first where the division is inside the shift, or there is no shift.
+        divideFirst = divided && (!shifted || shiftOutside);
+        return shift >= 0 && shift <= 31 && divisor >= 1 && divisor <= (1 << 20);
+    }
     // A guard, where it is not one already.
     void addGuard(Ahead& ah, const Followed::Cmp& g) {
         for (const Followed::Cmp& h : ah.guards)
@@ -3292,15 +3315,12 @@ struct Region {
         }
         // The mix: (a sum of byte fields of the item, each times a constant, plus a constant) >> a
         // constant, as a byte.
-        int64_t shift = 0, c = 0;
+        int64_t shift = 0, c = 0, divisor = 1;
+        bool divideFirst = false;
         std::vector<std::pair<int64_t, int64_t>> terms;  // weight, offset
         if (theMix != nullptr) {
             const Expr* m = theMix->a;
-            if (m->kind == Expr::Bin && m->op == '>' && m->b->kind == Expr::KInt) {
-                shift = m->b->ki;
-                m = m->a;
-            }
-            if (shift < 0 || shift > 31) return false;
+            if (!mixEnd(m, shift, divisor, divideFirst)) return false;
             std::function<bool(const Expr*)> sum = [&](const Expr* e) -> bool {
                 if (e->cls != CI) return false;
                 if (e->kind == Expr::KInt) return c += e->ki, true;
@@ -3340,6 +3360,9 @@ struct Region {
                        static_cast<int64_t>(constant), static_cast<int64_t>(kinds),
                        static_cast<int64_t>(static_cast<uint64_t>(shift) | static_cast<uint64_t>(terms.size()) << 8), c};
         for (const auto& t : terms) ah.mixWords.push_back(static_cast<int64_t>(static_cast<uint64_t>(t.first) << 32 | static_cast<uint64_t>(t.second)));
+        while (ah.mixWords.size() < 13) ah.mixWords.push_back(0);
+        ah.mixWords.push_back(divisor);              // 109
+        ah.mixWords.push_back(divideFirst ? 1 : 0);  // 110
         return true;
     }
 
@@ -3378,12 +3401,10 @@ struct Region {
         const Expr* v = first.value;
         if (v->kind != Expr::ToByte) return false;
         v = v->a;
-        int64_t shift = 0;
-        if (v->kind == Expr::Bin && v->op == '>' && v->b->kind == Expr::KInt) {
-            shift = v->b->ki;
-            if (shift < 0 || shift > 31) return false;
-            v = v->a;
-        }
+        int64_t shift = 0, divisor = 1;
+        bool divideFirst = false;
+        if (!mixEnd(v, shift, divisor, divideFirst)) return false;
+        ah.mixDivisor = divisor, ah.mixDivideFirst = divideFirst;
         struct Term {
             int64_t weight, offset;
         };
@@ -3908,6 +3929,7 @@ struct Region {
             if (ah.updates[u].how == 3) word(at + 3, ah.updates[u].constant);
             else operandWords(at + 2, ah.updates[u].with, 0);
         }
+        if (ah.shape == 14) word(61, ah.mixDivisor), word(62, ah.mixDivideFirst ? 1 : 0);
         if (ah.shape == 19) {
             word(50, ah.baseMode);
             if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);

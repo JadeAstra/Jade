@@ -1733,6 +1733,29 @@ INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
     return true;
 }
 
+// How a mix ends (kLoopWMix, kLoopWMixItems; 2026-11-13): `>> shift`, `/ divisor` (truncating toward
+// zero, as Jade's int division does), or both, divided first or shifted first. Where every number
+// divided is from 0 to 65535, by a multiply instead (exact there; a division by a number known only
+// as the loop runs is slow).
+struct MixEnd {
+    int32_t shift = 0, divisor = 1;
+    bool divideFirst = false, quick = false;
+    uint64_t magic = 0;
+    __attribute__((always_inline)) int32_t divide(int32_t x) const {
+        return quick ? static_cast<int32_t>((static_cast<uint64_t>(static_cast<uint32_t>(x)) * magic) >> 32) : x / divisor;
+    }
+    __attribute__((always_inline)) int32_t operator()(int32_t v) const {
+        if (divisor == 1) return v >> shift;
+        return divideFirst ? divide(v) >> shift : divide(v >> shift);
+    }
+    // Set up for sums from least to most.
+    void prepare(int32_t least, int32_t most) {
+        const int32_t lo = divideFirst ? least : least >> shift, hi = divideFirst ? most : most >> shift;
+        quick = divisor > 1 && divisor < 65536 && lo >= 0 && hi <= 65535;
+        magic = quick ? ((uint64_t{1} << 32) + static_cast<uint64_t>(divisor) - 1) / static_cast<uint64_t>(divisor) : 0;
+    }
+};
+
 INLINE void runLoop(Slot* base, Ctx* ctx) {
     uint64_t* t = ctx->t;
     // A variable the loop reads and never writes, checked as its steps check it each time round
@@ -1988,6 +2011,11 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const int64_t shift = static_cast<int64_t>(t[103] & 0xFF);
             const int nr = static_cast<int>((t[103] >> 8) & 0xFF);
             const int32_t c = static_cast<int32_t>(static_cast<int64_t>(t[104]));
+            MixEnd mixEnd;
+            mixEnd.shift = static_cast<int32_t>(shift);
+            mixEnd.divisor = static_cast<int32_t>(t[109] == 0 ? 1 : t[109]);
+            mixEnd.divideFirst = t[110] != 0;
+            if (mixEnd.divisor < 1) return;
             if (size == 0 || size > 8 || rw == 0 || ww < size || nr > 4 || shift > 31) return;
             int32_t weight[4] = {0, 0, 0, 0};
             uint64_t from[4] = {0, 0, 0, 0};
@@ -2006,17 +2034,24 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * ww;
             int32_t least = c, most = c;
             for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
-            const bool alwaysByte = nr == 0 || ((least >> shift) >= 0 && (most >> shift) <= 255);
+            mixEnd.prepare(least, most);
+            const bool alwaysByte = nr == 0 || (mixEnd(least) >= 0 && mixEnd(most) <= 255);
             // A greyscale's: three bytes read with weights, the mix three times and the fourth byte kept.
-            const bool grey = constant == 0 && rw == 4 && ww == 4 && size == 4 && nr == 3 && from[0] == 0 && from[1] == 1 && from[2] == 2 && kinds == (1u | 1u << 8 | 1u << 16 | 5u << 24);
+            // The mix three times and the fourth byte the item's own or a constant (a greyscale).
+            const uint64_t fourth = kinds >> 24;
+            const bool grey = (constant & 0xFFFFFF) == 0 && rw == 4 && ww == 4 && size == 4 && nr >= 1 && nr <= 3 && (kinds & 0xFFFFFF) == (1u | 1u << 8 | 1u << 16) &&
+                              (fourth == 5 || (fourth == 0)) && from[0] < 4 && from[1] < 4 && from[2] < 4;
+            const uint8_t fixedFourth = static_cast<uint8_t>(constant >> 24);
             if (grey && alwaysByte) {
                 // Its own loop, nothing to decide in it, which Clang does several at a time.
-                const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
+                const int32_t w0 = weight[0], w1 = nr > 1 ? weight[1] : 0, w2 = nr > 2 ? weight[2] : 0;
+                const uint64_t f0 = from[0], f1 = nr > 1 ? from[1] : 0, f2 = nr > 2 ? from[2] : 0;
+                const bool keepFourth = fourth == 5;
                 for (int64_t j = 0; j < left; j++) {
                     const uint8_t* p = x + j * 4;
                     uint8_t* d = o + j * 4;
-                    const uint8_t keep = p[3];
-                    const uint8_t v = static_cast<uint8_t>((w0 * p[0] + w1 * p[1] + w2 * p[2] + c) >> shift);
+                    const uint8_t keep = keepFourth ? p[3] : fixedFourth;
+                    const uint8_t v = static_cast<uint8_t>(mixEnd(w0 * p[f0] + w1 * p[f1] + w2 * p[f2] + c));
                     d[0] = v;
                     d[1] = v;
                     d[2] = v;
@@ -2027,19 +2062,15 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             for (int64_t j = 0; j < left; j++) {
                 const uint8_t* p = x + static_cast<uint64_t>(j) * rw;
                 int32_t v = c;
-                if (grey) {
-                    v += weight[0] * p[0] + weight[1] * p[1] + weight[2] * p[2];
-                } else {
-                    for (int k = 0; k < nr; k++) v += weight[k] * p[from[k]];
-                }
-                v >>= shift;
+                for (int k = 0; k < nr; k++) v += weight[k] * p[from[k]];
+                v = mixEnd(v);
                 if (!alwaysByte && static_cast<uint32_t>(v) > 255u) {
                     done = j;
                     break;
                 }
                 uint8_t* d = o + static_cast<uint64_t>(j) * ww;
                 if (grey) {
-                    const uint8_t keep = p[3];
+                    const uint8_t keep = fourth == 5 ? p[3] : fixedFourth;
                     d[0] = d[1] = d[2] = static_cast<uint8_t>(v);
                     d[3] = keep;
                     continue;
@@ -2216,6 +2247,11 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 if (to[m] >= K) return;
             }
             const int32_t c = static_cast<int32_t>(static_cast<int64_t>(t[8]));
+            MixEnd mixEnd;
+            mixEnd.shift = static_cast<int32_t>(shift);
+            mixEnd.divisor = static_cast<int32_t>(t[61] == 0 ? 1 : t[61]);
+            mixEnd.divideFirst = t[62] != 0;
+            if (mixEnd.divisor < 1) return;
             int64_t rows;
             if (__builtin_mul_overflow(end, K, &rows) || static_cast<uint64_t>(rows) > a.h[1] || static_cast<uint64_t>(rows) > out.h[2]) return;
             if (a.h[0] != out.h[0]) {  // two lists: none of one in the other
@@ -2230,12 +2266,13 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // a byte), each item worked out and stored in one pass, with no check.
             int32_t least = c, most = c;
             for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
-            if ((least >> shift) >= 0 && (most >> shift) <= 255) {
+            mixEnd.prepare(least, most);
+            if (mixEnd(least) >= 0 && mixEnd(most) <= 255) {
                 if (rgb) {
                     const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
                     for (int64_t q = next; q < end; q++) {
                         const uint8_t* p = x + q * 4;
-                        const uint8_t g = static_cast<uint8_t>((w0 * p[0] + w1 * p[1] + w2 * p[2] + c) >> shift);
+                        const uint8_t g = static_cast<uint8_t>(mixEnd(w0 * p[0] + w1 * p[1] + w2 * p[2] + c));
                         uint8_t* d = o + q * 4;
                         d[0] = g;
                         d[1] = g;
@@ -2246,7 +2283,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                         const uint8_t* p = x + q * K;
                         int32_t s = c;
                         for (int k = 0; k < nr; k++) s += weight[k] * p[from[k]];
-                        const uint8_t g = static_cast<uint8_t>(s >> shift);
+                        const uint8_t g = static_cast<uint8_t>(mixEnd(s));
                         for (int m = 0; m < nw; m++) o[q * K + to[m]] = g;
                     }
                 }
@@ -2261,7 +2298,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
                     const uint8_t* p = x + j * 4;
                     for (int64_t q = 0; q < n; q++) {
-                        const int32_t s = (w0 * p[q * 4] + w1 * p[q * 4 + 1] + w2 * p[q * 4 + 2] + c) >> shift;
+                        const int32_t s = mixEnd(w0 * p[q * 4] + w1 * p[q * 4 + 1] + w2 * p[q * 4 + 2] + c);
                         v[q] = s;
                         bad |= static_cast<int32_t>(static_cast<uint32_t>(s) > 255u);
                     }
@@ -2270,7 +2307,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                         const uint8_t* p = x + (j + q) * K;
                         int32_t s = c;
                         for (int k = 0; k < nr; k++) s += weight[k] * p[from[k]];
-                        s >>= shift;
+                        s = mixEnd(s);
                         v[q] = s;
                         bad |= static_cast<int32_t>(static_cast<uint32_t>(s) > 255u);
                     }

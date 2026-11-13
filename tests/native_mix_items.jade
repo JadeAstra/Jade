@@ -112,3 +112,55 @@ thrice { part(p, 10, 40) }
 print(shown(p), p[9, 5], p[10, 5], p[39, 24], p[40, 24])   // expect: 1679621330 Color(0, 0, 0) Color(196, 94, 253, 207) Color(94, 94, 94) Color(82, 128, 231, 215) Color(68, 82, 45, 241) Color(80, 80, 80, 240) Color(110, 110, 110, 242) Color(48, 128, 192, 241)
 val q = picture()
 print(failing { part(q, 50, 61) }, q[59, 5], q[49, 5], q[59, 6])   // expect: IndexOutOfBoundsException: pixel (60, 5) is outside the image, which is 60 by 40 Color(203, 203, 203, 241) Color(92, 202, 245, 251) Color(163, 243, 98, 240)
+
+// A division in the mix (2026-11-13): the average of three, divided then shifted, shifted then
+// divided, and a negative number divided, which truncates toward zero as Jade's int division
+// does (every pixel's (red - green) / 256 is 0, where rounding down would make some -1).
+fun average(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red + c.green + c.blue) / 3).toByte()
+      im[x, y] = Color(v, v, v)
+    }
+  }
+}
+fun halfThird(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = (((c.red + c.green + c.blue) / 3) >> 1).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun thirdHalf(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val w = (((c.red + c.green) >> 1) / 3).toByte()
+      im[x, y] = Color(w, w, w, c.alpha)
+    }
+  }
+}
+fun towardZero(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red - c.green) / 256).toByte()
+      im[x, y] = Color(v, c.green, c.blue, c.alpha)
+    }
+  }
+}
+val av = picture()
+thrice { average(av) }
+val ht = picture()
+thrice { halfThird(ht) }
+val th = picture()
+thrice { thirdHalf(th) }
+val tz = picture()
+thrice { towardZero(tz) }
+print(shown(av))   // expect: 1341114330 Color(0, 0, 0) Color(181, 181, 181) Color(124, 124, 124) Color(147, 147, 147)
+print(shown(ht))   // expect: 1368932489 Color(0, 0, 0) Color(22, 22, 22, 207) Color(15, 15, 15) Color(18, 18, 18, 215)
+print(shown(th))   // expect: 514747740 Color(0, 0, 0) Color(5, 5, 5, 207) Color(5, 5, 5) Color(3, 3, 3, 215)
+print(shown(tz))   // expect: 220368678 Color(0, 0, 0) Color(0, 94, 253, 207) Color(0, 54, 88) Color(0, 128, 231, 215)

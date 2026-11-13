@@ -101,3 +101,17 @@ fun twice(px : Bytes) {
 val g = pixels(1000, 4)
 thrice { twice(g) }
 print(shown(g))   // expect: 1984301330 0 4 2 111 198 202 54
+
+// A division in the mix (2026-11-13): the average of a pixel's three parts, in place.
+fun averageBytes(px : Bytes) {
+  for (i in 0 ..< px.size / 4) {
+    val j = i * 4
+    val v = ((px[j].toInt() + px[j + 1].toInt() + px[j + 2].toInt()) / 3).toByte()
+    px[j] = v
+    px[j + 1] = v
+    px[j + 2] = v
+  }
+}
+val av = pixels(1000, 4)
+thrice { averageBytes(av) }
+print(shown(av))   // expect: 1972424634 37 37 37 111 150 150 54
