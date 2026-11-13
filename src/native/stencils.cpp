@@ -52,7 +52,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t core;
     const void* band;
     uint64_t lists[24];
-    uint64_t t[16];
+    uint64_t t[64];
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
@@ -1560,7 +1560,7 @@ F_A(HVALPF, x)
 // operations, in the same order, as the steps would: the same answer to the bit.
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
-    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -1627,6 +1627,52 @@ INLINE bool itemsFit(const Items& x, uint64_t kind, int64_t end, int count) {
 
 INLINE bool small(uint64_t w) { return static_cast<int64_t>(w) > -(1 << 20) && static_cast<int64_t>(w) < (1 << 20); }
 
+// A template's operand (2026-11-13): words d and v, d its kind: 0 the constant v, 1 the counter
+// plus v, 2 v itself (a register stored there by the steps before), 3 the int field held as v.
+INLINE bool operand(const Ctx* ctx, uint64_t d, uint64_t v, int64_t counter, int64_t& out) {
+    switch (d) {
+        case 0:
+        case 2: out = static_cast<int64_t>(v); return true;
+        case 1: return !__builtin_add_overflow(counter, static_cast<int64_t>(v), &out);
+        case 3: {
+            if (v >= 16) return false;
+            const Slot& h = reinterpret_cast<const Slot*>(ctx->held)[v];
+            if (h.kind != kKindInt) return false;
+            out = h.i;
+            return true;
+        }
+        default: return false;
+    }
+}
+// Whether no guard of the loop fires for any counter from `first` to `last` (word 16 how many,
+// each five words from 17: its comparison, then its operands). A guard is the condition of a
+// way to a throw or a return; each side of it the counter plus a constant or the same each time
+// round, so that where it holds at neither end it holds nowhere between.
+INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
+    const uint64_t* t = ctx->t;
+    if (t[16] > 4) return false;
+    for (uint64_t g = 0; g < t[16]; g++) {
+        const uint64_t* w = t + 17 + 5 * g;
+        const int64_t ends[2] = {first, last};
+        for (const int64_t c : ends) {
+            int64_t a, b;
+            if (!operand(ctx, w[1], w[2], c, a) || !operand(ctx, w[3], w[4], c, b)) return false;
+            bool fires;
+            switch (w[0]) {
+                case 1: fires = a < b; break;
+                case 2: fires = a <= b; break;
+                case 3: fires = a > b; break;
+                case 4: fires = a >= b; break;
+                case 5: fires = a == b; break;
+                case 6: fires = a != b; break;
+                default: return false;
+            }
+            if (fires) return false;
+        }
+    }
+    return true;
+}
+
 INLINE void runLoop(Slot* base, Ctx* ctx) {
     uint64_t* t = ctx->t;
     // A variable the loop reads and never writes, checked as its steps check it each time round
@@ -1638,6 +1684,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     const int64_t next = static_cast<int64_t>(t[1]), left = static_cast<int64_t>(t[2]);
     if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
     const int64_t end = next + left;
+    if (!guardsHold(ctx, next, end - 1)) return;
     const Items out = itemsOf(ctx, 0), a = itemsOf(ctx, 1), b = itemsOf(ctx, 2);
     if (t[13] != 0 && (!out.ok() || out.kind() != 3)) return;  // a byte's value: into bytes alone
     if (sharedInPart(out, a, end) || sharedInPart(out, b, end)) return;
@@ -1852,6 +1899,59 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     break;
                 }
             }
+            break;
+        }
+        case kLoopWSumField: {
+            // A total of a field of items of a list looked at once (2026-11-13: image[x, y].red), the
+            // items at base + counter: base from words 40 to 44 (0 none, 1 an operand, 2 one times
+            // another, each two words); word 45 the item's width (high half), the field's offset
+            // (bits 8 on) and 1 for a byte, 8 for an int. An overflow stops it before the item.
+            if (!a.ok()) return;
+            int64_t at = 0;
+            if (t[40] == 1 || t[40] == 2) {
+                if (!operand(ctx, t[41], t[42], 0, at)) return;
+                if (t[40] == 2) {
+                    int64_t by;
+                    if (!operand(ctx, t[43], t[44], 0, by) || __builtin_mul_overflow(at, by, &at)) return;
+                }
+            } else if (t[40] != 0) {
+                return;
+            }
+            int64_t first, last;
+            if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1]) return;
+            const uint64_t width = t[45] >> 32, offset = (t[45] >> 8) & 0xFFFFFF, size = t[45] & 0xFF;
+            if (width == 0 || offset + size > width) return;
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * width + offset;
+            int64_t acc = static_cast<int64_t>(t[3]);
+            if (size == 1) {
+                if (left <= INT64_MAX / 255 && acc <= INT64_MAX - 255 * left) {
+                    int64_t s = 0;
+                    if (width == 4) for (int64_t j = 0; j < left; j++) s += x[j * 4];
+                    else for (int64_t j = 0; j < left; j++) s += x[static_cast<uint64_t>(j) * width];
+                    acc += s;
+                } else {
+                    for (int64_t j = 0; j < left; j++) {
+                        int64_t s;
+                        if (__builtin_add_overflow(acc, static_cast<int64_t>(x[static_cast<uint64_t>(j) * width]), &s)) {
+                            done = j;
+                            break;
+                        }
+                        acc = s;
+                    }
+                }
+            } else if (size == 8) {
+                for (int64_t j = 0; j < left; j++) {
+                    int64_t s;
+                    if (__builtin_add_overflow(acc, word<int64_t>(x + static_cast<uint64_t>(j) * width), &s)) {
+                        done = j;
+                        break;
+                    }
+                    acc = s;
+                }
+            } else {
+                return;
+            }
+            t[3] = static_cast<uint64_t>(acc);
             break;
         }
         case kLoopWMix: {

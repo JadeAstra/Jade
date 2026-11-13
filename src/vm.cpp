@@ -6902,11 +6902,12 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
                 break;
             }
     if (region != nullptr) {
-        // The context, its lists, loop templates' words and held fields set to nothing only at
-        // the region's start: they are made by its prologue, which no other way in runs, and read
-        // only in a region with no other way in (its lists and fields looked at once where nothing
-        // of the VM's is in it but on the way to a return or throw). A way in after an island,
-        // as after each call a loop makes, is spared setting some 600 bytes (2026-11-13).
+        // The context, its lists and held fields set to nothing only at the region's start: they
+        // are made by its prologue, which no other way in runs, and read only in a region with no
+        // other way in (its lists and fields looked at once where nothing of the VM's is in it but
+        // on the way to a return or throw). A way in after an island, as after each call a loop
+        // makes, is spared setting some 600 bytes (2026-11-13). A loop template's words are never
+        // set to nothing: each that its shape reads is set by the steps just before it runs.
         native::RegionContext context;
         context.attention = reinterpret_cast<const volatile uint8_t*>(&attention_);
         context.core = coreId_;
@@ -6915,7 +6916,6 @@ JADE_TAIL_FN int VM::nativeEnter(JADE_TAIL_PARAMS) {
         context.upvalues = frame->closure->upvalues.data();
         if (region->first) {
             std::memset(context.lists, 0, sizeof context.lists);
-            std::memset(context.t, 0, sizeof context.t);
             std::memset(context.held, 0, sizeof context.held);
         }
         std::memset(context.heldAt, 0, sizeof context.heldAt);

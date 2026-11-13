@@ -2847,7 +2847,10 @@ struct Region {
     // the whole loop is run there, before its own steps (which then find nothing left, or do the
     // item it stopped at).
     struct Expr {
-        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte } kind;
+        // Held: the int field held for the region as ki, the same each time round. Field: a field of
+        // an item of the list of items looked at once as `list`, the item at index b; ki the
+        // field's width (high half), offset (bits 8 on) and size (1 a byte, 8 an int).
+        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field } kind;
         Cls cls = CI;
         Reg reg{0, CI};  // Inv
         int64_t ki = 0;  // KInt
@@ -2862,6 +2865,11 @@ struct Region {
         exprs.push_back(e);
         return &exprs.back();
     }
+    const Expr* kintOf(int64_t v) {
+        Expr e{Expr::KInt};
+        e.ki = v;
+        return mk(e);
+    }
     static bool same(const Expr* x, const Expr* y) {
         if (x == y) return true;
         if (x == nullptr || y == nullptr || x->kind != y->kind || x->cls != y->cls) return false;
@@ -2869,6 +2877,8 @@ struct Region {
             case Expr::Counter: return true;
             case Expr::Inv: return x->reg == y->reg;
             case Expr::KInt: return x->ki == y->ki;
+            case Expr::Held: return x->ki == y->ki;
+            case Expr::Field: return x->list == y->list && x->ki == y->ki && same(x->b, y->b);
             case Expr::KFloat: return std::memcmp(&x->kf, &y->kf, 8) == 0;
             case Expr::Load: return x->list == y->list && same(x->b, y->b);
             default: return x->op == y->op && same(x->a, y->a) && same(x->b, y->b);
@@ -2877,7 +2887,7 @@ struct Region {
     // Whether an expression is the same each time round: no counter, no item in it.
     static bool invariant(const Expr* e) {
         if (e == nullptr) return false;
-        if (e->kind == Expr::Counter || e->kind == Expr::Load) return false;
+        if (e->kind == Expr::Counter || e->kind == Expr::Load || e->kind == Expr::Field) return false;
         return (e->a == nullptr || invariant(e->a)) && (e->b == nullptr || invariant(e->b));
     }
     static bool usesReg(const Expr* e, const Reg& r) {
@@ -2886,6 +2896,19 @@ struct Region {
         return usesReg(e->a, r) || usesReg(e->b, r);
     }
     static bool itemAtCounter(const Expr* e, Cls cls) { return e != nullptr && e->kind == Expr::Load && e->cls == cls && e->b != nullptr && e->b->kind == Expr::Counter; }
+    // A guard's side: the counter plus a constant, a constant, a register the loop does not change
+    // or an int field held for the region.
+    static bool guardSide(const Expr* e) {
+        if (e == nullptr || e->cls != CI) return false;
+        if (e->kind == Expr::Counter || e->kind == Expr::KInt || e->kind == Expr::Inv || e->kind == Expr::Held) return true;
+        return e->kind == Expr::Bin && e->op == '+' &&
+               ((e->a->kind == Expr::Counter && e->b->kind == Expr::KInt) || (e->a->kind == Expr::KInt && e->b->kind == Expr::Counter));
+    }
+    // An operand of a template's, the same each time round: a constant, a register the loop does
+    // not change, or an int field held for the region.
+    static bool fixedOperand(const Expr* e) {
+        return e != nullptr && e->cls == CI && (e->kind == Expr::KInt || e->kind == Expr::Inv || e->kind == Expr::Held);
+    }
     // An index of the counter times a constant of 1 or more, plus a constant of 0 or more: its
     // stride and offset.
     static bool strided(const Expr* e, int64_t& stride, int64_t& offset) {
@@ -2920,6 +2943,17 @@ struct Region {
             std::string stem;
         };
         std::vector<Store> stores;
+        // A guard's comparison (2026-11-13): the last one followed, for a jump on its flag.
+        struct Cmp {
+            int op = 0;  // 1 <, 2 <=, 3 >, 4 >=, 5 ==, 6 !=
+            const Expr* a = nullptr;
+            const Expr* b = nullptr;
+        };
+        Cmp last;
+        // Item Refs made into slots (hiref): the list and the index; and the slots the body writes
+        // values into, beside its registers (each a temporary of the VM's stack).
+        std::map<int64_t, std::pair<int, const Expr*>> refs;
+        std::vector<int64_t> slots;
     };
     const Expr* valueOf(Followed& fw, const Reg& r) {
         auto v = fw.val.find(r);
@@ -2972,6 +3006,38 @@ struct Region {
             e.a = valueOf(fw, n[0]), e.b = valueOf(fw, n[1]);
             return set(n[0], mk(e)), true;
         }
+        // A comparison of ints: its flag, for a guard's jump.
+        if ((s.size() == 4 || s.size() == 5) && (s[2] == 'i')) {
+            static const char* const ops[] = {"lt", "le", "gt", "ge", "eq", "ne"};
+            for (int k = 0; k < 6; k++)
+                if (s.compare(0, 2, ops[k]) == 0 && (s.substr(2) == "ii" || s.substr(2) == "ik")) {
+                    fw.last.op = k + 1;
+                    fw.last.a = valueOf(fw, n[0]);
+                    fw.last.b = s.substr(2) == "ik" ? kint(l.ki) : valueOf(fw, n[1]);
+                    return true;
+                }
+        }
+        if (s == "hgetpi") {
+            Expr e{Expr::Held};
+            e.ki = l.slot;
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "hgetpv") return fw.slots.push_back(l.slot2), true;
+        if (s == "hiref") {
+            fw.refs[l.slot2] = {static_cast<int>(l.slot), valueOf(fw, n[0])};
+            fw.slots.push_back(l.slot2);
+            return true;
+        }
+        if (s == "hvalpb" || s == "hvalpi") {
+            auto ref = fw.refs.find(l.slot);
+            if (ref == fw.refs.end() || ref->second.first != l.ki) return false;
+            const uint64_t what = static_cast<uint64_t>(l.slot2);
+            Expr e{Expr::Field};
+            e.list = ref->second.first;
+            e.b = ref->second.second;
+            e.ki = static_cast<int64_t>(((what >> 16) & 0xFFFF) << 32 | (what & 0xFFFF) << 8 | (s == "hvalpb" ? 1u : 8u));
+            return set(n[0], mk(e)), true;
+        }
         if (s == "shrik") {
             Expr e{Expr::Bin};
             e.cls = CI, e.op = '>', e.a = valueOf(fw, n[1]), e.b = kint(l.ki);
@@ -3008,7 +3074,25 @@ struct Region {
         bool hasAcc = false;
         const Expr* addend = nullptr;
         int checkSlot = -1, checkKind = 0;  // a variable's kind the body checks each time round  // kLoopWMap: c where it is a register the loop does not change
+        std::vector<Followed::Cmp> guards;  // conditions of ways to a throw or a return, none to hold
+        int baseMode = 0;                   // kLoopWSumField: base + counter, base none (0), a (1), a * b (2)
+        const Expr* baseA = nullptr;
+        const Expr* baseB = nullptr;
+        int64_t field = 0;
     };
+
+    // An item's index of base + counter, base none, an operand, or one operand times another.
+    static bool fieldIndex(const Expr* e, Ahead& ah) {
+        if (e == nullptr || e->cls != CI) return false;
+        if (e->kind == Expr::Counter) return ah.baseMode = 0, true;
+        if (e->kind != Expr::Bin || e->op != '+') return false;
+        const Expr* base = e->a->kind == Expr::Counter ? e->b : e->b->kind == Expr::Counter ? e->a : nullptr;
+        if (base == nullptr) return false;
+        if (fixedOperand(base)) return ah.baseMode = 1, ah.baseA = base, true;
+        if (base->kind == Expr::Bin && base->op == '*' && base->cls == CI && fixedOperand(base->a) && fixedOperand(base->b))
+            return ah.baseMode = 2, ah.baseA = base->a, ah.baseB = base->b, true;
+        return false;
+    }
 
     // Bytes of an item of K bytes, each set to one mix of bytes of it (kLoopWMix, 2026-11-13: a
     // greyscale of a picture's bytes in place): every store a byte's value into bytes, at counter
@@ -3098,11 +3182,37 @@ struct Region {
             fw.val[counter] = mk(c);
         }
         std::set<Reg> defined;
+        std::vector<Followed::Cmp> pending;
         for (int i = h + 1; i < e;) {
             const Result& r = results[static_cast<size_t>(i)];
             if (!in[static_cast<size_t>(i)].known || r.island || r.fallExit >= 0) return false;
             // An int chosen by a comparison with a constant: x > K ? K : x and the like.
             const LOp* last = r.ops.empty() ? nullptr : &r.ops.back();
+            // A guard as one step (2026-11-13): a jump on where a comparison does not hold, which
+            // falls into a way to a throw or a return where it does (`if (i >= n) { throw ... }`).
+            if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && (last->stem.substr(4) == "ii" || last->stem.substr(4) == "ik") &&
+                last->jumpExit < 0 && last->jumpTo > i + 1 && last->jumpTo < e) {
+                bool ends = true;
+                for (int u = i + 1; u < last->jumpTo && ends; u++) ends = endingAt(u);
+                static const char* const ops[] = {"lt", "le", "gt", "ge", "eq", "ne"};
+                int op = 0;
+                for (int k = 0; k < 6; k++)
+                    if (last->stem.compare(2, 2, ops[k]) == 0) op = k + 1;
+                if (ends && op != 0) {
+                    for (size_t k = 0; k + 1 < r.ops.size(); k++) {
+                        const LOp& l = r.ops[k];
+                        if (l.jumpTo >= 0 || l.jumpExit >= 0 || !follow(fw, l)) return false;
+                        for (const Reg& d : l.defs) defined.insert(d);
+                    }
+                    Followed::Cmp g;
+                    g.op = op;
+                    g.a = valueOf(fw, last->named[0]);
+                    g.b = last->stem.substr(4) == "ik" ? kintOf(last->ki) : valueOf(fw, last->named[1]);
+                    ah.guards.push_back(g);
+                    i = last->jumpTo;
+                    continue;
+                }
+            }
             if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && last->stem.substr(4) == "ik" && last->jumpTo > i && last->jumpTo < e) {
                 for (size_t k = 0; k + 1 < r.ops.size(); k++)
                     if (!follow(fw, r.ops[k])) return false;
@@ -3153,8 +3263,34 @@ struct Region {
                 i = y;
                 continue;
             }
+            int skipTo = -1;
             for (const LOp& l : r.ops) {
+                // A guard (2026-11-13): comparisons joined by `or`, each true one jumping on to the
+                // next `or` (or to the last jump), the last jump going on where none holds and
+                // falling into a way to a throw or a return otherwise. None may hold anywhere in
+                // the range, which the template checks first.
+                if (l.stem == "jtrue" || l.stem == "jfalse") {
+                    if (fw.last.op == 0 || l.jumpExit >= 0 || l.jumpTo <= i || l.jumpTo >= e) return false;
+                    pending.push_back(fw.last);
+                    fw.last = Followed::Cmp{};
+                    if (l.stem == "jtrue") {
+                        const Result& to = results[static_cast<size_t>(l.jumpTo)];
+                        if (to.ops.size() != 1 || (to.ops[0].stem != "jtrue" && to.ops[0].stem != "jfalse")) return false;
+                        continue;
+                    }
+                    if (&l != &r.ops.back()) return false;
+                    // Every instruction it falls into on the way to a throw or a return (one after
+                    // an island, which the analysis never reaches, as well).
+                    for (int u = i + 1; u < l.jumpTo; u++)
+                        if (!endingAt(u)) return false;
+                    if (l.jumpTo == i + 1) return false;
+                    ah.guards.insert(ah.guards.end(), pending.begin(), pending.end());
+                    pending.clear();
+                    skipTo = l.jumpTo;
+                    continue;
+                }
                 if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+                if (l.stem.rfind("hsetp", 0) == 0 || l.stem == "putp") return false;
                 if (l.stem == "chkf" || l.stem == "chkint" || l.stem == "chki") {
                     // Of a variable the loop never writes: checked once, by the template.
                     const int slot = static_cast<int>(l.slot);
@@ -3168,8 +3304,16 @@ struct Region {
                 if (!follow(fw, l)) return false;
                 for (const Reg& d : l.defs) defined.insert(d);
             }
-            i++;
+            i = skipTo >= 0 ? skipTo : i + 1;
         }
+        if (!pending.empty() || ah.guards.size() > 4) return false;
+        // A guard's sides: the counter plus a constant, or what is the same each time round.
+        auto changed = [&](const Expr* e) { return e != nullptr && e->kind == Expr::Inv && defined.count(e->reg) != 0; };
+        for (const Followed::Cmp& g : ah.guards)
+            if (!guardSide(g.a) || !guardSide(g.b) || changed(g.a) || changed(g.b)) return false;
+        // The slots the body writes beside its registers: temporaries above the loop's own.
+        for (int64_t slot : fw.slots)
+            if (slot < in[static_cast<size_t>(h)].top) return false;
         if (defined.count(next) || defined.count(left) || defined.count(counter)) return false;
         // What goes on round the loop: at most one total.
         const std::set<Reg>& live = liveIn[static_cast<size_t>(h)];
@@ -3193,6 +3337,13 @@ struct Region {
             if (itemAtCounter(v->b, ah.acc.cls)) {
                 ah.shape = ah.acc.cls == CF ? 8 /* kLoopFSum */ : 11 /* kLoopWSum */;
                 ah.a = v->b->list;
+                return true;
+            }
+            // A field of items at base + counter (2026-11-13: image[x, y].red).
+            if (ah.acc.cls == CI && v->b->kind == Expr::Field && fieldIndex(v->b->b, ah) && !changed(ah.baseA) && !changed(ah.baseB)) {
+                ah.shape = 15;  // kLoopWSumField
+                ah.a = v->b->list;
+                ah.field = v->b->ki;
                 return true;
             }
             // Whole numbers at counter * K + C (2026-11-13): one part of each pixel's four, say.
@@ -3342,6 +3493,30 @@ struct Region {
             }
             return true;
         };
+        // An operand in words at and at + 1 (stencils.cpp, operand).
+        auto operandWords = [&](int at, const Expr* e) {
+            if (e->kind == Expr::KInt) return word(at, 0), word(at + 1, e->ki);
+            if (e->kind == Expr::Counter) return word(at, 1), word(at + 1, 0);
+            if (e->kind == Expr::Bin) {  // the counter plus a constant
+                const Expr* k = e->a->kind == Expr::KInt ? e->a : e->b;
+                return word(at, 1), word(at + 1, k->ki);
+            }
+            if (e->kind == Expr::Held) return word(at, 3), word(at + 1, e->ki);
+            return word(at, 2), store(at + 1, e->reg);
+        };
+        word(16, static_cast<int64_t>(ah.guards.size()));
+        for (size_t g = 0; g < ah.guards.size(); g++) {
+            const int at = 17 + 5 * static_cast<int>(g);
+            word(at, ah.guards[g].op);
+            operandWords(at + 1, ah.guards[g].a);
+            operandWords(at + 3, ah.guards[g].b);
+        }
+        if (ah.shape == 15) {
+            word(40, ah.baseMode);
+            if (ah.baseMode >= 1) operandWords(41, ah.baseA);
+            if (ah.baseMode == 2) operandWords(43, ah.baseB);
+            word(45, ah.field);
+        }
         word(0, static_cast<int64_t>(ah.shape));
         word(4, ah.out), word(5, ah.a), word(6, ah.b);
         for (int k = 0; k < 6; k++) word(7 + k, ah.words[k]);
@@ -3368,7 +3543,10 @@ struct Region {
     int templates = 0;
 
     void makeAhead() {
-        if (prologue.empty() || lookedBeforeEnds) return;  // lists looked at once: none, or the VM's in the region
+        // Lists looked at once: none, no loop made ahead. Where the VM's only work is the way to a
+        // return or a throw (lookedBeforeEnds), a loop is made ahead as anywhere (2026-11-13): its
+        // body may hold no way out but a guard's, which the template checks never fires first.
+        if (prologue.empty()) return;
         for (size_t e = 0; e < ins.size(); e++) {
             if (!in[e].known || ins[e].op != Op::Loop) continue;
             const LOp& back = results[e].ops.back();

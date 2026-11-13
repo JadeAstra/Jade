@@ -1,0 +1,111 @@
+// Loops whose bodies hold a guard, a way to a throw or a return on a condition (an inline op []'s
+// check that (x, y) is inside the image, say), run whole by native code's loop templates
+// (2026-11-13): the template checks first that the guard holds nowhere from the loop's first
+// counter to its last, and leaves the loop to its own steps otherwise, which throw or return at
+// the item they would. And a total of a field of items at base + counter: image[x, y].red. Each
+// loop runs three times (its region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+val im = Image(60, 40)
+im.editPixels { g ->
+  for (y in 0 ..< 40) { for (x in 0 ..< 60) { g[x, y] = Color((x * 7 + y) % 256, (y * 11 + x * 3) % 256, (x * y) % 256, 255 - (x + y) % 50) } }
+}
+
+fun reds(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im[x, y].red } }
+  return t
+}
+fun greens(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im[x, y].green } }
+  return t
+}
+fun alphas(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im[x, y].alpha } }
+  return t
+}
+print(thrice { reds(im) }, thrice { greens(im) }, thrice { alphas(im) })   // expect: 278464 313760 553400
+
+// A guard that fires: x past the width, x from -1, y past the height. The same error at the
+// same pixel, nothing of the total seen.
+fun widthPlus(im : Image, more : int) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width + more) { t += im[x, y].red } }
+  return t
+}
+fun fromMinus(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in -1 ..< im.width) { t += im[x, y].red } }
+  return t
+}
+fun heightPlus(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height + 1) { for (x in 0 ..< im.width) { t += im[x, y].red } }
+  return t
+}
+print(thrice { widthPlus(im, 0) }, failing { thrice { widthPlus(im, 1) } })   // expect: 278464 IndexOutOfBoundsException: pixel (60, 0) is outside the image, which is 60 by 40
+print(failing { thrice { fromMinus(im) } })   // expect: IndexOutOfBoundsException: pixel (-1, 0) is outside the image, which is 60 by 40
+print(failing { thrice { heightPlus(im) } })   // expect: IndexOutOfBoundsException: pixel (0, 40) is outside the image, which is 60 by 40
+
+// Part of each row, from a column on.
+fun columns(im : Image, from : int, to : int) : int {
+  var t = 0
+  for (y in 0 ..< im.height) { for (x in from ..< to) { t += im[x, y].blue } }
+  return t
+}
+print(thrice { columns(im, 10, 30) }, thrice { columns(im, 59, 60) }, thrice { columns(im, 5, 5) })   // expect: 94792 5316 0
+
+// A grid of a value type of ints: an int field at base + counter.
+value Cell(val a : int, val b : int)
+val cells = Grid<Cell>(30, 20, fill = Cell(0, 0))
+for (y in 0 ..< 20) { for (x in 0 ..< 30) { cells[x, y] = Cell(x * 1000 + y, y * 1000000 - x) } }
+fun bs(g : Grid<Cell>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) { for (x in 0 ..< g.width) { t += g[x, y].b } }
+  return t
+}
+print(thrice { bs(cells) })   // expect: 5699991300
+
+// A guard in a plain list's total, to a throw and to a return.
+val xs : open List<int> = List(500) { it * 3 - 100 }
+fun upTo(xs : List<int>, n : int, limit : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i >= limit) { throw IllegalStateException("past the limit at $i") }
+    t += xs[i]
+  }
+  return t
+}
+fun untilLimit(xs : List<int>, n : int, limit : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i >= limit) { return -t }
+    t += xs[i]
+  }
+  return t
+}
+print(thrice { upTo(xs, 500, 500) }, failing { thrice { upTo(xs, 500, 321) } })   // expect: 324250 IllegalStateException: past the limit at 321
+print(thrice { untilLimit(xs, 500, 600) }, thrice { untilLimit(xs, 500, 123) })   // expect: 324250 -10209
+
+// A total that overflows: the steps throw at its pixel.
+val bright = Image(10, 10, Color(200, 200, 200))
+fun redsFrom(im : Image, start : int) : int {
+  var t = start
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { t += im[x, y].red } }
+  return t
+}
+print(thrice { redsFrom(bright, 9223372036854775807 - 20000) }, failing { thrice { redsFrom(bright, 9223372036854775807 - 19999) } })   // expect: 9223372036854775807 ArithmeticException: 9223372036854775608 + 200 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around

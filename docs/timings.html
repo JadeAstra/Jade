@@ -112,8 +112,8 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <div class="table"><table>
 <thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
 <tbody>
-<tr class="has-note"><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">67.2</td><td class="num">5.6</td><td class="num">3.3</td><td class="num">20×</td></tr>
-<tr class="note-row"><td colspan="6">Inline op [], the pixel read where it is; most of the rest is the check that (x, y) is in the image.</td></tr>
+<tr class="has-note slow"><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">3.3</td><td class="num">0.3</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="6">Inline op [], the pixel read where it is; was 67.2 ms, 25 steps a pixel, most of them the check that (x, y) is in the image. Now native code runs the inner loop whole as a loop template (2026-11-13): a total of a field of items at base + counter (here <code>y * width + x</code>), and loop templates now take bodies holding a guard, a way to a throw or a return on a condition (op []'s check, or an <code>if</code> that throws), checking first that the guard holds nowhere from the loop's first counter to its last; where it might, the loop's own steps run and throw at the pixel they would.</td></tr>
 <tr class="has-note"><td class="op"><code>val c = image[x, y]</code>, four parts</td><td class="num">121.5</td><td class="num">119.3</td><td class="num">9.9</td><td class="num">5.4</td><td class="num">22×</td></tr>
 <tr class="note-row"><td colspan="6">As above, the colour copied out once.</td></tr>
 <tr class="has-note"><td class="op"><code>pixels[x, y].red</code></td><td class="num">92.4</td><td class="num">85.8</td><td class="num">7.2</td><td class="num">3.3</td><td class="num">26×</td></tr>
@@ -255,7 +255,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">42</td><td class="num">2.0×</td><td class="num">3.3</td><td class="num">13×</td></tr>
 <tr><td class="op"><code>val c = colors[i]</code>, four parts</td><td class="num">274</td><td class="num">72</td><td class="num">3.8×</td><td class="num">5.4</td><td class="num">13×</td></tr>
 <tr><td class="op"><code>pixels[x, y]</code>, four parts</td><td class="num">770</td><td class="num">118</td><td class="num">6.5×</td><td class="num">5.4</td><td class="num">22×</td></tr>
-<tr><td class="op"><code>image[x, y].red</code></td><td class="num">1,363</td><td class="num">67</td><td class="num">20×</td><td class="num">3.3</td><td class="num">20×</td></tr>
+<tr><td class="op"><code>image[x, y].red</code></td><td class="num">1,363</td><td class="num">3.3</td><td class="num">413×</td><td class="num">3.3</td><td class="num">1.0×</td></tr>
 <tr><td class="op"><code>grid[x, y] = c</code></td><td class="num">619</td><td class="num">88</td><td class="num">7.0×</td><td class="num">3.2</td><td class="num">28×</td></tr>
 <tr><td class="op">greyscale into a <code>List&lt;Color&gt;</code></td><td class="num">882</td><td class="num">199</td><td class="num">4.4×</td><td class="num">18.8</td><td class="num">11×</td></tr>
 <tr><td class="op">greyscale by <code>grid[x, y] = ...</code></td><td class="num">887</td><td class="num">230</td><td class="num">3.9×</td><td class="num">7.4</td><td class="num">31×</td></tr>
