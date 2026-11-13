@@ -1,0 +1,103 @@
+// Bytes of each item of K bytes set to a mix of bytes of it, run whole by native code's mix
+// template (2026-11-13): a greyscale of a picture's bytes in place, say. Where every mix is a
+// byte whatever the bytes, worked out and stored with no check; otherwise a block at a time, and
+// a mix that is no byte left to the loop's own steps, which throw at its item. A loop past the
+// list's end: the steps, the same error at the same item. Each loop runs three times (its
+// region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+fun pixels(n : int, k : int) : Bytes {
+  val b = Bytes(n * k)
+  for (i in 0 ..< b.size) { b[i] = ((i * 37 + i / 7) % 256).toByte() }
+  return b
+}
+fun shown(b : Bytes) : string => "${b.crc32()} ${b[0]} ${b[1]} ${b[2]} ${b[3]} ${b[b.size - 4]} ${b[b.size - 3]} ${b[b.size - 1]}"
+
+// A greyscale in place: three of four bytes, every mix a byte.
+fun grey(px : Bytes) {
+  for (i in 0 ..< px.size / 4) {
+    val j = i * 4
+    val v = ((px[j].toInt() * 54 + px[j + 1].toInt() * 183 + px[j + 2].toInt() * 19 + 128) >> 8).toByte()
+    px[j] = v
+    px[j + 1] = v
+    px[j + 2] = v
+  }
+}
+val a = pixels(1000, 4)
+thrice { grey(a) }
+print(shown(a))   // expect: 3509370993 32 32 32 111 212 212 54
+
+// Into another list, three bytes a pixel, two of them written, the weights in another order.
+fun mixInto(from : Bytes, to : Bytes) {
+  for (i in 0 ..< 500) {
+    val v = ((from[i * 3 + 2].toInt() * 3 + from[i * 3].toInt()) >> 2).toByte()
+    to[i * 3 + 1] = v
+    to[i * 3] = v
+  }
+}
+// No shift: a byte's own value, moved.
+fun moved(from : Bytes, to : Bytes) {
+  for (i in 0 ..< 500) { to[i * 3 + 2] = (from[i * 3 + 1].toInt() + 0).toByte() }
+}
+val b3 = pixels(500, 3)
+val out3 = Bytes(1500)
+thrice { mixInto(b3, out3) }
+thrice { moved(b3, out3) }
+print(shown(out3))   // expect: 3223148189 55 55 37 166 232 106 88
+
+// Only the fourth byte set, from the other three's sum, a quarter of it.
+fun alphaOf(px : Bytes) {
+  for (i in 0 ..< px.size / 4) { px[i * 4 + 3] = ((px[i * 4].toInt() + px[i * 4 + 1].toInt() + px[i * 4 + 2].toInt() + 1) >> 2).toByte() }
+}
+val c = pixels(1000, 4)
+thrice { alphaOf(c) }
+print(shown(c))   // expect: 24084631 0 37 74 28 198 236 113
+
+// A weight below 0: mixes below 0 thrown at their item, as the loop's own steps throw.
+fun edges(px : Bytes) {
+  for (i in 0 ..< px.size / 4) {
+    val j = i * 4
+    val v = ((px[j + 1].toInt() * 2 - px[j].toInt() * 1 + 0) >> 1).toByte()
+    px[j + 2] = v
+  }
+}
+val d = pixels(1000, 4)
+print(failing { thrice { edges(d) } }, d[2], d[6], d[10])   // expect: IllegalArgumentException: -103 does not fit in a byte, which holds 0 to 255; toByteWrapped() keeps the low 8 bits 37 111 57
+
+// Past the list's end, and part of a list.
+fun upTo(px : Bytes, n : int) {
+  for (i in 0 ..< n) {
+    val j = i * 4
+    val v = ((px[j].toInt() * 77 + px[j + 1].toInt() * 150 + px[j + 2].toInt() * 29) >> 8).toByte()
+    px[j] = v
+    px[j + 1] = v
+    px[j + 2] = v
+  }
+}
+val e = pixels(100, 4)
+print(failing { thrice { upTo(e, 101) } }, shown(e))   // expect: IndexOutOfBoundsException: bytes index 400 is out of range (size 400) 651166245 30 30 30 111 146 146 228
+val f = pixels(100, 4)
+thrice { upTo(f, 37) }
+print(shown(f), f[36 * 4], f[37 * 4])   // expect: 1603722824 30 30 30 111 116 153 228 79 121
+
+// Two stores of what looks the same, the second reading what the first wrote: not one mix.
+fun twice(px : Bytes) {
+  for (i in 0 ..< px.size / 4) {
+    px[i * 4 + 1] = ((px[i * 4 + 1].toInt() + px[i * 4].toInt()) >> 1).toByte()
+    px[i * 4 + 2] = ((px[i * 4 + 1].toInt() + px[i * 4].toInt()) >> 1).toByte()
+  }
+}
+val g = pixels(1000, 4)
+thrice { twice(g) }
+print(shown(g))   // expect: 1984301330 0 4 2 111 198 202 54

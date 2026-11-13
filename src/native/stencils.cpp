@@ -1560,7 +1560,7 @@ F_A(HVALPF, x)
 // operations, in the same order, as the steps would: the same answer to the bit.
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
-    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -1851,6 +1851,118 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     done = j - next;
                     break;
                 }
+            }
+            break;
+        }
+        case kLoopWMix: {
+            // Bytes of an item of K bytes set to a mix of bytes of it (2026-11-13: a greyscale):
+            // out[j*K + w_m] = (sum of weight_k * a[j*K + r_k], + c) >> shift, each a byte. Word 7:
+            // K, shift, how many read, how many written (a byte each), then the four written
+            // offsets; word 8: c; words 9 to 12: each read's weight (high half) and offset. Every
+            // offset below K, so that no item reads what another writes; weights and c small
+            // enough that nothing can overflow 32 bits (the loop's steps check 64). A block of
+            // items worked out whole, then stored; one holding a mix that is no byte done an item
+            // at a time to it, for the loop's own steps to throw at it.
+            if (!a.ok() || a.kind() != 3 || !out.ok() || out.kind() != 3) return;
+            const uint64_t w7 = t[7];
+            const int64_t K = static_cast<int64_t>(w7 & 0xFF), shift = static_cast<int64_t>((w7 >> 8) & 0xFF);
+            const int nr = static_cast<int>((w7 >> 16) & 0xFF), nw = static_cast<int>((w7 >> 24) & 0xFF);
+            if (K < 1 || shift > 31 || nr < 1 || nr > 4 || nw < 1 || nw > 4) return;
+            int32_t weight[4] = {0, 0, 0, 0};
+            int64_t from[4] = {0, 0, 0, 0}, to[4] = {0, 0, 0, 0};
+            for (int k = 0; k < nr; k++) {
+                weight[k] = static_cast<int32_t>(static_cast<int64_t>(t[9 + k]) >> 32);
+                from[k] = static_cast<int64_t>(t[9 + k] & 0xFF);
+                if (from[k] >= K) return;
+            }
+            for (int m = 0; m < nw; m++) {
+                to[m] = static_cast<int64_t>((w7 >> (32 + 8 * m)) & 0xFF);
+                if (to[m] >= K) return;
+            }
+            const int32_t c = static_cast<int32_t>(static_cast<int64_t>(t[8]));
+            int64_t rows;
+            if (__builtin_mul_overflow(end, K, &rows) || static_cast<uint64_t>(rows) > a.h[1] || static_cast<uint64_t>(rows) > out.h[2]) return;
+            if (a.h[0] != out.h[0]) {  // two lists: none of one in the other
+                const uint64_t a0 = a.h[0], o0 = out.h[0];
+                if (a0 < o0 + static_cast<uint64_t>(rows) && o0 < a0 + static_cast<uint64_t>(rows)) return;
+            }
+            const uint8_t* x = a.bytes();
+            uint8_t* o = out.bytes();
+            // Three bytes read of four, written to three (a greyscale): written out for Clang.
+            const bool rgb = K == 4 && nr == 3 && from[0] == 0 && from[1] == 1 && from[2] == 2 && nw == 3 && to[0] == 0 && to[1] == 1 && to[2] == 2;
+            // Where every mix is a byte whatever the bytes (the least and the most it can be, each
+            // a byte), each item worked out and stored in one pass, with no check.
+            int32_t least = c, most = c;
+            for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
+            if ((least >> shift) >= 0 && (most >> shift) <= 255) {
+                if (rgb) {
+                    const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
+                    for (int64_t q = next; q < end; q++) {
+                        const uint8_t* p = x + q * 4;
+                        const uint8_t g = static_cast<uint8_t>((w0 * p[0] + w1 * p[1] + w2 * p[2] + c) >> shift);
+                        uint8_t* d = o + q * 4;
+                        d[0] = g;
+                        d[1] = g;
+                        d[2] = g;
+                    }
+                } else {
+                    for (int64_t q = next; q < end; q++) {
+                        const uint8_t* p = x + q * K;
+                        int32_t s = c;
+                        for (int k = 0; k < nr; k++) s += weight[k] * p[from[k]];
+                        const uint8_t g = static_cast<uint8_t>(s >> shift);
+                        for (int m = 0; m < nw; m++) o[q * K + to[m]] = g;
+                    }
+                }
+                break;
+            }
+            int64_t j = next;
+            while (j < end) {
+                const int64_t n = end - j < 64 ? end - j : 64;
+                int32_t v[64];
+                int32_t bad = 0;
+                if (rgb) {
+                    const int32_t w0 = weight[0], w1 = weight[1], w2 = weight[2];
+                    const uint8_t* p = x + j * 4;
+                    for (int64_t q = 0; q < n; q++) {
+                        const int32_t s = (w0 * p[q * 4] + w1 * p[q * 4 + 1] + w2 * p[q * 4 + 2] + c) >> shift;
+                        v[q] = s;
+                        bad |= static_cast<int32_t>(static_cast<uint32_t>(s) > 255u);
+                    }
+                } else {
+                    for (int64_t q = 0; q < n; q++) {
+                        const uint8_t* p = x + (j + q) * K;
+                        int32_t s = c;
+                        for (int k = 0; k < nr; k++) s += weight[k] * p[from[k]];
+                        s >>= shift;
+                        v[q] = s;
+                        bad |= static_cast<int32_t>(static_cast<uint32_t>(s) > 255u);
+                    }
+                }
+                int64_t good = n;
+                if (bad != 0)
+                    for (int64_t q = 0; q < n; q++)
+                        if (static_cast<uint32_t>(v[q]) > 255u) {
+                            good = q;
+                            break;
+                        }
+                if (rgb) {
+                    uint8_t* d = o + j * 4;
+                    for (int64_t q = 0; q < good; q++) {
+                        const uint8_t g = static_cast<uint8_t>(v[q]);
+                        d[q * 4] = g;
+                        d[q * 4 + 1] = g;
+                        d[q * 4 + 2] = g;
+                    }
+                } else {
+                    for (int64_t q = 0; q < good; q++)
+                        for (int m = 0; m < nw; m++) o[(j + q) * K + to[m]] = static_cast<uint8_t>(v[q]);
+                }
+                if (good < n) {
+                    done = j + good - next;
+                    break;
+                }
+                j += n;
             }
             break;
         }

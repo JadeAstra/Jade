@@ -2972,6 +2972,11 @@ struct Region {
             e.a = valueOf(fw, n[0]), e.b = valueOf(fw, n[1]);
             return set(n[0], mk(e)), true;
         }
+        if (s == "shrik") {
+            Expr e{Expr::Bin};
+            e.cls = CI, e.op = '>', e.a = valueOf(fw, n[1]), e.b = kint(l.ki);
+            return set(n[0], mk(e)), true;
+        }
         if (s == "chkbyte") {
             Expr e{Expr::ToByte};
             e.a = valueOf(fw, n[0]);
@@ -3004,6 +3009,80 @@ struct Region {
         const Expr* addend = nullptr;
         int checkSlot = -1, checkKind = 0;  // a variable's kind the body checks each time round  // kLoopWMap: c where it is a register the loop does not change
     };
+
+    // Bytes of an item of K bytes, each set to one mix of bytes of it (kLoopWMix, 2026-11-13: a
+    // greyscale of a picture's bytes in place): every store a byte's value into bytes, at counter
+    // * K + an offset below K, of one value: (a sum of items of one list at counter * K + an
+    // offset below K, each times a constant, plus a constant) >> a constant, as a byte. The
+    // weights and the constant small, so that nothing it works out can overflow.
+    bool mix(const Followed& fw, Ahead& ah) {
+        if (fw.stores.empty() || fw.stores.size() > 4) return false;
+        const Followed::Store& first = fw.stores[0];
+        int64_t K = 0;
+        uint64_t writes = 0;
+        for (size_t m = 0; m < fw.stores.size(); m++) {
+            const Followed::Store& st = fw.stores[m];
+            int64_t stride = 0, offset = 0;
+            // One value, worked out once before any of them is stored: every read before every write.
+            if (st.stem != "hsetwb" || st.list != first.list || st.value != first.value || !strided(st.index, stride, offset)) return false;
+            if (K == 0) K = stride;
+            if (stride != K || K > 255 || offset >= K) return false;
+            writes |= static_cast<uint64_t>(offset) << (8 * m);
+        }
+        const Expr* v = first.value;
+        if (v->kind != Expr::ToByte) return false;
+        v = v->a;
+        int64_t shift = 0;
+        if (v->kind == Expr::Bin && v->op == '>' && v->b->kind == Expr::KInt) {
+            shift = v->b->ki;
+            if (shift < 0 || shift > 31) return false;
+            v = v->a;
+        }
+        struct Term {
+            int64_t weight, offset;
+        };
+        std::vector<Term> terms;
+        int64_t c = 0;
+        int list = -1;
+        // Each term with its sign: what is taken away, its weight turned round.
+        std::function<bool(const Expr*, int64_t)> sum = [&](const Expr* e, int64_t sign) -> bool {
+            if (e->cls != CI) return false;
+            if (e->kind == Expr::KInt) {
+                if (e->ki < -(int64_t{1} << 40) || e->ki > (int64_t{1} << 40)) return false;
+                return c += sign * e->ki, true;
+            }
+            if (e->kind == Expr::Bin && e->op == '+') return sum(e->a, sign) && sum(e->b, sign);
+            if (e->kind == Expr::Bin && e->op == '-') return sum(e->a, sign) && sum(e->b, -sign);
+            const Expr* load = e;
+            int64_t w = sign;
+            if (e->kind == Expr::Bin && e->op == '*') {
+                const Expr* k = e->a->kind == Expr::KInt ? e->a : e->b;
+                load = e->a->kind == Expr::KInt ? e->b : e->a;
+                if (k->kind != Expr::KInt || k->ki < -(int64_t{1} << 40) || k->ki > (int64_t{1} << 40)) return false;
+                w = sign * k->ki;
+            }
+            int64_t stride = 0, offset = 0;
+            if (load->kind != Expr::Load || load->cls != CI || !strided(load->b, stride, offset) || stride != K || offset >= K) return false;
+            if (list >= 0 && load->list != list) return false;
+            list = load->list;
+            terms.push_back(Term{w, offset});
+            return true;
+        };
+        if (!sum(v, 1) || terms.empty() || terms.size() > 4 || list < 0) return false;
+        for (const Term& t : terms)
+            if (t.weight < -(1 << 20) || t.weight > (1 << 20)) return false;
+        if (c < -(1 << 28) || c > (1 << 28)) return false;
+        ah.shape = 14;  // kLoopWMix
+        ah.out = first.list;
+        ah.a = list;
+        ah.bytesOut = true;
+        ah.words[0] = static_cast<int64_t>(static_cast<uint64_t>(K) | static_cast<uint64_t>(shift) << 8 | static_cast<uint64_t>(terms.size()) << 16 |
+                                           static_cast<uint64_t>(fw.stores.size()) << 24 | writes << 32);
+        ah.words[1] = c;
+        for (size_t k = 0; k < terms.size(); k++)
+            ah.words[2 + k] = static_cast<int64_t>(static_cast<uint64_t>(terms[k].weight) << 32 | static_cast<uint64_t>(terms[k].offset));
+        return true;
+    }
 
     // The loop from head h (its RangeNext, the step 1) to its Loop e: a template where it fits.
     bool recognise(int h, int e, Ahead& ah, Reg& next, Reg& left) {
@@ -3124,6 +3203,7 @@ struct Region {
             ah.words[0] = stride, ah.words[1] = offset;
             return true;
         }
+        if (mix(fw, ah)) return true;
         if (fw.stores.size() != 1) return false;
         const Followed::Store& st = fw.stores[0];
         if (st.index->kind != Expr::Counter) return false;

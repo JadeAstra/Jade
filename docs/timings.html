@@ -104,8 +104,8 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <tbody>
 <tr class="has-note slow"><td class="op">bytes: read red</td><td class="num">3.7</td><td class="num">0.3</td><td class="num">3.6</td><td class="num">1.0×</td></tr>
 <tr class="note-row slow"><td colspan="5"><code>t += px[i * 4].toInt()</code>. Was 12.3 ms, a step at a time (5 cycles a pixel). Native code's sum template, which runs such a loop whole, took only <code>t += xs[i]</code>; now it takes an item at counter &times; K + C too, and sums bytes with no check of each where none can take the total past the largest int, which Clang does several at a time (2026-11-13). On the way: the template's checked sum of bytes left an overflowing total wrapped round, and the loop went on from there, where it should have thrown.</td></tr>
-<tr class="has-note"><td class="op">bytes: greyscale in place</td><td class="num">56.7</td><td class="num">4.7</td><td class="num">7.3</td><td class="num">7.8×</td></tr>
-<tr class="note-row"><td colspan="5">three reads, the sum, three writes</td></tr>
+<tr class="has-note slow"><td class="op">bytes: greyscale in place</td><td class="num">7.5</td><td class="num">0.6</td><td class="num">7.3</td><td class="num">1.0×</td></tr>
+<tr class="note-row slow"><td colspan="5">Three reads, the sum, three writes. Was 56.7 ms, 27 steps a pixel, each checked (overflow, bounds, a byte). Now native code runs such a loop whole as a loop template of its own (kLoopWMix, 2026-11-13): bytes of each item of K bytes set to one mix of bytes of it, (a sum of bytes times constants, plus a constant) shifted right; where the weights make every mix a byte whatever the bytes, worked out and stored in one pass with no check, otherwise a block at a time, a mix that is no byte left to the loop's own steps to throw at.</td></tr>
 </tbody></table></div>
 
 <h2 id="read">Reading pixels</h2>
@@ -280,7 +280,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <li><strong><code>scaled</code> up</strong> (7 ns a pixel) and <strong>smoothed lines</strong> (22 ns a pixel of length) could be faster; not looked into.</li>
 <li><strong>A half see-through picture</strong> drawn costs 4 ns a pixel, the blend's division for each part.</li>
 <li><strong>PNG and WebP encoding</strong>: the compressors' own work, not looked into.</li>
-<li><strong>Against C++</strong> (the 100% C++ columns): a pixel loop written in Jade takes 4 to 47 times what the same loop takes in C++, most of them 16 to 47 times (3 to 7 ms for 12 million pixels there, vectorised by Clang), the yardstick's greyscale over bytes 8 times (its read of red now as quick as C++'s), <code>histogram()</code> 4 times; what Jade does in C++ already is C++'s. <code>copy()</code>, <code>toTensor()</code>, a region of a grid and <code>fillRect</code> were 1.5 to 25 times a plain C++ loop, and are now as quick or quicker (fillRect 2.2 times, its calls from Jade). A see-through <code>fillRect</code> blends at 3.6 ns a pixel, three divisions each; not looked into.</li>
+<li><strong>Against C++</strong> (the 100% C++ columns): a pixel loop written in Jade takes 4 to 47 times what the same loop takes in C++, most of them 16 to 47 times (3 to 7 ms for 12 million pixels there, vectorised by Clang), the yardstick's loops over bytes now as quick as C++'s (both run whole by loop templates), <code>histogram()</code> 4 times; what Jade does in C++ already is C++'s. <code>copy()</code>, <code>toTensor()</code>, a region of a grid and <code>fillRect</code> were 1.5 to 25 times a plain C++ loop, and are now as quick or quicker (fillRect 2.2 times, its calls from Jade). A see-through <code>fillRect</code> blends at 3.6 ns a pixel, three divisions each; not looked into.</li>
 </ul>
 </main>
 </body>
