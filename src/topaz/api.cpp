@@ -803,8 +803,12 @@ void registerTopaz(VM& vm) {
             if (rt > l && b > t) r.uploadPart(surfaceOf(vm, card), rgba, static_cast<int>(w), static_cast<int>(l), static_cast<int>(t), static_cast<int>(rt - l), static_cast<int>(b - t));
         }
         setField("cardAt", Value::integer(changes));
-        // Nothing changed since this copy.
-        for (const char* side : {"changedLeft", "changedTop", "changedRight", "changedBottom"}) setField(side, Value::integer(0));
+        // Nothing changed since this copy: empty, as Image keeps it (the largest left and top, the
+        // smallest right and bottom).
+        setField("changedLeft", Value::integer(INT64_MAX));
+        setField("changedTop", Value::integer(INT64_MAX));
+        setField("changedRight", Value::integer(INT64_MIN));
+        setField("changedBottom", Value::integer(INT64_MIN));
         return card;
     });
     def("surfaceUpload", 2, 2, [](VM& vm, int, Value* args) -> Value {

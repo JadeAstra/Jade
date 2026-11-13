@@ -1,0 +1,79 @@
+// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// Pixels written in loops run whole by native code's loop templates (2026-11-13): one colour into
+// items at base + counter (image[x, y] = c, set, a grid's op []= in editPixels), the image's
+// changed rectangle and count of changes worked out for the whole loop (a min, a max and an add
+// of held fields), and a grid's writable checked first as a guard. The same pixels and errors as
+// the VM's, and the card shows exactly what changed. Each loop runs three times (its region is
+// made the second time it starts).
+import Topaz.*
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+fun fill(im : Image, c : Color, x0 : int, x1 : int, y0 : int, y1 : int) {
+  for (y in y0 ..< y1) { for (x in x0 ..< x1) { im[x, y] = c } }
+}
+fun fillSet(im : Image, c : Color) {
+  for (y in 0 ..< im.height) { for (x in 0 ..< im.width) { im.set(x, y, c) } }
+}
+fun fillEdit(im : Image, c : Color) {
+  im.editPixels { g ->
+    for (y in 0 ..< g.height) { for (x in 0 ..< g.width) { g[x, y] = c } }
+  }
+}
+fun shown(im : Image) : string => "${im.hashCode()} ${im[0, 0]} ${im[im.width - 1, im.height - 1]} ${im[im.width / 2, im.height / 2]}"
+
+val a = Image(40, 30)
+thrice { fill(a, Color(1, 2, 3, 4), 0, 40, 0, 30) }
+val b = Image(40, 30)
+thrice { fillSet(b, Color(200, 100, 50)) }
+val c = Image(40, 30)
+thrice { fillEdit(c, Color(9, 8, 7, 6)) }
+print(shown(a))   // expect: 921262985 Color(1, 2, 3, 4) Color(1, 2, 3, 4) Color(1, 2, 3, 4)
+print(shown(b))   // expect: 478689527 Color(200, 100, 50) Color(200, 100, 50) Color(200, 100, 50)
+print(shown(c))   // expect: 1893723039 Color(9, 8, 7, 6) Color(9, 8, 7, 6) Color(9, 8, 7, 6)
+
+// Part of each row, and past the edge: the pixels before the error set, the error at its pixel.
+val d = Image(40, 30, Color.white)
+thrice { fill(d, Color.black, 10, 30, 5, 15) }
+print(d[9, 5], d[10, 5], d[29, 14], d[30, 14], d[10, 15])   // expect: Color(255, 255, 255) Color(0, 0, 0) Color(0, 0, 0) Color(255, 255, 255) Color(255, 255, 255)
+val e = Image(40, 30, Color.white)
+print(failing { fill(e, Color.red, 35, 41, 0, 3) }, e[39, 0], e[34, 0], e[39, 1])   // expect: IndexOutOfBoundsException: pixel (40, 0) is outside the image, which is 40 by 30 Color(255, 0, 0) Color(255, 255, 255) Color(255, 255, 255)
+
+// A grid only to be read: its writable checked first, the error the VM's.
+fun intoPixels(g : Grid<Color>, c : Color) {
+  for (y in 0 ..< g.height) { for (x in 0 ..< g.width) { g[x, y] = c } }
+}
+print(failing { thrice { intoPixels(Image(5, 4).pixels, Color.red) } })   // expect: IllegalStateException: this grid is only read here: change an image's pixels in image.editPixels { }
+
+// The card: an image drawn in a window, then part of it written by a loop run whole; the next
+// frame shows that part changed and nothing else.
+val pic = Image(60, 40, Color.white)
+Topaz.windowOpener = HiddenWindowOpener(1)
+val shows = Component(object : Content {
+  override var owner : Component? = null
+  override fun sizes() : Sizes => Sizes(Size(60, 40), Size(60, 40), Size(60, 40))
+  override fun paint(canvas : Canvas) { canvas.draw(pic, 0, 0) }
+})
+val w = Window(shows, "Writes", 60, 40)
+w.show()
+val host = w.handle as WindowHost
+host.frame()
+print(host.snapshot()[25, 15])   // expect: Color(255, 255, 255)
+thrice { fill(pic, Color(0, 0, 255), 20, 30, 10, 20) }
+shows.invalidate()
+host.frame()
+val shot = host.snapshot()
+print(shot[25, 15], shot[19, 15], shot[30, 15], shot[25, 9], shot[25, 20], shot[20, 10], shot[29, 19])   // expect: Color(0, 0, 255) Color(255, 255, 255) Color(255, 255, 255) Color(255, 255, 255) Color(255, 255, 255) Color(0, 0, 255) Color(0, 0, 255)
+w.close()

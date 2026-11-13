@@ -60,5 +60,8 @@ constexpr int kRefDepth = 1, kRefOffset = 2, kRefIndex = 4;
 constexpr int kPackItemType = 16, kPackTypeSlot = 8;
 constexpr uint8_t kTypePlaces = 19;
 constexpr uint8_t kTypeIdInt = 1, kTypeIdFloat = 2;
+// A place of a frame's (ObjPlace): the class of the value it holds, that value's own type (null
+// for none), and where its bytes start (2026-11-13: a value made where a call leaves it).
+constexpr int kPlaceClass = 24, kPlaceType = 32, kPlaceData = 40;
 
 }  // namespace jade::native::layout

@@ -812,10 +812,13 @@ class Image : Drawable {
   // A number raised by every change, and the rectangle changed since the card's copy was made:
   // what Topaz's native layer sends again (D124).
   internal var changes = 0
-  internal var changedLeft = 0
-  internal var changedTop = 0
-  internal var changedRight = 0
-  internal var changedBottom = 0
+  // Empty, none changed: left and top the largest int, right and bottom the smallest, so that a
+  // change widens it by a min and a max of each side alone, no case of its own for empty
+  // (2026-11-13: native code's loop templates work out such a min and max for a whole loop at once).
+  internal var changedLeft = 9223372036854775807
+  internal var changedTop = 9223372036854775807
+  internal var changedRight = -9223372036854775807 - 1
+  internal var changedBottom = -9223372036854775807 - 1
   // Topaz's native layer's: its copy on the graphics card, and the change number it was made at.
   internal var card : any? = null
   internal var cardAt = -1
@@ -1177,14 +1180,10 @@ class Image : Drawable {
   // and written back as it leaves (before another thread can look), so a loop setting many
   // pixels writes the rectangle once.
   internal inline fun changed(left : int, top : int, right : int, bottom : int) {
-    if (changedRight <= changedLeft or changedBottom <= changedTop) {
-      changedLeft = left; changedTop = top; changedRight = right; changedBottom = bottom
-    } else {
-      if (left < changedLeft) { changedLeft = left }
-      if (top < changedTop) { changedTop = top }
-      if (right > changedRight) { changedRight = right }
-      if (bottom > changedBottom) { changedBottom = bottom }
-    }
+    if (left < changedLeft) { changedLeft = left }
+    if (top < changedTop) { changedTop = top }
+    if (right > changedRight) { changedRight = right }
+    if (bottom > changedBottom) { changedBottom = bottom }
     changes += 1
   }
 }

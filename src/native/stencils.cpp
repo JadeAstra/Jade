@@ -52,7 +52,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t core;
     const void* band;
     uint64_t lists[24];
-    uint64_t t[64];
+    uint64_t t[128];
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
@@ -708,6 +708,16 @@ STENCIL(ownsm) {
     if ((head & 0xFF) != kKindRef) NEXT;
     if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
     const uint8_t* o = s.p;
+    if (o[kObjType] == kTypePlaces) {
+        // A value in a place of a frame's, of the class and with no type of its own (2026-11-13:
+        // one made where a call leaves it): its bytes copied out.
+        if (word<int64_t>(o + kPlaceClass) != jade_ki || word<const void*>(o + kPlaceType) != nullptr) EXIT;
+        const uint64_t what = static_cast<uint64_t>(jade_slot2);
+        uint64_t bits = 0;
+        for (uint32_t k = 0; k < (what & 0xFF); k++) bits |= static_cast<uint64_t>(o[kPlaceData + k]) << (8 * k);
+        putValue(&s, kKindSmall | (what >> 32) << 32, bits);
+        NEXT;
+    }
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) EXIT;
     const uint8_t* pack = packOf(o, kStoreItems);
     if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != jade_ki || word<const void*>(pack + kPackItemType) != nullptr ||
@@ -1560,7 +1570,7 @@ F_A(HVALPF, x)
 // operations, in the same order, as the steps would: the same answer to the bit.
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
-    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField,
+    kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -1627,22 +1637,72 @@ INLINE bool itemsFit(const Items& x, uint64_t kind, int64_t end, int count) {
 
 INLINE bool small(uint64_t w) { return static_cast<int64_t>(w) > -(1 << 20) && static_cast<int64_t>(w) < (1 << 20); }
 
-// A template's operand (2026-11-13): words d and v, d its kind: 0 the constant v, 1 the counter
-// plus v, 2 v itself (a register stored there by the steps before), 3 the int field held as v.
+// A template's operand (2026-11-13): words d and v, d's low byte its kind: 0 the constant v, 1
+// the counter plus v, 2 v itself (a register stored there by the steps before), 3 the int field
+// held as v, 4 the bool field held as v (1 or 0); for 2 and 3, d's bits from 16 a constant added.
 INLINE bool operand(const Ctx* ctx, uint64_t d, uint64_t v, int64_t counter, int64_t& out) {
-    switch (d) {
-        case 0:
-        case 2: out = static_cast<int64_t>(v); return true;
+    const int64_t plus = static_cast<int64_t>(d) >> 16;
+    switch (d & 0xFF) {
+        case 0: out = static_cast<int64_t>(v); return true;
         case 1: return !__builtin_add_overflow(counter, static_cast<int64_t>(v), &out);
-        case 3: {
+        case 2: return !__builtin_add_overflow(static_cast<int64_t>(v), plus, &out);
+        case 3:
+        case 4: {
             if (v >= 16) return false;
             const Slot& h = reinterpret_cast<const Slot*>(ctx->held)[v];
+            if ((d & 0xFF) == 4) {
+                if (h.kind != kKindBool) return false;
+                out = static_cast<uint8_t>(h.i) != 0;
+                return true;
+            }
             if (h.kind != kKindInt) return false;
-            out = h.i;
-            return true;
+            return !__builtin_add_overflow(h.i, plus, &out);
         }
         default: return false;
     }
+}
+// Held int fields the loop changes each time round (2026-11-13: an image's changed rectangle and
+// its count of changes), word 70 how many, each four words from 71: the field, how (1 its min
+// with an operand, 2 its max, 3 a constant added), the operand (or the constant). Worked out for
+// `rounds` times round from `first` at once: a min of the counter plus a constant takes the
+// first, a max the last, the rest the same each time; an add the constant times the rounds.
+INLINE bool heldUpdates(Ctx* ctx, int64_t first, int64_t rounds, bool apply) {
+    const uint64_t* t = ctx->t;
+    if (t[70] > 6) return false;
+    Slot* held = reinterpret_cast<Slot*>(ctx->held);
+    for (uint64_t u = 0; u < t[70]; u++) {
+        const uint64_t* w = t + 71 + 4 * u;
+        const uint64_t k = w[0];
+        if (k >= 16 || held[k].kind != kKindInt) return false;
+        int64_t v = held[k].i;
+        if (w[1] == 3) {
+            int64_t by;
+            if (__builtin_mul_overflow(static_cast<int64_t>(w[3]), rounds, &by) || __builtin_add_overflow(v, by, &v)) return false;
+        } else if (w[1] == 1 || w[1] == 2) {
+            int64_t o;
+            const int64_t at = w[1] == 1 ? first : first + rounds - 1;  // the counter rising: the least first, the most last
+            if (!operand(ctx, w[2], w[3], at, o)) return false;
+            v = w[1] == 1 ? (o < v ? o : v) : (o > v ? o : v);
+        } else {
+            return false;
+        }
+        if (apply) held[k].i = v;
+    }
+    return true;
+}
+// Where items of a list looked at once start: base from words 50 to 54 (0 none, 1 an operand, 2
+// one times another, each two words), plus the counter.
+INLINE bool itemBase(const Ctx* ctx, int64_t& at) {
+    const uint64_t* t = ctx->t;
+    at = 0;
+    if (t[50] == 0) return true;
+    if (t[50] != 1 && t[50] != 2) return false;
+    if (!operand(ctx, t[51], t[52], 0, at)) return false;
+    if (t[50] == 2) {
+        int64_t by;
+        if (!operand(ctx, t[53], t[54], 0, by) || __builtin_mul_overflow(at, by, &at)) return false;
+    }
+    return true;
 }
 // Whether no guard of the loop fires for any counter from `first` to `last` (word 16 how many,
 // each five words from 17: its comparison, then its operands). A guard is the condition of a
@@ -1650,7 +1710,7 @@ INLINE bool operand(const Ctx* ctx, uint64_t d, uint64_t v, int64_t counter, int
 // round, so that where it holds at neither end it holds nowhere between.
 INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
     const uint64_t* t = ctx->t;
-    if (t[16] > 4) return false;
+    if (t[16] > 6) return false;
     for (uint64_t g = 0; g < t[16]; g++) {
         const uint64_t* w = t + 17 + 5 * g;
         const int64_t ends[2] = {first, last};
@@ -1681,13 +1741,13 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         const uint8_t k = base[t[14]].kind;
         if (t[15] == 1 ? k != kKindFloat : t[15] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
     }
-    // A for over a list of items (word 50 the iterator's slot): from the iterator's index to the
+    // A for over a list of items (word 60 the iterator's slot): from the iterator's index to the
     // list's end, the list the one looked at once as word 5's; the iterator left after the last
     // item done (2026-11-13).
     uint8_t* iterator = nullptr;
     if (t[0] == kLoopWIterSumField) {
         const uint8_t* list;
-        iterator = listIterator(base[t[50]], list);
+        iterator = listIterator(base[t[60]], list);
         const Items items = itemsOf(ctx, 1);
         if (iterator == nullptr || list == ctx->band || !items.ok() || reinterpret_cast<const uint8_t*>(items.h[3]) != list) return;
         const uint64_t index = word<uint64_t>(iterator + kIterIndex);
@@ -1699,6 +1759,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
     const int64_t end = next + left;
     if (!guardsHold(ctx, next, end - 1)) return;
+    if (t[70] != 0 && !heldUpdates(ctx, next, left, false)) return;
     const Items out = itemsOf(ctx, 0), a = itemsOf(ctx, 1), b = itemsOf(ctx, 2);
     if (t[13] != 0 && (!out.ok() || out.kind() != 3)) return;  // a byte's value: into bytes alone
     if (sharedInPart(out, a, end) || sharedInPart(out, b, end)) return;
@@ -1915,10 +1976,46 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             break;
         }
+        case kLoopWFillItems: {
+            // Items of a list looked at once at base + counter set to one value (2026-11-13:
+            // image[x, y] = c): word 55 the items' width, 56 and 57 where the value is (1 a slot,
+            // 2 a captured variable, and which), 58 what hsetsm is given (the value's type number
+            // in the high half, how many of its bytes in bits 24 to 31).
+            if (!out.ok()) return;
+            int64_t at, first, last;
+            if (!itemBase(ctx, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
+                static_cast<uint64_t>(last) >= out.h[2])
+                return;
+            const Slot* from = t[56] == 1 ? &base[t[57]] : t[56] == 2 ? word<const Slot*>(ctx->upvalues[t[57]] + kUpvalueLocation) : nullptr;
+            if (from == nullptr) return;
+            const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(from)), what = t[58], width = t[55];
+            const uint64_t size = (what >> 24) & 0xFF;
+            if (size == 0 || size > 8 || size > width) return;
+            uint64_t bits;
+            if ((head & 0xFF) == kKindSmall && (head >> 32) == (what >> 32)) {
+                bits = static_cast<uint64_t>(from->i);
+            } else if ((head & 0xFFFFFFFF) == kKindRef && from->p[kObjType] == kTypePlaces && t[59] != 0 &&
+                       word<uint64_t>(from->p + kPlaceClass) == t[59] && word<const void*>(from->p + kPlaceType) == nullptr) {
+                // A value in a place of a frame's, of the class the loop's ownsm takes (word 59).
+                bits = 0;
+                for (uint64_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from->p[kPlaceData + k]) << (8 * k);
+            } else {
+                return;
+            }
+            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * width;
+            if (width == 4 && size == 4) {
+                const uint32_t v = static_cast<uint32_t>(bits);
+                for (int64_t j = 0; j < left; j++) __builtin_memcpy(o + j * 4, &v, 4);
+            } else {
+                for (int64_t j = 0; j < left; j++)
+                    for (uint64_t k = 0; k < size; k++) o[static_cast<uint64_t>(j) * width + k] = static_cast<uint8_t>(bits >> (8 * k));
+            }
+            break;
+        }
         case kLoopWField: {
             // A byte field of each item into bytes or ints at the same index (pixels.map { it.red }).
             if (!a.ok() || !out.ok() || (out.kind() != 1 && out.kind() != 3)) return;
-            const uint64_t f = t[45], width = f >> 32, offset = (f >> 8) & 0xFFFFFF;
+            const uint64_t f = t[55], width = f >> 32, offset = (f >> 8) & 0xFFFFFF;
             if ((f & 0xFF) != 1 || width == 0 || offset >= width || static_cast<uint64_t>(end) > a.h[1] || static_cast<uint64_t>(end) > out.h[2]) return;
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + offset;
             if (out.kind() == 3) {
@@ -1934,34 +2031,26 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         case kLoopWIterSumField:
         case kLoopWSumField: {
             // A total of a field of items of a list looked at once (2026-11-13: image[x, y].red), the
-            // items at base + counter: base from words 40 to 44 (0 none, 1 an operand, 2 one times
-            // another, each two words); words 45 to 48 each field's item width (high half), offset
-            // (bits 8 on) and size (1 a byte, 8 an int); word 49 how many fields, more than one
+            // items at base + counter: base from words 50 to 54 (0 none, 1 an operand, 2 one times
+            // another, each two words); words 55 to 58 each field's item width (high half), offset
+            // (bits 8 on) and size (1 a byte, 8 an int); word 59 how many fields, more than one
             // bytes alone, added together for each item. An overflow stops it before the item.
             if (!a.ok()) return;
-            int64_t at = 0;
-            if (t[40] == 1 || t[40] == 2) {
-                if (!operand(ctx, t[41], t[42], 0, at)) return;
-                if (t[40] == 2) {
-                    int64_t by;
-                    if (!operand(ctx, t[43], t[44], 0, by) || __builtin_mul_overflow(at, by, &at)) return;
-                }
-            } else if (t[40] != 0) {
-                return;
-            }
+            int64_t at;
+            if (!itemBase(ctx, at)) return;
             int64_t first, last;
             if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1]) return;
-            const uint64_t width = t[45] >> 32, offset = (t[45] >> 8) & 0xFFFFFF, size = t[45] & 0xFF;
+            const uint64_t width = t[55] >> 32, offset = (t[55] >> 8) & 0xFFFFFF, size = t[55] & 0xFF;
             if (width == 0 || offset + size > width) return;
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * width + offset;
             int64_t acc = static_cast<int64_t>(t[3]);
-            const uint64_t fields = t[49];
+            const uint64_t fields = t[59];
             if (fields > 1) {
                 // Bytes of each item added together, then to the total.
                 if (fields > 4) return;
                 uint64_t at[4] = {0, 0, 0, 0};
                 for (uint64_t k = 0; k < fields; k++) {
-                    const uint64_t f = t[45 + k];
+                    const uint64_t f = t[55 + k];
                     if ((f >> 32) != width || (f & 0xFF) != 1 || ((f >> 8) & 0xFFFFFF) >= width) return;
                     at[k] = (f >> 8) & 0xFFFFFF;
                 }
@@ -2136,6 +2225,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         }
         default: return;
     }
+    if (t[70] != 0 && done > 0) heldUpdates(ctx, next, done, true);
     t[1] = static_cast<uint64_t>(next + done);
     t[2] = static_cast<uint64_t>(left - done);
     if (iterator != nullptr) {
