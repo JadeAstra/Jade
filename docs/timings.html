@@ -53,6 +53,7 @@ table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
 th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
 td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+td.cpp { color: var(--muted, #6b7280); font-size: 0.88em; }
 td.op { white-space: nowrap; }
 tr.slow td { background: var(--slow-soft); }
 tr.slow td.num:first-of-type { color: var(--slow); font-weight: 600; }
@@ -91,136 +92,137 @@ tr.slow td.num:first-of-type { color: var(--slow); font-weight: 600; }
 <h2 id="how">How they are timed</h2>
 <p>The picture is a 4000 by 3000 photo, 12 million pixels, read from raw RGBA bytes. Each operation runs three times and the best time is kept, in milliseconds, on the Clang build of <code>jade.exe</code>, an i9-14900KF held at 5 GHz. Per-pixel loops are written as a program would write them, in functions of their own, so that native code makes them regions (the second time a loop starts).</p>
 <p>ns a pixel is the time now divided by the pixels the operation goes through: 12 million unless the work column says otherwise.</p>
+<p><strong>100% C++</strong> (added 2026-11-13, at the user's word): the same work done by a C++ program of its own, <code>bench/kernels/timings.cpp</code> (<code>timings.bat</code> builds it as <code>jade.exe</code> is built, clang-cl /O2): plain loops over the picture's bytes, one thread, no intrinsics (Clang vectorises what it can), its results made new where Jade's are, on the same photo, the best of three on the performance cores. Jade ÷ C++ is how many times longer Jade takes now. <em>already C++</em>: Jade does the work for each pixel in C++ itself, a call or a few from Jade, so a program all in C++ would take what Jade takes. Where a plain C++ loop doing the same was clearly quicker than Jade's C++, its time is given beside it (<em>plain</em>): <code>copy()</code> and <code>toTensor()</code> copy the pixels once more than they need, <code>pixels[a..b, c..d]</code> goes through a general region copy, and a canvas's <code>fillRect</code> goes through its general way (shapes, coverage, blending) where the plain loop sets whole opaque pixels. Plain loops written as simply for the others (greyscale(), blurred, scaled, transformed, blend) were slower than Jade's C++ (rounding with <code>std::round</code> and working in doubles), and are not given.</p>
 
 <h2 id="yardstick">The yardstick</h2>
 <p>The same work on the picture's bytes (<code>rgbaBytes()</code>, four to a pixel) in a plain Jade loop: what a pixel loop can come near.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">ms</th><th class="num">ns a pixel</th><th>Note</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Note</th></tr></thead>
 <tbody>
-<tr><td class="op">bytes: read red</td><td class="num">12.3</td><td class="num">1.0</td><td><code>t += px[i * 4].toInt()</code></td></tr>
-<tr><td class="op">bytes: greyscale in place</td><td class="num">56.7</td><td class="num">4.7</td><td>three reads, the sum, three writes</td></tr>
+<tr><td class="op">bytes: read red</td><td class="num">12.3</td><td class="num">1.0</td><td class="num">3.6</td><td class="num">3.4×</td><td><code>t += px[i * 4].toInt()</code></td></tr>
+<tr><td class="op">bytes: greyscale in place</td><td class="num">56.7</td><td class="num">4.7</td><td class="num">7.3</td><td class="num">7.8×</td><td>three reads, the sum, three writes</td></tr>
 </tbody></table></div>
 
 <h2 id="read">Reading pixels</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Why it was slow; what changed</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Why it was slow; what changed</th></tr></thead>
 <tbody>
-<tr><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">67.2</td><td class="num">5.6</td><td>Inline op [], the pixel read where it is; most of the rest is the check that (x, y) is in the image.</td></tr>
-<tr><td class="op"><code>val c = image[x, y]</code>, four parts</td><td class="num">121.5</td><td class="num">119.3</td><td class="num">9.9</td><td>As above, the colour copied out once.</td></tr>
-<tr><td class="op"><code>pixels[x, y].red</code></td><td class="num">92.4</td><td class="num">85.8</td><td class="num">7.2</td><td>Grid's inline op [].</td></tr>
-<tr><td class="op"><code>pixels.toList()</code>, then <code>for (c in list)</code></td><td class="num">54.5</td><td class="num">52.2</td><td class="num">4.4</td><td>One copy of the list, then the fastest loop there is over Colors.</td></tr>
-<tr class="slow"><td class="op"><code>image.get(x, y).red</code></td><td class="num">973.6</td><td class="num">94.6</td><td class="num">7.9</td><td>Was a call for each pixel (only a top-level function in the same file is put in place by itself). Now <code>inline</code>.</td></tr>
-<tr class="slow"><td class="op"><code>image.getOrNull(x, y)!!.red</code></td><td class="num">1204.7</td><td class="num">137.1</td><td class="num">11.4</td><td>Was two calls for each pixel. Now inline, and native code does <code>!!</code> and knows a value that is a colour or null.</td></tr>
-<tr class="slow"><td class="op"><code>pixels.map { it.red }</code></td><td class="num">500.6</td><td class="num">95.5</td><td class="num">8.0</td><td>Was a call of the lambda for each pixel. Now <code>map</code> is inline, the new grid's cells made first and set by index; and native code now does loops over a <code>List&lt;byte&gt;</code> (the result's cells), which it left to the VM item by item.</td></tr>
+<tr><td class="op"><code>image[x, y].red</code></td><td class="num">69.1</td><td class="num">67.2</td><td class="num">5.6</td><td class="num">3.3</td><td class="num">20×</td><td>Inline op [], the pixel read where it is; most of the rest is the check that (x, y) is in the image.</td></tr>
+<tr><td class="op"><code>val c = image[x, y]</code>, four parts</td><td class="num">121.5</td><td class="num">119.3</td><td class="num">9.9</td><td class="num">5.4</td><td class="num">22×</td><td>As above, the colour copied out once.</td></tr>
+<tr><td class="op"><code>pixels[x, y].red</code></td><td class="num">92.4</td><td class="num">85.8</td><td class="num">7.2</td><td class="num">3.3</td><td class="num">26×</td><td>Grid's inline op [].</td></tr>
+<tr><td class="op"><code>pixels.toList()</code>, then <code>for (c in list)</code></td><td class="num">54.5</td><td class="num">52.2</td><td class="num">4.4</td><td class="num">11.9</td><td class="num">4.4×</td><td>One copy of the list, then the fastest loop there is over Colors.</td></tr>
+<tr class="slow"><td class="op"><code>image.get(x, y).red</code></td><td class="num">973.6</td><td class="num">94.6</td><td class="num">7.9</td><td class="num">3.3</td><td class="num">29×</td><td>Was a call for each pixel (only a top-level function in the same file is put in place by itself). Now <code>inline</code>.</td></tr>
+<tr class="slow"><td class="op"><code>image.getOrNull(x, y)!!.red</code></td><td class="num">1204.7</td><td class="num">137.1</td><td class="num">11.4</td><td class="num">3.3</td><td class="num">42×</td><td>Was two calls for each pixel. Now inline, and native code does <code>!!</code> and knows a value that is a colour or null.</td></tr>
+<tr class="slow"><td class="op"><code>pixels.map { it.red }</code></td><td class="num">500.6</td><td class="num">95.5</td><td class="num">8.0</td><td class="num">6.1</td><td class="num">16×</td><td>Was a call of the lambda for each pixel. Now <code>map</code> is inline, the new grid's cells made first and set by index; and native code now does loops over a <code>List&lt;byte&gt;</code> (the result's cells), which it left to the VM item by item.</td></tr>
 </tbody></table></div>
 
 <h2 id="write">Writing pixels</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Why it was slow; what changed</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Why it was slow; what changed</th></tr></thead>
 <tbody>
-<tr class="slow"><td class="op"><code>image[x, y] = c</code>, <code>c</code> a parameter</td><td class="num">652.9</td><td class="num">145.1</td><td class="num">12.1</td><td>op []='s own copy of its argument (OWN_LOCAL) was the VM's where the argument was a parameter passed on unchanged. Now native code makes the copy.</td></tr>
-<tr class="slow"><td class="op"><code>image.set(x, y, c)</code></td><td class="num">1422.1</td><td class="num">149.8</td><td class="num">12.5</td><td>Was a call for each pixel. Now inline.</td></tr>
-<tr class="slow"><td class="op"><code>editPixels { g[x, y] = c }</code></td><td class="num">379.1</td><td class="num">94.1</td><td class="num">7.8</td><td>The loop is in a lambda: native code did not read a variable it captures (<code>c</code>, R_GET_UPVALUE). Now it does.</td></tr>
+<tr class="slow"><td class="op"><code>image[x, y] = c</code>, <code>c</code> a parameter</td><td class="num">652.9</td><td class="num">145.1</td><td class="num">12.1</td><td class="num">3.2</td><td class="num">45×</td><td>op []='s own copy of its argument (OWN_LOCAL) was the VM's where the argument was a parameter passed on unchanged. Now native code makes the copy.</td></tr>
+<tr class="slow"><td class="op"><code>image.set(x, y, c)</code></td><td class="num">1422.1</td><td class="num">149.8</td><td class="num">12.5</td><td class="num">3.2</td><td class="num">47×</td><td>Was a call for each pixel. Now inline.</td></tr>
+<tr class="slow"><td class="op"><code>editPixels { g[x, y] = c }</code></td><td class="num">379.1</td><td class="num">94.1</td><td class="num">7.8</td><td class="num">3.2</td><td class="num">29×</td><td>The loop is in a lambda: native code did not read a variable it captures (<code>c</code>, R_GET_UPVALUE). Now it does.</td></tr>
 </tbody></table></div>
 
 <h2 id="change">Reading, changing and writing</h2>
 <p>A greyscale: each pixel read, its grey worked out, the pixel set to it.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Why it was slow; what changed</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Why it was slow; what changed</th></tr></thead>
 <tbody>
-<tr><td class="op">by <code>image[x, y] = Color(...)</code></td><td class="num">320.7</td><td class="num">296.4</td><td class="num">24.7</td><td>Native throughout; each set also widens the image's changed rectangle, held for the loop and written back once.</td></tr>
-<tr class="slow"><td class="op">in <code>editPixels { }</code></td><td class="num">873.6</td><td class="num">245.6</td><td class="num">20.5</td><td>The same loop in a lambda: <code>Color(...)</code> was looked up by name as it ran (INVOKE_IMPLICIT), the VM's. A bare name in a lambda that runs on no object, inside functions that run on none, is now compiled as the checker found it.</td></tr>
-<tr class="slow"><td class="op">by <code>pixels.map { ... }</code></td><td class="num">1031.8</td><td class="num">176.4</td><td class="num">14.7</td><td>Was a call of the lambda for each pixel. Now <code>map</code> is inline.</td></tr>
-<tr><td class="op"><code>pixels.mapChannels(t, t, t)</code></td><td class="num">16.3</td><td class="num">19.6</td><td class="num">1.6</td><td>One call into C++ with a table for each channel.</td></tr>
+<tr><td class="op">by <code>image[x, y] = Color(...)</code></td><td class="num">320.7</td><td class="num">296.4</td><td class="num">24.7</td><td class="num">7.4</td><td class="num">40×</td><td>Native throughout; each set also widens the image's changed rectangle, held for the loop and written back once.</td></tr>
+<tr class="slow"><td class="op">in <code>editPixels { }</code></td><td class="num">873.6</td><td class="num">245.6</td><td class="num">20.5</td><td class="num">7.4</td><td class="num">33×</td><td>The same loop in a lambda: <code>Color(...)</code> was looked up by name as it ran (INVOKE_IMPLICIT), the VM's. A bare name in a lambda that runs on no object, inside functions that run on none, is now compiled as the checker found it.</td></tr>
+<tr class="slow"><td class="op">by <code>pixels.map { ... }</code></td><td class="num">1031.8</td><td class="num">176.4</td><td class="num">14.7</td><td class="num">18.8</td><td class="num">9.4×</td><td>Was a call of the lambda for each pixel. Now <code>map</code> is inline.</td></tr>
+<tr><td class="op"><code>pixels.mapChannels(t, t, t)</code></td><td class="num">16.3</td><td class="num">19.6</td><td class="num">1.6</td><td class="num cpp">already C++</td><td class="num">—</td><td>One call into C++ with a table for each channel.</td></tr>
 </tbody></table></div>
 
 <h2 id="whole">Whole pictures</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Note</th></tr></thead>
+<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Note</th></tr></thead>
 <tbody>
-<tr><td class="op"><code>copy()</code></td><td>12 M</td><td class="num">13.4</td><td class="num">13.0</td><td class="num">1.1</td><td></td></tr>
-<tr><td class="op"><code>crop(1000, 1000, 2000, 1000)</code></td><td>2 M</td><td class="num">2.0</td><td class="num">2.0</td><td class="num">1.0</td><td></td></tr>
-<tr><td class="op"><code>pixels[0..1999, 0..999]</code></td><td>2 M</td><td class="num">6.3</td><td class="num">5.1</td><td class="num">2.6</td><td></td></tr>
-<tr><td class="op"><code>greyscale()</code></td><td>12 M</td><td class="num">41.0</td><td class="num">39.5</td><td class="num">3.3</td><td>C++ (<code>__mixed</code>)</td></tr>
-<tr class="slow"><td class="op"><code>inverted()</code></td><td>12 M</td><td class="num">70.6</td><td class="num">18.5</td><td class="num">1.5</td><td>Was a Jade loop over the bytes (since 2026-11-12). Now through <code>mapChannels</code>, as before that.</td></tr>
-<tr><td class="op"><code>adjusted(1.1, 1.2, 0.8)</code></td><td>12 M</td><td class="num">57.0</td><td class="num">59.8</td><td class="num">5.0</td><td></td></tr>
-<tr class="slow"><td class="op"><code>blurred(3)</code></td><td>12 M</td><td class="num">564.8</td><td class="num">399.3</td><td class="num">33.3</td><td>Two passes of a general convolution, 19 taps each. It made the whole picture as floats (192 MB) and its answer apart, and walked each row's sums 19 times. Now rows are made as floats in a ring as wanted, each pixel summed once with its four parts together, and the answer written in place. The same pixels. A blur of its own, not rounding between its passes, would be faster but give other pixels.</td></tr>
-<tr><td class="op"><code>scaled(2000, 1500)</code></td><td>12 M in</td><td class="num">33.7</td><td class="num">33.2</td><td class="num">2.8</td><td></td></tr>
-<tr><td class="op"><code>scaled(8000, 6000)</code></td><td>48 M out</td><td class="num">318.8</td><td class="num">335.2</td><td class="num">7.0</td><td>Bilinear, a little slow for what it is.</td></tr>
-<tr class="slow"><td class="op"><code>transformed(rotation(0.3))</code></td><td>19 M out</td><td class="num">992.7</td><td class="num">313.8</td><td class="num">16.5</td><td>Made two grids of floats as large as the result (where each new pixel comes from), then sampled through them, the picture made into planes of doubles first: some 900 MB written and read again. Now each place is worked out as it is sampled, from the colours themselves, in one pass (<code>sampleAffine</code>). The same pixels.</td></tr>
-<tr><td class="op"><code>histogram()</code></td><td>12 M</td><td class="num">68.4</td><td class="num">70.8</td><td class="num">5.9</td><td>Jade, reading the pixels where they are.</td></tr>
-<tr><td class="op"><code>inkBox()</code> of a photo</td><td>—</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">—</td><td>Stops at the first pixel in from each side.</td></tr>
-<tr><td class="op"><code>floodRegion(10, 10, 20)</code></td><td>its region</td><td class="num">3.7</td><td class="num">3.8</td><td class="num">—</td><td></td></tr>
-<tr><td class="op"><code>blend</code> 2000 by 1500 over, half see-through</td><td>3 M</td><td class="num">32.6</td><td class="num">33.5</td><td class="num">11.2</td><td></td></tr>
-<tr><td class="op"><code>regions(8)</code></td><td>1 M</td><td class="num">17.4</td><td class="num">16.8</td><td class="num">16.8</td><td></td></tr>
-<tr><td class="op"><code>palette(16)</code></td><td>1 M</td><td class="num">5.1</td><td class="num">4.5</td><td class="num">4.5</td><td></td></tr>
-<tr><td class="op"><code>==</code>, the same pixels</td><td>12 M</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">—</td><td>The same list: nothing to compare.</td></tr>
-<tr><td class="op"><code>hashCode()</code></td><td>12 M</td><td class="num">7.8</td><td class="num">7.6</td><td class="num">0.6</td><td></td></tr>
+<tr><td class="op"><code>copy()</code></td><td>12 M</td><td class="num">13.4</td><td class="num">13.0</td><td class="num">1.1</td><td class="num cpp">already C++; plain 8.4</td><td class="num">1.5×</td><td></td></tr>
+<tr><td class="op"><code>crop(1000, 1000, 2000, 1000)</code></td><td>2 M</td><td class="num">2.0</td><td class="num">2.0</td><td class="num">1.0</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>pixels[0..1999, 0..999]</code></td><td>2 M</td><td class="num">6.3</td><td class="num">5.1</td><td class="num">2.6</td><td class="num cpp">already C++; plain 2.8</td><td class="num">1.8×</td><td></td></tr>
+<tr><td class="op"><code>greyscale()</code></td><td>12 M</td><td class="num">41.0</td><td class="num">39.5</td><td class="num">3.3</td><td class="num cpp">already C++</td><td class="num">—</td><td>C++ (<code>__mixed</code>)</td></tr>
+<tr class="slow"><td class="op"><code>inverted()</code></td><td>12 M</td><td class="num">70.6</td><td class="num">18.5</td><td class="num">1.5</td><td class="num cpp">already C++</td><td class="num">—</td><td>Was a Jade loop over the bytes (since 2026-11-12). Now through <code>mapChannels</code>, as before that.</td></tr>
+<tr><td class="op"><code>adjusted(1.1, 1.2, 0.8)</code></td><td>12 M</td><td class="num">57.0</td><td class="num">59.8</td><td class="num">5.0</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr class="slow"><td class="op"><code>blurred(3)</code></td><td>12 M</td><td class="num">564.8</td><td class="num">399.3</td><td class="num">33.3</td><td class="num cpp">already C++</td><td class="num">—</td><td>Two passes of a general convolution, 19 taps each. It made the whole picture as floats (192 MB) and its answer apart, and walked each row's sums 19 times. Now rows are made as floats in a ring as wanted, each pixel summed once with its four parts together, and the answer written in place. The same pixels. A blur of its own, not rounding between its passes, would be faster but give other pixels.</td></tr>
+<tr><td class="op"><code>scaled(2000, 1500)</code></td><td>12 M in</td><td class="num">33.7</td><td class="num">33.2</td><td class="num">2.8</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>scaled(8000, 6000)</code></td><td>48 M out</td><td class="num">318.8</td><td class="num">335.2</td><td class="num">7.0</td><td class="num cpp">already C++</td><td class="num">—</td><td>Bilinear, a little slow for what it is.</td></tr>
+<tr class="slow"><td class="op"><code>transformed(rotation(0.3))</code></td><td>19 M out</td><td class="num">992.7</td><td class="num">313.8</td><td class="num">16.5</td><td class="num cpp">already C++</td><td class="num">—</td><td>Made two grids of floats as large as the result (where each new pixel comes from), then sampled through them, the picture made into planes of doubles first: some 900 MB written and read again. Now each place is worked out as it is sampled, from the colours themselves, in one pass (<code>sampleAffine</code>). The same pixels.</td></tr>
+<tr><td class="op"><code>histogram()</code></td><td>12 M</td><td class="num">68.4</td><td class="num">70.8</td><td class="num">5.9</td><td class="num">17.8</td><td class="num">4.0×</td><td>Jade, reading the pixels where they are.</td></tr>
+<tr><td class="op"><code>inkBox()</code> of a photo</td><td>—</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td><td>Stops at the first pixel in from each side.</td></tr>
+<tr><td class="op"><code>floodRegion(10, 10, 20)</code></td><td>its region</td><td class="num">3.7</td><td class="num">3.8</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>blend</code> 2000 by 1500 over, half see-through</td><td>3 M</td><td class="num">32.6</td><td class="num">33.5</td><td class="num">11.2</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>regions(8)</code></td><td>1 M</td><td class="num">17.4</td><td class="num">16.8</td><td class="num">16.8</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>palette(16)</code></td><td>1 M</td><td class="num">5.1</td><td class="num">4.5</td><td class="num">4.5</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>==</code>, the same pixels</td><td>12 M</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td><td>The same list: nothing to compare.</td></tr>
+<tr><td class="op"><code>hashCode()</code></td><td>12 M</td><td class="num">7.8</td><td class="num">7.6</td><td class="num">0.6</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
 </tbody></table></div>
 
 <h2 id="io">Conversions and files</h2>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Note</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Note</th></tr></thead>
 <tbody>
-<tr><td class="op"><code>rgbaBytes()</code></td><td class="num">7.3</td><td class="num">7.5</td><td class="num">0.6</td><td></td></tr>
-<tr><td class="op"><code>Image.of(w, h, bytes)</code></td><td class="num">12.2</td><td class="num">11.4</td><td class="num">1.0</td><td></td></tr>
-<tr><td class="op"><code>toPlanes()</code></td><td class="num">16.6</td><td class="num">16.7</td><td class="num">1.4</td><td></td></tr>
-<tr><td class="op"><code>Image.fromPlanes(...)</code></td><td class="num">20.2</td><td class="num">20.6</td><td class="num">1.7</td><td></td></tr>
-<tr><td class="op"><code>pixels.toTensor()</code></td><td class="num">19.3</td><td class="num">19.5</td><td class="num">1.6</td><td></td></tr>
-<tr><td class="op">encode PNG</td><td class="num">506.0</td><td class="num">520.1</td><td class="num">43.3</td><td>The compressor's own work; not looked into.</td></tr>
-<tr><td class="op">load PNG</td><td class="num">128.8</td><td class="num">134.2</td><td class="num">11.2</td><td></td></tr>
-<tr><td class="op">encode JPEG, quality 0.9</td><td class="num">59.3</td><td class="num">55.9</td><td class="num">4.7</td><td></td></tr>
-<tr><td class="op">load JPEG</td><td class="num">45.6</td><td class="num">46.2</td><td class="num">3.9</td><td></td></tr>
-<tr><td class="op">encode WebP, quality 0.9</td><td class="num">358.8</td><td class="num">362.7</td><td class="num">30.2</td><td>The encoder's own work; not looked into.</td></tr>
-<tr><td class="op">encode BMP</td><td class="num">58.4</td><td class="num">56.8</td><td class="num">4.7</td><td></td></tr>
+<tr><td class="op"><code>rgbaBytes()</code></td><td class="num">7.3</td><td class="num">7.5</td><td class="num">0.6</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>Image.of(w, h, bytes)</code></td><td class="num">12.2</td><td class="num">11.4</td><td class="num">1.0</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>toPlanes()</code></td><td class="num">16.6</td><td class="num">16.7</td><td class="num">1.4</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>Image.fromPlanes(...)</code></td><td class="num">20.2</td><td class="num">20.6</td><td class="num">1.7</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op"><code>pixels.toTensor()</code></td><td class="num">19.3</td><td class="num">19.5</td><td class="num">1.6</td><td class="num cpp">already C++; plain 8.0</td><td class="num">2.4×</td><td></td></tr>
+<tr><td class="op">encode PNG</td><td class="num">506.0</td><td class="num">520.1</td><td class="num">43.3</td><td class="num cpp">already C++</td><td class="num">—</td><td>The compressor's own work; not looked into.</td></tr>
+<tr><td class="op">load PNG</td><td class="num">128.8</td><td class="num">134.2</td><td class="num">11.2</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op">encode JPEG, quality 0.9</td><td class="num">59.3</td><td class="num">55.9</td><td class="num">4.7</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op">load JPEG</td><td class="num">45.6</td><td class="num">46.2</td><td class="num">3.9</td><td class="num cpp">already C++</td><td class="num">—</td><td></td></tr>
+<tr><td class="op">encode WebP, quality 0.9</td><td class="num">358.8</td><td class="num">362.7</td><td class="num">30.2</td><td class="num cpp">already C++</td><td class="num">—</td><td>The encoder's own work; not looked into.</td></tr>
+<tr><td class="op">encode BMP</td><td class="num">58.4</td><td class="num">56.8</td><td class="num">4.7</td><td class="num">18.0</td><td class="num">3.2×</td><td></td></tr>
 </tbody></table></div>
 
 <h2 id="draw">Drawing</h2>
 <p>On an image's canvas (<code>image.canvas()</code>), 4000 by 3000.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th>Why it was slow; what changed</th></tr></thead>
+<thead><tr><th>Operation</th><th>Work</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th><th>Why it was slow; what changed</th></tr></thead>
 <tbody>
-<tr><td class="op">10,000 <code>fillRect</code>, 100 by 100</td><td>100 M</td><td class="num">190.9</td><td class="num">198.1</td><td class="num">2.0</td><td></td></tr>
-<tr><td class="op">10,000 <code>fillOval</code>, 100 by 100</td><td>about 79 M</td><td class="num">241.8</td><td class="num">232.0</td><td class="num">2.9</td><td>Edges smoothed.</td></tr>
-<tr><td class="op">10,000 <code>drawLine</code>, long</td><td>—</td><td class="num">553.0</td><td class="num">606.9</td><td class="num">about 23 a pixel of length</td><td>Smoothed lines; see by size below.</td></tr>
-<tr><td class="op">2,000 <code>drawString</code></td><td>—</td><td class="num">9.9</td><td class="num">9.8</td><td class="num">—</td><td>5 µs a string.</td></tr>
-<tr class="slow"><td class="op">200 <code>draw(picture)</code>, 300 by 300</td><td>18 M</td><td class="num">664.3</td><td class="num">6.3</td><td class="num">0.35</td><td>Even at its own size on whole pixels, each pixel went through doubles, rounding and clamping, channel by channel. (The survey also blamed a copy of the picture for each call; there is none: its pixels are read where they are.) Now a picture at its own size on whole pixels is laid a row at a time in whole numbers, an opaque pixel copied: the same pixels.</td></tr>
+<tr><td class="op">10,000 <code>fillRect</code>, 100 by 100</td><td>100 M</td><td class="num">190.9</td><td class="num">198.1</td><td class="num">2.0</td><td class="num cpp">already C++; plain 7.8</td><td class="num">25.4×</td><td></td></tr>
+<tr><td class="op">10,000 <code>fillOval</code>, 100 by 100</td><td>about 79 M</td><td class="num">241.8</td><td class="num">232.0</td><td class="num">2.9</td><td class="num cpp">already C++</td><td class="num">—</td><td>Edges smoothed.</td></tr>
+<tr><td class="op">10,000 <code>drawLine</code>, long</td><td>—</td><td class="num">553.0</td><td class="num">606.9</td><td class="num">about 23 a pixel of length</td><td class="num cpp">already C++</td><td class="num">—</td><td>Smoothed lines; see by size below.</td></tr>
+<tr><td class="op">2,000 <code>drawString</code></td><td>—</td><td class="num">9.9</td><td class="num">9.8</td><td class="num">—</td><td class="num cpp">already C++</td><td class="num">—</td><td>5 µs a string.</td></tr>
+<tr class="slow"><td class="op">200 <code>draw(picture)</code>, 300 by 300</td><td>18 M</td><td class="num">664.3</td><td class="num">6.3</td><td class="num">0.35</td><td class="num cpp">already C++</td><td class="num">—</td><td>Even at its own size on whole pixels, each pixel went through doubles, rounding and clamping, channel by channel. (The survey also blamed a copy of the picture for each call; there is none: its pixels are read where they are.) Now a picture at its own size on whole pixels is laid a row at a time in whole numbers, an opaque pixel copied: the same pixels.</td></tr>
 </tbody></table></div>
 
 <h2 id="draw-size">Drawing, by size</h2>
 <p>How lines and pictures grow with their size, on the same canvas.</p>
 <div class="table"><table>
-<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel now</th></tr></thead>
+<thead><tr><th>Operation</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">ns a pixel now</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
 <tbody>
-<tr><td class="op">1,000 lines, 10 px long</td><td class="num">1.3</td><td class="num">1.3</td><td class="num">130 a pixel of length (mostly the call)</td></tr>
-<tr><td class="op">1,000 lines, 100 px long</td><td class="num">6.7</td><td class="num">6.6</td><td class="num">66</td></tr>
-<tr><td class="op">1,000 lines, 1,000 px long</td><td class="num">21.4</td><td class="num">22.2</td><td class="num">22</td></tr>
-<tr><td class="op">1,000 lines, 3,000 px long</td><td class="num">68.8</td><td class="num">65.8</td><td class="num">22</td></tr>
-<tr><td class="op">100 pictures, 10 by 10</td><td class="num">0.45</td><td class="num">0.08</td><td class="num">8 (mostly the call)</td></tr>
-<tr><td class="op">100 pictures, 10 by 10, half see-through</td><td class="num">0.49</td><td class="num">0.12</td><td class="num">12</td></tr>
-<tr class="slow"><td class="op">100 pictures, 100 by 100</td><td class="num">36.4</td><td class="num">0.48</td><td class="num">0.5</td></tr>
-<tr class="slow"><td class="op">100 pictures, 100 by 100, half see-through</td><td class="num">41.1</td><td class="num">4.2</td><td class="num">4.2</td></tr>
-<tr class="slow"><td class="op">100 pictures, 300 by 300</td><td class="num">332.1</td><td class="num">3.1</td><td class="num">0.35</td></tr>
-<tr class="slow"><td class="op">100 pictures, 300 by 300, half see-through</td><td class="num">369.1</td><td class="num">37.6</td><td class="num">4.2</td></tr>
-<tr class="slow"><td class="op">100 pictures, 1000 by 1000</td><td class="num">3678.9</td><td class="num">32.0</td><td class="num">0.32</td></tr>
-<tr class="slow"><td class="op">100 pictures, 1000 by 1000, half see-through</td><td class="num">4094.8</td><td class="num">420.3</td><td class="num">4.2</td></tr>
-<tr><td class="op">100 <code>fillRect</code>, 300 by 300</td><td class="num">13.9</td><td class="num">13.7</td><td class="num">1.5</td></tr>
+<tr><td class="op">1,000 lines, 10 px long</td><td class="num">1.3</td><td class="num">1.3</td><td class="num">130 a pixel of length (mostly the call)</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">1,000 lines, 100 px long</td><td class="num">6.7</td><td class="num">6.6</td><td class="num">66</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">1,000 lines, 1,000 px long</td><td class="num">21.4</td><td class="num">22.2</td><td class="num">22</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">1,000 lines, 3,000 px long</td><td class="num">68.8</td><td class="num">65.8</td><td class="num">22</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">100 pictures, 10 by 10</td><td class="num">0.45</td><td class="num">0.08</td><td class="num">8 (mostly the call)</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">100 pictures, 10 by 10, half see-through</td><td class="num">0.49</td><td class="num">0.12</td><td class="num">12</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 100 by 100</td><td class="num">36.4</td><td class="num">0.48</td><td class="num">0.5</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 100 by 100, half see-through</td><td class="num">41.1</td><td class="num">4.2</td><td class="num">4.2</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 300 by 300</td><td class="num">332.1</td><td class="num">3.1</td><td class="num">0.35</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 300 by 300, half see-through</td><td class="num">369.1</td><td class="num">37.6</td><td class="num">4.2</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 1000 by 1000</td><td class="num">3678.9</td><td class="num">32.0</td><td class="num">0.32</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr class="slow"><td class="op">100 pictures, 1000 by 1000, half see-through</td><td class="num">4094.8</td><td class="num">420.3</td><td class="num">4.2</td><td class="num cpp">already C++</td><td class="num">—</td></tr>
+<tr><td class="op">100 <code>fillRect</code>, 300 by 300</td><td class="num">13.9</td><td class="num">13.7</td><td class="num">1.5</td><td class="num cpp">already C++; plain 0.7</td><td class="num">19.6×</td></tr>
 </tbody></table></div>
 
 <h2 id="history">The pixel loops, from 2026-11-12 to now</h2>
 <p>The same loops at the start of 2026-11-12 and now: Colors read and written where they are by native code (B1 to B3), inline op [] and op []=, fields read once or held for a loop, the copies out of bodies put in place gone, an image's pixels checked once, and the fixes below. See <a href="M10-speed.html">the speed table</a> for each step.</p>
 <div class="table"><table>
-<thead><tr><th>Loop</th><th class="num">Start of 2026-11-12, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th></tr></thead>
+<thead><tr><th>Loop</th><th class="num">Start of 2026-11-12, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th><th class="num">100% C++, ms</th><th class="num">Jade ÷ C++</th></tr></thead>
 <tbody>
-<tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">42</td><td class="num">2.0×</td></tr>
-<tr><td class="op"><code>val c = colors[i]</code>, four parts</td><td class="num">274</td><td class="num">72</td><td class="num">3.8×</td></tr>
-<tr><td class="op"><code>pixels[x, y]</code>, four parts</td><td class="num">770</td><td class="num">118</td><td class="num">6.5×</td></tr>
-<tr><td class="op"><code>image[x, y].red</code></td><td class="num">1,363</td><td class="num">67</td><td class="num">20×</td></tr>
-<tr><td class="op"><code>grid[x, y] = c</code></td><td class="num">619</td><td class="num">88</td><td class="num">7.0×</td></tr>
-<tr><td class="op">greyscale into a <code>List&lt;Color&gt;</code></td><td class="num">882</td><td class="num">199</td><td class="num">4.4×</td></tr>
-<tr><td class="op">greyscale by <code>grid[x, y] = ...</code></td><td class="num">887</td><td class="num">230</td><td class="num">3.9×</td></tr>
-<tr><td class="op">greyscale by <code>image[x, y] = ...</code></td><td class="num">2,761</td><td class="num">296</td><td class="num">9.3×</td></tr>
-<tr><td class="op"><code>histogram()</code></td><td class="num">206 (C++)</td><td class="num">71</td><td class="num">2.9×</td></tr>
+<tr><td class="op"><code>for (c in colors) { c.red }</code></td><td class="num">85</td><td class="num">42</td><td class="num">2.0×</td><td class="num">3.3</td><td class="num">13×</td></tr>
+<tr><td class="op"><code>val c = colors[i]</code>, four parts</td><td class="num">274</td><td class="num">72</td><td class="num">3.8×</td><td class="num">5.4</td><td class="num">13×</td></tr>
+<tr><td class="op"><code>pixels[x, y]</code>, four parts</td><td class="num">770</td><td class="num">118</td><td class="num">6.5×</td><td class="num">5.4</td><td class="num">22×</td></tr>
+<tr><td class="op"><code>image[x, y].red</code></td><td class="num">1,363</td><td class="num">67</td><td class="num">20×</td><td class="num">3.3</td><td class="num">20×</td></tr>
+<tr><td class="op"><code>grid[x, y] = c</code></td><td class="num">619</td><td class="num">88</td><td class="num">7.0×</td><td class="num">3.2</td><td class="num">28×</td></tr>
+<tr><td class="op">greyscale into a <code>List&lt;Color&gt;</code></td><td class="num">882</td><td class="num">199</td><td class="num">4.4×</td><td class="num">18.8</td><td class="num">11×</td></tr>
+<tr><td class="op">greyscale by <code>grid[x, y] = ...</code></td><td class="num">887</td><td class="num">230</td><td class="num">3.9×</td><td class="num">7.4</td><td class="num">31×</td></tr>
+<tr><td class="op">greyscale by <code>image[x, y] = ...</code></td><td class="num">2,761</td><td class="num">296</td><td class="num">9.3×</td><td class="num">7.4</td><td class="num">40×</td></tr>
+<tr><td class="op"><code>histogram()</code></td><td class="num">206 (C++)</td><td class="num">71</td><td class="num">2.9×</td><td class="num">17.8</td><td class="num">4.0×</td></tr>
 </tbody></table></div>
 
 <h2 id="done">What was done for the slow ones</h2>
@@ -240,6 +242,7 @@ tr.slow td.num:first-of-type { color: var(--slow); font-weight: 600; }
 <li><strong><code>scaled</code> up</strong> (7 ns a pixel) and <strong>smoothed lines</strong> (22 ns a pixel of length) could be faster; not looked into.</li>
 <li><strong>A half see-through picture</strong> drawn costs 4 ns a pixel, the blend's division for each part.</li>
 <li><strong>PNG and WebP encoding</strong>: the compressors' own work, not looked into.</li>
+<li><strong>Against C++</strong> (the 100% C++ columns): a pixel loop written in Jade takes 4 to 47 times what the same loop takes in C++, most of them 16 to 47 times (3 to 7 ms for 12 million pixels there, vectorised by Clang), the yardstick's loops over bytes 3 to 8 times, <code>histogram()</code> 4 times; what Jade does in C++ already is C++'s, but for <code>copy()</code>, <code>toTensor()</code> and a region of a grid, a copy too many (1.5 to 2.4 times), and <code>fillRect</code>, 25 times a plain fill of whole pixels.</li>
 </ul>
 </main>
 </body>
