@@ -1744,20 +1744,41 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             break;
         }
         case kLoopWSum: {  // an overflow stops it before the item
-            if (!reads(a, 0)) return;
+            // The items at j * stride + offset (words 7 and 8, 2026-11-13: a stride of 0 is 1), the
+            // last of them one that may be read.
+            const int64_t stride = t[7] == 0 ? 1 : static_cast<int64_t>(t[7]), offset = static_cast<int64_t>(t[8]);
+            int64_t last;
+            if (stride < 1 || offset < 0 || __builtin_mul_overflow(end - 1, stride, &last) || __builtin_add_overflow(last, offset, &last)) return;
+            if (!a.ok() || (a.kind() != 1 && a.kind() != 3) || static_cast<uint64_t>(last) >= a.h[1]) return;
             int64_t acc = static_cast<int64_t>(t[3]);
             if (a.kind() == 3) {
-                const uint8_t* x = a.bytes();
-                for (int64_t j = next; j < end; j++)
-                    if (__builtin_add_overflow(acc, static_cast<int64_t>(x[j]), &acc)) {
-                        done = j - next;
-                        break;
+                const uint8_t* x = a.bytes() + offset;
+                if (left <= INT64_MAX / 255 && acc <= INT64_MAX - 255 * left) {
+                    // No byte can take the total past the largest int: summed with no check of each,
+                    // which Clang does several at a time.
+                    int64_t s = 0;
+                    if (stride == 1) for (int64_t j = next; j < end; j++) s += x[j];
+                    else if (stride == 4) for (int64_t j = next; j < end; j++) s += x[j * 4];
+                    else for (int64_t j = next; j < end; j++) s += x[j * stride];
+                    acc += s;
+                } else {
+                    // The sum kept apart until it fits: an overflow leaves the total as it was before
+                    // the item, for the loop's own steps to throw at it (2026-11-13: it was left
+                    // wrapped round, and the steps went on from there).
+                    for (int64_t j = next; j < end; j++) {
+                        int64_t s;
+                        if (__builtin_add_overflow(acc, static_cast<int64_t>(x[j * stride]), &s)) {
+                            done = j - next;
+                            break;
+                        }
+                        acc = s;
                     }
+                }
             } else {
-                const int64_t* x = a.ints();
+                const int64_t* x = a.ints() + offset;
                 for (int64_t j = next; j < end; j++) {
                     int64_t s;
-                    if (__builtin_add_overflow(acc, x[j], &s)) {
+                    if (__builtin_add_overflow(acc, x[j * stride], &s)) {
                         done = j - next;
                         break;
                     }

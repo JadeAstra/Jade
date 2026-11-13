@@ -2886,6 +2886,28 @@ struct Region {
         return usesReg(e->a, r) || usesReg(e->b, r);
     }
     static bool itemAtCounter(const Expr* e, Cls cls) { return e != nullptr && e->kind == Expr::Load && e->cls == cls && e->b != nullptr && e->b->kind == Expr::Counter; }
+    // An index of the counter times a constant of 1 or more, plus a constant of 0 or more: its
+    // stride and offset.
+    static bool strided(const Expr* e, int64_t& stride, int64_t& offset) {
+        if (e == nullptr || e->cls != CI) return false;
+        auto times = [&](const Expr* m) {
+            if (m->kind == Expr::Counter) return stride = 1, true;
+            if (m->kind != Expr::Bin || m->op != '*' || m->cls != CI) return false;
+            const Expr* k = m->a->kind == Expr::KInt ? m->a : m->b;
+            const Expr* c = m->a->kind == Expr::KInt ? m->b : m->a;
+            if (k->kind != Expr::KInt || c->kind != Expr::Counter || k->ki < 1) return false;
+            return stride = k->ki, true;
+        };
+        offset = 0;
+        if (e->kind == Expr::Bin && e->op == '+') {
+            const Expr* k = e->a->kind == Expr::KInt ? e->a : e->b;
+            const Expr* m = e->a->kind == Expr::KInt ? e->b : e->a;
+            if (k->kind != Expr::KInt || k->ki < 0 || !times(m)) return false;
+            offset = k->ki;
+            return true;
+        }
+        return times(e);
+    }
 
     // The body's steps, followed: each register's value; the stores (list, index, value, the
     // step's stem); false where a step is one this does not follow.
@@ -3088,9 +3110,18 @@ struct Region {
         if (ah.hasAcc) {
             if (!fw.stores.empty()) return false;
             const Expr* v = fw.val[ah.acc];
-            if (v->kind != Expr::Bin || v->op != '+' || v->a->kind != Expr::Inv || !(v->a->reg == ah.acc) || !itemAtCounter(v->b, ah.acc.cls)) return false;
-            ah.shape = ah.acc.cls == CF ? 8 /* kLoopFSum */ : 11 /* kLoopWSum */;
+            if (v->kind != Expr::Bin || v->op != '+' || v->a->kind != Expr::Inv || !(v->a->reg == ah.acc)) return false;
+            if (itemAtCounter(v->b, ah.acc.cls)) {
+                ah.shape = ah.acc.cls == CF ? 8 /* kLoopFSum */ : 11 /* kLoopWSum */;
+                ah.a = v->b->list;
+                return true;
+            }
+            // Whole numbers at counter * K + C (2026-11-13): one part of each pixel's four, say.
+            int64_t stride = 0, offset = 0;
+            if (ah.acc.cls != CI || v->b->kind != Expr::Load || v->b->cls != CI || !strided(v->b->b, stride, offset)) return false;
+            ah.shape = 11 /* kLoopWSum */;
             ah.a = v->b->list;
+            ah.words[0] = stride, ah.words[1] = offset;
             return true;
         }
         if (fw.stores.size() != 1) return false;

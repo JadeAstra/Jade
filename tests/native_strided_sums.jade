@@ -1,0 +1,88 @@
+// A total of a list's items at counter * K + C, run whole by native code's sum template
+// (2026-11-13): one part of each pixel's four in a picture's bytes, say. Bytes summed with no
+// check of each item where no byte can take the total past the largest int; otherwise, and for
+// ints, each add checked, the template stopping before an overflow for the loop's own steps to
+// throw. An index past the list's end: the loop's own steps, the same error at the same item.
+// Each loop runs three times (its region is made the second time it starts).
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+fun thrice(block : () -> any?) : any? {
+  block()
+  block()
+  return block()
+}
+
+val px = Bytes(4000)
+for (i in 0 ..< px.size) { px[i] = ((i * 7 + i / 5) % 256).toByte() }
+val ints : open List<int> = List(1000) { it * 3 - 700 }
+
+fun red(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< b.size / 4) { t += b[i * 4].toInt() }
+  return t
+}
+fun alpha(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< b.size / 4) { t += b[i * 4 + 3].toInt() }
+  return t
+}
+fun firstTimes(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< 400) { t += b[4 * i].toInt() }
+  return t
+}
+fun thirds(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< 1333) { t += b[3 * i + 1].toInt() }
+  return t
+}
+fun shifted(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< 3999) { t += b[i + 1].toInt() }
+  return t
+}
+fun plain(b : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< b.size) { t += b[i].toInt() }
+  return t
+}
+print(thrice { red(px) }, thrice { alpha(px) }, thrice { firstTimes(px) }, thrice { thirds(px) }, thrice { shifted(px) }, thrice { plain(px) })   // expect: 125488 128144 50400 169389 507776 507776
+
+// Ints at a stride, from a start.
+fun everyOther(xs : List<int>, from : int) : int {
+  var t = from
+  for (i in 0 ..< 499) { t += xs[i * 2 + 1] }
+  return t
+}
+print(thrice { everyOther(ints, 0) }, thrice { everyOther(ints, 1000000) })   // expect: 397703 1397703
+
+// Past the list's end: the same error, at the same item.
+fun past(b : Bytes, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += b[i * 4 + 2].toInt() }
+  return t
+}
+print(thrice { past(px, 1000) }, failing { thrice { past(px, 1001) } })   // expect: 127600 IndexOutOfBoundsException: bytes index 4002 is out of range (size 4000)
+
+// A total near the largest int: bytes each checked, the overflow thrown at its item (the template
+// left the total wrapped round before 2026-11-13, and the steps went on from there); ints too.
+fun fromNear(b : Bytes, start : int) : int {
+  var t = start
+  for (i in 0 ..< b.size / 4) { t += b[i * 4].toInt() }
+  return t
+}
+val near = 9223372036854775807 - 125488
+print(thrice { fromNear(px, near) }, failing { thrice { fromNear(px, near + 1) } })   // expect: 9223372036854775807 ArithmeticException: 9223372036854775709 + 99 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around
+val big : open List<int> = List(10) { 9223372036854775807 / 4 }
+fun bigSum(xs : List<int>) : int {
+  var t = 0
+  for (i in 0 ..< 5) { t += xs[i * 2] }
+  return t
+}
+print(failing { thrice { bigSum(big) } })   // expect: ArithmeticException: 9223372036854775804 + 2305843009213693951 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &+ for an answer that wraps around
