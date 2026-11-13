@@ -320,7 +320,9 @@ bool readFile(const std::string& path, std::string& out) {
 class ModuleCompiler {
 public:
     ModuleCompiler(CompilerSession& session, std::string file, std::string directory, Namespace* ns, std::string fileKey)
-        : session_(session), file_(std::move(file)), directory_(std::move(directory)), ns_(ns), fileKey_(std::move(fileKey)), homeFile_(fileKey_) {}
+        : session_(session), file_(std::move(file)), directory_(std::move(directory)), ns_(ns), fileKey_(std::move(fileKey)), homeFile_(fileKey_) {
+        session_.fileNames_[fileKey_] = file_;
+    }
 
     // A file on its own. Before anything else of it runs, its imports are loaded, its functions
     // defined and the structure of its classes set up, so that the order they are written in
@@ -1047,7 +1049,7 @@ private:
     const Node* unusedCall_ = nullptr;
     const Node* droppedValue_ = nullptr;
     bool compileInlineCall(const CallExpr& e) {
-        if (session_.checker == nullptr || inlineDepth_ >= 48) return false;
+        if (session_.checker == nullptr || inlineDepth_ >= 48 || notInlined_ == &e) return false;
         Checker::InlineCall info;
         if (!session_.checker->inlineCall(e, info)) return false;
         const MemberExpr* member = e.callee->kind == ExprKind::Member ? static_cast<const MemberExpr*>(e.callee.get()) : nullptr;
@@ -1068,7 +1070,50 @@ private:
         site.spread = e.spread;
         site.line = e.line;
         site.unused = unusedCall_ == &e;
+        if (info.guarded) return compileGuardedCall(e, member, site, info);
         return compileInlined(site, info);
+    }
+
+    // A small method of a class put in place behind a check (2026-11-13): the object, then
+    // JumpIfNotClass to the call as it is made without this where the object is not of exactly
+    // the method's class (a subclass's may be another); the body; on to after the call. The
+    // object is a variable or `this`, read again for the call: nothing runs in between.
+    const CallExpr* notInlined_ = nullptr;
+    bool compileGuardedCall(const CallExpr& e, const MemberExpr* member, InlineSite& site, const Checker::InlineCall& info) {
+        if (notInlined_ == &e || destinationCall_ == &e || tailCall_ == &e) return false;
+        const Expr* object = member != nullptr ? member->object.get() : nullptr;
+        if (member != nullptr && (member->safe || (object->kind != ExprKind::Name && object->kind != ExprKind::This))) return false;
+        if (info.fn->isAbstract) return false;
+        for (const FunctionState* state = fs_; state != nullptr; state = state->enclosing)
+            if (state->decl == info.fn) return false;  // a call of the method inside itself, as compileInlined leaves
+        const int global = ownerClassSlot(info);
+        if (global < 0) return false;
+        line_ = e.line;
+        if (object != nullptr) compileExpr(*object);
+        else emitGet("this", e);
+        line_ = e.line;
+        emit(Op::JumpIfNotClass, global);
+        const int slow = here();
+        emitI32(0);
+        site.unused = false;  // a value either way, as the call gives one
+        if (!compileInlined(site, info)) throw error(e, "internal: a method put in place behind a check could not be");
+        const int end = emitJump(Op::Jump);
+        patchJump(slow);
+        const CallExpr* saved = std::exchange(notInlined_, &e);
+        compileExpr(e);  // the call, as made where the object is of another class
+        notInlined_ = saved;
+        patchJump(end);
+        return true;
+    }
+    // The global holding the class an inline call's method is a member of, as its own file or
+    // folder names it; -1 where there is none to read.
+    int ownerClassSlot(const Checker::InlineCall& info) const {
+        if (info.ownerName.empty() || info.ownerName.find('.') != std::string::npos) return -1;
+        auto& privates = session_.privates_[info.fileKey];
+        if (auto it = privates.find(info.ownerName); it != privates.end()) return it->second.slot;
+        if (info.ns != nullptr)
+            if (auto it = info.ns->names.find(info.ownerName); it != info.ns->names.end() && it->second.declared) return it->second.slot;
+        return -1;
     }
     // `a[i]` where the checker chose an inline op [] (B2): its body in place.
     bool compileInlineIndex(const IndexExpr& e) {
@@ -1253,7 +1298,11 @@ private:
             // A small function's body keeps its lines, as the lines of a call of it (FunctionProto::inlined).
             body.lineFixed = -1;
             body.inlinedBody = static_cast<int>(inlinedBodies_.size());
-            inlinedBodies_.push_back(InlinedBody{fn.name, file_, callLine, {}});
+            // Its lines are its own file's, named as that file names them (another's, or the
+            // standard library's, which a test's report leaves out).
+            auto named = session_.fileNames_.find(info.fileKey);
+            const std::string source = info.prelude ? "<std>" : named != session_.fileNames_.end() ? named->second : file_;
+            inlinedBodies_.push_back(InlinedBody{fn.name, source, callLine, {}});
             smallInlined_.push_back(&fn);
         } else {
             body.lineFixed = callLine;
@@ -1295,12 +1344,13 @@ private:
                 emit(Op::Pop);
             }
         }
-        if (info.automatic) {
+        if (info.automatic && fn.body.size() == 1 && fn.body[0]->kind == StmtKind::Return && static_cast<const ReturnStmt&>(*fn.body[0]).value) {
             // `=> value`: the value, as the call's (the body's reads are copies already, inPlaceOff).
             const auto& ret = static_cast<const ReturnStmt&>(*fn.body[0]);
             line_ = ret.line;
             compileExpr(*ret.value);
         } else {
+            // An inline function's, or a small one's of a few statements (2026-11-13).
             compileInlineBody(fn.body);
         }
         endScopeKeepingValue();
@@ -8092,7 +8142,8 @@ static uint64_t skeletonOf(const std::vector<Token>& tokens, const std::vector<S
     std::vector<std::pair<size_t, size_t>> bodies;
     auto add = [&](const FunctionDecl& d) {
         // An inline function's body is copied into the files calling it: theirs to see too (D59).
-        if (d.isInline) return;
+        // So is a small one's, which may be put in place by itself (2026-11-13).
+        if (d.isInline || (d.bodyTo >= d.bodyFrom && d.bodyTo - d.bodyFrom <= kSmallBodyTokens)) return;
         if (d.bodyTo > d.bodyFrom) bodies.emplace_back(d.bodyFrom, d.bodyTo);
     };
     std::function<void(const ClassStmt&)> inClass = [&](const ClassStmt& c) {

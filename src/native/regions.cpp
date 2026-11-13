@@ -1681,6 +1681,19 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::JumpIfNotClass: {  // u16 global, i32 target: value ->, on to the target unless of exactly that class
+                const int top = s.top;
+                LOp& l = c.op("clsflag");
+                l.slot = c.objectSlot(top - 1);
+                l.ki = u16(x, 0);
+                State after = s;
+                after.top = top - 1;
+                after.flag = -1;  // the flag holds the answer, no slot's bool
+                s = after;
+                c.go(static_cast<uint32_t>(i32(x, 2)), after, c.op("jfalse"));
+                c.fall(after);
+                return;
+            }
             case Op::RGetUpvalue: {  // u8 A, u8 T, u16 upvalue: slot A = what the captured variable holds
                 const int a = u8(x, 0);
                 c.writeMemory(a);
@@ -3874,6 +3887,7 @@ bool mayDo(Op op) {
         case Op::GetOwnRef:
         case Op::AssertNotNull:
         case Op::RGetUpvalue:
+        case Op::JumpIfNotClass:
         case Op::RGetGlobal:
         case Op::RCall:
         case Op::WithDestinationAt:

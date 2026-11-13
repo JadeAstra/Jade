@@ -971,6 +971,16 @@ CASE(TypeSlots) {
     ip = typeInstruction(opAt(ip - kOpBytes), ip, frame);
     DONE();
 }
+CASE(JumpIfNotClass) {
+    {
+    const size_t global = static_cast<size_t>(READ_U16());
+    const int target = READ_I32();
+    const Value v = *--sp_;
+    const Value& cls = globals_[global];
+    if (!(v.isObjType(ObjType::Instance) && cls.isObjType(ObjType::Class) && asInstance(v)->cls == asClass(cls))) ip = code + target;
+    DONE();
+}
+}
 CASE(KeepTop) {
     if (sp_[-1].isRef() && sp_[-1].as.obj->type == ObjType::Places) sp_[-1] = ownRef(sp_[-1]);
     DONE();

@@ -842,12 +842,20 @@ class Scenario(val name : string, val steps : List<Step>)
 class Step(val files : List<Pair<string, string>>, val out : string = "", val error : string = "", val units : string = "",
            val command : List<string> = [], val sameAgain : bool = false)
 
+// A body too large to be put in place of a call by itself (more than 192 tokens), ending in `last`.
+fun largeBody(last : int) : string => "fun f() : int {\n  var t = 0\n" + (0 ..< 70).map { "  t += 1\n" }.join("") + "  return t + $last\n}"
+
 fun cacheScenarios() : List<Scenario> => [
   Scenario("a body changes in an imported file", [
-    Step([Pair("lib.jade", "fun f() : int => 1"), Pair("main.jade", "import lib.*\nprint(f())")], out = "1"),
+    Step([Pair("lib.jade", largeBody(1)), Pair("main.jade", "import lib.*\nprint(f())")], out = "71"),
     // Only lib.jade is compiled again: main.jade was compiled against what lib.jade declares,
     // which a body leaves as it was.
-    Step([Pair("lib.jade", "fun f() : int => 2")], out = "2", units = "units put back 1, compiled 1")]),
+    Step([Pair("lib.jade", largeBody(2))], out = "72", units = "units put back 1, compiled 1")]),
+  // A small body is put in place of its calls in other files too (2026-11-13): it is part of what
+  // its file declares, and main.jade is compiled again.
+  Scenario("a small body changes in an imported file", [
+    Step([Pair("lib.jade", "fun f() : int => 1"), Pair("main.jade", "import lib.*\nprint(f())")], out = "1"),
+    Step([Pair("lib.jade", "fun f() : int => 2")], out = "2", units = "units put back 0, compiled 2")]),
   Scenario("a body changes a result type not written", [
     Step([Pair("lib.jade", "fun f() => 1"), Pair("main.jade", "import lib.*\nval x : int = f()\nprint(x)")], out = "1"),
     Step([Pair("lib.jade", "fun f() => \"s\"")], error = "main.jade:2:16: error: 'x' is an int; it cannot start as a string")]),

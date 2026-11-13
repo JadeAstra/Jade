@@ -2209,6 +2209,18 @@ struct Checker::Impl {
     // Says so where code may not use a member of `owner` with the access word `word` (and, where
     // it is assigned, `setWord` under it); true if it did.
     bool checkAccess(ClassInfo* owner, const std::string& name, uint8_t word, uint8_t setWord, bool write, const Node& at) {
+        // A private or protected member of an object not the code's own: the program judges it
+        // as it runs by the code using it, so a function using one is not put in place by
+        // itself, where that code would be another's (2026-11-13).
+        auto restricted = [](uint8_t w) { return w == kAccessWordPrivate || w == kAccessWordProtected; };
+        if (restricted(word) || (write && restricted(setWord))) {
+            if (!accessOnThis)
+                for (FnCtx* c = ctx; c != nullptr; c = c->parent)
+                    if (!c->isLambda && c->fn != nullptr) {
+                        usesRestricted.insert(c->fn);
+                        break;
+                    }
+        }
         if (deniedHere(owner, word)) {
             report(at, accessMessage(name, owner, word, false));
             return true;
@@ -4658,8 +4670,18 @@ struct Checker::Impl {
         const auto& n = static_cast<const NameExpr&>(e);
         if (plain.cls->statics.count(n.name) == 0 || !meansGlobal(n) || findGlobal(*unit, n.name) != nullptr) return false;
         entry = plain;
+        // A function using one is not put in place by itself: its body copied into another
+        // file's code would not find the entry there (2026-11-13).
+        for (FnCtx* c = ctx; c != nullptr; c = c->parent)
+            if (!c->isLambda && c->fn != nullptr) {
+                usesBareEntries.insert(c->fn);
+                break;
+            }
         return true;
     }
+    std::unordered_set<const FuncInfo*> usesBareEntries;
+    std::unordered_set<const FuncInfo*> usesRestricted;
+    bool accessOnThis = false;  // the member being checked is asked of `this` (checkAccess)
 
     Type exprExpected(const Expr& e, const Type& expected) {
         // A kind of an enum class by its bare name, where one is expected (D39).
@@ -7543,7 +7565,9 @@ struct Checker::Impl {
             ClassInfo* k = obj.cls;
             Member m = lookupMember(plain, name);
             noteKeyMember(m, name);
+            accessOnThis = at.object->kind == ExprKind::This;
             checkMemberAccess(m, name, &at == assigning, at);
+            accessOnThis = false;
             // An object's constant is folded where the object is named, so nothing is skipped.
             const bool named = at.object->kind == ExprKind::Name || at.object->kind == ExprKind::This;
             if (m.field) {
@@ -8957,6 +8981,7 @@ struct Checker::Impl {
         std::vector<int> paramOf;
         bool automatic = false;  // a small function, not written `inline`
         bool pure = false;       // InlineCall::pure
+        bool guarded = false;    // InlineCall::guarded
     };
     std::unordered_map<const Node*, InlineCallFact> inlineCalls;
     // The inline functions each inline function's body calls, to find one that calls itself.
@@ -8964,21 +8989,24 @@ struct Checker::Impl {
     std::map<std::pair<FuncInfo*, int>, int> copiedKnown;  // 1 being worked out, 2 yes, 3 no
 
     // A call of a small function, put in place of the call as an inline function's is (the user,
-    // 2026-11-08: a call costs about three times the work of a small body): a function of the
-    // file's top level, called in the same file, whose body is `=> expression` of a few plain
-    // parts, with no lambda, jump or object made in it; with no type parameters, vararg,
-    // parameter of a function type or annotation, and not waiting or a loop of itself. Never in
-    // the shell, where a later input may declare the function again, which a call would then
-    // reach. The compiler leaves out a call of a function inside itself.
+    // 2026-11-08: a call costs about three times the work of a small body): a function of a
+    // file's top level whose body is `=> expression` of a few plain parts, with no lambda, jump or
+    // object made in it, or (2026-11-13) a few statements of such parts: vals and vars, changes,
+    // ifs, returns and throws, no loop or try (plainStatements); with no type parameters,
+    // vararg, parameter of a function type or annotation, and not waiting or a loop of itself.
+    // From any file since 2026-11-13: such a body is in its file's skeleton (smallBody), so a
+    // file using it is compiled again when it changes. Never in the shell, where a later input
+    // may declare the function again, which a call would then reach. The compiler leaves out a
+    // call of a function inside itself.
     // What a function's `return value` gives, as checked in the function: for a small function
     // put in place, whose end does not check it (noteSmallCall).
     std::unordered_map<const ReturnStmt*, Type> returnedTypes;
 
     void noteSmallCall(FuncInfo* f, const Binding& b, const Args& args, const Node& at) {
-        if (f->decl == nullptr || f->decl->isInline || unit == nullptr || unit->shell || f->unit != unit) return;
+        if (f->decl == nullptr || f->decl->isInline || unit == nullptr || unit->shell || f->unit == nullptr || !smallBody(*f->decl)) return;
         const FunctionDecl& d = *f->decl;
-        if (f->owner != nullptr || f->isExtension || f->isExternal || d.isAbstract || d.isSuspend || d.isTail || d.isLambda ||
-            !d.typeParams.empty() || !f->typeParams.empty() || d.varargIndex >= 0 || f->vararg >= 0 || !d.annotations.empty())
+        if ((f->owner != nullptr && !methodMayBeCopied(f)) || f->isExtension || f->isExternal || d.isAbstract || d.isSuspend || d.isTail ||
+            d.isLambda || !d.typeParams.empty() || !f->typeParams.empty() || d.varargIndex >= 0 || f->vararg >= 0 || !d.annotations.empty())
             return;
         // What a function's start does with what it is given stays its start's: a parameter left
         // to its default, a bare enum entry, a narrow int's range (D148), a byte made an int.
@@ -8988,17 +9016,20 @@ struct Checker::Impl {
                 return;
         for (bool given : b.given)
             if (!given) return;
-        if (b.failed || b.missing || d.body.size() != 1 || d.body[0]->kind != StmtKind::Return) return;
-        const auto& ret = static_cast<const ReturnStmt&>(*d.body[0]);
+        if (b.failed || b.missing || d.body.empty()) return;
         int budget = 32;
-        if (ret.value == nullptr || !plainParts(*ret.value, budget) || !topLevelFunction(f)) return;
-        // And what its end does: a bare enum entry or a byte given back as what the function
-        // gives, a narrow int's range.
-        auto returned = returnedTypes.find(&ret);
-        if (returned == returnedTypes.end() || !knownThrough(returned->second) || !f->result.known() || f->result.storage != 0 ||
-            (f->result.kind == Type::Class && f->result.cls != nullptr && (f->result.cls->isEnum || f->result.cls->isEnumClass)) ||
-            (returned->second.kind == Type::Byte && f->result.kind != Type::Byte))
+        // `=> value` (one return), or a few plain statements whose returns each give a value.
+        const bool expression = d.body.size() == 1 && d.body[0]->kind == StmtKind::Return;
+        std::vector<const ReturnStmt*> returns;
+        if (expression) {
+            const auto& ret = static_cast<const ReturnStmt&>(*d.body[0]);
+            if (ret.value == nullptr || !plainParts(*ret.value, budget)) return;
+            returns.push_back(&ret);
+        } else if (!plainStatements(d.body, budget, returns)) {
             return;
+        }
+        if (!copyableBody(f)) return;
+        if (f->owner == nullptr && !topLevelFunction(f)) return;
         // Every argument of a type known through and through: the function's own start checks
         // one the checker cannot see (a value of an untyped lambda's, say), and a call put in
         // place has no start.
@@ -9014,7 +9045,240 @@ struct Checker::Impl {
             if (p.kind != Type::Int && p.kind != Type::Float && p.kind != Type::Bool && p.kind != Type::Byte && p.kind != Type::Char &&
                 p.kind != Type::String)
                 pure = false;
-        inlineCalls[&at] = InlineCallFact{f, b.paramOf, true, pure && operatorsOnParams(*ret.value, d)};
+        // A method of a class (not a value type's, which has no subclasses, nor a static one) is put
+        // in place behind a check that the object is of exactly that class (JumpIfNotClass).
+        const bool guarded = f->owner != nullptr && !f->isStatic && !f->owner->isValue;
+        // What it gives is settled once every body has been checked (smallCallEnds): one of
+        // another file, or one whose result is worked out from its body, may not be yet.
+        InlineCallFact fact{f, b.paramOf, true, pure && expression && operatorsOnParams(*returns[0]->value, d), guarded};
+        pendingSmall[&at] = PendingSmall{std::move(fact), std::move(returns), expression};
+    }
+
+    // A call noted as a small function's, its end still to be looked at: settled when the
+    // compiler first asks (Checker::inlineCall), every body checked by then.
+    struct PendingSmall {
+        InlineCallFact fact;
+        std::vector<const ReturnStmt*> returns;
+        bool expression = false;
+    };
+    std::unordered_map<const Node*, PendingSmall> pendingSmall;
+    // Whether what a small function's body gives is as its end would make it: its result of a
+    // type known through and through (a bare enum entry, a narrow int's range or a byte given
+    // back as more are its end's to make), each return's value of that type, and a body of
+    // statements that ends with no return only where it gives unit.
+    bool smallCallEnds(PendingSmall& p) {
+        FuncInfo* f = p.fact.fn;
+        const FunctionDecl& d = *f->decl;
+        if (usesBareEntries.count(f) != 0 || usesRestricted.count(f) != 0) return false;
+        const Type result = resultOf(f);
+        if (!result.known() || result.storage != 0 ||
+            (result.kind == Type::Class && result.cls != nullptr && (result.cls->isEnum || result.cls->isEnumClass)))
+            return false;
+        for (const ReturnStmt* ret : p.returns) {
+            if (ret->value == nullptr) {
+                if (result.kind != Type::Unit) return false;
+                continue;
+            }
+            auto returned = returnedTypes.find(ret);
+            if (returned == returnedTypes.end() || !knownThrough(returned->second) || (returned->second.kind == Type::Byte && result.kind != Type::Byte))
+                return false;
+        }
+        if (!p.expression && (d.body.back()->kind != StmtKind::Return || static_cast<const ReturnStmt&>(*d.body.back()).value == nullptr) &&
+            result.kind != Type::Unit)
+            return false;
+        return true;
+    }
+
+    // A method that may be put in place by itself (2026-11-13): of a class or value type with no
+    // type parameters (G67), not an interface, enum or object; a plain method, not an
+    // initializer or accessor. Static methods too. A class's, behind a check of the object's
+    // class, which must be a global the check can name.
+    static bool methodMayBeCopied(const FuncInfo* f) {
+        const ClassInfo* owner = f->owner;
+        // A class of no superclass: every bare name in its method is a member of its own, read
+        // as one, never looked up as the program runs (where access is judged by the code).
+        if (owner == nullptr || owner->decl == nullptr || owner->isInterface || owner->isObject || owner->isEnum || owner->isEnumClass ||
+            !owner->typeParams.empty() || owner->unknownSuper || !owner->nested.empty() || owner->name.find('.') != std::string::npos ||
+            owner->decl->hasSuper)
+            return false;
+        const FunctionDecl& d = *f->decl;
+        // No static method: its body's names are the class's statics, which a body put in place
+        // elsewhere would not find as they are found in the class.
+        if (f->isStatic || d.accessor != FunctionDecl::Accessor::None || f->name == "init") return false;
+        if (!owner->isValue && !owner->global) return false;
+        return true;
+    }
+
+    // What a small body may not do to be put in place by itself (2026-11-13): call itself (a
+    // stack trace would show the copy as a frame of its own); give one of its parameters another
+    // value (a parameter put in place is the argument's); and, a value type's method, change
+    // anything but a local of its own or call a method of its value bare or through `this`
+    // (`this` put in place is a copy, where the method changes the value it is called on).
+    bool copyableBody(const FuncInfo* f) {
+        const FunctionDecl& d = *f->decl;
+        const ClassInfo* value = f->owner != nullptr && f->owner->isValue ? f->owner : nullptr;
+        std::set<std::string> locals;
+        bool ok = true;
+        std::function<void(const Expr&)> inExpr = [&](const Expr& e) {
+            if (!ok) return;
+            switch (e.kind) {
+                case ExprKind::Interp:
+                    for (const ExprPtr& part : static_cast<const InterpExpr&>(e).parts) inExpr(*part);
+                    return;
+                case ExprKind::Unary: inExpr(*static_cast<const UnaryExpr&>(e).operand); return;
+                case ExprKind::Binary: {
+                    const auto& b = static_cast<const BinaryExpr&>(e);
+                    inExpr(*b.left);
+                    inExpr(*b.right);
+                    return;
+                }
+                case ExprKind::Logical: {
+                    const auto& l = static_cast<const LogicalExpr&>(e);
+                    inExpr(*l.left);
+                    inExpr(*l.right);
+                    return;
+                }
+                case ExprKind::Ternary: {
+                    const auto& t = static_cast<const TernaryExpr&>(e);
+                    inExpr(*t.condition);
+                    inExpr(*t.then);
+                    inExpr(*t.otherwise);
+                    return;
+                }
+                case ExprKind::Elvis: {
+                    const auto& v = static_cast<const ElvisExpr&>(e);
+                    inExpr(*v.left);
+                    inExpr(*v.right);
+                    return;
+                }
+                case ExprKind::Member: inExpr(*static_cast<const MemberExpr&>(e).object); return;
+                case ExprKind::Index: {
+                    const auto& x = static_cast<const IndexExpr&>(e);
+                    inExpr(*x.object);
+                    inExpr(*x.index);
+                    return;
+                }
+                case ExprKind::Call: {
+                    const auto& call = static_cast<const CallExpr&>(e);
+                    if (call.callee->kind == ExprKind::Name) {
+                        const std::string& name = static_cast<const NameExpr&>(*call.callee).name;
+                        if (name == d.name) ok = false;
+                        if (value != nullptr && value->methods.count(name) != 0) ok = false;
+                    } else if (call.callee->kind == ExprKind::Member) {
+                        const auto& m = static_cast<const MemberExpr&>(*call.callee);
+                        if (value != nullptr && m.object->kind == ExprKind::This) ok = false;
+                        if (m.name == d.name && m.object->kind == ExprKind::This) ok = false;
+                        inExpr(*m.object);
+                    } else {
+                        inExpr(*call.callee);
+                    }
+                    for (const ExprPtr& arg : call.args) inExpr(*arg);
+                    return;
+                }
+                default: return;
+            }
+        };
+        auto changes = [&](const Expr& target) {
+            if (target.kind == ExprKind::Name) {
+                const std::string& name = static_cast<const NameExpr&>(target).name;
+                if (std::find(d.params.begin(), d.params.end(), name) != d.params.end()) ok = false;
+                if (value != nullptr && locals.count(name) == 0) ok = false;
+            } else if (value != nullptr) {
+                ok = false;
+            }
+            inExpr(target);
+        };
+        std::function<void(const Stmt&)> inStmt = [&](const Stmt& s) {
+            if (!ok) return;
+            switch (s.kind) {
+                case StmtKind::Var: {
+                    const auto& v = static_cast<const VarStmt&>(s);
+                    if (v.init) inExpr(*v.init);
+                    locals.insert(v.name);
+                    return;
+                }
+                case StmtKind::Expr: {
+                    const Expr& e = *static_cast<const ExprStmt&>(s).expr;
+                    if (e.kind == ExprKind::Assign) {
+                        changes(*static_cast<const AssignExpr&>(e).target);
+                        inExpr(*static_cast<const AssignExpr&>(e).value);
+                    } else if (e.kind == ExprKind::IncDec) {
+                        changes(*static_cast<const IncDecExpr&>(e).target);
+                    } else {
+                        inExpr(e);
+                    }
+                    return;
+                }
+                case StmtKind::Block:
+                    for (const StmtPtr& inner : static_cast<const BlockStmt&>(s).statements) inStmt(*inner);
+                    return;
+                case StmtKind::If: {
+                    const auto& i = static_cast<const IfStmt&>(s);
+                    inExpr(*i.condition);
+                    inStmt(*i.then);
+                    if (i.otherwise) inStmt(*i.otherwise);
+                    return;
+                }
+                case StmtKind::Return:
+                    if (static_cast<const ReturnStmt&>(s).value) inExpr(*static_cast<const ReturnStmt&>(s).value);
+                    return;
+                case StmtKind::Throw: inExpr(*static_cast<const ThrowStmt&>(s).value); return;
+                default: return;
+            }
+        };
+        for (const StmtPtr& s : d.body) inStmt(*s);
+        return ok;
+    }
+
+    // Whether a function's body is small enough to be put in place by itself: at most 192
+    // tokens. The same test says which bodies are in their file's skeleton (compiler.cpp,
+    // skeletonOf), so that a file a small body was copied into is compiled again when it changes.
+    static bool smallBody(const FunctionDecl& d) { return d.bodyTo >= d.bodyFrom && d.bodyTo - d.bodyFrom <= kSmallBodyTokens; }
+
+    // The statements of a small function's body (2026-11-13): vals and vars given plain values,
+    // changes made with plain values (an assignment, ++ or --), ifs of a plain condition over
+    // such statements, blocks of them, returns and throws of plain values. No loop, try, local
+    // function or class: what is copied in stays a few steps. `returns` gathers its returns.
+    static bool plainStatements(const std::vector<StmtPtr>& body, int& budget, std::vector<const ReturnStmt*>& returns) {
+        for (const StmtPtr& s : body)
+            if (!plainStatement(*s, budget, returns)) return false;
+        return true;
+    }
+    static bool plainStatement(const Stmt& s, int& budget, std::vector<const ReturnStmt*>& returns) {
+        if (--budget < 0) return false;
+        switch (s.kind) {
+            case StmtKind::Var: {
+                const auto& v = static_cast<const VarStmt&>(s);
+                if (!v.pattern.empty() || v.isLazy || v.isConst || v.isAtomic || v.isLateinit || v.getter || v.setter || v.isExternal) return false;
+                return v.init != nullptr && plainParts(*v.init, budget);
+            }
+            case StmtKind::Expr: {
+                const Expr& e = *static_cast<const ExprStmt&>(s).expr;
+                if (e.kind == ExprKind::Assign) {
+                    const auto& a = static_cast<const AssignExpr&>(e);
+                    return !a.nullSafe && a.op != TokenType::DotEq && plainParts(*a.target, budget) && plainParts(*a.value, budget);
+                }
+                if (e.kind == ExprKind::IncDec) {
+                    const auto& i = static_cast<const IncDecExpr&>(e);
+                    return !i.nullSafe && plainParts(*i.target, budget);
+                }
+                return plainParts(e, budget);
+            }
+            case StmtKind::Block: return plainStatements(static_cast<const BlockStmt&>(s).statements, budget, returns);
+            case StmtKind::If: {
+                const auto& i = static_cast<const IfStmt&>(s);
+                return plainParts(*i.condition, budget) && plainStatement(*i.then, budget, returns) &&
+                       (i.otherwise == nullptr || plainStatement(*i.otherwise, budget, returns));
+            }
+            case StmtKind::Return: {
+                const auto& r = static_cast<const ReturnStmt&>(s);
+                if (!r.label.empty() || (r.value != nullptr && !plainParts(*r.value, budget))) return false;
+                returns.push_back(&r);
+                return true;
+            }
+            case StmtKind::Throw: return plainParts(*static_cast<const ThrowStmt&>(s).value, budget);
+            default: return false;
+        }
     }
 
     static bool knownThrough(const Type& t) {
@@ -11893,7 +12157,15 @@ bool Checker::samCall(const CallExpr& call) const { return impl_->samCalls.count
 
 bool Checker::inlineCall(const Node& call, InlineCall& out) const {
     auto found = impl_->inlineCalls.find(&call);
-    if (found == impl_->inlineCalls.end()) return false;
+    if (found == impl_->inlineCalls.end()) {
+        auto pending = impl_->pendingSmall.find(&call);
+        if (pending == impl_->pendingSmall.end()) return false;
+        const bool holds = impl_->smallCallEnds(pending->second);
+        Impl::InlineCallFact fact = std::move(pending->second.fact);
+        impl_->pendingSmall.erase(pending);
+        if (!holds) return false;
+        found = impl_->inlineCalls.emplace(&call, std::move(fact)).first;
+    }
     const FuncInfo* f = found->second.fn;
     if (f->decl == nullptr || f->unit == nullptr) return false;
     out.fn = f->decl;
@@ -11906,6 +12178,7 @@ bool Checker::inlineCall(const Node& call, InlineCall& out) const {
     out.prelude = f->unit->prelude;
     out.automatic = found->second.automatic;
     out.pure = found->second.pure;
+    out.guarded = found->second.guarded;
     return true;
 }
 

@@ -408,6 +408,10 @@ enum class Op : uint16_t {
     // The fields of a class that keep a value of a generic value type declared wider than its
     // phantom type parameters can be, beside which they keep its own (G4): their names, one to a line.
     TypeSlots,          // u16 names                       class -> class
+    // A method put in place behind a check (2026-11-13): jumps to the call made as usual unless
+    // the value is an object of exactly the class global `global` holds, whose method the body
+    // put in place is (a subclass's may be another).
+    JumpIfNotClass,     // u16 global, i32 target          value ->
 
     Count_,
 

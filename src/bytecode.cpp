@@ -259,6 +259,7 @@ const OpInfo kOps[] = {
     {"KEEP_TOP", Operand::None},
     {"FIELD_TYPES_MAKER", Operand::None},
     {"TYPE_SLOTS", Operand::U16},
+    {"JUMP_IF_NOT_CLASS", Operand::U16I32},
 };
 
 const char* const kTypeNames[] = {"", "int", "float", "Number", "string", "bool", "List", "Map", "Range", "Function", "Bytes", "Type", "",
@@ -675,6 +676,12 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                 case Op::JumpIfFalse:
                     if (depth < 2) fail("stack underflow");
                     flow(a, depth - 1);
+                    pops = 1;
+                    break;
+                case Op::JumpIfNotClass:
+                    if (depth < 2) fail("stack underflow");
+                    if (static_cast<size_t>(a) >= program.globalNames.size()) fail("global out of range");
+                    flow(b, depth - 1);
                     pops = 1;
                     break;
                 case Op::And:
@@ -1408,6 +1415,9 @@ void disassembleFunction(const FunctionProto& f, const Program& program, std::os
             case Op::RangeNext:
                 out << " slot=" << a << " -> " << b;
                 break;
+            case Op::JumpIfNotClass:
+                out << " " << a << " -> " << b << "  ; " << program.globalNames[static_cast<size_t>(a)];
+                break;
             case Op::CachedType:
             case Op::TagCollection:
                 out << " cache=" << a << " -> " << b;
@@ -1582,7 +1592,7 @@ void FunctionProto::noteLibrary() {
 namespace {
 
 const char kMagic[4] = {'A', 'S', 'T', 'R'};
-const uint8_t kFormatVersion = 32;
+const uint8_t kFormatVersion = 33;  // 33: JumpIfNotClass (2026-11-13)
 const int kMaxProtoNesting = 200;
 
 enum ConstantTag : uint8_t { TagInt = 0, TagFloat = 1, TagString = 2, TagChar = 3, TagByte = 4 };
@@ -2245,6 +2255,7 @@ int targetOperand(Op op) {
         case Op::IterNext:
         case Op::IterNextRef:
         case Op::IterNextPair:
+        case Op::JumpIfNotClass:
         case Op::DefaultArg: return 3;
         default: return 0;
     }

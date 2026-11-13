@@ -728,6 +728,14 @@ STENCIL(getuv) {
     __builtin_memcpy(&base[jade_slot2], word<const Slot*>(cell + kUpvalueLocation), sizeof(Slot));
     NEXT;
 }
+// The flag register = whether slot jade_slot holds an object of exactly the class global jade_ki
+// holds (JumpIfNotClass: a method put in place behind the check, 2026-11-13).
+STENCIL(clsflag) {
+    const Slot& s = base[jade_slot];
+    const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + jade_ki;
+    i9 = s.kind == kKindObj && s.p[kObjType] == kTypeInstance && g->kind == kKindObj && word<const uint8_t*>(s.p + kInstClass) == g->p;
+    NEXT;
+}
 // `value!!` where slot jade_slot is in memory: nothing, unless it is null, which the VM throws for.
 STENCIL(notnull) {
     if (base[jade_slot].kind == kKindNull) EXIT;

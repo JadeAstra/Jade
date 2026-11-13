@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan: calls from native code</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: calls made from native code</h1>
+<p class="lede">Written 2026-11-13, at the user's word ("do 3 and 2", the third of the ways to make loops with calls faster): native code that calls a Jade function or method itself, without leaving the loop for the VM and coming back. A plan with its questions for the user; nothing is built until they are decided. It follows <a href="native-plan.html">the native code plan</a> (M9.5), whose regions it extends; the timings behind it are in <a href="timings.html">timings.html</a> and <a href="M10-speed.html">M10-speed.html</a>. Item 2, more calls put in place automatically (small methods behind a class check, small bodies of a few statements, from other files too), is built meanwhile: what this plan is for is the calls that stay calls.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#cp-what">What it is</a></li>
+<li><a href="#cp-why">Why: what a call costs a loop today</a></li>
+<li><a href="#cp-today">How a region leaves and comes back today</a></li>
+<li><a href="#cp-vm">How the VM makes a call</a></li>
+<li><a href="#cp-design">A call made from native code</a></li>
+<li><a href="#cp-kept">What a loop keeps across a call</a></li>
+<li><a href="#cp-which">Which calls</a></li>
+<li><a href="#cp-order">Order, and how each step is checked</a></li>
+<li><a href="#cp-same">What does not change</a></li>
+<li><a href="#cp-risks">Risks</a></li>
+<li><a href="#cp-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<section id="cp">
+
+<h2 id="cp-what">What it is</h2>
+<p>Native code cannot make a call. Where a loop calls a function that is not put in place, the region leaves at the call: what it holds in registers is written back to the frame's slots, the VM makes the call, and when the call returns the VM comes back into the region at the instruction after it, which loads the registers again. The plan is for the region to make the call itself and go on, the loop's machine code never left.</p>
+<p>Three things follow, in order of what they are worth:</p>
+<ol>
+<li><strong>A loop with a call is never slower in native code than in the VM.</strong> Today leaving and coming back costs about 5 ns on top of the call, so a loop that does little but call runs slower as native code than without it.</li>
+<li><strong>A loop with a call keeps what the region does once for a loop</strong>: lists and fields looked at once as the region starts, fields held for the loop and written back at its ways out. Today any VM work in a loop that does not end the function switches all of that off, as a way back in starts afresh.</li>
+<li><strong>A loop around a method call gets a region at all.</strong> Today such a loop is left to the VM whole: one instruction of five or so being the VM's is too little done between what the VM does (<code>Region::worthIt</code>).</li>
+</ol>
+<p>A program behaves the same with it as without it: answers, errors and their messages, stack traces, other threads' turns, tasks that wait. The tests show it by running every test with native code, with the VM alone and in the interpreter, as now.</p>
+
+<h2 id="cp-why">Why: what a call costs a loop today</h2>
+<p>Measured 2026-11-13, a loop run 10 million times round, best of three, on the Clang build at 5 GHz:</p>
+<div class="table"><table>
+<thead><tr><th>Loop</th><th class="num">Native code, ms</th><th class="num">VM alone, ms</th><th>What happens</th></tr></thead>
+<tbody>
+<tr><td>a small top-level function, put in place automatically</td><td class="num">9</td><td class="num">40</td><td>No call: the body is in the loop.</td></tr>
+<tr><td>a function whose body is two statements</td><td class="num">168</td><td class="num">118</td><td>Slower in native code: the call (about 12 ns) and the way out and back in (about 5 ns).</td></tr>
+<tr><td>a method call, <code>t += a.value(i)</code></td><td class="num">237</td><td class="num">238</td><td>No region: too little between what the VM does.</td></tr>
+<tr><td>some work, and a call every 100th time round</td><td class="num">60</td><td class="num">202</td><td>A rare way out costs little.</td></tr>
+<tr><td>some work, and a call every time round</td><td class="num">215</td><td class="num">278</td><td>Native code wins less than it should.</td></tr>
+</tbody></table></div>
+<p>Item 2 takes the first and the third row's calls away where the functions are small (the method behind a class check). What is left are calls of functions too large to copy, of lambdas a function is given, of methods a subclass may override, and calls the checker cannot see through: those are this plan's.</p>
+
+<h2 id="cp-today">How a region leaves and comes back today</h2>
+<ul>
+<li><strong>Islands.</strong> An instruction a region does not do is an island (<code>Region::transfer</code>): the region's steps before it jump to a way out, whose <em>stores</em> write back every slot the region holds in a register or has not made yet (a copy, a whole number of a list), and whose last step returns to the VM the instruction to go on at and the stack's top. An island on the straight way to a return or a throw <em>ends</em>: the VM never comes back.</li>
+<li><strong>Ways back in.</strong> Every other island's next instruction is a way in (<code>entries</code>, <code>resumed</code>): the region's machine code has a label there whose <em>loads</em> read what the region keeps in registers, and the instruction's word in the run code is patched so that the VM, reaching it, calls <code>VM::nativeEnter</code>.</li>
+<li><strong>Each time in</strong>, <code>nativeEnter</code> finds the region by its head among the function's regions (a search of a short list), makes a fresh <code>RegionContext</code> (the attention flag, the core, the lent object, the lists and fields looked at once, the loop templates' words, the globals, the closure's upvalue cells; some 700 bytes, set to zero), and runs the machine code. A way in other than the first runs no prologue: what was looked at once is gone. That is why <code>lookAtListsOnce</code> and the fields held for a loop are made only where every island ends the function.</li>
+<li><strong>A miss.</strong> A quick way that cannot is counted; past a limit, the region's ways in are the VM's own instructions again.</li>
+</ul>
+
+<h2 id="cp-vm">How the VM makes a call</h2>
+<ul>
+<li><strong>Quick calls.</strong> <code>CALL</code>, <code>R_CALL</code>, <code>INVOKE</code>, <code>INVOKE_OWN</code> and <code>R_INVOKE</code> enter a closure at once (<code>QUICK_CALL</code>) where nothing is to be done first: the arguments fit, no enum to settle, room for the frame, no collection due (<code>bytesAllocated_ &lt;= nextGC_</code>) and no other thread waiting (<code>attention_</code>). The caller's <code>frame-&gt;ip</code> is set to the instruction after the call, a frame pushed, and the callee's run code goes on in the same loop; its <code>RETURN</code> pops the frame and goes on in the caller. A method is found by name in the object's class (<code>cls-&gt;methods</code>), the place's cache remembering nothing yet for calls.</li>
+<li><strong>Anything else</strong> takes the cold way: a safe point (<code>GC_SAFE_POINT</code>, where the collector runs and another thread may take its turn), then <code>callValue</code>: a C++ function, a bound method, a class made, an object's method found by its interface, defaults and named arguments.</li>
+<li><strong>C++ calling Jade</strong> (<code>VM::call</code>, <code>callOn</code>): the arguments pushed at <code>sp_</code>, <code>callValue</code>, and a run of the VM's loop of its own (<code>run(base)</code>) until the frame count is back where it was; <code>NativeCallGuard</code> counts the depth (<code>nativeDepth_</code>, at most <code>kMaxNativeDepth</code>, 200, a stack overflow past it). It is the way a sort's comparison or a list's <code>forEach</code> given by C++ calls a lambda; it has never been timed as a hot way.</li>
+<li><strong>Exceptions</strong> are C++ exceptions (<code>JadeThrow</code>) from where they are thrown to the <code>run</code> whose frames they are in: <code>handled</code> asks <code>tryHandle</code> for the innermost handler (<code>handlers_</code>: a frame, a stack top, an ip), which belongs to that run only if its frame is the run's or above it; otherwise the exception goes on out of the run, to the C++ that called it.</li>
+<li><strong>Tasks that wait</strong> are set aside by throwing <code>FiberSuspend</code> through the C++ stack to <code>runFiber</code>, which a task may do only where nothing of C++ is between (<code>canSetAside</code>: <code>nativeDepth_ == 0</code>). A Jade function called by C++ cannot wait.</li>
+<li><strong>Threads</strong> take turns holding the VM's lock: a thread gives the others a turn only at a call or at the end of a loop's body (G64); native code checks the attention flag at its loops' ends and leaves.</li>
+</ul>
+
+<h2 id="cp-design">A call made from native code</h2>
+<p>A step for a call (<code>R_CALL</code>, <code>R_INVOKE</code>; <code>CALL</code> and <code>INVOKE</code> of the stack code) that does what <code>QUICK_CALL</code> asks first and, where all holds, has the call made and goes on; anything else leaves for the VM at the call, as an island does now. Its parts:</p>
+<ol>
+<li><strong>Before the call</strong>, what the callee could see written back: the frame's slots up to the call's arguments (a captured local is read and written through an open upvalue pointing at its slot; the collector reads the slots), and every field held for the loop (<code>putp</code>). The simplest is everything an island's way out would write (question 2).</li>
+<li><strong>The call</strong>, by a helper in C++ called from the step: <code>frame-&gt;ip</code> set to the call's instruction (for stack traces and for a handler in this frame), <code>sp_</code> set past the arguments, then the call made and run to its return. Two ways to run it (question 1): through <code>VM::call</code>, the VM's loop run anew for it; or by a way of its own that pushes the frame as <code>QUICK_CALL</code> does and runs the loop until it returns. The callee's own loops have regions of their own as now, entered from its run code.</li>
+<li><strong>After it</strong>, the result in the call's slot, and what the region keeps in registers loaded again, as a way in loads it; lists and fields looked at once looked at again (question 5).</li>
+<li><strong>An exception</strong> cannot go through the region's machine code: a stencil has no unwind information, and on Windows an exception thrown through it ends the program. The helper catches it, keeps it (<code>RegionContext</code>), and the step leaves at the call's instruction with the exception kept; <code>nativeEnter</code> throws it there, as the call would have, and the VM's <code>run</code> finds the handler as for any throw. Its stack trace was taken where it was thrown, the region's frame at the call's line.</li>
+<li><strong>Waiting and other threads' turns.</strong> A call of a function that may wait (R1) leaves for the VM, as now; a task cannot be set aside with the region's machine code on the C++ stack. Where the attention flag is up or a collection is due, the step leaves too, and the VM's cold way gives the turn or collects, as it does now (question 4).</li>
+<li><strong>Depth.</strong> Each call made from native code is a run of the VM on the C++ stack. Past a depth (question 6) the step leaves, and the VM makes the call as it does now, so that deep recursion through loops ends where it does today.</li>
+</ol>
+
+<h2 id="cp-kept">What a loop keeps across a call</h2>
+<ul>
+<li><strong>The context.</strong> A call made from native code leaves the region's context where it is: what was looked at once is still there after the call, and the loop templates' words.</li>
+<li><strong>But a callee may change it.</strong> A list looked at once may have been added to (its items moved), a field read once written, a held field read or written by the callee. Either each is looked at again after each call (a few loads a call, nothing to know about the callee), or kept where the checker knows the callee changes no list of that type and no field of that name (its effects: <code>noteCallEffects</code>, <code>changesLists</code>, <code>mayChangeLists</code>), which a call through a lambda or an overridable method rarely allows (question 5).</li>
+<li><strong>Held fields</strong> are written back before every call and read again after it either way: the callee may read them through the object.</li>
+</ul>
+
+<h2 id="cp-which">Which calls</h2>
+<ul>
+<li><strong>Jade closures</strong>: a function called by name, a lambda a function was given, a method of an object's class found by name as <code>QUICK_CALL</code> finds it. These are the calls item 2 leaves.</li>
+<li><strong>C++ functions</strong> (<code>Math</code>, a list's own methods, the text and picture libraries): the VM calls most of them at once already (<code>quickNative</code>), and many are steps of native code (a list's size, an item). Left to the VM at first (question 7).</li>
+<li><strong>Not</strong>: calls with named arguments or a spread, of a class (an object made), of a function that may wait, of a value the region knows nothing of where its call would not be quick in the VM either.</li>
+</ul>
+
+<h2 id="cp-order">Order, and how each step is checked</h2>
+<ol>
+<li><strong>A spike</strong>: the helper for a function called by name with up to four arguments, on the loops of the table above, both ways of question 1 timed. The gate (question 8): a call made from native code no slower than the VM's quick call, and the loop with a call every time faster than the VM alone. If neither way holds, stop and report.</li>
+<li><strong>Calls by name and of lambdas</strong> (<code>R_CALL</code>, <code>CALL</code>), with the write-back and the loads, exceptions kept and thrown at the call, the safe point and depth falls back to the VM.</li>
+<li><strong>Methods</strong> (<code>R_INVOKE</code>, <code>INVOKE</code>, <code>INVOKE_OWN</code>): found by name in the object's class, as the VM's quick way does.</li>
+<li><strong>A loop with a call keeps its once-looks</strong>: <code>lookAtListsOnce</code> and the held fields allowed where the region's only VM work is calls it makes itself, each looked at again after a call (or kept, as question 5 decides).</li>
+<li><strong><code>worthIt</code> again</strong>: a call made from native code counted as the region's work, so that a loop around a method call gets a region.</li>
+</ol>
+<p>Each step: a test of its own (answers, errors and their lines, stack traces, a handler in the loop's own function catching a callee's exception, recursion, a callee that waits, threads), every answer the VM's alone and the interpreter's; the suite and GC stress; the kernels and benchmarks against the build before. At the end, ASan (the clang-cl build) and the Linux build, as at a milestone.</p>
+
+<h2 id="cp-same">What does not change</h2>
+<ul>
+<li>What a program does, its errors and their messages, stack traces, the order things are worked out in.</li>
+<li>When other threads take their turns, and that a task that waits is set aside.</li>
+<li>How deep recursion may go before a stack overflow.</li>
+<li>The run code and the VM's own calls; <code>jade --interpret</code> and <code>JADE_NATIVE=0</code>.</li>
+</ul>
+
+<h2 id="cp-risks">Risks</h2>
+<ul>
+<li><strong><code>VM::call</code> is slow for this.</strong> It was made for C++ calling Jade now and then: a guard, room checked, <code>callValue</code>, the loop's setup and its <code>try</code>. If it costs more than the way out and back in it saves, the call needs a way of its own (question 1), or the gain is the once-looks alone.</li>
+<li><strong>The C++ stack.</strong> Native code calling the VM calling native code: each level a run of the loop on the C++ stack, which a deep recursion through loops could use up before the VM's own frame limit. The depth limit (question 6) is what keeps it as today.</li>
+<li><strong>A slot the region has not written.</strong> A copy made only at a way out (a slot as entered, read where it is) must be made before a call, as at a way out, or a callee reading it through an upvalue sees what was there before.</li>
+<li><strong>Exceptions kept across the region's return</strong>: one kept and never thrown, or thrown twice, would lose an error or report one twice. Each way the step leaves is tested.</li>
+<li><strong>Threads and the collector</strong> must see the frame as the VM would at a call: the slots written back, <code>frame-&gt;ip</code> right. GC stress and the thread stress setting run each step.</li>
+</ul>
+
+<h2 id="cp-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>How the call is made</h3>
+<ul>
+<li><strong>Through <code>VM::call</code></strong>, as C++ calls Jade now: nothing new in the VM, but untimed as a hot way, and it may cost more than it saves.</li>
+<li><strong>A way of its own</strong>: the frame pushed as <code>QUICK_CALL</code> pushes it, the loop run until it returns, no guard or <code>callValue</code> on the way. More code in the VM; as fast as the VM's own call can be.</li>
+<li><strong>Leave and come back, made cheaper</strong>: the VM still makes the call, but the region found at once, its context not made anew, its once-looks kept. Smallest; keeps the call's cost and part of the round trip.</li>
+</ul>
+<p><em>Recommended:</em> a way of its own, after the spike times it against <code>VM::call</code>: a call made from native code should cost no more than the VM's quick call, which <code>VM::call</code> is not built for.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>What is written back before a call</h3>
+<ul>
+<li><strong>Everything a way out writes back</strong>, and everything loaded again after.</li>
+<li><strong>Only what the callee can see</strong>: captured locals (slots with an open upvalue), held fields, copies not made yet; numbers in registers that nothing else can see kept there across the call.</li>
+</ul>
+<p><em>Recommended:</em> everything at first (the stores and loads exist and are tested), then only what the callee can see once the step works, as its own step: the second saves most where a loop keeps a few numbers in registers, but needs the slots a closure may see known exactly.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Exceptions</h3>
+<ul>
+<li><strong>Kept and thrown at the call</strong>: the helper catches, the region leaves at the call's instruction with it kept, and <code>nativeEnter</code> throws it there.</li>
+<li><strong>Unwind information for the stencils</strong>, so that an exception may go through the region's machine code: a table for every stencil on Windows and Linux, and every way through checked.</li>
+</ul>
+<p><em>Recommended:</em> kept and thrown at the call. It needs nothing of the system's unwinding, and the VM finds the handler as for any throw.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>Calls that may wait, and other threads' turns</h3>
+<ul>
+<li><strong>Left to the VM</strong>: a call of a function that may wait leaves the region; where another thread waits or a collection is due, the step leaves and the VM's cold way does it.</li>
+<li><strong>Done from native code</strong>: the turn given and the collection made by the helper, the region going on after; a task that waits set aside with native frames under it (not possible as tasks are set aside now).</li>
+</ul>
+<p><em>Recommended:</em> left to the VM. They are rare in a hot loop, and what they do (a task set aside, a turn given) stays exactly as it is.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>What stays looked at once across a call</h3>
+<ul>
+<li><strong>Looked at again after each call</strong>: every list and field looked at once read again (a few loads); held fields written back before and read again after.</li>
+<li><strong>Kept where the callee is known to change none of it</strong>: by the checker's effects (no list of that type changed, no field of that name written); looked at again otherwise.</li>
+<li><strong>Nothing kept</strong>: once-looks off in a loop with a call, as now.</li>
+</ul>
+<p><em>Recommended:</em> looked at again after each call. It is right whatever the callee does, costs a few loads, and the calls this plan is for (lambdas, overridable methods, large functions) are those the checker knows least about.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span>How deep calls from native code may go</h3>
+<ul>
+<li><strong>A limit of its own</strong> (say 64 runs of the loop on the C++ stack, below <code>kMaxNativeDepth</code>), past which the VM makes the call as now.</li>
+<li><strong><code>kMaxNativeDepth</code></strong> (200), as C++ calling Jade has it: past it, a stack overflow where the VM alone would go deeper.</li>
+</ul>
+<p><em>Recommended:</em> a limit of its own, falling back to the VM: recursion goes as deep as it does today, whatever native code does.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">7</span>Which calls first</h3>
+<ul>
+<li><strong>Jade functions, lambdas and methods</strong>, as <code>QUICK_CALL</code> enters them; C++ functions left to the VM.</li>
+<li><strong>C++ functions too</strong>, called by the helper as <code>quickNative</code> calls them.</li>
+</ul>
+<p><em>Recommended:</em> Jade's first. They are what item 2 leaves; the VM's quick way for C++ functions already costs little, and many are steps of native code.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">8</span>The spike as a gate</h3>
+<ul>
+<li><strong>A gate</strong>: if a call made from native code costs more than the VM's quick call, or the loop with a call every time round is not faster than the VM alone, stop and report before step 2.</li>
+<li><strong>No gate</strong>: build it all and time it at the end.</li>
+</ul>
+<p><em>Recommended:</em> a gate, as for native code itself. The whole gain rests on the call costing no more than the VM's, which is not known yet.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+</section>
+</main>
+</body>
+</html>

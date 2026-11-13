@@ -1,0 +1,25 @@
+// Small functions and a small method of another file, put in place where tests/small_calls_inlined.jade
+// calls them: what is private to this file is still this file's.
+private val factor = 7
+var helped = 0
+
+fun scaled(x : int) : int {
+  val y = x * factor
+  return y + 1
+}
+
+fun noteHelp(n : int) {
+  helped += n
+}
+
+fun atMost(x : int, most : int) : int {
+  if (x > most) { throw IllegalStateException("$x is above $most") }
+  return x
+}
+
+class Meter(var reading : int) {
+  fun advance(by : int) : int {
+    reading += by * factor
+    return reading
+  }
+}

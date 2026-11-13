@@ -49,6 +49,7 @@ constexpr uint8_t kTypeIterator = 11;
 // below, 0x80 for a payload alone with its kind in the low 2 bits).
 constexpr uint8_t kTypeInstance = 8;
 constexpr int kInstShape = 32, kInstData = 48;
+constexpr int kInstClass = 24;  // its class (ObjInstance::cls)
 constexpr uint8_t kKindUndefined = 5, kKindRef = 7;
 // A value of a value type (M9.5 B1): a Ref (the object holding it, a list of items say, the item's
 // position, the place in the item and how deep it is) or a Small value (its bytes in the payload,

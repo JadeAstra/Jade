@@ -319,6 +319,9 @@ public:
         // And its body is worked out from its parameters alone, all of them numbers, booleans,
         // characters or text, by operators: nothing the program writes runs meanwhile.
         bool pure = false;
+        // A class's method, which a subclass may have another of: put in place behind a check
+        // that the object is of exactly that class, the call made as usual otherwise (2026-11-13).
+        bool guarded = false;
     };
     // A call (or `a[i]` of an inline op [], B2) put in place.
     bool inlineCall(const Node& call, InlineCall& out) const;

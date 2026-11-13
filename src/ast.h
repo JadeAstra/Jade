@@ -100,6 +100,10 @@ inline uint8_t accessWord(const std::string& word) {
            : word == "protected" ? kAccessWordProtected : word == "internal" ? kAccessWordInternal : kAccessWordNone;
 }
 
+// The most tokens a function's body has that is small enough to be put in place by itself
+// (Checker::Impl::smallBody, compiler.cpp's skeletonOf).
+constexpr size_t kSmallBodyTokens = 192;
+
 struct FunctionDecl : Node {
     std::string name;
     std::vector<TypeParam> typeParams;  // `fun <T> first(items : list<T>) : T`
@@ -147,6 +151,8 @@ struct FunctionDecl : Node {
 
     // Where its body is among the file's tokens, from its first to past its last: what a
     // file's summary leaves out, other files seeing only what is learned from it (D145).
+    // A body of at most kSmallBodyTokens is small enough to be put in place by itself, from
+    // any file (2026-11-13), and so is in its file's summary as an inline function's is.
     size_t bodyFrom = 0, bodyTo = 0;
 
     // The access word in front of a member (an AccessWord): who may use it.

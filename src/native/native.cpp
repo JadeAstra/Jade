@@ -63,6 +63,7 @@ static_assert(static_cast<int>(ValueKind::Small) == L::kKindSmall && offsetof(Va
               "layout.h: values of value types");
 static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
 static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
+static_assert(offsetof(ObjInstance, cls) == L::kInstClass, "layout.h: an object's class");
 static_assert(offsetof(ObjUpvalue, location) == L::kUpvalueLocation && sizeof(Value*) == 8, "layout.h: a captured variable's cell");
 static_assert(static_cast<int>(ListStore::Narrow) == L::kStoreNarrow && static_cast<int>(Narrow::Byte) == L::kNarrowByte &&
                   offsetof(PackedItems, narrow) == L::kPackNarrow && sizeof(Narrow) == 1,
