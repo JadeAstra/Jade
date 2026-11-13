@@ -2753,7 +2753,9 @@ private:
             emit(Op::GetGlobal, aliasedName(*import, name.substr(dot + 1, next == std::string::npos ? next : next - dot - 1), at)->slot);
             dot = next;
         } else {
+            const bool saved = std::exchange(typeName_, true);
             emitGet(name.substr(0, dot), at);
+            typeName_ = saved;
         }
         while (dot != std::string::npos) {
             size_t next = name.find('.', dot + 1);
@@ -2842,7 +2844,8 @@ private:
             return;
         }
 
-        if (namesFromReceiver() && &at != globalName_) {
+        // A type's name, where a global has it, is that global: no object has a type as a member.
+        if (namesFromReceiver() && !globalPastReceiver(at) && !(typeName_ && findGlobal(name, at, true) != nullptr)) {
             // Not a variable of the lambda or of anything around it: a member of the object
             // the lambda runs on, if that has one by this name, and otherwise a global.
             const int slot = resolveGlobal(name, at)->slot;
@@ -2916,7 +2919,7 @@ private:
             }
         }
 
-        if (namesFromReceiver()) {
+        if (namesFromReceiver() && !globalPastReceiver(at)) {
             const int slot = resolveGlobal(name, at)->slot;
             emitImplicitOp(Op::SetImplicit, stringConstant(name));
             emitU16(slot);
@@ -7354,8 +7357,9 @@ private:
     // Returns false when the name is to be called as an ordinary value.
     bool compileBareCall(const CallExpr& e) {
         if (kindName(*e.callee) != nullptr) return false;  // an enum class's kind: compileCallee
-        if (globalCall_ == &e) return false;  // the global, called as a value (compileGlobalBeside)
-        if (besideSlow_ != &e && classSide() == ClassSide::None && compileGlobalBeside(e, static_cast<const NameExpr&>(*e.callee))) return true;
+        // A global, as the checker found (an extension's object has nothing by the name): called
+        // as a value, as anywhere.
+        if (globalPastReceiver(e)) return false;
         // A class's secondary constructor the checker chose (`Color(x, 2, 3)` with ints): its
         // static function, called by compileCallee, even where a lambda may run on an object whose
         // member a bare name could be, as nothing chooses among constructors when it runs.
@@ -7405,37 +7409,10 @@ private:
         return true;
     }
 
-    // A bare call in an extension function of a top-level class that has nothing by the name
-    // (2026-11-13: `Color(...)` in `fun Grid<Color>.mapChannels`): where the object is of exactly
-    // that class, the global, called as anywhere (which native code can make the value of);
-    // otherwise compiled as it was (looked up as it runs), as a subclass may have a member by it.
-    const CallExpr* globalCall_ = nullptr;
-    const CallExpr* besideSlow_ = nullptr;  // the call compiled as it was, past the check
-    const Node* globalName_ = nullptr;  // the callee read as the global itself (emitGet)
-    bool compileGlobalBeside(const CallExpr& e, const NameExpr& callee) {
-        if (session_.checker == nullptr || frame_ != nullptr || !fs_->isExtension || fs_->isLambda || !implicitSlots_.empty()) return false;
-        const std::string* cls = session_.checker->globalBesideReceiver(e);
-        if (cls == nullptr || *cls != fs_->receiverType) return false;
-        const GlobalName* global = findGlobal(*cls, callee, true);
-        if (global == nullptr || global->slot < 0) return false;
-        line_ = e.line;
-        emitGet("this", callee);
-        emit(Op::JumpIfNotClass, global->slot);
-        const int slow = here();
-        emitI32(0);
-        const CallExpr* savedCall = std::exchange(globalCall_, &e);
-        const Node* savedName = std::exchange(globalName_, e.callee.get());
-        compileExpr(e);
-        globalCall_ = savedCall;
-        globalName_ = savedName;
-        const int end = emitJump(Op::Jump);
-        patchJump(slow);
-        const CallExpr* savedSlow = std::exchange(besideSlow_, &e);
-        compileExpr(e);
-        besideSlow_ = savedSlow;
-        patchJump(end);
-        return true;
-    }
+    // Whether a bare name or call, written in an extension function, means a global (the
+    // checker's globalPastReceiver): compiled as one, not looked for on the object as it runs.
+    bool globalPastReceiver(const Node& at) const { return session_.checker != nullptr && session_.checker->globalPastReceiver(at); }
+    bool typeName_ = false;  // emitGet reading a type's name (emitTypeName)
 
     void compileNamedCall(const CallExpr& e) {
         int toEnd = -1;

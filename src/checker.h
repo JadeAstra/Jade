@@ -150,9 +150,10 @@ public:
     // For a call of an extension function: the declaration the checker found, whether or not
     // the name has other forms; null for any other call.
     const FunctionDecl* extensionCalled(const CallExpr& call) const;
-    // A bare call written in an extension function of a top-level class, which means a global
-    // as that class has nothing by the name: the class's name; null for any other call.
-    const std::string* globalBesideReceiver(const CallExpr& call) const;
+    // A bare name, or a call of one (the call and its callee), written in an extension function
+    // itself, which means a global: the object it runs on has nothing by the name, as its type
+    // says. It is the global whatever the object turns out to be, as in a method of a class.
+    bool globalPastReceiver(const Node& at) const;
     // A call of a class's name that chose a secondary constructor: the static function made of it.
     const FunctionDecl* secondaryConstructor(const CallExpr& call) const;
     // A value type made from its header with literal defaults left out: those defaults, which

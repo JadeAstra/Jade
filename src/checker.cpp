@@ -5485,6 +5485,7 @@ struct Checker::Impl {
                 if (!m.methods.empty()) return unknownType();
             }
         }
+        if (pastReceiver(n.name)) globalsPastReceiver.insert(&n);  // as in call
         if (const GlobalSym* g = findGlobal(*unit, n.name)) {
             if (g->var != nullptr) return fieldType(noteConst(n, g->var));
             if (g->cls != nullptr) return g->cls->isObject ? classType(g->cls) : unknownType();
@@ -8174,9 +8175,13 @@ struct Checker::Impl {
     // literal (`Color(1, 2, 3)`, alpha 255): the defaults, which the compiler passes at the call,
     // so that the value is made at once from its whole header and not by its initializer.
     std::unordered_map<const Node*, std::vector<const Expr*>> headerDefaults;
-    // A bare call in an extension function of a top-level class that means a global, as the
-    // class has nothing by the name (2026-11-13): the class's name.
-    std::unordered_map<const Node*, std::string> globalsBesideReceiver;
+    // Bare names and calls written in an extension function itself that mean globals: the object
+    // it runs on has nothing by the name, as its declared type says (2026-11-13). The compiler
+    // makes them the globals, whatever the object turns out to be, as in a method of a class.
+    std::unordered_set<const Node*> globalsPastReceiver;
+    bool pastReceiver(const std::string& name) {
+        return silent == 0 && ctx != nullptr && !ctx->isLambda && ctx->hasReceiver && ctx->cls == nullptr && findGlobal(*unit, name) != nullptr;
+    }
 
     void noteHeaderDefaults(ClassInfo* k, FuncInfo* init, const Args& args, const Node& at) {
         if (silent != 0 || !k->isValue || !k->typeParams.empty() || k->decl == nullptr || !k->headerInit || init != headerFunc(k)) return;
@@ -10419,14 +10424,10 @@ struct Checker::Impl {
                     }
                 }
             }
-            // Seen from an extension function itself, its object of a top-level class with
-            // nothing by the name: the compiler calls the global where the object is of exactly
-            // that class.
-            if (silent == 0 && ctx != nullptr && !ctx->isLambda && ctx->hasReceiver && ctx->cls == nullptr && ctx->receiver.kind == Type::Class &&
-                !ctx->receiver.nullable && ctx->receiver.cls != nullptr && ctx->receiver.cls->global && ctx->receiver.cls->outer == nullptr &&
-                findGlobal(*unit, n) != nullptr) {
-                const GlobalSym* own = findGlobal(*unit, ctx->receiver.cls->name);
-                if (own != nullptr && own->cls == ctx->receiver.cls) globalsBesideReceiver[&c] = ctx->receiver.cls->name;
+            // Past the object an extension function runs on, which has nothing by the name: the global.
+            if (pastReceiver(n)) {
+                globalsPastReceiver.insert(&c);
+                globalsPastReceiver.insert(c.callee.get());
             }
             if (const GlobalSym* g = findGlobal(*unit, n)) {
                 if (g->cls != nullptr && !g->cls->isObject) {
@@ -12656,10 +12657,7 @@ const std::vector<const Expr*>* Checker::headerDefaults(const CallExpr& call) co
     return found == impl_->headerDefaults.end() ? nullptr : &found->second;
 }
 
-const std::string* Checker::globalBesideReceiver(const CallExpr& call) const {
-    auto found = impl_->globalsBesideReceiver.find(&call);
-    return found == impl_->globalsBesideReceiver.end() ? nullptr : &found->second;
-}
+bool Checker::globalPastReceiver(const Node& at) const { return impl_->globalsPastReceiver.count(&at) != 0; }
 
 const FunctionDecl* Checker::secondaryConstructor(const CallExpr& call) const {
     auto found = impl_->secondaryCalls.find(&call);

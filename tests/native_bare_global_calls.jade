@@ -1,30 +1,51 @@
-// A bare call of a global in an extension function (2026-11-13): where the object is of exactly the
-// extension's class, which has nothing by the name, the global called as anywhere (a value native
-// code makes, a loop template for a whole loop); on an object of a subclass, looked for on it first
-// as before, so that a member of the subclass by the name is what is called. And `to[i] = Color(...)`,
-// the value made where the item is, run whole by native code's loop template as `val v = ...;
-// to[i] = v` is. The same values and errors as the VM's. Each loop runs three times (its region is
-// made the second time it starts).
+// A bare name in an extension function that the checker found to mean a global, the object it runs
+// on having nothing by the name (as its type says), is the global whatever the object turns out to
+// be, as in a method of a class (2026-11-13): a call of a class's constructor (a value native code
+// makes, a loop template for a whole loop), of a secondary constructor, of a small function put in
+// place, a global read and set, and a type's name, on a Box and on a Sub whose members have those
+// names alike.
+// And `to[i] = Color(...)`, the value made where the item is, run whole by native code's loop
+// template as `val v = ...; to[i] = v` is. The same values and errors as the VM's. Each loop runs
+// three times (its region is made the second time it starts).
 class Box(var n : int) {
 }
 class Sub(n : int) : Box(n) {
   var calls = 0
+  var limit = -1
   fun Color(r : byte, g : byte, b : byte, a : byte) : any {
     calls += 1
-    return made(1, 2, 3, 4)
+    return "Sub's own"
+  }
+  fun Color(r : int, g : int, b : int) : any {
+    calls += 1
+    return "Sub's own"
+  }
+  fun twice(x : int) : int {
+    calls += 1
+    return x * 100
   }
 }
-fun made(r : int, g : int, b : int, a : int) : Color => Color(r, g, b, a)
 fun twice(x : int) : int => x * 2
+var limit = 40
 
-// One call: the global on a Box, the member on a Sub.
+// One call, and a name read and set: the globals, on a Box and on a Sub alike.
 fun Box.one(k : int) : any => Color(k.toByte(), n.toByte(), 3.toByte(), 255.toByte())
-print(Box(2).one(1), Sub(5).one(4))   // expect: Color(1, 2, 3) Color(1, 2, 3, 4)
+print(Box(2).one(1), Sub(5).one(4))   // expect: Color(1, 2, 3) Color(4, 5, 3)
 fun Box.doubled(k : int) : int => twice(k) + n
-print(Box(1).doubled(10))   // expect: 21
-// A secondary constructor (ints), on a Box.
+print(Box(1).doubled(10), Sub(1).doubled(10))   // expect: 21 21
 fun Box.fromInts(k : int) : Color => Color(k, n, 300 - k)
-print(Box(7).fromInts(100))   // expect: Color(100, 7, 200)
+print(Box(7).fromInts(100), Sub(7).fromInts(100))   // expect: Color(100, 7, 200) Color(100, 7, 200)
+fun Box.raised(by : int) : int {
+  limit += by
+  return limit + n
+}
+val asSub = Sub(1000)
+print(Box(1).raised(2), asSub.raised(3), limit, asSub.limit, asSub.calls)   // expect: 43 1045 45 -1 0
+// A type's name: the class, never a member of the object.
+fun Box.isColor(x : any) : bool => x is Color
+fun Box.asColor(x : any) : Color => x as Color
+fun Box.listed() : List<Color> => [Color(1, 2, 3)]
+print(Sub(1).isColor(Color(1, 2, 3)), Sub(1).isColor("no"), Sub(1).asColor(Color(9, 8, 7)), Sub(1).listed())   // expect: true false Color(9, 8, 7) [Color(1, 2, 3)]
 
 // A loop through tables, on a Box and on a Sub.
 fun Box.mapped(px : List<Color>, t : Bytes, to : open List<Color>) {
@@ -41,19 +62,18 @@ val to : open List<Color> = []
 for (i in 0 ..< px.size) { to.add(Color(0, 0, 0)) }
 for (k in 0 ..< 3) { Box(1).mapped(px, t, to) }
 print(to[0], to[2999], to.hashCode())   // expect: Color(255, 255, 255, 55) Color(72, 83, 25, 55) -1775827856
+for (i in 0 ..< to.size) { to[i] = Color(0, 0, 0) }
 val sub = Sub(1)
 for (k in 0 ..< 3) { sub.mapped(px, t, to) }
-print(to[0], to[2999], sub.calls)   // expect: Color(1, 2, 3, 4) Color(1, 2, 3, 4) 9000
-for (k in 0 ..< 3) { Box(1).mapped(px, t, to) }
-print(to[0], to[2999], to.hashCode())   // expect: Color(255, 255, 255, 55) Color(72, 83, 25, 55) -1775827856
+print(to[0], to[2999], to.hashCode(), sub.calls)   // expect: Color(255, 255, 255, 55) Color(72, 83, 25, 55) -1775827856 0
 
-// A sum through a global function.
+// A sum through a small global function, on a Box and on a Sub.
 fun Box.total(count : int) : int {
   var s = 0
   for (i in 0 ..< count) { s += twice(i) + n }
   return s
 }
-print(Box(3).total(1000), Box(3).total(1000), Box(3).total(1000))   // expect: 1002000 1002000 1002000
+print(Box(3).total(1000), Box(3).total(1000), Box(3).total(1000), sub.total(1000), sub.calls)   // expect: 1002000 1002000 1002000 1000000 0
 
 // `to[i] = Color(...)` in a function of its own; into a list too short, the items before it set
 // and the VM's error.
