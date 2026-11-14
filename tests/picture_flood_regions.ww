@@ -1,0 +1,39 @@
+// floodRegion and regions of a grid of colours in WinterWolf (2026-11-13, were C++'s): the pixels
+// joined to one through pixels close enough to its colour, and every connected area numbered in
+// the order its first pixel comes. The same masks and numbers as the C++ gave (the expected values
+// its). Each runs three times (a loop's region is made the second time it starts).
+fun lcg(s : int) : int => (s * 1103515245 + 12345) & 0x7fffffff
+// Flat patches with a little noise, some see-through.
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { g ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = lcg(s)
+        g[x, y] = Color(((x / 5 + y / 7) * 40) % 256, ((x / 9) * 60 + s % 3) % 256, ((y / 4) * 30) % 256, 255 - ((x / 11) % 2) * 100)
+      }
+    }
+  }
+  return im
+}
+fun thrice(block : () -> string) : string {
+  block()
+  block()
+  return block()
+}
+val im = picture(90, 70, 5)
+val p = im.pixels
+for (t in [0, 2, 20, 70]) {
+  print(thrice { val f = im.floodRegion(45, 35, t); "${f.count} ${f.pixels.hashCode()} ${f.bounds}" },
+        thrice { "${p.floodRegion(0, 69, t, true).count}" },
+        thrice { val r = p.regions(t); "${r.hashCode()} ${r[89, 69]} ${r.toList().max()}" },
+        thrice { "${p.regions(t, true).hashCode()}" })
+}
+// expect: 1 -589193794 Rect(45, 35, 1 x 1) 6 136774789 3715 3715 1067233828
+// expect: 5 -1339796409 Rect(45, 35, 5 x 1) 10 1307466308 824 824 -1166360335
+// expect: 5 -1339796409 Rect(45, 35, 5 x 1) 10 1307466308 824 824 -1166360335
+// expect: 100 -2112408710 Rect(45, 24, 10 x 12) 103 -1459670982 41 41 -1459670982
+// Errors: outside the grid.
+try { p.floodRegion(90, 0) } catch (e : IndexOutOfBoundsException) { print(e.message) }   // expect: (90, 0) is outside the grid, which is 90 by 70
+print(Image(0, 3).pixels.regions(5).width, Image(1, 1).floodRegion(0, 0).count)   // expect: 0 1

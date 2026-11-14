@@ -468,19 +468,111 @@ fun Grid<Color>.histogram(bins : int = 256, from : Number? = null, to : Number? 
   return made
 }
 
-// Every connected area of pixels numbered from 0, two neighbours in one area where no part of
-// their colours (alpha too) differs by more than `tolerance`.
+// Every connected area of pixels numbered from 0, in the order their first pixels come row by
+// row, two neighbours in one area where no part of their colours (alpha too) differs by more than
+// `tolerance`. (In WinterWolf since 2026-11-13, the numbers the C++ gave: neighbours joined as
+// union-find, each area's root its first pixel.)
 fun Grid<Color>.regions(tolerance : int = 0, diagonal : bool = false) : Grid<int> {
   val made = Grid<int>(width, height)
-  __num.regions(cells, width, height, tolerance, diagonal, made.cells, true)
+  __colorRegions(cells, width, height, tolerance, diagonal, __gridInto(made, width, height))
   return made
 }
 // The pixels joined to (x, y) through pixels whose colour differs from its own by no more than
 // `tolerance` in any part: the magic wand, a flood fill's area.
 fun Grid<Color>.floodRegion(x : int, y : int, tolerance : int = 0, diagonal : bool = false) : Mask {
+  if (x < 0 or y < 0 or x >= width or y >= height) { throw IndexOutOfBoundsException("($x, $y) is outside the grid, which is $width by $height") }
   val made = Grid<bool>(width, height)
-  __num.flood(cells, width, height, x, y, tolerance, diagonal, made.cells, true)
+  __colorFlood(cells, width, height, x, y, tolerance, diagonal, __gridInto(made, width, height))
   return Mask(made)
+}
+
+// The neighbours of a pixel, as steps across and down: the four beside it, then the four corners.
+val __stepX : List<int> = [1, -1, 0, 0, 1, 1, -1, -1]
+val __stepY : List<int> = [0, 0, 1, -1, 1, -1, 1, -1]
+// The pixels joined to (sx, sy), each differing from it by no more than `tolerance`, set in `m`
+// (all false before): those found marked in bytes and kept in a list in the order found, each
+// looked round in turn; then each set in the mask (no pass over every pixel).
+fun __colorFlood(px : List<Color>, w : int, h : int, sx : int, sy : int, tolerance : int, diagonal : bool, m : open List<bool>) {
+  val seed = sy * w + sx
+  val from = px[seed]
+  val fr = from.red.toInt()
+  val fg = from.green.toInt()
+  val fb = from.blue.toInt()
+  val fa = from.alpha.toInt()
+  val seen = Bytes(w * h)
+  val found : open List<int> = [seed]
+  var next = 0
+  seen[seed] = 1.toByte()
+  val sides = diagonal ? 8 : 4
+  val stepX = __stepX
+  val stepY = __stepY
+  while (next < found.size) {
+    val k = found[next]
+    next += 1
+    val x = k % w
+    val y = k / w
+    for (d in 0 ..< sides) {
+      val nx = x + stepX[d]
+      val ny = y + stepY[d]
+      if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
+        val j = ny * w + nx
+        val c = px[j]
+        if (seen[j] == 0.toByte() and Math.abs(c.red.toInt() - fr) <= tolerance and Math.abs(c.green.toInt() - fg) <= tolerance and
+            Math.abs(c.blue.toInt() - fb) <= tolerance and Math.abs(c.alpha.toInt() - fa) <= tolerance) {
+          seen[j] = 1.toByte()
+          found.add(j)
+        }
+      }
+    }
+  }
+  for (q in 0 ..< found.size) { m[found[q]] = true }
+}
+// Each pixel's area's number in `out`: the pixels in row order, each not yet numbered starting an
+// area of the next number, which takes every pixel joined to it through neighbours close enough
+// (beside, and at the corners with `diagonal`). The numbers union-find gives, joining the larger
+// root under the smaller (each area's root its first pixel, the areas numbered in its order).
+fun __colorRegions(px : List<Color>, w : int, h : int, tolerance : int, diagonal : bool, out : open List<int>) {
+  val n = w * h
+  for (k in 0 ..< n) { out[k] = -1 }
+  // A stack as large as the picture (no area holds more), so that nothing is added to it.
+  val stack = Grid<int>(n, 1)
+  val todo = __gridInto(stack, n, 1)
+  val sides = diagonal ? 8 : 4
+  val stepX = __stepX
+  val stepY = __stepY
+  var count = 0
+  for (start in 0 ..< n) {
+    if (out[start] >= 0) { continue }
+    out[start] = count
+    todo[0] = start
+    var top = 1
+    while (top > 0) {
+      top -= 1
+      val k = todo[top]
+      val x = k % w
+      val y = k / w
+      val here = px[k]
+      val hr = here.red.toInt()
+      val hg = here.green.toInt()
+      val hb = here.blue.toInt()
+      val ha = here.alpha.toInt()
+      for (d in 0 ..< sides) {
+        val nx = x + stepX[d]
+        val ny = y + stepY[d]
+        if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
+          val j = ny * w + nx
+          val c = px[j]
+          if (out[j] < 0 and Math.abs(c.red.toInt() - hr) <= tolerance and Math.abs(c.green.toInt() - hg) <= tolerance and
+              Math.abs(c.blue.toInt() - hb) <= tolerance and Math.abs(c.alpha.toInt() - ha) <= tolerance) {
+            out[j] = count
+            todo[top] = j
+            top += 1
+          }
+        }
+      }
+    }
+    count += 1
+  }
 }
 
 // The pixels of `where` (every pixel when it is null) set to `color`.
