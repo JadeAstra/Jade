@@ -2044,7 +2044,17 @@ struct Region {
             case Op::RBitOrSS:
             case Op::RBitOrSK:
             case Op::RShlSS:
-            case Op::RShrSS: bitwise(c); return;
+            case Op::RShrSS:
+            case Op::RBitXorSS:
+            case Op::RBitXorSK:
+            case Op::RUshrSK:
+            case Op::RUshrSS:
+            case Op::RAddWrapSS:
+            case Op::RAddWrapSK:
+            case Op::RSubWrapSS:
+            case Op::RSubWrapSK:
+            case Op::RMulWrapSS:
+            case Op::RMulWrapSK: bitwise(c); return;
             default: island();
         }
     }
@@ -2143,6 +2153,31 @@ struct Region {
         c.write(to, moved);
     }
 
+    // Whether == of two values of the value type `cls` is their bytes' alone, and how many: no ==
+    // of its own, and every field an int, a bool or a narrow whole number, together covering the
+    // value byte for byte (no float, whose == is not its bits'; no padding, whose bytes say
+    // nothing; no object, which compares by more than where it is).
+    static bool bytesCompared(const ObjClass* cls, uint32_t& size) {
+        const Table::Entry* entries = cls->methods.entries();
+        for (uint32_t k = 0; entries != nullptr && k < cls->methods.capacity(); k++)
+            if (entries[k].key != nullptr && entries[k].key->utf8() == "==") return false;
+        const ValueLayout* layout = cls->layout.load(std::memory_order_acquire);
+        if (layout == nullptr || layout->size == 0 || layout->size > 64) return false;
+        std::vector<bool> covered(layout->size, false);
+        for (const ValueField& f : layout->fields) {
+            const uint32_t width = f.kind == ValueField::Int ? 8 : f.kind == ValueField::Bool ? 1 : f.kind == ValueField::Narrow ? narrowSize(f.narrow) : 0;
+            if (width == 0 || f.offset + width > layout->size) return false;
+            for (uint32_t b = f.offset; b < f.offset + width; b++) {
+                if (covered[b]) return false;
+                covered[b] = true;
+            }
+        }
+        for (bool b : covered)
+            if (!b) return false;
+        size = layout->size;
+        return true;
+    }
+
     // The typed instructions, and the untyped ones where the region knows (or guesses) their
     // operands: an int beside a float made a float, as the VM does.
     void arithmetic(Ctx& c, const Typed& t, bool untypedOp) {
@@ -2151,6 +2186,33 @@ struct Region {
         const int at = t.kind == Typed::Jump ? 0 : 1;
         const bool bConst = t.form == 2, cConst = t.form == 1;
         const int bOp = u8(x, at), cOp = u8(x, at + 1);
+        // == of two values of one value type whose == is their bytes' (2026-11-14: an Image's ==,
+        // its pixels compared one by one): the bytes compared where they are, each a value in its
+        // slot or an item a Ref there is to (eqsm).
+        if (untypedOp && t.kind == Typed::Compare && t.op == '=' && t.form == 0) {
+            // Where the slot's value is in memory: the slot, or the one it is a copy of as entered.
+            auto inSlot = [&](int slot) {
+                K k = s.kind(slot);
+                if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) slot = k.src, k = s.kind(slot);
+                return k.bits == kEntry || inMemory(k) ? slot : -1;
+            };
+            const ObjClass* const vb = valueClass(s, bOp);
+            const int from = inSlot(bOp), to = inSlot(cOp);
+            uint32_t size = 0;
+            if (vb != nullptr && vb == valueClass(s, cOp) && from >= 0 && to >= 0 && bytesCompared(vb, size)) {
+                LOp& l = c.op("eqsm");
+                l.slot = from;
+                l.slot2 = to;
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(vb));
+                const uint64_t what = static_cast<uint64_t>(vb->smallId) << 32 | size;
+                std::memcpy(&l.kf, &what, 8);
+                c.leaves(l);
+                c.write(u8(x, 0), K{kBool});
+                s.top = u8(x, 3);
+                c.fall(s);
+                return;
+            }
+        }
         int bCls, cCls;
         if (!untypedOp) {
             bCls = cCls = t.isFloat ? CF : CI;
@@ -2276,26 +2338,40 @@ struct Region {
         c.fall(after);
     }
 
-    // Shifts, and & and | of whole numbers.
+    // Shifts, and &, |, ^ of whole numbers; &+, &- and &* of ints (2026-11-14: ^, >>> and the
+    // wrapping three, for a hash written in WinterWolf).
     void bitwise(Ctx& c) {
         const Ins& x = c.x;
         const int a = u8(x, 0);
-        const bool k = x.op == Op::RShlSK || x.op == Op::RShrSK || x.op == Op::RBitAndSK || x.op == Op::RBitOrSK;
+        const Op o = x.op;
+        const bool k = o == Op::RShlSK || o == Op::RShrSK || o == Op::RBitAndSK || o == Op::RBitOrSK || o == Op::RBitXorSK || o == Op::RUshrSK ||
+                       o == Op::RAddWrapSK || o == Op::RSubWrapSK || o == Op::RMulWrapSK;
+        // The wrapping three take ints alone (a byte is the VM's, which throws).
+        const bool wrap = o == Op::RAddWrapSS || o == Op::RAddWrapSK || o == Op::RSubWrapSS || o == Op::RSubWrapSK || o == Op::RMulWrapSS ||
+                          o == Op::RMulWrapSK;
         if (c.guess(u8(x, 1)) != CI) island();
-        const Reg b = c.read(u8(x, 1), CI, true), dst{a, CI};
+        const Reg b = wrap ? c.number(u8(x, 1), CI, true) : c.read(u8(x, 1), CI, true), dst{a, CI};
         if (k) {
             const int64_t v = c.intConstant(u8(x, 2));
-            const bool shift = x.op == Op::RShlSK || x.op == Op::RShrSK;
+            const bool shift = o == Op::RShlSK || o == Op::RShrSK || o == Op::RUshrSK;
             if (shift && (v < 0 || v >= 64)) island();
-            const char* stem = x.op == Op::RShlSK ? "shlik" : x.op == Op::RShrSK ? "shrik" : x.op == Op::RBitAndSK ? "andik" : "orik";
+            const char* stem = o == Op::RShlSK      ? "shlik"
+                               : o == Op::RShrSK    ? "shrik"
+                               : o == Op::RUshrSK   ? "ushrik"
+                               : o == Op::RBitAndSK ? "andik"
+                               : o == Op::RBitOrSK  ? "orik"
+                               : o == Op::RBitXorSK ? "xorik"
+                               : o == Op::RAddWrapSK ? "waddik"
+                               : o == Op::RSubWrapSK ? "wsubik"
+                                                     : "wmulik";
             c.op(stem, {dst, b}, {b}, {dst}).ki = v;
-        } else if (x.op == Op::RShlSS || x.op == Op::RShrSS) {
-            // A count from 0 to 63 (any other left to the VM), then the shift of b by it: into
-            // dst from b, or through the scratch register where dst is the count.
+        } else if (o == Op::RShlSS || o == Op::RShrSS || o == Op::RUshrSS || o == Op::RSubWrapSS) {
+            // A count from 0 to 63 (any other left to the VM), then the shift of b by it (or b less
+            // the int): into dst from b, or through the scratch register where dst is the other.
             if (c.guess(u8(x, 2)) != CI) island();
-            const Reg r = c.read(u8(x, 2), CI, true);
-            const char* stem = x.op == Op::RShlSS ? "shli" : "shri";
-            c.leaves(c.op("chkshift", {r}, {r}));
+            const Reg r = o == Op::RSubWrapSS ? c.number(u8(x, 2), CI, true) : c.read(u8(x, 2), CI, true);
+            const char* stem = o == Op::RShlSS ? "shli" : o == Op::RShrSS ? "shri" : o == Op::RUshrSS ? "ushri" : "wsubi";
+            if (o != Op::RSubWrapSS) c.leaves(c.op("chkshift", {r}, {r}));
             if (dst == b) {
                 c.op(stem, {dst, r}, {dst, r}, {dst});
             } else if (dst != r) {
@@ -2309,8 +2385,12 @@ struct Region {
             }
         } else {
             if (c.guess(u8(x, 2)) != CI) island();
-            const Reg r = c.read(u8(x, 2), CI, true);
-            const char* stem = x.op == Op::RBitAndSS ? "andi" : "ori";
+            const Reg r = wrap ? c.number(u8(x, 2), CI, true) : c.read(u8(x, 2), CI, true);
+            const char* stem = o == Op::RBitAndSS    ? "andi"
+                               : o == Op::RBitOrSS   ? "ori"
+                               : o == Op::RBitXorSS  ? "xori"
+                               : o == Op::RAddWrapSS ? "waddi"
+                                                     : "wmuli";
             // Two operands, the first changed: into dst from whichever it is already.
             if (dst == b || dst == r) {
                 const Reg other = dst == b ? r : b;
@@ -2983,11 +3063,20 @@ struct Region {
         std::vector<Store> stores;
         // A guard's comparison (2026-11-13): the last one followed, for a jump on its flag.
         struct Cmp {
-            int op = 0;  // 1 <, 2 <=, 3 >, 4 >=, 5 ==, 6 !=
+            int op = 0;  // 1 <, 2 <=, 3 >, 4 >=, 5 ==, 6 !=; 7 and 8: itemCmp's two items the same, not
             const Expr* a = nullptr;
             const Expr* b = nullptr;
         };
         Cmp last;
+        // The two items an eqsm compares (2026-11-14): each list looked at once and the index, and
+        // how many bytes.
+        struct ItemCmp {
+            int listA = -1, listB = -1;
+            const Expr* indexA = nullptr;
+            const Expr* indexB = nullptr;
+            int64_t size = 0;
+        };
+        ItemCmp itemCmp;
         // Items in slots: a Ref (hiref) or a copy (hidxsm, and copyslot of either), by the list,
         // the index and the item's width where known; and the slots the body writes values into,
         // beside its registers (each a temporary of the VM's stack, or a variable of the body's).
@@ -2995,6 +3084,7 @@ struct Region {
             int list;
             const Expr* index;
             int64_t width;
+            int64_t what = 0;  // hidxsm: what it is given (the bytes read, the value's type number)
         };
         std::map<int64_t, Ref> refs;
         std::vector<int64_t> slots;
@@ -3114,8 +3204,17 @@ struct Region {
             fw.last.b = kint(0);
             return true;
         }
+        if (s == "eqsm") {  // two items compared (kLoopWSameItems)
+            auto x = fw.refs.find(l.slot), y = fw.refs.find(l.slot2);
+            if (x == fw.refs.end() || y == fw.refs.end() || x->second.list < 0 || y->second.list < 0) return false;
+            uint64_t what;
+            std::memcpy(&what, &l.kf, 8);
+            fw.itemCmp = Followed::ItemCmp{x->second.list, y->second.list, x->second.index, y->second.index, static_cast<int64_t>(what & 0xFF)};
+            fw.last = Followed::Cmp{7, nullptr, nullptr};
+            return true;
+        }
         if (s == "notflag") {
-            static const int turned[] = {0, 4, 3, 2, 1, 6, 5};  // < >=, <= >, > <=, >= <, == !=, != ==
+            static const int turned[] = {0, 4, 3, 2, 1, 6, 5, 8, 7};  // < >=, <= >, > <=, >= <, == !=, != ==, same not
             if (fw.last.op == 0) return false;
             fw.last.op = turned[fw.last.op];
             return true;
@@ -3152,7 +3251,7 @@ struct Region {
         }
         if (s == "hsetsm") {
             const int64_t from = l.slot2 & 0xFFFFFF;
-            if (fw.values.count(from) == 0 && fw.made.count(from) == 0) return false;
+            if (fw.values.count(from) == 0 && fw.made.count(from) == 0 && fw.refs.count(from) == 0) return false;
             Followed::Store st{static_cast<int>(l.slot), valueOf(fw, n[0]), nullptr, s};
             st.what = l.slot2, st.width = l.ki, st.source = from;
             fw.stores.push_back(st);
@@ -3165,7 +3264,7 @@ struct Region {
         }
         if (s == "hidxsm") {  // an item copied out into a slot: its fields as an item's (2026-11-13)
             const int64_t to = (l.slot2 >> 8) & 0xFFFFFF;
-            fw.refs[to] = Followed::Ref{static_cast<int>(l.slot), valueOf(fw, n[0]), l.ki};
+            fw.refs[to] = Followed::Ref{static_cast<int>(l.slot), valueOf(fw, n[0]), l.ki, l.slot2};
             fw.slots.push_back(to);
             return true;
         }
@@ -3282,6 +3381,11 @@ struct Region {
         std::vector<int64_t> fill;    // kLoopWFillItems: the items' width, where the value is (kind, which), what hsetsm is given
         std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
         int64_t mixDivisor = 1;         // kLoopWMix: words 61 and 62
+        const Expr* fromBase = nullptr;  // kLoopWCopyItems: where the items read start (baseA: where those written do)
+        // kLoopWSameItems: the two items compared, the template stopping before the first that
+        // differ (the loop's own steps go on from there, into the way out they fall into).
+        Followed::ItemCmp stopAt;
+        int64_t copyWhat[3] = {0, 0, 0};  // kLoopWCopyItems: the items' width, what hidxsm and hsetsm are given
         bool mixDivideFirst = false;
         // kLoopWMixItems' float mixes (kinds 0x60 + j): each lane's terms (the byte's offset and the
         // weight), its constant (or none), and the bounds it is held between; words 128 on.
@@ -3777,7 +3881,17 @@ struct Region {
                     // getOrNull's null, joining later) is never run where the template runs: it
                     // runs only where none of them holds anywhere in the loop.
                     if (l.jumpTo == i + 1) return false;
-                    for (const Followed::Cmp& g : pending) addGuard(ah, g);
+                    for (const Followed::Cmp& g : pending) {
+                        if (g.op == 7) return false;
+                        if (g.op == 8) {
+                            // Two items not the same falling into the way out: the template stops
+                            // before the first such (2026-11-14, kLoopWSameItems).
+                            if (ah.stopAt.listA >= 0) return false;
+                            ah.stopAt = fw.itemCmp;
+                            continue;
+                        }
+                        addGuard(ah, g);
+                    }
                     pending.clear();
                     skipTo = l.jumpTo;
                     continue;
@@ -3863,6 +3977,34 @@ struct Region {
         for (const auto& st : fw.stores)
             for (const Reg& d : defined)
                 if (usesReg(st.value, d) || usesReg(st.index, d)) return false;
+        // Items compared until two differ (2026-11-14: an Image's ==), nothing else done: the
+        // template moves on past those the same.
+        if (ah.stopAt.listA >= 0) {
+            if (ah.hasAcc || !fw.stores.empty() || ah.iterSlot >= 0 || !fw.heldWrites.empty()) return false;
+            auto counterPlus = [&](const Expr* x, const Expr*& b) {
+                if (x == nullptr || x->cls != CI) return false;
+                if (x->kind == Expr::Counter) return b = nullptr, true;
+                if (x->kind != Expr::Bin || x->op != '+') return false;
+                const Expr* y = x->a->kind == Expr::Counter ? x->b : x->b->kind == Expr::Counter ? x->a : nullptr;
+                if (y == nullptr) return false;
+                const Expr* core = y;
+                if (y->kind == Expr::Bin && y->op == '+' && y->cls == CI) {
+                    const Expr* k = y->a->kind == Expr::KInt ? y->a : y->b->kind == Expr::KInt ? y->b : nullptr;
+                    if (k == nullptr || k->ki < -(int64_t{1} << 40) || k->ki > (int64_t{1} << 40)) return false;
+                    core = k == y->a ? y->b : y->a;
+                }
+                if (!fixedOperand(core) || changed(core) || written(core)) return false;
+                return b = y, true;
+            };
+            const Expr* baseA = nullptr;
+            const Expr* baseB = nullptr;
+            if (!counterPlus(ah.stopAt.indexA, baseA) || !counterPlus(ah.stopAt.indexB, baseB) || ah.stopAt.size <= 0) return false;
+            ah.shape = 21;  // kLoopWSameItems
+            ah.a = ah.stopAt.listA, ah.b = ah.stopAt.listB;
+            ah.baseA = baseA, ah.fromBase = baseB;
+            ah.copyWhat[0] = ah.stopAt.size;
+            return true;
+        }
         if (ah.hasAcc) {
             if (!fw.stores.empty()) return false;
             const Expr* v = fw.val[ah.acc];
@@ -3904,6 +4046,39 @@ struct Region {
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && fw.made.count(fw.stores[0].source) != 0 && ah.iterSlot < 0 &&
             mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)))
             return true;
+        // Items of a value type copied from one list to another (or along the same one), each at a
+        // base plus the counter (2026-11-14: copy, crop and a grid's part, kLoopWCopyItems): moved at
+        // once, the bytes the steps would move.
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fw.refs.count(fw.stores[0].source) != 0) {
+            const Followed::Store& st = fw.stores[0];
+            const Followed::Ref from = fw.refs[st.source];
+            // The counter, or the counter plus what is the same each time round (an operand, or
+            // one plus a constant): the base, or null for none.
+            auto counterPlus = [&](const Expr* e, const Expr*& b) {
+                if (e == nullptr || e->cls != CI) return false;
+                if (e->kind == Expr::Counter) return b = nullptr, true;
+                if (e->kind != Expr::Bin || e->op != '+') return false;
+                const Expr* x = e->a->kind == Expr::Counter ? e->b : e->b->kind == Expr::Counter ? e->a : nullptr;
+                if (x == nullptr) return false;
+                const Expr* core = x;
+                if (x->kind == Expr::Bin && x->op == '+' && x->cls == CI) {
+                    const Expr* k = x->a->kind == Expr::KInt ? x->a : x->b->kind == Expr::KInt ? x->b : nullptr;
+                    if (k == nullptr || k->ki < -(int64_t{1} << 40) || k->ki > (int64_t{1} << 40)) return false;
+                    core = k == x->a ? x->b : x->a;
+                }
+                if (!fixedOperand(core) || changed(core) || written(core)) return false;
+                return b = x, true;
+            };
+            const Expr* toBase = nullptr;
+            const Expr* fromBase = nullptr;
+            if (from.list >= 0 && from.width > 0 && from.width == st.width && counterPlus(st.index, toBase) && counterPlus(from.index, fromBase)) {
+                ah.shape = 20;  // kLoopWCopyItems
+                ah.out = st.list, ah.a = from.list;
+                ah.baseA = toBase, ah.fromBase = fromBase;
+                ah.copyWhat[0] = st.width, ah.copyWhat[1] = from.what, ah.copyWhat[2] = st.what;
+                return true;
+            }
+        }
         // One value into items at base + counter (2026-11-13: image[x, y] = c, a grid's in editPixels).
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fieldIndex(fw.stores[0].index, ah) &&
             !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB))) {
@@ -4124,6 +4299,20 @@ struct Region {
                 word(at + 10, bitsOf(lane.lo));
                 word(at + 11, bitsOf(lane.hi));
             }
+        }
+        if (ah.shape == 21) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 20) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(55, ah.copyWhat[0]), word(56, ah.copyWhat[1]), word(57, ah.copyWhat[2]);
         }
         if (ah.shape == 18) {
             word(50, ah.baseMode);
@@ -5045,6 +5234,16 @@ bool mayDo(Op op) {
         case Op::RBitOrSK:
         case Op::RShlSS:
         case Op::RShrSS:
+        case Op::RBitXorSS:
+        case Op::RBitXorSK:
+        case Op::RUshrSK:
+        case Op::RUshrSS:
+        case Op::RAddWrapSS:
+        case Op::RAddWrapSK:
+        case Op::RSubWrapSS:
+        case Op::RSubWrapSK:
+        case Op::RMulWrapSS:
+        case Op::RMulWrapSK:
         case Op::IterNext:
         case Op::IterNextRef:
         case Op::RGetProp:

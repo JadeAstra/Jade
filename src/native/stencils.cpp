@@ -431,6 +431,23 @@ I_A(IINC, x)
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(shri_##a##_##b) { i##a = i##a >> (i##b & 63); NEXT; }               \
+    STENCIL(ushri_##a##_##b) {                                                  \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##a) >> (i##b & 63)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(xori_##a##_##b) { i##a = i##a ^ i##b; NEXT; }                       \
+    STENCIL(waddi_##a##_##b) {                                                  \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##a) + static_cast<uint64_t>(i##b)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(wsubi_##a##_##b) {                                                  \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##a) - static_cast<uint64_t>(i##b)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(wmuli_##a##_##b) {                                                  \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##a) * static_cast<uint64_t>(i##b)); \
+        NEXT;                                                                   \
+    }                                                                           \
     STENCIL(negi_##a##_##b) {                                                   \
         if (i##b == INT64_MIN) EXIT;                                            \
         i##a = -i##b;                                                           \
@@ -446,7 +463,24 @@ I_A(IINC, x)
         i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) << ww_ki);    \
         NEXT;                                                                   \
     }                                                                           \
-    STENCIL(shrik_##a##_##b) { i##a = i##b >> ww_ki; NEXT; }
+    STENCIL(shrik_##a##_##b) { i##a = i##b >> ww_ki; NEXT; }                    \
+    STENCIL(ushrik_##a##_##b) {                                                 \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) >> ww_ki);    \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(xorik_##a##_##b) { i##a = i##b ^ ww_ki; NEXT; }                   \
+    STENCIL(waddik_##a##_##b) {                                                 \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) + static_cast<uint64_t>(ww_ki)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(wsubik_##a##_##b) {                                                 \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) - static_cast<uint64_t>(ww_ki)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(wmulik_##a##_##b) {                                                 \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) * static_cast<uint64_t>(ww_ki)); \
+        NEXT;                                                                   \
+    }
 #define ITWO_A(a, ...) I_B(ITWO_B, a)
 I_A(ITWO_A, x)
 
@@ -899,6 +933,32 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
     const uint64_t index = head >> 32;
     if (index >= word<uint64_t>(pack + kPackCount)) return nullptr;
     return word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth) + offset;
+}
+// i9 = whether the values in slots ww_slot and ww_slot2 are the same, byte for byte (2026-11-14:
+// a value type whose == is its bytes', regions.cpp's bytesCompared): each a Small value of the
+// type numbered (ww_kf's bits >> 32), or a Ref, none deep, to an item of a list of the class
+// ww_ki's items; (ww_kf's bits & 0xFF) bytes. Anything else the VM's.
+INLINE const uint8_t* valueBytes(const Slot& s, const Ctx* ctx, uint64_t id) {
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
+    if ((head & 0xFF) == kKindSmall) return (head >> 32) == id ? reinterpret_cast<const uint8_t*>(&s.i) : nullptr;
+    if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    const uint8_t* pack = packOf(o, kStoreItems);
+    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
+    const uint64_t index = head >> 32;
+    if (index >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    return word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth);
+}
+STENCIL(eqsm) {
+    const uint64_t what = word<uint64_t>(reinterpret_cast<const uint8_t*>(&ww_kf));
+    const uint8_t* x = valueBytes((*slotAt(base)), ctx, what >> 32);
+    const uint8_t* y = valueBytes((*slot2At(base)), ctx, what >> 32);
+    if (x == nullptr || y == nullptr) EXIT;
+    bool same = true;
+    for (uint64_t k = 0; k < (what & 0xFF); k++) same &= x[k] == y[k];
+    i9 = same;
+    NEXT;
 }
 #define VALP(a, ...)                                                            \
     STENCIL(valpb_##a) {                                                        \
@@ -1700,6 +1760,7 @@ F_W(HVALPF, x)
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
+    kLoopWCopyItems, kLoopWSameItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2355,6 +2416,80 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 }
                 for (uint64_t b = 0; b < size; b++) d[b] = static_cast<uint8_t>(bits >> (8 * b));
             }
+            break;
+        }
+        case kLoopWCopyItems: {
+            // Items of a value type copied from one list looked at once to another, or along the
+            // same one, each at a base plus the counter (2026-11-14: copy, crop, a grid's part):
+            // words 50 to 52 the base written at, 63 to 65 the base read at (50, 63: 0 none, 1 an
+            // operand), 55 the items' width, 56 what hidxsm is given (the bytes it reads, the
+            // value's type number from bit 32), 57 what hsetsm is given (the bytes it stores in
+            // bits 24 to 31, the type number). Moved at once: the bytes the steps would move.
+            if (!a.ok() || !out.ok()) return;
+            int64_t to = 0, from = 0, toFirst, toLast, fromFirst, fromLast;
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, to)) return;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, from)) return;
+            if (__builtin_add_overflow(to, next, &toFirst) || __builtin_add_overflow(to, end - 1, &toLast) || __builtin_add_overflow(from, next, &fromFirst) ||
+                __builtin_add_overflow(from, end - 1, &fromLast) || toFirst < 0 || fromFirst < 0 || static_cast<uint64_t>(toLast) >= out.h[2] ||
+                static_cast<uint64_t>(fromLast) >= a.h[1])
+                return;
+            const uint64_t width = t[55], read = t[56], stored = t[57];
+            const uint64_t size = (stored >> 24) & 0xFF;
+            // The value hidxsm makes is the type hsetsm stores (where not, the steps leave for the
+            // VM at the first item), and every byte stored is one read.
+            if ((read >> 32) != (stored >> 32) || size == 0 || size > (read & 0xFF) || size > width) return;
+            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(toFirst) * width;
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(fromFirst) * width;
+            const uint64_t bytes = static_cast<uint64_t>(left) * width;
+            // Along the same list, the items written after those read and among them: the steps
+            // copy each over one still to be read, which one move would not.
+            if (o > x && o < x + bytes) return;
+            if (size == width) {
+                // Forward, as the steps go (from a place after the one written, where they overlap).
+                uint64_t n = bytes;
+                __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
+            } else {
+                for (int64_t j = 0; j < left; j++)
+                    for (uint64_t k = 0; k < size; k++) o[static_cast<uint64_t>(j) * width + k] = x[static_cast<uint64_t>(j) * width + k];
+            }
+            break;
+        }
+        case kLoopWSameItems: {
+            // Items of two lists looked at once compared, each at a base plus the counter, until
+            // two are not the same (2026-11-14: an Image's ==): words 50 to 52 the first's base, 63
+            // to 65 the second's (50, 63: 0 none, 1 an operand), 55 how many bytes of each. Those
+            // the same moved past; the first two that differ left to the loop's own steps.
+            if (!a.ok() || !b.ok()) return;
+            int64_t atA = 0, atB = 0, firstA, lastA, firstB, lastB;
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, atA)) return;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, atB)) return;
+            if (__builtin_add_overflow(atA, next, &firstA) || __builtin_add_overflow(atA, end - 1, &lastA) || __builtin_add_overflow(atB, next, &firstB) ||
+                __builtin_add_overflow(atB, end - 1, &lastB) || firstA < 0 || firstB < 0 || static_cast<uint64_t>(lastA) >= a.h[1] ||
+                static_cast<uint64_t>(lastB) >= b.h[1])
+                return;
+            const uint8_t* packA = packOf(reinterpret_cast<const uint8_t*>(a.h[3]), kStoreItems);
+            const uint8_t* packB = packOf(reinterpret_cast<const uint8_t*>(b.h[3]), kStoreItems);
+            if (packA == nullptr || packB == nullptr) return;
+            const uint64_t width = word<uint32_t>(packA + kPackWidth), size = t[55];
+            if (width == 0 || width != word<uint32_t>(packB + kPackWidth) || size == 0 || size > width) return;
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(firstA) * width;
+            const uint8_t* y = reinterpret_cast<const uint8_t*>(b.h[0]) + static_cast<uint64_t>(firstB) * width;
+            int64_t j = 0;
+            if (size == width) {
+                // Whole items one after another: eight bytes at a time to the first that differ.
+                const uint64_t bytes = static_cast<uint64_t>(left) * width;
+                uint64_t k = 0;
+                while (k + 8 <= bytes && word<uint64_t>(x + k) == word<uint64_t>(y + k)) k += 8;
+                while (k < bytes && x[k] == y[k]) k++;
+                j = static_cast<int64_t>(k / width);
+            } else {
+                for (; j < left; j++) {
+                    bool same = true;
+                    for (uint64_t k = 0; k < size; k++) same &= x[static_cast<uint64_t>(j) * width + k] == y[static_cast<uint64_t>(j) * width + k];
+                    if (!same) break;
+                }
+            }
+            done = j;
             break;
         }
         case kLoopWFillItems: {

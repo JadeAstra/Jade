@@ -76,6 +76,11 @@ const Family* familyOf(Op plain) {
     static const Family shr{Op::RShrSS, Op::RShrSK, Op::Count_};
     static const Family bitAnd{Op::RBitAndSS, Op::RBitAndSK, Op::Count_};
     static const Family bitOr{Op::RBitOrSS, Op::RBitOrSK, Op::Count_};
+    static const Family bitXor{Op::RBitXorSS, Op::RBitXorSK, Op::Count_};
+    static const Family ushr{Op::RUshrSS, Op::RUshrSK, Op::Count_};
+    static const Family addWrap{Op::RAddWrapSS, Op::RAddWrapSK, Op::Count_};
+    static const Family subWrap{Op::RSubWrapSS, Op::RSubWrapSK, Op::Count_};
+    static const Family mulWrap{Op::RMulWrapSS, Op::RMulWrapSK, Op::Count_};
     // On operands the checker knows (M6.7 step 5).
     static const Family typedAddI{Op::RAddISS, Op::RAddISK, Op::RAddIKS};
     static const Family typedSubI{Op::RSubISS, Op::RSubISK, Op::RSubIKS};
@@ -109,6 +114,11 @@ const Family* familyOf(Op plain) {
         case Op::Shr: return &shr;
         case Op::BitAnd: return &bitAnd;
         case Op::BitOr: return &bitOr;
+        case Op::BitXor: return &bitXor;
+        case Op::Ushr: return &ushr;
+        case Op::AddWrap: return &addWrap;
+        case Op::SubWrap: return &subWrap;
+        case Op::MulWrap: return &mulWrap;
         case Op::AddI: return &typedAddI;
         case Op::SubI: return &typedSubI;
         case Op::MulI: return &typedMulI;
@@ -176,6 +186,16 @@ bool storesResult(Op r) {
         case Op::RBitAndSK:
         case Op::RBitOrSS:
         case Op::RBitOrSK:
+        case Op::RBitXorSS:
+        case Op::RBitXorSK:
+        case Op::RUshrSK:
+        case Op::RUshrSS:
+        case Op::RAddWrapSS:
+        case Op::RAddWrapSK:
+        case Op::RSubWrapSS:
+        case Op::RSubWrapSK:
+        case Op::RMulWrapSS:
+        case Op::RMulWrapSK:
         case Op::RInvoke:
         case Op::RCall: return true;
         default: return (r >= Op::RAddSS && r <= Op::REqSK) || (r >= Op::RAddISS && r <= Op::REqFSK);
@@ -719,6 +739,11 @@ private:
             case Op::Shr:
             case Op::BitAnd:
             case Op::BitOr:
+            case Op::BitXor:
+            case Op::Ushr:
+            case Op::AddWrap:
+            case Op::SubWrap:
+            case Op::MulWrap:
             case Op::AddI:
             case Op::SubI:
             case Op::MulI:
@@ -1193,7 +1218,17 @@ CodeOffsets codeOffsets(Op o) {
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
-        case Op::RBitOrSK: return {5};
+        case Op::RBitOrSK:
+        case Op::RBitXorSS:
+        case Op::RBitXorSK:
+        case Op::RUshrSK:
+        case Op::RUshrSS:
+        case Op::RAddWrapSS:
+        case Op::RAddWrapSK:
+        case Op::RSubWrapSS:
+        case Op::RSubWrapSK:
+        case Op::RMulWrapSS:
+        case Op::RMulWrapSK: return {5};
         default: break;
     }
     if ((o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) || (o >= Op::RJumpLtISS && o <= Op::RJumpEqFSK)) return {3, 7};
@@ -1336,7 +1371,17 @@ size_t runSize(const std::vector<uint8_t>& run, size_t at, const char*& name) {
         case Op::RBitAndSS:
         case Op::RBitAndSK:
         case Op::RBitOrSS:
-        case Op::RBitOrSK: return kOpBytes + 9;
+        case Op::RBitOrSK:
+        case Op::RBitXorSS:
+        case Op::RBitXorSK:
+        case Op::RUshrSK:
+        case Op::RUshrSS:
+        case Op::RAddWrapSS:
+        case Op::RAddWrapSK:
+        case Op::RSubWrapSS:
+        case Op::RSubWrapSK:
+        case Op::RMulWrapSS:
+        case Op::RMulWrapSK: return kOpBytes + 9;
         default: break;
     }
     if ((o >= Op::RJumpLtSS && o <= Op::RJumpEqSK) || (o >= Op::RJumpLtISS && o <= Op::RJumpEqFSK)) return kOpBytes + 11;

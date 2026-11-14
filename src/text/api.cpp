@@ -1079,50 +1079,6 @@ void registerText(VM& vm) {
 
     // ---- An Image's pixels as a whole ----
 
-    // crop(pixels, width, height, x, y, w, h, into): the part (x, y, w, h) into another picture's
-    // pixels of w by h, what is outside the picture clear.
-    def("imageCrop", 8, 8, [](VM& vm, int, Value* args) -> Value {
-        const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
-        const std::vector<uint8_t>& from = rgbaOf(vm, args[0], w, h);
-        const int64_t x = vm.toInt(args[3], "x"), y = vm.toInt(args[4], "y"), cw = vm.toInt(args[5], "width"), ch = vm.toInt(args[6], "height");
-        std::vector<uint8_t>& to = rgbaOf(vm, args[7], cw, ch);
-        for (int64_t row = 0; row < ch; row++) {
-            const int64_t fy = y + row;
-            if (fy < 0 || fy >= h) continue;
-            const int64_t fromCol = std::max<int64_t>(0, -x), toCol = std::min<int64_t>(cw, w - x);
-            if (toCol <= fromCol) continue;
-            std::memcpy(&to[static_cast<size_t>((row * cw + fromCol) * 4)], &from[static_cast<size_t>((fy * w + x + fromCol) * 4)], static_cast<size_t>(toCol - fromCol) * 4);
-        }
-        return Value::null();
-    });
-    // samePixels(a, b): whether two pictures' pixels are the same, byte for byte.
-    def("imageSame", 2, 2, [](VM&, int, Value* args) -> Value {
-        auto bytesOf = [&](Value v) -> const std::vector<uint8_t>* {
-            if (v.isObjType(ObjType::Bytes)) return &asBytes(v)->data;
-            if (v.isObjType(ObjType::List) && asList(v)->packed()) return &asList(v)->pack->block;
-            return nullptr;
-        };
-        const std::vector<uint8_t>* a = bytesOf(args[0]);
-        const std::vector<uint8_t>* b = bytesOf(args[1]);
-        return Value::boolean(a != nullptr && b != nullptr && *a == *b);
-    });
-    // hash(cells): a hash of a picture's pixels, the same for the same pixels, eight bytes at a
-    // time. An Image's hashCode, with its size.
-    def("imageHash", 1, 1, [](VM&, int, Value* args) -> Value {
-        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed()) return Value::integer(0);
-        const std::vector<uint8_t>& px = asList(args[0])->pack->block;
-        uint64_t h = 0x9E3779B97F4A7C15ull ^ px.size();
-        size_t i = 0;
-        for (; i + 8 <= px.size(); i += 8) {
-            uint64_t word;
-            std::memcpy(&word, &px[i], 8);
-            h = (h ^ word) * 0xFF51AFD7ED558CCDull;
-            h ^= h >> 32;
-        }
-        for (; i < px.size(); i++) h = (h ^ px[i]) * 0x100000001B3ull;
-        h ^= h >> 29;
-        return Value::integer(static_cast<int32_t>(static_cast<uint32_t>(h ^ (h >> 32))));
-    });
     // pixels(cells): a picture's pixels as new bytes, four to a pixel (red, green, blue, alpha).
     def("imagePixels", 1, 1, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed()) throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells");

@@ -69,7 +69,7 @@ class Grid<T> {
     val across = __gridSpan(xs, width, "columns")
     val down = __gridSpan(ys, height, "rows")
     val made = blank<T>(across.size, down.size)
-    __grid.region(cells, width, across.first(), down.first(), across.size, down.size, made.cells)
+    __gridRegion(cells, width, across.first(), down.first(), across.size, down.size, made.cells)
     return made
   }
   // Another grid written in over those columns and rows: it must be their size.
@@ -80,7 +80,7 @@ class Grid<T> {
     if (from.width != across.size or from.height != down.size) {
       throw IllegalArgumentException("a grid of ${from.width} by ${from.height} does not fit ${across.size} columns by ${down.size} rows")
     }
-    __grid.paste(cells, width, across.first(), down.first(), from.cells, from.width, from.width, from.height)
+    __gridPaste(cells, width, across.first(), down.first(), from.cells, from.width, from.width, from.height)
   }
 
   // Each cell made into another, as a grid of the same size: pixels.map { it.alpha }. Inline,
@@ -113,9 +113,9 @@ class Grid<T> {
   fun insertRows(at : int, count : int = 1, fill : T? = null) : Grid<T> {
     __gridAt(at, height, "rows")
     val made = blank<T>(width, height + count)
-    __grid.region(cells, width, 0, 0, width, at, made.cells)
+    __gridRegion(cells, width, 0, 0, width, at, made.cells)
     __gridFill(made.cells, count * width, fill)
-    __grid.region(cells, width, 0, at, width, height - at, made.cells)
+    __gridRegion(cells, width, 0, at, width, height - at, made.cells)
     return made
   }
   // The rows of another grid as wide as this one, before row `at`.
@@ -123,9 +123,9 @@ class Grid<T> {
     __gridAt(at, height, "rows")
     if (rows.width != width) { throw IllegalArgumentException("rows of a grid ${rows.width} wide do not go into one $width wide") }
     val made = blank<T>(width, height + rows.height)
-    __grid.region(cells, width, 0, 0, width, at, made.cells)
-    __grid.region(rows.cells, width, 0, 0, width, rows.height, made.cells)
-    __grid.region(cells, width, 0, at, width, height - at, made.cells)
+    __gridRegion(cells, width, 0, 0, width, at, made.cells)
+    __gridRegion(rows.cells, width, 0, 0, width, rows.height, made.cells)
+    __gridRegion(cells, width, 0, at, width, height - at, made.cells)
     return made
   }
   // `count` columns before column `at` (0 to width).
@@ -133,9 +133,9 @@ class Grid<T> {
     __gridAt(at, width, "columns")
     val made = blank<T>(width + count, height)
     for row in 0..<height {
-      __grid.region(cells, width, 0, row, at, 1, made.cells)
+      __gridRegion(cells, width, 0, row, at, 1, made.cells)
       __gridFill(made.cells, count, fill)
-      __grid.region(cells, width, at, row, width - at, 1, made.cells)
+      __gridRegion(cells, width, at, row, width - at, 1, made.cells)
     }
     return made
   }
@@ -145,9 +145,9 @@ class Grid<T> {
     if (columns.height != height) { throw IllegalArgumentException("columns of a grid ${columns.height} high do not go into one $height high") }
     val made = blank<T>(width + columns.width, height)
     for row in 0..<height {
-      __grid.region(cells, width, 0, row, at, 1, made.cells)
-      __grid.region(columns.cells, columns.width, 0, row, columns.width, 1, made.cells)
-      __grid.region(cells, width, at, row, width - at, 1, made.cells)
+      __gridRegion(cells, width, 0, row, at, 1, made.cells)
+      __gridRegion(columns.cells, columns.width, 0, row, columns.width, 1, made.cells)
+      __gridRegion(cells, width, at, row, width - at, 1, made.cells)
     }
     return made
   }
@@ -166,8 +166,8 @@ class Grid<T> {
     val from = at.of(height)
     if (count < 0 or from < 0 or from + count > height) { throw IndexOutOfBoundsException("rows $from to ${from + count - 1} are not all in a grid of $height rows") }
     val made = blank<T>(width, height - count)
-    __grid.region(cells, width, 0, 0, width, from, made.cells)
-    __grid.region(cells, width, 0, from + count, width, height - from - count, made.cells)
+    __gridRegion(cells, width, 0, 0, width, from, made.cells)
+    __gridRegion(cells, width, 0, from + count, width, height - from - count, made.cells)
     return made
   }
   // Without `count` columns from column `at`, which may count from the end: removeColumns(^1). An
@@ -177,8 +177,8 @@ class Grid<T> {
     if (count < 0 or from < 0 or from + count > width) { throw IndexOutOfBoundsException("columns $from to ${from + count - 1} are not all in a grid of $width columns") }
     val made = blank<T>(width - count, height)
     for row in 0..<height {
-      __grid.region(cells, width, 0, row, from, 1, made.cells)
-      __grid.region(cells, width, from + count, row, width - from - count, 1, made.cells)
+      __gridRegion(cells, width, 0, row, from, 1, made.cells)
+      __gridRegion(cells, width, from + count, row, width - from - count, 1, made.cells)
     }
     return made
   }
@@ -214,7 +214,7 @@ class Grid<T> {
   // A grid of the same cells, its own, copied at once (Image.copy).
   internal fun copied() : Grid<T> {
     val made = blank<T>(width, height)
-    __grid.region(cells, width, 0, 0, width, height, made.cells)
+    __gridRegion(cells, width, 0, 0, width, height, made.cells)
     return made
   }
 
@@ -229,6 +229,46 @@ class Grid<T> {
   private fun __outside(x : int, y : int) : IndexOutOfBoundsException =>
     IndexOutOfBoundsException("($x, $y) is outside the grid, which is $width by $height")
   private fun __readOnly() : IllegalStateException => IllegalStateException("this grid is only read here: change an image's pixels in image.editPixels { }")
+}
+
+// Cells of a grid `w` wide, `cw` by `ch` from column `x` and row `y`, onto the end of `to`, row
+// by row: a grid's part, a copy, rows and columns put in or taken out (2026-11-14; was C++'s,
+// __grid.region). Made first, each its type's zero, then set where they are, a plain loop that
+// native code moves at once for a grid of a value type (kLoopWCopyItems); whole rows in one run.
+// A grid of objects, which have no zero, has its cells added one by one.
+fun <T> __gridRegion(from : List<T>, w : int, x : int, y : int, cw : int, ch : int, to : open List<T>) {
+  if (cw <= 0 or ch <= 0) { return }
+  val start = to.size
+  if (!__grid.zeros(to, cw * ch)) {
+    for (row in 0 ..< ch) {
+      val at = (y + row) * w + x
+      for (col in 0 ..< cw) { to.add(from[at + col]) }
+    }
+    return
+  }
+  if (cw == w) {
+    __gridRun(from, y * w, to, start, cw * ch)
+    return
+  }
+  for (row in 0 ..< ch) { __gridRun(from, (y + row) * w + x, to, start + row * cw, cw) }
+}
+// `w` by `h` cells of a grid `fromWidth` wide written into another `toWidth` wide at (x, y), a row
+// at a time (op []=; 2026-11-14, was C++'s __grid.paste).
+fun <T> __gridPaste(to : open List<T>, toWidth : int, x : int, y : int, from : List<T>, fromWidth : int, w : int, h : int) {
+  for (row in 0 ..< h) { __gridRun(from, row * fromWidth, to, (y + row) * toWidth + x, w) }
+}
+// `n` cells from `fromAt` set into `to` from `toAt`. Colours go to a loop of their own: native code
+// makes a function's region for the kind of list it first meets, and a picture's pixels are the
+// grids copied most.
+fun <T> __gridRun(from : List<T>, fromAt : int, to : open List<T>, toAt : int, n : int) {
+  if (from is List<Color>) {
+    __colorRun(from as List<Color>, fromAt, to as open List<Color>, toAt, n)
+    return
+  }
+  for (i in 0 ..< n) { to[toAt + i] = from[fromAt + i] }
+}
+fun __colorRun(from : List<Color>, fromAt : int, to : open List<Color>, toAt : int, n : int) {
+  for (i in 0 ..< n) { to[toAt + i] = from[fromAt + i] }
 }
 
 // A range of a grid's columns or rows, made plain and checked: the positions it covers.

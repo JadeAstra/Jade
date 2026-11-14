@@ -1,0 +1,74 @@
+// Native code's == of two values of a value type whose == is its bytes' (eqsm, 2026-11-14), and
+// its template for items of two lists compared until two differ (kLoopWSameItems: an Image's ==).
+// The VM's answers: a type with an == of its own, or a float field (NaN is not equal to itself,
+// 0.0 is -0.0), is compared as the VM compares it. Each loop run three times (its region is made
+// the second time it starts).
+value Rgb(val r : byte, val g : byte, val b : byte)
+value Spot(val x : int, val y : int, val on : bool)
+value Mass(val kg : float)
+value Loose(val n : int) {
+  op ==(other : any?) : bool => other is Loose and other.n % 10 == n % 10
+  fun hashCode() : int => n % 10
+}
+fun <T> same(a : List<T>, b : List<T>, from : int, to : int, n : int) : bool {
+  for (i in 0 ..< n) {
+    if (a[from + i] != b[to + i]) { return false }
+  }
+  return true
+}
+// The first index where they differ, or -1.
+fun <T> firstDiffering(a : List<T>, b : List<T>) : int {
+  for (i in 0 ..< a.size) {
+    if (a[i] != b[i]) { return i }
+  }
+  return -1
+}
+fun rgbs(n : int, seed : int) : open List<Rgb> {
+  val made : open List<Rgb> = []
+  var s = seed
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    made.add(Rgb((s % 256).toByte(), ((s / 256) % 256).toByte(), ((s / 65536) % 256).toByte()))
+  }
+  return made
+}
+for (k in 0 ..< 3) {
+  val a = rgbs(1000, 1)
+  val b = rgbs(1000, 1)
+  val first = same(a, b, 0, 0, 1000)
+  b[0] = Rgb(1, 2, 3)
+  val atStart = firstDiffering(a, b)
+  b[0] = a[0]
+  b[617] = Rgb(a[617].r, a[617].g, ((a[617].b.toInt() + 1) % 256).toByte())
+  val inside = firstDiffering(a, b)
+  b[617] = a[617]
+  b[999] = Rgb(0, 0, 0)
+  print("rgb", first, atStart, inside, firstDiffering(a, b), same(a, b, 0, 0, 999), same(a, a, 1, 0, 999), same(a, b, 10, 10, 0))
+}
+// expect: rgb true 0 617 999 true false true
+// expect: rgb true 0 617 999 true false true
+// expect: rgb true 0 617 999 true false true
+for (k in 0 ..< 3) {
+  val a = [Spot(1, 2, true), Spot(3, 4, false), Spot(-5, 6, true)]
+  val b = [Spot(1, 2, true), Spot(3, 4, false), Spot(-5, 6, false)]
+  val c = [Mass(1.0), Mass(0.0), Mass(0.0 / 0.0)]
+  val d = [Mass(1.0), Mass(-0.0), Mass(0.0 / 0.0)]
+  val e = [Loose(1), Loose(12), Loose(3)]
+  val f = [Loose(21), Loose(2), Loose(33)]
+  print("kinds", firstDiffering(a, b), firstDiffering(c, d), firstDiffering(e, f), same(e, f, 0, 0, 3))
+}
+// expect: kinds 2 2 -1 true
+// expect: kinds 2 2 -1 true
+// expect: kinds 2 2 -1 true
+// Past the end of one list: the VM's exception, after the items it reached.
+for (k in 0 ..< 3) {
+  val a = List<Rgb>(60) { Rgb(1.toByte(), 2.toByte(), 3.toByte()) }
+  try {
+    print("past", same(a, a, 0, 10, 55))
+  } catch (e : IndexOutOfBoundsException) {
+    print("past thrown")
+  }
+}
+// expect: past thrown
+// expect: past thrown
+// expect: past thrown

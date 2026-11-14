@@ -950,10 +950,17 @@ class Image : Drawable {
 
   // -- As a whole --
 
-  // A part of it as an image of its own; what is outside the image is clear.
+  // A part of it as an image of its own; what is outside the image is clear. The part inside
+  // copied a row at a time (2026-11-14; was C++'s), each row one move in native code.
   fun crop(x : int, y : int, w : int, h : int) : Image {
     val made = Image(Math.max(w, 0), Math.max(h, 0))
-    __text.imageCrop(cells.cells, width, height, x, y, made.width, made.height, made.cells.cells)
+    val left = Math.max(x, 0)
+    val right = Math.min(x + made.width, width)
+    val top = Math.max(y, 0)
+    val bottom = Math.min(y + made.height, height)
+    if (right > left) {
+      for (row in top ..< bottom) { __colorRun(cells.cells, row * width + left, made.cells.cells, (row - y) * made.width + left - x, right - left) }
+    }
     return made
   }
   // A new image of the same size with the same pixels, changed apart from this one. Its pixels
@@ -1163,9 +1170,9 @@ class Image : Drawable {
   fun toPng() : Bytes => __text.encodePng(cells.cells, width, height)
 
   // The same size and the same pixels.
-  op ==(other : any?) : bool => other is Image and other.width == width and other.height == height and __text.imageSame(cells.cells, other.cells.cells)
+  op ==(other : any?) : bool => other is Image and other.width == width and other.height == height and __sameColors(cells.cells, other.cells.cells)
   // A hash of its size and its pixels: equal images give equal hashes. It reads every pixel.
-  fun hashCode() : int => hash(width, height, __text.imageHash(cells.cells))
+  fun hashCode() : int => hash(width, height, __colorsHash(cells.cells))
   // Its size, as `Image(200 x 100)`.
   override fun toString() : string => "Image($width x $height)"
 
@@ -1191,6 +1198,42 @@ class Image : Drawable {
 // What Canvas.save() keeps for restore() to put back.
 class __CanvasState(val transform : Transform, val color : Color, val gradient : Paint?, val font : Font, val stroke : Stroke, val composite : Composite,
                     val interpolation : Interpolation)
+
+// Whether two lists of colours hold the same pixels, item by item (an Image's ==; 2026-11-14,
+// was C++'s).
+fun __sameColors(a : List<Color>, b : List<Color>) : bool {
+  if (a.size != b.size) { return false }
+  for (i in 0 ..< a.size) {
+    if (a[i] != b[i]) { return false }
+  }
+  return true
+}
+// A hash of pixels, the same for the same pixels (an Image's hashCode, with its size; 2026-11-14,
+// was C++'s, the same numbers): their bytes red, green, blue, alpha, eight at a time as a word,
+// each mixed in by a multiply, then any four left a byte at a time.
+fun __colorsHash(px : List<Color>) : int {
+  val n = px.size
+  var h = -7046029254386353131 ^ (n * 4)  // 0x9E3779B97F4A7C15
+  var i = 0
+  while (i + 1 < n) {
+    val p = px[i]
+    val q = px[i + 1]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* -49064778989728563  // 0xFF51AFD7ED558CCD
+    h = h ^ (h >>> 32)
+    i += 2
+  }
+  if (i < n) {
+    val p = px[i]
+    h = (h ^ p.red.toInt()) &* 1099511628211
+    h = (h ^ p.green.toInt()) &* 1099511628211
+    h = (h ^ p.blue.toInt()) &* 1099511628211
+    h = (h ^ p.alpha.toInt()) &* 1099511628211
+  }
+  h = h ^ (h >>> 29)
+  return (h ^ (h >>> 32)).toInt32Wrapped()
+}
 
 // What draws on an Image: the software engine, in the image's pixels (D123).
 class ImageCanvas : Canvas {

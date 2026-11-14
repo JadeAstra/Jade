@@ -86,18 +86,6 @@ bool appendZeros(VM& vm, ObjList* list, size_t count) {
     return true;
 }
 
-// Rows `y` to `y + h` of the columns `x` to `x + w` of a grid `srcWidth` wide, added to the end
-// of `to`.
-void appendRegion(VM& vm, ObjList* to, ObjList* from, size_t srcWidth, size_t x, size_t y, size_t w, size_t h) {
-    // Its room made once (2026-11-13: grown a row at a time, the block was moved as it grew).
-    if (to->packed() && from->packed() && to != from) to->pack->block.reserve((to->pack->count + w * h) * to->pack->width);
-    if (x == 0 && w == srcWidth) {
-        vm.listCopyRange(to, from, y * srcWidth, w * h);  // whole rows, one after another: one copy
-        return;
-    }
-    for (size_t row = 0; row < h; row++) vm.listCopyRange(to, from, (y + row) * srcWidth + x, w);
-}
-
 }  // namespace
 
 void registerGrid(VM& vm) {
@@ -130,32 +118,6 @@ void registerGrid(VM& vm) {
     // zeros(list, count): `count` of the item type's zero added; false where it has none.
     def("zeros", 2, 2, [](VM& vm, int, Value* args) -> Value {
         return Value::boolean(appendZeros(vm, listArgument(vm, args[0]), sizeArgument(vm, args[1], "the number of cells")));
-    });
-    // region(from, fromWidth, x, y, w, h, to): a part of one grid's cells added to another's.
-    def("region", 7, 7, [](VM& vm, int, Value* args) -> Value {
-        appendRegion(vm, listArgument(vm, args[6]), listArgument(vm, args[0]), sizeArgument(vm, args[1], "width"), sizeArgument(vm, args[2], "x"),
-                     sizeArgument(vm, args[3], "y"), sizeArgument(vm, args[4], "width"), sizeArgument(vm, args[5], "height"));
-        return Value::null();
-    });
-    // paste(to, toWidth, x, y, from, fromWidth, w, h): `w` by `h` cells of one grid written into
-    // another at (x, y), a row at a time.
-    def("paste", 8, 8, [](VM& vm, int, Value* args) -> Value {
-        ObjList* to = listArgument(vm, args[0]);
-        ObjList* from = listArgument(vm, args[4]);
-        const size_t toWidth = sizeArgument(vm, args[1], "width"), x = sizeArgument(vm, args[2], "x"), y = sizeArgument(vm, args[3], "y");
-        const size_t fromWidth = sizeArgument(vm, args[5], "width"), w = sizeArgument(vm, args[6], "width"), h = sizeArgument(vm, args[7], "height");
-        const bool sameLayout = to->packed() && from->packed() && to->pack->store == from->pack->store && to->pack->width == from->pack->width &&
-                                to->pack->itemClass == from->pack->itemClass && to->pack->narrow == from->pack->narrow && !to->pack->nullable &&
-                                !from->pack->nullable && to != from;
-        for (size_t row = 0; row < h; row++) {
-            const size_t at = (y + row) * toWidth + x, src = row * fromWidth;
-            if (sameLayout) {
-                std::memcpy(vm.itemAt(to, at), vm.itemAt(from, src), w * to->pack->width);
-                continue;
-            }
-            for (size_t col = 0; col < w; col++) vm.listSet(to, at + col, vm.listGet(from, src + col));
-        }
-        return Value::null();
     });
     // bytes(list): a copy of a packed grid's storage, its cells' bytes one after another.
     def("bytes", 1, 1, [](VM& vm, int, Value* args) -> Value {

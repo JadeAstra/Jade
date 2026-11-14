@@ -471,6 +471,18 @@ enum class Op : uint16_t {
     // A shift by a count in a slot, from 0 to 63 (any other the stack instruction's way).
     RShlSS,
     RShrSS,
+    // As those (2026-11-14, a hash written in WinterWolf): ^ of two whole numbers, >>> by a count
+    // from 0 to 63, and &+, &- and &* of two ints (which alone the stack instructions take).
+    RBitXorSS,
+    RBitXorSK,
+    RUshrSK,
+    RUshrSS,
+    RAddWrapSS,
+    RAddWrapSK,
+    RSubWrapSS,
+    RSubWrapSK,
+    RMulWrapSS,
+    RMulWrapSK,
     // On operands of the kinds the checker knows (M6.7 step 5): as RAddSS, RLtSS and RJumpLtSS,
     // testing nothing; an int's overflow alone goes the slow way.
     RAddISS, RAddISK, RAddIKS, RSubISS, RSubISK, RSubIKS,

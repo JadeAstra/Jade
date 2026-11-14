@@ -1,0 +1,78 @@
+// Native code's template for items of a value type copied from one list to another (or along the
+// same one), each at a base plus the counter (kLoopWCopyItems, 2026-11-14: copy, crop and a
+// grid's part): moved at once, the same items as the VM's steps give. Each loop run three times
+// (its region is made the second time it starts).
+fun copyRun(from : List<Color>, fromAt : int, to : open List<Color>, toAt : int, n : int) {
+  for (i in 0 ..< n) { to[toAt + i] = from[fromAt + i] }
+}
+fun <T> copyAny(from : List<T>, fromAt : int, to : open List<T>, toAt : int, n : int) {
+  for (i in 0 ..< n) { to[toAt + i] = from[fromAt + i] }
+}
+fun colors(n : int, seed : int) : open List<Color> {
+  val made : open List<Color> = []
+  var s = seed
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    made.add(Color(s % 256, (s / 256) % 256, (s / 65536) % 256, (s / 7) % 256))
+  }
+  return made
+}
+fun sum(xs : List<Color>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) { t = t * 31 + xs[i].red.toInt() + xs[i].green.toInt() * 3 + xs[i].blue.toInt() * 5 + xs[i].alpha.toInt() * 7 & 0xffffffff }
+  return t
+}
+// From one list to another, at offsets.
+for (k in 0 ..< 3) {
+  val a = colors(500, 1)
+  val b = colors(500, 2)
+  copyRun(a, 3, b, 7, 400)
+  print("offsets", sum(b), b[7] == a[3], b[406] == a[402], b[407] == colors(500, 2)[407])
+}
+// expect: offsets 1379240378 true true true
+// expect: offsets 1379240378 true true true
+// expect: offsets 1379240378 true true true
+// Along the same list, back one place: each item read before it is written over.
+for (k in 0 ..< 3) {
+  val a = colors(300, 3)
+  copyRun(a, 1, a, 0, 299)
+  print("back", sum(a), a[0] == colors(300, 3)[1])
+}
+// expect: back 3686402278 true
+// expect: back 3686402278 true
+// expect: back 3686402278 true
+// Along the same list, on one place: each item copied over the next before it is read, so the
+// first goes all the way along (the template leaves this to the steps).
+for (k in 0 ..< 3) {
+  val a = colors(300, 4)
+  copyRun(a, 0, a, 1, 299)
+  print("on", sum(a), a[299] == colors(300, 4)[0])
+}
+// expect: on 3235217792 true
+// expect: on 3235217792 true
+// expect: on 3235217792 true
+// Past the end of what is read: the same items copied as far as the VM gets, then its exception.
+for (k in 0 ..< 3) {
+  val a = colors(100, 5)
+  val b = colors(100, 6)
+  try {
+    copyRun(a, 50, b, 0, 60)
+  } catch (e : IndexOutOfBoundsException) {
+    print("past", sum(b), b[49] == a[99], b[50] == colors(100, 6)[50])
+  }
+}
+// expect: past 1404779096 true true
+// expect: past 1404779096 true true
+// expect: past 1404779096 true true
+// Through a generic function, colours, then ints (another kind of list, no template).
+for (k in 0 ..< 3) {
+  val a = colors(200, 7)
+  val b = colors(200, 8)
+  copyAny(a, 0, b, 100, 100)
+  val xs : open List<int> = [1, 2, 3, 4, 5, 6]
+  copyAny(xs, 0, xs, 3, 3)
+  print("any", sum(b), xs)
+}
+// expect: any 2453181007 [1, 2, 3, 1, 2, 3]
+// expect: any 2453181007 [1, 2, 3, 1, 2, 3]
+// expect: any 2453181007 [1, 2, 3, 1, 2, 3]
