@@ -1016,8 +1016,8 @@ class Image : Drawable {
     // pixels.sample through them, took 993 ms for 12 million pixels turned).
     val m = Transform.translation(left + 0.5, top + 0.5).then(back).then(Transform.translation(-0.5, -0.5))
     val made = Grid<Color>(w, h)
-    __num.sampleAffine(cells.cells, width, height, m.scaleX, m.shearY, m.shearX, m.scaleY, m.translateX, m.translateY, w, h,
-                       interpolation.ordinal, [0, 0, 0, 0], made.cells)
+    __sampleAffine(cells.cells, width, height, m.scaleX, m.shearY, m.shearX, m.scaleY, m.translateX, m.translateY, w, h, interpolation.ordinal,
+                   __gridInto(made, w, h))
     return of(made)
   }
 
@@ -1386,6 +1386,163 @@ fun __mixColors(px : List<Color>, to : open List<Color>, w0 : float, w1 : float,
 // A part's sum rounded half away from zero and held to 0 to 255: v + 0.5 held to 0 to 255, then cut
 // to a whole number (any v below -0.5 gives 0, as rounding and then holding does).
 fun __mixPart(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt().toByte()
+
+// Each pixel (ox, oy) of an ow by oh picture read from the place (m0 ox + m2 oy + m4, m1 ox + m3 oy
+// + m5) of `px` (w by h), by `interpolation` (0 nearest, 1 bilinear, 2 bicubic), each colour
+// multiplied by its alpha on the way; clear outside the picture (a place from -0.5 to w - 0.5
+// across is in it). In WinterWolf since 2026-11-13 (was C++'s sampleAffine), every expression as
+// the C++ worked it out, in doubles, so the same pixels. A loop for each interpolation.
+fun __sampleAffine(px : List<Color>, w : int, h : int, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, ow : int, oh : int,
+                   interpolation : int, to : open List<Color>) {
+  if (w == 0 or h == 0) { throw IllegalArgumentException("an empty grid has nothing to sample") }
+  // A row at a time: first each new pixel's place in this picture (-1e300 across where it is
+  // outside), then the pixels read there; the second loop keeps none of the transform's numbers,
+  // which is what lets native code keep its numbers in registers.
+  val placesGrid = Grid<float>(ow, 2)
+  val places = __gridInto(placesGrid, ow, 2)
+  val wf = w.toFloat()
+  val hf = h.toFloat()
+  for (oy in 0 ..< oh) {
+    __samplePlaces(places, ow, oy.toFloat(), m0, m1, m2, m3, m4, m5, wf, hf)
+    if (interpolation == 0) { __sampleNearest(px, w, h, places, ow, oy * ow, to) }
+    else if (interpolation == 1) { __sampleBilinear(px, w, h, places, ow, oy * ow, to) }
+    else { __sampleBicubic(px, w, h, places, ow, oy * ow, to) }
+  }
+}
+fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, wf : float, hf : float) {
+  for (ox in 0 ..< ow) {
+    val pxf = ox.toFloat()
+    val x = m0 * pxf + m2 * py + m4
+    val y = m1 * pxf + m3 * py + m5
+    if (x >= -0.5 and x < wf - 0.5 and y >= -0.5 and y < hf - 0.5) {
+      places[ox] = x
+      places[ow + ox] = y
+    } else {
+      places[ox] = -1.0e300
+    }
+  }
+}
+fun __sampleNearest(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
+  for (ox in 0 ..< ow) {
+    val x = places[ox]
+    if (x < -1.0e299) {
+      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
+      continue
+    }
+    val y = places[ow + ox]
+    val c = px[Math.min(Math.max(__rounded(y), 0), h - 1) * w + Math.min(Math.max(__rounded(x), 0), w - 1)]
+    val a = c.alpha.toInt().toFloat()
+    val mul = a / 255.0
+    to[at + ox] = __premultipliedColor(c.red.toInt() * mul, c.green.toInt() * mul, c.blue.toInt() * mul, a)
+  }
+}
+fun __sampleBilinear(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
+  for (ox in 0 ..< ow) {
+    val x = places[ox]
+    if (x < -1.0e299) {
+      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
+      continue
+    }
+    val y = places[ow + ox]
+    // The four pixels round it, each part multiplied by alpha / 255, alpha as it is; each product
+    // a variable of its own, then summed as the C++ summed them.
+    val fx = Math.floor(x)
+    val fy = Math.floor(y)
+    val u = x - fx
+    val t = y - fy
+    val ix = fx.toInt()
+    val iy = fy.toInt()
+    // Inside the picture, the four from one place; at its edges, each held to the picture.
+    var at0 = iy * w + ix
+    var at1 = at0 + 1
+    var at2 = at0 + w
+    var at3 = at2 + 1
+    if (ix < 0 or ix >= w - 1 or iy < 0 or iy >= h - 1) {
+      val x0 = Math.min(Math.max(ix, 0), w - 1)
+      val x1 = Math.min(Math.max(ix + 1, 0), w - 1)
+      val y0 = Math.min(Math.max(iy, 0), h - 1) * w
+      val y1 = Math.min(Math.max(iy + 1, 0), h - 1) * w
+      at0 = y0 + x0
+      at1 = y0 + x1
+      at2 = y1 + x0
+      at3 = y1 + x1
+    }
+    val q0 = px[at0]
+    val q1 = px[at1]
+    val q2 = px[at2]
+    val q3 = px[at3]
+    val su = 1.0 - u
+    val st = 1.0 - t
+    val a0 = q0.alpha.toInt().toFloat()
+    val a1 = q1.alpha.toInt().toFloat()
+    val a2 = q2.alpha.toInt().toFloat()
+    val a3 = q3.alpha.toInt().toFloat()
+    val k0 = a0 / 255.0
+    val k1 = a1 / 255.0
+    val k2 = a2 / 255.0
+    val k3 = a3 / 255.0
+    val r = (q0.red.toInt() * k0 * su + q1.red.toInt() * k1 * u) * st + (q2.red.toInt() * k2 * su + q3.red.toInt() * k3 * u) * t
+    val g = (q0.green.toInt() * k0 * su + q1.green.toInt() * k1 * u) * st + (q2.green.toInt() * k2 * su + q3.green.toInt() * k3 * u) * t
+    val b = (q0.blue.toInt() * k0 * su + q1.blue.toInt() * k1 * u) * st + (q2.blue.toInt() * k2 * su + q3.blue.toInt() * k3 * u) * t
+    val al = (a0 * su + a1 * u) * st + (a2 * su + a3 * u) * t
+    to[at + ox] = __premultipliedColor(r, g, b, al)
+  }
+}
+fun __sampleBicubic(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
+  for (ox in 0 ..< ow) {
+    val x = places[ox]
+    if (x < -1.0e299) {
+      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
+      continue
+    }
+    val y = places[ow + ox]
+    // Catmull-Rom's weights each way, then the sixteen pixels round it, row by row.
+    val fx = Math.floor(x)
+    val fy = Math.floor(y)
+    val tx = x - fx
+    val tx2 = tx * tx
+    val tx3 = tx2 * tx
+    val wx0 = (-tx3 + 2.0 * tx2 - tx) / 2.0
+    val wx1 = (3.0 * tx3 - 5.0 * tx2 + 2.0) / 2.0
+    val wx2 = (-3.0 * tx3 + 4.0 * tx2 + tx) / 2.0
+    val wx3 = (tx3 - tx2) / 2.0
+    val ty = y - fy
+    val ty2 = ty * ty
+    val ty3 = ty2 * ty
+    val ix = fx.toInt()
+    val iy = fy.toInt()
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    var al = 0.0
+    for (j in 0 .. 3) {
+      val wy = j == 0 ? (-ty3 + 2.0 * ty2 - ty) / 2.0 : (j == 1 ? (3.0 * ty3 - 5.0 * ty2 + 2.0) / 2.0 : (j == 2 ? (-3.0 * ty3 + 4.0 * ty2 + ty) / 2.0 : (ty3 - ty2) / 2.0))
+      val row = Math.min(Math.max(iy - 1 + j, 0), h - 1) * w
+      for (i in 0 .. 3) {
+        val wx = i == 0 ? wx0 : (i == 1 ? wx1 : (i == 2 ? wx2 : wx3))
+        val c = px[row + Math.min(Math.max(ix - 1 + i, 0), w - 1)]
+        val a = c.alpha.toInt().toFloat()
+        val k = a / 255.0
+        r += c.red.toInt() * k * wx * wy
+        g += c.green.toInt() * k * wx * wy
+        b += c.blue.toInt() * k * wx * wy
+        al += a * wx * wy
+      }
+    }
+    to[at + ox] = __premultipliedColor(r, g, b, al)
+  }
+}
+// A number rounded half away from zero, as a whole number.
+inline fun __rounded(v : float) : int => v >= 0.0 ? (v + 0.5).toInt() : -((0.0 - v + 0.5).toInt())
+// A colour from parts multiplied by alpha / 255 and alpha: alpha held to 0 to 255 and rounded, the
+// rest divided by it and held and rounded the same way.
+inline fun __premultipliedColor(r : float, g : float, b : float, alpha : float) : Color {
+  val a = alpha < 0.0 ? 0.0 : (255.0 < alpha ? 255.0 : alpha)
+  val ab = __heldByte(a)
+  val mul = ab == 0.toByte() ? 0.0 : 255.0 / a
+  return Color(__heldByte(r * mul), __heldByte(g * mul), __heldByte(b * mul), ab)
+}
+inline fun __heldByte(v : float) : byte => v <= 0.0 ? 0.toByte() : (v >= 255.0 ? 255.toByte() : (v + 0.5).toInt().toByte())
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another
 // kind gives as one (Jade's Surface).
