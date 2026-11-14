@@ -2879,7 +2879,8 @@ struct Region {
         // an item of the list of items looked at once as `list`, the item at index b; ki the
         // field's width (high half), offset (bits 8 on) and size (1 a byte, 8 an int).
         // Unknown: a register set on one way through the body alone, which nothing may read after.
-        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown } kind;
+        // ToFloat, ToInt: an int as a float (cvtif), a float cut to a whole number (cvtfi).
+        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown, ToFloat, ToInt } kind;
         Cls cls = CI;
         Reg reg{0, CI};  // Inv
         int64_t ki = 0;  // KInt
@@ -3064,9 +3065,16 @@ struct Region {
         if ((s == "addikr" || s == "subikr" || s == "mulikr") && arith(s, op)) return set(n[0], bin(op, CI, kint(l.ki), valueOf(fw, n[1]))), true;
         if ((s == "addfk" || s == "subfk" || s == "mulfk" || s == "divfk") && arith(s, op)) return set(n[0], bin(op, CF, valueOf(fw, n[1]), kfloat(l.kf))), true;
         if ((s == "addfkr" || s == "subfkr" || s == "mulfkr" || s == "divfkr") && arith(s, op)) return set(n[0], bin(op, CF, kfloat(l.kf), valueOf(fw, n[1]))), true;
-        if (s == "mini" || s == "maxi") {
-            Expr e{s == "mini" ? Expr::Min : Expr::Max};
+        if (s == "mini" || s == "maxi" || s == "minf" || s == "maxf") {
+            Expr e{s[1] == 'i' ? Expr::Min : Expr::Max};
+            e.cls = s.back() == 'f' ? CF : CI;
             e.a = valueOf(fw, n[0]), e.b = valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "cvtif" || s == "cvtfi") {  // d = s as a float, or cut to a whole number
+            Expr e{s == "cvtif" ? Expr::ToFloat : Expr::ToInt};
+            e.cls = s == "cvtif" ? CF : CI;
+            e.a = valueOf(fw, n[1]);
             return set(n[0], mk(e)), true;
         }
         // A comparison of ints: its flag, for a guard's jump.
@@ -3272,6 +3280,14 @@ struct Region {
         std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
         int64_t mixDivisor = 1;         // kLoopWMix: words 61 and 62
         bool mixDivideFirst = false;
+        // kLoopWMixItems' float mixes (kinds 0x60 + j): each lane's terms (the byte's offset and the
+        // weight), its constant (or none), and the bounds it is held between; words 128 on.
+        struct FloatLane {
+            std::vector<std::pair<int64_t, const Expr*>> terms;
+            const Expr* c = nullptr;
+            double lo = 0, hi = 0;
+        };
+        std::vector<FloatLane> floatLanes;
         // Objects as the loop entered them, each to be of exactly a class (clsflag, the way where
         // it is not out of the region): the slot and the global holding the class; words 112 on.
         std::vector<std::pair<int64_t, int64_t>> classChecks;
@@ -3344,7 +3360,14 @@ struct Region {
             if (e->kind == Expr::Field) {
                 if (!field(e)) return false;
                 kind = 2 + ((static_cast<uint64_t>(e->ki) >> 8) & 0xFFFFFF);
-                if (kind > 0xFF) return false;
+                if (kind >= 0x60) return false;  // below the float mixes' kinds
+            } else if (e->kind == Expr::ToByte && e->a->kind == Expr::ToInt) {
+                // A float mix of byte fields of the item, held between two bounds and cut to a
+                // whole number (2026-11-13: __mixColors, greyscale and saturation): 0x60 + its lane.
+                Ahead::FloatLane lane;
+                if (ah.floatLanes.size() >= 4 || !floatLane(e->a->a, lane, field)) return false;
+                kind = 0x60 | ah.floatLanes.size();
+                ah.floatLanes.push_back(lane);
             } else if (const Expr* t = e->kind == Expr::ToByte ? e->a : e;
                        t->kind == Expr::Load && t->cls == CI && t->b != nullptr && t->b->kind == Expr::Field && t->list >= 0 && t->list < 6) {
                 // A table's byte at a byte of the item (2026-11-13: mapChannels): 0x80, the table's
@@ -3414,6 +3437,53 @@ struct Region {
         while (ah.mixWords.size() < 13) ah.mixWords.push_back(0);
         ah.mixWords.push_back(divisor);              // 109
         ah.mixWords.push_back(divideFirst ? 1 : 0);  // 110
+        return true;
+    }
+
+    // A float mix of byte fields, as kLoopWMixItems takes one (stencils.cpp, FloatMix): x held by
+    // max and min with constants lo and hi (in either order: every sum is finite, and lo <= hi),
+    // where x is a sum of terms added left to right, each a weight (a constant, or what is the same
+    // each time round) times a byte field as a float, with a constant added last or not.
+    template <typename F>
+    bool floatLane(const Expr* x, Ahead::FloatLane& lane, F& field) {
+        bool haveLo = false, haveHi = false;
+        while ((x->kind == Expr::Min || x->kind == Expr::Max) && x->cls == CF) {
+            const Expr* k = x->a->kind == Expr::KFloat ? x->a : x->b->kind == Expr::KFloat ? x->b : nullptr;
+            if (k == nullptr) return false;
+            bool& have = x->kind == Expr::Max ? haveLo : haveHi;
+            if (have) return false;
+            have = true;
+            (x->kind == Expr::Max ? lane.lo : lane.hi) = k->kf;
+            x = k == x->a ? x->b : x->a;
+        }
+        if (!haveLo || !haveHi || !(lane.lo > -1.0) || !(lane.hi < 256.0) || lane.lo > lane.hi) return false;
+        auto isTerm = [&](const Expr* t) {
+            if (t->kind != Expr::Bin || t->op != '*' || t->cls != CF) return false;
+            const Expr* f = t->a->kind == Expr::ToFloat ? t->a : t->b->kind == Expr::ToFloat ? t->b : nullptr;
+            if (f == nullptr) return false;
+            const Expr* w = f == t->a ? t->b : t->a;
+            return w->cls == CF && (w->kind == Expr::KFloat || w->kind == Expr::Inv) && f->a->kind == Expr::Field && field(f->a);
+        };
+        if (x->kind == Expr::Bin && x->op == '+' && x->cls == CF && (x->a->kind == Expr::KFloat || x->b->kind == Expr::KFloat)) {
+            lane.c = x->a->kind == Expr::KFloat ? x->a : x->b;  // a + b is b + a, exactly
+            x = lane.c == x->a ? x->b : x->a;
+        }
+        std::vector<const Expr*> terms;
+        while (x->kind == Expr::Bin && x->op == '+' && x->cls == CF && isTerm(x->b)) {
+            terms.push_back(x->b);
+            x = x->a;
+        }
+        if (!isTerm(x)) return false;
+        terms.push_back(x);
+        if (terms.size() > 4) return false;
+        for (auto it = terms.rbegin(); it != terms.rend(); ++it) {
+            const Expr* t = *it;
+            const Expr* f = t->a->kind == Expr::ToFloat ? t->a : t->b;
+            const Expr* w = f == t->a ? t->b : t->a;
+            const uint64_t offset = (static_cast<uint64_t>(f->a->ki) >> 8) & 0xFFFFFF;
+            if (offset > 7) return false;
+            lane.terms.emplace_back(static_cast<int64_t>(offset), w);
+        }
         return true;
     }
 
@@ -3503,7 +3573,9 @@ struct Region {
     }
 
     // The loop from head h (its RangeNext, the step 1) to its Loop e: a template where it fits.
+    int templateHead = -1, templateEnd = -1;  // the loop recognise last looked at (templateSteps)
     bool recognise(int h, int e, Ahead& ah, Reg& next, Reg& left) {
+        templateHead = h, templateEnd = e;
         const Result& head = results[static_cast<size_t>(h)];
         Followed fw;
         loopTop = in[static_cast<size_t>(h)].top;
@@ -4020,6 +4092,35 @@ struct Region {
             if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
             if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
             for (size_t k = 0; k < ah.mixWords.size(); k++) word(96 + static_cast<int>(k), ah.mixWords[k]);
+            word(111, static_cast<int64_t>(ah.floatLanes.size()));
+            auto bitsOf = [](double d) {
+                int64_t b;
+                std::memcpy(&b, &d, 8);
+                return b;
+            };
+            for (size_t j = 0; j < ah.floatLanes.size(); j++) {
+                const Ahead::FloatLane& lane = ah.floatLanes[j];
+                const int at = 128 + 16 * static_cast<int>(j);
+                word(at, static_cast<int64_t>(lane.terms.size()) | (lane.c != nullptr ? 0x100 : 0));
+                for (size_t k = 0; k < lane.terms.size(); k++) {
+                    word(at + 1 + static_cast<int>(k), lane.terms[k].first);
+                    // A weight in a slot the loop never writes, read from there (no register kept
+                    // for it while the template runs: nine weights are more than there are).
+                    const Expr* w = lane.terms[k].second;
+                    bool entered = w->kind == Expr::Inv && w->reg.slot >= 0;
+                    for (int u = templateHead; entered && u <= templateEnd; u++) entered = in[static_cast<size_t>(u)].kind(w->reg.slot).bits == kEntry;
+                    if (entered) {
+                        LOp l;
+                        l.stem = "ctxslot", l.slot = at + 5 + static_cast<int>(k), l.slot2 = w->reg.slot;
+                        ops.push_back(l);
+                    } else if (!param(at + 5 + static_cast<int>(k), w)) {
+                        return false;
+                    }
+                }
+                word(at + 9, bitsOf(lane.c != nullptr ? lane.c->kf : 0.0));
+                word(at + 10, bitsOf(lane.lo));
+                word(at + 11, bitsOf(lane.hi));
+            }
         }
         if (ah.shape == 18) {
             word(50, ah.baseMode);
@@ -4636,6 +4737,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         st.ki = l.ki;
         st.kf = l.kf;
         st.slot = l.slot;
+        st.slot2 = l.slot2;  // (ctxslot's slot: a loop template's word read from a slot)
     }
     for (size_t i = 0; i < r.ins.size(); i++) {
         a.at(labels[i]);

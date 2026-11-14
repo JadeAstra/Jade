@@ -52,7 +52,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t core;
     const void* band;
     uint64_t lists[24];
-    uint64_t t[128];
+    uint64_t t[192];
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
@@ -1594,6 +1594,10 @@ struct Items {
 // The second's storage shared with the first's in part: not the same items, and not apart.
 INLINE bool sharedInPart(const Items& a, const Items& b, int64_t end) {
     if (!a.ok() || !b.ok() || a.h[0] == b.h[0]) return false;
+    // A list of a value type's items (h[3] the list itself, lookAtItems) keeps a block of its own,
+    // never part of another's (2026-11-13: measured as 8 bytes an item, a list of colours seemed to
+    // reach into the next one's block, and a template refused wherever the two lay end to end).
+    if (a.h[3] > 3 || b.h[3] > 3) return false;
     const uint64_t a0 = a.h[0], a1 = a0 + static_cast<uint64_t>(end) * a.width();
     const uint64_t b0 = b.h[0], b1 = b0 + static_cast<uint64_t>(end) * b.width();
     return a0 < b1 && b0 < a1;
@@ -1753,6 +1757,54 @@ struct MixEnd {
         const int32_t lo = divideFirst ? least : least >> shift, hi = divideFirst ? most : most >> shift;
         quick = divisor > 1 && divisor < 65536 && lo >= 0 && hi <= 65535;
         magic = quick ? ((uint64_t{1} << 32) + static_cast<uint64_t>(divisor) - 1) / static_cast<uint64_t>(divisor) : 0;
+    }
+};
+
+// A float mix of bytes of an item (kLoopWMixItems' kinds 0x60 + j; regions.cpp, floatLane): n
+// weights, each times a byte of the item as a float, added in order, a constant added last where
+// there is one, held between lo and hi, and cut to a whole number: as the steps work it out,
+// double by double in the same order (no multiply and add fused), so the same bytes. Words: n |
+// a constant << 8; the bytes' offsets; the weights; the constant, lo and hi, as doubles' bits.
+struct FloatMix {
+    int n = 0;
+    bool hasC = false;
+    uint64_t at[4] = {};
+    double w[4] = {}, c = 0, lo = 0, hi = 0;
+    __attribute__((always_inline)) bool read(const uint64_t* q, uint64_t width) {
+        n = static_cast<int>(q[0] & 0xFF);
+        hasC = ((q[0] >> 8) & 1) != 0;
+        if (n < 1 || n > 4) return false;
+        for (int k = 0; k < n; k++) {
+            at[k] = q[1 + k];
+            w[k] = bitsF(q[5 + k]);
+            if (at[k] >= width || !__builtin_isfinite(w[k])) return false;
+        }
+        c = bitsF(q[9]), lo = bitsF(q[10]), hi = bitsF(q[11]);
+        // Every sum finite, and anything between lo and hi a byte once cut: then min and max in
+        // either order, and the check of the byte, are as the steps have them.
+        return __builtin_isfinite(c) && lo > -1.0 && hi < 256.0 && lo <= hi;
+    }
+    __attribute__((always_inline)) uint8_t held(double s) const {
+#pragma clang fp contract(off)
+        s = s + c;  // 0 where there is none: s + 0 is s but for -0, which is cut to 0 as well
+        const double m = s > lo ? s : lo;
+        return static_cast<uint8_t>(static_cast<int64_t>(m < hi ? m : hi));
+    }
+    __attribute__((always_inline)) uint8_t operator()(const uint8_t* p) const {
+#pragma clang fp contract(off)
+        double s = w[0] * static_cast<double>(p[at[0]]);
+        for (int k = 1; k < n; k++) {
+            const double term = w[k] * static_cast<double>(p[at[k]]);
+            s = s + term;
+        }
+        return held(s);
+    }
+    __attribute__((always_inline)) uint8_t of3(const uint8_t* p) const {
+#pragma clang fp contract(off)
+        const double t0 = w[0] * static_cast<double>(p[at[0]]), t1 = w[1] * static_cast<double>(p[at[1]]), t2 = w[2] * static_cast<double>(p[at[2]]);
+        double s = t0 + t1;
+        s = s + t2;
+        return held(s);
     }
 };
 
@@ -2032,6 +2084,13 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 from[k] = t[105 + k] & 0xFFFFFF;
                 if (from[k] >= rw) return;
             }
+            // Float mixes (kinds 0x60 + j, 2026-11-13: greyscale and saturation with float weights):
+            // lane j's words from 128 + 16 j.
+            const uint64_t floats = t[111];
+            if (floats > 4) return;
+            FloatMix fm[4];
+            for (uint64_t j = 0; j < floats; j++)
+                if (!fm[j].read(t + 128 + 16 * j, rw)) return;
             int64_t at = 0, first, last;
             if (!into && !itemBase(ctx, at)) return;
             if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1] ||
@@ -2075,6 +2134,52 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             // A greyscale's: three bytes read with weights, the mix three times and the fourth byte kept.
             // The mix three times and the fourth byte the item's own or a constant (a greyscale).
+            const uint64_t k0 = kinds & 0xFF, k1 = (kinds >> 8) & 0xFF, k2 = (kinds >> 16) & 0xFF;
+            if (floats == 3 && size == 4 && rw == 4 && ww == 4 && (k0 & 0xFC) == 0x60 && (k1 & 0xFC) == 0x60 && (k2 & 0xFC) == 0x60 && (kinds >> 24) == 5 &&
+                fm[k0 & 3].n == 3 && fm[k1 & 3].n == 3 && fm[k2 & 3].n == 3) {
+                // Three float mixes of three bytes each, the fourth byte the item's own (a colour
+                // matrix): its own loop, each mix's words held apart (in registers).
+                const FloatMix m0 = fm[k0 & 3], m1 = fm[k1 & 3], m2 = fm[k2 & 3];
+                auto rgb = [](const FloatMix& m) { return m.at[0] == 0 && m.at[1] == 1 && m.at[2] == 2; };
+                if (rgb(m0) && rgb(m1) && rgb(m2) && m0.c == m1.c && m1.c == m2.c && m0.lo == m1.lo && m1.lo == m2.lo && m0.hi == m1.hi && m1.hi == m2.hi) {
+                    // Each lane a sum of the first three bytes, the same constant and bounds (a
+                    // colour matrix: greyscale, saturation): each byte made a float once.
+#pragma clang fp contract(off)
+                    const double a0 = m0.w[0], a1 = m0.w[1], a2 = m0.w[2], b0 = m1.w[0], b1 = m1.w[1], b2 = m1.w[2], c0 = m2.w[0], c1 = m2.w[1], c2 = m2.w[2];
+                    const double add = m0.c, lo = m0.lo, hi = m0.hi;
+                    auto held = [&](double s) {
+                        s = s + add;
+                        const double m = s > lo ? s : lo;
+                        return static_cast<uint8_t>(static_cast<int64_t>(m < hi ? m : hi));
+                    };
+                    for (int64_t j = 0; j < left; j++) {
+                        const uint8_t* p = x + j * 4;
+                        uint8_t* d = o + j * 4;
+                        const double r = p[0], g = p[1], b = p[2];
+                        const uint8_t keep = p[3];
+                        double s0 = a0 * r, s1 = b0 * r, s2 = c0 * r;
+                        const double t0 = a1 * g, t1 = b1 * g, t2 = c1 * g;
+                        s0 = s0 + t0, s1 = s1 + t1, s2 = s2 + t2;
+                        const double u0 = a2 * b, u1 = b2 * b, u2 = c2 * b;
+                        s0 = s0 + u0, s1 = s1 + u1, s2 = s2 + u2;
+                        const uint32_t v = static_cast<uint32_t>(held(s0)) | static_cast<uint32_t>(held(s1)) << 8 | static_cast<uint32_t>(held(s2)) << 16 |
+                                           static_cast<uint32_t>(keep) << 24;
+                        __builtin_memcpy(d, &v, 4);
+                    }
+                    break;
+                }
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + j * 4;
+                    uint8_t* d = o + j * 4;
+                    const uint8_t keep = p[3];
+                    const uint8_t v0 = m0.of3(p), v1 = m1.of3(p), v2 = m2.of3(p);
+                    d[0] = v0;
+                    d[1] = v1;
+                    d[2] = v2;
+                    d[3] = keep;
+                }
+                break;
+            }
             const uint64_t fourth = kinds >> 24;
             const bool grey = (constant & 0xFFFFFF) == 0 && rw == 4 && ww == 4 && size == 4 && nr >= 1 && nr <= 3 && (kinds & 0xFFFFFF) == (1u | 1u << 8 | 1u << 16) &&
                               (fourth == 5 || (fourth == 0)) && from[0] < 4 && from[1] < 4 && from[2] < 4;
@@ -2116,7 +2221,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (uint64_t b = 0; b < size; b++) {
                     const uint64_t kind = (kinds >> (8 * b)) & 0xFF;
                     if (kind == 0) continue;
-                    const uint64_t byte = kind == 1 ? static_cast<uint64_t>(v) & 0xFF : kind >= 0x80 ? table[b][p[kind & 7]] : p[kind - 2];
+                    const uint64_t byte = kind == 1 ? static_cast<uint64_t>(v) & 0xFF : kind >= 0x80 ? table[b][p[kind & 7]] : kind >= 0x60 ? fm[kind & 3](p) : p[kind - 2];
                     bits |= byte << (8 * b);  // as packb lays it on the constant
                 }
                 for (uint64_t b = 0; b < size; b++) d[b] = static_cast<uint8_t>(bits >> (8 * b));
@@ -2395,6 +2500,14 @@ STENCIL(tloop) {
 // The template's words set: a constant (word ww_slot = ww_ki), a register stored, or loaded.
 STENCIL(ctxk) {
     ctx->t[ww_slot] = static_cast<uint64_t>(ww_ki);
+    NEXT;
+}
+// Word ww_slot of a loop template's = the float slot ww_slot2 holds, a slot the loop never writes
+// (a float mix's weight: no register kept for it); a NaN where it holds no float, which the
+// template refuses (FloatMix).
+STENCIL(ctxslot) {
+    const Slot& s = base[ww_slot2];
+    ctx->t[ww_slot] = s.kind == kKindFloat ? static_cast<uint64_t>(s.i) : 0x7FF8000000000000ull;
     NEXT;
 }
 #define CTXI(a, ...)                                                            \

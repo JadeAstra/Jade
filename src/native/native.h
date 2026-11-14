@@ -84,8 +84,9 @@ struct RegionContext {
     // its items' address, how many may be read, how many changed, and what they are.
     uint64_t lists[kRegionLists * 4];
     // A loop template's words (stencils.cpp, runLoop): its shape, counter, lists and parameters;
-    // from 16, the guards it checks first and what it reads items at (2026-11-13).
-    uint64_t t[128];
+    // from 16, the guards it checks first and what it reads items at (2026-11-13); from 128, the
+    // float mixes of kLoopWMixItems.
+    uint64_t t[192];
     // The VM's globals, as a region reads one (B3: the class called to make a value).
     const void* globals;
     // The fields a region looks at once as it starts (stencils.cpp, lookp): each a value, two words;

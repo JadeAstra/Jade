@@ -1363,14 +1363,29 @@ class ImageCanvas : Canvas {
 }
 
 // Each colour's red, green and blue made sums of its own, weighed by `m`, a 3 by 3 matrix row by
-// row (the new red's weights first), held to 0 to 255 and rounded; alpha kept. In one pass in C++
-// (2026-11-11): through a ColorLookup, its table of 35,937 colours made by a WinterWolf function, it
-// took 46 ms a megapixel and was off by up to a level.
+// row (the new red's weights first), held to 0 to 255 and rounded half away from zero; alpha kept.
+// In one pass (2026-11-11: through a ColorLookup, its table of 35,937 colours made by a function,
+// it took 46 ms a megapixel and was off by up to a level); in WinterWolf since 2026-11-13, the
+// same pixels as the C++ it was.
 fun __mixed(grid : Grid<Color>, m : List<float>) : Grid<Color> {
+  if (m.size != 9) { throw IllegalArgumentException("the matrix has 9 numbers, not ${m.size}") }
   val out = Grid<Color>(grid.width, grid.height)
-  __num.mixColors(grid.cells, m, __gridInto(out, grid.width, grid.height))
+  __mixColors(grid.cells, __gridInto(out, grid.width, grid.height), m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
   return out
 }
+fun __mixColors(px : List<Color>, to : open List<Color>, w0 : float, w1 : float, w2 : float, w3 : float, w4 : float, w5 : float,
+                w6 : float, w7 : float, w8 : float) {
+  for (i in 0 ..< px.size) {
+    val c = px[i]
+    val r = c.red.toInt().toFloat()
+    val g = c.green.toInt().toFloat()
+    val b = c.blue.toInt().toFloat()
+    to[i] = Color(__mixPart(w0 * r + w1 * g + w2 * b), __mixPart(w3 * r + w4 * g + w5 * b), __mixPart(w6 * r + w7 * g + w8 * b), c.alpha)
+  }
+}
+// A part's sum rounded half away from zero and held to 0 to 255: v + 0.5 held to 0 to 255, then cut
+// to a whole number (any v below -0.5 gives 0, as rounding and then holding does).
+fun __mixPart(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt().toByte()
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another
 // kind gives as one (Jade's Surface).
