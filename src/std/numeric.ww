@@ -592,7 +592,230 @@ enum BlendMode { normal, multiply, screen, overlay, darken, lighten, colorDodge,
 // in a blend mode: layers, markup, pasting. What falls outside this picture is left out.
 fun Grid<Color>.blend(over : Grid<Color>, x : int = 0, y : int = 0, opacity : Number = 1.0, mode : BlendMode = BlendMode.normal) {
   if (!writable) { throw IllegalStateException("this grid is only read here: change an image's pixels in image.editPixels { }") }
-  __num.blend(cells, width, height, over.cells, over.width, over.height, x, y, opacity, mode.ordinal)
+  val o = opacity.toFloat()
+  __blendColors(cells, width, height, over.cells, over.width, over.height, x, y, o < 0.0 ? 0.0 : (1.0 < o ? 1.0 : o), mode.ordinal)
+}
+
+// `from` (fw by fh) laid over `to` (tw by th) with its top left corner at (ox, oy), as the W3C's
+// compositing has it: each colour part from 0 to 1, the source's alpha times `opacity`; the
+// mode's mix of backdrop and source, then the source laid over by its alpha. In WinterWolf since
+// 2026-11-13 (was C++'s blend), every expression as the C++ worked it out, so the same pixels.
+fun __blendColors(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  // A loop for each kind of mode (one with every mode's work in it is more than native code takes).
+  if (mode == 0) { __blendNormal(to, tw, th, from, fw, fh, ox, oy, opacity) }
+  else if (mode < 6) { __blendSimple(to, tw, th, from, fw, fh, ox, oy, opacity, mode) }
+  else if (mode < 12) { __blendSeparable(to, tw, th, from, fw, fh, ox, oy, opacity, mode) }
+  else { __blendNonSeparable(to, tw, th, from, fw, fh, ox, oy, opacity, mode) }
+}
+fun __blendNormal(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float) {
+  val firstX = Math.max(0, -ox)
+  val endX = Math.min(fw, tw - ox)
+  for (fy in 0 ..< fh) {
+    val ty = oy + fy
+    if (ty < 0 or ty >= th) { continue }
+    for (fx in firstX ..< endX) {
+      val s = from[fy * fw + fx]
+      val at = ty * tw + ox + fx
+      val d = to[at]
+      val sa = s.alpha.toInt() / 255.0 * opacity
+      if (sa <= 0.0) { continue }
+      val ba = d.alpha.toInt() / 255.0
+      val sr = s.red.toInt() / 255.0
+      val sg = s.green.toInt() / 255.0
+      val sb = s.blue.toInt() / 255.0
+      val br = d.red.toInt() / 255.0
+      val bg = d.green.toInt() / 255.0
+      val bb = d.blue.toInt() / 255.0
+      val mr = sr
+      val mg = sg
+      val mb = sb
+      val ao = sa + ba * (1.0 - sa)
+      to[at] = Color(__laidOver(sa, ba, ao, sr, br, mr), __laidOver(sa, ba, ao, sg, bg, mg), __laidOver(sa, ba, ao, sb, bb, mb), __unitByte(ao))
+    }
+  }
+}
+fun __blendSimple(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val firstX = Math.max(0, -ox)
+  val endX = Math.min(fw, tw - ox)
+  for (fy in 0 ..< fh) {
+    val ty = oy + fy
+    if (ty < 0 or ty >= th) { continue }
+    for (fx in firstX ..< endX) {
+      val s = from[fy * fw + fx]
+      val at = ty * tw + ox + fx
+      val d = to[at]
+      val sa = s.alpha.toInt() / 255.0 * opacity
+      if (sa <= 0.0) { continue }
+      val ba = d.alpha.toInt() / 255.0
+      val sr = s.red.toInt() / 255.0
+      val sg = s.green.toInt() / 255.0
+      val sb = s.blue.toInt() / 255.0
+      val br = d.red.toInt() / 255.0
+      val bg = d.green.toInt() / 255.0
+      val bb = d.blue.toInt() / 255.0
+      val mr = __simpleMix(mode, br, sr)
+      val mg = __simpleMix(mode, bg, sg)
+      val mb = __simpleMix(mode, bb, sb)
+      val ao = sa + ba * (1.0 - sa)
+      to[at] = Color(__laidOver(sa, ba, ao, sr, br, mr), __laidOver(sa, ba, ao, sg, bg, mg), __laidOver(sa, ba, ao, sb, bb, mb), __unitByte(ao))
+    }
+  }
+}
+fun __blendSeparable(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val firstX = Math.max(0, -ox)
+  val endX = Math.min(fw, tw - ox)
+  for (fy in 0 ..< fh) {
+    val ty = oy + fy
+    if (ty < 0 or ty >= th) { continue }
+    for (fx in firstX ..< endX) {
+      val s = from[fy * fw + fx]
+      val at = ty * tw + ox + fx
+      val d = to[at]
+      val sa = s.alpha.toInt() / 255.0 * opacity
+      if (sa <= 0.0) { continue }
+      val ba = d.alpha.toInt() / 255.0
+      val sr = s.red.toInt() / 255.0
+      val sg = s.green.toInt() / 255.0
+      val sb = s.blue.toInt() / 255.0
+      val br = d.red.toInt() / 255.0
+      val bg = d.green.toInt() / 255.0
+      val bb = d.blue.toInt() / 255.0
+      val mr = __separable(mode, br, sr)
+      val mg = __separable(mode, bg, sg)
+      val mb = __separable(mode, bb, sb)
+      val ao = sa + ba * (1.0 - sa)
+      to[at] = Color(__laidOver(sa, ba, ao, sr, br, mr), __laidOver(sa, ba, ao, sg, bg, mg), __laidOver(sa, ba, ao, sb, bb, mb), __unitByte(ao))
+    }
+  }
+}
+fun __blendNonSeparable(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val firstX = Math.max(0, -ox)
+  val endX = Math.min(fw, tw - ox)
+  for (fy in 0 ..< fh) {
+    val ty = oy + fy
+    if (ty < 0 or ty >= th) { continue }
+    for (fx in firstX ..< endX) {
+      val s = from[fy * fw + fx]
+      val at = ty * tw + ox + fx
+      val d = to[at]
+      val sa = s.alpha.toInt() / 255.0 * opacity
+      if (sa <= 0.0) { continue }
+      val ba = d.alpha.toInt() / 255.0
+      val sr = s.red.toInt() / 255.0
+      val sg = s.green.toInt() / 255.0
+      val sb = s.blue.toInt() / 255.0
+      val br = d.red.toInt() / 255.0
+      val bg = d.green.toInt() / 255.0
+      val bb = d.blue.toInt() / 255.0
+      // The W3C's SetSat, SetLum and ClipColor, for hue (12), saturation (13), colour (14) and
+      // luminosity (15).
+      var c0 = sr
+      var c1 = sg
+      var c2 = sb
+      if (mode == 13 or mode == 15) {
+        c0 = br
+        c1 = bg
+        c2 = bb
+      }
+      if (mode == 12 or mode == 13) {
+        val st = mode == 12 ? __most(br, bg, bb) - __least(br, bg, bb) : __most(sr, sg, sb) - __least(sr, sg, sb)
+        var mx = 0
+        var mn = 0
+        if (c1 > c0) { mx = 1 }
+        if (c1 < c0) { mn = 1 }
+        if (c2 > (mx == 0 ? c0 : c1)) { mx = 2 }
+        if (c2 < (mn == 0 ? c0 : c1)) { mn = 2 }
+        if (mx == mn) {
+          c0 = 0.0
+          c1 = 0.0
+          c2 = 0.0
+        } else {
+          val md = 3 - mx - mn
+          val cmx = mx == 0 ? c0 : (mx == 1 ? c1 : c2)
+          val cmn = mn == 0 ? c0 : (mn == 1 ? c1 : c2)
+          val cmd = md == 0 ? c0 : (md == 1 ? c1 : c2)
+          val middle = (cmd - cmn) * st / (cmx - cmn)
+          if (md == 0) { c0 = middle } else if (md == 1) { c1 = middle } else { c2 = middle }
+          if (mx == 0) { c0 = st } else if (mx == 1) { c1 = st } else { c2 = st }
+          if (mn == 0) { c0 = 0.0 } else if (mn == 1) { c1 = 0.0 } else { c2 = 0.0 }
+        }
+      }
+      val l = mode == 15 ? 0.3 * sr + 0.59 * sg + 0.11 * sb : 0.3 * br + 0.59 * bg + 0.11 * bb
+      val dl = l - (0.3 * c0 + 0.59 * c1 + 0.11 * c2)
+      c0 += dl
+      c1 += dl
+      c2 += dl
+      val cl = 0.3 * c0 + 0.59 * c1 + 0.11 * c2
+      val n = __least(c0, c1, c2)
+      val x = __most(c0, c1, c2)
+      if (n < 0.0) {
+        c0 = cl + (c0 - cl) * cl / (cl - n)
+        c1 = cl + (c1 - cl) * cl / (cl - n)
+        c2 = cl + (c2 - cl) * cl / (cl - n)
+      }
+      if (x > 1.0) {
+        c0 = cl + (c0 - cl) * (1.0 - cl) / (x - cl)
+        c1 = cl + (c1 - cl) * (1.0 - cl) / (x - cl)
+        c2 = cl + (c2 - cl) * (1.0 - cl) / (x - cl)
+      }
+      val mr = c0
+      val mg = c1
+      val mb = c2
+      val ao = sa + ba * (1.0 - sa)
+      to[at] = Color(__laidOver(sa, ba, ao, sr, br, mr), __laidOver(sa, ba, ao, sg, bg, mg), __laidOver(sa, ba, ao, sb, bb, mb), __unitByte(ao))
+    }
+  }
+}
+// The source part as the mode mixes it where the backdrop is, then laid over, as a byte.
+inline fun __laidOver(sa : float, ba : float, ao : float, cs : float, cb : float, mixed : float) : byte {
+  val cr = (1.0 - ba) * cs + ba * mixed
+  return __unitByte(ao > 0.0 ? (sa * cr + ba * (1.0 - sa) * cb) / ao : 0.0)
+}
+// A part from 0 to 1 (held to that) as a byte, rounded half up.
+inline fun __unitByte(v : float) : byte {
+  val c = v < 0.0 ? 0.0 : (1.0 < v ? 1.0 : v)
+  return (c * 255.0 + 0.5).toInt().toByte()
+}
+// A separable mode's mix of backdrop `b` and source `s` (one part): multiply, screen, overlay,
+// darken and lighten (1 to 5); colour dodge, colour burn, hard light, soft light, difference and
+// exclusion (6 to 11, below).
+inline fun __simpleMix(mode : int, b : float, s : float) : float {
+  if (mode == 1) { return b * s }
+  if (mode == 2) { return b + s - b * s }
+  if (mode == 3) { return b <= 0.5 ? 2.0 * b * s : 1.0 - 2.0 * (1.0 - b) * (1.0 - s) }
+  if (mode == 4) { return s < b ? s : b }
+  return b < s ? s : b
+}
+// The other separable modes, 6 to 11.
+inline fun __separable(mode : int, b : float, s : float) : float {
+  if (mode == 6) {
+    if (b == 0.0) { return 0.0 }
+    if (s >= 1.0) { return 1.0 }
+    val q = b / (1.0 - s)
+    return q < 1.0 ? q : 1.0
+  }
+  if (mode == 7) {
+    if (b >= 1.0) { return 1.0 }
+    if (s <= 0.0) { return 0.0 }
+    val q = (1.0 - b) / s
+    return 1.0 - (q < 1.0 ? q : 1.0)
+  }
+  if (mode == 8) { return s <= 0.5 ? 2.0 * b * s : 1.0 - 2.0 * (1.0 - b) * (1.0 - s) }
+  if (mode == 9) {
+    if (s <= 0.5) { return b - (1.0 - 2.0 * s) * b * (1.0 - b) }
+    val d = b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : Math.sqrt(b)
+    return b + (2.0 * s - 1.0) * (d - b)
+  }
+  if (mode == 10) { return Math.abs(b - s) }
+  return b + s - 2.0 * b * s
+}
+inline fun __least(a : float, b : float, c : float) : float {
+  val ab = b < a ? b : a
+  return c < ab ? c : ab
+}
+inline fun __most(a : float, b : float, c : float) : float {
+  val ab = a < b ? b : a
+  return ab < c ? c : ab
 }
 
 // Any colour-to-colour function as a table of 33 by 33 by 33 colours, worked out once (the

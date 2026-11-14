@@ -1,0 +1,54 @@
+// Grid<Color>.blend in WinterWolf (2026-11-13, was C++'s): every blend mode, a picture laid over
+// another at an offset, partly off its edges, with an opacity; the same pixels as the C++ gave
+// (the expected values its). Each runs three times (a loop's region is made the second time it
+// starts).
+fun lcg(s : int) : int => (s * 1103515245 + 12345) & 0x7fffffff
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { g ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = lcg(s)
+        g[x, y] = Color(s % 256, (s / 256) % 256, (s / 65536) % 256, (s / 7) % 256)
+      }
+    }
+  }
+  return im
+}
+val over = picture(23, 17, 4)
+val lines : open List<string> = []
+for (mode in BlendMode.entries) {
+  var last = ""
+  for (k in 0 ..< 3) {
+    val base = picture(30, 20, 9)
+    base.editPixels { g -> g.blend(over.pixels, 11, -3, 0.75, mode) }
+    val opaque = picture(12, 12, 2)
+    opaque.editPixels { g -> g.blend(over.pixels, -5, 2, 1, mode) }
+    last = "$mode ${base.hashCode()} ${base[20, 5]} ${opaque.hashCode()}"
+  }
+  lines.add(last)
+}
+for (l in lines) { print(l) }
+// expect: normal 1736299422 Color(129, 133, 209, 235) 1629053839
+// expect: multiply 1820053348 Color(114, 83, 198, 235) 749022686
+// expect: screen 141314558 Color(185, 151, 234, 235) 703099642
+// expect: overlay 2075882091 Color(162, 112, 231, 235) 1684446560
+// expect: darken 451622394 Color(129, 101, 209, 235) 314568610
+// expect: lighten 1783507259 Color(171, 133, 223, 235) 563688148
+// expect: colorDodge 696449695 Color(209, 177, 238, 235) 1472354811
+// expect: colorBurn 717659437 Color(109, 53, 219, 235) 880262168
+// expect: hardLight 866361459 Color(149, 120, 231, 235) 1917018099
+// expect: softLight 1179675919 Color(164, 108, 227, 235) 1951682851
+// expect: difference 607484208 Color(121, 85, 121, 235) 122575108
+// expect: exclusion 1198010732 Color(150, 122, 144, 235) 1132027538
+// expect: hue 1597751571 Color(117, 130, 213, 235) 2039778179
+// expect: saturation 706477407 Color(165, 106, 212, 235) 1260096014
+// expect: color 146912954 Color(124, 128, 205, 235) 505068774
+// expect: luminosity 557925210 Color(175, 106, 227, 235) 379579417
+// Onto itself, and with nothing seen through.
+val self = picture(8, 8, 3)
+self.editPixels { g -> g.blend(g, 2, 2, 0.5, BlendMode.multiply) }
+val none = picture(8, 8, 3)
+none.editPixels { g -> g.blend(over.pixels, 0, 0, 0.0) }
+print(self.hashCode(), none == picture(8, 8, 3))   // expect: 1361622458 true

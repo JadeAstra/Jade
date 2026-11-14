@@ -514,87 +514,6 @@ Taps tapsFor(size_t from, size_t to, int interpolation) {
     return t;
 }
 
-// ---- Blend modes (the W3C's compositing, as CSS's mix-blend-mode names them) ----
-
-double separable(int mode, double b, double s) {
-    switch (mode) {
-        case 1: return b * s;                                          // multiply
-        case 2: return b + s - b * s;                                  // screen
-        case 3: return b <= 0.5 ? 2 * b * s : 1 - 2 * (1 - b) * (1 - s);   // overlay: hard light with them swapped
-        case 4: return std::min(b, s);                                 // darken
-        case 5: return std::max(b, s);                                 // lighten
-        case 6: return b == 0 ? 0 : s >= 1 ? 1 : std::min(1.0, b / (1 - s));   // colour dodge
-        case 7: return b >= 1 ? 1 : s <= 0 ? 0 : 1 - std::min(1.0, (1 - b) / s);   // colour burn
-        case 8: return s <= 0.5 ? 2 * b * s : 1 - 2 * (1 - b) * (1 - s);   // hard light
-        case 9: {                                                      // soft light
-            if (s <= 0.5) return b - (1 - 2 * s) * b * (1 - b);
-            const double d = b <= 0.25 ? ((16 * b - 12) * b + 4) * b : std::sqrt(b);
-            return b + (2 * s - 1) * (d - b);
-        }
-        case 10: return std::fabs(b - s);                              // difference
-        case 11: return b + s - 2 * b * s;                             // exclusion
-        default: return s;                                             // normal
-    }
-}
-
-double lum(const double c[3]) { return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]; }
-void clipColor(double c[3]) {
-    const double l = lum(c), n = std::min({c[0], c[1], c[2]}), x = std::max({c[0], c[1], c[2]});
-    for (int i = 0; i < 3; i++) {
-        if (n < 0) c[i] = l + (c[i] - l) * l / (l - n);
-        if (x > 1) c[i] = l + (c[i] - l) * (1 - l) / (x - l);
-    }
-}
-void setLum(double c[3], double l) {
-    const double d = l - lum(c);
-    for (int i = 0; i < 3; i++) c[i] += d;
-    clipColor(c);
-}
-double sat(const double c[3]) { return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]}); }
-void setSat(double c[3], double s) {
-    int mx = 0, mn = 0;
-    for (int i = 1; i < 3; i++) {
-        if (c[i] > c[mx]) mx = i;
-        if (c[i] < c[mn]) mn = i;
-    }
-    if (mx == mn) {
-        c[0] = c[1] = c[2] = 0;
-        return;
-    }
-    const int md = 3 - mx - mn;
-    c[md] = (c[md] - c[mn]) * s / (c[mx] - c[mn]);
-    c[mx] = s;
-    c[mn] = 0;
-}
-
-// What a mode makes of backdrop `b` and source `s` (each red, green, blue from 0 to 1).
-void blendColor(int mode, const double b[3], const double s[3], double out[3]) {
-    if (mode < 12) {
-        for (int i = 0; i < 3; i++) out[i] = separable(mode, b[i], s[i]);
-        return;
-    }
-    double c[3] = {s[0], s[1], s[2]};
-    switch (mode) {
-        case 12:  // hue
-            setSat(c, sat(b));
-            setLum(c, lum(b));
-            break;
-        case 13:  // saturation
-            c[0] = b[0], c[1] = b[1], c[2] = b[2];
-            setSat(c, sat(s));
-            setLum(c, lum(b));
-            break;
-        case 14:  // colour
-            setLum(c, lum(b));
-            break;
-        default:  // luminosity
-            c[0] = b[0], c[1] = b[1], c[2] = b[2];
-            setLum(c, lum(s));
-            break;
-    }
-    out[0] = c[0], out[1] = c[1], out[2] = c[2];
-}
-
 // ---- Windows ----
 
 // The least or greatest of each run of `width` items of `in` centred on it (van Herk and
@@ -1422,43 +1341,6 @@ void registerNumeric(VM& vm) {
                 }
         }
         writePlanes(vm, args[6], result, nw * nh, colour, true);
-        return Value::null();
-    });
-    // blend(to, toWidth, toHeight, from, fromWidth, fromHeight, x, y, opacity, mode): a grid of
-    // colours laid over another at (x, y), by its alpha times `opacity`, in a blend mode (0
-    // normal ... 15 luminosity, as BlendMode's order).
-    def("blend", 10, 10, [](VM& vm, int, Value* args) -> Value {
-        const size_t tw = sizeArg(vm, args[1], "width"), th = sizeArg(vm, args[2], "height");
-        const size_t fw = sizeArg(vm, args[4], "width"), fh = sizeArg(vm, args[5], "height");
-        uint8_t* to = colorCells(vm, args[0], tw * th, "the grid");
-        const uint8_t* from = colorCells(vm, args[3], fw * fh, "the grid laid over");
-        const int64_t ox = vm.toInt(args[6], "x"), oy = vm.toInt(args[7], "y");
-        const double opacity = std::clamp(vm.toNumber(args[8], "opacity"), 0.0, 1.0);
-        const int mode = static_cast<int>(vm.toInt(args[9], "mode"));
-        for (size_t fy = 0; fy < fh; fy++) {
-            const int64_t ty = oy + static_cast<int64_t>(fy);
-            if (ty < 0 || ty >= static_cast<int64_t>(th)) continue;
-            for (size_t fx = 0; fx < fw; fx++) {
-                const int64_t tx = ox + static_cast<int64_t>(fx);
-                if (tx < 0 || tx >= static_cast<int64_t>(tw)) continue;
-                const uint8_t* s = from + (fy * fw + fx) * 4;
-                uint8_t* d = to + (static_cast<size_t>(ty) * tw + static_cast<size_t>(tx)) * 4;
-                const double as = s[3] / 255.0 * opacity;
-                if (as <= 0) continue;
-                const double ab = d[3] / 255.0;
-                const double cs[3] = {s[0] / 255.0, s[1] / 255.0, s[2] / 255.0}, cb[3] = {d[0] / 255.0, d[1] / 255.0, d[2] / 255.0};
-                double mixed[3];
-                blendColor(mode, cb, cs, mixed);
-                const double ao = as + ab * (1 - as);
-                for (int c = 0; c < 3; c++) {
-                    // The source as the mode mixes it where the backdrop is, then laid over.
-                    const double cr = (1 - ab) * cs[c] + ab * mixed[c];
-                    const double co = ao > 0 ? (as * cr + ab * (1 - as) * cb[c]) / ao : 0;
-                    d[c] = static_cast<uint8_t>(rounded(std::clamp(co, 0.0, 1.0) * 255));
-                }
-                d[3] = static_cast<uint8_t>(rounded(std::clamp(ao, 0.0, 1.0) * 255));
-            }
-        }
         return Value::null();
     });
     // fillWhere(cells, mask, color): the cells where a grid of bools is true set to one colour.
