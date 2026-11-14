@@ -371,6 +371,8 @@ struct Reg {
     bool operator==(const Reg& o) const { return slot == o.slot && cls == o.cls; }
 };
 constexpr int kScratchF = -1, kScratchI = -2;
+// The float registers given out (stencils.cpp): f0 to f15, two to each XMM register.
+constexpr int kFloatRegisters = 16;
 constexpr int kAnyNumber = 2;  // an operand's class: an int or a float, read as a float
 
 // A stencil to be copied: its name's stem and the registers that make the rest of its name,
@@ -386,6 +388,7 @@ struct LOp {
     int jumpExit = -1;   // or a way out (an index into the instruction's exits)
     int exit = -1;       // where it leaves for the VM when it cannot do what it does (an exit's index)
     const ObjString* field = nullptr;  // the field a getp or setp step reads or writes, where its name is known
+    bool whole = false;  // its float register, a low half, written whole (Region::markWhole)
 };
 
 // A way out: where the VM goes on, and the state there, which says what is written back.
@@ -4434,6 +4437,16 @@ struct Region {
         // none is, the one clashing most set aside all the same, in hope. Registers given the
         // other way round, each the lowest none of those it meets has: one set aside with fewer
         // clashes than registers always finds one, and the hoped-for often do.
+        // How often each value is read or written: a float's high half (f8 to f15) costs a
+        // shuffle to read and to write, and makes its low half's writes wait (markWhole), so the
+        // floats used least are the ones given high halves.
+        std::map<Reg, int> traffic;
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known)
+                for (const LOp& l : results[i].ops) {
+                    for (const Reg& u : l.uses) traffic[u]++;
+                    for (const Reg& d : l.defs) traffic[d]++;
+                }
         std::vector<Reg> order;
         {
             std::map<Reg, int> degree;
@@ -4443,12 +4456,12 @@ struct Region {
                 left.insert(r);
             }
             while (!left.empty()) {
+                // Of those clashing with fewer than there are registers, the one used least: set
+                // aside first, it is given its register last, a high half where the low ones
+                // are gone.
                 auto pick = left.end();
                 for (auto it = left.begin(); it != left.end(); ++it)
-                    if (degree[*it] < (it->cls == CI ? 9 : 8)) {
-                        pick = it;
-                        break;
-                    }
+                    if (degree[*it] < (it->cls == CI ? 9 : kFloatRegisters) && (pick == left.end() || traffic[*it] < traffic[*pick])) pick = it;
                 if (pick == left.end())
                     for (auto it = left.begin(); it != left.end(); ++it)
                         if (pick == left.end() || degree[*it] > degree[*pick]) pick = it;
@@ -4461,7 +4474,7 @@ struct Region {
             std::reverse(order.begin(), order.end());
         }
         for (const Reg& r : order) {
-            const int limit = r.cls == CI ? 9 : 8;
+            const int limit = r.cls == CI ? 9 : kFloatRegisters;
             std::vector<bool> taken(static_cast<size_t>(limit), false);
             for (const Reg& o : clash[r]) {
                 auto g = regs.find(o);
@@ -4472,6 +4485,23 @@ struct Region {
             for (const Reg& m : moves[r]) {
                 auto g = regs.find(m);
                 if (got < 0 && g != regs.end() && !taken[static_cast<size_t>(g->second)]) got = g->second;
+            }
+            if (r.cls == CF && got < 0) {
+                // A low half whose high half nothing it meets has (its writes whole); then any low
+                // half; then the high half whose low half's values are used least.
+                for (int k = 0; k < 8 && got < 0; k++)
+                    if (!taken[static_cast<size_t>(k)] && !taken[static_cast<size_t>(k + 8)]) got = k;
+                for (int k = 0; k < 8 && got < 0; k++)
+                    if (!taken[static_cast<size_t>(k)]) got = k;
+                if (got < 0) {
+                    std::vector<int> low(8, 0);
+                    for (const Reg& o : clash[r]) {
+                        auto g = regs.find(o);
+                        if (g != regs.end() && g->second < 8) low[static_cast<size_t>(g->second)] += traffic[o];
+                    }
+                    for (int k = 8; k < limit; k++)
+                        if (!taken[static_cast<size_t>(k)] && (got < 0 || low[static_cast<size_t>(k - 8)] < low[static_cast<size_t>(got - 8)])) got = k;
+                }
             }
             for (int k = 0; k < limit && got < 0; k++)
                 if (!taken[static_cast<size_t>(k)]) got = k;
@@ -4699,8 +4729,49 @@ struct Region {
     std::set<Reg> housed, madeBySpill;  // kept in cells; the registers spilling made to load and store
     std::string name(const LOp& l) const {
         std::string s = l.stem;
-        for (const Reg& r : l.named) s += "_" + std::to_string(regs.at(r));
+        for (size_t k = 0; k < l.named.size(); k++) s += "_" + std::to_string(regs.at(l.named[k]) + (k == 0 && l.whole ? 16 : 0));
         return s;
+    }
+
+    // Two float registers share each of the processor's XMM registers (stencils.cpp): f0 to f7
+    // the low halves, f8 to f15 the high ones. A write to a half keeps the other, and so waits
+    // for whatever last wrote the register, though the two values have nothing to do with each
+    // other. A step writing a low half whose high half holds nothing wanted after it writes the
+    // register whole instead (its stencil's f16 to f23): as quick as with a register to itself.
+    void markWhole() {
+        static const std::set<std::string> writers = {
+            "addf", "subf", "mulf", "divf", "addfk", "subfk", "mulfk", "divfk", "addfkr", "subfkr", "mulfkr", "divfkr",
+            "movf", "negf", "absf", "sqrtf", "minf", "maxf", "setfk", "cvtif", "idxf", "idxfk", "idxpf", "valpf",
+            "loadf", "numf", "getpf", "iterf", "hidxf", "hidxfk", "hgetpf", "hidxpf", "hvalpf", "ctxlf", "homelf"};
+        findLive();
+        auto highWanted = [&](const std::set<Reg>& live, int low) {
+            for (const Reg& x : live) {
+                if (x.cls != CF) continue;
+                auto g = regs.find(x);
+                if (g != regs.end() && g->second == low + 8) return true;
+            }
+            return false;
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            Result& r = results[i];
+            // Backwards through its steps, as findLive goes: what is wanted after each.
+            std::set<Reg> live;
+            if (r.fallExit >= 0) addUses(live, r.exits[static_cast<size_t>(r.fallExit)]);
+            else if (r.fallsThrough && i + 1 < ins.size()) live = liveIn[i + 1];
+            for (auto l = r.ops.rbegin(); l != r.ops.rend(); ++l) {
+                if (l->jumpTo >= 0) live.insert(liveIn[static_cast<size_t>(l->jumpTo)].begin(), liveIn[static_cast<size_t>(l->jumpTo)].end());
+                if (l->jumpExit >= 0) addUses(live, r.exits[static_cast<size_t>(l->jumpExit)]);
+                if (!l->named.empty() && l->named[0].cls == CF && writers.count(l->stem) &&
+                    std::find(l->defs.begin(), l->defs.end(), l->named[0]) != l->defs.end()) {
+                    const int k = regs.at(l->named[0]);
+                    l->whole = k < 8 && !highWanted(live, k);
+                }
+                for (const Reg& d : l->defs) live.erase(d);
+                if (l->exit >= 0) addUses(live, r.exits[static_cast<size_t>(l->exit)]);
+                live.insert(l->uses.begin(), l->uses.end());
+            }
+        }
     }
 
     // How much the region does itself, beside what it leaves to the VM each time round: where it
@@ -4797,15 +4868,21 @@ void loads(Assembler& a, const Region& r, int entry, std::vector<std::string>* n
         c.slot = reg.slot;
         c.exit = leave;
     }
-    for (const Reg& reg : r.liveAt(entry)) {
-        const std::string n = std::string(reg.cls == CI ? "loadi_" : "loadf_") + std::to_string(r.regs.at(reg));
-        if (names != nullptr) names->push_back(n);
-        a.add(n).slot = reg.slot;
-    }
+    // The low halves of the float registers loaded whole (Region::markWhole), before the high
+    // halves are loaded into them.
+    for (int high = 0; high < 2; high++)
+        for (const Reg& reg : r.liveAt(entry)) {
+            const int k = r.regs.at(reg);
+            if ((reg.cls == CF && k >= 8) != (high == 1)) continue;
+            const std::string n = reg.cls == CI ? "loadi_" + std::to_string(k) : "loadf_" + std::to_string(k < 8 ? k + 16 : k);
+            if (names != nullptr) names->push_back(n);
+            a.add(n).slot = reg.slot;
+        }
 }
 
 // The region's code, and each way in: (the instruction, its address in the code).
 std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>* names) {
+    r.markWhole();
     Assembler a;
     std::vector<int> labels(r.ins.size());
     for (int& l : labels) l = a.label();

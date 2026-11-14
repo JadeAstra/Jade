@@ -52,6 +52,10 @@ struct Stencil {
 
 }  // namespace
 
+// A symbol's section number, unsigned: 0 is none, 0xFFFF and 0xFFFE (-1, -2) are no section either,
+// and the numbers past 32767 are sections (stencils.cpp has more than 32767 since 2026-11-14).
+bool realSection(uint16_t n) { return n != 0 && n < 0xFF00; }
+
 // An x64 COFF object file (Windows, clang-cl).
 void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     const uint16_t sectionCount = u16(obj, 2);
@@ -74,10 +78,10 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     std::map<uint16_t, std::string> stencilOf;
     for (uint32_t i = 0; i < symbolCount; i++) {
         const size_t at = symbolTable + static_cast<size_t>(i) * 18;
-        const int16_t section = static_cast<int16_t>(u16(obj, at + 12));
+        const uint16_t section = u16(obj, at + 12);
         const uint8_t storage = obj[at + 16], aux = obj[at + 17];
         const std::string name = symbolName(i);
-        if (storage == 2 && section > 0 && name.rfind("st_", 0) == 0) stencilOf[static_cast<uint16_t>(section)] = name.substr(3);
+        if (storage == 2 && realSection(section) && name.rfind("st_", 0) == 0) stencilOf[section] = name.substr(3);
         i += aux;
     }
 
@@ -115,9 +119,9 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
             // A constant of read-only data (Clang's __real@ and __xmm@): its bytes go with the
             // stencil, at most 16, and are placed beside the region's code.
             const size_t sym = symbolTable + static_cast<size_t>(symbol) * 18;
-            const int16_t dataSection = static_cast<int16_t>(u16(obj, sym + 12));
+            const uint16_t dataSection = u16(obj, sym + 12);
             const uint32_t value = u32(obj, sym + 8);
-            if (dataSection <= 0) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
+            if (!realSection(dataSection)) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
             const size_t dh = sections + static_cast<size_t>(dataSection - 1) * 40;
             const uint32_t dataCharacteristics = u32(obj, dh + 36);
             const uint32_t dataSize = u32(obj, dh + 16), dataRaw = u32(obj, dh + 20);

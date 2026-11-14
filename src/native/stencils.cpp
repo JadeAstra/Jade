@@ -4,9 +4,10 @@
 //
 // Every stencil has the same parameters: the frame's slots, the region's context (the VM's flag,
 // a collection or another thread waiting; the core of a parallel section it runs on and the
-// object lent to it), then the region's registers, ints i0 to i9 and floats f0 to f7, which
+// object lent to it), then the region's registers, ints i0 to i9 and floats f0 to f15, which
 // `preserve_none` keeps in the processor's registers (all twelve of the processor's it gives for
-// ints, all eight for floats). A stencil does one thing to them and goes on to the next with
+// ints; for floats all eight XMM registers it gives, two floats to each since 2026-11-14: see
+// f0 below). A stencil does one thing to them and goes on to the next with
 // `musttail`, which Clang makes a plain jump; a register it does not touch is passed through as
 // it is. i9 is the region's flag register: a comparison's result, which the jumps and `and`
 // after it read (src/native/regions.cpp gives out i0 to i8).
@@ -20,7 +21,8 @@
 // Each is reached through a word placed after the region's code (a 32-bit offset from the
 // instruction), so that no stencil needs an absolute address.
 //
-// A stencil's name says what it does and to which registers: addf_4_4_5 is f4 = f4 + f5. The
+// A stencil's name says what it does and to which registers: addf_4_4_5 is f4 = f4 + f5 (and
+// addf_20_4_5 the same, the register written whole). The
 // jumps are named as the VM's typed jumps work, jumping where the comparison does NOT hold
 // (jnlt: not less; with a NaN every float comparison fails, so they jump), and the comparisons
 // put their answer in i9. A stencil that reads an object (a list's item, say) does what the VM
@@ -81,6 +83,17 @@ INLINE const uint8_t* packOf(const uint8_t* list, uint8_t store) {
     if (pack == nullptr || pack[kPackStore] != store || pack[kPackNullable] != 0) return nullptr;
     return pack;
 }
+// A float register written whole (f16 to f23): its value in the low half, the high one left as
+// the instruction that made it leaves it.
+struct Whole {
+    __m128d& v;
+    __attribute__((always_inline)) operator double() const { return v[0]; }
+    __attribute__((always_inline)) Whole& operator=(double x) {
+        const __m128d one = _mm_set_sd(x);
+        v = __builtin_shufflevector(one, one, 0, -1);
+        return *this;
+    }
+};
 INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
     // One store of the whole slot (2026-11-13): what reads it whole after (the VM's copies of a
     // value) is given it at once, where four stores of its parts had the read wait for them all
@@ -91,9 +104,38 @@ INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
 
 #define PARAMS                                                                                                         \
     Slot *base, Ctx *ctx, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, int64_t i5, int64_t i6,    \
-        int64_t i7, int64_t i8, int64_t i9, double f0, double f1, double f2, double f3, double f4, double f5, double f6, \
-        double f7
-#define ARGS base, ctx, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, f0, f1, f2, f3, f4, f5, f6, f7
+        int64_t i7, int64_t i8, int64_t i9, __m128d v0, __m128d v1, __m128d v2, __m128d v3, __m128d v4, __m128d v5,  \
+        __m128d v6, __m128d v7
+#define ARGS base, ctx, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, v0, v1, v2, v3, v4, v5, v6, v7
+// The sixteen float registers: two to each of the processor's eight XMM registers preserve_none
+// passes, f0 to f7 their low halves, f8 to f15 their high ones. A write to one half keeps the
+// other, and so waits for whatever last wrote the register; f16 to f23 are f0 to f7 written whole
+// (the high half left as it falls), which regions.cpp gives a stencil where f8 to f15 holds
+// nothing wanted after it.
+#define f0 v0[0]
+#define f1 v1[0]
+#define f2 v2[0]
+#define f3 v3[0]
+#define f4 v4[0]
+#define f5 v5[0]
+#define f6 v6[0]
+#define f7 v7[0]
+#define f8 v0[1]
+#define f9 v1[1]
+#define f10 v2[1]
+#define f11 v3[1]
+#define f12 v4[1]
+#define f13 v5[1]
+#define f14 v6[1]
+#define f15 v7[1]
+#define f16 (Whole{v0})
+#define f17 (Whole{v1})
+#define f18 (Whole{v2})
+#define f19 (Whole{v3})
+#define f20 (Whole{v4})
+#define f21 (Whole{v5})
+#define f22 (Whole{v6})
+#define f23 (Whole{v7})
 #define WW_STENCIL extern "C" __attribute__((preserve_none)) int64_t
 
 WW_STENCIL ww_next(PARAMS);
@@ -111,9 +153,11 @@ extern "C" const int64_t ww_ret;
 #define EXIT [[clang::musttail]] return ww_exit(ARGS)
 
 // Each register of a kind, for the variants: three levels, as a macro may not use itself.
-#define F_A(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__)
-#define F_B(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__)
-#define F_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__)
+#define F_A(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
+#define F_B(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
+// The float registers a stencil writes: each of the sixteen, and f0 to f7 written whole.
+#define F_W(M, ...) F_A(M, __VA_ARGS__) M(16, __VA_ARGS__) M(17, __VA_ARGS__) M(18, __VA_ARGS__) M(19, __VA_ARGS__) M(20, __VA_ARGS__) M(21, __VA_ARGS__) M(22, __VA_ARGS__) M(23, __VA_ARGS__)
+#define F_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
 #define I_A(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
 #define I_B(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
 #define I_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
@@ -127,19 +171,19 @@ extern "C" const int64_t ww_ret;
 #define FBIN_C(c, a, b, name, op) STENCIL(name##_##a##_##b##_##c) { f##a = f##b op f##c; NEXT; }
 #define FBIN_B(b, a, name, op) F_C(FBIN_C, a, b, name, op)
 #define FBIN_A(a, name, op) F_B(FBIN_B, a, name, op)
-F_A(FBIN_A, addf, +)
-F_A(FBIN_A, subf, -)
-F_A(FBIN_A, mulf, *)
-F_A(FBIN_A, divf, /)
+F_W(FBIN_A, addf, +)
+F_W(FBIN_A, subf, -)
+F_W(FBIN_A, mulf, *)
+F_W(FBIN_A, divf, /)
 
 // fa = fb op K, fa = K op fb
 #define FBINK_B(b, a, name, op) STENCIL(name##k_##a##_##b) { f##a = f##b op ww_kf; NEXT; } \
                                 STENCIL(name##kr_##a##_##b) { f##a = ww_kf op f##b; NEXT; }
 #define FBINK_A(a, name, op) F_B(FBINK_B, a, name, op)
-F_A(FBINK_A, addf, +)
-F_A(FBINK_A, subf, -)
-F_A(FBINK_A, mulf, *)
-F_A(FBINK_A, divf, /)
+F_W(FBINK_A, addf, +)
+F_W(FBINK_A, subf, -)
+F_W(FBINK_A, mulf, *)
+F_W(FBINK_A, divf, /)
 
 // fa = fb; fa = K; fa = -fb, |fb|, the square root of fb; fa = the less or the more of fa and
 // fb, fa kept unless fb is less (more), as the VM's Math.min and max keep the first.
@@ -151,9 +195,9 @@ F_A(FBINK_A, divf, /)
     STENCIL(minf_##a##_##b) { if (f##b < f##a) f##a = f##b; NEXT; }             \
     STENCIL(maxf_##a##_##b) { if (f##b > f##a) f##a = f##b; NEXT; }
 #define FUN_A(a, ...) F_B(FUN_B, a)
-F_A(FUN_A, x)
+F_W(FUN_A, x)
 #define FSETK(a, ...) STENCIL(setfk_##a) { f##a = ww_kf; NEXT; }
-F_A(FSETK, x)
+F_W(FSETK, x)
 
 // fa = ib, an int made a float; ia = fb made an int, its whole part, or its floor, ceiling or
 // nearest (half away from 0), leaving for the VM where it does not fit (or is NaN).
@@ -162,11 +206,13 @@ F_A(FSETK, x)
 // compiler drops a clearing it sees no use for.)
 #define CVT_B(b, a)                                                             \
     STENCIL(cvtif_##a##_##b) {                                                  \
-        __asm__("xorps %0, %0\n\tcvtsi2sdq %1, %0" : "=&x"(f##a) : "r"(i##b));  \
+        double d_;                                                              \
+        __asm__("xorps %0, %0\n\tcvtsi2sdq %1, %0" : "=&x"(d_) : "r"(i##b));    \
+        f##a = d_;                                                              \
         NEXT;                                                                   \
     }
 #define CVT_A(a, ...) I_B(CVT_B, a)
-F_A(CVT_A, x)
+F_W(CVT_A, x)
 #define TOINT_B(b, a)                                                           \
     STENCIL(cvtfi_##a##_##b) {                                                  \
         if (!FITS_INT(f##b)) EXIT;                                              \
@@ -427,7 +473,7 @@ STENCIL(loadflag) {
         NEXT;                                                                   \
     }
 #define IDXF_A(a, ...) I_B(IDXF_B, a)
-F_A(IDXF_A, x)
+F_W(IDXF_A, x)
 #define IDXFK(a, ...)                                                           \
     STENCIL(idxfk_##a) {                                                        \
         const uint8_t* list = objectIn(base[ww_slot], kTypeList);             \
@@ -437,7 +483,7 @@ F_A(IDXF_A, x)
         f##a = word<double>(word<const uint8_t*>(pack + kPackBlock) + ww_ki * 8); \
         NEXT;                                                                   \
     }
-F_A(IDXFK, x)
+F_W(IDXFK, x)
 
 // ia = item ic of a whole number's list: a packed list of ints, none null, or bytes; the item in
 // range. Which it was the region tells by the object, where it writes the item to its slot
@@ -519,7 +565,7 @@ INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
     STENCIL(setf_##v##_##c) {                                                   \
         uint8_t* at = listToChange(base[ww_slot], i##c, kStoreFloats, ctx);   \
         if (at == nullptr) EXIT;                                                \
-        __builtin_memcpy(at, &f##v, 8);                                              \
+        { const double d_ = f##v; __builtin_memcpy(at, &d_, 8); }                                              \
         NEXT;                                                                   \
     }
 #define SETF_A(v, ...) I_B(SETF_B, v)
@@ -589,7 +635,7 @@ I_A(IDXP_A, x)
         NEXT;                                                                   \
     }
 #define IDXPF_A(a, ...) I_B(IDXPF_B, a)
-F_A(IDXPF_A, x)
+F_W(IDXPF_A, x)
 
 // Slot ww_slot2 = a Ref to item ic of the list of a value type's items in slot ww_slot, none
 // null, the item in range: the item where it is, as GetIndexRef gives it. Anything else the VM's.
@@ -799,7 +845,7 @@ I_A(VALP, x)
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
     }
-F_A(VALPF, x)
+F_W(VALPF, x)
 
 // ---- Slots, and going on ----
 
@@ -829,11 +875,11 @@ I_A(ILOAD, x)
     STENCIL(loadf_##a) { f##a = base[ww_slot].d; NEXT; }                      \
     STENCIL(storef_##a) {                                                       \
         uint64_t bits;                                                          \
-        __builtin_memcpy(&bits, &f##a, 8);                                           \
+        { const double d_ = f##a; __builtin_memcpy(&bits, &d_, 8); }                                           \
         storeSlot(base, ww_slot, kKindFloat, bits);                           \
         NEXT;                                                                   \
     }
-F_A(FLOAD, x)
+F_W(FLOAD, x)
 STENCIL(storeb) {
     storeSlot(base, ww_slot, kKindBool, i9 != 0);
     NEXT;
@@ -922,7 +968,7 @@ STENCIL(chklist) {
         else EXIT;                                                              \
         NEXT;                                                                   \
     }
-F_A(NUMF, x)
+F_W(NUMF, x)
 // A slot checked to hold a byte (what the region takes a slot entered as a byte to hold).
 STENCIL(chkbyk) {
     if (base[ww_slot].kind != kKindByte) EXIT;
@@ -986,16 +1032,16 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
         uint64_t seen, bits;                                                    \
         const uint8_t* at = fieldAt(base[ww_slot], ctx, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindFloat, bits)) EXIT;    \
-        __builtin_memcpy(&f##a, &bits, 8);                                           \
+        { double d_; __builtin_memcpy(&d_, &bits, 8); f##a = d_; }                                           \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setpf_##a) {                                                        \
         uint64_t bits;                                                          \
-        __builtin_memcpy(&bits, &f##a, 8);                                           \
+        { const double d_ = f##a; __builtin_memcpy(&bits, &d_, 8); }                                           \
         if (!setNumberField(base[ww_slot], ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
         NEXT;                                                                   \
     }
-F_A(GETPF, x)
+F_W(GETPF, x)
 #define GETPI(a, ...)                                                           \
     STENCIL(getpi_##a) {                                                        \
         uint64_t seen, bits;                                                    \
@@ -1098,7 +1144,7 @@ INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, const Ctx* ct
         __builtin_memcpy(it + kIterIndex, &next, 8);                                 \
         NEXT;                                                                   \
     }
-F_A(ITERF, x)
+F_W(ITERF, x)
 #define ITERI(a, ...)                                                           \
     STENCIL(iteri_##a) {                                                        \
         uint8_t* it;                                                            \
@@ -1226,7 +1272,7 @@ STENCIL(lookw) {
         NEXT;                                                                   \
     }
 #define HIDXF_A(a, ...) I_B(HIDXF_B, a)
-F_A(HIDXF_A, x)
+F_W(HIDXF_A, x)
 #define HIDXFK(a, ...)                                                          \
     STENCIL(hidxfk_##a) {                                                       \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
@@ -1234,7 +1280,7 @@ F_A(HIDXF_A, x)
         f##a = reinterpret_cast<const double*>(h[0])[ww_ki];                  \
         NEXT;                                                                   \
     }
-F_A(HIDXFK, x)
+F_W(HIDXFK, x)
 #define HIDXW_B(c, a)                                                           \
     STENCIL(hidxw_##a##_##c) {                                                  \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
@@ -1411,7 +1457,7 @@ I_A(HGETPI, x)
         f##a = h.d;                                                             \
         NEXT;                                                                   \
     }
-F_A(HGETPF, x)
+F_W(HGETPF, x)
 STENCIL(hgetpv) {
     const Slot& h = heldSlot(ctx, ww_slot);
     if (h.kind == kKindUndefined) EXIT;
@@ -1475,7 +1521,7 @@ I_A(HIDXP_A, x)
         NEXT;                                                                   \
     }
 #define HIDXPF_A(a, ...) I_B(HIDXPF_B, a)
-F_A(HIDXPF_A, x)
+F_W(HIDXPF_A, x)
 // Slot ww_slot2 = a Ref to item ic of a list of items looked at once (k in ww_slot).
 #define HIREF(c, ...)                                                           \
     STENCIL(hiref_##c) {                                                        \
@@ -1556,7 +1602,7 @@ I_A(HVALP, x)
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
     }
-F_A(HVALPF, x)
+F_W(HVALPF, x)
 
 // ---- Whole loops made ahead (loop templates) ----
 
@@ -2188,13 +2234,13 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             if (grey && alwaysByte) {
                 // Its own loop, nothing to decide in it, which Clang does several at a time.
                 const int32_t w0 = weight[0], w1 = nr > 1 ? weight[1] : 0, w2 = nr > 2 ? weight[2] : 0;
-                const uint64_t f0 = from[0], f1 = nr > 1 ? from[1] : 0, f2 = nr > 2 ? from[2] : 0;
+                const uint64_t r0 = from[0], r1 = nr > 1 ? from[1] : 0, r2 = nr > 2 ? from[2] : 0;
                 const bool keepFourth = fourth == 5;
                 for (int64_t j = 0; j < left; j++) {
                     const uint8_t* p = x + j * 4;
                     uint8_t* d = o + j * 4;
                     const uint8_t keep = keepFourth ? p[3] : fixedFourth;
-                    const uint8_t v = static_cast<uint8_t>(mixEnd(w0 * p[f0] + w1 * p[f1] + w2 * p[f2] + c));
+                    const uint8_t v = static_cast<uint8_t>(mixEnd(w0 * p[r0] + w1 * p[r1] + w2 * p[r2] + c));
                     d[0] = v;
                     d[1] = v;
                     d[2] = v;
@@ -2523,14 +2569,14 @@ STENCIL(ctxslot) {
 I_A(CTXI, x)
 #define CTXF(a, ...)                                                            \
     STENCIL(ctxsf_##a) {                                                        \
-        __builtin_memcpy(&ctx->t[ww_slot], &f##a, 8);                              \
+        { const double d_ = f##a; __builtin_memcpy(&ctx->t[ww_slot], &d_, 8); }                              \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(ctxlf_##a) {                                                        \
-        __builtin_memcpy(&f##a, &ctx->t[ww_slot], 8);                              \
+        { double d_; __builtin_memcpy(&d_, &ctx->t[ww_slot], 8); f##a = d_; }                              \
         NEXT;                                                                   \
     }
-F_A(CTXF, x)
+F_W(CTXF, x)
 // A value kept in cell ww_slot of the region's own (regions.cpp, spillOne): stored, and loaded
 // again where it is wanted.
 #define HOMEI(a, ...)                                                           \
@@ -2545,11 +2591,11 @@ F_A(CTXF, x)
 I_A(HOMEI, x)
 #define HOMEF(a, ...)                                                           \
     STENCIL(homesf_##a) {                                                       \
-        __builtin_memcpy(&ctx->homes[ww_slot], &f##a, 8);                          \
+        { const double d_ = f##a; __builtin_memcpy(&ctx->homes[ww_slot], &d_, 8); }                          \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(homelf_##a) {                                                       \
-        __builtin_memcpy(&f##a, &ctx->homes[ww_slot], 8);                          \
+        { double d_; __builtin_memcpy(&d_, &ctx->homes[ww_slot], 8); f##a = d_; }                          \
         NEXT;                                                                   \
     }
-F_A(HOMEF, x)
+F_W(HOMEF, x)

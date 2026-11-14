@@ -109,11 +109,13 @@ struct RegionContext {
 #else
 #define WW_REGION_CALL
 #endif
+using Lanes = double __attribute__((vector_size(16)));  // two float registers (stencils.cpp)
 using RegionFn = int64_t(WW_REGION_CALL *)(void* slots, RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
-                                                          int64_t, int64_t, int64_t, int64_t, int64_t, double, double, double, double, double,
-                                                          double, double, double);
+                                                          int64_t, int64_t, int64_t, int64_t, int64_t, Lanes, Lanes, Lanes, Lanes, Lanes,
+                                                          Lanes, Lanes, Lanes);
 inline int64_t runRegion(void* code, void* slots, RegionContext* context) {
-    return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    const Lanes z{0, 0};
+    return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, z, z, z, z, z, z);
 }
 
 // Whether regions are made (ww --interpret, or WW_NATIVE=0, says not).

@@ -1,8 +1,10 @@
-// A loop with more floats wanted at once than native code has registers (eight), some of them
-// values no slot of their own can keep (Math's answers, an expression's parts): since 2026-11-13
-// ten of Math.sqrt's answers at once: they are kept in cells of the region's own, loaded where read (before, such a loop had no
-// region and ran in the VM). The same answers as the VM's; each loop run three times (its region
-// is made the second time it starts).
+// Loops with many floats wanted at once, some of them values no slot of their own can keep
+// (Math's answers, an expression's parts). Ten of Math.sqrt's answers: since 2026-11-14 in the
+// high halves of the processor's registers too (sixteen float registers, two to each), where
+// before they were more than the eight registers and kept in cells of the region's own (since
+// 2026-11-13; before that such a loop had no region and ran in the VM). Twenty: still more than
+// the registers, some kept in cells, loaded where read. The same answers as the VM's; each loop
+// run three times (its region is made the second time it starts).
 fun spread(n : int, a : float) : float {
   var total = 0.0
   for (i in 0 ..< n) {
@@ -27,6 +29,35 @@ fun thrice(block : () -> float) : float {
   return block()
 }
 print(thrice { spread(100000, 1.7) })   // expect: 238446698371428.97
+fun spread20(n : int, a : float) : float {
+  var total = 0.0
+  for (i in 0 ..< n) {
+    val x = i * 0.001 + a
+    val s0 = Math.sqrt(x)
+    val s1 = Math.sqrt(x + 1.0)
+    val s2 = Math.sqrt(x + 2.0)
+    val s3 = Math.sqrt(x + 3.0)
+    val s4 = Math.sqrt(x + 4.0)
+    val s5 = Math.sqrt(x + 5.0)
+    val s6 = Math.sqrt(x + 6.0)
+    val s7 = Math.sqrt(x + 7.0)
+    val s8 = Math.sqrt(x + 8.0)
+    val s9 = Math.sqrt(x + 9.0)
+    val s10 = Math.sqrt(x + 10.0)
+    val s11 = Math.sqrt(x + 11.0)
+    val s12 = Math.sqrt(x + 12.0)
+    val s13 = Math.sqrt(x + 13.0)
+    val s14 = Math.sqrt(x + 14.0)
+    val s15 = Math.sqrt(x + 15.0)
+    val s16 = Math.sqrt(x + 16.0)
+    val s17 = Math.sqrt(x + 17.0)
+    val s18 = Math.sqrt(x + 18.0)
+    val s19 = Math.sqrt(x + 19.0)
+    total += s19 * s0 + s18 * s1 + s17 * s2 + s16 * s3 + s15 * s4 + s14 * s5 + s13 * s6 + s12 * s7 + s11 * s8 + s10 * s9 + s0 * s19 * s1 * s18 * s2 * s17 * s3 * s16 * s4 * s15 * s5 * s14 * s6 * s13 * s7 * s12 * s8 * s11 * s9 * s10 / 1e12
+  }
+  return total
+}
+print(thrice { spread20(100000, 1.7) })   // expect: 2874696021416.5864
 // A transformed picture, its pixels as the C++ gave them (it reads a pixel's four neighbours with
 // two weights each way: more floats than registers too).
 fun lcg(s : int) : int => (s * 1103515245 + 12345) & 0x7fffffff
