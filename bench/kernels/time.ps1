@@ -1,9 +1,9 @@
 # Every kernel, best of $Runs, in C++ (kernels.exe, from build.bat) and in WinterWolf on each build
 # given, all kept on the fast cores (bench\fastcores.ps1): a line per kernel, its time on each,
 # for docs/M10-speed.html.
-#   powershell -ExecutionPolicy Bypass -File bench\kernels\time.ps1 -WinterWolf build\clang\ww.exe[,other\ww.exe] [-Runs 3] [-Only blur,flood]
-param([string[]]$WinterWolf = @('build\clang\ww.exe'), [int]$Runs = 3, [string]$Only = '')
-$WinterWolf = $WinterWolf | ForEach-Object { $_ -split ',' }   # one string, from -File
+#   powershell -ExecutionPolicy Bypass -File bench\kernels\time.ps1 -Ww build\clang\ww.exe[,other\ww.exe] [-Runs 3] [-Only blur,flood]
+param([string[]]$Ww = @('build\clang\ww.exe'), [int]$Runs = 3, [string]$Only = '')
+$Ww = $Ww | ForEach-Object { $_ -split ',' }   # one string, from -File
 $here = $PSScriptRoot
 $repo = Split-Path (Split-Path $here)
 . (Join-Path $repo 'bench\fastcores.ps1')
@@ -11,7 +11,7 @@ $mask = Get-FastCoreMask
 $kernels = @('lineEnds', 'idct', 'huffman', 'gradient', 'radial', 'blur', 'gaussian', 'shrink', 'flood', 'lineIndex', 'lineWorker', 'base64Encode', 'base64Decode', 'xml')
 if ($Only) { $kernels = $kernels | Where-Object { ($Only -split ',') -contains $_ } }
 $programs = @(@{ name = 'C++'; exe = (Join-Path $here 'kernels.exe'); args = @() })
-foreach ($j in $WinterWolf) {
+foreach ($j in $Ww) {
     $exe = if ([IO.Path]::IsPathRooted($j)) { $j } else { Join-Path $repo $j }
     $programs += @{ name = $j; exe = $exe; args = @((Join-Path $here 'kernels.ww')) }
 }

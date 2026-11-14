@@ -10,7 +10,7 @@
 # the core. There is no way to run them anywhere else; a processor whose kinds of core cannot be
 # read stops the run.
 
-param([string]$WinterWolf = (Join-Path $PSScriptRoot '..\build\ww.exe'), [int]$Runs = 5, [switch]$Save)
+param([string]$Ww = (Join-Path $PSScriptRoot '..\build\ww.exe'), [int]$Runs = 5, [switch]$Save)
 
 . (Join-Path $PSScriptRoot 'fastcores.ps1')
 $mask = Get-FastCoreMask
@@ -29,7 +29,7 @@ foreach ($bench in Get-ChildItem (Join-Path $PSScriptRoot '*.ww') | Sort-Object 
     $best = $null
     $check = $null
     for ($r = 0; $r -lt $Runs; $r++) {
-        $out = (Invoke-Pinned $WinterWolf @($bench.FullName) $mask | Select-Object -Last 1) -split ' '
+        $out = (Invoke-Pinned $Ww @($bench.FullName) $mask | Select-Object -Last 1) -split ' '
         $seconds = [double]$out[-1]
         $check = $out[1..($out.Count - 2)] -join ' '
         if ($null -eq $best -or $seconds -lt $best) { $best = $seconds }
