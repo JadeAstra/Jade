@@ -44,112 +44,6 @@ Value bytesValue(VM& vm, std::vector<uint8_t>&& data) {
 
 constexpr uint8_t kSeeThrough = 128;  // a pixel of less alpha is left see-through
 
-// ---- The colours that stand best: an octree ----
-
-// Up to `count` colours for the pixels that are not see-through: the colours themselves where
-// there are no more than that, or else an octree's, over the pixels' colours to 5 bits a channel,
-// the branches with fewest pixels joined until no more are left than `count`.
-std::vector<uint8_t> paletteOf(const std::vector<uint8_t>& px, size_t count) {
-    std::vector<uint8_t> palette;
-    // Few enough colours: those, in the order first met.
-    {
-        std::unordered_set<uint32_t> seen;
-        uint32_t last = 0xFFFFFFFFu;
-        bool few = true;
-        for (size_t i = 0; i + 3 < px.size(); i += 4) {
-            if (px[i + 3] < kSeeThrough) continue;
-            const uint32_t c = (static_cast<uint32_t>(px[i]) << 16) | (static_cast<uint32_t>(px[i + 1]) << 8) | px[i + 2];
-            if (c == last) continue;
-            last = c;
-            if (seen.insert(c).second) {
-                if (seen.size() > count) {
-                    few = false;
-                    break;
-                }
-                palette.insert(palette.end(), {px[i], px[i + 1], px[i + 2], 255});
-            }
-        }
-        if (few) return palette;
-        palette.clear();
-    }
-    // How many pixels have each colour, to 5 bits a channel, with their exact sums.
-    struct Bin {
-        uint64_t r = 0, g = 0, b = 0, n = 0;
-    };
-    std::vector<Bin> bins(32768);
-    for (size_t i = 0; i + 3 < px.size(); i += 4) {
-        if (px[i + 3] < kSeeThrough) continue;
-        Bin& bin = bins[(static_cast<size_t>(px[i] >> 3) << 10) | (static_cast<size_t>(px[i + 1] >> 3) << 5) | (px[i + 2] >> 3)];
-        bin.r += px[i];
-        bin.g += px[i + 1];
-        bin.b += px[i + 2];
-        bin.n++;
-    }
-    struct Node {
-        uint64_t r = 0, g = 0, b = 0, n = 0;
-        int32_t children[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
-        int level = 0;
-        bool leaf = false;
-        bool joined = false;
-    };
-    std::vector<Node> nodes(1);
-    size_t leaves = 0;
-    for (size_t key = 0; key < bins.size(); key++) {
-        const Bin& bin = bins[key];
-        if (bin.n == 0) continue;
-        const int r = static_cast<int>(key >> 10), g = static_cast<int>((key >> 5) & 31), b = static_cast<int>(key & 31);
-        size_t at = 0;
-        for (int level = 0; level < 5; level++) {
-            nodes[at].n += bin.n;
-            const int bit = 4 - level;
-            const int child = (((r >> bit) & 1) << 2) | (((g >> bit) & 1) << 1) | ((b >> bit) & 1);
-            if (nodes[at].children[child] < 0) {
-                nodes[at].children[child] = static_cast<int32_t>(nodes.size());
-                Node made;
-                made.level = level + 1;
-                nodes.push_back(made);
-            }
-            at = static_cast<size_t>(nodes[at].children[child]);
-        }
-        Node& leaf = nodes[at];
-        leaf.r += bin.r;
-        leaf.g += bin.g;
-        leaf.b += bin.b;
-        leaf.n += bin.n;
-        leaf.leaf = true;
-        leaves++;
-    }
-    // Join the branch of fewest pixels at the deepest level that has one, until few enough.
-    std::array<std::vector<size_t>, 5> branches;
-    for (size_t i = 0; i < nodes.size(); i++)
-        if (!nodes[i].leaf && nodes[i].level < 5) branches[static_cast<size_t>(nodes[i].level)].push_back(i);
-    for (int level = 4; level >= 0 && leaves > count; level--) {
-        std::vector<size_t>& here = branches[static_cast<size_t>(level)];
-        std::sort(here.begin(), here.end(), [&](size_t a, size_t b) { return nodes[a].n < nodes[b].n; });
-        for (size_t k = 0; k < here.size() && leaves > count; k++) {
-            Node& node = nodes[here[k]];
-            int children = 0;
-            for (int32_t child : node.children) {
-                if (child < 0) continue;
-                const Node& c = nodes[static_cast<size_t>(child)];
-                node.r += c.r;
-                node.g += c.g;
-                node.b += c.b;
-                nodes[static_cast<size_t>(child)].joined = true;
-                children++;
-            }
-            node.leaf = true;
-            leaves -= static_cast<size_t>(children) - 1;
-        }
-    }
-    for (const Node& node : nodes) {
-        if (!node.leaf || node.joined || node.n == 0) continue;
-        palette.insert(palette.end(), {static_cast<uint8_t>((node.r + node.n / 2) / node.n), static_cast<uint8_t>((node.g + node.n / 2) / node.n),
-                                       static_cast<uint8_t>((node.b + node.n / 2) / node.n), 255});
-    }
-    return palette;
-}
-
 // ---- The picture put into a palette ----
 
 // The nearest of a palette's colours to any colour: a colour of the palette itself is its own
@@ -686,13 +580,6 @@ void registerPicture(VM& vm) {
     auto def = [&](const char* name, int minArgs, int maxArgs, NativeFn fn) {
         holder->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("Picture.") + name, minArgs, maxArgs, fn)));
     };
-    // palette(pixels, count): the colours, four bytes each, alpha 255.
-    def("palette", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        const std::vector<uint8_t>& px = pixelsOf(vm, args[0]);
-        const int64_t count = vm.toInt(args[1], "count");
-        if (count < 1 || count > 256) throw vm.runtimeError(Thrown::IllegalArgumentException, "a palette has 1 to 256 colours, not " + std::to_string(count));
-        return bytesValue(vm, paletteOf(px, static_cast<size_t>(count)));
-    });
     // indices(pixels, width, height, palette, method): each pixel's index in the palette (four
     // bytes a colour), the palette's size for a see-through one.
     def("indices", 5, 5, [](VM& vm, int, Value* args) -> Value {

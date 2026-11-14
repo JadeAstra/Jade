@@ -19,9 +19,132 @@ enum Dither { none, floydSteinberg, atkinson }
 //   val colors = image.pixels.palette(16)
 //   val poster = image.pixels.dither(colors, Dither.none)
 fun Grid<Color>.palette(count : int = 256) : List<Color> {
-  val made : Bytes = __picture.palette(cells, count)
+  if (count < 1 or count > 256) { throw IllegalArgumentException("a palette has 1 to 256 colours, not $count") }
+  return __paletteOf(cells, count)
+}
+
+// The palette in WinterWolf (2026-11-13, was C++'s): the pixels' own colours where there are no more
+// than `count`, in the order first met; or else an octree over the colours to 5 bits a channel
+// (their exact sums kept), the branches of fewest pixels at the deepest level that has any joined
+// until no more leaves are left than `count`, each leaf the average of its pixels, rounded.
+fun __paletteOf(px : List<Color>, count : int) : List<Color> {
   val colors : open List<Color> = []
-  for (i in 0 ..< made.size / 4) { colors.add(Color(made[i * 4], made[i * 4 + 1], made[i * 4 + 2])) }
+  // Few enough colours: those, in the order first met.
+  val seen = Set<int>()
+  var last = -1
+  var few = true
+  var i = 0
+  while (i < px.size) {
+    // On past see-through pixels and the colour just met (no call: native code's).
+    var key = -1
+    while (i < px.size) {
+      val c = px[i]
+      i += 1
+      if (c.alpha.toInt() >= 128) {
+        val k = c.red.toInt() << 16 | c.green.toInt() << 8 | c.blue.toInt()
+        if (k != last) {
+          key = k
+          break
+        }
+      }
+    }
+    if (key < 0) { break }
+    last = key
+    if (seen.add(key)) {
+      if (seen.size > count) {
+        few = false
+        break
+      }
+      colors.add(Color((key >> 16).toByte(), ((key >> 8) & 255).toByte(), (key & 255).toByte()))
+    }
+  }
+  if (few) { return colors }
+  colors.clear()
+  // How many pixels have each colour, to 5 bits a channel, with their exact sums.
+  val binsGrid = Grid<int>(32768, 4)
+  val bins = __gridInto(binsGrid, 32768, 4)  // red's sums, green's, blue's, then the counts
+  for (i in 0 ..< px.size) {
+    val c = px[i]
+    if (c.alpha.toInt() < 128) { continue }
+    val r = c.red.toInt()
+    val g = c.green.toInt()
+    val b = c.blue.toInt()
+    val key = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3)
+    bins[key] += r
+    bins[32768 + key] += g
+    bins[65536 + key] += b
+    bins[98304 + key] += 1
+  }
+  // The octree (all: a node's red sum, green's, blue's, count, level, leaf, joined, each `most`
+  // apart), a node's parts in lists by its number: its sums and count, its eight children
+  // (-1 for none), its level, and whether it is a leaf and whether joined into its parent. As
+  // many as five levels can have (1 + 8 + ... + 32768), made at once: nothing added as it grows.
+  val most = 37449
+  val parts = Grid<int>(most, 7)
+  val all = __gridInto(parts, most, 7)
+  val kids = Grid<int>(most * 8, 1)
+  val children = __gridInto(kids, most * 8, 1)
+  for (k in 0 ..< most * 8) { children[k] = -1 }
+  var nodes = 1
+  var leaves = 0
+  for (key in 0 ..< 32768) {
+    val n = bins[98304 + key]
+    if (n == 0) { continue }
+    val r = key >> 10
+    val g = (key >> 5) & 31
+    val b = key & 31
+    var at = 0
+    for (depth in 0 ..< 5) {
+      all[3 * most + at] += n
+      val bit = 4 - depth
+      val child = ((r >> bit) & 1) << 2 | ((g >> bit) & 1) << 1 | ((b >> bit) & 1)
+      if (children[at * 8 + child] < 0) {
+        children[at * 8 + child] = nodes
+        all[4 * most + nodes] = depth + 1
+        nodes += 1
+      }
+      at = children[at * 8 + child]
+    }
+    all[at] += bins[key]
+    all[most + at] += bins[32768 + key]
+    all[2 * most + at] += bins[65536 + key]
+    all[3 * most + at] += n
+    all[5 * most + at] = 1
+    leaves += 1
+  }
+  // Join the branches of fewest pixels at the deepest level that has any, until few enough: a
+  // level's branches in order of their counts (and of their numbers where counts are the same).
+  var depth = 4
+  while (depth >= 0 and leaves > count) {
+    val here : open List<int> = []
+    for (i in 0 ..< nodes) {
+      if (all[5 * most + i] == 0 and all[4 * most + i] == depth) { here.add(all[3 * most + i] << 24 | i) }
+    }
+    here.sort()
+    var k = 0
+    while (k < here.size and leaves > count) {
+      val node = here[k] & 0xFFFFFF
+      var joinedHere = 0
+      for (c in 0 ..< 8) {
+        val child = children[node * 8 + c]
+        if (child < 0) { continue }
+        all[node] += all[child]
+        all[most + node] += all[most + child]
+        all[2 * most + node] += all[2 * most + child]
+        all[6 * most + child] = 1
+        joinedHere += 1
+      }
+      all[5 * most + node] = 1
+      leaves -= joinedHere - 1
+      k += 1
+    }
+    depth -= 1
+  }
+  for (i in 0 ..< nodes) {
+    val n = all[3 * most + i]
+    if (all[5 * most + i] == 0 or all[6 * most + i] == 1 or n == 0) { continue }
+    colors.add(Color(((all[i] + n / 2) / n).toByte(), ((all[most + i] + n / 2) / n).toByte(), ((all[2 * most + i] + n / 2) / n).toByte()))
+  }
   return colors
 }
 
@@ -82,7 +205,6 @@ fun Bytes.scaledPlane(width : int, height : int, toWidth : int, toHeight : int, 
     __picture.scalePlane(this, width, height, toWidth, toHeight, stride)
 
 external object __picture {
-  fun palette(pixels : any, count : int) : Bytes
   fun indices(pixels : any, width : int, height : int, palette : Bytes, method : int) : Bytes
   fun inverse8x8(coefficients : Bytes, blocksWide : int, blocksHigh : int, plane : Bytes, stride : int, scale : List<int>?) : unit
   fun forward8x8(plane : Bytes, stride : int, blocksWide : int, blocksHigh : int, divisors : List<int>?) : Bytes
