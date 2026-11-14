@@ -2625,6 +2625,7 @@ struct Region {
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known) results[i] = transfer(static_cast<int>(i), in[i]);
         madeWhereMoved();
+        bytesAtOnce();
         // What each way out writes back.
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known)
@@ -2697,6 +2698,150 @@ struct Region {
                 resumed.count(static_cast<int>(k)) || !results[k].ops.empty() || in[k].top - 1 != last.slot)
                 continue;
             wrote.ops.pop_back();
+        }
+    }
+
+    // ---- A value's bytes read as one int ----
+
+    // `c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24`
+    // (2026-11-14, an Image's hashCode): byte fields of one value at offsets one after another,
+    // each shifted 8 bits further, put together with |. Where steps do that one right after another
+    // in a straight run of instructions, each run of bytes is read at once (valph, valpw, valpi: 2,
+    // 4 or 8 bytes), shifted where it goes and |'d in: three steps or fewer for each run, where
+    // each byte took three. The register they are put together in starts with the first byte (a
+    // shift of it allowed); each further byte is read into another register, shifted, and |'d in,
+    // and that other register holds nothing wanted after. A read that fails leaves at the first
+    // read's way out, where the VM reads them all again (reading a field changes nothing).
+    void bytesAtOnce() {
+        std::vector<int> into(ins.size(), 0);
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known)
+                for (const Edge& e : results[i].edges)
+                    if (e.to >= 0 && static_cast<size_t>(e.to) < ins.size()) into[static_cast<size_t>(e.to)]++;
+        auto plainSteps = [&](size_t k) {
+            for (const LOp& l : results[k].ops)
+                if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+            return true;
+        };
+        for (size_t j = 0; j < ins.size();) {
+            if (!in[j].known || results[j].island || !plainSteps(j)) {
+                j++;
+                continue;
+            }
+            // A straight run: each instruction falling into the next, come to from there alone.
+            size_t e = j;
+            while (e + 1 < ins.size() && results[e].fallsThrough && results[e].fallExit < 0 && in[e + 1].known && !results[e + 1].island &&
+                   into[e + 1] == 1 && !entries.count(static_cast<int>(e + 1)) && !resumed.count(static_cast<int>(e + 1)) && plainSteps(e + 1))
+                e++;
+            std::vector<std::pair<size_t, size_t>> flat;  // (instruction, step)
+            for (size_t k = j; k <= e; k++)
+                for (size_t o = 0; o < results[k].ops.size(); o++) flat.emplace_back(k, o);
+            fuseBytes(flat);
+            j = e + 1;
+        }
+    }
+    struct ByteRun {
+        int64_t value, cls, id, offset, count, shift;
+    };
+    void fuseBytes(const std::vector<std::pair<size_t, size_t>>& flat) {
+        auto at = [&](size_t p) -> LOp& { return results[flat[p].first].ops[flat[p].second]; };
+        auto byteRead = [&](const LOp& l) { return l.stem == "valpb" && l.named.size() == 1 && l.named[0].cls == CI; };
+        std::set<std::pair<size_t, size_t>> gone;
+        std::map<std::pair<size_t, size_t>, std::vector<LOp>> instead;
+        for (size_t p = 0; p < flat.size();) {
+            if (!byteRead(at(p))) {
+                p++;
+                continue;
+            }
+            const LOp first = at(p);
+            const Reg into = first.named[0];
+            auto runOf = [&](const LOp& l) {
+                const uint64_t what = static_cast<uint64_t>(l.slot2);
+                return ByteRun{l.slot, l.ki, static_cast<int64_t>(what >> 32), static_cast<int64_t>(what & 0xFFFFFFFF), 1, 0};
+            };
+            std::vector<ByteRun> runs{runOf(first)};
+            size_t q = p + 1;
+            if (q < flat.size() && at(q).stem == "shlik" && at(q).named.size() == 2 && at(q).named[0] == into && at(q).named[1] == into && at(q).ki > 0 &&
+                at(q).ki < 64)
+                runs[0].shift = at(q).ki, q++;
+            Reg other{0, CI};
+            bool otherSet = false;
+            size_t pieces = 0;
+            for (;;) {
+                // A piece: a byte read into the other register, maybe shifted, then |'d in.
+                size_t u = q;
+                if (u >= flat.size() || !byteRead(at(u)) || at(u).named[0] == into || (otherSet && !(at(u).named[0] == other))) break;
+                const Reg t = at(u).named[0];
+                ByteRun piece = runOf(at(u));
+                u++;
+                if (u < flat.size() && at(u).stem == "shlik" && at(u).named.size() == 2 && at(u).named[0] == t && at(u).named[1] == t && at(u).ki > 0 &&
+                    at(u).ki < 64)
+                    piece.shift = at(u).ki, u++;
+                if (u >= flat.size() || at(u).stem != "ori" || at(u).named.size() != 2 || !(at(u).named[0] == into) || !(at(u).named[1] == t)) break;
+                u++;
+                other = t, otherSet = true;
+                ByteRun& last = runs.back();
+                if (piece.value == last.value && piece.cls == last.cls && piece.id == last.id && piece.offset == last.offset + last.count &&
+                    piece.shift == last.shift + 8 * last.count && last.count < 8)
+                    last.count++;
+                else
+                    runs.push_back(piece);
+                pieces++;
+                q = u;
+            }
+            bool worth = false;
+            for (const ByteRun& run : runs) worth = worth || run.count > 1;
+            // The other register holds nothing wanted after: a slot of the stack above its top
+            // once the last instruction of these is done.
+            const size_t lastIns = flat[q - 1].first;
+            if (!worth || pieces == 0 || lastIns + 1 >= ins.size() || other.slot < in[lastIns + 1].top) {
+                p = q > p + 1 ? q : p + 1;
+                continue;
+            }
+            // Each run as reads of 8, 4, 2 or 1 bytes.
+            std::vector<LOp> made;
+            bool firstRead = true;
+            for (const ByteRun& run : runs) {
+                int64_t offset = run.offset, left = run.count, shift = run.shift;
+                while (left > 0) {
+                    const int64_t n = left >= 8 ? 8 : left >= 4 ? 4 : left >= 2 ? 2 : 1;
+                    const Reg reg = firstRead ? into : other;
+                    LOp read = first;
+                    read.stem = n == 8 ? "valpi" : n == 4 ? "valpw" : n == 2 ? "valph" : "valpb";
+                    read.named = {reg}, read.uses = {}, read.defs = {reg};
+                    read.slot = run.value, read.ki = run.cls;
+                    read.slot2 = static_cast<int64_t>(static_cast<uint64_t>(run.id) << 32 | static_cast<uint64_t>(offset));
+                    made.push_back(read);
+                    if (shift != 0) {
+                        LOp sh;
+                        sh.stem = "shlik", sh.named = {reg, reg}, sh.uses = {reg}, sh.defs = {reg}, sh.ki = shift;
+                        made.push_back(sh);
+                    }
+                    if (!firstRead) {
+                        LOp o;
+                        o.stem = "ori", o.named = {into, other}, o.uses = {into, other}, o.defs = {into};
+                        made.push_back(o);
+                    }
+                    firstRead = false;
+                    offset += n, left -= n, shift += 8 * n;
+                }
+            }
+            for (size_t k = p; k < q; k++) gone.insert(flat[k]);
+            instead[flat[p]] = made;
+            p = q;
+        }
+        if (gone.empty()) return;
+        // Each instruction's steps again: the reads where the first was, the rest gone.
+        std::set<size_t> touched;
+        for (const auto& g : gone) touched.insert(g.first);
+        for (size_t k : touched) {
+            std::vector<LOp> kept;
+            for (size_t o = 0; o < results[k].ops.size(); o++) {
+                const std::pair<size_t, size_t> here{k, o};
+                if (auto put = instead.find(here); put != instead.end()) kept.insert(kept.end(), put->second.begin(), put->second.end());
+                else if (!gone.count(here)) kept.push_back(results[k].ops[o]);
+            }
+            results[k].ops = std::move(kept);
         }
     }
 
@@ -3306,7 +3451,7 @@ struct Region {
             if (value != fw.values.end()) value->second.cls = l.ki;
         }
         if (s == "keepl" || s == "ownsm" || s == "notnull") return fw.refs.count(l.slot) != 0 || fw.values.count(l.slot) != 0 || fw.made.count(l.slot) != 0;
-        if (s == "hvalpb" || s == "hvalpi") {
+        if (s == "hvalpb" || s == "hvalpi" || s == "hvalph" || s == "hvalpw") {
             auto ref = fw.refs.find(l.slot);
             if (ref == fw.refs.end()) return false;
             if (ref->second.list == -2) ref->second.list = static_cast<int>(l.ki);  // the iterated list, looked at once as k
@@ -3315,17 +3460,19 @@ struct Region {
             Expr e{Expr::Field};
             e.list = ref->second.list;
             e.b = ref->second.index;
-            e.ki = static_cast<int64_t>(((what >> 16) & 0xFFFF) << 32 | (what & 0xFFFF) << 8 | (s == "hvalpb" ? 1u : 8u));
+            e.ki = static_cast<int64_t>(((what >> 16) & 0xFFFF) << 32 | (what & 0xFFFF) << 8 |
+                                        (s == "hvalpb" ? 1u : s == "hvalph" ? 2u : s == "hvalpw" ? 4u : 8u));
             return set(n[0], mk(e)), true;
         }
-        if (s == "valpb" || s == "valpi") {
+        if (s == "valpb" || s == "valpi" || s == "valph" || s == "valpw") {
             auto ref = fw.refs.find(l.slot);
             const uint64_t offset = static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF;
             if (ref == fw.refs.end() || ref->second.width <= 0 || ref->second.width > 0xFFFF || offset >= 0xFFFFFF) return false;
             Expr e{Expr::Field};
             e.list = ref->second.list;
             e.b = ref->second.index;
-            e.ki = static_cast<int64_t>(static_cast<uint64_t>(ref->second.width) << 32 | offset << 8 | (s == "valpb" ? 1u : 8u));
+            e.ki = static_cast<int64_t>(static_cast<uint64_t>(ref->second.width) << 32 | offset << 8 |
+                                        (s == "valpb" ? 1u : s == "valph" ? 2u : s == "valpw" ? 4u : 8u));
             return set(n[0], mk(e)), true;
         }
         if (s == "divik" && l.ki > 0) return set(n[0], bin('/', CI, valueOf(fw, n[1]), kint(l.ki))), true;
@@ -4753,6 +4900,11 @@ struct Region {
             barred.insert(Reg{slot, CI});
             barred.insert(Reg{slot, CF});
         }
+        // And a value written back as one kind at one place and another at another (2026-11-14: an
+        // int made a byte in place by toByte(), which checks it and writes nothing): kept in its
+        // slot, it would stay the first kind there, as each write leaves it, where a way out after
+        // the change wants the second.
+        std::map<Reg, std::string> writtenAs;
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             const Result& res = results[i];
@@ -4762,6 +4914,12 @@ struct Region {
                     used[d]++;
                     if (ins[i].op == Op::Numeric || storeOf(res.after, d).stem.empty()) barred.insert(d);
                 }
+                for (const auto* list : {&l.uses, &l.defs})
+                    for (const Reg& r : *list) {
+                        if (r.slot < 0) continue;
+                        const std::string as = storeOf(res.after, r).stem;
+                        if (auto [seen, added] = writtenAs.emplace(r, as); !added && seen->second != as) barred.insert(r);
+                    }
             }
         }
         // The steps before the region's first instruction are not rewritten: what they use stays.

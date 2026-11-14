@@ -1,0 +1,59 @@
+// Native code reading a value's byte fields put together into an int as one read (2026-11-14:
+// `c.red.toInt() | c.green.toInt() << 8 | ...`, an Image's hashCode): runs of 2, 4 and 8 bytes,
+// one of 3 (read as 2 and 1), bytes out of order or shifted otherwise (each read alone), two
+// values in one int, a run shifted as a whole. The same numbers as the VM's; each loop run three
+// times (its region is made the second time it starts). `eights` makes values of eight bytes, each
+// `(...).toByte()`: more ints than registers, one kept in its slot, written there as an int before
+// toByte() made it a byte (it reached Eight as an int until 2026-11-14).
+value Eight(val a : byte, val b : byte, val c : byte, val d : byte, val e : byte, val f : byte, val g : byte, val h : byte)
+fun eights(n : int) : List<Eight> {
+  val made : open List<Eight> = []
+  var s = 7
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    val x = s
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    val y = s
+    made.add(Eight((x % 256).toByte(), (x / 256 % 256).toByte(), (x / 65536 % 256).toByte(), (x / 16777216 % 128 + 128).toByte(),
+      (y % 256).toByte(), (y / 256 % 256).toByte(), (y / 65536 % 256).toByte(), (y / 16777216 % 128 + 128).toByte()))
+  }
+  return made
+}
+fun sums(xs : List<Eight>) : List<int> {
+  var two = 0
+  var three = 0
+  var four = 0
+  var eight = 0
+  var mixed = 0
+  var shifted = 0
+  var apart = 0
+  for (i in 0 ..< xs.size - 1) {
+    val p = xs[i]
+    val q = xs[i + 1]
+    two = two ^ (p.a.toInt() | p.b.toInt() << 8)
+    three = three &+ (p.c.toInt() | p.d.toInt() << 8 | p.e.toInt() << 16)
+    four = four ^ (p.e.toInt() | p.f.toInt() << 8 | p.g.toInt() << 16 | p.h.toInt() << 24)
+    eight = eight &+ (p.a.toInt() | p.b.toInt() << 8 | p.c.toInt() << 16 | p.d.toInt() << 24 | p.e.toInt() << 32 | p.f.toInt() << 40 |
+      p.g.toInt() << 48 | p.h.toInt() << 56)
+    mixed = mixed ^ (p.a.toInt() | p.b.toInt() << 8 | q.c.toInt() << 16 | q.d.toInt() << 24 | p.b.toInt() << 32)
+    shifted = shifted &+ (p.c.toInt() << 4 | p.d.toInt() << 12 | p.e.toInt() << 20)
+    apart = apart ^ (p.b.toInt() | p.a.toInt() << 8 | p.c.toInt() << 24 | p.d.toInt() << 16)
+  }
+  return [two, three, four, eight, mixed, shifted, apart]
+}
+// The other register still wanted after: each byte read alone.
+fun kept(xs : List<Eight>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) {
+    val p = xs[i]
+    var hi = p.b.toInt() << 8
+    val lo = p.a.toInt() | hi
+    t = t &+ lo &+ hi
+  }
+  return t
+}
+val xs = eights(300)
+for (k in 0 ..< 3) { print(sums(xs), kept(xs)) }
+// expect: [15302, 2577040934, 2739104167, 243199441609999870, 256288701382, 41232654944, 2461451835] 19833228
+// expect: [15302, 2577040934, 2739104167, 243199441609999870, 256288701382, 41232654944, 2461451835] 19833228
+// expect: [15302, 2577040934, 2739104167, 243199441609999870, 256288701382, 41232654944, 2461451835] 19833228

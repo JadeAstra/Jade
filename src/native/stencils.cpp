@@ -972,6 +972,18 @@ STENCIL(eqsm) {
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(valph_##a) {                                                        \
+        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<uint16_t>(at);                                              \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(valpw_##a) {                                                        \
+        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<uint32_t>(at);                                              \
+        NEXT;                                                                   \
     }
 I_A(VALP, x)
 #define VALPF(a, ...)                                                           \
@@ -1734,6 +1746,18 @@ INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
         const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hvalph_##a) {                                                       \
+        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<uint16_t>(at);                                              \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hvalpw_##a) {                                                       \
+        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        if (at == nullptr) EXIT;                                                \
+        i##a = word<uint32_t>(at);                                              \
         NEXT;                                                                   \
     }
 I_A(HVALP, x)
