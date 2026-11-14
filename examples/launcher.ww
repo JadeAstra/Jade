@@ -1,4 +1,4 @@
-// Topaz's widgets in one window: JadeUI's Launcher, carried over close to line for line.
+// Jade's widgets in one window: JadeUI's Launcher, carried over close to line for line.
 //
 //   ww examples/launcher.ww
 //   ww examples/launcher.ww 5                  (closes itself after 5 seconds)
@@ -9,7 +9,7 @@
 // changing a label, menus with accelerators and a tick, the file dialogs, every dialog and the
 // program acting while one is open (the Dialogs and While Open menus), charts, and the widgets'
 // tabs. The tabs of later milestones say which milestone brings them, each replaced when it comes.
-import Topaz.*
+import Jade.*
 import "dialog_showcase".*
 
 // Demo only: a source such as "bar 8,5,12" (or line, pie) shown as a chart. Stands in for a
@@ -225,7 +225,7 @@ val menuBar = MenuBar([
   Menu("File", [
     MenuItem("New", accelerator = "Ctrl+N") { editorModel.setText("") },
     MenuItem("Open…", accelerator = "Ctrl+O") {
-      Topaz.fileDialog.open("Open", textFilters) { path ->
+      Jade.fileDialog.open("Open", textFilters) { path ->
         if (path != null) {
           try {
             editorModel.setText(FilePath(path).readText())
@@ -237,7 +237,7 @@ val menuBar = MenuBar([
       }
     },
     MenuItem("Save As…", accelerator = "Ctrl+S") {
-      Topaz.fileDialog.save("Save As", "untitled.txt", textFilters) { path ->
+      Jade.fileDialog.save("Save As", "untitled.txt", textFilters) { path ->
         if (path != null) {
           try {
             FilePath(path).writeText(editorModel.text)
@@ -257,7 +257,7 @@ val menuBar = MenuBar([
 ])
 
 // JadeUI's opens 640 wide, narrower than its row of twenty tabs; this one opens as wide as the row.
-val window = Window(ui, title = "Topaz launcher", initialWidth = 1120, initialHeight = 520, menuBar = menuBar)
+val window = Window(ui, title = "Jade launcher", initialWidth = 1120, initialHeight = 520, menuBar = menuBar)
 window.show()
 
 // A number on the command line closes the window after that many seconds.

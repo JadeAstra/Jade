@@ -65,7 +65,7 @@ int startExecutable(int argc, char** argv, int (*command)(const std::vector<std:
 // The ww command, given the command line's arguments (command.cpp).
 int wwCommandMain(const std::vector<std::string>& args);
 
-// Whether the part of this executable with Topaz's window, drawing and the text engine is in
+// Whether the part of this executable with Jade's window, drawing and the text engine is in
 // its file: a built program that reaches neither has it left out (M6.5 part 5).
 bool windowCodePresent();
 

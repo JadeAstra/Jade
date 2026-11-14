@@ -134,10 +134,10 @@ class Suite(val options : Options) {
     val found : open List<Item> = []
     val t = options.tests
     // Left out under the GC stress setting, which collects at every safe point: gc.ww counts
-    // collections, and topaz_treemap_big.ww's 200,000 nodes, xml_big.ww's 20,000 elements
+    // collections, and jade_treemap_big.ww's 200,000 nodes, xml_big.ww's 20,000 elements
     // and million characters of entities, and testing/io_files.ww's 400,000-line file would
     // take hours.
-    val leftOut = options.setting == Setting.gcStress ? ["gc.ww", "topaz_treemap_big.ww", "xml_big.ww", "io_files.ww"] : []
+    val leftOut = options.setting == Setting.gcStress ? ["gc.ww", "jade_treemap_big.ww", "xml_big.ww", "io_files.ww"] : []
     for (f in wwFiles(t)) {
       if (f.name !in leftOut) { found.add(Item(Kind.file, f.name, f)) }
     }
@@ -147,7 +147,7 @@ class Suite(val options : Options) {
     }
     for (f in filesEnding(FilePath(t, "shell"), ".shell")) { found.add(Item(Kind.shell, "shell/${f.name}", f)) }
     for (s in cacheScenarios()) { found.add(Item(Kind.cache, "cache: ${s.name}", null)) }
-    // The standard library, Topaz and the examples pass the checker as they are (M6.5); the
+    // The standard library, Jade and the examples pass the checker as they are (M6.5); the
     // examples are not there when the tests are copied elsewhere, nor the standard library.
     if (FilePath(t, "basics.ww").exists()) { found.add(Item(Kind.whole, "basics.ww with the standard library", FilePath(t, "basics.ww"))) }
     for (f in wwFiles(FilePath(t, "../examples"))) { found.add(Item(Kind.whole, "examples/${f.name}", f)) }
@@ -563,7 +563,7 @@ class Suite(val options : Options) {
   // of ww starting; a run after a one-line change inside a function in under 100 ms for each
   // 20,000 lines, the size the budgets were set on (the user, 2026-11-09: the program grew 2.7
   // times, and what a change costs grows with it, every unchanged file put back). Timed on the
-  // tests, the examples, the standard library and Topaz (some 20,000 lines), each test and example
+  // tests, the examples, the standard library and Jade (some 20,000 lines), each test and example
   // in a folder of its own so that their names do not meet, imported by one main file, compiled
   // and not run (WW_TIMES=compile). Each is the best of seven, as ww reports it: from when the
   // system made the process to when the program is ready to run.
@@ -623,7 +623,7 @@ class Suite(val options : Options) {
     }
     var lines = 0
     for (p in parts) { lines += linesOf[p]!! }
-    for (d in [FilePath(t, "../src/std"), FilePath(t, "../lib/Topaz")]) {
+    for (d in [FilePath(t, "../src/std"), FilePath(t, "../lib/Jade")]) {
       for (f in wwFiles(d)) { lines += f.readLines().size }
     }
     val leftOut = dropped.isEmpty() ? "" : " (${dropped.size} left out that do not go with the rest: " +
@@ -684,7 +684,7 @@ class Suite(val options : Options) {
     val firstBudget = Math.max(500.0, 500.0 * lines.toFloat() / 20000.0)
     val changeBudget = Math.max(100.0, 100.0 * lines.toFloat() / 20000.0)
     fun ms(v : any) : string => "${Math.round((v as float) * 10.0) / 10.0} ms"
-    item.measured = "program: ${parts.size} tests and examples, the standard library and Topaz, $lines lines$leftOut\n" +
+    item.measured = "program: ${parts.size} tests and examples, the standard library and Jade, $lines lines$leftOut\n" +
                     "ww starting:           ${ms(start)}\n" +
                     "first run:               ${ms(first[0])}  (budget ${firstBudget.toInt()}, 500 per 20,000 lines)    ${first[2]}\n" +
                     "second run, unchanged:   ${ms(second[0])}, ${ms(second[1])} on top of ww starting (budget 20)    ${second[2]}\n" +

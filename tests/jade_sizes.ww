@@ -1,0 +1,70 @@
+// What a component keeps of its content's sizes: asked for once, and again only once something
+// says it may have changed (it or anything in it invalidated, the toolkit's look changed, text
+// measured for another screen). A component with a caret inside it never keeps its picture, and
+// its sizes were once asked for again each time, up to eight times a layout for each level of
+// grids: these count how often each content is asked.
+import Jade.*
+
+// A content of a width that can change, which counts how often it is asked for its sizes.
+class Measured(var width : int) : Content {
+  override var owner : Component? = null
+  var asked = 0
+  fun widen(by : int) {
+    width += by
+    owner?.invalidateLayout()
+  }
+  override fun sizes() : Sizes {
+    asked += 1
+    return Sizes(Size(width, 10), Size(width, 10), Size(width, 10))
+  }
+  override fun paint(canvas : Canvas) {}
+}
+
+// The same with a caret: what it is in never keeps a picture of itself.
+class Caret : Content, OverlayContent {
+  override var owner : Component? = null
+  var asked = 0
+  override fun sizes() : Sizes {
+    asked += 1
+    return Sizes(Size(5, 10), Size(5, 10), Size(5, 10))
+  }
+  override fun paint(canvas : Canvas) {}
+  override fun paintOverlay(canvas : Canvas) {}
+}
+
+val leaves : open List<Measured> = []
+fun leaf(width : int) : Component {
+  val m = Measured(width)
+  leaves.add(m)
+  return Component(m)
+}
+fun gridTree(depth : int) : GridPane {
+  val g = GridPane()
+  for (k in 0 ..< 4) {
+    g.add(depth == 0 ? leaf(10 + k) : Component(gridTree(depth - 1)), row = k / 2, col = k % 2)
+  }
+  return g
+}
+val top = gridTree(2)
+val caret = Caret()
+top.add(Component(caret), row = 2, col = 0)
+val root = Component(top)
+fun asked() : int => leaves.sumOf { it.asked }
+
+// Three layouts, nothing changed between them: each content asked once.
+root.layout(400, 300)
+root.layout(400, 300)
+root.layout(500, 300)
+print(leaves.size, asked(), caret.asked)   // expect: 64 64 1
+
+// One leaf made wider: it alone is asked again, and the layout has its new width.
+val wide = leaves[5]
+wide.widen(30)
+root.layout(400, 300)
+print(asked(), wide.asked, wide.owner!!.bounds.width)   // expect: 65 2 41
+
+// A change of look: everything is asked again, once.
+Jade.invalidateRenderCaches()
+root.layout(400, 300)
+root.layout(400, 300)
+print(asked(), caret.asked)   // expect: 129 2

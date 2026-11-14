@@ -3,7 +3,7 @@
 // or below the one that declares it (and, for `internal`, in another library). The words are the
 // program's own (tests/member_access.ww has what is left to it as it runs: code written in a
 // class of the family, where the object's own class decides).
-import Topaz.*
+import Jade.*
 
 // ---- private ----
 
@@ -167,7 +167,7 @@ class Shared {
 }
 val i1 = Shared().note
 
-// What Topaz keeps to itself is kept from the program.
+// What Jade keeps to itself is kept from the program.
 val component = label("text")
 component.adopt(label("child"))            // check: 'adopt' is internal in class Component: only code of the library it belongs to can use it
 component.parent = null                    // check: 'parent' cannot be assigned here: its setter is private in class Component, so only code written in that class can assign to it

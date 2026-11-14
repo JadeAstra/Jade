@@ -5,7 +5,7 @@
 // section. Each core moves its share of the balls, the balls themselves and not copies of
 // them, which is allowed because moving a ball changes that ball and nothing else.
 // (bounce_threads.ww and bounce_workers.ww do the same with threads and with workers.)
-import Topaz.*
+import Jade.*
 
 val startingBalls = 50000
 

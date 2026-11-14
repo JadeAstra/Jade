@@ -1,13 +1,13 @@
 // Animation: tens of thousands of balls bouncing around a window, moved and drawn by one loop.
 // Click to add a hundred more; Space pauses.
 //
-// The window is Topaz's native layer: every ball is a smoothed circle drawn by the graphics
+// The window is Jade's native layer: every ball is a smoothed circle drawn by the graphics
 // card, all of them sent to it in one batch a frame.
 //
 // This is the version with no threads at all. bounce_parallel.ww is this with one line
 // changed, so that every core moves balls; bounce_threads.ww moves them on background
 // threads, bounce_tasks.ww in tasks on the main thread, and bounce_workers.ww in workers.
-import Topaz.*
+import Jade.*
 
 val startingBalls = 50000
 

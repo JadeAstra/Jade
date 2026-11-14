@@ -2096,10 +2096,10 @@ StmtPtr Parser::statement() {
         case TokenType::Import: {
             advance();
             auto s = node<ImportStmt>(t);
-            // import topaz            the folder (or file) topaz: its names are written topaz.Name
-            // import topaz.chart      topaz/chart: topaz.chart.Name
-            // import topaz.*          topaz's names can be written bare, too
-            // import topaz as ui      ui.Name
+            // import jade            the folder (or file) jade: its names are written jade.Name
+            // import jade.chart      jade/chart: jade.chart.Name
+            // import jade.*          jade's names can be written bare, too
+            // import jade as ui      ui.Name
             // A path that is not made of plain names goes in quotes: import "../shared/util" as util
             if (check(TokenType::String)) {
                 s->path = advance().stringValue;

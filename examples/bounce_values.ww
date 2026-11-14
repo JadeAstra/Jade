@@ -4,7 +4,7 @@
 // This is bounce_parallel.ww with Ball a value type (M6.6): the balls are kept one after
 // another in their list, and each core moves its own part of them where they are, through
 // `move`, now marked mutating, its body as it was. Nothing is made for a ball in a frame.
-import Topaz.*
+import Jade.*
 
 val startingBalls = 50000
 

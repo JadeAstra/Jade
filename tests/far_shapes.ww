@@ -2,12 +2,12 @@
 // Shapes far larger than the picture, or reaching far beyond it (2026-11-13): the rasterizer drew
 // nothing of a shape wider than 8192 pixels or with a point 2^24 pixels off; now what of it is on
 // the picture is drawn, cut to the clip first. On an image's canvas and on the card's alike.
-import Topaz.*
+import Jade.*
 
 fun pictures(scene : (Canvas) -> unit) : List<Image> {
   val image = Image(120, 100, Color.white)
   scene(image.canvas())
-  Topaz.windowOpener = HiddenWindowOpener(1)
+  Jade.windowOpener = HiddenWindowOpener(1)
   val w = Window(Component(object : Content {
     override var owner : Component? = null
     override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))

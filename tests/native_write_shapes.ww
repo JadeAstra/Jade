@@ -5,7 +5,7 @@
 // of held fields), and a grid's writable checked first as a guard. The same pixels and errors as
 // the VM's, and the card shows exactly what changed. Each loop runs three times (its region is
 // made the second time it starts).
-import Topaz.*
+import Jade.*
 
 fun failing(block : () -> any?) : string {
   try {
@@ -60,7 +60,7 @@ print(failing { thrice { intoPixels(Image(5, 4).pixels, Color.red) } })   // exp
 // The card: an image drawn in a window, then part of it written by a loop run whole; the next
 // frame shows that part changed and nothing else.
 val pic = Image(60, 40, Color.white)
-Topaz.windowOpener = HiddenWindowOpener(1)
+Jade.windowOpener = HiddenWindowOpener(1)
 val shows = Component(object : Content {
   override var owner : Component? = null
   override fun sizes() : Sizes => Sizes(Size(60, 40), Size(60, 40), Size(60, 40))

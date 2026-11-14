@@ -115,14 +115,14 @@ ww build app.ww --windowed --icon app.ico              app.exe, with an icon of 
 ```
 
 The result is one file holding the WinterWolf runtime and the compiled script with everything it
-imports, the `Topaz` library included. It needs neither `ww.exe`, the sources nor `lib` to
+imports, the `Jade` library included. It needs neither `ww.exe`, the sources nor `lib` to
 run, so it can be copied to another machine as it is.
 
 What the program can never reach is left out of it: the functions, classes and extension
-functions of the standard library, of Topaz and of the script that nothing it runs names, and
+functions of the standard library, of Jade and of the script that nothing it runs names, and
 the parts of the runtime no program needs to run (the compiler, the checker and the shell),
-and Topaz's window, drawing and text engine when nothing left in the program uses them. A
-`print("hi")` built is 1.7 MB and starts in about 8 ms; a Topaz app is about 2.2 MB.
+and Jade's window, drawing and text engine when nothing left in the program uses them. A
+`print("hi")` built is 1.7 MB and starts in about 8 ms; a Jade app is about 2.2 MB.
 
 A built program runs as its own process, named after its file: `Todo.exe` is listed as
 `Todo.exe` in Task Manager, never as `ww.exe`, so two WinterWolf apps running side by side are
@@ -1315,7 +1315,7 @@ class Square(val side : int) : Shape("square") {
   | --- | --- |
   | `private` | code written in the class, on any object of the class, in a lambda in one of its methods too; and a class declared inside it |
   | `protected` | that, and code written in a subclass, on objects of that subclass |
-  | `internal` | code of the same library (a program is one library; so is Topaz) |
+  | `internal` | code of the same library (a program is one library; so is Jade) |
   | `public`, or nothing | everyone |
 
   ```ww
@@ -1985,7 +1985,7 @@ do `Box<int>#.typeArguments` and a field's `type`, so `items.itemType == int#` (
 
 **Where a class comes from** is its `origin` (D184): `"ww"` for the built-in types and the
 standard library's classes (`List#.origin`, `Deck#.origin`), a library's name for its classes
-(`Button#.origin` is `"Topaz"`), and the program's name, `Program.name`, for the program's own.
+(`Button#.origin` is `"Jade"`), and the program's name, `Program.name`, for the program's own.
 So a program's `Range` and the built-in one, both named `"Range"`, are told apart by it.
 
 ### Annotations
@@ -2096,8 +2096,8 @@ see nothing of it until they import it:
 ```ww
 import Shapes              // the folder Shapes: its names are written Shapes.Circle
 import Shapes.*            // the same, and its names can be written bare as well: Circle
-import Topaz.Chart          // the folder Topaz/Chart: Topaz.Chart.Axis
-import Topaz as Ui          // under a name of your own: Ui.Button
+import Jade.Chart          // the folder Jade/Chart: Jade.Chart.Axis
+import Jade as Ui          // under a name of your own: Ui.Button
 import Shapes.Circle       // a file, Shapes/Circle.ww: loads that one file
 import "../shared/util" as Util    // a path that is not made of plain names goes in quotes
 ```
@@ -2115,12 +2115,12 @@ import "../shared/util" as Util    // a path that is not made of plain names goe
   Import one of them without `.*` and write `Shapes.title`, or give one another name. The
   standard library's names are not counted: a program's own come before them.
 - A name with an import in front works in types too (`fun show(b : Ui.Block)`).
-- A library may hold an object called like itself. `Topaz.Button` is then the library's class,
-  and what the library has no name for, `Topaz.requestRepaint()`, is looked for on the object.
+- A library may hold an object called like itself. `Jade.Button` is then the library's class,
+  and what the library has no name for, `Jade.requestRepaint()`, is looked for on the object.
 - A name can be declared only once in a folder.
 
 **How names are written.** Libraries (folders) and classes, enums, interfaces and objects
-are in Title case: `Topaz`, `Topaz.Chart`, `ListBox`. Functions, methods, fields, variables and
+are in Title case: `Jade`, `Jade.Chart`, `ListBox`. Functions, methods, fields, variables and
 constants and enum entries are in camelCase: `openWindow`, `windowOpener`, `Color.black`,
 `Fill.horizontal`. Types are in Title case too (`List`, `Map`, `Number`, `Bytes`), except a fixed
 set of basic ones, which are lowercase: `bool`, `char`, `byte`, `int`, `float`, the storage widths,
@@ -2136,12 +2136,12 @@ internal val cache = {:}          // this library: its folder and those under it
 fun open() { ... }                // everyone who imports the folder
 ```
 
-A library is a folder directly inside `lib`, with everything below it, so `Topaz` and
-`Topaz/Chart` can share `internal` names that programs using them cannot see. The folders of
+A library is a folder directly inside `lib`, with everything below it, so `Jade` and
+`Jade/Chart` can share `internal` names that programs using them cannot see. The folders of
 a program count as one library.
 
 An import is looked for next to the importing file, then in the `lib` folder beside
-`ww.exe`, and nowhere else. That is where the libraries that come with WinterWolf, such as `Topaz`, live, so
+`ww.exe`, and nowhere else. That is where the libraries that come with WinterWolf, such as `Jade`, live, so
 `ww.exe` and its `lib` folder belong together when ww is copied somewhere.
 
 **Order.** Within a file, and across the files of a folder that is imported as a whole, the
@@ -2153,20 +2153,20 @@ and statements, runs in the order written, and for a folder file by file in alph
 order: a top-level variable can be used by a function at any time, but not by a statement
 that runs before the variable's own line.
 
-## Windows and widgets: Topaz
+## Windows and widgets: Jade
 
-`import Topaz.*` gives a program windows. **Topaz is WinterWolf's GUI library, and it is being
+`import Jade.*` gives a program windows. **Jade is WinterWolf's GUI library, and it is being
 built**, as a port of JadeUI with the same names (the plan is in `docs\gui-plan.html`). What
 is there today: the native layer, which opens windows, reports what the keyboard and the
 pointer do and draws; and on top of it the first widgets, laid out by a grid. Text fields,
 lists, menus and dialogs come next.
 
-Everything is drawn by Topaz itself, with OpenGL: there are no controls of the system's.
+Everything is drawn by Jade itself, with OpenGL: there are no controls of the system's.
 Text comes from WinterWolf's own text engine (below), so it measures and looks the same wherever
 the same font file is. Windows only so far, on OpenGL 3.3 or later.
 
 ```ww
-import Topaz.*
+import Jade.*
 
 var count = 0
 val counter = label("Pressed 0 times")
@@ -2285,7 +2285,7 @@ corner. A content that changes says so with `owner.invalidate()`, or `invalidate
 if its size may have changed too. A component keeps a picture of itself and is not painted
 again until it is invalidated.
 Being a `FocusTarget` makes it take the keyboard, a `CursorProvider` gives it its own
-pointer, and there are a few more such interfaces in `lib\Topaz\Types.ww`.
+pointer, and there are a few more such interfaces in `lib\Jade\Types.ww`.
 
 **Without a window.** A tree of components can be laid out, painted and sent events with
 nothing on the screen, which is how it is tested:
@@ -2296,7 +2296,7 @@ ops.any { it is DrawOp.Text and it.text == "OK" }
 root.click(280, 20)                              // a press and a release at a point
 root.renderToImage(300, 100).save("root.png")    // or its picture
 
-Topaz.windowOpener = HiddenWindowOpener()         // windows that are never shown
+Jade.windowOpener = HiddenWindowOpener()         // windows that are never shown
 window.show()
 window.handle.send(RawInput.PointerDown(280, 20, PointerButton.left, Modifiers.none))
 window.handle.snapshot()                         // the window's picture, as an Image
@@ -2369,7 +2369,7 @@ case, which is what a shortcut wants: Ctrl+Z is the key whose letter is `"Z"`. `
 `Native.doubleClickTime`, `Native.screenScale`, `Native.nanoTime()`, and
 `Native.isAvailable` and `Native.problem()` for a machine with no OpenGL to draw with.
 
-**File dialogs.** `Topaz.fileDialog.open(title, filters) { path -> }`, `save(title,
+**File dialogs.** `Jade.fileDialog.open(title, filters) { path -> }`, `save(title,
 suggestedName, filters) { }` and `chooseDirectory(title) { }` return at once and give the path
 chosen, or null, to the lambda later. Before any window, and with hidden windows, the file
 dialog cancels everything; a window on the screen puts the system's in place
@@ -2420,11 +2420,11 @@ it has not changed.
 
 ### The graphics types
 
-JadeUI's API uses a handful of Java's types. Topaz takes the standard library's in their
+JadeUI's API uses a handful of Java's types. Jade takes the standard library's in their
 place (see "Graphics"), with WinterWolf's names where they read better. A program ported from
 JadeUI changes these, and each old name is a compile error saying what to write:
 
-| JadeUI | Topaz |
+| JadeUI | Jade |
 | --- | --- |
 | `Dimension(w, h)` | `Size(w, h)`, a value type |
 | `Rectangle(x, y, w, h)` | `Rect(x, y, w, h)`, a value type |
@@ -3315,7 +3315,7 @@ Every program can draw, with no import and no window: colours and shapes, fonts 
 and images in memory, saved as PNG. WinterWolf reads font files, measures text and draws it with
 code of its own. The system is asked for one thing only: which font files are installed.
 Everything else comes out of the files, so the same font file gives the same numbers and the
-same pixels on every machine. Topaz draws windows with the same types.
+same pixels on every machine. Jade draws windows with the same types.
 
 ```ww
 val font = Font("Segoe UI", 14, bold = true)
@@ -3357,9 +3357,9 @@ height, start, extent, kind)` (Java's `Arc2D`: `ArcKind.open`, `chord` or `pie`)
 
 ### The canvas
 
-A **`Canvas`** draws: `image.canvas()` in memory, and in Topaz a window's or a surface's on the
+A **`Canvas`** draws: `image.canvas()` in memory, and in Jade a window's or a surface's on the
 graphics card, with the same calls and the same meanings (they are listed under "The canvas"
-in Topaz's section). Straight lines and rectangles sit on pixel edges and are sharp; curves and
+in Jade's section). Straight lines and rectangles sit on pixel edges and are sharp; curves and
 slanted lines have smoothed edges, whose pixels add up to the shape's area.
 
 `image.canvasAt(width, height, scale)` draws an image that stands for `width` by `height`
@@ -3499,10 +3499,10 @@ source ──lexer──▶ tokens ──parser──▶ AST ──compiler─�
 | `src/text/engine.*`, `api.cpp` | A font at a size: the measuring rule, hinting, drawing; the built-in the library is written on |
 | `src/image/png.*` | PNG files, with the compression they use |
 | `src/std/*.ww` | Standard library, the part written in WinterWolf; packed into `ww.exe` by the build (`cmake/embed.cmake`) and loaded before every program |
-| `src/topaz/platform.h`, `platform_win.cpp` | Topaz's native layer, the part written per system: a window, its events, the clipboard |
-| `src/topaz/render.*`, `gl.*` | Drawing with OpenGL: one small record for each shape, the glyph atlas, pictures on the card |
-| `src/topaz/api.cpp` | The built-in the Topaz library is written on; where layout units become pixels |
-| `lib/Topaz/*.ww` | The Topaz library: its native layer, the types it takes from the JDK, components, the grid, the first widgets, and the window with what it makes of the keyboard and the pointer |
+| `src/jade/platform.h`, `platform_win.cpp` | Jade's native layer, the part written per system: a window, its events, the clipboard |
+| `src/jade/render.*`, `gl.*` | Drawing with OpenGL: one small record for each shape, the glyph atlas, pictures on the card |
+| `src/jade/api.cpp` | The built-in the Jade library is written on; where layout units become pixels |
+| `lib/Jade/*.ww` | The Jade library: its native layer, the types it takes from the JDK, components, the grid, the first widgets, and the window with what it makes of the keyboard and the pointer |
 | `src/main.cpp` | Command line, the shell, and building standalone programs |
 
 Every function is checked by the verifier before it can run, whether it came from the
@@ -3570,7 +3570,7 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 
 ## Limitations
 
-- Topaz has its native layer and its first widgets: labels, buttons and the grid. There are no
+- Jade has its native layer and its first widgets: labels, buttons and the grid. There are no
   text fields, lists, menus, tooltips or dialogs yet, and no pictures other than PNG. It is
   Windows-only and needs OpenGL 3.3.
 - Types are checked while the program runs (only literals are checked at compile time), so
@@ -3621,10 +3621,10 @@ opportunity, which is slow but useful for finding memory bugs when changing the 
 
 ## License
 
-WinterWolf, its standard library and Topaz are released under the Apache License, Version 2.0,
+WinterWolf, its standard library and Jade are released under the Apache License, Version 2.0,
 with a runtime library exception: a program built with WinterWolf carries parts of WinterWolf inside
-it (the runtime, the standard library, and Topaz if it imports it), and may be distributed on
+it (the runtime, the standard library, and Jade if it imports it), and may be distributed on
 any terms, without the attribution the license otherwise asks for. The full text is in
 `LICENSE`.
 
-Copyright 2026 Topaz.
+Copyright 2026 Jade.

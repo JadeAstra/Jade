@@ -1719,7 +1719,7 @@ struct Checker::Impl {
         return false;
     }
 
-    // `ui` in `ui.Button` after `import topaz as ui`: the namespace, or null.
+    // `ui` in `ui.Button` after `import jade as ui`: the namespace, or null.
     Namespace* findAlias(Unit& u, const std::string& name) {
         for (const ImportInfo& imp : u.imports)
             if (!imp.alias.empty() && imp.alias == name) return imp.ns;
@@ -1733,7 +1733,7 @@ struct Checker::Impl {
         return f == found->second.end() ? nullptr : &f->second;
     }
 
-    // A class by a written name: `Box`, `Outer.Inner`, `topaz.Button`.
+    // A class by a written name: `Box`, `Outer.Inner`, `jade.Button`.
     ClassInfo* findClass(Unit& u, const std::string& written, ClassInfo* around) {
         std::vector<std::string> parts;
         size_t start = 0;
@@ -3152,7 +3152,7 @@ struct Checker::Impl {
     }
 
     // The advice for a member a class does not have, by the first class of the standard library
-    // in its line: a Topaz NativeCanvas is asked as a Canvas.
+    // in its line: a Jade NativeCanvas is asked as a Canvas.
     static std::string preludeAdvice(const ClassInfo* k, const std::string& name) {
         for (const ClassInfo* c = k; c != nullptr; c = c->superclass) {
             if (c->unit == nullptr || !c->unit->prelude) continue;
@@ -5497,7 +5497,7 @@ struct Checker::Impl {
             report(n, advice);
         } else if (silent == 0 && bareArguments.count(&n) == 0 && n.name.rfind("__", 0) != 0 &&
                    !importRoot(*unit, n.name) &&
-                   std::find(declaringNames.begin(), declaringNames.end(), n.name) == declaringNames.end()) {  // __topaz and the like are the runtime's, made when it starts
+                   std::find(declaringNames.begin(), declaringNames.end(), n.name) == declaringNames.end()) {  // __jade and the like are the runtime's, made when it starts
             // Nothing of that name anywhere in reach: a misspelling, or a function of another
             // file not imported. Found here, not when the program comes to it.
             report(n, unknownNameMessage(n.name));
@@ -7003,7 +7003,7 @@ struct Checker::Impl {
                     if (f != it->end()) return f->second;
                 }
         }
-        // `ui.Button` after `import topaz as ui`, or `Outer.Inner`, or `Color.red`.
+        // `ui.Button` after `import jade as ui`, or `Outer.Inner`, or `Color.red`.
         if (m.object->kind == ExprKind::Name) {
             const std::string& base = static_cast<const NameExpr&>(*m.object).name;
             if (findLocal(base) == nullptr && !nameIsMember(base) && classNamed(base) == nullptr) {

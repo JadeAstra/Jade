@@ -1,5 +1,5 @@
 // Outlines of the shapes a canvas draws, in pixels with y growing downwards, for both canvases
-// that draw them (text/api.cpp's on an image in memory, topaz/api.cpp's on the graphics card):
+// that draw them (text/api.cpp's on an image in memory, jade/api.cpp's on the graphics card):
 // arcs, wedges and chords of an ellipse, and lines and outlines of any width (M8).
 //
 // A shape is made of pieces that may overlap (the bands of a wide line, the discs at its

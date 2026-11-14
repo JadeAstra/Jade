@@ -1415,12 +1415,12 @@ void registerBuiltins(VM& vm) {
     registerForeign(vm);
     registerWorkers(vm);
     registerParallel(vm);
-    // A built program that reaches neither Topaz nor the text engine has their code left out of
+    // A built program that reaches neither Jade nor the text engine has their code left out of
     // its file (M6.5 part 5): their names are then not there either.
     if (windowCodePresent()) {
         registerText(vm);
         // Windows belong to the main program: a worker has none.
-        if (!vm.isWorker()) registerTopaz(vm);
+        if (!vm.isWorker()) registerJade(vm);
     }
 
     // For parallel sections: which methods change what they are called on, and which

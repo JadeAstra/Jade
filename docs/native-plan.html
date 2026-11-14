@@ -117,7 +117,7 @@ pre code { background: none; padding: 0; }
 <li><strong>Copy and patch.</strong> Each instruction the VM runs becomes a piece of machine code made ahead, when <code>ww.exe</code> is built, by Clang from the VM's own <code>instructions.inc</code> (a <em>stencil</em>), with gaps where its operands go. A function's machine code is its instructions' stencils copied one after another, the gaps filled in: the slots it reads and writes, its constants, where it jumps. What the interpreter spends on each instruction besides its work (finding the next one's code, an indirect jump the processor often guesses wrong, reading the operands out of the code) is gone. Values stay where the VM keeps them, in the frame's slots, so the collector, tasks and the VM see everything as they do now; anything a stencil does not handle at once goes back to the VM at that instruction. Expected: loops 3 to 5 times as fast.</li>
 <li><strong>Values in registers.</strong> Where the checker knows a value is an int, a float or a bool (the typed instructions of M6.7 step 5), and nothing else can see it, it is kept in a processor register across the instructions of a function, not written to its slot and read back each time: loop counters, indexes, running totals. The hot typed instructions get stencils that take and give values in registers; every way out to the VM writes them back first. Expected: loops 1 to 1.5 ns an item, within 1.5 to 3 times of hand-written C++.</li>
 </ol>
-<p>The standard library and Topaz are WinterWolf code, and gain as a program does. A program behaves the same with machine code as without it, error messages, stack traces and checks included; the tests show it by running every test both ways.</p>
+<p>The standard library and Jade are WinterWolf code, and gain as a program does. A program behaves the same with machine code as without it, error messages, stack traces and checks included; the tests show it by running every test both ways.</p>
 
 <h2 id="np-today">How WinterWolf runs code today</h2>
 <p>What this stands on, as M6.7 and M9/M10 left it:</p>
@@ -208,7 +208,7 @@ pre code { background: none; padding: 0; }
 <tr><td><code>calls</code>, <code>fields</code>, <code>simulation</code></td><td>114, 90, 96 ms</td><td>1.5 to 2.5&times;</td><td>2 to 4&times;</td><td>&mdash;</td></tr>
 <tr><td><code>gradient</code> kernel as a WinterWolf loop (3840 by 2160)</td><td>353 ms</td><td>~100</td><td>~20 to 30</td><td>8</td></tr>
 <tr><td><code>blur</code> kernel as a WinterWolf loop</td><td>2,808 ms</td><td>~700</td><td>~300 to 450</td><td>297</td></tr>
-<tr><td><code>topaz_layout</code></td><td>450 ms</td><td>1.3 to 2&times;</td><td>1.5 to 2.5&times;</td><td>&mdash;</td></tr>
+<tr><td><code>jade_layout</code></td><td>450 ms</td><td>1.3 to 2&times;</td><td>1.5 to 2.5&times;</td><td>&mdash;</td></tr>
 </tbody></table></div>
 <p>Code that spends its time in the library, making objects or in the collector gains least; typed loops most. Every step is benchmarked as M6.7's were, against the commit before it, and kept only where it helps. The start-up budgets are watched throughout.</p>
 
@@ -245,7 +245,7 @@ pre code { background: none; padding: 0; }
 <tr><td><code>numeric</code></td><td class="num">97.0</td><td class="num"><strong>18.7</strong> (5.2&times;)</td></tr>
 <tr><td><code>calls</code>, <code>fields</code>, <code>simulation</code></td><td class="num">112.8, 89.2, 99.3</td><td class="num">113.0, 87.6, 99.0</td></tr>
 <tr><td><code>bounce_values</code>, <code>bounce_classes</code>, <code>particles</code></td><td class="num">512, 983, 2,716</td><td class="num">514, 955, 2,725</td></tr>
-<tr><td>the layouts, <code>topaz_layout</code>, <code>strings</code>, <code>colors</code>, <code>points</code></td><td class="num" colspan="2">the same within 2%</td></tr>
+<tr><td>the layouts, <code>jade_layout</code>, <code>strings</code>, <code>colors</code>, <code>points</code></td><td class="num" colspan="2">the same within 2%</td></tr>
 </tbody></table></div>
 <p>Code made of calls, objects and the library's work runs as the VM runs it (a region would leave for the VM too often to gain), and is no slower for native code; typed loops gain most, as expected. On x86-64 Linux (WSL, not held to the fast cores) the same: <code>numeric</code> 18.6 ms against 122, brightening bytes 1.6 ms against 54. The start-up budgets are kept on both (a first run 506 ms of 1,449 on Windows, the second 14.5 of 20; on Linux 570 and 10.5); a run makes regions for the loops it runs alone, at most about 1 ms of a benchmark's time.</p>
 

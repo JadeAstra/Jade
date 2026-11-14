@@ -150,7 +150,7 @@ std::string checkMaps(const std::string& wwMap, const std::string& withWindowMap
     if (std::string wrong = check(withWindow, {".wwc", ".wws"}, {}); !wrong.empty()) return wrong;
     // The core calls the window's two entry points only when its section is there.
     return check(plain, {".wwc", ".wws", ".wwt"},
-                 {"?registerTopaz@ww@@YAXAEAVVM@1@@Z", "?registerText@ww@@YAXAEAVVM@1@@Z"});
+                 {"?registerJade@ww@@YAXAEAVVM@1@@Z", "?registerText@ww@@YAXAEAVVM@1@@Z"});
 }
 
 // Leaves the bytes of the named sections out of an executable's image (M6.5 part 5, D161):
@@ -247,7 +247,7 @@ const char* const kUsage =
     "  ww --version\n"
     "  ww --help\n";
 
-// Where the libraries that come with WinterWolf, such as Topaz, live: a "lib" folder beside the executable, and
+// Where the libraries that come with WinterWolf, such as Jade, live: a "lib" folder beside the executable, and
 // nowhere else, so that a folder someone else can write to is never searched.
 std::vector<std::string> libraryPaths() {
     std::filesystem::path exe = executablePath();
@@ -569,10 +569,10 @@ int buildFile(const std::string& path, std::string outPath, bool asExecutable, b
     if (existing >= 0) image.resize(image.size() - kBundleTrailer - static_cast<size_t>(existing));
     stripPrelude(image);  // the program carries its own compiled copy of what it uses
     // What a built program never needs is left out of it: the compiler side and the standard
-    // library's source always, and Topaz's window with the text engine when nothing left in the
+    // library's source always, and Jade's window with the text engine when nothing left in the
     // program names them (M6.5 part 5, D161).
     std::vector<std::string> unneeded{".wwc", ".wws"};
-    if (!namesGlobal(session.program, {"__topaz", "__text"})) unneeded.push_back(".wwt");
+    if (!namesGlobal(session.program, {"__jade", "__text"})) unneeded.push_back(".wwt");
     if (const std::string inside = startupCodeIn(unneeded); !inside.empty()) {
         std::cerr << "ww: internal error: " << inside << "\n";
         return kExitCannotWrite;

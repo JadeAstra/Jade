@@ -3,7 +3,7 @@
 // What a text takes up in a font, in units.
 data TextMetrics(val width : int, val ascent : int, val descent : int, val height : int)
 
-// What everything is drawn on: an Image's canvas in memory (ImageCanvas, below), and in Topaz a
+// What everything is drawn on: an Image's canvas in memory (ImageCanvas, below), and in Jade a
 // window's or a Surface's on the graphics card, or one that records what it is asked to draw.
 // All have the same calls (D123):
 //
@@ -793,7 +793,7 @@ value Plane(val bytes : Bytes, val width : int, val height : int, val stride : i
 //   image.save(FilePath("out.png"))
 //
 // A pixel outside the image is an IndexOutOfBoundsException (D134). Its canvas draws in memory,
-// on any thread, so a worker can draw a thumbnail; Topaz keeps a copy of it on the graphics card
+// on any thread, so a worker can draw a thumbnail; Jade keeps a copy of it on the graphics card
 // for drawing it there, brought up to date from what has changed (D124). Threads may draw on one
 // image together: each shape, text or picture is drawn whole before another thread draws, and
 // the copy on the card misses none of them. In a parallel section a piece draws on an image it
@@ -810,7 +810,7 @@ class Image : Drawable {
   // having checked the pixel is in the image themselves.
   internal var cells : Grid<Color>
   // A number raised by every change, and the rectangle changed since the card's copy was made:
-  // what Topaz's native layer sends again (D124).
+  // what Jade's native layer sends again (D124).
   internal var changes = 0
   // Empty, none changed: left and top the largest int, right and bottom the smallest, so that a
   // change widens it by a min and a max of each side alone, no case of its own for empty
@@ -819,7 +819,7 @@ class Image : Drawable {
   internal var changedTop = 9223372036854775807
   internal var changedRight = -9223372036854775807 - 1
   internal var changedBottom = -9223372036854775807 - 1
-  // Topaz's native layer's: its copy on the graphics card, and the change number it was made at.
+  // Jade's native layer's: its copy on the graphics card, and the change number it was made at.
   internal var card : any? = null
   internal var cardAt = -1
   // How many times its canvases have been split: the number of the latest split, whose parts
@@ -1172,7 +1172,7 @@ class Image : Drawable {
   // Says that the pixels from (left, top) up to (right, bottom) have changed.
   //
   // Done in one step for other threads: a thread gives the others a turn only at a call or at
-  // the end of a loop's body, and this has neither, so none of them (Topaz sending the changes to
+  // the end of a loop's body, and this has neither, so none of them (Jade sending the changes to
   // the graphics card among them) sees it half done (G64). Keep calls and loops out of it: a
   // Math.min of two ints is no call today, but nothing here should hang on that. Inline, so that
   // image[x, y] = c costs no call (its body is put where it is used, which has no loop's end in
@@ -1373,14 +1373,14 @@ fun __mixed(grid : Grid<Color>, m : List<float>) : Grid<Color> {
 }
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another
-// kind gives as one (Topaz's Surface).
+// kind gives as one (Jade's Surface).
 fun __imageOf(picture : Drawable) : Image {
   if (picture is Image) { return picture }
   if (picture is ToImage) { return picture.toImage() }
   throw IllegalArgumentException("this picture cannot be drawn on an image: it has no pixels in memory")
 }
 
-// A picture kept somewhere other than in memory that can give its pixels as an Image: a Topaz
+// A picture kept somewhere other than in memory that can give its pixels as an Image: a Jade
 // Surface, from the graphics card.
 interface ToImage {
   // Its pixels, as a new Image: a Surface's at its size in pixels.

@@ -1,0 +1,14 @@
+// A big treemap (M8): 200,000 files, an ordinary disk, lay out fast enough to use. Kept apart from
+// jade_treemap.ww because the GC stress setting, which collects at every safe point, makes it
+// run for hours; the test runner leaves it out of that one.
+import Jade.*
+
+// The layout's time is measured against the time making the tree took, so that the check holds
+// on any build (ASan's runs everything some twenty times slower): about 2.5 times here, 0.2 s on
+// an ordinary build. A layout worse than linear in the tiles would be many times more.
+val started = Instant.now()
+val dirs = (1 .. 400).toList().map { d -> TreemapNode("d$d", 500 * 500, (1 .. 500).toList().map { TreemapNode("f$it", 500) }) }
+val made = Instant.now()
+val all = Treemap.layout(TreemapNode("root", dirs.map { it.weight }.sum(), dirs), Rect(0, 0, 1400, 900))
+val laidOut = Instant.now()
+print(all.isNotEmpty(), laidOut - made < (made - started) * 8)   // expect: true true

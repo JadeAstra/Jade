@@ -28,7 +28,7 @@ add_custom_command(
   COMMENT "Packing the standard library"
   VERBATIM)
 
-# The executable in three parts (M6.5 part 5, D161): what every program needs to run, Topaz's
+# The executable in three parts (M6.5 part 5, D161): what every program needs to run, Jade's
 # window with the text engine and the image codecs, and the compiler side with the ww command.
 # The last two are compiled into sections of their own (src/section_*.h), which `ww build`
 # leaves out of a built program that does not need them.
@@ -61,10 +61,10 @@ add_library(ww_core OBJECT
   src/run.cpp
 )
 add_library(ww_window OBJECT
-  src/topaz/platform_win.cpp
-  src/topaz/gl.cpp
-  src/topaz/render.cpp
-  src/topaz/api.cpp
+  src/jade/platform_win.cpp
+  src/jade/gl.cpp
+  src/jade/render.cpp
+  src/jade/api.cpp
   src/text/face.cpp
   src/text/cff.cpp
   src/text/variation.cpp
@@ -163,7 +163,7 @@ if(WIN32)
   target_link_libraries(ww_proof PRIVATE delayimp)
 endif()
 
-# ww looks for libraries such as Topaz only in the lib folder beside itself, so every
+# ww looks for libraries such as Jade only in the lib folder beside itself, so every
 # build puts a copy of lib/ next to the executable.
 add_custom_target(ww_lib ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/lib" "$<TARGET_FILE_DIR:ww>/lib"
@@ -181,7 +181,7 @@ if(MSVC)
   # opengl32.dll costs about 57 ms, which every script paid, window or not. A delay-loaded DLL
   # whose functions take float arguments is loaded whole before any is called
   # (__HrLoadAllImportsForDll): lld-link's stub for a first call can lose the second float
-  # argument (src/topaz/platform_win.cpp, WinPlatform::start).
+  # argument (src/jade/platform_win.cpp, WinPlatform::start).
   target_link_libraries(ww PRIVATE delayimp)
   target_link_options(ww PRIVATE /DELAYLOAD:opengl32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:ole32.dll)
 else()

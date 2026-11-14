@@ -1,14 +1,14 @@
 // windows only: it draws on the graphics card, which is on Windows only so far (G56)
 // Paints, clips to a shape, the Clear composite, text and pictures through a transform, and
 // blur (N3): the image's canvas and the graphics card's draw them alike.
-import Topaz.*
+import Jade.*
 
 // A canvas on an image in memory, and one on a hidden window's surface, given the same scene;
 // their pictures, to be compared.
 fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
   val image = Image(120 * scale, 100 * scale, Color.white)
   scene(image.canvasAt(120, 100, scale))
-  Topaz.windowOpener = HiddenWindowOpener(scale)
+  Jade.windowOpener = HiddenWindowOpener(scale)
   val w = Window(Component(object : Content {
     override var owner : Component? = null
     override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))

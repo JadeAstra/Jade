@@ -1,7 +1,7 @@
 // The test runner's window: every check of the suite in a table, with its status, each way's mark
 // and the time it took, kept up to date as the checks run; what failed in the one chosen below
 // it. Above: the ww tested, the ways, how many at once, a stress setting, and the buttons.
-import Topaz.*
+import Jade.*
 import "engine".*
 
 // What each column shows for a check: its name, status, a mark for each way, its time.
@@ -283,7 +283,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
   settingBox.onSelect = { if (!running) { refreshSuite() } }
 
   val browse = button("Choose…") {
-    Topaz.fileDialog.open("The ww to test", [FileFilter("Programs", ["*.exe"]), FileFilter("All files", ["*.*"])]) { path ->
+    Jade.fileDialog.open("The ww to test", [FileFilter("Programs", ["*.exe"]), FileFilter("All files", ["*.*"])]) { path ->
       if (path != null) { wwModel.setText(path) }
     }
   }
@@ -416,7 +416,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
       }
     }
   }
-  if (snapshot != null) { Topaz.windowOpener = HiddenWindowOpener() }
+  if (snapshot != null) { Jade.windowOpener = HiddenWindowOpener() }
   // Only some checks asked for: those shown, the rest not being run.
   if (only != null) { filterBox.show(thisRun) }
   window.show()

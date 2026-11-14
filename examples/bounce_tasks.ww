@@ -20,7 +20,7 @@
 //
 // bounce.ww is the same thing in one loop, bounce_threads.ww with threads, and
 // bounce_workers.ww with workers on other cores.
-import Topaz.*
+import Jade.*
 
 val startingBalls = 50000
 val taskCount = 4

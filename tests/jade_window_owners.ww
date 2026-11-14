@@ -1,0 +1,51 @@
+// windows only: it opens windows, which are on Windows only so far (G56)
+// A window that belongs to another (M8): when its owner closes first, it passes to its owner's
+// owner, or to none, rather than going with it, as the system would have it; and when a window in
+// front closes, the window it belongs to is in front again.
+import Jade.*
+
+val opener = HiddenWindowOpener()
+Jade.windowOpener = opener
+val main = Window(label("main"), "Main", 300, 200, exitOnClose = false)
+main.show()
+val dialog = Window(label("dialog"), "Dialog", 200, 100, owner = main, dialog = true)
+dialog.show()
+val inner = Window(label("inner"), "Inner", 150, 80, owner = dialog, dialog = true)
+inner.show()
+val innerHost = inner.handle as WindowHost
+print(inner.owner?.title, Jade.frontWindow?.title)   // expect: Dialog Inner
+
+// The dialog closes first: the inner one stays open, and is main's now.
+dialog.close()
+print(innerHost.native.isOpen, inner.owner?.title, Jade.frontWindow?.title)   // expect: true Main Inner
+// The system's window is still there: it paints (it would have gone with its owner).
+innerHost.frame()
+print(innerHost.native.snapshot())   // expect: Image(150 x 80)
+// Closing it gives the front to main.
+inner.close()
+print(innerHost.native.isOpen, Jade.frontWindow?.title)   // expect: false Main
+
+// A window whose owner has none passes to none.
+val a = Window(label("a"), "A", 200, 100, owner = main)
+a.show()
+val b = Window(label("b"), "B", 150, 80, owner = a)
+b.show()
+main.close()
+print(a.owner, (a.handle as WindowHost).native.isOpen)   // expect: null true
+a.close()
+print(b.owner?.title, (b.handle as WindowHost).native.isOpen)   // expect: null true
+b.close()
+print(Jade.frontWindow)   // expect: null
+
+// A dialog asked for from a dialog: its owner is the dialog in front, and it outlives it.
+val home = Window(label("home"), "Home", 300, 200, exitOnClose = false)
+home.show()
+val outer = Jade.inputDialog.prompt(PromptSpec("Outer", "", "o")) { print("outer:", it) }
+var nested = Jade.inputDialog.prompt(PromptSpec("Nested", "", "n")) { print("nested:", it) }
+val nestedHost = opener.opened[opener.opened.size - 1] as WindowHost
+print(nestedHost.window.owner?.title)   // expect: Outer
+outer.close()   // expect: outer: null
+print(nested.open, nestedHost.native.isOpen, nestedHost.window.owner?.title)   // expect: true true Home
+nestedHost.send(RawInput.KeyDown(KeyCode.enter, Modifiers.none))   // expect: nested: n
+print(Jade.frontWindow?.title)   // expect: Home
+home.close()

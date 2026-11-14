@@ -409,7 +409,7 @@ fun __relativeCcw(x1 : float, y1 : float, x2 : float, y2 : float, px : float, py
   return ccw < 0.0 ? -1 : ccw > 0.0 ? 1 : 0
 }
 
-// What a canvas draws as a picture (D106): an Image in memory, a Topaz Surface on the graphics
+// What a canvas draws as a picture (D106): an Image in memory, a Jade Surface on the graphics
 // card. Its size is in units.
 interface Drawable {
   // The picture's width, in units (an Image's are its pixels).

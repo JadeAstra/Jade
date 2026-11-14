@@ -1711,7 +1711,7 @@ void registerText(VM& vm);     // text/api.cpp: fonts, text and pictures
 // What started this program (see __io.selfCommand): set by main before the program runs.
 void setSelfCommand(std::vector<std::string> command);
 
-// The native layer of the Topaz library (lib/Topaz): windows, events and drawing. topaz/api.cpp.
-void registerTopaz(VM& vm);
+// The native layer of the Jade library (lib/Jade): windows, events and drawing. jade/api.cpp.
+void registerJade(VM& vm);
 
 }  // namespace ww

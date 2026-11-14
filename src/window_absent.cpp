@@ -9,6 +9,6 @@
 namespace ww {
 
 void registerText(VM&) { std::abort(); }
-void registerTopaz(VM&) { std::abort(); }
+void registerJade(VM&) { std::abort(); }
 
 }  // namespace ww

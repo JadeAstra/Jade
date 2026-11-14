@@ -2,7 +2,7 @@
 // Paths, fill rules and transforms (N3): a Path made a piece at a time or read from SVG path
 // data, a Transform as a value, and a canvas's transform, which every fill goes through; the
 // image's canvas and the graphics card's fill alike.
-import Topaz.*
+import Jade.*
 
 // -- Paths --
 
@@ -79,7 +79,7 @@ print(arrow.transformed(Transform.translation(5, 5).scale(2)).bounds)   // expec
 fun pictures(scale : int, scene : (Canvas) -> unit) : List<Image> {
   val image = Image(120 * scale, 100 * scale, Color.white)
   scene(image.canvasAt(120, 100, scale))
-  Topaz.windowOpener = HiddenWindowOpener(scale)
+  Jade.windowOpener = HiddenWindowOpener(scale)
   val w = Window(Component(object : Content {
     override var owner : Component? = null
     override fun sizes() : Sizes => Sizes(Size(120, 100), Size(120, 100), Size(120, 100))

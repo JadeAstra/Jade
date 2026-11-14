@@ -1,0 +1,255 @@
+// Panels one in front of the others, chosen by a row of tabs. (JadeUI: Tabs.kt.)
+
+private const tabH = 26
+private const tabPad = 12
+private const closeW = 18
+private const mark = "∗ "
+private const dirtyTip = "Changed since loaded"
+
+// Panels behind each other with a row of tabs above to bring one to the front. A tab can be
+// closed with its × when onClose is set, and marked as changed (a blue ∗) by `dirty`. With
+// showBar off it is a deck: the panels without the row, the program choosing which shows.
+class Tabs : Content, Container, TooltipProvider {
+  override var owner : Component? = null
+
+  var font : Font = defaultFont
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+
+  // One tab: its title and its panel.
+  class Tab(val title : string, val content : Component)
+
+  private val tabList : open List<Tab> = []
+  // The tabs, in order.
+  val tabs : List<Tab>
+    get() => tabList
+
+  fun init(tabs : List<Pair<string, Component>>, font : Font = defaultFont) {
+    for ((title, content) in tabs) { tabList.add(Tab(title, content)) }
+    this.font = font
+  }
+
+  // Adds a tab at the end and brings it to the front; gives its place.
+  fun add(title : string, content : Component) : int {
+    tabList.add(Tab(title, content))
+    active = tabList.size - 1
+    owner?.attachChildren()
+    Jade.requestLayout()
+    return active
+  }
+  // Puts another panel in a tab.
+  fun replace(index : int, content : Component) {
+    if (index < 0 or index >= tabList.size) { return }
+    tabList[index] = Tab(tabList[index].title, content)
+    owner?.attachChildren()
+    Jade.requestLayout()
+    owner?.invalidate()
+  }
+  // Gives a tab another title (and so another width).
+  fun rename(index : int, title : string) {
+    if (index < 0 or index >= tabList.size) { return }
+    if (tabList[index].title == title) { return }
+    tabList[index] = Tab(title, tabList[index].content)
+    Jade.requestLayout()
+    owner?.invalidate()
+  }
+  // Takes a tab out. One before the front tab moves the front one down a place; the front one
+  // closed gives its place to the tab after it (closing B of A, B, C brings C to the front).
+  fun remove(index : int) {
+    if (index < 0 or index >= tabList.size) { return }
+    tabList.removeAt(index)
+    active = tabList.isEmpty() ? 0 : index < active ? active - 1 : active.coerceIn(0, tabList.size - 1)
+    owner?.attachChildren()
+    Jade.requestLayout()
+  }
+
+  // The tab in front. Changing it lays out again: only the front panel is laid out, so one that
+  // was behind at the last layout has no size yet.
+  var active = 0
+    set(value) {
+      field = value.coerceIn(0, Math.max(tabList.size - 1, 0))
+      owner?.invalidate()
+      Jade.requestLayout()
+    }
+  // Whether the row of tabs shows.
+  var showBar = true
+    set(value) {
+      field = value
+      owner?.invalidate()
+      Jade.requestLayout()
+    }
+  private fun barH() : int => showBar ? tabH : 0
+
+  // Which tabs show as changed since they were loaded.
+  var dirty : (int) -> bool = { false }
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Told when a tab's × is pressed; with none, the tabs have no ×.
+  var onClose : ((int) -> unit)? = null
+    set(value) {
+      field = value
+      owner?.invalidate()
+    }
+  // Told when a tab is chosen by a click on it.
+  var onSelect : ((int) -> unit)? = null
+  // A tab's tip: its title, unless the program says otherwise.
+  var tabTooltip : (int) -> string? = { tabList.getOrNull(it)?.title }
+
+  // The panel in front, if there is one.
+  internal val activeContent : Component?
+    get() => tabList.getOrNull(active)?.content
+
+  private var hoverClose = -1
+
+  // A changed tab starts with a blue bold ∗ in a font of its own, so that it reads as a mark.
+  private fun markFont() : Font => font.copy(bold = true)
+  private fun markW(i : int) : int => dirty(i) ? metrics(markFont()).stringWidth(mark) : 0
+  private fun tabFullWidth(i : int) : int => markW(i) + metrics(font).stringWidth(tabList[i].title) + tabPad * 2 + (onClose != null ? closeW : 0)
+  private fun tabLeft(i : int) : int {
+    var x = 0
+    for (k in 0 ..< i) { x += tabFullWidth(k) }
+    return x
+  }
+
+  override fun sizes() : Sizes {
+    var barW = 0
+    for (i in 0 ..< tabList.size) { barW += tabFullWidth(i) }
+    var cw = 0
+    var ch = 0
+    var minH = 0
+    for (t in tabList) {
+      val pref = t.content.prefSize()
+      cw = Math.max(cw, pref.width)
+      ch = Math.max(ch, pref.height)
+      minH = Math.max(minH, t.content.minSize().height)
+    }
+    return Sizes(Size(showBar ? barW : 0, barH() + minH), Size(showBar ? Math.max(barW, cw) : cw, barH() + ch), Size(int.maxValue, int.maxValue))
+  }
+
+  // ---- As a container ----
+
+  // Only the panel in front is laid out, below the row of tabs.
+  override fun layoutChildren(width : int, height : int) {
+    val ac = activeContent
+    if (ac == null) { return }
+    val ch = Math.max(height - barH(), 0)
+    ac.layout(width, ch)
+    ac.bounds = Rect(0, barH(), width, ch)
+  }
+  // Events and the keyboard reach the panel in front; every tab's panel is held.
+  override fun shownChildren() : List<Component> {
+    val ac = activeContent
+    return ac == null ? [] : [ac]
+  }
+  override fun heldChildren() : List<Component> => tabList.map { it.content }
+  override fun childAtPoint(px : int, py : int) : PositionalChild? {
+    val ac = activeContent
+    if (ac != null and ac.visible and ac.bounds.contains(px, py)) { return PositionalChild(ac, ac.bounds.x, ac.bounds.y) }
+    return null
+  }
+
+  // ---- Painting ----
+
+  override fun paint(canvas : Canvas) {
+    if (showBar) { paintBar(canvas, canvas.width) }
+    val ac = activeContent
+    if (ac == null) { return }
+    val b = ac.bounds
+    if (b.width > 0 and b.height > 0) {
+      val sub = canvas.sub(b.x, b.y, b.width, b.height)
+      try {
+        ac.paintInto(sub)
+      } finally {
+        sub.dispose()
+      }
+    }
+  }
+
+  private fun paintBar(canvas : Canvas, w : int) {
+    canvas.color = Palette.headerBg
+    canvas.fillRect(0, 0, w, tabH)
+    canvas.font = font
+    var x = 0
+    for (i in 0 ..< tabList.size) {
+      val tw = tabFullWidth(i)
+      if (i == active) {
+        canvas.color = Palette.surface
+        canvas.fillRect(x, 0, tw, tabH)
+      }
+      val m = canvas.measure(tabList[i].title, font)
+      val base = (tabH - m.height) / 2 + m.ascent
+      if (dirty(i)) {
+        canvas.font = markFont()
+        canvas.color = Palette.fg(0x2D6CDF)
+        canvas.drawString(mark, x + tabPad, base)
+        canvas.font = font
+      }
+      val inactive = Palette.fg(0x606060)
+      canvas.color = i == active ? Palette.ink : inactive
+      canvas.drawString(tabList[i].title, x + tabPad + markW(i), base)
+      if (onClose != null) {
+        canvas.color = i == hoverClose ? Palette.fg(0xD32F2F) : i == active ? Palette.ink : inactive
+        canvas.drawString("×", x + tw - closeW + 3, base)
+      }
+      canvas.color = Palette.border
+      canvas.drawLine(x + tw, 0, x + tw, tabH)
+      x += tw
+    }
+    canvas.color = Palette.border
+    canvas.drawLine(0, tabH, w, tabH)
+  }
+
+  // ---- Choosing ----
+
+  override fun onEvent(event : Event) {
+    if (event is Event.Hover) {
+      val i = tabAt(event.x, event.y)
+      val over = i >= 0 and onClose != null and event.x >= tabLeft(i) + tabFullWidth(i) - closeW ? i : -1
+      if (over != hoverClose) {
+        hoverClose = over
+        owner?.invalidate()
+      }
+      return
+    }
+    if (event is Event.Click and event.y < barH()) {
+      val i = tabAt(event.x, event.y)
+      if (i >= 0) {
+        val close = onClose
+        if (close != null and event.x >= tabLeft(i) + tabFullWidth(i) - closeW) {
+          close(i)
+        } else {
+          active = i
+          onSelect?.invoke(i)
+        }
+      }
+    }
+  }
+
+  // The tab at a point in the row, or -1.
+  fun tabAt(x : int, y : int) : int {
+    if (y < 0 or y >= barH()) { return -1 }
+    var left = 0
+    for (i in 0 ..< tabList.size) {
+      val tw = tabFullWidth(i)
+      if (x >= left and x < left + tw) { return i }
+      left += tw
+    }
+    return -1
+  }
+
+  // Over a changed tab's ∗ the tip says what it means; anywhere else on a tab, what the tab is.
+  override fun tooltipAt(x : int, y : int) : string? {
+    val i = tabAt(x, y)
+    if (i < 0) { return null }
+    val markX = tabLeft(i) + tabPad
+    if (dirty(i) and x >= markX and x < markX + markW(i)) { return dirtyTip }
+    return tabTooltip(i)
+  }
+}
+
+// Tabs of panels, from their titles: tabs("One" to a, "Two" to b).
+fun tabs(vararg tabs : Pair<string, Component>) : Component => Component(Tabs(tabs))

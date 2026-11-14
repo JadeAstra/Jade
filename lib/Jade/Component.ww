@@ -1,0 +1,596 @@
+// A widget as the toolkit handles it: a content (which knows how large it is, how to paint
+// itself and what to do with events) wrapped with what every widget has: an id, whether it
+// shows and can be used, colours, sizes set from outside, where it has been placed, and a
+// kept picture of itself so that it is not painted again until it changes.
+// (JadeUI: JadeComponent.kt.)
+
+// A kept picture larger than this many pixels is not worth its memory: such a widget is
+// painted every frame instead.
+private const maxCachePixels = 8000000
+
+class Component {
+  val content : Content
+  var id : string? = null
+  var visible = true
+  var enabled = true
+  var tooltip : string? = null
+  var background : Color? = null
+  var foreground : Color? = null
+  var minSizeOverride : Size? = null
+  var prefSizeOverride : Size? = null
+  var maxSizeOverride : Size? = null
+  // Where it has been placed, in the canvas of what it is in.
+  var bounds = Rect(0, 0, 0, 0)
+  // Its width and height there (D152).
+  val size : Size
+    get() => bounds.size
+
+  // What the content last said of its size, kept inside the component (M6.6 part 7) until the
+  // component is invalidated, the toolkit's look changes (Jade.renderGeneration) or text is
+  // measured for another screen (Jade.layoutScale). It is kept apart from the picture painted,
+  // which some components never keep (one with a caret inside it, one too big): their sizes were
+  // asked for again each time, up to eight times a layout for each level of grids they were in.
+  private var sizesCache = Sizes(Size(0, 0), Size(0, 0), Size(0, 0))
+  private var sizesValid = false
+  private var sizesGen = -1
+  private var sizesScale : Number = 0
+
+  private var cacheStyle : Style? = null
+  private var cache : Surface? = null          // a Surface holding the content as last painted
+  private var cacheW = -1
+  private var cacheH = -1
+  private var cacheGen = -1
+  private var cacheScaleX = 0.0
+  private var cacheScaleY = 0.0
+  private var cacheDirty = true
+  // The part of the kept picture to paint again, in its own units, where only a part has
+  // changed (invalidate(area)); null when none, or when all of it is to be painted again.
+  private var cacheArea : Rect? = null
+
+  var parent : Component? = null
+    private set
+  // How many contents below this one draw something afresh every frame (a caret, say).
+  internal var overlayDescendants = 0
+    private set
+  private var attached : List<Component> = []
+
+  fun init(content : Content) {
+    this.content = content
+    content.owner = this   // so that it can say it has changed, and paint in its style
+    attachChildren()
+  }
+
+  // ---- Sizes ----
+
+  private fun sizes() : Sizes {
+    val gen = Jade.renderGeneration
+    val scale = Jade.layoutScale
+    if (sizesValid and sizesGen == gen and sizesScale == scale) { return sizesCache }
+    sizesCache = content.sizes()   // built where it is kept
+    sizesValid = true
+    sizesGen = gen
+    sizesScale = scale
+    return sizesCache
+  }
+  internal fun invalidateSizes() {
+    sizesValid = false
+  }
+  fun minSize() : Size => minSizeOverride ?: sizes().min
+  fun prefSize() : Size => prefSizeOverride ?: sizes().pref
+  fun maxSize() : Size => maxSizeOverride ?: sizes().max
+
+  // ---- Style ----
+
+  // The style it last painted in, worked out from what it was handed and its own (D132): what
+  // its content paints in.
+  var paintStyle = Style(null, null, true)
+
+  // Whether it draws its own frame: a container that frames it instead (a scroll, round a list)
+  // says no, so that the frame stays where the container is while the content moves (M7).
+  internal var framed = true
+
+  // The style this component gives its content by itself, and within one handed down:
+  // what it sets wins, what it leaves is the one handed down, and being disabled is passed on.
+  fun style() : Style => Style(background, foreground, enabled, framed)
+
+  // ---- The tree ----
+
+  private fun overlayUnits() : int => (content is OverlayContent ? 1 : 0) + overlayDescendants
+  private fun addOverlayUnits(delta : int) {
+    if (delta == 0) { return }
+    var c : Component? = this
+    while (c != null) {
+      c.overlayDescendants += delta
+      c = c.parent
+    }
+  }
+  internal fun adopt(child : Component) {
+    if (child.parent === this) { return }
+    child.parent?.release(child)
+    child.parent = this
+    addOverlayUnits(child.overlayUnits())
+  }
+  internal fun release(child : Component) {
+    if (child.parent !== this) { return }
+    addOverlayUnits(-child.overlayUnits())
+    child.parent = null
+  }
+  // Makes the children's `parent` say what the content now holds. A container calls this
+  // when a child is added to it or taken out.
+  fun attachChildren() {
+    val now = structuralChildren()
+    for (c in attached) {
+      if (!now.any { it === c }) { release(c) }
+    }
+    for (c in now) { adopt(c) }
+    attached = now
+  }
+
+  // ---- Painting ----
+
+  // Says that it has to be painted again, and asked for its sizes again: it and everything it is in.
+  fun invalidate() {
+    Jade.requestRepaint()
+    var c : Component? = this
+    while (c != null) {
+      c.cacheDirty = true
+      c.cacheArea = null
+      c.sizesValid = false
+      c = c.parent
+    }
+  }
+  // Says that a part of it has to be painted again (M10): `area`, in its own units. Its kept
+  // picture keeps the rest, and only that part is painted again, the content painting on a
+  // canvas clipped to it; its sizes are not asked for again, as invalidate() asks for them. What
+  // it is in paints that part again too. For a caret, a cell, a line that changes on its own.
+  fun invalidate(area : Rect) {
+    Jade.requestRepaint()
+    var c : Component? = this
+    var part = area
+    while (c != null) {
+      if (!c.cacheDirty) {
+        val now = c.cacheArea
+        c.cacheArea = now == null ? part : now.union(part)
+      }
+      // The same place in what it is in.
+      part = Rect(part.x + c.bounds.x, part.y + c.bounds.y, part.width, part.height)
+      c = c.parent
+    }
+  }
+  // The same, when its size may have changed too.
+  fun invalidateLayout() {
+    invalidate()
+    Jade.requestLayout()
+  }
+
+  // A container keeps no picture of itself while something in it draws afresh every frame,
+  // nor ever when what it shows moves without it changing (a scroll, the screen).
+  private fun cacheable() : bool {
+    val c = content
+    if (c is Container and !c.keepsPicture()) { return false }
+    return overlayDescendants == 0
+  }
+
+  // Paints the component on a canvas of its own size, in its own style, which its content
+  // reads as paintStyle (D132). On a canvas of the graphics card a picture of the content is
+  // kept and drawn from then on until the component is invalidated, changes size, or its style
+  // changes. A container hands its children nothing: each paints in its own style (8.9h).
+  fun paintInto(canvas : Canvas) {
+    val bg = background
+    if (bg != null) {
+      canvas.color = bg
+      canvas.fillRect(0, 0, canvas.width, canvas.height)
+    }
+    val w = canvas.width
+    val h = canvas.height
+    val st = style()
+    paintStyle = st
+    if (!(canvas is NativeCanvas) or !cacheable() or w <= 0 or h <= 0) {
+      content.paint(canvas)
+      if (content is OverlayContent) { content.paintOverlay(canvas) }   // caret and selection, live
+      return
+    }
+    val sx = canvas.deviceScaleX
+    val sy = canvas.deviceScaleY
+    val pw = Math.max(1, Math.round(w * sx).toInt())
+    val ph = Math.max(1, Math.round(h * sy).toInt())
+    if (pw * ph > maxCachePixels or pw > Surface.largestSide() or ph > Surface.largestSide()) {
+      cache = null                       // one kept from when it was smaller
+      cacheDirty = true
+      content.paint(canvas)
+      if (content is OverlayContent) { content.paintOverlay(canvas) }
+      return
+    }
+    val gen = Jade.renderGeneration
+    val valid = !cacheDirty and cacheGen == gen and cacheW == w and cacheH == h and cacheScaleX == sx and cacheScaleY == sy and cacheStyle == st and cache != null
+    val area = cacheArea
+    cacheArea = null
+    if (valid and area != null) {
+      // Only a part changed: that part of the kept picture wiped and painted again.
+      val part = cache!!.canvas().clipped(area.x, area.y, area.width, area.height)
+      part.clearRect(area.x, area.y, area.width, area.height)
+      content.paint(part)
+    }
+    if (!valid) {
+      val old = cache
+      val kept = old != null and old.deviceWidth == pw and old.deviceHeight == ph ? old : Surface(w, h, sx)
+      cache = kept
+      val into = kept.canvas()
+      into.clearRect(0, 0, w, h)         // the picture is used again: wiped first
+      content.paint(into)
+      cacheW = w
+      cacheH = h
+      cacheGen = gen
+      cacheScaleX = sx
+      cacheScaleY = sy
+      cacheStyle = st
+      cacheDirty = false
+    }
+    canvas.draw(cache!!, 0, 0)        // pixel for pixel: it was painted at the canvas's own scale
+    if (content is OverlayContent) { content.paintOverlay(canvas) }   // never kept
+  }
+
+  // ---- Setting it up, one call after another ----
+
+  fun withId(id : string) : Component {
+    this.id = id
+    return this
+  }
+  fun tooltip(text : string?) : Component {
+    this.tooltip = text
+    return this
+  }
+  fun background(color : Color?) : Component {
+    this.background = color
+    return this
+  }
+  fun foreground(color : Color?) : Component {
+    this.foreground = color
+    return this
+  }
+  fun preferredSize(size : Size?) : Component {
+    prefSizeOverride = size
+    return this
+  }
+  fun minimumSize(size : Size?) : Component {
+    minSizeOverride = size
+    return this
+  }
+  fun maximumSize(size : Size?) : Component {
+    maxSizeOverride = size
+    return this
+  }
+
+  // ---- Layout ----
+
+  // Gives the component a size and has its content place whatever is inside it.
+  fun layout(width : int, height : int) {
+    bounds = Rect(0, 0, width, height)
+    val c = content
+    if (c is Container) { c.layoutChildren(width, height) }
+  }
+
+  // The components its content shows, and all the ones it holds (which for some containers
+  // is more: the tabs that are not in front).
+  fun childComponents() : List<Component> {
+    val c = content
+    return c is Container ? c.shownChildren() : []
+  }
+  fun structuralChildren() : List<Component> {
+    val c = content
+    return c is Container ? c.heldChildren() : []
+  }
+
+  // ---- Pictures of it ----
+
+  // Lays the component out at a size and paints it into a new picture, drawn on the graphics
+  // card as a window is.
+  fun renderFrame(width : int, height : int) : Image {
+    val drawn = Surface(Math.max(width, 1), Math.max(height, 1))
+    layout(width, height)
+    paintInto(drawn.canvas())
+    return drawn.toImage()
+  }
+
+  // The same with nothing kept from before, so that it shows the component as it now is.
+  // With a scale the picture has that many pixels to the unit, across and down alike, as a
+  // screen has (8.9i).
+  fun renderToImage(width : int, height : int, scale : float? = null) : Image {
+    Jade.invalidateRenderCaches()
+    if (scale == null) { return renderFrame(width, height) }
+    val drawn = Surface(Math.max(width, 1), Math.max(height, 1), scale)
+    val before = Jade.layoutScale
+    Jade.layoutScale = scale               // measured for the screen the picture stands for
+    try {
+      layout(width, height)
+      paintInto(drawn.canvas())
+    } finally {
+      Jade.layoutScale = before
+    }
+    return drawn.toImage()
+  }
+
+  // Paints it into a picture that is used again frame after frame. The picture is wiped
+  // first, or only `clip` (a Rect) is, and then only that part is painted.
+  fun renderInto(target : Surface, width : int, height : int, scaleX : float, scaleY : float, doLayout : bool = true, clip : Rect? = null) {
+    renderOnto(target.canvasAt(width, height, scaleX), width, height, doLayout, clip)
+  }
+
+  // The same on a canvas: a window's, say.
+  fun renderOnto(canvas : NativeCanvas, width : int, height : int, doLayout : bool = true, clip : Rect? = null) {
+    val onto = clip == null ? canvas : canvas.clipped(clip.x, clip.y, clip.width, clip.height)
+    if (clip == null) { onto.clearRect(0, 0, width, height) } else { onto.clearRect(clip.x, clip.y, clip.width, clip.height) }
+    if (doLayout) { layout(width, height) }
+    paintInto(onto)
+  }
+
+  // What it would draw, as a list of DrawOp, with no window and no picture.
+  fun record(width : int, height : int) : List<DrawOp> {
+    val ops = []
+    layout(width, height)
+    paintInto(RecordingCanvas(width, height, ops))
+    return ops
+  }
+
+  // ---- Events ----
+
+  // The child of this component's content that a point falls on, and where its corner is;
+  // null if the point is the component's own.
+  private fun positionalChild(px : int, py : int) : PositionalChild? {
+    val c = content
+    return c is Container ? c.childAtPoint(px, py) : null
+  }
+
+  // Hands an event to whatever it is for: an event with a position goes down to the
+  // component under it, with the position made that component's own.
+  fun dispatch(event : Event) {
+    if (!visible or !enabled) { return }
+    if (event is Event.Wheel) {
+      dispatchWheel(event)
+      return
+    }
+    val at = positionOf(event)
+    if (at == null) {
+      content.onEvent(event)             // keys and commands have no place
+      return
+    }
+    val hit = positionalChild(at.x, at.y)
+    if (hit != null) {
+      hit.child.dispatch(movedBy(event, -hit.offsetX, -hit.offsetY))
+      return
+    }
+    content.onEvent(event)
+  }
+
+  // Where an event happened, for the kinds that happen somewhere; null for the others.
+  private fun positionOf(event : Event) : Point? {
+    if (event is Event.Click) { return Point(event.x, event.y) }
+    if (event is Event.Drag) { return Point(event.x, event.y) }
+    if (event is Event.Release) { return Point(event.x, event.y) }
+    if (event is Event.Context) { return Point(event.x, event.y) }
+    if (event is Event.Hover) { return Point(event.x, event.y) }
+    return null
+  }
+
+  // The same event, moved by (dx, dy), with all else as it was.
+  private fun movedBy(event : Event, dx : int, dy : int) : Event {
+    if (event is Event.Click) { return event.copy(x = event.x + dx, y = event.y + dy) }
+    if (event is Event.Drag) { return event.copy(x = event.x + dx, y = event.y + dy) }
+    if (event is Event.Release) { return event.copy(x = event.x + dx, y = event.y + dy) }
+    if (event is Event.Context) { return event.copy(x = event.x + dx, y = event.y + dy) }
+    if (event is Event.Hover) { return event.copy(x = event.x + dx, y = event.y + dy) }
+    return event
+  }
+
+  // The wheel goes to the innermost thing under the pointer that can use it. True if
+  // something did.
+  fun dispatchWheel(event : Event.Wheel) : bool {
+    if (!visible or !enabled) { return false }
+    val hit = positionalChild(event.x, event.y)
+    if (hit != null) {
+      if (hit.child.dispatchWheel(event.copy(x = event.x - hit.offsetX, y = event.y - hit.offsetY))) { return true }
+    }
+    val c = content
+    if (c is Container) { return c.takeWheel(event) }   // a viewport, if it could move
+    if (hit == null) {
+      if (c is WheelTarget) { return c.wheel(event) }
+      c.onEvent(event)                   // a leaf may still want it
+    }
+    return false
+  }
+
+  // A press and its release at a point, and a drag to one: for tests.
+  fun click(x : int, y : int) {
+    dispatch(Event.Click(x, y))
+    dispatch(Event.Release(x, y))
+  }
+  fun drag(x : int, y : int) {
+    dispatch(Event.Drag(x, y))
+  }
+
+  // The innermost component at a point; this one if none of its children is there.
+  fun componentAt(x : int, y : int) : Component? {
+    if (!visible) { return null }
+    val hit = positionalChild(x, y)
+    if (hit == null) { return this }
+    return hit.child.componentAt(x - hit.offsetX, y - hit.offsetY)
+  }
+
+  // The pointer the innermost component at a point wants.
+  fun cursorAt(x : int, y : int) : CursorKind {
+    if (!visible) { return CursorKind.default }
+    val hit = positionalChild(x, y)
+    if (hit != null) { return hit.child.cursorAt(x - hit.offsetX, y - hit.offsetY) }
+    val c = content
+    return c is CursorProvider ? c.cursorAt(x, y) : CursorKind.default
+  }
+
+  // The innermost component at a point together with where its corner is in this one, so
+  // that later positions can be made its own.
+  fun componentPathAt(x : int, y : int) : CapturedTarget? {
+    if (!visible) { return null }
+    val hit = positionalChild(x, y)
+    if (hit == null) { return CapturedTarget(this, 0, 0) }
+    val deeper = hit.child.componentPathAt(x - hit.offsetX, y - hit.offsetY)
+    if (deeper == null) { return null }
+    return CapturedTarget(deeper.component, deeper.offsetX + hit.offsetX, deeper.offsetY + hit.offsetY)
+  }
+
+  // ---- The keyboard ----
+
+  // Whether it is something the keyboard can belong to: what Tab moves between, and what a press
+  // may give the keyboard to. A button, a tab strip, a label or a scroll bar is not, so that
+  // pressing one leaves the keyboard where it was.
+  fun takesKeys() : bool {
+    val c = content
+    return c is TextEditable or c is ListBox or c is Tree or c is Table or c is DropdownProvider or c is FocusTarget
+  }
+
+  // The text it edits, or null if it edits none.
+  internal fun textModel() : SharedTextModel? {
+    val c = content
+    return c is TextEditable ? c.model : null
+  }
+
+  // The components in it that take the keyboard, in the order Tab goes through them.
+  fun focusables() : List<Component> {
+    val out = []
+    collectFocusables(out)
+    return out
+  }
+  fun collectFocusables(out : open List<Component>) {
+    if (!visible) { return }
+    if (takesKeys()) {
+      out.add(this)
+      return
+    }
+    for (child in childComponents()) { child.collectFocusables(out) }
+  }
+
+  // ---- Finding things ----
+
+  // This component and everything in it. Hidden ones, and the ones their containers hold
+  // without showing, only if asked for.
+  fun descendants(includeHidden : bool = false) : List<Component> {
+    val out = []
+    collectDescendants(out, includeHidden)
+    return out
+  }
+  fun collectDescendants(out : open List<Component>, includeHidden : bool) {
+    if (!includeHidden and !visible) { return }
+    out.add(this)
+    for (child in includeHidden ? structuralChildren() : childComponents()) { child.collectDescendants(out, includeHidden) }
+  }
+
+  // The component with an id, in this one or below it.
+  fun find(id : string) : Component? {
+    if (this.id == id) { return this }
+    for (child in structuralChildren()) {
+      val found = child.find(id)
+      if (found != null) { return found }
+    }
+    return null
+  }
+
+  // Where its corner is in the window.
+  fun windowPosition() : Point {
+    var x = 0
+    var y = 0
+    var c : Component? = this
+    while (c != null) {
+      x += c.bounds.x
+      y += c.bounds.y
+      // A container that draws what it holds moved (a scroll) has that left out of the bounds.
+      val holder = c.parent?.content
+      if (holder is Container) { y -= holder.childShiftY() }
+      c = c.parent
+    }
+    return Point(x, y)
+  }
+
+  override fun toString() : string => "Component(" + (id ?: content#.name) + ")"
+}
+
+internal class PositionalChild(val child : Component, val offsetX : int, val offsetY : int)
+
+// A content that holds components of its own (M7): a grid, a scroll, a split, tabs, the
+// screen. The toolkit asks it how to lay them out, which it shows and which a point falls on,
+// rather than testing for each kind of container, as JadeUI does.
+internal interface Container {
+  // Places what it holds within its own width and height.
+  fun layoutChildren(width : int, height : int)
+  // What it shows: where events, the keyboard and finding things go.
+  fun shownChildren() : List<Component>
+  // All it holds, shown or not: what is given it as a parent. More than it shows for some
+  // (the tabs not in front).
+  fun heldChildren() : List<Component> => shownChildren()
+  // The child a point falls on and where its corner is; null if the point is its own.
+  fun childAtPoint(px : int, py : int) : PositionalChild?
+  // Whether a picture of it may be kept: not when what it shows moves without it changing.
+  fun keepsPicture() : bool => true
+  // How far up it draws its children from where their bounds put them (a scroll's offset).
+  fun childShiftY() : int => 0
+  // The wheel, when none of its children took it: true if it used it (a viewport that moved).
+  fun takeWheel(event : Event.Wheel) : bool => false
+}
+
+// A component and where its corner is in the tree it was found in.
+class CapturedTarget(val component : Component, val offsetX : int, val offsetY : int)
+
+// ---- Making components ----
+
+fun label(text : string) : Component => Component(Label(text))
+
+fun button(text : string, onClick : () -> unit = {}) : Component => Component(Button(text, onClick))
+
+// A text field, with a text of its own or showing a model it shares with others.
+fun textField(text : string = "") : Component => Component(TextField(SharedTextModel(text)))
+fun textField(model : SharedTextModel) : Component => Component(TextField(model))
+
+// A grid built by a block that runs on it:
+//
+//   grid {
+//     hgap = 8
+//     row { cell(label("Name:")); cell(button("OK") { save() }) }
+//   }
+fun grid(id : string? = null, build : GridPane.() -> unit) : Component {
+  val g = GridPane()
+  if (id != null) { g.viewId = id }
+  g.apply(build)
+  val made = Component(g)
+  if (id != null) { made.id = id }
+  return made
+}
+
+// ---- Who gets the keyboard ----
+
+// The component Tab moves to from `current`, among those that take the keyboard, passing over
+// the fields that show the same text as it (moving to one would change nothing).
+fun nextFocus(focusables : List<Component>, current : Component?, forward : bool) : Component? {
+  val size = focusables.size
+  if (size == 0) { return null }
+  val currentModel = current?.textModel()
+  var n = -1
+  for (i in 0..<size) {
+    if (focusables[i] === current) { n = i }
+  }
+  for (step in 0..<size) {
+    n = forward ? n + 1 : n - 1
+    val candidate = focusables[((n % size) + size) % size]
+    if (candidate === current) { break }                 // all the way round
+    if (currentModel == null or candidate.textModel() !== currentModel) { return candidate }
+  }
+  return current
+}
+
+// Who has the keyboard after a press: what was pressed if it takes keys, unless what has
+// the keyboard now holds on to it.
+fun focusAfterPress(current : Component?, pressed : CapturedTarget?, x : int, y : int) : Component? {
+  if (pressed == null) { return current }
+  val p = pressed.component
+  if (current != null and p !== current) {
+    val holder = current.content
+    if (holder is FocusHolder and holder.holdsFocusOnPress(p, x - pressed.offsetX, y - pressed.offsetY)) { return current }
+  }
+  return p.takesKeys() ? p : current
+}
