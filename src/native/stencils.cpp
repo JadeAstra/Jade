@@ -17,6 +17,8 @@
 //                                     the way out to the VM this step has
 //   ww_kf, ww_ki                  a float or an int constant
 //   ww_slot, ww_slot2             slots of the frame
+//   ww_slotat, ww_slot2at         those slots' offsets in the frame, built into the instruction
+//                                     itself (a 32-bit value, not a word after the code)
 //   ww_ret                          what the region gives back: where the VM goes on
 // Each is reached through a word placed after the region's code (a 32-bit offset from the
 // instruction), so that no stencil needs an absolute address.
@@ -94,6 +96,30 @@ struct Whole {
         return *this;
     }
 };
+// The frame's slot ww_slot (ww_slot2): its offset built into the instruction (the gaps
+// ww_slotat, ww_slot2at, filled with the slot's offset itself; 2026-11-14). Before, the slot's
+// number was read from a word placed after the code and shifted before the slot could be: three
+// instructions, two reads of memory one after the other, for what is now one (a load, a store)
+// or one before the reads of it (an address).
+INLINE Slot* slotAt(Slot* base) {
+    Slot* s;
+    __asm__("leaq ww_slotat(%1), %0" : "=r"(s) : "r"(base));
+    return s;
+}
+INLINE Slot* slot2At(Slot* base) {
+    Slot* s;
+    __asm__("leaq ww_slot2at(%1), %0" : "=r"(s) : "r"(base));
+    return s;
+}
+// Slot ww_slot (ww_slot2) written whole, in one store (see storeSlot), the store's place built in.
+INLINE void storeSlotAt(Slot* base, uint8_t kind, uint64_t bits) {
+    const __m128i v = _mm_set_epi64x(static_cast<int64_t>(bits), kind);
+    __asm__ volatile("movdqu %1, ww_slotat(%0)" : : "r"(base), "x"(v) : "memory");
+}
+INLINE void storeSlot2At(Slot* base, uint8_t kind, uint64_t bits) {
+    const __m128i v = _mm_set_epi64x(static_cast<int64_t>(bits), kind);
+    __asm__ volatile("movdqu %1, ww_slot2at(%0)" : : "r"(base), "x"(v) : "memory");
+}
 INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
     // One store of the whole slot (2026-11-13): what reads it whole after (the VM's copies of a
     // value) is given it at once, where four stores of its parts had the read wait for them all
@@ -136,6 +162,56 @@ INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
 #define f21 (Whole{v5})
 #define f22 (Whole{v6})
 #define f23 (Whole{v7})
+// Each float register's XMM register, and an 8-byte load into it: movlps into a low half,
+// movhps into a high one (the other half kept), movsd whole (f16 to f23).
+#define FVEC_0 v0
+#define FVEC_1 v1
+#define FVEC_2 v2
+#define FVEC_3 v3
+#define FVEC_4 v4
+#define FVEC_5 v5
+#define FVEC_6 v6
+#define FVEC_7 v7
+#define FVEC_8 v0
+#define FVEC_9 v1
+#define FVEC_10 v2
+#define FVEC_11 v3
+#define FVEC_12 v4
+#define FVEC_13 v5
+#define FVEC_14 v6
+#define FVEC_15 v7
+#define FVEC_16 v0
+#define FVEC_17 v1
+#define FVEC_18 v2
+#define FVEC_19 v3
+#define FVEC_20 v4
+#define FVEC_21 v5
+#define FVEC_22 v6
+#define FVEC_23 v7
+#define FLOADOP_0 "movlps"
+#define FLOADOP_1 "movlps"
+#define FLOADOP_2 "movlps"
+#define FLOADOP_3 "movlps"
+#define FLOADOP_4 "movlps"
+#define FLOADOP_5 "movlps"
+#define FLOADOP_6 "movlps"
+#define FLOADOP_7 "movlps"
+#define FLOADOP_8 "movhps"
+#define FLOADOP_9 "movhps"
+#define FLOADOP_10 "movhps"
+#define FLOADOP_11 "movhps"
+#define FLOADOP_12 "movhps"
+#define FLOADOP_13 "movhps"
+#define FLOADOP_14 "movhps"
+#define FLOADOP_15 "movhps"
+#define FLOADOP_16 "movsd"
+#define FLOADOP_17 "movsd"
+#define FLOADOP_18 "movsd"
+#define FLOADOP_19 "movsd"
+#define FLOADOP_20 "movsd"
+#define FLOADOP_21 "movsd"
+#define FLOADOP_22 "movsd"
+#define FLOADOP_23 "movsd"
 #define WW_STENCIL extern "C" __attribute__((preserve_none)) int64_t
 
 WW_STENCIL ww_next(PARAMS);
@@ -454,8 +530,8 @@ STENCIL(jtrue) {
 }
 // A bool slot read into the flag register, leaving for the VM where it holds no bool.
 STENCIL(loadflag) {
-    if (base[ww_slot].kind != kKindBool) EXIT;
-    i9 = static_cast<uint8_t>(base[ww_slot].i) != 0;
+    if ((*slotAt(base)).kind != kKindBool) EXIT;
+    i9 = static_cast<uint8_t>((*slotAt(base)).i) != 0;
     NEXT;
 }
 
@@ -465,7 +541,7 @@ STENCIL(loadflag) {
 // range; anything else the VM's.
 #define IDXF_B(c, a)                                                            \
     STENCIL(idxf_##a##_##c) {                                                   \
-        const uint8_t* list = objectIn(base[ww_slot], kTypeList);             \
+        const uint8_t* list = objectIn((*slotAt(base)), kTypeList);             \
         if (list == nullptr || !mayRead(list, ctx)) EXIT;                       \
         const uint8_t* pack = packOf(list, kStoreFloats);                       \
         if (pack == nullptr || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
@@ -476,7 +552,7 @@ STENCIL(loadflag) {
 F_W(IDXF_A, x)
 #define IDXFK(a, ...)                                                           \
     STENCIL(idxfk_##a) {                                                        \
-        const uint8_t* list = objectIn(base[ww_slot], kTypeList);             \
+        const uint8_t* list = objectIn((*slotAt(base)), kTypeList);             \
         if (list == nullptr || !mayRead(list, ctx)) EXIT;                       \
         const uint8_t* pack = packOf(list, kStoreFloats);                       \
         if (pack == nullptr || static_cast<uint64_t>(ww_ki) >= word<uint64_t>(pack + kPackCount)) EXIT; \
@@ -518,7 +594,7 @@ INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out
 #define IDXW_B(c, a)                                                            \
     STENCIL(idxw_##a##_##c) {                                                   \
         int64_t v;                                                              \
-        if (!wholeItem(base[ww_slot], i##c, ctx, v)) EXIT;                    \
+        if (!wholeItem((*slotAt(base)), i##c, ctx, v)) EXIT;                    \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -527,7 +603,7 @@ I_A(IDXW_A, x)
 #define IDXWK(a, ...)                                                           \
     STENCIL(idxwk_##a) {                                                        \
         int64_t v;                                                              \
-        if (!wholeItem(base[ww_slot], ww_ki, ctx, v)) EXIT;                 \
+        if (!wholeItem((*slotAt(base)), ww_ki, ctx, v)) EXIT;                 \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -563,7 +639,7 @@ INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
 }
 #define SETF_B(c, v)                                                            \
     STENCIL(setf_##v##_##c) {                                                   \
-        uint8_t* at = listToChange(base[ww_slot], i##c, kStoreFloats, ctx);   \
+        uint8_t* at = listToChange((*slotAt(base)), i##c, kStoreFloats, ctx);   \
         if (at == nullptr) EXIT;                                                \
         { const double d_ = f##v; __builtin_memcpy(at, &d_, 8); }                                              \
         NEXT;                                                                   \
@@ -572,7 +648,7 @@ INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
 F_A(SETF_A, x)
 #define SETW_B(c, v)                                                            \
     STENCIL(setwi_##v##_##c) {                                                  \
-        const Slot& s = base[ww_slot];                                        \
+        const Slot& s = (*slotAt(base));                                        \
         if (s.kind == kKindObj && (s.p[kObjType] == kTypeBytes || (s.p[kObjType] == kTypeList && bytesPack(s.p) != nullptr))) { \
             uint8_t* at = byteToChange(s, i##c, ctx);                           \
             if (at == nullptr || static_cast<uint64_t>(i##v) > 255) EXIT;       \
@@ -585,10 +661,10 @@ F_A(SETF_A, x)
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setwb_##v##_##c) {                                                  \
-        uint8_t* at = byteToChange(base[ww_slot], i##c, ctx);                 \
+        uint8_t* at = byteToChange((*slotAt(base)), i##c, ctx);                 \
         if (at == nullptr) {                                                    \
             /* a byte into a list of ints: the int it is */                     \
-            uint8_t* item = listToChange(base[ww_slot], i##c, kStoreInts, ctx); \
+            uint8_t* item = listToChange((*slotAt(base)), i##c, kStoreInts, ctx); \
             if (item == nullptr) EXIT;                                          \
             __builtin_memcpy(item, &i##v, 8);                                   \
             NEXT;                                                               \
@@ -614,13 +690,13 @@ INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
 }
 #define IDXP_B(c, a)                                                            \
     STENCIL(idxpb_##a##_##c) {                                                  \
-        const uint8_t* at = itemField(base[ww_slot], i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(idxpi_##a##_##c) {                                                  \
-        const uint8_t* at = itemField(base[ww_slot], i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
@@ -629,7 +705,7 @@ INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
 I_A(IDXP_A, x)
 #define IDXPF_B(c, a)                                                           \
     STENCIL(idxpf_##a##_##c) {                                                  \
-        const uint8_t* at = itemField(base[ww_slot], i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -656,11 +732,11 @@ INLINE const uint8_t* itemsList(const Slot& s, const Ctx* ctx) {
 }
 #define IREF(c, ...)                                                            \
     STENCIL(iref_##c) {                                                         \
-        const uint8_t* list = itemsList(base[ww_slot], ctx);                  \
+        const uint8_t* list = itemsList((*slotAt(base)), ctx);                  \
         if (list == nullptr) EXIT;                                              \
         const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
         if (static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
-        putValue(&base[ww_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(list)); \
+        putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(list)); \
         NEXT;                                                                   \
     }
 I_A(IREF, x)
@@ -670,7 +746,7 @@ I_A(IREF, x)
 // number (ww_slot2 >> 32). Anything else the VM's.
 #define IDXSM(c, ...)                                                           \
     STENCIL(idxsm_##c) {                                                        \
-        const uint8_t* list = itemsList(base[ww_slot], ctx);                  \
+        const uint8_t* list = itemsList((*slotAt(base)), ctx);                  \
         if (list == nullptr) EXIT;                                              \
         const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
         if (word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr || \
@@ -689,7 +765,7 @@ I_A(IDXSM, x)
 STENCIL(getg) {
     const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + ww_ki;
     if (g->kind == kKindUndefined) EXIT;
-    __builtin_memcpy(&base[ww_slot2], g, sizeof(Slot));
+    __builtin_memcpy(&(*slot2At(base)), g, sizeof(Slot));
     NEXT;
 }
 // Making a value of a value type kept in the value itself, from its header's byte fields (B3:
@@ -701,7 +777,7 @@ STENCIL(getg) {
 I_A(PACKB_A, x)
 #define MKSM(a, ...)                                                            \
     STENCIL(mksm_##a) {                                                         \
-        const Slot& f = base[ww_slot];                                        \
+        const Slot& f = (*slotAt(base));                                        \
         if (f.kind != kKindObj || reinterpret_cast<int64_t>(f.p) != ww_ki) EXIT; \
         const uint64_t what = static_cast<uint64_t>(ww_slot2);                \
         putValue(&base[what & 0xFFFFFFFF], kKindSmall | (what >> 32) << 32, static_cast<uint64_t>(i##a)); \
@@ -713,11 +789,11 @@ I_A(MKSM, x)
 // range. Anything else the VM's.
 #define PLACEI(c, ...)                                                          \
     STENCIL(placei_##c) {                                                       \
-        const Slot& s = base[ww_slot];                                        \
+        const Slot& s = (*slotAt(base));                                        \
         if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
         const uint8_t* pack = packOf(s.p, kStoreItems);                         \
         if (pack == nullptr || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
-        putValue(&base[ww_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(s.p)); \
+        putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(s.p)); \
         NEXT;                                                                   \
     }
 I_A(PLACEI, x)
@@ -728,7 +804,7 @@ I_A(PLACEI, x)
 // that item itself (made there already). Anything else the VM's.
 #define SETSM(c, ...)                                                           \
     STENCIL(setsm_##c) {                                                        \
-        const Slot& s = base[ww_slot];                                        \
+        const Slot& s = (*slotAt(base));                                        \
         if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
         const uint8_t* pack = packOf(s.p, kStoreItems);                         \
         if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr || \
@@ -750,7 +826,7 @@ I_A(SETSM, x)
 // first (ww_slot2 & 0xFF) bytes, of the type numbered (ww_slot2 >> 32); anything but a Ref
 // as it is. Any other Ref the VM's (a box, or a frame's place, which stays).
 STENCIL(ownsm) {
-    Slot& s = base[ww_slot];
+    Slot& s = (*slotAt(base));
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
     if ((head & 0xFF) != kKindRef) NEXT;
     if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
@@ -781,26 +857,26 @@ STENCIL(ownsm) {
 // R_GET_UPVALUE reads it (2026-11-13: a loop in a lambda reading a variable around it).
 STENCIL(getuv) {
     const uint8_t* cell = ctx->upvalues[ww_ki];
-    __builtin_memcpy(&base[ww_slot2], word<const Slot*>(cell + kUpvalueLocation), sizeof(Slot));
+    __builtin_memcpy(&(*slot2At(base)), word<const Slot*>(cell + kUpvalueLocation), sizeof(Slot));
     NEXT;
 }
 // The flag register = whether slot ww_slot holds an object of exactly the class global ww_ki
 // holds (JumpIfNotClass: a method put in place behind the check, 2026-11-13).
 STENCIL(clsflag) {
-    const Slot& s = base[ww_slot];
+    const Slot& s = (*slotAt(base));
     const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + ww_ki;
     i9 = s.kind == kKindObj && s.p[kObjType] == kTypeInstance && g->kind == kKindObj && word<const uint8_t*>(s.p + kInstClass) == g->p;
     NEXT;
 }
 // `value!!` where slot ww_slot is in memory: nothing, unless it is null, which the VM throws for.
 STENCIL(notnull) {
-    if (base[ww_slot].kind == kKindNull) EXIT;
+    if ((*slotAt(base)).kind == kKindNull) EXIT;
     NEXT;
 }
 // KeepLocal where slot ww_slot is in memory: nothing, unless it holds a Ref to a place of the
 // frame's, which the VM copies.
 STENCIL(keepl) {
-    const Slot& s = base[ww_slot];
+    const Slot& s = (*slotAt(base));
     if ((word<uint64_t>(reinterpret_cast<const uint8_t*>(&s)) & 0xFF) == kKindRef && s.p[kObjType] == kTypePlaces) EXIT;
     NEXT;
 }
@@ -826,13 +902,13 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
 }
 #define VALP(a, ...)                                                            \
     STENCIL(valpb_##a) {                                                        \
-        const uint8_t* at = valueField(base[ww_slot], ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(valpi_##a) {                                                        \
-        const uint8_t* at = valueField(base[ww_slot], ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
@@ -840,7 +916,7 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
 I_A(VALP, x)
 #define VALPF(a, ...)                                                           \
     STENCIL(valpf_##a) {                                                        \
-        const uint8_t* at = valueField(base[ww_slot], ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -855,37 +931,43 @@ F_W(VALPF, x)
 // is bytes, an int otherwise); a slot copied whole from another (copyslot: what a pushed object
 // stands for).
 #define ILOAD(a, ...)                                                           \
-    STENCIL(loadi_##a) { i##a = base[ww_slot].i; NEXT; }                      \
+    STENCIL(loadi_##a) {                                                        \
+        __asm__("movq ww_slotat+8(%1), %0" : "=r"(i##a) : "r"(base) : "memory"); \
+        NEXT;                                                                   \
+    }                                                                           \
     STENCIL(storei_##a) {                                                       \
-        storeSlot(base, ww_slot, kKindInt, static_cast<uint64_t>(i##a));      \
+        storeSlotAt(base, kKindInt, static_cast<uint64_t>(i##a));      \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(storeby_##a) {                                                      \
-        storeSlot(base, ww_slot, kKindByte, static_cast<uint64_t>(i##a));     \
+        storeSlotAt(base, kKindByte, static_cast<uint64_t>(i##a));     \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(storew_##a) {                                                       \
-        const Slot& o = base[ww_slot2];                                       \
+        const Slot& o = (*slot2At(base));                                       \
         const bool bytes = o.kind == kKindObj && o.p[kObjType] == kTypeBytes;   \
-        storeSlot(base, ww_slot, bytes ? kKindByte : kKindInt, static_cast<uint64_t>(i##a)); \
+        storeSlotAt(base, bytes ? kKindByte : kKindInt, static_cast<uint64_t>(i##a)); \
         NEXT;                                                                   \
     }
 I_A(ILOAD, x)
 #define FLOAD(a, ...)                                                           \
-    STENCIL(loadf_##a) { f##a = base[ww_slot].d; NEXT; }                      \
+    STENCIL(loadf_##a) {                                                        \
+        __asm__(FLOADOP_##a " ww_slotat+8(%1), %0" : "+x"(FVEC_##a) : "r"(base) : "memory"); \
+        NEXT;                                                                   \
+    }                                                                           \
     STENCIL(storef_##a) {                                                       \
         uint64_t bits;                                                          \
         { const double d_ = f##a; __builtin_memcpy(&bits, &d_, 8); }                                           \
-        storeSlot(base, ww_slot, kKindFloat, bits);                           \
+        storeSlotAt(base, kKindFloat, bits);                           \
         NEXT;                                                                   \
     }
 F_W(FLOAD, x)
 STENCIL(storeb) {
-    storeSlot(base, ww_slot, kKindBool, i9 != 0);
+    storeSlotAt(base, kKindBool, i9 != 0);
     NEXT;
 }
 STENCIL(copyslot) {
-    __builtin_memcpy(&base[ww_slot], &base[ww_slot2], sizeof(Slot));
+    __builtin_memcpy(&(*slotAt(base)), &(*slot2At(base)), sizeof(Slot));
     NEXT;
 }
 
@@ -905,12 +987,12 @@ STENCIL(ret) { return ww_ret; }
 // A slot the region has not written, checked to hold what an untyped instruction is taken to
 // read in it: a whole number, or a float. Where it does not, the VM does the instruction.
 STENCIL(chki) {
-    const uint8_t k = base[ww_slot].kind;
+    const uint8_t k = (*slotAt(base)).kind;
     if (k != kKindInt && k != kKindByte) EXIT;
     NEXT;
 }
 STENCIL(chkf) {
-    if (base[ww_slot].kind != kKindFloat) EXIT;
+    if ((*slotAt(base)).kind != kKindFloat) EXIT;
     NEXT;
 }
 
@@ -948,12 +1030,12 @@ I_A(RCNT_A, x)
 I_A(IADDWK, x)
 // A slot checked to hold an int (not a byte): what the VM's range asks of its bounds.
 STENCIL(chkint) {
-    if (base[ww_slot].kind != kKindInt) EXIT;
+    if ((*slotAt(base)).kind != kKindInt) EXIT;
     NEXT;
 }
 // The object a whole number was read from checked to be no bytes: the number an int, not a byte.
 STENCIL(chklist) {
-    const Slot& o = base[ww_slot];
+    const Slot& o = (*slotAt(base));
     if (o.kind == kKindObj && o.p[kObjType] == kTypeBytes) EXIT;
     NEXT;
 }
@@ -962,7 +1044,7 @@ STENCIL(chklist) {
 // arithmetic, whatever it is (an int beside a float makes a float); anything else the VM's.
 #define NUMF(a, ...)                                                            \
     STENCIL(numf_##a) {                                                         \
-        const Slot& v = base[ww_slot];                                        \
+        const Slot& v = (*slotAt(base));                                        \
         if (v.kind == kKindFloat) f##a = v.d;                                   \
         else if (v.kind == kKindInt) f##a = static_cast<double>(v.i);           \
         else EXIT;                                                              \
@@ -971,7 +1053,7 @@ STENCIL(chklist) {
 F_W(NUMF, x)
 // A slot checked to hold a byte (what the region takes a slot entered as a byte to hold).
 STENCIL(chkbyk) {
-    if (base[ww_slot].kind != kKindByte) EXIT;
+    if ((*slotAt(base)).kind != kKindByte) EXIT;
     NEXT;
 }
 
@@ -1030,7 +1112,7 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
 #define GETPF(a, ...)                                                           \
     STENCIL(getpf_##a) {                                                        \
         uint64_t seen, bits;                                                    \
-        const uint8_t* at = fieldAt(base[ww_slot], ctx, false, seen);         \
+        const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindFloat, bits)) EXIT;    \
         { double d_; __builtin_memcpy(&d_, &bits, 8); f##a = d_; }                                           \
         NEXT;                                                                   \
@@ -1038,20 +1120,20 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
     STENCIL(setpf_##a) {                                                        \
         uint64_t bits;                                                          \
         { const double d_ = f##a; __builtin_memcpy(&bits, &d_, 8); }                                           \
-        if (!setNumberField(base[ww_slot], ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
+        if (!setNumberField((*slotAt(base)), ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
         NEXT;                                                                   \
     }
 F_W(GETPF, x)
 #define GETPI(a, ...)                                                           \
     STENCIL(getpi_##a) {                                                        \
         uint64_t seen, bits;                                                    \
-        const uint8_t* at = fieldAt(base[ww_slot], ctx, false, seen);         \
+        const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindInt, bits)) EXIT;      \
         i##a = static_cast<int64_t>(bits);                                      \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setpi_##a) {                                                        \
-        if (!setNumberField(base[ww_slot], ctx, kKindInt, kTypeIdInt, static_cast<uint64_t>(i##a))) EXIT; \
+        if (!setNumberField((*slotAt(base)), ctx, kKindInt, kTypeIdInt, static_cast<uint64_t>(i##a))) EXIT; \
         NEXT;                                                                   \
     }
 I_A(GETPI, x)
@@ -1077,7 +1159,7 @@ INLINE bool sizeOf(const Slot& s, const Ctx* ctx, int64_t& out) {
 #define SIZEW(a, ...)                                                           \
     STENCIL(sizew_##a) {                                                        \
         int64_t v;                                                              \
-        if (!sizeOf(base[ww_slot], ctx, v)) EXIT;                             \
+        if (!sizeOf((*slotAt(base)), ctx, v)) EXIT;                             \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -1086,16 +1168,16 @@ I_A(SIZEW, x)
 // A field of any kind copied to slot ww_slot2, as the VM copies it (no value held elsewhere).
 STENCIL(getpv) {
     uint64_t seen;
-    const uint8_t* at = fieldAt(base[ww_slot], ctx, false, seen);
+    const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);
     if (at == nullptr) EXIT;
     if ((seen & 0x80) != 0) {
         uint64_t bits;
         __builtin_memcpy(&bits, at, 8);
-        storeSlot(base, ww_slot2, static_cast<uint8_t>(seen & 3), bits);
+        storeSlot2At(base, static_cast<uint8_t>(seen & 3), bits);
         NEXT;
     }
     if (at[0] == kKindRef || at[0] == kKindUndefined) EXIT;
-    __builtin_memcpy(&base[ww_slot2], at, sizeof(Slot));
+    __builtin_memcpy(&(*slot2At(base)), at, sizeof(Slot));
     NEXT;
 }
 
@@ -1113,13 +1195,13 @@ INLINE uint8_t* listIterator(const Slot& s, const uint8_t*& list) {
 // are no more.
 STENCIL(iterv) {
     const uint8_t* list;
-    uint8_t* it = listIterator(base[ww_slot], list);
+    uint8_t* it = listIterator((*slotAt(base)), list);
     if (it == nullptr || word<const uint8_t*>(list + kListPack) != nullptr) EXIT;
     const Slot* first = word<const Slot*>(list + kListItems);
     const Slot* last = word<const Slot*>(list + kListItems + 8);
     const uint64_t index = word<uint64_t>(it + kIterIndex);
     if (index >= static_cast<uint64_t>(last - first)) JUMP;
-    __builtin_memcpy(&base[ww_slot2], first + index, sizeof(Slot));
+    __builtin_memcpy(&(*slot2At(base)), first + index, sizeof(Slot));
     const uint64_t next = index + 1;
     __builtin_memcpy(it + kIterIndex, &next, 8);
     NEXT;
@@ -1135,7 +1217,7 @@ INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, const Ctx* ct
 #define ITERF(a, ...)                                                           \
     STENCIL(iterf_##a) {                                                        \
         uint8_t* it;                                                            \
-        const uint8_t* pack = packedIterator(base[ww_slot], kStoreFloats, ctx, it); \
+        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreFloats, ctx, it); \
         if (pack == nullptr) EXIT;                                              \
         const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
@@ -1148,7 +1230,7 @@ F_W(ITERF, x)
 #define ITERI(a, ...)                                                           \
     STENCIL(iteri_##a) {                                                        \
         uint8_t* it;                                                            \
-        const uint8_t* pack = packedIterator(base[ww_slot], kStoreInts, ctx, it); \
+        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreInts, ctx, it); \
         if (pack == nullptr) EXIT;                                              \
         const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
@@ -1162,11 +1244,11 @@ I_A(ITERI, x)
 // ww_slot2, as IterNextRef gives it (M9.5 B1).
 STENCIL(iterref) {
     const uint8_t* list;
-    uint8_t* it = listIterator(base[ww_slot], list);
+    uint8_t* it = listIterator((*slotAt(base)), list);
     if (it == nullptr || list == ctx->band || packOf(list, kStoreItems) == nullptr) EXIT;
     const uint64_t index = word<uint64_t>(it + kIterIndex);
     if (index >= word<uint64_t>(word<const uint8_t*>(list + kListPack) + kPackCount)) JUMP;
-    putValue(&base[ww_slot2], kKindRef | index << 32, reinterpret_cast<uint64_t>(list));
+    putValue(&(*slot2At(base)), kKindRef | index << 32, reinterpret_cast<uint64_t>(list));
     const uint64_t next = index + 1;
     __builtin_memcpy(it + kIterIndex, &next, 8);
     NEXT;
@@ -1176,7 +1258,7 @@ STENCIL(iterref) {
 // type numbered (ww_slot2 >> 32), to slot (ww_slot2 >> 8 & 0xFFFFFF) (M9.5 B1).
 STENCIL(itersm) {
     uint8_t* it;
-    const uint8_t* pack = packedIterator(base[ww_slot], kStoreItems, ctx, it);
+    const uint8_t* pack = packedIterator((*slotAt(base)), kStoreItems, ctx, it);
     if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0)
         EXIT;
@@ -1194,15 +1276,15 @@ STENCIL(itersm) {
 
 // null, true or false pushed: written to slot ww_slot as the VM writes them.
 STENCIL(setnull) {
-    storeSlot(base, ww_slot, 0, 0);
+    storeSlotAt(base, 0, 0);
     NEXT;
 }
 STENCIL(settrue) {
-    storeSlot(base, ww_slot, kKindBool, 1);
+    storeSlotAt(base, kKindBool, 1);
     NEXT;
 }
 STENCIL(setfalse) {
-    storeSlot(base, ww_slot, kKindBool, 0);
+    storeSlotAt(base, kKindBool, 0);
     NEXT;
 }
 
@@ -1249,11 +1331,11 @@ INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
     }
 }
 STENCIL(lookf) {
-    lookAt(base[ww_slot], ctx, ww_ki, true);
+    lookAt((*slotAt(base)), ctx, ww_ki, true);
     NEXT;
 }
 STENCIL(lookw) {
-    lookAt(base[ww_slot], ctx, ww_ki, false);
+    lookAt((*slotAt(base)), ctx, ww_ki, false);
     NEXT;
 }
 // Items read and written through what was looked at (k in ww_slot): the index checked
@@ -1363,7 +1445,7 @@ INLINE void lookAtField(const Slot& s, Ctx* ctx) {
     __builtin_memcpy(&held[ww_slot2], at, sizeof(Slot));
 }
 STENCIL(lookp) {
-    lookAtField(base[ww_slot], ctx);
+    lookAtField((*slotAt(base)), ctx);
     NEXT;
 }
 STENCIL(lookph) {
@@ -1406,7 +1488,7 @@ INLINE void lookAtFieldToChange(const Slot& s, Ctx* ctx) {
     ctx->heldAt[ww_slot2] = reinterpret_cast<uint64_t>(at);
 }
 STENCIL(lookpw) {
-    lookAtFieldToChange(base[ww_slot], ctx);
+    lookAtFieldToChange((*slotAt(base)), ctx);
     NEXT;
 }
 STENCIL(lookpwh) {
@@ -1461,7 +1543,7 @@ F_W(HGETPF, x)
 STENCIL(hgetpv) {
     const Slot& h = heldSlot(ctx, ww_slot);
     if (h.kind == kKindUndefined) EXIT;
-    __builtin_memcpy(&base[ww_slot2], &h, sizeof(Slot));
+    __builtin_memcpy(&(*slot2At(base)), &h, sizeof(Slot));
     NEXT;
 }
 // Lists a field looked at once holds (held as ww_slot), looked at as a slot's are.
@@ -1481,12 +1563,12 @@ STENCIL(lookih) {
     NEXT;
 }
 STENCIL(looki) {
-    lookAtItems(base[ww_slot], ctx);
+    lookAtItems((*slotAt(base)), ctx);
     NEXT;
 }
 // The same for the list the iterator in slot ww_slot goes through (a for over it).
 STENCIL(lookit) {
-    const Slot& s = base[ww_slot];
+    const Slot& s = (*slotAt(base));
     if (s.kind == kKindObj && s.p[kObjType] == kTypeIterator) {
         lookAtItems(*reinterpret_cast<const Slot*>(s.p + kIterSource), ctx);
     } else {
@@ -1527,7 +1609,7 @@ F_W(HIDXPF_A, x)
     STENCIL(hiref_##c) {                                                        \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
-        putValue(&base[ww_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
+        putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
         NEXT;                                                                   \
     }
 I_A(HIREF, x)
@@ -1563,7 +1645,7 @@ I_A(HIREF, x)
     STENCIL(hplacei_##c) {                                                      \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
-        putValue(&base[ww_slot2], kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
+        putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
         NEXT;                                                                   \
     }
 I_A(HIDXSM, x)
@@ -1583,13 +1665,13 @@ INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
 }
 #define HVALP(a, ...)                                                           \
     STENCIL(hvalpb_##a) {                                                       \
-        const uint8_t* at = lookedField(base[ww_slot], ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hvalpi_##a) {                                                       \
-        const uint8_t* at = lookedField(base[ww_slot], ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
@@ -1597,7 +1679,7 @@ INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
 I_A(HVALP, x)
 #define HVALPF(a, ...)                                                          \
     STENCIL(hvalpf_##a) {                                                       \
-        const uint8_t* at = lookedField(base[ww_slot], ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -2553,7 +2635,7 @@ STENCIL(ctxk) {
 // (a float mix's weight: no register kept for it); a NaN where it holds no float, which the
 // template refuses (FloatMix).
 STENCIL(ctxslot) {
-    const Slot& s = base[ww_slot2];
+    const Slot& s = (*slot2At(base));
     ctx->t[ww_slot] = s.kind == kKindFloat ? static_cast<uint64_t>(s.i) : 0x7FF8000000000000ull;
     NEXT;
 }

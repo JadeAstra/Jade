@@ -163,7 +163,7 @@ bool holeAt(const Piece& p, uint32_t offset, HoleKind kind) {
 Piece shaped(const StencilCode& s, bool nextFollows) {
     Piece p{std::vector<uint8_t>(s.code, s.code + s.size), std::vector<Hole>(s.holes, s.holes + s.holeCount)};
     for (Hole& h : p.holes) {
-        if (h.after != 0 || h.offset < 3) continue;
+        if (h.kind > HoleExit || h.after != 0 || h.offset < 3) continue;
         const uint32_t j = h.offset - 1;  // the `jmp`'s opcode
         if (p.code[j] != 0xE9) continue;
         if ((p.code[j - 2] & 0xF0) == 0x70 && p.code[j - 1] == 0x05) {
@@ -244,7 +244,7 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
         at += pieces.back().code.size();
         for (const Hole& h : pieces.back().holes) {
             if (h.kind == HoleData) constants++;
-            else if (h.kind >= HoleFloat) words++;
+            else if (h.kind >= HoleFloat && h.kind != HoleSlotAt && h.kind != HoleSlot2At) words++;
         }
     }
     start[all.size()] = at;
@@ -279,6 +279,16 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
                 case HoleNext: rel32(place, hole.after, start[i + 1]); break;
                 case HoleJump: rel32(place, hole.after, start[labelled(st.jump)]); break;
                 case HoleExit: rel32(place, hole.after, st.exit >= 0 ? start[labelled(st.exit)] : start[exitAt]); break;
+                case HoleSlotAt:
+                case HoleSlot2At: {
+                    // The slot's own place, built into the instruction: its offset in the frame.
+                    const int64_t slot = hole.kind == HoleSlotAt ? st.slot : st.slot2;
+                    const int64_t v = slot * static_cast<int64_t>(sizeof(Value)) + static_cast<int64_t>(hole.after);
+                    if (slot < 0 || v > INT32_MAX) throw std::runtime_error("native code: a slot too far for an instruction to reach");
+                    const int32_t v32 = static_cast<int32_t>(v);
+                    std::memcpy(mem + place, &v32, 4);
+                    break;
+                }
                 case HoleData:
                     std::memset(mem + constant, 0, 16);
                     std::memcpy(mem + constant, hole.data, hole.size);

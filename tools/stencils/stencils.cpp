@@ -36,12 +36,17 @@ const std::map<std::string, std::string> kHoles = {
     {"ww_next", "HoleNext"},   {"ww_jump", "HoleJump"},   {"ww_exit", "HoleExit"},
     {"ww_kf", "HoleFloat"},    {"ww_ki", "HoleInt"},      {"ww_slot", "HoleSlot"},
     {"ww_ret", "HoleRet"},     {"ww_attention", "HoleAttention"}, {"ww_slot2", "HoleSlot2"},
+    {"ww_slotat", "HoleSlotAt"}, {"ww_slot2at", "HoleSlot2At"},
 };
+// The gaps filled with a value itself, not the distance to it: a slot's offset in the frame,
+// built into the instruction (an absolute 32-bit relocation; what it adds kept in `after`).
+bool absolute(const std::string& kind) { return kind == "HoleSlotAt" || kind == "HoleSlot2At"; }
 
 struct Hole {
     uint32_t offset;   // of the 32 bits filled in, in the stencil
     std::string kind;
-    uint32_t after;    // bytes of the instruction after the 32 bits (REL32_1 to _5), which the offset is counted from
+    uint32_t after;    // bytes of the instruction after the 32 bits (REL32_1 to _5), which the offset is counted from;
+                       // for an absolute gap, what is added to the value (the 32 bits' addend)
     std::vector<uint8_t> data;  // HoleData: the constant Clang put in read-only data (a float's bound, a sign's mask)
 };
 struct Stencil {
@@ -108,10 +113,19 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
             const uint32_t offset = u32(obj, at), symbol = u32(obj, at + 4);
             const uint16_t type = u16(obj, at + 8);
             const std::string target = symbolName(symbol);
+            auto hole = kHoles.find(target);
+            // IMAGE_REL_AMD64_ADDR32: the value itself, its addend in the 32 bits (a slot's offset).
+            if (hole != kHoles.end() && absolute(hole->second)) {
+                if (type != 2) fail("stencil " + st.name + ": " + target + " reached other than as a 32-bit value");
+                const int32_t addend = static_cast<int32_t>(u32(st.code, offset));
+                if (addend < 0 || addend > 15) fail("stencil " + st.name + ": " + target + " with an addend past its slot");
+                std::memset(&st.code[offset], 0, 4);
+                st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(addend), {}});
+                continue;
+            }
             // IMAGE_REL_AMD64_REL32 and REL32_1 to REL32_5: 32 bits, counted from the end of the
             // instruction, which is that many bytes past them.
             if (type < 4 || type > 9) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
-            auto hole = kHoles.find(target);
             if (hole != kHoles.end()) {
                 st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(type - 4), {}});
                 continue;
@@ -148,18 +162,22 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     if (obj.size() < 64 || obj[4] != 2 || obj[5] != 1 || u16(obj, 16) != 1 || u16(obj, 18) != 62)
         fail("not an x86-64 little-endian ELF relocatable object file");
     const uint64_t sectionTable = u64(obj, 0x28);
-    const uint16_t entry = u16(obj, 0x3A), count = u16(obj, 0x3C);
+    const uint16_t entry = u16(obj, 0x3A);
+    // Past 65,279 sections (the stencils since 2026-11-14) the count is 0 here and section 0's
+    // size holds it.
+    size_t count = u16(obj, 0x3C);
+    if (count == 0) count = static_cast<size_t>(u64(obj, sectionTable + 32));
     struct Section {
         uint32_t name, type;
         uint64_t flags, offset, size, entsize;
         uint32_t link, info;
     };
     std::vector<Section> sections(count);
-    for (uint16_t i = 0; i < count; i++) {
-        const size_t h = sectionTable + static_cast<size_t>(i) * entry;
+    for (size_t i = 0; i < count; i++) {
+        const size_t h = sectionTable + i * entry;
         sections[i] = Section{u32(obj, h), u32(obj, h + 4), u64(obj, h + 8), u64(obj, h + 24), u64(obj, h + 32), u64(obj, h + 56), u32(obj, h + 40), u32(obj, h + 44)};
     }
-    constexpr uint32_t kSymtab = 2, kRela = 4;
+    constexpr uint32_t kSymtab = 2, kRela = 4, kSymtabShndx = 18;
     constexpr uint64_t kAlloc = 2, kExec = 4, kWrite = 1;
     size_t symtab = 0;
     for (size_t i = 0; i < sections.size(); i++)
@@ -171,13 +189,24 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     struct Symbol {
         std::string name;
         uint8_t type;
-        uint16_t section;
+        uint32_t section;
         uint64_t value, size;
     };
+    // A symbol's section past 65,279: SHN_XINDEX in the symbol, its number in SYMTAB_SHNDX.
+    size_t shndx = 0;
+    for (size_t i = 0; i < sections.size(); i++)
+        if (sections[i].type == kSymtabShndx && sections[i].link == symtab) shndx = i;
     std::vector<Symbol> symbols(syms.size / 24);
     for (size_t i = 0; i < symbols.size(); i++) {
         const size_t at = syms.offset + i * 24;
-        symbols[i] = Symbol{nameAt(u32(obj, at)), static_cast<uint8_t>(obj[at + 4] & 0xF), u16(obj, at + 6), u64(obj, at + 8), u64(obj, at + 16)};
+        uint32_t section = u16(obj, at + 6);
+        if (section == 0xFFFF) {
+            if (shndx == 0) fail("a symbol's section in a table there is none of");
+            section = u32(obj, sections[shndx].offset + i * 4);
+        } else if (section >= 0xFF00) {
+            section = 0;  // absolute or common: no section
+        }
+        symbols[i] = Symbol{nameAt(u32(obj, at)), static_cast<uint8_t>(obj[at + 4] & 0xF), section, u64(obj, at + 8), u64(obj, at + 16)};
     }
     // Each stencil's section, and its relocations.
     std::map<size_t, size_t> stencilOf;  // section -> symbol
@@ -206,9 +235,16 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
                 const uint64_t offset = u64(obj, at), info = u64(obj, at + 8);
                 const int64_t addend = static_cast<int64_t>(u64(obj, at + 16));
                 const uint32_t type = static_cast<uint32_t>(info), symbol = static_cast<uint32_t>(info >> 32);
-                if (type != 2 && type != 4) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
                 const Symbol& target = symbols[symbol];
                 auto hole = kHoles.find(target.name);
+                // R_X86_64_32 and _32S: the value itself, plus the addend (a slot's offset).
+                if (hole != kHoles.end() && absolute(hole->second)) {
+                    if (type != 10 && type != 11) fail("stencil " + st.name + ": " + target.name + " reached other than as a 32-bit value");
+                    if (addend < 0 || addend > 15) fail("stencil " + st.name + ": " + target.name + " with an addend past its slot");
+                    st.holes.push_back(Hole{static_cast<uint32_t>(offset), hole->second, static_cast<uint32_t>(addend), {}});
+                    continue;
+                }
+                if (type != 2 && type != 4) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
                 if (hole != kHoles.end()) {
                     if (addend > -4 || addend < -9) fail("stencil " + st.name + ": a gap whose instruction does not end within 5 bytes of it");
                     st.holes.push_back(Hole{static_cast<uint32_t>(offset), hole->second, static_cast<uint32_t>(-addend - 4), {}});

@@ -13,9 +13,13 @@
 namespace ww::native {
 
 // What fills a stencil's gap (src/native/stencils.cpp names them ww_next and so on).
-enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData };
+// HoleSlotAt and HoleSlot2At (ww_slotat, ww_slot2at, 2026-11-14) are the byte offset of the
+// frame's slot ww_slot (ww_slot2) itself, built into the instruction that reads or writes it;
+// every other gap is the distance to what fills it (a word placed after the code, or code).
+enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData, HoleSlotAt, HoleSlot2At };
 // A gap: where its 32 bits are in the stencil, and how many bytes of the instruction follow them
-// (what its offset is counted from: REL32_1 to REL32_5).
+// (what its offset is counted from: REL32_1 to REL32_5); for HoleSlotAt and HoleSlot2At, what is
+// added to the slot's offset instead (8: its payload).
 struct Hole {
     uint32_t offset;
     HoleKind kind;
