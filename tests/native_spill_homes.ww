@@ -1,0 +1,45 @@
+// A loop with more floats wanted at once than native code has registers (eight), some of them
+// values no slot of their own can keep (Math's answers, an expression's parts): since 2026-11-13
+// ten of Math.sqrt's answers at once: they are kept in cells of the region's own, loaded where read (before, such a loop had no
+// region and ran in the VM). The same answers as the VM's; each loop run three times (its region
+// is made the second time it starts).
+fun spread(n : int, a : float) : float {
+  var total = 0.0
+  for (i in 0 ..< n) {
+    val x = i * 0.001 + a
+    val s0 = Math.sqrt(x)
+    val s1 = Math.sqrt(x + 1.0)
+    val s2 = Math.sqrt(x + 2.0)
+    val s3 = Math.sqrt(x + 3.0)
+    val s4 = Math.sqrt(x + 4.0)
+    val s5 = Math.sqrt(x + 5.0)
+    val s6 = Math.sqrt(x + 6.0)
+    val s7 = Math.sqrt(x + 7.0)
+    val s8 = Math.sqrt(x + 8.0)
+    val s9 = Math.sqrt(x + 9.0)
+    total += s9 * s0 + s8 * s1 + s7 * s2 + s6 * s3 + s5 * s4 + s0 * s1 * s2 * s3 * s4 * s5 * s6 * s7 * s8 * s9
+  }
+  return total
+}
+fun thrice(block : () -> float) : float {
+  block()
+  block()
+  return block()
+}
+print(thrice { spread(100000, 1.7) })   // expect: 238446698371428.97
+// A transformed picture, its pixels as the C++ gave them (it reads a pixel's four neighbours with
+// two weights each way: more floats than registers too).
+fun lcg(s : int) : int => (s * 1103515245 + 12345) & 0x7fffffff
+val im = Image(70, 50)
+var s = 4
+im.editPixels { g ->
+  for (y in 0 ..< 50) { for (x in 0 ..< 70) { s = lcg(s); g[x, y] = Color(s % 256, (s / 256) % 256, (s / 65536) % 256, (s / 7) % 256) } }
+}
+for (m in [Interpolation.nearest, Interpolation.bilinear, Interpolation.bicubic]) {
+  var last = 0
+  for (k in 0 ..< 3) { last = im.transformed(Transform.rotation(0.4, 35, 25).then(Transform.scaling(1.3, 0.8)), m).hashCode() }
+  print(m, last)
+}
+// expect: nearest 985372287
+// expect: bilinear 2022111562
+// expect: bicubic 121954290

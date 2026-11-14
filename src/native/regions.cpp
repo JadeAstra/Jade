@@ -4204,7 +4204,14 @@ struct Region {
     // What a way out reads: the registers it writes back. (A way to an instruction the VM comes
     // back in at loads what that reads after.)
     static void addUses(std::set<Reg>& live, const ExitPoint& e) {
-        for (const LOp& l : e.stores) live.insert(l.uses.begin(), l.uses.end());
+        // Backwards, as a way out may load a value kept in a cell before writing it back
+        // (spillHome): what it loads is no read of the way in to it.
+        std::set<Reg> here;
+        for (auto l = e.stores.rbegin(); l != e.stores.rend(); ++l) {
+            for (const Reg& d : l->defs) here.erase(d);
+            here.insert(l->uses.begin(), l->uses.end());
+        }
+        live.insert(here.begin(), here.end());
     }
 
     // Each value written to a slot and read only on the straight way after, before anything
@@ -4552,7 +4559,7 @@ struct Region {
                 best = &r;
             }
         }
-        if (best == nullptr) return false;
+        if (best == nullptr) return spillHome();
         const Reg r = *best;
         spilled.insert(r);
         // Each read of it loaded first, into a register of its own; each write written back after.
@@ -4566,6 +4573,7 @@ struct Region {
                 const bool writes = std::find(l.defs.begin(), l.defs.end(), r) != l.defs.end();
                 if (reads || writes) {
                     const Reg t{-100 - temps++, r.cls};
+                    madeBySpill.insert(t);
                     if (reads) {
                         LOp load;
                         load.stem = r.cls == CI ? "loadi" : "loadf";
@@ -4594,6 +4602,101 @@ struct Region {
         }
         return true;
     }
+    // Where no value can be kept in its slot: one kept in a cell of the region's own instead
+    // (2026-11-13, at the user's word: any value may be moved out to memory), loaded where it is
+    // read and stored where it is written, a way out that writes it back loading it first. Of
+    // those not wanted where the VM comes in (which loads only from slots) nor used by the steps
+    // before the region's first instruction, the one clashing most for how often it is used.
+    // False where there is none, or every cell is taken.
+    int homes = 0;
+    bool spillHome() {
+        if (homes >= kRegionHomes) return false;
+        std::set<Reg> barred;
+        for (int e : entries)
+            if (e >= 0 && static_cast<size_t>(e) < liveIn.size()) barred.insert(liveIn[static_cast<size_t>(e)].begin(), liveIn[static_cast<size_t>(e)].end());
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const ExitPoint& e : results[i].exits)
+                if (e.toEntry >= 0 && static_cast<size_t>(e.toEntry) < liveIn.size())
+                    barred.insert(liveIn[static_cast<size_t>(e.toEntry)].begin(), liveIn[static_cast<size_t>(e.toEntry)].end());
+        }
+        for (const LOp& l : headOps)
+            for (const auto* list : {&l.named, &l.uses, &l.defs})
+                for (const Reg& r : *list) barred.insert(r);
+        std::map<Reg, int> used;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops) {
+                for (const Reg& u : l.uses) used[u]++;
+                for (const Reg& d : l.defs) used[d]++;
+            }
+        }
+        const Reg* best = nullptr;
+        double bestScore = -1;
+        for (const auto& [r, others] : clash) {
+            if (madeBySpill.count(r) || housed.count(r) || barred.count(r) || used[r] == 0) continue;  // (not a load of what is kept already)
+            const double score = static_cast<double>(others.size()) / (1.0 + used[r]);
+            if (score > bestScore) {
+                bestScore = score;
+                best = &r;
+            }
+        }
+        if (best == nullptr) return false;
+        const Reg r = *best;
+        housed.insert(r);
+        const int64_t cell = homes++;
+        const char* load = r.cls == CI ? "homeli" : "homelf";
+        const char* store = r.cls == CI ? "homesi" : "homesf";
+        auto loadOf = [&](const Reg& t) {
+            LOp l;
+            l.stem = load, l.named = {t}, l.defs = {t}, l.slot = cell;
+            return l;
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            Result& res = results[i];
+            std::vector<LOp> out;
+            for (LOp l : res.ops) {
+                std::vector<LOp> after;
+                const bool reads = std::find(l.uses.begin(), l.uses.end(), r) != l.uses.end();
+                const bool writes = std::find(l.defs.begin(), l.defs.end(), r) != l.defs.end();
+                if (reads || writes) {
+                    const Reg t{-100 - temps++, r.cls};
+                    madeBySpill.insert(t);
+                    if (reads) out.push_back(loadOf(t));
+                    if (writes) {
+                        LOp keep;
+                        keep.stem = store, keep.named = {t}, keep.uses = {t}, keep.slot = cell;
+                        after.push_back(keep);
+                    }
+                    for (auto* list : {&l.named, &l.uses, &l.defs})
+                        for (Reg& x : *list)
+                            if (x == r) x = t;
+                }
+                out.push_back(l);
+                out.insert(out.end(), after.begin(), after.end());
+            }
+            res.ops = std::move(out);
+            // A way out writing it back: loaded from its cell first.
+            for (ExitPoint& e : res.exits) {
+                std::vector<LOp> stores;
+                for (LOp l : e.stores) {
+                    if (std::find(l.uses.begin(), l.uses.end(), r) != l.uses.end()) {
+                        const Reg t{-100 - temps++, r.cls};
+                        madeBySpill.insert(t);
+                        stores.push_back(loadOf(t));
+                        for (auto* list : {&l.named, &l.uses, &l.defs})
+                            for (Reg& x : *list)
+                                if (x == r) x = t;
+                    }
+                    stores.push_back(l);
+                }
+                e.stores = std::move(stores);
+            }
+        }
+        return true;
+    }
+    std::set<Reg> housed, madeBySpill;  // kept in cells; the registers spilling made to load and store
     std::string name(const LOp& l) const {
         std::string s = l.stem;
         for (const Reg& r : l.named) s += "_" + std::to_string(regs.at(r));

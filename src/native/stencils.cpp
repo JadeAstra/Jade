@@ -56,6 +56,7 @@ struct Ctx {  // native.h's RegionContext
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
+    uint64_t homes[32];
     const uint8_t* const* upvalues;
 };
 
@@ -2530,3 +2531,25 @@ I_A(CTXI, x)
         NEXT;                                                                   \
     }
 F_A(CTXF, x)
+// A value kept in cell ww_slot of the region's own (regions.cpp, spillOne): stored, and loaded
+// again where it is wanted.
+#define HOMEI(a, ...)                                                           \
+    STENCIL(homesi_##a) {                                                       \
+        ctx->homes[ww_slot] = static_cast<uint64_t>(i##a);                    \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(homeli_##a) {                                                       \
+        i##a = static_cast<int64_t>(ctx->homes[ww_slot]);                     \
+        NEXT;                                                                   \
+    }
+I_A(HOMEI, x)
+#define HOMEF(a, ...)                                                           \
+    STENCIL(homesf_##a) {                                                       \
+        __builtin_memcpy(&ctx->homes[ww_slot], &f##a, 8);                          \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(homelf_##a) {                                                       \
+        __builtin_memcpy(&f##a, &ctx->homes[ww_slot], 8);                          \
+        NEXT;                                                                   \
+    }
+F_A(HOMEF, x)
