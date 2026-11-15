@@ -1,0 +1,47 @@
+// The whole-picture operations of docs/timings.html, as timings.cpp times them: on the 4000 by
+// 3000 photo given as raw RGBA bytes (regions and palette on it scaled to 1000 by 1000). Each the
+// best of five, in milliseconds.
+//
+//   ww bench/kernels/whole.ww <photo.rgba>              all of them
+//   ww bench/kernels/whole.ww <photo.rgba> <name> ...   the ones whose names start so
+
+val args = Program.arguments
+if (args.size < 1) {
+  print("give the photo as raw RGBA bytes, 4000 by 3000")
+  exit(1)
+}
+val photo = Image.of(4000, 3000, FilePath(args[0]).readBytes())
+val small = photo.scaled(1000, 1000)
+val only = args.drop(1)
+
+fun time(name : string, work : () -> any?) {
+  if (only.size > 0 and !only.any { name.startsWith(it) }) { return }
+  var best = 1e300
+  var said = ""
+  for (round in 0 ..< 5) {
+    val started = Instant.now()
+    val result = work()
+    val took = (Instant.now() - started).inNanoseconds / 1e6
+    if (took < best) { best = took }
+    said = result.toString()
+  }
+  print("${name.padEnd(28)} ${(Math.round(best * 100) / 100.0).toString().padStart(9)} ms  ${said.take(40)}")
+}
+
+val overlay = photo.crop(0, 0, 2000, 1500).pixels
+val work = photo.copy()
+time("crop(1000, 1000, 2000, 1000)") { photo.crop(1000, 1000, 2000, 1000).width }
+time("inverted()") { photo.inverted().width }
+time("blurred(3)") { photo.blurred(3).width }
+time("scaled(2000, 1500)") { photo.scaled(2000, 1500).width }
+time("scaled(8000, 6000)") { photo.scaled(8000, 6000).width }
+time("transformed(rotation(0.3))") { photo.transformed(Transform.rotation(0.3)).width }
+time("histogram()") { photo.pixels.histogram().size }
+time("floodRegion(10, 10, 20)") { photo.floodRegion(10, 10, 20).count }
+time("blend 2000x1500 over, half") {
+  work.editPixels { it.blend(overlay, 500, 500, 0.5) }
+  work.width
+}
+time("regions(8)") { small.pixels.regions(8).width }
+time("palette(16)") { small.pixels.palette(16).size }
+time("hashCode()") { photo.hashCode() }

@@ -3767,6 +3767,18 @@ struct Region {
             if (value != fw.values.end()) value->second.cls = l.ki;
         }
         if (s == "keepl" || s == "ownsm" || s == "notnull") return fw.refs.count(l.slot) != 0 || fw.values.count(l.slot) != 0 || fw.made.count(l.slot) != 0;
+        if (s == "hidxpb" || s == "hidxpi") {
+            // `items[i].x` read where it is, a byte or an int field (2026-11-15: a histogram's
+            // `px[p].red`): the field of item n[1] of the list looked at once as k, at
+            // (slot2 & 0xFFFFFFFF) bytes into an item (slot2 >> 32) bytes wide.
+            const uint64_t what = static_cast<uint64_t>(l.slot2);
+            if ((what & 0xFFFFFFFF) > 0xFFFFFF || (what >> 32) > 0xFFFF) return false;
+            Expr e{Expr::Field};
+            e.list = static_cast<int>(l.slot);
+            e.b = valueOf(fw, n[1]);
+            e.ki = static_cast<int64_t>((what >> 32) << 32 | (what & 0xFFFFFFFF) << 8 | (s == "hidxpb" ? 1u : 8u));
+            return set(n[0], mk(e)), true;
+        }
         if (s == "hvalpb" || s == "hvalpi" || s == "hvalph" || s == "hvalpw") {
             auto ref = fw.refs.find(l.slot);
             if (ref == fw.refs.end()) return false;
@@ -4024,6 +4036,50 @@ struct Region {
         ah.baseA = out.base, ah.fromBase = from.base;
         ah.copyWhat[0] = out.k, ah.copyWhat[1] = k0;
         ah.mixWords = {0, made.global, made.cls};
+        return true;
+    }
+    // Byte fields of each item counted into a list of ints (kLoopWCountItems, 2026-11-15: a
+    // histogram, `levels[256 + px[p].green] += 1`): every store `counts[K + item.field] =
+    // counts[K + item.field] + c`, K and c constants, the fields bytes of one item of a list of a
+    // value type's items at a base plus the counter, up to eight stores, all into one list of
+    // ints. The template does them in order for each item, as the steps would. Words: 50 to 54
+    // where the items are read (fieldIndex), 128 how many stores, 129 the items' width, then three
+    // a store from 130: K, the field's offset, c.
+    bool countItems(const Followed& fw, Ahead& ah) {
+        if (fw.stores.empty() || fw.stores.size() > 8 || !fw.made.empty() || !fw.places.empty()) return false;
+        int out = -1, items = -1;
+        const Expr* index = nullptr;
+        int64_t width = 0;
+        std::vector<int64_t> words;
+        for (const Followed::Store& st : fw.stores) {
+            if (st.stem != "hsetwi" || st.index == nullptr || st.value == nullptr) return false;
+            if (out < 0) out = st.list;
+            else if (st.list != out) return false;
+            const Expr* f = st.index;
+            int64_t K = 0;
+            if (f->kind == Expr::Bin && f->op == '+' && f->cls == CI) {
+                if (f->a->kind == Expr::KInt) K = f->a->ki, f = f->b;
+                else if (f->b->kind == Expr::KInt) K = f->b->ki, f = f->a;
+                else return false;
+            }
+            if (f->kind != Expr::Field || (f->ki & 0xFF) != 1) return false;
+            if (items < 0) items = f->list, index = f->b, width = f->ki >> 32;
+            else if (f->list != items || !same(f->b, index) || (f->ki >> 32) != width) return false;
+            const int64_t offset = (f->ki >> 8) & 0xFFFFFF;
+            // The count plus a constant, or (`-=`) less one.
+            const Expr* v = st.value;
+            if (v->kind != Expr::Bin || (v->op != '+' && v->op != '-') || v->cls != CI) return false;
+            const Expr* load = v->op == '-' || v->a->kind == Expr::Load ? v->a : v->b;
+            const Expr* c = load == v->a ? v->b : v->a;
+            if (load->kind != Expr::Load || load->list != out || load->cls != CI || !same(load->b, st.index) || c->kind != Expr::KInt) return false;
+            if (K < 0 || K > (int64_t{1} << 40) || offset >= width || c->ki < -(1 << 20) || c->ki > (1 << 20)) return false;
+            words.push_back(K), words.push_back(offset), words.push_back(v->op == '-' ? -c->ki : c->ki);
+        }
+        if (items < 0 || items == out || width <= 0 || width > 0xFFFF || !fieldIndex(index, ah)) return false;
+        ah.shape = 26;  // kLoopWCountItems
+        ah.a = items, ah.out = out;
+        ah.mixWords = {static_cast<int64_t>(fw.stores.size()), width};
+        ah.mixWords.insert(ah.mixWords.end(), words.begin(), words.end());
         return true;
     }
     // How a mix ends (2026-11-13): `>> shift`, `/ divisor` (a constant of 1 or more, which truncates
@@ -4677,6 +4733,7 @@ struct Region {
             return true;
         }
         if (mix(fw, ah)) return true;
+        if (countItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB))) return true;
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && fw.made.count(fw.stores[0].source) != 0 && ah.iterSlot < 0 &&
             mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) &&
             !changed(ah.outA) && !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)))
@@ -4990,6 +5047,12 @@ struct Region {
                 word(at + 10, bitsOf(lane.lo));
                 word(at + 11, bitsOf(lane.hi));
             }
+        }
+        if (ah.shape == 26) {
+            word(50, ah.baseMode);
+            if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
+            if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
+            for (size_t k = 0; k < ah.mixWords.size(); k++) word(128 + static_cast<int>(k), ah.mixWords[k]);
         }
         if (ah.shape == 21) {
             word(50, ah.baseA != nullptr ? 1 : 0);

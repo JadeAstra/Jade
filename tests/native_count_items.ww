@@ -1,0 +1,80 @@
+// Byte fields of items counted into a list of ints, `counts[K + item.field] += c` (2026-11-15:
+// histogram()), which native code's loop template kLoopWCountItems does whole: four ones (a
+// histogram), other steps and a step taken away, two stores at the same place, items at a base
+// plus the counter; and where it must leave the work to the steps: a count that would leave an
+// int's range (the steps throw), a place past the counts (the steps throw). The same as the VM's;
+// each loop run three times (its region is made the second time it starts).
+value Two(val lo : byte, val hi : byte)
+
+fun pixels(n : int, seed : int) : List<Color> {
+  val out : open List<Color> = []
+  var s = seed
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    out.add(Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 16).toByteWrapped(), (s >> 24).toByteWrapped()))
+  }
+  return out
+}
+fun four(px : List<Color>, levels : open List<int>) {
+  for (p in 0 ..< px.size) {
+    levels[px[p].red] += 1
+    levels[256 + px[p].green] += 1
+    levels[512 + px[p].blue] += 1
+    levels[768 + px[p].alpha] += 1
+  }
+}
+fun steps(px : List<Color>, levels : open List<int>) {
+  for (p in 0 ..< px.size) {
+    levels[10 + px[p].blue] += 3
+    levels[10 + px[p].blue] -= 2
+    levels[300 + px[p].red] -= 5
+  }
+}
+fun twos(xs : List<Two>, at : int, n : int, levels : open List<int>) {
+  for (i in 0 ..< n) {
+    levels[xs[at + i].hi] += 1
+    levels[256 + xs[at + i].lo] += 7
+  }
+}
+fun sum(xs : List<int>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) { t = (t * 31 + xs[i] + i) % 1000000007 }
+  return t
+}
+fun attempt(work : () -> unit) : string {
+  try {
+    work()
+    return "done"
+  } catch (e : ArithmeticException) {
+    return "ArithmeticException"
+  } catch (e : IndexOutOfBoundsException) {
+    return "IndexOutOfBoundsException"
+  }
+}
+val px = pixels(5001, 3)
+val tw : open List<Two> = []
+for (k in 0 ..< 3000) { tw.add(Two((k * 7).toByteWrapped(), (k * 13 + 5).toByteWrapped())) }
+for (round in 0 ..< 3) {
+  val a : open List<int> = List(1024) { 0 }
+  four(px, a)
+  val b : open List<int> = List(600) { it }
+  steps(px, b)
+  val c : open List<int> = List(512) { 0 }
+  twos(tw, 100, 2500, c)
+  print(sum(a), sum(b), sum(c), a[0] + a[255] + a[1023])
+  // A count at the top of an int's range: the steps throw where it would leave it.
+  val full : open List<int> = List(1024) { 9223372036854775807 - 3 }
+  print(attempt { four(px, full) }, full[0] > 0)
+  // Counts too few for every place: the steps throw at the first item past them.
+  val few : open List<int> = List(700) { 0 }
+  print(attempt { four(px, few) }, sum(few))
+}
+// expect: 124386631 763346802 152805722 40
+// expect: ArithmeticException true
+// expect: IndexOutOfBoundsException 237271810
+// expect: 124386631 763346802 152805722 40
+// expect: ArithmeticException true
+// expect: IndexOutOfBoundsException 237271810
+// expect: 124386631 763346802 152805722 40
+// expect: ArithmeticException true
+// expect: IndexOutOfBoundsException 237271810

@@ -1942,6 +1942,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
+    kLoopWCountItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2773,6 +2774,56 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint64_t count = word<uint64_t>(pack + kPackCount) + static_cast<uint64_t>(done);
             __builtin_memcpy(pack + kPackCount, &count, 8);
             storeSlot(base, static_cast<int64_t>(t[57]), kKindBool, 1);
+            break;
+        }
+        case kLoopWCountItems: {
+            // Byte fields of each item counted into a list of ints, `counts[K + item.field] += c`
+            // for each store in order (regions.cpp, countItems: a histogram). Words: 50 to 54
+            // where the items are read, 128 how many stores, 129 the items' width, from 130 three
+            // a store: K, the field's offset, c. Every place 0 to 255 past each K within the
+            // counts, and no count able to leave an int's range however the items fall.
+            static_assert(kLoopWCountItems == 26, "regions.cpp's ah.shape 26");
+            if (!a.ok() || !out.ok() || out.kind() != 1) return;
+            const uint64_t n = t[128], width = t[129];
+            if (n == 0 || n > 8 || width == 0 || width > 0xFFFF) return;
+            int64_t at = 0, first, last;
+            if (!itemBase(ctx, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
+                static_cast<uint64_t>(last) >= a.h[1])
+                return;
+            int64_t* counts = out.ints();
+            int64_t K[8], c[8];
+            uint64_t off[8];
+            int64_t most = 0, least = 0;
+            int64_t step = 0;  // how far one item may move a count, all stores together
+            for (uint64_t s = 0; s < n; s++) {
+                K[s] = static_cast<int64_t>(t[130 + 3 * s]), off[s] = t[131 + 3 * s], c[s] = static_cast<int64_t>(t[132 + 3 * s]);
+                if (K[s] < 0 || static_cast<uint64_t>(K[s]) + 255 >= out.h[1] || static_cast<uint64_t>(K[s]) + 255 >= out.h[2] || off[s] >= width) return;
+                step += c[s] < 0 ? -c[s] : c[s];
+                for (int64_t v = 0; v < 256; v++) {
+                    const int64_t now = counts[K[s] + v];
+                    most = now > most ? now : most, least = now < least ? now : least;
+                }
+            }
+            int64_t reach;
+            if (__builtin_mul_overflow(step, left, &reach) || __builtin_add_overflow(most, reach, &most) || __builtin_sub_overflow(least, reach, &least)) return;
+            const uint8_t* x = a.bytes() + static_cast<uint64_t>(first) * width;
+            if (n == 4 && c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 1) {
+                // Four ones (a histogram's red, green, blue and alpha): their places held apart.
+                int64_t *q0 = counts + K[0], *q1 = counts + K[1], *q2 = counts + K[2], *q3 = counts + K[3];
+                const uint64_t o0 = off[0], o1 = off[1], o2 = off[2], o3 = off[3];
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + static_cast<uint64_t>(j) * width;
+                    q0[p[o0]]++;
+                    q1[p[o1]]++;
+                    q2[p[o2]]++;
+                    q3[p[o3]]++;
+                }
+                break;
+            }
+            for (int64_t j = 0; j < left; j++) {
+                const uint8_t* p = x + static_cast<uint64_t>(j) * width;
+                for (uint64_t s = 0; s < n; s++) counts[K[s] + p[off[s]]] += c[s];
+            }
             break;
         }
         case kLoopWToFloats:
