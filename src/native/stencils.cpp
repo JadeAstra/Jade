@@ -62,6 +62,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t heldAt[16];
     uint64_t homes[32];
     const uint8_t* const* upvalues;
+    const double* units;
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -2005,7 +2006,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems, kLoopWGatherPixels,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2250,6 +2251,11 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     if (t[14] != ~uint64_t{0}) {
         const uint8_t k = base[t[14]].kind;
         if (t[15] == 1 ? k != kKindFloat : t[15] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
+    }
+    // And a second (47 and 48, 2026-11-15).
+    if (t[47] != ~uint64_t{0}) {
+        const uint8_t k = base[t[47]].kind;
+        if (t[48] == 1 ? k != kKindFloat : t[48] == 2 ? k != kKindInt : (k != kKindInt && k != kKindByte)) return;
     }
     // Objects as the loop entered them, each of exactly a class (112: how many; 113 on: the slot
     // and the global holding the class, two words each), as clsflag checks; where one is not, the
@@ -3151,6 +3157,55 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             break;
         }
+        case kLoopWGatherPixels: {
+            // Pixels gathered and made four floats as they are added (regions.cpp, gatherPixels,
+            // says the words): out[o + p] += c[p] * m * w, c = a's item from + idx[i + x], m its
+            // alpha / 255.0 (the context's table of them, the same number), w the weight list's
+            // float at i + x; alpha times (m, 1.0) for the fourth, the same as alpha. An index
+            // whose pixel is not in `a` stops it there, for the steps to throw.
+            static_assert(kLoopWGatherPixels == 31, "regions.cpp's ah.shape 31");
+            const uint64_t wk = t[129];
+            if (wk >= 6 || !out.ok() || out.kind() != 2 || !a.ok() || a.kind() <= 3 || !b.ok() || b.kind() != 1) return;
+            const uint64_t* hw = ctx->lists + 4 * wk;
+            if (hw[3] != 2 || hw[0] == out.h[0]) return;
+            int64_t ob = 0, ib = 0, from = 0;
+            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ib)) ||
+                (t[130] == 1 && !operand(ctx, t[131], t[132], 0, from)))
+                return;
+            const int64_t lim = int64_t{1} << 50;
+            if (!small(t[53]) || !small(t[66]) || ob < -lim || ob > lim || ib < -lim || ib > lim || from < -lim || from > lim || next > lim || end > lim) return;
+            ob += static_cast<int64_t>(t[53]), ib += static_cast<int64_t>(t[66]);
+            const int64_t oFirst = ob + 4 * next, oLast = ob + 4 * (end - 1) + 3, iFirst = ib + next, iLast = ib + end - 1;
+            if (oFirst < 0 || iFirst < 0 || static_cast<uint64_t>(oLast) >= out.h[1] || static_cast<uint64_t>(oLast) >= out.h[2] ||
+                static_cast<uint64_t>(iLast) >= b.h[1] || static_cast<uint64_t>(iLast) >= hw[1])
+                return;
+            double* o = out.floats() + oFirst;
+            const uint8_t* items = a.bytes();
+            const uint64_t count = a.h[1];
+            const int64_t* idx = b.ints() + iFirst;
+            const double* w = reinterpret_cast<const double*>(hw[0]) + iFirst;
+            const double* units = ctx->units;
+            const __m128i none = _mm_setzero_si128();
+            const bool first = t[7] == 1;  // 0.0 plus each, not the float there plus it
+            for (int64_t j = 0; j < left; j++, o += 4) {
+                const int64_t c = idx[j];
+                if (c < -lim || c > lim || from + c < 0 || static_cast<uint64_t>(from + c) >= count) {
+                    done = j;
+                    break;
+                }
+                uint32_t px;
+                __builtin_memcpy(&px, items + static_cast<uint64_t>(from + c) * 4, 4);
+                const __m128i v = _mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(static_cast<int>(px)), none), none);
+                const double m = units[px >> 24];
+                const __m128d wt = _mm_set1_pd(w[j]);
+                const __m128d rg = _mm_mul_pd(_mm_mul_pd(_mm_cvtepi32_pd(v), _mm_set1_pd(m)), wt);
+                const __m128d ba = _mm_mul_pd(_mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v, 0x0E)), _mm_set_pd(1.0, m)), wt);
+                const __m128d o01 = first ? _mm_setzero_pd() : _mm_loadu_pd(o), o23 = first ? _mm_setzero_pd() : _mm_loadu_pd(o + 2);
+                _mm_storeu_pd(o, _mm_add_pd(o01, rg));
+                _mm_storeu_pd(o + 2, _mm_add_pd(o23, ba));
+            }
+            break;
+        }
         case kLoopWApartItems: {
             // How far apart two pixels are (regions.cpp, apartItems, says the words): out[o + j]
             // = the most |p[c] - q[c]| of the four bytes c, p item i + j of `a`, q item k + j of
@@ -3232,12 +3287,11 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                         done = j;
                         break;
                     }
-                    const double wt = w[j];
+                    // Two floats at a time, each lane the steps' multiply and then add.
+                    const __m128d wt = _mm_set1_pd(w[j]);
                     const double* q = line + 4 * c;
-                    o[0] = o[0] + q[0] * wt;
-                    o[1] = o[1] + q[1] * wt;
-                    o[2] = o[2] + q[2] * wt;
-                    o[3] = o[3] + q[3] * wt;
+                    _mm_storeu_pd(o, _mm_add_pd(_mm_loadu_pd(o), _mm_mul_pd(_mm_loadu_pd(q), wt)));
+                    _mm_storeu_pd(o + 2, _mm_add_pd(_mm_loadu_pd(o + 2), _mm_mul_pd(_mm_loadu_pd(q + 2), wt)));
                 }
             }
             break;
@@ -3265,13 +3319,19 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             double* f = floats.floats() + fFirst;
             uint8_t* p = items.bytes() + static_cast<uint64_t>(iFirst) * 4;
             if (to) {
+                // alpha / 255.0 read from the context's table of them (2026-11-15: a division a
+                // pixel was most of a big picture's scaling); red and green multiplied together.
+                // The pixel's four bytes widened to ints and made doubles two at a time; blue and
+                // alpha times (m, 1.0): alpha, a whole number, the same times 1.
+                const double* units = ctx->units;
+                const __m128i none = _mm_setzero_si128();
                 for (int64_t j = 0; j < left; j++, p += 4, f += 4) {
-                    const double al = static_cast<double>(p[3]);
-                    const double m = al / 255.0;
-                    f[0] = static_cast<double>(p[0]) * m;
-                    f[1] = static_cast<double>(p[1]) * m;
-                    f[2] = static_cast<double>(p[2]) * m;
-                    f[3] = al;
+                    uint32_t c;
+                    __builtin_memcpy(&c, p, 4);
+                    const __m128i v = _mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(static_cast<int>(c)), none), none);
+                    const double m = units[c >> 24];
+                    _mm_storeu_pd(f, _mm_mul_pd(_mm_cvtepi32_pd(v), _mm_set1_pd(m)));
+                    _mm_storeu_pd(f + 2, _mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v, 0x0E)), _mm_set_pd(1.0, m)));
                 }
                 break;
             }
@@ -3282,7 +3342,36 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 v = v > 0.0 ? v : 0.0;
                 return static_cast<uint8_t>(static_cast<int64_t>(v < 255.0 ? v : 255.0));
             };
-            for (int64_t j = 0; j < left; j++, p += 4, f += 4) {
+            // Two pixels at a time (2026-11-15: a division a pixel, one after another, was a fifth
+            // of a big picture's scaling): each lane a pixel, every operation the one below, max
+            // and min given the bound as their second side (that side where the two are equal,
+            // as below); a pair with a NaN left to the loop below, which stops there.
+            int64_t j = 0;
+            {
+                const __m128d zero = _mm_setzero_pd(), half = _mm_set1_pd(0.5), one = _mm_set1_pd(1.0), top = _mm_set1_pd(255.0);
+                for (; j + 2 <= left; j += 2, p += 8, f += 8) {
+                    const __m128d a01 = _mm_loadu_pd(f), a23 = _mm_loadu_pd(f + 2), b01 = _mm_loadu_pd(f + 4), b23 = _mm_loadu_pd(f + 6);
+                    const __m128d nan = _mm_or_pd(_mm_or_pd(_mm_cmpunord_pd(a01, a01), _mm_cmpunord_pd(a23, a23)),
+                                                  _mm_or_pd(_mm_cmpunord_pd(b01, b01), _mm_cmpunord_pd(b23, b23)));
+                    if (_mm_movemask_pd(nan) != 0) break;
+                    const __m128d r = _mm_unpacklo_pd(a01, b01), gr = _mm_unpackhi_pd(a01, b01), bl = _mm_unpacklo_pd(a23, b23), al0 = _mm_unpackhi_pd(a23, b23);
+                    const __m128d al = _mm_min_pd(_mm_max_pd(al0, zero), top);
+                    const __m128d up = _mm_add_pd(al, half);
+                    const __m128d gate = _mm_and_pd(_mm_cmpge_pd(up, one), one);  // min(1, (al + 0.5) cut): al + 0.5 is at least 0
+                    const __m128d m = _mm_mul_pd(gate, _mm_div_pd(top, _mm_max_pd(al, half)));
+                    auto parts = [&](__m128d v) {  // part(), each lane
+                        return _mm_cvttpd_epi32(_mm_min_pd(_mm_max_pd(_mm_add_pd(v, half), zero), top));
+                    };
+                    alignas(16) int32_t pr[4], pg[4], pb[4], pa[4];
+                    _mm_store_si128(reinterpret_cast<__m128i*>(pr), parts(_mm_mul_pd(r, m)));
+                    _mm_store_si128(reinterpret_cast<__m128i*>(pg), parts(_mm_mul_pd(gr, m)));
+                    _mm_store_si128(reinterpret_cast<__m128i*>(pb), parts(_mm_mul_pd(bl, m)));
+                    _mm_store_si128(reinterpret_cast<__m128i*>(pa), parts(al));
+                    p[0] = static_cast<uint8_t>(pr[0]), p[1] = static_cast<uint8_t>(pg[0]), p[2] = static_cast<uint8_t>(pb[0]), p[3] = static_cast<uint8_t>(pa[0]);
+                    p[4] = static_cast<uint8_t>(pr[1]), p[5] = static_cast<uint8_t>(pg[1]), p[6] = static_cast<uint8_t>(pb[1]), p[7] = static_cast<uint8_t>(pa[1]);
+                }
+            }
+            for (; j < left; j++, p += 4, f += 4) {
                 // Where any is NaN, the steps from there (as the VM's min and max have it).
                 if (f[0] != f[0] || f[1] != f[1] || f[2] != f[2] || f[3] != f[3]) {
                     done = j;

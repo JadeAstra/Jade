@@ -3912,6 +3912,7 @@ struct Region {
         bool hasAcc = false;
         const Expr* addend = nullptr;
         int checkSlot = -1, checkKind = 0;  // a variable's kind the body checks each time round  // kLoopWMap: c where it is a register the loop does not change
+        int checkSlot2 = -1, checkKind2 = 0;  // and a second's
         std::vector<Followed::Cmp> guards;  // conditions of ways to a throw or a return, none to hold
         int baseMode = 0;                   // kLoopWSumField: base + counter, base none (0), a (1), a * b (2)
         const Expr* baseA = nullptr;
@@ -4292,7 +4293,7 @@ struct Region {
     // place it is named. Sums, products, min and max match either way round (the same either way
     // round where no side is NaN: a template using one checks that as it runs).
     struct Pat {
-        enum Kind { Any, Node, Int, Float, Field } kind = Node;
+        enum Kind { Any, Node, Int, Float, Field, Load } kind = Node;
         char op = 0;
         std::string name;  // Any, Field: the expression's or the list's name
         int64_t ki = 0;    // Int; Field: the byte's offset
@@ -4325,6 +4326,12 @@ struct Region {
         p.kind = Pat::Field, p.name = list, p.a = std::move(index), p.ki = offset;
         return std::make_shared<const Pat>(p);
     }
+    // An item of a list of floats (float) or of ints (!float) named so, at an index matching `index`.
+    static PatP patLoad(const char* list, PatP index, bool isFloat) {
+        Pat p;
+        p.kind = Pat::Load, p.name = list, p.a = std::move(index), p.ki = isFloat ? 1 : 0;
+        return std::make_shared<const Pat>(p);
+    }
     struct Bound {
         std::map<std::string, const Expr*> exprs;
         std::map<std::string, int> lists;
@@ -4343,6 +4350,13 @@ struct Region {
             case Pat::Float: return e->kind == Expr::KFloat && std::memcmp(&e->kf, &p.kf, 8) == 0;
             case Pat::Field: {
                 if (e->kind != Expr::Field || (e->ki & 0xFF) != 1 || (e->ki >> 32) != 4 || ((e->ki >> 8) & 0xFFFFFF) != p.ki) return false;
+                auto at = b.lists.find(p.name);
+                if (at != b.lists.end() && at->second != e->list) return false;
+                b.lists[p.name] = e->list;
+                return matches(*p.a, e->b, b);
+            }
+            case Pat::Load: {
+                if (e->kind != Expr::Load || e->cls != (p.ki == 1 ? CF : CI)) return false;
                 auto at = b.lists.find(p.name);
                 if (at != b.lists.end() && at->second != e->list) return false;
                 b.lists[p.name] = e->list;
@@ -4439,6 +4453,67 @@ struct Region {
         ah.a = ex->list, ah.b = px, ah.out = st.list, ah.sizeW = ew, ah.sizeH = eh;
         ah.mixWords = {made.global, made.cls};
         std::memcpy(&ah.words[0], &g.b->kf, 8);
+        return true;
+    }
+    // Pixels gathered and made four floats as they are added (kLoopWGatherPixels, 2026-11-15:
+    // numeric.ww's __gatherPixels, scaling's across pass reading the picture itself): for each
+    // pixel c = px[from + idx[i + x]] (items four bytes wide), m = c[3] as a float over 255.0, w =
+    // weight[i + x], `out[o + p] = out[o + p] + c[p] * m * w` for p from 0 to 2 and `out[o + 3] =
+    // out[o + 3] + c[3] * w`, o the out base plus four times the counter. Words: 50 to 53 the out
+    // base (50: 0 none, 1 an operand; 53 a constant), 63 to 66 the index and weight lists' base, 129
+    // the weight list, 130 to 132 `from` (130: 0 none, 1 an operand); 7: 1 where each is 0.0 plus
+    // the product, not the float there plus it (the first tap of a row's sums).
+    template <typename Changed, typename Written>
+    bool gatherPixels(const Followed& fw, Ahead& ah, const Changed& changed, const Written& written) {
+        if (fw.stores.size() != 4 || ah.iterSlot >= 0 || !fw.made.empty()) return false;
+        Bound b;
+        Lin outAt;
+        int first = -1;  // 0.0 plus each, not the float there (the first of a row's sums)
+        for (int p = 0; p < 4; p++) {
+            const Followed::Store& st = fw.stores[static_cast<size_t>(p)];
+            if (st.stem != "hsetf" || st.index == nullptr || st.value == nullptr) return false;
+            const std::string own = "o" + std::to_string(p);
+            const PatP wt = patLoad("w", patAny("wi"), true);
+            const PatP part = p < 3 ? patOp('*', patOp('*', patOp('f', patField("px", patAny("c"), p)),
+                                                       patOp('/', patOp('f', patField("px", patAny("c"), 3)), patFloat(255.0))),
+                                             wt)
+                                    : patOp('*', patOp('f', patField("px", patAny("c"), 3)), wt);
+            Bound tried = b;
+            if (first != 1 && matches(*patOp('+', patLoad("out", patAny(own.c_str()), true), part), st.value, tried)) {
+                first = 0;
+                b = std::move(tried);
+                if (b.lists["out"] != st.list || !same(b.exprs[own], st.index)) return false;
+            } else if (first != 0 && matches(*patOp('+', patFloat(0.0), part), st.value, b)) {
+                first = 1;
+            } else {
+                return false;
+            }
+            Lin o;
+            if (!linear(st.index, o, 1, changed, written) || o.coef != 4) return false;
+            if (p == 0) outAt = o;
+            else if (o.k != outAt.k + p || !same(o.base, outAt.base)) return false;
+        }
+        // c = from + idx[i + x] (or idx[i + x] alone), the weight at the same place.
+        const Expr* c = b.exprs["c"];
+        const Expr* from = nullptr;
+        const Expr* load = c;
+        if (c != nullptr && c->kind == Expr::Bin && c->op == '+' && c->cls == CI) {
+            load = c->a->kind == Expr::Load ? c->a : c->b;
+            from = load == c->a ? c->b : c->a;
+            if (!fixedOperand(from) || changed(from) || written(from)) return false;
+        }
+        if (load == nullptr || load->kind != Expr::Load || load->cls != CI) return false;
+        Lin ii, wi;
+        if (!linear(load->b, ii, 1, changed, written) || ii.coef != 1 || !linear(b.exprs["wi"], wi, 1, changed, written) || wi.coef != 1 || wi.k != ii.k ||
+            !same(wi.base, ii.base))
+            return false;
+        const int out = fw.stores[0].list, px = b.lists["px"], wl = b.lists["w"];
+        if (px == out || load->list == out || wl == out) return false;
+        ah.shape = 31;  // kLoopWGatherPixels
+        ah.out = out, ah.a = px, ah.b = load->list;
+        ah.baseA = outAt.base, ah.fromBase = ii.base, ah.yA = from;
+        ah.copyWhat[0] = outAt.k, ah.copyWhat[1] = ii.k, ah.copyWhat[2] = wl;
+        ah.words[0] = first;
         return true;
     }
     // How far apart two pixels are (kLoopWApartItems, 2026-11-15: numeric.ww's __regionApart, a
@@ -4882,9 +4957,10 @@ struct Region {
             for (int u = h; u <= e; u++)
                 if (in[static_cast<size_t>(u)].kind(slot).bits != kEntry) return false;
             const int kind = l.stem == "chkf" ? 1 : l.stem == "chkint" ? 2 : 3;
-            if (ah.checkSlot >= 0 && (ah.checkSlot != slot || ah.checkKind != kind)) return false;
-            ah.checkSlot = slot, ah.checkKind = kind;
-            return true;
+            if (ah.checkSlot < 0 || (ah.checkSlot == slot && ah.checkKind == kind)) return ah.checkSlot = slot, ah.checkKind = kind, true;
+            // A second (2026-11-15: a gather's `from` beside its out base), in words 47 and 48.
+            if (ah.checkSlot2 < 0 || (ah.checkSlot2 == slot && ah.checkKind2 == kind)) return ah.checkSlot2 = slot, ah.checkKind2 = kind, true;
+            return false;
         };
         for (int i = h + 1; i < e;) {
             const Result& r = results[static_cast<size_t>(i)];
@@ -5354,6 +5430,7 @@ struct Region {
             }
         }
         if (apartItems(fw, ah, changed, written)) return true;
+        if (gatherPixels(fw, ah, changed, written)) return true;
         if (colorFloats(fw, ah, changed, written)) return true;
         if (gather4(fw, ah, changed, written)) return true;
         // Below, a store of a number (hsetf, hsetwi, hsetwb); a value of a value type's (hsetsm,
@@ -5594,6 +5671,17 @@ struct Region {
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
         }
+        if (ah.shape == 31) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(53, ah.copyWhat[0]);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(66, ah.copyWhat[1]);
+            word(129, ah.copyWhat[2]);
+            word(130, ah.yA != nullptr ? 1 : 0);
+            if (ah.yA != nullptr) operandWords(131, ah.yA, 0);
+        }
         if (ah.shape == 30) {
             word(50, ah.baseA != nullptr ? 1 : 0);
             if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
@@ -5683,6 +5771,7 @@ struct Region {
         for (int k = 0; k < 6; k++) word(7 + k, ah.words[k]);
         word(13, ah.bytesOut ? 1 : 0);
         word(14, ah.checkSlot), word(15, ah.checkKind);
+        word(47, ah.checkSlot2), word(48, ah.checkKind2);
         if (ah.p1 != nullptr && !param(7, ah.p1)) return false;
         if (ah.p2 != nullptr && !param(8, ah.p2)) return false;
         if (ah.addend != nullptr) store(8, ah.addend->reg);

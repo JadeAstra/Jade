@@ -1,0 +1,67 @@
+// Pixels gathered and made four floats as they are added (2026-11-15: numeric.ww's
+// __gatherPixels, scaling's across pass reading the picture itself), which native code's loop
+// template kLoopWGatherPixels does whole: the sums there plus each, or 0.0 plus each; a picture's
+// row from an offset, weights below zero, an index read twice; and an index whose pixel is past
+// the picture, where the template stops and the steps throw. Two variables' kinds checked once
+// (from and outAt). The same as the VM's; each run three times (a loop's region is made the
+// second time it starts).
+fun gather(px : List<Color>, from : int, out : open List<float>, outAt : int, index : List<int>, weight : List<float>, at : int, n : int) {
+  for (x in 0 ..< n) {
+    val c = px[from + index[at + x]]
+    val a = c.alpha.toInt().toFloat()
+    val m = a / 255.0
+    val wt = weight[at + x]
+    val o = outAt + x * 4
+    out[o] = out[o] + c.red.toInt().toFloat() * m * wt
+    out[o + 1] = out[o + 1] + c.green.toInt().toFloat() * m * wt
+    out[o + 2] = out[o + 2] + c.blue.toInt().toFloat() * m * wt
+    out[o + 3] = out[o + 3] + a * wt
+  }
+}
+fun first(px : List<Color>, from : int, out : open List<float>, outAt : int, index : List<int>, weight : List<float>, at : int, n : int) {
+  for (x in 0 ..< n) {
+    val c = px[from + index[at + x]]
+    val a = c.alpha.toInt().toFloat()
+    val m = a / 255.0
+    val wt = weight[at + x]
+    val o = outAt + x * 4
+    out[o] = 0.0 + c.red.toInt().toFloat() * m * wt
+    out[o + 1] = 0.0 + c.green.toInt().toFloat() * m * wt
+    out[o + 2] = 0.0 + c.blue.toInt().toFloat() * m * wt
+    out[o + 3] = 0.0 + a * wt
+  }
+}
+fun sum(xs : List<float>) : float {
+  var t = 0.0
+  for (i in 0 ..< xs.size) { t = t * 0.75 + xs[i] }
+  return t
+}
+var s = 5
+val px : List<Color> = List(300) {
+  s = (s * 1103515245 + 12345) & 0x7fffffff
+  Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 13).toByteWrapped(), (s >> 19).toByteWrapped())
+}
+val index : List<int> = List(300) { (it * 7) % 100 }
+val weight : List<float> = List(300) { (it % 9) * 0.25 - 0.8 }
+for (round in 0 ..< 3) {
+  val out : open List<float> = List(1000) { it * 0.01 }
+  first(px, 10, out, 0, index, weight, 0, 200)
+  gather(px, 0, out, 12, index, weight, 50, 200)
+  gather(px, 150, out, 3, index, weight, 7, 240)
+  print(sum(out))
+  val bad : List<int> = List(50) { it == 30 ? 400 : it }
+  val more : open List<float> = List(400) { 1.0 }
+  try {
+    gather(px, 5, more, 0, bad, weight, 0, 50)
+  } catch (e : IndexOutOfBoundsException) {
+    var t = 0.0
+    for (v in more) { t += v }
+    print("stopped:", t)
+  }
+}
+// expect: 39.83821800989996
+// expect: stopped: 1821.3547058823522
+// expect: 39.83821800989996
+// expect: stopped: 1821.3547058823522
+// expect: 39.83821800989996
+// expect: stopped: 1821.3547058823522

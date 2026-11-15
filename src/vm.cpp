@@ -6939,6 +6939,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         context.band = bandObject_;
         context.globals = globals_.data();
         context.upvalues = frame->closure->upvalues.data();
+        context.units = native::unitTable();
         if (region->first) {
             std::memset(context.lists, 0, sizeof context.lists);
             std::memset(context.held, 0, sizeof context.held);

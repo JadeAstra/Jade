@@ -104,7 +104,12 @@ struct RegionContext {
     // The cells of the variables the function the region runs in captures (its closure's
     // upvalues), as a region reads one (R_GET_UPVALUE, 2026-11-13).
     const void* upvalues;
+    // Each byte's value over 255.0, a / 255.0 as a double (unitTable), for loop templates that
+    // divide a byte by 255 (2026-11-15): the same number, read, not worked out each time.
+    const double* units;
 };
+// The 256 numbers a region's `units` points at, made once.
+const double* unitTable();
 
 // A region's machine code, run: the frame's slots, its context, then the registers (all 0 as it
 // starts). It gives back where the VM goes on: the instruction, and the stack's top above it.

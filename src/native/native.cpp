@@ -107,6 +107,15 @@ bool regionsOn = [] {
 }  // namespace
 
 bool enabled() { return regionsOn && available(); }
+
+const double* unitTable() {
+    static const double* const made = [] {
+        double* t = new double[256];  // never freed: regions read it for as long as the program runs
+        for (int a = 0; a < 256; a++) t[a] = static_cast<double>(a) / 255.0;
+        return t;
+    }();
+    return made;
+}
 void setEnabled(bool on) { regionsOn = on; }
 
 namespace {
@@ -336,7 +345,7 @@ namespace {
 volatile uint8_t checkFlag = 0;
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr};
+    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable()};
     return runRegion(code, slots, &context);
 }
 
