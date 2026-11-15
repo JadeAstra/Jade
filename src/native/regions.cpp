@@ -189,7 +189,7 @@ bool join(State& into, const State& from) {
         into.known = true;
         return true;
     }
-    if (into.top != from.top) refuse("two depths of the stack meet");
+    if (into.top != from.top) refuse("two depths of the stack meet: " + std::to_string(into.top) + " and " + std::to_string(from.top));
     bool changed = false;
     // The two in slot order, merged.
     const auto& as = into.kinds.items();
@@ -1878,8 +1878,11 @@ struct Region {
                 const Reg index = c.read(top - 2, CI, true);
                 const K v = s.kind(top - 1);
                 // (A whole number read from a list, an int or a byte, goes as an int: into bytes
-                // where it is from 0 to 255, into a list of ints as the int it is.)
-                const char* stem = (v.bits == kFloat || v.bits == kCopyF) ? "setf" : (v.bits == kInt || v.bits == kWhole) ? "setwi" : v.bits == kByte ? "setwb" : nullptr;
+                // where it is from 0 to 255, into a list of ints as the int it is; so does an int on
+                // one way and such a number on another, 2026-11-15: union-find's root, the pixel
+                // itself or a parent read from the list.)
+                const bool whole = v.bits == kInt || v.bits == kWhole || v.bits == (kInt | kWhole);
+                const char* stem = (v.bits == kFloat || v.bits == kCopyF) ? "setf" : whole ? "setwi" : v.bits == kByte ? "setwb" : nullptr;
                 Reg value{top - 1, stem != nullptr && stem[3] == 'f' ? CF : CI};
                 K result = v;
                 if (stem == nullptr) {

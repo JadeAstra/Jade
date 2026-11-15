@@ -725,93 +725,150 @@ fun Grid<Color>.floodRegion(x : int, y : int, tolerance : int = 0, diagonal : bo
   __colorFlood(cells, width, height, x, y, tolerance, diagonal, __gridInto(made, width, height))
   return Mask(made)
 }
-
-// The neighbours of a pixel, as steps across and down: the four beside it, then the four corners.
-val __stepX : List<int> = [1, -1, 0, 0, 1, 1, -1, -1]
-val __stepY : List<int> = [0, 0, 1, -1, 1, -1, 1, -1]
 // The pixels joined to (sx, sy), each differing from it by no more than `tolerance`, set in `m`
 // (all false before): those found marked in bytes and kept in a list in the order found, each
-// looked round in turn; then each set in the mask (no pass over every pixel).
+// with its column (2026-11-15: no division to find it), each looked round in turn, its sides
+// each on its own; then each set in the mask (no pass over every pixel; native code reads and
+// writes bytes, not bools).
 fun __colorFlood(px : List<Color>, w : int, h : int, sx : int, sy : int, tolerance : int, diagonal : bool, m : open List<bool>) {
+  val n = w * h
   val seed = sy * w + sx
   val from = px[seed]
   val fr = from.red.toInt()
   val fg = from.green.toInt()
   val fb = from.blue.toInt()
   val fa = from.alpha.toInt()
-  val seen = Bytes(w * h)
-  val found : open List<int> = [seed]
-  var next = 0
+  val t = tolerance
+  val corners = diagonal ? 1 : 0
+  val seen = Bytes(n)
+  val found : open List<int> = [seed, sx]
   seen[seed] = 1.toByte()
-  val sides = diagonal ? 8 : 4
-  val stepX = __stepX
-  val stepY = __stepY
+  var next = 0
   while (next < found.size) {
     val k = found[next]
-    next += 1
-    val x = k % w
-    val y = k / w
-    for (d in 0 ..< sides) {
-      val nx = x + stepX[d]
-      val ny = y + stepY[d]
-      if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
-        val j = ny * w + nx
-        val c = px[j]
-        if (seen[j] == 0.toByte() and Math.abs(c.red.toInt() - fr) <= tolerance and Math.abs(c.green.toInt() - fg) <= tolerance and
-            Math.abs(c.blue.toInt() - fb) <= tolerance and Math.abs(c.alpha.toInt() - fa) <= tolerance) {
-          seen[j] = 1.toByte()
-          found.add(j)
-        }
+    val x = found[next + 1]
+    next += 2
+    if (x + 1 < w) { __floodStep(px, seen, found, k + 1, x + 1, fr, fg, fb, fa, t) }
+    if (x > 0) { __floodStep(px, seen, found, k - 1, x - 1, fr, fg, fb, fa, t) }
+    if (k + w < n) { __floodStep(px, seen, found, k + w, x, fr, fg, fb, fa, t) }
+    if (k >= w) { __floodStep(px, seen, found, k - w, x, fr, fg, fb, fa, t) }
+    if (corners != 0) {
+      if (x + 1 < w) {
+        if (k + w < n) { __floodStep(px, seen, found, k + w + 1, x + 1, fr, fg, fb, fa, t) }
+        if (k >= w) { __floodStep(px, seen, found, k - w + 1, x + 1, fr, fg, fb, fa, t) }
+      }
+      if (x > 0) {
+        if (k + w < n) { __floodStep(px, seen, found, k + w - 1, x - 1, fr, fg, fb, fa, t) }
+        if (k >= w) { __floodStep(px, seen, found, k - w - 1, x - 1, fr, fg, fb, fa, t) }
       }
     }
   }
-  for (q in 0 ..< found.size) { m[found[q]] = true }
+  var q = 0
+  while (q < found.size) {
+    m[found[q]] = true
+    q += 2
+  }
 }
-// Each pixel's area's number in `out`: the pixels in row order, each not yet numbered starting an
-// area of the next number, which takes every pixel joined to it through neighbours close enough
-// (beside, and at the corners with `diagonal`). The numbers union-find gives, joining the larger
-// root under the smaller (each area's root its first pixel, the areas numbered in its order).
+// Pixel j (column jx) found where it is not yet and is close enough to (r, g, b, a) in every
+// part: marked, and kept to be looked round.
+inline fun __floodStep(px : List<Color>, seen : Bytes, found : open List<int>, j : int, jx : int, r : int, g : int, b : int, a : int, t : int) {
+  if (seen[j] == 0.toByte()) {
+    val c = px[j]
+    if (Math.abs(c.red.toInt() - r) <= t and Math.abs(c.green.toInt() - g) <= t and Math.abs(c.blue.toInt() - b) <= t and Math.abs(c.alpha.toInt() - a) <= t) {
+      seen[j] = 1.toByte()
+      found.add(j)
+      found.add(jx)
+    }
+  }
+}
+// Each pixel's area's number in `out`: every pixel joined to its neighbours close enough (beside,
+// and at the corners with `diagonal`), the areas numbered in the order their first pixels come
+// row by row. Union-find, as the C++ had it (2026-11-15; a flood from each area's first pixel
+// since 2026-11-13, which looked round every pixel four times): each pixel compared with the one
+// to its right and the one below (and those below at the corners), each join the larger root put
+// under the smaller, so that an area's root is its first pixel; then each pixel numbered as its
+// root was, a root taking the next number.
 fun __colorRegions(px : List<Color>, w : int, h : int, tolerance : int, diagonal : bool, out : open List<int>) {
   val n = w * h
-  for (k in 0 ..< n) { out[k] = -1 }
-  // A stack as large as the picture (no area holds more), so that nothing is added to it.
-  val stack = Grid<int>(n, 1)
-  val todo = __gridInto(stack, n, 1)
-  val sides = diagonal ? 8 : 4
-  val stepX = __stepX
-  val stepY = __stepY
-  var count = 0
-  for (start in 0 ..< n) {
-    if (out[start] >= 0) { continue }
-    out[start] = count
-    todo[0] = start
-    var top = 1
-    while (top > 0) {
-      top -= 1
-      val k = todo[top]
-      val x = k % w
-      val y = k / w
+  val t = tolerance
+  for (k in 0 ..< n) { out[k] = k }  // each its own root: `out` holds the parents first
+  val corners = diagonal ? 1 : 0
+  for (y in 0 ..< h) {
+    for (x in 0 ..< w) {
+      val k = y * w + x
       val here = px[k]
       val hr = here.red.toInt()
       val hg = here.green.toInt()
       val hb = here.blue.toInt()
       val ha = here.alpha.toInt()
-      for (d in 0 ..< sides) {
-        val nx = x + stepX[d]
-        val ny = y + stepY[d]
-        if (nx >= 0 and nx < w and ny >= 0 and ny < h) {
-          val j = ny * w + nx
-          val c = px[j]
-          if (out[j] < 0 and Math.abs(c.red.toInt() - hr) <= tolerance and Math.abs(c.green.toInt() - hg) <= tolerance and
-              Math.abs(c.blue.toInt() - hb) <= tolerance and Math.abs(c.alpha.toInt() - ha) <= tolerance) {
-            out[j] = count
-            todo[top] = j
-            top += 1
+      if (x + 1 < w) {
+        val c = px[k + 1]
+        if (Math.abs(c.red.toInt() - hr) <= t and Math.abs(c.green.toInt() - hg) <= t and Math.abs(c.blue.toInt() - hb) <= t and
+            Math.abs(c.alpha.toInt() - ha) <= t) {
+          __regionJoin(out, k, k + 1)
+        }
+      }
+      if (y + 1 < h) {
+        val c = px[k + w]
+        if (Math.abs(c.red.toInt() - hr) <= t and Math.abs(c.green.toInt() - hg) <= t and Math.abs(c.blue.toInt() - hb) <= t and
+            Math.abs(c.alpha.toInt() - ha) <= t) {
+          __regionJoin(out, k, k + w)
+        }
+        if (corners != 0) {
+          if (x + 1 < w) {
+            val d = px[k + w + 1]
+            if (Math.abs(d.red.toInt() - hr) <= t and Math.abs(d.green.toInt() - hg) <= t and Math.abs(d.blue.toInt() - hb) <= t and
+                Math.abs(d.alpha.toInt() - ha) <= t) {
+              __regionJoin(out, k, k + w + 1)
+            }
+          }
+          if (x > 0) {
+            val e = px[k + w - 1]
+            if (Math.abs(e.red.toInt() - hr) <= t and Math.abs(e.green.toInt() - hg) <= t and Math.abs(e.blue.toInt() - hb) <= t and
+                Math.abs(e.alpha.toInt() - ha) <= t) {
+              __regionJoin(out, k, k + w - 1)
+            }
           }
         }
       }
     }
-    count += 1
+  }
+  // Numbers, in row order: a root (its own parent, the first pixel of its area) the next; any
+  // other pixel its parent's, a pixel before it (a parent is always the smaller), numbered already.
+  var count = 0
+  for (k in 0 ..< n) {
+    val p = out[k]
+    if (p == k) {
+      out[k] = count
+      count += 1
+    } else {
+      out[k] = out[p]
+    }
+  }
+}
+// The areas of pixels a and b one: each one's root found (each pixel on the way pointed to its
+// grandparent), the larger put under the smaller.
+inline fun __regionJoin(parent : open List<int>, a : int, b : int) {
+  var x = a
+  var px = parent[x]
+  while (px != x) {
+    val up = parent[px]
+    parent[x] = up
+    x = up
+    px = parent[x]
+  }
+  var y = b
+  var py = parent[y]
+  while (py != y) {
+    val up = parent[py]
+    parent[y] = up
+    y = up
+    py = parent[y]
+  }
+  if (x < y) {
+    parent[y] = x
+  } else if (y < x) {
+    parent[x] = y
   }
 }
 
