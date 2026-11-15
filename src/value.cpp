@@ -1284,8 +1284,12 @@ KeptBlocks& keptBlocks() {
 }
 }  // namespace
 
-void* takeItemBlock(size_t bytes) {
-    if (bytes < kKeptFrom) return ::operator new(bytes);
+void* takeItemBlock(size_t bytes, bool zeroed) {
+    if (bytes < kKeptFrom) {
+        void* p = ::operator new(bytes);
+        if (zeroed) std::memset(p, 0, bytes);
+        return p;
+    }
     KeptBlocks& k = keptBlocks();
     {
         std::lock_guard<std::mutex> hold(k.lock);
@@ -1298,14 +1302,15 @@ void* takeItemBlock(size_t bytes) {
             k.kept.erase(k.kept.begin() + static_cast<std::ptrdiff_t>(best));
             k.keptBytes -= size;
             k.live[p] = size;
+            if (zeroed) std::memset(p, 0, bytes);
             return p;
         }
     }
-    void* p = std::malloc(bytes);
+    void* p = zeroed ? std::calloc(bytes, 1) : std::malloc(bytes);
     if (p == nullptr) {
         // Memory short: what is kept goes back, then once more.
         releaseItemBlocks();
-        p = std::malloc(bytes);
+        p = zeroed ? std::calloc(bytes, 1) : std::malloc(bytes);
         if (p == nullptr) throw std::bad_alloc();
     }
     std::lock_guard<std::mutex> hold(k.lock);

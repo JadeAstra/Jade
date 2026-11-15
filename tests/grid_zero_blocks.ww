@@ -1,0 +1,29 @@
+// A grid made of its type's zeros takes its storage zeroed (2026-11-15): a large one fresh from
+// calloc (pages the system zeroes as each is first touched, none written), or a block a list
+// let go of, kept for reuse and cleared. Each new grid all zeros, though the one before it of
+// the same size was filled and let go; small grids and grids grown from some cells too.
+fun allZero(g : Grid<int>) : bool {
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) {
+      if (g[x, y] != 0) { return false }
+    }
+  }
+  return true
+}
+var bad = 0
+for (round in 0 ..< 40) {
+  val g = Grid<int>(700, 300)  // 1.7 MB: kept for reuse when let go
+  if (!allZero(g)) { bad += 1 }
+  for (y in 0 ..< 300) { for (x in 0 ..< 700) { g[x, y] = x + y + 1 } }
+  val s = Grid<int>(9, 7)
+  if (!allZero(s)) { bad += 1 }
+  for (y in 0 ..< 7) { for (x in 0 ..< 9) { s[x, y] = 5 } }
+}
+val b = Grid<bool>(3000, 400)
+var trues = 0
+for (y in 0 ..< 400) { for (x in 0 ..< 3000) { if (b[x, y]) { trues += 1 } } }
+b[2999, 399] = true
+b[5, 0] = true
+val m = Mask(b)
+print(bad, trues, m.count, m.bounds)
+// expect: 0 0 2 Rect(5, 0, 2995 x 400)

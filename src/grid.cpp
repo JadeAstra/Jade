@@ -69,7 +69,7 @@ bool appendZeros(VM& vm, ObjList* list, size_t count) {
     if (list->packed()) {
         PackedItems& pack = *list->pack;
         const size_t start = pack.count;
-        pack.block.resize((start + count) * pack.width, 0);
+        zeroBlock(pack.block, (start + count) * pack.width);
         if (pack.nullable) {
             // The zero of a type that takes null is null.
             pack.nulls.resize((start + count + 63) / 64, 0);

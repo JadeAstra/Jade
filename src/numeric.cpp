@@ -10,6 +10,7 @@
 // range as storing it is.
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -1482,13 +1483,27 @@ void registerNumeric(VM& vm) {
         const size_t w = sizeArg(vm, args[1], "width");
         if (!mask->packed() || mask->pack->store != ListStore::Bools) fail(vm, Thrown::IllegalArgumentException, "a mask is a grid of bools");
         const uint8_t* m = mask->pack->block.data();
+        const size_t n = mask->size(), across = std::max<size_t>(w, 1);
         int64_t count = 0, l = INT64_MAX, t = INT64_MAX, r = -1, b = -1;
-        for (size_t k = 0; k < mask->size(); k++) {
-            if (m[k] == 0) continue;
+        auto note = [&](size_t k) {
             count++;
-            const int64_t x = static_cast<int64_t>(k % std::max<size_t>(w, 1)), y = static_cast<int64_t>(k / std::max<size_t>(w, 1));
+            const int64_t x = static_cast<int64_t>(k % across), y = static_cast<int64_t>(k / across);
             l = std::min(l, x), t = std::min(t, y), r = std::max(r, x), b = std::max(b, y);
+        };
+        // Eight cells at a time, those all false passed over at once (2026-11-15: a flood's mask of
+        // 12 M cells, 80 k of them true, counted in 4 ms a cell at a time).
+        size_t k = 0;
+        for (; k + 8 <= n; k += 8) {
+            uint64_t v;
+            std::memcpy(&v, m + k, 8);
+            while (v != 0) {  // each cell not 0 (its lowest bit set first), then that cell's byte cleared
+                const unsigned at = static_cast<unsigned>(std::countr_zero(v)) / 8;
+                note(k + at);
+                v &= ~(uint64_t{0xFF} << (8 * at));
+            }
         }
+        for (; k < n; k++)
+            if (m[k] != 0) note(k);
         std::vector<int64_t> out = count == 0 ? std::vector<int64_t>{0, 0, 0, 0, 0} : std::vector<int64_t>{count, l, t, r + 1, b + 1};
         ObjList* made = newNumbers(vm, false, 5);
         TempRoot keep(vm, Value::object(made));

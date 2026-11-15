@@ -14,6 +14,7 @@
 #include <emmintrin.h>
 #endif
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace ww {
@@ -732,25 +733,55 @@ enum class ListStore : uint8_t {
 // made again (a copy, a part, a filter's result each frame) then finds memory already in use,
 // where fresh memory costs a fault for each 4 KB page the first time it is written (about 4 ms
 // of a 48 MB copy's 6.5). Program.collectGarbage() gives them all back, as does an allocation
-// that fails. Smaller blocks are the heap's, as before. Any thread.
-void* takeItemBlock(size_t bytes);
+// that fails. Smaller blocks are the heap's, as before. Any thread. `zeroed`: the block all
+// zeros, a fresh one from calloc (pages the system zeroes as each is first touched, none
+// written here), one kept cleared.
+void* takeItemBlock(size_t bytes, bool zeroed = false);
 void giveItemBlock(void* p, size_t bytes) noexcept;
 void releaseItemBlocks() noexcept;
 size_t keptItemBytes() noexcept;  // the bytes kept for reuse (Program.memoryKept)
+// Set while an empty block is made a number of zero bytes (zeroBlock): taken zeroed, and the
+// vector's own zeros not written again (2026-11-15: a 12 MB mask made fresh cost 2 ms, each page
+// written; C++'s vector of zeros, which Clang makes a calloc, touches none).
+inline thread_local bool itemsComeZeroed = false;
 template <class T>
 struct ItemAllocator {
     using value_type = T;
     ItemAllocator() noexcept = default;
     template <class U>
     ItemAllocator(const ItemAllocator<U>&) noexcept {}
-    T* allocate(size_t n) { return static_cast<T*>(takeItemBlock(n * sizeof(T))); }
+    T* allocate(size_t n) { return static_cast<T*>(takeItemBlock(n * sizeof(T), itemsComeZeroed)); }
     void deallocate(T* p, size_t n) noexcept { giveItemBlock(p, n * sizeof(T)); }
+    template <class U>
+    void construct(U* p) noexcept {
+        if (!itemsComeZeroed) ::new (static_cast<void*>(p)) U();
+    }
+    template <class U, class... A>
+    void construct(U* p, A&&... a) {
+        ::new (static_cast<void*>(p)) U(std::forward<A>(a)...);
+    }
     template <class U>
     bool operator==(const ItemAllocator<U>&) const noexcept { return true; }
     template <class U>
     bool operator!=(const ItemAllocator<U>&) const noexcept { return false; }
 };
 using ItemBlock = std::vector<uint8_t, ItemAllocator<uint8_t>>;
+// `block` made `bytes` long, the bytes added zeros: where it has no storage yet, storage taken
+// zeroed (takeItemBlock) and nothing written.
+inline void zeroBlock(ItemBlock& block, size_t bytes) {
+    if (block.capacity() != 0 || bytes == 0) {
+        block.resize(bytes, 0);
+        return;
+    }
+    itemsComeZeroed = true;
+    try {
+        block.resize(bytes);
+    } catch (...) {
+        itemsComeZeroed = false;
+        throw;
+    }
+    itemsComeZeroed = false;
+}
 
 // The items of a packed list.
 struct PackedItems {
