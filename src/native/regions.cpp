@@ -3973,6 +3973,66 @@ struct Region {
         if (e == nullptr || e->kind != Expr::ToByte || e->a == nullptr || e->a->kind != Expr::ToInt) return nullptr;
         return plus(held(e->a->a, 0.0, 255.0), 0.5);
     }
+    // Four floats a pixel each plus a gathered float times a weight (kLoopFGather4, 2026-11-15:
+    // numeric.ww's __gatherMulAdd, scaling's across pass, a place of taps for every pixel):
+    // `out[o + p] = out[o + p] + line[c + p] * w` for p from 0 to 3, o the out base plus four
+    // times the counter, c four times the int at an index list's base plus the counter, w the
+    // float at a weight list's same place. Words 50 to 52 the out base (50: 0 none, 1 an
+    // operand), 63 to 65 the base of the index and the weight lists, 66 the constant added there,
+    // 129 the weight list (looked at once).
+    template <typename Changed, typename Written>
+    bool gather4(const Followed& fw, Ahead& ah, const Changed& changed, const Written& written) {
+        if (fw.stores.size() != 4) return false;
+        int out = -1, line = -1, ilist = -1, wlist = -1;
+        const Expr* c = nullptr;
+        const Expr* w = nullptr;
+        Lin outAt;
+        for (int p = 0; p < 4; p++) {
+            const Followed::Store& st = fw.stores[static_cast<size_t>(p)];
+            if (st.stem != "hsetf" || st.index == nullptr || st.value == nullptr) return false;
+            Lin o;
+            if (!linear(st.index, o, 1, changed, written) || o.coef != 4 || o.k != p) return false;
+            if (p == 0) out = st.list, outAt = o;
+            else if (st.list != out || !same(o.base, outAt.base)) return false;
+            const Expr* v = st.value;
+            if (v->kind != Expr::Bin || v->op != '+' || v->cls != CF) return false;
+            const Expr* old = v->a->kind == Expr::Load ? v->a : v->b;
+            const Expr* mul = old == v->a ? v->b : v->a;
+            if (old->kind != Expr::Load || old->list != out || old->cls != CF || !same(old->b, st.index)) return false;
+            if (mul->kind != Expr::Bin || mul->op != '*' || mul->cls != CF) return false;
+            const Expr* got = mul->a;
+            const Expr* wt = mul->b;
+            if (got->kind != Expr::Load || got->cls != CF || wt->kind != Expr::Load || wt->cls != CF) return false;
+            if (p == 0) line = got->list, w = wt;
+            else if (got->list != line || !same(wt, w)) return false;
+            // The gathered index: c (four times the int read) for p = 0, c + p after.
+            const Expr* at = got->b;
+            if (p > 0) {
+                if (at->kind != Expr::Bin || at->op != '+' || at->cls != CI) return false;
+                const Expr* k = at->a->kind == Expr::KInt ? at->a : at->b;
+                if (k->kind != Expr::KInt || k->ki != p) return false;
+                at = k == at->a ? at->b : at->a;
+            }
+            if (p == 0) c = at;
+            else if (!same(at, c)) return false;
+        }
+        // c = the int at the index list's place, times 4; w the float at the weight list's same place.
+        if (c->kind != Expr::Bin || c->op != '*' || c->cls != CI) return false;
+        const Expr* four = c->a->kind == Expr::KInt ? c->a : c->b;
+        const Expr* idx = four == c->a ? c->b : c->a;
+        if (four->kind != Expr::KInt || four->ki != 4 || idx->kind != Expr::Load || idx->cls != CI) return false;
+        ilist = idx->list, wlist = w->list;
+        Lin ii, wi;
+        if (!linear(idx->b, ii, 1, changed, written) || !linear(w->b, wi, 1, changed, written) || ii.coef != 1 || wi.coef != 1 || ii.k != wi.k ||
+            !same(ii.base, wi.base))
+            return false;
+        if (out < 0 || line < 0 || ilist < 0 || wlist < 0 || out == line || out == ilist || out == wlist) return false;
+        ah.shape = 27;  // kLoopFGather4
+        ah.out = out, ah.a = line, ah.b = ilist;
+        ah.baseA = outAt.base, ah.fromBase = ii.base;
+        ah.copyWhat[0] = ii.k, ah.copyWhat[1] = wlist;
+        return true;
+    }
     // Colours made four floats a pixel and back (2026-11-15: numeric.ww's __premultiplied and
     // __unpremultiplied, which blurred, scaled and a colour grid's convolve work through): each
     // matched to the expressions those loops are, every operation in the same order.
@@ -4976,6 +5036,7 @@ struct Region {
             }
         }
         if (colorFloats(fw, ah, changed, written)) return true;
+        if (gather4(fw, ah, changed, written)) return true;
         // Below, a store of a number (hsetf, hsetwi, hsetwb); a value of a value type's (hsetsm,
         // pushsm) has none.
         if (fw.stores.size() != 1 || fw.stores[0].value == nullptr) return false;
@@ -5204,6 +5265,14 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 27) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(66, ah.copyWhat[0]);
+            word(129, ah.copyWhat[1]);
         }
         if (ah.shape == 24 || ah.shape == 25) {
             word(50, ah.baseA != nullptr ? 1 : 0);

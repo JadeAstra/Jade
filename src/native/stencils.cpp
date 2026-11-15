@@ -1998,7 +1998,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems,
+    kLoopWCountItems, kLoopFGather4,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2969,6 +2969,52 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (uint64_t k = 0; k < nt; k++) key |= (static_cast<uint64_t>(p[toff[k]]) >> tshr[k]) << tshl[k];
                 for (uint64_t s = 0; s < n; s++)
                     counts[K[s] + static_cast<int64_t>(own[s] >= 0 ? p[own[s]] : key)] += kind[s] == 1 ? static_cast<int64_t>(p[v[s]]) : v[s];
+            }
+            break;
+        }
+        case kLoopFGather4: {
+            // Four floats a pixel each plus a gathered float times a weight (regions.cpp,
+            // gather4: scaling's across pass): out[o + p] = out[o + p] + line[4 idx[i] + p] * w[i]
+            // for p from 0 to 3, o the out base plus four times the counter, i the index and
+            // weight lists' base plus the counter. Words 50 to 52 the out base, 63 to 66 the other
+            // base, 129 the weight list. An index whose four floats are not in the line stops it
+            // there, for the steps to throw.
+            static_assert(kLoopFGather4 == 27, "regions.cpp's ah.shape 27");
+            const uint64_t wk = t[129];
+            if (wk >= 6 || !out.ok() || out.kind() != 2 || !a.ok() || a.kind() != 2 || !b.ok() || b.kind() != 1) return;
+            const uint64_t* hw = ctx->lists + 4 * wk;
+            if (hw[3] != 2 || hw[0] == out.h[0] || a.h[0] == out.h[0]) return;
+            int64_t ob = 0, ib = 0;
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ib)) return;
+            if (!small(t[66]) || ob < -(int64_t{1} << 50) || ob > (int64_t{1} << 50) || ib < -(int64_t{1} << 50) || ib > (int64_t{1} << 50) ||
+                next > (int64_t{1} << 50) || end > (int64_t{1} << 50))
+                return;
+            ib += static_cast<int64_t>(t[66]);
+            const int64_t oFirst = ob + 4 * next, oLast = ob + 4 * (end - 1) + 3, iFirst = ib + next, iLast = ib + end - 1;
+            if (oFirst < 0 || iFirst < 0 || static_cast<uint64_t>(oLast) >= out.h[1] || static_cast<uint64_t>(oLast) >= out.h[2] ||
+                static_cast<uint64_t>(iLast) >= b.h[1] || static_cast<uint64_t>(iLast) >= hw[1])
+                return;
+            double* o = out.floats() + oFirst;
+            const double* line = a.floats();
+            const uint64_t lineCount = a.h[1];
+            const int64_t* idx = b.ints() + iFirst;
+            const double* w = reinterpret_cast<const double*>(hw[0]) + iFirst;
+            {
+#pragma clang fp contract(off)
+                for (int64_t j = 0; j < left; j++, o += 4) {
+                    const int64_t c = idx[j];
+                    if (c < 0 || c > (int64_t{1} << 58) || static_cast<uint64_t>(4 * c + 3) >= lineCount) {
+                        done = j;
+                        break;
+                    }
+                    const double wt = w[j];
+                    const double* q = line + 4 * c;
+                    o[0] = o[0] + q[0] * wt;
+                    o[1] = o[1] + q[1] * wt;
+                    o[2] = o[2] + q[2] * wt;
+                    o[3] = o[3] + q[3] * wt;
+                }
             }
             break;
         }

@@ -608,6 +608,17 @@ fun __colorScaled(px : List<Color>, w : int, h : int, nw : int, nh : int, interp
   }
   if (nw == 0 or nh == 0) { return }
   val across = __tapsFor(w, nw, interpolation)
+  // The taps across by their place: every new pixel's first, then every second, ... (index 0
+  // and weight 0.0 for a pixel with fewer): each place one gathered multiply-add along the row.
+  val most = __mostTaps(across.start, nw)
+  val byPlaceIndex = Grid<int>(nw, most).cells
+  val byPlaceWeight = Grid<float>(nw, most).cells
+  for (x in 0 ..< nw) {
+    for (t in across.start[x] ..< across.start[x + 1]) {
+      byPlaceIndex[(t - across.start[x]) * nw + x] = across.index[t]
+      byPlaceWeight[(t - across.start[x]) * nw + x] = across.weight[t]
+    }
+  }
   val down = __tapsFor(h, nh, interpolation)
   val nw4 = nw * 4
   val kept = 8
@@ -623,7 +634,7 @@ fun __colorScaled(px : List<Color>, w : int, h : int, nw : int, nh : int, interp
       val place = sy % kept
       if (held[place] != sy) {
         __premultiplied(px, sy * w, w, line, 0)
-        __scaledAcross(line, nw, across.start, across.index, across.weight, ring, place * nw4)
+        __scaledAcross(line, nw, most, byPlaceIndex, byPlaceWeight, ring, place * nw4)
         held[place] = sy
       }
       __mulAdd(acc, 0, ring, place * nw4, nw4, down.weight[t], t > first)
@@ -631,27 +642,32 @@ fun __colorScaled(px : List<Color>, w : int, h : int, nw : int, nh : int, interp
     __unpremultiplied(acc, 0, nw, to, y * nw)
   }
 }
-// A row of four floats a pixel resampled across to nw pixels by the taps, into `out` from `outAt`.
-fun __scaledAcross(line : List<float>, nw : int, start : List<int>, index : List<int>, weight : List<float>, out : open List<float>, outAt : int) {
-  for (x in 0 ..< nw) {
-    var r = 0.0
-    var g = 0.0
-    var b = 0.0
-    var a = 0.0
-    for (t in start[x] ..< start[x + 1]) {
-      val c = index[t] * 4
-      val wt = weight[t]
-      r += line[c] * wt
-      g += line[c + 1] * wt
-      b += line[c + 2] * wt
-      a += line[c + 3] * wt
-    }
+// A row of four floats a pixel resampled across to nw pixels into `out` from `outAt`: the sums
+// zero, then each place's taps added for every pixel along the row (2026-11-15; was each pixel's
+// taps summed in turn, a loop too short for native code's templates), so each sum is added in
+// the same order as before, a padded tap's 0.0 adding nothing.
+fun __scaledAcross(line : List<float>, nw : int, most : int, index : List<int>, weight : List<float>, out : open List<float>, outAt : int) {
+  for (k in 0 ..< nw * 4) { out[outAt + k] = 0.0 }
+  for (j in 0 ..< most) { __gatherMulAdd(line, out, outAt, index, weight, j * nw, nw) }
+}
+// For n pixels: out's four floats at outAt + 4 x, each plus line's at 4 index[at + x] times
+// weight[at + x] (native code's loop template kLoopFGather4).
+fun __gatherMulAdd(line : List<float>, out : open List<float>, outAt : int, index : List<int>, weight : List<float>, at : int, n : int) {
+  for (x in 0 ..< n) {
+    val c = index[at + x] * 4
+    val wt = weight[at + x]
     val o = outAt + x * 4
-    out[o] = r
-    out[o + 1] = g
-    out[o + 2] = b
-    out[o + 3] = a
+    out[o] = out[o] + line[c] * wt
+    out[o + 1] = out[o + 1] + line[c + 1] * wt
+    out[o + 2] = out[o + 2] + line[c + 2] * wt
+    out[o + 3] = out[o + 3] + line[c + 3] * wt
   }
+}
+// The most taps any of n cells has.
+fun __mostTaps(start : List<int>, n : int) : int {
+  var most = 0
+  for (k in 0 ..< n) { most = Math.max(most, start[k + 1] - start[k]) }
+  return most
 }
 
 // Each pixel its neighbourhood within `radius` reduced, each part of the colour on its own (a

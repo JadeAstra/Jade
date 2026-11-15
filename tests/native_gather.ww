@@ -1,0 +1,44 @@
+// Four floats a pixel each plus a gathered float times a weight (2026-11-15: scaling's across
+// pass), which native code's loop template kLoopFGather4 does whole: at bases, weights below
+// zero, an index read twice; and an index whose floats are past the line, where the template
+// stops and the steps throw. The same as the VM's; each loop run three times (its region is made
+// the second time it starts).
+fun gather(line : List<float>, out : open List<float>, outAt : int, index : List<int>, weight : List<float>, at : int, n : int) {
+  for (x in 0 ..< n) {
+    val c = index[at + x] * 4
+    val wt = weight[at + x]
+    val o = outAt + x * 4
+    out[o] = out[o] + line[c] * wt
+    out[o + 1] = out[o + 1] + line[c + 1] * wt
+    out[o + 2] = out[o + 2] + line[c + 2] * wt
+    out[o + 3] = out[o + 3] + line[c + 3] * wt
+  }
+}
+fun sum(xs : List<float>) : float {
+  var t = 0.0
+  for (i in 0 ..< xs.size) { t = t * 0.75 + xs[i] }
+  return t
+}
+val line : List<float> = List(400) { it * 0.37 - 20.0 }
+val index : List<int> = List(300) { (it * 7) % 100 }
+val weight : List<float> = List(300) { (it % 9) * 0.25 - 0.8 }
+for (round in 0 ..< 3) {
+  val out : open List<float> = List(1000) { it * 0.01 }
+  gather(line, out, 0, index, weight, 0, 200)
+  gather(line, out, 12, index, weight, 50, 200)
+  gather(line, out, 3, index, weight, 7, 240)
+  print(sum(out))
+  val bad : List<int> = List(50) { it == 30 ? 100 : it }
+  val more : open List<float> = List(400) { 1.0 }
+  try {
+    gather(line, more, 0, bad, weight, 0, 50)
+  } catch (e : IndexOutOfBoundsException) {
+    print("stopped:", sum(more))
+  }
+}
+// expect: 39.840116123061215
+// expect: stopped: 3.999999999999999
+// expect: 39.840116123061215
+// expect: stopped: 3.999999999999999
+// expect: 39.840116123061215
+// expect: stopped: 3.999999999999999
