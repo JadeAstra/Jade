@@ -2553,7 +2553,37 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 const int32_t w0 = weight[0], w1 = nr > 1 ? weight[1] : 0, w2 = nr > 2 ? weight[2] : 0;
                 const uint64_t r0 = from[0], r1 = nr > 1 ? from[1] : 0, r2 = nr > 2 ? from[2] : 0;
                 const bool keepFourth = fourth == 5;
-                for (int64_t j = 0; j < left; j++) {
+                int64_t j = 0;
+                // Four pixels at a time (2026-11-15), where the mix ends in a shift alone: each
+                // pixel's bytes made 16-bit, times the weight at each byte (the weights of a byte
+                // read twice added), pairs added (pmaddwd) and the two halves of each pixel added,
+                // shifted; the grey three times and the fourth byte the pixel's own or the
+                // constant. The same sums as one at a time, in 32 bits.
+                int32_t at[4] = {0, 0, 0, 0};
+                at[r0] += w0, at[r1] += w1, at[r2] += w2;
+                bool wide = mixEnd.divisor == 1;
+                for (int k = 0; k < 4; k++) wide = wide && at[k] >= -32768 && at[k] <= 32767;
+                if (wide) {
+                    const __m128i weights = _mm_setr_epi16(static_cast<int16_t>(at[0]), static_cast<int16_t>(at[1]), static_cast<int16_t>(at[2]),
+                                                           static_cast<int16_t>(at[3]), static_cast<int16_t>(at[0]), static_cast<int16_t>(at[1]),
+                                                           static_cast<int16_t>(at[2]), static_cast<int16_t>(at[3]));
+                    const __m128i zero = _mm_setzero_si128(), added = _mm_set1_epi32(c), count = _mm_cvtsi32_si128(mixEnd.shift);
+                    const __m128i fourthMask = _mm_set1_epi32(keepFourth ? static_cast<int32_t>(0xFF000000u) : 0);
+                    const __m128i fourthFixed = _mm_set1_epi32(keepFourth ? 0 : static_cast<int32_t>(static_cast<uint32_t>(fixedFourth) << 24));
+                    for (; j + 4 <= left; j += 4) {
+                        const __m128i px = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x + j * 4));
+                        const __m128i lo = _mm_madd_epi16(_mm_unpacklo_epi8(px, zero), weights);
+                        const __m128i hi = _mm_madd_epi16(_mm_unpackhi_epi8(px, zero), weights);
+                        const __m128 lf = _mm_castsi128_ps(lo), hf = _mm_castsi128_ps(hi);
+                        const __m128i firsts = _mm_castps_si128(_mm_shuffle_ps(lf, hf, _MM_SHUFFLE(2, 0, 2, 0)));
+                        const __m128i seconds = _mm_castps_si128(_mm_shuffle_ps(lf, hf, _MM_SHUFFLE(3, 1, 3, 1)));
+                        const __m128i v = _mm_sra_epi32(_mm_add_epi32(_mm_add_epi32(firsts, seconds), added), count);
+                        const __m128i grey = _mm_or_si128(_mm_or_si128(v, _mm_slli_epi32(v, 8)), _mm_slli_epi32(v, 16));
+                        const __m128i out = _mm_or_si128(_mm_or_si128(grey, _mm_and_si128(px, fourthMask)), fourthFixed);
+                        _mm_storeu_si128(reinterpret_cast<__m128i*>(o + j * 4), out);
+                    }
+                }
+                for (; j < left; j++) {
                     const uint8_t* p = x + j * 4;
                     uint8_t* d = o + j * 4;
                     const uint8_t keep = keepFourth ? p[3] : fixedFourth;

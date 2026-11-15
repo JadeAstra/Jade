@@ -1,0 +1,124 @@
+// A grey made of whole-number weights of a pixel's bytes and a shift, set in place: native
+// code's loop template does four pixels at a time (2026-11-15), the rest of a row one at a time.
+// Three weights, one (alpha made opaque), a byte read twice, alpha weighted too, rows of 1 to 7
+// pixels and of 61; a division (one at a time); a negative weight and a grid set from another
+// (not the template's today). The same as the VM's; each run three times (a loop's region is
+// made the second time it starts).
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        px[x, y] = Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 16).toByteWrapped(), (s >> 24).toByteWrapped())
+      }
+    }
+  }
+  return im
+}
+fun three(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red * 54 + c.green * 183 + c.blue * 19 + 128) >> 8).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun one(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.green * 255) >> 8).toByte()
+      im[x, y] = Color(v, v, v)
+    }
+  }
+}
+fun twice(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.blue * 100 + c.blue * 27 + c.red * 128) >> 8).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun withAlpha(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.alpha * 3 + c.red * 5) >> 3).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun negative(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red * 200 - c.green * 45 + 11475) >> 8).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun divided(im : Image) {
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      val v = ((c.red + c.green + c.blue) / 3).toByte()
+      im[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun into(from : Grid<Color>, to : Grid<Color>) {
+  for (y in 0 ..< from.height) {
+    for (x in 0 ..< from.width) {
+      val c = from[x, y]
+      val v = ((c.red * 77 + c.green * 150 + c.blue * 29) >> 8).toByte()
+      to[x, y] = Color(v, v, v, c.alpha)
+    }
+  }
+}
+fun each(work : (Image) -> unit) : string {
+  var out = ""
+  for (w in [1, 2, 3, 4, 5, 6, 7, 61]) {
+    val im = picture(w, 9, w * 7 + 1)
+    work(im)
+    out += " ${im.hashCode()}"
+  }
+  return out
+}
+for (round in 0 ..< 3) {
+  print(each { three(it) })
+  print(each { one(it) })
+  print(each { twice(it) })
+  print(each { withAlpha(it) })
+  print(each { negative(it) })
+  print(each { divided(it) })
+  val src = picture(61, 13, 5)
+  val dst = Image(61, 13)
+  dst.editPixels { px -> into(src.pixels, px) }
+  print(dst.hashCode())
+}
+// expect:  421100825 1939377993 54216256 773551533 665316147 1401579723 52397345 119222667
+// expect:  1374833648 2020810656 929510275 329262907 1136898335 730090286 1807191475 953991660
+// expect:  562943155 2006562242 315248946 1007099153 1345295483 768211551 1427220113 89595490
+// expect:  98017440 1049057108 811837791 1807466201 1229139744 1199666683 1993228608 83950356
+// expect:  904010779 647102168 41154735 216629244 376727539 1103905889 48623057 278781572
+// expect:  1856541340 998617683 1808914111 1822525200 999095937 1919128767 2017389469 1518904924
+// expect: 720043074
+// expect:  421100825 1939377993 54216256 773551533 665316147 1401579723 52397345 119222667
+// expect:  1374833648 2020810656 929510275 329262907 1136898335 730090286 1807191475 953991660
+// expect:  562943155 2006562242 315248946 1007099153 1345295483 768211551 1427220113 89595490
+// expect:  98017440 1049057108 811837791 1807466201 1229139744 1199666683 1993228608 83950356
+// expect:  904010779 647102168 41154735 216629244 376727539 1103905889 48623057 278781572
+// expect:  1856541340 998617683 1808914111 1822525200 999095937 1919128767 2017389469 1518904924
+// expect: 720043074
+// expect:  421100825 1939377993 54216256 773551533 665316147 1401579723 52397345 119222667
+// expect:  1374833648 2020810656 929510275 329262907 1136898335 730090286 1807191475 953991660
+// expect:  562943155 2006562242 315248946 1007099153 1345295483 768211551 1427220113 89595490
+// expect:  98017440 1049057108 811837791 1807466201 1229139744 1199666683 1993228608 83950356
+// expect:  904010779 647102168 41154735 216629244 376727539 1103905889 48623057 278781572
+// expect:  1856541340 998617683 1808914111 1822525200 999095937 1919128767 2017389469 1518904924
+// expect: 720043074
