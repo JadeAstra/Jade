@@ -953,6 +953,9 @@ class Image : Drawable {
   // A part of it as an image of its own; what is outside the image is clear. The part inside
   // copied a row at a time (2026-11-14; was C++'s), each row one move in native code.
   fun crop(x : int, y : int, w : int, h : int) : Image {
+    // Wholly inside: the grid's part, each pixel written once (2026-11-15: a clear image made
+    // first was its 8 MB written twice, or faulted in and then written).
+    if (x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= width and y + h <= height) { return of(cells[x ..< x + w, y ..< y + h]) }
     val made = Image(Math.max(w, 0), Math.max(h, 0))
     val left = Math.max(x, 0)
     val right = Math.min(x + made.width, width)
@@ -1455,7 +1458,8 @@ fun __mixPart(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt
 // + m5) of `px` (w by h), by `interpolation` (0 nearest, 1 bilinear, 2 bicubic), each colour
 // multiplied by its alpha on the way; clear outside the picture (a place from -0.5 to w - 0.5
 // across is in it). In WinterWolf since 2026-11-13 (was C++'s sampleAffine), every expression as
-// the C++ worked it out, in doubles, so the same pixels. A loop for each interpolation.
+// the C++ worked it out, in doubles, so the same pixels. A loop for each interpolation. `to`
+// starts clear (a new grid's pixels): a place outside the picture leaves its pixel so.
 fun __sampleAffine(px : List<Color>, w : int, h : int, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, ow : int, oh : int,
                    interpolation : int, to : open List<Color>) {
   if (w == 0 or h == 0) { throw IllegalArgumentException("an empty grid has nothing to sample") }
@@ -1467,25 +1471,29 @@ fun __sampleAffine(px : List<Color>, w : int, h : int, m0 : float, m1 : float, m
   val wf = w.toFloat()
   val hf = h.toFloat()
   for (oy in 0 ..< oh) {
-    __samplePlaces(places, ow, oy.toFloat(), m0, m1, m2, m3, m4, m5, wf, hf, to, oy * ow)
+    __samplePlaces(places, ow, oy.toFloat(), m0, m1, m2, m3, m4, m5, wf, hf)
     if (interpolation == 0) { __sampleNearest(px, w, h, places, ow, oy * ow, to) }
     else if (interpolation == 1) { __sampleBilinear(px, w, h, places, ow, oy * ow, to) }
     else { __sampleBicubic(px, w, h, places, ow, oy * ow, to) }
   }
 }
-// Outside the picture the new pixel is see-through, set here; each sampler then skips it.
-fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, wf : float, hf : float,
-                   to : open List<Color>, at : int) {
+// Outside the picture each sampler skips the new pixel, clear already. What is the same along the
+// row worked out once before it (2026-11-15: fewer floats at once in the loop, which native code
+// had kept in memory), each sum still added in the same order: (m0 x + m2 y) + m4.
+fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, wf : float, hf : float) {
+  val ax = m2 * py
+  val ay = m3 * py
+  val right = wf - 0.5
+  val bottom = hf - 0.5
   for (ox in 0 ..< ow) {
     val pxf = ox.toFloat()
-    val x = m0 * pxf + m2 * py + m4
-    val y = m1 * pxf + m3 * py + m5
-    if (x >= -0.5 and x < wf - 0.5 and y >= -0.5 and y < hf - 0.5) {
+    val x = m0 * pxf + ax + m4
+    val y = m1 * pxf + ay + m5
+    if (x >= -0.5 and x < right and y >= -0.5 and y < bottom) {
       places[ox] = x
       places[ow + ox] = y
     } else {
       places[ox] = -1.0e300
-      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
     }
   }
 }

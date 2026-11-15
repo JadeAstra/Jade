@@ -3408,14 +3408,26 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 return;
             double* o = out.floats() + oFirst;
             const double* x = a.floats() + aFirst;
+            // Two at a time where that reads nothing the one at a time would have written
+            // first: x at o or after it, or two or more before it (2026-11-15: a blur's
+            // 150 multiply-adds a pixel). Each lane the same multiply, then add.
+            int64_t j = 0;
+            if (x >= o || x + 2 <= o) {
+                const __m128d c = _mm_set1_pd(c1);
+                if (t[55] != 0) {
+                    for (; j + 2 <= left; j += 2) _mm_storeu_pd(o + j, _mm_add_pd(_mm_loadu_pd(o + j), _mm_mul_pd(_mm_loadu_pd(x + j), c)));
+                } else {
+                    for (; j + 2 <= left; j += 2) _mm_storeu_pd(o + j, _mm_mul_pd(_mm_loadu_pd(x + j), c));
+                }
+            }
             if (t[55] != 0) {
 #pragma clang fp contract(off)
-                for (int64_t j = 0; j < left; j++) {
+                for (; j < left; j++) {
                     const double m = x[j] * c1;
                     o[j] = o[j] + m;
                 }
             } else {
-                for (int64_t j = 0; j < left; j++) o[j] = x[j] * c1;
+                for (; j < left; j++) o[j] = x[j] * c1;
             }
             break;
         }
