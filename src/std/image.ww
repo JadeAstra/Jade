@@ -1092,9 +1092,11 @@ class Image : Drawable {
     val w = width
     val n = width * height
     // The first pixel of ink from the top and the last from the bottom: its top and bottom rows.
-    val first = __colorOther(px, 0, n, word, false)
+    // (The first pixel and the last looked at here first: a picture inked to its corners, as a
+    // photo is, makes no call, 2026-11-15.)
+    val first = __colorWord(px[0]) != word ? 0 : __colorOther(px, 0, n, word, false)
     if (first < 0) { return null }
-    val last = n - 1 - __colorOther(px, n - 1, n - first, word, true)
+    val last = __colorWord(px[n - 1]) != word ? n - 1 : n - 1 - __colorOther(px, n - 1, n - first, word, true)
     // Then each row between, looked at only left of the leftmost ink found so far and right of
     // the rightmost: a picture inked to its edges is done at once.
     var left = first % w
@@ -1196,7 +1198,7 @@ fun __sameColors(a : List<Color>, b : List<Color>) : bool {
 }
 // A colour's four bytes as one int, red lowest: what native code reads a pixel's fields put
 // together so as in one read.
-fun __colorWord(c : Color) : int => c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24
+inline fun __colorWord(c : Color) : int => c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24
 // How far along from px[at] the first of n pixels is whose four bytes are not `word`
 // (__colorWord's), going on (or back, `back`); -1 for none (2026-11-15: inkBox's scans, which
 // native code's loop template kLoopWFindWord runs whole, four pixels a compare).

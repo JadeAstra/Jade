@@ -30,7 +30,7 @@ static void best(const char* group, const char* name, F&& work) {
         sink = sink + static_cast<uint64_t>(work());
         b = std::min(b, std::chrono::duration<double, std::milli>(Clock::now() - t).count());
     }
-    std::printf("%s\t%s\t%.1f\n", group, name, b);
+    std::printf(b < 1.0 ? "%s\t%s\t%.3f\n" : "%s\t%s\t%.1f\n", group, name, b);  // under 1 ms, to the microsecond
 }
 
 struct Image {
@@ -444,7 +444,12 @@ int main(int argc, char** argv) {
     best("whole", "histogram()", [&] { return histogram(photo); });
     best("whole", "floodRegion(10, 10, 20)", [&] { return flood(photo, 10, 10, 20); });
     const uint8_t clear[4] = {0, 0, 0, 0};
-    best("whole", "inkBox() of a photo", [&] { return inkBox(photo, clear); });
+    best("whole", "inkBox() of a photo, 1,000 times", [&] {
+        uint64_t got = 0;
+        const Image* volatile from = &photo;  // read again each time: the calls are not made one
+        for (int i = 0; i < 1000; i++) got += inkBox(*from, clear);
+        return got;
+    });
     Image dot(4000, 3000);
     dot.at(2000, 1500)[0] = 9, dot.at(2000, 1500)[3] = 255;
     best("whole", "inkBox(), one pixel in 12 M", [&] { return inkBox(dot, clear); });

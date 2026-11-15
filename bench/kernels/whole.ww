@@ -40,7 +40,11 @@ time("histogram()") { photo.pixels.histogram().size }
 // (The mask alone, as the C++ makes it: counting it after is a pass over all its cells, which
 // the C++, counting as it floods, does not make.)
 time("floodRegion(10, 10, 20)") { photo.floodRegion(10, 10, 20).width }
-time("inkBox() of a photo") { photo.inkBox() }
+time("inkBox() of a photo, 1,000 times") {
+  var box : Rect? = null
+  for (i in 0 ..< 1000) { box = photo.inkBox() }
+  box
+}
 val dot = Image(4000, 3000)
 dot.editPixels { it[2000, 1500] = Color(9.toByte(), 0.toByte(), 0.toByte(), 255.toByte()) }
 time("inkBox(), one pixel in 12 M") { dot.inkBox() }
