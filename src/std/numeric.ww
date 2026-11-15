@@ -893,6 +893,14 @@ fun Grid<Color>.blend(over : Grid<Color>, x : int = 0, y : int = 0, opacity : Nu
   __blendColors(cells, width, height, over.cells, over.width, over.height, x, y, o < 0.0 ? 0.0 : (1.0 < o ? 1.0 : o), mode.ordinal)
 }
 
+// Each byte over 255.0 (2026-11-15): the very quotient a division gives, read where the blends
+// divided by 255 seven times a pixel.
+val __units : List<float> = __unitsMade()
+fun __unitsMade() : List<float> {
+  val made : open List<float> = []
+  for (v in 0 ..< 256) { made.add(v / 255.0) }
+  return made
+}
 // `from` (fw by fh) laid over `to` (tw by th) with its top left corner at (ox, oy), as the W3C's
 // compositing has it: each colour part from 0 to 1, the source's alpha times `opacity`; the
 // mode's mix of backdrop and source, then the source laid over by its alpha. In WinterWolf since
@@ -905,6 +913,7 @@ fun __blendColors(to : open List<Color>, tw : int, th : int, from : List<Color>,
   else { __blendNonSeparable(to, tw, th, from, fw, fh, ox, oy, opacity, mode) }
 }
 fun __blendNormal(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float) {
+  val u = __units
   val firstX = Math.max(0, -ox)
   val endX = Math.min(fw, tw - ox)
   for (fy in 0 ..< fh) {
@@ -914,15 +923,15 @@ fun __blendNormal(to : open List<Color>, tw : int, th : int, from : List<Color>,
       val s = from[fy * fw + fx]
       val at = ty * tw + ox + fx
       val d = to[at]
-      val sa = s.alpha.toInt() / 255.0 * opacity
+      val sa = u[s.alpha.toInt()] * opacity
       if (sa <= 0.0) { continue }
-      val ba = d.alpha.toInt() / 255.0
-      val sr = s.red.toInt() / 255.0
-      val sg = s.green.toInt() / 255.0
-      val sb = s.blue.toInt() / 255.0
-      val br = d.red.toInt() / 255.0
-      val bg = d.green.toInt() / 255.0
-      val bb = d.blue.toInt() / 255.0
+      val ba = u[d.alpha.toInt()]
+      val sr = u[s.red.toInt()]
+      val sg = u[s.green.toInt()]
+      val sb = u[s.blue.toInt()]
+      val br = u[d.red.toInt()]
+      val bg = u[d.green.toInt()]
+      val bb = u[d.blue.toInt()]
       val mr = sr
       val mg = sg
       val mb = sb
@@ -932,6 +941,7 @@ fun __blendNormal(to : open List<Color>, tw : int, th : int, from : List<Color>,
   }
 }
 fun __blendSimple(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val u = __units
   val firstX = Math.max(0, -ox)
   val endX = Math.min(fw, tw - ox)
   for (fy in 0 ..< fh) {
@@ -941,15 +951,15 @@ fun __blendSimple(to : open List<Color>, tw : int, th : int, from : List<Color>,
       val s = from[fy * fw + fx]
       val at = ty * tw + ox + fx
       val d = to[at]
-      val sa = s.alpha.toInt() / 255.0 * opacity
+      val sa = u[s.alpha.toInt()] * opacity
       if (sa <= 0.0) { continue }
-      val ba = d.alpha.toInt() / 255.0
-      val sr = s.red.toInt() / 255.0
-      val sg = s.green.toInt() / 255.0
-      val sb = s.blue.toInt() / 255.0
-      val br = d.red.toInt() / 255.0
-      val bg = d.green.toInt() / 255.0
-      val bb = d.blue.toInt() / 255.0
+      val ba = u[d.alpha.toInt()]
+      val sr = u[s.red.toInt()]
+      val sg = u[s.green.toInt()]
+      val sb = u[s.blue.toInt()]
+      val br = u[d.red.toInt()]
+      val bg = u[d.green.toInt()]
+      val bb = u[d.blue.toInt()]
       val mr = __simpleMix(mode, br, sr)
       val mg = __simpleMix(mode, bg, sg)
       val mb = __simpleMix(mode, bb, sb)
@@ -959,6 +969,7 @@ fun __blendSimple(to : open List<Color>, tw : int, th : int, from : List<Color>,
   }
 }
 fun __blendSeparable(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val u = __units
   val firstX = Math.max(0, -ox)
   val endX = Math.min(fw, tw - ox)
   for (fy in 0 ..< fh) {
@@ -968,15 +979,15 @@ fun __blendSeparable(to : open List<Color>, tw : int, th : int, from : List<Colo
       val s = from[fy * fw + fx]
       val at = ty * tw + ox + fx
       val d = to[at]
-      val sa = s.alpha.toInt() / 255.0 * opacity
+      val sa = u[s.alpha.toInt()] * opacity
       if (sa <= 0.0) { continue }
-      val ba = d.alpha.toInt() / 255.0
-      val sr = s.red.toInt() / 255.0
-      val sg = s.green.toInt() / 255.0
-      val sb = s.blue.toInt() / 255.0
-      val br = d.red.toInt() / 255.0
-      val bg = d.green.toInt() / 255.0
-      val bb = d.blue.toInt() / 255.0
+      val ba = u[d.alpha.toInt()]
+      val sr = u[s.red.toInt()]
+      val sg = u[s.green.toInt()]
+      val sb = u[s.blue.toInt()]
+      val br = u[d.red.toInt()]
+      val bg = u[d.green.toInt()]
+      val bb = u[d.blue.toInt()]
       val mr = __separable(mode, br, sr)
       val mg = __separable(mode, bg, sg)
       val mb = __separable(mode, bb, sb)
@@ -986,6 +997,7 @@ fun __blendSeparable(to : open List<Color>, tw : int, th : int, from : List<Colo
   }
 }
 fun __blendNonSeparable(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
+  val u = __units
   val firstX = Math.max(0, -ox)
   val endX = Math.min(fw, tw - ox)
   for (fy in 0 ..< fh) {
@@ -995,15 +1007,15 @@ fun __blendNonSeparable(to : open List<Color>, tw : int, th : int, from : List<C
       val s = from[fy * fw + fx]
       val at = ty * tw + ox + fx
       val d = to[at]
-      val sa = s.alpha.toInt() / 255.0 * opacity
+      val sa = u[s.alpha.toInt()] * opacity
       if (sa <= 0.0) { continue }
-      val ba = d.alpha.toInt() / 255.0
-      val sr = s.red.toInt() / 255.0
-      val sg = s.green.toInt() / 255.0
-      val sb = s.blue.toInt() / 255.0
-      val br = d.red.toInt() / 255.0
-      val bg = d.green.toInt() / 255.0
-      val bb = d.blue.toInt() / 255.0
+      val ba = u[d.alpha.toInt()]
+      val sr = u[s.red.toInt()]
+      val sg = u[s.green.toInt()]
+      val sb = u[s.blue.toInt()]
+      val br = u[d.red.toInt()]
+      val bg = u[d.green.toInt()]
+      val bb = u[d.blue.toInt()]
       // The W3C's SetSat, SetLum and ClipColor, for hue (12), saturation (13), colour (14) and
       // luminosity (15).
       var c0 = sr
