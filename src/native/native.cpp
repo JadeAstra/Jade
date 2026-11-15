@@ -476,6 +476,36 @@ std::string check() {
         if (left != -1) return "the flag did not take the region out";
     }
     {
+        // Each float register compared with a constant, for each comparison (2026-11-15: in
+        // eqfk_8 to eqfk_15 the constant sat one byte off, the predicate after it uncounted).
+        static const char* const ops[] = {"lt", "le", "gt", "ge", "eq"};
+        static const double values[] = {1.25, 2.5, 3.75};
+        std::vector<Value> out(16);
+        for (int r = 0; r < 16; r++) {
+            Assembler a;
+            int s = 0;
+            for (double v : values)
+                for (const char* op : ops) {
+                    a.add("setfk_" + std::to_string(r)).kf = v;
+                    a.add(std::string(op) + "fk_" + std::to_string(r)).kf = 2.5;
+                    a.add("storeb").slot = s++;
+                }
+            a.add("ret").ret = 0;
+            void* code = a.finish(exitGiving(-1));
+            if (code == nullptr) return "no code memory";
+            if (run(code, out.data()) != 0) return "a float comparison left the region";
+            s = 0;
+            for (double v : values)
+                for (const char* op : ops) {
+                    const std::string o = op;
+                    const bool want = o == "lt" ? v < 2.5 : o == "le" ? v <= 2.5 : o == "gt" ? v > 2.5 : o == "ge" ? v >= 2.5 : v == 2.5;
+                    const Value& got = out[static_cast<size_t>(s++)];
+                    if (got.kind != ValueKind::Bool || got.as.b != want)
+                        return o + "fk_" + std::to_string(r) + " of " + std::to_string(v) + " and 2.5 did not give " + (want ? "true" : "false");
+                }
+        }
+    }
+    {
         // An int's overflow leaves for the VM before the int is changed.
         Assembler a;
         a.add("loadi_0").slot = 1;

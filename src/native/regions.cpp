@@ -3832,6 +3832,9 @@ struct Region {
         int baseMode = 0;                   // kLoopWSumField: base + counter, base none (0), a (1), a * b (2)
         const Expr* baseA = nullptr;
         const Expr* baseB = nullptr;
+        int outMode = 0;                    // kLoopWMixItems into another list: where it writes, as baseMode (words 56 to 60)
+        const Expr* outA = nullptr;
+        const Expr* outB = nullptr;
         std::vector<int64_t> fields;  // kLoopWSumField: each field's width, offset and size
         int64_t iterSlot = -1;        // a for over a list of items: the iterator's slot
         struct Update {
@@ -4126,10 +4129,12 @@ struct Region {
         if (theMix != nullptr) {
             const Expr* m = theMix->a;
             if (!mixEnd(m, shift, divisor, divideFirst)) return false;
-            std::function<bool(const Expr*)> sum = [&](const Expr* e) -> bool {
+            // Terms added or taken away (2026-11-15: `a * 200 - b * 45 + k`), each with its sign.
+            std::function<bool(const Expr*, int64_t)> sum = [&](const Expr* e, int64_t sign) -> bool {
                 if (e->cls != CI) return false;
-                if (e->kind == Expr::KInt) return c += e->ki, true;
-                if (e->kind == Expr::Bin && e->op == '+') return sum(e->a) && sum(e->b);
+                if (e->kind == Expr::KInt) return e->ki >= -(1 << 28) && e->ki <= (1 << 28) && (c += sign * e->ki, true);
+                if (e->kind == Expr::Bin && e->op == '+') return sum(e->a, sign) && sum(e->b, sign);
+                if (e->kind == Expr::Bin && e->op == '-') return sum(e->a, sign) && sum(e->b, -sign);
                 const Expr* f = e;
                 int64_t w = 1;
                 if (e->kind == Expr::Bin && e->op == '*') {
@@ -4139,19 +4144,24 @@ struct Region {
                     w = k->ki;
                 }
                 if (!field(f) || w < -(1 << 20) || w > (1 << 20)) return false;
-                terms.push_back({w, (f->ki >> 8) & 0xFFFFFF});
+                terms.push_back({w * sign, (f->ki >> 8) & 0xFFFFFF});
                 return true;
             };
-            if (!sum(m) || terms.empty() || terms.size() > 4 || c < -(1 << 28) || c > (1 << 28)) return false;
+            if (!sum(m, 1) || terms.empty() || terms.size() > 4 || c < -(1 << 28) || c > (1 << 28)) return false;
             for (const auto& t : terms)
                 if (t.second >= readWidth) return false;
         }
         if (list < 0) return false;
-        // Into the item read, or into another list's item at the counter (read at the counter too).
+        // Into the item read, or into another list's item at a base of its own plus the counter
+        // (2026-11-15: `to[x, y] = ...` from `from[x, y]`, two grids, each y times its width
+        // plus x), the item read at its base plus the counter.
         bool into = false;
         if (st.list == list && same(st.index, index)) {
             if (st.width != readWidth) return false;
-        } else if (st.list != list && st.index->kind == Expr::Counter && index->kind == Expr::Counter) {
+        } else if (st.list != list) {
+            Ahead out;
+            if (!fieldIndex(st.index, out)) return false;
+            ah.outMode = out.baseMode, ah.outA = out.baseA, ah.outB = out.baseB;
             into = true;
         } else {
             return false;
@@ -4539,7 +4549,7 @@ struct Region {
             }
             i = skipTo >= 0 ? skipTo : i + 1;
         }
-        if (!pending.empty() || ah.guards.size() > 6) return false;
+        if (!pending.empty() || ah.guards.size() > 12) return false;
         // A guard's sides: the counter plus a constant, or what is the same each time round.
         auto changed = [&](const Expr* e) { return e != nullptr && e->kind == Expr::Inv && defined.count(e->reg) != 0; };
         for (const Followed::Cmp& g : ah.guards)
@@ -4668,7 +4678,8 @@ struct Region {
         }
         if (mix(fw, ah)) return true;
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && fw.made.count(fw.stores[0].source) != 0 && ah.iterSlot < 0 &&
-            mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)))
+            mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) &&
+            !changed(ah.outA) && !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)))
             return true;
         // Items of a value type copied from one list to another (or along the same one), each at a
         // base plus the counter (2026-11-14: copy, crop and a grid's part, kLoopWCopyItems): moved at
@@ -4926,7 +4937,7 @@ struct Region {
         };
         word(16, static_cast<int64_t>(ah.guards.size()));
         for (size_t g = 0; g < ah.guards.size(); g++) {
-            const int at = 17 + 5 * static_cast<int>(g);
+            const int at = g < 6 ? 17 + 5 * static_cast<int>(g) : 192 + 5 * static_cast<int>(g - 6);  // as stencils.cpp, guardsHold
             word(at, ah.guards[g].op);
             operandWords(at + 1, ah.guards[g].a, 0);
             operandWords(at + 3, ah.guards[g].b, 0);
@@ -4946,6 +4957,9 @@ struct Region {
             word(50, ah.baseMode);
             if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
             if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
+            word(56, ah.outMode);  // into another list: where it writes (always set: words outlive a template)
+            if (ah.outMode >= 1) operandWords(57, ah.outA, 0);
+            if (ah.outMode == 2) operandWords(59, ah.outB, 0);
             for (size_t k = 0; k < ah.mixWords.size(); k++) word(96 + static_cast<int>(k), ah.mixWords[k]);
             word(111, static_cast<int64_t>(ah.floatLanes.size()));
             auto bitsOf = [](double d) {

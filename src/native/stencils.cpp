@@ -56,7 +56,7 @@ struct Ctx {  // native.h's RegionContext
     uint64_t core;
     const void* band;
     uint64_t lists[24];
-    uint64_t t[192];
+    uint64_t t[256];
     const uint8_t* globals;
     uint64_t held[32];
     uint64_t heldAt[16];
@@ -757,6 +757,13 @@ INLINE void putValue(Slot* at, uint64_t head, uint64_t payload) {
     __builtin_memcpy(p, &head, 8);
     __asm__ volatile("" ::: "memory");
     __builtin_memcpy(p + 8, &payload, 8);
+}
+// A 16-byte value the compiler may not take for a constant: made in a register where it is used.
+// A constant would be read from the stencil's data (`pand (%rip)`), which a copied stencil does
+// not keep on a 16-byte boundary, as an SSE instruction's memory operand must be.
+INLINE __m128i made128(__m128i v) {
+    __asm__("" : "+x"(v));
+    return v;
 }
 // n bytes moved forward from x to o (a loop template's items moved at once). Where it is more
 // than the caches would keep (1 MB on) and the two do not overlap, the stores go past the cache
@@ -2060,15 +2067,15 @@ INLINE bool heldUpdates(Ctx* ctx, int64_t first, int64_t rounds, bool apply) {
 }
 // Where items of a list looked at once start: base from words 50 to 54 (0 none, 1 an operand, 2
 // one times another, each two words), plus the counter.
-INLINE bool itemBase(const Ctx* ctx, int64_t& at) {
+INLINE bool itemBase(const Ctx* ctx, int64_t& at, int w = 50) {
     const uint64_t* t = ctx->t;
     at = 0;
-    if (t[50] == 0) return true;
-    if (t[50] != 1 && t[50] != 2) return false;
-    if (!operand(ctx, t[51], t[52], 0, at)) return false;
-    if (t[50] == 2) {
+    if (t[w] == 0) return true;
+    if (t[w] != 1 && t[w] != 2) return false;
+    if (!operand(ctx, t[w + 1], t[w + 2], 0, at)) return false;
+    if (t[w] == 2) {
         int64_t by;
-        if (!operand(ctx, t[53], t[54], 0, by) || __builtin_mul_overflow(at, by, &at)) return false;
+        if (!operand(ctx, t[w + 3], t[w + 4], 0, by) || __builtin_mul_overflow(at, by, &at)) return false;
     }
     return true;
 }
@@ -2078,9 +2085,9 @@ INLINE bool itemBase(const Ctx* ctx, int64_t& at) {
 // round, so that where it holds at neither end it holds nowhere between.
 INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
     const uint64_t* t = ctx->t;
-    if (t[16] > 6) return false;
+    if (t[16] > 12) return false;
     for (uint64_t g = 0; g < t[16]; g++) {
-        const uint64_t* w = t + 17 + 5 * g;
+        const uint64_t* w = t + (g < 6 ? 17 + 5 * g : 192 + 5 * (g - 6));  // the first six from 17, the rest from 192
         const int64_t ends[2] = {first, last};
         for (const int64_t c : ends) {
             int64_t a, b;
@@ -2456,13 +2463,19 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             for (uint64_t j = 0; j < floats; j++)
                 if (!fm[j].read(t + 128 + 16 * j, rw)) return;
             int64_t at = 0, first, last;
-            if (!into && !itemBase(ctx, at)) return;
+            // Read at its base plus the counter; written there too, or (into another list) at
+            // that list's own base plus the counter (2026-11-15: words 56 to 60).
+            int64_t outAt = 0, oFirst, oLast;
+            if (!itemBase(ctx, at)) return;
+            if (!into) outAt = at;
+            else if (!itemBase(ctx, outAt, 56)) return;
             if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1] ||
-                static_cast<uint64_t>(last) >= out.h[2])
+                __builtin_add_overflow(outAt, next, &oFirst) || __builtin_add_overflow(outAt, end - 1, &oLast) || oFirst < 0 ||
+                static_cast<uint64_t>(oLast) >= out.h[2])
                 return;
             if (into && a.h[0] == out.h[0]) return;  // another list: not the same one
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * rw;
-            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * ww;
+            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(oFirst) * ww;
             int32_t least = c, most = c;
             for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
             mixEnd.prepare(least, most);
@@ -2516,7 +2529,55 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                         const double m = s > lo ? s : lo;
                         return static_cast<uint8_t>(static_cast<int64_t>(m < hi ? m : hi));
                     };
-                    for (int64_t j = 0; j < left; j++) {
+                    int64_t j = 0;
+                    // Two pixels at a time (2026-11-15), one in each half of a register: each
+                    // sum in the same order, held the same way (maxpd and minpd pick as the
+                    // comparisons do, NaN included), cut to a whole number in 32 bits, which the
+                    // bounds keep it in.
+                    if (lo > -2147483648.0 && lo < 2147483647.0 && hi > -2147483648.0 && hi < 2147483647.0) {
+                        const __m128d va0 = _mm_set1_pd(a0), va1 = _mm_set1_pd(a1), va2 = _mm_set1_pd(a2), vb0 = _mm_set1_pd(b0), vb1 = _mm_set1_pd(b1),
+                                      vb2 = _mm_set1_pd(b2), vc0 = _mm_set1_pd(c0), vc1 = _mm_set1_pd(c1), vc2 = _mm_set1_pd(c2);
+                        const __m128d vadd = _mm_set1_pd(add), vlo = _mm_set1_pd(lo), vhi = _mm_set1_pd(hi);
+                        const __m128i zero = _mm_setzero_si128(), ones = made128(_mm_cmpeq_epi32(zero, zero));
+                        const __m128i low = _mm_srli_epi32(ones, 24), top = _mm_slli_epi32(ones, 24);
+#define HELD_TWO(s) _mm_cvttpd_epi32(_mm_min_pd(_mm_max_pd(_mm_add_pd((s), vadd), vlo), vhi))
+                        auto bits = [](double d) { return __builtin_bit_cast(uint64_t, d); };
+                        if (bits(a0) == bits(b0) && bits(b0) == bits(c0) && bits(a1) == bits(b1) && bits(b1) == bits(c1) && bits(a2) == bits(b2) &&
+                            bits(b2) == bits(c2)) {
+                            // The three the same sum (a greyscale): worked out once, four pixels at a
+                            // time, and the grey written three times.
+                            for (; j + 4 <= left; j += 4) {
+                                const __m128i px = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x + j * 4));
+                                const __m128i wideLo = _mm_unpacklo_epi8(px, zero), wideHi = _mm_unpackhi_epi8(px, zero);
+                                const __m128i p0 = _mm_unpacklo_epi16(wideLo, zero), p1 = _mm_unpackhi_epi16(wideLo, zero);
+                                const __m128i p2 = _mm_unpacklo_epi16(wideHi, zero), p3 = _mm_unpackhi_epi16(wideHi, zero);
+                                const __m128i rg01 = _mm_unpacklo_epi32(p0, p1), ba01 = _mm_unpackhi_epi32(p0, p1);
+                                const __m128i rg23 = _mm_unpacklo_epi32(p2, p3), ba23 = _mm_unpackhi_epi32(p2, p3);
+                                __m128d s01 = _mm_mul_pd(va0, _mm_cvtepi32_pd(rg01)), s23 = _mm_mul_pd(va0, _mm_cvtepi32_pd(rg23));
+                                s01 = _mm_add_pd(s01, _mm_mul_pd(va1, _mm_cvtepi32_pd(_mm_srli_si128(rg01, 8))));
+                                s23 = _mm_add_pd(s23, _mm_mul_pd(va1, _mm_cvtepi32_pd(_mm_srli_si128(rg23, 8))));
+                                s01 = _mm_add_pd(s01, _mm_mul_pd(va2, _mm_cvtepi32_pd(ba01)));
+                                s23 = _mm_add_pd(s23, _mm_mul_pd(va2, _mm_cvtepi32_pd(ba23)));
+                                const __m128i v = _mm_and_si128(_mm_unpacklo_epi64(HELD_TWO(s01), HELD_TWO(s23)), low);
+                                const __m128i grey = _mm_or_si128(_mm_or_si128(v, _mm_slli_epi32(v, 8)), _mm_slli_epi32(v, 16));
+                                _mm_storeu_si128(reinterpret_cast<__m128i*>(o + j * 4), _mm_or_si128(grey, _mm_and_si128(px, top)));
+                            }
+                        }
+                        for (; j + 2 <= left; j += 2) {
+                            const __m128i px = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(x + j * 4));
+                            const __m128i wide = _mm_unpacklo_epi8(px, zero);
+                            const __m128i first = _mm_unpacklo_epi16(wide, zero), second = _mm_unpackhi_epi16(wide, zero);
+                            const __m128i rg = _mm_unpacklo_epi32(first, second), ba = _mm_unpackhi_epi32(first, second);
+                            const __m128d r = _mm_cvtepi32_pd(rg), g = _mm_cvtepi32_pd(_mm_srli_si128(rg, 8)), b = _mm_cvtepi32_pd(ba);
+                            __m128d s0 = _mm_mul_pd(va0, r), s1 = _mm_mul_pd(vb0, r), s2 = _mm_mul_pd(vc0, r);
+                            s0 = _mm_add_pd(s0, _mm_mul_pd(va1, g)), s1 = _mm_add_pd(s1, _mm_mul_pd(vb1, g)), s2 = _mm_add_pd(s2, _mm_mul_pd(vc1, g));
+                            s0 = _mm_add_pd(s0, _mm_mul_pd(va2, b)), s1 = _mm_add_pd(s1, _mm_mul_pd(vb2, b)), s2 = _mm_add_pd(s2, _mm_mul_pd(vc2, b));
+                            const __m128i v0 = _mm_and_si128(HELD_TWO(s0), low), v1 = _mm_and_si128(HELD_TWO(s1), low), v2 = _mm_and_si128(HELD_TWO(s2), low);
+                            const __m128i made = _mm_or_si128(_mm_or_si128(v0, _mm_slli_epi32(v1, 8)), _mm_or_si128(_mm_slli_epi32(v2, 16), _mm_and_si128(px, top)));
+                            _mm_storel_epi64(reinterpret_cast<__m128i*>(o + j * 4), made);
+                        }
+                    }
+                    for (; j < left; j++) {
                         const uint8_t* p = x + j * 4;
                         uint8_t* d = o + j * 4;
                         const double r = p[0], g = p[1], b = p[2];
@@ -2561,13 +2622,18 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 // constant. The same sums as one at a time, in 32 bits.
                 int32_t at[4] = {0, 0, 0, 0};
                 at[r0] += w0, at[r1] += w1, at[r2] += w2;
-                bool wide = mixEnd.divisor == 1;
+                // A division too where it is a multiply (MixEnd's quick: what is divided from 0 to
+                // 65535): the high 32 bits of each lane times the magic number, two lanes at a time.
+                const bool divides = mixEnd.divisor != 1;
+                bool wide = !divides || mixEnd.quick;
                 for (int k = 0; k < 4; k++) wide = wide && at[k] >= -32768 && at[k] <= 32767;
                 if (wide) {
                     const __m128i weights = _mm_setr_epi16(static_cast<int16_t>(at[0]), static_cast<int16_t>(at[1]), static_cast<int16_t>(at[2]),
                                                            static_cast<int16_t>(at[3]), static_cast<int16_t>(at[0]), static_cast<int16_t>(at[1]),
                                                            static_cast<int16_t>(at[2]), static_cast<int16_t>(at[3]));
                     const __m128i zero = _mm_setzero_si128(), added = _mm_set1_epi32(c), count = _mm_cvtsi32_si128(mixEnd.shift);
+                    const __m128i magic = _mm_set1_epi32(static_cast<int32_t>(static_cast<uint32_t>(mixEnd.magic)));
+                    const __m128i highs = _mm_slli_epi64(made128(_mm_cmpeq_epi32(zero, zero)), 32);
                     const __m128i fourthMask = _mm_set1_epi32(keepFourth ? static_cast<int32_t>(0xFF000000u) : 0);
                     const __m128i fourthFixed = _mm_set1_epi32(keepFourth ? 0 : static_cast<int32_t>(static_cast<uint32_t>(fixedFourth) << 24));
                     for (; j + 4 <= left; j += 4) {
@@ -2577,7 +2643,17 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                         const __m128 lf = _mm_castsi128_ps(lo), hf = _mm_castsi128_ps(hi);
                         const __m128i firsts = _mm_castps_si128(_mm_shuffle_ps(lf, hf, _MM_SHUFFLE(2, 0, 2, 0)));
                         const __m128i seconds = _mm_castps_si128(_mm_shuffle_ps(lf, hf, _MM_SHUFFLE(3, 1, 3, 1)));
-                        const __m128i v = _mm_sra_epi32(_mm_add_epi32(_mm_add_epi32(firsts, seconds), added), count);
+                        const __m128i sum = _mm_add_epi32(_mm_add_epi32(firsts, seconds), added);
+                        __m128i v;
+                        if (!divides) {
+                            v = _mm_sra_epi32(sum, count);
+                        } else {
+                            const __m128i n = mixEnd.divideFirst ? sum : _mm_sra_epi32(sum, count);
+                            const __m128i even = _mm_srli_epi64(_mm_mul_epu32(n, magic), 32);
+                            const __m128i odd = _mm_and_si128(_mm_mul_epu32(_mm_srli_epi64(n, 32), magic), highs);
+                            const __m128i q = _mm_or_si128(even, odd);
+                            v = mixEnd.divideFirst ? _mm_sra_epi32(q, count) : q;
+                        }
                         const __m128i grey = _mm_or_si128(_mm_or_si128(v, _mm_slli_epi32(v, 8)), _mm_slli_epi32(v, 16));
                         const __m128i out = _mm_or_si128(_mm_or_si128(grey, _mm_and_si128(px, fourthMask)), fourthFixed);
                         _mm_storeu_si128(reinterpret_cast<__m128i*>(o + j * 4), out);

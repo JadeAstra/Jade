@@ -127,7 +127,14 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
             // instruction, which is that many bytes past them.
             if (type < 4 || type > 9) fail("stencil " + st.name + ": a relocation of kind " + std::to_string(type) + ", which is not filled in");
             if (hole != kHoles.end()) {
-                st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(type - 4), {}});
+                // The 32 bits' own addend counted (2026-11-15: eqfk_8 to eqfk_15, `cmpeqsd
+                // -0x1(%rip)` with the predicate after, read the float one byte off): the bytes
+                // after them, as for a constant below.
+                const int32_t inPlace = static_cast<int32_t>(u32(st.code, offset));
+                const int32_t after = static_cast<int32_t>(type - 4) - inPlace;
+                if (inPlace > 0 || after > 5) fail("stencil " + st.name + " reaches " + target + " with an addend of " + std::to_string(inPlace));
+                std::memset(&st.code[offset], 0, 4);
+                st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(after), {}});
                 continue;
             }
             // A constant of read-only data (Clang's __real@ and __xmm@): its bytes go with the
@@ -144,7 +151,17 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
                 dataSize - value > 16)
                 fail("stencil " + st.name + " refers to " + target + ", which is no gap nor a constant it can carry");
             std::vector<uint8_t> bytes(obj.begin() + dataRaw + value, obj.begin() + dataRaw + dataSize);
-            st.holes.push_back(Hole{offset, "HoleData", static_cast<uint32_t>(type - 4), bytes});
+            // The 32 bits hold an addend: where an instruction has a byte after them (an
+            // immediate: cmppd's predicate, pshufd's order), Clang may write a plain REL32 with
+            // -1 there rather than REL32_1 (2026-11-15: a cmpltpd read one byte past its bound,
+            // and faulted, as an SSE operand must be on 16). The bytes after them, counted both
+            // ways; the constant itself is what is reached, from its first byte.
+            const int32_t inPlace = static_cast<int32_t>(u32(st.code, offset));
+            const int32_t after = static_cast<int32_t>(type - 4) - inPlace;
+            if (inPlace > 0 || after > 5)
+                fail("stencil " + st.name + " reaches " + target + " other than at its first byte (" + std::to_string(inPlace) + ")");
+            std::memset(&st.code[offset], 0, 4);
+            st.holes.push_back(Hole{offset, "HoleData", static_cast<uint32_t>(after), bytes});
         }
         stencils.push_back(std::move(st));
     }
@@ -258,9 +275,19 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
                 if ((data.flags & kAlloc) == 0 || (data.flags & (kExec | kWrite)) != 0 || relaOf.count(target.section) != 0 || width == 0 || place < 0 ||
                     static_cast<uint64_t>(place) + width > data.size)
                     fail("stencil " + st.name + " refers to " + target.name + ", which is no gap nor a constant it can carry");
-                std::vector<uint8_t> bytes(obj.begin() + static_cast<std::ptrdiff_t>(data.offset + static_cast<uint64_t>(place)),
-                                           obj.begin() + static_cast<std::ptrdiff_t>(data.offset + static_cast<uint64_t>(place) + width));
-                st.holes.push_back(Hole{static_cast<uint32_t>(offset), "HoleData", 0, bytes});
+                // The addend counts the byte after the 32 bits too, in an instruction with an
+                // immediate (cmpps and cmppd 0F C2, pshufd 0F 70, shufps and shufpd 0F C6, the
+                // opcode just before the ModRM byte): the constant is then the one a byte on,
+                // read from its own first byte with that byte counted, so that it stays on its
+                // width (an SSE operand must be on 16; 2026-11-15). Else the bytes from `place`.
+                const uint8_t opcode = offset >= 2 ? st.code[static_cast<size_t>(offset) - 2] : 0;
+                const bool immediate = opcode == 0xC2 || opcode == 0x70 || opcode == 0xC6;
+                const uint64_t from = immediate && static_cast<uint64_t>(place) + 1 + width <= data.size && (static_cast<uint64_t>(place) + 1) % width == 0
+                                          ? static_cast<uint64_t>(place) + 1
+                                          : static_cast<uint64_t>(place);
+                std::vector<uint8_t> bytes(obj.begin() + static_cast<std::ptrdiff_t>(data.offset + from),
+                                           obj.begin() + static_cast<std::ptrdiff_t>(data.offset + from + width));
+                st.holes.push_back(Hole{static_cast<uint32_t>(offset), "HoleData", static_cast<uint32_t>(from - static_cast<uint64_t>(place)), bytes});
             }
         }
         stencils.push_back(std::move(st));
