@@ -2922,6 +2922,54 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (int64_t b = 0; b < 256; b++)
                     skipped[b] = skipOp == 0 ? 0 : skipOp == 1 ? b < skipK : skipOp == 2 ? b <= skipK : skipOp == 3 ? b > skipK : skipOp == 4 ? b >= skipK : skipOp == 5 ? b == skipK : b != skipK;
                 const uint64_t o0 = toff[0], o1 = nt > 1 ? toff[1] : 0, o2 = nt > 2 ? toff[2] : 0, so = skipOp != 0 ? skipOff : 0;
+                if (K[1] == K[0] + 1 && K[2] == K[0] + 2 && K[3] == K[0] + 3 && kind[0] == 1 && kind[1] == 1 && kind[2] == 1 && kind[3] == 0 && v[3] == 1) {
+                    // A palette's bins exactly (2026-11-15): three fields summed and a count, side
+                    // by side, through one place a pixel (the general loop below took twice the
+                    // time a plain C++ loop does).
+                    int64_t* q = counts + K[0];
+                    const uint64_t va = static_cast<uint64_t>(v[0]), vb = static_cast<uint64_t>(v[1]), vc = static_cast<uint64_t>(v[2]);
+                    const uint8_t* p = x;
+                    if (nt == 3 && tshr[0] == 3 && tshr[1] == 3 && tshr[2] == 3 && tshl[0] == 12 && tshl[1] == 7 && tshl[2] == 2 && (skipOp == 0 || skipOp == 1)) {
+                        // numeric.ww's key itself, (r >> 3) << 12 | (g >> 3) << 7 | (b >> 3) << 2, its
+                        // shifts constants, and the see-through skip a comparison: no table read.
+                        const int64_t below = skipOp == 1 ? skipK : -1;
+                        if (width == 4 && o0 == 0 && o1 == 1 && o2 == 2 && va == 0 && vb == 1 && vc == 2 && (skipOp == 0 || so == 3)) {
+                            // A Color's red, green, blue and alpha: the pixel read once, as a word.
+                            int64_t* q = counts + K[0];
+                            for (int64_t j = 0; j < left; j++, p += 4) {
+                                uint32_t c;
+                                __builtin_memcpy(&c, p, 4);
+                                if (static_cast<int64_t>(c >> 24) < below) continue;
+                                const uint32_t r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+                                int64_t* bin = q + ((r >> 3) << 12 | (g >> 3) << 7 | (b >> 3) << 2);
+                                bin[0] += r;
+                                bin[1] += g;
+                                bin[2] += b;
+                                bin[3] += 1;
+                            }
+                            break;
+                        }
+                        for (int64_t j = 0; j < left; j++, p += width) {
+                            if (static_cast<int64_t>(p[so]) < below) continue;
+                            int64_t* bin = counts + K[0] +
+                                           ((static_cast<uint64_t>(p[o0]) >> 3) << 12 | (static_cast<uint64_t>(p[o1]) >> 3) << 7 | (static_cast<uint64_t>(p[o2]) >> 3) << 2);
+                            bin[0] += p[va];
+                            bin[1] += p[vb];
+                            bin[2] += p[vc];
+                            bin[3] += 1;
+                        }
+                        break;
+                    }
+                    for (int64_t j = 0; j < left; j++, p += width) {
+                        if (skipped[p[so]]) continue;
+                        int64_t* bin = q + ((static_cast<uint64_t>(part[0][p[o0]]) | part[1][p[o1]] | part[2][p[o2]]) << low);
+                        bin[0] += p[va];
+                        bin[1] += p[vb];
+                        bin[2] += p[vc];
+                        bin[3] += 1;
+                    }
+                    break;
+                }
                 int64_t *q0 = counts + K[0], *q1 = counts + K[1], *q2 = counts + K[2], *q3 = counts + K[3];
                 const uint64_t fo0 = kind[0] == 1 ? static_cast<uint64_t>(v[0]) : 0, fo1 = kind[1] == 1 ? static_cast<uint64_t>(v[1]) : 0;
                 const uint64_t fo2 = kind[2] == 1 ? static_cast<uint64_t>(v[2]) : 0, fo3 = kind[3] == 1 ? static_cast<uint64_t>(v[3]) : 0;

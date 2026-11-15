@@ -78,15 +78,16 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
     bins[3 + at] += 1
   }
   // The octree (all: a node's red sum, green's, blue's, count, level, leaf, joined, each `most`
-  // apart), a node's parts in lists by its number: its sums and count, its eight children
-  // (-1 for none), its level, and whether it is a leaf and whether joined into its parent. As
-  // many as five levels can have (1 + 8 + ... + 32768), made at once: nothing added as it grows.
+  // apart), a node's parts in lists by its number: its sums and count, its eight children (0 for
+  // none: node 0, the root, is no node's child, so the grid's zeros stand and its memory is
+  // touched only where nodes are made), its level, and whether it is a leaf and whether joined
+  // into its parent. As many as five levels can have (1 + 8 + ... + 32768), made at once: nothing
+  // added as it grows.
   val most = 37449
   val parts = Grid<int>(most, 7)
   val all = __gridInto(parts, most, 7)
   val kids = Grid<int>(most * 8, 1)
   val children = __gridInto(kids, most * 8, 1)
-  for (k in 0 ..< most * 8) { children[k] = -1 }
   var nodes = 1
   var leaves = 0
   for (key in 0 ..< 32768) {
@@ -100,7 +101,7 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
       all[3 * most + at] += n
       val bit = 4 - depth
       val child = ((r >> bit) & 1) << 2 | ((g >> bit) & 1) << 1 | ((b >> bit) & 1)
-      if (children[at * 8 + child] < 0) {
+      if (children[at * 8 + child] == 0) {
         children[at * 8 + child] = nodes
         all[4 * most + nodes] = depth + 1
         nodes += 1
@@ -129,7 +130,7 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
       var joinedHere = 0
       for (c in 0 ..< 8) {
         val child = children[node * 8 + c]
-        if (child < 0) { continue }
+        if (child == 0) { continue }
         all[node] += all[child]
         all[most + node] += all[most + child]
         all[2 * most + node] += all[2 * most + child]
