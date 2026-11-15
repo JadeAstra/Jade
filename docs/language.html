@@ -581,7 +581,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Point"><code>Point</code></a> (4)</li>
 <li><a href="#Process"><code>Process</code></a> (13)</li>
 <li><a href="#ProcessResult"><code>ProcessResult</code></a> (1)</li>
-<li><a href="#Program"><code>Program</code></a> (11)</li>
+<li><a href="#Program"><code>Program</code></a> (12)</li>
 <li><a href="#Programs"><code>Programs</code></a> (2)</li>
 <li><a href="#RadialGradient"><code>RadialGradient</code></a> (2)</li>
 <li><a href="#RandomAccessFile"><code>RandomAccessFile</code></a> (10)</li>
@@ -1785,8 +1785,11 @@ load(map)
 print(&quot;the map takes ${Program.memoryUsed - before} bytes&quot;)
 </pre>
 </div>
+<div class="entry member" id="Program.memoryKept"><code class="sig">val memoryKept : int</code><a class="anchor" href="#Program.memoryKept">#</a>
+<p>The bytes kept, not given back to the system, for lists to use again: a list of 1 MB or more (a picture's pixels, a large grid), once nothing reaches it, leaves its memory here, up to 256 MB in all, for the next list of about its size, which then finds memory already in use rather than fresh memory, each page of which costs time the first time it is written (a 48 MB picture's copy some 6.5 ms fresh, 2.5 from here). Shared by every worker; not part of memoryUsed. collectGarbage() gives it all back.</p>
+</div>
 <div class="entry member" id="Program.collectGarbage"><code class="sig">fun collectGarbage()</code><a class="anchor" href="#Program.collectGarbage">#</a>
-<p>Collects the garbage now, as Java's System.gc(): every object nothing can reach any more is freed. The collector runs by itself as objects are made; this is for a moment that matters, before something is timed, say, or once a large piece of work is done with, so that its memory is given back then rather than later. Inside a parallel section it does nothing.</p>
+<p>Collects the garbage now, as Java's System.gc(): every object nothing can reach any more is freed. The collector runs by itself as objects are made; this is for a moment that matters, before something is timed, say, or once a large piece of work is done with, so that its memory is given back then rather than later (the memory kept for lists, memoryKept, too). Inside a parallel section it collects nothing.</p>
 </div>
 <div class="entry" id="Environment"><code class="sig">class Environment</code><a class="anchor" href="#Environment">#</a>
 <p>The environment variables a program was started with (Program.environment): read like a map, each name giving its value or null. On Windows a name is the same whatever its case, as the system has it (SystemRoot, SYSTEMROOT); elsewhere case counts.</p>

@@ -158,10 +158,20 @@ object Program {
   val memoryUsed : int
     get() => __memoryUsed()
 
+  // The bytes kept, not given back to the system, for lists to use again: a list of 1 MB or
+  // more (a picture's pixels, a large grid), once nothing reaches it, leaves its memory here,
+  // up to 256 MB in all, for the next list of about its size, which then finds memory already
+  // in use rather than fresh memory, each page of which costs time the first time it is written
+  // (a 48 MB picture's copy some 6.5 ms fresh, 2.5 from here). Shared by every worker; not part
+  // of memoryUsed. collectGarbage() gives it all back.
+  val memoryKept : int
+    get() => __memoryKept()
+
   // Collects the garbage now, as Java's System.gc(): every object nothing can reach any more is
   // freed. The collector runs by itself as objects are made; this is for a moment that matters,
   // before something is timed, say, or once a large piece of work is done with, so that its
-  // memory is given back then rather than later. Inside a parallel section it does nothing.
+  // memory is given back then rather than later (the memory kept for lists, memoryKept, too).
+  // Inside a parallel section it collects nothing.
   fun collectGarbage() {
     __collectGarbage()
   }

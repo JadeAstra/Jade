@@ -125,7 +125,7 @@ void registerGrid(VM& vm) {
         if (!list->packed())
             throw vm.runtimeError(Thrown::UnsupportedOperationException, "a grid of objects keeps no bytes: only a grid of numbers, bools or value types does");
         ObjBytes* made = vm.alloc<ObjBytes>();
-        made->data = list->pack->block;
+        made->data.assign(list->pack->block.begin(), list->pack->block.end());
         made->data.resize(list->pack->count * list->pack->width);
         vm.account(made->data.size());
         return Value::object(made);

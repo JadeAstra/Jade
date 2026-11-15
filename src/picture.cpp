@@ -27,7 +27,7 @@ namespace ww {
 namespace {
 
 // A picture's pixels: a packed list of colours, four bytes each.
-const std::vector<uint8_t>& pixelsOf(VM& vm, const Value& v) {
+std::span<const uint8_t> pixelsOf(VM& vm, const Value& v) {
     if (v.isObjType(ObjType::Bytes)) return asBytes(v)->data;
     if (!v.isObjType(ObjType::List) || !asList(v)->packed() || asList(v)->pack->width != 4)
         throw vm.runtimeError(Thrown::IllegalArgumentException, "expected a picture's pixels");
@@ -88,7 +88,7 @@ private:
 
 // Each pixel's index in the palette, dithered by `method` (0 none, 1 Floyd and Steinberg, 2
 // Atkinson); a see-through pixel's index is the palette's size.
-std::vector<uint8_t> indicesOf(const std::vector<uint8_t>& px, int width, int height, const std::vector<uint8_t>& palette, int method) {
+std::vector<uint8_t> indicesOf(std::span<const uint8_t> px, int width, int height, const std::vector<uint8_t>& palette, int method) {
     const size_t w = static_cast<size_t>(width), h = static_cast<size_t>(height);
     std::vector<uint8_t> out(w * h);
     const uint8_t clear = static_cast<uint8_t>(palette.size() / 4);
@@ -583,7 +583,7 @@ void registerPicture(VM& vm) {
     // indices(pixels, width, height, palette, method): each pixel's index in the palette (four
     // bytes a colour), the palette's size for a see-through one.
     def("indices", 5, 5, [](VM& vm, int, Value* args) -> Value {
-        const std::vector<uint8_t>& px = pixelsOf(vm, args[0]);
+        const std::span<const uint8_t> px = pixelsOf(vm, args[0]);
         const int64_t width = vm.toInt(args[1], "width"), height = vm.toInt(args[2], "height");
         if (width < 0 || height < 0 || static_cast<size_t>(width * height * 4) != px.size())
             throw vm.runtimeError(Thrown::IllegalArgumentException, "the pixels are not " + std::to_string(width) + " by " + std::to_string(height));
@@ -715,7 +715,7 @@ void registerPicture(VM& vm) {
         }
         if (!args[4].isObjType(ObjType::List) || !asList(args[4])->packed() || asList(args[4])->pack->block.size() != n * 4)
             throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture is not " + std::to_string(w) + " by " + std::to_string(h));
-        std::vector<uint8_t>& out = asList(args[4])->pack->block;
+        ItemBlock& out = asList(args[4])->pack->block;
         if (!whole) {
             // A row of each plane at a time: where it is the picture's width and height, read where
             // it is; where it is twice as small (or the same) either way, scaled into a row of its
@@ -767,7 +767,7 @@ void registerPicture(VM& vm) {
     });
     // isOpaque(pixels): whether no pixel is see-through at all.
     def("isOpaque", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        const std::vector<uint8_t>& px = pixelsOf(vm, args[0]);
+        const std::span<const uint8_t> px = pixelsOf(vm, args[0]);
         const size_t n = px.size() / 4;
         uint32_t all = 0xFFFFFFFFu;
         for (size_t i = 0; i < n; i++) {
@@ -780,7 +780,7 @@ void registerPicture(VM& vm) {
     });
     // toPlanes(pixels, space): planes of one byte a sample from RGBA pixels (alpha left out).
     def("toPlanes", 2, 2, [](VM& vm, int, Value* args) -> Value {
-        const std::vector<uint8_t>& px = pixelsOf(vm, args[0]);
+        const std::span<const uint8_t> px = pixelsOf(vm, args[0]);
         const int64_t space = vm.toInt(args[1], "space");
         const size_t n = px.size() / 4;
         const size_t count = space == 0 ? 1 : 3;

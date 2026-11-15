@@ -101,12 +101,12 @@ uint32_t colorOf(VM& vm, Value v) {
 }
 
 // A picture's pixels: the bytes value, checked against the size it is said to have.
-std::vector<uint8_t>& pixelsOf(VM& vm, Value* args, int& width, int& height) {
+std::span<uint8_t> pixelsOf(VM& vm, Value* args, int& width, int& height) {
     // Bytes, or the cells of a Grid<Color>, which are kept as the same four bytes a pixel.
     const bool cells = args[0].isObjType(ObjType::List) && asList(args[0])->packed() && asList(args[0])->pack->width == 4;
     if (!args[0].isObjType(ObjType::Bytes) && !cells) throw vm.runtimeError(Thrown::ClassCastException, "a picture's pixels are bytes");
     const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
-    std::vector<uint8_t>& data = cells ? asList(args[0])->pack->block : asBytes(args[0])->data;
+    const std::span<uint8_t> data = cells ? std::span<uint8_t>(asList(args[0])->pack->block) : std::span<uint8_t>(asBytes(args[0])->data);
     if (w < 0 || h < 0 || w > 32768 || h > 32768 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4 != data.size())
         throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture's pixels do not fit its size");
     width = static_cast<int>(w);
@@ -151,14 +151,15 @@ struct Target {
 };
 
 // The pixels of a picture: a Bytes, or the cells of a Grid<Color>, checked against its size.
-std::vector<uint8_t>& rgbaOf(VM& vm, Value v, int64_t w, int64_t h) {
-    std::vector<uint8_t>* data = nullptr;
-    if (v.isObjType(ObjType::Bytes)) data = &asBytes(v)->data;
-    else if (v.isObjType(ObjType::List) && asList(v)->packed() && asList(v)->pack->width == 4 && asList(v)->pack->store == ListStore::Items) data = &asList(v)->pack->block;
-    if (data == nullptr) throw vm.runtimeError(Thrown::ClassCastException, "a picture's pixels are bytes or a grid of colours");
-    if (w < 0 || h < 0 || w > 32768 || h > 32768 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4 != data->size())
+std::span<uint8_t> rgbaOf(VM& vm, Value v, int64_t w, int64_t h) {
+    std::span<uint8_t> data;
+    bool found = false;
+    if (v.isObjType(ObjType::Bytes)) data = asBytes(v)->data, found = true;
+    else if (v.isObjType(ObjType::List) && asList(v)->packed() && asList(v)->pack->width == 4 && asList(v)->pack->store == ListStore::Items) data = asList(v)->pack->block, found = true;
+    if (!found) throw vm.runtimeError(Thrown::ClassCastException, "a picture's pixels are bytes or a grid of colours");
+    if (w < 0 || h < 0 || w > 32768 || h > 32768 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4 != data.size())
         throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture's pixels do not fit its size");
-    return *data;
+    return data;
 }
 
 // In a parallel section a canvas draws on an image the piece made, or through a part of the
@@ -712,7 +713,7 @@ void registerText(VM& vm) {
     // drawText(pixels, width, height, font, text, x, baseline, colour): the text's width.
     def("drawText", 8, 8, [](VM& vm, int, Value* args) -> Value {
         int width, height;
-        std::vector<uint8_t>& pixels = pixelsOf(vm, args, width, height);
+        std::span<uint8_t> pixels = pixelsOf(vm, args, width, height);
         auto font = fontOf(vm, args[3]);
         const std::string& s = vm.toStr(args[4], "text");
         return Value::integer(text::drawText(pixels.data(), width, height, *font, s, clampInt(vm.toInt(args[5], "x")), clampInt(vm.toInt(args[6], "y")), colorOf(vm, args[7])));
@@ -721,7 +722,7 @@ void registerText(VM& vm) {
     // fill(pixels, width, height, x, y, w, h, colour): sets every pixel of a rectangle.
     def("fill", 8, 8, [](VM& vm, int, Value* args) -> Value {
         int width, height;
-        std::vector<uint8_t>& pixels = pixelsOf(vm, args, width, height);
+        std::span<uint8_t> pixels = pixelsOf(vm, args, width, height);
         const int64_t x = vm.toInt(args[3], "x"), y = vm.toInt(args[4], "y"), w = vm.toInt(args[5], "width"), h = vm.toInt(args[6], "height");
         const uint32_t color = colorOf(vm, args[7]);
         const int x0 = static_cast<int>(std::clamp<int64_t>(x, 0, width)), x1 = static_cast<int>(std::clamp<int64_t>(x + std::max<int64_t>(w, 0), 0, width));
@@ -741,7 +742,7 @@ void registerText(VM& vm) {
     // blend(pixels, width, height, x, y, w, h, colour): lays a colour over a rectangle.
     def("blend", 8, 8, [](VM& vm, int, Value* args) -> Value {
         int width, height;
-        std::vector<uint8_t>& pixels = pixelsOf(vm, args, width, height);
+        std::span<uint8_t> pixels = pixelsOf(vm, args, width, height);
         const int64_t x = vm.toInt(args[3], "x"), y = vm.toInt(args[4], "y"), w = vm.toInt(args[5], "width"), h = vm.toInt(args[6], "height");
         const int x0 = static_cast<int>(std::clamp<int64_t>(x, 0, width)), x1 = static_cast<int>(std::clamp<int64_t>(x + std::max<int64_t>(w, 0), 0, width));
         const int y0 = static_cast<int>(std::clamp<int64_t>(y, 0, height)), y1 = static_cast<int>(std::clamp<int64_t>(y + std::max<int64_t>(h, 0), 0, height));
@@ -759,8 +760,8 @@ void registerText(VM& vm) {
     // picture over this one with its top-left corner at (x, y).
     def("draw", 8, 8, [](VM& vm, int, Value* args) -> Value {
         int width, height, otherWidth, otherHeight;
-        std::vector<uint8_t>& pixels = pixelsOf(vm, args, width, height);
-        const std::vector<uint8_t>& other = pixelsOf(vm, args + 3, otherWidth, otherHeight);
+        std::span<uint8_t> pixels = pixelsOf(vm, args, width, height);
+        const std::span<uint8_t> other = pixelsOf(vm, args + 3, otherWidth, otherHeight);
         // As a colour glyph, which is the same thing: colours multiplied by their alpha.
         text::GlyphImage image;
         image.width = otherWidth;
@@ -780,7 +781,7 @@ void registerText(VM& vm) {
 
     def("encodePng", 3, 3, [](VM& vm, int, Value* args) -> Value {
         int width, height;
-        const std::vector<uint8_t>& pixels = pixelsOf(vm, args, width, height);
+        const std::span<uint8_t> pixels = pixelsOf(vm, args, width, height);
         if (width == 0 || height == 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a picture with no pixels cannot be written as PNG");
         ObjBytes* made = vm.alloc<ObjBytes>();
         made->data = image::encodePng(pixels.data(), width, height);
@@ -1001,7 +1002,7 @@ void registerText(VM& vm) {
     def("canvasPicture", 22, 22, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         const int64_t fw = vm.toInt(args[11], "width"), fh = vm.toInt(args[12], "height");
-        const std::vector<uint8_t>& from = rgbaOf(vm, args[10], fw, fh);
+        const std::span<uint8_t> from = rgbaOf(vm, args[10], fw, fh);
         const double sx = num(vm, args[13]), sy = num(vm, args[14]), sw = num(vm, args[15]), sh = num(vm, args[16]);
         const double dl = t.originX + px(t, num(vm, args[17])), dt = t.originY + px(t, num(vm, args[18]));
         const double dw = px(t, num(vm, args[19])), dh = px(t, num(vm, args[20]));
@@ -1082,7 +1083,7 @@ void registerText(VM& vm) {
     // pixels(cells): a picture's pixels as new bytes, four to a pixel (red, green, blue, alpha).
     def("imagePixels", 1, 1, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed()) throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells");
-        const std::vector<uint8_t>& from = asList(args[0])->pack->block;
+        const ItemBlock& from = asList(args[0])->pack->block;
         vm.checkRoomFor(from.size());
         ObjBytes* made = vm.alloc<ObjBytes>();
         made->data.assign(from.begin(), from.end());
@@ -1093,7 +1094,7 @@ void registerText(VM& vm) {
     def("imageSetPixels", 2, 2, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::Bytes))
             throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells and bytes");
-        std::vector<uint8_t>& to = asList(args[0])->pack->block;
+        ItemBlock& to = asList(args[0])->pack->block;
         const std::vector<uint8_t>& from = asBytes(args[1])->data;
         if (to.size() != from.size()) throw vm.runtimeError(Thrown::IllegalArgumentException, "the bytes do not fit the picture");
         std::memcpy(to.data(), from.data(), to.size());
@@ -1107,7 +1108,7 @@ void registerText(VM& vm) {
     def("canvasLay", 16, 16, [](VM& vm, int, Value* args) -> Value {
         const Target t = targetOf(vm, args);
         const int64_t w = vm.toInt(args[11], "width"), h = vm.toInt(args[12], "height");
-        const std::vector<uint8_t>& from = rgbaOf(vm, args[10], w, h);
+        const std::span<uint8_t> from = rgbaOf(vm, args[10], w, h);
         const int64_t left = vm.toInt(args[13], "left"), top = vm.toInt(args[14], "top");
         const bool clear = args[15].truthy();
         const int64_t l = std::max<int64_t>(t.clipLeft, left), r = std::min<int64_t>(t.clipRight, left + w);
@@ -1158,16 +1159,18 @@ void registerText(VM& vm) {
         return Value::null();
     });
 
-    // takePixels(cells, bytes): a picture's pixels taken from new bytes without a copy, the bytes
-    // left holding what the cells held. For the standard library's decoders, whose bytes are
-    // nowhere else.
+    // takePixels(cells, bytes): a picture's pixels taken from new bytes, the bytes emptied. For
+    // the standard library's decoders, whose bytes are nowhere else.
     def("imageTakePixels", 2, 2, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::Bytes))
             throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells and bytes");
-        std::vector<uint8_t>& to = asList(args[0])->pack->block;
+        ItemBlock& to = asList(args[0])->pack->block;
         std::vector<uint8_t>& from = asBytes(args[1])->data;
         if (to.size() != from.size()) throw vm.runtimeError(Thrown::IllegalArgumentException, "the bytes do not fit the picture");
-        to.swap(from);
+        // Copied since 2026-11-15: a list's items are kept apart from bytes' (value.h, ItemBlock),
+        // so the two cannot be swapped; the bytes are emptied, as nothing else holds them.
+        if (!from.empty()) std::memcpy(to.data(), from.data(), from.size());
+        std::vector<uint8_t>().swap(from);
         return Value::null();
     });
 

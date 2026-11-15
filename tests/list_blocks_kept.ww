@@ -1,0 +1,42 @@
+// Large blocks of list items kept for reuse (2026-11-15, value.h's ItemAllocator): a list of
+// 1 MB or more, once collected, leaves its memory for the next list of about its size, up to
+// 256 MB in all; Program.memoryKept says how much, Program.collectGarbage() gives it all back.
+// A list given a kept block starts as any other: a grid of zeros all zeros though the block
+// held other numbers, a copy the same as what it copied, a list added to holding what was added.
+// (Whether a block was kept is not asked: under GC stress each is taken again at once.)
+fun filled(n : int, v : int) : Grid<int> {
+  val g = Grid<int>(n, 1000)
+  for (y in 0 ..< 1000) {
+    for (x in 0 ..< n) { g[x, y] = v + x }
+  }
+  return g
+}
+fun sum(g : Grid<int>) : int {
+  var t = 0
+  for (y in 0 ..< g.height) {
+    for (x in 0 ..< g.width) { t += g[x, y] }
+  }
+  return t
+}
+var bad = 0
+var most = 0
+for (round in 0 ..< 8) {
+  // Just over 1 MB of ints, made and dropped; then a grid of zeros of the same size.
+  val g = filled(132, round + 1)
+  if (sum(g) != 1000 * (132 * (round + 1) + 132 * 131 / 2)) { bad += 1 }
+  val z = Grid<int>(132, 1000)
+  if (sum(z) != 0) { bad += 1 }
+  val c = Image(520, 520)
+  c[519, 519] = Color(round.toByteWrapped(), 2.toByte(), 3.toByte())
+  val d = c.copy()
+  if (d != c or d[0, 0] != c[0, 0] or d[519, 519].red != round.toByteWrapped()) { bad += 1 }
+  val l : open List<int> = []
+  for (i in 0 ..< 140000) { l.add(i) }
+  if (l[139999] != 139999 or l.size != 140000) { bad += 1 }
+  if (Program.memoryKept > most) { most = Program.memoryKept }
+}
+print(bad, most <= 256 * 1024 * 1024)
+Program.collectGarbage()
+print(Program.memoryKept)
+// expect: 0 true
+// expect: 0

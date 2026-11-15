@@ -4038,7 +4038,7 @@ void VM::listArrange(ObjList* list, const std::vector<size_t>& order) {
         return;
     }
     PackedItems& pack = *list->pack;
-    std::vector<uint8_t> block(pack.block.size());
+    ItemBlock block(pack.block.size());
     for (size_t i = 0; i < order.size(); i++)
         std::memcpy(block.data() + i * pack.width, pack.block.data() + order[i] * pack.width, pack.width);
     if (pack.nullable) {

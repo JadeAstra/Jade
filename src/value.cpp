@@ -1267,6 +1267,99 @@ bool ObjRange::contains(int64_t i) const {
     return offset % magnitude == 0;
 }
 
+// ---- Large blocks of list items, kept for reuse (value.h, ItemAllocator) ----
+
+namespace {
+constexpr size_t kKeptFrom = size_t{1} << 20;     // a block this big or bigger is kept
+constexpr size_t kKeptAtMost = size_t{256} << 20;  // in all
+struct KeptBlocks {
+    std::mutex lock;
+    std::unordered_map<void*, size_t> live;     // each large block a list has: its true size
+    std::vector<std::pair<void*, size_t>> kept;  // those kept, oldest first
+    size_t keptBytes = 0;
+};
+KeptBlocks& keptBlocks() {
+    static KeptBlocks* made = new KeptBlocks();  // never destroyed: lists may be freed at exit
+    return *made;
+}
+}  // namespace
+
+void* takeItemBlock(size_t bytes) {
+    if (bytes < kKeptFrom) return ::operator new(bytes);
+    KeptBlocks& k = keptBlocks();
+    {
+        std::lock_guard<std::mutex> hold(k.lock);
+        // The smallest kept that holds it, at most twice its size.
+        size_t best = k.kept.size();
+        for (size_t i = 0; i < k.kept.size(); i++)
+            if (k.kept[i].second >= bytes && k.kept[i].second / 2 <= bytes && (best == k.kept.size() || k.kept[i].second < k.kept[best].second)) best = i;
+        if (best != k.kept.size()) {
+            const auto [p, size] = k.kept[best];
+            k.kept.erase(k.kept.begin() + static_cast<std::ptrdiff_t>(best));
+            k.keptBytes -= size;
+            k.live[p] = size;
+            return p;
+        }
+    }
+    void* p = std::malloc(bytes);
+    if (p == nullptr) {
+        // Memory short: what is kept goes back, then once more.
+        releaseItemBlocks();
+        p = std::malloc(bytes);
+        if (p == nullptr) throw std::bad_alloc();
+    }
+    std::lock_guard<std::mutex> hold(k.lock);
+    k.live[p] = bytes;
+    return p;
+}
+
+void giveItemBlock(void* p, size_t bytes) noexcept {
+    if (p == nullptr) return;
+    if (bytes < kKeptFrom) {
+        ::operator delete(p);
+        return;
+    }
+    KeptBlocks& k = keptBlocks();
+    std::lock_guard<std::mutex> hold(k.lock);
+    auto at = k.live.find(p);
+    const size_t size = at != k.live.end() ? at->second : bytes;
+    if (at != k.live.end()) k.live.erase(at);
+    bool kept = false;
+    if (size <= kKeptAtMost) {
+        try {
+            k.kept.emplace_back(p, size);
+            k.keptBytes += size;
+            kept = true;
+        } catch (...) {
+        }
+    }
+    if (!kept) std::free(p);
+    // The oldest given back, until what is kept is within its limit.
+    size_t drop = 0;
+    while (k.keptBytes > kKeptAtMost && drop < k.kept.size()) {
+        k.keptBytes -= k.kept[drop].second;
+        std::free(k.kept[drop++].first);
+    }
+    k.kept.erase(k.kept.begin(), k.kept.begin() + static_cast<std::ptrdiff_t>(drop));
+}
+
+void releaseItemBlocks() noexcept {
+    KeptBlocks& k = keptBlocks();
+    std::vector<std::pair<void*, size_t>> freed;
+    {
+        std::lock_guard<std::mutex> hold(k.lock);
+        freed.swap(k.kept);
+        k.keptBytes = 0;
+    }
+    for (const auto& [p, size] : freed) std::free(p);
+}
+
+size_t keptItemBytes() noexcept {
+    KeptBlocks& k = keptBlocks();
+    std::lock_guard<std::mutex> hold(k.lock);
+    return k.keptBytes;
+}
+
 }  // namespace ww
 
 #ifndef WW_OBJECT_HEAP

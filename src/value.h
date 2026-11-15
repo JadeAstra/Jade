@@ -13,6 +13,7 @@
 #if defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
 #endif
+#include <span>
 #include <vector>
 
 namespace ww {
@@ -725,6 +726,32 @@ enum class ListStore : uint8_t {
     Items,   // a value type's, in its layout, `width` bytes an item
 };
 
+// Where a packed list's items are kept (2026-11-15). A block of 1 MB or more is not given back
+// to the system when its list is done with but kept, up to 256 MB of them, the oldest given back
+// first, and handed to the next list that needs one of its size or up to half of it: a picture
+// made again (a copy, a part, a filter's result each frame) then finds memory already in use,
+// where fresh memory costs a fault for each 4 KB page the first time it is written (about 4 ms
+// of a 48 MB copy's 6.5). Program.collectGarbage() gives them all back, as does an allocation
+// that fails. Smaller blocks are the heap's, as before. Any thread.
+void* takeItemBlock(size_t bytes);
+void giveItemBlock(void* p, size_t bytes) noexcept;
+void releaseItemBlocks() noexcept;
+size_t keptItemBytes() noexcept;  // the bytes kept for reuse (Program.memoryKept)
+template <class T>
+struct ItemAllocator {
+    using value_type = T;
+    ItemAllocator() noexcept = default;
+    template <class U>
+    ItemAllocator(const ItemAllocator<U>&) noexcept {}
+    T* allocate(size_t n) { return static_cast<T*>(takeItemBlock(n * sizeof(T))); }
+    void deallocate(T* p, size_t n) noexcept { giveItemBlock(p, n * sizeof(T)); }
+    template <class U>
+    bool operator==(const ItemAllocator<U>&) const noexcept { return true; }
+    template <class U>
+    bool operator!=(const ItemAllocator<U>&) const noexcept { return false; }
+};
+using ItemBlock = std::vector<uint8_t, ItemAllocator<uint8_t>>;
+
 // The items of a packed list.
 struct PackedItems {
     ListStore store = ListStore::Values;
@@ -739,7 +766,7 @@ struct PackedItems {
     size_t count = 0;               // the items
     ObjClass* itemClass = nullptr;  // ListStore::Items: the value type
     Narrow narrow = Narrow::None;   // ListStore::Narrow: what each item is
-    std::vector<uint8_t> block;     // `count` items of `width` bytes, one after another
+    ItemBlock block;                // `count` items of `width` bytes, one after another
     std::vector<uint64_t> nulls;    // nullable: a bit per item, set where the item is null
 };
 

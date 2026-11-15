@@ -981,7 +981,7 @@ void registerJade(VM& vm) {
     def("pixels", 6, 6, [](VM& vm, int, Value* args) -> Value {
         Renderer& r = need(vm);
         const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
-        std::vector<uint8_t>* data = nullptr;
+        ItemBlock* data = nullptr;
         if (args[0].isObjType(ObjType::List) && asList(args[0])->packed() && asList(args[0])->pack->width == 4) data = &asList(args[0])->pack->block;
         if (data == nullptr || w < 0 || h < 0 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4 != data->size())
             throw vm.runtimeError(Thrown::IllegalArgumentException, "the picture's pixels do not fit its size");

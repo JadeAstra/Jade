@@ -447,13 +447,19 @@ void registerGlobals(VM& vm) {
         return vm.str(vm.mainFileName());
     });
 
-    // Program.collectGarbage() and Program.memoryUsed: a collection now, and the bytes the objects take.
+    // Program.collectGarbage() and Program.memoryUsed: a collection now, and the bytes the objects
+    // take; the collection also gives back the large blocks kept for lists to reuse (value.h,
+    // ItemAllocator), which Program.memoryKept counts.
     vm.defineNative("__collectGarbage", 0, 0, [](VM& vm, int, Value*) -> Value {
         vm.collectNow();
+        releaseItemBlocks();
         return Value::null();
     });
     vm.defineNative("__memoryUsed", 0, 0, [](VM& vm, int, Value*) -> Value {
         return Value::integer(static_cast<int64_t>(vm.memoryUsed()));
+    });
+    vm.defineNative("__memoryKept", 0, 0, [](VM&, int, Value*) -> Value {
+        return Value::integer(static_cast<int64_t>(keptItemBytes()));
     });
 
     vm.defineNative("__arguments", 0, 0, [](VM& vm, int, Value*) -> Value {
