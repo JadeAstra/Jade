@@ -1769,6 +1769,30 @@ STENCIL(lookit) {
     }
 #define HIDXP_A(a, ...) I_B(HIDXP_B, a)
 I_A(HIDXP_A, x)
+// ia = items ic and ic + 1 of a list of items looked at once (k in ww_slot), 4, 2 or 1 bytes
+// wide, read as one 8, 4 or 2-byte int, item ic's bytes the low ones (regions.cpp's
+// twoItemsAtOnce): both indexes checked against the count.
+#define HIDXP2_B(c, a)                                                          \
+    STENCIL(hidxp2i_##a##_##c) {                                                \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
+        i##a = word<int64_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * 4); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hidxp2w_##a##_##c) {                                                \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
+        i##a = word<uint32_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * 2); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hidxp2h_##a##_##c) {                                                \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
+        i##a = word<uint16_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c); \
+        NEXT;                                                                   \
+    }
+#define HIDXP2_A(a, ...) I_B(HIDXP2_B, a)
+I_A(HIDXP2_A, x)
 #define HIDXPF_B(c, a)                                                          \
     STENCIL(hidxpf_##a##_##c) {                                                 \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \

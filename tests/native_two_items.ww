@@ -1,0 +1,173 @@
+// Neighbouring items read as one span (2026-11-15): `val p = px[i]; val q = px[i + 1]` and their
+// bytes put together into one int, q's above p's, read by native code as one read of items i
+// and i + 1 (both indexes checked at once), neither copy made where nothing reads it after.
+// Items of 4, 2 and 1 bytes; the read past the end (the VM's, which throws); p read again after;
+// i + 1 kept in a variable read after; a value of 3 bytes (no such read). The same as the VM's;
+// each loop run three times (its region is made the second time it starts).
+value Px(val red : byte, val green : byte, val blue : byte, val alpha : byte)
+value Two(val lo : byte, val hi : byte)
+value One(val b : byte)
+value Three(val a : byte, val b : byte, val c : byte)
+
+fun pixels(n : int) : List<Px> {
+  val out : open List<Px> = []
+  var s = 11
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    out.add(Px(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 16).toByteWrapped(), (s >> 24).toByteWrapped()))
+  }
+  return out
+}
+fun mix(h : int, word : int) : int {
+  val m = (h ^ word) &* -49064778989728563
+  return m ^ (m >>> 32)
+}
+// Two pixels a word, as an Image's hashCode.
+fun fours(px : List<Px>) : int {
+  var h = 17
+  var i = 0
+  while (i + 1 < px.size) {
+    val p = px[i]
+    val q = px[i + 1]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* -49064778989728563
+    h = h ^ (h >>> 32)
+    i += 2
+  }
+  return h
+}
+fun twos(xs : List<Two>) : int {
+  var h = 17
+  var i = 0
+  while (i + 1 < xs.size) {
+    val p = xs[i]
+    val q = xs[i + 1]
+    val word = p.lo.toInt() | p.hi.toInt() << 8 | q.lo.toInt() << 16 | q.hi.toInt() << 24
+    h = (h ^ word) &* 1099511628211
+    i += 2
+  }
+  return h
+}
+fun ones(xs : List<One>) : int {
+  var h = 17
+  var i = 0
+  while (i + 1 < xs.size) {
+    val p = xs[i]
+    val q = xs[i + 1]
+    val word = p.b.toInt() | q.b.toInt() << 8
+    h = (h ^ word) &* 1099511628211
+    i += 1
+  }
+  return h
+}
+// Past the end: the last time round, item i + 1 is not there.
+fun pastLoop(px : List<Px>, seen : open List<int>) {
+  var h = 17
+  var i = 0
+  while (i < px.size) {
+    val p = px[i]
+    val q = px[i + 1]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* 1099511628211
+    i += 2
+    seen[0] = h
+    seen[1] = i
+  }
+}
+fun past(px : List<Px>) : string {
+  val seen : open List<int> = [17, 0]
+  try {
+    pastLoop(px, seen)
+  } catch (e : IndexOutOfBoundsException) {
+    return "stopped at ${seen[1]}: ${seen[0]}"
+  }
+  return "ran out at ${seen[1]}: ${seen[0]}"
+}
+// p read again after the word is made.
+fun again(px : List<Px>) : int {
+  var h = 17
+  var reds = 0
+  var i = 0
+  while (i + 1 < px.size) {
+    val p = px[i]
+    val q = px[i + 1]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* 1099511628211
+    reds += p.red.toInt() + q.alpha.toInt()
+    i += 2
+  }
+  return h + reds
+}
+// i + 1 in a variable read after.
+fun kept(px : List<Px>) : int {
+  var h = 17
+  var i = 0
+  var t = 0
+  while (i + 1 < px.size) {
+    val p = px[i]
+    val j = i + 1
+    val q = px[j]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* 1099511628211
+    t += j
+    i += 2
+  }
+  return h + t
+}
+fun threes(xs : List<Three>) : int {
+  var h = 17
+  var i = 0
+  while (i + 1 < xs.size) {
+    val p = xs[i]
+    val q = xs[i + 1]
+    val word = p.a.toInt() | p.b.toInt() << 8 | p.c.toInt() << 16 | q.a.toInt() << 24 | q.b.toInt() << 32 | q.c.toInt() << 40
+    h = (h ^ word) &* 1099511628211
+    i += 2
+  }
+  return h
+}
+
+val px = pixels(1001)
+val tw : open List<Two> = []
+val on : open List<One> = []
+val th : open List<Three> = []
+for (k in 0 ..< 777) {
+  tw.add(Two((k * 7).toByteWrapped(), (k * 13 + 5).toByteWrapped()))
+  on.add(One((k * 29 + 3).toByteWrapped()))
+  th.add(Three(k.toByteWrapped(), (k * 3).toByteWrapped(), (k * 5).toByteWrapped()))
+}
+for (round in 0 ..< 3) {
+  print(fours(px), fours(pixels(2)), fours(pixels(1)), fours(pixels(0)))
+  print(twos(tw), ones(on), threes(th))
+  print(past(px), past(pixels(4)))
+  print(again(px), kept(px))
+  val photo = Image(37, 23)
+  photo.editPixels { p ->
+    for (y in 0 ..< 23) {
+      for (x in 0 ..< 37) {
+        val c = px[(y * 37 + x) % px.size]
+        p[x, y] = Color(c.red, c.green, c.blue, c.alpha)
+      }
+    }
+  }
+  print(photo.hashCode(), Image(1, 1).hashCode() == Image(1, 1).hashCode())
+}
+// expect: -8023121719188996932 12537253980808181 17 17
+// expect: 4345327734579736769 7179249415727143345 -8341103748375210359
+// expect: stopped at 1000: -5072060110917392095 ran out at 4: -6958906844914010329
+// expect: -5072060110917298238 -5072060110917142095
+// expect: 1021343793 true
+// expect: -8023121719188996932 12537253980808181 17 17
+// expect: 4345327734579736769 7179249415727143345 -8341103748375210359
+// expect: stopped at 1000: -5072060110917392095 ran out at 4: -6958906844914010329
+// expect: -5072060110917298238 -5072060110917142095
+// expect: 1021343793 true
+// expect: -8023121719188996932 12537253980808181 17 17
+// expect: 4345327734579736769 7179249415727143345 -8341103748375210359
+// expect: stopped at 1000: -5072060110917392095 ran out at 4: -6958906844914010329
+// expect: -5072060110917298238 -5072060110917142095
+// expect: 1021343793 true

@@ -2919,6 +2919,225 @@ struct Region {
         }
     }
 
+    // ---- Neighbouring items read as one span ----
+
+    // `val p = px[i]; val q = px[i + 1]` and then p's bytes and q's put together into one int,
+    // q's above p's (2026-11-15, an Image's hashCode, two pixels a word): from a list looked at
+    // once, item i a Ref in p's slot and item i + 1 one in q's, then (bytesAtOnce's) each read
+    // whole, q's shifted up by its width and |'d in. Where items are 1, 2 or 4 bytes wide, that
+    // is one read of 2, 4 or 8 bytes at item i (hidxp2h, hidxp2w, hidxp2i), both indexes checked
+    // at once, made where p's Ref was; neither Ref is made. Only where nothing reads p's slot or
+    // q's after: no step of the region but these names either, none is the VM's, and each way
+    // out of the loop leaves both above the stack's top. Between the read and the last step it
+    // stands for, nothing kept leaves for the VM (which would find p and q unmade): i + 1, made
+    // for q's index, goes where nothing else reads it, and otherwise can no longer overflow (the
+    // read found item i + 1). A read that fails leaves where p's Ref was made: the VM reads both.
+    bool twoItemsAtOnce() {
+        if (templates > 0) return false;
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known && (results[i].island || results[i].ends)) return false;
+        std::vector<int> into(ins.size(), 0);
+        for (size_t i = 0; i < ins.size(); i++)
+            if (in[i].known)
+                for (const Edge& e : results[i].edges)
+                    if (e.to >= 0 && static_cast<size_t>(e.to) < ins.size()) into[static_cast<size_t>(e.to)]++;
+        auto plainSteps = [&](size_t k) {
+            for (const LOp& l : results[k].ops)
+                if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+            return true;
+        };
+        bool changed = false;
+        for (size_t j = 0; j < ins.size();) {
+            if (!in[j].known || !plainSteps(j)) {
+                j++;
+                continue;
+            }
+            size_t e = j;
+            while (e + 1 < ins.size() && results[e].fallsThrough && results[e].fallExit < 0 && in[e + 1].known && into[e + 1] == 1 &&
+                   !entries.count(static_cast<int>(e + 1)) && !resumed.count(static_cast<int>(e + 1)) && plainSteps(e + 1))
+                e++;
+            for (bool again = true; again;) {
+                std::vector<std::pair<size_t, size_t>> flat;
+                for (size_t k = j; k <= e; k++)
+                    for (size_t o = 0; o < results[k].ops.size(); o++) flat.emplace_back(k, o);
+                again = false;
+                for (size_t p = 0; p < flat.size() && !again; p++)
+                    if (twoItemsFrom(flat, p)) again = changed = true;
+            }
+            j = e + 1;
+        }
+        return changed;
+    }
+    // Whether step `l` may read or write slot `slot` in memory, in any of the ways a step names
+    // one (a register is not its slot: loads and stores name the slot as `slot`).
+    static bool names(const LOp& l, int slot) {
+        const uint64_t w = static_cast<uint64_t>(l.slot2), s = static_cast<uint64_t>(slot);
+        return l.slot == slot || l.slot2 == slot || (w & 0xFFFFFF) == s || ((w >> 8) & 0xFFFFFF) == s || (w & 0xFFFFFFFF) == s ||
+               ((w >> 24) & 0xFFFF) == s;
+    }
+    // Whether step `l` reads or writes register `r`.
+    static bool touches(const LOp& l, const Reg& r) {
+        for (const auto* regs : {&l.named, &l.uses, &l.defs})
+            if (std::find(regs->begin(), regs->end(), r) != regs->end()) return true;
+        return false;
+    }
+    bool twoItemsFrom(const std::vector<std::pair<size_t, size_t>>& flat, size_t p) {
+        auto at = [&](size_t x) -> LOp& { return results[flat[x].first].ops[flat[x].second]; };
+        const LOp& first = at(p);
+        if (first.stem != "hiref" || first.named.size() != 1 || first.named[0].cls != CI) return false;
+        const Reg counter = first.named[0];
+        const int64_t list = first.slot;
+        const int pSlot = static_cast<int>(first.slot2);
+        // The index may be a copy of the counter made just before (`px[i]` reads i pushed), and
+        // i + 1 made from the counter itself.
+        Reg alias = counter;
+        for (size_t x = p; x-- > 0;) {
+            const LOp& l = at(x);
+            if (std::find(l.defs.begin(), l.defs.end(), counter) == l.defs.end()) continue;
+            if (l.stem == "movi" && l.named.size() == 2 && l.named[0] == counter && l.named[1].cls == CI) {
+                alias = l.named[1];
+                for (size_t y = x + 1; y < p; y++)
+                    if (std::find(at(y).defs.begin(), at(y).defs.end(), alias) != at(y).defs.end()) alias = counter;
+            }
+            break;
+        }
+        // i + 1 into another register, then item i + 1's Ref (its index that register, or a copy
+        // of it made after: `val j = i + 1; val q = px[j]`). Neither i nor the index read for p
+        // written before i + 1 is made (after, they may be: `px[j]` pushes j where i was).
+        size_t plus = 0, second = 0;
+        std::optional<Reg> plusCopy;
+        for (size_t x = p + 1; x < flat.size() && second == 0; x++) {
+            const LOp& l = at(x);
+            if (plus == 0) {
+                if (l.stem == "addik" && l.ki == 1 && l.named.size() == 2 && (l.named[1] == counter || l.named[1] == alias)) {
+                    plus = x;
+                    continue;
+                }
+                const bool recopied = l.stem == "movi" && l.named.size() == 2 && l.named[0] == counter && l.named[1] == alias && !(alias == counter);
+                for (const Reg& d : l.defs)
+                    if (d == alias || (d == counter && !recopied)) return false;
+                continue;
+            }
+            const Reg plusReg = at(plus).named[0];
+            if (l.stem == "hiref" && l.slot == list && l.named.size() == 1 && (l.named[0] == plusReg || (plusCopy && l.named[0] == *plusCopy)) &&
+                l.slot2 != pSlot) {
+                second = x;
+                continue;
+            }
+            for (const Reg& d : l.defs) {
+                if (d == plusReg) return false;
+                if (plusCopy && d == *plusCopy) plusCopy.reset();
+            }
+            if (!plusCopy && l.stem == "movi" && l.named.size() == 2 && l.named[1] == plusReg && l.named[0].cls == CI) plusCopy = l.named[0];
+        }
+        if (second == 0) return false;
+        const int qSlot = static_cast<int>(at(second).slot2);
+        const Reg plusReg = at(plus).named[0];
+        // p's bytes read whole, then q's, shifted up by the width, |'d in.
+        size_t read = 0;
+        for (size_t x = second + 1; x + 3 < flat.size() && read == 0; x++)
+            if (at(x).stem.rfind("hvalp", 0) == 0 && at(x).slot == pSlot) read = x;
+        if (read == 0) return false;
+        const LOp &rp = at(read), &rq = at(read + 1), &sh = at(read + 2), &orr = at(read + 3);
+        auto sizeOf = [](const std::string& s) { return s == "hvalpb" ? 1 : s == "hvalph" ? 2 : s == "hvalpw" ? 4 : 0; };
+        const int size = sizeOf(rp.stem);
+        if (size == 0 || rq.stem != rp.stem || rq.slot != qSlot || rp.ki != list || rq.ki != list || rp.slot2 != rq.slot2 || rp.named.size() != 1 ||
+            rq.named.size() != 1 || rp.named[0].cls != CI || rq.named[0].cls != CI || rp.named[0] == rq.named[0])
+            return false;
+        const uint64_t what = static_cast<uint64_t>(rp.slot2);
+        if ((what & 0xFFFF) != 0 || ((what >> 16) & 0xFFFF) != static_cast<uint64_t>(size)) return false;  // the whole item, from its start
+        const Reg into = rp.named[0], other = rq.named[0];
+        if (sh.stem != "shlik" || sh.named.size() != 2 || !(sh.named[0] == other) || !(sh.named[1] == other) || sh.ki != 8 * size) return false;
+        if (orr.stem != "ori" || orr.named.size() != 2 || !(orr.named[0] == into) || !(orr.named[1] == other)) return false;
+        // The other register holds nothing wanted after: above the stack's top once these are done.
+        const size_t lastIns = flat[read + 3].first;
+        if (lastIns + 1 >= ins.size() || other.slot < in[lastIns + 1].top) return false;
+        // Nothing else names p's slot or q's, anywhere in the region, nor on any way out.
+        std::set<std::pair<size_t, size_t>> ours{flat[p], flat[second], flat[read], flat[read + 1]};
+        std::set<std::pair<size_t, size_t>> keeps;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (size_t o = 0; o < results[i].ops.size(); o++) {
+                const LOp& l = results[i].ops[o];
+                if (ours.count({i, o}) || (!names(l, pSlot) && !names(l, qSlot))) continue;
+                if (l.stem == "keepl" && (l.slot == pSlot || l.slot == qSlot)) {
+                    keeps.insert({i, o});
+                    continue;
+                }
+                return false;
+            }
+            for (const ExitPoint& x : results[i].exits) {
+                for (LOp l : x.stores) {  // what it writes (`slot`) is the VM's value; what it reads
+                    l.slot = -1;
+                    if (names(l, pSlot) || names(l, qSlot)) return false;
+                }
+                if (!index.count(x.at) && x.state.top > std::min(pSlot, qSlot)) return false;  // out of the loop, p or q still there
+            }
+        }
+        for (const LOp& l : prologue)
+            if (names(l, pSlot) || names(l, qSlot)) return false;
+        for (const auto& k : keeps)
+            if (k < flat[p] || k > flat[read + 3]) return false;
+        // Between the read (where p's Ref was) and the last step it stands for: nothing kept
+        // leaves for the VM or touches the register read into; i + 1 dropped where nothing reads
+        // it before it is written again, otherwise one that cannot overflow.
+        bool plusDropped = false;
+        for (size_t x = plus + 1; x < flat.size(); x++) {
+            const LOp& l = at(x);
+            if (x == second || keeps.count(flat[x])) continue;
+            if (x == read) {
+                plusDropped = plusReg == into;
+                break;
+            }
+            if (std::find(l.uses.begin(), l.uses.end(), plusReg) != l.uses.end() || l.exit >= 0) break;
+            if (std::find(l.defs.begin(), l.defs.end(), plusReg) != l.defs.end()) {
+                plusDropped = true;
+                break;
+            }
+        }
+        if (!plusDropped && plusReg == into) return false;
+        // Where something kept between uses the register read into (a slot of the stack used
+        // again: `val j = i + 1; val q = px[j]`), the read goes into the scratch register, moved
+        // across where the last step it stands for was.
+        const Reg scratch{kScratchI, CI};
+        bool viaScratch = false;
+        for (size_t x = p + 1; x <= read + 3; x++) {
+            if ((x == plus && plusDropped) || x == second || (x >= read && x <= read + 3) || keeps.count(flat[x])) continue;
+            const LOp& l = at(x);
+            if (x != plus && (l.exit >= 0 || l.jumpTo >= 0 || l.jumpExit >= 0)) return false;
+            if (touches(l, scratch)) return false;
+            if (touches(l, into)) viaScratch = true;
+        }
+        // Made: the read where p's Ref was.
+        const Reg to = viaScratch ? scratch : into;
+        LOp two = first;
+        two.stem = size == 4 ? "hidxp2i" : size == 2 ? "hidxp2w" : "hidxp2h";
+        two.named = {to, counter}, two.uses = {counter}, two.defs = {to};
+        two.slot = list, two.slot2 = size, two.ki = 0;
+        LOp moved;
+        moved.stem = "movi", moved.named = {into, scratch}, moved.uses = {scratch}, moved.defs = {into};
+        std::set<std::pair<size_t, size_t>> gone{flat[second], flat[read], flat[read + 1], flat[read + 2], flat[read + 3]};
+        gone.insert(keeps.begin(), keeps.end());
+        if (plusDropped) gone.insert(flat[plus]);
+        else {
+            LOp& l = at(plus);
+            l.stem = "waddik", l.exit = -1;
+        }
+        std::set<size_t> touched{flat[p].first};
+        for (const auto& g : gone) touched.insert(g.first);
+        for (size_t k : touched) {
+            std::vector<LOp> kept;
+            for (size_t o = 0; o < results[k].ops.size(); o++) {
+                const std::pair<size_t, size_t> here{k, o};
+                if (here == flat[p]) kept.push_back(two);
+                else if (here == flat[read + 3] && viaScratch) kept.push_back(moved);
+                else if (!gone.count(here)) kept.push_back(results[k].ops[o]);
+            }
+            results[k].ops = std::move(kept);
+        }
+        return true;
+    }
+
     // ---- Lists and fields looked at once ----
 
     // In a region where nothing is the VM's, nothing can change where a list's items are or how
@@ -5891,6 +6110,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
                 r.makeAhead();
                 if (r.templates > 0) r.findLive();
             }
+            if (r.twoItemsAtOnce()) r.findLive();
             r.renameValues();
             r.findLive();
             lap(2);
