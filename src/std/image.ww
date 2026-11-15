@@ -1218,12 +1218,30 @@ fun __colorsHash(px : List<Color>) : int {
   val n = px.size
   var h = -7046029254386353131 ^ (n * 4)  // 0x9E3779B97F4A7C15
   var i = 0
-  while (i + 1 < n) {
+  // Two words a time round (2026-11-15: the loop's own steps shared, the mixing steps one chain
+  // either way), then the one left.
+  while (i + 3 < n) {
     val p = px[i]
     val q = px[i + 1]
     val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
       q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
     h = (h ^ word) &* -49064778989728563  // 0xFF51AFD7ED558CCD
+    h = h ^ (h >>> 32)
+    val j = i + 2
+    val r = px[j]
+    val s = px[j + 1]
+    val next = r.red.toInt() | r.green.toInt() << 8 | r.blue.toInt() << 16 | r.alpha.toInt() << 24 |
+      s.red.toInt() << 32 | s.green.toInt() << 40 | s.blue.toInt() << 48 | s.alpha.toInt() << 56
+    h = (h ^ next) &* -49064778989728563
+    h = h ^ (h >>> 32)
+    i += 4
+  }
+  while (i + 1 < n) {
+    val p = px[i]
+    val q = px[i + 1]
+    val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24 |
+      q.red.toInt() << 32 | q.green.toInt() << 40 | q.blue.toInt() << 48 | q.alpha.toInt() << 56
+    h = (h ^ word) &* -49064778989728563
     h = h ^ (h >>> 32)
     i += 2
   }

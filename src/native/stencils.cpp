@@ -469,6 +469,12 @@ I_A(IINC, x)
         i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) >> ww_ki);    \
         NEXT;                                                                   \
     }                                                                           \
+    /* By 32 (a hash's mix): a shift by an immediate, where ushrik's count  */ \
+    /* is patched in and shifts by cl (2026-11-15).                         */ \
+    STENCIL(ushr32_##a##_##b) {                                                 \
+        i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) >> 32);       \
+        NEXT;                                                                   \
+    }                                                                           \
     STENCIL(xorik_##a##_##b) { i##a = i##b ^ ww_ki; NEXT; }                   \
     STENCIL(waddik_##a##_##b) {                                                 \
         i##a = static_cast<int64_t>(static_cast<uint64_t>(i##b) + static_cast<uint64_t>(ww_ki)); \

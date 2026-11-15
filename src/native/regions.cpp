@@ -2481,6 +2481,7 @@ struct Region {
                                : o == Op::RAddWrapSK ? "waddik"
                                : o == Op::RSubWrapSK ? "wsubik"
                                                      : "wmulik";
+            if (o == Op::RUshrSK && v == 32) stem = "ushr32";  // its shift an immediate (stencils.cpp)
             c.op(stem, {dst, b}, {b}, {dst}).ki = v;
         } else if (o == Op::RShlSS || o == Op::RShrSS || o == Op::RUshrSS || o == Op::RSubWrapSS) {
             // A count from 0 to 63 (any other left to the VM), then the shift of b by it (or b less
