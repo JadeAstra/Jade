@@ -647,7 +647,7 @@ fun __colorScaled(px : List<Color>, w : int, h : int, nw : int, nh : int, interp
 // taps summed in turn, a loop too short for native code's templates), so each sum is added in
 // the same order as before, a padded tap's 0.0 adding nothing.
 fun __scaledAcross(line : List<float>, nw : int, most : int, index : List<int>, weight : List<float>, out : open List<float>, outAt : int) {
-  for (k in 0 ..< nw * 4) { out[outAt + k] = 0.0 }
+  for (k in outAt ..< outAt + nw * 4) { out[k] = 0.0 }  // the counter the place: a fill native code does at once
   for (j in 0 ..< most) { __gatherMulAdd(line, out, outAt, index, weight, j * nw, nw) }
 }
 // For n pixels: out's four floats at outAt + 4 x, each plus line's at 4 index[at + x] times

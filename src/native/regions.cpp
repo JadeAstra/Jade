@@ -27,6 +27,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -6070,13 +6071,114 @@ void loads(Assembler& a, const Region& r, int entry, std::vector<std::string>* n
         }
 }
 
+// ---- A profile of the steps native code runs (WW_PROFILE_NATIVE, 2026-11-15) ----
+
+// With WW_PROFILE_NATIVE set (to a function's name, or to anything else for every function),
+// each step of a region is counted as it runs (a `count` step before it), and as the program
+// ends the regions are told on stderr by how many steps each ran: what each spent most steps on,
+// how many of those were values kept in memory loaded and stored (what registers too few cost),
+// and its busiest steps in the order they come. What native code's choices are measured by.
+struct StepProfile {
+    std::string where;                // the function, and where its region starts
+    std::vector<std::string> stems;   // each step's name
+    std::vector<int> instruction;     // the instruction it does (-1: a way in or out)
+    std::deque<uint64_t> counts;      // how often each ran (a deque: each count stays where it is)
+};
+std::mutex profileLock;
+std::deque<StepProfile>* stepProfiles = nullptr;
+std::string millions(uint64_t n) {
+    char text[32];
+    if (n >= 1000000) std::snprintf(text, sizeof text, "%.1f M", static_cast<double>(n) / 1e6);
+    else if (n >= 1000) std::snprintf(text, sizeof text, "%.1f k", static_cast<double>(n) / 1e3);
+    else std::snprintf(text, sizeof text, "%llu", static_cast<unsigned long long>(n));
+    return text;
+}
+void reportStepProfiles() {
+    std::lock_guard<std::mutex> hold(profileLock);
+    if (stepProfiles == nullptr) return;
+    std::vector<std::pair<uint64_t, const StepProfile*>> made;
+    uint64_t all = 0;
+    for (const StepProfile& p : *stepProfiles) {
+        uint64_t total = 0;
+        for (uint64_t c : p.counts) total += c;
+        if (total > 0) made.emplace_back(total, &p), all += total;
+    }
+    std::sort(made.begin(), made.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+    std::fprintf(stderr, "native profile: %s steps run in %zu regions\n", millions(all).c_str(), made.size());
+    // A step's kind: its name without the registers it was made for (hidxpb_2_0: hidxpb).
+    auto kindOf = [](const std::string& stem) {
+        size_t cut = stem.size();
+        for (size_t k = 1; k + 1 < stem.size(); k++)
+            if (stem[k] == '_' && stem[k + 1] >= '0' && stem[k + 1] <= '9') {
+                cut = k;
+                break;
+            }
+        return stem.substr(0, cut);
+    };
+    auto memory = [](const std::string& kind) {
+        return kind == "loadi" || kind == "loadf" || kind == "storei" || kind == "storef" || kind == "storeby" || kind == "homeli" || kind == "homelf" ||
+               kind == "homesi" || kind == "homesf";
+    };
+    for (size_t m = 0; m < made.size() && m < 12; m++) {
+        const auto& [total, p] = made[m];
+        if (m > 0 && total * 100 < all) break;  // a region of under 1% of all
+        std::map<std::string, uint64_t> kinds;
+        uint64_t inMemory = 0;
+        for (size_t s = 0; s < p->stems.size(); s++) {
+            const std::string kind = kindOf(p->stems[s]);
+            kinds[kind] += p->counts[s];
+            if (memory(kind)) inMemory += p->counts[s];
+        }
+        std::fprintf(stderr, "== %s: %s steps (%.1f%%), %s of them values kept in memory loaded or stored\n", p->where.c_str(), millions(total).c_str(),
+                     100.0 * static_cast<double>(total) / static_cast<double>(all), millions(inMemory).c_str());
+        std::vector<std::pair<uint64_t, std::string>> byKind;
+        for (const auto& [kind, n] : kinds) byKind.emplace_back(n, kind);
+        std::sort(byKind.rbegin(), byKind.rend());
+        std::string line = "   by kind:";
+        for (size_t k = 0; k < byKind.size() && k < 14 && byKind[k].first > 0; k++) line += " " + byKind[k].second + " " + millions(byKind[k].first) + ",";
+        line.pop_back();
+        std::fprintf(stderr, "%s\n", line.c_str());
+        // The busiest steps (each run at least a tenth as often as the busiest), in their order.
+        uint64_t top = 0;
+        for (uint64_t c : p->counts) top = std::max(top, c);
+        line = "   in order:";
+        for (size_t s = 0; s < p->stems.size(); s++)
+            if (p->counts[s] > 0 && p->counts[s] * 10 >= top)
+                line += " " + p->stems[s] + (p->instruction[s] >= 0 ? "@" + std::to_string(p->instruction[s]) : "") + " " + millions(p->counts[s]) + ",";
+        line.pop_back();
+        std::fprintf(stderr, "%s\n", line.c_str());
+    }
+}
+StepProfile* newStepProfile(const Region& r) {
+    static const char* const asked = std::getenv("WW_PROFILE_NATIVE");
+    if (asked == nullptr || (std::strcmp(asked, r.f.name.c_str()) != 0 && std::strcmp(asked, "1") != 0 && std::strcmp(asked, "*") != 0)) return nullptr;
+    std::lock_guard<std::mutex> hold(profileLock);
+    if (stepProfiles == nullptr) {
+        stepProfiles = new std::deque<StepProfile>();  // never freed: read as the program ends
+        std::atexit(reportStepProfiles);
+    }
+    stepProfiles->emplace_back();
+    stepProfiles->back().where = r.f.name + ", its loop at " + std::to_string(r.ins[0].at);
+    return &stepProfiles->back();
+}
+
 // The region's code, and each way in: (the instruction, its address in the code).
 std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>* names) {
     r.markWhole();
     Assembler a;
     std::vector<int> labels(r.ins.size());
     for (int& l : labels) l = a.label();
+    // With a profile, each step counted as it runs (a `count` step before it).
+    StepProfile* const profile = newStepProfile(r);
+    int doing = -1;  // the instruction the steps added are for (-1: a way in or out)
     auto add = [&](const std::string& n) -> Step& {
+        if (profile != nullptr) {
+            profile->counts.push_back(0);
+            profile->stems.push_back(n);
+            profile->instruction.push_back(doing);
+            a.add("count").ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(&profile->counts.back()));
+            if (names != nullptr) names->push_back("count");
+        }
         if (names != nullptr) names->push_back(n);
         return a.add(n);
     };
@@ -6112,6 +6214,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
     for (size_t i = 0; i < r.ins.size(); i++) {
         a.at(labels[i]);
         if (!r.in[i].known) continue;
+        doing = static_cast<int>(i);
         const Result& res = r.results[i];
         std::vector<int> exitLabels;
         for (size_t e = 0; e < res.exits.size(); e++) {
@@ -6141,6 +6244,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
             loads(a, r, e.toEntry, names, leaveAt(e.toEntry));
         }
     }
+    doing = -1;
     // The ways out: what the region wrote that the VM may read written back, then where the VM
     // goes on and the stack's top there; or, to an instruction the VM comes back in at, what it
     // loads, and on to it.

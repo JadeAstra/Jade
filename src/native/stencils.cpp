@@ -1215,6 +1215,13 @@ STENCIL(copyslot) {
     NEXT;
 }
 
+// The next step run once more (WW_PROFILE_NATIVE, 2026-11-15: regions.cpp puts one before each
+// step): one added to the count at the address ww_ki holds. Not atomic: where two threads run
+// one region at once, a count may come out a little low.
+STENCIL(count) {
+    ++*reinterpret_cast<uint64_t*>(ww_ki);
+    NEXT;
+}
 // A jump; a look at the VM's flag; a loop's end (the flag looked at, then back to its start);
 // the region's end, giving where the VM goes on.
 STENCIL(jump) { JUMP; }
