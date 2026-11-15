@@ -498,6 +498,12 @@ std::string quoteCharacter(uint32_t c);
 // Whether `c` is a character: a code point that is not a surrogate's (D25).
 inline bool isCharacter(int64_t c) { return c >= 0 && c <= 0x10FFFF && !(c >= 0xD800 && c <= 0xDFFF); }
 
+// How many times a key has gone into or out of any Table (2026-11-15): a class's members, its
+// extends, the functions added to a type from outside. What was found not to be a member stays
+// so while this is unchanged (VM::implicitReceiver's cache); a value set again under a key it
+// has does not change it.
+extern std::atomic<uint64_t> tableKeysChanged;
+
 // Hash table keyed by interned strings (compared by pointer). Used for fields, methods and statics.
 class Table {
 public:
@@ -512,6 +518,7 @@ public:
     Table& operator=(const Table&) = delete;
 
     void clear() {
+        if (count_ != 0) tableKeysChanged.fetch_add(1, std::memory_order_relaxed);
         delete[] entries_;
         entries_ = nullptr;
         capacity_ = 0;

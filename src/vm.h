@@ -1490,6 +1490,17 @@ private:
     mutable uint8_t implicitFirstCount_ = 0;
     mutable bool implicitOnly_ = false;
     mutable uint8_t implicitTried_ = 0;  // how many of them the last lookup tried, for its error
+    // Bare names found not to be members of the object a function runs on (2026-11-15: `Color`,
+    // `Rect` in a method, each looked for among the object's members, extends and the functions
+    // added to its type, some 25 ns): by the function, the name and the object's class, as long
+    // as no Table has gained or lost a key since (tableKeysChanged).
+    struct ImplicitMiss {
+        const FunctionProto* proto = nullptr;
+        const ObjString* name = nullptr;
+        const ObjClass* cls = nullptr;
+        uint64_t keys = 0;
+    };
+    mutable ImplicitMiss implicitMisses_[256];
     void setAccess(ObjClass* cls, Table& marks, ObjString* name, bool write, const std::vector<uint16_t>& run, int kind);
     void declareAccess(ObjClass* cls, Table& marks, ObjString* name, int id, int kind, bool write);
     void joinProtected(ObjClass* subclass);

@@ -526,6 +526,8 @@ std::string quoteCharacter(uint32_t c) {
 
 // ---- Table ----
 
+std::atomic<uint64_t> tableKeysChanged{0};
+
 void Table::set(ObjString* key, Value value) {
     if ((count_ + 1) * 4 > capacity_ * 3) grow();
 
@@ -541,6 +543,7 @@ void Table::set(ObjString* key, Value value) {
             e.key = key;
             e.value = value;
             count_++;
+            tableKeysChanged.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         i = (i + 1) & mask;
@@ -571,6 +574,7 @@ bool Table::remove(const ObjString* key) {
     }
     entries_[i] = Entry{};
     count_--;
+    tableKeysChanged.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 

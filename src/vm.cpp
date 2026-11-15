@@ -1605,6 +1605,20 @@ Value VM::implicitReceiver(const CallFrame* frame, const Value* base, const ObjS
             if (has(implicitFirst_[i])) return implicitFirst_[i];
         if (only) return Value::undefined();
     }
+    // An object of a class, with no object around it to look in (no outer receivers): whether
+    // the name is a member says its class alone, kept once found not to be (implicitMisses_).
+    if (proto->outerReceivers.empty())
+        if (const ObjClass* const cls = classOf(base[0])) {
+            guardRead(base[0]);
+            const size_t at = ((reinterpret_cast<uintptr_t>(name) >> 4) ^ (reinterpret_cast<uintptr_t>(cls) >> 6) ^
+                               (reinterpret_cast<uintptr_t>(proto) >> 5)) & 255;
+            ImplicitMiss& seen = implicitMisses_[at];
+            const uint64_t keys = tableKeysChanged.load(std::memory_order_relaxed);
+            if (seen.name == name && seen.cls == cls && seen.proto == proto && seen.keys == keys) return Value::undefined();
+            if (has(base[0])) return base[0];
+            seen = ImplicitMiss{proto, name, cls, keys};
+            return Value::undefined();
+        }
     if (has(base[0])) return base[0];
     for (uint16_t upvalue : proto->outerReceivers) {
         const ObjUpvalue* cell = receiverUpvalue(frame, base, upvalue);

@@ -1,0 +1,57 @@
+// Bare names in methods (2026-11-15): where a name may be a member of the object a method runs
+// on (its class has a superclass, or no fields), it is looked for there first as the code runs,
+// then taken as the global. Found not to be a member, the VM keeps that for the function, the
+// name and the object's class (VM::implicitReceiver's cache) as long as no class gains or loses
+// a member, an extend or a function added from outside. The same answers, run often, with
+// objects of two classes through one method (one of which has the name as a member), and after
+// an extend and an extension function are added.
+
+val scale = 10
+fun twice(x : int) : int => x * 2
+
+class Thing(var id : int)
+class Box(var x : int, var y : int) : Thing(0) {
+  fun area(w : int) : Rect {
+    val r = Rect(x, y, w, scale)
+    return r.width > 0 ? r : Rect(0, 0, twice(w), 0)
+  }
+  fun tint(c : Color = Color.clear) : int => c.red.toInt() + scale
+}
+// A Box with a `twice` of its own, which its inherited methods' bare `twice` is not (the global,
+// as the checker found it): looked up for objects of both classes, each kept apart.
+class Big(x : int, y : int) : Box(x, y) {
+  fun twice(v : int) : int => v * 3
+}
+
+class Counter : Thing(1) {
+  var n = 0
+  fun step() : int {
+    n = n + scale
+    return twice(n)
+  }
+}
+
+val boxes = [Box(1, 2), Big(3, 4), Box(5, 6)]
+val counter = Counter()
+for (round in 0 ..< 3) {
+  var areas = 0
+  var tints = 0
+  var steps = 0
+  for (k in 0 ..< 200) {
+    val box = boxes[k % 3]
+    areas += box.area(k % 7 - 3).height + box.area(2).width
+    tints += box.tint() + box.tint(Color.red)
+    steps += counter.step() % 1000
+  }
+  print("$areas $tints $steps")
+}
+
+extend Box {
+  var label : string = "boxed"
+}
+fun Counter.bump() : int => n + 1
+print(boxes[0].label, counter.bump(), boxes[0].area(4), boxes[1].area(-4), boxes[0].area(-4), counter.step())
+// expect: 1240 55000 98000
+// expect: 1240 55000 98000
+// expect: 1240 55000 98000
+// expect: boxed 6001 Rect(1, 2, 4 x 10) Rect(0, 0, -8 x 0) Rect(0, 0, -8 x 0) 12020
