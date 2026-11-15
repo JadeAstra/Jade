@@ -1,9 +1,11 @@
 // Byte fields of items counted into a list of ints, `counts[K + item.field] += c` (2026-11-15:
-// histogram()), which native code's loop template kLoopWCountItems does whole: four ones (a
-// histogram), other steps and a step taken away, two stores at the same place, items at a base
-// plus the counter; and where it must leave the work to the steps: a count that would leave an
-// int's range (the steps throw), a place past the counts (the steps throw). The same as the VM's;
-// each loop run three times (its region is made the second time it starts).
+// histogram(), a palette's bins), which native code's loop template kLoopWCountItems does whole:
+// four ones (a histogram), other steps and a step taken away, two stores at the same place,
+// items at a base plus the counter; a key of fields shifted and or'd, fields added, an item
+// skipped by `continue` (a palette's bins; a key too wide for the template's tables); and where
+// it must leave the work to the steps: a count that would leave an int's range (the steps
+// throw), a place past the counts (the steps throw), a `continue` in a loop no template takes.
+// The same as the VM's; each loop run three times (its region is made the second time it starts).
 value Two(val lo : byte, val hi : byte)
 
 fun pixels(n : int, seed : int) : List<Color> {
@@ -36,6 +38,37 @@ fun twos(xs : List<Two>, at : int, n : int, levels : open List<int>) {
     levels[256 + xs[at + i].lo] += 7
   }
 }
+// A palette's bins: a key of three fields shifted and or'd, sums of fields, see-through skipped.
+fun bins(px : List<Color>, b : open List<int>) {
+  for (i in 0 ..< px.size) {
+    val c = px[i]
+    if (c.alpha.toInt() < 128) { continue }
+    val at = (c.red.toInt() >> 3) << 12 | (c.green.toInt() >> 3) << 7 | (c.blue.toInt() >> 3) << 2
+    b[at] += c.red.toInt()
+    b[1 + at] += c.green.toInt()
+    b[2 + at] += c.blue.toInt()
+    b[3 + at] += 1
+  }
+}
+// A key too wide for the template's tables, two stores, a skip on >=.
+fun wide(px : List<Color>, b : open List<int>) {
+  for (i in 0 ..< px.size) {
+    val c = px[i]
+    if (c.green.toInt() >= 200) { continue }
+    val at = c.red.toInt() << 9 | (c.blue.toInt() >> 4)
+    b[at] += 2
+    b[5 + at] -= 1
+  }
+}
+// A continue where the template takes no skip (a sum): the steps.
+fun skipSum(px : List<Color>) : int {
+  var t = 0
+  for (i in 0 ..< px.size) {
+    if (px[i].alpha.toInt() < 100) { continue }
+    t += px[i].red.toInt()
+  }
+  return t
+}
 fun sum(xs : List<int>) : int {
   var t = 0
   for (i in 0 ..< xs.size) { t = (t * 31 + xs[i] + i) % 1000000007 }
@@ -62,6 +95,11 @@ for (round in 0 ..< 3) {
   val c : open List<int> = List(512) { 0 }
   twos(tw, 100, 2500, c)
   print(sum(a), sum(b), sum(c), a[0] + a[255] + a[1023])
+  val d : open List<int> = List(32768 * 4) { 0 }
+  bins(px, d)
+  val e : open List<int> = List(131000) { 0 }
+  wide(px, e)
+  print(sum(d), sum(e), skipSum(px))
   // A count at the top of an int's range: the steps throw where it would leave it.
   val full : open List<int> = List(1024) { 9223372036854775807 - 3 }
   print(attempt { four(px, full) }, full[0] > 0)
@@ -70,11 +108,14 @@ for (round in 0 ..< 3) {
   print(attempt { four(px, few) }, sum(few))
 }
 // expect: 124386631 763346802 152805722 40
+// expect: 36454863 318286326 142656
 // expect: ArithmeticException true
 // expect: IndexOutOfBoundsException 237271810
 // expect: 124386631 763346802 152805722 40
+// expect: 36454863 318286326 142656
 // expect: ArithmeticException true
 // expect: IndexOutOfBoundsException 237271810
 // expect: 124386631 763346802 152805722 40
+// expect: 36454863 318286326 142656
 // expect: ArithmeticException true
 // expect: IndexOutOfBoundsException 237271810

@@ -2777,40 +2777,65 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             break;
         }
         case kLoopWCountItems: {
-            // Byte fields of each item counted into a list of ints, `counts[K + item.field] += c`
-            // for each store in order (regions.cpp, countItems: a histogram). Words: 50 to 54
-            // where the items are read, 128 how many stores, 129 the items' width, from 130 three
-            // a store: K, the field's offset, c. Every place 0 to 255 past each K within the
-            // counts, and no count able to leave an int's range however the items fall.
+            // Byte fields of each item counted into a list of ints (regions.cpp, countItems: a
+            // histogram, a palette's bins): `counts[K + key] += v` for each store in order, the
+            // key a byte field of the item or the key the stores share (fields shifted and or'd),
+            // v a constant or a byte field; an item skipped where its skip's comparison holds.
+            // Words: 50 to 54 where the items are read; 128 how many stores, 129 the items' width,
+            // 130 how many terms the shared key has, three each from 131 (offset, right, left);
+            // 143 to 145 the skip (comparison, offset, constant); from 146 four a store (K, its own
+            // field or -1, 0 a constant v or 1 a field, v or the field). Every place any key can
+            // reach within the counts, and no count able to leave an int's range however the
+            // items fall.
             static_assert(kLoopWCountItems == 26, "regions.cpp's ah.shape 26");
             if (!a.ok() || !out.ok() || out.kind() != 1) return;
-            const uint64_t n = t[128], width = t[129];
-            if (n == 0 || n > 8 || width == 0 || width > 0xFFFF) return;
+            const uint64_t n = t[128], width = t[129], nt = t[130];
+            if (n == 0 || n > 8 || width == 0 || width > 0xFFFF || nt > 4) return;
             int64_t at = 0, first, last;
             if (!itemBase(ctx, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
                 static_cast<uint64_t>(last) >= a.h[1])
                 return;
+            uint64_t toff[4] = {0, 0, 0, 0}, tshr[4] = {0, 0, 0, 0}, tshl[4] = {0, 0, 0, 0};
+            uint64_t keyMost = 0;  // the largest the shared key can be
+            for (uint64_t k = 0; k < nt; k++) {
+                toff[k] = t[131 + 3 * k], tshr[k] = t[132 + 3 * k], tshl[k] = t[133 + 3 * k];
+                if (toff[k] >= width || tshr[k] > 7 || tshl[k] > 31) return;
+                keyMost |= (uint64_t{255} >> tshr[k]) << tshl[k];
+            }
+            const uint64_t skipOp = t[143], skipOff = t[144];
+            const int64_t skipK = static_cast<int64_t>(t[145]);
+            if (skipOp > 6 || (skipOp != 0 && skipOff >= width)) return;
             int64_t* counts = out.ints();
-            int64_t K[8], c[8];
-            uint64_t off[8];
+            int64_t K[8], v[8];
+            int64_t own[8], kind[8];
             int64_t most = 0, least = 0;
             int64_t step = 0;  // how far one item may move a count, all stores together
+            uint64_t from = ~uint64_t{0}, to = 0;  // every place a store can reach lies between
             for (uint64_t s = 0; s < n; s++) {
-                K[s] = static_cast<int64_t>(t[130 + 3 * s]), off[s] = t[131 + 3 * s], c[s] = static_cast<int64_t>(t[132 + 3 * s]);
-                if (K[s] < 0 || static_cast<uint64_t>(K[s]) + 255 >= out.h[1] || static_cast<uint64_t>(K[s]) + 255 >= out.h[2] || off[s] >= width) return;
-                step += c[s] < 0 ? -c[s] : c[s];
-                for (int64_t v = 0; v < 256; v++) {
-                    const int64_t now = counts[K[s] + v];
-                    most = now > most ? now : most, least = now < least ? now : least;
-                }
+                const uint64_t* w = t + 146 + 4 * s;
+                K[s] = static_cast<int64_t>(w[0]), own[s] = static_cast<int64_t>(w[1]), kind[s] = static_cast<int64_t>(w[2]), v[s] = static_cast<int64_t>(w[3]);
+                if (own[s] < 0 && nt == 0) return;
+                if (own[s] >= static_cast<int64_t>(width) || (kind[s] == 1 && (v[s] < 0 || v[s] >= static_cast<int64_t>(width))) || kind[s] < 0 || kind[s] > 1) return;
+                const uint64_t reach = own[s] >= 0 ? 255 : keyMost;
+                if (K[s] < 0 || static_cast<uint64_t>(K[s]) + reach >= out.h[1] || static_cast<uint64_t>(K[s]) + reach >= out.h[2]) return;
+                step += kind[s] == 1 ? 255 : v[s] < 0 ? -v[s] : v[s];
+                from = static_cast<uint64_t>(K[s]) < from ? static_cast<uint64_t>(K[s]) : from;
+                to = static_cast<uint64_t>(K[s]) + reach > to ? static_cast<uint64_t>(K[s]) + reach : to;
             }
-            int64_t reach;
-            if (__builtin_mul_overflow(step, left, &reach) || __builtin_add_overflow(most, reach, &most) || __builtin_sub_overflow(least, reach, &least)) return;
+            // The counts there, once (the stores' ranges overlap: a palette's four, all of them).
+            for (uint64_t k = from; k <= to; k++) {
+                const int64_t now = counts[k];
+                most = now > most ? now : most, least = now < least ? now : least;
+            }
+            int64_t reachAll;
+            if (__builtin_mul_overflow(step, left, &reachAll) || __builtin_add_overflow(most, reachAll, &most) || __builtin_sub_overflow(least, reachAll, &least)) return;
             const uint8_t* x = a.bytes() + static_cast<uint64_t>(first) * width;
-            if (n == 4 && c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 1) {
-                // Four ones (a histogram's red, green, blue and alpha): their places held apart.
+            if (n == 4 && nt == 0 && skipOp == 0 && kind[0] == 0 && kind[1] == 0 && kind[2] == 0 && kind[3] == 0 && v[0] == 1 && v[1] == 1 && v[2] == 1 &&
+                v[3] == 1) {
+                // Four ones, each at its own field (a histogram): their places held apart.
                 int64_t *q0 = counts + K[0], *q1 = counts + K[1], *q2 = counts + K[2], *q3 = counts + K[3];
-                const uint64_t o0 = off[0], o1 = off[1], o2 = off[2], o3 = off[3];
+                const uint64_t o0 = static_cast<uint64_t>(own[0]), o1 = static_cast<uint64_t>(own[1]), o2 = static_cast<uint64_t>(own[2]),
+                               o3 = static_cast<uint64_t>(own[3]);
                 for (int64_t j = 0; j < left; j++) {
                     const uint8_t* p = x + static_cast<uint64_t>(j) * width;
                     q0[p[o0]]++;
@@ -2820,9 +2845,74 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 }
                 break;
             }
+            // The tables hold the key shifted down by its terms' least shift left (a key times four: 2).
+            uint64_t low = 31;
+            for (uint64_t k = 0; k < nt; k++) low = tshl[k] < low ? tshl[k] : low;
+            if (n == 4 && nt >= 1 && nt <= 3 && own[0] < 0 && own[1] < 0 && own[2] < 0 && own[3] < 0 && (keyMost >> low) < 65536) {
+                // As below, each term's part of the key and the skip read from tables of the
+                // byte's 256 values (a stencil's stack holds them: under 2 KB), no shift or
+                // comparison for each pixel.
+                uint16_t part[3][256];
+                uint8_t skipped[256];
+                for (uint64_t k = 0; k < 3; k++)
+                    for (uint64_t b = 0; b < 256; b++) part[k][b] = k < nt ? static_cast<uint16_t>((b >> tshr[k]) << (tshl[k] - low)) : 0;
+                for (int64_t b = 0; b < 256; b++)
+                    skipped[b] = skipOp == 0 ? 0 : skipOp == 1 ? b < skipK : skipOp == 2 ? b <= skipK : skipOp == 3 ? b > skipK : skipOp == 4 ? b >= skipK : skipOp == 5 ? b == skipK : b != skipK;
+                const uint64_t o0 = toff[0], o1 = nt > 1 ? toff[1] : 0, o2 = nt > 2 ? toff[2] : 0, so = skipOp != 0 ? skipOff : 0;
+                int64_t *q0 = counts + K[0], *q1 = counts + K[1], *q2 = counts + K[2], *q3 = counts + K[3];
+                const uint64_t fo0 = kind[0] == 1 ? static_cast<uint64_t>(v[0]) : 0, fo1 = kind[1] == 1 ? static_cast<uint64_t>(v[1]) : 0;
+                const uint64_t fo2 = kind[2] == 1 ? static_cast<uint64_t>(v[2]) : 0, fo3 = kind[3] == 1 ? static_cast<uint64_t>(v[3]) : 0;
+                const int64_t mk0 = kind[0] == 1 ? 0xFF : 0, mk1 = kind[1] == 1 ? 0xFF : 0, mk2 = kind[2] == 1 ? 0xFF : 0, mk3 = kind[3] == 1 ? 0xFF : 0;
+                const int64_t ck0 = kind[0] == 1 ? 0 : v[0], ck1 = kind[1] == 1 ? 0 : v[1], ck2 = kind[2] == 1 ? 0 : v[2], ck3 = kind[3] == 1 ? 0 : v[3];
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + static_cast<uint64_t>(j) * width;
+                    if (skipped[p[so]]) continue;
+                    const uint64_t key = (static_cast<uint64_t>(part[0][p[o0]]) | part[1][p[o1]] | part[2][p[o2]]) << low;
+                    q0[key] += (static_cast<int64_t>(p[fo0]) & mk0) + ck0;
+                    q1[key] += (static_cast<int64_t>(p[fo1]) & mk1) + ck1;
+                    q2[key] += (static_cast<int64_t>(p[fo2]) & mk2) + ck2;
+                    q3[key] += (static_cast<int64_t>(p[fo3]) & mk3) + ck3;
+                }
+                break;
+            }
+            if (n == 4 && nt >= 1 && nt <= 3 && own[0] < 0 && own[1] < 0 && own[2] < 0 && own[3] < 0) {
+                // Four stores at the one shared key (a palette's sums and count): no loop over
+                // them. A term past the key's own ones reads byte 0 and adds nothing (shifted out).
+                const uint64_t o0 = toff[0], o1 = nt > 1 ? toff[1] : 0, o2 = nt > 2 ? toff[2] : 0;
+                const uint64_t r0 = tshr[0], r1 = nt > 1 ? tshr[1] : 8, r2 = nt > 2 ? tshr[2] : 8;
+                const uint64_t l0 = tshl[0], l1 = nt > 1 ? tshl[1] : 0, l2 = nt > 2 ? tshl[2] : 0;
+                int64_t *q0 = counts + K[0], *q1 = counts + K[1], *q2 = counts + K[2], *q3 = counts + K[3];
+                // A store's v: the byte at its offset where it is a field (mask 0xFF), else the constant.
+                const uint64_t fo0 = kind[0] == 1 ? static_cast<uint64_t>(v[0]) : 0, fo1 = kind[1] == 1 ? static_cast<uint64_t>(v[1]) : 0;
+                const uint64_t fo2 = kind[2] == 1 ? static_cast<uint64_t>(v[2]) : 0, fo3 = kind[3] == 1 ? static_cast<uint64_t>(v[3]) : 0;
+                const int64_t mk0 = kind[0] == 1 ? 0xFF : 0, mk1 = kind[1] == 1 ? 0xFF : 0, mk2 = kind[2] == 1 ? 0xFF : 0, mk3 = kind[3] == 1 ? 0xFF : 0;
+                const int64_t ck0 = kind[0] == 1 ? 0 : v[0], ck1 = kind[1] == 1 ? 0 : v[1], ck2 = kind[2] == 1 ? 0 : v[2], ck3 = kind[3] == 1 ? 0 : v[3];
+                for (int64_t j = 0; j < left; j++) {
+                    const uint8_t* p = x + static_cast<uint64_t>(j) * width;
+                    if (skipOp != 0) {
+                        const int64_t f = p[skipOff];
+                        const bool holds = skipOp == 1 ? f < skipK : skipOp == 2 ? f <= skipK : skipOp == 3 ? f > skipK : skipOp == 4 ? f >= skipK : skipOp == 5 ? f == skipK : f != skipK;
+                        if (holds) continue;
+                    }
+                    const uint64_t key = (static_cast<uint64_t>(p[o0]) >> r0) << l0 | (static_cast<uint64_t>(p[o1]) >> r1) << l1 | (static_cast<uint64_t>(p[o2]) >> r2) << l2;
+                    q0[key] += (static_cast<int64_t>(p[fo0]) & mk0) + ck0;
+                    q1[key] += (static_cast<int64_t>(p[fo1]) & mk1) + ck1;
+                    q2[key] += (static_cast<int64_t>(p[fo2]) & mk2) + ck2;
+                    q3[key] += (static_cast<int64_t>(p[fo3]) & mk3) + ck3;
+                }
+                break;
+            }
             for (int64_t j = 0; j < left; j++) {
                 const uint8_t* p = x + static_cast<uint64_t>(j) * width;
-                for (uint64_t s = 0; s < n; s++) counts[K[s] + p[off[s]]] += c[s];
+                if (skipOp != 0) {
+                    const int64_t f = p[skipOff];
+                    const bool holds = skipOp == 1 ? f < skipK : skipOp == 2 ? f <= skipK : skipOp == 3 ? f > skipK : skipOp == 4 ? f >= skipK : skipOp == 5 ? f == skipK : f != skipK;
+                    if (holds) continue;
+                }
+                uint64_t key = 0;
+                for (uint64_t k = 0; k < nt; k++) key |= (static_cast<uint64_t>(p[toff[k]]) >> tshr[k]) << tshl[k];
+                for (uint64_t s = 0; s < n; s++)
+                    counts[K[s] + static_cast<int64_t>(own[s] >= 0 ? p[own[s]] : key)] += kind[s] == 1 ? static_cast<int64_t>(p[v[s]]) : v[s];
             }
             break;
         }

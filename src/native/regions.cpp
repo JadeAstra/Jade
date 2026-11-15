@@ -3809,6 +3809,18 @@ struct Region {
             e.cls = CI, e.op = '>', e.a = valueOf(fw, n[1]), e.b = kint(l.ki);
             return set(n[0], mk(e)), true;
         }
+        // A shift left by a constant ('<') and an or ('|') of two ints (2026-11-15: a palette's
+        // key, (r >> 3) << 10 | (g >> 3) << 5 | b >> 3, for kLoopWCountItems alone).
+        if (s == "shlik" && l.ki >= 0 && l.ki < 64) {
+            Expr e{Expr::Bin};
+            e.cls = CI, e.op = '<', e.a = valueOf(fw, n[1]), e.b = kint(l.ki);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "ori") {
+            Expr e{Expr::Bin};
+            e.cls = CI, e.op = '|', e.a = valueOf(fw, n[0]), e.b = valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
         if (s == "chkbyte") {
             Expr e{Expr::ToByte};
             e.a = valueOf(fw, n[0]);
@@ -3844,6 +3856,7 @@ struct Region {
         int baseMode = 0;                   // kLoopWSumField: base + counter, base none (0), a (1), a * b (2)
         const Expr* baseA = nullptr;
         const Expr* baseB = nullptr;
+        std::vector<Followed::Cmp> skips;  // kLoopWCountItems: an item skipped where its comparison holds (one at most)
         int outMode = 0;                    // kLoopWMixItems into another list: where it writes, as baseMode (words 56 to 60)
         const Expr* outA = nullptr;
         const Expr* outB = nullptr;
@@ -4039,17 +4052,45 @@ struct Region {
         return true;
     }
     // Byte fields of each item counted into a list of ints (kLoopWCountItems, 2026-11-15: a
-    // histogram, `levels[256 + px[p].green] += 1`): every store `counts[K + item.field] =
-    // counts[K + item.field] + c`, K and c constants, the fields bytes of one item of a list of a
-    // value type's items at a base plus the counter, up to eight stores, all into one list of
-    // ints. The template does them in order for each item, as the steps would. Words: 50 to 54
-    // where the items are read (fieldIndex), 128 how many stores, 129 the items' width, then three
-    // a store from 130: K, the field's offset, c.
+    // histogram, `levels[256 + px[p].green] += 1`; a palette's bins, `bins[32768 + key] += g` with
+    // `key = (r >> 3) << 10 | (g >> 3) << 5 | b >> 3`, see-through pixels skipped): every store
+    // `counts[K + key] = counts[K + key] + v`, K a constant, the key one byte field or the one
+    // key the stores share (byte fields each shifted right and then left, or'd together), v a
+    // constant or a byte field (`-=` a constant taken away); up to eight stores, all into one list
+    // of ints, the fields of one item of a list of a value type's items at a base plus the
+    // counter; an item skipped where a byte field compares so with a constant. The template does
+    // them in order for each item, as the steps would. Words: 50 to 54 where the items are read
+    // (fieldIndex); 128 how many stores, 129 the items' width; 130 how many terms the shared key
+    // has, three each from 131 (the field's offset, the shifts right and left); 143 the skip's
+    // comparison (0 none, else as a guard's), 144 its field's offset, 145 its constant; from 146
+    // four a store: K, its own field's offset or -1 for the shared key, 0 for a constant v or 1
+    // for a field, and v or the field's offset.
     bool countItems(const Followed& fw, Ahead& ah) {
-        if (fw.stores.empty() || fw.stores.size() > 8 || !fw.made.empty() || !fw.places.empty()) return false;
+        if (fw.stores.empty() || fw.stores.size() > 8 || !fw.made.empty() || !fw.places.empty() || ah.skips.size() > 1) return false;
         int out = -1, items = -1;
         const Expr* index = nullptr;
         int64_t width = 0;
+        // A byte field of the one item every field is of: its offset, or -1.
+        auto byteOf = [&](const Expr* f) -> int64_t {
+            if (f == nullptr || f->kind != Expr::Field || (f->ki & 0xFF) != 1) return -1;
+            if (items < 0) items = f->list, index = f->b, width = f->ki >> 32;
+            else if (f->list != items || !same(f->b, index) || (f->ki >> 32) != width) return -1;
+            const int64_t offset = (f->ki >> 8) & 0xFFFFFF;
+            return offset < width ? offset : -1;
+        };
+        // The shared key: an or of terms, each a byte field shifted right, then left.
+        const Expr* shared = nullptr;
+        std::vector<int64_t> terms;
+        std::function<bool(const Expr*)> keyTerms = [&](const Expr* e) -> bool {
+            if (e->kind == Expr::Bin && e->op == '|' && e->cls == CI) return keyTerms(e->a) && keyTerms(e->b);
+            int64_t shl = 0, shr = 0;
+            if (e->kind == Expr::Bin && e->op == '<' && e->b->kind == Expr::KInt) shl = e->b->ki, e = e->a;
+            if (e->kind == Expr::Bin && e->op == '>' && e->b->kind == Expr::KInt) shr = e->b->ki, e = e->a;
+            const int64_t offset = byteOf(e);
+            if (offset < 0 || shl < 0 || shl > 31 || shr < 0 || shr > 7 || terms.size() >= 12) return false;
+            terms.push_back(offset), terms.push_back(shr), terms.push_back(shl);
+            return true;
+        };
         std::vector<int64_t> words;
         for (const Followed::Store& st : fw.stores) {
             if (st.stem != "hsetwi" || st.index == nullptr || st.value == nullptr) return false;
@@ -4062,23 +4103,47 @@ struct Region {
                 else if (f->b->kind == Expr::KInt) K = f->b->ki, f = f->a;
                 else return false;
             }
-            if (f->kind != Expr::Field || (f->ki & 0xFF) != 1) return false;
-            if (items < 0) items = f->list, index = f->b, width = f->ki >> 32;
-            else if (f->list != items || !same(f->b, index) || (f->ki >> 32) != width) return false;
-            const int64_t offset = (f->ki >> 8) & 0xFFFFFF;
-            // The count plus a constant, or (`-=`) less one.
+            int64_t own = byteOf(f);
+            if (own < 0) {
+                if (shared == nullptr) {
+                    if (!keyTerms(f)) return false;
+                    shared = f;
+                } else if (!same(shared, f)) {
+                    return false;
+                }
+            }
+            // The count plus a constant or a byte field, or (`-=`) less a constant.
             const Expr* v = st.value;
             if (v->kind != Expr::Bin || (v->op != '+' && v->op != '-') || v->cls != CI) return false;
             const Expr* load = v->op == '-' || v->a->kind == Expr::Load ? v->a : v->b;
             const Expr* c = load == v->a ? v->b : v->a;
-            if (load->kind != Expr::Load || load->list != out || load->cls != CI || !same(load->b, st.index) || c->kind != Expr::KInt) return false;
-            if (K < 0 || K > (int64_t{1} << 40) || offset >= width || c->ki < -(1 << 20) || c->ki > (1 << 20)) return false;
-            words.push_back(K), words.push_back(offset), words.push_back(v->op == '-' ? -c->ki : c->ki);
+            if (load->kind != Expr::Load || load->list != out || load->cls != CI || !same(load->b, st.index)) return false;
+            int64_t kind, value;
+            if (c->kind == Expr::KInt) {
+                if (c->ki < -(1 << 20) || c->ki > (1 << 20)) return false;
+                kind = 0, value = v->op == '-' ? -c->ki : c->ki;
+            } else {
+                if (v->op != '+' || (value = byteOf(c)) < 0) return false;
+                kind = 1;
+            }
+            if (K < 0 || K > (int64_t{1} << 40)) return false;
+            words.push_back(K), words.push_back(own), words.push_back(kind), words.push_back(value);
+        }
+        // The skip: a byte field of the item against a constant.
+        int64_t skip[3] = {0, 0, 0};
+        if (!ah.skips.empty()) {
+            const Followed::Cmp& g = ah.skips[0];
+            const int64_t offset = byteOf(g.a);
+            if (offset < 0 || g.b == nullptr || g.b->kind != Expr::KInt || g.op < 1 || g.op > 6) return false;
+            skip[0] = g.op, skip[1] = offset, skip[2] = g.b->ki;
         }
         if (items < 0 || items == out || width <= 0 || width > 0xFFFF || !fieldIndex(index, ah)) return false;
         ah.shape = 26;  // kLoopWCountItems
         ah.a = items, ah.out = out;
-        ah.mixWords = {static_cast<int64_t>(fw.stores.size()), width};
+        ah.mixWords.assign(18, 0);
+        ah.mixWords[0] = static_cast<int64_t>(fw.stores.size()), ah.mixWords[1] = width, ah.mixWords[2] = static_cast<int64_t>(terms.size() / 3);
+        for (size_t k = 0; k < terms.size(); k++) ah.mixWords[3 + k] = terms[k];
+        ah.mixWords[15] = skip[0], ah.mixWords[16] = skip[1], ah.mixWords[17] = skip[2];
         ah.mixWords.insert(ah.mixWords.end(), words.begin(), words.end());
         return true;
     }
@@ -4458,6 +4523,40 @@ struct Region {
                     }
                 }
             }
+            // A skip (2026-11-15): a jump on where a comparison does not hold, which falls into the
+            // loop's way back to its head where it does (`if (c.alpha < 128) { continue }`): the
+            // item left as it is, the rest of the body not done. kLoopWCountItems alone takes it.
+            if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && (last->stem.substr(4) == "ii" || last->stem.substr(4) == "ik") &&
+                last->jumpExit < 0 && last->jumpTo >= i + 2 && last->jumpTo < e) {
+                // The way there: instructions with no steps (the body's variables let go), then
+                // the way back alone.
+                const int at = last->jumpTo - 1;
+                const Result& back = results[static_cast<size_t>(at)];
+                const Result& end = results[static_cast<size_t>(e)];
+                bool loopsBack = in[static_cast<size_t>(at)].known && !back.island && back.ops.size() == 1 && back.ops[0].stem == "loopback" &&
+                                 !end.ops.empty() && end.ops.back().stem == "loopback" && back.ops[0].jumpTo == end.ops.back().jumpTo;
+                for (int u = i + 1; u < at && loopsBack; u++)
+                    loopsBack = in[static_cast<size_t>(u)].known && !results[static_cast<size_t>(u)].island && results[static_cast<size_t>(u)].ops.empty() &&
+                                results[static_cast<size_t>(u)].fallsThrough;
+                static const char* const ops[] = {"lt", "le", "gt", "ge", "eq", "ne"};
+                int op = 0;
+                for (int k = 0; k < 6; k++)
+                    if (last->stem.compare(2, 2, ops[k]) == 0) op = k + 1;
+                if (loopsBack && op != 0 && ah.skips.empty() && fw.stores.empty()) {
+                    for (size_t k = 0; k + 1 < r.ops.size(); k++) {
+                        const LOp& l = r.ops[k];
+                        if (l.jumpTo >= 0 || l.jumpExit >= 0 || !follow(fw, l)) return false;
+                        for (const Reg& d : l.defs) defined.insert(d);
+                    }
+                    Followed::Cmp g;
+                    g.op = op;
+                    g.a = valueOf(fw, last->named[0]);
+                    g.b = last->stem.substr(4) == "ik" ? kintOf(last->ki) : valueOf(fw, last->named[1]);
+                    ah.skips.push_back(g);
+                    i = last->jumpTo;
+                    continue;
+                }
+            }
             // A guard as one step (2026-11-13): a jump on where a comparison does not hold, which
             // falls into a way to a throw or a return where it does (`if (i >= n) { throw ... }`).
             if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && (last->stem.substr(4) == "ii" || last->stem.substr(4) == "ik") &&
@@ -4667,6 +4766,10 @@ struct Region {
         for (const auto& st : fw.stores)
             for (const Reg& d : defined)
                 if (usesReg(st.value, d) || usesReg(st.index, d)) return false;
+        // An item skipped: counting alone.
+        if (!ah.skips.empty())
+            return !ah.hasAcc && fw.heldWrites.empty() && ah.iterSlot < 0 && ah.guards.empty() && countItems(fw, ah) && !changed(ah.baseA) &&
+                   !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB));
         // Items compared until two differ (2026-11-14: an Image's ==), nothing else done: the
         // template moves on past those the same.
         if (ah.stopAt.listA >= 0) {
@@ -5141,12 +5244,14 @@ struct Region {
             const LOp& back = results[e].ops.back();
             const int h = back.jumpTo;
             if (h < 0 || static_cast<size_t>(h) >= e || (ins[static_cast<size_t>(h)].op != Op::RangeNext && ins[static_cast<size_t>(h)].op != Op::IterNextRef)) continue;
-            // Entered by falling in from the instruction before alone (or the region's start).
+            // Entered by falling in from the instruction before alone (or the region's start); a
+            // `continue` inside the body goes back to it too (2026-11-15: recognise takes one as a
+            // skip, and refuses any other).
             bool alone = true;
             for (size_t i = 0; i < ins.size() && alone; i++) {
                 if (!in[i].known || i == e) continue;
                 for (const LOp& l : results[i].ops)
-                    if (l.jumpTo == h) alone = false;
+                    if (l.jumpTo == h && !(l.stem == "loopback" && i > static_cast<size_t>(h) && i < e)) alone = false;
             }
             if (!alone) continue;
             if (h > 0) {

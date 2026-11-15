@@ -60,20 +60,22 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
   }
   if (few) { return colors }
   colors.clear()
-  // How many pixels have each colour, to 5 bits a channel, with their exact sums.
-  val binsGrid = Grid<int>(32768, 4)
-  val bins = __gridInto(binsGrid, 32768, 4)  // red's sums, green's, blue's, then the counts
+  // How many pixels have each colour, to 5 bits a channel, with their exact sums: a colour's
+  // four numbers side by side (red's sum, green's, blue's, the count), at four times its key, so
+  // that a pixel touches one place in memory, not four (native code's kLoopWCountItems).
+  val binsGrid = Grid<int>(32768 * 4, 1)
+  val bins = __gridInto(binsGrid, 32768 * 4, 1)
   for (i in 0 ..< px.size) {
     val c = px[i]
     if (c.alpha.toInt() < 128) { continue }
     val r = c.red.toInt()
     val g = c.green.toInt()
     val b = c.blue.toInt()
-    val key = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3)
-    bins[key] += r
-    bins[32768 + key] += g
-    bins[65536 + key] += b
-    bins[98304 + key] += 1
+    val at = (r >> 3) << 12 | (g >> 3) << 7 | (b >> 3) << 2
+    bins[at] += r
+    bins[1 + at] += g
+    bins[2 + at] += b
+    bins[3 + at] += 1
   }
   // The octree (all: a node's red sum, green's, blue's, count, level, leaf, joined, each `most`
   // apart), a node's parts in lists by its number: its sums and count, its eight children
@@ -88,7 +90,7 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
   var nodes = 1
   var leaves = 0
   for (key in 0 ..< 32768) {
-    val n = bins[98304 + key]
+    val n = bins[4 * key + 3]
     if (n == 0) { continue }
     val r = key >> 10
     val g = (key >> 5) & 31
@@ -105,9 +107,9 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
       }
       at = children[at * 8 + child]
     }
-    all[at] += bins[key]
-    all[most + at] += bins[32768 + key]
-    all[2 * most + at] += bins[65536 + key]
+    all[at] += bins[4 * key]
+    all[most + at] += bins[4 * key + 1]
+    all[2 * most + at] += bins[4 * key + 2]
     all[3 * most + at] += n
     all[5 * most + at] = 1
     leaves += 1
