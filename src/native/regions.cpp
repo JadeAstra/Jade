@@ -26,7 +26,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -3454,7 +3456,8 @@ struct Region {
         // field's width (high half), offset (bits 8 on) and size (1 a byte, 8 an int).
         // Unknown: a register set on one way through the body alone, which nothing may read after.
         // ToFloat, ToInt: an int as a float (cvtif), a float cut to a whole number (cvtfi).
-        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown, ToFloat, ToInt } kind;
+        // Floor: a float floored to a whole number (floori), an int.
+        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown, ToFloat, ToInt, Floor } kind;
         Cls cls = CI;
         Reg reg{0, CI};  // Inv
         int64_t ki = 0;  // KInt
@@ -3664,6 +3667,11 @@ struct Region {
         if (s == "cvtif" || s == "cvtfi") {  // d = s as a float, or cut to a whole number
             Expr e{s == "cvtif" ? Expr::ToFloat : Expr::ToInt};
             e.cls = s == "cvtif" ? CF : CI;
+            e.a = valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "floori") {  // d = s floored, an int (2026-11-15: bilinear sampling's Math.floor)
+            Expr e{Expr::Floor};
             e.a = valueOf(fw, n[1]);
             return set(n[0], mk(e)), true;
         }
@@ -3920,6 +3928,11 @@ struct Region {
         std::vector<int64_t> mixWords;  // kLoopWMixItems: words 96 on
         int64_t mixDivisor = 1;         // kLoopWMix: words 61 and 62
         const Expr* fromBase = nullptr;  // kLoopWCopyItems: where the items read start (baseA: where those written do)
+        int yMode = 0;                   // kLoopWSampleBilinear: where the y places are read, as baseMode (words 63 to 67)
+        const Expr* yA = nullptr;
+        const Expr* yB = nullptr;
+        const Expr* sizeW = nullptr;     // kLoopWSampleBilinear: the picture's width and height (words 130 to 133)
+        const Expr* sizeH = nullptr;
         // kLoopWSameItems: the two items compared, the template stopping before the first that
         // differ (the loop's own steps go on from there, into the way out they fall into).
         Followed::ItemCmp stopAt;
@@ -4265,6 +4278,161 @@ struct Region {
         ah.shape = 28;  // kLoopWBlendNormal
         ah.a = source, ah.out = st.list, ah.p1 = opacity;
         ah.mixWords = {made.global, made.cls, table};
+        return true;
+    }
+    // A formula to match an expression against (2026-11-15, bilinear sampling): a node of two
+    // sides (+ - * / and m min, M max), or of one (f as a float, i cut to an int, b as a byte, F
+    // floored); an int or a float constant; a byte field of an item four bytes wide of a list
+    // named so, at an index matching its one side; or any expression named so, the same each
+    // place it is named. Sums, products, min and max match either way round (the same either way
+    // round where no side is NaN: a template using one checks that as it runs).
+    struct Pat {
+        enum Kind { Any, Node, Int, Float, Field } kind = Node;
+        char op = 0;
+        std::string name;  // Any, Field: the expression's or the list's name
+        int64_t ki = 0;    // Int; Field: the byte's offset
+        double kf = 0;
+        std::shared_ptr<const Pat> a, b;
+    };
+    using PatP = std::shared_ptr<const Pat>;
+    static PatP patAny(const char* name) {
+        Pat p;
+        p.kind = Pat::Any, p.name = name;
+        return std::make_shared<const Pat>(p);
+    }
+    static PatP patInt(int64_t v) {
+        Pat p;
+        p.kind = Pat::Int, p.ki = v;
+        return std::make_shared<const Pat>(p);
+    }
+    static PatP patFloat(double v) {
+        Pat p;
+        p.kind = Pat::Float, p.kf = v;
+        return std::make_shared<const Pat>(p);
+    }
+    static PatP patOp(char op, PatP a, PatP b = nullptr) {
+        Pat p;
+        p.op = op, p.a = std::move(a), p.b = std::move(b);
+        return std::make_shared<const Pat>(p);
+    }
+    static PatP patField(const char* list, PatP index, int64_t offset) {
+        Pat p;
+        p.kind = Pat::Field, p.name = list, p.a = std::move(index), p.ki = offset;
+        return std::make_shared<const Pat>(p);
+    }
+    struct Bound {
+        std::map<std::string, const Expr*> exprs;
+        std::map<std::string, int> lists;
+        int64_t budget = 1000000;  // steps it may take, trying sides both ways round
+    };
+    static bool matches(const Pat& p, const Expr* e, Bound& b) {
+        if (e == nullptr || --b.budget < 0) return false;
+        switch (p.kind) {
+            case Pat::Any: {
+                auto at = b.exprs.find(p.name);
+                if (at != b.exprs.end()) return same(at->second, e);
+                b.exprs[p.name] = e;
+                return true;
+            }
+            case Pat::Int: return e->kind == Expr::KInt && e->ki == p.ki;
+            case Pat::Float: return e->kind == Expr::KFloat && std::memcmp(&e->kf, &p.kf, 8) == 0;
+            case Pat::Field: {
+                if (e->kind != Expr::Field || (e->ki & 0xFF) != 1 || (e->ki >> 32) != 4 || ((e->ki >> 8) & 0xFFFFFF) != p.ki) return false;
+                auto at = b.lists.find(p.name);
+                if (at != b.lists.end() && at->second != e->list) return false;
+                b.lists[p.name] = e->list;
+                return matches(*p.a, e->b, b);
+            }
+            case Pat::Node: break;
+        }
+        switch (p.op) {
+            case 'f': return e->kind == Expr::ToFloat && matches(*p.a, e->a, b);
+            case 'i': return e->kind == Expr::ToInt && matches(*p.a, e->a, b);
+            case 'b': return e->kind == Expr::ToByte && matches(*p.a, e->a, b);
+            case 'F': return e->kind == Expr::Floor && matches(*p.a, e->a, b);
+            default: break;
+        }
+        const bool minMax = p.op == 'm' || p.op == 'M';
+        if (minMax ? e->kind != (p.op == 'm' ? Expr::Min : Expr::Max) : (e->kind != Expr::Bin || e->op != p.op)) return false;
+        Bound before = b;
+        if (matches(*p.a, e->a, b) && matches(*p.b, e->b, b)) return true;
+        if (p.op == '-' || p.op == '/') return false;
+        const int64_t budget = b.budget;
+        b = std::move(before);
+        b.budget = budget;
+        return matches(*p.a, e->b, b) && matches(*p.b, e->a, b);
+    }
+    // Bilinear sampling of a row (kLoopWSampleBilinear, 2026-11-15: image.ww's __sampleBilinear,
+    // a transformed picture's pixels): with x and y floats of a list at a base plus the counter
+    // (the item skipped where x is less than a constant), the four pixels round (x, y) of a
+    // picture w by h, each place held to it, mixed by x's and y's parts past their floors, each
+    // part times alpha / 255, then as image.ww's __premultipliedColor makes a colour of them, set
+    // at a base plus the counter of another list. Words: 50 to 54 where x is read, 56 to 60
+    // where the colour is set, 63 to 67 where y is read, 97 and 98 the class Color(...) calls,
+    // 7 the skip's constant, 130 and 131 w, 132 and 133 h.
+    bool sampleBilinear(const Followed& fw, Ahead& ah) {
+        if (fw.stores.size() != 1 || fw.stores[0].stem != "hsetsm" || ah.skips.size() != 1) return false;
+        const Followed::Store& st = fw.stores[0];
+        auto madeAt = fw.made.find(st.source);
+        if (madeAt == fw.made.end()) return false;
+        const Followed::Made& made = madeAt->second;
+        if ((static_cast<uint64_t>(st.what) >> 32) != static_cast<uint64_t>(made.id) || ((static_cast<uint64_t>(st.what) >> 24) & 0xFF) != 4 || st.width != 4)
+            return false;
+        const Expr* lanes[4] = {nullptr, nullptr, nullptr, nullptr};
+        const Expr* v = made.bytes;
+        while (v->kind == Expr::Bin && v->op == 'p') {
+            if (v->ki % 8 != 0 || v->ki < 0 || v->ki > 24 || lanes[v->ki / 8] != nullptr) return false;
+            lanes[v->ki / 8] = v->b;
+            v = v->a;
+        }
+        if (v->kind != Expr::KInt || v->ki != 0) return false;
+        // The formula, as image.ww writes it.
+        const PatP x = patAny("x"), y = patAny("y"), w = patAny("w"), h = patAny("h");
+        const PatP fx = patOp('F', x), fy = patOp('F', y);
+        const PatP u = patOp('-', x, patOp('f', fx)), t = patOp('-', y, patOp('f', fy));
+        auto held = [&](PatP i, PatP top) { return patOp('m', patOp('M', std::move(i), patInt(0)), patOp('-', std::move(top), patInt(1))); };
+        const PatP x0 = held(fx, w), x1 = held(patOp('+', fx, patInt(1)), w);
+        const PatP y0 = patOp('*', held(fy, h), w), y1 = patOp('*', held(patOp('+', fy, patInt(1)), h), w);
+        const PatP at[4] = {patOp('+', y0, x0), patOp('+', y0, x1), patOp('+', y1, x0), patOp('+', y1, x1)};
+        PatP al[4], k[4];
+        for (int q = 0; q < 4; q++) al[q] = patOp('f', patField("px", at[q], 3)), k[q] = patOp('/', al[q], patFloat(255.0));
+        const PatP su = patOp('-', patFloat(1.0), u), st1 = patOp('-', patFloat(1.0), t);
+        auto mixed = [&](PatP p0, PatP p1, PatP p2, PatP p3) {
+            return patOp('+', patOp('*', patOp('+', patOp('*', p0, su), patOp('*', p1, u)), st1), patOp('*', patOp('+', patOp('*', p2, su), patOp('*', p3, u)), t));
+        };
+        auto part = [&](int c) {
+            PatP p[4];
+            for (int q = 0; q < 4; q++) p[q] = patOp('*', patOp('f', patField("px", at[q], c)), k[q]);
+            return mixed(p[0], p[1], p[2], p[3]);
+        };
+        const PatP a = patOp('m', patFloat(255.0), patOp('M', patFloat(0.0), mixed(al[0], al[1], al[2], al[3])));
+        const PatP ab = patOp('i', patOp('+', a, patFloat(0.5)));
+        const PatP mul = patOp('*', patOp('f', patOp('m', patInt(1), ab)), patOp('/', patFloat(255.0), patOp('M', a, patFloat(1.0e-300))));
+        auto byteOf = [&](PatP p) { return patOp('b', patOp('i', patOp('m', patFloat(255.0), patOp('M', patFloat(0.0), patOp('+', std::move(p), patFloat(0.5)))))); };
+        Bound b;
+        for (int c = 0; c < 4; c++)
+            if (!matches(c < 3 ? *byteOf(patOp('*', part(c), mul)) : *patOp('b', ab), lanes[c], b)) return false;
+        // The skip: x below a constant.
+        const Followed::Cmp& g = ah.skips[0];
+        if (g.op != 1 || !same(g.a, b.exprs["x"]) || g.b == nullptr || g.b->kind != Expr::KFloat) return false;
+        // x and y floats of one list at a base plus the counter; w and h the same each time round;
+        // the picture's list neither that nor the one set.
+        const Expr* ex = b.exprs["x"];
+        const Expr* ey = b.exprs["y"];
+        const Expr* ew = b.exprs["w"];
+        const Expr* eh = b.exprs["h"];
+        const int px = b.lists.count("px") != 0 ? b.lists["px"] : -1;
+        if (ex == nullptr || ey == nullptr || ex->kind != Expr::Load || ey->kind != Expr::Load || ex->cls != CF || ex->list != ey->list || !fixedOperand(ew) ||
+            !fixedOperand(eh) || px < 0 || px == st.list || px == ex->list || ex->list == st.list)
+            return false;
+        Ahead out, ya;
+        if (!fieldIndex(ex->b, ah) || !fieldIndex(ey->b, ya) || !fieldIndex(st.index, out)) return false;
+        ah.outMode = out.baseMode, ah.outA = out.baseA, ah.outB = out.baseB;
+        ah.yMode = ya.baseMode, ah.yA = ya.baseA, ah.yB = ya.baseB;
+        ah.shape = 29;  // kLoopWSampleBilinear
+        ah.a = ex->list, ah.b = px, ah.out = st.list, ah.sizeW = ew, ah.sizeH = eh;
+        ah.mixWords = {made.global, made.cls};
+        std::memcpy(&ah.words[0], &g.b->kf, 8);
         return true;
     }
     // Byte fields of each item counted into a list of ints (kLoopWCountItems, 2026-11-15: a
@@ -4983,11 +5151,12 @@ struct Region {
         for (const auto& st : fw.stores)
             for (const Reg& d : defined)
                 if (usesReg(st.value, d) || usesReg(st.index, d)) return false;
-        // An item skipped: counting alone.
+        // An item skipped: counting, the normal blend or bilinear sampling alone.
         if (!ah.skips.empty())
-            return !ah.hasAcc && fw.heldWrites.empty() && ah.iterSlot < 0 && ah.guards.empty() && (countItems(fw, ah) || blendNormal(fw, ah)) &&
+            return !ah.hasAcc && fw.heldWrites.empty() && ah.iterSlot < 0 && ah.guards.empty() && (countItems(fw, ah) || blendNormal(fw, ah) || sampleBilinear(fw, ah)) &&
                    !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) && !changed(ah.outA) &&
-                   !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)) && !changed(ah.p1);
+                   !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)) && !changed(ah.p1) && !changed(ah.yA) && !changed(ah.yB) &&
+                   !written(plusOf(ah.yA)) && !written(plusOf(ah.yB)) && !changed(ah.sizeW) && !changed(ah.sizeH) && !written(ah.sizeW) && !written(ah.sizeH);
         // Items compared until two differ (2026-11-14: an Image's ==), nothing else done: the
         // template moves on past those the same.
         if (ah.stopAt.listA >= 0) {
@@ -5312,7 +5481,16 @@ struct Region {
                 return operandWords(at, k == e->a ? e->b : e->a, plus + k->ki);
             }
             if (e->kind == Expr::Held) return word(at, (e->op == 'b' ? 4 : 3) | static_cast<int64_t>(static_cast<uint64_t>(plus) << 16)), word(at + 1, e->ki);
-            return word(at, 2 | static_cast<int64_t>(static_cast<uint64_t>(plus) << 16)), store(at + 1, e->reg);
+            word(at, 2 | static_cast<int64_t>(static_cast<uint64_t>(plus) << 16));
+            // A register of a slot the loop never writes: read from there (2026-11-15), so that
+            // the template's words keep no register from being kept in its slot (the loop's own
+            // steps, which seldom run, may then hold more values than there are registers).
+            bool entered = e->reg.slot >= 0 && templateHead >= 0;
+            for (int u = templateHead; entered && u <= templateEnd; u++) entered = in[static_cast<size_t>(u)].kind(e->reg.slot).bits == kEntry;
+            if (!entered) return store(at + 1, e->reg);
+            LOp l;
+            l.stem = "ctxsloti", l.slot = at + 1, l.slot2 = e->reg.slot;
+            ops.push_back(l);
         };
         word(16, static_cast<int64_t>(ah.guards.size()));
         for (size_t g = 0; g < ah.guards.size(); g++) {
@@ -5382,6 +5560,20 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 29) {
+            word(50, ah.baseMode);
+            if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
+            if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
+            word(56, ah.outMode);
+            if (ah.outMode >= 1) operandWords(57, ah.outA, 0);
+            if (ah.outMode == 2) operandWords(59, ah.outB, 0);
+            word(63, ah.yMode);
+            if (ah.yMode >= 1) operandWords(64, ah.yA, 0);
+            if (ah.yMode == 2) operandWords(66, ah.yB, 0);
+            word(97, ah.mixWords[0]), word(98, ah.mixWords[1]);
+            operandWords(130, ah.sizeW, 0);
+            operandWords(132, ah.sizeH, 0);
         }
         if (ah.shape == 28) {
             word(50, ah.baseMode);
@@ -5734,9 +5926,22 @@ struct Region {
                 live.insert(l->uses.begin(), l->uses.end());
                 for (const Reg& u : l->named) note(u);
             }
-            for (const ExitPoint& e : r.exits)
-                for (const LOp& l : e.stores)
-                    for (const Reg& u : l.named) note(u);
+            // A way out's own steps, backwards too (2026-11-15): a value loaded from its cell
+            // (spillHome) meets what the stores after it write back, or its register could be
+            // one of theirs, overwritten before they store it (a NaN's floori leaving with the
+            // stack's copy of x in the register y was loaded into: the VM floored y).
+            for (const ExitPoint& e : r.exits) {
+                std::set<Reg> wanted;
+                for (auto l = e.stores.rbegin(); l != e.stores.rend(); ++l) {
+                    for (const Reg& d : l->defs) {
+                        note(d);
+                        for (const Reg& x : wanted) meet(d, x);
+                    }
+                    for (const Reg& d : l->defs) wanted.erase(d);
+                    wanted.insert(l->uses.begin(), l->uses.end());
+                    for (const Reg& u : l->named) note(u);
+                }
+            }
         }
         // The order (Chaitin's, as Briggs has it): one clashing with fewer than there are
         // registers set aside, those it meets then clashing with one fewer, and again; where
@@ -6378,6 +6583,8 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         a.at(o.label);
         for (const LOp& l : o.exit->stores) {
             Step& st = add(r.name(l));
+            // (A dump shows each store's slot, and where the VM goes on: the instruction and the top.)
+            if (names != nullptr) names->back() += "@" + std::to_string(l.slot) + (l.slot2 ? ":" + std::to_string(l.slot2) : std::string());
             st.slot = l.slot;
             st.slot2 = l.slot2;
         }
@@ -6385,6 +6592,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
             loads(a, r, o.exit->toEntry, names, leaveAt(o.exit->toEntry));
             add("jump").jump = labels[static_cast<size_t>(o.exit->toEntry)];
         } else {
+            if (names != nullptr) names->push_back("[to " + std::to_string(o.exit->at) + " top " + std::to_string(o.exit->state.top) + "]");
             add("ret").ret = static_cast<int64_t>(o.exit->at) | (static_cast<int64_t>(o.exit->state.top) << 32) |
                              (o.exit->miss ? (int64_t{1} << 48) : 0);
         }

@@ -2005,7 +2005,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -3027,6 +3027,82 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             break;
         }
+        case kLoopWSampleBilinear: {
+            // Bilinear sampling of a row (regions.cpp, sampleBilinear, says the formula and the
+            // words): x and y each a float of `a`, the pixels read from `b`'s (w by h), the colour
+            // set in `out`'s; every operation in the steps' order, so the same pixels. x and y
+            // past an int's range stop it there, for floori's steps to leave by. No side of a min
+            // or a max is ever NaN: x and y are numbers there, and the rest is made from them and
+            // bytes.
+            static_assert(kLoopWSampleBilinear == 29, "regions.cpp's ah.shape 29");
+            if (!a.ok() || a.kind() != 2 || !b.ok() || b.kind() <= 3 || !out.ok() || out.kind() <= 3 || b.h[0] == out.h[0]) return;
+            const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
+            if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
+            int64_t xb = 0, yb = 0, ob = 0, w = 0, h = 0;
+            if (!itemBase(ctx, xb) || !itemBase(ctx, yb, 63) || !itemBase(ctx, ob, 56) || !operand(ctx, t[130], t[131], 0, w) ||
+                !operand(ctx, t[132], t[133], 0, h))
+                return;
+            // Every place held to the picture is in it.
+            if (w < 1 || h < 1 || w > (int64_t{1} << 31) || h > (int64_t{1} << 31) || static_cast<uint64_t>(w * h) > b.h[1]) return;
+            int64_t xFirst, xLast, yFirst, yLast, oFirst, oLast;
+            if (__builtin_add_overflow(xb, next, &xFirst) || __builtin_add_overflow(xb, end - 1, &xLast) || __builtin_add_overflow(yb, next, &yFirst) ||
+                __builtin_add_overflow(yb, end - 1, &yLast) || __builtin_add_overflow(ob, next, &oFirst) || __builtin_add_overflow(ob, end - 1, &oLast) ||
+                xFirst < 0 || yFirst < 0 || oFirst < 0 || static_cast<uint64_t>(xLast) >= a.h[1] || static_cast<uint64_t>(yLast) >= a.h[1] ||
+                static_cast<uint64_t>(oLast) >= out.h[1] || static_cast<uint64_t>(oLast) >= out.h[2])
+                return;
+            const double* xs = a.floats() + xFirst;
+            const double* ys = a.floats() + yFirst;
+            const uint8_t* px = b.bytes();
+            uint8_t* dp = out.bytes() + static_cast<uint64_t>(oFirst) * 4;
+            const double skipBelow = c1;
+            {
+#pragma clang fp contract(off)
+                auto floored = [](double v) {  // as floori
+                    const int64_t c = static_cast<int64_t>(v);
+                    return c - (static_cast<double>(c) > v);
+                };
+                auto heldAt = [](int64_t v, int64_t top) {  // min(max(v, 0), top)
+                    const int64_t m = v < 0 ? 0 : v;
+                    return m > top ? top : m;
+                };
+                auto part = [](double v) {  // min(255, max(0, v + 0.5)) cut, as a byte
+                    const double s = v + 0.5;
+                    const double m = 0.0 > s ? 0.0 : s;
+                    return static_cast<uint8_t>(static_cast<int64_t>(255.0 < m ? 255.0 : m));
+                };
+                for (int64_t j = 0; j < left; j++, dp += 4) {
+                    const double x = xs[j];
+                    if (x < skipBelow) continue;
+                    const double y = ys[j];
+                    if (!FITS_INT(x) || !FITS_INT(y)) {
+                        done = j;
+                        break;
+                    }
+                    const int64_t ix = floored(x), iy = floored(y);
+                    const double u = x - static_cast<double>(ix), tt = y - static_cast<double>(iy);
+                    const int64_t x0 = heldAt(ix, w - 1), x1 = heldAt(ix + 1, w - 1);
+                    const int64_t y0 = heldAt(iy, h - 1) * w, y1 = heldAt(iy + 1, h - 1) * w;
+                    const uint8_t* q0 = px + static_cast<uint64_t>(y0 + x0) * 4;
+                    const uint8_t* q1 = px + static_cast<uint64_t>(y0 + x1) * 4;
+                    const uint8_t* q2 = px + static_cast<uint64_t>(y1 + x0) * 4;
+                    const uint8_t* q3 = px + static_cast<uint64_t>(y1 + x1) * 4;
+                    const double su = 1.0 - u, st = 1.0 - tt;
+                    const double a0 = q0[3], a1 = q1[3], a2 = q2[3], a3 = q3[3];
+                    const double k0 = a0 / 255.0, k1 = a1 / 255.0, k2 = a2 / 255.0, k3 = a3 / 255.0;
+                    double c[3];
+                    for (int p = 0; p < 3; p++)
+                        c[p] = (static_cast<double>(q0[p]) * k0 * su + static_cast<double>(q1[p]) * k1 * u) * st +
+                               (static_cast<double>(q2[p]) * k2 * su + static_cast<double>(q3[p]) * k3 * u) * tt;
+                    const double al = (a0 * su + a1 * u) * st + (a2 * su + a3 * u) * tt;
+                    const double am = 0.0 > al ? 0.0 : al;
+                    const double ac = 255.0 < am ? 255.0 : am;
+                    const int64_t ab = static_cast<int64_t>(ac + 0.5);
+                    const double mul = static_cast<double>(ab < 1 ? ab : 1) * (255.0 / (ac < 1.0e-300 ? 1.0e-300 : ac));
+                    dp[0] = part(c[0] * mul), dp[1] = part(c[1] * mul), dp[2] = part(c[2] * mul), dp[3] = static_cast<uint8_t>(ab);
+                }
+            }
+            break;
+        }
         case kLoopFGather4: {
             // Four floats a pixel each plus a gathered float times a weight (regions.cpp,
             // gather4: scaling's across pass): out[o + p] = out[o + p] + line[4 idx[i] + p] * w[i]
@@ -3473,6 +3549,14 @@ STENCIL(ctxk) {
 STENCIL(ctxslot) {
     const Slot& s = (*slot2At(base));
     ctx->t[ww_slot] = s.kind == kKindFloat ? static_cast<uint64_t>(s.i) : 0x7FF8000000000000ull;
+    NEXT;
+}
+// An int operand's value (2026-11-15), the same from a slot the loop never writes: an int or a
+// byte there, or else its first word (operand's kind) one operand refuses.
+STENCIL(ctxsloti) {
+    const Slot& s = (*slot2At(base));
+    if (s.kind == kKindInt || s.kind == kKindByte) ctx->t[ww_slot] = static_cast<uint64_t>(s.i);
+    else ctx->t[ww_slot - 1] = 0xFF;
     NEXT;
 }
 #define CTXI(a, ...)                                                            \

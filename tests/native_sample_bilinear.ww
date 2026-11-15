@@ -1,0 +1,114 @@
+// Bilinear sampling of a row, as image.ww's __sampleBilinear (2026-11-15), which native code's
+// loop template kLoopWSampleBilinear does whole: places inside, on and past each edge, skipped
+// ones, NaN and places past an int's range (where the template stops and the steps go on), a
+// w by h larger than the list (the template refuses, the steps throw); and transformed pictures,
+// each interpolation. The same as the VM's; each run three times (a loop's region is made the
+// second time it starts). The NaN once went on as if a number: the steps' way out at its floori
+// loaded y from its cell into the register holding the stack's copy of x, and the VM floored y.
+inline fun held(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt().toByte()
+inline fun colour(r : float, g : float, b : float, alpha : float) : Color {
+  val a = Math.min(255.0, Math.max(0.0, alpha))
+  val ab = (a + 0.5).toInt()
+  val mul = Math.min(1, ab).toFloat() * (255.0 / Math.max(a, 1.0e-300))
+  return Color(held(r * mul), held(g * mul), held(b * mul), ab.toByte())
+}
+fun sample(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
+  for (ox in 0 ..< ow) {
+    val x = places[ox]
+    if (x < -1.0e299) { continue }
+    val y = places[ow + ox]
+    val fx = Math.floor(x)
+    val fy = Math.floor(y)
+    val u = x - fx
+    val t = y - fy
+    val ix = fx.toInt()
+    val iy = fy.toInt()
+    val x0 = Math.min(Math.max(ix, 0), w - 1)
+    val x1 = Math.min(Math.max(ix + 1, 0), w - 1)
+    val y0 = Math.min(Math.max(iy, 0), h - 1) * w
+    val y1 = Math.min(Math.max(iy + 1, 0), h - 1) * w
+    val q0 = px[y0 + x0]
+    val q1 = px[y0 + x1]
+    val q2 = px[y1 + x0]
+    val q3 = px[y1 + x1]
+    val su = 1.0 - u
+    val st = 1.0 - t
+    val a0 = q0.alpha.toInt().toFloat()
+    val a1 = q1.alpha.toInt().toFloat()
+    val a2 = q2.alpha.toInt().toFloat()
+    val a3 = q3.alpha.toInt().toFloat()
+    val k0 = a0 / 255.0
+    val k1 = a1 / 255.0
+    val k2 = a2 / 255.0
+    val k3 = a3 / 255.0
+    val r = (q0.red.toInt() * k0 * su + q1.red.toInt() * k1 * u) * st + (q2.red.toInt() * k2 * su + q3.red.toInt() * k3 * u) * t
+    val g = (q0.green.toInt() * k0 * su + q1.green.toInt() * k1 * u) * st + (q2.green.toInt() * k2 * su + q3.green.toInt() * k3 * u) * t
+    val b = (q0.blue.toInt() * k0 * su + q1.blue.toInt() * k1 * u) * st + (q2.blue.toInt() * k2 * su + q3.blue.toInt() * k3 * u) * t
+    val al = (a0 * su + a1 * u) * st + (a2 * su + a3 * u) * t
+    to[at + ox] = colour(r, g, b, al)
+  }
+}
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        val a = s % 5 == 0 ? 0 : (s % 5 == 1 ? 255 : (s >> 16) % 256)
+        px[x, y] = Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 13).toByteWrapped(), a.toByte())
+      }
+    }
+  }
+  return im
+}
+fun hashOf(cs : List<Color>) : int {
+  var t = 7
+  for (c in cs) { t = (t * 31 + c.red.toInt() * 1000003 + c.green.toInt() * 1009 + c.blue.toInt() * 17 + c.alpha.toInt()) & 0xfffffff }
+  return t
+}
+val im = picture(13, 9, 11)
+val px : List<Color> = List(13 * 9) { im.pixels[it % 13, it / 13] }
+val n = 60
+val places : open List<float> = List(2 * n) { 0.0 }
+for (i in 0 ..< n) {
+  places[i] = (i * 0.37) % 14.0 - 0.6
+  places[n + i] = (i * 0.61) % 10.0 - 0.7
+  if (i % 7 == 3) { places[i] = -1.0e300 }
+}
+val nan = 0.0 / 0.0
+for (round in 0 ..< 3) {
+  val to : open List<Color> = List(n + 5) { Color(1.toByte(), 2.toByte(), 3.toByte(), 4.toByte()) }
+  sample(px, 13, 9, places, n, 5, to)
+  var said = "${hashOf(to)}"
+  // NaN and 1e300: the steps stop there (floor of them throws), what came before set.
+  for (bad in [nan, 1.0e300]) {
+    val p2 = places.toList()
+    p2[20] = bad
+    val t2 : open List<Color> = List(n) { Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte()) }
+    try {
+      sample(px, 13, 9, p2, n, 0, t2)
+      said += " none"
+    } catch (e : Exception) {
+      said += " stopped ${hashOf(t2)}"
+    }
+  }
+  // A picture taller than its pixels: an item past the list.
+  val t3 : open List<Color> = List(n) { Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte()) }
+  try {
+    sample(px, 13, 10, places, n, 0, t3)
+    said += " none"
+  } catch (e : IndexOutOfBoundsException) {
+    said += " outside ${hashOf(t3)}"
+  }
+  // Through transformed, each interpolation.
+  for (tr in [Transform.rotation(0.3), Transform.scaling(2.5, 3.25), Transform.shearing(0.4, -0.2)]) {
+    for (ip in [Interpolation.nearest, Interpolation.bilinear, Interpolation.bicubic]) {
+      said += " ${im.transformed(tr, ip).hashCode()}"
+    }
+  }
+  print(said)
+}
+// expect: 34911128 stopped 230803612 stopped 230803612 outside 68010989 1942559774 725797352 124988457 218852322 576777336 1247787844 1996042369 724505110 104840900
+// expect: 34911128 stopped 230803612 stopped 230803612 outside 68010989 1942559774 725797352 124988457 218852322 576777336 1247787844 1996042369 724505110 104840900
+// expect: 34911128 stopped 230803612 stopped 230803612 outside 68010989 1942559774 725797352 124988457 218852322 576777336 1247787844 1996042369 724505110 104840900

@@ -1449,13 +1449,15 @@ fun __sampleAffine(px : List<Color>, w : int, h : int, m0 : float, m1 : float, m
   val wf = w.toFloat()
   val hf = h.toFloat()
   for (oy in 0 ..< oh) {
-    __samplePlaces(places, ow, oy.toFloat(), m0, m1, m2, m3, m4, m5, wf, hf)
+    __samplePlaces(places, ow, oy.toFloat(), m0, m1, m2, m3, m4, m5, wf, hf, to, oy * ow)
     if (interpolation == 0) { __sampleNearest(px, w, h, places, ow, oy * ow, to) }
     else if (interpolation == 1) { __sampleBilinear(px, w, h, places, ow, oy * ow, to) }
     else { __sampleBicubic(px, w, h, places, ow, oy * ow, to) }
   }
 }
-fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, wf : float, hf : float) {
+// Outside the picture the new pixel is see-through, set here; each sampler then skips it.
+fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, m1 : float, m2 : float, m3 : float, m4 : float, m5 : float, wf : float, hf : float,
+                   to : open List<Color>, at : int) {
   for (ox in 0 ..< ow) {
     val pxf = ox.toFloat()
     val x = m0 * pxf + m2 * py + m4
@@ -1465,16 +1467,14 @@ fun __samplePlaces(places : open List<float>, ow : int, py : float, m0 : float, 
       places[ow + ox] = y
     } else {
       places[ox] = -1.0e300
+      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
     }
   }
 }
 fun __sampleNearest(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
   for (ox in 0 ..< ow) {
     val x = places[ox]
-    if (x < -1.0e299) {
-      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
-      continue
-    }
+    if (x < -1.0e299) { continue }
     val y = places[ow + ox]
     val c = px[Math.min(Math.max(__rounded(y), 0), h - 1) * w + Math.min(Math.max(__rounded(x), 0), w - 1)]
     val a = c.alpha.toInt().toFloat()
@@ -1485,10 +1485,7 @@ fun __sampleNearest(px : List<Color>, w : int, h : int, places : List<float>, ow
 fun __sampleBilinear(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
   for (ox in 0 ..< ow) {
     val x = places[ox]
-    if (x < -1.0e299) {
-      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
-      continue
-    }
+    if (x < -1.0e299) { continue }
     val y = places[ow + ox]
     // The four pixels round it, each part multiplied by alpha / 255, alpha as it is; each product
     // a variable of its own, then summed as the C++ summed them.
@@ -1498,25 +1495,15 @@ fun __sampleBilinear(px : List<Color>, w : int, h : int, places : List<float>, o
     val t = y - fy
     val ix = fx.toInt()
     val iy = fy.toInt()
-    // Inside the picture, the four from one place; at its edges, each held to the picture.
-    var at0 = iy * w + ix
-    var at1 = at0 + 1
-    var at2 = at0 + w
-    var at3 = at2 + 1
-    if (ix < 0 or ix >= w - 1 or iy < 0 or iy >= h - 1) {
-      val x0 = Math.min(Math.max(ix, 0), w - 1)
-      val x1 = Math.min(Math.max(ix + 1, 0), w - 1)
-      val y0 = Math.min(Math.max(iy, 0), h - 1) * w
-      val y1 = Math.min(Math.max(iy + 1, 0), h - 1) * w
-      at0 = y0 + x0
-      at1 = y0 + x1
-      at2 = y1 + x0
-      at3 = y1 + x1
-    }
-    val q0 = px[at0]
-    val q1 = px[at1]
-    val q2 = px[at2]
-    val q3 = px[at3]
+    // The four pixels round it, each held to the picture (inside it, the same four unheld).
+    val x0 = Math.min(Math.max(ix, 0), w - 1)
+    val x1 = Math.min(Math.max(ix + 1, 0), w - 1)
+    val y0 = Math.min(Math.max(iy, 0), h - 1) * w
+    val y1 = Math.min(Math.max(iy + 1, 0), h - 1) * w
+    val q0 = px[y0 + x0]
+    val q1 = px[y0 + x1]
+    val q2 = px[y1 + x0]
+    val q3 = px[y1 + x1]
     val su = 1.0 - u
     val st = 1.0 - t
     val a0 = q0.alpha.toInt().toFloat()
@@ -1537,10 +1524,7 @@ fun __sampleBilinear(px : List<Color>, w : int, h : int, places : List<float>, o
 fun __sampleBicubic(px : List<Color>, w : int, h : int, places : List<float>, ow : int, at : int, to : open List<Color>) {
   for (ox in 0 ..< ow) {
     val x = places[ox]
-    if (x < -1.0e299) {
-      to[at + ox] = Color(0.toByte(), 0.toByte(), 0.toByte(), 0.toByte())
-      continue
-    }
+    if (x < -1.0e299) { continue }
     val y = places[ow + ox]
     // Catmull-Rom's weights each way, then the sixteen pixels round it, row by row.
     val fx = Math.floor(x)
@@ -1581,14 +1565,17 @@ fun __sampleBicubic(px : List<Color>, w : int, h : int, places : List<float>, ow
 // A number rounded half away from zero, as a whole number.
 inline fun __rounded(v : float) : int => v >= 0.0 ? (v + 0.5).toInt() : -((0.0 - v + 0.5).toInt())
 // A colour from parts multiplied by alpha / 255 and alpha: alpha held to 0 to 255 and rounded, the
-// rest divided by it and held and rounded the same way.
+// rest divided by it and held and rounded the same way; all of them 0 where alpha rounds to 0 (a
+// kept above 0 for the division there, whose result is then not used). With no branches, so that
+// native code's template kLoopWSampleBilinear sees the whole of it.
 inline fun __premultipliedColor(r : float, g : float, b : float, alpha : float) : Color {
-  val a = alpha < 0.0 ? 0.0 : (255.0 < alpha ? 255.0 : alpha)
-  val ab = __heldByte(a)
-  val mul = ab == 0.toByte() ? 0.0 : 255.0 / a
-  return Color(__heldByte(r * mul), __heldByte(g * mul), __heldByte(b * mul), ab)
+  val a = Math.min(255.0, Math.max(0.0, alpha))
+  val ab = (a + 0.5).toInt()
+  val mul = Math.min(1, ab).toFloat() * (255.0 / Math.max(a, 1.0e-300))
+  return Color(__heldByte(r * mul), __heldByte(g * mul), __heldByte(b * mul), ab.toByte())
 }
-inline fun __heldByte(v : float) : byte => v <= 0.0 ? 0.toByte() : (v >= 255.0 ? 255.toByte() : (v + 0.5).toInt().toByte())
+// A part rounded half away from zero and held from 0 to 255 (as numeric.ww's __colorPart).
+inline fun __heldByte(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt().toByte()
 
 // A picture as pixels in memory, for drawing it on an image: an Image as it is, or what another
 // kind gives as one (Jade's Surface).
