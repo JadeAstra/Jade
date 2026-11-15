@@ -1096,6 +1096,17 @@ void registerListMethods(VM& vm) {
         return Value::boolean(true);
     });
 
+    // ensureCapacity(capacity): room for that many items in all, so that adding up to that many
+    // makes no room as it goes; nothing added (2026-11-15: a list built by adding, copied at once
+    // by native code where it has room).
+    vm.defineMethod(T, "ensureCapacity", 1, 1, [](VM& vm, Value self, int, Value* args) -> Value {
+        const int64_t n = vm.toInt(args[0], "capacity");
+        if (n < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a capacity of " + std::to_string(n) + ": it cannot be negative");
+        if (n > (int64_t{1} << 40)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a capacity of " + std::to_string(n) + " items is more than a list can hold");
+        vm.listReserve(asList(self), static_cast<size_t>(n));
+        return Value::null();
+    });
+
     // addAll(items) at the end, or addAll(index, items). `items` is anything a for loop takes.
     vm.defineMethod(T, "addAll", 1, 2, [](VM& vm, Value self, int argc, Value* args) -> Value {
         ObjList* list = asList(self);

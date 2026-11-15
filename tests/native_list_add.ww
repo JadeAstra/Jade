@@ -1,0 +1,208 @@
+// A list's add in native code (2026-11-15): the item written at the end of the list's block where
+// it has room, the VM's add where it has none (which makes room), each time round. Ints, floats,
+// bytes (to a List<byte> and to a List<int>), constants, a value of a value type and an item of
+// another list (`to.add(from[i])`; with room made first by ensureCapacity, as many as there is
+// room for moved at once), an item of the list itself, a list added to while it is read
+// (floodRegion's), read through another name too, the true add gives, and lists the VM adds to
+// (nullable, of strings). The same as the VM's; each loop run three times (its region is
+// made the second time it starts).
+value Rgb(val r : byte, val g : byte, val b : byte)
+
+fun ints(n : int) : open List<int> {
+  val out : open List<int> = []
+  for (i in 0 ..< n) { out.add(i * 3 - 7) }
+  return out
+}
+fun floats(n : int) : List<float> {
+  val out : open List<float> = []
+  for (i in 0 ..< n) { out.add(i * 0.5 + 0.25) }
+  return out
+}
+fun bytes(n : int) : List<byte> {
+  val out : open List<byte> = []
+  for (i in 0 ..< n) { out.add((i % 256).toByte()) }
+  return out
+}
+fun bytesAsInts(n : int) : List<int> {
+  val out : open List<int> = []
+  for (i in 0 ..< n) { out.add((i % 200).toByte()) }
+  return out
+}
+fun constants(n : int) : string {
+  val a : open List<int> = []
+  val b : open List<float> = []
+  for (i in 0 ..< n) {
+    a.add(7)
+    b.add(1.5)
+  }
+  return "${a.size} ${a[n - 1]} ${b.size} ${b[n - 1]}"
+}
+fun values(n : int) : List<Rgb> {
+  val out : open List<Rgb> = []
+  for (i in 0 ..< n) {
+    val c = Rgb((i % 256).toByte(), (i * 7 % 256).toByte(), 9.toByte())
+    out.add(c)
+  }
+  return out
+}
+fun copied(from : List<Rgb>) : open List<Rgb> {
+  val to : open List<Rgb> = []
+  for (i in 0 ..< from.size) { to.add(from[i]) }
+  return to
+}
+// The same with room made first, for all of them or half (2026-11-15: as many as there is room
+// for moved at once, kLoopWAddItems; the rest one by one), from a base.
+fun copiedWithRoom(from : List<Rgb>, room : int, at : int, n : int) : open List<Rgb> {
+  val to : open List<Rgb> = []
+  to.ensureCapacity(room)
+  for (i in 0 ..< n) { to.add(from[at + i]) }
+  return to
+}
+// Each item added again at the end, read from the list itself, room made first.
+fun doubledWithRoom(xs : open List<Rgb>) : int {
+  val n = xs.size
+  xs.ensureCapacity(2 * n)
+  for (i in 0 ..< n) { xs.add(xs[i]) }
+  return xs.size
+}
+// Each item added again at the end, read from the list itself.
+fun doubled(xs : open List<Rgb>) : int {
+  val n = xs.size
+  for (i in 0 ..< n) { xs.add(xs[i]) }
+  return xs.size
+}
+fun doubledInts(xs : open List<int>) : int {
+  val n = xs.size
+  for (i in 0 ..< n) { xs.add(xs[i] * 2) }
+  return xs.size
+}
+// A list added to as it is read: the numbers reached from 1 by *2 and *3, below n.
+fun reached(n : int) : int {
+  val found : open List<int> = [1]
+  val seen = Bytes(n)
+  seen[1] = 1.toByte()
+  var next = 0
+  var sum = 0
+  while (next < found.size) {
+    val k = found[next]
+    next += 1
+    sum += k
+    if (k * 2 < n and seen[k * 2] == 0.toByte()) {
+      seen[k * 2] = 1.toByte()
+      found.add(k * 2)
+    }
+    if (k * 3 < n and seen[k * 3] == 0.toByte()) {
+      seen[k * 3] = 1.toByte()
+      found.add(k * 3)
+    }
+  }
+  return sum * 1000 + found.size
+}
+// Added to by one name, read by another.
+fun twoNames(n : int) : int {
+  val xs : open List<int> = []
+  val same = xs
+  var t = 0
+  for (i in 0 ..< n) {
+    xs.add(i)
+    t += same[i]
+  }
+  return t
+}
+// What add gives.
+fun gives(n : int) : int {
+  val xs : open List<int> = []
+  var t = 0
+  for (i in 0 ..< n) {
+    val ok = xs.add(i)
+    if (ok) { t += 1 }
+  }
+  return t
+}
+fun nullable(n : int) : string {
+  val xs : open List<int?> = []
+  for (i in 0 ..< n) { xs.add(i) }
+  return "${xs.size} ${xs[n - 1]}"
+}
+fun strings(n : int) : string {
+  val xs : open List<string> = []
+  for (i in 0 ..< n) { xs.add("s") }
+  return "${xs.size}"
+}
+fun sum(xs : List<int>) : int {
+  var t = 0
+  for (x in xs) { t += x }
+  return t
+}
+fun sumF(xs : List<float>) : float {
+  var t = 0.0
+  for (x in xs) { t += x }
+  return t
+}
+fun rgbSum(xs : List<Rgb>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) { t = t * 31 % 1000000007 + xs[i].r.toInt() + xs[i].g.toInt() * 3 + xs[i].b.toInt() * 5 }
+  return t
+}
+
+for (k in 0 ..< 3) {
+  val ns = ints(5000)
+  val fs = floats(3000)
+  val bs = bytes(3000)
+  val bi = bytesAsInts(3000)
+  print(ns.size, sum(ns), fs.size, sumF(fs), bs.size, bs[2999], bi.size, sum(bi))
+  print(constants(1000))
+  val vs = values(2000)
+  val cs = copied(vs)
+  print(vs.size, rgbSum(vs), cs.size, rgbSum(cs), cs == vs)
+  val ds : open List<Rgb> = copied(vs)
+  print(doubled(ds), rgbSum(ds))
+  val w1 = copiedWithRoom(vs, 2000, 0, 2000)
+  val w2 = copiedWithRoom(vs, 700, 100, 1500)
+  val w3 = copiedWithRoom(vs, 0, 1999, 1)
+  print(w1.size, rgbSum(w1), w1 == vs, w2.size, rgbSum(w2), w3.size, rgbSum(w3))
+  val dw : open List<Rgb> = copied(vs)
+  print(doubledWithRoom(dw), rgbSum(dw), rgbSum(dw) == rgbSum(ds))
+  val di : open List<int> = ints(1000)
+  print(doubledInts(di), sum(di))
+  print(reached(100000), twoNames(3000), gives(2000))
+  print(nullable(1000), strings(1000))
+}
+// ensureCapacity adds nothing; a negative capacity is refused.
+val roomy : open List<int> = [1, 2]
+roomy.ensureCapacity(100)
+print(roomy.size, roomy)
+try {
+  roomy.ensureCapacity(-1)
+} catch (e : IllegalArgumentException) {
+  print(e.message)
+}
+// expect: 5000 37457500 3000 2250000.0 3000 183 3000 298500
+// expect: 1000 7 1000 1.5
+// expect: 2000 395310725 2000 395310725 true
+// expect: 4000 345803747
+// expect: 2000 395310725 true 1500 108550783 1 759
+// expect: 4000 345803747 true
+// expect: 2000 4474500
+// expect: 1494589101 4498500 2000
+// expect: 1000 999 1000
+// expect: 5000 37457500 3000 2250000.0 3000 183 3000 298500
+// expect: 1000 7 1000 1.5
+// expect: 2000 395310725 2000 395310725 true
+// expect: 4000 345803747
+// expect: 2000 395310725 true 1500 108550783 1 759
+// expect: 4000 345803747 true
+// expect: 2000 4474500
+// expect: 1494589101 4498500 2000
+// expect: 1000 999 1000
+// expect: 5000 37457500 3000 2250000.0 3000 183 3000 298500
+// expect: 1000 7 1000 1.5
+// expect: 2000 395310725 2000 395310725 true
+// expect: 4000 345803747
+// expect: 2000 395310725 true 1500 108550783 1 759
+// expect: 4000 345803747 true
+// expect: 2000 4474500
+// expect: 1494589101 4498500 2000
+// expect: 1000 999 1000
+// expect: 2 [1, 2]
+// expect: a capacity of -1: it cannot be negative

@@ -855,6 +855,108 @@ I_A(PLACEI, x)
         NEXT;                                                                   \
     }
 I_A(SETSM, x)
+
+// ---- A list's add (2026-11-15) ----
+
+// Where list.add(x) puts its item without the VM: the list in slot ww_slot, packed as `store`
+// (and, for narrow items, as bytes), none null, its core's own, not frozen, not the object lent
+// to the section; `width` bytes left in its block's room past its end. The item is then written
+// there and the end moved on (added), as the VM's add does where its vector has room; a list
+// with none is the VM's, which makes room (and counts the memory it takes). Null for anything
+// else. The VM's add gives true, written to slot ww_slot2.
+INLINE uint8_t* roomToAdd(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack) {
+    if (s.kind != kKindObj) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) return nullptr;
+    pack = word<uint8_t*>(o + kListPack);
+    if (pack == nullptr || pack[kPackStore] != store || pack[kPackNullable] != 0) return nullptr;
+    if (store == kStoreNarrow && pack[kPackNarrow] != kNarrowByte) return nullptr;
+    uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8);
+    const uint8_t* const room = word<uint8_t*>(pack + kPackBlock + 16);
+    if (static_cast<uint64_t>(room - end) < word<uint32_t>(pack + kPackWidth)) return nullptr;
+    return end;
+}
+INLINE void added(uint8_t* pack) {
+    const uint32_t width = word<uint32_t>(pack + kPackWidth);
+    uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8) + width;
+    __builtin_memcpy(pack + kPackBlock + 8, &end, 8);
+    const uint64_t count = word<uint64_t>(pack + kPackCount) + 1;
+    __builtin_memcpy(pack + kPackCount, &count, 8);
+}
+// An int (ia) added to a List<int>.
+#define ADDLI(a, ...)                                                           \
+    STENCIL(pushi_##a) {                                                        \
+        uint8_t* pack;                                                          \
+        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreInts, pack);        \
+        if (at == nullptr) EXIT;                                                \
+        __builtin_memcpy(at, &i##a, 8);                                         \
+        added(pack);                                                            \
+        storeSlot2At(base, kKindBool, 1);                                       \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(pushb_##a) {                                                        \
+        uint8_t* pack;                                                          \
+        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreInts, pack);        \
+        if (at != nullptr) {                                                    \
+            __builtin_memcpy(at, &i##a, 8);                                     \
+        } else {                                                                \
+            at = roomToAdd((*slotAt(base)), ctx, kStoreNarrow, pack);           \
+            if (at == nullptr) EXIT;                                            \
+            *at = static_cast<uint8_t>(i##a);                                   \
+        }                                                                       \
+        added(pack);                                                            \
+        storeSlot2At(base, kKindBool, 1);                                       \
+        NEXT;                                                                   \
+    }
+I_A(ADDLI, x)
+// A float (fa) added to a List<float>.
+#define ADDLF(a, ...)                                                           \
+    STENCIL(pushf_##a) {                                                        \
+        uint8_t* pack;                                                          \
+        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreFloats, pack);      \
+        if (at == nullptr) EXIT;                                                \
+        { const double d_ = f##a; __builtin_memcpy(at, &d_, 8); }               \
+        added(pack);                                                            \
+        storeSlot2At(base, kKindBool, 1);                                       \
+        NEXT;                                                                   \
+    }
+F_A(ADDLF, x)
+// The value in slot (ww_slot2 & 0xFFFFFF) added to a list of the class ww_ki's items, kept in
+// the value itself (at most 8 bytes an item), none with a type of its own; true to slot
+// (ww_slot2 >> 24 & 0xFFFF). The value a Small one of the type numbered (ww_slot2 >> 40); or a
+// Ref, none deep, to an item of a list of the same class's items, which may be read here
+// (to.add(from[i])): its bytes copied. Anything else the VM's.
+STENCIL(pushsm) {
+    uint8_t* pack;
+    uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreItems, pack);
+    if (at == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
+        word<uint32_t>(pack + kPackTypeSlot) != 0)
+        EXIT;
+    const uint32_t width = word<uint32_t>(pack + kPackWidth);
+    if (width > 8) EXIT;
+    const uint64_t what = static_cast<uint64_t>(ww_slot2);
+    const Slot& v = base[what & 0xFFFFFF];
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v));
+    uint64_t bits = 0;
+    if ((head & 0xFF) == kKindSmall) {
+        if ((head >> 32) != what >> 40) EXIT;
+        bits = static_cast<uint64_t>(v.i);
+    } else {
+        if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
+        const uint8_t* from = v.p;
+        if (from[kObjType] != kTypeList || !mayRead(from, ctx)) EXIT;
+        const uint8_t* fromPack = packOf(from, kStoreItems);
+        if (fromPack == nullptr || word<int64_t>(fromPack + kPackItemClass) != ww_ki || word<const void*>(fromPack + kPackItemType) != nullptr ||
+            word<uint32_t>(fromPack + kPackTypeSlot) != 0 || (head >> 32) >= word<uint64_t>(fromPack + kPackCount))
+            EXIT;
+        const uint8_t* item = word<const uint8_t*>(fromPack + kPackBlock) + (head >> 32) * width;
+        for (uint32_t k = 0; k < width; k++) bits |= static_cast<uint64_t>(item[k]) << (8 * k);
+    }
+    for (uint32_t k = 0; k < width; k++) at[k] = static_cast<uint8_t>(bits >> (8 * k));
+    added(pack);
+    storeSlot(base, static_cast<int64_t>((what >> 24) & 0xFFFF), kKindBool, 1);
+    NEXT;
+}
 // OwnLocal where slot ww_slot is in memory (B2): a Ref, none deep, to an item of a list of the
 // class ww_ki's items kept in the value itself, none with a type of its own, made a copy of its
 // first (ww_slot2 & 0xFF) bytes, of the type numbered (ww_slot2 >> 32); anything but a Ref
@@ -1784,7 +1886,7 @@ F_W(HVALPF, x)
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
-    kLoopWCopyItems, kLoopWSameItems,
+    kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2476,6 +2578,47 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (int64_t j = 0; j < left; j++)
                     for (uint64_t k = 0; k < size; k++) o[static_cast<uint64_t>(j) * width + k] = x[static_cast<uint64_t>(j) * width + k];
             }
+            break;
+        }
+        case kLoopWAddItems: {
+            // Items of a value type added one by one at the end of a list, from a list looked at
+            // once at a base plus the counter (2026-11-15: to.add(from[i]), a grid's part and copy):
+            // words 63 to 65 the base read at (63: 0 none, 1 an operand), 55 the slot of the list
+            // added to, 56 the items' class, 57 the slot pushsm writes its true to. As many as the
+            // list has room for moved at once, and its end moved on; the rest left to the steps
+            // (pushsm leaves for the VM's add, which makes room). The list added to is no list
+            // looked at once (regions.cpp, lookAtListsOnce): its items are never those read here
+            // but where the same list is read through another name, and then only those it had.
+            if (!a.ok()) return;
+            int64_t from = 0, fromFirst, fromLast;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, from)) return;
+            if (__builtin_add_overflow(from, next, &fromFirst) || __builtin_add_overflow(from, end - 1, &fromLast) || fromFirst < 0 ||
+                static_cast<uint64_t>(fromLast) >= a.h[1])
+                return;
+            const uint8_t* fromList = reinterpret_cast<const uint8_t*>(a.h[3]);
+            const uint8_t* fromPack = packOf(fromList, kStoreItems);
+            uint8_t* pack;
+            uint8_t* at = roomToAdd(base[t[55]], ctx, kStoreItems, pack);
+            if (at == nullptr || fromPack == nullptr) return;
+            const int64_t cls = static_cast<int64_t>(t[56]);
+            if (word<int64_t>(pack + kPackItemClass) != cls || word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0 ||
+                word<int64_t>(fromPack + kPackItemClass) != cls || word<const void*>(fromPack + kPackItemType) != nullptr ||
+                word<uint32_t>(fromPack + kPackTypeSlot) != 0)
+                return;
+            const uint64_t width = word<uint32_t>(pack + kPackWidth);
+            if (width == 0 || width > 8 || word<uint32_t>(fromPack + kPackWidth) != width) return;
+            const uint64_t room = static_cast<uint64_t>(word<const uint8_t*>(pack + kPackBlock + 16) - at) / width;
+            done = static_cast<uint64_t>(left) < room ? left : static_cast<int64_t>(room);
+            if (done == 0) return;
+            const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(fromFirst) * width;
+            uint8_t* o = at;
+            uint64_t n = static_cast<uint64_t>(done) * width;
+            __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
+            uint8_t* const newEnd = at + static_cast<uint64_t>(done) * width;
+            __builtin_memcpy(pack + kPackBlock + 8, &newEnd, 8);
+            const uint64_t count = word<uint64_t>(pack + kPackCount) + static_cast<uint64_t>(done);
+            __builtin_memcpy(pack + kPackCount, &count, 8);
+            storeSlot(base, static_cast<int64_t>(t[57]), kKindBool, 1);
             break;
         }
         case kLoopWSameItems: {

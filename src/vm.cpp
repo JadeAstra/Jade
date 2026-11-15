@@ -3675,6 +3675,21 @@ void VM::listInsert(ObjList* list, size_t at, const Value* items, size_t n) {
 
 void VM::listAdd(ObjList* list, Value v) { listInsert(list, list->size(), &v, 1); }
 
+void VM::listReserve(ObjList* list, size_t n) {
+    if (!list->packed()) {
+        std::vector<Value>& values = list->values();
+        const size_t before = values.capacity();
+        values.reserve(n);
+        if (values.capacity() > before) account((values.capacity() - before) * sizeof(Value));
+        return;
+    }
+    PackedItems& pack = *list->pack;
+    const size_t before = pack.block.capacity();
+    pack.block.reserve(n * pack.width);
+    if (pack.nullable) pack.nulls.reserve((n + 63) / 64);
+    if (pack.block.capacity() > before) account(pack.block.capacity() - before);
+}
+
 // Takes `n` items away from position `at`, moving those after it back.
 void VM::listErase(ObjList* list, size_t at, size_t n) {
     if (!list->packed()) {

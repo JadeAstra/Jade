@@ -346,6 +346,14 @@ bool vectorAsRead() {
     const uint8_t* words[2];
     std::memcpy(words, reinterpret_cast<const uint8_t*>(&bytes) + layout::kBytesData, sizeof words);
     if (words[0] != bytes.data.data() || words[1] != bytes.data.data() + 3) return false;
+    // A packed list's block: its first item, its end, and the end of its room (a list's add in
+    // native code writes there and moves the end on, 2026-11-15).
+    PackedItems pack;
+    pack.block.reserve(10);
+    pack.block.resize(3);
+    const uint8_t* block[3];
+    std::memcpy(block, reinterpret_cast<const uint8_t*>(&pack) + layout::kPackBlock, sizeof block);
+    if (block[0] != pack.block.data() || block[1] != pack.block.data() + 3 || block[2] != pack.block.data() + pack.block.capacity()) return false;
     // A list's own items, where the list keeps them (a private member, so asked of the list).
     ObjList list;
     return reinterpret_cast<const uint8_t*>(&list.values()) - reinterpret_cast<const uint8_t*>(&list) == layout::kListItems;

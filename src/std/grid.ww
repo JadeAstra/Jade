@@ -233,11 +233,16 @@ class Grid<T> {
 
 // Cells of a grid `w` wide, `cw` by `ch` from column `x` and row `y`, onto the end of `to`, row
 // by row: a grid's part, a copy, rows and columns put in or taken out (2026-11-14; was C++'s,
-// __grid.region). Made first, each its type's zero, then set where they are, a plain loop that
-// native code moves at once for a grid of a value type (kLoopWCopyItems); whole rows in one run.
-// A grid of objects, which have no zero, has its cells added one by one.
+// __grid.region). Colours added (__colorRegion). Any other cells made first, each its type's
+// zero, then set where they are, a plain loop that native code moves at once for a grid of
+// numbers or of a value type (kLoopWCopyItems); whole rows in one run. A grid of objects, which
+// have no zero, has its cells added one by one.
 fun <T> __gridRegion(from : List<T>, w : int, x : int, y : int, cw : int, ch : int, to : open List<T>) {
   if (cw <= 0 or ch <= 0) { return }
+  if (from is List<Color>) {
+    __colorRegion(from as List<Color>, w, x, y, cw, ch, to as open List<Color>)
+    return
+  }
   val start = to.size
   if (!__grid.zeros(to, cw * ch)) {
     for (row in 0 ..< ch) {
@@ -269,6 +274,21 @@ fun <T> __gridRun(from : List<T>, fromAt : int, to : open List<T>, toAt : int, n
 }
 fun __colorRun(from : List<Color>, fromAt : int, to : open List<Color>, toAt : int, n : int) {
   for (i in 0 ..< n) { to[toAt + i] = from[fromAt + i] }
+}
+// A picture's part or copy (2026-11-15): room made for its pixels, then each row added, which
+// native code moves at once (kLoopWAddItems), so that each pixel is written once; whole rows in
+// one run. Apart from __gridRegion, as native code makes a function's region for the kind of list
+// it first meets.
+fun __colorRegion(from : List<Color>, w : int, x : int, y : int, cw : int, ch : int, to : open List<Color>) {
+  to.ensureCapacity(to.size + cw * ch)
+  if (cw == w) {
+    __colorAdd(from, y * w, to, cw * ch)
+    return
+  }
+  for (row in 0 ..< ch) { __colorAdd(from, (y + row) * w + x, to, cw) }
+}
+fun __colorAdd(from : List<Color>, at : int, to : open List<Color>, n : int) {
+  for (i in 0 ..< n) { to.add(from[at + i]) }
 }
 
 // A range of a grid's columns or rows, made plain and checked: the positions it covers.

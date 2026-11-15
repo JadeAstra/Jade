@@ -254,6 +254,10 @@ external fun <T> open List<T>.removeFirstOrNull() : T?
 external fun <T> open List<T>.removeLastOrNull() : T?
 // Takes out every item.
 external fun <T> open List<T>.clear()
+// Makes room for `capacity` items in all, adding none: adding up to that many then takes no new
+// room as it goes, and a loop adding them (`to.add(from[i])`) is done at once where native code
+// runs it. An IllegalArgumentException for a negative `capacity`.
+external fun <T> open List<T>.ensureCapacity(capacity : int)
 // True when an item is equal to `item`, compared with ==.
 external fun <T> List<T>.contains(item : any?) : bool
 // The position of the first item equal to `item`, or -1 where there is none.

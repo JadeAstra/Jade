@@ -1554,6 +1554,80 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::RInvoke: {  // u8 A, u8 B, u8 T, u8 S, u8 argc, u8 flags, u8 X1..X4, u16 name, u16 cache, i32 slow, i32 resume
+                // `list.add(x)` (2026-11-15): x written at the end of a packed list where its block
+                // has room (pushi, pushb, pushf, pushsm), the step checking the list is one of x's
+                // kind; anything else the VM's, the call made as before. Any other call the VM's.
+                const int a = u8(x, 0), argc = u8(x, 4), flags = u8(x, 5);
+                const Value& name = constant(u16(x, 10));
+                if (argc != 1 || !name.isObjType(ObjType::String) || asString(name)->utf8() != "add") island();
+                const int list = c.objectSlot(u8(x, 1));
+                const int xk = u8(x, 6);
+                const char* stem = nullptr;
+                Reg value{};
+                if (flags & 1) {
+                    const Value& v = constant(xk);
+                    if (v.isFloat()) {
+                        value = Reg{kScratchF, CF};
+                        c.op("setfk", {value}, {}, {value}).kf = v.as.d;
+                        stem = "pushf";
+                    } else if (v.isInt() || v.isByte()) {
+                        value = Reg{kScratchI, CI};
+                        c.op("setik", {value}, {}, {value}).ki = v.as.i;
+                        stem = v.isByte() ? "pushb" : "pushi";
+                    } else {
+                        island();
+                    }
+                } else if (const uint16_t w = static_cast<uint16_t>(s.kind(xk).bits & ~kEntry); w == kInt || w == kFloat || w == kByte) {
+                    value = c.read(xk, w == kFloat ? CF : CI, false);
+                    stem = w == kFloat ? "pushf" : w == kByte ? "pushb" : "pushi";
+                } else if (const ObjClass* const cls = valueClass(s, xk); cls != nullptr && s.kind(xk).bits != kWhole) {
+                    // A value of a value type: a Small one, or a Ref to an item (from[i]).
+                    const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+                    if (cls->smallId == 0 || cls->smallId >= (1u << 24) || layout == nullptr || layout->size > 8 || a > 0xFFFF) island();
+                    const int valueSlot = c.objectSlot(xk);
+                    // Slot A written by the step: a copy of it wanted is made first; the way out
+                    // keeps A as it was, which the VM's call reads (the list's own slot, maybe).
+                    const K before = s.kind(a);
+                    const bool had = s.kinds.find(a) != s.kinds.end();
+                    const int flag = s.flag;
+                    c.writeMemory(a);
+                    if (had) s.kinds[a] = before;
+                    else s.kinds.erase(a);
+                    s.flag = flag;
+                    LOp& l = c.op("pushsm");
+                    l.slot = list;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 40) | (static_cast<uint64_t>(a) << 24) |
+                                                   static_cast<uint64_t>(valueSlot));
+                    l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    c.leaves(l);
+                    c.write(a, K{kMem});
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                } else {
+                    // Not typed in the region (a parameter): an int or a float as the typed
+                    // instructions or the frame say, checked to be one.
+                    const Cls guessed = c.guess(xk);
+                    value = c.number(xk, guessed, true);
+                    stem = guessed == CF ? "pushf" : "pushi";
+                }
+                const K before = s.kind(a);
+                const bool had = s.kinds.find(a) != s.kinds.end();
+                const int flag = s.flag;
+                c.writeMemory(a);
+                if (had) s.kinds[a] = before;
+                else s.kinds.erase(a);
+                s.flag = flag;
+                LOp& l = c.op(stem, {value}, {value});
+                l.slot = list;
+                l.slot2 = a;
+                c.leaves(l);
+                c.write(a, K{kMem});
+                s.top = u8(x, 2);
+                c.fall(s);
+                return;
+            }
             case Op::WithDestinationAt:
                 // The place the call after it makes its value in: the VM's way of making it where it
                 // goes. A value the region makes (RCall) is put there by the SetIndex after; the VM,
@@ -3047,10 +3121,21 @@ struct Region {
                 steps.emplace_back(&l, root);
             }
         }
+        // A list added to (push...) is not looked at once: its count changes as the region runs.
+        // (Another slot holding the same list, looked at, sees fewer items than it has: those
+        // added are read by the VM, as items out of range are; nothing moves them meanwhile, as
+        // the region adds only where the list's block has room.)
+        std::set<int> addedTo;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops)
+                if (l.stem.rfind("push", 0) == 0) addedTo.insert(rootOf(i, static_cast<int>(l.slot)));
+        }
         // Never written in the region: as entered everywhere (a field's, as it is held).
         std::map<int, int> index;
         for (const auto& [root, kind] : kindOf) {
             if ((kind != 1 && kind != 2 && kind != 4 && kind != 8) || static_cast<int>(index.size()) == kRegionLists) continue;
+            if (addedTo.count(root) != 0) continue;
             if (kind == 8 && root < 0) continue;
             const ObjClass* const cls = kind >= 4 ? itemClass[root] : nullptr;
             const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
@@ -3204,6 +3289,7 @@ struct Region {
             const Expr* value;
             std::string stem;
             int64_t what = 0, width = 0, source = -1;  // hsetsm: what it is given, the items' width, the value's slot
+            int64_t cls = 0;                           // pushsm: the items' class (`list` the slot of the list added to)
         };
         std::vector<Store> stores;
         // A guard's comparison (2026-11-13): the last one followed, for a jump on its flag.
@@ -3400,6 +3486,17 @@ struct Region {
             Followed::Store st{static_cast<int>(l.slot), valueOf(fw, n[0]), nullptr, s};
             st.what = l.slot2, st.width = l.ki, st.source = from;
             fw.stores.push_back(st);
+            return true;
+        }
+        if (s == "pushsm") {
+            // An item of another list added at the end of the list in slot l.slot (2026-11-15:
+            // to.add(from[i])); the true it gives written to a slot of the stack's.
+            const int64_t from = l.slot2 & 0xFFFFFF;
+            if (fw.refs.count(from) == 0) return false;
+            Followed::Store st{static_cast<int>(l.slot), nullptr, nullptr, s};
+            st.what = l.slot2, st.source = from, st.cls = l.ki;
+            fw.stores.push_back(st);
+            fw.slots.push_back((l.slot2 >> 24) & 0xFFFF);
             return true;
         }
         if (s == "hiref") {
@@ -4196,26 +4293,26 @@ struct Region {
         // Items of a value type copied from one list to another (or along the same one), each at a
         // base plus the counter (2026-11-14: copy, crop and a grid's part, kLoopWCopyItems): moved at
         // once, the bytes the steps would move.
+        // The counter, or the counter plus what is the same each time round (an operand, or one
+        // plus a constant): the base, or null for none.
+        auto counterPlus = [&](const Expr* e, const Expr*& b) {
+            if (e == nullptr || e->cls != CI) return false;
+            if (e->kind == Expr::Counter) return b = nullptr, true;
+            if (e->kind != Expr::Bin || e->op != '+') return false;
+            const Expr* x = e->a->kind == Expr::Counter ? e->b : e->b->kind == Expr::Counter ? e->a : nullptr;
+            if (x == nullptr) return false;
+            const Expr* core = x;
+            if (x->kind == Expr::Bin && x->op == '+' && x->cls == CI) {
+                const Expr* k = x->a->kind == Expr::KInt ? x->a : x->b->kind == Expr::KInt ? x->b : nullptr;
+                if (k == nullptr || k->ki < -(int64_t{1} << 40) || k->ki > (int64_t{1} << 40)) return false;
+                core = k == x->a ? x->b : x->a;
+            }
+            if (!fixedOperand(core) || changed(core) || written(core)) return false;
+            return b = x, true;
+        };
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fw.refs.count(fw.stores[0].source) != 0) {
             const Followed::Store& st = fw.stores[0];
             const Followed::Ref from = fw.refs[st.source];
-            // The counter, or the counter plus what is the same each time round (an operand, or
-            // one plus a constant): the base, or null for none.
-            auto counterPlus = [&](const Expr* e, const Expr*& b) {
-                if (e == nullptr || e->cls != CI) return false;
-                if (e->kind == Expr::Counter) return b = nullptr, true;
-                if (e->kind != Expr::Bin || e->op != '+') return false;
-                const Expr* x = e->a->kind == Expr::Counter ? e->b : e->b->kind == Expr::Counter ? e->a : nullptr;
-                if (x == nullptr) return false;
-                const Expr* core = x;
-                if (x->kind == Expr::Bin && x->op == '+' && x->cls == CI) {
-                    const Expr* k = x->a->kind == Expr::KInt ? x->a : x->b->kind == Expr::KInt ? x->b : nullptr;
-                    if (k == nullptr || k->ki < -(int64_t{1} << 40) || k->ki > (int64_t{1} << 40)) return false;
-                    core = k == x->a ? x->b : x->a;
-                }
-                if (!fixedOperand(core) || changed(core) || written(core)) return false;
-                return b = x, true;
-            };
             const Expr* toBase = nullptr;
             const Expr* fromBase = nullptr;
             if (from.list >= 0 && from.width > 0 && from.width == st.width && counterPlus(st.index, toBase) && counterPlus(from.index, fromBase)) {
@@ -4223,6 +4320,23 @@ struct Region {
                 ah.out = st.list, ah.a = from.list;
                 ah.baseA = toBase, ah.fromBase = fromBase;
                 ah.copyWhat[0] = st.width, ah.copyWhat[1] = from.what, ah.copyWhat[2] = st.what;
+                return true;
+            }
+        }
+        // Items of a value type added one by one at the end of a list, from another list looked
+        // at once, at a base plus the counter (2026-11-15: to.add(from[i]); a grid's part and copy,
+        // its room made first): as many as the list has room for moved at once (kLoopWAddItems).
+        // The list added to is in a slot the region never writes (pushsm's own check, that it is
+        // a list of the class's items with room, made by the template for them all).
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "pushsm" && ah.iterSlot < 0 && fw.refs.count(fw.stores[0].source) != 0) {
+            const Followed::Store& st = fw.stores[0];
+            const Followed::Ref from = fw.refs[st.source];
+            const Expr* fromBase = nullptr;
+            if (from.list >= 0 && st.list >= 0 && untouched(st.list) && counterPlus(from.index, fromBase)) {
+                ah.shape = 22;  // kLoopWAddItems
+                ah.a = from.list;
+                ah.fromBase = fromBase;
+                ah.copyWhat[0] = st.list, ah.copyWhat[1] = st.cls, ah.copyWhat[2] = (st.what >> 24) & 0xFFFF;
                 return true;
             }
         }
@@ -4238,7 +4352,7 @@ struct Region {
         }
         if (fw.stores.size() != 1) return false;
         const Followed::Store& st = fw.stores[0];
-        if (st.index->kind != Expr::Counter || ah.iterSlot >= 0) return false;
+        if (st.index == nullptr || st.index->kind != Expr::Counter || ah.iterSlot >= 0) return false;  // (a pushsm has none)
         ah.out = st.list;
         const Expr* v = st.value;
         // A field of each item, a byte, into a list of bytes or ints at the same index (2026-11-13:
@@ -4453,6 +4567,11 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 22) {
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(55, ah.copyWhat[0]), word(56, ah.copyWhat[1]), word(57, ah.copyWhat[2]);
         }
         if (ah.shape == 20) {
             word(50, ah.baseA != nullptr ? 1 : 0);
@@ -5410,6 +5529,14 @@ bool mayDo(Op op) {
         default: return false;
     }
 }
+// The same of an instruction: a call the region makes itself (`list.add(x)`, 2026-11-15) too.
+bool mayDo(const FunctionProto& f, const Ins& x) {
+    if (x.op == Op::RInvoke && u8(x, 4) == 1 && u16(x, 10) < f.constants.size()) {
+        const Value& name = f.constants[u16(x, 10)];
+        if (name.isObjType(ObjType::String) && asString(name)->utf8() == "add") return true;
+    }
+    return mayDo(x.op);
+}
 
 // The loops of a function's run code: each Loop jumping back, with where it jumps.
 struct Candidate {
@@ -5499,8 +5626,8 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             int can = 0, cannot = 0;
             const std::vector<bool> ending = endingRuns(c.last - c.first + 1, [&](int i) { return all[static_cast<size_t>(c.first + i)].op; });
             for (int i = c.first; i <= c.last; i++)
-                if (!ending[static_cast<size_t>(i - c.first)]) (mayDo(all[static_cast<size_t>(i)].op) ? can : cannot)++;
-            if (!mayDo(all[static_cast<size_t>(c.first)].op) || can < 3 || cannot * 6 > can) {
+                if (!ending[static_cast<size_t>(i - c.first)]) (mayDo(f, all[static_cast<size_t>(i)]) ? can : cannot)++;
+            if (!mayDo(f, all[static_cast<size_t>(c.first)]) || can < 3 || cannot * 6 > can) {
                 if (dumping)
                     std::fprintf(stderr, "== %s: no region for the loop at %u: %d of its instructions the VM's, %d a region's\n", f.name.c_str(),
                                  all[static_cast<size_t>(c.first)].at, cannot, can);

@@ -544,7 +544,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
 <li><a href="#LineJoin"><code>LineJoin</code></a> (1)</li>
 <li><a href="#LinearGradient"><code>LinearGradient</code></a> (2)</li>
-<li><a href="#List.size"><code>List</code></a> (193)</li>
+<li><a href="#List.size"><code>List</code></a> (194)</li>
 <li><a href="#ListView"><code>ListView</code></a> (11)</li>
 <li><a href="#LocalDate"><code>LocalDate</code></a> (11)</li>
 <li><a href="#LocalDateTime"><code>LocalDateTime</code></a> (14)</li>
@@ -1001,6 +1001,9 @@ Range(10, 0, -3).toList()  // [10, 7, 4, 1]
 </div>
 <div class="entry" id="List.clear"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.clear()</code><a class="anchor" href="#List.clear">#</a>
 <p>Takes out every item.</p>
+</div>
+<div class="entry" id="List.ensureCapacity"><code class="sig">fun &lt;T&gt; open List&lt;T&gt;.ensureCapacity(capacity : int)</code><a class="anchor" href="#List.ensureCapacity">#</a>
+<p>Makes room for <code>capacity</code> items in all, adding none: adding up to that many then takes no new room as it goes, and a loop adding them (<code>to.add(from[i])</code>) is done at once where native code runs it. An IllegalArgumentException for a negative <code>capacity</code>.</p>
 </div>
 <div class="entry" id="List.contains"><code class="sig">fun &lt;T&gt; List&lt;T&gt;.contains(item : any?) : bool</code><a class="anchor" href="#List.contains">#</a>
 <p>True when an item is equal to <code>item</code>, compared with ==.</p>
@@ -3359,7 +3362,7 @@ image.save(FilePath(&quot;out.png&quot;))
 <p>The same for an image that stands for <code>width</code> by <code>height</code> units at <code>scale</code> pixels to the unit: what a window's picture is on a dense screen.</p>
 </div>
 <div class="entry member" id="Image.crop"><code class="sig">fun crop(x : int, y : int, w : int, h : int) : Image</code><a class="anchor" href="#Image.crop">#</a>
-<p>A part of it as an image of its own; what is outside the image is clear.</p>
+<p>A part of it as an image of its own; what is outside the image is clear. The part inside copied a row at a time (2026-11-14; was C++'s), each row one move in native code.</p>
 </div>
 <div class="entry member" id="Image.copy"><code class="sig">fun copy() : Image</code><a class="anchor" href="#Image.copy">#</a>
 <p>A new image of the same size with the same pixels, changed apart from this one. Its pixels copied once (2026-11-13: as a crop, a clear image was made first and then written over).</p>
@@ -4583,7 +4586,7 @@ val smooth = heights.convolve(Grid&lt;float&gt;(3, 3, fill = 1.0 / 9))
 <p>How the pixels' parts fall in each of <code>bins</code> equal parts of <code>from</code> to <code>to</code> (0 to 256, a bin a level, when they are null): four lists, red, green, blue, alpha. Auto-levels, equalising, counting colours.</p>
 </div>
 <div class="entry" id="Grid.regions-2"><code class="sig">fun Grid&lt;Color&gt;.regions(tolerance : int = 0, diagonal : bool = false) : Grid&lt;int&gt;</code><a class="anchor" href="#Grid.regions-2">#</a>
-<p>Every connected area of pixels numbered from 0, two neighbours in one area where no part of their colours (alpha too) differs by more than <code>tolerance</code>.</p>
+<p>Every connected area of pixels numbered from 0, in the order their first pixels come row by row, two neighbours in one area where no part of their colours (alpha too) differs by more than <code>tolerance</code>. (In WinterWolf since 2026-11-13, the numbers the C++ gave: neighbours joined as union-find, each area's root its first pixel.)</p>
 </div>
 <div class="entry" id="Grid.floodRegion-2"><code class="sig">fun Grid&lt;Color&gt;.floodRegion(x : int, y : int, tolerance : int = 0, diagonal : bool = false) : Mask</code><a class="anchor" href="#Grid.floodRegion-2">#</a>
 <p>The pixels joined to (x, y) through pixels whose colour differs from its own by no more than <code>tolerance</code> in any part: the magic wand, a flood fill's area.</p>

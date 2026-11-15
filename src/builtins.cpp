@@ -1425,7 +1425,7 @@ void registerBuiltins(VM& vm) {
 
     // For parallel sections: which methods change what they are called on, and which
     // built-in functions wait, or work on something the whole program has one of.
-    vm.markMutating(BuiltinType::List, {"removeAt", "remove", "clear", "reverse", "sort", "add", "addAll", "set",
+    vm.markMutating(BuiltinType::List, {"removeAt", "remove", "clear", "reverse", "sort", "add", "addAll", "set", "ensureCapacity",
                                         "removeFirst", "removeLast", "removeFirstOrNull", "removeLastOrNull", "fill", "sortBy",
                                         "sortByDescending", "replaceAll"});
     vm.markMutating(BuiltinType::Map, {"remove", "clear", "put", "set"});

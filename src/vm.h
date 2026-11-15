@@ -376,6 +376,8 @@ public:
     void listSet(ObjList* list, size_t i, Value v);
     void listInsert(ObjList* list, size_t at, const Value* items, size_t n);
     void listAdd(ObjList* list, Value v);
+    // Room made for `n` items in all, none added (ensureCapacity).
+    void listReserve(ObjList* list, size_t n);
     void listErase(ObjList* list, size_t at, size_t n);
     void listClear(ObjList* list);
     std::vector<Value> listCopy(ObjList* list);

@@ -174,6 +174,10 @@ if(MSVC)
   foreach(part ww ww_core ww_window ww_compiler ww_proof ww_proof_plain)
     target_compile_options(${part} PRIVATE /W4 /utf-8 /permissive-)
     target_compile_definitions(${part} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    # Under AddressSanitizer, the Microsoft library marks a vector's room past its end as not to
+    # be touched; native code's list add writes there and moves the end on (2026-11-15), which
+    # the library's marks would not follow. (libstdc++ marks nothing unless asked.)
+    target_compile_definitions(${part} PRIVATE _DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION)
   endforeach()
   # The parser and compiler recurse over nested source; give them room.
   target_link_options(ww PRIVATE /STACK:16777216)
