@@ -726,10 +726,10 @@ fun Grid<Color>.floodRegion(x : int, y : int, tolerance : int = 0, diagonal : bo
   return Mask(made)
 }
 // The pixels joined to (sx, sy), each differing from it by no more than `tolerance`, set in `m`
-// (all false before): those found marked in bytes and kept in a list in the order found, each
-// with its column (2026-11-15: no division to find it), each looked round in turn, its sides
-// each on its own; then each set in the mask (no pass over every pixel; native code reads and
-// writes bytes, not bools).
+// (all false before), which marks them as they are found (2026-11-15: native code reads and
+// writes a list of bools: no marks of their own, no pass setting the mask after); those found
+// kept in a list in the order found, each with its column (no division to find it), each looked
+// round in turn, its sides each on its own.
 fun __colorFlood(px : List<Color>, w : int, h : int, sx : int, sy : int, tolerance : int, diagonal : bool, m : open List<bool>) {
   val n = w * h
   val seed = sy * w + sx
@@ -740,42 +740,36 @@ fun __colorFlood(px : List<Color>, w : int, h : int, sx : int, sy : int, toleran
   val fa = from.alpha.toInt()
   val t = tolerance
   val corners = diagonal ? 1 : 0
-  val seen = Bytes(n)
   val found : open List<int> = [seed, sx]
-  seen[seed] = 1.toByte()
+  m[seed] = true
   var next = 0
   while (next < found.size) {
     val k = found[next]
     val x = found[next + 1]
     next += 2
-    if (x + 1 < w) { __floodStep(px, seen, found, k + 1, x + 1, fr, fg, fb, fa, t) }
-    if (x > 0) { __floodStep(px, seen, found, k - 1, x - 1, fr, fg, fb, fa, t) }
-    if (k + w < n) { __floodStep(px, seen, found, k + w, x, fr, fg, fb, fa, t) }
-    if (k >= w) { __floodStep(px, seen, found, k - w, x, fr, fg, fb, fa, t) }
+    if (x + 1 < w) { __floodStep(px, m, found, k + 1, x + 1, fr, fg, fb, fa, t) }
+    if (x > 0) { __floodStep(px, m, found, k - 1, x - 1, fr, fg, fb, fa, t) }
+    if (k + w < n) { __floodStep(px, m, found, k + w, x, fr, fg, fb, fa, t) }
+    if (k >= w) { __floodStep(px, m, found, k - w, x, fr, fg, fb, fa, t) }
     if (corners != 0) {
       if (x + 1 < w) {
-        if (k + w < n) { __floodStep(px, seen, found, k + w + 1, x + 1, fr, fg, fb, fa, t) }
-        if (k >= w) { __floodStep(px, seen, found, k - w + 1, x + 1, fr, fg, fb, fa, t) }
+        if (k + w < n) { __floodStep(px, m, found, k + w + 1, x + 1, fr, fg, fb, fa, t) }
+        if (k >= w) { __floodStep(px, m, found, k - w + 1, x + 1, fr, fg, fb, fa, t) }
       }
       if (x > 0) {
-        if (k + w < n) { __floodStep(px, seen, found, k + w - 1, x - 1, fr, fg, fb, fa, t) }
-        if (k >= w) { __floodStep(px, seen, found, k - w - 1, x - 1, fr, fg, fb, fa, t) }
+        if (k + w < n) { __floodStep(px, m, found, k + w - 1, x - 1, fr, fg, fb, fa, t) }
+        if (k >= w) { __floodStep(px, m, found, k - w - 1, x - 1, fr, fg, fb, fa, t) }
       }
     }
-  }
-  var q = 0
-  while (q < found.size) {
-    m[found[q]] = true
-    q += 2
   }
 }
 // Pixel j (column jx) found where it is not yet and is close enough to (r, g, b, a) in every
 // part: marked, and kept to be looked round.
-inline fun __floodStep(px : List<Color>, seen : Bytes, found : open List<int>, j : int, jx : int, r : int, g : int, b : int, a : int, t : int) {
-  if (seen[j] == 0.toByte()) {
+inline fun __floodStep(px : List<Color>, m : open List<bool>, found : open List<int>, j : int, jx : int, r : int, g : int, b : int, a : int, t : int) {
+  if (!m[j]) {
     val c = px[j]
     if (Math.abs(c.red.toInt() - r) <= t and Math.abs(c.green.toInt() - g) <= t and Math.abs(c.blue.toInt() - b) <= t and Math.abs(c.alpha.toInt() - a) <= t) {
-      seen[j] = 1.toByte()
+      m[j] = true
       found.add(j)
       found.add(jx)
     }

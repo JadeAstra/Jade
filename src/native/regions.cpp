@@ -474,6 +474,13 @@ struct Region {
         if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
         return listClass(frame[slot]);
     }
+    // Whether the frame's slot holds a List<bool> (packed, none null) where the region is made
+    // (2026-11-15: its items read into the flag register and set from it; the steps check it).
+    bool frameBools(int slot) const {
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
+        const Value& v = frame[slot];
+        return v.isObjType(ObjType::List) && asList(v)->packed() && asList(v)->store() == ListStore::Bools && !asList(v)->pack->nullable;
+    }
     // What the list in a field holds, where the region is made: the field of the object in slot
     // `objSlot` (as the frame holds it) where the place's cache says, if the cache saw that
     // object's layout and a field kept as a value.
@@ -1434,6 +1441,23 @@ struct Region {
                     c.fall(s);
                     return;
                 }
+                // A List<bool>'s item into the flag register (2026-11-15), the list checked by the step.
+                if (c.r.frameBools(list)) {
+                    Reg index{};
+                    if (x.op == Op::RGetIndexSK) {
+                        index = Reg{kScratchI, CI};
+                        c.op("setik", {index}, {}, {index}).ki = c.intConstant(u8(x, 2));
+                    } else {
+                        index = c.read(u8(x, 2), CI, true);
+                    }
+                    LOp& l = c.op("idxbool", {index}, {index});
+                    l.slot = list;
+                    c.leaves(l);
+                    c.write(a, K{kBool});
+                    s.top = u8(x, 3);
+                    c.fall(s);
+                    return;
+                }
                 // As read next; or a guess, which the step checks (an item of another kind leaves):
                 // how it is used, or what the list holds in the call the region is made in.
                 int cls = useClass(c.i, a, u8(x, 3));
@@ -1871,6 +1895,19 @@ struct Region {
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                     c.leaves(l);
                     move(c, top - 1, top - 3);
+                    s.top = top - 2;
+                    c.fall(s);
+                    return;
+                }
+                if (c.r.frameBools(list)) {
+                    // A List<bool>'s item set from the flag register (2026-11-15), the value made
+                    // a bool there (as it is, or read from its slot, checked to be one).
+                    const Reg index = c.read(top - 2, CI, true);
+                    c.flagOf(top - 1);
+                    LOp& l = c.op("setbool", {index}, {index});
+                    l.slot = list;
+                    c.leaves(l);
+                    c.write(top - 3, K{kBool});
                     s.top = top - 2;
                     c.fall(s);
                     return;
@@ -3298,8 +3335,8 @@ struct Region {
                 if (auto h = heldBy.find(known->from); h != heldBy.end()) return -2 - h->second;
             return -1;
         };
-        auto isRead = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "idxw" || stem == "idxwk"; };
-        auto isWrite = [](const std::string& stem) { return stem == "setf" || stem == "setwi" || stem == "setwb"; };
+        auto isRead = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "idxw" || stem == "idxwk" || stem == "idxbool"; };
+        auto isWrite = [](const std::string& stem) { return stem == "setf" || stem == "setwi" || stem == "setwb" || stem == "setbool"; };
         auto isFloat = [](const std::string& stem) { return stem == "idxf" || stem == "idxfk" || stem == "setf"; };
         // A list of a value type's items (M9.5 B1): its items' fields read, or a Ref to one made,
         // and the fields of the values those Refs are in read (valp); an item copied out, set to
@@ -3339,7 +3376,7 @@ struct Region {
                 if (!isRead(l.stem) && !isWrite(l.stem)) continue;
                 const int root = rootOf(i, static_cast<int>(l.slot));
                 if (root == -1) continue;
-                kindOf[root] |= isFloat(l.stem) ? 1 : 2;
+                kindOf[root] |= l.stem == "idxbool" || l.stem == "setbool" ? 16 : isFloat(l.stem) ? 1 : 2;  // 16: bools (2026-11-15)
                 steps.emplace_back(&l, root);
             }
         }
@@ -3356,21 +3393,22 @@ struct Region {
         // Never written in the region: as entered everywhere (a field's, as it is held).
         std::map<int, int> index;
         for (const auto& [root, kind] : kindOf) {
-            if ((kind != 1 && kind != 2 && kind != 4 && kind != 8) || static_cast<int>(index.size()) == kRegionLists) continue;
+            if ((kind != 1 && kind != 2 && kind != 4 && kind != 8 && kind != 16) || (kind == 16 && root < 0) || static_cast<int>(index.size()) == kRegionLists) continue;
             if (addedTo.count(root) != 0) continue;
             if (kind == 8 && root < 0) continue;
-            const ObjClass* const cls = kind >= 4 ? itemClass[root] : nullptr;
+            const bool items = kind == 4 || kind == 8;  // not 16, a list of bools
+            const ObjClass* const cls = items ? itemClass[root] : nullptr;
             const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
-            if (kind >= 4 && (layout == nullptr || layout->size == 0 || layout->size > 0xFFFF)) continue;
+            if (items && (layout == nullptr || layout->size == 0 || layout->size > 0xFFFF)) continue;
             if (root >= 0 && !untouched(root)) continue;
             const int k = static_cast<int>(index.size());
             index[root] = k;
             LOp look;
-            look.stem = kind == 1 ? "lookf" : kind == 2 ? "lookw" : kind == 4 ? "looki" : "lookit";
+            look.stem = kind == 1 ? "lookf" : kind == 2 ? "lookw" : kind == 4 ? "looki" : kind == 16 ? "lookbool" : "lookit";
             if (root < 0) look.stem += "h";  // from a field held as -2 - root
             look.slot = root >= 0 ? root : -2 - root;
             look.ki = k;
-            if (kind >= 4) {
+            if (items) {
                 look.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 look.slot2 = static_cast<int64_t>(static_cast<uint64_t>(layout->size) << 32 | (plain.count(root) ? 0x100u : 0u) | static_cast<uint64_t>(k));
             }

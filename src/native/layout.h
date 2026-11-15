@@ -23,7 +23,7 @@ constexpr int kListPack = 32;
 // Packed items (PackedItems): how they are kept, whether any may be null, how many there are,
 // and the block holding them (a std::vector: its first item's address first).
 constexpr int kPackStore = 0, kPackNullable = 1, kPackCount = 24, kPackBlock = 48;
-constexpr uint8_t kStoreInts = 1, kStoreFloats = 2;
+constexpr uint8_t kStoreInts = 1, kStoreFloats = 2, kStoreBools = 3;  // ListStore's Ints, Floats, Bools (a byte each, 0 or 1)
 // A list of a value type's items: the bytes an item takes, and the value type (an ObjClass).
 constexpr int kPackWidth = 4, kPackItemClass = 32;
 constexpr uint8_t kStoreItems = 5;

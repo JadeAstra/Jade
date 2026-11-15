@@ -1,0 +1,83 @@
+// A List<bool>'s items read into native code's flag register and set from it (2026-11-15): in a
+// loop where the list is looked at once and where it is not (another list set in the same loop),
+// a Grid<bool>'s cells, an index past the end (the VM's, which throws), and masks made by
+// floodRegion. The same as the VM's; each loop run three times (its region is made the second
+// time it starts).
+fun flips(xs : open List<bool>) : int {
+  var on = 0
+  for (i in 0 ..< xs.size) {
+    if (xs[i]) { on += 1 }
+    xs[i] = !xs[i]
+  }
+  return on
+}
+fun copyEvery(from : List<bool>, to : open List<bool>, step : int) : int {
+  var n = 0
+  var i = 0
+  while (i < from.size) {
+    to[i] = from[i]
+    if (to[i] and i % 3 == 0) { n += 1 }
+    i += step
+  }
+  return n
+}
+fun marks(n : int) : open List<bool> {
+  val made : open List<bool> = []
+  for (i in 0 ..< n) { made.add(i % 7 == 2 or i % 5 == 0) }
+  return made
+}
+fun count(xs : List<bool>) : int {
+  var t = 0
+  for (i in 0 ..< xs.size) { if (xs[i]) { t = (t * 3 + i) % 1000000007 } }
+  return t
+}
+fun attempt(work : () -> any) : string {
+  try {
+    return work().toString()
+  } catch (e : IndexOutOfBoundsException) {
+    return "IndexOutOfBoundsException"
+  } catch (e : UnsupportedOperationException) {
+    return "UnsupportedOperationException"
+  } catch (e : IllegalStateException) {
+    return "IllegalStateException"
+  }
+}
+fun picture(w : int, h : int) : Image {
+  val im = Image(w, h)
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) { px[x, y] = Color(((x / 7) * 40).toByteWrapped(), ((y / 5) * 30).toByteWrapped(), 9.toByte()) }
+    }
+  }
+  return im
+}
+val im = picture(90, 60)
+for (round in 0 ..< 3) {
+  val a = marks(1001)
+  print(flips(a), count(a), flips(a), count(a))
+  val b : open List<bool> = List(1001) { false }
+  print(copyEvery(a, b, 1), copyEvery(a, b, 4), count(b))
+  val g = Grid<bool>(31, 17)
+  val gl : open List<bool> = g.toList()
+  print(flips(gl), flips(gl), g.width)
+  val short : open List<bool> = List(10) { true }
+  print(attempt { copyEvery(a, short, 1) }, count(short))
+  val m = im.floodRegion(3, 3, 10)
+  val d = im.pixels.floodRegion(40, 30, 50, true)
+  print(m.count, d.count, m[0, 0], m[89, 59], d[45, 30])
+}
+// expect: 316 329950946 685 671203435
+// expect: 105 27 671203435
+// expect: 0 527 31
+// expect: IndexOutOfBoundsException 42
+// expect: 35 315 true false true
+// expect: 316 329950946 685 671203435
+// expect: 105 27 671203435
+// expect: 0 527 31
+// expect: IndexOutOfBoundsException 42
+// expect: 35 315 true false true
+// expect: 316 329950946 685 671203435
+// expect: 105 27 671203435
+// expect: 0 527 31
+// expect: IndexOutOfBoundsException 42
+// expect: 35 315 true false true

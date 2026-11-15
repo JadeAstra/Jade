@@ -655,6 +655,45 @@ INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, const 
     if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
     return word<uint8_t*>(pack + kPackBlock) + index * 8;
 }
+// A List<bool>'s item (2026-11-15: a Mask's pixels, a flood's marks): a packed list of bools, a
+// byte each (0 or 1), none null, the item in range; to read (its core's or none's) or to change
+// (its core's own, not frozen). Null where not: the VM's.
+INLINE uint8_t* boolItem(const Slot& s, int64_t index, const Ctx* ctx, bool change) {
+    if (s.kind != kKindObj) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList) return nullptr;
+    if (change ? (o[kObjCore] != ctx->core || o[kObjFrozen] != 0) : !mayRead(o, ctx)) return nullptr;
+    const uint8_t* pack = packOf(o, kStoreBools);
+    if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    return word<uint8_t*>(pack + kPackBlock) + index;
+}
+// The flag register = item ic of a List<bool>; item ic = the flag register.
+#define IDXBOOL(c, ...)                                                         \
+    STENCIL(idxbool_##c) {                                                      \
+        const uint8_t* at = boolItem((*slotAt(base)), i##c, ctx, false);        \
+        if (at == nullptr) EXIT;                                                \
+        i9 = *at != 0;                                                          \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(setbool_##c) {                                                      \
+        uint8_t* at = boolItem((*slotAt(base)), i##c, ctx, true);               \
+        if (at == nullptr) EXIT;                                                \
+        *at = i9 != 0;                                                          \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hidxbool_##c) {                                                     \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
+        i9 = reinterpret_cast<const uint8_t*>(h[0])[i##c] != 0;                 \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetbool_##c) {                                                     \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
+        reinterpret_cast<uint8_t*>(h[0])[i##c] = i9 != 0;                       \
+        NEXT;                                                                   \
+    }
+I_A(IDXBOOL, x)
 INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
@@ -1541,6 +1580,23 @@ STENCIL(lookf) {
 }
 STENCIL(lookw) {
     lookAt((*slotAt(base)), ctx, ww_ki, false);
+    NEXT;
+}
+// A List<bool> looked at once (2026-11-15): its bytes, how many may be read and changed, 4.
+STENCIL(lookbool) {
+    uint64_t* h = ctx->lists + 4 * ww_ki;
+    h[0] = h[1] = h[2] = h[3] = 0;
+    const Slot& s = (*slotAt(base));
+    if (s.kind == kKindObj && s.p[kObjType] == kTypeList) {
+        const uint8_t* o = s.p;
+        if (const uint8_t* pack = packOf(o, kStoreBools)) {
+            const uint64_t count = word<uint64_t>(pack + kPackCount);
+            h[0] = word<uint64_t>(pack + kPackBlock);
+            if (mayRead(o, ctx)) h[1] = count;
+            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+            h[3] = 4;
+        }
+    }
     NEXT;
 }
 // Items read and written through what was looked at (k in ww_slot): the index checked
