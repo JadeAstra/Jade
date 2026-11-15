@@ -3456,8 +3456,8 @@ struct Region {
         // field's width (high half), offset (bits 8 on) and size (1 a byte, 8 an int).
         // Unknown: a register set on one way through the body alone, which nothing may read after.
         // ToFloat, ToInt: an int as a float (cvtif), a float cut to a whole number (cvtfi).
-        // Floor: a float floored to a whole number (floori), an int.
-        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown, ToFloat, ToInt, Floor } kind;
+        // Floor: a float floored to a whole number (floori), an int. Abs: an int's size (absi).
+        enum Kind { Counter, Inv, KInt, KFloat, Load, Bin, Min, Max, ToByte, Held, Field, Unknown, ToFloat, ToInt, Floor, Abs } kind;
         Cls cls = CI;
         Reg reg{0, CI};  // Inv
         int64_t ki = 0;  // KInt
@@ -3673,6 +3673,11 @@ struct Region {
         if (s == "floori") {  // d = s floored, an int (2026-11-15: bilinear sampling's Math.floor)
             Expr e{Expr::Floor};
             e.a = valueOf(fw, n[1]);
+            return set(n[0], mk(e)), true;
+        }
+        if (s == "absi") {  // an int's size, in place (2026-11-15: how far apart two pixels are)
+            Expr e{Expr::Abs};
+            e.a = valueOf(fw, n[0]);
             return set(n[0], mk(e)), true;
         }
         // A comparison of ints: its flag, for a guard's jump.
@@ -4282,7 +4287,7 @@ struct Region {
     }
     // A formula to match an expression against (2026-11-15, bilinear sampling): a node of two
     // sides (+ - * / and m min, M max), or of one (f as a float, i cut to an int, b as a byte, F
-    // floored); an int or a float constant; a byte field of an item four bytes wide of a list
+    // floored, a an int's size); an int or a float constant; a byte field of an item four bytes wide of a list
     // named so, at an index matching its one side; or any expression named so, the same each
     // place it is named. Sums, products, min and max match either way round (the same either way
     // round where no side is NaN: a template using one checks that as it runs).
@@ -4350,6 +4355,7 @@ struct Region {
             case 'i': return e->kind == Expr::ToInt && matches(*p.a, e->a, b);
             case 'b': return e->kind == Expr::ToByte && matches(*p.a, e->a, b);
             case 'F': return e->kind == Expr::Floor && matches(*p.a, e->a, b);
+            case 'a': return e->kind == Expr::Abs && matches(*p.a, e->a, b);
             default: break;
         }
         const bool minMax = p.op == 'm' || p.op == 'M';
@@ -4433,6 +4439,32 @@ struct Region {
         ah.a = ex->list, ah.b = px, ah.out = st.list, ah.sizeW = ew, ah.sizeH = eh;
         ah.mixWords = {made.global, made.cls};
         std::memcpy(&ah.words[0], &g.b->kf, 8);
+        return true;
+    }
+    // How far apart two pixels are (kLoopWApartItems, 2026-11-15: numeric.ww's __regionApart, a
+    // row of regions' neighbours): out[o + j] = the most |p.c - q.c| of the four byte fields c, p
+    // and q items four bytes wide at their bases plus the counter, `out` a list of ints. Words: 50
+    // to 53 where it writes (50: 0 no operand, 1 one; 53 a constant added), 63 to 66 where p is,
+    // 130 to 133 where q is.
+    template <typename Changed, typename Written>
+    bool apartItems(const Followed& fw, Ahead& ah, const Changed& changed, const Written& written) {
+        if (fw.stores.size() != 1 || fw.stores[0].stem != "hsetwi" || ah.iterSlot >= 0 || !fw.made.empty() || fw.stores[0].index == nullptr) return false;
+        const Followed::Store& st = fw.stores[0];
+        auto apart = [](int c) {
+            return patOp('a', patOp('-', patField("p", patAny("i"), c), patField("q", patAny("j"), c)));
+        };
+        Bound b;
+        if (!matches(*patOp('M', patOp('M', apart(0), apart(1)), patOp('M', apart(2), apart(3))), st.value, b)) return false;
+        Lin o, p, q;
+        if (!linear(st.index, o, 1, changed, written) || o.coef != 1 || !linear(b.exprs["i"], p, 1, changed, written) || p.coef != 1 ||
+            !linear(b.exprs["j"], q, 1, changed, written) || q.coef != 1)
+            return false;
+        const int lp = b.lists["p"], lq = b.lists["q"];
+        if (lp == st.list || lq == st.list) return false;
+        ah.shape = 30;  // kLoopWApartItems
+        ah.out = st.list, ah.a = lp, ah.b = lq;
+        ah.baseA = o.base, ah.fromBase = p.base, ah.yA = q.base;
+        ah.copyWhat[0] = o.k, ah.copyWhat[1] = p.k, ah.copyWhat[2] = q.k;
         return true;
     }
     // Byte fields of each item counted into a list of ints (kLoopWCountItems, 2026-11-15: a
@@ -5321,6 +5353,7 @@ struct Region {
                 return true;
             }
         }
+        if (apartItems(fw, ah, changed, written)) return true;
         if (colorFloats(fw, ah, changed, written)) return true;
         if (gather4(fw, ah, changed, written)) return true;
         // Below, a store of a number (hsetf, hsetwi, hsetwb); a value of a value type's (hsetsm,
@@ -5560,6 +5593,17 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 30) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(53, ah.copyWhat[0]);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(66, ah.copyWhat[1]);
+            word(130, ah.yA != nullptr ? 1 : 0);
+            if (ah.yA != nullptr) operandWords(131, ah.yA, 0);
+            word(133, ah.copyWhat[2]);
         }
         if (ah.shape == 29) {
             word(50, ah.baseMode);

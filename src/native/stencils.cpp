@@ -2005,7 +2005,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -3100,6 +3100,51 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     const double mul = static_cast<double>(ab < 1 ? ab : 1) * (255.0 / (ac < 1.0e-300 ? 1.0e-300 : ac));
                     dp[0] = part(c[0] * mul), dp[1] = part(c[1] * mul), dp[2] = part(c[2] * mul), dp[3] = static_cast<uint8_t>(ab);
                 }
+            }
+            break;
+        }
+        case kLoopWApartItems: {
+            // How far apart two pixels are (regions.cpp, apartItems, says the words): out[o + j]
+            // = the most |p[c] - q[c]| of the four bytes c, p item i + j of `a`, q item k + j of
+            // `b`, each four bytes wide; `out` a list of ints.
+            static_assert(kLoopWApartItems == 30, "regions.cpp's ah.shape 30");
+            if (!out.ok() || out.kind() != 1 || !a.ok() || a.kind() <= 3 || !b.ok() || b.kind() <= 3) return;
+            int64_t ob = 0, pb = 0, qb = 0;
+            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(ctx, t[64], t[65], 0, pb)) ||
+                (t[130] == 1 && !operand(ctx, t[131], t[132], 0, qb)))
+                return;
+            const int64_t lim = int64_t{1} << 50;
+            if (!small(t[53]) || !small(t[66]) || !small(t[133]) || ob < -lim || ob > lim || pb < -lim || pb > lim || qb < -lim || qb > lim || next > lim ||
+                end > lim)
+                return;
+            ob += static_cast<int64_t>(t[53]), pb += static_cast<int64_t>(t[66]), qb += static_cast<int64_t>(t[133]);
+            if (ob + next < 0 || pb + next < 0 || qb + next < 0 || static_cast<uint64_t>(ob + end - 1) >= out.h[1] || static_cast<uint64_t>(ob + end - 1) >= out.h[2] ||
+                static_cast<uint64_t>(pb + end - 1) >= a.h[1] || static_cast<uint64_t>(qb + end - 1) >= b.h[1])
+                return;
+            const uint8_t* p = a.bytes() + static_cast<uint64_t>(pb + next) * 4;
+            const uint8_t* q = b.bytes() + static_cast<uint64_t>(qb + next) * 4;
+            int64_t* o = out.ints() + ob + next;
+            // Four pixels at a time: each byte's distance (the two ways' saturated differences
+            // or'd), the most of each pixel's four bytes, widened to ints.
+            const __m128i low = made128(_mm_set1_epi32(0xFF));
+            const __m128i zero = _mm_setzero_si128();
+            int64_t j = 0;
+            for (; j + 4 <= left; j += 4, p += 16, q += 16) {
+                const __m128i pv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p));
+                const __m128i qv = _mm_loadu_si128(reinterpret_cast<const __m128i*>(q));
+                __m128i d = _mm_or_si128(_mm_subs_epu8(pv, qv), _mm_subs_epu8(qv, pv));
+                d = _mm_max_epu8(d, _mm_srli_epi32(d, 16));
+                d = _mm_and_si128(_mm_max_epu8(d, _mm_srli_epi32(d, 8)), low);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(o + j), _mm_unpacklo_epi32(d, zero));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(o + j + 2), _mm_unpackhi_epi32(d, zero));
+            }
+            for (; j < left; j++, p += 4, q += 4) {
+                int64_t most = 0;
+                for (int c = 0; c < 4; c++) {
+                    const int64_t d = p[c] > q[c] ? p[c] - q[c] : q[c] - p[c];
+                    most = d > most ? d : most;
+                }
+                o[j] = most;
             }
             break;
         }

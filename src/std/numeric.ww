@@ -794,54 +794,64 @@ inline fun __floodStep(px : List<Color>, m : open List<bool>, found : open List<
 // Each pixel's area's number in `out`: every pixel joined to its neighbours close enough (beside,
 // and at the corners with `diagonal`), the areas numbered in the order their first pixels come
 // row by row. Union-find, as the C++ had it (2026-11-15; a flood from each area's first pixel
-// since 2026-11-13, which looked round every pixel four times): each pixel compared with the one
-// to its right and the one below (and those below at the corners), each join the larger root put
-// under the smaller, so that an area's root is its first pixel; then each pixel numbered as its
-// root was, a root taking the next number.
+// since 2026-11-13, which looked round every pixel four times), each join the larger root put
+// under the smaller, so that an area's root is its first pixel, whatever order the joins come
+// in; then each pixel numbered as its root was, a root taking the next number. A row at a time
+// (2026-11-15): first how far each pixel is from the one to its right and from the one above
+// (the most any part differs: no branch), then the row's runs of pixels close to the one before
+// each put under the run's first (none of the row joined to anything yet: no root to find),
+// then each pixel joined to the one above it, but where the pixel before it is close to it and
+// to the one above it, and that one to the one above this: joined through those already.
 fun __colorRegions(px : List<Color>, w : int, h : int, tolerance : int, diagonal : bool, out : open List<int>) {
   val n = w * h
   val t = tolerance
-  for (k in 0 ..< n) { out[k] = k }  // each its own root: `out` holds the parents first
-  val corners = diagonal ? 1 : 0
+  var right : open List<int> = List(w) { 0 }
+  var rightBefore : open List<int> = List(w) { 0 }
+  val up : open List<int> = List(w) { 0 }
+  val todo : open List<int> = List(w) { 0 }
   for (y in 0 ..< h) {
-    for (x in 0 ..< w) {
-      val k = y * w + x
-      val here = px[k]
-      val hr = here.red.toInt()
-      val hg = here.green.toInt()
-      val hb = here.blue.toInt()
-      val ha = here.alpha.toInt()
-      if (x + 1 < w) {
-        val c = px[k + 1]
-        if (Math.abs(c.red.toInt() - hr) <= t and Math.abs(c.green.toInt() - hg) <= t and Math.abs(c.blue.toInt() - hb) <= t and
-            Math.abs(c.alpha.toInt() - ha) <= t) {
-          __regionJoin(out, k, k + 1)
+    val row = y * w
+    // `out` holds the parents first: here each pixel of the row its own root, or under the root of
+    // the one before it.
+    __regionApart(px, row, row + 1, w - 1, right)
+    var root = row
+    if (w > 0) { out[row] = row }
+    for (x in 0 ..< w - 1) {
+      if (right[x] > t) { root = row + x + 1 }
+      out[row + x + 1] = root
+    }
+    if (y > 0) {
+      // The columns to join, first (the joins' walks kept out of this loop).
+      __regionApart(px, row, row - w, w, up)
+      var m = 0
+      if (w > 0 and up[0] <= t) {
+        todo[0] = 0
+        m = 1
+      }
+      for (x in 1 ..< w) {
+        if (up[x] <= t and Math.max(Math.max(up[x - 1], right[x - 1]), rightBefore[x - 1]) > t) {
+          todo[m] = x
+          m += 1
         }
       }
-      if (y + 1 < h) {
-        val c = px[k + w]
-        if (Math.abs(c.red.toInt() - hr) <= t and Math.abs(c.green.toInt() - hg) <= t and Math.abs(c.blue.toInt() - hb) <= t and
-            Math.abs(c.alpha.toInt() - ha) <= t) {
-          __regionJoin(out, k, k + w)
+      for (i in 0 ..< m) {
+        val x = todo[i]
+        __regionJoin(out, row - w + x, row + x)
+      }
+      if (diagonal) {
+        __regionApart(px, row + 1, row - w, w - 1, up)  // each pixel and the one above to its left
+        for (x in 0 ..< w - 1) {
+          if (up[x] <= t) { __regionJoin(out, row - w + x, row + x + 1) }
         }
-        if (corners != 0) {
-          if (x + 1 < w) {
-            val d = px[k + w + 1]
-            if (Math.abs(d.red.toInt() - hr) <= t and Math.abs(d.green.toInt() - hg) <= t and Math.abs(d.blue.toInt() - hb) <= t and
-                Math.abs(d.alpha.toInt() - ha) <= t) {
-              __regionJoin(out, k, k + w + 1)
-            }
-          }
-          if (x > 0) {
-            val e = px[k + w - 1]
-            if (Math.abs(e.red.toInt() - hr) <= t and Math.abs(e.green.toInt() - hg) <= t and Math.abs(e.blue.toInt() - hb) <= t and
-                Math.abs(e.alpha.toInt() - ha) <= t) {
-              __regionJoin(out, k, k + w - 1)
-            }
-          }
+        __regionApart(px, row, row - w + 1, w - 1, up)  // and the one above to its right
+        for (x in 0 ..< w - 1) {
+          if (up[x] <= t) { __regionJoin(out, row - w + x + 1, row + x) }
         }
       }
     }
+    val kept = rightBefore
+    rightBefore = right
+    right = kept
   }
   // Numbers, in row order: a root (its own parent, the first pixel of its area) the next; any
   // other pixel its parent's, a pixel before it (a parent is always the smaller), numbered already.
@@ -854,6 +864,16 @@ fun __colorRegions(px : List<Color>, w : int, h : int, tolerance : int, diagonal
     } else {
       out[k] = out[p]
     }
+  }
+}
+// How far pixel a + x is from pixel b + x, for x from 0 to n - 1: the most any of its parts
+// differs from that one's.
+fun __regionApart(px : List<Color>, a : int, b : int, n : int, out : open List<int>) {
+  for (x in 0 ..< n) {
+    val p = px[a + x]
+    val q = px[b + x]
+    out[x] = Math.max(Math.max(Math.abs(p.red.toInt() - q.red.toInt()), Math.abs(p.green.toInt() - q.green.toInt())),
+                      Math.max(Math.abs(p.blue.toInt() - q.blue.toInt()), Math.abs(p.alpha.toInt() - q.alpha.toInt())))
   }
 }
 // The areas of pixels a and b one: each one's root found (each pixel on the way pointed to its
