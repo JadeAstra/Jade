@@ -1,0 +1,47 @@
+// Four multiply-adds of a row in one pass (2026-11-15: numeric.ww's __mulAdd4, a blur's taps four
+// at a time), which native code's loop template kLoopFMulAdd4 does whole, two floats at a time:
+// plus what is there or the first product to start, bases apart and overlapping, lengths odd and
+// even; one list both read and written (the template refuses, the steps do it); a read past the
+// list's end (refused too, the steps throw). The same as the VM's; each run three times (a loop's
+// region is made the second time it starts).
+fun four(out : open List<float>, outAt : int, from : List<float>, f0 : int, f1 : int, f2 : int, f3 : int, n : int, w0 : float, w1 : float, w2 : float, w3 : float,
+         add : bool) {
+  if (add) {
+    for (j in 0 ..< n) { out[outAt + j] = out[outAt + j] + from[f0 + j] * w0 + from[f1 + j] * w1 + from[f2 + j] * w2 + from[f3 + j] * w3 }
+  } else {
+    for (j in 0 ..< n) { out[outAt + j] = from[f0 + j] * w0 + from[f1 + j] * w1 + from[f2 + j] * w2 + from[f3 + j] * w3 }
+  }
+}
+fun sum(xs : List<float>) : float {
+  var t = 0.0
+  for (i in 0 ..< xs.size) { t = t * 0.75 + xs[i] * (1 + i % 7) }
+  return t
+}
+val from : List<float> = List(500) { (it * 37 % 101) * 0.173 - 6.0 }
+for (round in 0 ..< 3) {
+  val out : open List<float> = List(300) { it * 0.01 }
+  four(out, 0, from, 0, 4, 8, 12, 200, 0.1, 0.25, -0.3, 0.07, false)
+  four(out, 3, from, 50, 51, 52, 53, 201, 0.5, -0.125, 0.33, 1.5, true)
+  four(out, 100, from, 300, 7, 290, 9, 199, 1.0 / 3.0, 0.2, 0.0, -2.5, true)
+  var said = "${sum(out)}"
+  for (n in [0, 1, 2, 3]) {
+    four(out, 290, from, 10, 20, 30, 40, n, 0.9, 0.8, 0.7, 0.6, n % 2 == 0)
+    said += " ${sum(out)}"
+  }
+  // Read and written, one list: the steps, one float at a time.
+  val both : open List<float> = List(400) { it * 0.5 }
+  four(both, 10, both, 8, 11, 12, 30, 300, 0.5, 0.25, 0.125, 0.0625, true)
+  said += " ${sum(both)}"
+  // Past the end: each float before it done, then a throw.
+  val more : open List<float> = List(100) { 1.0 }
+  try {
+    four(more, 0, from, 0, 1, 2, 450, 90, 1.0, 1.0, 1.0, 1.0, true)
+    said += " none"
+  } catch (e : IndexOutOfBoundsException) {
+    said += " stopped ${sum(more)}"
+  }
+  print(said)
+}
+// expect: -30.46017437217323 -30.46017437217323 -19.32115092551798 -16.168475095439856 -17.646455408550192 3213.3417871296806 stopped 14.17635656687538
+// expect: -30.46017437217323 -30.46017437217323 -19.32115092551798 -16.168475095439856 -17.646455408550192 3213.3417871296806 stopped 14.17635656687538
+// expect: -30.46017437217323 -30.46017437217323 -19.32115092551798 -16.168475095439856 -17.646455408550192 3213.3417871296806 stopped 14.17635656687538

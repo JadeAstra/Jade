@@ -461,6 +461,18 @@ fun __mulAdd(out : open List<float>, outAt : int, from : List<float>, fromAt : i
     for (j in 0 ..< n) { out[outAt + j] = from[fromAt + j] * weight }
   }
 }
+// Four of __mulAdd in one pass (2026-11-15: a blur's 19 taps, each a pass over the row): out[outAt
+// + j] plus from[f0 + j] * w0, then from[f1 + j] * w1, from[f2 + j] * w2 and from[f3 + j] * w3, or
+// without `add` the first product alone to start; each float's sums in the order the four passes
+// made them, so the same numbers where `out` is not `from` (native code's kLoopFMulAdd4).
+fun __mulAdd4(out : open List<float>, outAt : int, from : List<float>, f0 : int, f1 : int, f2 : int, f3 : int, n : int, w0 : float, w1 : float, w2 : float,
+              w3 : float, add : bool) {
+  if (add) {
+    for (j in 0 ..< n) { out[outAt + j] = out[outAt + j] + from[f0 + j] * w0 + from[f1 + j] * w1 + from[f2 + j] * w2 + from[f3 + j] * w3 }
+  } else {
+    for (j in 0 ..< n) { out[outAt + j] = from[f0 + j] * w0 + from[f1 + j] * w1 + from[f2 + j] * w2 + from[f3 + j] * w3 }
+  }
+}
 
 // A row of `w` pixels (four floats each, from `rowAt`) convolved across by the `kw` taps from
 // `tapsAt` (the middle one, kw / 2, on the pixel itself; the edge pixels repeated past the edge),
@@ -472,7 +484,17 @@ fun __acrossRow(row : List<float>, rowAt : int, w : int, taps : List<float>, tap
   val inTo = w - kw + cx
   if (inTo >= inFrom) {
     val n = (inTo - inFrom + 1) * 4
-    for (i in 0 ..< kw) { __mulAdd(out, outAt + inFrom * 4, row, rowAt + (inFrom + i - cx) * 4, n, taps[tapsAt + i], i > 0) }
+    // Four taps a pass, then any left one by one: the same sums (`out` is never `row`).
+    var i = 0
+    while (i + 4 <= kw) {
+      val b = rowAt + (inFrom + i - cx) * 4
+      __mulAdd4(out, outAt + inFrom * 4, row, b, b + 4, b + 8, b + 12, n, taps[tapsAt + i], taps[tapsAt + i + 1], taps[tapsAt + i + 2], taps[tapsAt + i + 3], i > 0)
+      i += 4
+    }
+    while (i < kw) {
+      __mulAdd(out, outAt + inFrom * 4, row, rowAt + (inFrom + i - cx) * 4, n, taps[tapsAt + i], i > 0)
+      i += 1
+    }
   }
   // The rest, near the edges.
   for (x in 0 ..< w) {
@@ -532,7 +554,10 @@ fun __colorBlur(px : List<Color>, w : int, h : int, taps : List<float>, to : ope
   val ring = Grid<float>(w4, k).cells
   val held = Grid<int>(k, 1, -1).cells
   val acc = Grid<float>(w4, 1).cells
+  val at = Grid<int>(k, 1).cells
   for (y in 0 ..< h) {
+    // The window's rows made where they are not yet, then summed down four taps a pass
+    // (2026-11-15), any left one by one: each float's sum in the taps' order, as before.
     for (j in 0 ..< k) {
       val yy = Math.min(h - 1, Math.max(0, y + j - cy))
       val place = yy % k
@@ -541,7 +566,16 @@ fun __colorBlur(px : List<Color>, w : int, h : int, taps : List<float>, to : ope
         __acrossRow(line, 0, w, taps, 0, k, ring, place * w4)
         held[place] = yy
       }
-      __mulAdd(acc, 0, ring, place * w4, w4, taps[j], j > 0)
+      at[j] = place * w4
+    }
+    var j = 0
+    while (j + 4 <= k) {
+      __mulAdd4(acc, 0, ring, at[j], at[j + 1], at[j + 2], at[j + 3], w4, taps[j], taps[j + 1], taps[j + 2], taps[j + 3], j > 0)
+      j += 4
+    }
+    while (j < k) {
+      __mulAdd(acc, 0, ring, at[j], w4, taps[j], j > 0)
+      j += 1
     }
     __unpremultiplied(acc, 0, w, to, y * w)
   }

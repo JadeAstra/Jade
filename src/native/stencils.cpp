@@ -2012,7 +2012,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems, kLoopWGatherPixels,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems, kLoopWGatherPixels, kLoopFMulAdd4,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -3159,6 +3159,56 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     const int64_t ab = static_cast<int64_t>(ac + 0.5);
                     const double mul = static_cast<double>(ab < 1 ? ab : 1) * (255.0 / (ac < 1.0e-300 ? 1.0e-300 : ac));
                     dp[0] = part(c[0] * mul), dp[1] = part(c[1] * mul), dp[2] = part(c[2] * mul), dp[3] = static_cast<uint8_t>(ab);
+                }
+            }
+            break;
+        }
+        case kLoopFMulAdd4: {
+            // Four multiply-adds of a row in one pass (regions.cpp, mulAdd4, says the words):
+            // o[j] = (((o[j] + x0[j] * w0) + x1[j] * w1) + x2[j] * w2) + x3[j] * w3, or the first
+            // product to start; two floats at a time, each lane the same operations in the same
+            // order. `out` and `a` two lists (what matched it says so; checked again here).
+            static_assert(kLoopFMulAdd4 == 32, "regions.cpp's ah.shape 32");
+            if (!out.ok() || out.kind() != 2 || !a.ok() || a.kind() != 2 || out.h[0] == a.h[0]) return;
+            const int64_t lim = int64_t{1} << 50;
+            int64_t ob = 0, xb[4] = {0, 0, 0, 0};
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
+            if (!small(t[53]) || ob < -lim || ob > lim || next > lim || end > lim) return;
+            ob += static_cast<int64_t>(t[53]);
+            if (ob + next < 0 || static_cast<uint64_t>(ob + end - 1) >= out.h[1] || static_cast<uint64_t>(ob + end - 1) >= out.h[2]) return;
+            for (int q = 0; q < 4; q++) {
+                const uint64_t* w4 = t + 130 + 4 * q;
+                if (w4[0] == 1 && !operand(ctx, w4[1], w4[2], 0, xb[q])) return;
+                if (!small(w4[3]) || xb[q] < -lim || xb[q] > lim) return;
+                xb[q] += static_cast<int64_t>(w4[3]);
+                if (xb[q] + next < 0 || static_cast<uint64_t>(xb[q] + end - 1) >= a.h[1]) return;
+            }
+            double* o = out.floats() + ob + next;
+            const double* x0 = a.floats() + xb[0] + next;
+            const double* x1 = a.floats() + xb[1] + next;
+            const double* x2 = a.floats() + xb[2] + next;
+            const double* x3 = a.floats() + xb[3] + next;
+            const double w0 = bitsF(t[146]), w1 = bitsF(t[147]), w2 = bitsF(t[148]), w3 = bitsF(t[149]);
+            const bool start = t[7] == 1;
+            const __m128d v0 = _mm_set1_pd(w0), v1 = _mm_set1_pd(w1), v2 = _mm_set1_pd(w2), v3 = _mm_set1_pd(w3);
+            int64_t j = 0;
+            for (; j + 2 <= left; j += 2) {
+                const __m128d p0 = _mm_mul_pd(_mm_loadu_pd(x0 + j), v0);
+                __m128d s = start ? p0 : _mm_add_pd(_mm_loadu_pd(o + j), p0);
+                s = _mm_add_pd(s, _mm_mul_pd(_mm_loadu_pd(x1 + j), v1));
+                s = _mm_add_pd(s, _mm_mul_pd(_mm_loadu_pd(x2 + j), v2));
+                s = _mm_add_pd(s, _mm_mul_pd(_mm_loadu_pd(x3 + j), v3));
+                _mm_storeu_pd(o + j, s);
+            }
+            {
+#pragma clang fp contract(off)
+                for (; j < left; j++) {
+                    const double p0 = x0[j] * w0;
+                    double s = start ? p0 : o[j] + p0;
+                    s = s + x1[j] * w1;
+                    s = s + x2[j] * w2;
+                    s = s + x3[j] * w3;
+                    o[j] = s;
                 }
             }
             break;

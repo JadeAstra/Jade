@@ -3940,6 +3940,10 @@ struct Region {
         const Expr* yB = nullptr;
         const Expr* sizeW = nullptr;     // kLoopWSampleBilinear: the picture's width and height (words 130 to 133)
         const Expr* sizeH = nullptr;
+        // kLoopFMulAdd4: the four reads' bases and constants, and their weights.
+        const Expr* fourBase[4] = {nullptr, nullptr, nullptr, nullptr};
+        int64_t fourK[4] = {0, 0, 0, 0};
+        const Expr* fourWeight[4] = {nullptr, nullptr, nullptr, nullptr};
         // kLoopWSameItems: the two items compared, the template stopping before the first that
         // differ (the loop's own steps go on from there, into the way out they fall into).
         Followed::ItemCmp stopAt;
@@ -4514,6 +4518,49 @@ struct Region {
         ah.out = out, ah.a = px, ah.b = load->list;
         ah.baseA = outAt.base, ah.fromBase = ii.base, ah.yA = from;
         ah.copyWhat[0] = outAt.k, ah.copyWhat[1] = ii.k, ah.copyWhat[2] = wl;
+        ah.words[0] = first;
+        return true;
+    }
+    // Four multiply-adds of a row in one pass (kLoopFMulAdd4, 2026-11-15: numeric.ww's
+    // __mulAdd4, a blur's taps four at a time): out[o + j] = (((out[o + j] + a[b0 + j] * w0) + a[b1 +
+    // j] * w1) + a[b2 + j] * w2) + a[b3 + j] * w3, or the first product in place of out's float to
+    // start; each base the counter plus what is the same each time round, each weight a float the
+    // same each time round, `out` not `a`. Words: 50 to 53 out's base (50: 0 none, 1 an operand; 53
+    // a constant), from 130 four a read's (the same), 146 to 149 the weights, 7 1 to start.
+    template <typename Changed, typename Written>
+    bool mulAdd4(const Followed& fw, Ahead& ah, const Changed& changed, const Written& written) {
+        if (fw.stores.size() != 1 || fw.stores[0].stem != "hsetf" || ah.iterSlot >= 0 || fw.stores[0].index == nullptr) return false;
+        const Followed::Store& st = fw.stores[0];
+        auto product = [](int q) {
+            const std::string i = "i" + std::to_string(q), w = "w" + std::to_string(q);
+            return patOp('*', patLoad("a", patAny(i.c_str()), true), patAny(w.c_str()));
+        };
+        auto sum = [&](PatP start) { return patOp('+', patOp('+', patOp('+', patOp('+', std::move(start), product(0)), product(1)), product(2)), product(3)); };
+        const PatP firstForm = patOp('+', patOp('+', patOp('+', product(0), product(1)), product(2)), product(3));
+        Bound b;
+        int first = 0;
+        if (matches(*sum(patLoad("out", patAny("o"), true)), st.value, b)) {
+            if (b.lists["out"] != st.list || !same(b.exprs["o"], st.index)) return false;
+        } else {
+            b = Bound{};
+            if (!matches(*firstForm, st.value, b)) return false;
+            first = 1;
+        }
+        const int a = b.lists["a"];
+        if (a == st.list) return false;
+        Lin o;
+        if (!linear(st.index, o, 1, changed, written) || o.coef != 1) return false;
+        for (int q = 0; q < 4; q++) {
+            const std::string i = "i" + std::to_string(q), w = "w" + std::to_string(q);
+            Lin at;
+            if (!linear(b.exprs[i], at, 1, changed, written) || at.coef != 1) return false;
+            const Expr* wt = b.exprs[w];
+            if (wt == nullptr || wt->cls != CF || !(wt->kind == Expr::KFloat || wt->kind == Expr::Inv) || changed(wt)) return false;
+            ah.fourBase[q] = at.base, ah.fourK[q] = at.k, ah.fourWeight[q] = wt;
+        }
+        ah.shape = 32;  // kLoopFMulAdd4
+        ah.out = st.list, ah.a = a;
+        ah.baseA = o.base, ah.copyWhat[0] = o.k;
         ah.words[0] = first;
         return true;
     }
@@ -5432,6 +5479,7 @@ struct Region {
         }
         if (apartItems(fw, ah, changed, written)) return true;
         if (gatherPixels(fw, ah, changed, written)) return true;
+        if (mulAdd4(fw, ah, changed, written)) return true;
         if (colorFloats(fw, ah, changed, written)) return true;
         if (gather4(fw, ah, changed, written)) return true;
         // Below, a store of a number (hsetf, hsetwi, hsetwb); a value of a value type's (hsetsm,
@@ -5671,6 +5719,17 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 32) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(53, ah.copyWhat[0]);
+            for (int q = 0; q < 4; q++) {
+                word(130 + 4 * q, ah.fourBase[q] != nullptr ? 1 : 0);
+                if (ah.fourBase[q] != nullptr) operandWords(131 + 4 * q, ah.fourBase[q], 0);
+                word(133 + 4 * q, ah.fourK[q]);
+                if (!param(146 + q, ah.fourWeight[q])) return false;
+            }
         }
         if (ah.shape == 31) {
             word(50, ah.baseA != nullptr ? 1 : 0);
