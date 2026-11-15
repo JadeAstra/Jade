@@ -2005,7 +2005,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2976,6 +2976,54 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 for (uint64_t k = 0; k < nt; k++) key |= (static_cast<uint64_t>(p[toff[k]]) >> tshr[k]) << tshl[k];
                 for (uint64_t s = 0; s < n; s++)
                     counts[K[s] + static_cast<int64_t>(own[s] >= 0 ? p[own[s]] : key)] += kind[s] == 1 ? static_cast<int64_t>(p[v[s]]) : v[s];
+            }
+            break;
+        }
+        case kLoopWBlendNormal: {
+            // The normal blend of a row (regions.cpp, blendNormal, says the formula and the
+            // words): each backdrop pixel set from its source pixel, a see-through source's left;
+            // every operation in the steps' order, so the same pixels. Refused for a NaN opacity
+            // (min and max then not the same either way round).
+            static_assert(kLoopWBlendNormal == 28, "regions.cpp's ah.shape 28");
+            if (!a.ok() || !out.ok() || a.h[0] == out.h[0]) return;
+            const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
+            if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
+            const uint64_t tk = t[130];
+            if (tk >= 6) return;
+            const uint64_t* ht = ctx->lists + 4 * tk;
+            if (ht[3] != 2 || ht[1] < 256) return;
+            const double* u = reinterpret_cast<const double*>(ht[0]);
+            const double op = bitsF(t[129]);
+            if (op != op) return;
+            int64_t sb = 0, db = 0, sFirst, sLast, dFirst, dLast;
+            if (!itemBase(ctx, sb) || !itemBase(ctx, db, 56)) return;
+            if (__builtin_add_overflow(sb, next, &sFirst) || __builtin_add_overflow(sb, end - 1, &sLast) || __builtin_add_overflow(db, next, &dFirst) ||
+                __builtin_add_overflow(db, end - 1, &dLast) || sFirst < 0 || dFirst < 0 || static_cast<uint64_t>(sLast) >= a.h[1] ||
+                static_cast<uint64_t>(dLast) >= out.h[1] || static_cast<uint64_t>(dLast) >= out.h[2])
+                return;
+            const uint8_t* sp = a.bytes() + static_cast<uint64_t>(sFirst) * 4;
+            uint8_t* dp = out.bytes() + static_cast<uint64_t>(dFirst) * 4;
+            {
+#pragma clang fp contract(off)
+                auto held = [](double v) {
+                    const double m = 0.0 > v ? 0.0 : v;  // max(0, v), then min(1, m): as minf and maxf
+                    const double c = 1.0 < m ? 1.0 : m;
+                    return static_cast<uint8_t>(static_cast<int64_t>(c * 255.0 + 0.5));
+                };
+                for (int64_t j = 0; j < left; j++, sp += 4, dp += 4) {
+                    const double sa = u[sp[3]] * op;
+                    if (sa <= 0.0) continue;
+                    const double ba = u[dp[3]];
+                    const double ao = sa + ba * (1.0 - sa);
+                    uint8_t made[4];
+                    for (int c = 0; c < 3; c++) {
+                        const double cs = u[sp[c]], cb = u[dp[c]];
+                        const double cr = (1.0 - ba) * cs + ba * cs;
+                        made[c] = held((sa * cr + ba * (1.0 - sa) * cb) / ao);
+                    }
+                    made[3] = held(ao);
+                    dp[0] = made[0], dp[1] = made[1], dp[2] = made[2], dp[3] = made[3];
+                }
             }
             break;
         }

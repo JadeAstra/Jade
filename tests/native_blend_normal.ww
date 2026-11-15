@@ -1,0 +1,34 @@
+// The normal blend, which native code's loop template kLoopWBlendNormal does a row at a time
+// (2026-11-15): see-through and part see-through sources and backdrops, opacity 0, a half, 1 and
+// NaN (taken as 0), placed inside, across each edge and past them. The same as the VM's; each
+// run three times (a loop's region is made the second time it starts).
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        val a = s % 5 == 0 ? 0 : (s % 5 == 1 ? 255 : (s >> 16) % 256)
+        px[x, y] = Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 13).toByteWrapped(), a.toByte())
+      }
+    }
+  }
+  return im
+}
+val back = picture(70, 50, 3)
+val over = picture(33, 21, 7)
+for (round in 0 ..< 3) {
+  var out = ""
+  for (opacity in [0.0, 0.5, 1.0, 0.0 / 0.0, 0.37]) {
+    for (place in [[5, 7], [-10, -4], [50, 40], [-40, 10], [80, 3]]) {
+      val made = back.copy()
+      made.editPixels { it.blend(over.pixels, place[0], place[1], opacity) }
+      out += " ${made.hashCode()}"
+    }
+  }
+  print(out.trim())
+}
+// expect: 515409430 515409430 515409430 515409430 515409430 2011537266 863893714 1124084732 515409430 515409430 1176609817 462212604 1847114496 515409430 515409430 515409430 515409430 515409430 515409430 515409430 295305041 2112954793 812985470 515409430 515409430
+// expect: 515409430 515409430 515409430 515409430 515409430 2011537266 863893714 1124084732 515409430 515409430 1176609817 462212604 1847114496 515409430 515409430 515409430 515409430 515409430 515409430 515409430 295305041 2112954793 812985470 515409430 515409430
+// expect: 515409430 515409430 515409430 515409430 515409430 2011537266 863893714 1124084732 515409430 515409430 1176609817 462212604 1847114496 515409430 515409430 515409430 515409430 515409430 515409430 515409430 295305041 2112954793 812985470 515409430 515409430

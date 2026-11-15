@@ -3470,6 +3470,11 @@ struct Region {
         exprs.push_back(e);
         return &exprs.back();
     }
+    const Expr* kfloatOf(double v) {
+        Expr e{Expr::KFloat};
+        e.cls = CF, e.kf = v;
+        return mk(e);
+    }
     const Expr* kintOf(int64_t v) {
         Expr e{Expr::KInt};
         e.ki = v;
@@ -4153,6 +4158,115 @@ struct Region {
         ah.mixWords = {0, made.global, made.cls};
         return true;
     }
+    // The normal blend of a row (kLoopWBlendNormal, 2026-11-15: numeric.ww's __blendNormalRow):
+    // each backdrop pixel d (items of four bytes at a base plus the counter) set from source pixel
+    // s (another list's, the same way), skipped where sa = u[s.alpha] * opacity is at most 0;
+    // with ba = u[d.alpha] and ao = sa + ba (1 - sa), each part c of the three
+    // held((sa ((1 - ba) u[s.c] + ba u[s.c]) + ba (1 - sa) u[d.c]) / ao), alpha held(ao), held(v)
+    // = (min(1, max(0, v)) 255 + 0.5) cut: u a list of floats (the bytes over 255). Matched by
+    // its expressions written out with each leaf named by what it is, sums and products and min
+    // and max with their two sides in one order (each the same either way round: neither side is
+    // ever NaN, opacity checked as it runs), against the same written out for that formula.
+    // Words: 50 to 54 where the source is read, 56 to 60 where the backdrop is, 97 and 98 the
+    // class Color(...) calls, 129 the opacity, 130 the table.
+    bool blendNormal(const Followed& fw, Ahead& ah) {
+        if (fw.stores.size() != 1 || fw.stores[0].stem != "hsetsm" || ah.skips.size() != 1) return false;
+        const Followed::Store& st = fw.stores[0];
+        auto madeAt = fw.made.find(st.source);
+        if (madeAt == fw.made.end()) return false;
+        const Followed::Made& made = madeAt->second;
+        if ((static_cast<uint64_t>(st.what) >> 32) != static_cast<uint64_t>(made.id) || ((static_cast<uint64_t>(st.what) >> 24) & 0xFF) != 4 || st.width != 4)
+            return false;
+        // The leaves by what they are: S0 to S3 the source's bytes, D0 to D3 the backdrop's, P the
+        // opacity, u[...] the table's floats.
+        int source = -1, table = -1;
+        const Expr* sourceIndex = nullptr;
+        const Expr* opacity = nullptr;
+        bool bad = false;
+        auto fmt = [](double v) {
+            char text[40];
+            std::snprintf(text, sizeof text, "%.17g", v);
+            return std::string(text);
+        };
+        auto bin = [](char op, std::string a, std::string b) {
+            if ((op == '+' || op == '*') && b < a) std::swap(a, b);
+            return "(" + a + op + b + ")";
+        };
+        auto two = [](const char* name, std::string a, std::string b) {
+            if (b < a) std::swap(a, b);
+            return std::string(name) + "(" + a + "," + b + ")";
+        };
+        std::function<std::string(const Expr*)> show = [&](const Expr* e) -> std::string {
+            if (e == nullptr || bad) return bad = true, "";
+            switch (e->kind) {
+                case Expr::KFloat: return fmt(e->kf);
+                case Expr::KInt: return std::to_string(e->ki);
+                case Expr::Field: {
+                    if ((e->ki & 0xFF) != 1 || (e->ki >> 32) != 4) return bad = true, "";
+                    const int64_t offset = (e->ki >> 8) & 0xFFFFFF;
+                    if (e->list == st.list && same(e->b, st.index)) return "D" + std::to_string(offset);
+                    if (source < 0 && e->list != st.list) source = e->list, sourceIndex = e->b;
+                    if (e->list == source && same(e->b, sourceIndex)) return "S" + std::to_string(offset);
+                    return bad = true, "";
+                }
+                case Expr::Load: {
+                    if (e->cls != CF) return bad = true, "";
+                    if (table < 0) table = e->list;
+                    if (e->list != table) return bad = true, "";
+                    return "u[" + show(e->b) + "]";
+                }
+                case Expr::Inv: {
+                    if (e->cls != CF) return bad = true, "";
+                    if (opacity == nullptr) opacity = e;
+                    if (!same(e, opacity)) return bad = true, "";
+                    return "P";
+                }
+                case Expr::Bin: return bin(e->op, show(e->a), show(e->b));
+                case Expr::Min: return two("min", show(e->a), show(e->b));
+                case Expr::Max: return two("max", show(e->a), show(e->b));
+                case Expr::ToByte: return "byte(" + show(e->a) + ")";
+                case Expr::ToInt: return "int(" + show(e->a) + ")";
+                case Expr::ToFloat: return "float(" + show(e->a) + ")";
+                default: return bad = true, "";
+            }
+        };
+        // The formula, written out the same way.
+        const std::string one = fmt(1.0), zero = fmt(0.0);
+        auto u = [](const std::string& x) { return "u[" + x + "]"; };
+        const std::string sa = bin('*', u("S3"), "P"), ba = u("D3");
+        const std::string ao = bin('+', sa, bin('*', ba, bin('-', one, sa)));
+        auto held = [&](const std::string& v) {
+            return "byte(int(" + bin('+', bin('*', two("min", one, two("max", zero, v)), fmt(255.0)), fmt(0.5)) + "))";
+        };
+        auto part = [&](int c) {
+            const std::string cs = u("S" + std::to_string(c)), cb = u("D" + std::to_string(c));
+            const std::string cr = bin('+', bin('*', bin('-', one, ba), cs), bin('*', ba, cs));
+            return held(bin('/', bin('+', bin('*', sa, cr), bin('*', bin('*', ba, bin('-', one, sa)), cb)), ao));
+        };
+        // The four bytes, down to nothing (a value made from them alone).
+        const Expr* lanes[4] = {nullptr, nullptr, nullptr, nullptr};
+        const Expr* v = made.bytes;
+        while (v->kind == Expr::Bin && v->op == 'p') {
+            if (v->ki % 8 != 0 || v->ki < 0 || v->ki > 24 || lanes[v->ki / 8] != nullptr) return false;
+            lanes[v->ki / 8] = v->b;
+            v = v->a;
+        }
+        if (v->kind != Expr::KInt || v->ki != 0) return false;
+        for (int c = 0; c < 4; c++)
+            if (lanes[c] == nullptr || show(lanes[c]) != (c < 3 ? part(c) : held(ao)) || bad) return false;
+        // The skip: sa <= 0.
+        const Followed::Cmp& g = ah.skips[0];
+        if (g.op != 2 || show(g.a) != sa || g.b == nullptr || g.b->kind != Expr::KFloat || g.b->kf != 0.0 || bad) return false;
+        if (source < 0 || table < 0 || opacity == nullptr || source == st.list) return false;
+        // Each at a base plus the counter.
+        Ahead out;
+        if (!fieldIndex(sourceIndex, ah) || !fieldIndex(st.index, out)) return false;
+        ah.outMode = out.baseMode, ah.outA = out.baseA, ah.outB = out.baseB;
+        ah.shape = 28;  // kLoopWBlendNormal
+        ah.a = source, ah.out = st.list, ah.p1 = opacity;
+        ah.mixWords = {made.global, made.cls, table};
+        return true;
+    }
     // Byte fields of each item counted into a list of ints (kLoopWCountItems, 2026-11-15: a
     // histogram, `levels[256 + px[p].green] += 1`; a palette's bins, `bins[32768 + key] += g` with
     // `key = (r >> 3) << 10 | (g >> 3) << 5 | b >> 3`, see-through pixels skipped): every store
@@ -4627,8 +4741,9 @@ struct Region {
             }
             // A skip (2026-11-15): a jump on where a comparison does not hold, which falls into the
             // loop's way back to its head where it does (`if (c.alpha < 128) { continue }`): the
-            // item left as it is, the rest of the body not done. kLoopWCountItems alone takes it.
-            if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && (last->stem.substr(4) == "ii" || last->stem.substr(4) == "ik") &&
+            // item left as it is, the rest of the body not done. kLoopWCountItems and
+            // kLoopWBlendNormal take it.
+            if (last != nullptr && last->stem.size() == 6 && last->stem.rfind("jn", 0) == 0 && (last->stem.substr(4) == "ii" || last->stem.substr(4) == "ik" || last->stem.substr(4) == "fk") &&
                 last->jumpExit < 0 && last->jumpTo >= i + 2 && last->jumpTo < e) {
                 // The way there: instructions with no steps (the body's variables let go), then
                 // the way back alone.
@@ -4653,7 +4768,7 @@ struct Region {
                     Followed::Cmp g;
                     g.op = op;
                     g.a = valueOf(fw, last->named[0]);
-                    g.b = last->stem.substr(4) == "ik" ? kintOf(last->ki) : valueOf(fw, last->named[1]);
+                    g.b = last->stem.substr(4) == "ik" ? kintOf(last->ki) : last->stem.substr(4) == "fk" ? kfloatOf(last->kf) : valueOf(fw, last->named[1]);  // fk: a float against a constant (2026-11-15: the blend's sa <= 0.0)
                     ah.skips.push_back(g);
                     i = last->jumpTo;
                     continue;
@@ -4870,8 +4985,9 @@ struct Region {
                 if (usesReg(st.value, d) || usesReg(st.index, d)) return false;
         // An item skipped: counting alone.
         if (!ah.skips.empty())
-            return !ah.hasAcc && fw.heldWrites.empty() && ah.iterSlot < 0 && ah.guards.empty() && countItems(fw, ah) && !changed(ah.baseA) &&
-                   !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB));
+            return !ah.hasAcc && fw.heldWrites.empty() && ah.iterSlot < 0 && ah.guards.empty() && (countItems(fw, ah) || blendNormal(fw, ah)) &&
+                   !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) && !changed(ah.outA) &&
+                   !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)) && !changed(ah.p1);
         // Items compared until two differ (2026-11-14: an Image's ==), nothing else done: the
         // template moves on past those the same.
         if (ah.stopAt.listA >= 0) {
@@ -5266,6 +5382,16 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 28) {
+            word(50, ah.baseMode);
+            if (ah.baseMode >= 1) operandWords(51, ah.baseA, 0);
+            if (ah.baseMode == 2) operandWords(53, ah.baseB, 0);
+            word(56, ah.outMode);
+            if (ah.outMode >= 1) operandWords(57, ah.outA, 0);
+            if (ah.outMode == 2) operandWords(59, ah.outB, 0);
+            word(97, ah.mixWords[0]), word(98, ah.mixWords[1]), word(130, ah.mixWords[2]);
+            if (!param(129, ah.p1)) return false;
         }
         if (ah.shape == 27) {
             word(50, ah.baseA != nullptr ? 1 : 0);

@@ -900,7 +900,7 @@ enum BlendMode { normal, multiply, screen, overlay, darken, lighten, colorDodge,
 fun Grid<Color>.blend(over : Grid<Color>, x : int = 0, y : int = 0, opacity : Number = 1.0, mode : BlendMode = BlendMode.normal) {
   if (!writable) { throw IllegalStateException("this grid is only read here: change an image's pixels in image.editPixels { }") }
   val o = opacity.toFloat()
-  __blendColors(cells, width, height, over.cells, over.width, over.height, x, y, o < 0.0 ? 0.0 : (1.0 < o ? 1.0 : o), mode.ordinal)
+  __blendColors(cells, width, height, over.cells, over.width, over.height, x, y, !(o >= 0.0) ? 0.0 : (1.0 < o ? 1.0 : o), mode.ordinal)
 }
 
 // Each byte over 255.0 (2026-11-15): the very quotient a division gives, read where the blends
@@ -929,27 +929,36 @@ fun __blendNormal(to : open List<Color>, tw : int, th : int, from : List<Color>,
   for (fy in 0 ..< fh) {
     val ty = oy + fy
     if (ty < 0 or ty >= th) { continue }
-    for (fx in firstX ..< endX) {
-      val s = from[fy * fw + fx]
-      val at = ty * tw + ox + fx
-      val d = to[at]
-      val sa = u[s.alpha.toInt()] * opacity
-      if (sa <= 0.0) { continue }
-      val ba = u[d.alpha.toInt()]
-      val sr = u[s.red.toInt()]
-      val sg = u[s.green.toInt()]
-      val sb = u[s.blue.toInt()]
-      val br = u[d.red.toInt()]
-      val bg = u[d.green.toInt()]
-      val bb = u[d.blue.toInt()]
-      val mr = sr
-      val mg = sg
-      val mb = sb
-      val ao = sa + ba * (1.0 - sa)
-      to[at] = Color(__laidOver(sa, ba, ao, sr, br, mr), __laidOver(sa, ba, ao, sg, bg, mg), __laidOver(sa, ba, ao, sb, bb, mb), __unitByte(ao))
-    }
+    __blendNormalRow(to, ty * tw + ox, from, fy * fw, firstX, endX, opacity, u)
   }
 }
+// One row of the normal blend, from fx = first to end: the backdrop at toAt + fx, the source at
+// fromAt + fx. Written with no branch but the see-through source's skip (2026-11-15: a loop
+// native code's template kLoopWBlendNormal does whole): the result's alpha is above zero once the
+// source's is (a + b (1 - a), a above 0 and at most 1), so the C++'s test of it always held, and
+// each part held to 0 to 1 by min and max, as the tests did; the same pixels.
+fun __blendNormalRow(to : open List<Color>, toAt : int, from : List<Color>, fromAt : int, first : int, end : int, opacity : float, u : List<float>) {
+  for (fx in first ..< end) {
+    val s = from[fromAt + fx]
+    val d = to[toAt + fx]
+    val sa = u[s.alpha.toInt()] * opacity
+    if (sa <= 0.0) { continue }
+    val ba = u[d.alpha.toInt()]
+    val ao = sa + ba * (1.0 - sa)
+    val r = __normalPart(sa, ba, ao, u[s.red.toInt()], u[d.red.toInt()])
+    val g = __normalPart(sa, ba, ao, u[s.green.toInt()], u[d.green.toInt()])
+    val b = __normalPart(sa, ba, ao, u[s.blue.toInt()], u[d.blue.toInt()])
+    to[toAt + fx] = Color(r, g, b, __unitHeld(ao))
+  }
+}
+// A part laid over in the normal mode (the mix the source's part itself), as __laidOver works it
+// out where the result's alpha is above zero.
+inline fun __normalPart(sa : float, ba : float, ao : float, cs : float, cb : float) : byte {
+  val cr = (1.0 - ba) * cs + ba * cs
+  return __unitHeld((sa * cr + ba * (1.0 - sa) * cb) / ao)
+}
+// As __unitByte, held by min and max (the same for any number but NaN).
+inline fun __unitHeld(v : float) : byte => (Math.min(1.0, Math.max(0.0, v)) * 255.0 + 0.5).toInt().toByte()
 fun __blendSimple(to : open List<Color>, tw : int, th : int, from : List<Color>, fw : int, fh : int, ox : int, oy : int, opacity : float, mode : int) {
   val u = __units
   val firstX = Math.max(0, -ox)
