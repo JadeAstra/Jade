@@ -1,0 +1,110 @@
+// A whole function's region (2026-11-15): a function called often (64 times) made machine code
+// from just past its parameters to its end, at a return, where the frame says what its locals
+// are; its loops left out, each to its own region, the VM going from one region straight into
+// the next. Each function here is called 200 times a round, and the answers summed or kept: the
+// same as `ww --interpret` gives (the runner runs every test both ways), errors and lines too.
+
+fun failing(block : () -> any?) : string {
+  try {
+    block()
+  } catch (e : Exception) {
+    return "${e#.name}: ${e.message}"
+  }
+  return "no error"
+}
+
+// Straight-line int work, its parameters checked.
+fun mix(a : int, b : int) : int {
+  var h = a * 31 + b
+  h = h ^ (h >>> 7)
+  h = h * 17 + 3
+  h = h ^ (h << 5)
+  h = h + (h >> 3)
+  h = h ^ (h >>> 11)
+  h = h * 13 + 7
+  return h & 1023
+}
+
+// A default argument, early returns, and floats.
+fun shape(w : float, h : float, scale : float = 2.0) : float {
+  if (w <= 0.0) { return -1.0 }
+  val area = w * h * scale
+  if (area > 1000.0) { return 1000.0 }
+  val edge = (w + h) * 2.0
+  return area / edge + scale
+}
+
+// A loop left out (it calls a function: VM work in it), the code before and after it the
+// function's region, a break taking the loop's region out at once.
+fun firstOver(xs : List<int>, limit : int, start : int = 0) : int {
+  val n = xs.size
+  var found = -1
+  val half = limit / 2 + start
+  for (i in start ..< n) {
+    if (xs[i] > limit) {
+      found = i
+      break
+    }
+    if (xs[i] == half) { found = mix(i, half) }
+  }
+  val tail = n - found
+  return found * 1000 + tail
+}
+
+// An int's overflow and a division by zero inside the region: the VM does them, as it would.
+fun risky(a : int, d : int) : int {
+  val big = a * 1537228672809129301
+  val q = big / d
+  val r = a % d
+  val s = q - r * 3 + (q >> 4)
+  val t = s ^ (r << 2)
+  val u = t + (t >> 7) - (s & 255)
+  val v = u - (t >> 2) + (u >> 9)
+  return v ^ (u << 1) ^ (t >> 3)
+}
+
+// A method on an object's fields, and a value type's parts.
+class Box(var x : int, var y : int, var w : int, var h : int) {
+  fun grown(by : int) : Rect {
+    val nx = x - by
+    val ny = y - by
+    if (w + 2 * by <= 0) { return Rect(nx, ny, 0, 0) }
+    return Rect(nx, ny, w + 2 * by, h + 2 * by)
+  }
+}
+fun word(c : Color) : int {
+  return c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24
+}
+
+// Recursion: each call its own frame, the region entered afresh in each.
+fun depth(n : int, acc : int) : int {
+  if (n == 0) { return acc }
+  val next = acc * 3 + n
+  return depth(n - 1, next % 100003)
+}
+
+val xs = List(50) { it * 7 % 31 }
+val box = Box(3, 4, 10, 6)
+for (round in 0 ..< 3) {
+  var t = 0
+  var f = 0.0
+  var where = 0
+  var grown = Rect(0, 0, 0, 0)
+  var words = 0
+  for (k in 0 ..< 200) {
+    t += mix(k, t % 1000)
+    f += shape(k * 0.5, 3.0) + shape(-1.0, 2.0) + shape(k * 1.0, k * 1.0, 0.5)
+    where += firstOver(xs, 20 + k % 12, k % 5)
+    grown = box.grown(k % 9 - 4)
+    words += word(Color((k % 256).toByte(), 1.toByte(), 2.toByte(), 255.toByte())) % 1000
+    t += depth(k % 30, 1) + risky(k % 6, k % 7 + 1) % 1000
+  }
+  print("$t ${Math.round(f * 1000)} $where $grown $words")
+  print(failing { risky(3, 0) }, failing { risky(7, 1) }, risky(0, 7), risky(5, 3))
+}
+// expect: 6656543 155876602 8380621 Rect(6, 7, 4 x 0) 101500
+// expect: ArithmeticException: division by zero ArithmeticException: 7 * 1537228672809129301 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &* for an answer that wraps around 0 6065884948497055554
+// expect: 6656543 155876602 8380621 Rect(6, 7, 4 x 0) 101500
+// expect: ArithmeticException: division by zero ArithmeticException: 7 * 1537228672809129301 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &* for an answer that wraps around 0 6065884948497055554
+// expect: 6656543 155876602 8380621 Rect(6, 7, 4 x 0) 101500
+// expect: ArithmeticException: division by zero ArithmeticException: 7 * 1537228672809129301 does not fit in an int, which holds -9223372036854775808 to 9223372036854775807; write &* for an answer that wraps around 0 6065884948497055554

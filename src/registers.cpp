@@ -1302,6 +1302,9 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     f.regionsNow.store(nullptr, std::memory_order_release);
     f.nativeHeads.clear();
     f.nativeArrivals.clear();
+    f.nativeCallHead = UINT32_MAX;
+    f.nativeCalls = 0;
+    f.nativeReturns.clear();
     bool loops = false;
     if (opBytes == kOpBytes && !f.runTops.empty()) {
         // Each where an instruction starts; one inside an instruction (a comparison the jump

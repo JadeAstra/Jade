@@ -1398,6 +1398,10 @@ private:
     // address before the first instruction of the loop the region was made of.
     WW_TAIL_FN int nativeEnter(WW_TAIL_PARAMS);
     WW_TAIL_FN int nativeFirst(WW_TAIL_PARAMS);
+    // A whole function's region (2026-11-15): its calls counted at its start, then made at a
+    // return, where the frame holds what its locals are.
+    WW_TAIL_FN int nativeCall(WW_TAIL_PARAMS);
+    WW_TAIL_FN int nativeReturn(WW_TAIL_PARAMS);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif

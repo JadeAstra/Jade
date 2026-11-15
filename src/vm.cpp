@@ -5794,6 +5794,8 @@ struct TailTable {
     static const TailFn* get();
     static TailFn nativeEntry() { return &VM::nativeEnter; }
     static TailFn nativeFirstEntry() { return &VM::nativeFirst; }
+    static TailFn nativeCallEntry() { return &VM::nativeCall; }
+    static TailFn nativeReturnEntry() { return &VM::nativeReturn; }
 };
 namespace {
 // Writes into run code each instruction's function (D160), as the code is made: the functions,
@@ -5811,6 +5813,11 @@ void addressCode(FunctionProto& f) {
     const TailFn first = TailTable::nativeFirstEntry();
     for (size_t k = 0; k < f.nativeHeads.size(); k++)
         if (f.nativeArrivals[k] < 2) std::memcpy(f.run.data() + f.nativeHeads[k], &first, kThreaded);
+    // A whole function's start, its calls counted until its region is made (2026-11-15).
+    if (f.nativeCallHead != UINT32_MAX) {
+        const TailFn call = TailTable::nativeCallEntry();
+        std::memcpy(f.run.data() + f.nativeCallHead, &call, kThreaded);
+    }
     const TailFn enter = TailTable::nativeEntry();
     if (const auto* regions = f.regionsNow.load(std::memory_order_acquire))
         for (const FunctionProto::NativeRegion& r : *regions) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
@@ -6913,6 +6920,69 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
     [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
 }
 
+// How many times a function is called before its whole region is made (2026-11-15): enough that
+// a function called a few times, as most are, costs nothing to make; few enough that one called
+// in a loop is made at once.
+constexpr uint32_t kNativeCallsFirst = 64;
+
+// A whole function's start, until its region is made: the calls counted, and at the count the
+// function's returns made VM::nativeReturn's, which makes the region (as the frame then says
+// what the function's locals are); the start the instruction's own function again.
+WW_TAIL_FN int VM::nativeCall(WW_TAIL_PARAMS) {
+    FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
+    uint8_t* const run = const_cast<uint8_t*>(code);
+    const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
+    if (head == f.nativeCallHead && ++f.nativeCalls == kNativeCallsFirst) {  // racing cores may count one call twice: as well
+        static std::mutex arming;
+        std::lock_guard<std::mutex> hold(arming);
+        const TailFn back = TailTable::nativeReturnEntry();
+        for (uint32_t at : f.nativeReturns) std::memcpy(run + at, &back, kThreaded);
+        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
+        std::memcpy(run + head, &own, kThreaded);
+    }
+    ip -= kThreaded + kOpBytes;
+    const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
+    sp_ = sp;
+    frame->ip = ip += kThreaded + kOpBytes;
+    [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
+}
+
+// A return of a function called often (nativeCall): its whole region made, the frame's slots
+// saying what its locals hold; its start then the region's way in, and its returns their own.
+WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
+    FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
+    uint8_t* const run = const_cast<uint8_t*>(code);
+    {
+        static std::mutex making;
+        std::lock_guard<std::mutex> hold(making);
+        if (f.nativeCallHead != UINT32_MAX && f.nativeCalls >= kNativeCallsFirst && f.nativeCalls != UINT32_MAX) {
+            f.nativeCalls = UINT32_MAX;  // made, or refused: never again
+            std::vector<FunctionProto::NativeRegion> made;
+            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size()};
+            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), f.nativeCallHead, made);
+            nativeGlobalsSeen = GlobalsSeen{};
+            for (uint32_t at : f.nativeReturns) {
+                const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))];
+                std::memcpy(run + at, &own, kThreaded);
+            }
+            if (!made.empty()) {
+                auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
+                if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
+                list->insert(list->end(), made.begin(), made.end());
+                f.regionsNow.store(list.get(), std::memory_order_release);
+                f.regionLists.push_back(std::move(list));
+                const TailFn enter = TailTable::nativeEntry();
+                for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+            }
+        }
+    }
+    ip -= kThreaded + kOpBytes;
+    const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
+    sp_ = sp;
+    frame->ip = ip += kThreaded + kOpBytes;
+    [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
+}
+
 // Into a native code region (M9.5): its machine code run on this frame's slots from the
 // instruction here, one of its ways in, and on where it gives back, with the stack's top it
 // gives. `ip` is just past the instruction's opcode, where the instruction before put it.
@@ -6926,7 +6996,8 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
                 region = &r;
                 break;
             }
-    if (region != nullptr) {
+    uint32_t at = head;
+    for (int chained = 0; region != nullptr; chained++) {
         // The context, its lists and held fields set to nothing only at the region's start: they
         // are made by its prologue, which no other way in runs, and read only in a region with no
         // other way in (its lists and fields looked at once where nothing of the VM's is in it but
@@ -6940,33 +7011,54 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         context.globals = globals_.data();
         context.upvalues = frame->closure->upvalues.data();
         context.units = native::unitTable();
-        if (region->first) {
-            std::memset(context.lists, 0, sizeof context.lists);
-            std::memset(context.held, 0, sizeof context.held);
+        if (region->looks) {
+            if (region->first) {
+                std::memset(context.lists, 0, sizeof context.lists);
+                std::memset(context.held, 0, sizeof context.held);
+            }
+            std::memset(context.heldAt, 0, sizeof context.heldAt);
         }
-        std::memset(context.heldAt, 0, sizeof context.heldAt);
         const int64_t out = native::runRegion(region->code, base, &context);
-        static const bool traceExits = std::getenv("WW_TRACE_EXITS") != nullptr;
+        // WW_TRACE_EXITS=n: the first n ways in and out (at least 30).
+        static const int traceExits = std::getenv("WW_TRACE_EXITS") == nullptr ? 0 : std::max(std::atoi(std::getenv("WW_TRACE_EXITS")), 30);
         static int traced = 0;
-        if (traceExits && traced < 30) {
+        if (traced < traceExits) {
             traced++;
-            std::fprintf(stderr, "region %s: in at %u, out at %u\n", frame->closure->proto->name.c_str(), head, static_cast<uint32_t>(out));
+            std::fprintf(stderr, "region %s: in at %u, out at %u%s\n", frame->closure->proto->name.c_str(), at, static_cast<uint32_t>(out),
+                         ((static_cast<uint64_t>(out) >> 48) & 1) != 0 ? " (could not)" : "");
         }
         sp = base + ((static_cast<uint64_t>(out) >> 32) & 0xFFFF);
         ip = code + static_cast<uint32_t>(out);
         // A quick way that could not: past a limit, the region's ways in are the VM's own
         // instructions again (one aligned word each, as the run code's addresses are written).
-        if (((static_cast<uint64_t>(out) >> 48) & 1) != 0 && ++*region->misses == kNativeMissLimit) {
+        const bool missed = ((static_cast<uint64_t>(out) >> 48) & 1) != 0;
+        if (missed && ++*region->misses == kNativeMissLimit) {
             for (const FunctionProto::NativeRegion& r : *regions)
                 if (r.misses == region->misses) {
-                    uint8_t* at = const_cast<uint8_t*>(code) + r.head;
-                    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(at + kThreaded))];
-                    std::memcpy(at, &own, kThreaded);
+                    uint8_t* way = const_cast<uint8_t*>(code) + r.head;
+                    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(way + kThreaded))];
+                    std::memcpy(way, &own, kThreaded);
                 }
         }
-    } else {
-        ip = code + head;
+        // Left at another region's way in (a loop's region where its function's goes on after
+        // the loop, and the function's at the start of a loop left to its own, 2026-11-15):
+        // straight into that one, as the VM would at once. Not where this one could not do what
+        // it left at (the VM does it), and not round and round.
+        const uint32_t next = static_cast<uint32_t>(out);
+        if (missed || chained == 3 || next == at) break;
+        const TailFn enter = TailTable::nativeEntry();
+        if (std::memcmp(code + next, &enter, kThreaded) != 0) break;
+        const FunctionProto::NativeRegion* other = nullptr;
+        for (const FunctionProto::NativeRegion& r : *regions)
+            if (r.head == next) {
+                other = &r;
+                break;
+            }
+        if (other == nullptr || other->misses == region->misses) break;
+        region = other;
+        at = next;
     }
+    if (region == nullptr) ip = code + head;
     // The VM does the instruction the region left at: its own function, never this one again,
     // where the instruction is another way into the region.
     const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];

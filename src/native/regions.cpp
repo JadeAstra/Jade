@@ -446,7 +446,13 @@ struct Region {
     // meet one (wantInts), and the region made again with them.
     std::set<int> intLists;
     mutable std::set<int> wantInts;
-    std::vector<Result> results;               // each instruction's, in its state
+    // A whole function's region (2026-11-15): its loops are left out (`outside`: a way there
+    // leaves for the VM, which goes into the loop's own region as it would), and the region is
+    // come back into where each loop ends (`seeds`, more ways in). Each loop keeps the region it
+    // has (lists looked at once, fields held), which a region with other ways in cannot have.
+    std::set<int> outside;
+    std::set<int> seeds;
+    std::vector<Result> results;              // each instruction's, in its state
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
 
@@ -1090,7 +1096,7 @@ struct Region {
         }
         void go(uint32_t target, const State& st, LOp& jumping) {
             auto found = r.index.find(target);
-            if (found == r.index.end()) {
+            if (found == r.index.end() || r.outside.count(found->second)) {
                 jumping.jumpExit = exitTo(target, st);
             } else if (r.resumed.count(found->second)) {
                 jumping.jumpExit = exitTo(target, st);
@@ -1102,6 +1108,12 @@ struct Region {
             }
         }
         void fall(const State& st) {
+            if (r.outside.count(i + 1)) {
+                // On into a loop left out: a way out to the VM there.
+                op("jump").jumpExit = exitTo(r.ins[static_cast<size_t>(i) + 1].at, st);
+                out.fallsThrough = false;
+                return;
+            }
             if (r.resumed.count(i + 1)) {
                 out.fallExit = exitTo(r.ins[static_cast<size_t>(i) + 1].at, st);
                 if (lowering) out.exits.back().toEntry = i + 1;
@@ -2194,7 +2206,16 @@ struct Region {
     // (a Fact).
     void move(Ctx& c, int from, int to) {
         const Fact* known = factOf(c.s, from);
-        const int16_t fact = known != nullptr ? static_cast<int16_t>(known - facts.data()) : static_cast<int16_t>(-1);
+        int16_t fact = known != nullptr ? static_cast<int16_t>(known - facts.data()) : static_cast<int16_t>(-1);
+        // A value of a value type as entered, as the frame has it: the copy known as one too (its
+        // own slot may hold another variable where the frame was read: a whole function's region
+        // is made at a return, 2026-11-15). A guess the steps check.
+        if (fact < 0 && (c.s.kind(from).bits == kEntry || inMemory(c.s.kind(from))))
+            if (const ObjClass* const cls = valueClass(c.s, from)) {
+                Fact v;
+                v.value = cls;
+                fact = intern(v);
+            }
         moveSlot(c, from, to);
         if (fact >= 0) c.s.kinds[to].fact = fact;
     }
@@ -2541,6 +2562,7 @@ struct Region {
         switch (which) {
             case NumericOp::ToInt:
                 if (cls == CF) c.leaves(c.op("cvtfi", {asI, asF}, {asF}, {asI}));
+                else if (k.bits == kEntry || inMemory(k)) own(CI, false);  // in memory: read, checked a whole number (2026-11-15)
                 else if (cls != CI) island();
                 c.write(top, K{kInt});
                 break;
@@ -2631,7 +2653,9 @@ struct Region {
             const int i = work.back();
             work.pop_back();
             done[static_cast<size_t>(i)] = true;
-            Result r = transfer(i, in[static_cast<size_t>(i)], false);
+            // No longer given anything (the island before it, say): not reached, and so giving
+            // nothing on (stepped through, its state's top unknown, it gave the next a top of -1).
+            Result r = in[static_cast<size_t>(i)].known ? transfer(i, in[static_cast<size_t>(i)], false) : Result{};
             std::map<int, State> gives;
             for (const Edge& e : r.edges) {
                 if (e.to < 0 || e.to >= static_cast<int>(n)) refuse("a way past the loop's end");
@@ -2667,6 +2691,8 @@ struct Region {
     void analyse(int headTop) {
         maybeNullFacts = &maybeNull;
         entries = {0};
+        for (int e : seeds)
+            if (e > 0 && e < static_cast<int>(ins.size()) && !outside.count(e) && topAt(e) >= 0) entries.insert(e);
         tops[ins[0].at] = headTop;
         // A round finds the ways in after the islands its states reach, often one more each round
         // (GIF's LZW writer takes 24): up to 32, the analysis's time held as everywhere else.
@@ -2701,7 +2727,7 @@ struct Region {
             for (size_t i = 0; i < ins.size(); i++) {
                 if (!in[i].known || !results[i].island) continue;
                 for (int e : results[i].resumes) {
-                    if (e <= 0 || e >= static_cast<int>(ins.size()) || topAt(e) < 0) continue;
+                    if (e <= 0 || e >= static_cast<int>(ins.size()) || topAt(e) < 0 || outside.count(e)) continue;
                     if (in[static_cast<size_t>(e)].known && results[static_cast<size_t>(e)].island) continue;
                     more.insert(e);
                     join(nextComeBack[e], afterIsland(in[i], static_cast<int>(i), topAt(e)));
@@ -6958,7 +6984,80 @@ struct Candidate {
     int first, last;  // instructions, the loop's start and its Loop
 };
 
+// Where a whole function's region starts (2026-11-15): the first instruction past its
+// parameters' prologue (defaults given, parameters checked: the VM's) that every call comes to
+// once, nothing before it jumping past it, from which a run of instructions a region does
+// follows (four, or fewer on the way to a return); -1 where there is none, or where it is a
+// loop's start. `mayDoAt(i)`, `endsAt(i)` and `targetOf(i)` (an instruction's jump target as an
+// index, or -1) say what the instructions are.
+template <typename MayDo, typename Ends, typename TargetOf>
+int functionHead(int count, MayDo mayDoAt, Ends endsAt, TargetOf targetOf, const std::vector<int>& loopHeads) {
+    int reach = 0;  // the furthest instruction any before jumps to
+    for (int i = 0; i < count && i < 64; i++) {
+        if (i >= reach && mayDoAt(i)) {
+            int run = 0;
+            int k = i;
+            for (; k < count && run < 4 && mayDoAt(k); k++) run++;
+            if (run >= 4 || k == count || endsAt(k)) {
+                if (std::find(loopHeads.begin(), loopHeads.end(), i) != loopHeads.end()) return -1;
+                return i;
+            }
+        }
+        if (const int t = targetOf(i); t > reach) reach = t;
+    }
+    return -1;
+}
+
 void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
+
+// A function's run code read as instructions, with where each starts -> its place.
+std::vector<Ins> readRun(const FunctionProto& f, std::unordered_map<uint32_t, int>* index) {
+    std::vector<Ins> all;
+    for (size_t at = 0; at < f.run.size();) {
+        const char* name = nullptr;
+        const size_t size = runSize(f.run, at + kThreaded, name);
+        Ins x;
+        x.at = static_cast<uint32_t>(at);
+        x.op = opAt(f.run.data() + at + kThreaded);
+        x.o = f.run.data() + at + kThreaded + kOpBytes;
+        x.next = static_cast<uint32_t>(at + kThreaded + size);
+        if (index != nullptr) (*index)[x.at] = static_cast<int>(all.size());
+        all.push_back(x);
+        at += kThreaded + size;
+    }
+    return all;
+}
+// The last instruction of the function's own code, before the R instructions' slow ways: the
+// last the translator gave a top (FunctionProto::runTops); -1 where none has one.
+int lastOwn(const FunctionProto& f, const std::unordered_map<uint32_t, int>& index) {
+    int last = -1;
+    for (const auto& [at, top] : f.runTops)
+        if (auto i = index.find(at); i != index.end()) last = std::max(last, i->second);
+    return last;
+}
+// Its whole region's start (functionHead), as an index into `all`, or -1.
+int functionHeadOf(const FunctionProto& f, const std::vector<Ins>& all, const std::unordered_map<uint32_t, int>& index) {
+    std::vector<int> loopHeads;
+    for (size_t i = 0; i < all.size(); i++)
+        if (all[i].op == Op::Loop)
+            if (auto h = index.find(static_cast<uint32_t>(i32(all[i], 0))); h != index.end()) loopHeads.push_back(h->second);
+    return functionHead(
+        static_cast<int>(all.size()), [&](int i) { return mayDo(f, all[static_cast<size_t>(i)]); },
+        [&](int i) { return endsFunction(all[static_cast<size_t>(i)].op); },
+        [&](int i) -> int {
+            // Where it may jump (not its slow way, which comes back): a stack instruction's
+            // target; the run code's jumps', in their operands (registers.cpp, codeOffsets);
+            // any other that may jump, past everything.
+            const Ins& x = all[static_cast<size_t>(i)];
+            int at = targetOperand(x.op) - 1;
+            if (x.op == Op::RJumpIfFalse) at = 2;
+            else if ((x.op >= Op::RJumpLtSS && x.op <= Op::RJumpEqSK) || (x.op >= Op::RJumpLtISS && x.op <= Op::RJumpEqFSK)) at = 3;
+            if (at < 0) return mayJump(x.op) ? INT32_MAX : -1;
+            auto to = index.find(static_cast<uint32_t>(i32(x, at)));
+            return to == index.end() ? INT32_MAX : to->second;
+        },
+        loopHeads);
+}
 
 // How long making regions took, said as the program ends where WW_TIME_NATIVE is set.
 double phaseTimes[4] = {};  // each phase's time, for WW_TIME_NATIVE
@@ -6986,29 +7085,9 @@ void makeRegions(FunctionProto& f, const Value* frame, int frameSlots, uint32_t 
 
 void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     if (!enabled()) return;
-    // A function with no loop: nothing to make, found at once.
-    bool anyLoop = false;
-    for (size_t at = 0; at < f.run.size() && !anyLoop;) {
-        const char* name = nullptr;
-        anyLoop = opAt(f.run.data() + at + kThreaded) == Op::Loop;
-        at += kThreaded + runSize(f.run, at + kThreaded, name);
-    }
-    if (!anyLoop) return;
     const auto setupStart = std::chrono::steady_clock::now();
-    std::vector<Ins> all;
     std::unordered_map<uint32_t, int> index;
-    for (size_t at = 0; at < f.run.size();) {
-        const char* name = nullptr;
-        const size_t size = runSize(f.run, at + kThreaded, name);
-        Ins x;
-        x.at = static_cast<uint32_t>(at);
-        x.op = opAt(f.run.data() + at + kThreaded);
-        x.o = f.run.data() + at + kThreaded + kOpBytes;
-        x.next = static_cast<uint32_t>(at + kThreaded + size);
-        index[x.at] = static_cast<int>(all.size());
-        all.push_back(x);
-        at += kThreaded + size;
-    }
+    const std::vector<Ins> all = readRun(f, &index);
     // The VM's top where each run instruction starts; where two places say two, not known.
     std::unordered_map<uint32_t, int> tops;
     for (const auto& [at, top] : f.runTops) {
@@ -7024,6 +7103,20 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
     }
     // The outermost first: a loop inside one made into a region is in it already.
     std::sort(loops.begin(), loops.end(), [](const Candidate& x, const Candidate& y) { return x.last - x.first > y.last - y.first; });
+    // A whole function's region (2026-11-15): from its head to the end of its own code, its
+    // loops (the outermost: their starts and their Loops) left out.
+    std::set<std::pair<int, int>> leftOut;
+    if (head == f.nativeCallHead) {
+        auto h = index.find(head);
+        const int last = lastOwn(f, index);
+        if (h == index.end() || last <= h->second) return;
+        for (const Candidate& l : loops) {
+            bool inner = false;
+            for (const auto& [from, to] : leftOut) inner = inner || (l.first >= from && l.last <= to);
+            if (!inner && l.first > h->second && l.last <= last) leftOut.emplace(l.first, l.last);
+        }
+        loops.assign(1, Candidate{h->second, last});
+    }
     std::vector<Candidate> made;
     setupTime += std::chrono::duration<double>(std::chrono::steady_clock::now() - setupStart).count();
     static const char* const dump = std::getenv("WW_DUMP_NATIVE");
@@ -7034,15 +7127,26 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
         if (inside) continue;
         if (all[static_cast<size_t>(c.first)].at != head) continue;  // another loop's: made as it starts
         auto headTop = tops.find(all[static_cast<size_t>(c.first)].at);
-        if (headTop == tops.end() || headTop->second < 0) continue;
+        if (headTop == tops.end() || headTop->second < 0) {
+            if (dumping) std::fprintf(stderr, "== %s: no region for the loop at %u: the stack's top there not known\n", f.name.c_str(), head);
+            continue;
+        }
         // At a glance, before the analysis: a loop that starts with an instruction no region does,
         // or has too many of them for what it would do itself (Region::worthIt), stays the VM's.
         {
             int can = 0, cannot = 0;
             const std::vector<bool> ending = endingRuns(c.last - c.first + 1, [&](int i) { return all[static_cast<size_t>(c.first + i)].op; });
-            for (int i = c.first; i <= c.last; i++)
-                if (!ending[static_cast<size_t>(i - c.first)]) (mayDo(f, all[static_cast<size_t>(i)]) ? can : cannot)++;
-            if (!mayDo(f, all[static_cast<size_t>(c.first)]) || can < 3 || cannot * 6 > can) {
+            // (A whole function's: its instructions but its loops', those on the way to a return
+            // counted where a region does them: a function's work is mostly on its way to one.)
+            const bool function = head == f.nativeCallHead;
+            for (int i = c.first; i <= c.last; i++) {
+                bool inLoop = false;
+                for (const auto& [from, to] : leftOut) inLoop = inLoop || (i >= from && i <= to);
+                const bool may = mayDo(f, all[static_cast<size_t>(i)]);
+                if (inLoop || (ending[static_cast<size_t>(i - c.first)] && !(function && may))) continue;
+                (may ? can : cannot)++;
+            }
+            if (!mayDo(f, all[static_cast<size_t>(c.first)]) || can < (function ? 8 : 3) || cannot * 6 > can) {
                 if (dumping)
                     std::fprintf(stderr, "== %s: no region for the loop at %u: %d of its instructions the VM's, %d a region's\n", f.name.c_str(),
                                  all[static_cast<size_t>(c.first)].at, cannot, can);
@@ -7061,6 +7165,10 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
         r.frameSlots = frameSlots;
         r.tops = tops;
         r.intLists = intLists;
+        for (const auto& [from, to] : leftOut) {
+            for (int k = from; k <= to; k++) r.outside.insert(k - c.first);
+            r.seeds.insert(to + 1 - c.first);
+        }
         // A range counted through, made just before the loop: its step, where none is given, is 1
         // (or -1, going down), as the VM's RangeLoop sets it.
         if (all[static_cast<size_t>(c.first)].op == Op::RangeNext && c.first > 0 && all[static_cast<size_t>(c.first) - 1].op == Op::RangeLoop) {
@@ -7106,7 +7214,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             const auto ways = make(r, dumping ? &names : nullptr);
             if (ways.empty()) break;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
-            for (size_t w = 0; w < ways.size(); w++) out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0});
+            for (size_t w = 0; w < ways.size(); w++) out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0, !r.prologue.empty()});
             made.push_back(c);
             if (dumping) {
                 int islands = 0;
@@ -7139,6 +7247,23 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
 // first time one of them starts (VM::nativeFirst).
 bool findLoops(FunctionProto& f) {
     if (!enabled()) return false;
+    {
+        static const bool wholeFunctions = [] {
+            const char* asked = std::getenv("WW_NATIVE_FUNCTIONS");
+            return asked == nullptr || std::string(asked) != "0";
+        }();
+        std::unordered_map<uint32_t, int> index;
+        const std::vector<Ins> all = readRun(f, &index);
+        const int fh = wholeFunctions ? functionHeadOf(f, all, index) : -1;
+        const int last = fh >= 0 ? lastOwn(f, index) : -1;
+        if (fh >= 0 && last > fh) {
+            f.nativeCallHead = all[static_cast<size_t>(fh)].at;
+            for (int i = fh; i <= last; i++)
+                if (all[static_cast<size_t>(i)].op == Op::Return || all[static_cast<size_t>(i)].op == Op::ReturnInit)
+                    f.nativeReturns.push_back(all[static_cast<size_t>(i)].at);
+            if (f.nativeReturns.empty()) f.nativeCallHead = UINT32_MAX;
+        }
+    }
     for (size_t at = 0; at < f.run.size();) {
         const char* name = nullptr;
         const size_t size = runSize(f.run, at + kThreaded, name);
@@ -7152,7 +7277,7 @@ bool findLoops(FunctionProto& f) {
         at += kThreaded + size;
     }
     f.nativeArrivals.assign(f.nativeHeads.size(), 0);
-    return !f.nativeHeads.empty();
+    return !f.nativeHeads.empty() || f.nativeCallHead != UINT32_MAX;
 }
 
 #if WW_NATIVE

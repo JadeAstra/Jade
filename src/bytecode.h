@@ -812,6 +812,14 @@ struct FunctionProto {
     std::vector<std::pair<uint32_t, uint16_t>> runTops;
     std::vector<uint32_t> nativeHeads;
     std::vector<uint8_t> nativeArrivals;
+    // A whole function's region (2026-11-15): where it starts (just past its parameters'
+    // prologue; UINT32_MAX for none), whose address in the code is VM::nativeCall's until the
+    // function has been called often enough (nativeCalls counts); then each of its returns
+    // (nativeReturns) is VM::nativeReturn's, which makes the region the next time one is come to,
+    // the frame holding what each of its locals is.
+    uint32_t nativeCallHead = UINT32_MAX;
+    uint32_t nativeCalls = 0;
+    std::vector<uint32_t> nativeReturns;
     struct NativeRegion {
         uint32_t head;
         void* code;
@@ -821,6 +829,10 @@ struct FunctionProto {
         // The region's start, whose prologue looks at lists and fields once; any other way in
         // (after an island) reads none of what the context keeps for that (VM::nativeEnter).
         bool first = false;
+        // Whether the region looks at lists or fields once (its prologue): where it does not,
+        // nothing of the context's lists and held fields is read, and none is set to nothing as
+        // it is entered (2026-11-15: some 600 bytes, each time a function's region is entered).
+        bool looks = true;
     };
     // The regions made so far as published: a list never changed once published, replaced whole
     // as a loop's regions are added (under VM::nativeFirst's lock), so that a core reading it as
