@@ -758,6 +758,30 @@ INLINE void putValue(Slot* at, uint64_t head, uint64_t payload) {
     __asm__ volatile("" ::: "memory");
     __builtin_memcpy(p + 8, &payload, 8);
 }
+// n bytes moved forward from x to o (a loop template's items moved at once). Where it is more
+// than the caches would keep (1 MB on) and the two do not overlap, the stores go past the cache
+// (non-temporal), 64 bytes at a time: the place written is not read into the cache first, a
+// third of the memory's traffic saved (2026-11-15: a picture's copy, 48 MB in 3.8 ms by rep
+// movsb). Otherwise rep movsb, as the steps would go.
+INLINE void moveBytes(uint8_t* o, const uint8_t* x, uint64_t n) {
+    if (n >= (1u << 20) && (o + n <= x || x + n <= o)) {
+        uint64_t head = (64 - (reinterpret_cast<uintptr_t>(o) & 63)) & 63;
+        n -= head;
+        __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(head) : : "memory");
+        for (; n >= 64; n -= 64, o += 64, x += 64) {
+            const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x));
+            const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x + 16));
+            const __m128i c = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x + 32));
+            const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x + 48));
+            _mm_stream_si128(reinterpret_cast<__m128i*>(o), a);
+            _mm_stream_si128(reinterpret_cast<__m128i*>(o + 16), b);
+            _mm_stream_si128(reinterpret_cast<__m128i*>(o + 32), c);
+            _mm_stream_si128(reinterpret_cast<__m128i*>(o + 48), d);
+        }
+        _mm_sfence();
+    }
+    __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
+}
 INLINE const uint8_t* itemsList(const Slot& s, const Ctx* ctx) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
@@ -2597,7 +2621,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             if (size == width) {
                 // Forward, as the steps go (from a place after the one written, where they overlap).
                 uint64_t n = bytes;
-                __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
+                moveBytes(o, x, n);
             } else {
                 for (int64_t j = 0; j < left; j++)
                     for (uint64_t k = 0; k < size; k++) o[static_cast<uint64_t>(j) * width + k] = x[static_cast<uint64_t>(j) * width + k];
@@ -2637,7 +2661,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(fromFirst) * width;
             uint8_t* o = at;
             uint64_t n = static_cast<uint64_t>(done) * width;
-            __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
+            moveBytes(o, x, n);
             uint8_t* const newEnd = at + static_cast<uint64_t>(done) * width;
             __builtin_memcpy(pack + kPackBlock + 8, &newEnd, 8);
             const uint64_t count = word<uint64_t>(pack + kPackCount) + static_cast<uint64_t>(done);

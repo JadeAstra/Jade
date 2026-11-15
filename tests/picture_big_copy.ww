@@ -1,0 +1,77 @@
+// Items moved at once by a loop template, more than 1 MB of them (2026-11-15): the stores then go
+// past the cache, 64 bytes at a time, after the bytes up to a 64-byte boundary. A picture's copy,
+// a part of whole rows starting part way in, a part of rows narrower than the picture, items set
+// one list from another, and along one list each way (where they overlap, as the steps go). The
+// same as the VM's; each run three times (a loop's region is made the second time it starts).
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        px[x, y] = Color(s.toByteWrapped(), (s >> 8).toByteWrapped(), (s >> 16).toByteWrapped(), (s >> 24).toByteWrapped())
+      }
+    }
+  }
+  return im
+}
+fun sum(px : List<Color>) : int {
+  var t = 0
+  for (c in px) { t = (t * 31 + c.red.toInt() + c.green.toInt() * 7 + c.blue.toInt() * 13 + c.alpha.toInt() * 17) % 1000000007 }
+  return t
+}
+fun same(a : Grid<Color>, b : Grid<Color>, x0 : int, y0 : int) : bool {
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      if (a[x, y] != b[x + x0, y + y0]) { return false }
+    }
+  }
+  return true
+}
+fun setAll(from : List<Color>, to : open List<Color>, n : int) {
+  for (i in 0 ..< n) { to[i] = from[i] }
+}
+fun down(xs : open List<Color>, n : int) {
+  for (i in 0 ..< n) { xs[i] = xs[i + 3] }
+}
+fun up(xs : open List<Color>, n : int) {
+  for (i in 0 ..< n) { xs[i + 3] = xs[i] }
+}
+
+val big = picture(701, 503, 9)
+for (round in 0 ..< 3) {
+  val copy = big.copy()
+  print(copy == big, copy.hashCode() == big.hashCode(), sum(copy.pixels.toList()))
+  val rows = big.pixels[0 .. 700, 3 .. 500]
+  print(rows.width, rows.height, same(rows, big.pixels, 0, 3))
+  val narrow = big.pixels[5 .. 690, 1 .. 499]
+  print(narrow.width, narrow.height, same(narrow, big.pixels, 5, 1))
+  val from = big.pixels.toList()
+  val to : open List<Color> = []
+  for (i in 0 ..< from.size) { to.add(Color.black) }
+  setAll(from, to, from.size)
+  print(sum(to) == sum(from))
+  val d : open List<Color> = []
+  d.addAll(from)
+  down(d, d.size - 3)
+  val u : open List<Color> = []
+  u.addAll(from)
+  up(u, u.size - 3)
+  print(sum(d), sum(u))
+}
+// expect: true true 971052267
+// expect: 701 498 true
+// expect: 686 499 true
+// expect: true
+// expect: 333286007 951100535
+// expect: true true 971052267
+// expect: 701 498 true
+// expect: 686 499 true
+// expect: true
+// expect: 333286007 951100535
+// expect: true true 971052267
+// expect: 701 498 true
+// expect: 686 499 true
+// expect: true
+// expect: 333286007 951100535
