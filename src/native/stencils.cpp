@@ -2012,7 +2012,7 @@ enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
     kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
-    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems, kLoopWGatherPixels, kLoopFMulAdd4,
+    kLoopWCountItems, kLoopFGather4, kLoopWBlendNormal, kLoopWSampleBilinear, kLoopWApartItems, kLoopWGatherPixels, kLoopFMulAdd4, kLoopWFindWord,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -3159,6 +3159,60 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                     const int64_t ab = static_cast<int64_t>(ac + 0.5);
                     const double mul = static_cast<double>(ab < 1 ? ab : 1) * (255.0 / (ac < 1.0e-300 ? 1.0e-300 : ac));
                     dp[0] = part(c[0] * mul), dp[1] = part(c[1] * mul), dp[2] = part(c[2] * mul), dp[3] = static_cast<uint8_t>(ab);
+                }
+            }
+            break;
+        }
+        case kLoopWFindWord: {
+            // Items four bytes wide, each read as one word, until one is not `want` (regions.cpp,
+            // recognise, kLoopWFindWord: inkBox's scans): item base + dir (next + j), dir 1 or -1.
+            // It stops before that one, for the loop's own steps to find it. Words 50 to 53 the
+            // base, 54 dir, 130 and 131 the word. Four items a compare.
+            static_assert(kLoopWFindWord == 33, "regions.cpp's ah.shape 33");
+            if (!a.ok() || a.kind() <= 3) return;
+            const int64_t lim = int64_t{1} << 50, dir = static_cast<int64_t>(t[54]);
+            int64_t base = 0, want = 0;
+            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, base)) || !operand(ctx, t[130], t[131], 0, want)) return;
+            if ((dir != 1 && dir != -1) || !small(t[53]) || base < -lim || base > lim || next > lim || end > lim) return;
+            base += static_cast<int64_t>(t[53]);
+            const int64_t i0 = base + dir * next, i1 = base + dir * (end - 1);
+            if (i0 < 0 || i1 < 0 || static_cast<uint64_t>(i0) >= a.h[1] || static_cast<uint64_t>(i1) >= a.h[1]) return;
+            if (want < 0 || want > 0xFFFFFFFF) {  // no item's word is it: the steps from the first
+                done = 0;
+                break;
+            }
+            const uint32_t w32 = static_cast<uint32_t>(want);
+            const __m128i wv = _mm_set1_epi32(static_cast<int>(w32));
+            const uint8_t* p = a.bytes() + static_cast<uint64_t>(i0) * 4;
+            int64_t j = 0;
+            bool found = false;
+            if (dir == 1) {
+                for (; j + 4 <= left; j += 4, p += 16) {
+                    const int same = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)), wv)));
+                    if (same != 0xF) {
+                        done = j + __builtin_ctz(~same & 0xF);
+                        found = true;
+                        break;
+                    }
+                }
+            } else {
+                // Items i0 - j - 3 to i0 - j, the last of them the first in the loop's order.
+                for (; j + 4 <= left; j += 4, p -= 16) {
+                    const int same = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p - 12)), wv)));
+                    if (same != 0xF) {
+                        done = j + 3 - (31 - __builtin_clz(static_cast<unsigned>(~same & 0xF)));
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (found) break;
+            for (; j < left; j++, p += 4 * dir) {
+                uint32_t c;
+                __builtin_memcpy(&c, p, 4);
+                if (c != w32) {
+                    done = j;
+                    break;
                 }
             }
             break;

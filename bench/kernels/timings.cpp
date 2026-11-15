@@ -248,6 +248,32 @@ static uint64_t histogram(const Image& im) {
     }
     return static_cast<uint64_t>(levels[128]);
 }
+// The smallest box outside which every pixel is `bg` (inkBox): the first pixel of ink from the
+// top and the last from the bottom, then each row between looked at only left of the leftmost ink
+// found so far and right of the rightmost. Its left, top, right and bottom summed, or 0 for none.
+static uint64_t inkBox(const Image& im, const uint8_t bg[4]) {
+    auto ink = [&](size_t p) { return std::memcmp(&im.px[p * 4], bg, 4) != 0; };
+    const size_t w = static_cast<size_t>(im.w), n = w * static_cast<size_t>(im.h);
+    size_t first = 0;
+    while (first < n && !ink(first)) first++;
+    if (first == n) return 0;
+    size_t last = n - 1;
+    while (!ink(last)) last--;
+    size_t left = first % w, right = last % w;
+    for (size_t y = first / w; y <= last / w && (left > 0 || right < w - 1); y++) {
+        for (size_t x = 0; x < left; x++)
+            if (ink(y * w + x)) {
+                left = x;
+                break;
+            }
+        for (size_t x = w - 1; x > right; x--)
+            if (ink(y * w + x)) {
+                right = x;
+                break;
+            }
+    }
+    return left + first / w + right + last / w;
+}
 // The pixels joined to (x, y) through neighbours whose colour is within `tolerance` of its own in
 // every part: a mask, filled from a stack.
 static uint64_t flood(const Image& im, int x, int y, int tolerance) {
@@ -417,6 +443,11 @@ int main(int argc, char** argv) {
     best("whole", "transformed(rotation(0.3))", [&] { return rotated(photo, 0.3, 2000, 1500).px[0]; });
     best("whole", "histogram()", [&] { return histogram(photo); });
     best("whole", "floodRegion(10, 10, 20)", [&] { return flood(photo, 10, 10, 20); });
+    const uint8_t clear[4] = {0, 0, 0, 0};
+    best("whole", "inkBox() of a photo", [&] { return inkBox(photo, clear); });
+    Image dot(4000, 3000);
+    dot.at(2000, 1500)[0] = 9, dot.at(2000, 1500)[3] = 255;
+    best("whole", "inkBox(), one pixel in 12 M", [&] { return inkBox(dot, clear); });
     const Image overlay = crop(photo, 0, 0, 2000, 1500);
     best("whole", "blend 2000x1500 over, half", [&] { return blend(work, overlay, 500, 500, 0.5); });
 

@@ -3947,6 +3947,11 @@ struct Region {
         // kLoopWSameItems: the two items compared, the template stopping before the first that
         // differ (the loop's own steps go on from there, into the way out they fall into).
         Followed::ItemCmp stopAt;
+        // kLoopWFindWord (2026-11-15): items, a word each, compared with one word until one is not
+        // it; the list, the item's index and the word.
+        int stopList = -1;
+        const Expr* stopIndex = nullptr;
+        const Expr* stopWord = nullptr;
         int64_t copyWhat[3] = {0, 0, 0};  // kLoopWCopyItems: the items' width, what hidxsm and hsetsm are given
         bool mixDivideFirst = false;
         // kLoopWMixItems' float mixes (kinds 0x60 + j): each lane's terms (the byte's offset and the
@@ -5220,6 +5225,19 @@ struct Region {
                             ah.stopAt = fw.itemCmp;
                             continue;
                         }
+                        // An item's four bytes, one word (a pixel's fields put together), not a
+                        // word the same each time round: the template stops before the first such
+                        // (2026-11-15, kLoopWFindWord: inkBox's scans).
+                        auto wholeWord = [](const Expr* f) {
+                            return f != nullptr && f->kind == Expr::Field && (f->ki & 0xFF) == 4 && ((f->ki >> 8) & 0xFFFFFF) == 0 && (f->ki >> 32) == 4;
+                        };
+                        if (g.op == 6 && (wholeWord(g.a) || wholeWord(g.b))) {
+                            const Expr* f = wholeWord(g.a) ? g.a : g.b;
+                            const Expr* w = f == g.a ? g.b : g.a;
+                            if (ah.stopList >= 0 || !fixedOperand(w)) return false;
+                            ah.stopList = f->list, ah.stopIndex = f->b, ah.stopWord = w;
+                            continue;
+                        }
                         addGuard(ah, g);
                     }
                     pending.clear();
@@ -5313,6 +5331,42 @@ struct Region {
                    !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) && !changed(ah.outA) &&
                    !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)) && !changed(ah.p1) && !changed(ah.yA) && !changed(ah.yB) &&
                    !written(plusOf(ah.yA)) && !written(plusOf(ah.yB)) && !changed(ah.sizeW) && !changed(ah.sizeH) && !written(ah.sizeW) && !written(ah.sizeH);
+        // Items compared with one word until one is not it (2026-11-15: inkBox's scans), forward or
+        // back, nothing else done: the template moves on past those that are.
+        if (ah.stopList >= 0) {
+            if (ah.hasAcc || !fw.stores.empty() || ah.iterSlot >= 0 || !fw.heldWrites.empty() || ah.stopAt.listA >= 0) return false;
+            // A base the same each time round, plus or less a constant: the base and the constant.
+            auto basePlus = [&](const Expr* x, const Expr*& base, int64_t& k) {
+                base = nullptr, k = 0;
+                if (x->kind == Expr::KInt) return k = x->ki, true;
+                if (x->kind == Expr::Bin && (x->op == '+' || x->op == '-') && x->cls == CI && x->b->kind == Expr::KInt) {
+                    k = x->op == '+' ? x->b->ki : -x->b->ki;
+                    x = x->a;
+                } else if (x->kind == Expr::Bin && x->op == '+' && x->cls == CI && x->a->kind == Expr::KInt) {
+                    k = x->a->ki;
+                    x = x->b;
+                }
+                if (k < -(int64_t{1} << 40) || k > (int64_t{1} << 40) || !fixedOperand(x) || changed(x) || written(x)) return false;
+                return base = x, true;
+            };
+            const Expr* x = ah.stopIndex;
+            const Expr* base = nullptr;
+            int64_t k = 0, dir = 0;
+            Lin at;
+            if (linear(x, at, 1, changed, written) && at.coef == 1) {
+                base = at.base, k = at.k, dir = 1;
+            } else if (x->kind == Expr::Bin && x->op == '-' && x->cls == CI && x->b->kind == Expr::Counter && basePlus(x->a, base, k)) {
+                dir = -1;
+            } else {
+                return false;
+            }
+            if (changed(ah.stopWord) || written(ah.stopWord)) return false;
+            ah.shape = 33;  // kLoopWFindWord
+            ah.a = ah.stopList;
+            ah.baseA = base, ah.copyWhat[0] = k, ah.copyWhat[1] = dir;
+            ah.yA = ah.stopWord;
+            return true;
+        }
         // Items compared until two differ (2026-11-14: an Image's ==), nothing else done: the
         // template moves on past those the same.
         if (ah.stopAt.listA >= 0) {
@@ -5719,6 +5773,12 @@ struct Region {
             word(63, ah.fromBase != nullptr ? 1 : 0);
             if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
             word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 33) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(53, ah.copyWhat[0]), word(54, ah.copyWhat[1]);
+            operandWords(130, ah.yA, 0);
         }
         if (ah.shape == 32) {
             word(50, ah.baseA != nullptr ? 1 : 0);

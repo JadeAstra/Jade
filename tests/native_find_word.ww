@@ -1,0 +1,53 @@
+// Pixels compared with one word until one is not it (2026-11-15: image.ww's __colorOther,
+// inkBox's scans), which native code's loop template kLoopWFindWord runs whole, four pixels a
+// compare: forward and back, the first other one at each place in a group of four and past the
+// groups, none, a word no pixel's four bytes can be, a range reaching past the list (the template
+// refuses, the steps throw); and inkBox itself. The same as the VM's; each run three times (a
+// loop's region is made the second time it starts).
+fun other(px : List<Color>, at : int, n : int, word : int, back : bool) : int {
+  if (back) {
+    for (k in 0 ..< n) {
+      val c = px[at - k]
+      if ((c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24) != word) { return k }
+    }
+    return -1
+  }
+  for (k in 0 ..< n) {
+    val c = px[at + k]
+    if ((c.red.toInt() | c.green.toInt() << 8 | c.blue.toInt() << 16 | c.alpha.toInt() << 24) != word) { return k }
+  }
+  return -1
+}
+val bg = Color(7.toByte(), 8.toByte(), 9.toByte(), 200.toByte())
+val word = 7 | 8 << 8 | 9 << 16 | 200 << 24
+for (round in 0 ..< 3) {
+  var said = ""
+  for (spot in [0, 1, 2, 3, 4, 5, 6, 7, 37, 38, 39, 40, 41]) {
+    val px : open List<Color> = List(42) { bg }
+    px[spot] = Color(7.toByte(), 8.toByte(), 9.toByte(), 201.toByte())
+    said += " ${other(px, 0, 42, word, false)}/${other(px, 41, 42, word, true)}/${other(px, 3, 30, word, false)}/${other(px, 35, 30, word, true)}"
+  }
+  val plain : List<Color> = List(42) { bg }
+  said += " ${other(plain, 0, 42, word, false)} ${other(plain, 41, 42, word, true)} ${other(plain, 0, 42, -1, false)} ${other(plain, 0, 42, 1 << 40, true)}"
+  try {
+    said += " ${other(plain, 30, 20, word, false)}"
+  } catch (e : IndexOutOfBoundsException) {
+    said += " past"
+  }
+  try {
+    said += " ${other(plain, 10, 20, word, true)}"
+  } catch (e : IndexOutOfBoundsException) {
+    said += " before"
+  }
+  val im = Image(37, 23, bg)
+  im.editPixels {
+    it[5, 3] = Color.red
+    it[30, 19] = Color.red
+    it[2, 11] = Color.blue
+  }
+  said += " ${im.inkBox(bg)} ${im.inkBox()} ${Image(9, 9, bg).inkBox(bg)}"
+  print(said.trim())
+}
+// expect: 0/41/-1/-1 1/40/-1/-1 2/39/-1/-1 3/38/0/-1 4/37/1/-1 5/36/2/-1 6/35/3/29 7/34/4/28 37/4/-1/-1 38/3/-1/-1 39/2/-1/-1 40/1/-1/-1 41/0/-1/-1 -1 -1 0 0 past before Rect(2, 3, 29 x 17) Rect(0, 0, 37 x 23) null
+// expect: 0/41/-1/-1 1/40/-1/-1 2/39/-1/-1 3/38/0/-1 4/37/1/-1 5/36/2/-1 6/35/3/29 7/34/4/28 37/4/-1/-1 38/3/-1/-1 39/2/-1/-1 40/1/-1/-1 41/0/-1/-1 -1 -1 0 0 past before Rect(2, 3, 29 x 17) Rect(0, 0, 37 x 23) null
+// expect: 0/41/-1/-1 1/40/-1/-1 2/39/-1/-1 3/38/0/-1 4/37/1/-1 5/36/2/-1 6/35/3/29 7/34/4/28 37/4/-1/-1 38/3/-1/-1 39/2/-1/-1 40/1/-1/-1 41/0/-1/-1 -1 -1 0 0 past before Rect(2, 3, 29 x 17) Rect(0, 0, 37 x 23) null
