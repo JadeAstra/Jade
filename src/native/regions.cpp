@@ -3643,6 +3643,167 @@ struct Region {
         // it is not out of the region): the slot and the global holding the class; words 112 on.
         std::vector<std::pair<int64_t, int64_t>> classChecks;
     };
+    // An index as base + coef * counter + k: base null or an operand the same each time round.
+    struct Lin {
+        const Expr* base = nullptr;
+        int64_t coef = 0, k = 0;
+    };
+    template <typename Changed, typename Written>
+    static bool linear(const Expr* e, Lin& out, int64_t scale, const Changed& changed, const Written& written) {
+        if (e == nullptr || e->cls != CI || scale < -64 || scale > 64) return false;
+        if (e->kind == Expr::Counter) return out.coef += scale, true;
+        if (e->kind == Expr::KInt) {
+            if (e->ki < -(int64_t{1} << 40) || e->ki > (int64_t{1} << 40)) return false;
+            return out.k += e->ki * scale, true;
+        }
+        if (e->kind == Expr::Bin && e->op == '+') return linear(e->a, out, scale, changed, written) && linear(e->b, out, scale, changed, written);
+        if (e->kind == Expr::Bin && e->op == '*') {
+            if (e->a->kind == Expr::KInt && e->a->ki >= 1 && e->a->ki <= 64) return linear(e->b, out, scale * e->a->ki, changed, written);
+            if (e->b->kind == Expr::KInt && e->b->ki >= 1 && e->b->ki <= 64) return linear(e->a, out, scale * e->b->ki, changed, written);
+            return false;
+        }
+        if (scale == 1 && out.base == nullptr && fixedOperand(e) && !changed(e) && !written(e)) return out.base = e, true;
+        return false;
+    }
+    static bool kf(const Expr* e, double v) { return e != nullptr && e->kind == Expr::KFloat && e->kf == v; }
+    // `min(hi, max(lo, x))` as WinterWolf writes Math.min(hi, Math.max(lo, x)), either way round
+    // each: x, or null.
+    static const Expr* held(const Expr* e, double lo, double hi) {
+        if (e == nullptr || e->kind != Expr::Min || e->cls != CF) return nullptr;
+        const Expr* inner = kf(e->a, hi) ? e->b : kf(e->b, hi) ? e->a : nullptr;
+        if (inner == nullptr || inner->kind != Expr::Max || inner->cls != CF) return nullptr;
+        return kf(inner->a, lo) ? inner->b : kf(inner->b, lo) ? inner->a : nullptr;
+    }
+    // x + c (either way round): x, or null.
+    static const Expr* plus(const Expr* e, double c) {
+        if (e == nullptr || e->kind != Expr::Bin || e->cls != CF || e->op != '+') return nullptr;
+        return kf(e->a, c) ? e->b : kf(e->b, c) ? e->a : nullptr;
+    }
+    // A colour's part as numeric.ww's __colorPart makes it from v: Math.min(255.0, Math.max(0.0,
+    // v + 0.5)).toInt().toByte(): v, or null.
+    static const Expr* colorPart(const Expr* e) {
+        if (e == nullptr || e->kind != Expr::ToByte || e->a == nullptr || e->a->kind != Expr::ToInt) return nullptr;
+        return plus(held(e->a->a, 0.0, 255.0), 0.5);
+    }
+    // Colours made four floats a pixel and back (2026-11-15: numeric.ww's __premultiplied and
+    // __unpremultiplied, which blurred, scaled and a colour grid's convolve work through): each
+    // matched to the expressions those loops are, every operation in the same order.
+    //
+    // kLoopWToFloats: items of four bytes (a colour) at a base plus the counter, into a list of
+    // floats at a base plus four times the counter: the first three bytes each times the fourth
+    // over 255.0, then the fourth. Words 50 to 53 the floats' base (50: 0 none, 1 an operand; 53 a
+    // constant added), 63 to 66 the items'.
+    //
+    // kLoopWFromFloats: four floats a pixel into items of a value type of four bytes (a colour)
+    // made from them: a = the fourth held from 0 to 255, m = min(1, (a + 0.5) cut) times 255.0
+    // over max(a, 0.5), each of the first three bytes the part of a float times m, the fourth
+    // the part of a (__colorPart). Words 50 to 53 the items' base, 63 to 66 the floats', 97 the
+    // global holding the type and 98 the type (the class mksm checks).
+    template <typename Changed, typename Written>
+    bool colorFloats(const Followed& fw, Ahead& ah, const Changed& changed, const Written& written) {
+        if (ah.iterSlot >= 0) return false;
+        auto byteField = [&](const Expr* e, int64_t offset) {
+            return e != nullptr && e->kind == Expr::Field && (e->ki & 0xFF) == 1 && ((e->ki >> 8) & 0xFFFFFF) == offset && (e->ki >> 32) == 4;
+        };
+        if (fw.stores.size() == 4) {
+            const Followed::Store* by[4] = {nullptr, nullptr, nullptr, nullptr};
+            Lin out[4];
+            for (int q = 0; q < 4; q++) {
+                const Followed::Store& st = fw.stores[static_cast<size_t>(q)];
+                if (st.stem != "hsetf" || st.list != fw.stores[0].list || !linear(st.index, out[q], 1, changed, written) || out[q].coef != 4) return false;
+            }
+            int64_t k0 = out[0].k;
+            for (int q = 1; q < 4; q++) k0 = std::min(k0, out[q].k);
+            for (int q = 0; q < 4; q++) {
+                const int64_t at = out[q].k - k0;
+                if (at < 0 || at > 3 || by[at] != nullptr || !same(out[q].base, out[0].base)) return false;
+                by[at] = &fw.stores[static_cast<size_t>(q)];
+            }
+            const Expr* alpha = by[3]->value;
+            if (alpha == nullptr || alpha->kind != Expr::ToFloat || !byteField(alpha->a, 3)) return false;
+            const Expr* f3 = alpha->a;
+            for (int q = 0; q < 3; q++) {
+                const Expr* v = by[q]->value;
+                if (v == nullptr || v->kind != Expr::Bin || v->cls != CF || v->op != '*') return false;
+                auto part = [&](const Expr* e) {
+                    return e->kind == Expr::ToFloat && byteField(e->a, q) && e->a->list == f3->list && same(e->a->b, f3->b);
+                };
+                auto factor = [&](const Expr* e) {
+                    return e->kind == Expr::Bin && e->cls == CF && e->op == '/' && kf(e->b, 255.0) && e->a->kind == Expr::ToFloat && same(e->a->a, f3);
+                };
+                if (!((part(v->a) && factor(v->b)) || (part(v->b) && factor(v->a)))) return false;
+            }
+            Lin from;
+            if (!linear(f3->b, from, 1, changed, written) || from.coef != 1) return false;
+            ah.shape = 24;  // kLoopWToFloats
+            ah.out = fw.stores[0].list, ah.a = f3->list;
+            ah.baseA = out[0].base, ah.fromBase = from.base;
+            ah.copyWhat[0] = k0, ah.copyWhat[1] = from.k;
+            return true;
+        }
+        if (fw.stores.size() != 1 || fw.stores[0].stem != "hsetsm" || fw.made.count(fw.stores[0].source) == 0) return false;
+        const Followed::Store& st = fw.stores[0];
+        const Followed::Made& made = fw.made.at(st.source);
+        if ((static_cast<uint64_t>(st.what) >> 32) != static_cast<uint64_t>(made.id) || ((static_cast<uint64_t>(st.what) >> 24) & 0xFF) != 4 || st.width != 4)
+            return false;
+        Lin out;
+        if (!linear(st.index, out, 1, changed, written) || out.coef != 1) return false;
+        const Expr* lanes[4] = {nullptr, nullptr, nullptr, nullptr};
+        const Expr* v = made.bytes;
+        while (v->kind == Expr::Bin && v->op == 'p') {
+            if (v->ki % 8 != 0 || v->ki < 0 || v->ki > 24 || lanes[v->ki / 8] != nullptr) return false;
+            lanes[v->ki / 8] = v->b;
+            v = v->a;
+        }
+        if (v->kind != Expr::KInt || v->ki != 0) return false;
+        for (const Expr* lane : lanes)
+            if (lane == nullptr) return false;
+        // The fourth: the float at k + 3 held from 0 to 255, its part.
+        const Expr* a = colorPart(lanes[3]);
+        const Expr* load3 = held(a, 0.0, 255.0);
+        if (load3 == nullptr || load3->kind != Expr::Load || load3->cls != CF) return false;
+        Lin from;
+        if (!linear(load3->b, from, 1, changed, written) || from.coef != 4) return false;
+        const int64_t k0 = from.k - 3;
+        // m = min(1, (a + 0.5) cut) as a float, times 255.0 over max(a, 0.5).
+        const Expr* m = nullptr;
+        auto isM = [&](const Expr* e) {
+            if (e == nullptr || e->kind != Expr::Bin || e->cls != CF || e->op != '*') return false;
+            auto gate = [&](const Expr* g) {
+                if (g->kind != Expr::ToFloat || g->a == nullptr || g->a->kind != Expr::Min || g->a->cls != CI) return false;
+                const Expr* x = g->a->a->kind == Expr::KInt && g->a->a->ki == 1 ? g->a->b : g->a->b->kind == Expr::KInt && g->a->b->ki == 1 ? g->a->a : nullptr;
+                return x != nullptr && x->kind == Expr::ToInt && same(plus(x->a, 0.5), a);
+            };
+            auto over = [&](const Expr* d) {
+                if (d->kind != Expr::Bin || d->cls != CF || d->op != '/' || !kf(d->a, 255.0) || d->b->kind != Expr::Max) return false;
+                const Expr* x = kf(d->b->a, 0.5) ? d->b->b : kf(d->b->b, 0.5) ? d->b->a : nullptr;
+                return same(x, a);
+            };
+            return (gate(e->a) && over(e->b)) || (gate(e->b) && over(e->a));
+        };
+        for (int q = 0; q < 3; q++) {
+            const Expr* x = colorPart(lanes[q]);
+            if (x == nullptr || x->kind != Expr::Bin || x->cls != CF || x->op != '*') return false;
+            const Expr* load = x->a->kind == Expr::Load ? x->a : x->b->kind == Expr::Load ? x->b : nullptr;
+            const Expr* other = load == x->a ? x->b : x->a;
+            Lin at;
+            if (load == nullptr || load->list != load3->list || !linear(load->b, at, 1, changed, written) || at.coef != 4 || at.k != k0 + q ||
+                !same(at.base, from.base))
+                return false;
+            if (m == nullptr) {
+                if (!isM(other)) return false;
+                m = other;
+            } else if (!same(other, m)) {
+                return false;
+            }
+        }
+        ah.shape = 25;  // kLoopWFromFloats
+        ah.out = st.list, ah.a = load3->list;
+        ah.baseA = out.base, ah.fromBase = from.base;
+        ah.copyWhat[0] = out.k, ah.copyWhat[1] = k0;
+        ah.mixWords = {0, made.global, made.cls};
+        return true;
+    }
     // How a mix ends (2026-11-13): `>> shift`, `/ divisor` (a constant of 1 or more, which truncates
     // toward zero as C++'s does), or both in either order; `v` the sum before them.
     static bool mixEnd(const Expr*& v, int64_t& shift, int64_t& divisor, bool& divideFirst) {
@@ -4341,7 +4502,7 @@ struct Region {
             }
         }
         // One value into items at base + counter (2026-11-13: image[x, y] = c, a grid's in editPixels).
-        if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fieldIndex(fw.stores[0].index, ah) &&
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && ah.iterSlot < 0 && fw.values.count(fw.stores[0].source) != 0 && fieldIndex(fw.stores[0].index, ah) &&
             !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB))) {
             const Followed::Store& st = fw.stores[0];
             const Followed::Value v = fw.values[st.source];
@@ -4350,7 +4511,43 @@ struct Region {
             ah.fill = {st.width, v.kind, v.at, st.what, v.cls};
             return true;
         }
-        if (fw.stores.size() != 1) return false;
+        // A tap of a convolution (2026-11-15: __mulAdd, which blurred, scaled and a colour grid's
+        // convolve take a row at a time): out[ob + j] = a[ab + j] * c, or out[ob + j] plus that, c the
+        // same each time round, each base the counter plus what is the same each time round
+        // (kLoopFMulAdd).
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetf" && ah.iterSlot < 0 && fw.stores[0].index != nullptr) {
+            const Followed::Store& st = fw.stores[0];
+            const Expr* v = st.value;
+            auto mulOf = [&](const Expr* e, const Expr*& load, const Expr*& c) {
+                if (e == nullptr || e->kind != Expr::Bin || e->cls != CF || e->op != '*') return false;
+                if (e->a->kind == Expr::Load && e->a->cls == CF && invariant(e->b)) return load = e->a, c = e->b, true;
+                if (e->b->kind == Expr::Load && e->b->cls == CF && invariant(e->a)) return load = e->b, c = e->a, true;
+                return false;
+            };
+            const Expr* load = nullptr;
+            const Expr* c = nullptr;
+            bool add = false;
+            if (!mulOf(v, load, c) && v->kind == Expr::Bin && v->cls == CF && v->op == '+') {
+                auto self = [&](const Expr* e) { return e->kind == Expr::Load && e->cls == CF && e->list == st.list && same(e->b, st.index); };
+                const Expr* m = self(v->a) ? v->b : self(v->b) ? v->a : nullptr;
+                add = m != nullptr && mulOf(m, load, c);
+                if (!add) load = nullptr;
+            }
+            const Expr* outBase = nullptr;
+            const Expr* fromBase = nullptr;
+            if (load != nullptr && counterPlus(st.index, outBase) && counterPlus(load->b, fromBase)) {
+                ah.shape = 23;  // kLoopFMulAdd
+                ah.out = st.list, ah.a = load->list;
+                ah.baseA = outBase, ah.fromBase = fromBase;
+                ah.p1 = c;
+                ah.copyWhat[0] = add ? 1 : 0;
+                return true;
+            }
+        }
+        if (colorFloats(fw, ah, changed, written)) return true;
+        // Below, a store of a number (hsetf, hsetwi, hsetwb); a value of a value type's (hsetsm,
+        // pushsm) has none.
+        if (fw.stores.size() != 1 || fw.stores[0].value == nullptr) return false;
         const Followed::Store& st = fw.stores[0];
         if (st.index == nullptr || st.index->kind != Expr::Counter || ah.iterSlot >= 0) return false;  // (a pushsm has none)
         ah.out = st.list;
@@ -4562,6 +4759,22 @@ struct Region {
             }
         }
         if (ah.shape == 21) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(55, ah.copyWhat[0]);
+        }
+        if (ah.shape == 24 || ah.shape == 25) {
+            word(50, ah.baseA != nullptr ? 1 : 0);
+            if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
+            word(53, ah.copyWhat[0]);
+            word(63, ah.fromBase != nullptr ? 1 : 0);
+            if (ah.fromBase != nullptr) operandWords(64, ah.fromBase, 0);
+            word(66, ah.copyWhat[1]);
+            if (ah.shape == 25) word(97, ah.mixWords[1]), word(98, ah.mixWords[2]);
+        }
+        if (ah.shape == 23) {
             word(50, ah.baseA != nullptr ? 1 : 0);
             if (ah.baseA != nullptr) operandWords(51, ah.baseA, 0);
             word(63, ah.fromBase != nullptr ? 1 : 0);

@@ -1886,7 +1886,7 @@ F_W(HVALPF, x)
 enum : uint64_t {
     kLoopFCopy = 1, kLoopFFill, kLoopFOpK, kLoopFKOp, kLoopFOp, kLoopFAffine, kLoopFBlend, kLoopFSum,
     kLoopWCopy, kLoopWFill, kLoopWSum, kLoopWMap, kLoopWLookup, kLoopWMix, kLoopWSumField, kLoopWIterSumField, kLoopWField, kLoopWFillItems, kLoopWMixItems,
-    kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems,
+    kLoopWCopyItems, kLoopWSameItems, kLoopWAddItems, kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats,
 };
 // Parameters: an operator is '+', '-', '*' or '/'. kLoopWMap: v = sign * a + c, then up to two
 // of min (1) or max (2) with a constant, then stored (into bytes, from 0 to 255).
@@ -2619,6 +2619,88 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint64_t count = word<uint64_t>(pack + kPackCount) + static_cast<uint64_t>(done);
             __builtin_memcpy(pack + kPackCount, &count, 8);
             storeSlot(base, static_cast<int64_t>(t[57]), kKindBool, 1);
+            break;
+        }
+        case kLoopWToFloats:
+        case kLoopWFromFloats: {
+            // Colours made four floats a pixel, or back (2026-11-15: numeric.ww's __premultiplied
+            // and __unpremultiplied; regions.cpp, colorFloats, says what each works out and the
+            // words). Each base the counter (times four for the floats) plus an operand and a
+            // constant: words 50 to 53 the list written's, 63 to 66 the list read's.
+            const bool to = t[0] == kLoopWToFloats;
+            const Items& floats = to ? out : a;
+            const Items& items = to ? a : out;
+            if (!floats.ok() || floats.kind() != 2 || !items.ok() || items.kind() <= 3) return;
+            int64_t ob = 0, ab = 0;
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ab)) return;
+            if (!small(t[53]) || !small(t[66]) || ob < -(int64_t{1} << 50) || ob > (int64_t{1} << 50) || ab < -(int64_t{1} << 50) || ab > (int64_t{1} << 50) ||
+                next > (int64_t{1} << 50) || end > (int64_t{1} << 50))
+                return;
+            ob += static_cast<int64_t>(t[53]), ab += static_cast<int64_t>(t[66]);
+            const int64_t fb = to ? ob : ab, ib = to ? ab : ob;
+            const int64_t fFirst = fb + 4 * next, fLast = fb + 4 * (end - 1) + 3, iFirst = ib + next, iLast = ib + end - 1;
+            if (fFirst < 0 || iFirst < 0 || static_cast<uint64_t>(fLast) >= floats.h[to ? 2 : 1] || static_cast<uint64_t>(iLast) >= items.h[to ? 1 : 2]) return;
+            double* f = floats.floats() + fFirst;
+            uint8_t* p = items.bytes() + static_cast<uint64_t>(iFirst) * 4;
+            if (to) {
+                for (int64_t j = 0; j < left; j++, p += 4, f += 4) {
+                    const double al = static_cast<double>(p[3]);
+                    const double m = al / 255.0;
+                    f[0] = static_cast<double>(p[0]) * m;
+                    f[1] = static_cast<double>(p[1]) * m;
+                    f[2] = static_cast<double>(p[2]) * m;
+                    f[3] = al;
+                }
+                break;
+            }
+            const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
+            if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
+            auto part = [](double v) {
+                v = v + 0.5;
+                v = v > 0.0 ? v : 0.0;
+                return static_cast<uint8_t>(static_cast<int64_t>(v < 255.0 ? v : 255.0));
+            };
+            for (int64_t j = 0; j < left; j++, p += 4, f += 4) {
+                // Where any is NaN, the steps from there (as the VM's min and max have it).
+                if (f[0] != f[0] || f[1] != f[1] || f[2] != f[2] || f[3] != f[3]) {
+                    done = j;
+                    break;
+                }
+                double al = f[3] > 0.0 ? f[3] : 0.0;
+                al = al < 255.0 ? al : 255.0;
+                const int64_t cut = static_cast<int64_t>(al + 0.5);
+                const double gate = static_cast<double>(cut < 1 ? cut : 1);
+                const double m = gate * (255.0 / (al > 0.5 ? al : 0.5));
+                const uint8_t r = part(f[0] * m), gr = part(f[1] * m), b = part(f[2] * m), alpha = part(al);
+                p[0] = r, p[1] = gr, p[2] = b, p[3] = alpha;
+            }
+            break;
+        }
+        case kLoopFMulAdd: {
+            // A tap of a convolution (2026-11-15: __mulAdd): out[ob + j] = a[ab + j] * c1, or
+            // out[ob + j] + that where word 55 says, each base the counter plus an operand (words
+            // 50 to 52 out's, 63 to 65 a's; 50, 63: 0 none, 1 an operand). Forward, one item at a
+            // time, as the steps go: the same where the two are one list.
+            if (!out.ok() || !a.ok() || out.kind() != 2 || a.kind() != 2) return;
+            int64_t ob = 0, ab = 0, oFirst, oLast, aFirst, aLast;
+            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ab)) return;
+            if (__builtin_add_overflow(ob, next, &oFirst) || __builtin_add_overflow(ob, end - 1, &oLast) || __builtin_add_overflow(ab, next, &aFirst) ||
+                __builtin_add_overflow(ab, end - 1, &aLast) || oFirst < 0 || aFirst < 0 || static_cast<uint64_t>(oLast) >= out.h[2] ||
+                static_cast<uint64_t>(oLast) >= out.h[1] || static_cast<uint64_t>(aLast) >= a.h[1])
+                return;
+            double* o = out.floats() + oFirst;
+            const double* x = a.floats() + aFirst;
+            if (t[55] != 0) {
+#pragma clang fp contract(off)
+                for (int64_t j = 0; j < left; j++) {
+                    const double m = x[j] * c1;
+                    o[j] = o[j] + m;
+                }
+            } else {
+                for (int64_t j = 0; j < left; j++) o[j] = x[j] * c1;
+            }
             break;
         }
         case kLoopWSameItems: {

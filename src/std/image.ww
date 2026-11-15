@@ -973,17 +973,20 @@ class Image : Drawable {
   // and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that,
   // across and then down, their colours weighed by their alpha so that a see-through edge does
   // not darken, the edge pixels repeated beyond the edges. An IllegalArgumentException for a
-  // radius below 0.
+  // radius below 0. Worked out in doubles, across and then down with nothing rounded between
+  // (2026-11-15; was C++'s, in single precision, rounded to bytes between the two).
   fun blurred(radius : Number) : Image {
     val s = radius.toFloat()
     if (!(s >= 0.0)) { throw IllegalArgumentException("a blur's radius is 0 or more, not $radius") }
     if (s == 0.0 or width == 0 or height == 0) { return copy() }
     val reach = Math.ceil(3.0 * s).toInt()
-    val across = Grid<float>(2 * reach + 1, 1)
+    val taps : open List<float> = []
     var total = 0.0
     for (k in -reach .. reach) { total += Math.exp(-(k * k) / (2.0 * s * s)) }
-    for (k in -reach .. reach) { across[k + reach, 0] = Math.exp(-(k * k) / (2.0 * s * s)) / total }
-    return of(pixels.convolve(across).convolve(across.transposed()))
+    for (k in -reach .. reach) { taps.add(Math.exp(-(k * k) / (2.0 * s * s)) / total) }
+    val made = Grid<Color>(width, height)
+    __colorBlur(cells.cells, width, height, taps, made.cells)
+    return of(made)
   }
 
   // The picture at another size: each way it shrinks, each new pixel the average of those it

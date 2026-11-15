@@ -1,0 +1,76 @@
+// blurred, scaled and a colour grid's convolve in WinterWolf (2026-11-15; were C++'s, in single
+// precision): in doubles, the blur not rounded between its two passes. Native code does their
+// loops as templates (kLoopFMulAdd, kLoopWToFloats, kLoopWFromFloats); the same pixels as the
+// VM's. Pictures smaller than the kernel, see-through ones, a convolve into its own grid, a
+// kernel with NaN in it (the templates leave such pixels to the steps), scaling to and from
+// nothing. Each run three times (a loop's region is made the second time it starts).
+fun picture(w : int, h : int, seed : int) : Image {
+  val im = Image(w, h)
+  var s = seed
+  im.editPixels { px ->
+    for (y in 0 ..< h) {
+      for (x in 0 ..< w) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        px[x, y] = Color((s % 256).toByte(), (s / 256 % 256).toByte(), (s / 65536 % 256).toByte(), (s / 16777216 % 2 == 0 ? 255 : (s / 7 % 256)).toByte())
+      }
+    }
+  }
+  return im
+}
+fun sum(im : Image) : int {
+  var t = 0
+  for (y in 0 ..< im.height) {
+    for (x in 0 ..< im.width) {
+      val c = im[x, y]
+      t = (t * 31 + c.red.toInt() + c.green.toInt() * 7 + c.blue.toInt() * 13 + c.alpha.toInt() * 17) % 1000000007
+    }
+  }
+  return t
+}
+fun kernel(w : int, h : int, odd : float, around : float = -0.125) : Grid<float> {
+  val k = Grid<float>(w, h, around)
+  k[w / 2, h / 2] = odd
+  return k
+}
+val big = picture(61, 47, 3)
+val tiny = picture(2, 3, 5)
+val one = picture(1, 1, 7)
+for (round in 0 ..< 3) {
+  print(sum(big.blurred(0.6)), sum(big.blurred(2)), sum(tiny.blurred(3)), sum(one.blurred(1)))
+  print(sum(big.scaled(20, 15)), sum(big.scaled(130, 90)), sum(big.scaled(130, 90, Interpolation.nearest)), sum(big.scaled(130, 90, Interpolation.bicubic)),
+        sum(big.scaled(130, 9)), sum(tiny.scaled(9, 1)), big.scaled(0, 5).width)
+  val sharp = big.copy()
+  sharp.editPixels { px -> big.pixels.convolve(kernel(3, 3, 2.0), px) }
+  val inPlace = big.copy()
+  inPlace.editPixels { px -> px.convolve(kernel(3, 3, 2.0), px) }
+  val wide = tiny.copy()
+  wide.editPixels { px -> tiny.pixels.convolve(kernel(5, 7, 0.32, 0.02), px) }
+  print(sum(sharp), sum(inPlace) == sum(sharp), sum(wide))
+  val odd = big.copy()
+  odd.editPixels { px -> big.pixels.convolve(kernel(3, 1, 0.0 / 0.0), px) }
+  print(sum(odd))
+}
+try {
+  Image(0, 0).pixels.scaled(3, 3)
+} catch (e : IllegalArgumentException) {
+  print(e.message)
+}
+try {
+  big.pixels.convolve(Grid<float>(0, 3))
+} catch (e : IllegalArgumentException) {
+  print(e.message)
+}
+// expect: 689190388 757689264 740583357 6386
+// expect: 177122825 589614063 507055119 476684936 194912852 453723982 0
+// expect: 150841903 true 886044943
+// expect: 0
+// expect: 689190388 757689264 740583357 6386
+// expect: 177122825 589614063 507055119 476684936 194912852 453723982 0
+// expect: 150841903 true 886044943
+// expect: 0
+// expect: 689190388 757689264 740583357 6386
+// expect: 177122825 589614063 507055119 476684936 194912852 453723982 0
+// expect: 150841903 true 886044943
+// expect: 0
+// expect: an empty grid cannot be scaled to 3 by 3
+// expect: the kernel is 0 by 3

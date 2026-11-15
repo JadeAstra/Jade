@@ -267,7 +267,7 @@ fun <T> __gridLike(like : Grid<T>, width : int, height : int) : Grid<T> {
 // itself), the edge cells repeated past the edge: blurs, sharpening, edges, a terrain smoothed.
 fun <T : Number> Grid<T>.convolve(kernel : Grid<float>, into : Grid<float>? = null) : Grid<float> {
   val out = into ?: Grid<float>(width, height)
-  __num.convolve(cells, width, height, kernel.cells, kernel.width, kernel.height, __gridInto(out, width, height), false)
+  __num.convolve(cells, width, height, kernel.cells, kernel.width, kernel.height, __gridInto(out, width, height))
   return out
 }
 
@@ -275,7 +275,7 @@ fun <T : Number> Grid<T>.convolve(kernel : Grid<float>, into : Grid<float>? = nu
 // it shrinks, read between cells by `interpolation` each way it grows; ints rounded.
 fun <T : Number> Grid<T>.scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Grid<T> {
   val made = __gridLike(this, width, height)
-  __num.scaled(cells, this.width, this.height, width, height, interpolation.ordinal, made.cells, false)
+  __num.scaled(cells, this.width, this.height, width, height, interpolation.ordinal, made.cells)
   return made
 }
 
@@ -399,19 +399,259 @@ fun __channelTable(table : List<int>?) : Bytes {
 
 // Each colour the sum of its neighbours' weighted by `kernel`, each part on its own, multiplied by
 // alpha on the way so that a see-through edge does not darken; the edge cells repeated past the
-// edge.
+// edge. `into` may be this grid itself.
 fun Grid<Color>.convolve(kernel : Grid<float>, into : Grid<Color>? = null) : Grid<Color> {
   val out = into ?: Grid<Color>(width, height)
-  __num.convolve(cells, width, height, kernel.cells, kernel.width, kernel.height, __gridInto(out, width, height), true)
+  __colorConvolve(cells, width, height, kernel.cells, kernel.width, kernel.height, __gridInto(out, width, height))
   return out
 }
 
 // The picture resampled to `width` by `height`: area-averaged each way it shrinks, read between
 // pixels by `interpolation` each way it grows; colours weighed by alpha.
 fun Grid<Color>.scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Grid<Color> {
+  if (width < 0 or height < 0) { throw IllegalArgumentException("a grid is at least 0 by 0, not $width by $height") }
   val made = Grid<Color>(width, height)
-  __num.scaled(cells, this.width, this.height, width, height, interpolation.ordinal, made.cells, true)
+  __colorScaled(cells, this.width, this.height, width, height, interpolation.ordinal, made.cells)
   return made
+}
+
+// ---- Colours convolved and scaled (2026-11-15; were C++'s, in single precision) ----
+//
+// In doubles, each pixel's sums in the C++'s order: a row's taps one after another, then the rows.
+// A colour is worked on as four floats, red, green and blue multiplied by its alpha out of 255, and
+// alpha; a whole row of them at a time, each tap of a kernel one multiply-add over the row
+// (__mulAdd, which native code does as a loop template), so that the work of each tap is a loop
+// thousands long rather than four sums of a few taps for each pixel.
+
+// Pixels `from` to `from + n` of `px` as four floats each, into `to` from `at` (native code does it
+// as a loop template, kLoopWToFloats).
+fun __premultiplied(px : List<Color>, from : int, n : int, to : open List<float>, at : int) {
+  for (x in 0 ..< n) {
+    val c = px[from + x]
+    val a = c.alpha.toInt().toFloat()
+    val m = a / 255.0
+    val k = at + 4 * x
+    to[k] = c.red.toInt().toFloat() * m
+    to[k + 1] = c.green.toInt().toFloat() * m
+    to[k + 2] = c.blue.toInt().toFloat() * m
+    to[k + 3] = a
+  }
+}
+// `n` pixels' four floats from `at` as colours, into `to` from `toAt`: alpha held from 0 to 255 and
+// rounded, red, green and blue divided by it, each rounded and held; all 0 where alpha rounds to
+// 0. With no branch, which native code does as a loop template (kLoopWFromFloats): m is 0 where a
+// is below 0.5 (alpha 0), and 255 / a otherwise, as 1.0 * (255 / a) is.
+fun __unpremultiplied(acc : List<float>, at : int, n : int, to : open List<Color>, toAt : int) {
+  for (x in 0 ..< n) {
+    val k = at + 4 * x
+    val a = Math.min(255.0, Math.max(0.0, acc[k + 3]))
+    val m = Math.min(1, (a + 0.5).toInt()).toFloat() * (255.0 / Math.max(a, 0.5))
+    to[toAt + x] = Color(__colorPart(acc[k] * m), __colorPart(acc[k + 1] * m), __colorPart(acc[k + 2] * m), __colorPart(a))
+  }
+}
+// A part rounded half away from zero and held from 0 to 255: v + 0.5 held, then cut to a whole
+// number (anything at 0 or below gives 0, as rounding and then holding does), with no branch.
+fun __colorPart(v : float) : byte => Math.min(255.0, Math.max(0.0, v + 0.5)).toInt().toByte()
+
+// out[outAt + j] = from[fromAt + j] * weight, or plus it where `add`, for j from 0 to n - 1.
+fun __mulAdd(out : open List<float>, outAt : int, from : List<float>, fromAt : int, n : int, weight : float, add : bool) {
+  if (add) {
+    for (j in 0 ..< n) { out[outAt + j] = out[outAt + j] + from[fromAt + j] * weight }
+  } else {
+    for (j in 0 ..< n) { out[outAt + j] = from[fromAt + j] * weight }
+  }
+}
+
+// A row of `w` pixels (four floats each, from `rowAt`) convolved across by the `kw` taps from
+// `tapsAt` (the middle one, kw / 2, on the pixel itself; the edge pixels repeated past the edge),
+// into `out` from `outAt`. Each pixel's sum the taps' in order.
+fun __acrossRow(row : List<float>, rowAt : int, w : int, taps : List<float>, tapsAt : int, kw : int, out : open List<float>, outAt : int) {
+  val cx = kw / 2
+  // The pixels whose taps all fall inside the row: each tap one multiply-add over all of them.
+  val inFrom = cx
+  val inTo = w - kw + cx
+  if (inTo >= inFrom) {
+    val n = (inTo - inFrom + 1) * 4
+    for (i in 0 ..< kw) { __mulAdd(out, outAt + inFrom * 4, row, rowAt + (inFrom + i - cx) * 4, n, taps[tapsAt + i], i > 0) }
+  }
+  // The rest, near the edges.
+  for (x in 0 ..< w) {
+    if (x >= inFrom and x <= inTo) { continue }
+    for (p in 0 ..< 4) {
+      var s = 0.0
+      for (i in 0 ..< kw) {
+        val at = Math.min(w - 1, Math.max(0, x + i - cx))
+        s += row[rowAt + at * 4 + p] * taps[tapsAt + i]
+      }
+      out[outAt + x * 4 + p] = s
+    }
+  }
+}
+
+// Kernel `kernel` (kw by kh, row by row) over the colours `px` (w by h), into `to`, which may be
+// `px`: the rows a window takes made four floats a pixel as they are first wanted, into a ring of
+// kh rows (row r in place r % kh), each answer row the sum of the window's rows each convolved
+// across by its row of the kernel. A row is in the ring before its answer is written over it.
+fun __colorConvolve(px : List<Color>, w : int, h : int, kernel : List<float>, kw : int, kh : int, to : open List<Color>) {
+  if (kw == 0 or kh == 0 or kernel.size != kw * kh) { throw IllegalArgumentException("the kernel is $kw by $kh") }
+  if (w == 0 or h == 0) { return }
+  val w4 = w * 4
+  val cy = kh / 2
+  val ring = Grid<float>(w4, kh)
+  val rows = ring.cells
+  val held = Grid<int>(kh, 1, -1).cells
+  val acc = Grid<float>(w4, 1).cells
+  val sum = Grid<float>(w4, 1).cells
+  for (y in 0 ..< h) {
+    for (j in 0 ..< kh) {
+      val yy = Math.min(h - 1, Math.max(0, y + j - cy))
+      val place = yy % kh
+      if (held[place] != yy) {
+        __premultiplied(px, yy * w, w, rows, place * w4)
+        held[place] = yy
+      }
+      if (j == 0) {
+        __acrossRow(rows, place * w4, w, kernel, 0, kw, acc, 0)
+      } else {
+        __acrossRow(rows, place * w4, w, kernel, j * kw, kw, sum, 0)
+        __mulAdd(acc, 0, sum, 0, w4, 1.0, true)
+      }
+    }
+    __unpremultiplied(acc, 0, w, to, y * w)
+  }
+}
+
+// A Gaussian blur (Image.blurred): the colours `px` (w by h) convolved across by `taps`, then down
+// by them, not rounded between: each row convolved across as it is first wanted, into a ring of as
+// many rows as there are taps, and each answer row the taps' sum of the window's rows.
+fun __colorBlur(px : List<Color>, w : int, h : int, taps : List<float>, to : open List<Color>) {
+  val k = taps.size
+  val w4 = w * 4
+  val cy = k / 2
+  val line = Grid<float>(w4, 1).cells
+  val ring = Grid<float>(w4, k).cells
+  val held = Grid<int>(k, 1, -1).cells
+  val acc = Grid<float>(w4, 1).cells
+  for (y in 0 ..< h) {
+    for (j in 0 ..< k) {
+      val yy = Math.min(h - 1, Math.max(0, y + j - cy))
+      val place = yy % k
+      if (held[place] != yy) {
+        __premultiplied(px, yy * w, w, line, 0)
+        __acrossRow(line, 0, w, taps, 0, k, ring, place * w4)
+        held[place] = yy
+      }
+      __mulAdd(acc, 0, ring, place * w4, w4, taps[j], j > 0)
+    }
+    __unpremultiplied(acc, 0, w, to, y * w)
+  }
+}
+
+// How each cell of a line `to` long takes from a line `from` long (Grid.scaled): area-averaged
+// where it shrinks, read between cells by `interpolation` where it grows (0 nearest, 1 bilinear,
+// 2 bicubic, Catmull-Rom's). Cell k's taps are `index` and `weight` from start[k] to start[k + 1].
+class __Taps(val start : open List<int>, val index : open List<int>, val weight : open List<float>)
+fun __tapsFor(from : int, to : int, interpolation : int) : __Taps {
+  val t = __Taps([], [], [])
+  val ratio = from.toFloat() / to.toFloat()
+  for (k in 0 ..< to) {
+    t.start.add(t.index.size)
+    if (to < from) {
+      // The part of the old line the new cell covers, each old cell by its overlap.
+      val lo = k * ratio
+      val hi = (k + 1) * ratio
+      var i = Math.floor(lo).toInt()
+      while (i < from and i.toFloat() < hi) {
+        val overlap = Math.min(hi, i + 1.0) - Math.max(lo, i.toFloat())
+        if (overlap > 0.0) {
+          t.index.add(i)
+          t.weight.add(overlap / ratio)
+        }
+        i += 1
+      }
+      continue
+    }
+    val at = (k + 0.5) * ratio - 0.5
+    if (interpolation == 0) {
+      t.index.add(Math.min(from - 1, Math.max(0, Math.floor((k + 0.5) * ratio).toInt())))
+      t.weight.add(1.0)
+    } else if (interpolation == 1) {
+      val f = Math.floor(at)
+      val u = at - f
+      t.index.add(Math.min(from - 1, Math.max(0, f.toInt())))
+      t.weight.add(1.0 - u)
+      t.index.add(Math.min(from - 1, Math.max(0, f.toInt() + 1)))
+      t.weight.add(u)
+    } else {
+      val f = Math.floor(at)
+      val u = at - f
+      val u2 = u * u
+      val u3 = u2 * u
+      val ws = [(-u3 + 2.0 * u2 - u) / 2.0, (3.0 * u3 - 5.0 * u2 + 2.0) / 2.0, (-3.0 * u3 + 4.0 * u2 + u) / 2.0, (u3 - u2) / 2.0]
+      for (j in 0 ..< 4) {
+        t.index.add(Math.min(from - 1, Math.max(0, f.toInt() - 1 + j)))
+        t.weight.add(ws[j])
+      }
+    }
+  }
+  t.start.add(t.index.size)
+  return t
+}
+
+// The colours `px` (w by h) resampled to nw by nh into `to` (Grid.scaled): each source row a
+// row is made from made four floats a pixel and resampled across as it is first wanted, kept in a
+// ring of 8; each answer row its taps' sum of those rows.
+fun __colorScaled(px : List<Color>, w : int, h : int, nw : int, nh : int, interpolation : int, to : open List<Color>) {
+  if (w == 0 or h == 0) {
+    if (nw * nh != 0) { throw IllegalArgumentException("an empty grid cannot be scaled to $nw by $nh") }
+    return
+  }
+  if (nw == 0 or nh == 0) { return }
+  val across = __tapsFor(w, nw, interpolation)
+  val down = __tapsFor(h, nh, interpolation)
+  val nw4 = nw * 4
+  val kept = 8
+  val line = Grid<float>(w * 4, 1).cells
+  val ring = Grid<float>(nw4, kept).cells
+  val held = Grid<int>(kept, 1, -1).cells
+  val acc = Grid<float>(nw4, 1).cells
+  for (y in 0 ..< nh) {
+    val first = down.start[y]
+    val last = down.start[y + 1]
+    for (t in first ..< last) {
+      val sy = down.index[t]
+      val place = sy % kept
+      if (held[place] != sy) {
+        __premultiplied(px, sy * w, w, line, 0)
+        __scaledAcross(line, nw, across.start, across.index, across.weight, ring, place * nw4)
+        held[place] = sy
+      }
+      __mulAdd(acc, 0, ring, place * nw4, nw4, down.weight[t], t > first)
+    }
+    __unpremultiplied(acc, 0, nw, to, y * nw)
+  }
+}
+// A row of four floats a pixel resampled across to nw pixels by the taps, into `out` from `outAt`.
+fun __scaledAcross(line : List<float>, nw : int, start : List<int>, index : List<int>, weight : List<float>, out : open List<float>, outAt : int) {
+  for (x in 0 ..< nw) {
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    var a = 0.0
+    for (t in start[x] ..< start[x + 1]) {
+      val c = index[t] * 4
+      val wt = weight[t]
+      r += line[c] * wt
+      g += line[c + 1] * wt
+      b += line[c + 2] * wt
+      a += line[c + 3] * wt
+    }
+    val o = outAt + x * 4
+    out[o] = r
+    out[o + 1] = g
+    out[o + 2] = b
+    out[o + 3] = a
+  }
 }
 
 // Each pixel its neighbourhood within `radius` reduced, each part of the colour on its own (a

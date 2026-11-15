@@ -3368,7 +3368,7 @@ image.save(FilePath(&quot;out.png&quot;))
 <p>A new image of the same size with the same pixels, changed apart from this one. Its pixels copied once (2026-11-13: as a crop, a clear image was made first and then written over).</p>
 </div>
 <div class="entry member" id="Image.blurred"><code class="sig">fun blurred(radius : Number) : Image</code><a class="anchor" href="#Image.blurred">#</a>
-<p>A copy blurred by a Gaussian whose standard deviation is <code>radius</code> pixels, as CSS's blur() and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that, across and then down, their colours weighed by their alpha so that a see-through edge does not darken, the edge pixels repeated beyond the edges. An IllegalArgumentException for a radius below 0.</p>
+<p>A copy blurred by a Gaussian whose standard deviation is <code>radius</code> pixels, as CSS's blur() and SVG's stdDeviation (N3): each pixel a mix of those round it out to three times that, across and then down, their colours weighed by their alpha so that a see-through edge does not darken, the edge pixels repeated beyond the edges. An IllegalArgumentException for a radius below 0. Worked out in doubles, across and then down with nothing rounded between (2026-11-15; was C++'s, in single precision, rounded to bytes between the two).</p>
 </div>
 <div class="entry member" id="Image.scaled"><code class="sig">fun scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Image</code><a class="anchor" href="#Image.scaled">#</a>
 <p>The picture at another size: each way it shrinks, each new pixel the average of those it covers; each way it grows, read between pixels by <code>interpolation</code>; colours weighed by alpha. An IllegalArgumentException for a size below 0.</p>
@@ -4571,11 +4571,13 @@ val smooth = heights.convolve(Grid&lt;float&gt;(3, 3, fill = 1.0 / 9))
 <p>Each part of each colour through a table of 256 values (0 to 255; a part kept as it is where its table is null): brightness, contrast, gamma, levels, inverting, together in one pass.</p>
 </div>
 <div class="entry" id="Grid.convolve-2"><code class="sig">fun Grid&lt;Color&gt;.convolve(kernel : Grid&lt;float&gt;, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.convolve-2">#</a>
-<p>Each colour the sum of its neighbours' weighted by <code>kernel</code>, each part on its own, multiplied by alpha on the way so that a see-through edge does not darken; the edge cells repeated past the edge.</p>
+<p>Each colour the sum of its neighbours' weighted by <code>kernel</code>, each part on its own, multiplied by alpha on the way so that a see-through edge does not darken; the edge cells repeated past the edge. <code>into</code> may be this grid itself.</p>
 </div>
 <div class="entry" id="Grid.scaled-2"><code class="sig">fun Grid&lt;Color&gt;.scaled(width : int, height : int, interpolation : Interpolation = Interpolation.bilinear) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.scaled-2">#</a>
 <p>The picture resampled to <code>width</code> by <code>height</code>: area-averaged each way it shrinks, read between pixels by <code>interpolation</code> each way it grows; colours weighed by alpha.</p>
 </div>
+<h3>Colours convolved and scaled (2026-11-15; were C++'s, in single precision)</h3>
+<p>In doubles, each pixel's sums in the C++'s order: a row's taps one after another, then the rows. A colour is worked on as four floats, red, green and blue multiplied by its alpha out of 255, and alpha; a whole row of them at a time, each tap of a kernel one multiply-add over the row (__mulAdd, which native code does as a loop template), so that the work of each tap is a loop thousands long rather than four sums of a few taps for each pixel.</p>
 <div class="entry" id="Grid.window-2"><code class="sig">fun Grid&lt;Color&gt;.window(radius : int, reduce : Reduce, shape : WindowShape = WindowShape.square, into : Grid&lt;Color&gt;? = null) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.window-2">#</a>
 <p>Each pixel its neighbourhood within <code>radius</code> reduced, each part of the colour on its own (a mean weighed by alpha, as a blur).</p>
 </div>

@@ -425,35 +425,6 @@ void writePlanes(VM& vm, Value out, const std::vector<std::vector<double>>& plan
     }
 }
 
-// A row of colours as floats, red, green and blue multiplied by alpha (out of 255), and alpha.
-void premultipliedRow(const uint8_t* src, size_t n, float* out) {
-    for (size_t x = 0; x < n; x++, src += 4, out += 4) {
-        const float m = src[3] / 255.0f;
-        out[0] = src[0] * m;
-        out[1] = src[1] * m;
-        out[2] = src[2] * m;
-        out[3] = src[3];
-    }
-}
-
-// Such a row back as colours: alpha rounded and held from 0 to 255, the rest divided by it.
-void colorRow(const float* in, size_t n, uint8_t* dst) {
-    auto byte = [](float v) { return static_cast<uint8_t>(v <= 0 ? 0 : v >= 255 ? 255 : static_cast<int>(v + 0.5f)); };
-    for (size_t x = 0; x < n; x++, in += 4, dst += 4) {
-        const float a = in[3] < 0 ? 0 : in[3] > 255 ? 255 : in[3];
-        const uint8_t alpha = byte(a);
-        dst[3] = alpha;
-        if (alpha == 0) {
-            dst[0] = dst[1] = dst[2] = 0;
-            continue;
-        }
-        const float m = 255.0f / a;
-        dst[0] = byte(in[0] * m);
-        dst[1] = byte(in[1] * m);
-        dst[2] = byte(in[2] * m);
-    }
-}
-
 // Catmull-Rom's weights for the four cells round a place t of the way between the middle two.
 void cubicWeights(double t, double w[4]) {
     const double t2 = t * t, t3 = t2 * t;
@@ -1180,76 +1151,15 @@ void registerNumeric(VM& vm) {
             for (size_t x = 0; x < w; x++) vm.listSet(to, x * h + y, vm.listGet(from, y * w + x));
         return Value::null();
     });
-    // convolve(cells, width, height, kernel, kw, kh, out, colour): each cell the sum of its
-    // neighbours weighted by the kernel centred on it, the edge cells repeated past the edge;
-    // colours each part on its own, multiplied by alpha on the way.
-    def("convolve", 8, 8, [](VM& vm, int, Value* args) -> Value {
+    // convolve(cells, width, height, kernel, kw, kh, out): each cell the sum of its neighbours
+    // weighted by the kernel centred on it, the edge cells repeated past the edge. A grid of
+    // numbers; colours are numeric.ww's (__colorConvolve, 2026-11-15).
+    def("convolve", 7, 7, [](VM& vm, int, Value* args) -> Value {
         const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
         const size_t kw = sizeArg(vm, args[4], "the kernel's width"), kh = sizeArg(vm, args[5], "the kernel's height");
-        const bool colour = args[7].truthy();
+        const bool colour = false;
         const Numbers k = numbers(vm, args[3], "the kernel");
         if (k.count != kw * kh || kw == 0 || kh == 0) fail(vm, Thrown::IllegalArgumentException, "the kernel is " + std::to_string(kw) + " by " + std::to_string(kh));
-        if (colour) {
-            const uint8_t* in = colorCells(vm, args[0], w * h, "the grid");
-            uint8_t* out = colorCells(vm, args[6], w * h, "the grid written into");
-            if (w == 0 || h == 0) return Value::null();
-            std::vector<float> weights(kw * kh);
-            for (size_t i = 0; i < kw * kh; i++) weights[i] = static_cast<float>(k.f(i));
-            // Rows multiplied by alpha as they are first wanted, into a ring of the kernel's height
-            // (row r in place r % kh): the rows a pixel's window takes are kh in a run, so never
-            // two in one place, and a row leaves only once no window takes it again. Each answer
-            // row written straight into `out`, which may be `in`: a row is in the ring before
-            // its answer is written over it (2026-11-13: the whole picture as floats, 192 MB for
-            // 12 million pixels, and the answer apart, took 127 ms for a 1 by 1 kernel).
-            const int64_t cx = static_cast<int64_t>(kw / 2), cy = static_cast<int64_t>(kh / 2);
-            std::vector<float> ring(kh * w * 4), acc(w * 4);
-            std::vector<int64_t> held(kh, -1);
-            std::vector<const float*> rows(kh);
-            // The columns whose whole window is inside the grid: no edge to repeat.
-            const int64_t inFrom = cx, inTo = static_cast<int64_t>(w) - static_cast<int64_t>(kw) + cx;
-            // A pixel's four parts side by side, worked out together: each part the same
-            // multiplications and additions, in the same order, as one at a time.
-            using F4 = float __attribute__((vector_size(16)));
-            auto load4 = [](const float* p) {
-                F4 v;
-                std::memcpy(&v, p, sizeof v);
-                return v;
-            };
-            for (size_t y = 0; y < h; y++) {
-                for (size_t j = 0; j < kh; j++) {
-                    const int64_t yy = std::clamp<int64_t>(static_cast<int64_t>(y + j) - cy, 0, static_cast<int64_t>(h) - 1);
-                    const size_t place = static_cast<size_t>(yy) % kh;
-                    if (held[place] != yy) {
-                        premultipliedRow(in + static_cast<size_t>(yy) * w * 4, w, &ring[place * w * 4]);
-                        held[place] = yy;
-                    }
-                    rows[j] = &ring[place * w * 4];
-                }
-                // Each pixel: its window's rows in order, each row's taps in order, as before
-                // (an answer the sum over rows of each row's sum).
-                for (int64_t x = 0; x < static_cast<int64_t>(w); x++) {
-                    F4 total = {0, 0, 0, 0};
-                    for (size_t j = 0; j < kh; j++) {
-                        const float* row = rows[j];
-                        const float* kr = &weights[j * kw];
-                        F4 sum = {0, 0, 0, 0};
-                        if (x >= inFrom && x <= inTo) {
-                            const float* at = row + (x - cx) * 4;
-                            for (size_t i = 0; i < kw; i++, at += 4) sum += load4(at) * kr[i];
-                        } else {
-                            for (size_t i = 0; i < kw; i++) {
-                                const float* at = row + std::clamp<int64_t>(x + static_cast<int64_t>(i) - cx, 0, static_cast<int64_t>(w) - 1) * 4;
-                                sum += load4(at) * kr[i];
-                            }
-                        }
-                        total += sum;
-                    }
-                    std::memcpy(&acc[static_cast<size_t>(x) * 4], &total, sizeof total);
-                }
-                colorRow(acc.data(), w, out + y * w * 4);
-            }
-            return Value::null();
-        }
         auto planes = planesOf(vm, args[0], w * h, colour, true);
         std::vector<std::vector<double>> result(planes.size(), std::vector<double>(w * h));
         const int64_t cx = static_cast<int64_t>(kw / 2), cy = static_cast<int64_t>(kh / 2);
@@ -1269,60 +1179,22 @@ void registerNumeric(VM& vm) {
                     out[y * w + x] = sum;
                 }
         }
-        if (colour) writePlanes(vm, args[6], result, w * h, true, true);
-        else store(vm, listArg(vm, args[6], "the grid written into"), result[0]);
+        store(vm, listArg(vm, args[6], "the grid written into"), result[0]);
         return Value::null();
     });
-    // scaled(cells, width, height, toWidth, toHeight, interpolation, out, colour): the grid
-    // resampled to another size, area-averaged each way it shrinks, read between cells by the
-    // interpolation each way it grows.
-    def("scaled", 8, 8, [](VM& vm, int, Value* args) -> Value {
+    // scaled(cells, width, height, toWidth, toHeight, interpolation, out): the grid resampled to
+    // another size, area-averaged each way it shrinks, read between cells by the interpolation
+    // each way it grows. A grid of numbers; colours are numeric.ww's (__colorScaled, 2026-11-15).
+    def("scaled", 7, 7, [](VM& vm, int, Value* args) -> Value {
         const size_t w = sizeArg(vm, args[1], "width"), h = sizeArg(vm, args[2], "height");
         const size_t nw = sizeArg(vm, args[3], "width"), nh = sizeArg(vm, args[4], "height");
         const int interpolation = static_cast<int>(vm.toInt(args[5], "interpolation"));
-        const bool colour = args[7].truthy();
+        const bool colour = false;
         if (w == 0 || h == 0) {
             if (nw * nh != 0) fail(vm, Thrown::IllegalArgumentException, "an empty grid cannot be scaled to " + std::to_string(nw) + " by " + std::to_string(nh));
             return Value::null();
         }
         const Taps across = tapsFor(w, nw, interpolation), down = tapsFor(h, nh, interpolation);
-        if (colour) {
-            const uint8_t* in = colorCells(vm, args[0], w * h, "the grid");
-            uint8_t* out = colorCells(vm, args[6], nw * nh, "the grid written into");
-            // Source rows made the new width, kept for the next rows that read them too.
-            const size_t kept = 8;
-            std::vector<int64_t> keptRow(kept, -1);
-            std::vector<float> keptData(kept * nw * 4), line(w * 4), acc(nw * 4);
-            auto across4 = [&](size_t sy) -> const float* {
-                const size_t slot = sy % kept;
-                float* row = &keptData[slot * nw * 4];
-                if (keptRow[slot] == static_cast<int64_t>(sy)) return row;
-                premultipliedRow(in + sy * w * 4, w, line.data());
-                for (size_t x = 0; x < nw; x++) {
-                    float r = 0, g = 0, b = 0, a = 0;
-                    for (size_t t = across.start[x]; t < across.start[x + 1]; t++) {
-                        const float* c = &line[across.index[t] * 4];
-                        const float wt = static_cast<float>(across.weight[t]);
-                        r += c[0] * wt, g += c[1] * wt, b += c[2] * wt, a += c[3] * wt;
-                    }
-                    row[x * 4] = r, row[x * 4 + 1] = g, row[x * 4 + 2] = b, row[x * 4 + 3] = a;
-                }
-                keptRow[slot] = static_cast<int64_t>(sy);
-                return row;
-            };
-            std::vector<uint8_t> done(nw * nh * 4);
-            for (size_t y = 0; y < nh; y++) {
-                std::fill(acc.begin(), acc.end(), 0.0f);
-                for (size_t t = down.start[y]; t < down.start[y + 1]; t++) {
-                    const float* row = across4(down.index[t]);
-                    const float wt = static_cast<float>(down.weight[t]);
-                    for (size_t i = 0; i < nw * 4; i++) acc[i] += row[i] * wt;
-                }
-                colorRow(acc.data(), nw, &done[y * nw * 4]);
-            }
-            std::memcpy(out, done.data(), done.size());
-            return Value::null();
-        }
         auto planes = planesOf(vm, args[0], w * h, colour, true);
         std::vector<std::vector<double>> result(planes.size(), std::vector<double>(nw * nh));
         std::vector<double> mid(nw * h);
