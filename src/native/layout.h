@@ -44,8 +44,13 @@ inline const uint8_t* stringUnits(const uint8_t* s) {
 }
 // A type (ObjTypeInfo): its class, and its arguments (a std::vector, its first one's address first).
 constexpr int kTypeInfoCls = 32, kTypeInfoArgs = 40;
-// A class (ObjClass): its number among the value types kept in the value itself (0 for none).
+// A class (ObjClass): its number among the value types kept in the value itself (0 for none). The
+// standard library's containers before it differ in size: MSVC's and libstdc++'s.
+#if defined(_MSC_VER)
 constexpr int kClassSmallId = 828;
+#else
+constexpr int kClassSmallId = 796;
+#endif
 // A map's or a set's table (ObjMap::map, ObjSet::items, a ValueMap), and a set's map where it is a
 // view of one; in the table, the entries (a std::vector of Entry: a key, a value, whether it is
 // live, its hash), the slots (a std::vector of uint32_t: an entry's place plus one, 0 empty,
