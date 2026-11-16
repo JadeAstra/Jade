@@ -25,8 +25,27 @@ constexpr int kListType = 24;
 // A string (ObjString, ObjType::String): its length in characters.
 constexpr uint8_t kTypeString = 0;
 constexpr int kStringLength = 32;
+// A string's characters (ObjString::units_, a std::string) and its hash (bit 32 set where it has
+// been worked out; ObjString::hash_), for native code's probing of string keys (2026-11-16).
+constexpr int kStringUnits = 40, kStringHash = 72, kStringWidth = 25;
+// The first character's address in a std::string, by the standard library's layout: MSVC's keeps
+// up to 15 bytes in the object itself, a pointer past that (its room 8 bytes after its size);
+// libstdc++'s always a pointer first. Checked as ww starts its native code (native.cpp,
+// stringAsRead): where it does not hold, no step reads a string's characters.
+inline const uint8_t* stringUnits(const uint8_t* s) {
+#if defined(_MSC_VER)
+    uint64_t room;
+    __builtin_memcpy(&room, s + 24, 8);
+    if (room < 16) return s;
+#endif
+    const uint8_t* p;
+    __builtin_memcpy(&p, s, 8);
+    return p;
+}
 // A type (ObjTypeInfo): its class, and its arguments (a std::vector, its first one's address first).
 constexpr int kTypeInfoCls = 32, kTypeInfoArgs = 40;
+// A class (ObjClass): its number among the value types kept in the value itself (0 for none).
+constexpr int kClassSmallId = 828;
 // A map's or a set's table (ObjMap::map, ObjSet::items, a ValueMap), and a set's map where it is a
 // view of one; in the table, the entries (a std::vector of Entry: a key, a value, whether it is
 // live, its hash), the slots (a std::vector of uint32_t: an entry's place plus one, 0 empty,
@@ -76,6 +95,7 @@ constexpr uint8_t kKindUndefined = 5, kKindRef = 7;
 // its type's number); a list's items' own type and where in an item it is kept (G4); and the
 // object a frame keeps its variables' values in.
 constexpr uint8_t kKindSmall = 8;
+constexpr uint8_t kKindChar = 9;  // a char, which equals a string of it alone as a key
 constexpr int kRefDepth = 1, kRefOffset = 2, kRefIndex = 4;
 constexpr int kPackItemType = 16, kPackTypeSlot = 8;
 constexpr uint8_t kTypePlaces = 19;

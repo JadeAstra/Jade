@@ -71,6 +71,10 @@ static_assert(offsetof(ObjMap, map) == L::kTableAt && offsetof(ObjSet, items) ==
                   ValueMap::partAt(4) == L::kTableVersion && offsetof(ObjSet, entries) == L::kSetEntries && offsetof(ObjSet, values) == L::kSetValues &&
                   offsetof(ObjIterator, version) == L::kIterVersion,
               "layout.h: a map's or a set's table");
+static_assert(static_cast<int>(ValueKind::Char) == L::kKindChar, "layout.h: a char");
+static_assert(offsetof(ObjClass, smallId) == L::kClassSmallId && sizeof(ObjClass::smallId) == 4, "layout.h: a class's small number");
+static_assert(ObjString::partAt(0) == L::kStringUnits && ObjString::partAt(1) == L::kStringHash && offsetof(ObjString, width) == L::kStringWidth && sizeof(std::string) == 32,
+              "layout.h: a string's characters and hash");
 static_assert(static_cast<int>(ObjType::String) == L::kTypeString && offsetof(ObjString, length) == L::kStringLength && sizeof(ObjString::length) == 8, "layout.h: a string");
 static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
 static_assert(offsetof(ObjInstance, cls) == L::kInstClass, "layout.h: an object's class");
@@ -360,6 +364,19 @@ int64_t run(void* code, Value* slots) {
     return runRegion(code, slots, &context);
 }
 
+// std::string as the stencils read it (layout.h's stringUnits, 2026-11-16): a string's characters,
+// short and long, and an ObjString's own.
+bool stringAsRead() {
+    for (const size_t n : {0, 1, 7, 15, 16, 17, 40, 300}) {
+        const std::string s(n, 'q');
+        if (layout::stringUnits(reinterpret_cast<const uint8_t*>(&s)) != reinterpret_cast<const uint8_t*>(s.data())) return false;
+        const ObjString text{std::string(n, 'r')};
+        if (layout::stringUnits(reinterpret_cast<const uint8_t*>(&text) + layout::kStringUnits) != reinterpret_cast<const uint8_t*>(text.units().data()))
+            return false;
+    }
+    return true;
+}
+
 // std::vector as the stencils read it (layout.h): its first item's address, then the end's.
 bool vectorAsRead() {
     ObjBytes bytes;
@@ -473,6 +490,7 @@ std::string check() {
     for (size_t i = 1; i < stencilCount(); i++)
         if (!(std::string_view(kStencils[i - 1].name) < std::string_view(kStencils[i].name))) return "the stencils are not in name order";
     if (!vectorAsRead()) return "std::vector is not laid out as layout.h reads it";
+    if (!stringAsRead()) return "std::string is not laid out as layout.h reads it";
     // Every stencil shaped both ways, its gaps inside it.
     for (const StencilCode& s : kStencils)
         for (bool follows : {false, true}) {

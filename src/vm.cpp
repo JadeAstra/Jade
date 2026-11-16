@@ -7088,7 +7088,9 @@ WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
             }
             if (!made.empty()) {
                 auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
-                if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
+                if (const auto* now = f.regionsNow.load(std::memory_order_acquire))  // (less those dropped)
+                    for (const FunctionProto::NativeRegion& r : *now)
+                        if (*r.misses < kNativeMissLimit) list->push_back(r);
                 list->insert(list->end(), made.begin(), made.end());
                 f.regionsNow.store(list.get(), std::memory_order_release);
                 f.regionLists.push_back(std::move(list));
@@ -7175,6 +7177,14 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
             FunctionProto& fp = *const_cast<FunctionProto*>(frame->closure->proto);
             for (const FunctionProto::NativeRegion& r : *regions) {
                 if (r.misses != region->misses || !r.first) continue;
+                // A whole function's (2026-11-16): made again at its next return, from the frame
+                // there, once (nativeReturn).
+                if (r.head == fp.nativeCallHead && !fp.nativeCallsAgain && fp.nativeCalls == UINT32_MAX) {
+                    fp.nativeCallsAgain = true;
+                    fp.nativeCalls = kNativeCallsFirst;
+                    const TailFn back = TailTable::nativeReturnEntry();
+                    for (uint32_t at : fp.nativeReturns) std::memcpy(const_cast<uint8_t*>(code) + at, &back, kThreaded);
+                }
                 for (size_t k = 0; k < fp.nativeHeads.size(); k++)
                     if (fp.nativeHeads[k] == r.head && fp.nativeArrivals[k] == 2) {
                         fp.nativeArrivals[k] = 3;

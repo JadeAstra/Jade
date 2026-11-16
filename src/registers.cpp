@@ -1304,6 +1304,7 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     f.nativeArrivals.clear();
     f.nativeCallHead = UINT32_MAX;
     f.nativeCalls = 0;
+    f.nativeCallsAgain = false;
     f.nativeReturns.clear();
     bool loops = false;
     if (opBytes == kOpBytes && !f.runTops.empty()) {

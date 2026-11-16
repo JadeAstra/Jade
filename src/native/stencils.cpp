@@ -624,6 +624,81 @@ INLINE int probeInt(const Slot& table, int64_t key, const uint8_t*& value) {
         if (kind == kKindFloat || kind == kKindObj || kind == kKindSmall || kind == kKindRef) return -1;
     }
 }
+// Whether two strings (ObjString) hold the same characters, as sameText: kept at the narrowest
+// width that holds them, so the same width and the same bytes.
+INLINE bool sameUnits(const uint8_t* a, const uint8_t* b) {
+    if (a == b) return true;
+    const uint64_t n = word<uint64_t>(a + kStringLength);
+    if (n != word<uint64_t>(b + kStringLength) || a[kStringWidth] != b[kStringWidth]) return false;
+    const uint64_t bytes = n * a[kStringWidth];
+    const uint8_t* const x = stringUnits(a + kStringUnits);
+    const uint8_t* const y = stringUnits(b + kStringUnits);
+    uint64_t k = 0;
+    for (; k + 8 <= bytes; k += 8)
+        if (word<uint64_t>(x + k) != word<uint64_t>(y + k)) return false;
+    for (; k < bytes; k++)
+        if (x[k] != y[k]) return false;
+    return true;
+}
+// A string key looked up in the step itself (2026-11-16), as probeInt: its hash its kept one
+// (ObjString::hash, folded as ValueMap::hashOf folds it), where worked out; a stored string the
+// same where it holds the same characters (its hash worked out here where it is not yet). -1 where
+// the step cannot say: a stored key met with the same hash that may be equal to a string another
+// way (a char, a value, an object of a class).
+INLINE int probeString(const Slot& table, const uint8_t* key, const uint8_t*& value) {
+    if (table.kind != kKindObj) return -1;
+    const uint8_t* const o = table.p;
+    if (o[kObjType] != static_cast<uint8_t>(ww_ret)) return -1;
+    if (o[kObjType] != kTypeMapObj && word<const void*>(o + kSetViewOf) != nullptr) return -1;
+    const uint8_t* const m = o + kTableAt;
+    if (word<uint32_t>(m + kTableLive) == 0) return 0;
+    uint64_t known = word<uint64_t>(key + kStringHash);
+    if ((known >> 32) == 0) {
+        // Not worked out yet: here, as ObjString::makeHash does (FNV-1a over the characters), and
+        // kept with bit 32 set (any core may, each to the same number).
+        const uint64_t n = word<uint64_t>(key + kStringLength);
+        const uint8_t width = key[kStringWidth];
+        const uint8_t* const units = stringUnits(key + kStringUnits);
+        uint32_t h = 2166136261u;
+        for (uint64_t k = 0; k < n; k++) {
+            const uint32_t c = width == 1 ? units[k] : width == 2 ? word<uint16_t>(units + 2 * k) : word<uint32_t>(units + 4 * k);
+            h = (h ^ c) * 16777619u;
+        }
+        known = (uint64_t{1} << 32) | h;
+        __builtin_memcpy(const_cast<uint8_t*>(key) + kStringHash, &known, 8);
+    }
+    const uint32_t hash = static_cast<uint32_t>((static_cast<uint64_t>(static_cast<uint32_t>(known)) * 0x9E3779B97F4A7C15ULL) >> 32);
+    const uint32_t* const slots = word<const uint32_t*>(m + kTableSlots);
+    const uint64_t mask = static_cast<uint64_t>(word<const uint32_t*>(m + kTableSlots + 8) - slots) - 1;
+    const uint8_t* const entries = word<const uint8_t*>(m + kTableEntries);
+    for (uint64_t at = hash >> word<uint32_t>(m + kTableShift);; at = (at + 1) & mask) {
+        const uint32_t slot = slots[at];
+        if (slot == 0) return 0;
+        if (slot == 0xFFFFFFFFu) continue;
+        const uint8_t* const e = entries + static_cast<uint64_t>(slot - 1) * kEntrySize;
+        if (word<uint32_t>(e + kEntryHash) != hash) continue;
+        const uint8_t kind = e[0];
+        if (kind == kKindObj) {
+            const uint8_t* const stored = word<const uint8_t*>(e + 8);
+            const uint8_t type = stored[kObjType];
+            if (type == kTypeString) {
+                if (!sameUnits(stored, key)) continue;
+                value = e + kEntryValue;
+                return 1;
+            }
+            if (type == kTypeInstance || type == kTypeValue) return -1;
+            continue;
+        }
+        if (kind == kKindSmall || kind == kKindRef || kind == kKindChar) return -1;
+    }
+}
+// A key in a slot probed in the step where it is an int or a string (probeInt, probeString);
+// -1 for any other.
+INLINE int probeKey(const Slot& table, const Slot& key, const uint8_t*& value) {
+    if (key.kind == kKindInt) return probeInt(table, key.i, value);
+    if (key.kind == kKindObj && key.p[kObjType] == kTypeString) return probeString(table, key.p, value);
+    return -1;
+}
 // Slot ww_slot2 = the map's value for the key (null where it has none): int register c
 // (mapgeti, probed here, the VM's way where it cannot say), the value in slot ww_ki (mapgetv), or
 // the constant whose address is ww_ki (mapgetk).
@@ -646,14 +721,22 @@ INLINE int probeInt(const Slot& table, int64_t key, const uint8_t*& value) {
         NEXT;                                                                   \
     }
 I_A(MAPGETI, x)
+// The key probed in the step where it is an int or a string (probeKey), else by the VM's way.
+INLINE int lookUp(const Ctx* ctx, Slot* base, const Slot& key, Slot* out) {
+    const uint8_t* value;
+    const int r = probeKey((*slotAt(base)), key, value);
+    if (r == 1 && out != nullptr) __builtin_memcpy(out, value, sizeof(Slot));
+    if (r >= 0) return r;
+    return findKey(ctx, base, key, out);
+}
 STENCIL(mapgetv) {
-    const int r = findKey(ctx, base, base[ww_ki], &(*slot2At(base)));
+    const int r = lookUp(ctx, base, base[ww_ki], &(*slot2At(base)));
     if (r < 0) EXIT;
     if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
     NEXT;
 }
 STENCIL(mapgetk) {
-    const int r = findKey(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), &(*slot2At(base)));
+    const int r = lookUp(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), &(*slot2At(base)));
     if (r < 0) EXIT;
     if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
     NEXT;
@@ -675,28 +758,28 @@ STENCIL(mapgetk) {
     }
 I_A(HASI, x)
 STENCIL(hasv) {
-    const int r = findKey(ctx, base, base[ww_ki], nullptr);
+    const int r = lookUp(ctx, base, base[ww_ki], nullptr);
     if (r < 0) EXIT;
     i9 = r;
     NEXT;
 }
 STENCIL(hask) {
-    const int r = findKey(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), nullptr);
+    const int r = lookUp(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), nullptr);
     if (r < 0) EXIT;
     i9 = r;
     NEXT;
 }
 // The map in slot ww_slot (ww_ret: ObjType::Map) given the value in slot ww_slot2 for the key in
-// slot ww_ki (part 2: `map[k] = v`): an int key already there, the map this core's and not frozen,
+// slot ww_ki (part 2: `map[k] = v`): an int or string key already there, the map this core's and not frozen,
 // the value no Ref: written in its entry here; anything else by the VM's way (ctx->setKey: a new
 // key added), or the VM's.
 STENCIL(mapset) {
     const Slot& table = (*slotAt(base));
     const Slot& key = base[ww_ki];
     const Slot& value = (*slot2At(base));
-    if (key.kind == kKindInt && value.kind != kKindRef) {
+    if (value.kind != kKindRef) {
         const uint8_t* at;
-        if (probeInt(table, key.i, at) == 1 && table.p[kObjCore] == ctx->core && table.p[kObjFrozen] == 0) {
+        if (probeKey(table, key, at) == 1 && table.p[kObjCore] == ctx->core && table.p[kObjFrozen] == 0) {
             __builtin_memcpy(const_cast<uint8_t*>(at), &value, sizeof(Slot));
             NEXT;
         }
@@ -2019,6 +2102,38 @@ STENCIL(iterv) {
     uint8_t* it = listIterator((*slotAt(base)), list);
     if (it == nullptr) EXIT;
     if (const uint8_t* pack = word<const uint8_t*>(list + kListPack)) {
+        if (pack[kPackStore] == kStoreItems) {
+            // A value type's items kept in the value itself (a Color), any of them null: a Small
+            // value of each, as the VM's smallFrom makes it (2026-11-16: a List<any?> given a
+            // List<Color?> after a List<int?>). Not where the items keep a type of their own, or
+            // the list's item type has type arguments (the VM numbers those).
+            if (!mayRead(list, ctx) || word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) EXIT;
+            const uint8_t* const cls = word<const uint8_t*>(pack + kPackItemClass);
+            const uint32_t id = word<uint32_t>(cls + kClassSmallId);
+            const uint32_t width = word<uint32_t>(pack + kPackWidth);
+            if (id == 0 || width > 8) EXIT;
+            if (const uint8_t* const made = word<const uint8_t*>(list + kListType)) {
+                const uint8_t* const first = word<const uint8_t*>(made + kTypeInfoArgs);
+                if (word<const uint8_t*>(made + kTypeInfoArgs + 8) - first == 8) {
+                    const uint8_t* const arg = word<const uint8_t*>(first);
+                    if (word<const uint8_t*>(arg + kTypeInfoCls) == cls && word<const uint8_t*>(arg + kTypeInfoArgs + 8) != word<const uint8_t*>(arg + kTypeInfoArgs))
+                        EXIT;
+                }
+            }
+            const uint64_t index = word<uint64_t>(it + kIterIndex);
+            if (index >= word<uint64_t>(pack + kPackCount)) JUMP;
+            if (nullItem(pack, index)) {
+                storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
+            } else {
+                const uint8_t* const from = word<const uint8_t*>(pack + kPackBlock) + index * width;
+                uint64_t bits = 0;
+                for (uint32_t k = 0; k < width; k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k);
+                putValue(&(*slot2At(base)), kKindSmall | static_cast<uint64_t>(id) << 32, bits);
+            }
+            const uint64_t next = index + 1;
+            __builtin_memcpy(it + kIterIndex, &next, 8);
+            NEXT;
+        }
         // Packed ints, floats or bools, any of them null (2026-11-16: a for over a List<int?>).
         if (!plainStore(pack) || !mayRead(list, ctx)) EXIT;
         const uint64_t index = word<uint64_t>(it + kIterIndex);

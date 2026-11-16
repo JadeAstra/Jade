@@ -93,6 +93,22 @@ fun changeWhileGoing(m : open Map<int, int>) : string {
   return "went through, $t"
 }
 
+fun wideKeys(m : Map<string, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += m["é${i % 30}"] ?: 1000
+    t += m["日本${i % 30}"] ?: 1000
+    t += m["😀${i % 30}"] ?: 1000
+    t += m["plain${i % 30}"] ?: 1000
+  }
+  return t
+}
+fun charOrString(m : Map<any, int>, keys : List<string>) : int {
+  var t = 0
+  for (k in keys) { t += m[k] ?: 7 }
+  return t
+}
+
 val map : open Map<int, int> = {:}
 val set : open Set<int> = Set([])
 for (i in 0 ..< 2000) {
@@ -149,6 +165,24 @@ val numbers : open Map<int, int> = {:}
 for (i in 0 ..< 20) { numbers[i] = i }
 for (r in 0 ..< 300) { numbers[1000 + 7] = 1; numbers.remove(1007) }
 print(changeWhileGoing(numbers), numbers.size)
+// String keys of every width, made afresh in the loop (their hash not worked out yet), and a
+// char beside a string of it alone (one key, as the VM has it).
+val wide : open Map<string, int> = {:}
+for (i in 0 ..< 20) {
+  wide["é$i"] = i
+  wide["日本$i"] = i * 2
+  wide["😀$i"] = i * 3
+  wide["plain$i"] = i * 4
+}
+var ws = 0
+for (r in 0 ..< 300) { ws = wideKeys(wide, 120) }
+print(ws)
+val withChar : open Map<any, int> = {:}
+withChar['a'] = 1
+withChar["bc"] = 2
+var cs = 0
+for (r in 0 ..< 300) { cs = charOrString(withChar, ["a", "bc", "b", "a"]) }
+print(cs)
 // expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
 // expect: 0 2097 null 50 true false
 // expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
@@ -157,3 +191,5 @@ print(changeWhileGoing(numbers), numbers.size)
 // expect: 0 2097 null 50 true false
 // expect: 475
 // expect: stopped after 28 21
+// expect: 167600
+// expect: 11

@@ -819,6 +819,9 @@ struct FunctionProto {
     // the frame holding what each of its locals is.
     uint32_t nativeCallHead = UINT32_MAX;
     uint32_t nativeCalls = 0;
+    // Whether its region has been made again, once, after it was dropped past its misses' limit
+    // (2026-11-16, VM::nativeEnter): made at the next return, from the frame there.
+    bool nativeCallsAgain = false;
     std::vector<uint32_t> nativeReturns;
     struct NativeRegion {
         uint32_t head;

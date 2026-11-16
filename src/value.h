@@ -448,7 +448,13 @@ private:
     explicit ObjString(Made made);
     const std::string& makeUtf8() const;
     uint32_t makeHash() const;
+
+public:
+    // Where its parts are, for native code's probing of a map or a set with string keys
+    // (2026-11-16, checked by native/layout.h): 0 the characters (a std::string), 1 the hash.
+    static constexpr size_t partAt(int which);
 };
+constexpr size_t ObjString::partAt(int which) { return which == 0 ? offsetof(ObjString, units_) : offsetof(ObjString, hash_); }
 
 inline void appendText(Characters& to, const ObjString* text) { to.append(text->units().data(), text->length, text->width); }
 

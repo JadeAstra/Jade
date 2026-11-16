@@ -38,6 +38,26 @@ for (r in 0 ..< 300) { a += indexInts(some); b += sumAll(some) }
 print(a, b)
 for (r in 0 ..< 300) { a += indexInts(plain); b += sumAll(plain) }
 print(a, b)
+// A whole function's region (2026-11-16), made again at a return once its misses' limit is passed.
+fun pick(xs : List<int?>, i : int, k : int) : int {
+  val n = xs[i]
+  if (n == null) { return -1 }
+  var a = n * 2 + 1
+  if (a > k) { a -= k } else { a += k }
+  val m = xs[(i + 1) % xs.size]
+  if (m != null) { a += m * 3 } else { a -= 5 }
+  if (a % 7 == 0) { a += 11 }
+  return a + k * 2 - i
+}
+val plainP : List<int?> = (0 ..< 100).toList()
+val someP : open List<int?> = []
+for (i in 0 ..< 100) { someP.add(i % 3 == 0 ? null : i) }
+var p = 0
+for (r in 0 ..< 3000) { p += pick(plainP, r % 100, r % 13) }
+for (r in 0 ..< 3000) { p += pick(someP, r % 100, r % 13) }
+for (r in 0 ..< 3000) { p += pick(plainP, r % 100, r % 13) }
+print(p)
 // expect: 149850000 149850000 600000
 // expect: 278335800 278378700
 // expect: 428185800 428228700
+// expect: 1500856
