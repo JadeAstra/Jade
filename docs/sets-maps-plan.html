@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sets and maps natively</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: sets and maps in native code</h1>
+<p class="lede">Written 2026-11-16, at the user's word ("take a look at these as well", of what was left after lists that may hold null: "Sets and maps: nothing native at all"). A region's steps looking a key up in a map or a set, setting a key's value, and going through a set or a map in a <code>for</code>, where today each of these leaves for the VM, or worse, is taken for a list and misses. Questions for the user at the end, each with a recommendation; nothing is built before they are decided, and part 1 is built as a spike with a gate.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#sm-now">Where they stand</a></li>
+<li><a href="#sm-table">How a map and a set are kept</a></li>
+<li><a href="#sm-parts">The parts</a></li>
+<li><a href="#sm-lookup">Looking a key up: in C++ or in the step</a></li>
+<li><a href="#sm-gate">The spike and its gate</a></li>
+<li><a href="#sm-same">What does not change</a></li>
+<li><a href="#sm-risks">Risks</a></li>
+<li><a href="#sm-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="sm-now">Where they stand</h2>
+<p>A million keys or items, each loop in a function of its own (<code>bench/kernels/nullables.ww</code>, the best of five, pinned; the set and the map of 666,667 ints):</p>
+<div class="table"><table>
+<thead><tr><th>Loop</th><th class="num">ms</th><th>What a region does with it</th></tr></thead>
+<tbody>
+<tr><td><code>for (n in set)</code></td><td class="num">4.0</td><td>Taken for a list (<code>iteri</code>), which misses every time round: dropped, made again (42ba9d1), dropped again; 512 misses, then the VM's.</td></tr>
+<tr><td><code>set.contains(i)</code>, <code>i in set</code></td><td class="num">26.4</td><td>No region: the call (R_INVOKE, and a SWAP for <code>in</code>) is the VM's, and too little is left around it.</td></tr>
+<tr><td><code>map[i] ?: 0</code></td><td class="num">28.5</td><td>A region, the read (R_GET_INDEX_SS) the VM's: it leaves and comes back each time round.</td></tr>
+<tr><td><code>map[i] = x</code></td><td class="num">—</td><td>Taken for a list (<code>hsetwi</code>, looked at once): misses every time, 512 in all, then the VM's.</td></tr>
+<tr><td><code>m[w] = (m[w] ?: 0) + 1</code> over words</td><td class="num">—</td><td>Both: the words' for taken as ints (<code>iteri</code>), the set taken for a list (<code>setwi</code>); 512 misses.</td></tr>
+<tr><td><code>for ((k, v) in map)</code></td><td class="num">3.4</td><td>No region (IterNextPair is the VM's).</td></tr>
+</tbody></table></div>
+<p>The misses cost twice: each region is made, used until 256 misses, made again, and missed out again. The VM alone already does the plain cases quickly (a <code>for</code> over a set, 6 ns an item); what native code can win is in the lookups (26 to 28 ns each now) and in keeping the loop around them native.</p>
+
+<h2 id="sm-table">How a map and a set are kept</h2>
+<p>Both are a <code>ValueMap</code> (value.h): the entries in the order they were added, each a key, a value (unused in a set), whether it is live, and its key's hash folded to 32 bits; and an index of slots, a power of two in size, each 0 (empty), the entry's place plus one, or gone. A key's hash is <code>keyHash</code> times 0x9E3779B97F4A7C15, its top 32 bits; the first slot tried is the hash shifted down to the index's size, then the next, and on. Two keys are the same where <code>keysEqual</code> says so: an int and a byte or a float of the same number are one key, a char and a one-letter string are one, a string by its characters, a value of a value type by its fields, an object of a class with its own <code>==</code> and <code>hashCode</code> by those (D26). A key added or taken out moves the map's version on; a <code>for</code> going through it stops with an error once it has. Values are stored as they are; the collector neither moves objects nor needs to be told of a store (no write barrier).</p>
+
+<h2 id="sm-parts">The parts</h2>
+<ol>
+<li><strong>Part 0: no list steps on a map or a set.</strong> Where the frame shows a map or a set as the region is made, the steps for lists (<code>iteri</code>, <code>iterf</code>, <code>idxw</code>, <code>setwi</code>, the looked-at-once <code>h</code> steps) are not made for it: the instruction stays the VM's. Nothing new; it ends the 512 misses above. Small and safe whatever is decided below.</li>
+<li><strong>Part 1: lookups.</strong> <code>map[k]</code> (the value, or null, into the slot, then <code>?:</code> and <code>!= null</code> as for lists), <code>map.containsKey(k)</code>, <code>set.contains(k)</code> and <code>k in set</code> / <code>k in map</code> (into the flag): one step each, the map's or set's kind and core checked by it.</li>
+<li><strong>Part 2: setting a key's value.</strong> <code>map[k] = v</code> where the key is there: the value written in its entry. A new key: added by the VM (question 3). <code>set.add(k)</code>, <code>map.remove(k)</code> and the like: the VM's, or the same way as a new key.</li>
+<li><strong>Part 3: going through.</strong> <code>for (k in set)</code>, <code>for (k in map.keys)</code> and <code>for ((k, v) in map)</code>: the next live entry's key (and value) into their slots, the version checked each time as the VM checks it (a change leaves for the VM, which stops with the error).</li>
+</ol>
+
+<h2 id="sm-lookup">Looking a key up: in C++ or in the step</h2>
+<p>Two ways, which can be had one after the other:</p>
+<ul>
+<li><strong>A call into C++</strong> from the step, as <code>mkbox</code> calls the VM for a box (since 2026-11-15) and the push steps call it for room (42ba9d1): <code>ValueMap::find</code> with the key as the slot holds it. Every kind of key, exactly the VM's answer (a class's own <code>==</code> is the one case that cannot run there: it runs code, so the step leaves for the VM where the map's keys may have one). What it saves is leaving and coming back (the region's registers written back and loaded, the VM's dispatch): most of the 26 to 28 ns.</li>
+<li><strong>Probing in the step</strong>, for ints and strings: the hash worked out as <code>keyHash</code> does for them (an int's own bits; a string's kept hash, the VM's where it is not worked out yet), the slots tried in turn, a stored key compared as <code>keysEqual</code> would (an int or a byte by its number; a string by being the same object, or its length, width and characters); any other stored key met (a float, a char, an object) the VM's. No call at all, but a second copy of the table's rules, to be kept in step with value.cpp.</li>
+</ul>
+
+<h2 id="sm-gate">The spike and its gate</h2>
+<p>Part 0, then part 1 by the C++ call, timed on <code>bench/kernels/nullables.ww</code> against the commit before. Gate: <code>set.contains(i)</code> over a million at 10 ms or less (26.4 now), <code>map[i] ?: 0</code> at 12 ms or less (28.5), no other row slower. Where the call misses the gate and probing in the step would meet it, probing for ints and strings; where neither, stop there.</p>
+
+<h2 id="sm-same">What does not change</h2>
+<ul>
+<li>The table itself (<code>ValueMap</code>), its hashing and its rules for keys: native code follows them or leaves.</li>
+<li>A <code>for</code> over a map changed as it goes stops with the same error, from the VM.</li>
+<li>Maps and sets of another core, or frozen, or a view of a map's keys or entries: the VM's (as for lists).</li>
+</ul>
+
+<h2 id="sm-risks">Risks</h2>
+<ul>
+<li><strong>A class's own <code>==</code> or <code>hashCode</code></strong> runs WinterWolf code, which a step cannot: the step leaves for the VM where the key it looks up, or a stored key it meets, is an object of a class (<code>mayOwnKeys</code>).</li>
+<li><strong>Equal keys of two kinds</strong> (1 and 1.0, 'a' and "a"): a probing step that meets a stored key of another kind leaves rather than decides.</li>
+<li><strong>A new key's index</strong>: growing the index from a step means the C++ call (question 3); keeping a pointer into the entries across a call that may add would leave it behind, so no step keeps one.</li>
+<li><strong>Code layout</strong>: as every change to the VM's loop, timings move by a few percent with the executable's layout; each is checked with native code off as well.</li>
+</ul>
+
+<h2 id="sm-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>Whether to build it</h3>
+<ul>
+<li><strong>Part 0 now, then the spike</strong> (part 1 by the C++ call, with the gate above), then parts 2 and 3 if it passes.</li>
+<li><strong>Part 0 only</strong>: the misses ended, sets and maps left to the VM.</li>
+<li><strong>Not now.</strong></li>
+</ul>
+<p><em>Recommended:</em> part 0 now, then the spike. Part 0 is a fix whatever else is done; the spike shows in a day whether a lookup from native code can cost a third of what it does.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>How a lookup is done</h3>
+<ul>
+<li><strong>The C++ call first</strong>, probing in the step for ints and strings only where the gate wants it.</li>
+<li><strong>Probing in the step</strong> from the start, for ints and strings; any other key the VM's.</li>
+<li><strong>The C++ call only.</strong></li>
+</ul>
+<p><em>Recommended:</em> the C++ call first. It is exact for every kind of key with no second copy of the table's rules, and most of what a lookup costs now is the way out and back, which it takes away.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>A new key</h3>
+<ul>
+<li><strong>Added by a C++ call from the step</strong> (<code>ValueMap::set</code>, as <code>makeRoom</code> grows a list), the region going on.</li>
+<li><strong>Left to the VM</strong>: the step leaves (no miss) and the VM adds it.</li>
+</ul>
+<p><em>Recommended:</em> the C++ call. A map filled in a loop (<code>counts[w] = ...</code>) adds a new key often; leaving each time would cost what it costs now.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>Going through sets and maps (part 3)</h3>
+<ul>
+<li><strong>In this plan</strong>, after parts 1 and 2.</li>
+<li><strong>Later</strong>: a <code>for</code> over a set or a map stays the VM's (5 ns an item now), with part 0 so that it no longer misses.</li>
+</ul>
+<p><em>Recommended:</em> in this plan. The loop body around a <code>for</code> over a map is often what costs (lookups in another map, sums); with the <code>for</code> the VM's it cannot be a region at all.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>The gate</h3>
+<ul>
+<li><strong>As above</strong>: <code>set.contains(i)</code> 10 ms or less, <code>map[i] ?: 0</code> 12 ms or less, a million each, nothing else slower.</li>
+<li><strong>Stricter</strong>: 6 and 8 ms.</li>
+</ul>
+<p><em>Recommended:</em> as above: a third of today's, which the way out and back alone accounts for. The stricter one is what probing in the step would be judged by, if it comes to that.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
