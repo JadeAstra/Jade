@@ -1,0 +1,111 @@
+// The pixel loops of docs/timings.html's history table ("The pixel loops, from 2026-11-12 to
+// now"), as a program would write them, each in a function of its own: on the 4000 by 3000 photo
+// given as raw RGBA bytes. Each the best of five, in milliseconds; timings.cpp has the C++.
+//
+//   ww bench/kernels/loops.ww <photo.rgba>
+
+val args = Program.arguments
+if (args.size < 1) {
+  print("give the photo as raw RGBA bytes, 4000 by 3000")
+  exit(1)
+}
+val photo = Image.of(4000, 3000, FilePath(args[0]).readBytes())
+
+fun time(name : string, work : () -> any?) {
+  var best = 1e300
+  var said = ""
+  for (round in 0 ..< 5) {
+    val started = Instant.now()
+    val result = work()
+    val took = (Instant.now() - started).inNanoseconds / 1e6
+    if (took < best) { best = took }
+    said = result.toString()
+  }
+  print("${name.padEnd(40)} ${(Math.round(best * 100) / 100.0).toString().padStart(9)} ms  ${said.take(30)}")
+}
+
+fun forRed(colors : List<Color>) : int {
+  var t = 0
+  for (c in colors) { t += c.red.toInt() }
+  return t
+}
+fun indexFour(colors : List<Color>) : int {
+  var t = 0
+  for (i in 0 ..< colors.size) {
+    val c = colors[i]
+    t += c.red.toInt() + c.green.toInt() + c.blue.toInt() + c.alpha.toInt()
+  }
+  return t
+}
+fun gridFour(pixels : Grid<Color>) : int {
+  var t = 0
+  for (y in 0 ..< pixels.height) {
+    for (x in 0 ..< pixels.width) {
+      val c = pixels[x, y]
+      t += c.red.toInt() + c.green.toInt() + c.blue.toInt() + c.alpha.toInt()
+    }
+  }
+  return t
+}
+fun imageRed(image : Image) : int {
+  var t = 0
+  for (y in 0 ..< image.height) {
+    for (x in 0 ..< image.width) { t += image[x, y].red.toInt() }
+  }
+  return t
+}
+fun gridSet(grid : Grid<Color>, c : Color) {
+  for (y in 0 ..< grid.height) {
+    for (x in 0 ..< grid.width) { grid[x, y] = c }
+  }
+}
+fun greyOf(c : Color) : byte => ((c.red.toInt() * 54 + c.green.toInt() * 183 + c.blue.toInt() * 19 + 128) >> 8).toByte()
+fun greyList(colors : List<Color>) : List<Color> {
+  val out : open List<Color> = []
+  for (c in colors) {
+    val g = greyOf(c)
+    out.add(Color(g, g, g, c.alpha))
+  }
+  return out
+}
+fun greyGrid(grid : Grid<Color>) {
+  for (y in 0 ..< grid.height) {
+    for (x in 0 ..< grid.width) {
+      val c = grid[x, y]
+      val g = greyOf(c)
+      grid[x, y] = Color(g, g, g, c.alpha)
+    }
+  }
+}
+fun greyImage(image : Image) {
+  for (y in 0 ..< image.height) {
+    for (x in 0 ..< image.width) {
+      val c = image[x, y]
+      val g = greyOf(c)
+      image[x, y] = Color(g, g, g, c.alpha)
+    }
+  }
+}
+
+val colors = photo.pixels.toList()
+time("for (c in colors) { c.red }") { forRed(colors) }
+time("val c = colors[i], four parts") { indexFour(colors) }
+time("pixels[x, y], four parts") { gridFour(photo.pixels) }
+time("image[x, y].red") { imageRed(photo) }
+val canvas = Image(4000, 3000)
+time("grid[x, y] = c") {
+  canvas.editPixels { gridSet(it, Color.red) }
+  canvas[1, 1]
+}
+time("greyscale into a List<Color>") { greyList(colors).size }
+val work = photo.copy()
+time("greyscale by grid[x, y] = ...") {
+  work.editPixels { greyGrid(it) }
+  work[1, 1]
+}
+val work2 = photo.copy()
+time("greyscale by image[x, y] = ...") {
+  greyImage(work2)
+  work2[1, 1]
+}
+time("histogram()") { photo.pixels.histogram().size }

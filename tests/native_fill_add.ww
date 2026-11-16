@@ -1,0 +1,68 @@
+// Two pixel loops native code runs (2026-11-15): one colour set into every pixel of a grid where
+// the colour is a parameter (the fill template takes a slot as the loop entered it, not only a
+// captured variable), and `out.add(Color(...))` (ADD_NEW: the value made of its bytes and added
+// at the list's end, a list with no room left the VM's to grow, any other list the VM's). The
+// same answers as the VM's, each run three times.
+
+fun fill(grid : Grid<Color>, c : Color) {
+  for (y in 0 ..< grid.height) {
+    for (x in 0 ..< grid.width) { grid[x, y] = c }
+  }
+}
+
+fun greys(colors : List<Color>) : List<Color> {
+  val out : open List<Color> = []
+  for (c in colors) {
+    val g = ((c.red.toInt() * 54 + c.green.toInt() * 183 + c.blue.toInt() * 19 + 128) >> 8).toByte()
+    out.add(Color(g, g, g, c.alpha))
+  }
+  return out
+}
+
+// Into a list that may hold null, and one of another type: the VM's add, the same items.
+fun greysOrNull(colors : List<Color>) : List<Color?> {
+  val out : open List<Color?> = [null]
+  for (c in colors) { out.add(Color(c.blue, c.green, c.red, c.alpha)) }
+  return out
+}
+
+fun sum(colors : List<Color?>) : int {
+  var t = 0
+  for (c in colors) {
+    if (c != null) { t += c.red.toInt() * 3 + c.green.toInt() * 5 + c.blue.toInt() * 7 + c.alpha.toInt() }
+  }
+  return t
+}
+
+val image = Image(37, 23)
+image.editPixels {
+  for (y in 0 ..< 23) {
+    for (x in 0 ..< 37) { it[x, y] = Color((x * 7).toByte(), (y * 11).toByte(), (x + y).toByte(), (200 + x % 50).toByte()) }
+  }
+}
+val colors = image.pixels.toList()
+var many : open List<Color> = []
+for (i in 0 ..< 5000) { many.add(colors[i % colors.size]) }
+for (round in 0 ..< 3) {
+  val canvas = Image(29, 17)
+  canvas.editPixels { fill(it, Color(9.toByte(), 8.toByte(), 7.toByte(), 6.toByte())) }
+  val other = Image(29, 17)
+  other.editPixels { fill(it, image[3, 4]) }  // a pixel of another image, given as the colour
+  val third = Image(29, 17)
+  third.editPixels { fill(it, colors[100]) }
+  print(canvas[28, 16], other[0, 0], other[28, 16], third[5, 5], sum(canvas.pixels.toList()), sum(other.pixels.toList()))
+  val g = greys(colors)
+  val gm = greys(many)
+  print(g.size, gm.size, sum(g), sum(gm), g[0], g[g.size - 1], gm[4999])
+  val n = greysOrNull(colors)
+  print(n.size, n[0], n[1], sum(n))
+}
+// expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
+// expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
+// expect: 852 null Color(0, 0, 0, 200) 1524992
+// expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
+// expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
+// expect: 852 null Color(0, 0, 0, 200) 1524992
+// expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
+// expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
+// expect: 852 null Color(0, 0, 0, 200) 1524992

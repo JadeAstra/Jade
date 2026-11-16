@@ -1039,6 +1039,34 @@ INLINE void added(uint8_t* pack) {
     const uint64_t count = word<uint64_t>(pack + kPackCount) + 1;
     __builtin_memcpy(pack + kPackCount, &count, 8);
 }
+// A value of a value type kept in the value itself, made of its header's bytes (ia: as mksm
+// packs them), added at the end of the list in slot ww_slot (ADD_NEW, `out.add(Color(g, g, g,
+// a))`, 2026-11-15): where slot ww_slot2 holds the class ww_ki (what is called), the list is of
+// that class's items, none with a type of its own, its core's own (the true ADD_NEW leaves, a
+// step of its own). A list with no room left: to the VM by the jump (it makes room, which is no
+// miss); anything else the VM's (a miss).
+#define ADDSM(a, ...)                                                           \
+    STENCIL(addsm_##a) {                                                        \
+        const Slot& f = (*slot2At(base));                                       \
+        if (f.kind != kKindObj || reinterpret_cast<int64_t>(f.p) != ww_ki) EXIT; \
+        const Slot& s = (*slotAt(base));                                        \
+        if (s.kind != kKindObj) EXIT;                                           \
+        const uint8_t* o = s.p;                                                 \
+        if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) EXIT; \
+        uint8_t* const pack = word<uint8_t*>(o + kListPack);                    \
+        if (pack == nullptr || pack[kPackStore] != kStoreItems || pack[kPackNullable] != 0 || word<int64_t>(pack + kPackItemClass) != ww_ki || \
+            word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) \
+            EXIT;                                                               \
+        const uint32_t width = word<uint32_t>(pack + kPackWidth);               \
+        if (width > 8) EXIT;                                                    \
+        uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8);             \
+        if (static_cast<uint64_t>(word<uint8_t*>(pack + kPackBlock + 16) - end) < width) JUMP; \
+        const uint64_t bits = static_cast<uint64_t>(i##a);                      \
+        for (uint32_t k = 0; k < width; k++) end[k] = static_cast<uint8_t>(bits >> (8 * k)); \
+        added(pack);                                                            \
+        NEXT;                                                                   \
+    }
+I_A(ADDSM, x)
 // An int (ia) added to a List<int>.
 #define ADDLI(a, ...)                                                           \
     STENCIL(pushi_##a) {                                                        \

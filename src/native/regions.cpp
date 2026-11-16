@@ -1500,6 +1500,53 @@ struct Region {
                 c.fall(popped);
                 return;
             }
+            case Op::AddNew: {  // u8 argc, i32 target: list class args... -> [true, at target]
+                // `out.add(Color(...))` (2026-11-15): a value kept in the value itself, made of its
+                // header's bytes (as RCall's mksm), added at the end of the list (addsm), true
+                // where the list was, and on at the target; a list with no room left the VM's
+                // (no miss: it makes room), anything else the VM's, the call and the add made.
+                const int argc = u8(x, 0), top = s.top, at = top - argc - 2, callee = top - argc - 1;
+                if (at < 0) island();
+                const ObjClass* const cls = madeValue(s, callee, argc, c.i);
+                if (cls == nullptr) island();
+                const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+                std::vector<std::pair<Reg, int>> parts;
+                for (int k = 0; k < argc; k++) {
+                    const ValueField* field = headerFieldOf(cls, layout, k);
+                    const int xk = callee + 1 + k;
+                    if (field == nullptr || (s.kind(xk).bits != kByte && s.kind(xk).bits != kWhole)) island();
+                    const Reg part = c.read(xk, CI, false);
+                    if (s.kind(xk).bits == kWhole) c.leaves(c.op("chkbyte", {part}, {part}));
+                    parts.emplace_back(part, static_cast<int>(field->offset));
+                }
+                const int list = c.objectSlot(at);
+                // The list the frame holds as the region is made: one that may hold null, or of
+                // another class's items, would leave every time (a miss each): the VM's at once.
+                if (frame != nullptr && list < frameSlots && list < f.maxStack) {
+                    const Value& held = frame[list];
+                    if (!held.isObjType(ObjType::List) || asList(held)->store() != ListStore::Items || asList(held)->pack->nullable ||
+                        asList(held)->pack->itemClass != cls)
+                        island();
+                }
+                const Reg acc{kScratchI, CI};
+                c.op("setik", {acc}, {}, {acc}).ki = 0;
+                for (const auto& [reg, offset] : parts) c.op("packb", {acc, reg}, {acc, reg}, {acc}).ki = 8 * offset;
+                LOp& l = c.op("addsm", {acc}, {acc});
+                l.slot = list;
+                l.slot2 = c.objectSlot(callee);
+                l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                l.jumpExit = c.exitHere();  // no room: the VM's, no miss
+                c.leaves(l);
+                // True where the list was on the stack, as ADD_NEW leaves it (written after the
+                // step's ways out, where the VM is given the list there, a copy made as it leaves).
+                c.writeMemory(at);
+                c.op("settrue").slot = at;
+                s.kinds[at] = K{kMem};
+                s.top = at + 1;
+                c.go(static_cast<uint32_t>(i32(x, 1)), s, c.op("jump"));
+                c.out.fallsThrough = false;
+                return;
+            }
             case Op::WithPlace:
                 // A variable's place for the call after to make its value in (2026-11-15): the
                 // RCall reads which from here (madeInPlace), and the VM, doing a call the region
@@ -3992,6 +4039,11 @@ struct Region {
         }
         if (s == "hsetsm") {
             const int64_t from = l.slot2 & 0xFFFFFF;
+            // A slot as the loop entered it that nothing in the loop writes, read where it is (a
+            // parameter: `grid[x, y] = c` in a function given c, 2026-11-15; a copy of one went
+            // by copyslot, a captured one by getuv): the same each time round.
+            if (fw.values.count(from) == 0 && fw.made.count(from) == 0 && fw.refs.count(from) == 0 && from < loopTop && untouched(static_cast<int>(from)))
+                fw.values[from] = Followed::Value{1, from};
             if (fw.values.count(from) == 0 && fw.made.count(from) == 0 && fw.refs.count(from) == 0) return false;
             Followed::Store st{static_cast<int>(l.slot), valueOf(fw, n[0]), nullptr, s};
             st.what = l.slot2, st.width = l.ki, st.source = from;
