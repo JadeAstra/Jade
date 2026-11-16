@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jade on Linux</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: Jade's windows on Linux, under KDE and GNOME</h1>
+<p class="lede">Written 2026-11-16, at the user's word ("can we have the gui use kde and gnome in linux?"). Jade's native layer (<code>src/jade/platform.h</code>) written again for Linux, as <code>platform_win.cpp</code> is for Windows, so that a program with <code>import Jade</code> opens its windows on KDE Plasma and on GNOME. Four things the user decided as the plan was asked for (below, decided); the rest are questions at the end, each with a recommendation. Nothing is built before they are decided, and the first step is a spike with a gate.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#lx-now">Where it stands</a></li>
+<li><a href="#lx-how">How: Wayland, and nothing between</a></li>
+<li><a href="#lx-parts">What the native layer needs, and from where</a></li>
+<li><a href="#lx-title">Title bars</a></li>
+<li><a href="#lx-gaps">What Wayland does not give</a></li>
+<li><a href="#lx-test">How it is tested</a></li>
+<li><a href="#lx-order">Order, and how each step is checked</a></li>
+<li><a href="#lx-risks">Risks</a></li>
+<li><a href="#lx-decided">Decided as the plan was asked for</a></li>
+<li><a href="#lx-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="lx-now">Where it stands</h2>
+<ul>
+<li>The native layer is one interface (<code>platform.h</code>: windows with an OpenGL context, their events, the pointer's shape, the clipboard, waiting, the file dialog) with one implementation, <code>platform_win.cpp</code> (909 lines). Everything above it (drawing, text, the toolkit) is the same code on every system.</li>
+<li>On Linux ww has no window section: a program that imports Jade cannot open a window, and 30 tests are marked Windows only.</li>
+<li>Fonts already work there: the text engine reads <code>/usr/share/fonts</code>. OpenGL's functions are fetched by name through what the platform gives (<code>loadGl</code>), so the drawing code needs nothing new.</li>
+<li>WSL on this machine runs WSLg, a Wayland compositor (<code>WAYLAND_DISPLAY=wayland-0</code>): windows can be opened and tested here. Its compositor is neither KDE's nor GNOME's.</li>
+<li>The user has a Fedora VM in VirtualBox (KDE Plasma), with <code>D:\Projects\MK_fed</code> shared as <code>/mk</code>.</li>
+</ul>
+
+<h2 id="lx-how">How: Wayland, and nothing between</h2>
+<p>KDE Plasma and GNOME both run on Wayland by default, and both speak its common protocols (xdg-shell for windows, and the stable and staging extensions below). One native layer talking Wayland directly, as <code>platform_win.cpp</code> talks Win32, serves both, with no toolkit (GTK, Qt, SDL, GLFW) in between: nothing third-party added, and the window behaving as each desktop's own do. Where the two differ (title bars; which extensions are offered), the layer asks what the compositor offers and does the rest itself.</p>
+<p>The system's libraries are opened as the first window is made (<code>dlopen</code>): <code>libwayland-client.so.0</code>, <code>libwayland-egl.so.1</code>, <code>libEGL.so.1</code>, <code>libxkbcommon.so.0</code>, <code>libdbus-1.so.3</code>. ww is not linked against them: on a machine with none (a server, a container) ww and programs without windows run as now, and a program that opens a window is told there is no display, as on Windows with no OpenGL 3.3. The headers are needed only to build (the dev packages; installed in WSL at the user's word).</p>
+
+<h2 id="lx-parts">What the native layer needs, and from where</h2>
+<div class="table"><table>
+<thead><tr><th>platform.h asks for</th><th>On Wayland</th></tr></thead>
+<tbody>
+<tr><td>A window, shown and hidden, its title, size and limits, resizable or not</td><td><code>wl_surface</code> with an <code>xdg_toplevel</code> (xdg-shell): <code>set_title</code>, <code>set_min_size</code>/<code>set_max_size</code>, the configure events for its size. Hidden: the surface without a buffer.</td></tr>
+<tr><td>An OpenGL 3.3 context to draw in, and one with no window (pictures)</td><td>EGL on the Wayland display, <code>wl_egl_window</code> for each window; with no window, a surfaceless context (<code>EGL_KHR_surfaceless_context</code>, which Mesa has), or a 1 by 1 pbuffer.</td></tr>
+<tr><td>Scale (1, 1.25, 1.5, 2)</td><td><code>wp_fractional_scale_v1</code> with <code>wp_viewporter</code> (both desktops have them); the output's whole scale where they are missing.</td></tr>
+<tr><td>Pointer, wheel, keys and text</td><td><code>wl_seat</code>: <code>wl_pointer</code> (with axis events, value120 for wheels), <code>wl_keyboard</code> with its keymap read by xkbcommon (keys, text, modifiers, repeat as the compositor says), <code>zwp_text_input_v3</code> for composed text (later step).</td></tr>
+<tr><td>The pointer's shape</td><td><code>wp_cursor_shape_v1</code> where offered (KDE has it; recent GNOME), else the theme's cursors (<code>libwayland-cursor</code>).</td></tr>
+<tr><td>Pointer locked or confined (drags in games, sliders)</td><td><code>zwp_pointer_constraints_v1</code> and <code>zwp_relative_pointer_v1</code>.</td></tr>
+<tr><td>An owner window, kept in front</td><td><code>xdg_toplevel.set_parent</code>.</td></tr>
+<tr><td>To the front; asking for attention</td><td><code>xdg_activation_v1</code> (a token from the last input event).</td></tr>
+<tr><td>Focus</td><td>The keyboard's enter and leave.</td></tr>
+<tr><td>Icon</td><td>The desktop file's (Wayland has no per-window icon in its common protocols; <code>xdg_toplevel_icon_v1</code> where offered).</td></tr>
+<tr><td>Clipboard</td><td><code>wl_data_device</code>: text offered and read as <code>text/plain;charset=utf-8</code>.</td></tr>
+<tr><td>File dialog</td><td>The desktop portal (<code>org.freedesktop.portal.FileChooser</code>, over D-Bus): KDE's dialog under KDE, GNOME's under GNOME, from the same call.</td></tr>
+<tr><td>Double click time; dark or light; accent colour</td><td>The portal's settings (<code>org.freedesktop.appearance</code>: <code>color-scheme</code>, <code>accent-color</code>); the double click time a fixed 400 ms where neither desktop gives it.</td></tr>
+<tr><td>Waiting for events, and waking from another thread</td><td><code>poll</code> on the display's descriptor and an <code>eventfd</code> written by <code>wake()</code>.</td></tr>
+</tbody></table></div>
+
+<h2 id="lx-title">Title bars</h2>
+<p>KDE draws a window's title bar and edges itself where the window asks (<code>zxdg_decoration_manager_v1</code>, server-side). GNOME does not offer that protocol: a window there draws its own (client-side). As decided, Jade draws its own on GNOME (and on any compositor without server-side decorations): a bar of Jade's own, drawn by the toolkit with the window's content (a WinterWolf part of the Jade library, as the rest of its controls are), with the title, close, maximise and minimise, the window's menu on a right click (<code>show_window_menu</code>), a drag of the bar moving the window (<code>xdg_toplevel.move</code>) and of the edges resizing it (<code>xdg_toplevel.resize</code>), a double click maximising; and a shadow and rounded corners where the compositor says the window is floating (its tiled and maximised states turn them off). The native layer tells the toolkit whether the compositor decorates (a new <code>PlatformWindow::decorated()</code>); on Windows and KDE it does, and nothing changes there.</p>
+
+<h2 id="lx-gaps">What Wayland does not give</h2>
+<ul>
+<li><strong>A window's position.</strong> A Wayland client cannot place its window or learn where it is: the compositor decides. <code>position()</code> and <code>setPosition()</code> (and a dialog centred on its owner by the program) have nothing to work with (question 1).</li>
+<li><strong>A window's icon</strong>, in the common protocols: the desktop file names it (and <code>xdg_toplevel_icon_v1</code> where the compositor has it).</li>
+<li><strong>Raising a window at will:</strong> only with an activation token from recent input, as both desktops guard against windows taking focus.</li>
+<li><strong>The system's own loop while an edge is dragged</strong> (Windows' <code>onIdle</code>): none on Wayland; the program's loop goes on as usual, which is simpler.</li>
+</ul>
+
+<h2 id="lx-test">How it is tested</h2>
+<ul>
+<li><strong>The suite, on Linux in WSL:</strong> the tests that use windows never shown (<code>NativeWindow(..., scale = 1)</code>, <code>snapshot()</code>, raw input sent in) run on Linux too, drawing with EGL into pictures: the 30 Windows-only tests made to run on both where they can.</li>
+<li><strong>Real windows in WSLg</strong>, as each step is built: a script opens a window, sends input through the test hooks, and saves what it shows.</li>
+<li><strong>KDE, in the user's Fedora VM:</strong> ww built in WSL and put in the shared folder (<code>/mk</code>) with a script; the user runs it in the VM and its report goes back through the same folder. A build made on Ubuntu 26.04 runs on a Fedora whose C library is as new or newer; where it is not, ww is built in the VM instead (question 3).</li>
+<li><strong>GNOME:</strong> a GNOME session in the same VM, chosen at the login screen (question 2).</li>
+</ul>
+
+<h2 id="lx-order">Order, and how each step is checked</h2>
+<table>
+<thead><tr><th>Step</th><th>What</th><th>Checked by</th></tr></thead>
+<tbody>
+<tr><td class="part">0, the spike</td><td>A Wayland window with an OpenGL 3.3 context through EGL, the libraries opened at run time, drawing one of Jade's examples, resized, pointer and keys coming in (xkbcommon), the scale; and the offscreen context for pictures.</td><td>WSLg, then the user's Fedora KDE VM; the gate below.</td></tr>
+<tr><td class="part">1</td><td>The whole of <code>platform.h</code> but the dialog: pointer shapes, pointer lock, owners, activation, clipboard, waiting and waking, focus.</td><td>The Jade tests that never show a window, run on Linux; a scripted window in WSLg.</td></tr>
+<tr><td class="part">2</td><td>The portal: the file dialog, dark or light, the accent colour (D-Bus).</td><td>The VM: the dialog on KDE.</td></tr>
+<tr><td class="part">3</td><td>Jade's own title bar and edges, where the compositor does not decorate.</td><td>The VM's GNOME session; the KDE session unchanged.</td></tr>
+<tr><td class="part">4</td><td>Composed text (<code>text-input-v3</code>, for input methods), and the examples on both desktops.</td><td>The VM, both sessions; every example opened.</td></tr>
+</tbody></table>
+<p><strong>The spike's gate:</strong> a Jade example opens on WSLg and on the Fedora KDE VM, draws as it does on Windows (its snapshot compared byte for byte with Windows' at scale 1), resizes without tearing or leaving bands, takes pointer and keyboard input; and ww with no Wayland display (a plain shell) runs non-window programs as before. Where it does not, stop and report.</p>
+
+<h2 id="lx-risks">Risks</h2>
+<ul>
+<li><strong>OpenGL in the VM:</strong> VirtualBox's 3D acceleration is often off or old under Linux guests; Mesa's software renderer (llvmpipe) gives OpenGL 4.5 there, slower but complete. WSLg gives OpenGL through its own driver.</li>
+<li><strong>GNOME's extensions lag KDE's</strong> (no server-side decorations at all; some protocols later than KDE's): each extension asked for and done without where missing.</li>
+<li><strong>Window position</strong> code in programs and in the toolkit (centring a dialog) behaves differently (question 1).</li>
+<li><strong>D-Bus</strong> through <code>libdbus</code>: present on every desktop Linux; where it is missing, no dialog and the default light look.</li>
+</ul>
+
+<h2 id="lx-decided">Decided as the plan was asked for</h2>
+<p>2026-11-16, the user: "wayland only, jade's own title bars in gnome, install the dev packages in WSL, I have oracle virtualbox with fedora installed for testing with a shared folder".</p>
+<ul>
+<li><strong>Wayland only:</strong> no X11 code; on an X11-only session ww says there is no display it can use.</li>
+<li><strong>Jade's own title bars on GNOME</strong> (and wherever the compositor does not decorate).</li>
+<li><strong>The dev packages in WSL</strong> (the command given to the user, as it asks for their password).</li>
+<li><strong>Testing in the user's Fedora VM</strong> through the shared folder.</li>
+</ul>
+
+<h2 id="lx-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>A window's position on Wayland</h3>
+<ul>
+<li><strong>Kept, not used:</strong> <code>setPosition</code> remembers what it was given and <code>position()</code> gives it back (0, 0 at first); the compositor places windows (an owner's dialogs centred on it by the compositor, as <code>set_parent</code> asks). Programs run unchanged.</li>
+<li><strong>Said plainly:</strong> <code>position()</code> gives null on Wayland and <code>setPosition</code> does nothing; programs that place windows learn to ask.</li>
+</ul>
+<p><em>Recommended:</em> kept, not used. A program written on Windows runs as it is; what Wayland will not do is the compositor's to decide, as with every other Wayland program.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>A GNOME session to test on</h3>
+<ul>
+<li><strong>GNOME added to the same Fedora VM</strong> (<code>sudo dnf group install gnome-desktop</code>, picked at the login screen), the user installing it.</li>
+<li><strong>A second VM</strong> with Fedora Workstation (GNOME's).</li>
+</ul>
+<p><em>Recommended:</em> added to the same VM: one machine, one shared folder, the two desktops a log-out apart.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Where ww is built for the VM</h3>
+<ul>
+<li><strong>In WSL</strong> (Ubuntu 26.04), put in the shared folder: the VM only runs it.</li>
+<li><strong>In the VM</strong>, from the shared folder's copy of the source (Clang and the dev packages installed there).</li>
+</ul>
+<p><em>Recommended:</em> in WSL, while Fedora's C library is as new as Ubuntu 26.04's (checked at the spike); in the VM only if it is not.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>How Jade's title bar looks</h3>
+<ul>
+<li><strong>Jade's own look</strong>, from its theme (light or dark as the portal says, its accent colour), the same on every desktop that needs it.</li>
+<li><strong>Like GNOME's own</strong> (Adwaita's header bar: its buttons, sizes and rounded corners).</li>
+</ul>
+<p><em>Recommended:</em> like GNOME's own, drawn by Jade: on GNOME it is the only title bar a user sees, and one that looks foreign there is the first thing they notice.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>The spike's gate</h3>
+<ul>
+<li><strong>As above:</strong> an example on WSLg and on Fedora KDE, its snapshot the same bytes as Windows', resizing clean, input working, non-window programs unchanged without a display.</li>
+<li><strong>Less:</strong> a window that draws and takes input on WSLg alone.</li>
+</ul>
+<p><em>Recommended:</em> as above. WSLg alone would not show what a real desktop does (KDE's decorations, its scale, its cursor protocol).</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
