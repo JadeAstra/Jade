@@ -119,6 +119,10 @@ struct RegionContext {
     // How many times a key has gone into or out of any Table (value.h's tableKeysChanged): a
     // bare name found to be no member as the region was made is none while it is unchanged.
     const uint64_t* keys;
+    // The VM's way of making room in a packed list a region adds to (2026-11-16, stencils.cpp's
+    // push steps): false where a collection is due or the list is not packed, where the region
+    // leaves the add to the VM.
+    bool (*makeRoom)(void* vm, const void* list);
 };
 // The 256 numbers a region's `units` points at, made once.
 const double* unitTable();

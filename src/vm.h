@@ -1405,6 +1405,7 @@ private:
     // A value of a value type in a box, made for a region (RegionContext::makeBox): its bytes
     // zero; null where a collection is due (the region leaves the making to the VM).
     static void* boxForRegion(void* vm, const void* cls);
+    static bool roomForRegion(void* vm, const void* list);
     // Whether a bare name in function `f` is no member of `receiver`, as implicitReceiver would
     // find it, by its class alone (GlobalsSeen::noMember).
     static bool noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver);

@@ -178,7 +178,10 @@ ObjList* newNumbers(VM& vm, bool isFloat, size_t count, const ObjList* like = nu
         PackedItems& p = *list->pack;
         p.block.assign(count * p.width, 0);
         p.count = count;
-        if (p.nullable) p.nulls.assign((count + 63) / 64, 0);
+        if (p.nullable) {
+            p.nulls.assign((count + 63) / 64, 0);
+            coverNulls(p, count);
+        }
         vm.account(count * p.width);
     } else {
         list->values().assign(count, isFloat ? Value::number(0) : Value::integer(0));

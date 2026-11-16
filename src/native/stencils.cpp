@@ -67,6 +67,7 @@ struct Ctx {  // native.h's RegionContext
     void* (*makeBox)(void* vm, const void* cls);
     uint8_t* places;
     const uint64_t* keys;
+    bool (*makeRoom)(void* vm, const void* list);
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -579,6 +580,11 @@ STENCIL(isnull) {
     i9 = (*slotAt(base)).kind == kKindNull;
     NEXT;
 }
+// The flag register false: whether a number the region holds in a register is null (2026-11-16).
+STENCIL(noflag) {
+    i9 = 0;
+    NEXT;
+}
 STENCIL(loadflag) {
     if ((*slotAt(base)).kind != kKindBool) EXIT;
     i9 = static_cast<uint8_t>((*slotAt(base)).i) != 0;
@@ -1000,6 +1006,49 @@ STENCIL(setplace) {
     putValue(&(*slotAt(base)), kKindRef, reinterpret_cast<uint64_t>(to));
     NEXT;
 }
+// A variable given an item of a list where it is (SET_PLACE after GetIndexRef: `val c =
+// colors[i]` of a List<Color?>, 2026-11-16), as the VM's setPlace does: the value in slot
+// ww_slot2 a Ref, none deep, to an item of a list of a value type's items with no type of their
+// own, at most a place's bytes each: the item copied into the frame's place ww_ret, its class the
+// list's items', its type as refType gives it, and slot ww_slot = a Ref to the place. Null or a Small value, or a frame with no places: slot ww_slot = the value. Anything
+// else the VM's.
+STENCIL(setplaceref) {
+    const Slot& v = (*slot2At(base));
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v));
+    const uint8_t kind = static_cast<uint8_t>(head & 0xFF);
+    if (kind == kKindNull || kind == kKindSmall || (kind == kKindRef && ctx->places == nullptr)) {
+        __builtin_memcpy(&(*slotAt(base)), &v, sizeof(Slot));
+        NEXT;
+    }
+    if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
+    const uint8_t* o = v.p;
+    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) EXIT;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);
+    if (pack == nullptr || pack[kPackStore] != kStoreItems || word<const void*>(pack + kPackItemType) != nullptr ||
+        word<uint32_t>(pack + kPackTypeSlot) != 0)
+        EXIT;
+    const uint64_t index = head >> 32;
+    const uint32_t width = word<uint32_t>(pack + kPackWidth);
+    if (index >= word<uint64_t>(pack + kPackCount) || nullItem(pack, index) || width > kPlaceBytes) EXIT;
+    uint8_t* const to = ctx->places - ww_ret * kPlaceStride;
+    const uint8_t* const from = word<const uint8_t*>(pack + kPackBlock) + index * width;
+    for (uint32_t k = 0; k < width; k++) to[kPlaceData + k] = from[k];
+    const int64_t cls = word<int64_t>(pack + kPackItemClass);
+    __builtin_memcpy(to + kPlaceClass, &cls, 8);
+    // Its type, as refType gives it: what the list was made to hold, where that is of the items' class.
+    uint64_t type = 0;
+    if (const uint8_t* const made = word<const uint8_t*>(o + kListType)) {
+        const uint8_t* const first = word<const uint8_t*>(made + kTypeInfoArgs);
+        const uint8_t* const end = word<const uint8_t*>(made + kTypeInfoArgs + 8);
+        if (end - first == 8) {
+            const uint8_t* const arg = word<const uint8_t*>(first);
+            if (word<int64_t>(arg + kTypeInfoCls) == cls) type = reinterpret_cast<uint64_t>(arg);
+        }
+    }
+    __builtin_memcpy(to + kPlaceType, &type, 8);
+    putValue(&(*slotAt(base)), kKindRef, reinterpret_cast<uint64_t>(to));
+    NEXT;
+}
 // A field of the box in slot ww_slot (mkbox's, mkplace's), ww_ki bytes into its data: int register a's 8
 // bytes (boxi), a byte (boxb), float register a's 8 (boxf).
 #define BOXI(a, ...)                                                            \
@@ -1067,23 +1116,53 @@ I_A(SETSM, x)
 // there and the end moved on (added), as the VM's add does where its vector has room; a list
 // with none is the VM's, which makes room (and counts the memory it takes). Null for anything
 // else. The VM's add gives true, written to slot ww_slot2.
-INLINE uint8_t* roomToAdd(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack) {
+// Whether a list whose items may be null has the word for item `index`'s bit (coverNulls keeps
+// one for every item its block has room for; 2026-11-16).
+INLINE bool nullWordAt(const uint8_t* pack, uint64_t index) {
+    const uint8_t* const first = word<const uint8_t*>(pack + kPackNulls);
+    const uint8_t* const end = word<const uint8_t*>(pack + kPackNulls + 8);
+    return index / 64 < static_cast<uint64_t>(end - first) / 8;
+}
+// (nullsToo: a list whose items may be null too, for a step adding one item, which added() clears
+// the bit of, where the bit's word is there; never a template, which writes many.)
+// (full: set where the list is one to add to but has no room, its block's or its bits': the VM's
+// add makes it, which a step takes as no miss.)
+INLINE uint8_t* roomToAdd(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack, bool nullsToo = false, bool* full = nullptr) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) return nullptr;
     pack = word<uint8_t*>(o + kListPack);
-    if (pack == nullptr || pack[kPackStore] != store || pack[kPackNullable] != 0) return nullptr;
+    if (pack == nullptr || pack[kPackStore] != store) return nullptr;
+    if (pack[kPackNullable] != 0 && !nullsToo) return nullptr;
     if (store == kStoreNarrow && pack[kPackNarrow] != kNarrowByte) return nullptr;
     uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8);
     const uint8_t* const room = word<uint8_t*>(pack + kPackBlock + 16);
-    if (static_cast<uint64_t>(room - end) < word<uint32_t>(pack + kPackWidth)) return nullptr;
+    if (static_cast<uint64_t>(room - end) < word<uint32_t>(pack + kPackWidth) || (pack[kPackNullable] != 0 && !nullWordAt(pack, word<uint64_t>(pack + kPackCount)))) {
+        if (full != nullptr) *full = true;
+        return nullptr;
+    }
     return end;
+}
+// roomToAdd for a step adding one item, a list whose items may be null too; where the list has
+// no room and the step may have room made (ww_ret: the region keeps no list's block address,
+// 2026-11-16), made by the VM (ctx->makeRoom: twice the items, at least 8), and looked for again.
+// Without it each add to a list made afresh, as it grows, left for the VM's.
+INLINE uint8_t* roomMade(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack, bool& full) {
+    uint8_t* at = roomToAdd(s, ctx, store, pack, true, &full);
+    if (at == nullptr && full && ww_ret != 0 && ctx->makeRoom(ctx->vm, s.p)) {
+        full = false;
+        at = roomToAdd(s, ctx, store, pack, true, &full);
+    }
+    return at;
 }
 INLINE void added(uint8_t* pack) {
     const uint32_t width = word<uint32_t>(pack + kPackWidth);
     uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8) + width;
     __builtin_memcpy(pack + kPackBlock + 8, &end, 8);
-    const uint64_t count = word<uint64_t>(pack + kPackCount) + 1;
+    const uint64_t index = word<uint64_t>(pack + kPackCount);
+    // Where items may be null (roomToAdd found the bit's word): this one is not.
+    if (pack[kPackNullable] != 0) word<uint64_t*>(pack + kPackNulls)[index / 64] &= ~(uint64_t{1} << (index % 64));
+    const uint64_t count = index + 1;
     __builtin_memcpy(pack + kPackCount, &count, 8);
 }
 // A value of a value type kept in the value itself, made of its header's bytes (ia: as mksm
@@ -1101,13 +1180,22 @@ INLINE void added(uint8_t* pack) {
         const uint8_t* o = s.p;                                                 \
         if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) EXIT; \
         uint8_t* const pack = word<uint8_t*>(o + kListPack);                    \
-        if (pack == nullptr || pack[kPackStore] != kStoreItems || pack[kPackNullable] != 0 || word<int64_t>(pack + kPackItemClass) != ww_ki || \
+        if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki || \
             word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) \
             EXIT;                                                               \
         const uint32_t width = word<uint32_t>(pack + kPackWidth);               \
         if (width > 8) EXIT;                                                    \
-        uint8_t* const end = word<uint8_t*>(pack + kPackBlock + 8);             \
-        if (static_cast<uint64_t>(word<uint8_t*>(pack + kPackBlock + 16) - end) < width) JUMP; \
+        uint8_t* end = word<uint8_t*>(pack + kPackBlock + 8);                   \
+        /* no room (the block's, or the bits' where items may be null): made by the VM where   \
+           the step may (roomMade), or the VM's add (no miss) */                \
+        if (static_cast<uint64_t>(word<uint8_t*>(pack + kPackBlock + 16) - end) < width || \
+            (pack[kPackNullable] != 0 && !nullWordAt(pack, word<uint64_t>(pack + kPackCount)))) { \
+            if (ww_ret == 0 || !ctx->makeRoom(ctx->vm, o)) JUMP;                \
+            end = word<uint8_t*>(pack + kPackBlock + 8);                        \
+            if (static_cast<uint64_t>(word<uint8_t*>(pack + kPackBlock + 16) - end) < width || \
+                (pack[kPackNullable] != 0 && !nullWordAt(pack, word<uint64_t>(pack + kPackCount)))) \
+                JUMP;                                                           \
+        }                                                                       \
         const uint64_t bits = static_cast<uint64_t>(i##a);                      \
         for (uint32_t k = 0; k < width; k++) end[k] = static_cast<uint8_t>(bits >> (8 * k)); \
         added(pack);                                                            \
@@ -1118,8 +1206,12 @@ I_A(ADDSM, x)
 #define ADDLI(a, ...)                                                           \
     STENCIL(pushi_##a) {                                                        \
         uint8_t* pack;                                                          \
-        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreInts, pack);        \
-        if (at == nullptr) EXIT;                                                \
+        bool full = false;                                                      \
+        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreInts, pack, full); \
+        if (at == nullptr) {                                                    \
+            if (full) JUMP; /* no room: the VM's add makes it (no miss) */      \
+            EXIT;                                                               \
+        }                                                                       \
         __builtin_memcpy(at, &i##a, 8);                                         \
         added(pack);                                                            \
         storeSlot2At(base, kKindBool, 1);                                       \
@@ -1127,12 +1219,17 @@ I_A(ADDSM, x)
     }                                                                           \
     STENCIL(pushb_##a) {                                                        \
         uint8_t* pack;                                                          \
-        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreInts, pack);        \
+        bool full = false;                                                      \
+        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreInts, pack, full); \
+        if (full) JUMP;                                                         \
         if (at != nullptr) {                                                    \
             __builtin_memcpy(at, &i##a, 8);                                     \
         } else {                                                                \
-            at = roomToAdd((*slotAt(base)), ctx, kStoreNarrow, pack);           \
-            if (at == nullptr) EXIT;                                            \
+            at = roomMade((*slotAt(base)), ctx, kStoreNarrow, pack, full); \
+            if (at == nullptr) {                                                \
+                if (full) JUMP;                                                 \
+                EXIT;                                                           \
+            }                                                                   \
             *at = static_cast<uint8_t>(i##a);                                   \
         }                                                                       \
         added(pack);                                                            \
@@ -1144,14 +1241,67 @@ I_A(ADDLI, x)
 #define ADDLF(a, ...)                                                           \
     STENCIL(pushf_##a) {                                                        \
         uint8_t* pack;                                                          \
-        uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreFloats, pack);      \
-        if (at == nullptr) EXIT;                                                \
+        bool full = false;                                                      \
+        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreFloats, pack, full); \
+        if (at == nullptr) {                                                    \
+            if (full) JUMP; /* no room: the VM's add makes it (no miss) */      \
+            EXIT;                                                               \
+        }                                                                       \
         { const double d_ = f##a; __builtin_memcpy(at, &d_, 8); }               \
         added(pack);                                                            \
         storeSlot2At(base, kKindBool, 1);                                       \
         NEXT;                                                                   \
     }
 F_A(ADDLF, x)
+// A value of the class ww_ki in a box, or in a frame's place a Ref (none deep) is to (2026-11-15:
+// made by mkbox or mkplace, `val r = Rect(...)`): its bytes; null for anything else. `head` is
+// the slot's first word.
+INLINE const uint8_t* boxedBytes(const Slot& s, uint64_t head) {
+    const uint8_t* o = s.p;
+    if ((head & 0xFF) == kKindObj) return o[kObjType] == kTypeValue && word<int64_t>(o + kPlaceClass) == ww_ki ? o + kValueData : nullptr;
+    if (head != kKindRef || o[kObjType] != kTypePlaces || word<int64_t>(o + kPlaceClass) != ww_ki) return nullptr;
+    return o + kPlaceData;
+}
+// The value in slot (ww_slot2 & 0xFFFFFF) added to a packed list of ints, floats or bools in slot
+// ww_slot whose items may be null (2026-11-16: `ints.add(x)`, x an int?): an int (or a byte, as
+// its int) into ints, a float into floats, a bool into bools, null with its bit set; true to slot
+// (ww_slot2 >> 24 & 0xFFFF). Anything else the VM's.
+STENCIL(pushv) {
+    const Slot& s = (*slotAt(base));
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeList) EXIT;
+    const uint8_t* const p = word<const uint8_t*>(s.p + kListPack);
+    if (p == nullptr || !plainStore(p)) EXIT;
+    uint8_t* pack;
+    bool full = false;
+    uint8_t* const at = roomMade(s, ctx, p[kPackStore], pack, full);
+    if (at == nullptr) {
+        if (full) JUMP;  // no room: the VM's add makes it (no miss)
+        EXIT;
+    }
+    const uint64_t what = static_cast<uint64_t>(ww_slot2);
+    const Slot& v = base[what & 0xFFFFFF];
+    const uint8_t store = pack[kPackStore];
+    const uint64_t index = word<uint64_t>(pack + kPackCount);
+    bool null = false;
+    if (v.kind == kKindNull) {
+        if (pack[kPackNullable] == 0) EXIT;
+        if (store == kStoreBools) *at = 0;
+        else __builtin_memset(at, 0, 8);
+        null = true;
+    } else if (store == kStoreInts && (v.kind == kKindInt || v.kind == kKindByte)) {
+        __builtin_memcpy(at, &v.i, 8);
+    } else if (store == kStoreFloats && v.kind == kKindFloat) {
+        __builtin_memcpy(at, &v.d, 8);
+    } else if (store == kStoreBools && v.kind == kKindBool) {
+        *at = static_cast<uint8_t>(v.i) != 0;
+    } else {
+        EXIT;
+    }
+    added(pack);
+    if (null) word<uint64_t*>(pack + kPackNulls)[index / 64] |= uint64_t{1} << (index % 64);
+    storeSlot(base, static_cast<int64_t>((what >> 24) & 0xFFFF), kKindBool, 1);
+    NEXT;
+}
 // The value in slot (ww_slot2 & 0xFFFFFF) added to a list of the class ww_ki's items, kept in
 // the value itself (at most 8 bytes an item), none with a type of its own; true to slot
 // (ww_slot2 >> 24 & 0xFFFF). The value a Small one of the type numbered (ww_slot2 >> 40); or a
@@ -1159,7 +1309,9 @@ F_A(ADDLF, x)
 // (to.add(from[i])): its bytes copied. Anything else the VM's.
 STENCIL(pushsm) {
     uint8_t* pack;
-    uint8_t* at = roomToAdd((*slotAt(base)), ctx, kStoreItems, pack);
+    bool full = false;
+    uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreItems, pack, full);
+    if (at == nullptr && full) JUMP;  // no room: the VM's add makes it (no miss)
     if (at == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0)
         EXIT;
@@ -1169,16 +1321,31 @@ STENCIL(pushsm) {
     const Slot& v = base[what & 0xFFFFFF];
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v));
     uint64_t bits = 0;
+    if ((head & 0xFF) == kKindNull && pack[kPackNullable] != 0) {
+        // null into a list whose items may be null (2026-11-16): zeros, the bit set, as the VM's
+        // writeItem leaves them.
+        for (uint32_t k = 0; k < width; k++) at[k] = 0;
+        const uint64_t index = word<uint64_t>(pack + kPackCount);
+        added(pack);
+        word<uint64_t*>(pack + kPackNulls)[index / 64] |= uint64_t{1} << (index % 64);
+        storeSlot(base, static_cast<int64_t>((what >> 24) & 0xFFFF), kKindBool, 1);
+        NEXT;
+    }
     if ((head & 0xFF) == kKindSmall) {
         if ((head >> 32) != what >> 40) EXIT;
         bits = static_cast<uint64_t>(v.i);
+    } else if (const uint8_t* const boxed = boxedBytes(v, head)) {
+        // One in a box or a frame's place (2026-11-16: `out.add(Color(...))` to a List<Color?>,
+        // made in a place by mkplace): its bytes.
+        for (uint32_t k = 0; k < width; k++) bits |= static_cast<uint64_t>(boxed[k]) << (8 * k);
     } else {
         if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
         const uint8_t* from = v.p;
         if (from[kObjType] != kTypeList || !mayRead(from, ctx)) EXIT;
-        const uint8_t* fromPack = packOf(from, kStoreItems);
-        if (fromPack == nullptr || word<int64_t>(fromPack + kPackItemClass) != ww_ki || word<const void*>(fromPack + kPackItemType) != nullptr ||
-            word<uint32_t>(fromPack + kPackTypeSlot) != 0 || (head >> 32) >= word<uint64_t>(fromPack + kPackCount))
+        const uint8_t* fromPack = word<const uint8_t*>(from + kListPack);  // its items may be null; this one not
+        if (fromPack == nullptr || fromPack[kPackStore] != kStoreItems || word<int64_t>(fromPack + kPackItemClass) != ww_ki ||
+            word<const void*>(fromPack + kPackItemType) != nullptr || word<uint32_t>(fromPack + kPackTypeSlot) != 0 ||
+            (head >> 32) >= word<uint64_t>(fromPack + kPackCount) || nullItem(fromPack, head >> 32))
             EXIT;
         const uint8_t* item = word<const uint8_t*>(fromPack + kPackBlock) + (head >> 32) * width;
         for (uint32_t k = 0; k < width; k++) bits |= static_cast<uint64_t>(item[k]) << (8 * k);
@@ -1246,15 +1413,6 @@ STENCIL(keepl) {
     const Slot& s = (*slotAt(base));
     if ((word<uint64_t>(reinterpret_cast<const uint8_t*>(&s)) & 0xFF) == kKindRef && s.p[kObjType] == kTypePlaces) EXIT;
     NEXT;
-}
-// A value of the class ww_ki in a box, or in a frame's place a Ref (none deep) is to (2026-11-15:
-// made by mkbox or mkplace, `val r = Rect(...)`): its bytes; null for anything else. `head` is
-// the slot's first word.
-INLINE const uint8_t* boxedBytes(const Slot& s, uint64_t head) {
-    const uint8_t* o = s.p;
-    if ((head & 0xFF) == kKindObj) return o[kObjType] == kTypeValue && word<int64_t>(o + kPlaceClass) == ww_ki ? o + kValueData : nullptr;
-    if (head != kKindRef || o[kObjType] != kTypePlaces || word<int64_t>(o + kPlaceClass) != ww_ki) return nullptr;
-    return o + kPlaceData;
 }
 // ia (or fa) = a field of the value of a value type in slot ww_slot: a Small value of the type
 // numbered (ww_slot2 >> 32), or a Ref, none deep, to an item of a list of the class ww_ki's
@@ -1566,6 +1724,10 @@ I_A(GETPI, x)
 INLINE bool sizeOf(const Slot& s, const Ctx* ctx, int64_t& out) {
     if (s.kind != kKindObj) return false;
     const uint8_t* o = s.p;
+    if (o[kObjType] == kTypeString) {  // its characters (2026-11-16): a string never changes, whoever holds it
+        out = word<int64_t>(o + kStringLength);
+        return true;
+    }
     if (!mayRead(o, ctx)) return false;
     if (o[kObjType] == kTypeBytes) {
         out = word<const uint8_t*>(o + kBytesData + 8) - word<const uint8_t*>(o + kBytesData);

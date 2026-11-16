@@ -1,0 +1,112 @@
+// Adds to lists whose items may be null, by native code (2026-11-16): an int or null to a
+// List<int?>, a float or null to a List<float?>, a bool or null to a List<bool?>, a colour, null
+// or a new Color to a List<Color?>. The list's bits for null cover every item its block has room
+// for (coverNulls), so a step adds where the block has room and sets or clears the item's bit;
+// with no room the VM's add makes it (no miss). Lists made afresh each call, and lists cleared or
+// cut down first (their bits past the count left as they were): the same answers as the VM's.
+
+fun addInts(n : int, k : int) : List<int?> {
+  val out : open List<int?> = []
+  for (i in 0 ..< n) { out.add(i % k == 0 ? null : i) }
+  return out
+}
+fun addFloats(n : int) : List<float?> {
+  val out : open List<float?> = []
+  for (i in 0 ..< n) { out.add(i % 4 == 1 ? null : i * 0.5) }
+  return out
+}
+fun addBools(n : int) : List<bool?> {
+  val out : open List<bool?> = []
+  for (i in 0 ..< n) { out.add(i % 3 == 0 ? null : i % 2 == 0) }
+  return out
+}
+fun copyColors(from : List<Color?>) : List<Color?> {
+  val out : open List<Color?> = []
+  for (c in from) { out.add(c) }
+  return out
+}
+fun newColors(n : int) : List<Color?> {
+  val out : open List<Color?> = []
+  for (i in 0 ..< n) { out.add(Color((i % 256).toByte(), (i % 5).toByte(), 9.toByte(), 255.toByte())) }
+  return out
+}
+fun refill(into : open List<int?>, n : int) : int {
+  for (i in 0 ..< n) { into.add(i) }
+  return into.size
+}
+fun refillNulls(into : open List<int?>, n : int) : int {
+  for (i in 0 ..< n) { into.add(i % 2 == 0 ? null : i) }
+  return into.size
+}
+fun nullsIn(items : List<any?>) : int {
+  var t = 0
+  for (x in items) {
+    if (x == null) { t += 1 }
+  }
+  return t
+}
+fun sumInts(items : List<int?>) : int {
+  var t = 0
+  for (x in items) { t += x ?: 1000 }
+  return t
+}
+
+val colors : open List<Color?> = []
+for (i in 0 ..< 300) { colors.add(i % 6 == 0 ? null : Color((i % 256).toByte(), 2.toByte(), 3.toByte(), 4.toByte())) }
+for (round in 0 ..< 3) {
+  var a : List<int?> = []
+  var f : List<float?> = []
+  var b : List<bool?> = []
+  var c : List<Color?> = []
+  var n : List<Color?> = []
+  for (r in 0 ..< 300) {
+    a = addInts(700, 7)
+    f = addFloats(500)
+    b = addBools(400)
+    c = copyColors(colors)
+    n = newColors(333)
+  }
+  print(a.size, nullsIn(a), sumInts(a), a[0], a[1], a[699])
+  print(f.size, nullsIn(f), f[0], f[1], f[2], f[499])
+  print(b.size, nullsIn(b), b[0], b[1], b[2], b[399])
+  print(c.size, nullsIn(c), c[0], c[1], c[299])
+  print(n.size, nullsIn(n), n[0], n[332])
+}
+// Cleared, then added to: the bits left from before cleared as each item is added.
+val again : open List<int?> = []
+for (r in 0 ..< 300) {
+  again.clear()
+  refillNulls(again, 100)
+  again.clear()
+  refill(again, 100)
+}
+print(again.size, nullsIn(again), sumInts(again))
+// Cut down from the end and the front, then added to.
+val cut : open List<int?> = []
+cut.addAll(addInts(1000, 3))
+for (r in 0 ..< 300) {
+  cut.removeLast()
+  refill(cut, 1)
+}
+print(cut.size, nullsIn(cut), sumInts(cut), cut[998], cut[999])
+for (r in 0 ..< 400) { cut.removeAt(0) }
+refill(cut, 500)
+print(cut.size, nullsIn(cut), sumInts(cut), cut[0], cut[599], cut[1099])
+// expect: 700 100 310000 null 1 699
+// expect: 500 125 0.0 null 1.0 249.5
+// expect: 400 134 null false true null
+// expect: 300 50 null Color(1, 2, 3, 4) Color(43, 2, 3, 4)
+// expect: 333 0 Color(0, 0, 9) Color(76, 2, 9)
+// expect: 700 100 310000 null 1 699
+// expect: 500 125 0.0 null 1.0 249.5
+// expect: 400 134 null false true null
+// expect: 300 50 null Color(1, 2, 3, 4) Color(43, 2, 3, 4)
+// expect: 333 0 Color(0, 0, 9) Color(76, 2, 9)
+// expect: 700 100 310000 null 1 699
+// expect: 500 125 0.0 null 1.0 249.5
+// expect: 400 134 null false true null
+// expect: 300 50 null Color(1, 2, 3, 4) Color(43, 2, 3, 4)
+// expect: 333 0 Color(0, 0, 9) Color(76, 2, 9)
+// expect: 100 0 4950
+// expect: 1000 333 665667 998 0
+// expect: 1100 199 603350 400 0 499

@@ -94,6 +94,27 @@ fun forMap(m : Map<int, int>) : int {
   return t
 }
 
+fun addInts(n : int) : int {
+  val out : open List<int?> = []
+  for (i in 0 ..< n) { out.add(i % 7 == 0 ? null : i) }
+  return out.size
+}
+fun addIntsPlain(n : int) : int {
+  val out : open List<int?> = []
+  for (i in 0 ..< n) { out.add(i) }
+  return out.size
+}
+fun copyColors(colors : List<Color?>) : int {
+  val out : open List<Color?> = []
+  for (c in colors) { out.add(c) }
+  return out.size
+}
+fun newColors(n : int) : int {
+  val out : open List<Color?> = []
+  for (i in 0 ..< n) { out.add(Color((i % 256).toByte(), 0.toByte(), 0.toByte(), 255.toByte())) }
+  return out.size
+}
+
 val n = 1000000
 val ints : open List<int?> = []
 val xs : open List<float?> = []
@@ -123,3 +144,7 @@ time("for (n in Set<int>)") { forSet(set) }
 time("set.contains(i)") { setContains(set, n) }
 time("map[i] ?: 0") { mapGet(map, n) }
 time("for ((k, v) in Map<int, int>)") { forMap(map) }
+time("List<int?>.add(null or i)") { addInts(n) }
+time("List<int?>.add(i)") { addIntsPlain(n) }
+time("List<Color?>.add(c), c from one") { copyColors(colors) }
+time("List<Color?>.add(Color(...))") { newColors(n) }

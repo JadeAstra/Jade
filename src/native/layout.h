@@ -20,6 +20,13 @@ constexpr uint8_t kTypeList = 1, kTypeBytes = 12;
 
 // A list (ObjList): its packed items, a pointer (null where the list is not packed).
 constexpr int kListPack = 32;
+// What it was made to hold (ObjList::type, an ObjTypeInfo), just before.
+constexpr int kListType = 24;
+// A string (ObjString, ObjType::String): its length in characters.
+constexpr uint8_t kTypeString = 0;
+constexpr int kStringLength = 32;
+// A type (ObjTypeInfo): its class, and its arguments (a std::vector, its first one's address first).
+constexpr int kTypeInfoCls = 32, kTypeInfoArgs = 40;
 // Packed items (PackedItems): how they are kept, whether any may be null, how many there are,
 // and the block holding them (a std::vector: its first item's address first).
 constexpr int kPackStore = 0, kPackNullable = 1, kPackCount = 24, kPackBlock = 48;

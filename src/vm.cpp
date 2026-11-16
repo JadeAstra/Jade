@@ -3679,7 +3679,7 @@ void VM::listInsert(ObjList* list, size_t at, const Value* items, size_t n) {
     uint8_t* base = list->pack->block.data();
     std::memmove(base + (at + n) * width, base + at * width, (old - at) * width);
     if (list->pack->nullable) {
-        list->pack->nulls.resize((old + n + 63) / 64, 0);
+        coverNulls(*list->pack, old + n);
         for (size_t i = old; i-- > at;) setNullAt(list, i + n, nullAt(list, i));
     }
     list->pack->count = old + n;
@@ -3700,7 +3700,7 @@ void VM::listReserve(ObjList* list, size_t n) {
     PackedItems& pack = *list->pack;
     const size_t before = pack.block.capacity();
     pack.block.reserve(n * pack.width);
-    if (pack.nullable) pack.nulls.reserve((n + 63) / 64);
+    if (pack.nullable) coverNulls(pack, n);
     if (pack.block.capacity() > before) account(pack.block.capacity() - before);
 }
 
@@ -3718,7 +3718,6 @@ void VM::listErase(ObjList* list, size_t at, size_t n) {
         for (size_t i = at; i + n < list->pack->count; i++) setNullAt(list, i, nullAt(list, i + n));
     list->pack->count -= n;
     list->pack->block.resize(list->pack->count * width);
-    if (list->pack->nullable) list->pack->nulls.resize((list->pack->count + 63) / 64);
 }
 
 void VM::listClear(ObjList* list) {
@@ -3727,8 +3726,7 @@ void VM::listClear(ObjList* list) {
         return;
     }
     list->pack->count = 0;
-    list->pack->block.clear();
-    list->pack->nulls.clear();
+    list->pack->block.clear();  // its room kept, and the bits for it (coverNulls)
 }
 
 // The items as 16-byte values, for what reads them so; the list itself is as it was.
@@ -3779,7 +3777,7 @@ void VM::listCopyRange(ObjList* to, const ObjList* from, size_t start, size_t co
         std::memcpy(to->pack->block.data() + old * to->pack->width, from->pack->block.data() + start * from->pack->width, count * from->pack->width);
     }
     if (to->pack->nullable) {
-        to->pack->nulls.resize((old + count + 63) / 64, 0);
+        coverNulls(*to->pack, old + count);
         for (size_t i = 0; i < count; i++) setNullAt(to, old + i, nullAt(from, start + i));
     }
     to->pack->count = old + count;
@@ -4031,7 +4029,7 @@ bool VM::addNew(int argc) {
     const size_t before = pack.block.capacity();
     pack.block.insert(pack.block.end(), item, item + layout.size);
     if (pack.nullable) {
-        pack.nulls.resize((pack.count + 1 + 63) / 64, 0);
+        coverNulls(pack, pack.count + 1);
         setNullAt(list, pack.count, false);
     }
     pack.count++;
@@ -5826,7 +5824,7 @@ void addressCode(FunctionProto& f) {
     // them; a region's ways in are VM::nativeEnter's (M9.5).
     const TailFn first = TailTable::nativeFirstEntry();
     for (size_t k = 0; k < f.nativeHeads.size(); k++)
-        if (f.nativeArrivals[k] < 2) std::memcpy(f.run.data() + f.nativeHeads[k], &first, kThreaded);
+        if (f.nativeArrivals[k] < 2 || f.nativeArrivals[k] == 3) std::memcpy(f.run.data() + f.nativeHeads[k], &first, kThreaded);
     // A whole function's start, its calls counted until its region is made (2026-11-15).
     if (f.nativeCallHead != UINT32_MAX) {
         const TailFn call = TailTable::nativeCallEntry();
@@ -6908,13 +6906,17 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
     if (which < f.nativeHeads.size()) {
         static std::mutex making;
         std::lock_guard<std::mutex> hold(making);
-        if (f.nativeArrivals[which] < 2) {
+        // 1: made the first time; 3: made again, its regions dropped past their misses' limit (2026-11-16).
+        if (f.nativeArrivals[which] == 1 || f.nativeArrivals[which] == 3) {
             std::vector<FunctionProto::NativeRegion> made;
             nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size(), &VM::noMemberForRegion, this};
             if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), head, made);
             nativeGlobalsSeen = GlobalsSeen{};
             auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
-            if (const auto* now = f.regionsNow.load(std::memory_order_acquire)) *list = *now;
+            // (Less those dropped: one made again has the same ways in, found first otherwise.)
+            if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
+                for (const FunctionProto::NativeRegion& r : *now)
+                    if (*r.misses < kNativeMissLimit) list->push_back(r);
             list->insert(list->end(), made.begin(), made.end());
             f.regionsNow.store(list.get(), std::memory_order_release);
             f.regionLists.push_back(std::move(list));
@@ -6923,7 +6925,7 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
             std::memcpy(run + head, &own, kThreaded);
             const TailFn enter = TailTable::nativeEntry();
             for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
-            f.nativeArrivals[which] = 2;
+            f.nativeArrivals[which] = f.nativeArrivals[which] == 3 ? 4 : 2;
         }
     }
     // On at this instruction, as it is now addressed.
@@ -6948,6 +6950,21 @@ void* VM::boxForRegion(void* vm, const void* cls) {
     VM& self = *static_cast<VM*>(vm);
     if (self.bytesAllocated_ > self.nextGC_) return nullptr;
     return self.newValue(const_cast<ObjClass*>(static_cast<const ObjClass*>(cls)));
+}
+
+// Room made in a packed list a region adds to, which has none left (2026-11-16): twice its
+// items, at least 8, its bits for null too (listReserve, coverNulls), as the VM's add would
+// grow it; false where a collection is due (the region leaves the add to the VM, which collects
+// first) or the list is not packed. Only a region that has looked at no list once asks (its
+// steps keep no list's block address).
+bool VM::roomForRegion(void* vm, const void* list) {
+    VM& self = *static_cast<VM*>(vm);
+    if (self.bytesAllocated_ > self.nextGC_) return false;
+    ObjList* const l = const_cast<ObjList*>(static_cast<const ObjList*>(list));
+    if (!l->packed()) return false;
+    const size_t want = l->pack->count * 2 > 8 ? l->pack->count * 2 : 8;
+    self.listReserve(l, want);
+    return true;
 }
 
 // How many times a function is called before its whole region is made (2026-11-15): enough that
@@ -7043,6 +7060,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         context.units = native::unitTable();
         context.vm = this;
         context.makeBox = &VM::boxForRegion;
+        context.makeRoom = &VM::roomForRegion;
         context.places = nullptr;
         context.keys = reinterpret_cast<const uint64_t*>(&tableKeysChanged);
         if ((frame->closure->proto->typeArgs & kHasPlaces) != 0 && context_->places != nullptr && (framePlacesEnd(frame - frames_) & ~PlaceArena::kNone) != 0)
@@ -7075,6 +7093,19 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
                     const TailFn own = TailTable::get()[static_cast<size_t>(opAt(way + kThreaded))];
                     std::memcpy(way, &own, kThreaded);
                 }
+            // A loop's regions made again, once, from the frame the next time the loop starts
+            // (2026-11-16: made for a list holding no null, their steps miss on one that may hold
+            // some; made from a frame showing such a list, they read both kinds).
+            FunctionProto& fp = *const_cast<FunctionProto*>(frame->closure->proto);
+            for (const FunctionProto::NativeRegion& r : *regions) {
+                if (r.misses != region->misses || !r.first) continue;
+                for (size_t k = 0; k < fp.nativeHeads.size(); k++)
+                    if (fp.nativeHeads[k] == r.head && fp.nativeArrivals[k] == 2) {
+                        fp.nativeArrivals[k] = 3;
+                        const TailFn first = TailTable::nativeFirstEntry();
+                        std::memcpy(const_cast<uint8_t*>(code) + r.head, &first, kThreaded);
+                    }
+            }
         }
         // Left at another region's way in (a loop's region where its function's goes on after
         // the loop, and the function's at the start of a loop left to its own, 2026-11-15):

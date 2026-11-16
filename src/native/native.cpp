@@ -48,7 +48,7 @@ static_assert(offsetof(Obj, type) == L::kObjType && offsetof(Obj, core) == L::kO
               "layout.h: an object");
 static_assert(sizeof(ObjType) == 1 && static_cast<int>(ObjType::List) == L::kTypeList && static_cast<int>(ObjType::Bytes) == L::kTypeBytes,
               "layout.h: the kinds of object");
-static_assert(offsetof(ObjList, pack) == L::kListPack && sizeof(std::unique_ptr<PackedItems>) == 8, "layout.h: a list");
+static_assert(offsetof(ObjList, pack) == L::kListPack && offsetof(ObjList, type) == L::kListType && offsetof(ObjTypeInfo, cls) == L::kTypeInfoCls && offsetof(ObjTypeInfo, args) == L::kTypeInfoArgs && sizeof(std::unique_ptr<PackedItems>) == 8, "layout.h: a list");
 static_assert(offsetof(PackedItems, store) == L::kPackStore && offsetof(PackedItems, nullable) == L::kPackNullable &&
                   offsetof(PackedItems, count) == L::kPackCount && offsetof(PackedItems, block) == L::kPackBlock && offsetof(PackedItems, nulls) == L::kPackNulls && sizeof(ListStore) == 1 &&
                   static_cast<int>(ListStore::Ints) == L::kStoreInts && static_cast<int>(ListStore::Floats) == L::kStoreFloats &&
@@ -63,6 +63,7 @@ static_assert(static_cast<int>(ValueKind::Small) == L::kKindSmall && offsetof(Va
                   sizeof(PackedItems::typeSlot) == 4 && static_cast<int>(ObjType::Places) == L::kTypePlaces,
               "layout.h: values of value types");
 static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
+static_assert(static_cast<int>(ObjType::String) == L::kTypeString && offsetof(ObjString, length) == L::kStringLength && sizeof(ObjString::length) == 8, "layout.h: a string");
 static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
 static_assert(offsetof(ObjInstance, cls) == L::kInstClass, "layout.h: an object's class");
 static_assert(offsetof(ObjUpvalue, location) == L::kUpvalueLocation && sizeof(Value*) == 8, "layout.h: a captured variable's cell");
@@ -347,7 +348,7 @@ namespace {
 volatile uint8_t checkFlag = 0;
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr};
+    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr, nullptr};
     return runRegion(code, slots, &context);
 }
 

@@ -808,6 +808,16 @@ struct PackedItems {
     std::vector<uint64_t> nulls;    // nullable: a bit per item, set where the item is null
 };
 
+// A list whose items may be null: its bits made to cover `items` items, and every item its block
+// has room for, never fewer than they did (2026-11-16: native code adding an item where the block
+// has room finds its bit's word there, and sets or clears it; where it does not, the VM adds).
+// Bits past the count may be anything: each item written sets or clears its own.
+inline void coverNulls(PackedItems& p, size_t items) {
+    const size_t room = p.width != 0 ? p.block.capacity() / p.width : 0;
+    const size_t words = ((items > room ? items : room) + 63) / 64;
+    if (p.nulls.size() < words) p.nulls.resize(words, 0);
+}
+
 // Item `i` of a packed list of ints, floats, bools or narrow items (anything but a value type's
 // Items), as VM::packedGet gives it: what a for over such a list is given each time (G69).
 inline Value packedPlain(const PackedItems& p, size_t i) {

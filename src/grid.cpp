@@ -52,7 +52,7 @@ void appendCopies(VM& vm, ObjList* list, size_t count, Value value) {
     }
     if (pack.nullable) {
         const bool isNull = vm.listGet(list, start).isNull();
-        pack.nulls.resize((start + count + 63) / 64, 0);
+        coverNulls(pack, start + count);
         for (size_t i = start + 1; i < start + count; i++) {
             if (isNull) pack.nulls[i / 64] |= uint64_t{1} << (i % 64);
             else pack.nulls[i / 64] &= ~(uint64_t{1} << (i % 64));
@@ -72,7 +72,7 @@ bool appendZeros(VM& vm, ObjList* list, size_t count) {
         zeroBlock(pack.block, (start + count) * pack.width);
         if (pack.nullable) {
             // The zero of a type that takes null is null.
-            pack.nulls.resize((start + count + 63) / 64, 0);
+            coverNulls(pack, start + count);
             for (size_t i = start; i < start + count; i++) pack.nulls[i / 64] |= uint64_t{1} << (i % 64);
         }
         pack.count = start + count;

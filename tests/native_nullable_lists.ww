@@ -67,6 +67,23 @@ fun firstNull(colors : List<Color?>) : int {
   }
   return -1
 }
+fun indexColors(colors : List<Color?>) : string {
+  var t = 0
+  var nulls = 0
+  var last : Color? = null
+  var first : Color? = null
+  for (i in 0 ..< colors.size) {
+    val c = colors[i]
+    if (c != null) {
+      t += c.red.toInt() + c.blue.toInt() * 2
+      if (first == null) { first = c }
+      last = c
+    } else {
+      nulls += 1
+    }
+  }
+  return "$t $nulls $first $last"
+}
 fun indexWords(words : List<string>) : int {
   var t = 0
   for (i in 0 ..< words.size) {
@@ -120,6 +137,9 @@ for (round in 0 ..< 3) {
     w = indexWords(words)
   }
   print(a, b, c, d, e, f, g, h, w)
+  var ic = ""
+  for (r in 0 ..< 200) { ic = indexColors(colors) }
+  print(ic, indexColors(plainColors))
   // The other kind of list, given to the same functions.
   print(forInts(plain), indexInts(plain), elvisInts(plain), forColors(plainColors), firstNull(plainColors))
   print(readPast(ints, 0), readPast(ints, 3))
@@ -131,12 +151,15 @@ print(changed[0], changed[1], changed[4], changed[299], forInts(changed), indexI
 setSome(changed, 5)
 print(changed[0], changed[4], changed[5], forInts(changed), elvisInts(changed))
 // expect: 428000 3e+05 333 333 334 428286 442729 600050.0 311607 0 1990
+// expect: 118911 91 Color(1, 1, 1, 200) Color(231, 11, 5, 200) 142116 0 Color(255, 0, 0) Color(231, 11, 5, 200)
 // expect: 499500 499500 499500 358017 -1
 // expect: read 428572 caught after 428572
 // expect: 428000 3e+05 333 333 334 428286 442729 600050.0 311607 0 1990
+// expect: 118911 91 Color(1, 1, 1, 200) Color(231, 11, 5, 200) 142116 0 Color(255, 0, 0) Color(231, 11, 5, 200)
 // expect: 499500 499500 499500 358017 -1
 // expect: read 428572 caught after 428572
 // expect: 428000 3e+05 333 333 334 428286 442729 600050.0 311607 0 1990
+// expect: 118911 91 Color(1, 1, 1, 200) Color(231, 11, 5, 200) 142116 0 Color(255, 0, 0) Color(231, 11, 5, 200)
 // expect: 499500 499500 499500 358017 -1
 // expect: read 428572 caught after 428572
 // expect: null 2 null 598 67275 67425 75000

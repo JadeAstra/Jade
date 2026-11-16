@@ -263,6 +263,12 @@ State asInMemory(const State& st) {
 
 // Held in memory, as entered or as the region wrote it there: read from the slot.
 bool inMemory(const K& k) { return (k.bits & kMem) != 0 && (k.bits & ~(kEntry | kMem)) == 0; }
+// A number (or a bool) the region holds in a register on every way here, so never null
+// (2026-11-16: an item read as an int from a list that held no null, tested `!= null`).
+bool heldNumber(const K& k) {
+    const uint16_t w = static_cast<uint16_t>(k.bits);
+    return w != 0 && (w & ~(kInt | kFloat | kByte | kBool | kWhole | kCopyI | kCopyF)) == 0;
+}
 
 // The class a slot is read as where the region knows what it holds: an int (or a byte) or a
 // float; -1 where it does not (as entered); -2 where two kinds meet.
@@ -447,6 +453,24 @@ struct Region {
     // meet one (wantInts), and the region made again with them.
     std::set<int> intLists;
     mutable std::set<int> wantInts;
+    // Slots where a number the region holds in a register meets a value in memory (2026-11-16:
+    // `out.add(i % 7 == 0 ? null : i)`, null one way, the int the other): the number written to its
+    // slot on the way into each place a jump goes to (spilled), so that the two meet in memory.
+    // Found as wantInts are (wantMemory), and the region made again with them.
+    std::set<int> memorySlots;
+    mutable std::set<int> wantMemory;
+    std::vector<bool> jumpedTo_;  // the instructions a jump in the region goes to
+    bool jumpedTo(int i) {
+        if (jumpedTo_.size() != ins.size()) {
+            jumpedTo_.assign(ins.size(), false);
+            for (const Ins& x : ins) {
+                const int t = targetOperand(x.op);
+                if (t <= 0) continue;
+                if (auto to = index.find(static_cast<uint32_t>(i32(x, t - 1))); to != index.end()) jumpedTo_[static_cast<size_t>(to->second)] = true;
+            }
+        }
+        return i >= 0 && static_cast<size_t>(i) < jumpedTo_.size() && jumpedTo_[static_cast<size_t>(i)];
+    }
     // A whole function's region (2026-11-15): its loops are left out (`outside`: a way there
     // leaves for the VM, which goes into the loop's own region as it would), and the region is
     // come back into where each loop ends (`seeds`, more ways in). Each loop keeps the region it
@@ -629,6 +653,9 @@ struct Region {
         int slot;  // where the Ref to it is
     };
     mutable std::map<int, MadeInPlace> madeInPlace;
+    // The GetIndexRefs of the region (iref): the list's slot, for the SetPlace after one
+    // (setplaceref, 2026-11-16).
+    mutable std::map<int, int> refInto;
     // The field of a value type's header's component `k`: the field of its name.
     static const ValueField* headerFieldOf(const ObjClass* cls, const ValueLayout* layout, int k) {
         if (layout == nullptr || k < 0 || static_cast<size_t>(k) >= cls->components.size()) return nullptr;
@@ -790,10 +817,12 @@ struct Region {
         return k < layout->fields.size() ? &layout->fields[k] : nullptr;
     }
     // Whether a GetProp reads `size` of a list or bytes the frame holds in slot `objSlot`.
-    bool sizeRead(int objSlot, int32_t slow) const {
-        if (frame == nullptr || objSlot < 0 || objSlot >= frameSlots || objSlot >= f.maxStack) return false;
-        const Value& v = frame[objSlot];
-        if (!v.isObjType(ObjType::List) && !v.isObjType(ObjType::Bytes)) return false;
+    bool sizeRead(const State& s, int objSlot, int32_t slow) const {
+        // (What the region knows the slot likely holds, or the frame: 2026-11-16, an item read by idxv.)
+        const Value* const known = knownValue(s, objSlot);
+        if (known == nullptr) return false;
+        const Value& v = *known;
+        if (!v.isObjType(ObjType::List) && !v.isObjType(ObjType::Bytes) && !v.isString()) return false;  // (a string's, 2026-11-16)
         const ObjString* const name = slowName(slow);
         return name != nullptr && name->utf8() == "size";
     }
@@ -1127,6 +1156,8 @@ struct Region {
                 // An int the region made meeting an item read from the list in slot `src`, an int or
                 // a byte: made again with that list's items read as ints (intLists).
                 if (w == (kInt | kWhole) && k.src >= 0 && !intLists.count(k.src)) wantInts.insert(k.src);
+                // A number in a register meeting a value in memory: written to its slot where they meet.
+                if ((w == (kInt | kMem) || w == (kFloat | kMem) || w == (kByte | kMem)) && !memorySlots.count(slot)) wantMemory.insert(slot);
                 refuse("slot " + std::to_string(slot) + " of two kinds (" + std::to_string(k.bits) + ") at a way out, at " + std::to_string(at));
             }
         }
@@ -1184,7 +1215,23 @@ struct Region {
                 out.edges.push_back(Edge{found->second, st});
             }
         }
-        void fall(const State& st) {
+        // On the way into instruction `to`, where a jump goes too: a number the region holds in a
+        // register, in a slot of memorySlots, written to its slot, which then holds it (2026-11-16).
+        State spilled(int to, const State& st) {
+            if (r.memorySlots.empty() || !r.jumpedTo(to)) return st;
+            State t = st;
+            for (const int slot : r.memorySlots) {
+                if (slot >= t.top) continue;
+                const uint16_t w = static_cast<uint16_t>(t.kind(slot).bits & ~kEntry);
+                if (w != kInt && w != kFloat && w != kByte) continue;
+                const Reg reg{slot, w == kFloat ? CF : CI};
+                op(w == kInt ? "storei" : w == kFloat ? "storef" : "storeby", {reg}, {reg}).slot = slot;
+                t.kinds[slot] = K{kMem};
+            }
+            return t;
+        }
+        void fall(const State& given) {
+            const State st = spilled(i + 1, given);
             if (r.outside.count(i + 1)) {
                 // On into a loop left out: a way out to the VM there.
                 op("jump").jumpExit = exitTo(r.ins[static_cast<size_t>(i) + 1].at, st);
@@ -1515,6 +1562,16 @@ struct Region {
                 int from = s.top - 1;
                 K k = s.kind(from);
                 if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) from = k.src, k = s.kind(from);
+                if (heldNumber(k)) {
+                    // A number in a register, never null: `?:` goes on with it, `?.` too.
+                    if (x.op == Op::JumpIfNotNull) {
+                        c.go(static_cast<uint32_t>(i32(x, 0)), s, c.op("jump"));
+                        c.out.fallsThrough = false;
+                    } else {
+                        c.fall(s);
+                    }
+                    return;
+                }
                 if (!(k.bits == kEntry || inMemory(k))) island();
                 c.op("isnull").slot = from;
                 s.flag = -1;
@@ -1585,11 +1642,11 @@ struct Region {
                     parts.emplace_back(part, static_cast<int>(field->offset));
                 }
                 const int list = c.objectSlot(at);
-                // The list the frame holds as the region is made: one that may hold null, or of
-                // another class's items, would leave every time (a miss each): the VM's at once.
+                // The list the frame holds as the region is made: one of another class's items
+                // would leave every time (a miss each): the VM's at once. One that may hold null is added to, 2026-11-16.
                 if (frame != nullptr && list < frameSlots && list < f.maxStack) {
                     const Value& held = frame[list];
-                    if (!held.isObjType(ObjType::List) || asList(held)->store() != ListStore::Items || asList(held)->pack->nullable ||
+                    if (!held.isObjType(ObjType::List) || asList(held)->store() != ListStore::Items ||
                         asList(held)->pack->itemClass != cls)
                         island();
                 }
@@ -1624,6 +1681,27 @@ struct Region {
                 // which also makes sure the frame has places): copied into the variable's own,
                 // where it was made in another (setplace).
                 auto made = madeInPlace.find(c.i - 1);
+                if (auto ref = refInto.find(c.i - 1); made == madeInPlace.end() && ref != refInto.end() && top >= 0) {
+                    // An item of a list, where it is (2026-11-16: `val c = colors[i]` of a
+                    // List<Color?>): copied into the variable's place as the VM's setPlace does (the
+                    // step checks the list, as the frame shows it here); null as it is.
+                    const int list = ref->second;
+                    const ObjClass* const cls = itemsClass(s, list);
+                    if (cls == nullptr || frame == nullptr || list >= frameSlots || list >= f.maxStack || !frame[list].isObjType(ObjType::List)) island();
+                    const ObjList* const held = asList(frame[list]);
+                    if (!held->packed() || held->pack->itemClass != cls || held->pack->itemType != nullptr || held->pack->typeSlot != 0 ||
+                        held->pack->width > ObjPlace::kBytes)
+                        island();
+                    if (slot != top) c.writeMemory(slot);
+                    LOp& l = c.op("setplaceref");
+                    l.slot = slot;
+                    l.slot2 = top;
+                    l.ret = u8(x, 2);
+                    c.leaves(l);
+                    noteValue(s, slot, cls);
+                    c.fall(s);
+                    return;
+                }
                 if (made == madeInPlace.end() || made->second.slot != top || top < 0) island();
                 if (slot != top) c.writeMemory(slot);
                 LOp& l = c.op("setplace");
@@ -1634,10 +1712,13 @@ struct Region {
                 c.fall(s);
                 return;
             }
-            case Op::Jump:
-                c.go(static_cast<uint32_t>(i32(x, 0)), s, c.op("jump"));
+            case Op::Jump: {
+                const auto to = index.find(static_cast<uint32_t>(i32(x, 0)));
+                const State there = to == index.end() ? s : c.spilled(to->second, s);
+                c.go(static_cast<uint32_t>(i32(x, 0)), there, c.op("jump"));
                 c.out.fallsThrough = false;
                 return;
+            }
             case Op::Loop: {
                 LOp& l = c.op("loopback");
                 c.go(static_cast<uint32_t>(i32(x, 0)), s, l);
@@ -1756,6 +1837,8 @@ struct Region {
                     l->slot = list;
                     l->slot2 = a;
                     c.leaves(*l);
+                    // What it likely holds: the frame's list's first item (a string, whose size is read next).
+                    if (const ObjList* const held = asList(frame[list]); !held->packed() && held->size() > 0) noteFieldValue(s, a, held->values()[0]);
                     s.top = u8(x, 3);
                     c.fall(s);
                     return;
@@ -1798,6 +1881,7 @@ struct Region {
                 l.slot2 = top - 2;
                 l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 c.leaves(l);
+                refInto[c.i] = list;  // for a SetPlace after it (setplaceref)
                 c.write(top - 2, K{kMem});
                 noteValue(s, top - 2, cls);
                 s.top = top - 1;
@@ -1937,13 +2021,31 @@ struct Region {
                 const Value& name = constant(u16(x, 10));
                 if (argc != 1 || !name.isObjType(ObjType::String) || asString(name)->utf8() != "add") island();
                 const int list = c.objectSlot(u8(x, 1));
-                // A list that may hold null, as the frame has it where the region is made: its
-                // bits for null grow as it does, which the steps cannot (each add would leave, a
-                // miss each): the VM's at once (2026-11-16).
-                if (frame != nullptr && list < frameSlots && list < f.maxStack && frame[list].isObjType(ObjType::List) && asList(frame[list])->packed() &&
-                    asList(frame[list])->pack->nullable)
-                    island();
+                // A list that may hold null (2026-11-16): the steps add to it where its bits have
+                // room (coverNulls keeps a word for each item its block has room for); a value
+                // that may be null, to a list of ints, floats or bools, added from its slot (pushv).
                 const int xk = u8(x, 6);
+                if (const uint16_t w = static_cast<uint16_t>(s.kind(xk).bits & ~kEntry);
+                    !(flags & 1) && frameNullable(list) && w != kInt && w != kFloat && w != kByte && valueClass(s, xk) == nullptr) {
+                    const int valueSlot = c.objectSlot(xk);
+                    if (a > 0xFFFF || valueSlot > 0xFFFFFF) island();
+                    const K before = s.kind(a);
+                    const bool had = s.kinds.find(a) != s.kinds.end();
+                    const int flag = s.flag;
+                    c.writeMemory(a);
+                    if (had) s.kinds[a] = before;
+                    else s.kinds.erase(a);
+                    s.flag = flag;
+                    LOp& l = c.op("pushv");
+                    l.slot = list;
+                    l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(a) << 24) | static_cast<uint64_t>(valueSlot));
+                    l.jumpExit = c.exitHere();  // no room: the VM's, no miss
+                    c.leaves(l);
+                    c.write(a, K{kMem});
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                }
                 const char* stem = nullptr;
                 Reg value{};
                 if (flags & 1) {
@@ -1981,6 +2083,7 @@ struct Region {
                     l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 40) | (static_cast<uint64_t>(a) << 24) |
                                                    static_cast<uint64_t>(valueSlot));
                     l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
+                    l.jumpExit = c.exitHere();  // no room: the VM's, no miss
                     c.leaves(l);
                     c.write(a, K{kMem});
                     s.top = u8(x, 2);
@@ -2003,6 +2106,7 @@ struct Region {
                 LOp& l = c.op(stem, {value}, {value});
                 l.slot = list;
                 l.slot2 = a;
+                l.jumpExit = c.exitHere();  // no room: the VM's, no miss (2026-11-16: a list made afresh each call grows by the VM's add)
                 c.leaves(l);
                 c.write(a, K{kMem});
                 s.top = u8(x, 2);
@@ -2397,7 +2501,7 @@ struct Region {
                 const int64_t cache = cacheAddress(u16(x, 4));
                 // A list's or bytes' size (a while loop's `i < items.size`), where the frame holds
                 // one as the region is made: read from the object, which the step checks.
-                if (sizeRead(obj, i32(x, 6))) {
+                if (sizeRead(s, obj, i32(x, 6))) {
                     const Reg dst{a, CI};
                     LOp& l = c.op("sizew", {dst}, {}, {dst});
                     c.write(a, K{static_cast<uint16_t>(kInt)});
@@ -2721,8 +2825,12 @@ struct Region {
                 int from = other;
                 K k = s.kind(from);
                 if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) from = k.src, k = s.kind(from);
-                if (!(k.bits == kEntry || inMemory(k)) && !isNull(from)) island();
-                c.op("isnull").slot = from;
+                if (heldNumber(k)) {
+                    c.op("noflag");  // a number in a register: not null
+                } else {
+                    if (!(k.bits == kEntry || inMemory(k)) && !isNull(from)) island();
+                    c.op("isnull").slot = from;
+                }
                 s.flag = -1;  // the flag register now holds this answer, no slot's bool
                 if (t.kind == Typed::Compare) {
                     c.write(u8(x, 0), K{kBool});
@@ -3731,6 +3839,18 @@ struct Region {
                     e.stores.push_back(put);
                 }
         }
+    }
+
+    // The steps adding to a list may have the VM make room in it (ret 1: roomMade, 2026-11-16),
+    // where the region looks at no list once: a list looked at keeps its block's address in the
+    // context, which the same list in another slot, grown, would leave behind. (Fields looked at
+    // keep values, not blocks.)
+    void allowRoom() {
+        for (const LOp& look : prologue)
+            if (look.stem.rfind("look", 0) == 0 && look.stem.rfind("lookp", 0) != 0) return;
+        for (Result& res : results)
+            for (LOp& l : res.ops)
+                if (l.stem.rfind("push", 0) == 0 || l.stem == "addsm") l.ret = 1;
     }
 
     void lookAtListsOnce() {
@@ -5720,9 +5840,9 @@ struct Region {
                     skipTo = l.jumpTo;
                     continue;
                 }
-                // addsm's way to the VM where the list has no room left: the template adds only
-                // what it has room for, and the steps then come to it (2026-11-15).
-                if (l.jumpTo >= 0 || (l.jumpExit >= 0 && l.stem.rfind("addsm", 0) != 0)) return false;
+                // addsm's (a push step's, 2026-11-16) way to the VM where the list has no room left:
+                // the template adds only what it has room for, and the steps then come to it (2026-11-15).
+                if (l.jumpTo >= 0 || (l.jumpExit >= 0 && l.stem.rfind("addsm", 0) != 0 && l.stem.rfind("push", 0) != 0)) return false;
                 if ((l.stem.rfind("hsetp", 0) == 0 && l.stem.rfind("hsetpi", 0) != 0) || l.stem == "putp") return false;
                 if (l.stem == "chkf" || l.stem == "chkint" || l.stem == "chki") {
                     if (!kindCheck(l)) return false;
@@ -7619,14 +7739,16 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             if (dumping) std::fprintf(stderr, "== %s: no region for the loop at %u: more than 600 instructions\n", f.name.c_str(), all[static_cast<size_t>(c.first)].at);
             continue;
         }
-        // Made a second time where the first found lists whose items must be read as ints.
-        std::set<int> intLists;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        // Made again where it found lists whose items must be read as ints, or slots where a number
+        // and a value meet (memorySlots): at most twice more.
+        std::set<int> intLists, memorySlots;
+        for (int attempt = 0; attempt < 3; attempt++) {
         Region r(f);
         r.frame = frame;
         r.frameSlots = frameSlots;
         r.tops = tops;
         r.intLists = intLists;
+        r.memorySlots = memorySlots;
         r.function = head == f.nativeCallHead;
         for (const auto& [from, to] : leftOut) {
             for (int k = from; k <= to; k++) r.outside.insert(k - c.first);
@@ -7655,6 +7777,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             lap(1);
             if (!r.worthIt()) refuse("too little done between what the VM does");
             r.lookAtListsOnce();
+            r.allowRoom();
             r.findLive();
             static const bool ahead = [] {
                 const char* asked = std::getenv("WW_NATIVE_TEMPLATES");
@@ -7690,8 +7813,9 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
             }
         } catch (const std::exception& e) {
-            if (attempt == 0 && !r.wantInts.empty()) {
-                intLists = r.wantInts;
+            if (attempt < 2 && (!r.wantInts.empty() || !r.wantMemory.empty())) {
+                intLists.insert(r.wantInts.begin(), r.wantInts.end());
+                memorySlots.insert(r.wantMemory.begin(), r.wantMemory.end());
                 continue;
             }
             refusals++;

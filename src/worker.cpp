@@ -555,6 +555,7 @@ Value decodePacked(VM& vm, Reader& in) {
         list->pack->nulls.resize(words);
         std::memcpy(list->pack->nulls.data(), in.at, words * sizeof(uint64_t));
         in.at += words * sizeof(uint64_t);
+        coverNulls(*list->pack, count);
     }
     vm.account(bytes);
     return Value::object(list);

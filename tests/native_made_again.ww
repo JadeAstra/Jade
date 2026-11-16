@@ -1,0 +1,43 @@
+// A loop's region made again (2026-11-16): made while its function was given lists holding no
+// null, its steps read items as numbers and miss on a list that may hold null; past its misses'
+// limit it is made again, once, from the frame the next time the loop starts, and the new one
+// reads both kinds. Then a string's size read in a loop (`w.size`), the string an item read by
+// its index. The same answers as the VM's.
+
+fun indexInts(ints : List<int?>) : int {
+  var t = 0
+  for (i in 0 ..< ints.size) {
+    val n = ints[i]
+    if (n != null) { t += n } else { t -= 1 }
+  }
+  return t
+}
+fun sumAll(ints : List<int?>) : int {
+  var t = 0
+  for (i in 0 ..< ints.size) { t += ints[i] ?: 0 }
+  return t
+}
+fun sizes(words : List<string>) : int {
+  var t = 0
+  for (i in 0 ..< words.size) {
+    val w = words[i]
+    t += w.size
+  }
+  return t
+}
+val plain : List<int?> = (0 ..< 1000).toList()
+val some : open List<int?> = []
+for (i in 0 ..< 1000) { some.add(i % 7 == 0 ? null : i) }
+val words = (0 ..< 400).map { "ab".repeat(it % 5) + "é" }
+var a = 0
+var b = 0
+var c = 0
+for (r in 0 ..< 300) { a += indexInts(plain); b += sumAll(plain); c += sizes(words) }
+print(a, b, c)
+for (r in 0 ..< 300) { a += indexInts(some); b += sumAll(some) }
+print(a, b)
+for (r in 0 ..< 300) { a += indexInts(plain); b += sumAll(plain) }
+print(a, b)
+// expect: 149850000 149850000 600000
+// expect: 278335800 278378700
+// expect: 428185800 428228700
