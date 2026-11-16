@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: calls from native code to native code</h1>
-<p class="lede">Written 2026-11-15, at the user's word ("ok", to: calls made by native code start as a plan, its spike to show a call from native code to native code costing less than the VM's own). A function's region calling another function whose own region is made, from machine code to machine code: the callee's frame pushed by a step, its machine code entered at once, its return a step that comes back. It follows <a href="calls-plan.html">the plan for calls made from native code</a> (2026-11-13), whose spike failed its gate, and native code for whole functions (d09b55e), which is what makes another way possible now. Questions for the user at the end, each with a recommendation; nothing is built before they are decided and the spike passes its gate.</p>
+<p class="lede">Written 2026-11-15, at the user's word ("ok", to: calls made by native code start as a plan, its spike to show a call from native code to native code costing less than the VM's own). A function's region calling another function whose own region is made, from machine code to machine code: the callee's frame pushed by a step, its machine code entered at once, its return a step that comes back. It follows <a href="calls-plan.html">the plan for calls made from native code</a> (2026-11-13), whose spike failed its gate, and native code for whole functions (d09b55e), which is what makes another way possible now. Questions for the user at the end, each with a recommendation; nothing is built before they are decided and the spike passes its gate. All eight decided 2026-11-15 as recommended ("go ahead"). <strong>The spike failed its gate</strong> the same day (<a href="#nc-spike">below</a>): stopped there.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -102,6 +102,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#nc-same">What does not change</a></li>
 <li><a href="#nc-risks">Risks</a></li>
 <li><a href="#nc-questions">Questions for the user</a></li>
+<li><a href="#nc-spike">The spike: failed its gate</a></li>
 </ul>
 </nav>
 
@@ -189,7 +190,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Not now</strong>: native code goes as far as it has (calls leave for the VM and come back).</li>
 </ul>
 <p><em>Recommended:</em> build it. What failed last time was the VM run inside the call; the callee's own region takes that away, and the spike shows in a day or two whether what is left (the frame, the context, the registers saved) is cheap enough.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -199,7 +200,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Everything a way out writes back</strong>, as at an island, and loaded again after: simpler, and what made the last spike's region side 8 ns.</li>
 </ul>
 <p><em>Recommended:</em> only the arguments. Nothing but the caller reads its registers while the callee runs in native code (a collection, a stack trace or a handler happens only once the callee has left for the VM, and then the caller writes back first).</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -210,7 +211,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>A new whole one</strong> per call, as <code>nativeEnter</code> makes: some 2.9 KB of stack, the simplest, likely too slow.</li>
 </ul>
 <p><em>Recommended:</em> split. Each region says what of the context it uses (it says already whether it looks at lists or fields once, since d09b55e); a function's region uses little of it, and <code>nativeEnter</code> gains by it too.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -220,7 +221,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>A run of the VM's loop for the callee</strong> inside the call step, and back into the caller's code.</li>
 </ul>
 <p><em>Recommended:</em> the caller leaves too. Nothing of the VM runs with native code on the C++ stack under it, so exceptions, collections, threads' turns and tasks that wait are as today, and native code needs no unwind information; the cost (a way out and a way back in) is only where the callee could not go on.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -230,7 +231,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The VM's frame limit alone</strong> (20,000): up to some 8 MB of machine stack, more than a task's or a worker thread's stack may have.</li>
 </ul>
 <p><em>Recommended:</em> a limit of 256. Recursion deeper than that is the VM's from there on, as all of it is today, and no thread's stack can run out first.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -240,7 +241,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Each closure's region found as it is called</strong>: the step looks up the region of whatever closure it is given (a search, as <code>nativeEnter</code> makes).</li>
 </ul>
 <p><em>Recommended:</em> not at first; looked at again once calls by name and methods are in and measured.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -250,7 +251,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The defaults filled in by the call step</strong> where each default is a constant or a global read once (<code>Color.clear</code>), as the callee's prologue would.</li>
 </ul>
 <p><em>Recommended:</em> not at first; it is the step after methods, and the one inkBox waits on.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -260,8 +261,19 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Looked at again after each call</strong>: a few loads a call, nothing to know of the callee.</li>
 </ul>
 <p><em>Recommended:</em> no native calls from it at first. Loops that look at lists once are the kernels' hot loops, which have no calls in them; a function's region rarely looks at anything once.</p>
-<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-15, the user ("go ahead"): as recommended.</span></div>
 </section>
+<h2 id="nc-spike">The spike: failed its gate</h2>
+<p>Built and timed 2026-11-15, the questions decided as recommended; kept as <code>bench/spike/native-calls-2.patch</code> (against b29051d), not merged.</p>
+<p><strong>Built in the form a loop can use.</strong> A loop's region is made the second time round its loop, long before the functions it calls have been called 64 times and have regions of their own: a call step that the caller's region is made with, deciding then, would never see <code>mix16</code>'s region. So the call was made where the caller's region leaves at it (an RCall island, bit 50 of its way out): <code>VM::nativeEnter</code> (<code>regionCall</code>) looks, at each call, for the callee's whole region (<code>FunctionProto::nativeCallCode</code>, set as it is made, its prologue only <code>CHECK_LOCAL</code>s), puts and checks the arguments, pushes the frame, runs the callee's region on a context of its own, makes its quick return, and enters the caller's region again after the call; a callee that leaves for the VM is the running frame from there. No run of the VM's loop inside native code, nothing thrown through it (question 4 as decided). Unlike question 2, the caller writes back what it holds at the call, as an island does: its region leaves there.</p>
+<div class="table"><table>
+<thead><tr><th>Calls</th><th class="num">Before, ms</th><th class="num">Spike, ms</th><th class="num">Gate, ms</th></tr></thead>
+<tbody>
+<tr><td><code>mix16(i, t)</code>, 1M</td><td class="num">21.5</td><td class="num">24.5</td><td class="num">13</td></tr>
+<tr><td><code>fib(25)</code></td><td class="num">2.56</td><td class="num">3.53</td><td class="num">2.56</td></tr>
+</tbody></table></div>
+<p><strong>Where the time goes</strong>, a call of <code>mix16</code>, in the processor's time-stamp ticks (some 0.31 ns each; each figure with a reading's own cost in it): the caller's region from its way in after the call to the next call, 40; the callee's region, 49 (its body some 2 ns of it); the rest of <code>regionCall</code> (the arguments checked and put, the frame, the context, the return), some 80. The C++ between the two regions, and going into machine code twice a call from C++ (each saving and loading the registers C++ keeps), cost more than the VM's own quick call, call and return, does. <code>fib</code> was slower too: its calls counted as its region's own work, it got a region, and only the innermost return came back to native code (the levels above returned through the VM).</p>
+<p><strong>What would be left.</strong> The plan's own form, a call step in the caller's machine code calling the callee's machine code straight (no C++ between, the caller's registers saved by the step), would take away <code>regionCall</code>'s C++ and one way in and out, but needs the callee's region made before the caller's (or looked up as each call is made, in the step) and still pays the registers saved and the callee's prologue and way out: an estimate of some 10 ns a call, over the gate's 6.5. Not built: the gate failed, and the plan says stop.</p>
 </main>
 </body>
 </html>
