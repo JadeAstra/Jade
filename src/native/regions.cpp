@@ -453,6 +453,7 @@ struct Region {
     // has (lists looked at once, fields held), which a region with other ways in cannot have.
     std::set<int> outside;
     std::set<int> seeds;
+    bool function = false;  // a whole function's region
     std::vector<Result> results;              // each instruction's, in its state
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
@@ -6786,14 +6787,18 @@ struct Region {
     // But one as one alone: the call a small method put in place makes where its object is of
     // another class (behind JUMP_IF_NOT_CLASS), which is seldom made, if ever.
     bool worthIt() const {
-        int work = 0, islands = 0;
+        int work = 0, islands = 0, endingCalls = 0;
         const std::vector<bool> ending = endingRuns(static_cast<int>(ins.size()), [&](int i) { return ins[static_cast<size_t>(i)].op; });
         const std::vector<bool> otherClass = behindClassChecks();
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             if (results[i].island) {
-                // On a way out of the loop by return or throw: not its work.
+                // On a way out of the loop by return or throw: not its work. In a function's region
+                // (2026-11-15), a call where it leaves for good on the way to its return (the rest the
+                // VM's) is weighed apart: each time it is entered the region pays a way in and out
+                // for what it does before (fib(25), its compare and a subtraction, 2.55 ms to 3.28).
                 if (!ending[i]) islands += isCall(ins[i].op) && !otherClass[i] ? 2 : 1;
+                else if (function && isCall(ins[i].op)) endingCalls++;
                 continue;
             }
             for (const LOp& l : results[i].ops)
@@ -6805,8 +6810,10 @@ struct Region {
         }();
         // WW_WORTH: what each loop does itself and leaves to the VM, as weighed here.
         static const bool show = std::getenv("WW_WORTH") != nullptr;
-        if (show) std::fprintf(stderr, "worth %s at %u: work %d islands %d\n", f.name.c_str(), ins[0].at, work, islands);
-        return work >= 3 && work >= ratio * islands;
+        if (show) std::fprintf(stderr, "worth %s at %u: work %d islands %d, calls it ends at %d\n", f.name.c_str(), ins[0].at, work, islands, endingCalls);
+        // At least four steps of its own for each such call (fib 3: slower; Canvas.fillTurned 6
+        // and Image.of 4: quicker, by 8% and 5% of fillTurned and drawPicture).
+        return work >= 3 && work >= ratio * islands && work >= 4 * endingCalls;
     }
     // The instructions run only where a small method's object is of another class: from where a
     // JUMP_IF_NOT_CLASS jumps to, the call made as before, up to where the JUMP over them (the end
@@ -7373,6 +7380,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
         r.frameSlots = frameSlots;
         r.tops = tops;
         r.intLists = intLists;
+        r.function = head == f.nativeCallHead;
         for (const auto& [from, to] : leftOut) {
             for (int k = from; k <= to; k++) r.outside.insert(k - c.first);
             r.seeds.insert(to + 1 - c.first);

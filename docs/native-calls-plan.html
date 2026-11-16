@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native-to-native calls</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: calls from native code to native code</h1>
+<p class="lede">Written 2026-11-15, at the user's word ("ok", to: calls made by native code start as a plan, its spike to show a call from native code to native code costing less than the VM's own). A function's region calling another function whose own region is made, from machine code to machine code: the callee's frame pushed by a step, its machine code entered at once, its return a step that comes back. It follows <a href="calls-plan.html">the plan for calls made from native code</a> (2026-11-13), whose spike failed its gate, and native code for whole functions (d09b55e), which is what makes another way possible now. Questions for the user at the end, each with a recommendation; nothing is built before they are decided and the spike passes its gate.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#nc-what">What it is</a></li>
+<li><a href="#nc-why">Why: what a call costs today</a></li>
+<li><a href="#nc-before">Why the spike of 2026-11-13 failed, and what is different now</a></li>
+<li><a href="#nc-how">A call from native code to native code</a></li>
+<li><a href="#nc-slow">When the callee cannot go on in native code</a></li>
+<li><a href="#nc-which">Which calls</a></li>
+<li><a href="#nc-order">Order, and how each step is checked</a></li>
+<li><a href="#nc-same">What does not change</a></li>
+<li><a href="#nc-risks">Risks</a></li>
+<li><a href="#nc-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="nc-what">What it is</h2>
+<p>Today a region cannot make a call. At a call it writes back what it holds in registers and leaves for the VM; the VM makes the call; the callee's own region, if it has one, is entered through <code>VM::nativeEnter</code> (its context made anew) and left at its return for the VM again; the VM returns, and comes back into the caller's region at the instruction after the call, which loads its registers again. Four ways in and out of native code for one call, and the VM's call and return between.</p>
+<p>The plan: where the callee's region is made and the call is one the VM would make at once (its quick call), the caller's region pushes the callee's frame itself and runs the callee's machine code; the callee's region, coming to its return, does the VM's quick return and comes back to the caller's machine code, which goes on. The VM is not in it at all. Anything the quick way does not cover leaves for the VM as now.</p>
+<p>A program behaves the same with it as without it: answers, errors and their messages, stack traces, other threads' turns, collections, tasks that wait, how deep recursion goes. Every test runs with native code, with the VM alone and in the interpreter, as now.</p>
+
+<h2 id="nc-why">Why: what a call costs today</h2>
+<p>Measured 2026-11-15 on the Clang build at f8bb654 and the fix after it, a million calls from a loop, best of seven, on the performance cores. <code>mix16</code> is 16 int operations, too large to be put in place; <code>step</code> a method of six, writing a field; <code>fib</code> calls itself.</p>
+<div class="table"><table>
+<thead><tr><th>Calls</th><th class="num">VM alone, ms</th><th class="num">Native code, loops only, ms</th><th class="num">Native code, whole functions, ms</th><th>What happens</th></tr></thead>
+<tbody>
+<tr><td><code>mix16(i, t)</code>, 1M</td><td class="num">47.7</td><td class="num">47.7</td><td class="num">21.2</td><td>The same work written in the loop by hand: 6.5 ms. Each call costs some 14.7 ns over its body.</td></tr>
+<tr><td><code>acc.step(i)</code>, 1M</td><td class="num">38.1</td><td class="num">37.5</td><td class="num">28.3</td><td>A method found by name in the object's class, its field written.</td></tr>
+<tr><td><code>fib(25)</code>, 243 k calls</td><td class="num">2.55</td><td class="num">2.55</td><td class="num">2.56</td><td>No region: a body of a compare and two calls is too little between the VM's work (counted so since the fix after f8bb654; 3.28 ms before it).</td></tr>
+<tr><td><code>inkBox()</code> of a photo, 1k</td><td class="num">0.31</td><td class="num">0.33</td><td class="num">0.12</td><td>The call (its default argument the VM's), three ways into native code, the result's check: the C++ 0.002.</td></tr>
+</tbody></table></div>
+<p>Of <code>mix16</code>'s 14.7 ns a call: the loop's region leaving at the call (its registers written back), the VM's quick call (the frame pushed, the two parameters checked), <code>nativeEnter</code> finding the callee's region and making its context, the callee's region leaving at <code>CHECK_RETURN</code>, the VM's check and return, and the VM coming back into the loop's region (<code>nativeEnter</code> again, its registers loaded). How it splits between them is to be measured by the spike, not guessed here.</p>
+
+<h2 id="nc-before">Why the spike of 2026-11-13 failed, and what is different now</h2>
+<p>That spike made the call from the caller's region by a C++ helper that pushed the callee's frame and ran the VM's loop until it returned. The VM's own quick call was 13 ns, call, callee and return; the region's side alone was 8 ns (its registers written back and loaded again), the helper 3, and the run of the loop 14: about 20 ns against 13. The gate was a call made from native code costing no more than the VM's quick call; it failed, and leaving and coming back was made cheaper instead.</p>
+<p>What is different now: callees have regions of their own (d09b55e). The callee need not run in the VM at all, so there is no loop to run anew and no <code>nativeEnter</code>, and the caller need not write back what nothing but itself reads: a value in a register that the callee cannot see stays in the caller's register (saved on the machine stack by the call step, as any C++ function saves what it keeps across a call). What is left to pay is the frame pushed, the arguments in their slots, the jump into the callee's code and back, and the callee's context.</p>
+
+<h2 id="nc-how">A call from native code to native code</h2>
+<h3>The call step</h3>
+<ul>
+<li><strong>What it checks, as the VM's quick call does:</strong> the callee is the function the region was made for (the global, or the method the object's class has, read and compared with what it was); its region is made; the arguments are all given (no default left to fill in); there is room for a frame and on the stack; no collection is due and no other thread waits (the flag); the call wants no place for its result. Anything else: the region leaves at the call, as now.</li>
+<li><strong>What it writes:</strong> the arguments into their slots (where the callee's region reads its parameters); the caller's frame's <code>ip</code> to the instruction after the call (for stack traces and handlers, as the VM sets it); the callee's frame (<code>frames_[frameCount_]</code>: its closure, <code>ip</code>, <code>base</code>), and the frame count. The VM's frames and stack are read and written through the context (<code>RegionContext</code> gains the VM's frame array, count and limit, the stack's end, the collection's numbers).</li>
+<li><strong>The callee's machine code</strong> entered at its region's head, past its parameters' prologue (the checks of each parameter's type the call step makes instead, as the region knows the arguments' kinds), as a function the step calls, its own registers: what the caller keeps in registers across it, the step saves and loads again (Clang does this in the stencil, as for any call).</li>
+<li><strong>The callee's context:</strong> its own (question 3). A region reads per frame its closure's captured variables (<code>upvalues</code>) and its places (<code>places</code>); the rest (the flag, the core, the globals, the allocator, the keys' count) is the caller's.</li>
+</ul>
+<h3>The return step</h3>
+<p>A whole function's region today leaves at its return for the VM. Entered by a call step, its return does what the VM's quick <code>RETURN</code> does where it may: no variable of the frame captured (no open upvalue at or above its base), no handler of its own left, its result wanted and no Ref: the result into the frame's slot 0 (where the caller's call put the callee), the frame count back, and back to the call step with the result. The call step puts it where the call's result goes and the caller's region goes on. Entered by the VM (<code>nativeEnter</code>), the same region leaves at its return as now: how it was entered is passed in the context.</p>
+
+<h2 id="nc-slow">When the callee cannot go on in native code</h2>
+<p>The callee's region may leave for the VM: at an island (an instruction it leaves to the VM), at a miss (a guess wrong), at a loop's flag, at a return the quick way does not cover. Its frame is pushed and the VM's state is right for it (its slots written back, as at any way out). Two ways on (question 4):</p>
+<ul>
+<li><strong>The caller leaves too</strong> (recommended): the call step writes back the caller's registers (which it holds, saved, after the callee's code returns to it), and returns to <code>nativeEnter</code> the callee's instruction and top, marked as another frame's. The VM goes on with the callee, makes its return as it always does, and comes back into the caller at the instruction after the call, which is a way in of the caller's region (as after an island today). No run of the VM's loop inside native code, no C++ frame between: an exception, a collection, another thread's turn and a task that waits all happen in the VM as they do now. Native code never has anything thrown through it, so it needs no unwind information.</li>
+<li><strong>A run of the VM's loop for the callee</strong> (the spike of 2026-11-13's way 1), coming back into the caller's code: native code on the C++ stack under the VM, which needs exceptions kept and thrown at the call or unwind information, and a task that waits cannot be set aside.</li>
+</ul>
+<p>The same way where the callee's code itself makes a call that leaves: each level writes back and leaves in turn, innermost first, and the VM goes on with the innermost frame; each caller is come back into at the instruction after its call.</p>
+<p><strong>Depth.</strong> Each call from native code to native code is a C++ call: the machine stack grows by the callee code's frame (a few hundred bytes) for each level. The VM's frame limit (20,000) is checked as the quick call checks it, and below it a limit of native levels (question 5): past it the call leaves for the VM, which makes it as now, so recursion goes as deep as it does today and the machine stack never runs out first (the main thread's is 16 MB; other threads' and tasks' may be smaller).</p>
+
+<h2 id="nc-which">Which calls</h2>
+<ul>
+<li><strong>A function by name</strong> (R_CALL, CALL of a global closure; INVOKE_IMPLICIT where the name is no member, as made values are done since f8bb654): the global read and compared with the closure the region was made for.</li>
+<li><strong>A method</strong> (R_INVOKE, INVOKE, INVOKE_OWN): found by name in the class of the object as the region is made; the step compares the object's class with it, and the method the class has (a subclass's override is another class).</li>
+<li><strong>Not at first:</strong> lambdas a function is given (the closure differs from call to call: question 6), calls leaving out defaulted arguments (the callee's prologue fills them in, which the VM does: <code>inkBox()</code> is one; question 7), calls with named arguments or a spread, of a class (a value made, f8bb654's), of C++ functions (the VM calls most at once), of a function whose region looks at lists or fields once (it would have to look again after each call: question 8), of a generic function given its type arguments, of a function that may wait.</li>
+</ul>
+
+<h2 id="nc-order">Order, and how each step is checked</h2>
+<ol>
+<li><strong>The spike:</strong> calls by name of a function with no defaults left out, whose region looks at nothing once, the callee's code entered as a function; its return the quick one only; anything else leaving the caller's region at the call before it is made (the slow way of question 4 not yet built). Timed on the table above. <strong>The gate:</strong> <code>mix16</code> called a million times in 13 ms or less (from 21.2: the call at most half of what it costs today), <code>fib(25)</code> no slower than 2.56 ms (with its region made, now that its calls would be its own work), and no row of <a href="timings.html">timings.html</a>, the kernels or the ops benches slower. If it fails, stop and report, as the last spike did.</li>
+<li>The slow way: a callee that leaves, the caller leaving after it (or as question 4 decides).</li>
+<li>Methods, with the class compared.</li>
+<li>The context per frame as question 3 decides; regions that look at lists or fields once as question 8 decides.</li>
+<li>Region::worthIt: a call made from native code counted as the region's work, not the VM's, where its callee's region is made.</li>
+</ol>
+<p>Each step: a test of its own (answers, errors and their lines, stack traces through native calls, a handler in a caller catching what its native callee's VM part threw, recursion past the native limit, a callee that waits, threads, a collection during a callee's VM part), every answer the VM's alone and the interpreter's; the suite and GC stress; the kernels and the benchmarks against the build before. At the end, ASan (the clang-cl build) and the Linux build, as at a milestone.</p>
+
+<h2 id="nc-same">What does not change</h2>
+<ul>
+<li>What a program does: its answers, errors and their messages, stack traces (the frames are the VM's own, each with its <code>ip</code>).</li>
+<li>When other threads take their turns, when the collector runs, that a task that waits is set aside, how deep recursion goes.</li>
+<li>The run code, the VM's calls and returns, <code>ww --interpret</code>, <code>WW_NATIVE=0</code> and <code>WW_NATIVE_FUNCTIONS=0</code>.</li>
+</ul>
+
+<h2 id="nc-risks">Risks</h2>
+<ul>
+<li><strong>The callee's context is the cost.</strong> A region's context is some 2.9 KB, most of it what loops use (templates' words, lists, held fields, homes for spilled values). Made anew for every call it costs more than the call saves; shared, the callee's spilled values must not land where the caller keeps its own. Question 3 is about this, and the spike measures it.</li>
+<li><strong>Saving the caller's registers.</strong> A region keeps up to nine ints and sixteen floats in registers, all of which a callee's code may use. The call step saves those live across the call and loads them after; with many live it may cost what writing them back did. The spike measures it on <code>mix16</code>'s loop (two live) and on one with many.</li>
+<li><strong>Two ways out of one region.</strong> A callee's region left at its return comes back to a call step or to <code>nativeEnter</code>; a mistake there returns a result to the wrong place. Each way is tested, entered both ways.</li>
+<li><strong>Frames the VM did not push.</strong> Everything that walks the frames (stack traces, the collector's roots, handlers, <code>RETURN</code>'s checks of open upvalues) must find the frames the call steps push exactly as the VM's own. GC stress and the thread stress setting run each step.</li>
+<li><strong>Gains narrower than the table suggests.</strong> Many calls in the library are of methods with defaults, lambdas, or C++ functions: the first steps reach calls by name and plain methods only.</li>
+</ul>
+
+<h2 id="nc-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>Whether to build the spike</h3>
+<ul>
+<li><strong>Build it</strong>, with the gate above: <code>mix16</code> called a million times in 13 ms or less, <code>fib(25)</code> no slower, no timings row slower.</li>
+<li><strong>Not now</strong>: native code goes as far as it has (calls leave for the VM and come back).</li>
+</ul>
+<p><em>Recommended:</em> build it. What failed last time was the VM run inside the call; the callee's own region takes that away, and the spike shows in a day or two whether what is left (the frame, the context, the registers saved) is cheap enough.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>What the caller writes back before a call</h3>
+<ul>
+<li><strong>Only the arguments</strong> (and the caller's <code>ip</code>): the rest of what the caller keeps in registers saved by the call step on the machine stack, written back only where the callee leaves for the VM.</li>
+<li><strong>Everything a way out writes back</strong>, as at an island, and loaded again after: simpler, and what made the last spike's region side 8 ns.</li>
+</ul>
+<p><em>Recommended:</em> only the arguments. Nothing but the caller reads its registers while the callee runs in native code (a collection, a stack trace or a handler happens only once the callee has left for the VM, and then the caller writes back first).</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>The callee's context</h3>
+<ul>
+<li><strong>Split:</strong> the context made two parts, what every frame shares (the flag, the core, the globals, the allocator, the keys' count: a few words, the caller's) and what each region uses for itself (its upvalues and places, its homes for spilled values, and for loops its lists, held fields and templates' words); a call step makes the callee's own part on the machine stack, only as large as that callee's region uses (most functions' regions: two words).</li>
+<li><strong>Shared whole:</strong> the callee runs on the caller's context, its upvalues and places swapped in and back: no making, but the callee's spills land in the caller's homes, so only callees that spill nothing.</li>
+<li><strong>A new whole one</strong> per call, as <code>nativeEnter</code> makes: some 2.9 KB of stack, the simplest, likely too slow.</li>
+</ul>
+<p><em>Recommended:</em> split. Each region says what of the context it uses (it says already whether it looks at lists or fields once, since d09b55e); a function's region uses little of it, and <code>nativeEnter</code> gains by it too.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>When the callee leaves for the VM</h3>
+<ul>
+<li><strong>The caller leaves too</strong>, its registers written back, and the VM goes on with the callee and comes back into the caller after the call, as after an island.</li>
+<li><strong>A run of the VM's loop for the callee</strong> inside the call step, and back into the caller's code.</li>
+</ul>
+<p><em>Recommended:</em> the caller leaves too. Nothing of the VM runs with native code on the C++ stack under it, so exceptions, collections, threads' turns and tasks that wait are as today, and native code needs no unwind information; the cost (a way out and a way back in) is only where the callee could not go on.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>How deep native calls nest</h3>
+<ul>
+<li><strong>A limit of native levels</strong>, say 256 on any thread (some 100 KB of machine stack at most), past which the call leaves for the VM.</li>
+<li><strong>The VM's frame limit alone</strong> (20,000): up to some 8 MB of machine stack, more than a task's or a worker thread's stack may have.</li>
+</ul>
+<p><em>Recommended:</em> a limit of 256. Recursion deeper than that is the VM's from there on, as all of it is today, and no thread's stack can run out first.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span>Lambdas</h3>
+<ul>
+<li><strong>Not at first</strong>: a call of a lambda a function is given leaves for the VM as now.</li>
+<li><strong>Each closure's region found as it is called</strong>: the step looks up the region of whatever closure it is given (a search, as <code>nativeEnter</code> makes).</li>
+</ul>
+<p><em>Recommended:</em> not at first; looked at again once calls by name and methods are in and measured.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">7</span>Calls leaving out defaulted arguments</h3>
+<ul>
+<li><strong>Not at first</strong>: the VM makes them (<code>photo.inkBox()</code> is one).</li>
+<li><strong>The defaults filled in by the call step</strong> where each default is a constant or a global read once (<code>Color.clear</code>), as the callee's prologue would.</li>
+</ul>
+<p><em>Recommended:</em> not at first; it is the step after methods, and the one inkBox waits on.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">8</span>A caller that looks at lists or fields once</h3>
+<ul>
+<li><strong>No native calls from it</strong> at first: its calls leave for the VM as now.</li>
+<li><strong>Looked at again after each call</strong>: a few loads a call, nothing to know of the callee.</li>
+</ul>
+<p><em>Recommended:</em> no native calls from it at first. Loops that look at lists once are the kernels' hot loops, which have no calls in them; a function's region rarely looks at anything once.</p>
+<div class="verdict"><span class="label">Your decision</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
