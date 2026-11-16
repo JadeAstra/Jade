@@ -2392,9 +2392,9 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     }
     // A for over a list of items (word 60 the iterator's slot): from the iterator's index to the
     // list's end, the list the one looked at once as word 5's; the iterator left after the last
-    // item done (2026-11-13).
+    // item done (2026-11-13). Word 242 says it is one (2026-11-15: kLoopWMixItems added at a list's end).
     uint8_t* iterator = nullptr;
-    if (t[0] == kLoopWIterSumField) {
+    if (t[0] == kLoopWIterSumField || t[242] == 1) {
         const uint8_t* list;
         iterator = listIterator(base[t[60]], list);
         const Items items = itemsOf(ctx, 1);
@@ -2403,6 +2403,22 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         if (index >= items.h[1]) return;
         t[1] = index;
         t[2] = items.h[1] - index;
+    }
+    // kLoopWMixItems added at a list's end (2026-11-15): the list in slot 240 of the class's items
+    // (word 98), none with a type of its own, its core's own, with room; as many done as it has
+    // room for (the rest left to the steps, whose add leaves for the VM's, which makes room), its
+    // end and count moved on after the switch by what was done.
+    uint8_t* addPack = nullptr;
+    uint8_t* addAt = nullptr;
+    if (t[0] == kLoopWMixItems && (t[96] & 2) != 0) {
+        const uint64_t width = t[100] >> 32;
+        addAt = roomToAdd(base[t[240]], ctx, kStoreItems, addPack);
+        if (addAt == nullptr || width == 0 || width > 8 || word<int64_t>(addPack + kPackItemClass) != static_cast<int64_t>(t[98]) ||
+            word<const void*>(addPack + kPackItemType) != nullptr || word<uint32_t>(addPack + kPackTypeSlot) != 0 || word<uint32_t>(addPack + kPackWidth) != width)
+            return;
+        const uint64_t room = static_cast<uint64_t>(word<const uint8_t*>(addPack + kPackBlock + 16) - addAt) / width;
+        if (room == 0) return;
+        if (t[2] > room) t[2] = room;
     }
     const int64_t next = static_cast<int64_t>(t[1]), left = static_cast<int64_t>(t[2]);
     if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
@@ -2628,7 +2644,12 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         case kLoopWMixItems: {
             // Each item set to a value made of bytes: one mix of byte fields of the item read, a
             // byte field of it, or a constant (regions.cpp, mixItems, says the words from 96).
-            if (!a.ok() || !out.ok()) return;
+            // Or (bit 1 of word 96, 2026-11-15: `out.add(Color(g, g, g, c.alpha))`) added at the
+            // end of the list in slot 240, as many as it has room for (the rest left to the steps,
+            // whose add leaves for the VM's, which makes room), true to slot 241 as the steps
+            // write it.
+            const bool add = (t[96] & 2) != 0;
+            if (!a.ok() || (!add && !out.ok())) return;
             const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
             if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
             const bool into = (t[96] & 1) != 0;
@@ -2662,15 +2683,25 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // that list's own base plus the counter (2026-11-15: words 56 to 60).
             int64_t outAt = 0, oFirst, oLast;
             if (!itemBase(ctx, at)) return;
-            if (!into) outAt = at;
-            else if (!itemBase(ctx, outAt, 56)) return;
-            if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1] ||
-                __builtin_add_overflow(outAt, next, &oFirst) || __builtin_add_overflow(outAt, end - 1, &oLast) || oFirst < 0 ||
-                static_cast<uint64_t>(oLast) >= out.h[2])
+            if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1])
                 return;
-            if (into && a.h[0] == out.h[0]) return;  // another list: not the same one
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * rw;
-            uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(oFirst) * ww;
+            uint8_t* o;
+            if (add) {
+                // At the end of the list added to (made ready before the switch, the count cut
+                // to its room; its end and count moved on after it, by what was done), not the
+                // list read.
+                if (addAt == nullptr || base[t[240]].p == reinterpret_cast<const uint8_t*>(a.h[3])) return;
+                o = addAt;
+            } else {
+                if (!into) outAt = at;
+                else if (!itemBase(ctx, outAt, 56)) return;
+                if (__builtin_add_overflow(outAt, next, &oFirst) || __builtin_add_overflow(outAt, end - 1, &oLast) || oFirst < 0 ||
+                    static_cast<uint64_t>(oLast) >= out.h[2])
+                    return;
+                if (into && a.h[0] == out.h[0]) return;  // another list: not the same one
+                o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(oFirst) * ww;
+            }
             int32_t least = c, most = c;
             for (int k = 0; k < nr; k++) (weight[k] < 0 ? least : most) += weight[k] * 255;
             mixEnd.prepare(least, most);
@@ -3946,6 +3977,14 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             break;
         }
         default: return;
+    }
+    if (addPack != nullptr && done > 0) {
+        const uint64_t width = t[100] >> 32;
+        uint8_t* const newEnd = addAt + static_cast<uint64_t>(done) * width;
+        __builtin_memcpy(addPack + kPackBlock + 8, &newEnd, 8);
+        const uint64_t items = word<uint64_t>(addPack + kPackCount) + static_cast<uint64_t>(done);
+        __builtin_memcpy(addPack + kPackCount, &items, 8);
+        if (static_cast<int64_t>(t[241]) >= 0) storeSlot(base, static_cast<int64_t>(t[241]), kKindBool, 1);
     }
     if (t[70] != 0 && done > 0) heldUpdates(ctx, next, done, true);
     t[1] = static_cast<uint64_t>(next + done);

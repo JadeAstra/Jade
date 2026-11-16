@@ -3839,6 +3839,7 @@ struct Region {
             int64_t cls = 0;                           // pushsm: the items' class (`list` the slot of the list added to)
         };
         std::vector<Store> stores;
+        int64_t trueAt = -1;  // the slot an addsm's settrue writes (2026-11-15)
         // A guard's comparison (2026-11-13): the last one followed, for a jump on its flag.
         struct Cmp {
             int op = 0;  // 1 <, 2 <=, 3 >, 4 >=, 5 ==, 6 !=; 7 and 8: itemCmp's two items the same, not
@@ -4050,6 +4051,28 @@ struct Region {
             fw.stores.push_back(st);
             return true;
         }
+        if (s == "addsm") {
+            // A value made of its bytes (n[0]) added at the end of the list in slot l.slot (ADD_NEW,
+            // 2026-11-15: `out.add(Color(g, g, g, c.alpha))`), the class read from a global into
+            // slot l.slot2: followed as a value made (mksm) into a slot of its own, and a store.
+            auto g = fw.globals.find(l.slot2);
+            const auto* const cls = reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l.ki));
+            const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;
+            if (g == fw.globals.end() || layout == nullptr || layout->size == 0 || layout->size > 8 || cls->smallId == 0) return false;
+            const int64_t made = -1000 - static_cast<int64_t>(fw.stores.size());
+            fw.made[made] = Followed::Made{valueOf(fw, n[0]), static_cast<int64_t>(cls->smallId), l.ki, g->second};
+            Followed::Store st{static_cast<int>(l.slot), nullptr, nullptr, s};
+            st.what = static_cast<int64_t>(static_cast<uint64_t>(cls->smallId) << 32 | static_cast<uint64_t>(layout->size) << 24);
+            st.width = static_cast<int64_t>(layout->size), st.source = made, st.cls = l.ki;
+            fw.stores.push_back(st);
+            return true;
+        }
+        if (s == "settrue" && !fw.stores.empty() && fw.stores.back().stem == "addsm" && fw.trueAt < 0) {
+            // The true ADD_NEW leaves where the list was on the stack: written by the template.
+            fw.trueAt = l.slot;
+            fw.slots.push_back(l.slot);
+            return true;
+        }
         if (s == "pushsm") {
             // An item of another list added at the end of the list in slot l.slot (2026-11-15:
             // to.add(from[i])); the true it gives written to a slot of the stack's.
@@ -4125,7 +4148,12 @@ struct Region {
         if (s == "hvalpb" || s == "hvalpi" || s == "hvalph" || s == "hvalpw") {
             auto ref = fw.refs.find(l.slot);
             if (ref == fw.refs.end()) return false;
-            if (ref->second.list == -2) ref->second.list = static_cast<int>(l.ki);  // the iterated list, looked at once as k
+            if (ref->second.list == -2) {
+                // The iterated list, looked at once as k; every copy of the item too (an inline
+                // body's parameter, `greyOf(c)`, 2026-11-15), the one iterator's.
+                for (auto& [slot, r] : fw.refs)
+                    if (r.list == -2 && same(r.index, ref->second.index)) r.list = static_cast<int>(l.ki);
+            }
             if (ref->second.list != l.ki) return false;
             const uint64_t what = static_cast<uint64_t>(l.slot2);
             Expr e{Expr::Field};
@@ -4137,6 +4165,11 @@ struct Region {
         }
         if (s == "valpb" || s == "valpi" || s == "valph" || s == "valpw") {
             auto ref = fw.refs.find(l.slot);
+            // A copy of the iterator's item (its list resolved by an hvalp of the item): the
+            // width its class's (2026-11-15).
+            if (ref != fw.refs.end() && ref->second.width <= 0 && ref->second.list >= 0 && l.ki != 0)
+                if (const ValueLayout* layout = reinterpret_cast<const ObjClass*>(static_cast<intptr_t>(l.ki))->layout.load(std::memory_order_acquire))
+                    ref->second.width = static_cast<int64_t>(layout->size);
             const uint64_t offset = static_cast<uint64_t>(l.slot2) & 0xFFFFFFFF;
             if (ref == fw.refs.end() || ref->second.width <= 0 || ref->second.width > 0xFFFF || offset >= 0xFFFFFF) return false;
             Expr e{Expr::Field};
@@ -4202,6 +4235,7 @@ struct Region {
         const Expr* baseB = nullptr;
         std::vector<Followed::Cmp> skips;  // kLoopWCountItems: an item skipped where its comparison holds (one at most)
         int outMode = 0;                    // kLoopWMixItems into another list: where it writes, as baseMode (words 56 to 60)
+        int64_t addTo = -1, addTrue = -1;   // kLoopWMixItems added at the end of a list: its slot, and the slot its true goes to (words 240, 241)
         const Expr* outA = nullptr;
         const Expr* outB = nullptr;
         std::vector<int64_t> fields;  // kLoopWSumField: each field's width, offset and size
@@ -5103,7 +5137,12 @@ struct Region {
         // (2026-11-15: `to[x, y] = ...` from `from[x, y]`, two grids, each y times its width
         // plus x), the item read at its base plus the counter.
         bool into = false;
-        if (st.list == list && same(st.index, index)) {
+        const bool add = st.stem == "addsm";
+        if (add) {
+            // Added at the end of the list in slot st.list (2026-11-15: out.add(Color(...)), the
+            // item read by a for over another list, or at a base plus the counter).
+            if (st.width != readWidth || fw.trueAt < 0) return false;
+        } else if (st.list == list && same(st.index, index)) {
             if (st.width != readWidth) return false;
         } else if (st.list != list) {
             Ahead out;
@@ -5114,10 +5153,14 @@ struct Region {
             return false;
         }
         if (!fieldIndex(index, ah)) return false;
+        // A for over a list (its items one after another), and an add only in one: the runner cuts
+        // the count to the list's room, which a counted loop would take back as its own.
+        if (ah.iterSlot >= 0 ? (!add || ah.baseMode != 0) : add) return false;
         ah.shape = 19;  // kLoopWMixItems
         ah.a = list;
-        ah.out = st.list;
-        ah.mixWords = {into ? 1 : 0, made.global, made.cls, made.id,
+        ah.out = add ? -1 : st.list;
+        if (add) ah.addTo = st.list, ah.addTrue = fw.trueAt;
+        ah.mixWords = {(into ? 1 : 0) | (add ? 2 : 0), made.global, made.cls, made.id,
                        static_cast<int64_t>(size | static_cast<uint64_t>(readWidth) << 8 | static_cast<uint64_t>(st.width) << 32),
                        static_cast<int64_t>(constant), static_cast<int64_t>(kinds),
                        static_cast<int64_t>(static_cast<uint64_t>(shift) | static_cast<uint64_t>(terms.size()) << 8), c};
@@ -5534,7 +5577,9 @@ struct Region {
                     skipTo = l.jumpTo;
                     continue;
                 }
-                if (l.jumpTo >= 0 || l.jumpExit >= 0) return false;
+                // addsm's way to the VM where the list has no room left: the template adds only
+                // what it has room for, and the steps then come to it (2026-11-15).
+                if (l.jumpTo >= 0 || (l.jumpExit >= 0 && l.stem.rfind("addsm", 0) != 0)) return false;
                 if ((l.stem.rfind("hsetp", 0) == 0 && l.stem.rfind("hsetpi", 0) != 0) || l.stem == "putp") return false;
                 if (l.stem == "chkf" || l.stem == "chkint" || l.stem == "chki") {
                     if (!kindCheck(l)) return false;
@@ -5719,6 +5764,11 @@ struct Region {
         if (fw.stores.size() == 1 && fw.stores[0].stem == "hsetsm" && fw.made.count(fw.stores[0].source) != 0 && ah.iterSlot < 0 &&
             mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)) &&
             !changed(ah.outA) && !changed(ah.outB) && !written(plusOf(ah.outA)) && !written(plusOf(ah.outB)))
+            return true;
+        // The same added at the end of a list (2026-11-15: `out.add(Color(g, g, g, c.alpha))` in a
+        // for over another list), the list in a slot the loop never writes.
+        if (fw.stores.size() == 1 && fw.stores[0].stem == "addsm" && fw.made.count(fw.stores[0].source) != 0 && untouched(fw.stores[0].list) &&
+            mixItems(fw, ah) && !changed(ah.baseA) && !changed(ah.baseB) && !written(plusOf(ah.baseA)) && !written(plusOf(ah.baseB)))
             return true;
         // Items of a value type copied from one list to another (or along the same one), each at a
         // base plus the counter (2026-11-14: copy, crop and a grid's part, kLoopWCopyItems): moved at
@@ -6013,6 +6063,7 @@ struct Region {
             if (ah.outMode >= 1) operandWords(57, ah.outA, 0);
             if (ah.outMode == 2) operandWords(59, ah.outB, 0);
             for (size_t k = 0; k < ah.mixWords.size(); k++) word(96 + static_cast<int>(k), ah.mixWords[k]);
+            if ((ah.mixWords[0] & 2) != 0) word(240, ah.addTo), word(241, ah.addTrue);  // added at the end of a list (2026-11-15)
             word(111, static_cast<int64_t>(ah.floatLanes.size()));
             auto bitsOf = [](double d) {
                 int64_t b;
@@ -6177,6 +6228,7 @@ struct Region {
         if (ah.p1 != nullptr && !param(7, ah.p1)) return false;
         if (ah.p2 != nullptr && !param(8, ah.p2)) return false;
         if (ah.addend != nullptr) store(8, ah.addend->reg);
+        word(242, ah.iterSlot >= 0 ? 1 : 0);  // a for over a list (2026-11-15: any shape that takes one, not only kLoopWIterSumField)
         if (ah.iterSlot >= 0) {
             word(60, ah.iterSlot);
         } else {

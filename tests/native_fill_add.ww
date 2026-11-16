@@ -2,7 +2,9 @@
 // the colour is a parameter (the fill template takes a slot as the loop entered it, not only a
 // captured variable), and `out.add(Color(...))` (ADD_NEW: the value made of its bytes and added
 // at the list's end, a list with no room left the VM's to grow, any other list the VM's). The
-// same answers as the VM's, each run three times.
+// same answers as the VM's, each run three times. The greys loop is a loop template
+// (kLoopWMixItems, added at the list's end, over a for); the fills before it leave other
+// templates' words in the region's context, which it must not read as its own.
 
 fun fill(grid : Grid<Color>, c : Color) {
   for (y in 0 ..< grid.height) {
