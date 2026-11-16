@@ -1402,6 +1402,12 @@ private:
     // return, where the frame holds what its locals are.
     WW_TAIL_FN int nativeCall(WW_TAIL_PARAMS);
     WW_TAIL_FN int nativeReturn(WW_TAIL_PARAMS);
+    // A value of a value type in a box, made for a region (RegionContext::makeBox): its bytes
+    // zero; null where a collection is due (the region leaves the making to the VM).
+    static void* boxForRegion(void* vm, const void* cls);
+    // Whether a bare name in function `f` is no member of `receiver`, as implicitReceiver would
+    // find it, by its class alone (GlobalsSeen::noMember).
+    static bool noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif

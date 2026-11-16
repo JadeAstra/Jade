@@ -1003,6 +1003,11 @@ extern void (*makeNativeRegions)(FunctionProto& f, const Value* frame, int frame
 struct GlobalsSeen {
     const Value* values = nullptr;
     size_t count = 0;
+    // Whether a bare name in function `f` is no member of `receiver`, so that the VM takes the
+    // global of that name (VM::implicitReceiver; 2026-11-15, an INVOKE_IMPLICIT made native code
+    // where it makes a value); false where it may be one, or cannot be known by its class alone.
+    bool (*noMember)(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver) = nullptr;
+    const void* vm = nullptr;
 };
 extern GlobalsSeen nativeGlobalsSeen;
 

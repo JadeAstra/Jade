@@ -107,6 +107,18 @@ struct RegionContext {
     // Each byte's value over 255.0, a / 255.0 as a double (unitTable), for loop templates that
     // divide a byte by 255 (2026-11-15): the same number, read, not worked out each time.
     const double* units;
+    // The VM the region runs on, and its way of making a value of a value type in a box for a
+    // region (2026-11-15, stencils.cpp's mkbox): the box, its bytes zero; null where a collection
+    // is due, where the region leaves the making to the VM.
+    void* vm;
+    void* (*makeBox)(void* vm, const void* cls);
+    // The running frame's first place (VM::placeOf(frame, 0)), where a value of a value type is
+    // made for a variable (stencils.cpp's mkplace; place k is k strides down); null where the
+    // frame has none.
+    uint8_t* places;
+    // How many times a key has gone into or out of any Table (value.h's tableKeysChanged): a
+    // bare name found to be no member as the region was made is none while it is unchanged.
+    const uint64_t* keys;
 };
 // The 256 numbers a region's `units` points at, made once.
 const double* unitTable();

@@ -6910,7 +6910,7 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
         std::lock_guard<std::mutex> hold(making);
         if (f.nativeArrivals[which] < 2) {
             std::vector<FunctionProto::NativeRegion> made;
-            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size()};
+            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size(), &VM::noMemberForRegion, this};
             if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), head, made);
             nativeGlobalsSeen = GlobalsSeen{};
             auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
@@ -6932,6 +6932,22 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
     sp_ = sp;
     frame->ip = ip += kThreaded + kOpBytes;
     [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
+}
+
+bool VM::noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver) {
+    const VM& self = *static_cast<const VM*>(vm);
+    if (!f.outerReceivers.empty() || !(receiver.isObjType(ObjType::Instance) || receiver.isObjType(ObjType::Value))) return false;
+    try {
+        return !(self.hasMember(receiver, name) && !(name->restricted != 0 && self.accessDenied(receiver, name, &f, false)));
+    } catch (...) {
+        return false;
+    }
+}
+
+void* VM::boxForRegion(void* vm, const void* cls) {
+    VM& self = *static_cast<VM*>(vm);
+    if (self.bytesAllocated_ > self.nextGC_) return nullptr;
+    return self.newValue(const_cast<ObjClass*>(static_cast<const ObjClass*>(cls)));
 }
 
 // How many times a function is called before its whole region is made (2026-11-15): enough that
@@ -6972,7 +6988,7 @@ WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
         if (f.nativeCallHead != UINT32_MAX && f.nativeCalls >= kNativeCallsFirst && f.nativeCalls != UINT32_MAX) {
             f.nativeCalls = UINT32_MAX;  // made, or refused: never again
             std::vector<FunctionProto::NativeRegion> made;
-            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size()};
+            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size(), &VM::noMemberForRegion, this};
             if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), f.nativeCallHead, made);
             nativeGlobalsSeen = GlobalsSeen{};
             for (uint32_t at : f.nativeReturns) {
@@ -7025,6 +7041,12 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         context.globals = globals_.data();
         context.upvalues = frame->closure->upvalues.data();
         context.units = native::unitTable();
+        context.vm = this;
+        context.makeBox = &VM::boxForRegion;
+        context.places = nullptr;
+        context.keys = reinterpret_cast<const uint64_t*>(&tableKeysChanged);
+        if ((frame->closure->proto->typeArgs & kHasPlaces) != 0 && context_->places != nullptr && (framePlacesEnd(frame - frames_) & ~PlaceArena::kNone) != 0)
+            if (ObjPlace* const first = placeOf(frame, 0)) context.places = reinterpret_cast<uint8_t*>(first);
         if (region->looks) {
             if (region->first) {
                 std::memset(context.lists, 0, sizeof context.lists);

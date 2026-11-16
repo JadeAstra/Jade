@@ -387,6 +387,7 @@ struct LOp {
     int64_t ki = 0;
     double kf = 0;
     int64_t slot = 0, slot2 = 0;
+    int64_t ret = 0;     // a third word for the step (mkplace: the place)
     int jumpTo = -1;     // an instruction of the region
     int jumpExit = -1;   // or a way out (an index into the instruction's exits)
     int exit = -1;       // where it leaves for the VM when it cannot do what it does (an exit's index)
@@ -559,6 +560,49 @@ struct Region {
             if (ins[static_cast<size_t>(i - back)].op == Op::WithTypes) return nullptr;
         return cls;
     }
+    // The class an RCall at `i` makes a value of in a box from its header alone (2026-11-15:
+    // `Rect(x, y, w, h)`), where slot `callee` holds it as the region is made: a value type kept
+    // in a box (no Small one), made from its header, each of its fields an int, a float or a
+    // byte, of no type given before and with no other place for it given (WithTypes or
+    // WithDestinationAt since the call before, which the VM keeps for the call that follows:
+    // made here, it would be left for the next). Where WithPlace gave it a variable's place
+    // (`place`, its number), one kept in the value itself too, made there. Null for anything else.
+    const ObjClass* boxedValue(const State& s, int callee, int argc, int i, int& place) const {
+        const Value* v = knownValue(s, callee);
+        return v != nullptr && v->isObjType(ObjType::Class) ? boxedClass(asClass(*v), argc, i, place) : (place = -1, nullptr);
+    }
+    const ObjClass* boxedClass(const ObjClass* cls, int argc, int i, int& place) const {
+        place = -1;
+        for (int back = i - 1; back >= 0 && back >= i - 64; back--) {
+            const Op o = ins[static_cast<size_t>(back)].op;
+            if (o == Op::WithTypes || o == Op::WithDestinationAt) return nullptr;
+            if (o == Op::WithPlace) {
+                place = u8(ins[static_cast<size_t>(back)], 0);
+                break;
+            }
+            if (isCall(o)) break;
+        }
+        if (!cls->isValue || !cls->madeFromHeader || cls->staticInit != nullptr || cls->fieldTypesMaker != nullptr || (cls->smallId != 0 && place < 0) ||
+            cls->isAbstract || cls->isInterface || cls->enumSealed || cls->components.size() != static_cast<size_t>(argc) || argc == 0)
+            return nullptr;
+        const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
+        if (layout == nullptr || (place >= 0 && layout->size > ObjPlace::kBytes)) return nullptr;
+        for (int k = 0; k < argc; k++) {
+            const ValueField* field = headerFieldOf(cls, layout, k);
+            if (field == nullptr || !(field->kind == ValueField::Int || field->kind == ValueField::Float ||
+                                      (field->kind == ValueField::Narrow && field->narrow == Narrow::Byte)))
+                return nullptr;
+        }
+        return cls;
+    }
+    // The RCalls made in a variable's place, each with that place's number: the SetPlace after
+    // one only holds what it made (Ctx::step's SetPlace).
+    struct MadeInPlace {
+        int place;
+        const ObjClass* cls;
+        int slot;  // where the Ref to it is
+    };
+    mutable std::map<int, MadeInPlace> madeInPlace;
     // The field of a value type's header's component `k`: the field of its name.
     static const ValueField* headerFieldOf(const ObjClass* cls, const ValueLayout* layout, int k) {
         if (layout == nullptr || k < 0 || static_cast<size_t>(k) >= cls->components.size()) return nullptr;
@@ -568,6 +612,13 @@ struct Region {
         return nullptr;
     }
     // Whether the region makes a closure, which may hold slots of the frame open.
+    // Whether the region gives the VM objects to look in for a bare name first (ImplicitFirst,
+    // a block run on another object), which its class alone does not say.
+    bool hasImplicitFirst() const {
+        for (const Ins& x : ins)
+            if (x.op == Op::ImplicitFirst) return true;
+        return false;
+    }
     bool makesClosures() const {
         for (const Ins& x : ins)
             if (x.op == Op::Closure) return true;
@@ -1293,6 +1344,81 @@ struct Region {
         return std::move(c.out);
     }
 
+    // A value of the value type `boxed` made from its header (2026-11-15): in a box, or in the
+    // frame's place `place` (WithPlace's) where it is not -1, into slot `a`, where slot `callee`
+    // holds the class. `arg(k)` gives part k: its slot, or a constant's number where the second
+    // is true. Each part read as its field's kind (checked where the region only guesses it),
+    // the box made (mkbox: the VM's where a collection is due) or the place made ready (mkplace),
+    // then each field written into it.
+    // The bare name of constant `nameAt` no member of the object the function runs on, as the VM
+    // finds it as the region is made (GlobalsSeen::noMember, by its class alone): the step that
+    // checks it still is (nomember: the object of that class, no Table's keys changed since),
+    // where the VM does the instruction otherwise. Anything else, the instruction the VM's.
+    void noMemberHere(Ctx& c, int nameAt) {
+        const Value& name = constant(nameAt);
+        const GlobalsSeen& seen = nativeGlobalsSeen;
+        if (!name.isObjType(ObjType::String) || seen.noMember == nullptr || frame == nullptr || frameSlots < 1 || c.s.kind(0).bits != kEntry ||
+            hasImplicitFirst())
+            island();
+        const Value& self = frame[0];
+        if (!(self.isObjType(ObjType::Instance) || self.isObjType(ObjType::Value)) || !seen.noMember(seen.vm, f, asString(name), self)) island();
+        LOp& check = c.op("nomember");
+        check.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(classOf(self)));
+        check.ret = static_cast<int64_t>(tableKeysChanged.load(std::memory_order_relaxed));
+        c.leaves(check);
+    }
+    template <typename Arg>
+    void makeValue(Ctx& c, const ObjClass* boxed, int place, int a, int callee, int argc, Arg arg) {
+        State& s = c.s;
+        const ValueLayout* const layout = boxed->layout.load(std::memory_order_acquire);
+        struct Part {
+            const ValueField* field;
+            Reg reg;
+            bool constant;
+            Value value;
+        };
+        std::vector<Part> parts;
+        for (int k = 0; k < argc; k++) {
+            const ValueField* field = headerFieldOf(boxed, layout, k);
+            const auto [xk, isConstant] = arg(k);
+            const bool isFloat = field->kind == ValueField::Float, isByte = field->kind == ValueField::Narrow;
+            if (isConstant) {
+                const Value& v = constant(xk);
+                if (isFloat ? !v.isFloat() : !(v.isInt() || v.isByte())) island();
+                if (isByte && (v.as.i < 0 || v.as.i > 255)) island();
+                parts.push_back(Part{field, Reg{}, true, v});
+            } else if (isByte) {
+                if (s.kind(xk).bits != kByte && s.kind(xk).bits != kWhole) island();
+                const Reg part = c.read(xk, CI, false);
+                if (s.kind(xk).bits == kWhole) c.leaves(c.op("chkbyte", {part}, {part}));
+                parts.push_back(Part{field, part, false, {}});
+            } else {
+                parts.push_back(Part{field, c.number(xk, isFloat ? CF : CI, !isFloat), false, {}});
+            }
+        }
+        if (place >= 0) madeInPlace[c.i] = MadeInPlace{place, boxed, a};
+        c.writeMemory(a);
+        LOp& made = c.op(place >= 0 ? "mkplace" : "mkbox");
+        made.slot = callee;
+        made.slot2 = a;
+        made.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(boxed));
+        made.ret = place;
+        c.leaves(made);
+        for (const Part& p : parts) {
+            const bool isFloat = p.field->kind == ValueField::Float, isByte = p.field->kind == ValueField::Narrow;
+            Reg r = p.reg;
+            if (p.constant) {
+                r = isFloat ? Reg{kScratchF, CF} : Reg{kScratchI, CI};
+                if (isFloat) c.op("setfk", {r}, {}, {r}).kf = p.value.as.d;
+                else c.op("setik", {r}, {}, {r}).ki = p.value.as.i;
+            }
+            LOp& l = c.op(isFloat ? "boxf" : isByte ? "boxb" : "boxi", {r}, {r});
+            l.slot = a;
+            l.ki = static_cast<int64_t>(p.field->offset);
+        }
+        noteValue(s, a, boxed);
+    }
+
     void step(Ctx& c) {
         const Ins& x = c.x;
         State& s = c.s;
@@ -1371,6 +1497,28 @@ struct Region {
                 State popped = s;
                 popped.top--;
                 c.fall(popped);
+                return;
+            }
+            case Op::WithPlace:
+                // A variable's place for the call after to make its value in (2026-11-15): the
+                // RCall reads which from here (madeInPlace), and the VM, doing a call the region
+                // does not, makes it elsewhere and SetPlace copies it in, the same value.
+                c.fall(s);
+                return;
+            case Op::SetPlace: {  // u16 slot, u8 place: the variable holds what was made in its place
+                const int slot = u16(x, 0), top = s.top - 1;
+                // Only right after a call the region made its value for in a place (mkplace,
+                // which also makes sure the frame has places): copied into the variable's own,
+                // where it was made in another (setplace).
+                auto made = madeInPlace.find(c.i - 1);
+                if (made == madeInPlace.end() || made->second.slot != top || top < 0) island();
+                if (slot != top) c.writeMemory(slot);
+                LOp& l = c.op("setplace");
+                l.slot = slot;
+                l.slot2 = top;
+                l.ret = u8(x, 2);
+                noteValue(s, slot, made->second.cls);
+                c.fall(s);
                 return;
             }
             case Op::Jump:
@@ -1550,15 +1698,70 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::GetImplicit: {  // u16 name, u16 global -> the global, where the name is no member
+                // A bare name read in a method that the VM, as the region is made, finds no member
+                // of the object the function runs on (2026-11-15: `Rect` for a result's check):
+                // that checked (nomember), then the global read as RGetGlobal reads it.
+                const int top = s.top;
+                noMemberHere(c, u16(x, 0));
+                c.writeMemory(top);
+                LOp& l = c.op("getg");
+                l.ki = u16(x, 2);
+                l.slot2 = top;
+                c.leaves(l);
+                if (const Value* g = globalSeen(u16(x, 2)); g != nullptr && g->kind == ValueKind::Obj) noteFieldValue(s, top, *g);
+                s.top = top + 1;
+                c.fall(s);
+                return;
+            }
+            case Op::InvokeImplicit: {  // u16 name, u16 global, u8 argc: receiver, arguments -> result
+                // A bare name called in a method (2026-11-15: `Rect(...)` in Image.inkBox): where
+                // the VM, as the region is made, finds the name no member of the class of the
+                // object the function runs on, and the global is a value type a region makes (as
+                // RCall's): the object checked to be of that class with no Table's keys changed
+                // since (nomember), the global read into the receiver's slot (getg), and the value
+                // made there. Anything else the VM's.
+                madeInPlace.erase(c.i);
+                const int argc = u8(x, 4), top = s.top, at = top - argc - 1;
+                if (at < 1 || argc == 0) island();
+                const Value* global = globalSeen(u16(x, 2));
+                if (global == nullptr || !global->isObjType(ObjType::Class)) island();
+                int place = -1;
+                const ObjClass* const boxed = boxedClass(asClass(*global), argc, c.i, place);
+                if (boxed == nullptr) island();
+                noMemberHere(c, u16(x, 0));
+                c.writeMemory(at);
+                LOp& read = c.op("getg");
+                read.ki = u16(x, 2);
+                read.slot2 = at;
+                c.leaves(read);
+                makeValue(c, boxed, place, at, at, argc, [&](int k) { return std::pair<int, bool>(top - argc + k, false); });
+                s.top = at + 1;
+                c.fall(s);
+                return;
+            }
             case Op::RCall: {  // u8 A, u8 F, u8 T, u8 S, u8 argc, u8 flags, u8 X1..X4, i32 slow, i32 resume
                 // A value of a value type kept in the value itself, made from its header's byte
                 // fields (`Color(r, g, b, a)`, B3), where slot F holds its class as the region is
                 // made (the step checks it), nothing of a type given right before, and each part a
                 // byte the region knows: its bytes put together. Any other call the VM's.
+                madeInPlace.erase(c.i);
                 const int a = u8(x, 0), argc = u8(x, 4), flags = u8(x, 5);
                 const int callee = c.objectSlot(u8(x, 1));
-                const ObjClass* const cls = madeValue(s, callee, argc, c.i);
-                if (cls == nullptr) island();
+                int place = -1;
+                const ObjClass* const boxed = boxedValue(s, callee, argc, c.i, place);
+                const ObjClass* const cls = place >= 0 ? nullptr : madeValue(s, callee, argc, c.i);
+                if (cls == nullptr) {
+                    // In a box, or in the variable's place WithPlace gave (2026-11-15): each part
+                    // read as its field's kind (checked where the region only guesses it), the
+                    // box made (mkbox: the VM's where a collection is due) or the place made
+                    // ready (mkplace), then each field written into it.
+                    if (boxed == nullptr) island();
+                    makeValue(c, boxed, place, a, callee, argc, [&](int k) { return std::pair<int, bool>(u8(x, 6 + k), (flags & (1 << k)) != 0); });
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                }
                 const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
                 uint64_t constant = 0;
                 std::vector<std::pair<Reg, int>> parts;  // a byte's register, and its offset
@@ -6839,6 +7042,7 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
             st.kf = l.kf;
             st.slot = l.slot;
             st.slot2 = l.slot2;
+            st.ret = l.ret;
             if (l.jumpTo >= 0) st.jump = labels[static_cast<size_t>(l.jumpTo)];
             if (l.jumpExit >= 0) st.jump = exitLabels[static_cast<size_t>(l.jumpExit)];
             if (l.exit >= 0) st.exit = exitLabels[static_cast<size_t>(l.exit)];
@@ -6940,6 +7144,10 @@ bool mayDo(Op op) {
         case Op::RCall:
         case Op::WithDestinationAt:
         case Op::PlaceIndex:
+        case Op::WithPlace:
+        case Op::SetPlace:
+        case Op::InvokeImplicit:
+        case Op::GetImplicit:
         case Op::Swap:
         case Op::SetIndex:
         case Op::Numeric:

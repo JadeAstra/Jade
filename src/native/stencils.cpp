@@ -63,6 +63,10 @@ struct Ctx {  // native.h's RegionContext
     uint64_t homes[32];
     const uint8_t* const* upvalues;
     const double* units;
+    void* vm;
+    void* (*makeBox)(void* vm, const void* cls);
+    uint8_t* places;
+    const uint64_t* keys;
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -895,6 +899,81 @@ I_A(PACKB_A, x)
         NEXT;                                                                   \
     }
 I_A(MKSM, x)
+// Making a value of a value type in a box (2026-11-15: `Rect(x, y, w, h)`, its fields ints,
+// floats or bytes, made from its header alone): where slot ww_slot holds the class ww_ki (what is
+// called), the box made by the VM (ctx->makeBox, its bytes zero; null where a collection is due,
+// and then the VM makes the call), and slot ww_slot2 = it. Its fields are written next (boxi,
+// boxf, boxb), which nothing between reads.
+STENCIL(mkbox) {
+    const Slot& f = (*slotAt(base));
+    if (f.kind != kKindObj || reinterpret_cast<int64_t>(f.p) != ww_ki) EXIT;
+    void* const box = ctx->makeBox(ctx->vm, reinterpret_cast<const void*>(ww_ki));
+    if (box == nullptr) EXIT;
+    putValue(&(*slot2At(base)), kKindObj, reinterpret_cast<uint64_t>(box));
+    NEXT;
+}
+// The object the function runs on (slot 0) an object of the class ww_ki, or a value of it in a
+// box, and no key gone into or out of any Table since the region was made (*ctx->keys ==
+// ww_ret): a bare name found then to be no member of it is still none, and is the global
+// (INVOKE_IMPLICIT, 2026-11-15). Anything else the VM's.
+STENCIL(nomember) {
+    const Slot& self = base[0];
+    if (self.kind != kKindObj || (self.p[kObjType] != kTypeInstance && self.p[kObjType] != kTypeValue) ||
+        word<int64_t>(self.p + kInstClass) != ww_ki || *ctx->keys != static_cast<uint64_t>(ww_ret))
+        EXIT;
+    NEXT;
+}
+// The same made in the frame's place ww_ret, for a variable (WithPlace before the call, `val r =
+// Rect(...)`): the place given the class and no type, its bytes zero, and slot ww_slot2 = a Ref
+// to it, as the VM makes it there; the frame given no places, the VM's. Its fields are written
+// next as a box's (the place laid out as a box is).
+STENCIL(mkplace) {
+    const Slot& f = (*slotAt(base));
+    if (f.kind != kKindObj || reinterpret_cast<int64_t>(f.p) != ww_ki || ctx->places == nullptr) EXIT;
+    uint8_t* const place = ctx->places - ww_ret * kPlaceStride;
+    const int64_t cls = ww_ki;
+    __builtin_memcpy(place + kPlaceClass, &cls, 8);
+    __builtin_memset(place + kPlaceType, 0, 8);
+    __builtin_memset(place + kPlaceData, 0, kPlaceBytes);
+    putValue(&(*slot2At(base)), kKindRef, reinterpret_cast<uint64_t>(place));
+    NEXT;
+}
+// A variable given a value made in a place (SetPlace after mkplace's call): the value in the
+// place slot ww_slot2 refers to copied into the frame's place ww_ret (its class, its type and
+// its bytes; the same place, nothing), and slot ww_slot = a Ref to that place, as the VM's
+// setPlace does it. The value is made in another place where the variable may be read as it
+// is made (`p = Point(p.y, p.x)`).
+STENCIL(setplace) {
+    uint8_t* const to = ctx->places - ww_ret * kPlaceStride;
+    const uint8_t* const from = (*slot2At(base)).p;
+    if (from != to) {
+        __builtin_memcpy(to + kPlaceClass, from + kPlaceClass, 16);
+        __builtin_memcpy(to + kPlaceData, from + kPlaceData, kPlaceBytes);
+    }
+    putValue(&(*slotAt(base)), kKindRef, reinterpret_cast<uint64_t>(to));
+    NEXT;
+}
+// A field of the box in slot ww_slot (mkbox's, mkplace's), ww_ki bytes into its data: int register a's 8
+// bytes (boxi), a byte (boxb), float register a's 8 (boxf).
+#define BOXI(a, ...)                                                            \
+    STENCIL(boxi_##a) {                                                         \
+        uint8_t* const at = const_cast<uint8_t*>((*slotAt(base)).p) + kValueData + ww_ki; \
+        __builtin_memcpy(at, &i##a, 8);                                         \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(boxb_##a) {                                                         \
+        uint8_t* const at = const_cast<uint8_t*>((*slotAt(base)).p) + kValueData + ww_ki; \
+        *at = static_cast<uint8_t>(i##a);                                       \
+        NEXT;                                                                   \
+    }
+I_A(BOXI, x)
+#define BOXF(a, ...)                                                            \
+    STENCIL(boxf_##a) {                                                         \
+        uint8_t* const at = const_cast<uint8_t*>((*slotAt(base)).p) + kValueData + ww_ki; \
+        { const double d_ = f##a; __builtin_memcpy(at, &d_, 8); }               \
+        NEXT;                                                                   \
+    }
+F_A(BOXF, x)
 // Slot ww_slot2 = a Ref to item ic of the list of a value type's items in slot ww_slot, to be
 // changed there (PlaceIndex, B3): the list its core's own and not frozen, none null, the item in
 // range. Anything else the VM's.
@@ -1093,9 +1172,19 @@ STENCIL(keepl) {
     if ((word<uint64_t>(reinterpret_cast<const uint8_t*>(&s)) & 0xFF) == kKindRef && s.p[kObjType] == kTypePlaces) EXIT;
     NEXT;
 }
+// A value of the class ww_ki in a box, or in a frame's place a Ref (none deep) is to (2026-11-15:
+// made by mkbox or mkplace, `val r = Rect(...)`): its bytes; null for anything else. `head` is
+// the slot's first word.
+INLINE const uint8_t* boxedBytes(const Slot& s, uint64_t head) {
+    const uint8_t* o = s.p;
+    if ((head & 0xFF) == kKindObj) return o[kObjType] == kTypeValue && word<int64_t>(o + kPlaceClass) == ww_ki ? o + kValueData : nullptr;
+    if (head != kKindRef || o[kObjType] != kTypePlaces || word<int64_t>(o + kPlaceClass) != ww_ki) return nullptr;
+    return o + kPlaceData;
+}
 // ia (or fa) = a field of the value of a value type in slot ww_slot: a Small value of the type
 // numbered (ww_slot2 >> 32), or a Ref, none deep, to an item of a list of the class ww_ki's
-// items; the field (ww_slot2 & 0xFFFFFFFF) bytes into it. Anything else the VM's.
+// items, or one in a box or a place (boxedBytes); the field (ww_slot2 & 0xFFFFFFFF) bytes into
+// it. Anything else the VM's.
 INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
     // Its kind, how deep, where in the item and the index or type number, in one word.
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
@@ -1104,6 +1193,7 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
         if ((head >> 32) != static_cast<uint64_t>(ww_slot2) >> 32) return nullptr;
         return reinterpret_cast<const uint8_t*>(&s.i) + offset;
     }
+    if (const uint8_t* const boxed = boxedBytes(s, head)) return boxed + offset;
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;  // a Ref none deep, at its item's start
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
@@ -1120,6 +1210,7 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
 INLINE const uint8_t* valueBytes(const Slot& s, const Ctx* ctx, uint64_t id) {
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
     if ((head & 0xFF) == kKindSmall) return (head >> 32) == id ? reinterpret_cast<const uint8_t*>(&s.i) : nullptr;
+    if (const uint8_t* const boxed = boxedBytes(s, head)) return boxed;
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;

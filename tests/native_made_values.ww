@@ -1,0 +1,79 @@
+// Values of value types made by native code (2026-11-15): one made from its header alone (each
+// field an int, a float or a byte) in a variable's place (`last = Rect(...)`: WithPlace, the call,
+// SetPlace, nothing allocated), or in a box where it goes anywhere else (`t += Rect(...).width`),
+// the box made by the VM for the region (the VM's call where a collection is due). The same
+// answers as the VM's: a variable read as its new value is made, a value of floats and bytes,
+// many boxes (collections between), values compared, and a value kept past the loop.
+
+value Span(var from : float, var to : float, var tag : byte)
+
+fun rects(n : int) : string {
+  var t = 0
+  var last = Rect(0, 0, 0, 0)
+  for (i in 0 ..< n) {
+    last = Rect(i, i + 1, 3, last.height + 1)
+    t += last.width + last.height
+  }
+  return "$t $last"
+}
+
+// Each made from the one before: made in another place, then copied into the variable's.
+fun swaps(n : int) : Point {
+  var p = Point(1, 2)
+  for (i in 0 ..< n) { p = Point(p.y, p.x + i % 3) }
+  return p
+}
+
+// In a box: read at once, never held.
+fun boxes(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += Rect(i, 2, i % 7, 4).width + Point(i, -i).y }
+  return t
+}
+
+fun spans(n : int) : string {
+  var s = Span(0.0, 0.0, 0.toByte())
+  var total = 0.0
+  for (i in 0 ..< n) {
+    s = Span(i * 0.5, i * 0.25 + s.from, (i % 200).toByte())
+    total += s.to - s.from + s.tag.toInt()
+  }
+  return "$total ${s.tag}"
+}
+
+fun same(n : int) : int {
+  var count = 0
+  for (i in 0 ..< n) {
+    val a = Point(i % 4, 1)
+    val b = Point(i % 3, 1)
+    if (a == b) { count += 1 }
+  }
+  return count
+}
+
+// In a method of a class with a superclass, where `Rect` and `Point` might be members and are looked
+// up as it runs (INVOKE_IMPLICIT, GET_IMPLICIT): the object checked to be of the class the VM found
+// them no member of. (`k` passed in: read in the method, it is looked up as a member is.)
+class Base(var k : int)
+class Maker(k : int) : Base(k) {
+  fun many(n : int, m : int) : int {
+    var t = 0
+    var r = Rect(0, 0, 0, 0)
+    for (i in 0 ..< n) {
+      r = Rect(i, m, 2, 3)
+      t += r.x + Point(i, m).y
+    }
+    return t
+  }
+  fun one(i : int, m : int) : Rect? => i < 0 ? null : Rect(i, m, i + m, 1)
+}
+val maker = Maker(5)
+
+for (round in 0 ..< 3) {
+  var ones = 0
+  for (i in -3 ..< 300) { ones += maker.one(i, maker.k)?.width ?: 100 }
+  print(rects(50), swaps(101), boxes(300000), spans(1000), same(1200), maker.many(500, maker.k), ones)
+}
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650

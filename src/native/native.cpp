@@ -66,6 +66,8 @@ static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
 static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
 static_assert(offsetof(ObjInstance, cls) == L::kInstClass, "layout.h: an object's class");
 static_assert(offsetof(ObjUpvalue, location) == L::kUpvalueLocation && sizeof(Value*) == 8, "layout.h: a captured variable's cell");
+static_assert(PlaceArena::kStride == L::kPlaceStride && ObjPlace::kBytes == L::kPlaceBytes && offsetof(ObjPlace, type) == L::kPlaceType, "layout.h: the places");
+static_assert(sizeof(ObjValue) == L::kValueData && offsetof(ObjValue, cls) == L::kPlaceClass && static_cast<int>(ObjType::Value) == L::kTypeValue, "layout.h: a value in a box");
 static_assert(offsetof(ObjPlace, cls) == L::kPlaceClass && offsetof(ObjPlace, type) == L::kPlaceType && sizeof(ObjPlace) == L::kPlaceData,
               "layout.h: a frame's place");
 static_assert(static_cast<int>(ListStore::Narrow) == L::kStoreNarrow && static_cast<int>(Narrow::Byte) == L::kNarrowByte &&
@@ -345,7 +347,7 @@ namespace {
 volatile uint8_t checkFlag = 0;
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable()};
+    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr};
     return runRegion(code, slots, &context);
 }
 

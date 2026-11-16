@@ -59,9 +59,15 @@ constexpr uint8_t kKindSmall = 8;
 constexpr int kRefDepth = 1, kRefOffset = 2, kRefIndex = 4;
 constexpr int kPackItemType = 16, kPackTypeSlot = 8;
 constexpr uint8_t kTypePlaces = 19;
+constexpr uint8_t kTypeValue = 16;  // a value of a value type in a box (ObjValue, 2026-11-15)
 constexpr uint8_t kTypeIdInt = 1, kTypeIdFloat = 2;
 // A place of a frame's (ObjPlace): the class of the value it holds, that value's own type (null
 // for none), and where its bytes start (2026-11-13: a value made where a call leaves it).
 constexpr int kPlaceClass = 24, kPlaceType = 32, kPlaceData = 40;
+// A value of a value type in a box (ObjValue): its fields' bytes, as a place keeps them (2026-11-15).
+constexpr int kValueData = 40;
+// The places a line of execution keeps values of its frames' variables in (PlaceArena), each
+// this many bytes on from the one before: a frame's place k is k strides down from its first.
+constexpr int kPlaceStride = 104, kPlaceBytes = 64;
 
 }  // namespace ww::native::layout
