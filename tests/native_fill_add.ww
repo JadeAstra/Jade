@@ -36,6 +36,22 @@ fun sum(colors : List<Color?>) : int {
   return t
 }
 
+// == null and != null, either side, in a loop (2026-11-16: done by the slot's kind).
+fun nulls(colors : List<Color?>, ints : List<int?>) : string {
+  var none = 0
+  var some = 0
+  var t = 0
+  for (c in colors) {
+    if (c == null) { none += 1 }
+    if (null != c) { some += 1 }
+  }
+  for (i in 0 ..< ints.size) {
+    val n = ints[i]
+    if (n != null) { t += n } else { t -= 1 }
+  }
+  return "$none $some $t"
+}
+
 val image = Image(37, 23)
 image.editPixels {
   for (y in 0 ..< 23) {
@@ -58,13 +74,19 @@ for (round in 0 ..< 3) {
   print(g.size, gm.size, sum(g), sum(gm), g[0], g[g.size - 1], gm[4999])
   val n = greysOrNull(colors)
   print(n.size, n[0], n[1], sum(n))
+  val ints : open List<int?> = []
+  for (i in 0 ..< 600) { ints.add(i % 7 == 0 ? null : i) }
+  print(nulls(n, ints), nulls(colors, ints))
 }
 // expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
 // expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
 // expect: 852 null Color(0, 0, 0, 200) 1524992
+// expect: 1 851 154029 0 851 154029
 // expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
 // expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
 // expect: 852 null Color(0, 0, 0, 200) 1524992
+// expect: 1 851 154029 0 851 154029
 // expect: Color(9, 8, 7, 6) Color(21, 44, 7, 203) Color(21, 44, 7, 203) Color(182, 22, 28, 226) 60146 263755
 // expect: 851 5000 1656448 9603620 Color(0, 0, 0, 200) Color(230, 230, 230, 236) Color(165, 165, 165, 204)
 // expect: 852 null Color(0, 0, 0, 200) 1524992
+// expect: 1 851 154029 0 851 154029

@@ -474,6 +474,7 @@ struct Region {
     static int listClass(const Value& v) {
         if (v.isObjType(ObjType::Bytes)) return CI;
         if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
+        if (asList(v)->pack->nullable) return -1;  // items that may be null: read by the VM (each step reading it would leave, 2026-11-16)
         const ListStore store = asList(v)->store();
         if (store == ListStore::Narrow && asList(v)->pack->narrow == Narrow::Byte) return CI;  // a List<byte>, read as bytes are
         return store == ListStore::Floats ? CF : store == ListStore::Ints ? CI : -1;
@@ -1852,6 +1853,12 @@ struct Region {
                 const Value& name = constant(u16(x, 10));
                 if (argc != 1 || !name.isObjType(ObjType::String) || asString(name)->utf8() != "add") island();
                 const int list = c.objectSlot(u8(x, 1));
+                // A list that may hold null, as the frame has it where the region is made: its
+                // bits for null grow as it does, which the steps cannot (each add would leave, a
+                // miss each): the VM's at once (2026-11-16).
+                if (frame != nullptr && list < frameSlots && list < f.maxStack && frame[list].isObjType(ObjType::List) && asList(frame[list])->packed() &&
+                    asList(frame[list])->pack->nullable)
+                    island();
                 const int xk = u8(x, 6);
                 const char* stem = nullptr;
                 Reg value{};
@@ -2599,6 +2606,34 @@ struct Region {
                 c.write(u8(x, 0), K{kBool});
                 s.top = u8(x, 3);
                 c.fall(s);
+                return;
+            }
+        }
+        // == null (2026-11-16: `if (c != null)`, == and a not, over a List<Color?>): whether the
+        // other side holds null, as its slot in memory says (as entered, written there, or a copy
+        // of such), in the flag; a number the region holds in a register is none.
+        if (untypedOp && (t.kind == Typed::Compare || t.kind == Typed::Jump) && t.op == '=' && t.form == 0) {
+            auto isNull = [&](int slot) {
+                const Fact* f = factOf(s, slot);
+                return f != nullptr && f->isNull;
+            };
+            const int other = isNull(cOp) ? bOp : isNull(bOp) ? cOp : -1;
+            if (other >= 0) {
+                int from = other;
+                K k = s.kind(from);
+                if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) from = k.src, k = s.kind(from);
+                if (!(k.bits == kEntry || inMemory(k)) && !isNull(from)) island();
+                c.op("isnull").slot = from;
+                if (t.kind == Typed::Compare) {
+                    c.write(u8(x, 0), K{kBool});
+                    s.top = u8(x, 3);
+                    c.fall(s);
+                    return;
+                }
+                State after = s;
+                after.top = u8(x, 2);
+                c.go(static_cast<uint32_t>(i32(x, 3)), after, c.op("jfalse"));
+                c.fall(after);
                 return;
             }
         }
@@ -3599,6 +3634,11 @@ struct Region {
     }
 
     void lookAtListsOnce() {
+        // A whole function's region, its loops left out: each of its reads made once a call, so
+        // looking first only adds the prologue and the context set to nothing each time it is
+        // entered (2026-11-16: Canvas.layering, drawPicture 6% slower where its null tests made
+        // it look).
+        if (function) return;
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known || !results[i].island) continue;
             if (!results[i].ends) return;

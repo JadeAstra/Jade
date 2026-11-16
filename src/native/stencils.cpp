@@ -574,6 +574,11 @@ STENCIL(jtrue) {
     NEXT;
 }
 // A bool slot read into the flag register, leaving for the VM where it holds no bool.
+// The flag = whether slot ww_slot holds null (2026-11-16: `c != null`, == and a not).
+STENCIL(isnull) {
+    i9 = (*slotAt(base)).kind == kKindNull;
+    NEXT;
+}
 STENCIL(loadflag) {
     if ((*slotAt(base)).kind != kKindBool) EXIT;
     i9 = static_cast<uint8_t>((*slotAt(base)).i) != 0;
@@ -2031,6 +2036,36 @@ F_W(HIDXPF_A, x)
         NEXT;                                                                   \
     }
 I_A(HIREF, x)
+// The first `size` bytes of a value of the class `cls` kept in the value itself (its type number
+// `id`): a Small one; a Ref, none deep, to an item of a list of that class's items, none with a
+// type of its own (2026-11-16: `grid[x, y] = c`, c given as `colors[100]`); or one in a frame's
+// place or in a box of that class, with no type of its own. False for anything else.
+INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, const Ctx* ctx, uint64_t& bits) {
+    const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v));
+    if ((head & 0xFF) == kKindSmall) {
+        if ((head >> 32) != id) return false;
+        bits = static_cast<uint64_t>(v.i);
+        return true;
+    }
+    const uint8_t* from = nullptr;
+    const uint8_t* o = v.p;
+    if ((head & 0xFF) == kKindObj) {
+        if (o[kObjType] == kTypeValue && word<int64_t>(o + kPlaceClass) == cls && word<const void*>(o + kPlaceType) == nullptr) from = o + kValueData;
+    } else if ((head & 0xFFFFFFFF) == kKindRef) {
+        if (o[kObjType] == kTypePlaces) {
+            if ((head >> 32) == 0 && word<int64_t>(o + kPlaceClass) == cls && word<const void*>(o + kPlaceType) == nullptr) from = o + kPlaceData;
+        } else if (o[kObjType] == kTypeList && mayRead(o, ctx)) {
+            const uint8_t* pack = packOf(o, kStoreItems);
+            if (pack != nullptr && word<int64_t>(pack + kPackItemClass) == cls && word<const void*>(pack + kPackItemType) == nullptr &&
+                word<uint32_t>(pack + kPackTypeSlot) == 0 && (head >> 32) < word<uint64_t>(pack + kPackCount))
+                from = word<const uint8_t*>(pack + kPackBlock) + (head >> 32) * word<uint32_t>(pack + kPackWidth);
+        }
+    }
+    if (from == nullptr) return false;
+    bits = 0;
+    for (uint64_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k);
+    return true;
+}
 // Items copied out, set, and made a place to be set (idxsm, setsm, placei) through a list of
 // items looked at once (k in ww_slot), each ww_ki bytes wide: the index checked against the
 // count, and a value set its type's; nothing else (the list's class, and that its items have no
@@ -2054,10 +2089,17 @@ I_A(HIREF, x)
         const Slot& v = base[what & 0xFFFFFF];                                  \
         const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v)); \
         if ((head & 0xFFFFFFFF) == kKindRef && v.p == reinterpret_cast<const uint8_t*>(h[3]) && (head >> 32) == static_cast<uint64_t>(i##c)) NEXT; \
-        if ((head & 0xFF) != kKindSmall || (head >> 32) != what >> 32) EXIT;    \
+        const uint64_t size = (what >> 24) & 0xFF;                              \
+        uint64_t bits;                                                          \
+        if ((head & 0xFF) == kKindSmall && (head >> 32) == what >> 32) {        \
+            bits = static_cast<uint64_t>(v.i);                                  \
+        } else {                                                                \
+            /* Of the class of the list's items (2026-11-16): an item of another list, a value in a place or a box. */ \
+            const uint8_t* const pack = word<const uint8_t*>(reinterpret_cast<const uint8_t*>(h[3]) + kListPack); \
+            if (pack == nullptr || !valueBits(v, word<int64_t>(pack + kPackItemClass), what >> 32, size, ctx, bits)) EXIT; \
+        }                                                                       \
         uint8_t* to = reinterpret_cast<uint8_t*>(h[0]) + i##c * ww_ki;        \
-        const uint64_t bits = static_cast<uint64_t>(v.i);                       \
-        for (uint32_t k = 0; k < ((what >> 24) & 0xFF); k++) to[k] = static_cast<uint8_t>(bits >> (8 * k)); \
+        for (uint32_t k = 0; k < size; k++) to[k] = static_cast<uint8_t>(bits >> (8 * k)); \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hplacei_##c) {                                                      \
@@ -3747,7 +3789,10 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 bits = 0;
                 for (uint64_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from->p[kPlaceData + k]) << (8 * k);
             } else {
-                return;
+                // An item of another list of the class of the items set, or a value in a box of it
+                // (2026-11-16: `fill(grid, colors[100])`).
+                const uint8_t* const outPack = word<const uint8_t*>(reinterpret_cast<const uint8_t*>(out.h[3]) + kListPack);
+                if (out.h[3] == 0 || outPack == nullptr || !valueBits(*from, word<int64_t>(outPack + kPackItemClass), what >> 32, size, ctx, bits)) return;
             }
             uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * width;
             if (width == 4 && size == 4) {
