@@ -115,6 +115,28 @@ fun newColors(n : int) : int {
   return out.size
 }
 
+fun inSet(s : Set<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i in s) { t += 1 }
+  }
+  return t
+}
+fun mapSet(m : open Map<int, int>, n : int) : int {
+  for (i in 0 ..< n) { m[i] = i * 3 }
+  return m.size
+}
+fun counts(words : List<string>) : int {
+  val m : open Map<string, int> = {:}
+  for (w in words) { m[w] = (m[w] ?: 0) + 1 }
+  return m.size
+}
+fun fillMap(n : int) : int {
+  val m : open Map<int, int> = {:}
+  for (i in 0 ..< n) { m[i] = i }
+  return m.size
+}
+
 val n = 1000000
 val ints : open List<int?> = []
 val xs : open List<float?> = []
@@ -148,3 +170,8 @@ time("List<int?>.add(null or i)") { addInts(n) }
 time("List<int?>.add(i)") { addIntsPlain(n) }
 time("List<Color?>.add(c), c from one") { copyColors(colors) }
 time("List<Color?>.add(Color(...))") { newColors(n) }
+time("i in set") { inSet(set, n) }
+time("map[i] = i * 3, keys there") { mapSet(map, n) }
+time("map[i] = i, a new map") { fillMap(n) }
+val words = (0 ..< n).map { "w${it % 1000}" }
+time("m[w] = (m[w] ?: 0) + 1, words") { counts(words) }

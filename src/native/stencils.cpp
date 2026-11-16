@@ -68,6 +68,8 @@ struct Ctx {  // native.h's RegionContext
     uint8_t* places;
     const uint64_t* keys;
     bool (*makeRoom)(void* vm, const void* list);
+    int (*findKey)(const void* table, const void* key, void* out);
+    int (*setKey)(void* vm, const void* table, const void* key, const void* value);
 };
 
 // What the VM's fast ways ask of an object: a list or bytes it may read (owned by the core it
@@ -578,6 +580,199 @@ STENCIL(jtrue) {
 // The flag = whether slot ww_slot holds null (2026-11-16: `c != null`, == and a not).
 STENCIL(isnull) {
     i9 = (*slotAt(base)).kind == kKindNull;
+    NEXT;
+}
+// ---- Maps and sets (2026-11-16, sets-maps-plan part 1) ----
+
+// The key looked up in the map or set in slot ww_slot, which is of the kind ww_ret (ObjType: a
+// map, or a set), by the VM's way (ctx->findKey, which runs no WinterWolf code): 1 found (a map's
+// value copied to `out`, where given), 0 not, -1 the VM's (anything else, a key of another
+// kind, a stored key that may have an == of its own).
+INLINE int findKey(const Ctx* ctx, Slot* base, const Slot& key, Slot* out) {
+    const Slot& table = (*slotAt(base));
+    if (table.kind != kKindObj || table.p[kObjType] != static_cast<uint8_t>(ww_ret)) return -1;
+    return ctx->findKey(table.p, &key, out);
+}
+// An int key looked up in the step itself (the spike's second way, 2026-11-16): the table of the
+// map or set in slot ww_slot, of the kind ww_ret (a set no view of a map), probed as ValueMap's
+// lookup does, an int's hash its own bits (keyHash). 1 found (`value` its entry's value), 0 not,
+// -1 where the step cannot say: no such table, or a stored key met with the same hash that may be
+// equal to an int another way (a float, an object), where the VM's way decides (findKey).
+INLINE int probeInt(const Slot& table, int64_t key, const uint8_t*& value) {
+    if (table.kind != kKindObj) return -1;
+    const uint8_t* const o = table.p;
+    if (o[kObjType] != static_cast<uint8_t>(ww_ret)) return -1;
+    if (o[kObjType] != kTypeMapObj && word<const void*>(o + kSetViewOf) != nullptr) return -1;
+    const uint8_t* const m = o + kTableAt;
+    if (word<uint32_t>(m + kTableLive) == 0) return 0;
+    const uint32_t hash = static_cast<uint32_t>((static_cast<uint64_t>(key) * 0x9E3779B97F4A7C15ULL) >> 32);
+    const uint32_t* const slots = word<const uint32_t*>(m + kTableSlots);
+    const uint64_t mask = static_cast<uint64_t>(word<const uint32_t*>(m + kTableSlots + 8) - slots) - 1;
+    const uint8_t* const entries = word<const uint8_t*>(m + kTableEntries);
+    for (uint64_t at = hash >> word<uint32_t>(m + kTableShift);; at = (at + 1) & mask) {
+        const uint32_t slot = slots[at];
+        if (slot == 0) return 0;
+        if (slot == 0xFFFFFFFFu) continue;
+        const uint8_t* const e = entries + static_cast<uint64_t>(slot - 1) * kEntrySize;
+        if (word<uint32_t>(e + kEntryHash) != hash) continue;
+        const uint8_t kind = e[0];
+        if (kind == kKindInt || kind == kKindByte) {
+            if (word<int64_t>(e + 8) != key) continue;
+            value = e + kEntryValue;
+            return 1;
+        }
+        if (kind == kKindFloat || kind == kKindObj || kind == kKindSmall || kind == kKindRef) return -1;
+    }
+}
+// Slot ww_slot2 = the map's value for the key (null where it has none): int register c
+// (mapgeti, probed here, the VM's way where it cannot say), the value in slot ww_ki (mapgetv), or
+// the constant whose address is ww_ki (mapgetk).
+#define MAPGETI(c, ...)                                                         \
+    STENCIL(mapgeti_##c) {                                                      \
+        const uint8_t* value;                                                   \
+        int r = probeInt((*slotAt(base)), i##c, value);                         \
+        if (r == 1) {                                                           \
+            __builtin_memcpy(&(*slot2At(base)), value, sizeof(Slot));           \
+            NEXT;                                                               \
+        }                                                                       \
+        if (r < 0) {                                                            \
+            Slot key;                                                           \
+            storeSlot(&key, 0, kKindInt, static_cast<uint64_t>(i##c));          \
+            r = findKey(ctx, base, key, &(*slot2At(base)));                     \
+            if (r < 0) EXIT;                                                    \
+            if (r == 1) NEXT;                                                   \
+        }                                                                       \
+        storeSlot(&(*slot2At(base)), 0, kKindNull, 0);                          \
+        NEXT;                                                                   \
+    }
+I_A(MAPGETI, x)
+STENCIL(mapgetv) {
+    const int r = findKey(ctx, base, base[ww_ki], &(*slot2At(base)));
+    if (r < 0) EXIT;
+    if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
+    NEXT;
+}
+STENCIL(mapgetk) {
+    const int r = findKey(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), &(*slot2At(base)));
+    if (r < 0) EXIT;
+    if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
+    NEXT;
+}
+// The flag = whether the key is in the set (a map's keys): int register c (hasi), the value in
+// slot ww_ki (hasv), or the constant whose address is ww_ki (hask).
+#define HASI(c, ...)                                                            \
+    STENCIL(hasi_##c) {                                                         \
+        const uint8_t* value;                                                   \
+        int r = probeInt((*slotAt(base)), i##c, value);                         \
+        if (r < 0) {                                                            \
+            Slot key;                                                           \
+            storeSlot(&key, 0, kKindInt, static_cast<uint64_t>(i##c));          \
+            r = findKey(ctx, base, key, nullptr);                               \
+            if (r < 0) EXIT;                                                    \
+        }                                                                       \
+        i9 = r;                                                                 \
+        NEXT;                                                                   \
+    }
+I_A(HASI, x)
+STENCIL(hasv) {
+    const int r = findKey(ctx, base, base[ww_ki], nullptr);
+    if (r < 0) EXIT;
+    i9 = r;
+    NEXT;
+}
+STENCIL(hask) {
+    const int r = findKey(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), nullptr);
+    if (r < 0) EXIT;
+    i9 = r;
+    NEXT;
+}
+// The map in slot ww_slot (ww_ret: ObjType::Map) given the value in slot ww_slot2 for the key in
+// slot ww_ki (part 2: `map[k] = v`): an int key already there, the map this core's and not frozen,
+// the value no Ref: written in its entry here; anything else by the VM's way (ctx->setKey: a new
+// key added), or the VM's.
+STENCIL(mapset) {
+    const Slot& table = (*slotAt(base));
+    const Slot& key = base[ww_ki];
+    const Slot& value = (*slot2At(base));
+    if (key.kind == kKindInt && value.kind != kKindRef) {
+        const uint8_t* at;
+        if (probeInt(table, key.i, at) == 1 && table.p[kObjCore] == ctx->core && table.p[kObjFrozen] == 0) {
+            __builtin_memcpy(const_cast<uint8_t*>(at), &value, sizeof(Slot));
+            NEXT;
+        }
+    }
+    if (table.kind != kKindObj || table.p[kObjType] != static_cast<uint8_t>(ww_ret)) EXIT;
+    if (ctx->setKey(ctx->vm, table.p, &key, &value) < 0) EXIT;
+    NEXT;
+}
+// The key in slot ww_ki added to the set in slot ww_slot (ww_ret: ObjType::Set; part 2,
+// `set.add(k)`), by the VM's way: the flag = whether it was added (it was not there).
+STENCIL(setadd) {
+    const Slot& table = (*slotAt(base));
+    if (table.kind != kKindObj || table.p[kObjType] != static_cast<uint8_t>(ww_ret)) EXIT;
+    const int r = ctx->setKey(ctx->vm, table.p, &base[ww_ki], nullptr);
+    if (r < 0) EXIT;
+    i9 = r;
+    NEXT;
+}
+// The table a for over a set goes through (its own, or the map's where it is a view of a map's
+// keys), with the iterator in slot ww_slot; null for anything else (a view of a map's entries or
+// values, which the VM makes; a map itself, whose items are entries; part 3).
+INLINE const uint8_t* iteratedTable(Slot* base, uint8_t*& it, bool pairs) {
+    const Slot& s = (*slotAt(base));
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeIterator) return nullptr;
+    const Slot& source = *reinterpret_cast<const Slot*>(s.p + kIterSource);
+    if (source.kind != kKindObj) return nullptr;
+    it = const_cast<uint8_t*>(s.p);
+    const uint8_t* const o = source.p;
+    if (pairs) return o[kObjType] == kTypeMapObj ? o + kTableAt : nullptr;
+    if (o[kObjType] != kTypeSetObj) return nullptr;
+    const uint8_t* const viewOf = word<const uint8_t*>(o + kSetViewOf);
+    if (viewOf == nullptr) return o + kTableAt;
+    return o[kSetEntries] == 0 && o[kSetValues] == 0 ? viewOf + kTableAt : nullptr;
+}
+// The next live entry of that table, its place moved on past it; null at the end. The table's
+// version the one the for began with (anything else the VM's, which stops with its error).
+INLINE const uint8_t* nextEntry(const uint8_t* m, uint8_t* it, bool& changed) {
+    changed = word<uint64_t>(m + kTableVersion) != word<uint64_t>(it + kIterVersion);
+    if (changed) return nullptr;
+    const uint8_t* const first = word<const uint8_t*>(m + kTableEntries);
+    const uint64_t count = static_cast<uint64_t>(word<const uint8_t*>(m + kTableEntries + 8) - first) / kEntrySize;
+    uint64_t index = word<uint64_t>(it + kIterIndex);
+    while (index < count && first[index * kEntrySize + kEntryLive] == 0) index++;
+    if (index >= count) {
+        __builtin_memcpy(it + kIterIndex, &index, 8);
+        return nullptr;
+    }
+    const uint64_t next = index + 1;
+    __builtin_memcpy(it + kIterIndex, &next, 8);
+    return first + index * kEntrySize;
+}
+// A for over a set, or a map's keys (part 3): the next key to slot ww_slot2; to the jump's target
+// where there are no more.
+STENCIL(iterkey) {
+    uint8_t* it;
+    const uint8_t* const m = iteratedTable(base, it, false);
+    if (m == nullptr) EXIT;
+    bool changed;
+    const uint8_t* const e = nextEntry(m, it, changed);
+    if (changed) EXIT;
+    if (e == nullptr) JUMP;
+    __builtin_memcpy(&(*slot2At(base)), e, sizeof(Slot));
+    NEXT;
+}
+// A for over a map's keys and values (`for ((k, v) in map)`, IterNextPair; part 3): the next key to
+// slot ww_slot2, its value to slot ww_ki; to the jump's target where there are no more.
+STENCIL(iterpair) {
+    uint8_t* it;
+    const uint8_t* const m = iteratedTable(base, it, true);
+    if (m == nullptr) EXIT;
+    bool changed;
+    const uint8_t* const e = nextEntry(m, it, changed);
+    if (changed) EXIT;
+    if (e == nullptr) JUMP;
+    __builtin_memcpy(&(*slot2At(base)), e, sizeof(Slot));
+    __builtin_memcpy(&base[ww_ki], e + kEntryValue, sizeof(Slot));
     NEXT;
 }
 // The flag register false: whether a number the region holds in a register is null (2026-11-16).

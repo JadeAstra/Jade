@@ -6967,6 +6967,80 @@ bool VM::roomForRegion(void* vm, const void* list) {
     return true;
 }
 
+// A key a region gives the VM's way for maps and sets: one with no == or hashCode of its own,
+// whose lookup runs no WinterWolf code (a number, a bool, a char, null or a string).
+bool VM::plainKeyForRegion(const Value& k) {
+    switch (k.kind) {
+        case ValueKind::Int:
+        case ValueKind::Byte:
+        case ValueKind::Float:
+        case ValueKind::Bool:
+        case ValueKind::Char:
+        case ValueKind::Null: return true;
+        case ValueKind::Obj: return k.as.obj->type == ObjType::String;
+        default: return false;
+    }
+}
+
+// A key looked up in a map's keys or a set for a region (2026-11-16, sets-maps-plan part 1: map[k],
+// set.contains(k), k in set, k in map.keys): 1 where it is there (a map's value copied to `out`,
+// where given), 0 where it is not, -1 where the VM looks it up instead: the table no map, set or
+// view of a map's keys, the key not a plain one (plainKeyForRegion), or a stored key met that may
+// have an == of its own (ValueMap::findPlain runs no WinterWolf code).
+int VM::findForRegion(const void* table, const void* key, void* out) {
+    const Obj* const o = static_cast<const Obj*>(table);
+    const Value& k = *static_cast<const Value*>(key);
+    if (!plainKeyForRegion(k)) return -1;
+    const ValueMap* m = nullptr;
+    if (o->type == ObjType::Map) {
+        m = &static_cast<const ObjMap*>(o)->map;
+    } else if (o->type == ObjType::Set) {
+        const ObjSet* const set = static_cast<const ObjSet*>(o);
+        if (!set->view()) m = &set->items;
+        else if (!set->entries && !set->values && out == nullptr) m = &set->viewOf->map;  // a map's keys
+        else return -1;
+    } else {
+        return -1;
+    }
+    const Value* found = nullptr;
+    const int r = m->findPlain(k, found);
+    if (r == 1 && out != nullptr) std::memcpy(out, found, sizeof(Value));
+    return r;
+}
+
+// A key set in a map, or added to a set, for a region (2026-11-16, sets-maps-plan part 2: map[k]
+// = v, set.add(k)): 1 done (a set: added), 0 a set that had it, -1 where the VM does it instead:
+// the table no map or set of this core's, frozen, or a view; the key not a number, a bool, a
+// char, null or a string; a map's value a Ref (the VM copies it); a stored key met that may have
+// an == of its own; or a collection due (the VM collects first).
+int VM::setForRegion(void* vm, const void* table, const void* key, const void* value) {
+    VM& self = *static_cast<VM*>(vm);
+    Obj* const o = const_cast<Obj*>(static_cast<const Obj*>(table));
+    const Value& k = *static_cast<const Value*>(key);
+    if (!plainKeyForRegion(k) || o->core != self.coreId_ || o->frozen != 0 || self.bytesAllocated_ > self.nextGC_) return -1;
+    ValueMap* m = nullptr;
+    const bool isMap = o->type == ObjType::Map;
+    if (isMap) {
+        if (value == nullptr || static_cast<const Value*>(value)->kind == ValueKind::Ref) return -1;
+        m = &static_cast<ObjMap*>(o)->map;
+    } else if (o->type == ObjType::Set && !static_cast<ObjSet*>(o)->view()) {
+        m = &static_cast<ObjSet*>(o)->items;
+    } else {
+        return -1;
+    }
+    const Value* found = nullptr;
+    const int r = m->findPlain(k, found);
+    if (r < 0) return -1;
+    if (r == 1) {
+        if (!isMap) return 0;
+        std::memcpy(const_cast<Value*>(found), value, sizeof(Value));
+        return 1;
+    }
+    m->addNew(k, isMap ? *static_cast<const Value*>(value) : Value::null(), ValueMap::hashOf(k));
+    self.account(64);
+    return 1;
+}
+
 // How many times a function is called before its whole region is made (2026-11-15): enough that
 // a function called a few times, as most are, costs nothing to make; few enough that one called
 // in a loop is made at once.
@@ -7061,6 +7135,8 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         context.vm = this;
         context.makeBox = &VM::boxForRegion;
         context.makeRoom = &VM::roomForRegion;
+        context.findKey = &VM::findForRegion;
+        context.setKey = &VM::setForRegion;
         context.places = nullptr;
         context.keys = reinterpret_cast<const uint64_t*>(&tableKeysChanged);
         if ((frame->closure->proto->typeArgs & kHasPlaces) != 0 && context_->places != nullptr && (framePlacesEnd(frame - frames_) & ~PlaceArena::kNone) != 0)

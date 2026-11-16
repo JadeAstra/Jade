@@ -1160,6 +1160,23 @@ const Value* ValueMap::find(const Value& key, uint32_t hash) const {
     return &entries_[slots_[static_cast<size_t>(at)] - 1].value;
 }
 
+int ValueMap::findPlain(const Value& key, const Value*& out) const {
+    if (live_ == 0) return 0;
+    const uint32_t hash = hashOf(key);
+    const size_t mask = slots_.size() - 1;
+    for (size_t at = firstSlot(hash);; at = (at + 1) & mask) {
+        const uint32_t slot = slots_[at];
+        if (slot == 0) return 0;
+        if (slot == kGone || entries_[slot - 1].hash != hash) continue;
+        const Value& stored = entries_[slot - 1].key;
+        if (mayOwnKeys(stored)) return -1;
+        if (keysEqual(stored, key, 0)) {
+            out = &entries_[slot - 1].value;
+            return 1;
+        }
+    }
+}
+
 void ValueMap::set(const Value& key, const Value& value) {
     const uint32_t hash = hashOf(key);
     if (live_ != 0) {

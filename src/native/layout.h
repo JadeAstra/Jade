@@ -27,6 +27,17 @@ constexpr uint8_t kTypeString = 0;
 constexpr int kStringLength = 32;
 // A type (ObjTypeInfo): its class, and its arguments (a std::vector, its first one's address first).
 constexpr int kTypeInfoCls = 32, kTypeInfoArgs = 40;
+// A map's or a set's table (ObjMap::map, ObjSet::items, a ValueMap), and a set's map where it is a
+// view of one; in the table, the entries (a std::vector of Entry: a key, a value, whether it is
+// live, its hash), the slots (a std::vector of uint32_t: an entry's place plus one, 0 empty,
+// all ones gone), the live entries' count and the shift for the first slot a hash tries.
+constexpr int kTableAt = 24, kSetViewOf = 104;
+constexpr uint8_t kTypeMapObj = 2, kTypeSetObj = 17;  // ObjType::Map, ObjType::Set
+constexpr int kTableEntries = 0, kTableSlots = 24, kTableLive = 48, kTableShift = 56;
+constexpr int kEntrySize = 40, kEntryValue = 16, kEntryLive = 32, kEntryHash = 36;
+// The table's version (moved on with every key added or taken out), a set's flags where it is a
+// view (of the map's entries, of its values), and the version an iterator began with.
+constexpr int kTableVersion = 64, kSetEntries = 112, kSetValues = 113, kIterVersion = 64;
 // Packed items (PackedItems): how they are kept, whether any may be null, how many there are,
 // and the block holding them (a std::vector: its first item's address first).
 constexpr int kPackStore = 0, kPackNullable = 1, kPackCount = 24, kPackBlock = 48;

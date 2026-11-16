@@ -581,6 +581,10 @@ public:
     // key known not to be there.
     static uint32_t hashOf(const Value& key);
     const Value* find(const Value& key, uint32_t hash) const;
+    // A lookup that runs no WinterWolf code (2026-11-16, native code's map and set steps): 1 where
+    // `key` is there (its value in `out`), 0 where it is not, -1 where a stored key met may have an
+    // == of its own (the VM's lookup then). The key itself one that has none (a number, a string).
+    int findPlain(const Value& key, const Value*& out) const;
     void addNew(const Value& key, const Value& value, uint32_t hash);
 
     // Includes removed entries (live == false); iterate by index and skip those.
@@ -606,7 +610,15 @@ private:
     // An index of `capacity` slots for `entries`, the live ones placed by their kept hashes.
     static std::vector<uint32_t> indexFor(const std::vector<Entry>& entries, size_t capacity, uint32_t shift);
     static uint32_t shiftFor(size_t capacity);
+
+public:
+    // Where its parts are, for native code's probing of a map or a set (2026-11-16, checked by
+    // native/layout.h): 0 the entries, 1 the slots, 2 the live entries' count, 3 the shift, 4 the version.
+    static constexpr size_t partAt(int which);
 };
+constexpr size_t ValueMap::partAt(int which) {
+    return which == 0 ? offsetof(ValueMap, entries_) : which == 1 ? offsetof(ValueMap, slots_) : which == 2 ? offsetof(ValueMap, live_) : which == 3 ? offsetof(ValueMap, shift_) : offsetof(ValueMap, version_);
+}
 
 struct ObjTypeInfo;
 struct ObjClass;

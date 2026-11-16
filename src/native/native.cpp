@@ -63,6 +63,14 @@ static_assert(static_cast<int>(ValueKind::Small) == L::kKindSmall && offsetof(Va
                   sizeof(PackedItems::typeSlot) == 4 && static_cast<int>(ObjType::Places) == L::kTypePlaces,
               "layout.h: values of value types");
 static_assert(offsetof(ObjBytes, data) == L::kBytesData, "layout.h: bytes");
+static_assert(static_cast<int>(ObjType::Map) == L::kTypeMapObj && static_cast<int>(ObjType::Set) == L::kTypeSetObj, "layout.h: maps and sets");
+static_assert(offsetof(ObjMap, map) == L::kTableAt && offsetof(ObjSet, items) == L::kTableAt && offsetof(ObjSet, viewOf) == L::kSetViewOf &&
+                  ValueMap::partAt(0) == L::kTableEntries && ValueMap::partAt(1) == L::kTableSlots && ValueMap::partAt(2) == L::kTableLive &&
+                  ValueMap::partAt(3) == L::kTableShift && sizeof(ValueMap::Entry) == L::kEntrySize && offsetof(ValueMap::Entry, value) == L::kEntryValue &&
+                  offsetof(ValueMap::Entry, hash) == L::kEntryHash && offsetof(ValueMap::Entry, key) == 0 && offsetof(ValueMap::Entry, live) == L::kEntryLive &&
+                  ValueMap::partAt(4) == L::kTableVersion && offsetof(ObjSet, entries) == L::kSetEntries && offsetof(ObjSet, values) == L::kSetValues &&
+                  offsetof(ObjIterator, version) == L::kIterVersion,
+              "layout.h: a map's or a set's table");
 static_assert(static_cast<int>(ObjType::String) == L::kTypeString && offsetof(ObjString, length) == L::kStringLength && sizeof(ObjString::length) == 8, "layout.h: a string");
 static_assert(static_cast<int>(ValueKind::Null) == L::kKindNull, "layout.h: null");
 static_assert(offsetof(ObjInstance, cls) == L::kInstClass, "layout.h: an object's class");
@@ -348,7 +356,7 @@ namespace {
 volatile uint8_t checkFlag = 0;
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr, nullptr};
+    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
     return runRegion(code, slots, &context);
 }
 

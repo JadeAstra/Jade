@@ -520,6 +520,28 @@ struct Region {
         const ListStore store = asList(v)->store();
         return store == ListStore::Ints || store == ListStore::Floats || store == ListStore::Bools;
     }
+    // Whether the frame's slot holds a map or a set, or an iterator through one, where the region is
+    // made: no list step is made for it, which would miss each time (2026-11-16, sets-maps-plan
+    // part 0: a for over a set by iteri, map[i] = x by hsetwi, 512 misses each).
+    // The local a stack slot was pushed from (GET_LOCAL), going back from instruction `i` to what
+    // pushed it; -1 where something else did, or none is found. A guess: a slot the region knows
+    // only as memory holds it (after the VM did an instruction) was mostly pushed so.
+    int pushedLocal(int i, int slot) const {
+        for (int j = i - 1; j >= 0 && j >= i - 32; j--) {
+            const int t = topAt(j);
+            if (t < 0 || t > slot) continue;
+            return t == slot && ins[static_cast<size_t>(j)].op == Op::GetLocal ? u16(ins[static_cast<size_t>(j)], 0) : -1;
+        }
+        return -1;
+    }
+    // (What the region knows the slot holds first: a global read, 2026-11-16.)
+    bool frameMapOrSet(const State& s, int slot) const {
+        if (slot < 0) return false;
+        const Value* v = knownValue(s, slot);
+        if (v == nullptr) return false;
+        if (v->isObjType(ObjType::Iterator)) v = &asIterator(*v)->source;
+        return v->isObjType(ObjType::Map) || v->isObjType(ObjType::Set);
+    }
     // Whether the frame's slot holds packed ints, floats or bools that may be null (setnullat).
     bool frameNullable(int slot) const {
         if (!frameValues(slot)) return false;
@@ -1320,6 +1342,19 @@ struct Region {
             }
             write(slot, K{kMem});
         }
+        // For a step that writes `slot` after its ways out (2026-11-16: has, setadd, mapget, idxv):
+        // the copies of it elsewhere made first, as writeMemory does, but the slot itself as it was
+        // on the step's way out, where the VM, doing the instruction again, may read it (the call's
+        // result slot, the set itself pushed there: GC stress found the VM reading a stale bool).
+        void writeMemoryLater(int slot) {
+            const K before = s.kind(slot);
+            const bool had = s.kinds.find(slot) != s.kinds.end();
+            const int flag = s.flag;
+            writeMemory(slot);
+            if (had) s.kinds[slot] = before;
+            else s.kinds.erase(slot);
+            s.flag = flag;
+        }
         // Whether another slot below the top is a copy of `slot`, or a whole number read from the
         // list there: what a step writing the slot in place of writeMemory leaves out.
         bool copiedElsewhere(int slot) const {
@@ -1380,6 +1415,59 @@ struct Region {
             return Reg{slot, cls};
         }
     };
+
+    // What the table in a slot likely is, as the region is made (the frame's, a global read, or the
+    // local it was pushed from): a map's or a set's ObjType; String for anything else (2026-11-16,
+    // sets-maps-plan). A guess the steps check.
+    ObjType tableKind(const State& s, int slot, int i) const {
+        for (const int at : {slot, pushedLocal(i, slot)}) {
+            if (at < 0) continue;
+            const Value* const v = knownValue(s, at);
+            if (v != nullptr && (v->isObjType(ObjType::Map) || v->isObjType(ObjType::Set))) return v->as.obj->type;
+        }
+        return ObjType::String;
+    }
+    // A step looking a key up (mapget, has: sets-maps-plan part 1): the key a constant (stem + "k",
+    // the constant's address in ww_ki), a whole number the region holds in an int register (stem +
+    // "i"), or a value in a slot (stem + "v", the slot in ww_ki).
+    LOp& keyStep(Ctx& c, const char* stem, bool isConstant, int k) {
+        if (isConstant) {
+            LOp& l = c.op(std::string(stem) + "k");
+            l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(&constant(k)));
+            return l;
+        }
+        const K kk = c.s.kind(k);
+        if (kk.bits != 0 && (kk.bits & ~(kInt | kCopyI | kWhole)) == 0) {
+            const Reg key = c.read(k, CI, false);
+            return c.op(std::string(stem) + "i", {key}, {key});
+        }
+        LOp& l = c.op(std::string(stem) + "v");
+        l.ki = c.objectSlot(k);
+        return l;
+    }
+
+    // The slot whose memory holds what slot `slot` holds, for a step that gives it to the VM's way
+    // (mapset, setadd: sets-maps-plan part 2): the slot itself as entered or written there, the
+    // one it copies, or, where the region holds it in a register (an int, a float, a bool in the
+    // flag), the slot with it written there first.
+    int memorySlot(Ctx& c, int slot) {
+        const K k = c.s.kind(slot);
+        if (k.bits == kEntry || inMemory(k)) return slot;
+        if ((k.bits & ~kCopies) == 0 && k.src >= 0 && (c.s.kind(k.src).bits == kEntry || inMemory(c.s.kind(k.src)))) return k.src;
+        if (k.bits == kInt || k.bits == kFloat || k.bits == kByte || k.bits == kCopyI || k.bits == kCopyF) {
+            const Cls cls = k.bits == kFloat || k.bits == kCopyF ? CF : CI;
+            const Reg r = c.read(slot, cls, false);
+            c.op(k.bits == kByte ? "storeby" : cls == CF ? "storef" : "storei", {r}, {r}).slot = slot;
+            c.s.kinds[slot] = K{kMem};
+            return slot;
+        }
+        if (k.bits == kBool && c.s.flag == slot) {
+            c.op("storeb").slot = slot;
+            c.s.kinds[slot] = K{kMem};
+            return slot;
+        }
+        island();
+    }
 
     Result transfer(int i, const State& start, bool lowering = true) {
         const Ins& x = ins[static_cast<size_t>(i)];
@@ -1817,6 +1905,22 @@ struct Region {
                 }
                 // As read next; or a guess, which the step checks (an item of another kind leaves):
                 // how it is used, or what the list holds in the call the region is made in.
+                if (frameMapOrSet(s, list) || frameMapOrSet(s, pushedLocal(c.i, list))) {
+                    // No list step on a map or a set (sets-maps-plan part 0); a map's value for a
+                    // key looked up by the VM's way, the region going on (part 1, mapget): null
+                    // where it has none, anything else the VM's.
+                    if (tableKind(s, list, c.i) != ObjType::Map) island();
+                    c.writeMemoryLater(a);
+                    LOp& l = keyStep(c, "mapget", x.op == Op::RGetIndexSK, u8(x, 2));
+                    l.slot = list;
+                    l.slot2 = a;
+                    l.ret = static_cast<int64_t>(ObjType::Map);
+                    c.leaves(l);
+                    c.write(a, K{kMem});
+                    s.top = u8(x, 3);
+                    c.fall(s);
+                    return;
+                }
                 int cls = useClass(c.i, a, u8(x, 3));
                 if (cls < 0) cls = useClass(c.i, a, u8(x, 3), 0, true);
                 if (cls < 0) cls = frameClass(list);
@@ -1825,7 +1929,7 @@ struct Region {
                     // as the frame's is (2026-11-16: `val n = ints[i]` of a List<int?>): the item
                     // as a value, in memory (idxv; the step checks the list).
                     if (!frameValues(list)) island();
-                    c.writeMemory(a);
+                    c.writeMemoryLater(a);
                     LOp* l;
                     if (x.op == Op::RGetIndexSK) {
                         l = &c.op("idxvk");
@@ -1837,6 +1941,7 @@ struct Region {
                     l->slot = list;
                     l->slot2 = a;
                     c.leaves(*l);
+                    c.write(a, K{kMem});  // written by the step, after its way out
                     // What it likely holds: the frame's list's first item (a string, whose size is read next).
                     if (const ObjList* const held = asList(frame[list]); !held->packed() && held->size() > 0) noteFieldValue(s, a, held->values()[0]);
                     s.top = u8(x, 3);
@@ -2019,8 +2124,41 @@ struct Region {
                 // kind; anything else the VM's, the call made as before. Any other call the VM's.
                 const int a = u8(x, 0), argc = u8(x, 4), flags = u8(x, 5);
                 const Value& name = constant(u16(x, 10));
+                // `set.contains(k)`, `map.containsKey(k)` (and `k in set`): the key looked up by the
+                // VM's way, the region going on (2026-11-16, sets-maps-plan part 1), into the flag.
+                if (argc == 1 && name.isObjType(ObjType::String) && (asString(name)->utf8() == "contains" || asString(name)->utf8() == "containsKey")) {
+                    const int table = c.objectSlot(u8(x, 1));
+                    const ObjType kind = tableKind(s, table, c.i);
+                    if (kind != (asString(name)->utf8() == "contains" ? ObjType::Set : ObjType::Map)) island();
+                    c.writeMemoryLater(a);
+                    LOp& l = keyStep(c, "has", (flags & 1) != 0, u8(x, 6));
+                    l.slot = table;
+                    l.ret = static_cast<int64_t>(kind);
+                    c.leaves(l);
+                    c.write(a, K{kBool});
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                }
                 if (argc != 1 || !name.isObjType(ObjType::String) || asString(name)->utf8() != "add") island();
                 const int list = c.objectSlot(u8(x, 1));
+                if (frameMapOrSet(s, list) || frameMapOrSet(s, pushedLocal(c.i, list))) {
+                    // A set's add by the VM's way (sets-maps-plan parts 0 and 2, setadd): whether
+                    // it was added, into the flag.
+                    if (tableKind(s, list, c.i) != ObjType::Set) island();
+                    const int keySlot = (flags & 1) ? -1 : memorySlot(c, u8(x, 6));
+                    if (keySlot < 0) island();
+                    c.writeMemoryLater(a);
+                    LOp& l = c.op("setadd");
+                    l.slot = list;
+                    l.ki = keySlot;
+                    l.ret = static_cast<int64_t>(ObjType::Set);
+                    c.leaves(l);
+                    c.write(a, K{kBool});
+                    s.top = u8(x, 2);
+                    c.fall(s);
+                    return;
+                }
                 // A list that may hold null (2026-11-16): the steps add to it where its bits have
                 // room (coverNulls keeps a word for each item its block has room for); a value
                 // that may be null, to a list of ints, floats or bools, added from its slot (pushv).
@@ -2142,6 +2280,29 @@ struct Region {
                 // The two on top changed round, where the next instruction pops the one on top
                 // (`a[i] = V(...)`: the place under the value, dropped): the value moved down.
                 const int top = s.top;
+                // Two copies of other slots (2026-11-16: `k in set`, the key and the set pushed
+                // and changed round for the call): which slot each copies, changed round.
+                // (Or an int or a float in its register: moved to the other slot's.)
+                auto copyOnly = [](const K& k) { return k.bits != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0; };
+                auto number = [](const K& k) { return k.bits == kInt || k.bits == kFloat; };
+                const K under = top >= 2 ? s.kind(top - 2) : K{}, over = top >= 2 ? s.kind(top - 1) : K{};
+                if (top >= 2 && (copyOnly(under) || number(under)) && (copyOnly(over) || number(over)) && !(number(under) && number(over))) {
+                    if (number(under)) {
+                        const Cls cls = under.bits == kFloat ? CF : CI;
+                        const Reg from{top - 2, cls}, to{top - 1, cls};
+                        c.op(cls == CF ? "movf" : "movi", {to, from}, {from}, {to});
+                    }
+                    if (number(over)) {
+                        const Cls cls = over.bits == kFloat ? CF : CI;
+                        const Reg from{top - 1, cls}, to{top - 2, cls};
+                        c.op(cls == CF ? "movf" : "movi", {to, from}, {from}, {to});
+                    }
+                    s.kinds[top - 2] = over;
+                    s.kinds[top - 1] = under;
+                    if (s.flag == top - 1 || s.flag == top - 2) s.flag = -1;
+                    c.fall(s);
+                    return;
+                }
                 if (c.i + 1 >= static_cast<int>(ins.size()) || ins[static_cast<size_t>(c.i + 1)].op != Op::Pop || top < 2) island();
                 move(c, top - 1, top - 2);
                 c.fall(s);
@@ -2341,6 +2502,22 @@ struct Region {
             case Op::SetIndex: {  // list index value -> value
                 const int top = s.top;
                 const int list = c.objectSlot(top - 3);
+                if (frameMapOrSet(s, list) || frameMapOrSet(s, pushedLocal(c.i, list))) {
+                    // No list step on a map or a set (sets-maps-plan part 0); a map's key given a
+                    // value (part 2, mapset), the key and the value in memory for the VM's way.
+                    if (tableKind(s, list, c.i) != ObjType::Map) island();
+                    const int keySlot = memorySlot(c, top - 2), valueSlot = memorySlot(c, top - 1);
+                    LOp& l = c.op("mapset");
+                    l.slot = list;
+                    l.slot2 = valueSlot;
+                    l.ki = keySlot;
+                    l.ret = static_cast<int64_t>(ObjType::Map);
+                    c.leaves(l);
+                    move(c, top - 1, top - 3);
+                    s.top = top - 2;
+                    c.fall(s);
+                    return;
+                }
                 if (const ObjClass* const cls = itemsClass(s, list)) {
                     // An item of a list of a value type's items kept in the value itself (B3): the
                     // value's bytes, where the region holds a value of the type in memory (or a
@@ -2431,10 +2608,47 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::IterNextPair: {  // u16 slot, i32 target: a map's next key and value pushed, or to the target
+                // `for ((k, v) in map)` by the map's table (2026-11-16, sets-maps-plan part 3,
+                // iterpair); anything else (a list of pairs) the VM's.
+                const int it = c.objectSlot(u16(x, 0));
+                const int top = s.top;
+                const Value* const held = knownValue(s, it);
+                if (held == nullptr || !held->isObjType(ObjType::Iterator) || !asIterator(*held)->source.isObjType(ObjType::Map)) island();
+                const State none = s;
+                c.writeMemory(top);
+                c.writeMemory(top + 1);
+                LOp& l = c.op("iterpair");
+                l.slot = it;
+                l.slot2 = top;
+                l.ki = top + 1;
+                c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
+                c.leaves(l);
+                s.top = top + 2;
+                c.fall(s);
+                return;
+            }
             case Op::IterNextRef:
             case Op::IterNext: {  // u16 slot, i32 target: the next item pushed, or to the target
                 const int it = c.objectSlot(u16(x, 0));
                 const int top = s.top;
+                if (frameMapOrSet(s, it)) {
+                    // No list step on a map or a set (sets-maps-plan part 0); a for over a set, or
+                    // a map's keys, by its table (part 3, iterkey); over a map itself (its entries,
+                    // made) the VM's.
+                    const Value* const held = knownValue(s, it);
+                    if (held == nullptr || !held->isObjType(ObjType::Iterator) || !asIterator(*held)->source.isObjType(ObjType::Set)) island();
+                    const State none = s;
+                    c.writeMemory(top);
+                    LOp& l = c.op("iterkey");
+                    l.slot = it;
+                    l.slot2 = top;
+                    c.go(static_cast<uint32_t>(i32(x, 2)), none, l);
+                    c.leaves(l);
+                    s.top = top + 1;
+                    c.fall(s);
+                    return;
+                }
                 if (x.op == Op::IterNextRef) {
                     // A list of a value type's items: each item where it is, a Ref (M9.5 B1). Any
                     // other list as IterNext, which the VM's IterNextRef is for it.
@@ -2474,6 +2688,12 @@ struct Region {
                 }
                 int cls = useClass(c.i, top, top + 1);
                 if (cls < 0) cls = useClass(c.i, top, top + 1, 0, true);
+                // A list the frame's iterator goes through whose items are no such numbers (2026-11-16: a
+                // List<string> whose items are used as keys): read as values (iterv), not guessed.
+                if (cls >= 0 && frame != nullptr && it < frameSlots && it < f.maxStack && frame[it].isObjType(ObjType::Iterator)) {
+                    const Value& source = asIterator(frame[it])->source;
+                    if (source.isObjType(ObjType::List) && asList(source)->store() != (cls == CF ? ListStore::Floats : ListStore::Ints)) cls = -1;
+                }
                 const State none = s;  // no more: nothing pushed
                 LOp* l;
                 if (cls >= 0) {
@@ -7546,6 +7766,7 @@ bool mayDo(Op op) {
         case Op::RMulWrapSK:
         case Op::IterNext:
         case Op::IterNextRef:
+        case Op::IterNextPair:  // a map's keys and values (2026-11-16)
         case Op::RGetProp:
         case Op::RSetPropSS:
         case Op::RSetPropSK: return true;
@@ -7556,7 +7777,8 @@ bool mayDo(Op op) {
 bool mayDo(const FunctionProto& f, const Ins& x) {
     if (x.op == Op::RInvoke && u8(x, 4) == 1 && u16(x, 10) < f.constants.size()) {
         const Value& name = f.constants[u16(x, 10)];
-        if (name.isObjType(ObjType::String) && asString(name)->utf8() == "add") return true;
+        if (name.isObjType(ObjType::String) && (asString(name)->utf8() == "add" || asString(name)->utf8() == "contains" || asString(name)->utf8() == "containsKey"))
+            return true;  // (contains, containsKey: a set's or a map's, 2026-11-16)
     }
     return mayDo(x.op);
 }

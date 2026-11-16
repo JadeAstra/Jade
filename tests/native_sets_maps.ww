@@ -1,0 +1,159 @@
+// Sets and maps in native code (2026-11-16, docs/sets-maps-plan.html): map[k], set.contains(k),
+// k in set, k in map.keys (looked up by the step for an int key, by the VM's way for another);
+// map[k] = v and set.add(k) (an existing int key's value written by the step, a new key added by
+// the VM's way); a for over a set, over a map's keys, and over a map's keys and values. Then the
+// keys the VM must decide: a float equal to an int, a byte, strings, values of a value type, objects
+// of a class with its own == and hashCode; a map changed in a for over it. Each
+// loop run often enough for its region to be made: the same answers as the VM's.
+
+class Key(val n : int) {
+  op ==(other : any?) => other is Key and other.n % 10 == n % 10
+  fun hashCode() => n % 10
+}
+
+fun getAll(m : Map<int, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += m[i] ?: -1 }
+  return t
+}
+fun containsAll(s : Set<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (s.contains(i)) { t += i }
+  }
+  return t
+}
+fun inAll(s : Set<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i in s) { t += 1 }
+  }
+  return t
+}
+fun inKeys(m : Map<int, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i in m.keys) { t += 1 }
+  }
+  return t
+}
+fun setAll(m : open Map<int, int>, n : int) : int {
+  for (i in 0 ..< n) { m[i] = i * 3 }
+  return m.size
+}
+fun addAll(s : open Set<int>, n : int) : int {
+  var added = 0
+  for (i in 0 ..< n) {
+    if (s.add(i % 50)) { added += 1 }
+  }
+  return added
+}
+fun counts(words : List<string>) : string {
+  val m : open Map<string, int> = {:}
+  for (w in words) { m[w] = (m[w] ?: 0) + 1 }
+  return "${m.size} ${m["w3"]} ${m["w96"]} ${m["none"]}"
+}
+fun sumSet(s : Set<int>) : int {
+  var t = 0
+  for (n in s) { t += n }
+  return t
+}
+fun sumKeys(m : Map<int, int>) : int {
+  var t = 0
+  for (k in m.keys) { t += k }
+  return t
+}
+fun sumPairs(m : Map<int, int>) : int {
+  var t = 0
+  for ((k, v) in m) { t += k * 2 + v }
+  return t
+}
+fun anyGet(m : Map<any, int>, keys : List<any>) : int {
+  var t = 0
+  for (i in 0 ..< keys.size) { t += m[keys[i]] ?: 100 }
+  return t
+}
+fun strings(s : Set<string>, words : List<string>) : int {
+  var t = 0
+  for (w in words) {
+    if (s.contains(w)) { t += 1 }
+  }
+  return t
+}
+fun changeWhileGoing(m : open Map<int, int>) : string {
+  var t = 0
+  try {
+    for ((k, v) in m) {
+      t += v
+      if (k == 7) { m[1000 + k] = 1 }
+    }
+  } catch (e : Exception) {
+    return "stopped after $t"
+  }
+  return "went through, $t"
+}
+
+val map : open Map<int, int> = {:}
+val set : open Set<int> = Set([])
+for (i in 0 ..< 2000) {
+  if (i % 3 != 0) {
+    map[i] = i * 2
+    set.add(i)
+  }
+}
+val words = (0 ..< 1500).map { "w${it % 97}" }
+val vocabulary : Set<string> = Set((0 ..< 40).map { "w$it" })
+for (round in 0 ..< 3) {
+  var a = 0
+  var b = 0
+  var c = 0
+  var d = 0
+  var e = 0
+  var f = ""
+  var g = 0
+  var h = 0
+  var p = 0
+  var w = 0
+  for (r in 0 ..< 200) {
+    a = getAll(map, 2100)
+    b = containsAll(set, 2100)
+    c = inAll(set, 2100)
+    d = inKeys(map, 2100)
+    f = counts(words)
+    g = sumSet(set)
+    h = sumKeys(map)
+    p = sumPairs(map)
+    w = strings(vocabulary, words)
+  }
+  val filled : open Map<int, int> = {:}
+  val grown : open Set<int> = Set([])
+  for (r in 0 ..< 200) {
+    e = setAll(filled, 700)
+    e += addAll(grown, 300)
+  }
+  print(a, b, c, d, e, g, h, p, w, f)
+  print(filled[0], filled[699], filled[700], grown.size, grown.contains(49), grown.contains(50))
+}
+// Keys the VM decides: a float equal to an int, a byte, a string, a value, an object of its own ==.
+val mixed : open Map<any, int> = {:}
+mixed[1.0] = 10
+mixed[2] = 20
+mixed[3.5] = 35
+mixed["4"] = 40
+mixed[Key(5)] = 50
+val keys : List<any> = [1, 2, 3, 3.5, "4", 4, Key(15), Key(6), 2.0]
+var m = 0
+for (r in 0 ..< 300) { m = anyGet(mixed, keys) }
+print(m)
+val numbers : open Map<int, int> = {:}
+for (i in 0 ..< 20) { numbers[i] = i }
+for (r in 0 ..< 300) { numbers[1000 + 7] = 1; numbers.remove(1007) }
+print(changeWhileGoing(numbers), numbers.size)
+// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
+// expect: 0 2097 null 50 true false
+// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
+// expect: 0 2097 null 50 true false
+// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
+// expect: 0 2097 null 50 true false
+// expect: 475
+// expect: stopped after 28 21

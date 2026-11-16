@@ -1406,6 +1406,9 @@ private:
     // zero; null where a collection is due (the region leaves the making to the VM).
     static void* boxForRegion(void* vm, const void* cls);
     static bool roomForRegion(void* vm, const void* list);
+    static int findForRegion(const void* table, const void* key, void* out);
+    static int setForRegion(void* vm, const void* table, const void* key, const void* value);
+    static bool plainKeyForRegion(const Value& k);
     // Whether a bare name in function `f` is no member of `receiver`, as implicitReceiver would
     // find it, by its class alone (GlobalsSeen::noMember).
     static bool noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver);

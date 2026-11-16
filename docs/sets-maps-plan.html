@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: sets and maps in native code</h1>
-<p class="lede">Written 2026-11-16, at the user's word ("take a look at these as well", of what was left after lists that may hold null: "Sets and maps: nothing native at all"). A region's steps looking a key up in a map or a set, setting a key's value, and going through a set or a map in a <code>for</code>, where today each of these leaves for the VM, or worse, is taken for a list and misses. Questions for the user at the end, each with a recommendation; nothing is built before they are decided, and part 1 is built as a spike with a gate.</p>
+<p class="lede">Written 2026-11-16, at the user's word ("take a look at these as well", of what was left after lists that may hold null: "Sets and maps: nothing native at all"). A region's steps looking a key up in a map or a set, setting a key's value, and going through a set or a map in a <code>for</code>, where today each of these leaves for the VM, or worse, is taken for a list and misses. Questions for the user at the end, each with a recommendation; nothing is built before they are decided, and part 1 is built as a spike with a gate. All five decided 2026-11-16 as recommended ("go ahead"). <strong>The spike passed its gate</strong> the same day (<a href="#sm-spike">below</a>), with probing in the step for int keys; parts 2 and 3 built after it.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -100,6 +100,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#sm-same">What does not change</a></li>
 <li><a href="#sm-risks">Risks</a></li>
 <li><a href="#sm-questions">Questions for the user</a></li>
+<li><a href="#sm-spike">The spike: passed its gate</a></li>
 </ul>
 </nav>
 
@@ -164,7 +165,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Not now.</strong></li>
 </ul>
 <p><em>Recommended:</em> part 0 now, then the spike. Part 0 is a fix whatever else is done; the spike shows in a day whether a lookup from native code can cost a third of what it does.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -175,7 +176,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The C++ call only.</strong></li>
 </ul>
 <p><em>Recommended:</em> the C++ call first. It is exact for every kind of key with no second copy of the table's rules, and most of what a lookup costs now is the way out and back, which it takes away.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -185,7 +186,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Left to the VM</strong>: the step leaves (no miss) and the VM adds it.</li>
 </ul>
 <p><em>Recommended:</em> the C++ call. A map filled in a loop (<code>counts[w] = ...</code>) adds a new key often; leaving each time would cost what it costs now.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -195,7 +196,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Later</strong>: a <code>for</code> over a set or a map stays the VM's (5 ns an item now), with part 0 so that it no longer misses.</li>
 </ul>
 <p><em>Recommended:</em> in this plan. The loop body around a <code>for</code> over a map is often what costs (lookups in another map, sums); with the <code>for</code> the VM's it cannot be a region at all.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("go ahead"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -205,8 +206,24 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Stricter</strong>: 6 and 8 ms.</li>
 </ul>
 <p><em>Recommended:</em> as above: a third of today's, which the way out and back alone accounts for. The stricter one is what probing in the step would be judged by, if it comes to that.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("go ahead"): as recommended.</span></div>
 </section>
+<h2 id="sm-spike">The spike: passed its gate</h2>
+<p>2026-11-16, the same day, after part 0. By the C++ call alone, a million keys: <code>set.contains(i)</code> 14.6 ms (gate 10), <code>map[i] ?: 0</code> 15.5 ms (gate 12): half of what they were, short of the gate. Then, as decided, probing in the step for int keys (<code>probeInt</code>: an int's hash its own bits, as <code>keyHash</code>; a stored float or object of the same hash left to the C++ call, which is exact): 6.9 and 7.0 ms, inside even the stricter gate for maps. A string key, and any other plain key, by the C++ call (<code>ValueMap::findPlain</code>, which runs no WinterWolf code; a stored key that may have its own <code>==</code> leaves for the VM). Parts 2 and 3 built after it:</p>
+<div class="table"><table>
+<thead><tr><th>Loop, a million</th><th class="num">e8d83af, ms</th><th class="num">Now, ms</th></tr></thead>
+<tbody>
+<tr><td><code>set.contains(i)</code></td><td class="num">27.2</td><td class="num">6.8</td></tr>
+<tr><td><code>i in set</code></td><td class="num">28.4</td><td class="num">6.2</td></tr>
+<tr><td><code>map[i] ?: 0</code></td><td class="num">28.8</td><td class="num">6.8</td></tr>
+<tr><td><code>map[i] = i * 3</code>, the keys there</td><td class="num">29.5</td><td class="num">8.5</td></tr>
+<tr><td><code>map[i] = i</code>, a new map</td><td class="num">55.1</td><td class="num">45.1</td></tr>
+<tr><td><code>m[w] = (m[w] ?: 0) + 1</code> over words</td><td class="num">51.0</td><td class="num">36.5</td></tr>
+<tr><td><code>for (n in set)</code> (666,667)</td><td class="num">4.0</td><td class="num">1.9</td></tr>
+<tr><td><code>for ((k, v) in map)</code> (666,667)</td><td class="num">3.3</td><td class="num">2.1</td></tr>
+</tbody></table></div>
+<p>What each is: part 0, no list step where the frame (or a global read, or the local a slot was pushed from) shows a map or a set; part 1, <code>mapgeti</code>/<code>mapgetv</code>/<code>mapgetk</code> and <code>hasi</code>/<code>hasv</code>/<code>hask</code> (<code>contains</code>, <code>in</code> through a <code>SWAP</code> now native, <code>k in map.keys</code>); part 2, <code>mapset</code> (an existing int key's value written in the step, anything else by <code>VM::setForRegion</code>, which adds a new key) and <code>setadd</code>; part 3, <code>iterkey</code> (a set, or a map's keys) and <code>iterpair</code> (IterNextPair), the table's version checked each time as the VM checks it. A map's own <code>for (e in map)</code>, whose entries are made, stays the VM's; so does a key of a class with its own <code>==</code>. Adding new keys is where the rest of the time goes (the table's own work, the same in the VM). <code>jade_layout</code> reads 2 to 3% slower with native code off as well: the executable's layout. GC stress found the call's result slot marked written before a step that may leave (the set pushed there read stale by the VM): fixed for every such step (<code>writeMemoryLater</code>).</p>
+
 </main>
 </body>
 </html>

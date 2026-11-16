@@ -123,6 +123,13 @@ struct RegionContext {
     // push steps): false where a collection is due or the list is not packed, where the region
     // leaves the add to the VM.
     bool (*makeRoom)(void* vm, const void* list);
+    // The VM's way of looking a key up in a map or a set for a region (2026-11-16, sets-maps-plan
+    // part 1, stencils.cpp's mapget and has steps): 1 found (a map's value copied to `out`), 0 not,
+    // -1 where the VM looks it up instead.
+    int (*findKey)(const void* table, const void* key, void* out);
+    // And of setting a map's key or adding to a set (part 2, mapset and setadd): 1 done (a set:
+    // added), 0 a set that had it, -1 where the VM does it instead.
+    int (*setKey)(void* vm, const void* table, const void* key, const void* value);
 };
 // The 256 numbers a region's `units` points at, made once.
 const double* unitTable();
