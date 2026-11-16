@@ -893,7 +893,7 @@ Platform* Platform::get(std::string& error) {
 
 }  // namespace ww::jade
 
-#else
+#elif !defined(WW_WAYLAND)  // on Linux with Wayland: platform_linux.cpp
 
 #include "platform.h"
 

@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: Jade's windows on Linux, under KDE and GNOME</h1>
-<p class="lede">Written 2026-11-16, at the user's word ("can we have the gui use kde and gnome in linux?"). Jade's native layer (<code>src/jade/platform.h</code>) written again for Linux, as <code>platform_win.cpp</code> is for Windows, so that a program with <code>import Jade</code> opens its windows on KDE Plasma and on GNOME. Four things the user decided as the plan was asked for (below, decided); the rest are questions at the end, each with a recommendation. Nothing is built before they are decided, and the first step is a spike with a gate.</p>
+<p class="lede">Written 2026-11-16, at the user's word ("can we have the gui use kde and gnome in linux?"). Jade's native layer (<code>src/jade/platform.h</code>) written again for Linux, as <code>platform_win.cpp</code> is for Windows, so that a program with <code>import Jade</code> opens its windows on KDE Plasma and on GNOME. Four things the user decided as the plan was asked for (below, decided); the rest are questions at the end, each with a recommendation. Nothing is built before they are decided, and the first step is a spike with a gate. All five decided 2026-11-16 as recommended.</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -102,6 +102,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#lx-risks">Risks</a></li>
 <li><a href="#lx-decided">Decided as the plan was asked for</a></li>
 <li><a href="#lx-questions">Questions for the user</a></li>
+<li><a href="#lx-spike">The spike, so far</a></li>
 </ul>
 </nav>
 
@@ -196,7 +197,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Said plainly:</strong> <code>position()</code> gives null on Wayland and <code>setPosition</code> does nothing; programs that place windows learn to ask.</li>
 </ul>
 <p><em>Recommended:</em> kept, not used. A program written on Windows runs as it is; what Wayland will not do is the compositor's to decide, as with every other Wayland program.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("as recommended").</span></div>
 </section>
 
 <section class="decision">
@@ -206,7 +207,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>A second VM</strong> with Fedora Workstation (GNOME's).</li>
 </ul>
 <p><em>Recommended:</em> added to the same VM: one machine, one shared folder, the two desktops a log-out apart.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("as recommended").</span></div>
 </section>
 
 <section class="decision">
@@ -216,7 +217,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>In the VM</strong>, from the shared folder's copy of the source (Clang and the dev packages installed there).</li>
 </ul>
 <p><em>Recommended:</em> in WSL, while Fedora's C library is as new as Ubuntu 26.04's (checked at the spike); in the VM only if it is not.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("as recommended").</span></div>
 </section>
 
 <section class="decision">
@@ -226,7 +227,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Like GNOME's own</strong> (Adwaita's header bar: its buttons, sizes and rounded corners).</li>
 </ul>
 <p><em>Recommended:</em> like GNOME's own, drawn by Jade: on GNOME it is the only title bar a user sees, and one that looks foreign there is the first thing they notice.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("as recommended").</span></div>
 </section>
 
 <section class="decision">
@@ -236,8 +237,18 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Less:</strong> a window that draws and takes input on WSLg alone.</li>
 </ul>
 <p><em>Recommended:</em> as above. WSLg alone would not show what a real desktop does (KDE's decorations, its scale, its cursor protocol).</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-16, the user ("as recommended").</span></div>
 </section>
+<h2 id="lx-spike">The spike, so far</h2>
+<p>2026-11-16. <code>src/jade/platform_linux.cpp</code>: the whole of <code>platform.h</code> but the file dialog and the clipboard (both step 1 and 2), on Wayland: xdg-shell's toplevels, EGL with one OpenGL 3.3 core context (surfaceless for pictures), xkbcommon for keys, text and composing (dead keys), the cursor theme for the pointer's shapes, the whole and fractional scale (with the viewport), server-side title bars where the compositor offers them, the frames paced by frame callbacks on a queue of their own. ww is linked with none of it: <code>ldd ww</code> names only the C and C++ libraries; the protocols' descriptions are made by wayland-scanner as ww is built (CMakeLists.txt).</p>
+<ul>
+<li><strong>The tests that draw in windows never shown</strong>, on Linux in WSL: 26 of the 30 marked Windows only pass there as they are. The other four are about fonts (Segoe UI and Windows' other families, which Linux lacks; DejaVu Sans in their place has other widths): <code>fonts.ww</code>, <code>text_measure.ww</code>, <code>text_draw.ww</code>, and one line of <code>jade_host.ww</code>.</li>
+<li><strong>A window shown</strong> under WSLg (<code>bench/spike/linux_window.ww</code>): visible, at scale 1, its picture the same bytes as the same picture drawn in a window never shown. Against Windows' picture (the same program, text in the same font file): 187 of its 86,400 pixels differ, each by one level of 255, all on the edges of shapes and letters. Windows drew it on the graphics card, WSLg in Mesa's software renderer (llvmpipe): the two round the edges' coverage differently. Byte-for-byte sameness with Windows, as the gate asked it, holds only for one renderer: it is the native layer that is to add nothing, which the shown and hidden pictures show.</li>
+<li><strong>With no Wayland display</strong>: a program without windows runs as before; one that opens a window is told "there is no Wayland display (WAYLAND_DISPLAY is not set): windows need a Wayland session".</li>
+<li><strong>Built in WSL</strong>, ww needs a C library of 2.43 or later (Ubuntu 26.04's): the VM's is checked by the script before anything runs.</li>
+<li><strong>Left for the gate:</strong> the user's Fedora KDE VM (<code>D:\Projects\MK_fed\ww-linux-spike\run.sh</code>, run as <code>bash /mk/ww-linux-spike/run.sh</code>): the picture there, then input, resizing and KDE's title bar tried by hand, into <code>report.txt</code>.</li>
+</ul>
+
 </main>
 </body>
 </html>

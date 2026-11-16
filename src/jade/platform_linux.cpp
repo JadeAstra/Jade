@@ -1,0 +1,1230 @@
+// Jade's native layer on Linux: see platform.h, and docs/linux-gui-plan.html.
+//
+// Wayland, talked to directly, as platform_win.cpp talks Win32: a surface with xdg-shell's
+// toplevel role for each window, its OpenGL 3.3 context through EGL, the keyboard read with
+// xkbcommon. One native layer for KDE Plasma and GNOME alike (both run Wayland and speak its
+// common protocols); what one offers and the other does not (a title bar drawn by the
+// compositor) is asked for, and done without where missing.
+//
+// ww is linked with none of the system's libraries for it: each is opened as the first window
+// is made (dlopen), so that ww runs where they are missing (a server, a container), and a
+// program that opens a window there is told there is no display. The functions the protocol
+// headers call are redirected below to pointers filled from the libraries; the protocols'
+// descriptions (wl_interface) are made from their XML by wayland-scanner as ww is built
+// (CMakeLists.txt) and included at the end of this file.
+
+#if defined(__linux__) && defined(WW_WAYLAND)
+
+#include <dlfcn.h>
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+// ---- The libraries' functions, reached through pointers ----
+// Each name below, as the system's headers declare it, becomes a pointer of the function's own
+// type (the header's declaration of it, so redirected, defines the pointer), filled from the
+// library as it is opened. Every call, ours and the headers' own inline ones, goes through it.
+
+#define wl_display_connect (*ww_wl_display_connect)
+#define wl_display_disconnect (*ww_wl_display_disconnect)
+#define wl_display_get_fd (*ww_wl_display_get_fd)
+#define wl_display_dispatch_pending (*ww_wl_display_dispatch_pending)
+#define wl_display_dispatch_queue_pending (*ww_wl_display_dispatch_queue_pending)
+#define wl_display_flush (*ww_wl_display_flush)
+#define wl_display_roundtrip (*ww_wl_display_roundtrip)
+#define wl_display_prepare_read (*ww_wl_display_prepare_read)
+#define wl_display_prepare_read_queue (*ww_wl_display_prepare_read_queue)
+#define wl_display_read_events (*ww_wl_display_read_events)
+#define wl_display_cancel_read (*ww_wl_display_cancel_read)
+#define wl_display_create_queue (*ww_wl_display_create_queue)
+#define wl_display_get_error (*ww_wl_display_get_error)
+#define wl_event_queue_destroy (*ww_wl_event_queue_destroy)
+#define wl_proxy_set_queue (*ww_wl_proxy_set_queue)
+#define wl_proxy_marshal_flags (*ww_wl_proxy_marshal_flags)
+#define wl_proxy_add_listener (*ww_wl_proxy_add_listener)
+#define wl_proxy_destroy (*ww_wl_proxy_destroy)
+#define wl_proxy_get_version (*ww_wl_proxy_get_version)
+#define wl_proxy_set_user_data (*ww_wl_proxy_set_user_data)
+#define wl_proxy_get_user_data (*ww_wl_proxy_get_user_data)
+#include <wayland-client-core.h>
+
+#define wl_egl_window_create (*ww_wl_egl_window_create)
+#define wl_egl_window_destroy (*ww_wl_egl_window_destroy)
+#define wl_egl_window_resize (*ww_wl_egl_window_resize)
+#include <wayland-egl-core.h>
+
+#define wl_cursor_theme_load (*ww_wl_cursor_theme_load)
+#define wl_cursor_theme_destroy (*ww_wl_cursor_theme_destroy)
+#define wl_cursor_theme_get_cursor (*ww_wl_cursor_theme_get_cursor)
+#define wl_cursor_image_get_buffer (*ww_wl_cursor_image_get_buffer)
+#include <wayland-cursor.h>
+
+#include <wayland-client-protocol.h>
+
+#include "fractional-scale-client.h"
+#include "viewporter-client.h"
+#include "xdg-decoration-client.h"
+#include "xdg-shell-client.h"
+
+#define EGL_NO_X11
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#include <xkbcommon/xkbcommon-compose.h>
+#include <xkbcommon/xkbcommon.h>
+
+#include "gl.h"
+#include "platform.h"
+
+#include "../section_window.h"  // last: this file's own code goes in its section (D161)
+
+namespace ww::jade {
+
+namespace {
+
+// ---- Opening the libraries ----
+
+// EGL's and xkbcommon's functions, by the types their headers give them.
+struct Egl {
+    decltype(&::eglGetProcAddress) GetProcAddress = nullptr;
+    decltype(&::eglGetPlatformDisplay) GetPlatformDisplay = nullptr;
+    decltype(&::eglInitialize) Initialize = nullptr;
+    decltype(&::eglBindAPI) BindAPI = nullptr;
+    decltype(&::eglChooseConfig) ChooseConfig = nullptr;
+    decltype(&::eglCreateContext) CreateContext = nullptr;
+    decltype(&::eglCreateWindowSurface) CreateWindowSurface = nullptr;
+    decltype(&::eglDestroySurface) DestroySurface = nullptr;
+    decltype(&::eglMakeCurrent) MakeCurrent = nullptr;
+    decltype(&::eglSwapBuffers) SwapBuffers = nullptr;
+    decltype(&::eglSwapInterval) SwapInterval = nullptr;
+    decltype(&::eglQueryString) QueryString = nullptr;
+    decltype(&::eglGetError) GetError = nullptr;
+} egl;
+
+struct Xkb {
+    decltype(&::xkb_context_new) context_new = nullptr;
+    decltype(&::xkb_keymap_new_from_string) keymap_new_from_string = nullptr;
+    decltype(&::xkb_keymap_unref) keymap_unref = nullptr;
+    decltype(&::xkb_keymap_key_repeats) keymap_key_repeats = nullptr;
+    decltype(&::xkb_state_new) state_new = nullptr;
+    decltype(&::xkb_state_unref) state_unref = nullptr;
+    decltype(&::xkb_state_update_mask) state_update_mask = nullptr;
+    decltype(&::xkb_state_key_get_one_sym) state_key_get_one_sym = nullptr;
+    decltype(&::xkb_state_key_get_utf8) state_key_get_utf8 = nullptr;
+    decltype(&::xkb_state_mod_name_is_active) state_mod_name_is_active = nullptr;
+    decltype(&::xkb_keysym_to_utf32) keysym_to_utf32 = nullptr;
+    decltype(&::xkb_keysym_to_upper) keysym_to_upper = nullptr;  // xkbcommon 1.8 and later: may be missing
+    decltype(&::xkb_compose_table_new_from_locale) compose_table_new_from_locale = nullptr;
+    decltype(&::xkb_compose_table_unref) compose_table_unref = nullptr;
+    decltype(&::xkb_compose_state_new) compose_state_new = nullptr;
+    decltype(&::xkb_compose_state_unref) compose_state_unref = nullptr;
+    decltype(&::xkb_compose_state_feed) compose_state_feed = nullptr;
+    decltype(&::xkb_compose_state_get_status) compose_state_get_status = nullptr;
+    decltype(&::xkb_compose_state_get_utf8) compose_state_get_utf8 = nullptr;
+    decltype(&::xkb_compose_state_reset) compose_state_reset = nullptr;
+} xkb;
+
+// A library by the name it is installed under; null, with `error` saying which, if it is not there.
+void* openLibrary(const char* name, std::string& error) {
+    void* handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+    if (handle == nullptr && error.empty()) error = std::string("the library ") + name + " is not installed";
+    return handle;
+}
+// A function of a library into `slot`; false, with `error` naming it, where it is missing.
+template <typename T>
+bool find(void* library, T& slot, const char* name, std::string& error) {
+    slot = reinterpret_cast<T>(dlsym(library, name));
+    if (slot == nullptr && error.empty()) error = std::string("the system's libraries lack ") + name;
+    return slot != nullptr;
+}
+
+bool loadLibraries(std::string& error) {
+    void* client = openLibrary("libwayland-client.so.0", error);
+    void* eglWindow = openLibrary("libwayland-egl.so.1", error);
+    void* cursor = openLibrary("libwayland-cursor.so.0", error);
+    void* eglLibrary = openLibrary("libEGL.so.1", error);
+    void* keys = openLibrary("libxkbcommon.so.0", error);
+    if (!error.empty()) return false;
+    bool ok = true;
+#define WW_FIND(library, name) ok = find(library, ww_##name, #name, error) && ok
+    WW_FIND(client, wl_display_connect);
+    WW_FIND(client, wl_display_disconnect);
+    WW_FIND(client, wl_display_get_fd);
+    WW_FIND(client, wl_display_dispatch_pending);
+    WW_FIND(client, wl_display_dispatch_queue_pending);
+    WW_FIND(client, wl_display_flush);
+    WW_FIND(client, wl_display_roundtrip);
+    WW_FIND(client, wl_display_prepare_read);
+    WW_FIND(client, wl_display_prepare_read_queue);
+    WW_FIND(client, wl_display_read_events);
+    WW_FIND(client, wl_display_cancel_read);
+    WW_FIND(client, wl_display_create_queue);
+    WW_FIND(client, wl_display_get_error);
+    WW_FIND(client, wl_event_queue_destroy);
+    WW_FIND(client, wl_proxy_set_queue);
+    WW_FIND(client, wl_proxy_marshal_flags);
+    WW_FIND(client, wl_proxy_add_listener);
+    WW_FIND(client, wl_proxy_destroy);
+    WW_FIND(client, wl_proxy_get_version);
+    WW_FIND(client, wl_proxy_set_user_data);
+    WW_FIND(client, wl_proxy_get_user_data);
+    WW_FIND(eglWindow, wl_egl_window_create);
+    WW_FIND(eglWindow, wl_egl_window_destroy);
+    WW_FIND(eglWindow, wl_egl_window_resize);
+    WW_FIND(cursor, wl_cursor_theme_load);
+    WW_FIND(cursor, wl_cursor_theme_destroy);
+    WW_FIND(cursor, wl_cursor_theme_get_cursor);
+    WW_FIND(cursor, wl_cursor_image_get_buffer);
+#undef WW_FIND
+#define WW_EGL(name) ok = find(eglLibrary, egl.name, "egl" #name, error) && ok
+    WW_EGL(GetProcAddress);
+    WW_EGL(GetPlatformDisplay);
+    WW_EGL(Initialize);
+    WW_EGL(BindAPI);
+    WW_EGL(ChooseConfig);
+    WW_EGL(CreateContext);
+    WW_EGL(CreateWindowSurface);
+    WW_EGL(DestroySurface);
+    WW_EGL(MakeCurrent);
+    WW_EGL(SwapBuffers);
+    WW_EGL(SwapInterval);
+    WW_EGL(QueryString);
+    WW_EGL(GetError);
+#undef WW_EGL
+#define WW_XKB(name) ok = find(keys, xkb.name, "xkb_" #name, error) && ok
+    WW_XKB(context_new);
+    WW_XKB(keymap_new_from_string);
+    WW_XKB(keymap_unref);
+    WW_XKB(keymap_key_repeats);
+    WW_XKB(state_new);
+    WW_XKB(state_unref);
+    WW_XKB(state_update_mask);
+    WW_XKB(state_key_get_one_sym);
+    WW_XKB(state_key_get_utf8);
+    WW_XKB(state_mod_name_is_active);
+    WW_XKB(keysym_to_utf32);
+    WW_XKB(compose_table_new_from_locale);
+    WW_XKB(compose_table_unref);
+    WW_XKB(compose_state_new);
+    WW_XKB(compose_state_unref);
+    WW_XKB(compose_state_feed);
+    WW_XKB(compose_state_get_status);
+    WW_XKB(compose_state_get_utf8);
+    WW_XKB(compose_state_reset);
+#undef WW_XKB
+    xkb.keysym_to_upper = reinterpret_cast<decltype(xkb.keysym_to_upper)>(dlsym(keys, "xkb_keysym_to_upper"));
+    return ok;
+}
+
+// ---- Keys ----
+
+// Which key a Linux key code is (evdev's, which Wayland gives), by where the key is on the
+// keyboard, whatever the layout: from 1 to 88 they are the PC's scan codes, which platform_win's
+// table reads too.
+Key keyOf(uint32_t code) {
+    static const struct {
+        uint32_t code;
+        Key key;
+    } table[] = {
+        {30, Key::A}, {48, Key::B}, {46, Key::C}, {32, Key::D}, {18, Key::E}, {33, Key::F}, {34, Key::G}, {35, Key::H},
+        {23, Key::I}, {36, Key::J}, {37, Key::K}, {38, Key::L}, {50, Key::M}, {49, Key::N}, {24, Key::O}, {25, Key::P},
+        {16, Key::Q}, {19, Key::R}, {31, Key::S}, {20, Key::T}, {22, Key::U}, {47, Key::V}, {17, Key::W}, {45, Key::X},
+        {21, Key::Y}, {44, Key::Z},
+        {11, Key::Digit0}, {2, Key::Digit1}, {3, Key::Digit2}, {4, Key::Digit3}, {5, Key::Digit4}, {6, Key::Digit5},
+        {7, Key::Digit6}, {8, Key::Digit7}, {9, Key::Digit8}, {10, Key::Digit9},
+        {57, Key::Space}, {40, Key::Apostrophe}, {51, Key::Comma}, {12, Key::Minus}, {52, Key::Period}, {53, Key::Slash},
+        {39, Key::Semicolon}, {13, Key::Equal}, {26, Key::LeftBracket}, {43, Key::Backslash}, {27, Key::RightBracket},
+        {41, Key::GraveAccent}, {1, Key::Escape}, {28, Key::Enter}, {15, Key::Tab}, {14, Key::Backspace},
+        {58, Key::CapsLock}, {70, Key::ScrollLock}, {69, Key::NumLock},
+        {82, Key::Numpad0}, {79, Key::Numpad1}, {80, Key::Numpad2}, {81, Key::Numpad3}, {75, Key::Numpad4}, {76, Key::Numpad5},
+        {77, Key::Numpad6}, {71, Key::Numpad7}, {72, Key::Numpad8}, {73, Key::Numpad9}, {83, Key::NumpadDecimal},
+        {55, Key::NumpadMultiply}, {74, Key::NumpadSubtract}, {78, Key::NumpadAdd}, {96, Key::NumpadEnter}, {98, Key::NumpadDivide},
+        {117, Key::NumpadEqual},
+        {42, Key::ShiftLeft}, {54, Key::ShiftRight}, {29, Key::ControlLeft}, {97, Key::ControlRight}, {56, Key::AltLeft},
+        {100, Key::AltRight}, {125, Key::MetaLeft}, {126, Key::MetaRight},
+        {110, Key::Insert}, {111, Key::Delete}, {106, Key::Right}, {105, Key::Left}, {108, Key::Down}, {103, Key::Up},
+        {104, Key::PageUp}, {109, Key::PageDown}, {102, Key::Home}, {107, Key::End},
+        {99, Key::PrintScreen}, {119, Key::Pause}, {127, Key::Menu}, {139, Key::Menu},
+        {87, Key::F11}, {88, Key::F12},
+    };
+    if (code >= 59 && code <= 68) return static_cast<Key>(static_cast<int>(Key::F1) + static_cast<int>(code - 59));
+    if (code >= 183 && code <= 194) return static_cast<Key>(static_cast<int>(Key::F13) + static_cast<int>(code - 183));
+    for (const auto& entry : table)
+        if (entry.code == code) return entry.key;
+    return Key::Unknown;
+}
+
+int64_t nowMillis() {
+    timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return static_cast<int64_t>(t.tv_sec) * 1000 + t.tv_nsec / 1000000;
+}
+
+class LinuxPlatform;
+
+// ---- A window ----
+
+class LinuxWindow final : public PlatformWindow {
+public:
+    LinuxPlatform& platform;
+    wl_surface* surface = nullptr;
+    xdg_surface* shell = nullptr;      // its role while shown
+    xdg_toplevel* toplevel = nullptr;
+    zxdg_toplevel_decoration_v1* decoration = nullptr;
+    wp_viewport* viewport = nullptr;
+    wp_fractional_scale_v1* fractional = nullptr;
+    wl_egl_window* eglWindow = nullptr;
+    EGLSurface eglSurface = EGL_NO_SURFACE;
+    wl_callback* frame = nullptr;      // asked for with the last picture shown: the next may follow when it comes
+
+    std::string title;
+    bool dialog = false, resizable = true;
+    double fixedScale = 0;             // a scale given by a test, in place of the screen's
+    double preferred = 1;              // the compositor's for this window
+    int logicalWidth = 1, logicalHeight = 1;  // the size in the compositor's units, which the layout's are
+    int pendingWidth = 0, pendingHeight = 0;  // a configure's, until it is done
+    int minWidth = 0, minHeight = 0, maxWidth = 0, maxHeight = 0;  // device pixels
+    int x = 0, y = 0;                  // kept, not used: Wayland places windows itself
+    bool shown = false, configured = false;
+    LinuxWindow* owner = nullptr;
+    Cursor cursor = Cursor::Default;
+    PointerMode pointerMode = PointerMode::Normal;
+    int buttons = 0;
+
+    explicit LinuxWindow(LinuxPlatform& p) : platform(p) {}
+    ~LinuxWindow() override;
+
+    void emit(const RawEvent& event) {
+        if (onEvent) onEvent(event);
+    }
+
+    double scale() const override { return fixedScale > 0 ? fixedScale : preferred; }
+    int width() const override { return std::max(1, static_cast<int>(std::lround(logicalWidth * scale()))); }
+    int height() const override { return std::max(1, static_cast<int>(std::lround(logicalHeight * scale()))); }
+
+    void show() override;
+    void hide() override;
+    bool visible() const override { return shown; }
+    void setTitle(const std::string& text) override {
+        title = text;
+        if (toplevel != nullptr) xdg_toplevel_set_title(toplevel, title.c_str());
+    }
+    void setSize(int width, int height) override {
+        logicalWidth = std::max(1, static_cast<int>(std::lround(std::max(width, 1) / scale())));
+        logicalHeight = std::max(1, static_cast<int>(std::lround(std::max(height, 1) / scale())));
+        sized();
+    }
+    void position(int& px, int& py) const override {
+        px = x;
+        py = y;
+    }
+    void setPosition(int px, int py) override {
+        x = px;
+        y = py;
+    }
+    void setLimits(int minW, int minH, int maxW, int maxH) override {
+        minWidth = minW;
+        minHeight = minH;
+        maxWidth = maxW;
+        maxHeight = maxH;
+        applyLimits();
+    }
+    void setResizable(bool on) override {
+        resizable = on;
+        applyLimits();
+    }
+    void toFront() override {}
+    void requestAttention() override {}
+    void setOwner(PlatformWindow* to) override {
+        owner = static_cast<LinuxWindow*>(to);
+        if (toplevel != nullptr) xdg_toplevel_set_parent(toplevel, owner != nullptr ? owner->toplevel : nullptr);
+    }
+    bool focused() const override;
+    void setIcon(const std::vector<uint8_t>&, int, int) override {}  // Wayland's common protocols have none: the desktop file's
+    void setCursor(Cursor shape) override;
+    void setPointerMode(PointerMode mode) override;
+    void postForTest(const std::string& what) override;
+    bool makeCurrent() override;
+    void swapBuffers() override;
+
+    // The limits in the compositor's units; a window not resizable held at its size.
+    void applyLimits() {
+        if (toplevel == nullptr) return;
+        const double s = scale();
+        auto units = [&](int px) { return px > 0 ? std::max(1, static_cast<int>(std::lround(px / s))) : 0; };
+        if (!resizable) {
+            xdg_toplevel_set_min_size(toplevel, logicalWidth, logicalHeight);
+            xdg_toplevel_set_max_size(toplevel, logicalWidth, logicalHeight);
+        } else {
+            xdg_toplevel_set_min_size(toplevel, units(minWidth), units(minHeight));
+            xdg_toplevel_set_max_size(toplevel, maxWidth > 0 && maxHeight > 0 ? units(maxWidth) : 0, maxWidth > 0 && maxHeight > 0 ? units(maxHeight) : 0);
+        }
+    }
+    // The picture's size from the window's size and scale: the EGL window, and the viewport that
+    // shows it at the window's size where the scale is fractional (else the buffer's own scale).
+    void sized();
+    void scaleChanged(double now) {
+        if (fixedScale > 0 || std::fabs(now - preferred) < 1e-9) return;
+        preferred = now;
+        RawEvent e;
+        e.kind = RawEvent::Scale;
+        e.scale = scale();
+        emit(e);
+        sized();
+        applyLimits();
+    }
+};
+
+// ---- The platform ----
+
+class LinuxPlatform final : public Platform {
+public:
+    wl_display* display = nullptr;
+    wl_registry* registry = nullptr;
+    wl_compositor* compositor = nullptr;
+    uint32_t compositorVersion = 0;
+    wl_shm* shm = nullptr;
+    xdg_wm_base* shell = nullptr;
+    wl_seat* seat = nullptr;
+    wl_pointer* pointer = nullptr;
+    wl_keyboard* keyboard = nullptr;
+    zxdg_decoration_manager_v1* decorations = nullptr;
+    wp_viewporter* viewporter = nullptr;
+    wp_fractional_scale_manager_v1* fractionalScales = nullptr;
+    struct Output {
+        wl_output* output;
+        uint32_t name;
+        int scale;
+    };
+    std::vector<Output> outputs;
+    wl_event_queue* frames = nullptr;  // the windows' frame callbacks, waited for apart from all else
+    int wakeFd = -1;
+
+    EGLDisplay eglDisplay = EGL_NO_DISPLAY;
+    EGLConfig config = nullptr;
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLSurface currentSurface = EGL_NO_SURFACE;
+    bool contextCurrent = false;
+
+    xkb_context* keys = nullptr;
+    xkb_keymap* keymap = nullptr;
+    xkb_state* keyState = nullptr;
+    xkb_state* plainState = nullptr;  // the layout alone, no modifiers: what a key types plainly
+    xkb_compose_state* compose = nullptr;
+    int32_t repeatRate = 25, repeatDelay = 600;
+    uint32_t repeating = 0;            // the key code repeating, plus 1; 0 for none
+    int64_t repeatAt = 0;
+
+    std::vector<LinuxWindow*> windows;
+    LinuxWindow* pointerFocus = nullptr;
+    LinuxWindow* keyboardFocus = nullptr;
+    uint32_t pointerSerial = 0;        // the last entry's, which setting the pointer's shape needs
+    double pointerX = 0, pointerY = 0; // device pixels, in the window under it
+    double wheelX = 0, wheelY = 0;     // a frame's wheel, in notches
+    bool wheelDiscrete = false;
+    wl_cursor_theme* cursorTheme = nullptr;
+    int cursorThemeSize = 0;
+    wl_surface* cursorSurface = nullptr;
+    std::vector<std::pair<LinuxWindow*, RawEvent>> posted;  // events made for tests, handed out as events are pumped
+
+    bool start(std::string& error);
+
+    LinuxWindow* windowOf(wl_surface* s) const {
+        if (s == nullptr) return nullptr;
+        for (LinuxWindow* w : windows)
+            if (w->surface == s) return w;
+        return nullptr;
+    }
+
+    std::unique_ptr<PlatformWindow> createWindow(const WindowSettings& settings, PlatformWindow* owner, std::string& error) override;
+
+    bool use(EGLSurface s) {
+        if (contextCurrent && currentSurface == s) return true;
+        if (!egl.MakeCurrent(eglDisplay, s, s, context)) return false;
+        currentSurface = s;
+        contextCurrent = true;
+        return true;
+    }
+    bool makeCurrentOffscreen() override { return use(EGL_NO_SURFACE); }
+    // An EGL surface on a window's EGL window, shown at once when drawn: no wait for the screen's
+    // refresh in EGL itself (a window the compositor does not show would wait for ever); the
+    // windows' frame callbacks pace the pictures instead (LinuxWindow::swapBuffers).
+    EGLSurface windowSurface(wl_egl_window* window) {
+        EGLSurface s = egl.CreateWindowSurface(eglDisplay, config, reinterpret_cast<EGLNativeWindowType>(window), nullptr);
+        if (s != EGL_NO_SURFACE && use(s)) egl.SwapInterval(eglDisplay, 0);
+        return s;
+    }
+
+    // Events read and handled: those waiting already, then, for at most `millis` (-1: as long as
+    // it takes), the next to come; a key held down repeated as the compositor says.
+    void dispatch(int64_t millis);
+    void pumpEvents() override { dispatch(0); }
+    void waitEvents(int64_t millis) override { dispatch(millis); }
+    void wake() override {
+        const uint64_t one = 1;
+        if (write(wakeFd, &one, sizeof one) < 0) {
+        }
+    }
+
+    bool chooseFile(int, const std::string&, const std::vector<std::pair<std::string, std::string>>&, const std::string&, const std::string&, PlatformWindow*,
+                    std::string&, std::string& error) override {
+        error = "the file dialog is not there on Linux yet";
+        return false;
+    }
+    std::string clipboardText() override { return std::string(); }
+    void setClipboardText(const std::string&) override {}
+    int doubleClickTime() override { return 400; }
+    double screenScale() override {
+        int most = 1;
+        for (const Output& o : outputs) most = std::max(most, o.scale);
+        return most;
+    }
+
+    // The pointer's shape over the window it is in, from the cursor theme (the shapes' names as
+    // CSS's and X's both have them).
+    void showCursor();
+    void pressKey(uint32_t code, bool down, bool repeat);
+    int modifiers() const {
+        if (keyState == nullptr) return 0;
+        int bits = 0;
+        if (xkb.state_mod_name_is_active(keyState, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0) bits |= kShift;
+        if (xkb.state_mod_name_is_active(keyState, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0) bits |= kControl;
+        if (xkb.state_mod_name_is_active(keyState, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE) > 0) bits |= kAlt;
+        if (xkb.state_mod_name_is_active(keyState, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0) bits |= kMeta;
+        return bits;
+    }
+};
+
+LinuxPlatform* thePlatform = nullptr;
+
+// ---- Listeners ----
+// Each event of each object, as the protocol's header lists them, in its order. An object is
+// bound at no higher a version than these handle.
+
+// The registry: what the compositor offers.
+void onGlobal(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version);
+void onGlobalRemove(void* data, wl_registry*, uint32_t name) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    for (size_t i = 0; i < p.outputs.size(); i++)
+        if (p.outputs[i].name == name) {
+            wl_output_destroy(p.outputs[i].output);
+            p.outputs.erase(p.outputs.begin() + static_cast<std::ptrdiff_t>(i));
+            return;
+        }
+}
+const wl_registry_listener registryListener = {onGlobal, onGlobalRemove};
+
+void onPing(void*, xdg_wm_base* shell, uint32_t serial) { xdg_wm_base_pong(shell, serial); }
+const xdg_wm_base_listener shellListener = {onPing};
+
+// A screen: its whole scale, where the compositor gives no fractional one.
+void onOutputScale(void* data, wl_output* output, int32_t factor) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    for (auto& o : p.outputs)
+        if (o.output == output) o.scale = std::max(1, factor);
+}
+const wl_output_listener outputListener = {
+    [](void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t, const char*, const char*, int32_t) {},
+    [](void*, wl_output*, uint32_t, int32_t, int32_t, int32_t) {},
+    [](void*, wl_output*) {},
+    onOutputScale,
+    [](void*, wl_output*, const char*) {},
+    [](void*, wl_output*, const char*) {},
+};
+
+// A window's surface: the scale the compositor would have its picture drawn at (whole), where it
+// gives no fractional one.
+void onSurfaceScale(void* data, wl_surface*, int32_t factor) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    if (w->platform.fractionalScales == nullptr) w->scaleChanged(std::max(1, factor));
+}
+const wl_surface_listener surfaceListener = {
+    [](void*, wl_surface*, wl_output*) {},
+    [](void*, wl_surface*, wl_output*) {},
+    onSurfaceScale,
+    [](void*, wl_surface*, uint32_t) {},
+};
+
+void onFractionalScale(void* data, wp_fractional_scale_v1*, uint32_t scale120) { static_cast<LinuxWindow*>(data)->scaleChanged(scale120 / 120.0); }
+const wp_fractional_scale_v1_listener fractionalListener = {onFractionalScale};
+
+// The toplevel's size and states, then the surface's configure saying they are all there.
+void onToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    w->pendingWidth = width;
+    w->pendingHeight = height;
+}
+void onToplevelClose(void* data, xdg_toplevel*) {
+    RawEvent e;
+    e.kind = RawEvent::Close;
+    static_cast<LinuxWindow*>(data)->emit(e);
+}
+const xdg_toplevel_listener toplevelListener = {
+    onToplevelConfigure,
+    onToplevelClose,
+    [](void*, xdg_toplevel*, int32_t, int32_t) {},  // configure_bounds
+    [](void*, xdg_toplevel*, wl_array*) {},         // wm_capabilities
+};
+void onShellConfigure(void* data, xdg_surface* shell, uint32_t serial) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    xdg_surface_ack_configure(shell, serial);
+    const bool first = !w->configured;
+    w->configured = true;
+    const int oldWidth = w->logicalWidth, oldHeight = w->logicalHeight;
+    if (w->pendingWidth > 0 && w->pendingHeight > 0) {
+        w->logicalWidth = w->pendingWidth;
+        w->logicalHeight = w->pendingHeight;
+    }
+    if (first || oldWidth != w->logicalWidth || oldHeight != w->logicalHeight) w->sized();
+    if (w->onExpose) w->onExpose();
+}
+const xdg_surface_listener shellSurfaceListener = {onShellConfigure};
+
+void onDecorationConfigure(void*, zxdg_toplevel_decoration_v1*, uint32_t) {}
+const zxdg_toplevel_decoration_v1_listener decorationListener = {onDecorationConfigure};
+
+void onFrameDone(void* data, wl_callback* callback, uint32_t) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    if (w->frame == callback) w->frame = nullptr;
+    wl_callback_destroy(callback);
+}
+const wl_callback_listener frameListener = {onFrameDone};
+
+// ---- The pointer ----
+
+void onPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surface, wl_fixed_t sx, wl_fixed_t sy) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.pointerFocus = p.windowOf(surface);
+    p.pointerSerial = serial;
+    if (p.pointerFocus == nullptr) return;
+    const double s = p.pointerFocus->scale();
+    p.pointerX = wl_fixed_to_double(sx) * s;
+    p.pointerY = wl_fixed_to_double(sy) * s;
+    p.showCursor();
+    RawEvent e;
+    e.kind = RawEvent::PointerMove;
+    e.x = static_cast<int>(std::floor(p.pointerX));
+    e.y = static_cast<int>(std::floor(p.pointerY));
+    e.buttons = p.pointerFocus->buttons;
+    e.modifiers = p.modifiers();
+    p.pointerFocus->emit(e);
+}
+void onPointerLeave(void* data, wl_pointer*, uint32_t, wl_surface*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.pointerFocus != nullptr) {
+        RawEvent e;
+        e.kind = RawEvent::PointerLeave;
+        p.pointerFocus->emit(e);
+    }
+    p.pointerFocus = nullptr;
+}
+void onPointerMotion(void* data, wl_pointer*, uint32_t, wl_fixed_t sx, wl_fixed_t sy) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.pointerFocus == nullptr) return;
+    const double s = p.pointerFocus->scale();
+    const double nx = wl_fixed_to_double(sx) * s, ny = wl_fixed_to_double(sy) * s;
+    RawEvent e;
+    e.kind = RawEvent::PointerMove;
+    e.x = static_cast<int>(std::floor(nx));
+    e.y = static_cast<int>(std::floor(ny));
+    e.dx = nx - p.pointerX;
+    e.dy = ny - p.pointerY;
+    e.buttons = p.pointerFocus->buttons;
+    e.modifiers = p.modifiers();
+    p.pointerX = nx;
+    p.pointerY = ny;
+    p.pointerFocus->emit(e);
+}
+void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.pointerFocus == nullptr) return;
+    // evdev's buttons: left, right, middle, side (back), extra (forward).
+    if (button < 0x110 || button > 0x114) return;
+    p.pointerSerial = serial;
+    const int which = static_cast<int>(button - 0x110);
+    const bool down = state == WL_POINTER_BUTTON_STATE_PRESSED;
+    LinuxWindow& w = *p.pointerFocus;
+    if (down) w.buttons |= 1 << which;
+    else w.buttons &= ~(1 << which);
+    RawEvent e;
+    e.kind = down ? RawEvent::PointerDown : RawEvent::PointerUp;
+    e.x = static_cast<int>(std::floor(p.pointerX));
+    e.y = static_cast<int>(std::floor(p.pointerY));
+    e.button = which;
+    e.buttons = w.buttons;
+    e.modifiers = p.modifiers();
+    w.emit(e);
+}
+// A wheel's turn: in notches where the compositor gives them (value120, or discrete steps),
+// else from the distance (a touchpad's, 10 units a notch); up and left positive.
+void onPointerAxis(void* data, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.wheelDiscrete) return;
+    const double notches = -wl_fixed_to_double(value) / 10.0;
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) p.wheelY += notches;
+    else p.wheelX += notches;
+}
+void onPointerAxisValue120(void* data, wl_pointer*, uint32_t axis, int32_t value120) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (!p.wheelDiscrete) p.wheelX = p.wheelY = 0;  // the distances of this frame were the same turn
+    p.wheelDiscrete = true;
+    const double notches = -value120 / 120.0;
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) p.wheelY += notches;
+    else p.wheelX += notches;
+}
+void onPointerAxisDiscrete(void* data, wl_pointer* pointer, uint32_t axis, int32_t discrete) { onPointerAxisValue120(data, pointer, axis, discrete * 120); }
+void onPointerFrame(void* data, wl_pointer*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.pointerFocus != nullptr && (p.wheelX != 0 || p.wheelY != 0)) {
+        RawEvent e;
+        e.kind = RawEvent::Wheel;
+        e.x = static_cast<int>(std::floor(p.pointerX));
+        e.y = static_cast<int>(std::floor(p.pointerY));
+        e.dx = p.wheelX;
+        e.dy = p.wheelY;
+        e.modifiers = p.modifiers();
+        p.pointerFocus->emit(e);
+    }
+    p.wheelX = p.wheelY = 0;
+    p.wheelDiscrete = false;
+}
+const wl_pointer_listener pointerListener = {
+    onPointerEnter,
+    onPointerLeave,
+    onPointerMotion,
+    onPointerButton,
+    onPointerAxis,
+    onPointerFrame,
+    [](void*, wl_pointer*, uint32_t) {},            // axis_source
+    [](void*, wl_pointer*, uint32_t, uint32_t) {},  // axis_stop
+    onPointerAxisDiscrete,
+    onPointerAxisValue120,
+    [](void*, wl_pointer*, uint32_t, uint32_t) {},  // axis_relative_direction
+};
+
+// ---- The keyboard ----
+
+void onKeymap(void* data, wl_keyboard*, uint32_t format, int32_t fd, uint32_t size) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+        close(fd);
+        return;
+    }
+    void* text = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (text == MAP_FAILED) return;
+    xkb_keymap* made = xkb.keymap_new_from_string(p.keys, static_cast<const char*>(text), XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    munmap(text, size);
+    if (made == nullptr) return;
+    if (p.keyState != nullptr) xkb.state_unref(p.keyState);
+    if (p.plainState != nullptr) xkb.state_unref(p.plainState);
+    if (p.keymap != nullptr) xkb.keymap_unref(p.keymap);
+    p.keymap = made;
+    p.keyState = xkb.state_new(made);
+    p.plainState = xkb.state_new(made);
+}
+void onKeyboardEnter(void* data, wl_keyboard*, uint32_t, wl_surface* surface, wl_array*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.keyboardFocus = p.windowOf(surface);
+    if (p.keyboardFocus == nullptr) return;
+    RawEvent e;
+    e.kind = RawEvent::Focus;
+    e.on = true;
+    p.keyboardFocus->emit(e);
+}
+void onKeyboardLeave(void* data, wl_keyboard*, uint32_t, wl_surface*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.repeating = 0;
+    if (p.keyboardFocus != nullptr) {
+        RawEvent e;
+        e.kind = RawEvent::Focus;
+        e.on = false;
+        p.keyboardFocus->emit(e);
+    }
+    p.keyboardFocus = nullptr;
+}
+void onKey(void* data, wl_keyboard*, uint32_t, uint32_t, uint32_t code, uint32_t state) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.pressKey(code, state == WL_KEYBOARD_KEY_STATE_PRESSED, false);
+}
+void onModifiers(void* data, wl_keyboard*, uint32_t, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.keyState == nullptr) return;
+    xkb.state_update_mask(p.keyState, depressed, latched, locked, 0, 0, group);
+    xkb.state_update_mask(p.plainState, 0, 0, 0, 0, 0, group);
+}
+void onRepeatInfo(void* data, wl_keyboard*, int32_t rate, int32_t delay) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.repeatRate = rate;
+    p.repeatDelay = delay;
+}
+const wl_keyboard_listener keyboardListener = {onKeymap, onKeyboardEnter, onKeyboardLeave, onKey, onModifiers, onRepeatInfo};
+
+// ---- The seat: its pointer and keyboard as they come and go ----
+
+void onSeatCapabilities(void* data, wl_seat* seat, uint32_t capabilities) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    const bool hasPointer = (capabilities & WL_SEAT_CAPABILITY_POINTER) != 0;
+    const bool hasKeyboard = (capabilities & WL_SEAT_CAPABILITY_KEYBOARD) != 0;
+    if (hasPointer && p.pointer == nullptr) {
+        p.pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(p.pointer, &pointerListener, &p);
+    } else if (!hasPointer && p.pointer != nullptr) {
+        wl_pointer_destroy(p.pointer);
+        p.pointer = nullptr;
+        p.pointerFocus = nullptr;
+    }
+    if (hasKeyboard && p.keyboard == nullptr) {
+        p.keyboard = wl_seat_get_keyboard(seat);
+        wl_keyboard_add_listener(p.keyboard, &keyboardListener, &p);
+    } else if (!hasKeyboard && p.keyboard != nullptr) {
+        wl_keyboard_destroy(p.keyboard);
+        p.keyboard = nullptr;
+        p.keyboardFocus = nullptr;
+    }
+}
+const wl_seat_listener seatListener = {onSeatCapabilities, [](void*, wl_seat*, const char*) {}};
+
+void onGlobal(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    const std::string what = interface;
+    auto bind = [&](const wl_interface* of, uint32_t most) {
+        return wl_registry_bind(registry, name, of, std::min(version, most));
+    };
+    if (what == "wl_compositor") {
+        p.compositorVersion = std::min(version, 6u);
+        p.compositor = static_cast<wl_compositor*>(bind(&wl_compositor_interface, 6));
+    } else if (what == "wl_shm") {
+        p.shm = static_cast<wl_shm*>(bind(&wl_shm_interface, 1));
+    } else if (what == "xdg_wm_base") {
+        p.shell = static_cast<xdg_wm_base*>(bind(&xdg_wm_base_interface, 5));
+        xdg_wm_base_add_listener(p.shell, &shellListener, &p);
+    } else if (what == "wl_seat" && p.seat == nullptr) {
+        p.seat = static_cast<wl_seat*>(bind(&wl_seat_interface, 8));
+        wl_seat_add_listener(p.seat, &seatListener, &p);
+    } else if (what == "wl_output") {
+        auto* output = static_cast<wl_output*>(bind(&wl_output_interface, 4));
+        p.outputs.push_back(LinuxPlatform::Output{output, name, 1});
+        wl_output_add_listener(output, &outputListener, &p);
+    } else if (what == "zxdg_decoration_manager_v1") {
+        p.decorations = static_cast<zxdg_decoration_manager_v1*>(bind(&zxdg_decoration_manager_v1_interface, 1));
+    } else if (what == "wp_viewporter") {
+        p.viewporter = static_cast<wp_viewporter*>(bind(&wp_viewporter_interface, 1));
+    } else if (what == "wp_fractional_scale_manager_v1") {
+        p.fractionalScales = static_cast<wp_fractional_scale_manager_v1*>(bind(&wp_fractional_scale_manager_v1_interface, 1));
+    }
+}
+
+// ---- The platform's start ----
+
+bool LinuxPlatform::start(std::string& error) {
+    if (std::getenv("WAYLAND_DISPLAY") == nullptr && std::getenv("WAYLAND_SOCKET") == nullptr) {
+        error = "there is no Wayland display (WAYLAND_DISPLAY is not set): windows need a Wayland session";
+        return false;
+    }
+    if (!loadLibraries(error)) return false;
+    display = wl_display_connect(nullptr);
+    if (display == nullptr) {
+        error = "cannot connect to the Wayland display";
+        return false;
+    }
+    registry = wl_display_get_registry(display);
+    wl_registry_add_listener(registry, &registryListener, this);
+    wl_display_roundtrip(display);  // the globals
+    wl_display_roundtrip(display);  // what each sends as it is bound (the seat's, the outputs')
+    if (compositor == nullptr || shell == nullptr) {
+        error = "the Wayland compositor offers no windows (xdg-shell)";
+        return false;
+    }
+    frames = wl_display_create_queue(display);
+    wakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+
+    keys = xkb.context_new(XKB_CONTEXT_NO_FLAGS);
+    if (keys == nullptr) {
+        error = "cannot start xkbcommon";
+        return false;
+    }
+    const char* locale = std::getenv("LC_ALL");
+    if (locale == nullptr || *locale == 0) locale = std::getenv("LC_CTYPE");
+    if (locale == nullptr || *locale == 0) locale = std::getenv("LANG");
+    if (locale == nullptr || *locale == 0) locale = "C";
+    if (xkb_compose_table* table = xkb.compose_table_new_from_locale(keys, locale, XKB_COMPOSE_COMPILE_NO_FLAGS)) {
+        compose = xkb.compose_state_new(table, XKB_COMPOSE_STATE_NO_FLAGS);
+        xkb.compose_table_unref(table);
+    }
+
+    // OpenGL 3.3, core, through EGL on the Wayland display: one context for every window, current
+    // on whichever is being drawn, and on none (surfaceless) for pictures.
+    eglDisplay = egl.GetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, display, nullptr);
+    EGLint major = 0, minor = 0;
+    if (eglDisplay == EGL_NO_DISPLAY || !egl.Initialize(eglDisplay, &major, &minor)) {
+        error = "cannot start EGL on the Wayland display";
+        return false;
+    }
+    const char* extensions = egl.QueryString(eglDisplay, EGL_EXTENSIONS);
+    if (extensions == nullptr || std::strstr(extensions, "EGL_KHR_surfaceless_context") == nullptr) {
+        error = "EGL here cannot draw without a window (EGL_KHR_surfaceless_context)";
+        return false;
+    }
+    if (!egl.BindAPI(EGL_OPENGL_API)) {
+        error = "EGL here has no OpenGL";
+        return false;
+    }
+    const EGLint wanted[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+                             EGL_ALPHA_SIZE, 0, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
+    EGLint count = 0;
+    if (!egl.ChooseConfig(eglDisplay, wanted, &config, 1, &count) || count < 1) {
+        error = "no EGL configuration that OpenGL can draw in";
+        return false;
+    }
+    const EGLint attributes[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                 EGL_NONE};
+    context = egl.CreateContext(eglDisplay, config, EGL_NO_CONTEXT, attributes);
+    if (context == EGL_NO_CONTEXT || !use(EGL_NO_SURFACE)) {
+        error = "OpenGL 3.3 is not available on this machine";
+        return false;
+    }
+    const char* missing = nullptr;
+    if (!loadGl([](const char* name) -> void* { return reinterpret_cast<void*>(egl.GetProcAddress(name)); }, missing)) {
+        error = std::string("the OpenGL driver lacks ") + missing;
+        return false;
+    }
+    return true;
+}
+
+// ---- Events ----
+
+void LinuxPlatform::dispatch(int64_t millis) {
+    // Events made for tests first, as the system's own would come.
+    if (!posted.empty()) {
+        auto events = std::move(posted);
+        posted.clear();
+        for (auto& [window, event] : events) {
+            bool there = false;
+            for (LinuxWindow* w : windows) there = there || w == window;
+            if (there) window->emit(event);
+        }
+        millis = 0;
+    }
+    while (wl_display_prepare_read(display) != 0) wl_display_dispatch_pending(display);
+    wl_display_flush(display);
+    // As long as asked, or until a held key next repeats.
+    int64_t wait = millis;
+    if (repeating != 0) {
+        const int64_t until = std::max<int64_t>(0, repeatAt - nowMillis());
+        wait = wait < 0 ? until : std::min(wait, until);
+    }
+    pollfd fds[2] = {{wl_display_get_fd(display), POLLIN, 0}, {wakeFd, POLLIN, 0}};
+    const int ready = poll(fds, 2, wait < 0 ? -1 : static_cast<int>(std::min<int64_t>(wait, 0x7FFFFFFF)));
+    if (ready > 0 && (fds[0].revents & POLLIN) != 0) wl_display_read_events(display);
+    else wl_display_cancel_read(display);
+    if (ready > 0 && (fds[1].revents & POLLIN) != 0) {
+        uint64_t count = 0;
+        if (read(wakeFd, &count, sizeof count) < 0) {
+        }
+    }
+    wl_display_dispatch_pending(display);
+    if (repeating != 0 && nowMillis() >= repeatAt) {
+        pressKey(repeating - 1, true, true);
+        repeatAt += repeatRate > 0 ? std::max(1, 1000 / repeatRate) : 1000;
+    }
+}
+
+void LinuxPlatform::pressKey(uint32_t code, bool down, bool repeat) {
+    LinuxWindow* w = keyboardFocus;
+    if (w == nullptr || keyState == nullptr) return;
+    const xkb_keycode_t keycode = code + 8;  // xkb's codes are evdev's plus 8
+    RawEvent e;
+    e.kind = down ? RawEvent::KeyDown : RawEvent::KeyUp;
+    e.key = keyOf(code);
+    e.modifiers = modifiers();
+    e.repeat = repeat;
+    // What the key types plainly in the layout, upper case, where it is a letter or a digit.
+    const xkb_keysym_t plain = xkb.state_key_get_one_sym(plainState, keycode);
+    const uint32_t typed = xkb.keysym_to_utf32(plain);
+    if ((typed >= '0' && typed <= '9') || (typed >= 'A' && typed <= 'Z')) e.letter = typed;
+    else if (typed >= 'a' && typed <= 'z') e.letter = typed - 'a' + 'A';
+    else if (typed >= 0x80 && xkb.keysym_to_upper != nullptr) {
+        const xkb_keysym_t upper = xkb.keysym_to_upper(plain);
+        if (upper != plain) e.letter = xkb.keysym_to_utf32(upper);
+    }
+    w->emit(e);
+    if (!down) {
+        if (repeating == code + 1) repeating = 0;
+        return;
+    }
+    if (!repeat) {
+        if (repeatRate > 0 && xkb.keymap_key_repeats(keymap, keycode)) {
+            repeating = code + 1;
+            repeatAt = nowMillis() + repeatDelay;
+        } else {
+            repeating = 0;
+        }
+    }
+    // The text it types, after the layout and any composing (a dead key, then a letter).
+    std::string text;
+    const xkb_keysym_t sym = xkb.state_key_get_one_sym(keyState, keycode);
+    if (compose != nullptr && !repeat) xkb.compose_state_feed(compose, sym);
+    const xkb_compose_status status = compose != nullptr ? xkb.compose_state_get_status(compose) : XKB_COMPOSE_NOTHING;
+    if (status == XKB_COMPOSE_COMPOSING) return;
+    if (status == XKB_COMPOSE_COMPOSED) {
+        char buffer[64];
+        const int n = xkb.compose_state_get_utf8(compose, buffer, sizeof buffer);
+        if (n > 0) text.assign(buffer, static_cast<size_t>(std::min<int>(n, sizeof buffer - 1)));
+        xkb.compose_state_reset(compose);
+    } else if (status == XKB_COMPOSE_CANCELLED) {
+        xkb.compose_state_reset(compose);
+        return;
+    } else {
+        char buffer[64];
+        const int n = xkb.state_key_get_utf8(keyState, keycode, buffer, sizeof buffer);
+        if (n > 0) text.assign(buffer, static_cast<size_t>(std::min<int>(n, sizeof buffer - 1)));
+    }
+    // Enter, Backspace, Tab and the like come as keys (as do Control and a letter, which types a control character).
+    if (text.empty() || static_cast<unsigned char>(text[0]) < 32 || text == "\x7F") return;
+    RawEvent t;
+    t.kind = RawEvent::Text;
+    t.text = text;
+    w->emit(t);
+}
+
+void LinuxPlatform::showCursor() {
+    LinuxWindow* w = pointerFocus;
+    if (w == nullptr || pointer == nullptr) return;
+    if (w->pointerMode != PointerMode::Normal) {
+        wl_pointer_set_cursor(pointer, pointerSerial, nullptr, 0, 0);
+        return;
+    }
+    if (shm == nullptr) return;
+    const int scale = std::max(1, static_cast<int>(std::ceil(w->scale())));
+    const int size = 24 * scale;
+    if (cursorTheme == nullptr || cursorThemeSize != size) {
+        if (cursorTheme != nullptr) wl_cursor_theme_destroy(cursorTheme);
+        const char* named = std::getenv("XCURSOR_THEME");
+        cursorTheme = wl_cursor_theme_load(named, size, shm);
+        cursorThemeSize = size;
+    }
+    if (cursorTheme == nullptr) return;
+    static const char* const names[][2] = {
+        {"default", "left_ptr"}, {"ew-resize", "sb_h_double_arrow"}, {"ns-resize", "sb_v_double_arrow"}, {"text", "xterm"}, {"pointer", "hand2"},
+        {"move", "fleur"},       {"nwse-resize", "bottom_right_corner"}, {"nesw-resize", "bottom_left_corner"}, {"crosshair", "crosshair"},
+    };
+    const int index = std::clamp(static_cast<int>(w->cursor), 0, 8);
+    wl_cursor* shape = wl_cursor_theme_get_cursor(cursorTheme, names[index][0]);
+    if (shape == nullptr) shape = wl_cursor_theme_get_cursor(cursorTheme, names[index][1]);
+    if (shape == nullptr) shape = wl_cursor_theme_get_cursor(cursorTheme, "left_ptr");
+    if (shape == nullptr || shape->image_count == 0) return;
+    wl_cursor_image* image = shape->images[0];
+    wl_buffer* buffer = wl_cursor_image_get_buffer(image);
+    if (buffer == nullptr) return;
+    if (cursorSurface == nullptr) cursorSurface = wl_compositor_create_surface(compositor);
+    if (compositorVersion >= 3) wl_surface_set_buffer_scale(cursorSurface, scale);
+    wl_pointer_set_cursor(pointer, pointerSerial, cursorSurface, static_cast<int32_t>(image->hotspot_x) / scale, static_cast<int32_t>(image->hotspot_y) / scale);
+    wl_surface_attach(cursorSurface, buffer, 0, 0);
+    wl_surface_damage(cursorSurface, 0, 0, static_cast<int32_t>(image->width), static_cast<int32_t>(image->height));
+    wl_surface_commit(cursorSurface);
+}
+
+// ---- Windows ----
+
+std::unique_ptr<PlatformWindow> LinuxPlatform::createWindow(const WindowSettings& settings, PlatformWindow* owner, std::string& error) {
+    auto window = std::make_unique<LinuxWindow>(*this);
+    LinuxWindow& w = *window;
+    w.title = settings.title;
+    w.dialog = settings.dialog;
+    w.resizable = settings.resizable;
+    w.fixedScale = settings.scale;
+    w.preferred = screenScale();
+    w.owner = static_cast<LinuxWindow*>(owner);
+    w.surface = wl_compositor_create_surface(compositor);
+    if (w.surface == nullptr) {
+        error = "cannot create a Wayland surface";
+        return nullptr;
+    }
+    wl_surface_add_listener(w.surface, &surfaceListener, &w);
+    if (fractionalScales != nullptr && viewporter != nullptr) {
+        w.fractional = wp_fractional_scale_manager_v1_get_fractional_scale(fractionalScales, w.surface);
+        wp_fractional_scale_v1_add_listener(w.fractional, &fractionalListener, &w);
+        w.viewport = wp_viewporter_get_viewport(viewporter, w.surface);
+    }
+    // The size asked for is of what can be drawn on, in layout units: the compositor's own.
+    w.logicalWidth = std::max(1, settings.width);
+    w.logicalHeight = std::max(1, settings.height);
+    windows.push_back(&w);
+    return window;
+}
+
+LinuxWindow::~LinuxWindow() {
+    hide();
+    LinuxPlatform& p = platform;
+    if (p.pointerFocus == this) p.pointerFocus = nullptr;
+    if (p.keyboardFocus == this) {
+        p.keyboardFocus = nullptr;
+        p.repeating = 0;
+    }
+    for (LinuxWindow* w : p.windows)
+        if (w->owner == this) w->owner = nullptr;
+    p.posted.erase(std::remove_if(p.posted.begin(), p.posted.end(), [&](const auto& posted) { return posted.first == this; }), p.posted.end());
+    if (fractional != nullptr) wp_fractional_scale_v1_destroy(fractional);
+    if (viewport != nullptr) wp_viewport_destroy(viewport);
+    if (surface != nullptr) wl_surface_destroy(surface);
+    p.windows.erase(std::remove(p.windows.begin(), p.windows.end(), this), p.windows.end());
+    wl_display_flush(p.display);
+}
+
+// Shown: the surface given xdg-shell's toplevel role, its title and limits, a title bar from the
+// compositor where it draws them; then, once the compositor has said its size (configure), the
+// EGL window drawn into.
+void LinuxWindow::show() {
+    if (shown) return;
+    LinuxPlatform& p = platform;
+    shown = true;
+    configured = false;
+    shell = xdg_wm_base_get_xdg_surface(p.shell, surface);
+    xdg_surface_add_listener(shell, &shellSurfaceListener, this);
+    toplevel = xdg_surface_get_toplevel(shell);
+    xdg_toplevel_add_listener(toplevel, &toplevelListener, this);
+    xdg_toplevel_set_title(toplevel, title.c_str());
+    xdg_toplevel_set_app_id(toplevel, "winterwolf");
+    if (owner != nullptr && owner->toplevel != nullptr) xdg_toplevel_set_parent(toplevel, owner->toplevel);
+    applyLimits();
+    if (p.decorations != nullptr) {
+        decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(p.decorations, toplevel);
+        zxdg_toplevel_decoration_v1_add_listener(decoration, &decorationListener, this);
+        zxdg_toplevel_decoration_v1_set_mode(decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+    }
+    wl_surface_commit(surface);
+    // Its first configure waited for, so that the program's first picture has a place to go.
+    for (int i = 0; i < 100 && !configured && shown; i++) wl_display_roundtrip(p.display);
+}
+
+void LinuxWindow::hide() {
+    if (!shown) return;
+    LinuxPlatform& p = platform;
+    shown = false;
+    configured = false;
+    if (p.currentSurface == eglSurface && eglSurface != EGL_NO_SURFACE) p.use(EGL_NO_SURFACE);
+    if (eglSurface != EGL_NO_SURFACE) egl.DestroySurface(p.eglDisplay, eglSurface);
+    eglSurface = EGL_NO_SURFACE;
+    if (eglWindow != nullptr) wl_egl_window_destroy(eglWindow);
+    eglWindow = nullptr;
+    if (frame != nullptr) wl_callback_destroy(frame);
+    frame = nullptr;
+    if (decoration != nullptr) zxdg_toplevel_decoration_v1_destroy(decoration);
+    decoration = nullptr;
+    if (toplevel != nullptr) xdg_toplevel_destroy(toplevel);
+    toplevel = nullptr;
+    if (shell != nullptr) xdg_surface_destroy(shell);
+    shell = nullptr;
+    wl_surface_attach(surface, nullptr, 0, 0);
+    wl_surface_commit(surface);
+    wl_display_flush(p.display);
+}
+
+void LinuxWindow::sized() {
+    const int w = width(), h = height();
+    if (configured) {
+        if (eglWindow == nullptr) {
+            eglWindow = wl_egl_window_create(surface, w, h);
+            if (eglWindow != nullptr) eglSurface = platform.windowSurface(eglWindow);
+        } else {
+            wl_egl_window_resize(eglWindow, w, h, 0, 0);
+        }
+        // The picture drawn at the scale, shown at the window's size: by the viewport where the
+        // scale is fractional, else by the buffer's own (whole) scale.
+        if (viewport != nullptr) {
+            wp_viewport_set_destination(viewport, logicalWidth, logicalHeight);
+        } else if (platform.compositorVersion >= 3) {
+            wl_surface_set_buffer_scale(surface, std::max(1, static_cast<int>(std::lround(scale()))));
+        }
+    }
+    RawEvent e;
+    e.kind = RawEvent::Resize;
+    e.width = w;
+    e.height = h;
+    emit(e);
+}
+
+bool LinuxWindow::focused() const { return platform.keyboardFocus == this; }
+
+void LinuxWindow::setCursor(Cursor shape) {
+    cursor = shape;
+    if (platform.pointerFocus == this) platform.showCursor();
+}
+void LinuxWindow::setPointerMode(PointerMode mode) {
+    pointerMode = mode;
+    if (platform.pointerFocus == this) platform.showCursor();
+}
+
+void LinuxWindow::postForTest(const std::string& what) {
+    if (what != "close") return;  // no loop of the system's own while a window moves: nothing to say
+    RawEvent e;
+    e.kind = RawEvent::Close;
+    platform.posted.emplace_back(this, e);
+    platform.wake();
+}
+
+bool LinuxWindow::makeCurrent() { return platform.use(shown && eglSurface != EGL_NO_SURFACE ? eglSurface : EGL_NO_SURFACE); }
+
+// The picture shown, with the next frame's callback asked for first: the one before waited for
+// (at most 50 ms, a window the compositor does not show getting none), its queue apart from all
+// other events so that waiting runs none of the program's handlers.
+void LinuxWindow::swapBuffers() {
+    LinuxPlatform& p = platform;
+    if (!shown || eglSurface == EGL_NO_SURFACE) return;
+    const int64_t deadline = nowMillis() + 50;
+    while (frame != nullptr) {
+        while (wl_display_prepare_read_queue(p.display, p.frames) != 0) wl_display_dispatch_queue_pending(p.display, p.frames);
+        wl_display_flush(p.display);
+        const int64_t left = deadline - nowMillis();
+        if (left <= 0) {
+            wl_display_cancel_read(p.display);
+            wl_callback_destroy(frame);
+            frame = nullptr;
+            break;
+        }
+        pollfd fd = {wl_display_get_fd(p.display), POLLIN, 0};
+        if (poll(&fd, 1, static_cast<int>(left)) > 0) wl_display_read_events(p.display);
+        else wl_display_cancel_read(p.display);
+        wl_display_dispatch_queue_pending(p.display, p.frames);
+    }
+    frame = wl_surface_frame(surface);
+    wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(frame), p.frames);
+    wl_callback_add_listener(frame, &frameListener, this);
+    if (!p.use(eglSurface)) return;
+    egl.SwapBuffers(p.eglDisplay, eglSurface);
+}
+
+}  // namespace
+
+Platform* Platform::get(std::string& error) {
+    static std::string failure;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        auto* platform = new LinuxPlatform();  // lives as long as the program
+        if (platform->start(failure)) thePlatform = platform;
+    }
+    if (thePlatform == nullptr) error = failure;
+    return thePlatform;
+}
+
+}  // namespace ww::jade
+
+// ---- The protocols' descriptions, made from their XML as ww is built ----
+#include "core-protocol.c"
+#include "fractional-scale-protocol.c"
+#include "viewporter-protocol.c"
+#include "xdg-decoration-protocol.c"
+#include "xdg-shell-protocol.c"
+
+#endif

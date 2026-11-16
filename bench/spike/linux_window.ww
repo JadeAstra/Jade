@@ -1,0 +1,53 @@
+// The Linux window spike's picture (docs/linux-gui-plan.html, step 0): a window shown at scale 1,
+// shapes and text drawn in it, shown, and once the system has had time to show it, its picture
+// saved, to be compared byte for byte with the same on Windows. The text in a font file both
+// systems read (DejaVu Sans, given as the second argument), as their own fonts differ.
+//
+//   ww bench/spike/linux_window.ww <picture.png> <DejaVuSans.ttf>
+
+import Jade.*
+
+val args = Program.arguments
+if (args.size < 2) {
+  print("give where the picture goes, and DejaVuSans.ttf")
+  exit(1)
+}
+val face = Fonts.load(args[1])
+val window = NativeWindow("WinterWolf: a window on Wayland", 360, 240, scale = 1)
+var resized = 0
+window.onResize = { w, h ->
+  resized += 1
+  paint()
+}
+
+fun paint() {
+  val c = window.canvas()
+  c.color = Color.white
+  c.fillRect(0, 0, 360, 240)
+  c.color = Color.red
+  c.fillRect(10, 10, 50, 40)
+  c.color = Color(30, 90, 200)
+  c.fillOval(80, 16, 120, 80)
+  c.color = Color(20, 140, 60)
+  c.drawLine(10, 220, 340, 120)
+  c.drawOval(220, 20, 110, 70)
+  c.fillRoundRect(230, 150, 100, 60, 16, 16)
+  c.color = Color(250, 160, 20, 140)
+  c.fillPolygon([40, 140, 90], [200, 200, 120])
+  c.color = Color.black
+  c.font = Font(face, 18)
+  c.drawString("Wayland, from WinterWolf", 14, 130)
+  c.font = Font(face, 12, bold = true)
+  c.drawString("é ß ж Ω — 1.25 ×", 14, 160)
+  window.present()
+}
+
+window.show()
+paint()
+EventLoop.after(1500.milliseconds) {
+  paint()
+  val shot = window.snapshot()
+  try { shot.save(args[0]) } catch (e : IOException) { print("cannot save: ${e.message}") }
+  print(shot, window.isVisible, window.scale, window.width, window.height)
+  window.close()
+}

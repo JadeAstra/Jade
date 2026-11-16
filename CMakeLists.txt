@@ -88,6 +88,63 @@ add_library(ww_compiler OBJECT
   src/command.cpp
   src/doc.cpp
 )
+# Jade's windows on Linux (docs/linux-gui-plan.html): Wayland, talked to directly, as Win32 is on
+# Windows. ww is linked with none of the system's libraries for it (wayland-client, wayland-egl,
+# EGL, xkbcommon): src/jade/platform_linux.cpp opens them as the first window is made, so ww runs
+# where they are missing. The descriptions of the protocols it speaks are made from their XML by
+# wayland-scanner as ww is built, and included by platform_linux.cpp; where the scanner, the
+# protocols or the headers are missing, ww is built with no windows on Linux, as before.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_program(WW_WAYLAND_SCANNER wayland-scanner)
+  set(WW_WAYLAND_CORE /usr/share/wayland/wayland.xml)
+  set(WW_PROTOCOLS /usr/share/wayland-protocols)
+  set(WW_WAYLAND_EXTENSIONS
+      "xdg-shell|${WW_PROTOCOLS}/stable/xdg-shell/xdg-shell.xml"
+      "viewporter|${WW_PROTOCOLS}/stable/viewporter/viewporter.xml"
+      "fractional-scale|${WW_PROTOCOLS}/staging/fractional-scale/fractional-scale-v1.xml"
+      "xdg-decoration|${WW_PROTOCOLS}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
+  set(WW_WAYLAND_FOUND ON)
+  foreach(needed ${WW_WAYLAND_CORE} /usr/include/wayland-client-core.h /usr/include/wayland-egl-core.h /usr/include/EGL/egl.h
+          /usr/include/xkbcommon/xkbcommon.h /usr/include/xkbcommon/xkbcommon-compose.h)
+    if(NOT EXISTS ${needed})
+      set(WW_WAYLAND_FOUND OFF)
+    endif()
+  endforeach()
+  foreach(extension ${WW_WAYLAND_EXTENSIONS})
+    string(REPLACE "|" ";" parts "${extension}")
+    list(GET parts 1 xml)
+    if(NOT EXISTS ${xml})
+      set(WW_WAYLAND_FOUND OFF)
+    endif()
+  endforeach()
+  if(WW_WAYLAND_SCANNER AND WW_WAYLAND_FOUND)
+    set(made "${CMAKE_BINARY_DIR}/wayland")
+    file(MAKE_DIRECTORY ${made})
+    set(WW_WAYLAND_MADE "${made}/core-protocol.c")
+    add_custom_command(OUTPUT "${made}/core-protocol.c"
+                       COMMAND ${WW_WAYLAND_SCANNER} private-code ${WW_WAYLAND_CORE} "${made}/core-protocol.c"
+                       DEPENDS ${WW_WAYLAND_CORE} VERBATIM)
+    foreach(extension ${WW_WAYLAND_EXTENSIONS})
+      string(REPLACE "|" ";" parts "${extension}")
+      list(GET parts 0 name)
+      list(GET parts 1 xml)
+      add_custom_command(OUTPUT "${made}/${name}-protocol.c" "${made}/${name}-client.h"
+                         COMMAND ${WW_WAYLAND_SCANNER} private-code ${xml} "${made}/${name}-protocol.c"
+                         COMMAND ${WW_WAYLAND_SCANNER} client-header ${xml} "${made}/${name}-client.h"
+                         DEPENDS ${xml} VERBATIM)
+      list(APPEND WW_WAYLAND_MADE "${made}/${name}-protocol.c" "${made}/${name}-client.h")
+    endforeach()
+    add_custom_target(ww_wayland_protocols DEPENDS ${WW_WAYLAND_MADE})
+    target_sources(ww_window PRIVATE src/jade/platform_linux.cpp)
+    set_source_files_properties(src/jade/platform_linux.cpp PROPERTIES OBJECT_DEPENDS "${WW_WAYLAND_MADE}")
+    add_dependencies(ww_window ww_wayland_protocols)
+    target_include_directories(ww_window PRIVATE ${made})
+    target_compile_definitions(ww_window PRIVATE WW_WAYLAND=1)
+  else()
+    message(STATUS "Jade's windows on Linux left out: wayland-scanner, the Wayland protocols or the headers of wayland-client, wayland-egl, EGL or xkbcommon are missing")
+  endif()
+endif()
+
 # Native code (M9.5, docs/native-plan.html): the register stencils compiled by Clang into an
 # object file of their own, read by tools/stencils into a table that ww.exe carries, and checked
 # by ww itself as the build's step. With Clang on x64 Windows (clang-cl, COFF) and on x86-64
