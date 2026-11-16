@@ -50,7 +50,7 @@ static_assert(sizeof(ObjType) == 1 && static_cast<int>(ObjType::List) == L::kTyp
               "layout.h: the kinds of object");
 static_assert(offsetof(ObjList, pack) == L::kListPack && sizeof(std::unique_ptr<PackedItems>) == 8, "layout.h: a list");
 static_assert(offsetof(PackedItems, store) == L::kPackStore && offsetof(PackedItems, nullable) == L::kPackNullable &&
-                  offsetof(PackedItems, count) == L::kPackCount && offsetof(PackedItems, block) == L::kPackBlock && sizeof(ListStore) == 1 &&
+                  offsetof(PackedItems, count) == L::kPackCount && offsetof(PackedItems, block) == L::kPackBlock && offsetof(PackedItems, nulls) == L::kPackNulls && sizeof(ListStore) == 1 &&
                   static_cast<int>(ListStore::Ints) == L::kStoreInts && static_cast<int>(ListStore::Floats) == L::kStoreFloats &&
                   static_cast<int>(ListStore::Bools) == L::kStoreBools,
               "layout.h: a list's packed items");

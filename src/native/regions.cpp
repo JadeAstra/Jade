@@ -486,6 +486,30 @@ struct Region {
         if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
         return listClass(frame[slot]);
     }
+    // Whether the frame's slot holds a list kept as values, or packed ints, floats or bools any of
+    // which may be null, where the region is made: what idxv reads (2026-11-16).
+    bool frameValues(int slot) const {
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
+        const Value& v = frame[slot];
+        if (!v.isObjType(ObjType::List)) return false;
+        if (!asList(v)->packed()) return true;
+        const ListStore store = asList(v)->store();
+        return store == ListStore::Ints || store == ListStore::Floats || store == ListStore::Bools;
+    }
+    // Whether the frame's slot holds packed ints, floats or bools that may be null (setnullat).
+    bool frameNullable(int slot) const {
+        if (!frameValues(slot)) return false;
+        const ObjList* const list = asList(frame[slot]);
+        return list->packed() && list->pack->nullable;
+    }
+    // Whether the frame's slot holds a packed list whose items may be null, or an iterator through
+    // one: never looked at once (its steps read the bits; a template would not).
+    bool frameMayHoldNull(int slot) const {
+        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
+        const Value* v = &frame[slot];
+        if (v->isObjType(ObjType::Iterator)) v = &asIterator(*v)->source;
+        return v->isObjType(ObjType::List) && asList(*v)->packed() && asList(*v)->pack->nullable;
+    }
     // Whether the frame's slot holds a List<bool> (packed, none null) where the region is made
     // (2026-11-15: its items read into the flag register and set from it; the steps check it).
     bool frameBools(int slot) const {
@@ -517,7 +541,7 @@ struct Region {
     }
     // The value type of the items of the list the frame's iterator in slot `itSlot` goes through,
     // where they are kept in the value itself (a Color) with no type of their own; null for any other.
-    // With `where`, of a list of any value type's items, none null, read where they are.
+    // With `where`, of a list of any value type's items (any of them null), read where they are.
     const ObjClass* iteratedClass(int itSlot, bool where = false) const {
         if (frame == nullptr || itSlot < 0 || itSlot >= frameSlots || itSlot >= f.maxStack) return nullptr;
         const Value& v = frame[itSlot];
@@ -526,7 +550,7 @@ struct Region {
         if (!source.isObjType(ObjType::List) || asList(source)->store() != ListStore::Items) return nullptr;
         const PackedItems& pack = *asList(source)->pack;
         const ObjClass* const cls = pack.itemClass;
-        if (where) return pack.nullable ? nullptr : cls;
+        if (where) return cls;  // any of them null too (2026-11-16): null where it is, as the VM's IterNextRef gives it
         if (cls == nullptr || cls->smallId == 0 || pack.itemType != nullptr || pack.typeSlot != 0) return nullptr;
         const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
         return layout != nullptr && layout->size <= 8 ? cls : nullptr;
@@ -1484,6 +1508,46 @@ struct Region {
                 c.fall(s);
                 return;
             }
+            case Op::JumpIfNull:
+            case Op::JumpIfNotNull: {  // i32 target: the top stays either way
+                // `?:` and `?.` (2026-11-16: `ints[i] ?: 0`): whether the top holds null, as its
+                // slot in memory says (as entered, written there, or a copy of such), in the flag.
+                int from = s.top - 1;
+                K k = s.kind(from);
+                if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) from = k.src, k = s.kind(from);
+                if (!(k.bits == kEntry || inMemory(k))) island();
+                c.op("isnull").slot = from;
+                s.flag = -1;
+                // Where the way that is not null reads the value as a number next (`?: 0` adds it),
+                // in its register there: so the two ways meet with a number in the register, where
+                // the other has put one (the 0), not a number one way and a value the other.
+                const auto target = index.find(static_cast<uint32_t>(i32(x, 0)));
+                const int notNullAt = x.op == Op::JumpIfNull ? c.i + 1 : target == index.end() ? -1 : target->second;
+                int cls = -1;
+                if (from == s.top - 1 && notNullAt > 0 && c.i + 1 < static_cast<int>(ins.size())) {
+                    cls = useClass(notNullAt - 1, from, s.top);
+                    if (cls < 0) cls = useClass(notNullAt - 1, from, s.top, 0, true);
+                }
+                if (cls < 0) {
+                    c.go(static_cast<uint32_t>(i32(x, 0)), s, c.op(x.op == Op::JumpIfNull ? "jtrue" : "jfalse"));
+                    c.fall(s);
+                    return;
+                }
+                const K number{static_cast<uint16_t>(cls == CF ? kFloat : kInt)};
+                if (x.op == Op::JumpIfNull) {
+                    c.go(static_cast<uint32_t>(i32(x, 0)), s, c.op("jtrue"));
+                    c.number(from, static_cast<Cls>(cls), cls == CI);
+                    c.write(from, number);
+                    c.fall(s);
+                    return;
+                }
+                c.go(ins[static_cast<size_t>(c.i) + 1].at, s, c.op("jtrue"));  // null: on, as memory holds it
+                c.number(from, static_cast<Cls>(cls), cls == CI);
+                c.write(from, number);
+                c.go(static_cast<uint32_t>(i32(x, 0)), s, c.op("jump"));
+                c.out.fallsThrough = false;
+                return;
+            }
             case Op::RJumpIfFalse: {  // u8 B, u8 T, i32 target, i32 slow
                 c.flagOf(u8(x, 0));
                 State after = s;
@@ -1675,7 +1739,27 @@ struct Region {
                 int cls = useClass(c.i, a, u8(x, 3));
                 if (cls < 0) cls = useClass(c.i, a, u8(x, 3), 0, true);
                 if (cls < 0) cls = frameClass(list);
-                if (cls < 0) island();
+                if (cls < 0) {
+                    // A list kept as values, or of ints, floats or bools any of which may be null,
+                    // as the frame's is (2026-11-16: `val n = ints[i]` of a List<int?>): the item
+                    // as a value, in memory (idxv; the step checks the list).
+                    if (!frameValues(list)) island();
+                    c.writeMemory(a);
+                    LOp* l;
+                    if (x.op == Op::RGetIndexSK) {
+                        l = &c.op("idxvk");
+                        l->ki = c.intConstant(u8(x, 2));
+                    } else {
+                        const Reg index = c.read(u8(x, 2), CI, true);
+                        l = &c.op("idxv", {index}, {index});
+                    }
+                    l->slot = list;
+                    l->slot2 = a;
+                    c.leaves(*l);
+                    s.top = u8(x, 3);
+                    c.fall(s);
+                    return;
+                }
                 const Reg dst{a, static_cast<Cls>(cls)};
                 LOp* l;
                 if (x.op == Op::RGetIndexSK) {
@@ -2185,6 +2269,21 @@ struct Region {
                     c.fall(s);
                     return;
                 }
+                if (const Fact* nf = factOf(s, top - 1); nf != nullptr && nf->isNull) {
+                    // null into a list of ints, floats or bools that may hold null, as the frame's
+                    // is (2026-11-16: `ints[i] = null`): the item's bit set (setnullat).
+                    int root = list;
+                    if (const K lk = s.kind(list); (lk.bits & ~kCopies) == 0 && lk.src >= 0) root = lk.src;
+                    if (!frameNullable(root)) island();
+                    const Reg index = c.read(top - 2, CI, true);
+                    LOp& l = c.op("setnullat", {index}, {index});
+                    l.slot = list;
+                    c.leaves(l);
+                    move(c, top - 1, top - 3);
+                    s.top = top - 2;
+                    c.fall(s);
+                    return;
+                }
                 const Reg index = c.read(top - 2, CI, true);
                 const K v = s.kind(top - 1);
                 // (A whole number read from a list, an int or a byte, goes as an int: into bytes
@@ -2624,6 +2723,7 @@ struct Region {
                 if ((k.bits & kCopies) != 0 && (k.bits & ~kCopies) == 0 && k.src >= 0) from = k.src, k = s.kind(from);
                 if (!(k.bits == kEntry || inMemory(k)) && !isNull(from)) island();
                 c.op("isnull").slot = from;
+                s.flag = -1;  // the flag register now holds this answer, no slot's bool
                 if (t.kind == Typed::Compare) {
                     c.write(u8(x, 0), K{kBool});
                     s.top = u8(x, 3);
@@ -3717,6 +3817,9 @@ struct Region {
             if ((kind != 1 && kind != 2 && kind != 4 && kind != 8 && kind != 16) || (kind == 16 && root < 0) || static_cast<int>(index.size()) == kRegionLists) continue;
             if (addedTo.count(root) != 0) continue;
             if (kind == 8 && root < 0) continue;
+            // Items that may be null are read and set by their steps, which see the bits (2026-11-16):
+            // looked at once, the steps through what was looked at would leave each time.
+            if (root >= 0 && frameMayHoldNull(root)) continue;
             const bool items = kind == 4 || kind == 8;  // not 16, a list of bools
             const ObjClass* const cls = items ? itemClass[root] : nullptr;
             const ValueLayout* const layout = cls != nullptr ? cls->layout.load(std::memory_order_acquire) : nullptr;

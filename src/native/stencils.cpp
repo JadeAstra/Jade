@@ -663,14 +663,42 @@ I_A(IDXWK, x)
 // once: a float into a packed list of floats, none null; an int into a packed list of ints, or
 // one from 0 to 255 into bytes; a byte into bytes. The object its core's own, a list not frozen,
 // the item in range; anything else the VM's.
+// Whether a packed list's items are ints, floats or bools (any of them null where it is nullable).
+INLINE bool plainStore(const uint8_t* pack) {
+    const uint8_t store = pack[kPackStore];
+    return store == kStoreInts || store == kStoreFloats || store == kStoreBools;
+}
 INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, const Ctx* ctx) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
-    const uint8_t* pack = packOf(o, store);
-    if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);
+    if (pack == nullptr || pack[kPackStore] != store || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    // A list whose items may be null (2026-11-16): the item's bit cleared, as the VM's writeItem
+    // does (the value is written next, by every caller).
+    if (pack[kPackNullable] != 0) word<uint64_t*>(pack + kPackNulls)[index / 64] &= ~(uint64_t{1} << (index % 64));
     return word<uint8_t*>(pack + kPackBlock) + index * 8;
 }
+// Item ic of the list in slot ww_slot set to null (`ints[i] = null`, 2026-11-16): a packed list
+// of ints, floats or bools that may hold null, its core's own, not frozen, the item in range;
+// its bit set and its bytes zeroed, as the VM's writeItem does. Anything else the VM's.
+#define SETNULLAT(c, ...)                                                       \
+    STENCIL(setnullat_##c) {                                                    \
+        const Slot& s = (*slotAt(base));                                        \
+        if (s.kind != kKindObj) EXIT;                                           \
+        const uint8_t* o = s.p;                                                 \
+        if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) EXIT; \
+        const uint8_t* pack = word<const uint8_t*>(o + kListPack);              \
+        if (pack == nullptr || !plainStore(pack) || pack[kPackNullable] == 0) EXIT; \
+        const uint64_t index = static_cast<uint64_t>(i##c);                     \
+        if (index >= word<uint64_t>(pack + kPackCount)) EXIT;                   \
+        word<uint64_t*>(pack + kPackNulls)[index / 64] |= uint64_t{1} << (index % 64); \
+        uint8_t* const at = word<uint8_t*>(pack + kPackBlock);                  \
+        if (pack[kPackStore] == kStoreBools) at[index] = 0;                     \
+        else __builtin_memset(at + index * 8, 0, 8);                            \
+        NEXT;                                                                   \
+    }
+I_A(SETNULLAT, x)
 // A List<bool>'s item (2026-11-15: a Mask's pixels, a flood's marks): a packed list of bools, a
 // byte each (0 or 1), none null, the item in range; to read (its core's or none's) or to change
 // (its core's own, not frozen). Null where not: the VM's.
@@ -848,14 +876,24 @@ INLINE const uint8_t* itemsList(const Slot& s, const Ctx* ctx) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
-    return packOf(o, kStoreItems) != nullptr ? o : nullptr;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);
+    return pack != nullptr && pack[kPackStore] == kStoreItems ? o : nullptr;
 }
+// Whether item `index` of a packed list is null: where it may be, its bit set (2026-11-16).
+INLINE bool nullItem(const uint8_t* pack, uint64_t index) {
+    return pack[kPackNullable] != 0 && (word<const uint64_t*>(pack + kPackNulls)[index / 64] >> (index % 64) & 1) != 0;
+}
+// (The list's items may be null: null for a null item, as the VM's GetIndexRef gives it.)
 #define IREF(c, ...)                                                            \
     STENCIL(iref_##c) {                                                         \
         const uint8_t* list = itemsList((*slotAt(base)), ctx);                  \
         if (list == nullptr) EXIT;                                              \
         const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
         if (static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
+        if (nullItem(pack, static_cast<uint64_t>(i##c))) {                      \
+            storeSlot(&(*slot2At(base)), 0, kKindNull, 0);                      \
+            NEXT;                                                               \
+        }                                                                       \
         putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(list)); \
         NEXT;                                                                   \
     }
@@ -873,8 +911,12 @@ I_A(IREF, x)
             word<uint32_t>(pack + kPackTypeSlot) != 0 || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) \
             EXIT;                                                               \
         const uint64_t what = static_cast<uint64_t>(ww_slot2);                \
+        if (nullItem(pack, static_cast<uint64_t>(i##c))) { /* null: the VM's read too */ \
+            storeSlot(base, static_cast<int64_t>((what >> 8) & 0xFFFFFF), kKindNull, 0); \
+            NEXT;                                                               \
+        }                                                                       \
         const uint32_t size = static_cast<uint32_t>(what & 0xFF), id = static_cast<uint32_t>(what >> 32); \
-        const uint8_t* from = word<const uint8_t*>(pack + kPackBlock) + i##c * static_cast<int64_t>(word<uint32_t>(pack + kPackWidth)); \
+        const uint8_t* from = word<const uint8_t*>(pack + kPackBlock) + i##c *static_cast<int64_t>(word<uint32_t>(pack + kPackWidth)); \
         uint64_t bits = 0;                                                      \
         for (uint32_t k = 0; k < size; k++) bits |= static_cast<uint64_t>(from[k]) << (8 * k); \
         putValue(&base[(what >> 8) & 0xFFFFFF], kKindSmall | static_cast<uint64_t>(id) << 32, bits); \
@@ -1230,10 +1272,10 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;  // a Ref none deep, at its item's start
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
-    const uint8_t* pack = packOf(o, kStoreItems);
-    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);  // its items may be null; this one not (2026-11-16)
+    if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
     const uint64_t index = head >> 32;
-    if (index >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    if (index >= word<uint64_t>(pack + kPackCount) || nullItem(pack, index)) return nullptr;
     return word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth) + offset;
 }
 // i9 = whether the values in slots ww_slot and ww_slot2 are the same, byte for byte (2026-11-14:
@@ -1247,10 +1289,10 @@ INLINE const uint8_t* valueBytes(const Slot& s, const Ctx* ctx, uint64_t id) {
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
-    const uint8_t* pack = packOf(o, kStoreItems);
-    if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
+    const uint8_t* pack = word<const uint8_t*>(o + kListPack);  // its items may be null; this one not (2026-11-16)
+    if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
     const uint64_t index = head >> 32;
-    if (index >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    if (index >= word<uint64_t>(pack + kPackCount) || nullItem(pack, index)) return nullptr;
     return word<const uint8_t*>(pack + kPackBlock) + index * word<uint32_t>(pack + kPackWidth);
 }
 STENCIL(eqsm) {
@@ -1573,12 +1615,62 @@ INLINE uint8_t* listIterator(const Slot& s, const uint8_t*& list) {
     list = source.p;
     return const_cast<uint8_t*>(s.p);
 }
+// Item `index` of such a list (plainStore, the index in range) as the VM reads it, a value in
+// slot `to`: null where its bit says so (2026-11-16).
+INLINE void plainItem(Slot* to, const uint8_t* pack, uint64_t index) {
+    if (pack[kPackNullable] != 0 && (word<const uint64_t*>(pack + kPackNulls)[index / 64] >> (index % 64) & 1) != 0) {
+        storeSlot(to, 0, kKindNull, 0);
+        return;
+    }
+    const uint8_t* const at = word<const uint8_t*>(pack + kPackBlock);
+    const uint8_t store = pack[kPackStore];
+    if (store == kStoreBools) storeSlot(to, 0, kKindBool, at[index] != 0);
+    else storeSlot(to, 0, store == kStoreInts ? kKindInt : kKindFloat, word<uint64_t>(at + index * 8));
+}
+// Slot ww_slot2 = item ic (or item K) of the list in slot ww_slot, as a value: of a list kept as
+// values, a copy; of packed ints, floats or bools, any of them null, the item or null
+// (2026-11-16: `val n = ints[i]` of a List<int?>). The item in range; anything else the VM's.
+INLINE bool valueItem(Slot* base, int64_t index, const Ctx* ctx) {
+    const Slot& s = (*slotAt(base));
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeList || !mayRead(s.p, ctx)) return false;
+    const uint8_t* const list = s.p;
+    if (const uint8_t* pack = word<const uint8_t*>(list + kListPack)) {
+        if (!plainStore(pack) || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return false;
+        plainItem(&(*slot2At(base)), pack, static_cast<uint64_t>(index));
+        return true;
+    }
+    const Slot* first = word<const Slot*>(list + kListItems);
+    const Slot* last = word<const Slot*>(list + kListItems + 8);
+    if (static_cast<uint64_t>(index) >= static_cast<uint64_t>(last - first)) return false;
+    __builtin_memcpy(&(*slot2At(base)), first + index, sizeof(Slot));
+    return true;
+}
+#define IDXV(c, ...)                                                            \
+    STENCIL(idxv_##c) {                                                         \
+        if (!valueItem(base, i##c, ctx)) EXIT;                                  \
+        NEXT;                                                                   \
+    }
+I_A(IDXV, x)
+STENCIL(idxvk) {
+    if (!valueItem(base, ww_ki, ctx)) EXIT;
+    NEXT;
+}
 // The next item of a list kept as values, to slot ww_slot2; to the jump's target where there
 // are no more.
 STENCIL(iterv) {
     const uint8_t* list;
     uint8_t* it = listIterator((*slotAt(base)), list);
-    if (it == nullptr || word<const uint8_t*>(list + kListPack) != nullptr) EXIT;
+    if (it == nullptr) EXIT;
+    if (const uint8_t* pack = word<const uint8_t*>(list + kListPack)) {
+        // Packed ints, floats or bools, any of them null (2026-11-16: a for over a List<int?>).
+        if (!plainStore(pack) || !mayRead(list, ctx)) EXIT;
+        const uint64_t index = word<uint64_t>(it + kIterIndex);
+        if (index >= word<uint64_t>(pack + kPackCount)) JUMP;
+        plainItem(&(*slot2At(base)), pack, index);
+        const uint64_t next = index + 1;
+        __builtin_memcpy(it + kIterIndex, &next, 8);
+        NEXT;
+    }
     const Slot* first = word<const Slot*>(list + kListItems);
     const Slot* last = word<const Slot*>(list + kListItems + 8);
     const uint64_t index = word<uint64_t>(it + kIterIndex);
@@ -1627,9 +1719,18 @@ I_A(ITERI, x)
 STENCIL(iterref) {
     const uint8_t* list;
     uint8_t* it = listIterator((*slotAt(base)), list);
-    if (it == nullptr || list == ctx->band || packOf(list, kStoreItems) == nullptr) EXIT;
+    if (it == nullptr || list == ctx->band) EXIT;
+    const uint8_t* const pack = word<const uint8_t*>(list + kListPack);
+    if (pack == nullptr || pack[kPackStore] != kStoreItems) EXIT;
     const uint64_t index = word<uint64_t>(it + kIterIndex);
-    if (index >= word<uint64_t>(word<const uint8_t*>(list + kListPack) + kPackCount)) JUMP;
+    if (index >= word<uint64_t>(pack + kPackCount)) JUMP;
+    if (nullItem(pack, index)) {
+        // A list whose items may be null (2026-11-16): null, as the VM's IterNextRef gives it.
+        storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
+        const uint64_t next = index + 1;
+        __builtin_memcpy(it + kIterIndex, &next, 8);
+        NEXT;
+    }
     putValue(&(*slot2At(base)), kKindRef | index << 32, reinterpret_cast<uint64_t>(list));
     const uint64_t next = index + 1;
     __builtin_memcpy(it + kIterIndex, &next, 8);

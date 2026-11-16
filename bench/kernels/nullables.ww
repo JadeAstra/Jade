@@ -1,0 +1,125 @@
+// Loops over lists that may hold null, and over sets and maps, as a program would write them,
+// each in a function of its own (2026-11-16). Each the best of five, in milliseconds.
+//
+//   ww bench/kernels/nullables.ww
+
+fun time(name : string, work : () -> any?) {
+  var best = 1e300
+  var said = ""
+  for (round in 0 ..< 5) {
+    val started = Instant.now()
+    val result = work()
+    val took = (Instant.now() - started).inNanoseconds / 1e6
+    if (took < best) { best = took }
+    said = result.toString()
+  }
+  print("${name.padEnd(40)} ${(Math.round(best * 100) / 100.0).toString().padStart(9)} ms  ${said.take(30)}")
+}
+
+fun forInts(ints : List<int?>) : int {
+  var t = 0
+  for (n in ints) {
+    if (n != null) { t += n }
+  }
+  return t
+}
+fun indexInts(ints : List<int?>) : int {
+  var t = 0
+  for (i in 0 ..< ints.size) {
+    val n = ints[i]
+    if (n != null) { t += n } else { t -= 1 }
+  }
+  return t
+}
+fun elvisInts(ints : List<int?>) : int {
+  var t = 0
+  for (i in 0 ..< ints.size) { t += ints[i] ?: 0 }
+  return t
+}
+fun forFloats(xs : List<float?>) : float {
+  var t = 0.0
+  for (x in xs) {
+    if (x != null) { t += x * 0.5 }
+  }
+  return t
+}
+fun forColors(colors : List<Color?>) : int {
+  var t = 0
+  for (c in colors) {
+    if (c != null) { t += c.red.toInt() + c.green.toInt() + c.blue.toInt() + c.alpha.toInt() }
+  }
+  return t
+}
+fun indexColors(colors : List<Color?>) : int {
+  var t = 0
+  for (i in 0 ..< colors.size) {
+    val c = colors[i]
+    if (c != null) { t += c.red.toInt() }
+  }
+  return t
+}
+fun countNulls(ints : List<int?>) : int {
+  var none = 0
+  for (n in ints) {
+    if (n == null) { none += 1 }
+  }
+  return none
+}
+fun setNulls(ints : open List<int?>) : int {
+  for (i in 0 ..< ints.size) {
+    if (i % 5 == 0) { ints[i] = null } else { ints[i] = i }
+  }
+  return ints.size
+}
+fun forSet(s : Set<int>) : int {
+  var t = 0
+  for (n in s) { t += n }
+  return t
+}
+fun setContains(s : Set<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (s.contains(i)) { t += 1 }
+  }
+  return t
+}
+fun mapGet(m : Map<int, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) { t += m[i] ?: 0 }
+  return t
+}
+fun forMap(m : Map<int, int>) : int {
+  var t = 0
+  for ((k, v) in m) { t += k + v }
+  return t
+}
+
+val n = 1000000
+val ints : open List<int?> = []
+val xs : open List<float?> = []
+val colors : open List<Color?> = []
+for (i in 0 ..< n) {
+  ints.add(i % 7 == 0 ? null : i)
+  xs.add(i % 7 == 0 ? null : i * 1.5)
+  colors.add(i % 7 == 0 ? null : Color((i % 256).toByte(), (i % 13).toByte(), (i % 7).toByte(), 255.toByte()))
+}
+val set : open Set<int> = Set([])
+val map : open Map<int, int> = {:}
+for (i in 0 ..< n) {
+  if (i % 3 != 0) {
+    set.add(i)
+    map[i] = i * 2
+  }
+}
+time("for (n in List<int?>) n != null") { forInts(ints) }
+time("val n = ints[i], != null, else") { indexInts(ints) }
+time("ints[i] ?: 0") { elvisInts(ints) }
+time("for (x in List<float?>)") { forFloats(xs) }
+time("for (c in List<Color?>), four parts") { forColors(colors) }
+time("val c = colors[i], c.red") { indexColors(colors) }
+time("count nulls in List<int?>") { countNulls(ints) }
+time("ints[i] = null or i") { setNulls(ints) }
+time("for (n in Set<int>)") { forSet(set) }
+time("set.contains(i)") { setContains(set, n) }
+time("map[i] ?: 0") { mapGet(map, n) }
+time("for ((k, v) in Map<int, int>)") { forMap(map) }

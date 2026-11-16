@@ -88,6 +88,7 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <li><a href="#draw-size">Drawing, by size</a></li>
 <li><a href="#history">The pixel loops, from 2026-11-12 to now</a></li>
 <li><a href="#done">What was done for the slow ones</a></li>
+<li><a href="#nullable">Lists that may hold null, sets and maps</a></li>
 <li><a href="#left">Left</a></li>
 </ul>
 </nav>
@@ -281,6 +282,26 @@ tr.note-row td { border-top: none; padding-top: 0; padding-bottom: 10px; color: 
 <li><strong><code>transformed</code> and <code>blurred</code>.</strong> Sampling in one pass with each place worked out as it is wanted; the convolution with a ring of rows, a pixel's four parts together, the answer written in place.</li>
 <li><strong><code>inverted()</code>.</strong> Through <code>mapChannels</code> again.</li>
 </ol>
+
+<h2 id="nullable">Lists that may hold null, sets and maps</h2>
+<p>Loops over a million items, each in a function of its own, by <code>bench/kernels/nullables.ww</code> (2026-11-16, the user: "try dealing with null lists/sets/maps in native"): the best of five, pinned, against a build of the commit before. One item in 7 is null (in 11 for colours). A list that may hold null keeps its items as one that may not, with a bit for each item beside them; native code had left every such list to the VM, and the loops lost their regions. Now a <code>for</code> and a read by index give the item or null by its bit, a number set clears it, <code>= null</code> sets it, and <code>?:</code> keeps the number in its register on the way that is not null. Such lists are never looked at once or given to a loop template.</p>
+<div class="table"><table>
+<thead><tr><th>Loop</th><th class="num">Before, ms</th><th class="num">Now, ms</th><th class="num">Faster by</th></tr></thead>
+<tbody>
+<tr><td class="op"><code>for (n in ints)</code>, a <code>List&lt;int?&gt;</code>, <code>n != null</code></td><td class="num">16.0</td><td class="num">3.4</td><td class="num">4.7×</td></tr>
+<tr><td class="op"><code>val n = ints[i]</code>, <code>!= null</code>, else</td><td class="num">10.9</td><td class="num">2.6</td><td class="num">4.2×</td></tr>
+<tr><td class="op"><code>ints[i] ?: 0</code></td><td class="num">15.4</td><td class="num">2.4</td><td class="num">6.3×</td></tr>
+<tr><td class="op"><code>for (x in xs)</code>, a <code>List&lt;float?&gt;</code></td><td class="num">16.9</td><td class="num">3.3</td><td class="num">5.1×</td></tr>
+<tr><td class="op"><code>for (c in colors)</code>, a <code>List&lt;Color?&gt;</code>, four parts</td><td class="num">56.8</td><td class="num">10.8</td><td class="num">5.2×</td></tr>
+<tr><td class="op"><code>val c = colors[i]</code>, a <code>List&lt;Color?&gt;</code>, <code>c.red</code></td><td class="num">56</td><td class="num">55</td><td class="num">—</td></tr>
+<tr><td class="op">nulls counted in a <code>List&lt;int?&gt;</code></td><td class="num">14.8</td><td class="num">3.1</td><td class="num">4.8×</td></tr>
+<tr><td class="op"><code>ints[i] = null</code> or <code>i</code></td><td class="num">11.0</td><td class="num">2.8</td><td class="num">3.9×</td></tr>
+<tr><td class="op"><code>for (n in set)</code>, a <code>Set&lt;int&gt;</code> of 666,667</td><td class="num">4.0</td><td class="num">4.0</td><td class="num">—</td></tr>
+<tr><td class="op"><code>set.contains(i)</code></td><td class="num">26.7</td><td class="num">26.2</td><td class="num">—</td></tr>
+<tr><td class="op"><code>map[i] ?: 0</code>, a <code>Map&lt;int, int&gt;</code></td><td class="num">37.2</td><td class="num">28.3</td><td class="num">1.3×</td></tr>
+<tr><td class="op"><code>for ((k, v) in map)</code></td><td class="num">3.4</td><td class="num">3.4</td><td class="num">—</td></tr>
+</tbody></table></div>
+<p>Not yet native: <code>val c = colors[i]</code> of a <code>List&lt;Color?&gt;</code>, whose value is copied into the variable's own place (SET_PLACE from a Ref into the list: the item's type as the VM's <code>refType</code> works it out), and every step of a set or a map (the map's row gains only by <code>?:</code>).</p>
 
 <h2 id="left">Left</h2>
 <ul>
