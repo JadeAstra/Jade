@@ -1090,6 +1090,79 @@ void registerText(VM& vm) {
         vm.account(made->data.size());
         return Value::object(made);
     });
+    // opaque(cells): whether every pixel of a picture has an alpha of 255 (Image.isOpaque). The
+    // pixels ANDed together 32 bits at a time, which the compiler makes wide.
+    def("imageOpaque", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed()) throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells");
+        const ItemBlock& block = asList(args[0])->pack->block;
+        const size_t pixels = block.size() / 4;
+        const uint8_t* bytes = block.data();
+        uint32_t all = 0xFFFFFFFFu;
+        for (size_t start = 0; start < pixels && (all >> 24) == 0xFF; start += 65536) {  // a solid picture read whole, a see-through one left early
+            const size_t end = std::min(pixels, start + 65536);
+            uint32_t part = 0xFFFFFFFFu;
+            for (size_t i = start; i < end; i++) {
+                uint32_t px;
+                std::memcpy(&px, bytes + i * 4, 4);
+                part &= px;
+            }
+            all &= part;
+        }
+        return Value::boolean((all >> 24) == 0xFF);
+    });
+    // write(cells, width, height, to, at, order, rowStride, bottomUp): a picture's pixels written into
+    // bytes from `at` (Image.writePixels): each pixel's channels in `order` ("BGR", "RGBA", any of
+    // R, G, B and A in any order, 1 to 4 of them), a row every `rowStride` bytes, from the top row or
+    // the bottom one first. What is between rows is left as it is.
+    def("imageWrite", 8, 8, [](VM& vm, int, Value* args) -> Value {
+        if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[3].isObjType(ObjType::Bytes))
+            throw vm.runtimeError(Thrown::ClassCastException, "expected a picture's cells and bytes");
+        const ItemBlock& block = asList(args[0])->pack->block;
+        const int64_t w = vm.toInt(args[1], "width"), h = vm.toInt(args[2], "height");
+        std::vector<uint8_t>& to = asBytes(args[3])->data;
+        const int64_t at = vm.toInt(args[4], "index");
+        const std::string& order = vm.toStr(args[5], "order");
+        const int64_t stride = vm.toInt(args[6], "rowStride");
+        const bool bottomUp = args[7].truthy();
+        const int64_t size = static_cast<int64_t>(order.size());
+        if (size < 1 || size > 4) throw vm.runtimeError(Thrown::IllegalArgumentException, "an order is 1 to 4 of R, G, B and A, not \"" + order + "\"");
+        int from[4] = {0, 0, 0, 0};
+        for (int64_t c = 0; c < size; c++) {
+            const char* found = std::strchr("RGBA", order[static_cast<size_t>(c)]);
+            if (found == nullptr || order[static_cast<size_t>(c)] == 0)
+                throw vm.runtimeError(Thrown::IllegalArgumentException, "an order is 1 to 4 of R, G, B and A, not \"" + order + "\"");
+            from[c] = static_cast<int>(found - "RGBA");
+        }
+        if (w * h * 4 != static_cast<int64_t>(block.size())) throw vm.runtimeError(Thrown::IllegalArgumentException, "the size does not fit the picture");
+        if (stride < w * size) throw vm.runtimeError(Thrown::IllegalArgumentException, "a row stride of " + std::to_string(stride) + " is less than a row's " + std::to_string(w * size) + " bytes");
+        if (h > 0 && w > 0 && (at < 0 || at + (h - 1) * stride + w * size > static_cast<int64_t>(to.size())))
+            throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "the pixels would run past the end of the bytes");
+        const uint8_t* source = block.data();
+        for (int64_t row = 0; row < h; row++) {
+            const uint8_t* p = source + row * w * 4;
+            uint8_t* o = to.data() + at + (bottomUp ? h - 1 - row : row) * stride;
+            if (order == "RGBA") {
+                std::memcpy(o, p, static_cast<size_t>(w) * 4);
+            } else if (order == "BGR") {
+                for (int64_t x = 0; x < w; x++, o += 3, p += 4) {
+                    o[0] = p[2];
+                    o[1] = p[1];
+                    o[2] = p[0];
+                }
+            } else if (order == "BGRA") {
+                for (int64_t x = 0; x < w; x++, o += 4, p += 4) {
+                    o[0] = p[2];
+                    o[1] = p[1];
+                    o[2] = p[0];
+                    o[3] = p[3];
+                }
+            } else {
+                for (int64_t x = 0; x < w; x++, o += size, p += 4)
+                    for (int64_t c = 0; c < size; c++) o[c] = p[from[c]];
+            }
+        }
+        return Value::null();
+    });
     // setPixels(cells, bytes): a picture's pixels taken from bytes, four to a pixel.
     def("imageSetPixels", 2, 2, [](VM& vm, int, Value* args) -> Value {
         if (!args[0].isObjType(ObjType::List) || !asList(args[0])->packed() || !args[1].isObjType(ObjType::Bytes))

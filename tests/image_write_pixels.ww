@@ -1,0 +1,48 @@
+// Image.isOpaque and Image.writePixels (2026-11-17, for BMP's writer): whether every pixel is
+// solid, and the pixels written into bytes in any channel order, rows padded, bottom up.
+
+val img = Image(3, 2, Color(10, 20, 30))
+img[1, 0] = Color(40, 50, 60, 255)
+img[2, 1] = Color(70, 80, 90, 255)
+print(img.isOpaque)   // expect: true
+print(Image(0, 0).isOpaque)   // expect: true
+
+// As rgbaBytes gives them, the same bytes.
+print(img.writePixels(Bytes(24)) == img.rgbaBytes())   // expect: true
+
+// Blue, green, red, after a header of 2 bytes, each row padded to 12, the bottom row first.
+val out = Bytes(2 + 12 * 2).fill(255.toByte())
+img.writePixels(out, 2, "BGR", 12, bottomUp = true)
+print(out.toList())   // expect: [255, 255, 30, 20, 10, 30, 20, 10, 90, 80, 70, 255, 255, 255, 30, 20, 10, 60, 50, 40, 30, 20, 10, 255, 255, 255]
+
+// One channel; four in another order; a channel twice.
+print(img.writePixels(Bytes(6), 0, "G").toList())   // expect: [20, 50, 20, 20, 20, 80]
+print(img.writePixels(Bytes(24), 0, "ABGR", 0).toList().take(4))   // expect: [255, 30, 20, 10]
+print(img.writePixels(Bytes(12), 0, "RR").toList().take(4))   // expect: [10, 10, 40, 40]
+
+// One see-through pixel anywhere.
+val glass = Image(300, 200, Color.white)
+glass[299, 199] = Color(1, 2, 3, 254)
+print(glass.isOpaque)   // expect: false
+glass[299, 199] = Color(1, 2, 3)
+print(glass.isOpaque)   // expect: true
+glass[0, 0] = Color(0, 0, 0, 0)
+print(glass.isOpaque)   // expect: false
+
+// What is not allowed.
+fun attempt(f : () -> any?) : string {
+  try {
+    f()
+    return "no error"
+  } catch (e : Exception) {
+    return e#.name
+  }
+}
+print(attempt { img.writePixels(Bytes(17), 0, "BGR") })   // expect: IndexOutOfBoundsException
+print(attempt { img.writePixels(Bytes(18), 1, "BGR") })   // expect: IndexOutOfBoundsException
+print(attempt { img.writePixels(Bytes(18), -1, "BGR") })   // expect: IndexOutOfBoundsException
+print(attempt { img.writePixels(Bytes(64), 0, "BGRX") })   // expect: IllegalArgumentException
+print(attempt { img.writePixels(Bytes(64), 0, "") })   // expect: IllegalArgumentException
+print(attempt { img.writePixels(Bytes(64), 0, "RGBAR") })   // expect: IllegalArgumentException
+print(attempt { img.writePixels(Bytes(64), 0, "BGR", 8) })   // expect: IllegalArgumentException
+print(attempt { img.writePixels(Bytes(18), 0, "BGR") })   // expect: no error

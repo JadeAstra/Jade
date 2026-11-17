@@ -521,7 +521,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
 <li><a href="#IllegalStateException"><code>IllegalStateException</code></a> (1)</li>
-<li><a href="#Image"><code>Image</code></a> (35)</li>
+<li><a href="#Image"><code>Image</code></a> (37)</li>
 <li><a href="#ImageCanvas"><code>ImageCanvas</code></a> (20)</li>
 <li><a href="#ImageFormat"><code>ImageFormat</code></a> (3)</li>
 <li><a href="#InMemoryByteSource"><code>InMemoryByteSource</code></a> (6)</li>
@@ -3405,6 +3405,15 @@ image.save(FilePath(&quot;out.png&quot;))
 </div>
 <div class="entry member" id="Image.rgbaBytes"><code class="sig">fun rgbaBytes() : Bytes</code><a class="anchor" href="#Image.rgbaBytes">#</a>
 <p>Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of takes them. A copy: changing it changes nothing here.</p>
+</div>
+<div class="entry member" id="Image.isOpaque"><code class="sig">val isOpaque : bool</code><a class="anchor" href="#Image.isOpaque">#</a>
+<p>Whether every pixel is solid, an alpha of 255: what an encoder asks before leaving alpha out. A look at each pixel, with nothing copied.</p>
+</div>
+<div class="entry member" id="Image.writePixels"><code class="sig">fun writePixels(to : Bytes, at : int = 0, order : string = &quot;RGBA&quot;, rowStride : int = 0, bottomUp : bool = false) : Bytes</code><a class="anchor" href="#Image.writePixels">#</a>
+<p>Its pixels written into <code>to</code> from <code>at</code>, each pixel's channels in <code>order</code> (any of R, G, B and A, one to four of them: &quot;BGR&quot; for a BMP's, &quot;RGBA&quot; as rgbaBytes gives them), a row every <code>rowStride</code> bytes (a row's own bytes when 0; what is between rows is left as it is), the top row first or, with <code>bottomUp</code>, the bottom one. Nothing else is made: a file's header and its pixels in one set of bytes. Gives <code>to</code>. An IndexOutOfBoundsException where they would run past its end, an IllegalArgumentException for another order.</p>
+<pre>val out = Bytes(54 + stride * height)
+image.writePixels(out, 54, &quot;BGR&quot;, stride, bottomUp = true)
+</pre>
 </div>
 <div class="entry member" id="Image.toPng"><code class="sig">fun toPng() : Bytes</code><a class="anchor" href="#Image.toPng">#</a>
 <p>The bytes of a PNG file of it. An image with no pixels (0 wide or 0 high) is an IllegalArgumentException, here and in save.</p>

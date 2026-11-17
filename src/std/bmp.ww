@@ -178,10 +178,9 @@ object __Bmp {
 
   // The image as a BMP file: 24 bits a pixel, or 32 with an alpha mask where a pixel is see-through.
   fun encode(image : Image) : Bytes {
-    val pixels = image.rgbaBytes()
     val width = image.width
     val height = image.height
-    val seeThrough = Bytes(width * height).copyFrom(pixels, 3, 4, 0, 1, width * height).without(255.toByte()).size > 0
+    val seeThrough = !image.isOpaque
     val bits = seeThrough ? 32 : 24
     val headerSize = seeThrough ? 108 : 40
     val stride = (width * bits + 31) / 32 * 4
@@ -206,16 +205,7 @@ object __Bmp {
       out.putUint32(66, 0xFF000000)
       out.putUint32(70, 0x73524742)   // sRGB
     }
-    // Red, green, blue (and alpha) into blue, green, red (and alpha), a row at a time from the bottom.
-    val size = bits / 8
-    for (row in 0 ..< height) {
-      val o = pixelsAt + (height - 1 - row) * stride
-      val p = row * width * 4
-      out.copyFrom(pixels, p + 2, 4, o, size, width)
-      out.copyFrom(pixels, p + 1, 4, o + 1, size, width)
-      out.copyFrom(pixels, p, 4, o + 2, size, width)
-      if (seeThrough) { out.copyFrom(pixels, p + 3, 4, o + 3, 4, width) }
-    }
-    return out
+    // Blue, green, red (and alpha), the bottom row first, straight after the header.
+    return image.writePixels(out, pixelsAt, seeThrough ? "BGRA" : "BGR", stride, bottomUp = true)
   }
 }

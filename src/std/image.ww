@@ -1153,6 +1153,23 @@ class Image : Drawable {
   // Its pixels as bytes, four to a pixel: red, green, blue, alpha, top row first, as Image.of
   // takes them. A copy: changing it changes nothing here.
   fun rgbaBytes() : Bytes => __text.imagePixels(cells.cells)
+  // Whether every pixel is solid, an alpha of 255: what an encoder asks before leaving alpha out.
+  // A look at each pixel, with nothing copied.
+  val isOpaque : bool
+    get() => __text.imageOpaque(cells.cells)
+  // Its pixels written into `to` from `at`, each pixel's channels in `order` (any of R, G, B and A,
+  // one to four of them: "BGR" for a BMP's, "RGBA" as rgbaBytes gives them), a row every
+  // `rowStride` bytes (a row's own bytes when 0; what is between rows is left as it is), the top
+  // row first or, with `bottomUp`, the bottom one. Nothing else is made: a file's header and
+  // its pixels in one set of bytes. Gives `to`. An IndexOutOfBoundsException where they would run
+  // past its end, an IllegalArgumentException for another order.
+  //
+  //   val out = Bytes(54 + stride * height)
+  //   image.writePixels(out, 54, "BGR", stride, bottomUp = true)
+  fun writePixels(to : Bytes, at : int = 0, order : string = "RGBA", rowStride : int = 0, bottomUp : bool = false) : Bytes {
+    __text.imageWrite(cells.cells, width, height, to, at, order, rowStride == 0 ? width * order.size : rowStride, bottomUp)
+    return to
+  }
   // The bytes of a PNG file of it. An image with no pixels (0 wide or 0 high) is an
   // IllegalArgumentException, here and in save.
   fun toPng() : Bytes => __text.encodePng(cells.cells, width, height)
