@@ -1351,14 +1351,30 @@ void registerBytes(VM& vm) {
         ObjBytes* made = vm.alloc<ObjBytes>();
         TempRoot keep(vm, Value::object(made));
         const std::vector<uint8_t>& from = asBytes(self)->data;
-        made->data.reserve(n);
-        size_t start = 0;
-        while (start < n) {
-            const void* hit = std::memchr(from.data() + start, value, n - start);
-            const size_t end = hit == nullptr ? n : static_cast<size_t>(static_cast<const uint8_t*>(hit) - from.data());
-            made->data.insert(made->data.end(), from.begin() + static_cast<std::ptrdiff_t>(start), from.begin() + static_cast<std::ptrdiff_t>(end));
-            start = end + 1;
+        made->data.resize(n);
+        const uint8_t* source = from.data();
+        uint8_t* to = made->data.data();
+        size_t kept = 0, at = 0;
+        while (at < n) {
+            // A stretch with none of `value` found at once and copied whole (the line breaks of
+            // text, far apart)...
+            const void* hit = std::memchr(source + at, value, n - at);
+            const size_t end = hit == nullptr ? n : static_cast<size_t>(static_cast<const uint8_t*>(hit) - source);
+            std::memcpy(to + kept, source + at, end - at);
+            kept += end - at;
+            if (end == n) break;
+            // ...and after one, a stretch where they may be close together gone through a byte at a
+            // time with no branch: every alpha 255 of an opaque picture took a call each before
+            // (2026-11-17: 30 ms for 12 million).
+            const size_t stop = std::min(n, end + 256);
+            for (size_t i = end; i < stop; i++) {
+                to[kept] = source[i];
+                kept += source[i] != value ? 1 : 0;
+            }
+            at = stop;
         }
+        made->data.resize(kept);
+        made->data.shrink_to_fit();
         vm.account(made->data.size());
         return Value::object(made);
     });
