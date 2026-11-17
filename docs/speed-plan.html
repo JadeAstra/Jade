@@ -96,6 +96,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#sp-how">How: WinterWolf first, native code taught what it lacks</a></li>
 <li><a href="#sp-parts">The parts, each with its spike and gate</a></li>
 <li><a href="#sp-order">Order</a></li>
+<li><a href="#sp-p1">Part 1, GIF: its gate not reached (2026-11-17)</a></li>
 <li><a href="#sp-questions">Questions for the user</a></li>
 </ul>
 </nav>
@@ -138,6 +139,27 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 
 <h2 id="sp-order">Order</h2>
 <p>1, 2, 3, 4, 5, 6, 7 (question 5): the encoders first, as they are the largest times and teach native code the shapes the rest need; calls last, as most of what it would win is won by putting small functions in place. Each part finished, timed, tested on Windows and Linux, written into timings.html and committed (a version a build) before the next; each reported and the next begun on the user's word.</p>
+
+<h2 id="sp-p1">Part 1, GIF: its gate not reached (2026-11-17)</h2>
+<p><strong>Where its time goes</strong> (the 1000 by 1000 photo, 33 ms on the build before): the palette 2.6 ms (WinterWolf), the indices 6.2 (C++), the LZW loop 14 (WinterWolf), the rest copies of the pixels. At 4000 by 3000, 305 ms: palette 26, indices 46, LZW 160. <code>bench/kernels/gifparts.ww</code> times each part; <code>timings.cpp</code> now has their yardsticks (the C++ indices and dithering as they were, and the LZW loop as a C++ program would write it, a table of 16-bit codes), each checked to give the same bytes.</p>
+<div class="table"><table>
+<thead><tr><th>Part, 1000 by 1000 (4000 by 3000)</th><th>C++, ms</th><th>WinterWolf, ms</th><th>Kept</th></tr></thead>
+<tbody>
+<tr><td class="part">Indices, none dithered</td><td>6.2 (45.7)</td><td>8.4 (64.3)</td><td>C++</td></tr>
+<tr><td class="part">Floyd and Steinberg</td><td>20.5 (208)</td><td>59.5 (616)</td><td>C++</td></tr>
+<tr><td class="part">Atkinson</td><td>18.5 (189)</td><td>59.5 (650)</td><td>C++</td></tr>
+<tr><td class="part">LZW (the gate)</td><td>5.7 (56.6)</td><td>14.0 (160)</td><td>WinterWolf, as before</td></tr>
+</tbody></table></div>
+<p><strong>The indices in WinterWolf</strong> (<code>bench/spike/gif_nearest.ww</code>): the same indices as the C++ on every picture tried (the photo, a crop, noise with see-through pixels, a ramp, palettes of 2 to 256 colours and one with colours twice, each method, and the GIF files: 85, byte for byte); its search through the palette sorted by green, which tries a few colours where the C++ tried all 256, its tables zeros until used. 1.4 times the C++ undithered, 3 times dithered: kept out by the gate (a slower piece does not replace a quicker one), the C++ left in place, now a member every program can call, <code>Grid&lt;Color&gt;.paletteIndices(palette, method)</code>, each pixel's index as bytes (what a file of indexed colours holds).</p>
+<p><strong>Why native code did not carry them:</strong> each loop is made whole, but holds more values at once than its nine registers for whole numbers. A way out after each check must write back every variable changed so far, so they are all alive at once, and what is spilled to memory is spilled everywhere: the hot path's values (the LZW loop's prefix, key and code found: four loads and stores each time round, of 17 steps) as much as the cold path's. The C++ compiler keeps them in registers on the hot path and writes them only on the way to the cold one.</p>
+<p><strong>What native code was taught</strong> on the way, for every program:</p>
+<ul>
+<li>Items of two lists meeting in one variable (<code>c = cells[key]</code>, else <code>nearestOf[key]</code>): every list read so made again as a list of ints, where the region was refused.</li>
+<li>One more try at making a region (four, not three), where the first ones each uncover one thing to change.</li>
+<li>Lists and fields looked at once in a loop that calls out and comes back: every way back in looks at them again, where before a call anywhere in the loop meant none was (the indices' loop 8.4 ms to 4.6 held; <code>tests/native_relook.ww</code>, which fails without the looking again).</li>
+</ul>
+<p>Tried and dropped: what to spill chosen by how often each value is used as a guess has it (the loop's head once each time round, a branch halving it, a branch round a call taken 1 time in 16, one straight back round the loop 7 in 8, an inner loop four times, the head's own counters spilled last), not by where it is written. It helped the indices' loops, but where a region's hot part is an inner loop (the blur kernel: the outer loop over a pixel's four parts, four times a row, round the loop along the row) it kept the outer loop's counters and spilled the inner one's values: 13% slower. Without counts of what really runs, a guess that serves one loop costs another.</p>
+<p><strong>Next, to reach the gate:</strong> a value's life split between a loop's hot path and its cold one, kept in a register on the first and in memory on the second, written back on the way into the cold path (what C++ compilers do); or more registers for native code (it has nine of the processor's sixteen). Either is a piece of native code's own, before part 1 is tried again; the user's to choose, and whether part 2 (PNG) goes first meanwhile.</p>
 
 <h2 id="sp-questions">Questions for the user</h2>
 <p>Each with the recommendation and why.</p>

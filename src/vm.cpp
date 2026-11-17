@@ -7125,8 +7125,10 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         // are made by its prologue, which no other way in runs, and read only in a region with no
         // other way in (its lists and fields looked at once where nothing of the VM's is in it but
         // on the way to a return or throw). A way in after an island, as after each call a loop
-        // makes, is spared setting some 600 bytes (2026-11-13). A loop template's words are never
-        // set to nothing: each that its shape reads is set by the steps just before it runs.
+        // makes, is spared setting some 600 bytes (2026-11-13); one that runs the prologue again
+        // (2026-11-17: a loop that calls out and comes back looks at its lists and fields again)
+        // sets each of those it reads, as the start does. A loop template's words are never set to
+        // nothing: each that its shape reads is set by the steps just before it runs.
         native::RegionContext context;
         context.attention = reinterpret_cast<const volatile uint8_t*>(&attention_);
         context.core = coreId_;

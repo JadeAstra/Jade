@@ -309,8 +309,7 @@ object __Gif {
       // Its colours: its own where it has few enough, else an octree's; one kept for see-through.
       val seeThrough = Bytes(w * h).copyFrom(part, 3, 4, 0, 1, w * h).mapped(__seeThroughTable).without(0).size > 0
       val colors = partGrid.palette(seeThrough ? 255 : 256)
-      val paletteBytes = __paletteBytes(colors, 256)
-      val indices : Bytes = __picture.indices(part, w, h, paletteBytes, 0)
+      val indices = partGrid.paletteIndices(colors, Dither.none)
       var tableSize = 2
       var bits = 1
       while (tableSize < colors.size + (seeThrough ? 1 : 0)) {

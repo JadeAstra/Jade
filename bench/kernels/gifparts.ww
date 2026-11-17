@@ -1,0 +1,137 @@
+// The GIF writer's parts (2026-11-17, docs/speed-plan.html part 1), on the photo at 1000 by 1000 and
+// whole, each the best of five, in milliseconds: its palette, the indices (none, and dithered both
+// ways), the LZW loop alone, the whole file. With a folder, writes there what timings.exe's GIF
+// yardsticks read (the small photo, the palettes, the indices, the LZW's bytes).
+//
+//   ww bench/kernels/gifparts.ww <photo.rgba, 4000 by 3000> [<folder>]
+
+val args = Program.arguments
+if (args.size < 1) {
+  print("give the photo as raw RGBA bytes, 4000 by 3000")
+  exit(1)
+}
+val big = Image.of(4000, 3000, FilePath(args[0]).readBytes())
+val folder = args.size > 1 ? FilePath(args[1]) : null
+
+fun time(name : string, work : () -> any?) {
+  var best = 1e300
+  for (round in 0 ..< 5) {
+    val started = Instant.now()
+    work()
+    best = Math.min(best, (Instant.now() - started).inNanoseconds / 1e6)
+  }
+  print("${name.padEnd(28)} ${(Math.round(best * 100) / 100.0).toString().padStart(9)} ms")
+}
+
+for (size in ["1000", "4000"]) {
+  val image = size == "1000" ? big.scaled(1000, 1000) : big
+  print("--- ${image.width} by ${image.height}")
+  val grid = image.pixels
+  time("palette(256)") { grid.palette(256) }
+  val colors = grid.palette(256)
+  time("indices") { grid.paletteIndices(colors, Dither.none) }
+  time("Floyd and Steinberg") { grid.paletteIndices(colors, Dither.floydSteinberg) }
+  time("Atkinson") { grid.paletteIndices(colors, Dither.atkinson) }
+  val indices = grid.paletteIndices(colors, Dither.none)
+  val table = Lzw()
+  time("LZW") { table.encode(indices, 8) }
+  time("encode GIF") { image.encode(ImageFormat.gif) }
+  if (folder != null) {
+    if (size == "1000") { folder!!.resolve("small.rgba").writeBytes(image.rgbaBytes()) }
+    val palette = Bytes(colors.size * 4)
+    for (i in 0 ..< colors.size) {
+      palette[i * 4] = colors[i].red
+      palette[i * 4 + 1] = colors[i].green
+      palette[i * 4 + 2] = colors[i].blue
+      palette[i * 4 + 3] = 255.toByte()
+    }
+    folder!!.resolve("palette$size.bin").writeBytes(palette)
+    folder!!.resolve("indices$size.bin").writeBytes(indices)
+    folder!!.resolve("lzw$size.bin").writeBytes(table.encode(indices, 8))
+  }
+}
+
+// The GIF writer's LZW (src/std/gif.ww's __LzwTable, which a program cannot reach), the same code.
+class Lzw {
+  // Zeros made at once by a grid's cells, rather than a million added one at a time.
+  private val children : open List<int> = List(4096 * 256) { 0 }
+  // The keys put in the table since it was emptied: fewer than 4096.
+  private val keys : open List<int> = List(4096) { 0 }
+
+  // The indices as codes, lowest bit first, from `minSize` + 1 bits up to 12, a clear code when the
+  // table is full. One loop, the codes put out in it, for native code to make whole: the lists
+  // read into variables, no calls, no list grown.
+  fun encode(indices : Bytes, minSize : int) : Bytes {
+    val child = children
+    val used = keys
+    val clear = 1 << minSize
+    val end = clear + 1
+    val n = indices.size
+    // Room for every code at 12 bits, and a clear code each time the table fills.
+    val out = Bytes((n + n / 2048 + 4) * 3 / 2 + 4)
+    var size = 0
+    // The bits not yet put out, lowest first: the clear code to begin.
+    var acc = clear
+    var bits = minSize + 1
+    var codeSize = minSize + 1
+    var limit = 1 << codeSize
+    var next = end + 1
+    var count = 0
+    if (n > 0) {
+      var prefix = indices[0].toInt()
+      for (i in 1 ..< n) {
+        val k = indices[i].toInt()
+        val key = (prefix << 8) | k
+        val found = child[key]
+        if (found != 0) {
+          prefix = found
+          continue
+        }
+        acc = acc | (prefix << bits)
+        bits += codeSize
+        while (bits >= 8) {
+          out[size] = (acc & 255).toByte()
+          size += 1
+          acc = acc >> 8
+          bits -= 8
+        }
+        child[key] = next
+        used[count] = key
+        count += 1
+        next += 1
+        if (next == limit + 1 and codeSize < 12) {
+          codeSize += 1
+          limit = limit * 2
+        }
+        if (next == 4096) {
+          acc = acc | (clear << bits)
+          bits += codeSize
+          while (bits >= 8) {
+            out[size] = (acc & 255).toByte()
+            size += 1
+            acc = acc >> 8
+            bits -= 8
+          }
+          for (j in 0 ..< count) { child[used[j]] = 0 }
+          count = 0
+          codeSize = minSize + 1
+          limit = 1 << codeSize
+          next = end + 1
+        }
+        prefix = k
+      }
+      acc = acc | (prefix << bits)
+      bits += codeSize
+    }
+    acc = acc | (end << bits)
+    bits += codeSize
+    while (bits > 0) {
+      out[size] = (acc & 255).toByte()
+      size += 1
+      acc = acc >> 8
+      bits -= 8
+    }
+    for (j in 0 ..< count) { child[used[j]] = 0 }
+    return out[0 ..< size]
+  }
+}

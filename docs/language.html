@@ -516,7 +516,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Foreign"><code>Foreign</code></a> (2)</li>
 <li><a href="#ForeignFunction"><code>ForeignFunction</code></a> (6)</li>
 <li><a href="#Function.invoke"><code>Function</code></a> (7)</li>
-<li><a href="#Grid"><code>Grid</code></a> (85)</li>
+<li><a href="#Grid"><code>Grid</code></a> (86)</li>
 <li><a href="#HuffmanTable"><code>HuffmanTable</code></a> (2)</li>
 <li><a href="#IOException"><code>IOException</code></a> (1)</li>
 <li><a href="#IllegalArgumentException"><code>IllegalArgumentException</code></a> (1)</li>
@@ -5016,7 +5016,7 @@ canvas.fill(arrow)
 <section class="file" id="file-picture-ww">
 <h2>picture.ww</h2>
 <h3>Palettes and dithering</h3>
-<p>General picture operations over a picture's pixels, a Grid&lt;Color&gt; (image.pixels, or a grid of one's own), the work for every pixel in C++ (question 17): the colours that stand best for a picture, and the picture put into them. What GIF's 256 colours need, and posterising.</p>
+<p>General picture operations over a picture's pixels, a Grid&lt;Color&gt; (image.pixels, or a grid of one's own): the colours that stand best for a picture, and the picture put into them. What GIF's 256 colours need, and posterising. The palette in WinterWolf (since 2026-11-13); the nearest colours and dithering in C++ (each pixel's index, paletteIndices), until native code carries the WinterWolf written for them at C++'s speed (bench/spike/gif_nearest.ww, 2026-11-17).</p>
 <div class="entry" id="Dither"><code class="sig">enum Dither</code><a class="anchor" href="#Dither">#</a>
 <p>How a picture put into a few colours spreads each pixel's error to the pixels after it: not at all, each pixel its nearest colour; Floyd and Steinberg's way, 7/16 of it to the right and 3/16, 5/16 and 1/16 to the three below; or Atkinson's, 1/8 to each of six neighbours (three quarters in all, so lighter and of more contrast, as the first Macintosh had it).</p>
 </div>
@@ -5028,6 +5028,12 @@ val poster = image.pixels.dither(colors, Dither.none)
 </div>
 <div class="entry" id="Grid.dither"><code class="sig">fun Grid&lt;Color&gt;.dither(palette : List&lt;Color&gt;, method : Dither = Dither.floydSteinberg) : Grid&lt;Color&gt;</code><a class="anchor" href="#Grid.dither">#</a>
 <p>The picture with each pixel the nearest of <code>palette</code>'s colours (the channels weighted as the eye sees them), its error spread by <code>method</code>; a see-through pixel (alpha below 128) clear. The palette's alpha is not read: every colour is solid.</p>
+</div>
+<div class="entry" id="Grid.paletteIndices"><code class="sig">fun Grid&lt;Color&gt;.paletteIndices(palette : List&lt;Color&gt;, method : Dither = Dither.floydSteinberg) : Bytes</code><a class="anchor" href="#Grid.paletteIndices">#</a>
+<p>Each pixel's index in <code>palette</code> as <code>dither</code> chooses it, a byte each, row after row: what a picture file of indexed colours holds (GIF's, PNG's of a palette). A see-through pixel's index is palette.size, so a palette of 256 colours leaves none for one (an IllegalArgumentException).</p>
+<pre>val colors = image.pixels.palette(16)
+val indices = image.pixels.paletteIndices(colors, Dither.none)
+</pre>
 </div>
 <h3>The DCT of 8 by 8 blocks, and planes</h3>
 <div class="entry" id="Dct"><code class="sig">object Dct</code><a class="anchor" href="#Dct">#</a>

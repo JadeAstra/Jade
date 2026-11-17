@@ -1,8 +1,10 @@
 // ---- Palettes and dithering ----
 
 // General picture operations over a picture's pixels, a Grid<Color> (image.pixels, or a grid of
-// one's own), the work for every pixel in C++ (question 17): the colours that stand best for a
-// picture, and the picture put into them. What GIF's 256 colours need, and posterising.
+// one's own): the colours that stand best for a picture, and the picture put into them. What GIF's
+// 256 colours need, and posterising. The palette in WinterWolf (since 2026-11-13); the nearest
+// colours and dithering in C++ (each pixel's index, paletteIndices), until native code carries the
+// WinterWolf written for them at C++'s speed (bench/spike/gif_nearest.ww, 2026-11-17).
 
 // How a picture put into a few colours spreads each pixel's error to the pixels after it: not at
 // all, each pixel its nearest colour; Floyd and Steinberg's way, 7/16 of it to the right and 3/16,
@@ -155,12 +157,22 @@ fun __paletteOf(px : List<Color>, count : int) : List<Color> {
 // sees them), its error spread by `method`; a see-through pixel (alpha below 128) clear. The
 // palette's alpha is not read: every colour is solid.
 fun Grid<Color>.dither(palette : List<Color>, method : Dither = Dither.floydSteinberg) : Grid<Color> {
-  val indices : Bytes = __picture.indices(cells, width, height, __paletteBytes(palette, 256), method.ordinal)
+  val indices = paletteIndices(palette, method)
   // The colours by index, with index palette.size clear for see-through pixels.
   val colors = Bytes(256 * 4).copyFrom(__paletteBytes(palette, 256), 0, 1, 0, 1, palette.size * 4)
   val made = Grid<Color>(width, height)
   __text.imageTakePixels(made.cells, indices.mapped(colors, 4))
   return made
+}
+
+// Each pixel's index in `palette` as `dither` chooses it, a byte each, row after row: what a
+// picture file of indexed colours holds (GIF's, PNG's of a palette). A see-through pixel's index is
+// palette.size, so a palette of 256 colours leaves none for one (an IllegalArgumentException).
+//
+//   val colors = image.pixels.palette(16)
+//   val indices = image.pixels.paletteIndices(colors, Dither.none)
+fun Grid<Color>.paletteIndices(palette : List<Color>, method : Dither = Dither.floydSteinberg) : Bytes {
+  return __picture.indices(cells, width, height, __paletteBytes(palette, 256), method.ordinal)
 }
 
 // A palette's colours as bytes, four each, alpha 255; an IllegalArgumentException for none or more

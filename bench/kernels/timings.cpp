@@ -1,7 +1,7 @@
 // docs/timings.html's operations written in plain C++, for its "100% C++" columns (2026-11-13):
 // the same work on the same 4000 by 3000 photo, as a C++ program would do it by itself.
 //
-//   timings.bat, then timings.exe <the photo as raw RGBA bytes, 4000 by 3000>
+//   timings.bat, then timings.exe <the photo as raw RGBA bytes, 4000 by 3000> [<gifparts.ww's folder>]
 //
 // Plain loops over the bytes, one thread, no intrinsics (Clang may vectorise what it can), built
 // as ww.exe is (clang-cl /O2). Each operation the best of three, in milliseconds, its result
@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -383,6 +384,204 @@ static void drawPicture(Image& im, const Image& p, int x0, int y0) {
     }
 }
 
+// ---- GIF (2026-11-17): WinterWolf's writer's indices and its LZW ----
+
+// The nearest colours as WinterWolf had them in C++ until 2026-11-17 (src/picture.cpp's Nearest and
+// indicesOf, kept here as the yardstick of the WinterWolf that replaced them).
+// The nearest of a palette's colours to any colour: a colour of the palette itself is its own
+// index; any other the nearest to the middle of its cell of colours, 6 bits a channel, found once
+// for each cell that comes up and kept.
+class Nearest {
+public:
+    explicit Nearest(const std::vector<uint8_t>& palette) : palette_(palette), cells_(size_t{1} << 18, -1) {
+        for (size_t i = 0; i * 4 < palette.size(); i++) exact_.emplace(colorKey(palette[i * 4], palette[i * 4 + 1], palette[i * 4 + 2]), static_cast<int>(i));
+    }
+
+    int of(int r, int g, int b) {
+        if (auto found = exact_.find(colorKey(r, g, b)); found != exact_.end()) return found->second;
+        const size_t key = (static_cast<size_t>(r >> 2) << 12) | (static_cast<size_t>(g >> 2) << 6) | static_cast<size_t>(b >> 2);
+        int16_t& cell = cells_[key];
+        if (cell < 0) cell = static_cast<int16_t>(search((r & ~3) | 2, (g & ~3) | 2, (b & ~3) | 2));
+        return cell;
+    }
+
+private:
+    const std::vector<uint8_t>& palette_;
+    std::vector<int16_t> cells_;
+    std::unordered_map<uint32_t, int> exact_;
+
+    static uint32_t colorKey(int r, int g, int b) { return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b); }
+
+    // The nearest by distance, the channels weighted as the eye sees them.
+    int search(int r, int g, int b) const {
+        int best = 0;
+        int64_t bestDistance = INT64_MAX;
+        for (size_t i = 0; i * 4 < palette_.size(); i++) {
+            const int dr = r - palette_[i * 4], dg = g - palette_[i * 4 + 1], db = b - palette_[i * 4 + 2];
+            const int64_t d = 2 * static_cast<int64_t>(dr) * dr + 4 * static_cast<int64_t>(dg) * dg + 3 * static_cast<int64_t>(db) * db;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = static_cast<int>(i);
+            }
+        }
+        return best;
+    }
+};
+
+// Each pixel's index in the palette, dithered by `method` (0 none, 1 Floyd and Steinberg, 2
+// Atkinson); a see-through pixel's index is the palette's size.
+static std::vector<uint8_t> indicesOf(const uint8_t* px, int width, int height, const std::vector<uint8_t>& palette, int method) {
+    const size_t w = static_cast<size_t>(width), h = static_cast<size_t>(height);
+    std::vector<uint8_t> out(w * h);
+    const uint8_t clear = static_cast<uint8_t>(palette.size() / 4);
+    Nearest nearest(palette);
+    if (method == 0) {
+        for (size_t i = 0; i < w * h; i++) {
+            const uint8_t* p = &px[i * 4];
+            out[i] = p[3] < 128 ? clear : static_cast<uint8_t>(nearest.of(p[0], p[1], p[2]));
+        }
+        return out;
+    }
+    // The error each pixel's colour is off by, spread to those after it: three rows of it, for
+    // Atkinson's reach of two rows down.
+    std::vector<int32_t> error(3 * (w + 4) * 3, 0);
+    auto at = [&](size_t row, size_t x) -> int32_t* { return &error[((row % 3) * (w + 4) + x + 2) * 3]; };
+    for (size_t y = 0; y < h; y++) {
+        std::fill(error.begin() + static_cast<std::ptrdiff_t>(((y + 2) % 3) * (w + 4) * 3), error.begin() + static_cast<std::ptrdiff_t>((((y + 2) % 3) + 1) * (w + 4) * 3), 0);
+        for (size_t x = 0; x < w; x++) {
+            const uint8_t* p = &px[(y * w + x) * 4];
+            if (p[3] < 128) {
+                out[y * w + x] = clear;
+                continue;
+            }
+            int32_t* e = at(y, x);
+            // The error is kept in sixteenths (Floyd and Steinberg) or eighths (Atkinson).
+            const int32_t scale = method == 1 ? 16 : 8;
+            const int r = std::clamp(p[0] + e[0] / scale, 0, 255), g = std::clamp(p[1] + e[1] / scale, 0, 255), b = std::clamp(p[2] + e[2] / scale, 0, 255);
+            const int index = nearest.of(r, g, b);
+            out[y * w + x] = static_cast<uint8_t>(index);
+            const int32_t er = r - palette[static_cast<size_t>(index) * 4], eg = g - palette[static_cast<size_t>(index) * 4 + 1],
+                          eb = b - palette[static_cast<size_t>(index) * 4 + 2];
+            auto spread = [&](size_t row, int dx, int32_t parts) {
+                const int64_t nx = static_cast<int64_t>(x) + dx;
+                if (nx < 0 || nx >= static_cast<int64_t>(w) || row >= h) return;
+                int32_t* to = at(row, static_cast<size_t>(nx));
+                to[0] += er * parts;
+                to[1] += eg * parts;
+                to[2] += eb * parts;
+            };
+            if (method == 1) {
+                spread(y, 1, 7);
+                spread(y + 1, -1, 3);
+                spread(y + 1, 0, 5);
+                spread(y + 1, 1, 1);
+            } else {
+                spread(y, 1, 1);
+                spread(y, 2, 1);
+                spread(y + 1, -1, 1);
+                spread(y + 1, 0, 1);
+                spread(y + 1, 1, 1);
+                spread(y + 2, 0, 1);
+            }
+        }
+        std::fill(error.begin() + static_cast<std::ptrdiff_t>((y % 3) * (w + 4) * 3), error.begin() + static_cast<std::ptrdiff_t>(((y % 3) + 1) * (w + 4) * 3), 0);
+    }
+    return out;
+}
+
+// The GIF writer's LZW (src/std/gif.ww's __LzwTable.encode), as a C++ program would write the same
+// loop: a table of each (code, next index)'s code, 4096 by 256, emptied of what it was given after.
+struct Lzw {
+    std::vector<uint16_t> child = std::vector<uint16_t>(4096 * 256, 0);
+    std::vector<uint32_t> used = std::vector<uint32_t>(4096, 0);
+    Bytes encode(const Bytes& indices, int minSize) {
+        const int clear = 1 << minSize, end = clear + 1;
+        const size_t n = indices.size();
+        Bytes out((n + n / 2048 + 4) * 3 / 2 + 4);
+        size_t size = 0;
+        uint64_t acc = static_cast<uint64_t>(clear);
+        int bits = minSize + 1, codeSize = minSize + 1, limit = 1 << codeSize, next = end + 1, count = 0;
+        auto put = [&](uint32_t code) {
+            acc |= static_cast<uint64_t>(code) << bits;
+            bits += codeSize;
+            while (bits >= 8) {
+                out[size++] = static_cast<uint8_t>(acc);
+                acc >>= 8;
+                bits -= 8;
+            }
+        };
+        if (n > 0) {
+            uint32_t prefix = indices[0];
+            for (size_t i = 1; i < n; i++) {
+                const uint32_t k = indices[i], key = prefix << 8 | k;
+                if (const uint16_t found = child[key]; found != 0) {
+                    prefix = found;
+                    continue;
+                }
+                put(prefix);
+                child[key] = static_cast<uint16_t>(next);
+                used[static_cast<size_t>(count++)] = key;
+                next++;
+                if (next == limit + 1 && codeSize < 12) codeSize++, limit *= 2;
+                if (next == 4096) {
+                    put(static_cast<uint32_t>(clear));
+                    for (int j = 0; j < count; j++) child[used[static_cast<size_t>(j)]] = 0;
+                    count = 0, codeSize = minSize + 1, limit = 1 << codeSize, next = end + 1;
+                }
+                prefix = k;
+            }
+            put(prefix);
+        }
+        put(static_cast<uint32_t>(end));
+        if (bits > 0) out[size++] = static_cast<uint8_t>(acc);
+        for (int j = 0; j < count; j++) child[used[static_cast<size_t>(j)]] = 0;
+        out.resize(size);
+        return out;
+    }
+};
+static Bytes readAll(const char* folder, const char* name) {
+    char path[1024];
+    std::snprintf(path, sizeof path, "%s/%s", folder, name);
+    Bytes data;
+    if (FILE* f = std::fopen(path, "rb")) {
+        uint8_t block[65536];
+        for (size_t got; (got = std::fread(block, 1, sizeof block, f)) > 0;) data.insert(data.end(), block, block + got);
+        std::fclose(f);
+    }
+    return data;
+}
+// The GIF writer's parts on the photo at 1000 by 1000 and whole, from what bench/kernels/gifparts.ww
+// wrote to `folder` (the pictures, their palettes and indices as WinterWolf made them, and its LZW's
+// bytes): each checked against WinterWolf's.
+static void gifParts(const char* folder, const Image& photo) {
+    for (const char* size : {"1000", "4000"}) {
+        char name[64];
+        const Bytes px = std::strcmp(size, "1000") == 0 ? readAll(folder, "small.rgba") : photo.px;
+        std::snprintf(name, sizeof name, "palette%s.bin", size);
+        const Bytes palette = readAll(folder, name);
+        std::snprintf(name, sizeof name, "indices%s.bin", size);
+        const Bytes indices = readAll(folder, name);
+        std::snprintf(name, sizeof name, "lzw%s.bin", size);
+        const Bytes lzw = readAll(folder, name);
+        const int w = std::strcmp(size, "1000") == 0 ? 1000 : 4000, h = std::strcmp(size, "1000") == 0 ? 1000 : 3000;
+        if (px.size() != static_cast<size_t>(w) * h * 4 || palette.empty() || indices.size() != static_cast<size_t>(w) * h) {
+            std::fprintf(stderr, "gif: %s's files are missing from %s\n", size, folder);
+            return;
+        }
+        const bool same = indicesOf(px.data(), w, h, palette, 0) == indices;
+        Lzw table;
+        const bool sameLzw = table.encode(indices, 8) == lzw;
+        std::snprintf(name, sizeof name, "indices %s%s", size, same ? "" : " (NOT THE SAME)");
+        best("gif", name, [&] { return indicesOf(px.data(), w, h, palette, 0)[0]; });
+        std::snprintf(name, sizeof name, "Floyd and Steinberg %s", size);
+        best("gif", name, [&] { return indicesOf(px.data(), w, h, palette, 1)[0]; });
+        std::snprintf(name, sizeof name, "Atkinson %s", size);
+        best("gif", name, [&] { return indicesOf(px.data(), w, h, palette, 2)[0]; });
+        std::snprintf(name, sizeof name, "LZW %s%s", size, sameLzw ? "" : " (NOT THE SAME)");
+        best("gif", name, [&] { return table.encode(indices, 8).size(); });
+    }
+}
+
 int main(int argc, char** argv) {
     SetProcessAffinityMask(GetCurrentProcess(), 0xFFFF);  // the performance cores, as bench/pinned.ps1
     if (argc < 2) {
@@ -463,6 +662,7 @@ int main(int argc, char** argv) {
     best("io", "fromPlanes()", [&] { return fromPlanes(planes, photo.w, photo.h); });
     best("io", "toTensor()", [&] { return Bytes(photo.px)[0]; });
     best("io", "encode BMP", [&] { return encodeBmp(photo); });
+    if (argc > 2) gifParts(argv[2], photo);
 
     Image board(4000, 3000);
     best("draw", "10,000 fillRect 100x100", [&] { return fillRects(board, 10000, 100, 100, 1); });

@@ -1,0 +1,53 @@
+// Native code's loops that call out and come back (2026-11-17): lists and fields looked at once as
+// the loop starts are looked at again each time the VM comes back in, so what a call did to them
+// (a list grown, its items moved; a field set to another list) is seen. Each loop run several
+// times, so that native code makes it.
+
+// A list grown by a call, which moves its items, read on after.
+fun grow(list : open List<int>) {
+  for (k in 0 ..< 1000) { list.add(k) }
+}
+fun total(list : open List<int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i == list.size) { grow(list) }
+    val v = list[i]
+    t += (v * 3 + (v ^ i) + (v >> 1) * 5 - (i & 7)) % 1000
+  }
+  return t
+}
+print((0 ..< 4).map { total(List(10) { it }, 2000) })   // expect: [973250, 973250, 973250, 973250]
+
+// A field set by a call to another list, read on after.
+class Bag {
+  var items : open List<int> = List(100) { it }
+  fun refill(n : int) {
+    items = List(100) { it * 3 + n }
+  }
+  fun sum(n : int) : int {
+    var t = 0
+    for (i in 0 ..< n) {
+      if (i % 100 == 99) { refill(i) }
+      val v = items[i % 100]
+      t += (v * 3 + (v ^ i) + (v >> 1) * 5 - (i & 7)) % 1000
+    }
+    return t
+  }
+}
+print((0 ..< 4).map { Bag().sum(1000) })   // expect: [460945, 460945, 460945, 460945]
+
+// Bytes written by the loop and by a call between.
+fun stamp(out : Bytes, at : int) {
+  for (k in 0 ..< 8) { out[(at + k) % out.size] = 7 }
+}
+fun fill(out : Bytes) : int {
+  var t = 0
+  for (i in 0 ..< out.size) {
+    if (i % 64 == 0) { stamp(out, i + 1) }
+    val v = out[i].toInt()
+    t += (v * 3 + (v ^ i) + (v >> 1) * 5 - (i & 7)) % 1000
+    out[i] = 1
+  }
+  return t
+}
+print((0 ..< 4).map { fill(Bytes(1000)) })   // expect: [498608, 498608, 498608, 498608]

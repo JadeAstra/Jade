@@ -453,6 +453,13 @@ struct Region {
     // meet one (wantInts), and the region made again with them.
     std::set<int> intLists;
     mutable std::set<int> wantInts;
+    // Every list whose items the region reads as whole numbers (kWhole): where items of two of them
+    // meet in one variable (src -2), which ones is not known, so all are wanted as int lists.
+    mutable std::set<int> wholeLists;
+    void wantAllWholeLists() const {
+        for (int list : wholeLists)
+            if (!intLists.count(list)) wantInts.insert(list);
+    }
     // Slots where a number the region holds in a register meets a value in memory (2026-11-16:
     // `out.add(i % 7 == 0 ? null : i)`, null one way, the int the other): the number written to its
     // slot on the way into each place a jump goes to (spilled), so that the two meet in memory.
@@ -1161,7 +1168,10 @@ struct Region {
                 l.slot2 = k.src;
                 first.push_back(l);
             } else if (w == kWhole) {
-                if (k.src < 0) refuse("a whole number of two lists");
+                if (k.src < 0) {
+                    wantAllWholeLists();
+                    refuse("a whole number of two lists");
+                }
                 l.stem = "storew", l.named = {Reg{slot, CI}}, l.uses = l.named, l.slot2 = k.src;
                 first.push_back(l);
             } else if (w == kInt || w == kByte) {
@@ -1178,6 +1188,9 @@ struct Region {
                 // An int the region made meeting an item read from the list in slot `src`, an int or
                 // a byte: made again with that list's items read as ints (intLists).
                 if (w == (kInt | kWhole) && k.src >= 0 && !intLists.count(k.src)) wantInts.insert(k.src);
+                // Items of two lists meeting (2026-11-17, the GIF writer's nearest colours: `c =
+                // cells[key]`, else `nearestOf[key]`, else an index found): every list read so.
+                if ((w & kWhole) && k.src == -2) wantAllWholeLists();
                 // A number in a register meeting a value in memory: written to its slot where they meet.
                 if ((w == (kInt | kMem) || w == (kFloat | kMem) || w == (kByte | kMem)) && !memorySlots.count(slot)) wantMemory.insert(slot);
                 refuse("slot " + std::to_string(slot) + " of two kinds (" + std::to_string(k.bits) + ") at a way out, at " + std::to_string(at));
@@ -1967,6 +1980,7 @@ struct Region {
                     c.leaves(chk);
                     c.write(a, K{kInt});
                 } else {
+                    if (cls == CI) c.r.wholeLists.insert(list);
                     c.write(a, cls == CF ? K{kFloat} : K{kWhole, static_cast<int16_t>(list)});
                 }
                 s.top = u8(x, 3);
@@ -3934,6 +3948,8 @@ struct Region {
     // Looked at where the VM's only work is the way to a return or a throw, which leaves the
     // region for good: no loop made ahead then.
     bool lookedBeforeEnds = false;
+    // The VM does something in the loop and comes back: each way in runs the prologue too.
+    bool relookAtWays = false;
 
     // Whether slot `root` is as entered everywhere in the region: never written in it.
     bool untouched(int root) const {
@@ -4079,12 +4095,17 @@ struct Region {
         // entered (2026-11-16: Canvas.layering, drawPicture 6% slower where its null tests made
         // it look).
         if (function) return;
+        // Where the VM does something in the loop and comes back (an island: a call, say), what it
+        // did may have moved a list's items or set a field: every way back in then looks at them
+        // again, as the start does (relookAtWays, 2026-11-17: the GIF writer's nearest colours,
+        // whose loop calls out once a new cell, had each of its three tables looked up at each
+        // read, 8.4 ms to 4.6 held).
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known || !results[i].island) continue;
-            if (!results[i].ends) return;
-            lookedBeforeEnds = true;
+            if (!results[i].ends) relookAtWays = true;
+            else lookedBeforeEnds = true;
         }
-        if (entries.size() != 1) return;
+        if (entries.size() != 1 && !relookAtWays) return;
         std::map<int, int> heldBy;
         lookAtFieldsOnce(heldBy);
         // The slot each list step reads, as entered; or -2 - k, where a field held as k holds it.
@@ -7637,6 +7658,8 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
             st.slot = l.slot;
             st.slot2 = l.slot2;
             st.ret = l.ret;
+            // (A dump shows the slot each value kept in memory is loaded from and stored to.)
+            if (names != nullptr && (l.stem == "loadi" || l.stem == "storei" || l.stem == "loadf" || l.stem == "storef")) names->back() += "@" + std::to_string(l.slot);
             if (l.jumpTo >= 0) st.jump = labels[static_cast<size_t>(l.jumpTo)];
             if (l.jumpExit >= 0) st.jump = exitLabels[static_cast<size_t>(l.jumpExit)];
             if (l.exit >= 0) st.exit = exitLabels[static_cast<size_t>(l.exit)];
@@ -7680,6 +7703,14 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         if (e == 0) continue;
         const int label = a.label();
         a.at(label);
+        // After the VM's work, the lists and fields looked at once looked at again.
+        if (r.relookAtWays)
+            for (const LOp& l : r.prologue) {
+                Step& st = add(l.stem);
+                st.slot = l.slot;
+                st.ki = l.ki;
+                st.slot2 = l.slot2;
+            }
         loads(a, r, e, names, leaveAt(e));
         add("jump").jump = labels[static_cast<size_t>(e)];
         ways.emplace_back(e, label);
@@ -7962,9 +7993,9 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             continue;
         }
         // Made again where it found lists whose items must be read as ints, or slots where a number
-        // and a value meet (memorySlots): at most twice more.
+        // and a value meet (memorySlots): at most three times more (one of each, then one more where those uncover another).
         std::set<int> intLists, memorySlots;
-        for (int attempt = 0; attempt < 3; attempt++) {
+        for (int attempt = 0; attempt < 4; attempt++) {
         Region r(f);
         r.frame = frame;
         r.frameSlots = frameSlots;
@@ -8015,6 +8046,11 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             lap(2);
             while (!r.giveRegisters()) {
                 if (!r.spillOne()) refuse("more values at once than registers, and none can be kept in its slot");
+                if (dumping) {
+                    std::fprintf(stderr, "== %s: kept in their slots:", f.name.c_str());
+                    for (const Reg& s : r.spilled) std::fprintf(stderr, " %d%s", s.slot, s.cls == CF ? "f" : "");
+                    std::fprintf(stderr, "\n");
+                }
                 r.findLive();
             }
             lap(3);
@@ -8033,9 +8069,14 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
                 std::fprintf(stderr, "\n");
                 for (size_t i = 0; i < r.ins.size(); i++)
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
+                std::fprintf(stderr, "  lists read as ints:");
+                for (int s : intLists) std::fprintf(stderr, " %d", s);
+                std::fprintf(stderr, "; slots written where they meet memory:");
+                for (int s : memorySlots) std::fprintf(stderr, " %d", s);
+                std::fprintf(stderr, "\n");
             }
         } catch (const std::exception& e) {
-            if (attempt < 2 && (!r.wantInts.empty() || !r.wantMemory.empty())) {
+            if (attempt < 3 && (!r.wantInts.empty() || !r.wantMemory.empty())) {
                 intLists.insert(r.wantInts.begin(), r.wantInts.end());
                 memorySlots.insert(r.wantMemory.begin(), r.wantMemory.end());
                 continue;

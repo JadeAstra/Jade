@@ -1,0 +1,310 @@
+// Spike (2026-11-17, docs/speed-plan.html part 1): the GIF writer's indices and dithering in
+// WinterWolf, the C++ (src/picture.cpp's Nearest and indicesOf) written again. The same indices
+// as the C++ on every picture tried (85 dithered pictures and GIF files, every method), but slower:
+// on the 1000 by 1000 photo 8.4 ms to the C++'s 6.2 (none), 59.5 to 20.5 (Floyd and Steinberg),
+// 59.5 to 18.5 (Atkinson). Its loops are native code's whole, but hold more values at once than
+// native code's nine registers, and what is spilled to memory is the hot path's as much as the
+// cold (a way out, after each check, needs every value changed so far). Kept for when native code
+// splits a value's life between a loop's hot path and its cold one.
+//
+//   ww bench/spike/gif_nearest.ww <photo.rgba, 4000 by 3000>
+
+val big = Image.of(4000, 3000, FilePath(Program.arguments[0]).readBytes())
+fun best(name : string, f : () -> any?) {
+  var b = 1e9
+  for (r in 0 ..< 5) {
+    val s = clock()
+    f()
+    b = Math.min(b, clock() - s)
+  }
+  print(name.padEnd(34), (Math.round(b * 10000) / 10.0).toString().padStart(8), "ms")
+}
+
+// The nearest of a palette's colours to any colour, the channels weighted as the eye sees them (2,
+// 4, 3): a colour of the palette itself is its own index (the first, of two the same); any other
+// the nearest to the middle of its cell of colours (6 bits a channel), found the first time the
+// cell comes up and kept. A cell holding one colour of the palette keeps it, to be compared with
+// each pixel there first; one holding several sends its pixels to the palette whole. The search
+// goes out both ways from the colour's green through the palette sorted by green, and stops each way
+// where green's part alone is past the nearest found: the colour trying all of them would find, a
+// few tried. (2026-11-17, was C++: its loops held whole by native code, the GIF writer's indices 8.8
+// ms on a 1000 by 1000 photo where the C++ took about 6, and 65 to 55 at 4000 by 3000.)
+class Nearest {
+  private val count : int
+  // Each cell's nearest + 1, 0 till found (a grid's zeros: no memory touched till used).
+  private val cells : open List<int> = List(1 << 18) { 0 }
+  // Each cell's colour of the palette (red lowest) + 1, 0 for none, -1 for several; and its index.
+  private val ownRgb : open List<int> = List(1 << 18) { 0 }
+  private val ownIndex : open List<int> = List(1 << 18) { 0 }
+  // The palette's colours as words, red lowest; and by green: each one's red, green, blue and index,
+  // and where each green starts among them.
+  private val rgbOf : open List<int>
+  private val reds : open List<int>
+  private val greens : open List<int>
+  private val blues : open List<int>
+  private val order : open List<int>
+  private val greenAt : open List<int> = List(257) { 0 }
+
+  fun init(palette : List<Color>) {
+    count = palette.size
+    rgbOf = List(count) { palette[it].red.toInt() | palette[it].green.toInt() << 8 | palette[it].blue.toInt() << 16 }
+    val keys = List(count) { palette[it].green.toInt() * 256 + it }.sorted()
+    reds = List(count) { palette[keys[it] & 255].red.toInt() }
+    greens = List(count) { keys[it] >> 8 }
+    blues = List(count) { palette[keys[it] & 255].blue.toInt() }
+    order = List(count) { keys[it] & 255 }
+    var at = 0
+    for (g in 0 .. 256) {
+      while (at < count and greens[at] < g) { at += 1 }
+      greenAt[g] = at
+    }
+    for (i in 0 ..< count) {
+      val rgb = rgbOf[i]
+      val key = (rgb & 0xFC) << 10 | (rgb & 0xFC00) >> 4 | (rgb & 0xFC0000) >> 18
+      if (ownRgb[key] == 0) {
+        ownRgb[key] = rgb + 1
+        ownIndex[key] = i
+      } else if (ownRgb[key] != rgb + 1) {
+        ownRgb[key] = -1
+      }
+    }
+  }
+
+  // Each pixel's index, `clear` for one see-through (alpha below 128). One loop, its pixel read as
+  // one word, which native code runs whole: it leaves only to find a cell's nearest.
+  fun indices(pixels : List<Color>, clear : int) : Bytes {
+    val n = pixels.size
+    val out = Bytes(n)
+    val cell = cells
+    val owns = ownRgb
+    val ownAt = ownIndex
+    // (A while loop: two values fewer than a range's held in registers.)
+    var i = -1
+    while (i < n - 1) {
+      i += 1
+      val p = pixels[i]
+      val word = p.red.toInt() | p.green.toInt() << 8 | p.blue.toInt() << 16 | p.alpha.toInt() << 24
+      if (word < 0x80000000) {
+        out[i] = clear.toByte()
+        continue
+      }
+      val key = (word & 0xFC) << 10 | (word & 0xFC00) >> 4 | (word & 0xFC0000) >> 18
+      var c = cell[key] - 1
+      val own = owns[key]
+      if (own == (word & 0xFFFFFF) + 1) {
+        c = ownAt[key]
+      } else {
+        if (own == -1) { c = several(key, word & 0xFFFFFF) }
+        if (c < 0) {
+          find(key)
+          c = cell[key] - 1
+        }
+      }
+      out[i] = c.toByte()
+    }
+    return out
+  }
+
+  // Each pixel's index, its colour's error from the one chosen spread to the pixels after it:
+  // Floyd and Steinberg's way (`floyd`) in sixteenths, or Atkinson's in eighths. Three rows of the
+  // error, each pixel's three parts, two pixels more at either side (what is spread past an edge,
+  // or past the last row, lands where nothing reads it).
+  fun dithered(pixels : List<Color>, width : int, height : int, clear : int, floyd : bool) : Bytes {
+    val out = Bytes(width * height)
+    val row = (width + 4) * 3
+    val error : open List<int> = List(3 * row) { 0 }
+    for (y in 0 ..< height) {
+      val here = (y % 3) * row
+      val further = ((y + 2) % 3) * row
+      for (k in 0 ..< row) { error[further + k] = 0 }
+      // (The error's place for the pixel before the first: each row's starts 2 pixels in.)
+      if (floyd) {
+        floydRow(pixels, out, error, y * width, (y + 1) * width, here, ((y + 1) % 3) * row - here, further - here, clear)
+      } else {
+        atkinsonRow(pixels, out, error, y * width, (y + 1) * width, here, ((y + 1) % 3) * row - here, further - here, clear)
+      }
+      for (k in 0 ..< row) { error[here + k] = 0 }
+    }
+    return out
+  }
+
+  // One row of the pixels dithered, from pixel `from` to `to`: `here` where its errors start among
+  // `error`'s, the next two rows' `toBelow` and `toFurther` on from them. A loop native code runs
+  // whole, leaving only to find a cell's nearest; as few values in it at once as can be (a running
+  // place in the pixels and in the errors; the colour's parts kept together as a word, each part's
+  // error spread before the next is worked out), for native code's registers.
+  private fun floydRow(pixels : List<Color>, out : Bytes, error : open List<int>, from : int, to : int, here : int, toBelow : int, toFurther : int, clear : int) {
+    val cell = cells
+    val owns = ownRgb
+    val ownAt = ownIndex
+    val rgb = rgbOf
+    var i = from - 1
+    var e = here + 3
+    while (i < to - 1) {
+      i += 1
+      e += 3
+      val p = pixels[i]
+      if (p.alpha.toInt() < 128) {
+        out[i] = clear.toByte()
+        continue
+      }
+      val word = Math.min(Math.max(p.red.toInt() + error[e] / 16, 0), 255) | Math.min(Math.max(p.green.toInt() + error[e + 1] / 16, 0), 255) << 8 |
+                 Math.min(Math.max(p.blue.toInt() + error[e + 2] / 16, 0), 255) << 16
+      val key = (word & 0xFC) << 10 | (word & 0xFC00) >> 4 | (word & 0xFC0000) >> 18
+      var c = cell[key] - 1
+      val own = owns[key]
+      if (own == word + 1) {
+        c = ownAt[key]
+      } else {
+        if (own == -1) { c = several(key, word) }
+        if (c < 0) {
+          find(key)
+          c = cell[key] - 1
+        }
+      }
+      out[i] = c.toByte()
+      val chosen = rgb[c]
+      // Each part's error spread before the next is worked out: fewer values at once.
+      val er = (word & 255) - (chosen & 255)
+      error[e + 3] += er * 7
+      error[e + toBelow - 3] += er * 3
+      error[e + toBelow] += er * 5
+      error[e + toBelow + 3] += er
+      val eg = ((word >> 8) & 255) - ((chosen >> 8) & 255)
+      error[e + 4] += eg * 7
+      error[e + toBelow - 2] += eg * 3
+      error[e + toBelow + 1] += eg * 5
+      error[e + toBelow + 4] += eg
+      val eb = ((word >> 16) & 255) - ((chosen >> 16) & 255)
+      error[e + 5] += eb * 7
+      error[e + toBelow - 1] += eb * 3
+      error[e + toBelow + 2] += eb * 5
+      error[e + toBelow + 5] += eb
+    }
+  }
+
+  private fun atkinsonRow(pixels : List<Color>, out : Bytes, error : open List<int>, from : int, to : int, here : int, toBelow : int, toFurther : int, clear : int) {
+    val cell = cells
+    val owns = ownRgb
+    val ownAt = ownIndex
+    val rgb = rgbOf
+    var i = from - 1
+    var e = here + 3
+    while (i < to - 1) {
+      i += 1
+      e += 3
+      val p = pixels[i]
+      if (p.alpha.toInt() < 128) {
+        out[i] = clear.toByte()
+        continue
+      }
+      val word = Math.min(Math.max(p.red.toInt() + error[e] / 8, 0), 255) | Math.min(Math.max(p.green.toInt() + error[e + 1] / 8, 0), 255) << 8 |
+                 Math.min(Math.max(p.blue.toInt() + error[e + 2] / 8, 0), 255) << 16
+      val key = (word & 0xFC) << 10 | (word & 0xFC00) >> 4 | (word & 0xFC0000) >> 18
+      var c = cell[key] - 1
+      val own = owns[key]
+      if (own == word + 1) {
+        c = ownAt[key]
+      } else {
+        if (own == -1) { c = several(key, word) }
+        if (c < 0) {
+          find(key)
+          c = cell[key] - 1
+        }
+      }
+      out[i] = c.toByte()
+      val chosen = rgb[c]
+      val er = (word & 255) - (chosen & 255)
+      error[e + 3] += er
+      error[e + 6] += er
+      error[e + toBelow - 3] += er
+      error[e + toBelow] += er
+      error[e + toBelow + 3] += er
+      error[e + toFurther] += er
+      val eg = ((word >> 8) & 255) - ((chosen >> 8) & 255)
+      error[e + 4] += eg
+      error[e + 7] += eg
+      error[e + toBelow - 2] += eg
+      error[e + toBelow + 1] += eg
+      error[e + toBelow + 4] += eg
+      error[e + toFurther + 1] += eg
+      val eb = ((word >> 16) & 255) - ((chosen >> 16) & 255)
+      error[e + 5] += eb
+      error[e + 8] += eb
+      error[e + toBelow - 1] += eb
+      error[e + toBelow + 2] += eb
+      error[e + toBelow + 5] += eb
+      error[e + toFurther + 2] += eb
+    }
+  }
+
+  // The nearest to the middle of the cell `key`, kept: out both ways from its green through the
+  // palette by green, each way till green's part alone is past the nearest found; the first of
+  // equals.
+  private fun find(key : int) {
+    val rs = reds
+    val gs = greens
+    val bs = blues
+    val by = order
+    val r = ((key >> 12) << 2) | 2
+    val g = (((key >> 6) & 63) << 2) | 2
+    val b = ((key & 63) << 2) | 2
+    var c = 0
+    var bestDistance = 9223372036854775807
+    val mid = greenAt[g]
+    var j = mid
+    while (j < count) {
+      val dg = gs[j] - g
+      val far = 4 * dg * dg
+      if (far > bestDistance) { break }
+      val dr = rs[j] - r
+      val db = bs[j] - b
+      val d = 2 * dr * dr + far + 3 * db * db
+      val index = by[j]
+      if (d < bestDistance or (d == bestDistance and index < c)) {
+        bestDistance = d
+        c = index
+      }
+      j += 1
+    }
+    j = mid - 1
+    while (j >= 0) {
+      val dg = gs[j] - g
+      val far = 4 * dg * dg
+      if (far > bestDistance) { break }
+      val dr = rs[j] - r
+      val db = bs[j] - b
+      val d = 2 * dr * dr + far + 3 * db * db
+      val index = by[j]
+      if (d < bestDistance or (d == bestDistance and index < c)) {
+        bestDistance = d
+        c = index
+      }
+      j -= 1
+    }
+    cells[key] = c + 1
+  }
+
+  // In a cell holding several of the palette's colours: the first that is `rgb`, else the cell's
+  // nearest (-1 till found).
+  private fun several(key : int, rgb : int) : int {
+    for (i in 0 ..< count) {
+      if (rgbOf[i] == rgb) { return i }
+    }
+    return cells[key] - 1
+  }
+}
+
+val image = big.scaled(1000, 1000)
+val colors = image.pixels.palette(256)
+val flat = image.pixels.toList()
+for (method in [Dither.none, Dither.floydSteinberg, Dither.atkinson]) {
+  val near = Nearest(colors)
+  val mine = method == Dither.none ? near.indices(flat, colors.size) : near.dithered(flat, 1000, 1000, colors.size, method == Dither.floydSteinberg)
+  print(method, "the same as paletteIndices:", mine == image.pixels.paletteIndices(colors, method))
+  best("$method, WinterWolf") {
+    val n = Nearest(colors)
+    method == Dither.none ? n.indices(flat, colors.size) : n.dithered(flat, 1000, 1000, colors.size, method == Dither.floydSteinberg)
+  }
+  best("$method, paletteIndices (C++)") { image.pixels.paletteIndices(colors, method) }
+}

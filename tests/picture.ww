@@ -44,3 +44,18 @@ try { few.pixels.dither([]) } catch (e : IllegalArgumentException) { print(e.mes
 val full = (0 ..< 256).map { Color(it, 0, 0) }
 try { few.pixels.dither(full) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a palette of 256 colours leaves no index for the see-through pixels: give it 255 at most
 print(Image(2, 2, Color(3, 0, 0)).pixels.dither(full)[0, 0])   // expect: Color(3, 0, 0)
+
+// Each pixel's index as bytes (2026-11-17): what dither puts colours on; a see-through pixel's the palette's size.
+print(few.pixels.paletteIndices(few.pixels.palette(), Dither.none).toList())   // expect: [0, 1, 0, 0, 0, 0, 2, 0]
+print(few.pixels.paletteIndices([Color(200, 0, 0), Color(10, 20, 30)], Dither.none).toList())   // expect: [1, 0, 1, 1, 1, 1, 2, 1]
+for (method in [Dither.none, Dither.floydSteinberg, Dither.atkinson]) {
+  val bw = grey.paletteIndices(blackWhite, method)
+  val dithered = grey.dither(blackWhite, method)
+  var same = bw.size == 1600
+  for (i in 0 ..< 1600) { same = same and dithered[i % 40, i / 40] == blackWhite[bw[i].toInt()] }
+  print(method, same)
+}
+// expect: none true
+// expect: floydSteinberg true
+// expect: atkinson true
+try { few.pixels.paletteIndices(full) } catch (e : IllegalArgumentException) { print(e.message) }   // expect: a palette of 256 colours leaves no index for the see-through pixels: give it 255 at most

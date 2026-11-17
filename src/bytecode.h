@@ -830,7 +830,8 @@ struct FunctionProto {
         // kind, a guess wrong), shared by its ways in: past a limit, the VM stops going in.
         uint32_t* misses;
         // The region's start, whose prologue looks at lists and fields once; any other way in
-        // (after an island) reads none of what the context keeps for that (VM::nativeEnter).
+        // (after an island) reads none of what the context keeps for that (VM::nativeEnter),
+        // unless it looks at them again itself (a loop that calls out and comes back, 2026-11-17).
         bool first = false;
         // Whether the region looks at lists or fields once (its prologue): where it does not,
         // nothing of the context's lists and held fields is read, and none is set to nothing as
