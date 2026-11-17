@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: what is left of the speed, in WinterWolf</h1>
-<p class="lede">Written 2026-11-17, at the user's word: "work on them all, try to keep them in ww, using stencils and templates and such". What <a href="timings.html">timings.html</a> leaves (every WinterWolf loop it sets against C++ now takes 0.6 to 1.0 times as long), each part made faster in WinterWolf where native code (its stencils and loop templates) can carry it, C++ only where it cannot. One part at a time, each with a spike and a gate; nothing built before the questions at the end are answered.</p>
+<p class="lede">Written 2026-11-17, at the user's word: "work on them all, try to keep them in ww, using stencils and templates and such". What <a href="timings.html">timings.html</a> leaves (every WinterWolf loop it sets against C++ now takes 0.6 to 1.0 times as long), each part made faster in WinterWolf where native code (its stencils and loop templates) can carry it, C++ only where it cannot. One part at a time, each with a spike and a gate; nothing built before the questions at the end are answered. All five answered as recommended (2026-11-17).</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -149,7 +149,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>No:</strong> left in C++, made faster there.</li>
 </ul>
 <p><em>Recommended:</em> yes, behind the gates. It is what "keep them in ww" asks, and what native code learns on them (hash chains, bit output, tables) serves every program; a gate keeps a slower encoder from replacing a quicker one.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("Yes, behind gates").</span></div>
 </section>
 
 <section class="decision">
@@ -159,7 +159,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>A little larger allowed:</strong> a quicker search for repeats (as fpng and libdeflate's fast levels do), files up to 5% larger, several times faster.</li>
 </ul>
 <p><em>Recommended:</em> no larger, with the quicker way offered as a level (<code>save(path, quality)</code> already takes one) for a program that wants it.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("No larger").</span></div>
 </section>
 
 <section class="decision">
@@ -169,7 +169,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Within one level:</strong> a quicker way to the coverage along the line; a pixel's edge may differ by one level of 255.</li>
 </ul>
 <p><em>Recommended:</em> within one level: no eye tells, and it is where most of the speed is; the tests that compare pixels compare lines with a tolerance already.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("Within one level").</span></div>
 </section>
 
 <section class="decision">
@@ -179,7 +179,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Floats:</strong> several times faster, a pixel a level off here and there.</li>
 </ul>
 <p><em>Recommended:</em> the same pixels: a blur is often compared against a saved picture, and the work split across cores gives most of the speed anyway.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("Same pixels").</span></div>
 </section>
 
 <section class="decision">
@@ -189,7 +189,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Calls first:</strong> what is written in WinterWolf after it has quicker calls from the start.</li>
 </ul>
 <p><em>Recommended:</em> as above: the encoders are written as single loops, which native code takes whole without calls; calls matter most to code made of small functions, and their last spike failed.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17: as recommended, the user not asked otherwise; theirs to change.</span></div>
 </section>
 </main>
 </body>
