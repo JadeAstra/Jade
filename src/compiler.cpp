@@ -120,6 +120,220 @@ uint8_t staticTypeOf(const Expr& expr) {
     }
 }
 
+// `for (e in map)` whose body reads only `e.key` and `e.value`: the reads, which are then made of
+// the two parts IterNextPair gives (as `for ((k, v) in map)` takes them), with no entry made for
+// each time round (50.6 ms against 1.9 for 666,667 entries, 2026-11-16). Anything else the body
+// does with the name, and anything that names it again (a variable, a parameter, a catch's, a
+// when's subject) or might (a function, a class or an object declared in it), and it is not done:
+// `ok` false. Kinds of expression or statement it does not know are taken as such too.
+class EntryReads {
+public:
+    explicit EntryReads(const std::string& name) : name_(name) {}
+    bool ok = true;
+    std::vector<const MemberExpr*> reads;
+
+    void stmts(const std::vector<StmtPtr>& list) {
+        for (const StmtPtr& s : list) stmt(s.get());
+    }
+
+private:
+    const std::string& name_;
+
+    void declares(const std::string& n) {
+        if (n == name_) ok = false;
+    }
+    void stmt(const Stmt* s) {
+        if (s == nullptr || !ok) return;
+        switch (s->kind) {
+            case StmtKind::Expr: expr(static_cast<const ExprStmt&>(*s).expr.get()); break;
+            case StmtKind::Var: {
+                const auto& v = static_cast<const VarStmt&>(*s);
+                if (v.getter || v.setter || v.isExternal) {
+                    ok = false;
+                    break;
+                }
+                declares(v.name);
+                for (const std::string& p : v.pattern) declares(p);
+                expr(v.init.get());
+                break;
+            }
+            case StmtKind::Block: stmts(static_cast<const BlockStmt&>(*s).statements); break;
+            case StmtKind::If: {
+                const auto& i = static_cast<const IfStmt&>(*s);
+                expr(i.condition.get());
+                stmt(i.then.get());
+                stmt(i.otherwise.get());
+                break;
+            }
+            case StmtKind::While: {
+                const auto& w = static_cast<const WhileStmt&>(*s);
+                expr(w.condition.get());
+                stmt(w.body.get());
+                break;
+            }
+            case StmtKind::ForIn: {
+                const auto& f = static_cast<const ForInStmt&>(*s);
+                expr(f.iterable.get());
+                declares(f.variable);
+                for (const std::string& p : f.pattern) declares(p);
+                stmt(f.body.get());
+                break;
+            }
+            case StmtKind::Return: expr(static_cast<const ReturnStmt&>(*s).value.get()); break;
+            case StmtKind::Break:
+            case StmtKind::Continue: break;
+            case StmtKind::Throw: expr(static_cast<const ThrowStmt&>(*s).value.get()); break;
+            case StmtKind::Try: {
+                const auto& t = static_cast<const TryStmt&>(*s);
+                stmt(t.body.get());
+                for (const CatchClause& c : t.catches) {
+                    if (c.hasVariable) declares(c.variable);
+                    stmt(c.body.get());
+                }
+                stmt(t.finalizer.get());
+                break;
+            }
+            default: ok = false;  // a function, a class, an import, a type alias, an extension
+        }
+    }
+    void function(const FunctionDecl& fn) {
+        if (fn.params.empty() && name_ == "it") ok = false;  // `it` there would be the lambda's own
+        for (const std::string& p : fn.params) declares(p);
+        for (const auto& pattern : fn.paramPatterns)
+            for (const std::string& p : pattern) declares(p);
+        for (const ExprPtr& d : fn.paramDefaults) expr(d.get());
+        stmts(fn.body);
+    }
+    void expr(const Expr* e) {
+        if (e == nullptr || !ok) return;
+        switch (e->kind) {
+            case ExprKind::Literal:
+            case ExprKind::This:
+            case ExprKind::Super:
+            case ExprKind::Current: break;
+            case ExprKind::Name:
+                if (static_cast<const NameExpr&>(*e).name == name_) ok = false;  // the entry itself, not one of its parts
+                break;
+            case ExprKind::Member: {
+                const auto& m = static_cast<const MemberExpr&>(*e);
+                if (m.object->kind == ExprKind::Name && static_cast<const NameExpr&>(*m.object).name == name_ && !m.safe &&
+                    (m.name == "key" || m.name == "value")) {
+                    reads.push_back(&m);
+                    break;
+                }
+                expr(m.object.get());
+                break;
+            }
+            case ExprKind::Interp:
+                for (const ExprPtr& p : static_cast<const InterpExpr&>(*e).parts) expr(p.get());
+                break;
+            case ExprKind::Unary: expr(static_cast<const UnaryExpr&>(*e).operand.get()); break;
+            case ExprKind::Binary: {
+                const auto& b = static_cast<const BinaryExpr&>(*e);
+                expr(b.left.get());
+                expr(b.right.get());
+                break;
+            }
+            case ExprKind::Logical: {
+                const auto& l = static_cast<const LogicalExpr&>(*e);
+                expr(l.left.get());
+                expr(l.right.get());
+                break;
+            }
+            case ExprKind::Ternary: {
+                const auto& t = static_cast<const TernaryExpr&>(*e);
+                expr(t.condition.get());
+                expr(t.then.get());
+                expr(t.otherwise.get());
+                break;
+            }
+            case ExprKind::Assign: {
+                const auto& a = static_cast<const AssignExpr&>(*e);
+                target(a.target.get());
+                expr(a.value.get());
+                break;
+            }
+            case ExprKind::IncDec: target(static_cast<const IncDecExpr&>(*e).target.get()); break;
+            case ExprKind::Call: {
+                const auto& c = static_cast<const CallExpr&>(*e);
+                // `e.key(...)`: called as a method of the entry, which is not made.
+                if (c.callee->kind == ExprKind::Member && static_cast<const MemberExpr&>(*c.callee).object->kind == ExprKind::Name &&
+                    static_cast<const NameExpr&>(*static_cast<const MemberExpr&>(*c.callee).object).name == name_) {
+                    ok = false;
+                    break;
+                }
+                expr(c.callee.get());
+                for (const ExprPtr& a : c.args) expr(a.get());
+                break;
+            }
+            case ExprKind::Index: {
+                const auto& i = static_cast<const IndexExpr&>(*e);
+                expr(i.object.get());
+                expr(i.index.get());
+                expr(i.defaultValue.get());
+                for (const ExprPtr& m : i.more) expr(m.get());
+                break;
+            }
+            case ExprKind::List:
+                for (const ExprPtr& item : static_cast<const ListExpr&>(*e).items) expr(item.get());
+                break;
+            case ExprKind::Map:
+                for (const auto& [k, v] : static_cast<const MapExpr&>(*e).entries) {
+                    expr(k.get());
+                    expr(v.get());
+                }
+                break;
+            case ExprKind::Range: {
+                const auto& r = static_cast<const RangeExpr&>(*e);
+                expr(r.start.get());
+                expr(r.end.get());
+                expr(r.step.get());
+                break;
+            }
+            case ExprKind::Is: expr(static_cast<const IsExpr&>(*e).value.get()); break;
+            case ExprKind::ClassOf: expr(static_cast<const ClassOfExpr&>(*e).value.get()); break;
+            case ExprKind::Cast: expr(static_cast<const CastExpr&>(*e).value.get()); break;
+            case ExprKind::In: {
+                const auto& i = static_cast<const InExpr&>(*e);
+                expr(i.value.get());
+                expr(i.container.get());
+                break;
+            }
+            case ExprKind::Elvis: {
+                const auto& v = static_cast<const ElvisExpr&>(*e);
+                expr(v.left.get());
+                expr(v.right.get());
+                break;
+            }
+            case ExprKind::Function: function(*static_cast<const FunctionExpr&>(*e).fn); break;
+            case ExprKind::Jump: stmt(static_cast<const JumpExpr&>(*e).jump.get()); break;
+            case ExprKind::Statement: stmt(static_cast<const StatementExpr&>(*e).statement.get()); break;
+            case ExprKind::When: {
+                const auto& w = static_cast<const WhenExpr&>(*e);
+                expr(w.subject.get());
+                declares(w.subjectName);
+                for (const WhenBranch& b : w.branches) {
+                    for (const WhenCondition& c : b.conditions) expr(c.value.get());
+                    stmt(b.body.get());
+                }
+                break;
+            }
+            default: ok = false;  // an object expression, or a kind added since
+        }
+    }
+    // What is assigned to: the entry and its parts never are (the parts are not the map's).
+    void target(const Expr* t) {
+        if (t != nullptr && t->kind == ExprKind::Member) {
+            const auto& m = static_cast<const MemberExpr&>(*t);
+            if (m.object->kind == ExprKind::Name && static_cast<const NameExpr&>(*m.object).name == name_) {
+                ok = false;
+                return;
+            }
+        }
+        expr(t);
+    }
+};
+
 struct LoopState {
     LoopState* enclosing;
     int start;       // address that `continue` jumps to
@@ -4541,8 +4755,15 @@ private:
                                              (inPlaceOff() ? handsItemToLambda(s) : session_.checker->loopsInPlace(s)) &&
                                              (!copyingReads() || session_.checker->loopPassesOn(s)));
         // Two names taking the item apart, `for ((key, value) in map)`: both parts at once, with
-        // nothing made for a map's entry (D64, D73).
-        const bool pair = !counted && !inPlace && s.pattern.size() == 2;
+        // nothing made for a map's entry (D64, D73). So too `for (e in map)` where the body reads
+        // only `e.key` and `e.value` (EntryReads): the parts kept as `e.key` and `e.value`, names
+        // nothing written can be.
+        EntryReads entries(s.variable);
+        if (!counted && !inPlace && s.pattern.empty() && session_.checker != nullptr && session_.checker->loopsOverMap(s))
+            entries.stmts(s.body->statements);
+        else
+            entries.ok = false;
+        const bool pair = !counted && !inPlace && (s.pattern.size() == 2 || entries.ok);
         emit(counted ? Op::RangeNext : pair ? Op::IterNextPair : inPlace ? Op::IterNextRef : Op::IterNext, slotOf(iteratorSlot));
         int toExit = here();
         emitI32(0);
@@ -4550,7 +4771,12 @@ private:
         // The loop variable lives in a scope of its own, so each iteration gets a fresh
         // variable and closures capture the value of their own iteration.
         beginScope();
-        if (s.pattern.empty()) {
+        if (entries.ok) {
+            const std::string key = s.variable + ".key", value = s.variable + ".value";
+            addLocal(key, false, s, true);
+            addLocal(value, false, s, true);
+            for (const MemberExpr* read : entries.reads) entryReads_[read] = read->name == "key" ? key : value;
+        } else if (s.pattern.empty()) {
             addLocal(s.variable, false, s, true);
         } else if (pair) {
             addLocal(s.pattern[0] == "_" ? "(first)" : s.pattern[0], false, s, true);
@@ -4560,6 +4786,7 @@ private:
             declareParts(s.pattern, item, false, s);
         }
         compileBlockBody(s.body->statements);
+        for (const MemberExpr* read : entries.reads) entryReads_.erase(read);
         endScope();
 
         emitLoop(loop.start);
@@ -6507,8 +6734,19 @@ private:
         size_t start, end;
     };
     std::vector<NameUse> methodsUses_;
+    // The `e.key` and `e.value` of loops over maps being compiled, and the locals they are read from.
+    std::unordered_map<const Expr*, std::string> entryReads_;
 
     void compileExpr(const Expr& expr) {
+        if (expr.kind == ExprKind::Member && !entryReads_.empty()) {
+            // `e.key` in `for (e in map)` taken apart (compileForIn): the part's own local.
+            auto read = entryReads_.find(&expr);
+            if (read != entryReads_.end()) {
+                line_ = expr.line;
+                emitGet(read->second, expr);
+                return;
+            }
+        }
         if (expr.kind == ExprKind::Name || expr.kind == ExprKind::Member) {
             // An atomic var held under its lock, read under it (8.7f).
             if (Checker::AtomicFieldOp atomic; session_.checker != nullptr && session_.checker->atomicField(expr, atomic)) {

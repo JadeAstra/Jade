@@ -3618,7 +3618,14 @@ struct Checker::Impl {
                     else if (over.kind == Type::Bytes) item = Type::of(Type::Byte);
                     else if (over.kind == Type::String) item = Type::of(Type::Char);
                     else if (over.kind == Type::List && !over.args.empty()) item = readType(over.args[0]);
-                    else if (over.kind == Type::Map) item = mapEntryOf(over);  // a map gives its entries (D64)
+                    else if (over.kind == Type::Map) {
+                        item = mapEntryOf(over);  // a map gives its entries (D64)
+                        // Its parts read where nothing is made of them, but not where they are of a value type,
+                        // which is read in place and may be changed through the entry.
+                        auto plain = [](const Type& t) { return t.kind != Type::Class || t.cls == nullptr || !t.cls->isValue; };
+                        if (f.pattern.empty() && silent == 0 && over.args.size() == 2 && plain(over.args[0]) && plain(over.args[1]))
+                            mapLoops.insert(&f);
+                    }
                     else if ((over.kind == Type::Set || over.kind == Type::Values) && !over.args.empty()) item = readType(over.args[0]);
                     else if (over.kind == Type::Class && over.cls != nullptr) item = iterationItem(over, f);
                 } else if (over.known() && over.kind != Type::Null) {
@@ -6536,6 +6543,7 @@ struct Checker::Impl {
         bool keptPast = false;  // noteKeptPastLoops
     };
     std::unordered_map<const ForInStmt*, LoopCandidate> loopCandidates;
+    std::unordered_set<const ForInStmt*> mapLoops;  // `for (e in map)` over a map that is not null
 
     struct ParamCandidate {
         int index;
@@ -12571,6 +12579,7 @@ bool Checker::returnsValue(const FunctionDecl& fn) const {
 bool Checker::constructsValue(const CallExpr& call) const { return impl_->constructedValues.count(&call) != 0; }
 bool Checker::buildsInPlace(const AssignExpr& assign) const { return impl_->builtInPlace.count(&assign) != 0; }
 bool Checker::loopsInPlace(const ForInStmt& loop) const { return impl_->loopsInPlace(loop); }
+bool Checker::loopsOverMap(const ForInStmt& loop) const { return impl_->mapLoops.count(&loop) != 0; }
 bool Checker::loopPassesOn(const ForInStmt& loop) const {
     auto found = impl_->loopCandidates.find(&loop);
     return found != impl_->loopCandidates.end() && found->second.uses.size() == 1 && found->second.argUses.size() == 1;

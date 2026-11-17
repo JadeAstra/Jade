@@ -352,6 +352,8 @@ public:
     // A field with no type written whose value is of a value type, null or not (G16).
     bool inferredValueFieldType(const VarStmt& field, RuntimeType& out) const;
     bool loopsInPlace(const ForInStmt& loop) const;
+    // `for (e in map)` over a map that is not null: an entry of it each time round.
+    bool loopsOverMap(const ForInStmt& loop) const;
     bool loopPassesOn(const ForInStmt& loop) const;  // its variable's one use is to be passed on
     std::vector<int> paramsOwned(const FunctionDecl& fn) const;
     // The default an override takes for parameter `i` from what it overrides, where it writes

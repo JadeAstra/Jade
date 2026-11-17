@@ -1,0 +1,93 @@
+// `for (e in map)` whose body reads only e.key and e.value is run as `for ((k, v) in map)` is, with
+// no entry made each time round (2026-11-16); any other use of e, or a name e declared again in
+// the body, and it runs as before. Each loop here: the same answers either way.
+
+value Spot(val x : int, val y : int)
+
+fun total(m : Map<string, int>) : int {
+  var t = 0
+  for (e in m) { t += e.value * 10 + e.key.size }
+  return t
+}
+
+val ages = mapOf("ann" to 30, "bob" to 25, "cy" to 40)
+print(total(ages))   // expect: 958
+
+// Keys and values in text, in order, a break and a continue.
+var said = ""
+for (e in ages) {
+  if (e.key == "bob") { continue }
+  said += "${e.key}=${e.value};"
+  if (e.value >= 40) { break }
+}
+print(said)   // expect: ann=30;cy=40;
+
+// Read in a lambda, kept past its round: each keeps its own round's parts.
+val later : open List<() -> string> = []
+for (e in ages) { later.add({ -> e.key + e.value }) }
+print(later.map { it() }.join(","))   // expect: ann30,bob25,cy40
+
+// A null value, narrowed by a test.
+val maybe : Map<string, int?> = mapOf("a" to 1, "b" to null, "c" to 3)
+var some = 0
+for (e in maybe) {
+  if (e.value != null) { some += e.value }
+}
+print(some)   // expect: 4
+
+// Nothing read at all: still each round.
+var rounds = 0
+for (e in ages) { rounds += 1 }
+print(rounds)   // expect: 3
+
+// The entry itself used: made as before.
+fun describe(entry : MapEntry<string, int>) : string => entry.key + ":" + entry.value
+val whole : open List<string> = []
+for (e in ages) { whole.add(describe(e)) }
+print(whole.join(" "))   // expect: ann:30 bob:25 cy:40
+for (e in ages) { print(e); break }   // expect: MapEntry(key="ann", value=30)
+
+// A loop inside that names e again: the inner one taken apart, the outer as before.
+val pairs = mapOf(1 to "one", 2 to "two")
+var both = ""
+for (e in ages) {
+  for (e in pairs) { both += e.value }
+  both += e.key
+}
+print(both)   // expect: onetwoannonetwobobonetwocy
+
+// e in a when's subject and a catch.
+var told = ""
+for (e in ages) {
+  when (val e = e.value / 10) {
+    3 -> told += "3"
+    else -> told += "x"
+  }
+}
+print(told)   // expect: 3xx
+var caught = 0
+for (e in ages) {
+  try { if (e.value > 26) { throw IllegalStateException(e.key) } } catch (e : IllegalStateException) { caught += e.message!!.size }
+}
+print(caught)   // expect: 5
+
+// Keys of a class: the key read is the very object.
+class Tag(val name : string)
+val t1 = Tag("first")
+val tagged = mapOf(t1 to 1)
+for (e in tagged) { print(e.key === t1, e.key.name) }   // expect: true first
+
+// A value type's: as before.
+val spots = mapOf("a" to Spot(1, 2), "b" to Spot(3, 4))
+var sx = 0
+for (e in spots) { sx += e.value.x + e.value.y }
+print(sx)   // expect: 10
+
+// Changing the map in the loop is still seen.
+val m = mapOf("a" to 1, "b" to 2)
+try { for (e in m) { m[e.key + "!"] = e.value } } catch (x : ConcurrentModificationException) { print("added: stopped") }   // expect: added: stopped
+
+// A loop over a map's entry that is called `it`: as before, `it` in a lambda being the lambda's.
+var its = 0
+for (it in ages) { its += listOf(1, 2).sumOf { it } + it.value }
+print(its)   // expect: 104
