@@ -6,7 +6,7 @@
 //
 //   stencils <object file> <header written>
 //
-// The object file is COFF (Windows, x64; clang-cl /Gy) or ELF (Linux, x86-64; clang
+// The object file is COFF (Windows, x64; clang-cl /Gy; the small form or the big) or ELF (Linux, x86-64; clang
 // -ffunction-sections). A stencil is a function whose name starts with "st_", each in a section
 // of its own.
 
@@ -57,20 +57,34 @@ struct Stencil {
 
 }  // namespace
 
-// A symbol's section number, unsigned: 0 is none, 0xFFFF and 0xFFFE (-1, -2) are no section either,
-// and the numbers past 32767 are sections (stencils.cpp has more than 32767 since 2026-11-14).
-bool realSection(uint16_t n) { return n != 0 && n < 0xFF00; }
+// Whether an object file is COFF's big form (Clang writes it past 65,279 sections: stencils.cpp
+// since 2026-11-17, eleven registers for whole numbers): its header 56 bytes, a symbol 20, a
+// symbol's section number 32 bits.
+bool bigCoff(const std::vector<uint8_t>& obj) {
+    return obj.size() >= 56 && u16(obj, 0) == 0 && u16(obj, 2) == 0xFFFF && u16(obj, 4) >= 2 && u16(obj, 6) == 0x8664;
+}
 
-// An x64 COFF object file (Windows, clang-cl).
+// An x64 COFF object file (Windows, clang-cl), of either form.
 void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
-    const uint16_t sectionCount = u16(obj, 2);
-    const uint32_t symbolTable = u32(obj, 8), symbolCount = u32(obj, 12);
-    const uint16_t optionalHeader = u16(obj, 16);
-    const size_t sections = 20 + optionalHeader;
-    const size_t strings = symbolTable + static_cast<size_t>(symbolCount) * 18;
+    const bool big = bigCoff(obj);
+    const uint32_t sectionCount = big ? u32(obj, 44) : u16(obj, 2);
+    const uint32_t symbolTable = big ? u32(obj, 48) : u32(obj, 8), symbolCount = big ? u32(obj, 52) : u32(obj, 12);
+    const size_t sections = big ? 56 : 20 + u16(obj, 16);
+    const size_t symbolSize = big ? 20 : 18;
+    const size_t strings = symbolTable + static_cast<size_t>(symbolCount) * symbolSize;
+    // A symbol's section number: 0 is none; -1 and -2 (0xFFFF and 0xFFFE in the small form, whose
+    // numbers past 32767 are sections: stencils.cpp has had more since 2026-11-14) are no section either.
+    auto sectionOf = [&](size_t symbolAt) -> uint32_t {
+        if (big) {
+            const int32_t n = static_cast<int32_t>(u32(obj, symbolAt + 12));
+            return n > 0 ? static_cast<uint32_t>(n) : 0;
+        }
+        const uint16_t n = u16(obj, symbolAt + 12);
+        return n != 0 && n < 0xFF00 ? n : 0;
+    };
 
     auto symbolName = [&](uint32_t index) {
-        const size_t at = symbolTable + static_cast<size_t>(index) * 18;
+        const size_t at = symbolTable + static_cast<size_t>(index) * symbolSize;
         if (u32(obj, at) == 0) {
             const size_t s = strings + u32(obj, at + 4);
             return std::string(reinterpret_cast<const char*>(&obj[s]));
@@ -80,17 +94,17 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     };
 
     // Each stencil's section: the defined external symbol starting "st_" in it.
-    std::map<uint16_t, std::string> stencilOf;
+    std::map<uint32_t, std::string> stencilOf;
     for (uint32_t i = 0; i < symbolCount; i++) {
-        const size_t at = symbolTable + static_cast<size_t>(i) * 18;
-        const uint16_t section = u16(obj, at + 12);
-        const uint8_t storage = obj[at + 16], aux = obj[at + 17];
+        const size_t at = symbolTable + static_cast<size_t>(i) * symbolSize;
+        const uint32_t section = sectionOf(at);
+        const uint8_t storage = obj[at + symbolSize - 2], aux = obj[at + symbolSize - 1];
         const std::string name = symbolName(i);
-        if (storage == 2 && realSection(section) && name.rfind("st_", 0) == 0) stencilOf[section] = name.substr(3);
+        if (storage == 2 && section != 0 && name.rfind("st_", 0) == 0) stencilOf[section] = name.substr(3);
         i += aux;
     }
 
-    for (uint16_t s = 1; s <= sectionCount; s++) {
+    for (uint32_t s = 1; s <= sectionCount; s++) {
         const size_t h = sections + static_cast<size_t>(s - 1) * 40;
         const uint32_t characteristics = u32(obj, h + 36);
         const bool code = (characteristics & 0x20) != 0;
@@ -139,10 +153,10 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
             }
             // A constant of read-only data (Clang's __real@ and __xmm@): its bytes go with the
             // stencil, at most 16, and are placed beside the region's code.
-            const size_t sym = symbolTable + static_cast<size_t>(symbol) * 18;
-            const uint16_t dataSection = u16(obj, sym + 12);
+            const size_t sym = symbolTable + static_cast<size_t>(symbol) * symbolSize;
+            const uint32_t dataSection = sectionOf(sym);
             const uint32_t value = u32(obj, sym + 8);
-            if (!realSection(dataSection)) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
+            if (dataSection == 0) fail("stencil " + st.name + " refers to " + target + ", which is no gap");
             const size_t dh = sections + static_cast<size_t>(dataSection - 1) * 40;
             const uint32_t dataCharacteristics = u32(obj, dh + 36);
             const uint32_t dataSize = u32(obj, dh + 16), dataRaw = u32(obj, dh + 20);
@@ -301,7 +315,7 @@ int main(int argc, char** argv) {
     const std::vector<uint8_t> obj((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::vector<Stencil> stencils;
     if (obj.size() >= 4 && obj[0] == 0x7F && obj[1] == 'E' && obj[2] == 'L' && obj[3] == 'F') readElf(obj, stencils);
-    else if (obj.size() >= 20 && u16(obj, 0) == 0x8664) readCoff(obj, stencils);
+    else if ((obj.size() >= 20 && u16(obj, 0) == 0x8664) || bigCoff(obj)) readCoff(obj, stencils);
     else fail("not an x64 COFF nor an x86-64 ELF object file");
     if (stencils.empty()) fail("no stencils found");
     // In name order, which ww looks them up by.

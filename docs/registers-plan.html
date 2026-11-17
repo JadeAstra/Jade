@@ -88,12 +88,13 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: more registers for native code, and values kept in them where they are used</h1>
-<p class="lede">Written 2026-11-17, at the user's word ("can we do 1 and 2?"), after the speed plan's part 1 (<a href="speed-plan.html#sp-p1">GIF</a>) did not reach its gate: native code holds the GIF writer's LZW loop whole, but spills the values its hot path uses with those of its cold path, as it has nine registers for whole numbers and a way out after each check needs every value changed so far. Two things the user asked for: more registers (2), and a value kept in a register on the path that uses it most, in memory only on the path that needs its register for something else (1). Three parts, each with a spike and a gate; nothing built before the questions at the end are answered.</p>
+<p class="lede">Written 2026-11-17, at the user's word ("can we do 1 and 2?"), after the speed plan's part 1 (<a href="speed-plan.html#sp-p1">GIF</a>) did not reach its gate: native code holds the GIF writer's LZW loop whole, but spills the values its hot path uses with those of its cold path, as it has nine registers for whole numbers and a way out after each check needs every value changed so far. Two things the user asked for: more registers (2), and a value kept in a register on the path that uses it most, in memory only on the path that needs its register for something else (1). Three parts, each with a spike and a gate; nothing built before the questions at the end are answered. All three answered as recommended (2026-11-17); part A's spike found RBX and R10 unsound (below).</p>
 <nav>
 <h2>Contents</h2>
 <ul>
 <li><a href="#rp-now">How native code's registers are now</a></li>
 <li><a href="#rp-parts">The parts, each with its spike and gate</a></li>
+<li><a href="#rp-a">Part A's spike: RBX and R10 unsound</a></li>
 <li><a href="#rp-after">After</a></li>
 <li><a href="#rp-questions">Questions for the user</a></li>
 </ul>
@@ -118,6 +119,15 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 </tbody></table></div>
 <p>Each part finished, timed against the build before it (the kernels, the whole pictures, <code>bench/run.ps1</code>, the GIF parts), tested on Windows and Linux, written into this page and committed (a version a build) before the next; each reported, the next begun on the user's word.</p>
 
+<h2 id="rp-a">Part A's spike: RBX and R10 unsound (2026-11-17)</h2>
+<p>Built as planned: the flag renamed, RBX and R10 bound in every stencil by an empty <code>asm</code> as it starts and as it goes on, eleven registers given out. 48,107 stencils (+4,942), ww.exe 0.73 MB larger; the object file then past COFF's 65,279 sections, so the stencil tool now reads COFF's big form too (kept). The native check passed; the LZW loop was no faster (14.9 ms: its spills still chosen by where values are written, the range loop's own slots among them).</p>
+<p><strong>Then the kernels:</strong> blur failed (an index out of range) and idct took 662 ms to 398. Two causes, both in what Clang makes of the stencils:</p>
+<ul>
+<li><strong>The binding is not a reservation.</strong> A register variable is in its register only at the <code>asm</code> that names it; Clang may move other work past that <code>asm</code> and use the register for it. In <code>rcntai_0_1</code> it worked out the range's count after the hand-on <code>asm</code>, in RBX and R10, so register 10 came to the next stencil holding the count. Ten registers (RBX only) gave the right blur by luck: nothing makes it hold. Clang has no way to reserve RBX on x86 (<code>-ffixed-rbx</code> is refused).</li>
+<li><strong>No register left for Clang's own work.</strong> With twelve registers passed and two more bound, a stencil needing one more pushes RBP and pops it again: in most stencils, each step a push and a pop more.</li>
+</ul>
+<p>Undone; nothing of it is in the build but the tool's reading of the big form. A sound way to one more register, if wanted: the flag's register (RAX, the twelfth passed) given out as an ordinary register wherever no comparison's answer is in it, the allocator told where the flag lives (each comparison's step writing it, each jump or <code>and</code> reading it); stencils for register 9 that name the flag's. Ten registers, no binding.</p>
+
 <h2 id="rp-after">After</h2>
 <p>The speed plan's part 1 tried again: the LZW loop against its gate (at its C++'s speed), and the indices and dithering in WinterWolf (<code>bench/spike/gif_nearest.ww</code>) against the C++ they would replace. Then part 2, PNG, whose deflate is the same kind of loop.</p>
 
@@ -131,7 +141,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Twelve</strong> (RBP too): saved as a region is entered and put back on every way out (a step each); a crash inside a region would show no frame chain past it.</li>
 </ul>
 <p><em>Recommended:</em> eleven first, twelve tried in the same spike and kept only if it is measurably quicker on the loops above.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("go with the recommendations"): eleven first, twelve tried in the spike.</span></div>
 </section>
 
 <section class="decision">
@@ -141,7 +151,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>A, then C on guesses:</strong> splitting without counts, the hot path guessed.</li>
 </ul>
 <p><em>Recommended:</em> A, B, C. Guessing which path is hot is what failed on 2026-11-17; with counts, splitting and spilling both choose from what really runs.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user: A, B, C.</span></div>
 </section>
 
 <section class="decision">
@@ -151,7 +161,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The first 10,000 times round:</strong> surer counts, longer at the counting region's speed.</li>
 </ul>
 <p><em>Recommended:</em> 1,000: a loop worth native code runs far more than that, and a branch taken once in a thousand matters little to what is spilled.</p>
-<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user: the first 1,000 times round.</span></div>
 </section>
 </main>
 </body>
