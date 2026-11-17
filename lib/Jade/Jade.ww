@@ -38,8 +38,39 @@ object Jade {
       return abgr == null ? null : Color(abgr!! & 0xFF, (abgr!! >> 8) & 0xFF, (abgr!! >> 16) & 0xFF)
     }
 
+  // The accent as the system shows it in a light or a dark theme: on Windows the shade of it
+  // Windows' own apps use, from the palette Settings keeps (a lighter one on dark, a darker on
+  // light; the accent itself where there is no palette); elsewhere the accent as it is, which KDE
+  // and GNOME use in both. Palette follows this one.
+  internal fun systemAccentFor(dark : bool) : Color? {
+    if (!onWindows) { return systemAccent }
+    val palette = registryBytes("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", 32)
+    if (palette == null) { return systemAccent }
+    // Eight colours, red, green, blue and one more each, from the lightest to the darkest: the
+    // second for a dark theme, the fifth for a light one.
+    val at = (dark ? 1 : 4) * 4
+    return Color(palette!![at].toInt() & 0xFF, palette!![at + 1].toInt() & 0xFF, palette!![at + 2].toInt() & 0xFF)
+  }
+
   private val onWindows : bool
     get() => FilePath.separator == "\\"
+
+  // `size` bytes of the current user's in the registry (RRF_RT_REG_BINARY), or null.
+  private fun registryBytes(key : string, name : string, size : int) : Bytes? {
+    try {
+      val getValue = Library("advapi32").function("RegGetValueW",
+        [CType.pointer, CType.wideString, CType.wideString, CType.uint32, CType.pointer, CType.pointer, CType.pointer], CType.int32)
+      return Memory(size).use { data ->
+        Memory(4).use { length ->
+          length.putInt32(0, size)
+          val status = getValue.call(-2147483647, key, name, 0x08, null, data, length)
+          status == 0 and length.int32(0) == size ? data.bytes(0, size) : null
+        }
+      }
+    } catch (e : Exception) {
+      return null
+    }
+  }
 
   // A 32-bit number of the current user's in the registry, through WinterWolf's foreign
   // functions (RegGetValueW); null where it is not there or cannot be read.

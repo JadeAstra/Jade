@@ -212,7 +212,9 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     progress.value = wanted == 0 ? 0.0 : done.toFloat() / wanted.toFloat()
     // Red from the first failure on; green once a run has ended with every check passed.
     val wasColor = progress.color
-    val nowColor = failed > 0 ? Color(208, 52, 52) : (!running and done > 0 and done == wanted and passed + skipped == done ? Color(46, 160, 67) : null)
+    // Red for a failure, green when all passed; blue while running, whatever the system's accent
+    // (an orange one read as failing, 2026-11-17).
+    val nowColor = failed > 0 ? Color(208, 52, 52) : (!running and done > 0 and done == wanted and passed + skipped == done ? Color(46, 160, 67) : Palette.selectBlue)
     if (nowColor != wasColor) { progress.color = nowColor }
     val c = chosen
     val text = c != null ? detailOf(c) : reportText != "" ? "What the run gave (choose a check to see it alone):\n\n$reportText" :

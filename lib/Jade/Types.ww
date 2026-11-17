@@ -151,6 +151,8 @@ object Palette {
       darkNow = value
       memo.clear()
       changed()
+      // The system's accent in the shade for this theme (Windows has one for each).
+      if (following and !accentChosen) { changeAccent(Jade.systemAccentFor(value)) }
     }
   }
   private fun changeAccent(value : Color?) {
@@ -171,7 +173,7 @@ object Palette {
     if (start and following) { return }
     following = true
     if (!darkChosen) { changeDark(Jade.systemDark) }
-    if (!accentChosen) { changeAccent(Jade.systemAccent) }
+    if (!accentChosen) { changeAccent(Jade.systemAccentFor(darkNow)) }
   }
 
   fun onThemeChange(hook : () -> unit) {
