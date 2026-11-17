@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -85,6 +86,7 @@
 #include "pointer-constraints-client.h"
 #include "relative-pointer-client.h"
 #include "xdg-activation-client.h"
+#include "xdg-foreign-client.h"
 #include "xdg-shell-client.h"
 
 #define EGL_NO_X11
@@ -96,6 +98,7 @@
 
 #include "gl.h"
 #include "platform.h"
+#include "portal.h"
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
 
@@ -368,6 +371,8 @@ public:
     Cursor cursor = Cursor::Default;
     PointerMode pointerMode = PointerMode::Normal;
     zwp_locked_pointer_v1* lock = nullptr;  // while the pointer mode is Locked
+    zxdg_exported_v2* exported = nullptr;   // while shown: its name for other programs' windows (the portal's dialogs)
+    std::string exportHandle;               // that name, once given; read by a dialog's thread (LinuxPlatform::handlesMutex)
     bool lockActive = false;                // the compositor holds the pointer now (it may let go and take it again)
     int buttons = 0;
 
@@ -495,6 +500,8 @@ public:
     wp_viewporter* viewporter = nullptr;
     wp_fractional_scale_manager_v1* fractionalScales = nullptr;
     xdg_activation_v1* activation = nullptr;
+    zxdg_exporter_v2* exporter = nullptr;
+    std::mutex handlesMutex;           // the windows' exportHandle, which a dialog's thread reads
     zwp_pointer_constraints_v1* constraints = nullptr;
     zwp_relative_pointer_manager_v1* relativePointers = nullptr;
     zwp_relative_pointer_v1* relativePointer = nullptr;
@@ -602,10 +609,17 @@ public:
         }
     }
 
-    bool chooseFile(int, const std::string&, const std::vector<std::pair<std::string, std::string>>&, const std::string&, const std::string&, PlatformWindow*,
-                    std::string&, std::string& error) override {
-        error = "the file dialog is not there on Linux yet";
-        return false;
+    // The desktop's own dialog, through its portal (KDE's under KDE, GNOME's under GNOME), on
+    // the calling thread (not the one pumping events: SystemFileDialog's), in front of `owner`.
+    bool chooseFile(int kind, const std::string& title, const std::vector<std::pair<std::string, std::string>>& filters, const std::string& startDir,
+                    const std::string& name, PlatformWindow* owner, std::string& path, std::string& error) override {
+        std::string parent;
+        if (owner != nullptr) {
+            std::lock_guard<std::mutex> hold(handlesMutex);
+            const std::string& handle = static_cast<LinuxWindow*>(owner)->exportHandle;
+            if (!handle.empty()) parent = "wayland:" + handle;
+        }
+        return portal::chooseFile(kind, title, filters, startDir, name, parent, path, error);
     }
     std::string clipboardText() override;
     void setClipboardText(const std::string& text) override;
@@ -1114,6 +1128,15 @@ void onActivationToken(void* data, xdg_activation_token_v1* token, const char* n
 }
 const xdg_activation_token_v1_listener activationTokenListener = {onActivationToken};
 
+// A shown window's name for other programs' windows, which the portal's dialogs are told to
+// stand in front of.
+void onExportHandle(void* data, zxdg_exported_v2*, const char* handle) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    std::lock_guard<std::mutex> hold(w->platform.handlesMutex);
+    w->exportHandle = handle;
+}
+const zxdg_exported_v2_listener exportedListener = {onExportHandle};
+
 // ---- The pointer held (PointerMode::Locked) ----
 
 void onLocked(void* data, zwp_locked_pointer_v1*) {
@@ -1212,6 +1235,8 @@ void onGlobal(void* data, wl_registry* registry, uint32_t name, const char* inte
         p.dataManager = static_cast<wl_data_device_manager*>(bind(&wl_data_device_manager_interface, 3));
     } else if (what == "xdg_activation_v1") {
         p.activation = static_cast<xdg_activation_v1*>(bind(&xdg_activation_v1_interface, 1));
+    } else if (what == "zxdg_exporter_v2") {
+        p.exporter = static_cast<zxdg_exporter_v2*>(bind(&zxdg_exporter_v2_interface, 1));
     } else if (what == "zwp_pointer_constraints_v1") {
         p.constraints = static_cast<zwp_pointer_constraints_v1*>(bind(&zwp_pointer_constraints_v1_interface, 1));
     } else if (what == "zwp_relative_pointer_manager_v1") {
@@ -1568,6 +1593,10 @@ void LinuxWindow::show() {
         zxdg_toplevel_decoration_v1_add_listener(decoration, &decorationListener, this);
         zxdg_toplevel_decoration_v1_set_mode(decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
+    if (p.exporter != nullptr) {
+        exported = zxdg_exporter_v2_export_toplevel(p.exporter, surface);
+        zxdg_exported_v2_add_listener(exported, &exportedListener, this);
+    }
     wl_surface_commit(surface);
     // Its first configure waited for, so that the program's first picture has a place to go.
     for (int i = 0; i < 100 && !configurePending && shown; i++) wl_display_roundtrip(p.display);
@@ -1591,6 +1620,12 @@ void LinuxWindow::hide() {
     eglWindow = nullptr;
     if (decoration != nullptr) zxdg_toplevel_decoration_v1_destroy(decoration);
     decoration = nullptr;
+    if (exported != nullptr) zxdg_exported_v2_destroy(exported);
+    exported = nullptr;
+    {
+        std::lock_guard<std::mutex> hold(p.handlesMutex);
+        exportHandle.clear();
+    }
     if (toplevel != nullptr) xdg_toplevel_destroy(toplevel);
     toplevel = nullptr;
     if (shell != nullptr) xdg_surface_destroy(shell);
@@ -1809,6 +1844,7 @@ Platform* Platform::get(std::string& error) {
 #include "pointer-constraints-protocol.c"
 #include "relative-pointer-protocol.c"
 #include "xdg-activation-protocol.c"
+#include "xdg-foreign-protocol.c"
 #include "xdg-shell-protocol.c"
 
 #endif

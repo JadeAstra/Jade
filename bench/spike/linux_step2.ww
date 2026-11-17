@@ -1,0 +1,42 @@
+// The Linux windows' step 2 (docs/linux-gui-plan.html), tried by hand: the desktop's own file
+// dialogs through its portal, in front of this window, and the window in the desktop's light or
+// dark and its accent colour (the check box shows the accent).
+//
+//   ww bench/spike/linux_step2.ww
+import Jade.*
+
+val dark = Jade.systemDark
+val accent = Jade.systemAccent
+Palette.dark = dark
+Palette.customAccent = accent
+print("the desktop says: dark $dark, accent $accent")
+
+val result = label("Nothing chosen yet")
+fun shown(what : string, path : string?) {
+  val failed = (Jade.fileDialog as? SystemFileDialog)?.lastError?.message
+  val text = failed != null ? "$what: could not be shown: $failed" : (path == null ? "$what: cancelled" : "$what: $path")
+  (result.content as Label).text = text
+  print(text)
+}
+
+val root = grid {
+  insets = Insets(14, 14, 14, 14)
+  hgap = 8
+  vgap = 10
+  row { cell(label("The desktop says: " + (dark ? "dark" : "light") + ", accent " + (accent == null ? "none" : "$accent")), colSpan = 3, anchor = Anchor.west) }
+  row { cell(checkBox("Checked in the accent colour", true), colSpan = 3, anchor = Anchor.west) }
+  row {
+    cell(button("Open a file…") {
+      Jade.fileDialog.open("Open a text file", [FileFilter("Text", ["*.txt", "*.md"]), FileFilter("Everything", ["*"])]) { path -> shown("open", path) }
+    })
+    cell(button("Save as…") {
+      Jade.fileDialog.save("Save as", "notes.txt", [FileFilter("Text", ["*.txt"])]) { path -> shown("save", path) }
+    })
+    cell(button("Choose a folder…") {
+      Jade.fileDialog.chooseDirectory("Choose a folder") { path -> shown("folder", path) }
+    })
+  }
+  row { cell(result, colSpan = 3, fill = Fill.horizontal, weightX = 1.0, weightY = 1.0, anchor = Anchor.northwest) }
+}
+
+Window(root, "WinterWolf: Linux step 2", 620, 220).show()

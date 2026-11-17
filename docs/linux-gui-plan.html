@@ -104,6 +104,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#lx-questions">Questions for the user</a></li>
 <li><a href="#lx-spike">The spike, so far</a></li>
 <li><a href="#lx-step1">Step 1: clipboard, drops, activation, the held pointer</a></li>
+<li><a href="#lx-step2">Step 2: the portal</a></li>
 </ul>
 </nav>
 
@@ -271,6 +272,14 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Ovals</strong> are now smoothed by their edge's distance worked out exactly (the gradient of |p / h|), not from the GPU's differences between neighbouring pixels: an outline's right edge was grey on VirtualBox's driver, and Windows' own rings were a little lumpy (405 pixels of the event window's picture up to 14 levels, all on oval edges). The gate's picture from Windows made again.</li>
 </ul>
 <p><strong>The tests:</strong> 27 files marked <code>// windows only</code> because windows were on Windows only (G56) are now marked <code>// needs windows</code>: the runner runs them where a window can open (Windows, or Linux with a Wayland display) and passes them over elsewhere. The three about Segoe UI keep <code>// windows only</code>. One line of <code>jade_host.ww</code> took for granted that text is a little wider at 2 pixels to the unit (Segoe UI's is, DejaVu Sans' is a little narrower): left out. Results: Windows 1928 passed; WSLg 1589 passed, 3 passed over; the VM 1585 passed, 4 failed, 3 passed over (the one line of <code>graphics.ww</code> about Segoe UI's bold, for the fonts later). <code>bench/spike/linux_step1.ww</code> is the window tried by hand.</p>
+<h2 id="lx-step2">Step 2: the portal</h2>
+<p>2026-11-17, at the user's "go ahead". <code>src/jade/portal_linux.cpp</code> talks to the desktop's portal (xdg-desktop-portal) over D-Bus, libdbus opened when first wanted (<code>libdbus-1.so.3</code>; its few types laid out as its headers lay them out, so that building needs none of its headers):</p>
+<ul>
+<li><strong>The file dialog</strong> (<code>org.freedesktop.portal.FileChooser</code>: OpenFile, SaveFile, OpenFile with <code>directory</code> for a folder): KDE's under KDE, GNOME's under GNOME. The filters, the folder to start in and the suggested name passed on; the answer awaited on the request's path worked out before asking (<code>handle_token</code>), on a connection of the dialog's own, on the thread SystemFileDialog gives it. In front of its window through xdg-foreign: each shown window exported, its handle given to the portal as <code>wayland:&lt;handle&gt;</code>. Where there is no portal (WSLg) the program is told "no file dialog: the desktop has no portal for it".</li>
+<li><strong>Dark or light</strong>: <code>Jade.systemDark</code> reads the portal's <code>color-scheme</code> on Linux (Windows' registry as before).</li>
+<li><strong>The accent colour</strong>, new on both systems: <code>Jade.systemAccent</code> (the portal's <code>accent-color</code> on Linux; on Windows <code>AccentColor</code> under DWM's key, read from WinterWolf as <code>systemDark</code> is), and <code>Palette.customAccent</code>, null at first, which a program sets to it as it sets <code>Palette.dark</code>. Read afresh each time, on one kept connection.</li>
+</ul>
+<p><strong>Found in the VM:</strong> every call to the portal refused ("Unable to open /proc/<em>pid</em>/root"), <code>gdbus</code>'s too: the shell ran with <code>vboxsf</code> as its main group (<code>newgrp</code>), and Linux lets the portal, in the user's own group, look into no process of another group. After logging in again: KDE's dialogs, opened, cancelled and chosen from, in front of the window, and its accent (61, 174, 233). Windows' own accent read as (218, 59, 1). <code>bench/spike/linux_step2.ww</code> is the window tried by hand.</p>
 </main>
 </body>
 </html>

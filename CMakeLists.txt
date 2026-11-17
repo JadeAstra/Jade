@@ -62,6 +62,7 @@ add_library(ww_core OBJECT
 )
 add_library(ww_window OBJECT
   src/jade/platform_win.cpp
+  src/jade/portal_linux.cpp
   src/jade/gl.cpp
   src/jade/render.cpp
   src/jade/api.cpp
@@ -105,7 +106,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       "xdg-decoration|${WW_PROTOCOLS}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml"
       "xdg-activation|${WW_PROTOCOLS}/staging/xdg-activation/xdg-activation-v1.xml"
       "pointer-constraints|${WW_PROTOCOLS}/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"
-      "relative-pointer|${WW_PROTOCOLS}/unstable/relative-pointer/relative-pointer-unstable-v1.xml")
+      "relative-pointer|${WW_PROTOCOLS}/unstable/relative-pointer/relative-pointer-unstable-v1.xml"
+      "xdg-foreign|${WW_PROTOCOLS}/unstable/xdg-foreign/xdg-foreign-unstable-v2.xml")
   set(WW_WAYLAND_FOUND ON)
   foreach(needed ${WW_WAYLAND_CORE} /usr/include/wayland-client-core.h /usr/include/wayland-egl-core.h /usr/include/EGL/egl.h
           /usr/include/xkbcommon/xkbcommon.h /usr/include/xkbcommon/xkbcommon-compose.h)

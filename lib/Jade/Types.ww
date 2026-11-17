@@ -193,8 +193,21 @@ object Palette {
     get() => fg(0x909090)
   val selection : Color
     get() => bg(0xADD8E6)
+  // The colour that stands out on checked boxes, sliders and links: Jade's blue (turned for the
+  // dark theme), unless a program gives one of its own, the system's say, used as it is in
+  // both themes.
+  //   Palette.customAccent = Jade.systemAccent
+  var customAccent : Color? = null
+    set(value) {
+      if (field != value) {
+        field = value
+        Jade.invalidateRenderCaches()
+        Jade.requestRepaint()
+        for (hook in listeners.toList()) { hook() }
+      }
+    }
   val accent : Color
-    get() => fg(0x1565C0)
+    get() => customAccent ?: fg(0x1565C0)
   val selectBlue : Color
     get() => fg(0x2D6CDF)
   val positive : Color

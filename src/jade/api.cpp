@@ -20,6 +20,7 @@
 #include "../sandbox.h"
 #include "../vm.h"
 #include "platform.h"
+#include "portal.h"
 #include "render.h"
 #include "../text/shapes.h"
 
@@ -401,6 +402,19 @@ void registerJade(VM& vm) {
     });
     def("doubleClickTime", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::integer(need(vm).platform().doubleClickTime()); });
     def("screenScale", 0, 0, [](VM& vm, int, Value*) -> Value { return Value::number(need(vm).platform().screenScale()); });
+    // What the desktop's portal says of its look, on Linux (Jade.systemDark, Jade.systemAccent):
+    // true for dark, false for light or no preference, null where it cannot be told; the accent
+    // as 0xRRGGBB, or null. Null elsewhere, and in a sandbox.
+    def("desktopDark", 0, 0, [](VM& vm, int, Value*) -> Value {
+        if (vm.currentHost().isSandbox()) return Value::null();
+        const int scheme = jade::portal::colorScheme();
+        return scheme < 0 ? Value::null() : Value::boolean(scheme == 1);
+    });
+    def("desktopAccent", 0, 0, [](VM& vm, int, Value*) -> Value {
+        uint32_t rgb = 0;
+        if (vm.currentHost().isSandbox() || !jade::portal::accentColor(rgb)) return Value::null();
+        return Value::integer(static_cast<int64_t>(rgb));
+    });
 
     // chooseFile(kind, title, filters, startDir, name, window): the system's dialog for a file
     // to open (0), to save to (1) or a folder (2), waited for here with the program's other
