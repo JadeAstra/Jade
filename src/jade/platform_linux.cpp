@@ -1417,6 +1417,7 @@ bool LinuxPlatform::start(std::string& error) {
     }
     // The desktop made light or dark, or given another accent: told on the pumping thread.
     portal::watchAppearance([this] {
+        WW_TRACE("appearance: the portal says it changed");
         appearanceChanged.store(true);
         wake();
     });
@@ -1533,7 +1534,10 @@ void LinuxPlatform::pump() {
     else wl_display_cancel_read(display);
     wl_display_dispatch_pending(display);
     flushMove();
-    if (appearanceChanged.exchange(false) && onAppearanceChanged) onAppearanceChanged();
+    if (appearanceChanged.exchange(false)) {
+        WW_TRACE("appearance: telling the program (%s)", onAppearanceChanged ? "listening" : "nobody listening");
+        if (onAppearanceChanged) onAppearanceChanged();
+    }
     // Each window's newest configure, once all waiting are read (a copy of the list: drawing
     // may open or close windows).
     const std::vector<LinuxWindow*> now = windows;
