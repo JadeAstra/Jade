@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Background plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: native code made on another core while the VM runs on</h1>
+<p class="lede">Written 2026-11-17, at the user's word ("look at background building first"), after the first call's cost of making regions was cut (0.9.5006, f1c0b48). Regions are still made on the core that runs the program, which stops while they are made: on the first GIF, 14 ms of its 50. Made on another core instead, the program would go on in the VM meanwhile and take the native code once it is ready. Measured below by a simulation; one spike and its gate; nothing built before the questions at the end are answered.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#bp-now">What the first call costs now</a></li>
+<li><a href="#bp-gain">What making regions elsewhere would gain, measured</a></li>
+<li><a href="#bp-reads">What the making reads of the running program</a></li>
+<li><a href="#bp-how">How it would go</a></li>
+<li><a href="#bp-spike">The spike and its gate</a></li>
+<li><a href="#bp-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="bp-now">What the first call costs now</h2>
+<ul>
+<li><strong>When regions are made:</strong> a loop's the second time round its first run (<code>VM::nativeFirst</code>, at its head), from the frame as it is then; a whole function's at a return after its 64th call (<code>VM::nativeReturn</code>); a region dropped past its misses' limit, once more. Each time on the core that came to it, under one lock, the program waiting.</li>
+<li><strong>The first GIF</strong> (the photo at 1000 by 1000, a fresh process): 50 ms, the calls after it 36. 30 functions' regions made in 14 ms: analysis 3.2, liveness 1.3, registers 4.1 (colouring 2.2, spilling 0.8, liveness again 1.1), the code made 2.4, setting up 1.3; 11 attempts refused. The LZW loop's the most (2.8 ms), then <code>__paletteOf</code>'s ten loops (8 ms between them).</li>
+<li><strong>The VM alone</strong> (<code>WW_NATIVE=0</code>) takes 125 ms on every GIF: on this work native code is 3.5 times as fast.</li>
+</ul>
+
+<h2 id="bp-gain">What making regions elsewhere would gain, measured</h2>
+<p>A simulation (scratch, not kept): regions made as now, but each loop's way in written only when a builder on another core would have had them ready, one builder taking the loops in turn; while it waits, the loop runs in the VM, its head its own instruction (one time round in 256 looking at the clock). The time spent making taken off the call's time. The first GIF, six runs each:</p>
+<div class="table"><table>
+<thead><tr><th>The first GIF</th><th class="num">ms</th></tr></thead>
+<tbody>
+<tr><td>Now, made in place</td><td class="num">49.9</td></tr>
+<tr><td>Made by one builder on another core</td><td class="num">39.1</td></tr>
+<tr><td>Made at no cost at all (the bound)</td><td class="num">37.0</td></tr>
+<tr><td>The calls after it</td><td class="num">36</td></tr>
+<tr><td>The VM alone</td><td class="num">125</td></tr>
+</tbody></table></div>
+<p>So some 11 of the 14 ms the first call pays over the later ones. It is no more because a loop waiting for its region runs at the VM's speed meanwhile; it is that much because most of the making goes to loops that run little once made (<code>__paletteOf</code>'s, and the 11 refused, which then cost nothing), while the loops that run long wait a short time against their run. One builder comes within 2 ms of the bound: more would gain little here.</p>
+<p>Beside the time: a program with a window would no longer stop for a region (14 ms is most of a frame at 60 a second).</p>
+
+<h2 id="bp-reads">What the making reads of the running program</h2>
+<p>To run beside the program, the making may read nothing the program changes as it goes on. What it reads now (<code>src/native/regions.cpp</code>):</p>
+<ul>
+<li><strong>The frame's slots, and deep into what they hold:</strong> a list's class, whether it is packed, its store, its items' class, its first item; an object's fields where a place's cache says; an iterator's source; a value's class (some twenty readers, lines 490 to 900, and five places in the analysis). The program changes all of these as it runs: a list that grows moves its items; a field is set; a collection frees what is no longer held. <em>Made safe by:</em> what the frame shows taken on the running core as the build is asked for (each live slot's kind, and for a list, an iterator, an object or a value what the readers ask of it; a few dozen bytes a slot, microseconds), and the readers reading that instead.</li>
+<li><strong>The globals</strong> (<code>nativeGlobalsSeen</code>, one for the process now, set for the making under its lock), and whether a bare name is a member of <code>this</code> (<code>noMemberForRegion</code>, which asks the VM). <em>Made safe by:</em> the globals copied with the frame's facts, and the answers for the function's bare names worked out on the running core beforehand.</li>
+<li><strong>Places' caches:</strong> read atomically already; one that changes after is a guess the region checks, as now.</li>
+<li><strong>What the facts point at</strong> (classes, their fields' layouts, strings): kept from the collector, as roots, until the build's regions are put in or dropped.</li>
+<li><strong>The making's own state:</strong> its time counters, <code>stepProfiles</code> (for <code>WW_PROFILE_NATIVE</code>) and the executable memory, used by one builder at a time; <code>maybeNullFacts</code> is a thread's own already.</li>
+<li><strong>Publishing</strong> (the function's list of regions replaced whole, then each way in written as one aligned word) is made already for several cores running the function as its regions come: unchanged.</li>
+</ul>
+
+<h2 id="bp-how">How it would go</h2>
+<ul>
+<li>Where a region is made now, the running core takes the frame's facts, hands the build to the builder and goes on in the VM, the loop's head its own instruction again (nothing paid while it waits).</li>
+<li>One builder thread, started with the first build (a program that makes none starts none: start-up as now), taking builds in turn and putting each one's regions in as now. A loop that ends before its regions are ready has them the next time it starts.</li>
+<li>As the program ends: the builder told to stop and waited for (at most the build under way, a few ms); builds not begun dropped.</li>
+<li><code>WW_NATIVE_BACKGROUND=0</code>: made in place, as now. <code>WW_NATIVE_BACKGROUND=wait</code>: made by the builder from the facts while the program waits, for checking (below).</li>
+<li>Every core of a program (threads, <code>parallel</code>) hands its builds to the same builder.</li>
+</ul>
+
+<h2 id="bp-spike">The spike and its gate</h2>
+<p><strong>The spike:</strong> the frame's facts, the builder and the settings above built. <strong>Its checks:</strong> every test's native code dumped (<code>WW_DUMP_NATIVE</code>), made in place and made from the facts while waiting: the same, which shows the facts hold all the making reads; the suite on Windows and Linux, in place and in the background; ASan, thread stress, GC stress.</p>
+<p><strong>Gate:</strong> the first GIF 41 ms or less (from 50); the calls after it, the kernels and <code>bench/run.ps1</code> no slower; ww.exe's start-up no slower.</p>
+<p>Then written into this page, timed, committed (a version a build) and reported; registers plan part B after, on the user's word.</p>
+
+<h2 id="bp-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>What the builder reads</h3>
+<ul>
+<li><strong>The frame's facts,</strong> taken on the running core (above): the whole making moves to the builder.</li>
+<li><strong>The live frame, the analysis in place:</strong> the analysis (3.2 ms, the part that reads the frame) stays on the running core, the rest goes to the builder. Less to change; some 4 ms of the 11 kept.</li>
+</ul>
+<p><em>Recommended:</em> the facts. The readers are in one place, and the check above (in place against from the facts, the same code) shows if one is missed.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>How many builders</h3>
+<ul>
+<li><strong>One.</strong></li>
+<li><strong>Several</strong> (up to a quarter of the cores), each build on the first one free.</li>
+</ul>
+<p><em>Recommended:</em> one. Measured within 2 ms of no cost at all on the GIF; several would add the order between builds to think about, for little.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>The suite's runs: in place or in the background</h3>
+<ul>
+<li><strong>In place</strong> for the suite's every run (the runner sets <code>WW_NATIVE_BACKGROUND=0</code>), and one more run in the background at each major check, with the stress runs.</li>
+<li><strong>In the background</strong> always, as programs run.</li>
+</ul>
+<p><em>Recommended:</em> in place, with the background run at major checks. Most tests' loops would end before their regions were ready, so in the background the suite would no longer test native code; in place it tests it as now, and the background run tests the builder.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>On for every program?</h3>
+<ul>
+<li><strong>On</strong> unless <code>WW_NATIVE_BACKGROUND=0</code>.</li>
+<li><strong>Off</strong> unless asked.</li>
+</ul>
+<p><em>Recommended:</em> on. It is what makes a first call quick and keeps a window's frames from stopping; the cost is a second core busy for some milliseconds as a program starts its loops.</p>
+<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
