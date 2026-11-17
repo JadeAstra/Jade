@@ -169,7 +169,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <tr><td class="part">1</td><td>The whole of <code>platform.h</code> but the dialog: pointer shapes, pointer lock, owners, activation, clipboard, waiting and waking, focus.</td><td>The Jade tests that never show a window, run on Linux; a scripted window in WSLg.</td></tr>
 <tr><td class="part">2</td><td>The portal: the file dialog, dark or light, the accent colour (D-Bus).</td><td>The VM: the dialog on KDE.</td></tr>
 <tr><td class="part">3</td><td>Jade's own title bar and edges, where the compositor does not decorate.</td><td>The VM's GNOME session; the KDE session unchanged.</td></tr>
-<tr><td class="part">4</td><td>Composed text (<code>text-input-v3</code>, for input methods), and the examples on both desktops.</td><td>The VM, both sessions; every example opened.</td></tr>
+<tr><td class="part">4</td><td>Composed text (<code>text-input-v3</code>, for input methods), and the examples on both desktops. <em>Put among the future plans by the user (2026-11-17): not part of this work.</em></td><td>The VM, both sessions; every example opened.</td></tr>
 </tbody></table>
 <p><strong>The spike's gate:</strong> a Jade example opens on WSLg and on the Fedora KDE VM, draws as it does on Windows (its shown picture the same bytes as the picture of a window never shown, and within one level of Windows' at scale 1 on Mesa's software renderer; changed from "byte for byte with Windows'" by the user, 2026-11-16, as no graphics driver draws Windows' bytes), resizes without tearing or leaving bands, takes pointer and keyboard input; and ww with no Wayland display (a plain shell) runs non-window programs as before. Where it does not, stop and report.</p>
 
@@ -289,6 +289,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The system's look, followed</strong> (the user's choice, 2026-11-17: by default, and as it changes): Palette.dark and Palette.customAccent take the system's light or dark and accent as a program's first window is shown, until the program sets them itself; changes reach a running program (the portal's <code>SettingChanged</code> on Linux, <code>WM_SETTINGCHANGE</code> and <code>WM_DWMCOLORIZATIONCOLORCHANGED</code> on Windows). Windows' own title bar is dark with a dark theme (<code>DWMWA_USE_IMMERSIVE_DARK_MODE</code>). The widgets example follows it too.</li>
 </ul>
 <p><strong>Tried by the user in the VM's GNOME session:</strong> moving, double click, the window menu, resizing from each edge and corner, the three buttons, maximised and tiled by dragging to the screen's edges, the bar paler when another window is active, the theme followed as it was switched. Matched to GNOME's own look as the user compared them (the shadow made fainter, the icons GNOME's, inactive buttons faded). Windows 1933 passed; WSLg 1593 passed, 3 passed over. KDE, which draws its own title bars, is to be looked at again in its session (the window's buffer now has an alpha, made solid where it is drawn on).</p>
+<p><strong>Where it stops:</strong> steps 0 to 3 done; step 4 (input methods through <code>text-input-v3</code>, every example opened on both desktops) put among the future plans by the user (2026-11-17), with KDE's look checked again after step 3.</p>
 </main>
 </body>
 </html>
