@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #endif
 
 #include "../section_window.h"  // last: this file's own code goes in its section (D161)
@@ -308,6 +309,43 @@ bool accentColor(uint32_t& rgb) {
     });
 }
 
+void watchAppearance(std::function<void()> changed) {
+    const Dbus* d = dbus();
+    if (d == nullptr) return;
+    std::thread([d, changed] {
+        std::string error;
+        Bus bus(*d, error);
+        if (bus.c == nullptr) return;
+        Error e(*d);
+        d->bus_add_match(bus.c, "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged',arg0='org.freedesktop.appearance'", &e.e);
+        if (e.set()) return;
+        for (;;) {
+            DBusMessage* next = d->connection_pop_message(bus.c);
+            if (next == nullptr) {
+                if (!d->connection_read_write(bus.c, -1)) return;  // the bus closed
+                continue;
+            }
+            Message signal(*d, next);
+            if (!d->message_is_signal(signal.m, "org.freedesktop.portal.Settings", "SettingChanged")) continue;
+            DBusMessageIter it;
+            if (!d->message_iter_init(signal.m, &it) || d->message_iter_get_arg_type(&it) != kTypeString) continue;
+            const char* group = nullptr;
+            d->message_iter_get_basic(&it, &group);
+            if (group != nullptr && std::strcmp(group, "org.freedesktop.appearance") == 0) changed();
+        }
+    }).detach();
+}
+
+bool textSetting(const std::string& group, const std::string& key, std::string& value) {
+    return readSetting(group.c_str(), key.c_str(), [&](const Dbus& d, DBusMessageIter& v) {
+        if (d.message_iter_get_arg_type(&v) != kTypeString) return false;
+        const char* text = nullptr;
+        d.message_iter_get_basic(&v, &text);
+        value = text != nullptr ? text : "";
+        return true;
+    });
+}
+
 bool chooseFile(int kind, const std::string& title, const std::vector<std::pair<std::string, std::string>>& filters, const std::string& startDir,
                 const std::string& name, const std::string& parent, std::string& path, std::string& error) {
     const Dbus* d = dbus();
@@ -472,6 +510,8 @@ bool chooseFile(int kind, const std::string& title, const std::vector<std::pair<
 
 int colorScheme() { return -1; }
 bool accentColor(uint32_t&) { return false; }
+bool textSetting(const std::string&, const std::string&, std::string&) { return false; }
+void watchAppearance(std::function<void()>) {}
 bool chooseFile(int, const std::string&, const std::vector<std::pair<std::string, std::string>>&, const std::string&, const std::string&, const std::string&,
                 std::string&, std::string& error) {
     error = "the desktop portal is Linux's";

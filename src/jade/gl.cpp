@@ -72,6 +72,7 @@ bool loadGl(void* (*find)(const char* name), const char*& missing) {
     fetch(gl.Clear, "glClear");
     fetch(gl.Viewport, "glViewport");
     fetch(gl.Scissor, "glScissor");
+    fetch(gl.ColorMask, "glColorMask");
     fetch(gl.ReadPixels, "glReadPixels");
     fetch(gl.GetIntegerv, "glGetIntegerv");
     fetch(gl.GetString, "glGetString");

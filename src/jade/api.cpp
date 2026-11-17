@@ -40,6 +40,7 @@ using jade::Renderer;
 struct Window {
     std::unique_ptr<PlatformWindow> native;
     int surface = 0;
+    int frame = 0;           // the title bar and edges the program draws, where it does (windowFrameSurface)
     bool holdsLoop = false;  // shown: the program goes on while it is
 };
 
@@ -243,6 +244,22 @@ void deliver(int id, const RawEvent& e) {
             dispatch(id, "filesDropped", unit(e.x), unit(e.y), 0, 0, 0, 0, Value::object(files));
             break;
         }
+        // Over the title bar the program draws (from the outer corner of all the window draws).
+        case RawEvent::FrameMove:
+            dispatch(id, "frameMove", unit(e.x), unit(e.y), e.buttons, e.modifiers);
+            break;
+        case RawEvent::FrameDown:
+            dispatch(id, "frameDown", unit(e.x), unit(e.y), e.button, e.modifiers);
+            break;
+        case RawEvent::FrameUp:
+            dispatch(id, "frameUp", unit(e.x), unit(e.y), e.button, e.modifiers);
+            break;
+        case RawEvent::FrameLeave:
+            dispatch(id, "frameLeave");
+            break;
+        case RawEvent::State:
+            dispatch(id, "state", 0, 0, e.state);
+            break;
     }
 }
 
@@ -308,6 +325,8 @@ void hookLoop(VM& vm) {
     vm.loopWait = waitForEvents;
     vm.onLoopWake = wakeLoop;
     state().renderer->platform().onIdle = idle;
+    // The program's Palette, where it follows the system's look, takes it again (Native.ww).
+    state().renderer->platform().onAppearanceChanged = [] { dispatch(0, "appearance"); };
 }
 
 RawEvent syntheticEvent(VM& vm, Window& window, const std::string& kind, Value* args) {
@@ -410,6 +429,11 @@ void registerJade(VM& vm) {
         const int scheme = jade::portal::colorScheme();
         return scheme < 0 ? Value::null() : Value::boolean(scheme == 1);
     });
+    def("desktopSetting", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        std::string value;
+        if (vm.currentHost().isSandbox() || !jade::portal::textSetting(vm.toStr(args[0], "group"), vm.toStr(args[1], "key"), value)) return Value::null();
+        return vm.str(std::move(value));
+    });
     def("desktopAccent", 0, 0, [](VM& vm, int, Value*) -> Value {
         uint32_t rgb = 0;
         if (vm.currentHost().isSandbox() || !jade::portal::accentColor(rgb)) return Value::null();
@@ -504,7 +528,7 @@ void registerJade(VM& vm) {
         window.native->onEvent = [id](const RawEvent& event) { deliver(id, event); };
         window.native->onExpose = [id] {
             auto found = state().windows.find(id);
-            if (found != state().windows.end() && state().renderer != nullptr && state().renderer->present(found->second.surface, *found->second.native))
+            if (found != state().windows.end() && state().renderer != nullptr && state().renderer->present(found->second.surface, *found->second.native, found->second.frame))
                 found->second.native->swapBuffers();
         };
         state().windows[id] = std::move(window);
@@ -634,7 +658,7 @@ void registerJade(VM& vm) {
             r.flush();
             return Value::null();
         }
-        if (r.present(window.surface, *window.native)) {
+        if (r.present(window.surface, *window.native, window.frame)) {
             // Showing it waits for the screen's next refresh; the program's other threads
             // have that time.
             PlatformWindow* native = window.native.get();
@@ -643,6 +667,48 @@ void registerJade(VM& vm) {
         }
         return Value::null();
     });
+    // windowDarkFrame(window, dark): the system's title bar dark or light, with the program's theme.
+    def("windowDarkFrame", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        windowOf(vm, args[0]).native->setDarkFrame(args[1].truthy());
+        return Value::null();
+    });
+
+    // ---- A title bar and edges the program draws (PlatformWindow::clientFrame) ----
+    // Whether it draws them: where the system does not (GNOME, WSLg).
+    def("windowClientFrame", 1, 1, [](VM& vm, int, Value* args) -> Value { return Value::boolean(windowOf(vm, args[0]).native->clientFrame()); });
+    // windowSetFrame(window, bar, shadow): their sizes, in layout units; 0, 0 for none.
+    def("windowSetFrame", 3, 3, [](VM& vm, int, Value* args) -> Value {
+        windowOf(vm, args[0]).native->setFrame(vm.toInt32(args[1], "bar"), vm.toInt32(args[2], "shadow"));
+        return Value::null();
+    });
+    // windowFrameSurface(window, surface or null): the picture of them, shown around what can be
+    // drawn on (which is left for it).
+    def("windowFrameSurface", 2, 2, [](VM& vm, int, Value* args) -> Value {
+        windowOf(vm, args[0]).frame = args[1].isNull() ? 0 : surfaceOf(vm, args[1]);
+        return Value::null();
+    });
+    // windowOuter(window): [width, height] of all the window draws and [x, y] of what can be drawn
+    // on in it, in device pixels, and its state (kMaximized, kFullscreen, kTiled, kActivated).
+    def("windowOuter", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const PlatformWindow& native = *windowOf(vm, args[0]).native;
+        int ox = 0, oy = 0;
+        native.contentOffset(ox, oy);
+        return pairOf(vm, {Value::integer(native.outerWidth()), Value::integer(native.outerHeight()), Value::integer(ox), Value::integer(oy),
+                           Value::integer(native.frameState())});
+    });
+    // windowFrameAction(window, action, x, y): 1 move it (a press on the bar), 2 maximise it or
+    // give it back its size, 3 minimise it, 4 the system's menu for it at (x, y), layout units from
+    // the outer corner.
+    def("windowFrameAction", 4, 4, [](VM& vm, int, Value* args) -> Value {
+        PlatformWindow& native = *windowOf(vm, args[0]).native;
+        const int64_t action = vm.toInt(args[1], "action");
+        if (action < 1 || action > 4) throw vm.runtimeError(Thrown::IllegalArgumentException, "a frame action is 1 to 4");
+        const double scale = native.scale();
+        native.frameAction(static_cast<jade::FrameAction>(action), static_cast<int>(std::lround(num(vm, args[2]) * scale)),
+                           static_cast<int>(std::lround(num(vm, args[3]) * scale)));
+        return Value::null();
+    });
+
     // windowSend(window, kind, x, y, n1, n2, f1, f2, extra): an event made up by a test,
     // which then goes the way a real one does.
     def("windowSend", 9, 9, [](VM& vm, int, Value* args) -> Value {

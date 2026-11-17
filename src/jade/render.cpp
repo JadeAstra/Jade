@@ -817,21 +817,38 @@ void Renderer::flush() {
     }
 }
 
-bool Renderer::present(int id, PlatformWindow& window) {
+bool Renderer::present(int id, PlatformWindow& window, int frameId) {
     flush();
     Surface* s = surface(id);
     if (s == nullptr || !window.makeCurrent()) return false;
-    const int width = window.width(), height = window.height();
+    const int width = window.outerWidth(), height = window.outerHeight();
     if (width < 1 || height < 1) return false;
+    int ox = 0, oy = 0;
+    window.contentOffset(ox, oy);
+    Surface* frame = frameId != 0 ? surface(frameId) : nullptr;
     gl.BindFramebuffer(kFramebuffer, 0);
     glViewport(0, 0, width, height);
+    glClearColor(0, 0, 0, frame != nullptr ? 0 : 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // The surfaces as they are, pixel for pixel from the top left corner: on the screen y grows
+    // upwards, so they are turned over on the way. Copied, not drawn as textured squares: less
+    // work. The frame first, then what can be drawn on in its place in it.
+    if (frame != nullptr) {
+        gl.BindFramebuffer(kReadFramebuffer, frame->framebuffer);
+        gl.BlitFramebuffer(0, 0, frame->width, frame->height, 0, height, frame->width, height - frame->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+    gl.BindFramebuffer(kReadFramebuffer, s->framebuffer);
+    gl.BlitFramebuffer(0, 0, s->width, s->height, ox, height - oy, ox + s->width, height - oy - s->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // Solid where it can be drawn on: a picture may leave parts of it see-through, and where the
+    // window has room for a shadow (and so an alpha of its own) the screen would show through.
+    gl.BindFramebuffer(kFramebuffer, 0);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(ox, height - oy - window.height(), window.width(), window.height());
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    // The surface as it is, pixel for pixel from the top left corner: on the screen y grows
-    // upwards, so it is turned over on the way. Copied, not drawn as a textured square: less work.
-    gl.BindFramebuffer(kReadFramebuffer, s->framebuffer);
-    gl.BlitFramebuffer(0, 0, s->width, s->height, 0, height, s->width, height - s->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    gl.BindFramebuffer(kFramebuffer, 0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_SCISSOR_TEST);
     return true;
 }
 

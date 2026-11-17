@@ -120,6 +120,7 @@ struct GlApi {
     void(APIENTRY* Clear)(GLbitfield);
     void(APIENTRY* Viewport)(GLint, GLint, GLsizei, GLsizei);
     void(APIENTRY* Scissor)(GLint, GLint, GLsizei, GLsizei);
+    void(APIENTRY* ColorMask)(GLboolean, GLboolean, GLboolean, GLboolean);
     void(APIENTRY* ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
     void(APIENTRY* GetIntegerv)(GLenum, GLint*);
     const GLubyte*(APIENTRY* GetString)(GLenum);
@@ -142,6 +143,7 @@ extern GlApi gl;
 #define glClear ::ww::jade::gl.Clear
 #define glViewport ::ww::jade::gl.Viewport
 #define glScissor ::ww::jade::gl.Scissor
+#define glColorMask ::ww::jade::gl.ColorMask
 #define glReadPixels ::ww::jade::gl.ReadPixels
 #define glGetIntegerv ::ww::jade::gl.GetIntegerv
 #define glGetString ::ww::jade::gl.GetString

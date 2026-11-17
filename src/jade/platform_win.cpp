@@ -270,6 +270,19 @@ public:
         SetForegroundWindow(hwnd);
     }
     void requestAttention() override { FlashWindow(hwnd, TRUE); }
+    // Windows 11's dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE), from dwmapi found as it runs;
+    // the frame drawn again at once.
+    void setDarkFrame(bool dark) override {
+        using SetAttribute = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+        static const SetAttribute set = [] {
+            HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+            return dwm != nullptr ? reinterpret_cast<SetAttribute>(reinterpret_cast<void*>(GetProcAddress(dwm, "DwmSetWindowAttribute"))) : nullptr;
+        }();
+        if (set == nullptr) return;
+        const BOOL on = dark ? TRUE : FALSE;
+        if (SUCCEEDED(set(hwnd, 20, &on, sizeof on)))
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     void setOwner(PlatformWindow* owner) override {
         // The owner of a top-level window is kept where a child keeps its parent.
         HWND to = owner != nullptr ? static_cast<WinWindow*>(owner)->hwnd : nullptr;
@@ -872,6 +885,15 @@ LRESULT WinWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
             e.kind = RawEvent::Close;
             emit(e);
             return 0;  // closing is the program's to do
+
+        // Apps made light or dark, or another accent chosen, in Settings (each window is told).
+        case WM_SETTINGCHANGE:
+            if (lParam != 0 && wcscmp(reinterpret_cast<const wchar_t*>(lParam), L"ImmersiveColorSet") == 0 && platform.onAppearanceChanged)
+                platform.onAppearanceChanged();
+            return DefWindowProcW(hwnd, message, wParam, lParam);
+        case 0x0320:  // WM_DWMCOLORIZATIONCOLORCHANGED: the accent
+            if (platform.onAppearanceChanged) platform.onAppearanceChanged();
+            return DefWindowProcW(hwnd, message, wParam, lParam);
         default:
             return DefWindowProcW(hwnd, message, wParam, lParam);
     }

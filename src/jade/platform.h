@@ -56,6 +56,13 @@ struct RawEvent {
         Scale,         // scale: the window is now on a screen of another density
         Close,         // the user asked for the window to close; nothing has been closed
         FilesDropped,  // files; x, y
+        // Over a title bar the program draws itself (PlatformWindow::clientFrame), in device pixels
+        // from the outer corner of all it draws: x, y; button; buttons; modifiers.
+        FrameMove,
+        FrameDown,
+        FrameUp,
+        FrameLeave,
+        State,         // state: what the window now is (kMaximized and the rest)
     };
     Kind kind = PointerMove;
     int x = 0, y = 0;
@@ -68,7 +75,13 @@ struct RawEvent {
     double scale = 1;
     std::string text;
     std::vector<std::string> files;
+    int state = 0;
 };
+
+// A window's state as the system says it (RawEvent::State, PlatformWindow::frameState).
+const int kMaximized = 1, kFullscreen = 2, kTiled = 4, kActivated = 8;
+// What a title bar the program draws itself asks of the system (PlatformWindow::frameAction).
+enum class FrameAction : int { Move = 1, ToggleMaximized = 2, Minimize = 3, Menu = 4 };
 
 // The shapes a pointer can take, in the order of the toolkit's CursorKind.
 enum class Cursor : int { Default, ResizeH, ResizeV, Text, Hand, Move, ResizeNwse, ResizeNesw, Crosshair };
@@ -127,6 +140,23 @@ public:
     // Drawing: the one OpenGL context made current on this window, and its picture shown.
     virtual bool makeCurrent() = 0;
     virtual void swapBuffers() = 0;
+
+    // Where the system draws no title bar or edges for the window (GNOME, and WSLg): the program
+    // draws them, around what can be drawn on, as a frame of `bar` units above it and `shadow`
+    // units of shadow around (the edges dragged to resize it, gone while it is maximised or
+    // tiled). The window is then outerWidth() by outerHeight() device pixels, what can be drawn
+    // on at contentOffset() in it; pointer events over the bar come as Frame events, over the
+    // shadow they resize the window. Nothing of this where the system decorates the window.
+    virtual bool clientFrame() const { return false; }
+    // The title bar the system draws, dark or light, to go with the program's own theme (Windows).
+    virtual void setDarkFrame(bool dark) { (void)dark; }
+    virtual void setFrame(int bar, int shadow) { (void)bar; (void)shadow; }
+    virtual int outerWidth() const { return width(); }
+    virtual int outerHeight() const { return height(); }
+    virtual void contentOffset(int& x, int& y) const { x = y = 0; }
+    virtual int frameState() const { return 0; }
+    // `x`, `y` (for Menu): device pixels from the outer corner.
+    virtual void frameAction(FrameAction action, int x, int y) { (void)action; (void)x; (void)y; }
 };
 
 class Platform {
@@ -153,6 +183,9 @@ public:
     // While the system runs a loop of its own (an edge or the title bar being dragged), it
     // calls this now and then so that the program's timers go on.
     std::function<void()> onIdle;
+    // Called, on the thread that pumps events, when the user has made the system light or dark,
+    // or chosen another accent colour.
+    std::function<void()> onAppearanceChanged;
 
     virtual std::string clipboardText() = 0;
     virtual void setClipboardText(const std::string& text) = 0;

@@ -371,6 +371,15 @@ public:
     Cursor cursor = Cursor::Default;
     PointerMode pointerMode = PointerMode::Normal;
     zwp_locked_pointer_v1* lock = nullptr;  // while the pointer mode is Locked
+    // A frame the program draws (PlatformWindow::clientFrame): its bar and shadow, in the
+    // compositor's units, and the window's state as the compositor last said it.
+    bool framed = false;
+    int barUnits = 0, shadowUnits = 0;
+    int state = 0, pendingState = 0;
+    // Which part of it the pointer is over (Zone), and the part a press began in, which keeps
+    // the pointer's moves until every button is let go.
+    enum Zone { Outside, Content, Bar, Edge };
+    Zone zone = Outside, heldZone = Outside;
     zxdg_exported_v2* exported = nullptr;   // while shown: its name for other programs' windows (the portal's dialogs)
     std::string exportHandle;               // that name, once given; read by a dialog's thread (LinuxPlatform::handlesMutex)
     bool lockActive = false;                // the compositor holds the pointer now (it may let go and take it again)
@@ -422,6 +431,50 @@ public:
     }
     void toFront() override;
     void requestAttention() override;
+
+    // ---- A frame the program draws ----
+    bool clientFrame() const override;
+    void setFrame(int bar, int shadow) override {
+        framed = clientFrame() && (bar > 0 || shadow > 0);
+        barUnits = framed ? std::max(0, bar) : 0;
+        shadowUnits = framed ? std::max(0, shadow) : 0;
+        if (configured) sized();
+        applyLimits();
+    }
+    // The shadow and the bar as they are now: no shadow (nor edges to drag) while the window is
+    // maximised, tiled or full screen, and no bar full screen.
+    int shadowNow() const { return framed && (state & (kMaximized | kFullscreen | kTiled)) == 0 ? shadowUnits : 0; }
+    int barNow() const { return framed && (state & kFullscreen) == 0 ? barUnits : 0; }
+    int device(int units) const { return static_cast<int>(std::lround(units * scale())); }
+    int outerWidth() const override { return width() + 2 * device(shadowNow()); }
+    int outerHeight() const override { return height() + device(barNow()) + 2 * device(shadowNow()); }
+    void contentOffset(int& ox, int& oy) const override {
+        ox = device(shadowNow());
+        oy = device(shadowNow()) + device(barNow());
+    }
+    int frameState() const override { return state; }
+    void frameAction(FrameAction action, int fx, int fy) override;
+    // The part of the window at a point (device pixels from the outer corner), and the edge or
+    // corner (xdg_toplevel's resize_edge) there.
+    Zone zoneAt(double px, double py) const {
+        if (!framed) return Content;
+        int ox = 0, oy = 0;
+        contentOffset(ox, oy);
+        if (px >= ox && px < ox + width() && py >= oy && py < oy + height()) return Content;
+        if (px >= ox && px < ox + width() && py >= oy - device(barNow()) && py < oy) return Bar;
+        return Edge;
+    }
+    uint32_t edgeAt(double px, double py) const {
+        int ox = 0, oy = 0;
+        contentOffset(ox, oy);
+        const double x0 = ox, y0 = oy - device(barNow()), x1 = ox + width(), y1 = oy + height();
+        const double corner = device(16);
+        const bool beyondY = py < y0 || py >= y1, beyondX = px < x0 || px >= x1;
+        const bool left = px < x0 || (px < x0 + corner && beyondY), right = px >= x1 || (px >= x1 - corner && beyondY);
+        const bool top = py < y0 || (py < y0 + corner && beyondX), bottom = py >= y1 || (py >= y1 - corner && beyondX);
+        return (top ? XDG_TOPLEVEL_RESIZE_EDGE_TOP : 0) | (bottom ? XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM : 0) | (left ? XDG_TOPLEVEL_RESIZE_EDGE_LEFT : 0) |
+               (right ? XDG_TOPLEVEL_RESIZE_EDGE_RIGHT : 0);
+    }
     void setOwner(PlatformWindow* to) override {
         owner = static_cast<LinuxWindow*>(to);
         if (toplevel != nullptr) xdg_toplevel_set_parent(toplevel, owner != nullptr ? owner->toplevel : nullptr);
@@ -439,12 +492,14 @@ public:
         if (toplevel == nullptr) return;
         const double s = scale();
         auto units = [&](int px) { return px > 0 ? std::max(1, static_cast<int>(std::lround(px / s))) : 0; };
+        // The compositor's sizes are the window's own, a bar the program draws in them.
+        const int bar = barNow();
         if (!resizable) {
-            xdg_toplevel_set_min_size(toplevel, logicalWidth, logicalHeight);
-            xdg_toplevel_set_max_size(toplevel, logicalWidth, logicalHeight);
+            xdg_toplevel_set_min_size(toplevel, logicalWidth, logicalHeight + bar);
+            xdg_toplevel_set_max_size(toplevel, logicalWidth, logicalHeight + bar);
         } else {
-            xdg_toplevel_set_min_size(toplevel, units(minWidth), units(minHeight));
-            xdg_toplevel_set_max_size(toplevel, maxWidth > 0 && maxHeight > 0 ? units(maxWidth) : 0, maxWidth > 0 && maxHeight > 0 ? units(maxHeight) : 0);
+            xdg_toplevel_set_min_size(toplevel, units(minWidth), minHeight > 0 || bar > 0 ? units(minHeight) + bar : 0);
+            xdg_toplevel_set_max_size(toplevel, maxWidth > 0 && maxHeight > 0 ? units(maxWidth) : 0, maxWidth > 0 && maxHeight > 0 ? units(maxHeight) + bar : 0);
         }
     }
     // The picture's size from the window's size and scale: the EGL window, and the viewport that
@@ -459,13 +514,24 @@ public:
         const bool first = !configured;
         configured = true;
         const int oldWidth = logicalWidth, oldHeight = logicalHeight;
+        const int oldShadow = shadowNow(), oldBar = barNow(), oldState = state;
+        state = pendingState;
+        // The size is the window's own, a bar the program draws in it: what can be drawn on is
+        // what is left under the bar.
         if (pendingWidth > 0 && pendingHeight > 0) {
             logicalWidth = pendingWidth;
-            logicalHeight = pendingHeight;
+            logicalHeight = std::max(1, pendingHeight - barNow());
         }
-        WW_TRACE("configure %u done: %d x %d", configureSerial, logicalWidth, logicalHeight);
+        WW_TRACE("configure %u done: %d x %d, state %d", configureSerial, logicalWidth, logicalHeight, state);
         const int64_t began = nowMillis();
-        if (first || oldWidth != logicalWidth || oldHeight != logicalHeight) sized();
+        if (state != oldState) {
+            RawEvent e;
+            e.kind = RawEvent::State;
+            e.state = state;
+            emit(e);
+            if (oldBar != barNow()) applyLimits();
+        }
+        if (first || oldWidth != logicalWidth || oldHeight != logicalHeight || oldShadow != shadowNow() || oldBar != barNow()) sized();
         at("configure: the program drawing");
         if (onExpose) onExpose();
         if (const int64_t took = nowMillis() - began; took > 50) WW_TRACE("configure: the program's answer took %lld ms", static_cast<long long>(took));
@@ -502,6 +568,7 @@ public:
     xdg_activation_v1* activation = nullptr;
     zxdg_exporter_v2* exporter = nullptr;
     std::mutex handlesMutex;           // the windows' exportHandle, which a dialog's thread reads
+    std::atomic<bool> appearanceChanged{false};  // the desktop made light or dark (portal::watchAppearance's thread)
     zwp_pointer_constraints_v1* constraints = nullptr;
     zwp_relative_pointer_manager_v1* relativePointers = nullptr;
     zwp_relative_pointer_v1* relativePointer = nullptr;
@@ -760,6 +827,16 @@ void onToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t heigh
     }
     w->pendingWidth = width;
     w->pendingHeight = height;
+    int now = 0;
+    for (size_t i = 0; i + 4 <= states->size; i += 4) {
+        uint32_t s;
+        std::memcpy(&s, static_cast<const char*>(states->data) + i, 4);
+        if (s == XDG_TOPLEVEL_STATE_MAXIMIZED) now |= kMaximized;
+        else if (s == XDG_TOPLEVEL_STATE_FULLSCREEN) now |= kFullscreen;
+        else if (s == XDG_TOPLEVEL_STATE_ACTIVATED) now |= kActivated;
+        else if (s >= XDG_TOPLEVEL_STATE_TILED_LEFT && s <= XDG_TOPLEVEL_STATE_TILED_BOTTOM) now |= kTiled;
+    }
+    w->pendingState = now;
 }
 void onToplevelClose(void* data, xdg_toplevel*) {
     static_cast<LinuxWindow*>(data)->platform.flushMove();
@@ -789,50 +866,97 @@ const zxdg_toplevel_decoration_v1_listener decorationListener = {onDecorationCon
 
 // ---- The pointer ----
 
+// Where the pointer is in what can be drawn on, as the program counts: device pixels from its
+// corner, the frame the program draws (if any) left out.
+void contentPoint(const LinuxPlatform& p, const LinuxWindow& w, int& x, int& y) {
+    int ox = 0, oy = 0;
+    w.contentOffset(ox, oy);
+    x = static_cast<int>(std::floor(p.pointerX - ox));
+    y = static_cast<int>(std::floor(p.pointerY - oy));
+}
+// The pointer gone from one part of a window to another (LinuxWindow::Zone): the part it left
+// told so, the pointer's shape set for the part it is in.
+void enterZone(LinuxPlatform& p, LinuxWindow& w, LinuxWindow::Zone z) {
+    if (w.zone == z) return;
+    p.flushMove();
+    const LinuxWindow::Zone left = w.zone;
+    w.zone = z;
+    if (left == LinuxWindow::Content || left == LinuxWindow::Bar) {
+        RawEvent e;
+        e.kind = left == LinuxWindow::Content ? RawEvent::PointerLeave : RawEvent::FrameLeave;
+        w.emit(e);
+    }
+    if (z != LinuxWindow::Outside && p.pointerFocus == &w) p.showCursor();
+}
+
 void onPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surface, wl_fixed_t sx, wl_fixed_t sy) {
     auto& p = *static_cast<LinuxPlatform*>(data);
     p.flushMove();
     p.pointerFocus = p.windowOf(surface);
     p.pointerSerial = serial;
     if (p.pointerFocus == nullptr) return;
-    const double s = p.pointerFocus->scale();
+    LinuxWindow& w = *p.pointerFocus;
+    const double s = w.scale();
     p.pointerX = wl_fixed_to_double(sx) * s;
     p.pointerY = wl_fixed_to_double(sy) * s;
-    p.showCursor();
+    w.zone = LinuxWindow::Outside;
+    const LinuxWindow::Zone z = w.zoneAt(p.pointerX, p.pointerY);
+    enterZone(p, w, z);
+    if (z == LinuxWindow::Edge) return;
     RawEvent e;
-    e.kind = RawEvent::PointerMove;
-    e.x = static_cast<int>(std::floor(p.pointerX));
-    e.y = static_cast<int>(std::floor(p.pointerY));
-    e.buttons = p.pointerFocus->buttons;
+    e.kind = z == LinuxWindow::Content ? RawEvent::PointerMove : RawEvent::FrameMove;
+    if (z == LinuxWindow::Content) {
+        contentPoint(p, w, e.x, e.y);
+    } else {
+        e.x = static_cast<int>(std::floor(p.pointerX));
+        e.y = static_cast<int>(std::floor(p.pointerY));
+    }
+    e.buttons = w.buttons;
     e.modifiers = p.modifiers();
-    p.pointerFocus->emit(e);
+    w.emit(e);
 }
 void onPointerLeave(void* data, wl_pointer*, uint32_t, wl_surface*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
     p.flushMove();
     if (p.pointerFocus != nullptr) {
-        RawEvent e;
-        e.kind = RawEvent::PointerLeave;
-        p.pointerFocus->emit(e);
+        LinuxWindow& w = *p.pointerFocus;
+        w.heldZone = LinuxWindow::Outside;
+        enterZone(p, w, LinuxWindow::Outside);
     }
     p.pointerFocus = nullptr;
 }
 void onPointerMotion(void* data, wl_pointer*, uint32_t, wl_fixed_t sx, wl_fixed_t sy) {
     auto& p = *static_cast<LinuxPlatform*>(data);
     if (p.pointerFocus == nullptr) return;
-    const double s = p.pointerFocus->scale();
+    LinuxWindow& w = *p.pointerFocus;
+    const double s = w.scale();
     const double nx = wl_fixed_to_double(sx) * s, ny = wl_fixed_to_double(sy) * s;
-    RawEvent e;
-    e.kind = RawEvent::PointerMove;
-    e.x = static_cast<int>(std::floor(nx));
-    e.y = static_cast<int>(std::floor(ny));
-    e.dx = nx - p.pointerX;
-    e.dy = ny - p.pointerY;
-    e.buttons = p.pointerFocus->buttons;
-    e.modifiers = p.modifiers();
+    const double dx = nx - p.pointerX, dy = ny - p.pointerY;
     p.pointerX = nx;
     p.pointerY = ny;
-    p.moved(p.pointerFocus, e);
+    const LinuxWindow::Zone z = w.heldZone != LinuxWindow::Outside ? w.heldZone : w.zoneAt(nx, ny);
+    enterZone(p, w, z);
+    if (z == LinuxWindow::Content) {
+        RawEvent e;
+        e.kind = RawEvent::PointerMove;
+        contentPoint(p, w, e.x, e.y);
+        e.dx = dx;
+        e.dy = dy;
+        e.buttons = w.buttons;
+        e.modifiers = p.modifiers();
+        p.moved(&w, e);
+    } else if (z == LinuxWindow::Bar) {
+        p.flushMove();
+        RawEvent e;
+        e.kind = RawEvent::FrameMove;
+        e.x = static_cast<int>(std::floor(nx));
+        e.y = static_cast<int>(std::floor(ny));
+        e.buttons = w.buttons;
+        e.modifiers = p.modifiers();
+        w.emit(e);
+    } else if (z == LinuxWindow::Edge) {
+        p.showCursor();  // the edge's or the corner's shape, as the pointer goes round
+    }
 }
 void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state) {
     auto& p = *static_cast<LinuxPlatform*>(data);
@@ -845,16 +969,37 @@ void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_
     const bool down = state == WL_POINTER_BUTTON_STATE_PRESSED;
     LinuxWindow& w = *p.pointerFocus;
     if (down) p.inputSerial = serial;
+    // A press keeps the pointer's moves for the part it began in, until every button is let go.
+    const LinuxWindow::Zone z = w.heldZone != LinuxWindow::Outside ? w.heldZone : w.zoneAt(p.pointerX, p.pointerY);
     if (down) w.buttons |= 1 << which;
     else w.buttons &= ~(1 << which);
-    RawEvent e;
-    e.kind = down ? RawEvent::PointerDown : RawEvent::PointerUp;
-    e.x = static_cast<int>(std::floor(p.pointerX));
-    e.y = static_cast<int>(std::floor(p.pointerY));
-    e.button = which;
-    e.buttons = w.buttons;
-    e.modifiers = p.modifiers();
-    w.emit(e);
+    if (down && w.heldZone == LinuxWindow::Outside) w.heldZone = z;
+    if (z == LinuxWindow::Edge) {
+        // An edge or a corner dragged: the compositor resizes the window, and the button's
+        // letting go comes to it, not here.
+        if (down && which == 0 && w.resizable && w.toplevel != nullptr && p.seat != nullptr) {
+            xdg_toplevel_resize(w.toplevel, p.seat, serial, w.edgeAt(p.pointerX, p.pointerY));
+            w.buttons = 0;
+            w.heldZone = LinuxWindow::Outside;
+        }
+    } else {
+        RawEvent e;
+        e.kind = z == LinuxWindow::Content ? (down ? RawEvent::PointerDown : RawEvent::PointerUp) : (down ? RawEvent::FrameDown : RawEvent::FrameUp);
+        if (z == LinuxWindow::Content) {
+            contentPoint(p, w, e.x, e.y);
+        } else {
+            e.x = static_cast<int>(std::floor(p.pointerX));
+            e.y = static_cast<int>(std::floor(p.pointerY));
+        }
+        e.button = which;
+        e.buttons = w.buttons;
+        e.modifiers = p.modifiers();
+        w.emit(e);
+    }
+    if (!down && w.buttons == 0 && p.pointerFocus == &w) {
+        w.heldZone = LinuxWindow::Outside;
+        enterZone(p, w, w.zoneAt(p.pointerX, p.pointerY));
+    }
 }
 // A wheel's turn: in notches where the compositor gives them (value120, or discrete steps),
 // else from the distance (a touchpad's, 10 units a notch); up and left positive.
@@ -876,12 +1021,11 @@ void onPointerAxisValue120(void* data, wl_pointer*, uint32_t axis, int32_t value
 void onPointerAxisDiscrete(void* data, wl_pointer* pointer, uint32_t axis, int32_t discrete) { onPointerAxisValue120(data, pointer, axis, discrete * 120); }
 void onPointerFrame(void* data, wl_pointer*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
-    if (p.pointerFocus != nullptr && (p.wheelX != 0 || p.wheelY != 0)) {
+    if (p.pointerFocus != nullptr && p.pointerFocus->zone == LinuxWindow::Content && (p.wheelX != 0 || p.wheelY != 0)) {
         p.flushMove();
         RawEvent e;
         e.kind = RawEvent::Wheel;
-        e.x = static_cast<int>(std::floor(p.pointerX));
-        e.y = static_cast<int>(std::floor(p.pointerY));
+        contentPoint(p, *p.pointerFocus, e.x, e.y);
         e.dx = p.wheelX;
         e.dy = p.wheelY;
         e.modifiers = p.modifiers();
@@ -1035,8 +1179,10 @@ void onDrop(void* data, wl_data_device*) {
     if (offer == nullptr) return;
     RawEvent e;
     e.kind = RawEvent::FilesDropped;
-    e.x = static_cast<int>(std::floor(p.dropX));
-    e.y = static_cast<int>(std::floor(p.dropY));
+    int ox = 0, oy = 0;
+    if (w != nullptr) w->contentOffset(ox, oy);
+    e.x = static_cast<int>(std::floor(p.dropX - ox));
+    e.y = static_cast<int>(std::floor(p.dropY - oy));
     if (w != nullptr && p.hasType(offer, "text/uri-list")) {
         const std::string list = p.readOffer(offer, "text/uri-list");
         size_t at = 0;
@@ -1158,8 +1304,7 @@ void onRelativeMotion(void* data, zwp_relative_pointer_v1*, uint32_t, uint32_t, 
     const double s = w->scale();
     RawEvent e;
     e.kind = RawEvent::PointerMove;
-    e.x = static_cast<int>(std::floor(p.pointerX));
-    e.y = static_cast<int>(std::floor(p.pointerY));
+    contentPoint(p, *w, e.x, e.y);
     e.dx = wl_fixed_to_double(dx) * s;
     e.dy = wl_fixed_to_double(dy) * s;
     e.buttons = w->buttons;
@@ -1270,6 +1415,11 @@ bool LinuxPlatform::start(std::string& error) {
         dataDevice = wl_data_device_manager_get_data_device(dataManager, seat);
         wl_data_device_add_listener(dataDevice, &dataDeviceListener, this);
     }
+    // The desktop made light or dark, or given another accent: told on the pumping thread.
+    portal::watchAppearance([this] {
+        appearanceChanged.store(true);
+        wake();
+    });
     // A launcher's token, to bring the first window shown to the front; not handed on to
     // programs this one starts.
     if (const char* token = std::getenv("XDG_ACTIVATION_TOKEN")) {
@@ -1327,7 +1477,7 @@ bool LinuxPlatform::start(std::string& error) {
         return false;
     }
     const EGLint wanted[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
-                             EGL_ALPHA_SIZE, 0, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
+                             EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};  // alpha: a frame's shadow (Renderer::present)
     EGLint count = 0;
     if (!egl.ChooseConfig(eglDisplay, wanted, &config, 1, &count) || count < 1) {
         error = "no EGL configuration that OpenGL can draw in";
@@ -1383,6 +1533,7 @@ void LinuxPlatform::pump() {
     else wl_display_cancel_read(display);
     wl_display_dispatch_pending(display);
     flushMove();
+    if (appearanceChanged.exchange(false) && onAppearanceChanged) onAppearanceChanged();
     // Each window's newest configure, once all waiting are read (a copy of the list: drawing
     // may open or close windows).
     const std::vector<LinuxWindow*> now = windows;
@@ -1403,7 +1554,7 @@ void LinuxPlatform::wait(int64_t millis) {
     struct Out {
         ~Out() { at("the program (between events)"); }
     } out;
-    if (!posted.empty()) return;
+    if (!posted.empty() || appearanceChanged.load()) return;
     for (LinuxWindow* w : windows)
         if (w->configurePending) return;
     if (wl_display_prepare_read(display) != 0) return;  // events read already, for the pump
@@ -1486,7 +1637,7 @@ void LinuxPlatform::pressKey(uint32_t code, bool down, bool repeat) {
 void LinuxPlatform::showCursor() {
     LinuxWindow* w = pointerFocus;
     if (w == nullptr || pointer == nullptr) return;
-    if (w->pointerMode != PointerMode::Normal) {
+    if (w->pointerMode != PointerMode::Normal && w->zone == LinuxWindow::Content) {
         wl_pointer_set_cursor(pointer, pointerSerial, nullptr, 0, 0);
         return;
     }
@@ -1504,9 +1655,31 @@ void LinuxPlatform::showCursor() {
         {"default", "left_ptr"}, {"ew-resize", "sb_h_double_arrow"}, {"ns-resize", "sb_v_double_arrow"}, {"text", "xterm"}, {"pointer", "hand2"},
         {"move", "fleur"},       {"nwse-resize", "bottom_right_corner"}, {"nesw-resize", "bottom_left_corner"}, {"crosshair", "crosshair"},
     };
-    const int index = std::clamp(static_cast<int>(w->cursor), 0, 8);
-    wl_cursor* shape = wl_cursor_theme_get_cursor(cursorTheme, names[index][0]);
-    if (shape == nullptr) shape = wl_cursor_theme_get_cursor(cursorTheme, names[index][1]);
+    // Over the frame the program draws: the plain arrow on the bar, an edge's or a corner's
+    // shape on the shadow round the window (its edges, to drag).
+    static const struct {
+        uint32_t edge;
+        const char* names[2];
+    } edges[] = {
+        {XDG_TOPLEVEL_RESIZE_EDGE_TOP, {"n-resize", "top_side"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM, {"s-resize", "bottom_side"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_LEFT, {"w-resize", "left_side"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_RIGHT, {"e-resize", "right_side"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT, {"nw-resize", "top_left_corner"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT, {"ne-resize", "top_right_corner"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT, {"sw-resize", "bottom_left_corner"}},
+        {XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT, {"se-resize", "bottom_right_corner"}},
+    };
+    const char* const* chosen = names[std::clamp(static_cast<int>(w->cursor), 0, 8)];
+    if (w->zone == LinuxWindow::Bar || (w->zone == LinuxWindow::Edge && !w->resizable)) {
+        chosen = names[0];
+    } else if (w->zone == LinuxWindow::Edge) {
+        const uint32_t edge = w->edgeAt(pointerX, pointerY);
+        for (const auto& e : edges)
+            if (e.edge == edge) chosen = e.names;
+    }
+    wl_cursor* shape = wl_cursor_theme_get_cursor(cursorTheme, chosen[0]);
+    if (shape == nullptr) shape = wl_cursor_theme_get_cursor(cursorTheme, chosen[1]);
     if (shape == nullptr) shape = wl_cursor_theme_get_cursor(cursorTheme, "left_ptr");
     if (shape == nullptr || shape->image_count == 0) return;
     wl_cursor_image* image = shape->images[0];
@@ -1640,19 +1813,25 @@ void LinuxWindow::sized() {
     WW_TRACE("sized: logical %d x %d, scale %.4f, device %d x %d, configured %d, egl window %s, viewport %s", logicalWidth, logicalHeight, scale(), w, h, configured ? 1 : 0,
              eglWindow != nullptr ? "resized" : "made", viewport != nullptr ? "set" : "none");
     if (configured) {
+        // All it draws: what can be drawn on and any frame the program draws around it.
+        const int ow = outerWidth(), oh = outerHeight();
+        const int shadow = shadowNow(), bar = barNow();
         if (eglWindow == nullptr) {
-            eglWindow = wl_egl_window_create(surface, w, h);
+            eglWindow = wl_egl_window_create(surface, ow, oh);
             if (eglWindow != nullptr) eglSurface = platform.windowSurface(eglWindow);
         } else {
-            wl_egl_window_resize(eglWindow, w, h, 0, 0);
+            wl_egl_window_resize(eglWindow, ow, oh, 0, 0);
         }
         // The picture drawn at the scale, shown at the window's size: by the viewport where the
         // scale is fractional, else by the buffer's own (whole) scale.
         if (viewport != nullptr) {
-            wp_viewport_set_destination(viewport, logicalWidth, logicalHeight);
+            wp_viewport_set_destination(viewport, logicalWidth + 2 * shadow, logicalHeight + bar + 2 * shadow);
         } else if (platform.compositorVersion >= 3) {
             wl_surface_set_buffer_scale(surface, std::max(1, static_cast<int>(std::lround(scale()))));
         }
+        // Which of it is the window, the shadow around not: what the compositor places, tiles
+        // and sizes.
+        if (framed && shell != nullptr) xdg_surface_set_window_geometry(shell, shadow, shadow, logicalWidth, logicalHeight + bar);
     }
     RawEvent e;
     e.kind = RawEvent::Resize;
@@ -1671,6 +1850,40 @@ void LinuxWindow::setPointerMode(PointerMode mode) {
     pointerMode = mode;
     platform.lockPointer(*this, mode == PointerMode::Locked);
     if (platform.pointerFocus == this) platform.showCursor();
+}
+
+// The compositor offers to draw no title bar or edges (GNOME's offers none; KDE's draws them).
+bool LinuxWindow::clientFrame() const { return platform.decorations == nullptr; }
+
+void LinuxWindow::frameAction(FrameAction action, int fx, int fy) {
+    LinuxPlatform& p = platform;
+    if (toplevel == nullptr) return;
+    switch (action) {
+        case FrameAction::Move:
+            // The compositor moves the window from here, and the button's letting go comes to it.
+            if (p.seat != nullptr) xdg_toplevel_move(toplevel, p.seat, p.inputSerial);
+            buttons = 0;
+            heldZone = Outside;
+            break;
+        case FrameAction::ToggleMaximized:
+            if ((state & kMaximized) != 0) xdg_toplevel_unset_maximized(toplevel);
+            else xdg_toplevel_set_maximized(toplevel);
+            break;
+        case FrameAction::Minimize:
+            xdg_toplevel_set_minimized(toplevel);
+            break;
+        case FrameAction::Menu: {
+            // At the point, from the window's own corner (the shadow left out), in units.
+            const double s = scale();
+            if (p.seat != nullptr)
+                xdg_toplevel_show_window_menu(toplevel, p.seat, p.inputSerial, static_cast<int32_t>(std::lround(fx / s)) - shadowNow(),
+                                              static_cast<int32_t>(std::lround(fy / s)) - shadowNow());
+            buttons = 0;
+            heldZone = Outside;
+            break;
+        }
+    }
+    wl_display_flush(p.display);
 }
 
 void LinuxWindow::toFront() { platform.activate(*this, true); }

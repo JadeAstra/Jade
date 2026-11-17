@@ -92,8 +92,10 @@ public:
     void flush();
     // Draws a surface into a window. It shows once the window's buffers are swapped, which
     // waits for the screen's next refresh: the caller does that, and may let other threads
-    // run meanwhile. False if there was nothing to draw.
-    bool present(int surface, PlatformWindow& window);
+    // run meanwhile. False if there was nothing to draw. `frame`, where the program draws the
+    // window's title bar and edges (PlatformWindow::clientFrame), is a surface of all the window
+    // draws, the surface's place in it left for the surface; 0 for none.
+    bool present(int surface, PlatformWindow& window, int frame = 0);
 
     // How many shapes have been sent to the card, and in how many batches, since the start.
     int64_t shapesDrawn() const { return shapesDrawn_; }

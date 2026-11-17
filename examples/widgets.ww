@@ -52,17 +52,16 @@ val root = grid {
 
 // A colour of the program's own is given through Palette, so that it has a counterpart in
 // the dark theme; a component's foreground is a colour, though, and is set again when the
-// theme changes.
-fun tint() {
+// theme changes: by the button, or by the system's own light or dark, which the program follows
+// until the button is pressed.
+fun themed() {
   reset.foreground(Palette.fg(0xB00020))
-}
-tint()
-
-(theme.content as Button).onClick = {
-  Palette.dark = !Palette.dark
   (theme.content as Button).text = Palette.dark ? "Light theme" : "Dark theme"
-  tint()
 }
+themed()
+Palette.onThemeChange { themed() }
+
+(theme.content as Button).onClick = { Palette.dark = !Palette.dark }
 
 val window = Window(root, "Jade: labels and buttons", 520, 260)
 window.show()

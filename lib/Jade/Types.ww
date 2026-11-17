@@ -131,16 +131,48 @@ object Palette {
   private val listeners = []
   private val memo = {:}
 
-  var dark = false
+  // The dark theme. A program's windows follow the system's light or dark, and its accent colour,
+  // from the first one shown and as the user changes them, until the program sets one itself:
+  // that one is then the program's (the user's "Dark theme" button, say).
+  var dark : bool
+    get() => darkNow
     set(value) {
-      if (field != value) {
-        field = value
-        memo.clear()
-        Jade.invalidateRenderCaches()
-        Jade.requestRepaint()
-        for (hook in listeners.toList()) { hook() }
-      }
+      darkChosen = true
+      changeDark(value)
     }
+  private var darkNow = false
+  private var darkChosen = false
+  private var accentNow : Color? = null
+  private var accentChosen = false
+  private var following = false
+
+  private fun changeDark(value : bool) {
+    if (darkNow != value) {
+      darkNow = value
+      memo.clear()
+      changed()
+    }
+  }
+  private fun changeAccent(value : Color?) {
+    if (accentNow != value) {
+      accentNow = value
+      changed()
+    }
+  }
+  private fun changed() {
+    Jade.invalidateRenderCaches()
+    Jade.requestRepaint()
+    for (hook in listeners.toList()) { hook() }
+  }
+
+  // The system's light or dark and accent, where the program has chosen none of its own: as a
+  // window is first shown (`start`, NativeWindow.show), and each time the user changes them.
+  internal fun followSystem(start : bool) {
+    if (start and following) { return }
+    following = true
+    if (!darkChosen) { changeDark(Jade.systemDark) }
+    if (!accentChosen) { changeAccent(Jade.systemAccent) }
+  }
 
   fun onThemeChange(hook : () -> unit) {
     listeners.add(hook)
@@ -193,18 +225,14 @@ object Palette {
     get() => fg(0x909090)
   val selection : Color
     get() => bg(0xADD8E6)
-  // The colour that stands out on checked boxes, sliders and links: Jade's blue (turned for the
-  // dark theme), unless a program gives one of its own, the system's say, used as it is in
-  // both themes.
-  //   Palette.customAccent = Jade.systemAccent
-  var customAccent : Color? = null
+  // The colour that stands out on checked boxes, sliders and links: the system's (Jade.systemAccent,
+  // followed as `dark` is), else Jade's blue turned for the dark theme; or one the program gives,
+  // used as it is in both themes (null: Jade's blue).
+  var customAccent : Color?
+    get() => accentNow
     set(value) {
-      if (field != value) {
-        field = value
-        Jade.invalidateRenderCaches()
-        Jade.requestRepaint()
-        for (hook in listeners.toList()) { hook() }
-      }
+      accentChosen = true
+      changeAccent(value)
     }
   val accent : Color
     get() => customAccent ?: fg(0x1565C0)

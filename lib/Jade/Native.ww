@@ -72,6 +72,10 @@ internal var jadeActiveCanvas : NativeCanvas? = null
 internal val jadeWindows : open Map<int, NativeWindow> = {:}
 
 internal fun jadeDispatch(id : int, kind : string, x : int, y : int, n1 : int, n2 : int, f1 : float, f2 : float, extra : any?) {
+  if (id == 0 and kind == "appearance") {
+    Palette.followSystem(false)   // the user made the system light or dark, or chose another accent
+    return
+  }
   val window = jadeWindows[id]
   if (window != null) { window.deliver(kind, x, y, n1, n2, f1, f2, extra) }
 }
@@ -307,6 +311,11 @@ class NativeWindow {
   private var currentCursorMode : CursorMode = CursorMode.normal
   private var canResize : bool
   private var inside = false
+  private val isDialog : bool
+  // Where the system draws no title bar or edges for it (GNOME, WSLg), Jade's own (WindowFrame).
+  private var frame : WindowFrame? = null
+  // The system's title bar, where it draws one, kept dark or light with the program's theme.
+  private var themeHook : (() -> unit)? = null
   var onInput : ((RawInput) -> unit)? = null
   var onResize : ((int, int) -> unit)? = null
   var onScaleChanged : ((float) -> unit)? = null
@@ -320,6 +329,7 @@ class NativeWindow {
     __jade.setDispatcher(jadeDispatch)
     this.currentTitle = "$title"
     this.canResize = resizable
+    this.isDialog = dialog
     this.id = __jade.windowCreate(currentTitle, width, height, resizable, dialog, owner == null ? 0 : owner.id, scale ?: 0)
     jadeWindows[id] = this
   }
@@ -336,6 +346,7 @@ class NativeWindow {
     set(text) {
       currentTitle = "$text"
       __jade.windowTitle(id, currentTitle)
+      frame?.paint(true)
     }
   fun setTitle(text : string) {
     title = text
@@ -380,6 +391,14 @@ class NativeWindow {
     }
 
   fun show() {
+    Palette.followSystem(true)
+    if (frame == null and __jade.windowClientFrame(id)) { frame = WindowFrame(this, isDialog, canResize) }
+    if (themeHook == null) {
+      val hook = { -> __jade.windowDarkFrame(id, Palette.dark) }
+      themeHook = hook
+      Palette.onThemeChange(hook)
+      hook()
+    }
     __jade.windowShow(id)
   }
   fun hide() {
@@ -388,8 +407,19 @@ class NativeWindow {
   // Closes it for good. A program whose last showing window is closed, with nothing else
   // going on, ends.
   fun close() {
+    frame?.dispose()
+    frame = null
+    val hook = themeHook
+    if (hook != null) { Palette.removeThemeHook(hook) }
+    themeHook = null
     __jade.windowClose(id)
     jadeWindows.remove(id)
+  }
+  // The user asked for it to close (its close button, the system's): onCloseRequest says what
+  // happens, or it closes.
+  internal fun closeRequested() {
+    val handler = onCloseRequest
+    if (handler != null) { handler() } else { close() }
   }
   fun toFront() {
     __jade.windowToFront(id)
@@ -517,20 +547,275 @@ class NativeWindow {
       "resize" -> {
         // The picture has another size, and a canvas made for the old size is void.
         jadeActiveCanvas = null
+        frame?.paint(false)   // shown with the program's picture for the new size
         onResize?.invoke(x, y)
       }
       "scale" -> {
         onScaleChanged?.invoke(f1)
       }
-      "close" -> {
-        val handler = onCloseRequest
-        if (handler != null) { handler() } else { close() }
-      }
+      "close" -> closeRequested()
       "filesDropped" -> {
         onFilesDropped?.invoke(extra as List<string>, x, y)
       }
+      // The title bar and the window's state, where Jade draws its frame.
+      "frameMove" -> frame?.moved(x, y, n1 & 1 != 0)
+      "frameDown" -> frame?.pressedAt(n1, x, y)
+      "frameUp" -> frame?.releasedAt(n1, x, y)
+      "frameLeave" -> frame?.left()
+      "state" -> frame?.paint(true)
     }
   }
 
   override fun toString() : string => "NativeWindow($currentTitle)"
 }
+
+// ---- A title bar and edges of Jade's own ----
+
+// Where the system draws no title bar or edges for a window (GNOME, WSLg): Jade draws them, as
+// GNOME draws its own windows' (Adwaita's header bar), around what the program draws on, which
+// stays its own size. A bar with the title and the buttons GNOME's setting asks for (close
+// alone unless the user added more), a shadow round the window that is its edges to drag, while
+// it is neither maximised nor tiled. Dragging the bar moves the window, a double click
+// maximises it, the right button gives the system's menu for it. Drawn on a surface of its own,
+// which the window shows around the program's picture (windowFrameSurface).
+internal class WindowFrame {
+  val window : NativeWindow
+  private var surface : Surface? = null
+  private var state = 0             // the native layer's: 1 maximised, 2 full screen, 4 tiled, 8 the active window
+  private var hover = ""            // the button the pointer is over: "close", "maximize", "minimize", or none
+  private var pressed = ""          // the button pressed, until it is let go
+  private var dragFrom : Point? = null  // where a press on the bar began, until it moves the window
+  private var lastPress = -1.0
+  private var lastPressAt = Point(0, 0)
+  private val leftButtons : List<string>
+  private val rightButtons : List<string>
+  private val placed : open List<FrameButton> = []
+  private val themeHook : () -> unit
+
+  fun init(window : NativeWindow, dialog : bool, resizable : bool) {
+    this.window = window
+    // GNOME's own setting, "appmenu:close" and the like: the buttons on the left, then the right.
+    val layout = (__jade.desktopSetting("org.gnome.desktop.wm.preferences", "button-layout") as string?) ?: "appmenu:close"
+    val sides = layout.split(":")
+    fun wanted(side : string) : List<string> =>
+      side.split(",").map { it.trim() }.filter { (it == "close") or (!dialog and it == "minimize") or (!dialog and resizable and it == "maximize") }
+    leftButtons = wanted(sides[0])
+    rightButtons = sides.size > 1 ? wanted(sides[1]) : []
+    themeHook = { paint(true) }
+    Palette.onThemeChange(themeHook)
+    __jade.windowSetFrame(window.id, WindowFrame.barHeight, WindowFrame.shadowSize)
+  }
+
+  static {
+    val barHeight = 46
+    val shadowSize = 24
+  }
+
+  fun dispose() {
+    Palette.removeThemeHook(themeHook)
+    surface?.dispose()
+    surface = null
+  }
+
+  // ---- Its picture ----
+
+  // Painted again on the frame's surface, and shown with the program's last picture if `show`.
+  fun paint(show : bool) {
+    if (!window.isOpen) { return }
+    val outer = __jade.windowOuter(window.id) as List<int>
+    val ow = outer[0]
+    val oh = outer[1]
+    state = outer[4]
+    if (ow < 1 or oh < 1) { return }
+    var s = surface
+    if (s == null or s!!.deviceWidth != ow or s!!.deviceHeight != oh) {
+      s?.dispose()
+      s = Surface(ow, oh)
+      surface = s
+      __jade.windowFrameSurface(window.id, s!!.handle)
+    }
+    val scale = window.scale
+    val w = Math.round(ow / scale).toInt()
+    val h = Math.round(oh / scale).toInt()
+    val c = s!!.canvasAt(w, h, scale)
+    c.clearRect(0, 0, w, h)
+    val floating = state & 7 == 0
+    val shadow = floating ? WindowFrame.shadowSize : 0
+    val bar = state & 2 != 0 ? 0 : WindowFrame.barHeight
+    placed.clear()
+    if (bar > 0) {
+      val gx = shadow
+      val gy = shadow
+      val gw = w - 2 * shadow
+      val active = state & 8 != 0
+      if (shadow > 0) { drawShadow(c, gx, gy, gw, h - 2 * shadow, active) }
+      val radius = floating ? 12 : 0
+      c.color = barColor(active)
+      if (radius > 0) {
+        c.fillRoundRect(gx, gy, gw, bar + radius, radius * 2, radius * 2)   // its lower corners under the program's picture
+      } else {
+        c.fillRect(gx, gy, gw, bar)
+      }
+      c.color = Palette.dark ? Color(0, 0, 0, 92) : Color(0, 0, 0, 18)
+      c.fillRect(gx, gy + bar - 1, gw, 1)
+      // The buttons, 24 units round, 30 apart, 9 in from the window's sides.
+      var left = gx + 9.0
+      for (kind in leftButtons) {
+        placed.add(FrameButton(kind, left + 12, gy + bar / 2.0))
+        left += 30
+      }
+      var right = gx + gw - 9.0
+      for (kind in rightButtons.reversed()) {
+        placed.add(FrameButton(kind, right - 12, gy + bar / 2.0))
+        right -= 30
+      }
+      for (b in placed) { drawButton(c, b, active) }
+      drawTitle(c, gx, gy, gw, bar, left + 6, right - 6, active)
+    }
+    if (show) { __jade.windowPresent(window.id) }
+  }
+
+  private fun barColor(active : bool) : Color =>
+    Palette.dark ? (active ? Color(0x2E2E32) : Color(0x222226)) : (active ? Color(0xEBEBED) : Color(0xFAFAFB))
+  private fun inkColor(active : bool) : Color =>
+    Palette.dark ? Color(255, 255, 255, active ? 230 : 100) : Color(0, 0, 0, active ? 204 : 80)
+
+  // A soft shadow, faint as GNOME's own (fainter still while the window is not the active one),
+  // darker near the window: layers of a little black, each larger than the last, the nearest
+  // under all of them. A little lower than the window, as if lit from above.
+  private fun drawShadow(c : Canvas, x : int, y : int, w : int, h : int, active : bool) {
+    val layers = 12
+    for (i in 0..<layers) {
+      val spread = (layers - i) * 2
+      c.color = Color(0, 0, 0, active ? 3 : 2)
+      c.fillRoundRect(x - spread, y - spread + 1, w + 2 * spread, h + 2 * spread, 24 + spread * 2, 24 + spread * 2)
+    }
+    c.color = Color(0, 0, 0, Palette.dark ? 70 : 28)   // the window's outline
+    c.lineWidth = 1
+    c.drawRoundRect(x - 0.5, y - 0.5, w + 1, h + 1, 25, 25)
+  }
+
+  private fun drawButton(c : Canvas, b : FrameButton, active : bool) {
+    // Faint while the window is not the active one, as GNOME's own are.
+    val shade = b.kind == pressed ? 64 : (b.kind == hover ? 40 : (active ? 22 : 10))
+    c.color = Palette.dark ? Color(255, 255, 255, shade) : Color(0, 0, 0, shade)
+    c.fillOval(b.cx - 12, b.cy - 12, 24, 24)
+    c.color = inkColor(active)
+    c.lineWidth = 1.5
+    when (b.kind) {
+      "close" -> {
+        c.drawLine(b.cx - 4, b.cy - 4, b.cx + 4, b.cy + 4)
+        c.drawLine(b.cx + 4, b.cy - 4, b.cx - 4, b.cy + 4)
+      }
+      // GNOME's own: a chevron down to minimise, up to maximise, a diamond to give back the size.
+      "minimize" -> {
+        c.drawLine(b.cx - 4, b.cy - 2, b.cx, b.cy + 2)
+        c.drawLine(b.cx, b.cy + 2, b.cx + 4, b.cy - 2)
+      }
+      "maximize" -> {
+        if (state & 1 != 0) {
+          c.drawLine(b.cx, b.cy - 4, b.cx + 4, b.cy)
+          c.drawLine(b.cx + 4, b.cy, b.cx, b.cy + 4)
+          c.drawLine(b.cx, b.cy + 4, b.cx - 4, b.cy)
+          c.drawLine(b.cx - 4, b.cy, b.cx, b.cy - 4)
+        } else {
+          c.drawLine(b.cx - 4, b.cy + 2, b.cx, b.cy - 2)
+          c.drawLine(b.cx, b.cy - 2, b.cx + 4, b.cy + 2)
+        }
+      }
+      else -> {}
+    }
+  }
+
+  // The title, in the middle of the window where the buttons leave room for it there, cut short
+  // with an ellipsis where it is too long.
+  private fun drawTitle(c : Canvas, gx : int, gy : int, gw : int, bar : int, from : float, to : float, active : bool) {
+    val text = window.title
+    if (text.isEmpty() or to - from < 16) { return }
+    val font = Font(Font.sansSerif, 14, bold = true)
+    var shown = text
+    while (shown.size > 1 and font.width(shown) > to - from) { shown = shown.dropLast(2) + "…" }
+    val width = font.width(shown)
+    var x = gx + (gw - width) / 2.0
+    if (x < from) { x = from }
+    if (x + width > to) { x = to - width }
+    c.font = font
+    c.color = inkColor(active)
+    c.drawString(shown, x, gy + (bar + font.ascent - font.descent) / 2.0)
+  }
+
+  // ---- The pointer on the bar (units from the outer corner) ----
+
+  private fun buttonAt(x : int, y : int) : string {
+    for (b in placed) {
+      if ((x - b.cx) * (x - b.cx) + (y - b.cy) * (y - b.cy) <= 13 * 13) { return b.kind }
+    }
+    return ""
+  }
+
+  fun moved(x : int, y : int, leftHeld : bool) {
+    val from = dragFrom
+    if (from != null and leftHeld and (Math.abs(x - from!!.x) > 4 or Math.abs(y - from!!.y) > 4)) {
+      // Dragged far enough: the system moves the window from here.
+      dragFrom = null
+      __jade.windowFrameAction(window.id, 1, x, y)
+      return
+    }
+    val now = buttonAt(x, y)
+    if (now != hover) {
+      hover = now
+      paint(true)
+    }
+  }
+
+  fun pressedAt(button : int, x : int, y : int) {
+    if (button == 1) {
+      __jade.windowFrameAction(window.id, 4, x, y)   // the system's menu for the window
+      return
+    }
+    if (button != 0) { return }
+    val b = buttonAt(x, y)
+    if (b != "") {
+      pressed = b
+      paint(true)
+      return
+    }
+    val now = clock()
+    if (lastPress >= 0 and now - lastPress < Native.doubleClickTime / 1000.0 and Math.abs(x - lastPressAt.x) < 6 and Math.abs(y - lastPressAt.y) < 6) {
+      lastPress = -1.0
+      dragFrom = null
+      if (window.resizable) { __jade.windowFrameAction(window.id, 2, x, y) }
+      return
+    }
+    lastPress = now
+    lastPressAt = Point(x, y)
+    dragFrom = Point(x, y)
+  }
+
+  fun releasedAt(button : int, x : int, y : int) {
+    dragFrom = null
+    if (button != 0 or pressed == "") { return }
+    val b = pressed
+    pressed = ""
+    paint(true)
+    if (buttonAt(x, y) != b) { return }
+    when (b) {
+      "close" -> window.closeRequested()
+      "maximize" -> __jade.windowFrameAction(window.id, 2, x, y)
+      "minimize" -> __jade.windowFrameAction(window.id, 3, x, y)
+      else -> {}
+    }
+  }
+
+  fun left() {
+    dragFrom = null
+    if (hover != "" or pressed != "") {
+      hover = ""
+      pressed = ""
+      paint(true)
+    }
+  }
+}
+
+// A button of a frame's, and where its middle is.
+internal data FrameButton(val kind : string, val cx : float, val cy : float)
