@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speed plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: what is left of the speed, in WinterWolf</h1>
+<p class="lede">Written 2026-11-17, at the user's word: "work on them all, try to keep them in ww, using stencils and templates and such". What <a href="timings.html">timings.html</a> leaves (every WinterWolf loop it sets against C++ now takes 0.6 to 1.0 times as long), each part made faster in WinterWolf where native code (its stencils and loop templates) can carry it, C++ only where it cannot. One part at a time, each with a spike and a gate; nothing built before the questions at the end are answered.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#sp-now">What is left, measured</a></li>
+<li><a href="#sp-how">How: WinterWolf first, native code taught what it lacks</a></li>
+<li><a href="#sp-parts">The parts, each with its spike and gate</a></li>
+<li><a href="#sp-order">Order</a></li>
+<li><a href="#sp-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="sp-now">What is left, measured</h2>
+<p>2026-11-17, the Clang build, pinned to the fast cores, best of three.</p>
+<div class="table"><table>
+<thead><tr><th>Part</th><th>Written in</th><th>Now</th><th>Where its time goes</th></tr></thead>
+<tbody>
+<tr><td class="part">GIF, written</td><td>WinterWolf (LZW, palette), C++ (each pixel's nearest colour)</td><td>35 ms, 1000 by 1000</td><td>Palette 2.7 ms; the rest the pixels' indices and the LZW loop (to be split by the spike).</td></tr>
+<tr><td class="part">PNG, written</td><td>C++ (filters, and Jade's own deflate)</td><td>66 ms, 1000 by 1000; 520 ms, 4000 by 3000 (43 ns a pixel)</td><td>The five filters tried on each row, then deflate: its search for repeats and its Huffman codes.</td></tr>
+<tr><td class="part">WebP, written</td><td>C++</td><td>141 ms lossless, 31 ms lossy, 1000 by 1000</td><td>Lossless: its transforms and its LZ77 with a colour cache; lossy: the DCT and its coding.</td></tr>
+<tr><td class="part"><code>scaled</code> up</td><td>C++ (Grid's)</td><td>7 ns a pixel</td><td>Bilinear reading, colours weighed by alpha.</td></tr>
+<tr><td class="part">A see-through picture or fillRect drawn</td><td>C++</td><td>3.6 to 4 ns a pixel</td><td>A division for each part of each pixel blended.</td></tr>
+<tr><td class="part">Smooth lines</td><td>C++ (the shape rasterizer)</td><td>22 ns a pixel of length</td><td>Coverage worked out for every pixel near the line.</td></tr>
+<tr><td class="part"><code>blurred</code></td><td>WinterWolf, in doubles</td><td>1.4 times faster than C++'s was; several times more to be had</td><td>Each pixel a mix of 6 &times; radius + 1 others, twice, in doubles.</td></tr>
+<tr><td class="part">Calls from native code to native code</td><td>&mdash;</td><td>mix16: 14.7 ns a call over its body</td><td>The way out of a region into the VM's call and back in. Its spike failed its gate (2026-11-15, <a href="native-calls-plan.html">native-calls-plan.html</a>).</td></tr>
+</tbody></table></div>
+
+<h2 id="sp-how">How: WinterWolf first, native code taught what it lacks</h2>
+<ul>
+<li><strong>Written in WinterWolf</strong>, as a program would, in functions of their own, so that native code makes regions and loop templates of them; where native code leaves a loop to the VM, it is taught that loop's shape (a stencil, a template), as was done for the pixel loops, rather than the loop being moved into C++.</li>
+<li><strong>C++ only where native code cannot come near</strong> after that, and then as a public piece any program can call (as <code>Image.writePixels</code>), never a private one.</li>
+<li><strong>The same results:</strong> each encoder's files read back as the same pixels, and as small as now or smaller; each drawing the same pixels as now, unless a question below decides otherwise.</li>
+<li><strong>Each part timed against the C++ it replaces or a C++ yardstick</strong> in <code>bench/kernels/timings.cpp</code>, and its row in timings.html.</li>
+</ul>
+
+<h2 id="sp-parts">The parts, each with its spike and gate</h2>
+<div class="table"><table>
+<thead><tr><th>Part</th><th>What</th><th>Spike, and its gate</th></tr></thead>
+<tbody>
+<tr><td class="part">1. GIF</td><td>Its time split; the indices (nearest colour) moved from C++ into WinterWolf; the LZW loop run whole by native code (a table read and written by key, bits put out a byte at a time); the frame's see-through test by <code>isOpaque</code>.</td><td>The LZW loop alone, in a region of its own, at the speed of the same loop in C++ (a yardstick added), the same bytes.</td></tr>
+<tr><td class="part">2. PNG</td><td>The filters and deflate written in WinterWolf (question 1): the filters as loops over bytes (templates have those); deflate's search for repeats by a hash of three bytes and chains, its Huffman codes, its bits.</td><td>Deflate in WinterWolf within 1.25 times the C++ one's time on the photo, files no larger. Below the gate, the C++ stays and is made faster in place (question 2).</td></tr>
+<tr><td class="part">3. WebP</td><td>Lossless first (its transforms, LZ77, the colour cache), then lossy's DCT, in WinterWolf.</td><td>The lossless encoder within 1.25 times the C++ one's time, the same files or smaller.</td></tr>
+<tr><td class="part">4. Pictures and blending</td><td><code>scaled</code> and the see-through blends (pictures, fillRect) written in WinterWolf, the division by alpha made a multiplication by a table of reciprocals where the pixels come out the same.</td><td>The same pixels, at C++'s time or less.</td></tr>
+<tr><td class="part">5. Smooth lines</td><td>A line's coverage worked out along it (a span per row) rather than for every pixel near it; in WinterWolf.</td><td>The same pixels to within one level (question 3), several times faster.</td></tr>
+<tr><td class="part">6. <code>blurred</code></td><td>As question 4 decides: the same pixels with less work (a running sum where the radius is large), or floats.</td><td>As decided.</td></tr>
+<tr><td class="part">7. Calls between native code</td><td>A new way in: small functions called in a loop put in place by the compiler more often (it does some already), and a call from a region to a region kept inside native code where both are made, without the C++ between that sank the last spike.</td><td>mix16 called a million times in under 13 ms (the old gate).</td></tr>
+</tbody></table></div>
+
+<h2 id="sp-order">Order</h2>
+<p>1, 2, 3, 4, 5, 6, 7 (question 5): the encoders first, as they are the largest times and teach native code the shapes the rest need; calls last, as most of what it would win is won by putting small functions in place. Each part finished, timed, tested on Windows and Linux, written into timings.html and committed (a version a build) before the next; each reported and the next begun on the user's word.</p>
+
+<h2 id="sp-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>The encoders now in C++ (PNG's, WebP's): written again in WinterWolf?</h3>
+<ul>
+<li><strong>Yes, each behind its gate:</strong> written in WinterWolf, native code taught what they need; kept only where they reach their gate, the C++ deleted then.</li>
+<li><strong>No:</strong> left in C++, made faster there.</li>
+</ul>
+<p><em>Recommended:</em> yes, behind the gates. It is what "keep them in ww" asks, and what native code learns on them (hash chains, bit output, tables) serves every program; a gate keeps a slower encoder from replacing a quicker one.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>PNG: faster at the same size, or faster still a little larger?</h3>
+<ul>
+<li><strong>No larger:</strong> each file as small as now or smaller; the speed from better code only.</li>
+<li><strong>A little larger allowed:</strong> a quicker search for repeats (as fpng and libdeflate's fast levels do), files up to 5% larger, several times faster.</li>
+</ul>
+<p><em>Recommended:</em> no larger, with the quicker way offered as a level (<code>save(path, quality)</code> already takes one) for a program that wants it.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Smooth lines: the same pixels exactly, or within one level?</h3>
+<ul>
+<li><strong>Exactly the same:</strong> the coverage worked out as now, only less of it.</li>
+<li><strong>Within one level:</strong> a quicker way to the coverage along the line; a pixel's edge may differ by one level of 255.</li>
+</ul>
+<p><em>Recommended:</em> within one level: no eye tells, and it is where most of the speed is; the tests that compare pixels compare lines with a tolerance already.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span><code>blurred</code>: the same pixels, or a level off here and there?</h3>
+<ul>
+<li><strong>The same pixels:</strong> what can be had without changing any (a running sum for large radii, the work split across cores).</li>
+<li><strong>Floats:</strong> several times faster, a pixel a level off here and there.</li>
+</ul>
+<p><em>Recommended:</em> the same pixels: a blur is often compared against a saved picture, and the work split across cores gives most of the speed anyway.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>The order</h3>
+<ul>
+<li><strong>As above:</strong> GIF, PNG, WebP, pictures and blending, lines, blur, calls.</li>
+<li><strong>Calls first:</strong> what is written in WinterWolf after it has quicker calls from the start.</li>
+</ul>
+<p><em>Recommended:</em> as above: the encoders are written as single loops, which native code takes whole without calls; calls matter most to code made of small functions, and their last spike failed.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
