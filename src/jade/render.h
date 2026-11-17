@@ -145,6 +145,7 @@ private:
 
     Platform* platform_ = nullptr;
     GLuint program_ = 0, vao_ = 0, vbo_ = 0;
+    ptrdiff_t vboRoom_ = 0;  // bytes the buffer holds, kept from batch to batch
     GLint uTarget_ = -1, uFlip_ = -1, uTex_ = -1;
     int maxTexture_ = 2048;
 

@@ -16,14 +16,20 @@
 #if defined(__linux__) && defined(WW_WAYLAND)
 
 #include <dlfcn.h>
+#include <execinfo.h>
+#include <pthread.h>
+#include <signal.h>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <thread>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -108,6 +114,7 @@ struct Egl {
     decltype(&::eglSwapInterval) SwapInterval = nullptr;
     decltype(&::eglQueryString) QueryString = nullptr;
     decltype(&::eglGetError) GetError = nullptr;
+    decltype(&::eglQuerySurface) QuerySurface = nullptr;
 } egl;
 
 struct Xkb {
@@ -199,6 +206,7 @@ bool loadLibraries(std::string& error) {
     WW_EGL(SwapInterval);
     WW_EGL(QueryString);
     WW_EGL(GetError);
+    WW_EGL(QuerySurface);
 #undef WW_EGL
 #define WW_XKB(name) ok = find(keys, xkb.name, "xkb_" #name, error) && ok
     WW_XKB(context_new);
@@ -269,6 +277,60 @@ int64_t nowMillis() {
     return static_cast<int64_t>(t.tv_sec) * 1000 + t.tv_nsec / 1000000;
 }
 
+// WW_WAYLAND_TRACE=1: what the compositor asks and what is done, to standard error, for finding
+// out what a desktop does (2026-11-16: KDE's resizing).
+bool tracing() {
+    static const bool on = [] {
+        const char* v = std::getenv("WW_WAYLAND_TRACE");
+        return v != nullptr && v[0] == '1';
+    }();
+    return on;
+}
+#define WW_TRACE(...)                                      \
+    do {                                                   \
+        if (tracing()) {                                   \
+            std::fprintf(stderr, "wayland: " __VA_ARGS__); \
+            std::fputc('\n', stderr);                      \
+        }                                                  \
+    } while (0)
+// Under the trace, where the program is (which call of the window layer's, or none: the program's
+// own code), and a thread that says so where it stays in one for seconds: a hang found where it
+// is, as the compositor says the window is not responding.
+std::atomic<const char*> stage{"starting"};
+std::atomic<uint64_t> stageCount{0};
+void at(const char* where) {
+    if (!tracing()) return;
+    stage.store(where);
+    stageCount.fetch_add(1);
+}
+// The main thread's stack, printed by the main thread itself as the watchdog asks (SIGUSR1):
+// addresses within ww, for addr2line.
+pthread_t mainThread;
+void printStack(int) {
+    void* frames[64];
+    const int n = backtrace(frames, 64);
+    static const char said[] = "wayland: watchdog: the main thread's stack:\n";
+    if (write(2, said, sizeof said - 1) < 0) {
+    }
+    backtrace_symbols_fd(frames, n, 2);
+}
+void watch() {
+    mainThread = pthread_self();
+    signal(SIGUSR1, printStack);
+    std::thread([] {
+        uint64_t seen = 0;
+        int still = 0;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            const uint64_t now = stageCount.load();
+            still = now == seen && std::strncmp(stage.load(), "wait:", 5) != 0 ? still + 1 : 0;  // (waiting with nothing to do is no hang)
+            seen = now;
+            if (still == 3 || (still > 3 && still % 10 == 0)) WW_TRACE("watchdog: in %s for %d s", stage.load(), still);
+            if (still == 5) pthread_kill(mainThread, SIGUSR1);
+        }
+    }).detach();
+}
+
 class LinuxPlatform;
 
 // ---- A window ----
@@ -284,7 +346,6 @@ public:
     wp_fractional_scale_v1* fractional = nullptr;
     wl_egl_window* eglWindow = nullptr;
     EGLSurface eglSurface = EGL_NO_SURFACE;
-    wl_callback* frame = nullptr;      // asked for with the last picture shown: the next may follow when it comes
 
     std::string title;
     bool dialog = false, resizable = true;
@@ -295,6 +356,8 @@ public:
     int minWidth = 0, minHeight = 0, maxWidth = 0, maxHeight = 0;  // device pixels
     int x = 0, y = 0;                  // kept, not used: Wayland places windows itself
     bool shown = false, configured = false;
+    bool configurePending = false;      // a configure came, not yet done
+    uint32_t configureSerial = 0;
     LinuxWindow* owner = nullptr;
     Cursor cursor = Cursor::Default;
     PointerMode pointerMode = PointerMode::Normal;
@@ -319,6 +382,7 @@ public:
         if (toplevel != nullptr) xdg_toplevel_set_title(toplevel, title.c_str());
     }
     void setSize(int width, int height) override {
+        WW_TRACE("setSize %d x %d at scale %.4f", width, height, scale());
         logicalWidth = std::max(1, static_cast<int>(std::lround(std::max(width, 1) / scale())));
         logicalHeight = std::max(1, static_cast<int>(std::lround(std::max(height, 1) / scale())));
         sized();
@@ -332,6 +396,7 @@ public:
         y = py;
     }
     void setLimits(int minW, int minH, int maxW, int maxH) override {
+        WW_TRACE("setLimits %d %d %d %d", minW, minH, maxW, maxH);
         minWidth = minW;
         minHeight = minH;
         maxWidth = maxW;
@@ -372,7 +437,28 @@ public:
     // The picture's size from the window's size and scale: the EGL window, and the viewport that
     // shows it at the window's size where the scale is fractional (else the buffer's own scale).
     void sized();
+    // The newest configure done: acknowledged, the size it says taken (0 by 0: the program's
+    // own), and the program told and asked to draw.
+    void configure() {
+        if (!configurePending || shell == nullptr) return;
+        configurePending = false;
+        xdg_surface_ack_configure(shell, configureSerial);
+        const bool first = !configured;
+        configured = true;
+        const int oldWidth = logicalWidth, oldHeight = logicalHeight;
+        if (pendingWidth > 0 && pendingHeight > 0) {
+            logicalWidth = pendingWidth;
+            logicalHeight = pendingHeight;
+        }
+        WW_TRACE("configure %u done: %d x %d", configureSerial, logicalWidth, logicalHeight);
+        const int64_t began = nowMillis();
+        if (first || oldWidth != logicalWidth || oldHeight != logicalHeight) sized();
+        at("configure: the program drawing");
+        if (onExpose) onExpose();
+        if (const int64_t took = nowMillis() - began; took > 50) WW_TRACE("configure: the program's answer took %lld ms", static_cast<long long>(took));
+    }
     void scaleChanged(double now) {
+        WW_TRACE("preferred scale %.4f (was %.4f, fixed %.4f)", now, preferred, fixedScale);
         if (fixedScale > 0 || std::fabs(now - preferred) < 1e-9) return;
         preferred = now;
         RawEvent e;
@@ -406,7 +492,6 @@ public:
         int scale;
     };
     std::vector<Output> outputs;
-    wl_event_queue* frames = nullptr;  // the windows' frame callbacks, waited for apart from all else
     int wakeFd = -1;
 
     EGLDisplay eglDisplay = EGL_NO_DISPLAY;
@@ -435,6 +520,13 @@ public:
     int cursorThemeSize = 0;
     wl_surface* cursorSurface = nullptr;
     std::vector<std::pair<LinuxWindow*, RawEvent>> posted;  // events made for tests, handed out as events are pumped
+    // The pointer's moves, made one as Windows makes them (2026-11-16): Wayland sends each, and a
+    // program slower to draw than the pointer moves (one drawing for each, in a virtual machine)
+    // fell seconds behind them. The moves of one batch of events are one, the last place with the
+    // whole distance; any other event sends it first, so that the order holds.
+    LinuxWindow* moveWindow = nullptr;
+    RawEvent move;
+    void flushMove();
 
     bool start(std::string& error);
 
@@ -457,18 +549,19 @@ public:
     bool makeCurrentOffscreen() override { return use(EGL_NO_SURFACE); }
     // An EGL surface on a window's EGL window, shown at once when drawn: no wait for the screen's
     // refresh in EGL itself (a window the compositor does not show would wait for ever); the
-    // windows' frame callbacks pace the pictures instead (LinuxWindow::swapBuffers).
+    // toolkit's own timer paces animations (LinuxWindow::swapBuffers).
     EGLSurface windowSurface(wl_egl_window* window) {
         EGLSurface s = egl.CreateWindowSurface(eglDisplay, config, reinterpret_cast<EGLNativeWindowType>(window), nullptr);
         if (s != EGL_NO_SURFACE && use(s)) egl.SwapInterval(eglDisplay, 0);
         return s;
     }
 
-    // Events read and handled: those waiting already, then, for at most `millis` (-1: as long as
-    // it takes), the next to come; a key held down repeated as the compositor says.
-    void dispatch(int64_t millis);
-    void pumpEvents() override { dispatch(0); }
-    void waitEvents(int64_t millis) override { dispatch(millis); }
+    // Events handled (pump, with the runtime's lock held), and waited for (wait, without it:
+    // only waiting, nothing handled), as the runtime's event loop asks.
+    void pump();
+    void wait(int64_t millis);
+    void pumpEvents() override { pump(); }
+    void waitEvents(int64_t millis) override { wait(millis); }
     void wake() override {
         const uint64_t one = 1;
         if (write(wakeFd, &one, sizeof one) < 0) {
@@ -506,6 +599,13 @@ public:
 
 LinuxPlatform* thePlatform = nullptr;
 
+void LinuxPlatform::flushMove() {
+    if (moveWindow == nullptr) return;
+    LinuxWindow* w = moveWindow;
+    moveWindow = nullptr;
+    w->emit(move);
+}
+
 // ---- Listeners ----
 // Each event of each object, as the protocol's header lists them, in its order. An object is
 // bound at no higher a version than these handle.
@@ -523,7 +623,10 @@ void onGlobalRemove(void* data, wl_registry*, uint32_t name) {
 }
 const wl_registry_listener registryListener = {onGlobal, onGlobalRemove};
 
-void onPing(void*, xdg_wm_base* shell, uint32_t serial) { xdg_wm_base_pong(shell, serial); }
+void onPing(void*, xdg_wm_base* shell, uint32_t serial) {
+    WW_TRACE("ping %u", serial);
+    xdg_wm_base_pong(shell, serial);
+}
 const xdg_wm_base_listener shellListener = {onPing};
 
 // A screen: its whole scale, where the compositor gives no fractional one.
@@ -558,12 +661,22 @@ void onFractionalScale(void* data, wp_fractional_scale_v1*, uint32_t scale120) {
 const wp_fractional_scale_v1_listener fractionalListener = {onFractionalScale};
 
 // The toplevel's size and states, then the surface's configure saying they are all there.
-void onToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
+void onToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* states) {
     auto* w = static_cast<LinuxWindow*>(data);
+    if (tracing()) {
+        std::string said;
+        for (size_t i = 0; i + 4 <= states->size; i += 4) {
+            uint32_t s;
+            std::memcpy(&s, static_cast<const char*>(states->data) + i, 4);
+            said += " " + std::to_string(s);
+        }
+        WW_TRACE("toplevel configure %d x %d, states%s", width, height, said.c_str());
+    }
     w->pendingWidth = width;
     w->pendingHeight = height;
 }
 void onToplevelClose(void* data, xdg_toplevel*) {
+    static_cast<LinuxWindow*>(data)->platform.flushMove();
     RawEvent e;
     e.kind = RawEvent::Close;
     static_cast<LinuxWindow*>(data)->emit(e);
@@ -574,35 +687,25 @@ const xdg_toplevel_listener toplevelListener = {
     [](void*, xdg_toplevel*, int32_t, int32_t) {},  // configure_bounds
     [](void*, xdg_toplevel*, wl_array*) {},         // wm_capabilities
 };
-void onShellConfigure(void* data, xdg_surface* shell, uint32_t serial) {
+// Only noted: a drag of an edge sends one for nearly each move of the pointer, and a program that
+// redrew for each fell a minute behind (2026-11-16, KDE). The newest is done once the events
+// waiting are all read (LinuxWindow::configure), and only it acknowledged, as xdg-shell allows.
+void onShellConfigure(void* data, xdg_surface*, uint32_t serial) {
     auto* w = static_cast<LinuxWindow*>(data);
-    xdg_surface_ack_configure(shell, serial);
-    const bool first = !w->configured;
-    w->configured = true;
-    const int oldWidth = w->logicalWidth, oldHeight = w->logicalHeight;
-    if (w->pendingWidth > 0 && w->pendingHeight > 0) {
-        w->logicalWidth = w->pendingWidth;
-        w->logicalHeight = w->pendingHeight;
-    }
-    if (first || oldWidth != w->logicalWidth || oldHeight != w->logicalHeight) w->sized();
-    if (w->onExpose) w->onExpose();
+    WW_TRACE("surface configure %u: pending %d x %d", serial, w->pendingWidth, w->pendingHeight);
+    w->configureSerial = serial;
+    w->configurePending = true;
 }
 const xdg_surface_listener shellSurfaceListener = {onShellConfigure};
 
 void onDecorationConfigure(void*, zxdg_toplevel_decoration_v1*, uint32_t) {}
 const zxdg_toplevel_decoration_v1_listener decorationListener = {onDecorationConfigure};
 
-void onFrameDone(void* data, wl_callback* callback, uint32_t) {
-    auto* w = static_cast<LinuxWindow*>(data);
-    if (w->frame == callback) w->frame = nullptr;
-    wl_callback_destroy(callback);
-}
-const wl_callback_listener frameListener = {onFrameDone};
-
 // ---- The pointer ----
 
 void onPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surface, wl_fixed_t sx, wl_fixed_t sy) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
     p.pointerFocus = p.windowOf(surface);
     p.pointerSerial = serial;
     if (p.pointerFocus == nullptr) return;
@@ -620,6 +723,7 @@ void onPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surfac
 }
 void onPointerLeave(void* data, wl_pointer*, uint32_t, wl_surface*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
     if (p.pointerFocus != nullptr) {
         RawEvent e;
         e.kind = RawEvent::PointerLeave;
@@ -642,10 +746,22 @@ void onPointerMotion(void* data, wl_pointer*, uint32_t, wl_fixed_t sx, wl_fixed_
     e.modifiers = p.modifiers();
     p.pointerX = nx;
     p.pointerY = ny;
-    p.pointerFocus->emit(e);
+    if (p.moveWindow == p.pointerFocus) {
+        p.move.x = e.x;
+        p.move.y = e.y;
+        p.move.dx += e.dx;
+        p.move.dy += e.dy;
+        p.move.buttons = e.buttons;
+        p.move.modifiers = e.modifiers;
+        return;
+    }
+    p.flushMove();
+    p.move = e;
+    p.moveWindow = p.pointerFocus;
 }
 void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
     if (p.pointerFocus == nullptr) return;
     // evdev's buttons: left, right, middle, side (back), extra (forward).
     if (button < 0x110 || button > 0x114) return;
@@ -685,6 +801,7 @@ void onPointerAxisDiscrete(void* data, wl_pointer* pointer, uint32_t axis, int32
 void onPointerFrame(void* data, wl_pointer*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
     if (p.pointerFocus != nullptr && (p.wheelX != 0 || p.wheelY != 0)) {
+        p.flushMove();
         RawEvent e;
         e.kind = RawEvent::Wheel;
         e.x = static_cast<int>(std::floor(p.pointerX));
@@ -734,6 +851,7 @@ void onKeymap(void* data, wl_keyboard*, uint32_t format, int32_t fd, uint32_t si
 }
 void onKeyboardEnter(void* data, wl_keyboard*, uint32_t, wl_surface* surface, wl_array*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
     p.keyboardFocus = p.windowOf(surface);
     if (p.keyboardFocus == nullptr) return;
     RawEvent e;
@@ -743,6 +861,7 @@ void onKeyboardEnter(void* data, wl_keyboard*, uint32_t, wl_surface* surface, wl
 }
 void onKeyboardLeave(void* data, wl_keyboard*, uint32_t, wl_surface*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
     p.repeating = 0;
     if (p.keyboardFocus != nullptr) {
         RawEvent e;
@@ -817,8 +936,11 @@ void onGlobal(void* data, wl_registry* registry, uint32_t name, const char* inte
         wl_output_add_listener(output, &outputListener, &p);
     } else if (what == "zxdg_decoration_manager_v1") {
         p.decorations = static_cast<zxdg_decoration_manager_v1*>(bind(&zxdg_decoration_manager_v1_interface, 1));
+    } else if (what == "wp_viewporter" && std::getenv("WW_WAYLAND_NO_VIEWPORT") != nullptr) {
+        // (WW_WAYLAND_NO_VIEWPORT: left out, to tell whether a driver's picture is shown wrong through it.)
     } else if (what == "wp_viewporter") {
         p.viewporter = static_cast<wp_viewporter*>(bind(&wp_viewporter_interface, 1));
+    } else if (what == "wp_fractional_scale_manager_v1" && std::getenv("WW_WAYLAND_NO_VIEWPORT") != nullptr) {
     } else if (what == "wp_fractional_scale_manager_v1") {
         p.fractionalScales = static_cast<wp_fractional_scale_manager_v1*>(bind(&wp_fractional_scale_manager_v1_interface, 1));
     }
@@ -845,7 +967,6 @@ bool LinuxPlatform::start(std::string& error) {
         error = "the Wayland compositor offers no windows (xdg-shell)";
         return false;
     }
-    frames = wl_display_create_queue(display);
     wakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 
     keys = xkb.context_new(XKB_CONTEXT_NO_FLAGS);
@@ -898,12 +1019,27 @@ bool LinuxPlatform::start(std::string& error) {
         error = std::string("the OpenGL driver lacks ") + missing;
         return false;
     }
+    if (tracing()) watch();
+    if (tracing()) {
+        using GetString = const unsigned char* (*)(unsigned int);
+        if (auto getString = reinterpret_cast<GetString>(egl.GetProcAddress("glGetString")))
+            WW_TRACE("OpenGL: %s, %s", reinterpret_cast<const char*>(getString(0x1F01)), reinterpret_cast<const char*>(getString(0x1F02)));
+        WW_TRACE("protocols: decorations %s, viewporter %s, fractional scale %s, compositor %u", decorations != nullptr ? "yes" : "no",
+                 viewporter != nullptr ? "yes" : "no", fractionalScales != nullptr ? "yes" : "no", compositorVersion);
+    }
     return true;
 }
 
 // ---- Events ----
 
-void LinuxPlatform::dispatch(int64_t millis) {
+// Every event waiting handled, on the thread that pumps, with the runtime's lock held (VM's
+// event loop, loopPump): those read already and any on the connection now, without waiting; then
+// the pointer's moves made one, each window's newest configure done, and a held key repeated.
+void LinuxPlatform::pump() {
+    at("pump: handling events (the program's handlers)");
+    struct Out {
+        ~Out() { at("the program (between events)"); }
+    } out;
     // Events made for tests first, as the system's own would come.
     if (!posted.empty()) {
         auto events = std::move(posted);
@@ -913,18 +1049,46 @@ void LinuxPlatform::dispatch(int64_t millis) {
             for (LinuxWindow* w : windows) there = there || w == window;
             if (there) window->emit(event);
         }
-        millis = 0;
     }
     while (wl_display_prepare_read(display) != 0) wl_display_dispatch_pending(display);
     wl_display_flush(display);
-    // As long as asked, or until a held key next repeats.
-    int64_t wait = millis;
+    pollfd fd = {wl_display_get_fd(display), POLLIN, 0};
+    if (poll(&fd, 1, 0) > 0 && (fd.revents & POLLIN) != 0) wl_display_read_events(display);
+    else wl_display_cancel_read(display);
+    wl_display_dispatch_pending(display);
+    flushMove();
+    // Each window's newest configure, once all waiting are read (a copy of the list: drawing
+    // may open or close windows).
+    const std::vector<LinuxWindow*> now = windows;
+    for (LinuxWindow* w : now)
+        if (std::find(windows.begin(), windows.end(), w) != windows.end()) w->configure();
+    if (repeating != 0 && nowMillis() >= repeatAt) {
+        pressKey(repeating - 1, true, true);
+        repeatAt += repeatRate > 0 ? std::max(1, 1000 / repeatRate) : 1000;
+    }
+}
+
+// Waiting only, as Windows' waiting for a message is: for an event to come (read into its
+// queue, handled by the next pump), wake(), a held key's next repeat, or `millis` (-1: as long as
+// it takes). Nothing is handled here: the runtime waits with its lock let go, and a handler run
+// without it left the lock held for good (2026-11-16, KDE: the window stopped answering).
+void LinuxPlatform::wait(int64_t millis) {
+    at("wait: waiting for events (poll)");
+    struct Out {
+        ~Out() { at("the program (between events)"); }
+    } out;
+    if (!posted.empty()) return;
+    for (LinuxWindow* w : windows)
+        if (w->configurePending) return;
+    if (wl_display_prepare_read(display) != 0) return;  // events read already, for the pump
+    wl_display_flush(display);
+    int64_t limit = millis;
     if (repeating != 0) {
         const int64_t until = std::max<int64_t>(0, repeatAt - nowMillis());
-        wait = wait < 0 ? until : std::min(wait, until);
+        limit = limit < 0 ? until : std::min(limit, until);
     }
     pollfd fds[2] = {{wl_display_get_fd(display), POLLIN, 0}, {wakeFd, POLLIN, 0}};
-    const int ready = poll(fds, 2, wait < 0 ? -1 : static_cast<int>(std::min<int64_t>(wait, 0x7FFFFFFF)));
+    const int ready = poll(fds, 2, limit < 0 ? -1 : static_cast<int>(std::min<int64_t>(limit, 0x7FFFFFFF)));
     if (ready > 0 && (fds[0].revents & POLLIN) != 0) wl_display_read_events(display);
     else wl_display_cancel_read(display);
     if (ready > 0 && (fds[1].revents & POLLIN) != 0) {
@@ -932,14 +1096,10 @@ void LinuxPlatform::dispatch(int64_t millis) {
         if (read(wakeFd, &count, sizeof count) < 0) {
         }
     }
-    wl_display_dispatch_pending(display);
-    if (repeating != 0 && nowMillis() >= repeatAt) {
-        pressKey(repeating - 1, true, true);
-        repeatAt += repeatRate > 0 ? std::max(1, 1000 / repeatRate) : 1000;
-    }
 }
 
 void LinuxPlatform::pressKey(uint32_t code, bool down, bool repeat) {
+    flushMove();
     LinuxWindow* w = keyboardFocus;
     if (w == nullptr || keyState == nullptr) return;
     const xkb_keycode_t keycode = code + 8;  // xkb's codes are evdev's plus 8
@@ -1067,6 +1227,7 @@ LinuxWindow::~LinuxWindow() {
     hide();
     LinuxPlatform& p = platform;
     if (p.pointerFocus == this) p.pointerFocus = nullptr;
+    if (p.moveWindow == this) p.moveWindow = nullptr;
     if (p.keyboardFocus == this) {
         p.keyboardFocus = nullptr;
         p.repeating = 0;
@@ -1104,7 +1265,8 @@ void LinuxWindow::show() {
     }
     wl_surface_commit(surface);
     // Its first configure waited for, so that the program's first picture has a place to go.
-    for (int i = 0; i < 100 && !configured && shown; i++) wl_display_roundtrip(p.display);
+    for (int i = 0; i < 100 && !configurePending && shown; i++) wl_display_roundtrip(p.display);
+    configure();
 }
 
 void LinuxWindow::hide() {
@@ -1117,8 +1279,6 @@ void LinuxWindow::hide() {
     eglSurface = EGL_NO_SURFACE;
     if (eglWindow != nullptr) wl_egl_window_destroy(eglWindow);
     eglWindow = nullptr;
-    if (frame != nullptr) wl_callback_destroy(frame);
-    frame = nullptr;
     if (decoration != nullptr) zxdg_toplevel_decoration_v1_destroy(decoration);
     decoration = nullptr;
     if (toplevel != nullptr) xdg_toplevel_destroy(toplevel);
@@ -1132,6 +1292,8 @@ void LinuxWindow::hide() {
 
 void LinuxWindow::sized() {
     const int w = width(), h = height();
+    WW_TRACE("sized: logical %d x %d, scale %.4f, device %d x %d, configured %d, egl window %s, viewport %s", logicalWidth, logicalHeight, scale(), w, h, configured ? 1 : 0,
+             eglWindow != nullptr ? "resized" : "made", viewport != nullptr ? "set" : "none");
     if (configured) {
         if (eglWindow == nullptr) {
             eglWindow = wl_egl_window_create(surface, w, h);
@@ -1175,33 +1337,52 @@ void LinuxWindow::postForTest(const std::string& what) {
 
 bool LinuxWindow::makeCurrent() { return platform.use(shown && eglSurface != EGL_NO_SURFACE ? eglSurface : EGL_NO_SURFACE); }
 
-// The picture shown, with the next frame's callback asked for first: the one before waited for
-// (at most 50 ms, a window the compositor does not show getting none), its queue apart from all
-// other events so that waiting runs none of the program's handlers.
+// The picture shown, at once. Not paced by the compositor's frame callbacks: the toolkit paces its
+// animations by its own timer, and in a slow virtual machine KDE's callbacks came later than 50
+// ms, so that waiting for each added that to every picture (2026-11-16).
 void LinuxWindow::swapBuffers() {
     LinuxPlatform& p = platform;
     if (!shown || eglSurface == EGL_NO_SURFACE) return;
-    const int64_t deadline = nowMillis() + 50;
-    while (frame != nullptr) {
-        while (wl_display_prepare_read_queue(p.display, p.frames) != 0) wl_display_dispatch_queue_pending(p.display, p.frames);
-        wl_display_flush(p.display);
-        const int64_t left = deadline - nowMillis();
-        if (left <= 0) {
-            wl_display_cancel_read(p.display);
-            wl_callback_destroy(frame);
-            frame = nullptr;
-            break;
-        }
-        pollfd fd = {wl_display_get_fd(p.display), POLLIN, 0};
-        if (poll(&fd, 1, static_cast<int>(left)) > 0) wl_display_read_events(p.display);
-        else wl_display_cancel_read(p.display);
-        wl_display_dispatch_queue_pending(p.display, p.frames);
+    if (!p.use(eglSurface)) {
+        WW_TRACE("swap: cannot make the surface current (EGL error 0x%x)", egl.GetError());
+        return;
     }
-    frame = wl_surface_frame(surface);
-    wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(frame), p.frames);
-    wl_callback_add_listener(frame, &frameListener, this);
-    if (!p.use(eglSurface)) return;
-    egl.SwapBuffers(p.eglDisplay, eglSurface);
+    if (tracing()) {
+        EGLint ew = 0, eh = 0;
+        egl.QuerySurface(p.eglDisplay, eglSurface, EGL_WIDTH, &ew);
+        egl.QuerySurface(p.eglDisplay, eglSurface, EGL_HEIGHT, &eh);
+        static int lastW = -1, lastH = -1;
+        if (ew != lastW || eh != lastH) WW_TRACE("swap: EGL surface %d x %d, window %d x %d", ew, eh, width(), height());
+        lastW = ew;
+        lastH = eh;
+    }
+    at("eglSwapBuffers (Mesa)");
+    // WW_WAYLAND_READBACK=<path>: the picture about to be shown, read back from the window's own
+    // buffer (once a size), saved raw as <path>_<w>x<h>.rgba: whether a driver drew it wrong or the
+    // compositor shows it wrong (2026-11-16, VirtualBox's SVGA3D).
+    if (const char* readback = std::getenv("WW_WAYLAND_READBACK")) {
+        static int lastW = -1, lastH = -1;
+        const int w = width(), h = height();
+        using ReadPixels = void (*)(int, int, int, int, unsigned int, unsigned int, void*);
+        if ((w != lastW || h != lastH) && w > 0 && h > 0) {
+            if (auto readPixels = reinterpret_cast<ReadPixels>(egl.GetProcAddress("glReadPixels"))) {
+                std::vector<uint8_t> rgba(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+                readPixels(0, 0, w, h, 0x1908, 0x1401, rgba.data());  // GL_RGBA, GL_UNSIGNED_BYTE: bottom row first
+                const std::string path = std::string(readback) + "_" + std::to_string(w) + "x" + std::to_string(h) + ".rgba";
+                if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                    for (int row = h - 1; row >= 0; row--) std::fwrite(rgba.data() + static_cast<size_t>(row) * static_cast<size_t>(w) * 4, 1, static_cast<size_t>(w) * 4, f);
+                    std::fclose(f);
+                    WW_TRACE("read back %s", path.c_str());
+                }
+            }
+            lastW = w;
+            lastH = h;
+        }
+    }
+    const int64_t before = nowMillis();
+    if (!egl.SwapBuffers(p.eglDisplay, eglSurface)) WW_TRACE("swap failed: EGL error 0x%x", egl.GetError());
+    if (const int64_t took = nowMillis() - before; took > 20) WW_TRACE("swap: eglSwapBuffers took %lld ms", static_cast<long long>(took));
+    at("the program (after a swap)");
 }
 
 }  // namespace
@@ -1228,3 +1409,4 @@ Platform* Platform::get(std::string& error) {
 #include "xdg-shell-protocol.c"
 
 #endif
+

@@ -65,7 +65,7 @@ namespace ww::jade {
 
 const GLenum kFragmentShader = 0x8B30, kVertexShader = 0x8B31, kCompileStatus = 0x8B81, kLinkStatus = 0x8B82;
 const GLenum kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kTexture0 = 0x84C0, kClampToEdge = 0x812F;
-const GLenum kFramebuffer = 0x8D40, kColorAttachment0 = 0x8CE0, kFramebufferComplete = 0x8CD5;
+const GLenum kFramebuffer = 0x8D40, kReadFramebuffer = 0x8CA8, kColorAttachment0 = 0x8CE0, kFramebufferComplete = 0x8CD5;
 const GLenum kR8 = 0x8229, kRed = 0x1903, kRgba8 = 0x8058, kTriangleStrip = 0x0005;
 
 struct GlApi {
@@ -88,6 +88,7 @@ struct GlApi {
     void(APIENTRY* GenBuffers)(GLsizei, GLuint*);
     void(APIENTRY* BindBuffer)(GLenum, GLuint);
     void(APIENTRY* BufferData)(GLenum, ptrdiff_t, const void*, GLenum);
+    void(APIENTRY* BufferSubData)(GLenum, ptrdiff_t, ptrdiff_t, const void*);
     void(APIENTRY* EnableVertexAttribArray)(GLuint);
     void(APIENTRY* VertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*);
     void(APIENTRY* VertexAttribDivisor)(GLuint, GLuint);
@@ -98,6 +99,11 @@ struct GlApi {
     void(APIENTRY* FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
     GLenum(APIENTRY* CheckFramebufferStatus)(GLenum);
     void(APIENTRY* DeleteFramebuffers)(GLsizei, const GLuint*);
+    void(APIENTRY* DeleteBuffers)(GLsizei, const GLuint*);
+    void(APIENTRY* DeleteVertexArrays)(GLsizei, const GLuint*);
+    void(APIENTRY* DeleteProgram)(GLuint);
+    void(APIENTRY* DeleteShader)(GLuint);
+    void(APIENTRY* BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
     void(APIENTRY* BlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
 #ifdef WW_GL_TABLE_1_1
     // OpenGL 1.1's, which Windows' own library gives by name and elsewhere are fetched too.

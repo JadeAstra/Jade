@@ -41,6 +41,7 @@ bool loadGl(void* (*find)(const char* name), const char*& missing) {
     fetch(gl.GenBuffers, "glGenBuffers");
     fetch(gl.BindBuffer, "glBindBuffer");
     fetch(gl.BufferData, "glBufferData");
+    fetch(gl.BufferSubData, "glBufferSubData");
     fetch(gl.EnableVertexAttribArray, "glEnableVertexAttribArray");
     fetch(gl.VertexAttribPointer, "glVertexAttribPointer");
     fetch(gl.VertexAttribDivisor, "glVertexAttribDivisor");
@@ -51,6 +52,11 @@ bool loadGl(void* (*find)(const char* name), const char*& missing) {
     fetch(gl.FramebufferTexture2D, "glFramebufferTexture2D");
     fetch(gl.CheckFramebufferStatus, "glCheckFramebufferStatus");
     fetch(gl.DeleteFramebuffers, "glDeleteFramebuffers");
+    fetch(gl.DeleteBuffers, "glDeleteBuffers");
+    fetch(gl.DeleteVertexArrays, "glDeleteVertexArrays");
+    fetch(gl.DeleteProgram, "glDeleteProgram");
+    fetch(gl.DeleteShader, "glDeleteShader");
+    fetch(gl.BlitFramebuffer, "glBlitFramebuffer");
     fetch(gl.BlendFuncSeparate, "glBlendFuncSeparate");
 #ifdef WW_GL_TABLE_1_1
     fetch(gl.PixelStorei, "glPixelStorei");

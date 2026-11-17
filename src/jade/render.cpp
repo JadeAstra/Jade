@@ -99,6 +99,69 @@ GLuint compile(GLenum kind, const char* source, std::string& log) {
     return shader;
 }
 
+GLuint makeTexture(bool smooth);
+
+// Made on VirtualBox's and VMware's SVGA3D only (Renderer::start): one throwaway draw, every
+// setting unlike the renderer's, into a picture of its own. That driver sends a setting only
+// when it changes, and the device can keep what an earlier program left there: a label went
+// blank, a picture grew by its own middle. After this draw, the renderer's first sends them all.
+void primeDriver() {
+    const char* vertex = "#version 330 core\nlayout(location = 0) in vec2 p;\nvoid main() { gl_Position = vec4(p, 0.5, 1.0); }\n";
+    const char* fragment =
+        "#version 330 core\nuniform sampler2D t;\nout vec4 o;\nvoid main() { o = texture(t, vec2(0.5)) + vec4(1.0, 0.0, 0.0, 1.0); }\n";
+    std::string log;
+    const GLuint vs = compile(kVertexShader, vertex, log), fs = compile(kFragmentShader, fragment, log);
+    if (!log.empty()) return;
+    const GLuint program = gl.CreateProgram();
+    gl.AttachShader(program, vs);
+    gl.AttachShader(program, fs);
+    gl.LinkProgram(program);
+    const uint8_t texel[4] = {10, 20, 30, 40};
+    const GLuint source = makeTexture(true);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgba8), 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+    const GLuint target = makeTexture(false);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgba8), 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    GLuint framebuffer = 0;
+    gl.GenFramebuffers(1, &framebuffer);
+    gl.BindFramebuffer(kFramebuffer, framebuffer);
+    gl.FramebufferTexture2D(kFramebuffer, kColorAttachment0, GL_TEXTURE_2D, target, 0);
+    GLuint vao = 0, vbo = 0;
+    gl.GenVertexArrays(1, &vao);
+    gl.BindVertexArray(vao);
+    gl.GenBuffers(1, &vbo);
+    gl.BindBuffer(kArrayBuffer, vbo);
+    const float corners[6] = {-1, -1, 3, -1, -1, 3};
+    gl.BufferData(kArrayBuffer, sizeof corners, corners, kStreamDraw);
+    gl.EnableVertexAttribArray(0);
+    gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, nullptr);
+    glViewport(0, 0, 2, 2);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 1, 1);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    gl.BlendFuncSeparate(GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
+    gl.UseProgram(program);
+    gl.ActiveTexture(kTexture0);
+    glBindTexture(GL_TEXTURE_2D, source);
+    gl.DrawArraysInstanced(0x0004 /* GL_TRIANGLES */, 0, 3, 1);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    gl.BindFramebuffer(kFramebuffer, 0);
+    gl.BindVertexArray(0);
+    gl.UseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    GLuint textures[2] = {source, target};
+    glDeleteTextures(2, textures);
+    gl.DeleteFramebuffers(1, &framebuffer);
+    gl.DeleteBuffers(1, &vbo);
+    gl.DeleteVertexArrays(1, &vao);
+    gl.DeleteProgram(program);
+    gl.DeleteShader(vs);
+    gl.DeleteShader(fs);
+}
+
 GLuint makeTexture(bool smooth) {
     GLuint texture = 0;
     glGenTextures(1, &texture);
@@ -185,6 +248,8 @@ bool Renderer::start(std::string& error) {
     colors_.pixels.assign(static_cast<size_t>(kColorAtlas) * kColorAtlas * 4, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(kRgba8), kColorAtlas, kColorAtlas, 0, GL_RGBA, GL_UNSIGNED_BYTE, colors_.pixels.data());
 
+    const char* card = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    if (card != nullptr && std::strstr(card, "SVGA3D") != nullptr) primeDriver();
     // Colours are multiplied by their alpha before they are laid over what is there.
     glEnable(GL_BLEND);
     gl.BlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -702,7 +767,15 @@ void Renderer::drawRuns(int width, int height, float flip) {
     gl.ActiveTexture(kTexture0);
     gl.BindVertexArray(vao_);
     gl.BindBuffer(kArrayBuffer, vbo_);
-    gl.BufferData(kArrayBuffer, static_cast<ptrdiff_t>(batch_.size() * sizeof(Instance)), batch_.data(), kStreamDraw);
+    // The records written into the one buffer, kept from batch to batch and made larger only when
+    // a batch needs more, not given new room for each: VirtualBox's SVGA3D sometimes went on
+    // reading the room the buffer had before (labels went blank when a button was hovered).
+    const ptrdiff_t bytes = static_cast<ptrdiff_t>(batch_.size() * sizeof(Instance));
+    if (bytes > vboRoom_) {
+        vboRoom_ = std::max<ptrdiff_t>({bytes, vboRoom_ * 2, ptrdiff_t{1} << 20});
+        gl.BufferData(kArrayBuffer, vboRoom_, nullptr, kStreamDraw);
+    }
+    gl.BufferSubData(kArrayBuffer, 0, bytes, batch_.data());
     const GLsizei stride = sizeof(Instance);
     for (const Run& run : runs_) {
         if (run.count == 0) continue;
@@ -749,19 +822,11 @@ bool Renderer::present(int id, PlatformWindow& window) {
     glViewport(0, 0, width, height);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    // The surface as it is, from the top left corner: on the screen y grows upwards, so it
-    // is turned over on the way.
-    const float savedClip[4] = {clip_[0], clip_[1], clip_[2], clip_[3]};
-    clip_[0] = clip_[1] = -1e9f;
-    clip_[2] = clip_[3] = 1e9f;
-    push(s->width / 2.0f, s->height / 2.0f, s->width / 2.0f, s->height / 2.0f, 4, 0, 0, 0, 0xFFFFFFFFu, s->texture);
-    batch_.back().u1 = batch_.back().v1 = 1;
-    std::memcpy(clip_, savedClip, sizeof clip_);
-    glDisable(GL_BLEND);
-    drawRuns(width, height, -1.0f);
-    glEnable(GL_BLEND);
-    batch_.clear();
-    runs_.clear();
+    // The surface as it is, pixel for pixel from the top left corner: on the screen y grows
+    // upwards, so it is turned over on the way. Copied, not drawn as a textured square: less work.
+    gl.BindFramebuffer(kReadFramebuffer, s->framebuffer);
+    gl.BlitFramebuffer(0, 0, s->width, s->height, 0, height, s->width, height - s->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl.BindFramebuffer(kFramebuffer, 0);
     return true;
 }
 
