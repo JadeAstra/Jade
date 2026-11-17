@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Registers plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: more registers for native code, and values kept in them where they are used</h1>
+<p class="lede">Written 2026-11-17, at the user's word ("can we do 1 and 2?"), after the speed plan's part 1 (<a href="speed-plan.html#sp-p1">GIF</a>) did not reach its gate: native code holds the GIF writer's LZW loop whole, but spills the values its hot path uses with those of its cold path, as it has nine registers for whole numbers and a way out after each check needs every value changed so far. Two things the user asked for: more registers (2), and a value kept in a register on the path that uses it most, in memory only on the path that needs its register for something else (1). Three parts, each with a spike and a gate; nothing built before the questions at the end are answered.</p>
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#rp-now">How native code's registers are now</a></li>
+<li><a href="#rp-parts">The parts, each with its spike and gate</a></li>
+<li><a href="#rp-after">After</a></li>
+<li><a href="#rp-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="rp-now">How native code's registers are now</h2>
+<ul>
+<li><strong>The stencils</strong> (<code>src/native/stencils.cpp</code>) are functions of the calling convention <code>preserve_none</code>, which passes up to twelve whole numbers in the processor's registers, and eight XMM registers. All twelve are taken: the frame's slots, the region's context, nine registers for the region's whole numbers (i0 to i8) and its flag (i9, a comparison's answer). The processor has sixteen: of the four left, RSP is the stack, RBP the convention keeps for its caller, RBX and R10 are free for a stencil's own use.</li>
+<li><strong>A register kept past the twelve</strong> works (tried 2026-11-17, Clang 19): a variable bound to RBX by an empty <code>asm</code> at a stencil's start and again before its jump on keeps its value through the stencil and the jump, and Clang takes another register for its own work.</li>
+<li><strong>Stencils by registers:</strong> 43,165 now. The whole numbers' take 7,938 (2,187 of three registers: add, subtract, multiply, 9 &times; 9 &times; 9 each); the floats' the rest (6,144 each for four operations). Eleven registers for whole numbers would add some 4,500, twelve some 7,000.</li>
+<li><strong>Spilling</strong> (<code>src/native/regions.cpp</code>, giveRegisters and spillOne): Chaitin's colouring as Briggs has it; where there are too many values, one is kept in its slot everywhere (each read loaded first, each write stored), chosen by how many it clashes with for how often it is written in the code. Not by how often it runs: no region knows that. A guess at it was tried and dropped (2026-11-17): it served the loops it was made on and cost the blur kernel 13%.</li>
+<li><strong>A region made again</strong> already happens, once, where its quick ways miss too often (vm.cpp): the way the counts of part B would come back.</li>
+</ul>
+
+<h2 id="rp-parts">The parts, each with its spike and gate</h2>
+<div class="table"><table>
+<thead><tr><th>Part</th><th>What</th><th>Spike, and its gate</th></tr></thead>
+<tbody>
+<tr><td class="part">A. More registers</td><td>Native code given RBX and R10 as two more registers for whole numbers, each bound by an empty <code>asm</code> at every stencil's start and before its jump on (in the STENCIL and NEXT macros, so no stencil is written again); the region given eleven. The stencil tool checks that no stencil writes RBX or R10 but those that mean to. With RBP too (question 1), twelve: saved in the context as a region is entered and put back on every way out.</td><td>The spike: eleven registers built, every test passed on Windows and Linux; the stencils counted, ww.exe's size and its build's time. Gate: the LZW loop and the GIF spike's loops faster by a tenth or more, no kernel or benchmark slower, ww.exe no more than a megabyte larger.</td></tr>
+<tr><td class="part">B. Counts of what runs</td><td>A region counts, the first times round, how often each of its branches goes each way (a count on each way, as WW_PROFILE_NATIVE's are); then is made again, once, with what was counted: what to spill chosen by how often each value is really used (question 3: how many times round).</td><td>The spike: the counts on, and spills chosen by them. Gate: the GIF spike's indices as quick as the dropped guess made them (8.4 ms to some 6), the blur kernel as now, nothing slower; the counting itself no more than 1% of any benchmark.</td></tr>
+<tr><td class="part">C. A value's life split</td><td>Where a value would be spilled, kept in its register on the paths the counts show run most, written to its slot on the way into the path that needs its register (where it changed) and loaded again on the way out; spilled everywhere only where that is no better. As C++ compilers do.</td><td>The spike: the LZW loop's prefix, key and code found in registers on its hot path. Gate: the LZW loop within 1.25 times the C++ (5.7 ms on the 1000 by 1000 photo: 7.1 or less), nothing slower.</td></tr>
+</tbody></table></div>
+<p>Each part finished, timed against the build before it (the kernels, the whole pictures, <code>bench/run.ps1</code>, the GIF parts), tested on Windows and Linux, written into this page and committed (a version a build) before the next; each reported, the next begun on the user's word.</p>
+
+<h2 id="rp-after">After</h2>
+<p>The speed plan's part 1 tried again: the LZW loop against its gate (at its C++'s speed), and the indices and dithering in WinterWolf (<code>bench/spike/gif_nearest.ww</code>) against the C++ they would replace. Then part 2, PNG, whose deflate is the same kind of loop.</p>
+
+<h2 id="rp-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>How many registers: eleven, or twelve with RBP?</h3>
+<ul>
+<li><strong>Eleven</strong> (RBX and R10): nothing to save or put back.</li>
+<li><strong>Twelve</strong> (RBP too): saved as a region is entered and put back on every way out (a step each); a crash inside a region would show no frame chain past it.</li>
+</ul>
+<p><em>Recommended:</em> eleven first, twelve tried in the same spike and kept only if it is measurably quicker on the loops above.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>The order: A, B, C?</h3>
+<ul>
+<li><strong>A, B, C:</strong> more registers first (mechanical, helps every loop at once); then counts; then splitting, which needs the counts to tell a hot path from a cold one.</li>
+<li><strong>A, then C on guesses:</strong> splitting without counts, the hot path guessed.</li>
+</ul>
+<p><em>Recommended:</em> A, B, C. Guessing which path is hot is what failed on 2026-11-17; with counts, splitting and spilling both choose from what really runs.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>How long a region counts before it is made again</h3>
+<ul>
+<li><strong>The first 1,000 times round</strong> (or the loop's first run, if shorter): made again as the loop next starts.</li>
+<li><strong>The first 10,000 times round:</strong> surer counts, longer at the counting region's speed.</li>
+</ul>
+<p><em>Recommended:</em> 1,000: a loop worth native code runs far more than that, and a branch taken once in a thousand matters little to what is spilled.</p>
+<div class="verdict"><span class="label">To decide</span><span class="blank"></span></div>
+</section>
+</main>
+</body>
+</html>
