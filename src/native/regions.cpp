@@ -6142,7 +6142,7 @@ struct Region {
         if (ah.updates.size() > 6) return false;
         if (defined.count(next) || defined.count(left) || defined.count(counter)) return false;
         // What goes on round the loop: at most one total.
-        const std::set<Reg>& live = liveIn[static_cast<size_t>(h)];
+        const std::set<Reg>& live = liveIn(static_cast<size_t>(h));
         for (const Reg& d : defined) {
             if (d == counter || !live.count(d)) continue;
             if (ah.hasAcc) return false;
@@ -6791,7 +6791,18 @@ struct Region {
 
     // ---- Liveness: which registers each instruction reads before writing ----
 
-    std::vector<std::set<Reg>> liveIn;
+    // Each instruction's values live as it starts, as a set made the first time it is asked for
+    // (liveIn), from findLive's bits (2026-11-17: made for every instruction, they were most of
+    // findLive's time; most are never asked for).
+    mutable std::vector<std::set<Reg>> liveSets;
+    mutable std::vector<char> liveSetMade;
+    const std::set<Reg>& liveIn(size_t i) const {
+        if (!liveSetMade[i]) {
+            liveSets[i] = denseSet(liveBits[i]);
+            liveSetMade[i] = 1;
+        }
+        return liveSets[i];
+    }
 
     // What a way out reads: the registers it writes back. (A way to an instruction the VM comes
     // back in at loads what that reads after.)
@@ -6856,7 +6867,7 @@ struct Region {
                         w.cover[ii] = {lo, pp};  // its way out is before the write; its jump after
                         return true;
                     }
-                    if (l.jumpTo >= 0 && liveIn[static_cast<size_t>(l.jumpTo)].count(d)) return false;
+                    if (l.jumpTo >= 0 && liveIn(static_cast<size_t>(l.jumpTo)).count(d)) return false;
                     if (l.jumpExit >= 0 && exitReads(r.exits[static_cast<size_t>(l.jumpExit)], d)) w.outs.emplace(ii, l.jumpExit);
                 }
                 w.cover[ii] = {lo, r.ops.size()};
@@ -6865,7 +6876,7 @@ struct Region {
                     return true;
                 }
                 if (!r.fallsThrough || ii + 1 >= ins.size()) return true;
-                if (!liveIn[ii + 1].count(d)) return true;
+                if (!liveIn(ii + 1).count(d)) return true;
                 if (joined[ii + 1] || !in[ii + 1].known || results[ii + 1].island) return false;
                 ii++;
                 pp = 0;
@@ -6913,41 +6924,107 @@ struct Region {
         }
     }
 
+    // The region's values numbered in Reg's own order, so that liveness and clashes are kept as
+    // rows of bits (2026-11-17: as sets of values, made afresh for every instruction on every pass
+    // and after every spill, they were most of the 21 ms the first GIF written spent making its
+    // regions). Walking a row's bits from the lowest visits values as walking a set of them did.
+    std::vector<Reg> denseRegs;
+    std::map<Reg, int> denseIndex;
+    size_t denseWords = 0;
+    std::vector<std::vector<uint64_t>> liveBits;  // liveIn as bits
+    std::vector<std::vector<std::vector<uint64_t>>> exitUseBits;  // each way out's uses, by instruction
+    void numberValues() {
+        std::vector<Reg> all;
+        auto take = [&](const LOp& l) {
+            all.insert(all.end(), l.uses.begin(), l.uses.end());
+            all.insert(all.end(), l.defs.begin(), l.defs.end());
+            all.insert(all.end(), l.named.begin(), l.named.end());
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops) take(l);
+            for (const ExitPoint& e : results[i].exits)
+                for (const LOp& l : e.stores) take(l);
+        }
+        for (const LOp& l : headOps) take(l);
+        std::sort(all.begin(), all.end());
+        all.erase(std::unique(all.begin(), all.end()), all.end());
+        denseRegs = std::move(all);
+        denseIndex.clear();
+        for (size_t k = 0; k < denseRegs.size(); k++) denseIndex.emplace_hint(denseIndex.end(), denseRegs[k], static_cast<int>(k));
+        denseWords = (denseRegs.size() + 63) / 64;
+    }
+    std::set<Reg> denseSet(const std::vector<uint64_t>& bits) const {
+        std::set<Reg> out;
+        for (size_t w = 0; w < bits.size(); w++)
+            for (uint64_t b = bits[w]; b != 0; b &= b - 1) out.emplace_hint(out.end(), denseRegs[w * 64 + static_cast<size_t>(__builtin_ctzll(b))]);
+        return out;
+    }
+
     void findLive() {
-        liveIn.assign(ins.size(), {});
+        numberValues();
+        const size_t n = ins.size(), words = denseWords;
+        auto bit = [&](std::vector<uint64_t>& bits, const Reg& r, bool on) {
+            const size_t k = static_cast<size_t>(denseIndex.at(r));
+            if (on) bits[k / 64] |= uint64_t{1} << (k % 64);
+            else bits[k / 64] &= ~(uint64_t{1} << (k % 64));
+        };
+        // Each way out's uses (addUses), as bits, made once (and kept for giveRegisters).
+        std::vector<std::vector<std::vector<uint64_t>>>& exitUses = exitUseBits;
+        exitUses.assign(n, {});
+        for (size_t i = 0; i < n; i++) {
+            if (!in[i].known) continue;
+            for (const ExitPoint& e : results[i].exits) {
+                // As addUses: backwards through its stores, what each writes no use of the way in.
+                std::vector<uint64_t> bits(words, 0);
+                for (auto l = e.stores.rbegin(); l != e.stores.rend(); ++l) {
+                    for (const Reg& d : l->defs) bit(bits, d, false);
+                    for (const Reg& u : l->uses) bit(bits, u, true);
+                }
+                exitUses[i].push_back(std::move(bits));
+            }
+        }
+        auto orIn = [](std::vector<uint64_t>& to, const std::vector<uint64_t>& from) {
+            for (size_t w = 0; w < to.size(); w++) to[w] |= from[w];
+        };
+        liveBits.assign(n, std::vector<uint64_t>(words, 0));
+        std::vector<uint64_t> live(words, 0);
         for (bool changed = true; changed;) {
             changed = false;
-            for (int i = static_cast<int>(ins.size()) - 1; i >= 0; i--) {
+            for (int i = static_cast<int>(n) - 1; i >= 0; i--) {
                 if (!in[static_cast<size_t>(i)].known) continue;
                 const Result& r = results[static_cast<size_t>(i)];
-                std::set<Reg> live;
-                if (r.fallExit >= 0) addUses(live, r.exits[static_cast<size_t>(r.fallExit)]);
-                else if (r.fallsThrough && i + 1 < static_cast<int>(ins.size())) live = liveIn[static_cast<size_t>(i) + 1];
+                const auto& ex = exitUses[static_cast<size_t>(i)];
+                if (r.fallExit >= 0) live = ex[static_cast<size_t>(r.fallExit)];
+                else if (r.fallsThrough && i + 1 < static_cast<int>(n)) live = liveBits[static_cast<size_t>(i) + 1];
+                else std::fill(live.begin(), live.end(), 0);
                 for (auto l = r.ops.rbegin(); l != r.ops.rend(); ++l) {
-                    if (l->jumpTo >= 0) live.insert(liveIn[static_cast<size_t>(l->jumpTo)].begin(), liveIn[static_cast<size_t>(l->jumpTo)].end());
-                    if (l->jumpExit >= 0) addUses(live, r.exits[static_cast<size_t>(l->jumpExit)]);
-                    for (const Reg& d : l->defs) live.erase(d);
-                    if (l->exit >= 0) addUses(live, r.exits[static_cast<size_t>(l->exit)]);
-                    live.insert(l->uses.begin(), l->uses.end());
+                    if (l->jumpTo >= 0) orIn(live, liveBits[static_cast<size_t>(l->jumpTo)]);
+                    if (l->jumpExit >= 0) orIn(live, ex[static_cast<size_t>(l->jumpExit)]);
+                    for (const Reg& d : l->defs) bit(live, d, false);
+                    if (l->exit >= 0) orIn(live, ex[static_cast<size_t>(l->exit)]);
+                    for (const Reg& u : l->uses) bit(live, u, true);
                 }
-                if (live != liveIn[static_cast<size_t>(i)]) {
-                    liveIn[static_cast<size_t>(i)] = std::move(live);
+                if (live != liveBits[static_cast<size_t>(i)]) {
+                    liveBits[static_cast<size_t>(i)] = live;
                     changed = true;
                 }
             }
         }
+        liveSets.assign(n, {});
+        liveSetMade.assign(n, 0);
         // Where the region starts, before its first instruction: the steps of its loop's template.
-        liveStart = liveIn.empty() ? std::set<Reg>{} : liveIn[0];
+        liveStart = n == 0 ? std::set<Reg>{} : liveIn(0);
         for (auto l = headOps.rbegin(); l != headOps.rend(); ++l) {
             for (const Reg& d : l->defs) liveStart.erase(d);
             liveStart.insert(l->uses.begin(), l->uses.end());
         }
         for (int e : entries)
-            for (const Reg& r : e == 0 ? liveStart : liveIn[static_cast<size_t>(e)])
+            for (const Reg& r : e == 0 ? liveStart : liveIn(static_cast<size_t>(e)))
                 if (r.slot < 0) refuse("a scratch register read before it is written");
     }
     std::set<Reg> liveStart;
-    const std::set<Reg>& liveAt(int entry) const { return entry == 0 ? liveStart : liveIn[static_cast<size_t>(entry)]; }
+    const std::set<Reg>& liveAt(int entry) const { return entry == 0 ? liveStart : liveIn(static_cast<size_t>(entry)); }
 
     // ---- Registers ----
 
@@ -6961,22 +7038,51 @@ struct Region {
         regs.clear();
         clash.clear();
         std::map<Reg, std::set<Reg>> moves;
+        // The clashes as rows of bits over findLive's numbering, made into `clash` at the end
+        // (2026-11-17: inserted into sets one pair at a time, they were the most of the time
+        // making a region took). A row's bits are only those of its own class.
+        const size_t n = denseRegs.size(), words = denseWords;
+        std::vector<std::vector<uint64_t>> rows(n, std::vector<uint64_t>(words, 0));
+        std::vector<uint64_t> noted(words, 0), ints(words, 0);
+        for (size_t k = 0; k < n; k++)
+            if (denseRegs[k].cls == CI) ints[k / 64] |= uint64_t{1} << (k % 64);
+        auto idx = [&](const Reg& r) { return static_cast<size_t>(denseIndex.at(r)); };
+        auto has = [](const std::vector<uint64_t>& bits, size_t k) { return (bits[k / 64] >> (k % 64)) & 1; };
+        auto put = [](std::vector<uint64_t>& bits, size_t k) { bits[k / 64] |= uint64_t{1} << (k % 64); };
         auto meet = [&](const Reg& a, const Reg& b) {
             if (a.cls != b.cls || a == b) return;
-            clash[a].insert(b);
-            clash[b].insert(a);
+            put(rows[idx(a)], idx(b));
         };
-        auto note = [&](const Reg& r) { clash[r]; };
-        auto together = [&](const std::set<Reg>& live) {
-            for (const Reg& a : live) {
-                note(a);
-                for (const Reg& b : live) meet(a, b);
-            }
+        auto note = [&](const Reg& r) { put(noted, idx(r)); };
+        // `d` meets every value in `live` of its class but itself.
+        auto meetAll = [&](const Reg& d, const std::vector<uint64_t>& live) {
+            const size_t k = idx(d);
+            std::vector<uint64_t>& row = rows[k];
+            const bool isInt = d.cls == CI;
+            for (size_t w = 0; w < words; w++) row[w] |= live[w] & (isInt ? ints[w] : ~ints[w]);
+            row[k / 64] &= ~(uint64_t{1} << (k % 64));
+        };
+        // Each value in `live` noted, and meeting all the others of its class.
+        auto together = [&](const std::vector<uint64_t>& live) {
+            for (size_t w = 0; w < words; w++)
+                for (uint64_t b = live[w]; b != 0; b &= b - 1) {
+                    const size_t a = w * 64 + static_cast<size_t>(__builtin_ctzll(b));
+                    put(noted, a);
+                    meetAll(denseRegs[a], live);
+                }
         };
         // What each way in loads, at once; and the steps before the region's first instruction.
-        for (int e : entries) together(liveAt(e));
+        for (int e : entries) {
+            if (e != 0) {
+                together(liveBits[static_cast<size_t>(e)]);
+                continue;
+            }
+            std::vector<uint64_t> start(words, 0);
+            for (const Reg& s : liveStart) put(start, idx(s));
+            together(start);
+        }
         {
-            std::set<Reg> live = liveIn.empty() ? std::set<Reg>{} : liveIn[0];
+            std::set<Reg> live = ins.empty() ? std::set<Reg>{} : liveIn(0);
             for (auto l = headOps.rbegin(); l != headOps.rend(); ++l) {
                 for (const Reg& d : l->defs) {
                     note(d);
@@ -6987,19 +7093,24 @@ struct Region {
                 for (const Reg& u : l->named) note(u);
             }
         }
+        std::vector<uint64_t> live(words, 0);
+        auto orIn = [](std::vector<uint64_t>& to, const std::vector<uint64_t>& from) {
+            for (size_t w = 0; w < to.size(); w++) to[w] |= from[w];
+        };
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             const Result& r = results[i];
             for (const ExitPoint& e : r.exits)
-                if (e.toEntry >= 0) together(liveIn[static_cast<size_t>(e.toEntry)]);
+                if (e.toEntry >= 0) together(liveBits[static_cast<size_t>(e.toEntry)]);
             // Backwards through its steps, as findLive goes: what a step writes meets what is
             // wanted after it.
-            std::set<Reg> live;
-            if (r.fallExit >= 0) addUses(live, r.exits[static_cast<size_t>(r.fallExit)]);
-            else if (r.fallsThrough && i + 1 < ins.size()) live = liveIn[i + 1];
+            const auto& exitBits = exitUseBits[i];
+            if (r.fallExit >= 0) live = exitBits[static_cast<size_t>(r.fallExit)];
+            else if (r.fallsThrough && i + 1 < ins.size()) live = liveBits[i + 1];
+            else std::fill(live.begin(), live.end(), 0);
             for (auto l = r.ops.rbegin(); l != r.ops.rend(); ++l) {
-                if (l->jumpTo >= 0) live.insert(liveIn[static_cast<size_t>(l->jumpTo)].begin(), liveIn[static_cast<size_t>(l->jumpTo)].end());
-                if (l->jumpExit >= 0) addUses(live, r.exits[static_cast<size_t>(l->jumpExit)]);
+                if (l->jumpTo >= 0) orIn(live, liveBits[static_cast<size_t>(l->jumpTo)]);
+                if (l->jumpExit >= 0) orIn(live, exitBits[static_cast<size_t>(l->jumpExit)]);
                 // A move's two ends do not clash for the move itself: they may share a register,
                 // and the move is then nothing.
                 const bool isMove = (l->stem == "movi" || l->stem == "movf") && l->named.size() == 2;
@@ -7009,12 +7120,22 @@ struct Region {
                 }
                 for (const Reg& d : l->defs) {
                     note(d);
-                    for (const Reg& x : live)
-                        if (!(isMove && x == l->named[1])) meet(d, x);
+                    if (isMove) {
+                        // Every value wanted after but the move's source.
+                        std::vector<uint64_t> others = live;
+                        const size_t s = idx(l->named[1]);
+                        others[s / 64] &= ~(uint64_t{1} << (s % 64));
+                        meetAll(d, others);
+                    } else {
+                        meetAll(d, live);
+                    }
                 }
-                for (const Reg& d : l->defs) live.erase(d);
-                if (l->exit >= 0) addUses(live, r.exits[static_cast<size_t>(l->exit)]);
-                live.insert(l->uses.begin(), l->uses.end());
+                for (const Reg& d : l->defs) {
+                    const size_t k = idx(d);
+                    live[k / 64] &= ~(uint64_t{1} << (k % 64));
+                }
+                if (l->exit >= 0) orIn(live, exitBits[static_cast<size_t>(l->exit)]);
+                for (const Reg& u : l->uses) put(live, idx(u));
                 for (const Reg& u : l->named) note(u);
             }
             // A way out's own steps, backwards too (2026-11-15): a value loaded from its cell
@@ -7034,6 +7155,19 @@ struct Region {
                 }
             }
         }
+        // Each clash both ways, as meet made them; then as `clash` has them: every value noted or
+        // met, each with those it meets.
+        for (size_t a = 0; a < n; a++)
+            for (size_t w = 0; w < words; w++)
+                for (uint64_t b = rows[a][w]; b != 0; b &= b - 1) put(rows[w * 64 + static_cast<size_t>(__builtin_ctzll(b))], a);
+        for (size_t a = 0; a < n; a++) {
+            bool any = has(noted, a) != 0;
+            for (size_t w = 0; w < words && !any; w++) any = rows[a][w] != 0;
+            if (!any) continue;
+            std::set<Reg>& s = clash.emplace_hint(clash.end(), denseRegs[a], std::set<Reg>{})->second;
+            for (size_t w = 0; w < words; w++)
+                for (uint64_t b = rows[a][w]; b != 0; b &= b - 1) s.emplace_hint(s.end(), denseRegs[w * 64 + static_cast<size_t>(__builtin_ctzll(b))]);
+        }
         // The order (Chaitin's, as Briggs has it): one clashing with fewer than there are
         // registers set aside, those it meets then clashing with one fewer, and again; where
         // none is, the one clashing most set aside all the same, in hope. Registers given the
@@ -7042,36 +7176,46 @@ struct Region {
         // How often each value is read or written: a float's high half (f8 to f15) costs a
         // shuffle to read and to write, and makes its low half's writes wait (markWhole), so the
         // floats used least are the ones given high halves.
-        std::map<Reg, int> traffic;
+        // (Over findLive's numbering, in arrays, 2026-11-17: the same picks, in the same order of
+        // values, as the maps and sets they were in, which made each pick a walk of map lookups.)
+        std::vector<int> traffic(n, 0);
         for (size_t i = 0; i < ins.size(); i++)
             if (in[i].known)
                 for (const LOp& l : results[i].ops) {
-                    for (const Reg& u : l.uses) traffic[u]++;
-                    for (const Reg& d : l.defs) traffic[d]++;
+                    for (const Reg& u : l.uses) traffic[idx(u)]++;
+                    for (const Reg& d : l.defs) traffic[idx(d)]++;
                 }
         std::vector<Reg> order;
         {
-            std::map<Reg, int> degree;
-            std::set<Reg> left;
+            std::vector<int> degree(n, 0);
+            std::vector<size_t> left;  // in the values' order
             for (const auto& [r, others] : clash) {
-                degree[r] = static_cast<int>(others.size());
-                left.insert(r);
+                degree[idx(r)] = static_cast<int>(others.size());
+                left.push_back(idx(r));
             }
+            std::vector<char> isLeft(n, 0);
+            for (size_t k : left) isLeft[k] = 1;
             while (!left.empty()) {
                 // Of those clashing with fewer than there are registers, the one used least: set
                 // aside first, it is given its register last, a high half where the low ones
                 // are gone.
-                auto pick = left.end();
-                for (auto it = left.begin(); it != left.end(); ++it)
-                    if (degree[*it] < (it->cls == CI ? 9 : kFloatRegisters) && (pick == left.end() || traffic[*it] < traffic[*pick])) pick = it;
-                if (pick == left.end())
-                    for (auto it = left.begin(); it != left.end(); ++it)
-                        if (pick == left.end() || degree[*it] > degree[*pick]) pick = it;
-                const Reg r = *pick;
-                left.erase(pick);
-                order.push_back(r);
-                for (const Reg& o : clash[r])
-                    if (left.count(o)) degree[o]--;
+                size_t pick = left.size();
+                for (size_t j = 0; j < left.size(); j++) {
+                    const size_t k = left[j];
+                    if (degree[k] < (denseRegs[k].cls == CI ? 9 : kFloatRegisters) && (pick == left.size() || traffic[k] < traffic[left[pick]])) pick = j;
+                }
+                if (pick == left.size())
+                    for (size_t j = 0; j < left.size(); j++)
+                        if (pick == left.size() || degree[left[j]] > degree[left[pick]]) pick = j;
+                const size_t r = left[pick];
+                left.erase(left.begin() + static_cast<std::ptrdiff_t>(pick));
+                isLeft[r] = 0;
+                order.push_back(denseRegs[r]);
+                for (size_t w = 0; w < words; w++)
+                    for (uint64_t b = rows[r][w]; b != 0; b &= b - 1) {
+                        const size_t o = w * 64 + static_cast<size_t>(__builtin_ctzll(b));
+                        if (isLeft[o]) degree[o]--;
+                    }
             }
             std::reverse(order.begin(), order.end());
         }
@@ -7099,7 +7243,7 @@ struct Region {
                     std::vector<int> low(8, 0);
                     for (const Reg& o : clash[r]) {
                         auto g = regs.find(o);
-                        if (g != regs.end() && g->second < 8) low[static_cast<size_t>(g->second)] += traffic[o];
+                        if (g != regs.end() && g->second < 8) low[static_cast<size_t>(g->second)] += traffic[idx(o)];
                     }
                     for (int k = 8; k < limit; k++)
                         if (!taken[static_cast<size_t>(k)] && (got < 0 || low[static_cast<size_t>(k - 8)] < low[static_cast<size_t>(got - 8)])) got = k;
@@ -7256,12 +7400,12 @@ struct Region {
         if (homes >= kRegionHomes) return false;
         std::set<Reg> barred;
         for (int e : entries)
-            if (e >= 0 && static_cast<size_t>(e) < liveIn.size()) barred.insert(liveIn[static_cast<size_t>(e)].begin(), liveIn[static_cast<size_t>(e)].end());
+            if (e >= 0 && static_cast<size_t>(e) < ins.size()) barred.insert(liveIn(static_cast<size_t>(e)).begin(), liveIn(static_cast<size_t>(e)).end());
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             for (const ExitPoint& e : results[i].exits)
-                if (e.toEntry >= 0 && static_cast<size_t>(e.toEntry) < liveIn.size())
-                    barred.insert(liveIn[static_cast<size_t>(e.toEntry)].begin(), liveIn[static_cast<size_t>(e.toEntry)].end());
+                if (e.toEntry >= 0 && static_cast<size_t>(e.toEntry) < ins.size())
+                    barred.insert(liveIn(static_cast<size_t>(e.toEntry)).begin(), liveIn(static_cast<size_t>(e.toEntry)).end());
         }
         for (const LOp& l : headOps)
             for (const auto* list : {&l.named, &l.uses, &l.defs})
@@ -7371,9 +7515,9 @@ struct Region {
             // Backwards through its steps, as findLive goes: what is wanted after each.
             std::set<Reg> live;
             if (r.fallExit >= 0) addUses(live, r.exits[static_cast<size_t>(r.fallExit)]);
-            else if (r.fallsThrough && i + 1 < ins.size()) live = liveIn[i + 1];
+            else if (r.fallsThrough && i + 1 < ins.size()) live = liveIn(i + 1);
             for (auto l = r.ops.rbegin(); l != r.ops.rend(); ++l) {
-                if (l->jumpTo >= 0) live.insert(liveIn[static_cast<size_t>(l->jumpTo)].begin(), liveIn[static_cast<size_t>(l->jumpTo)].end());
+                if (l->jumpTo >= 0) live.insert(liveIn(static_cast<size_t>(l->jumpTo)).begin(), liveIn(static_cast<size_t>(l->jumpTo)).end());
                 if (l->jumpExit >= 0) addUses(live, r.exits[static_cast<size_t>(l->jumpExit)]);
                 if (!l->named.empty() && l->named[0].cls == CF && writers.count(l->stem) &&
                     std::find(l->defs.begin(), l->defs.end(), l->named[0]) != l->defs.end()) {
@@ -7896,14 +8040,21 @@ int functionHeadOf(const FunctionProto& f, const std::vector<Ins>& all, const st
 
 // How long making regions took, said as the program ends where WW_TIME_NATIVE is set.
 double phaseTimes[4] = {};  // each phase's time, for WW_TIME_NATIVE
+// Of the registers' phase: colouring, spilling, liveness found again; then the code made; and how
+// many spills (2026-11-17).
+double registerTimes[4] = {};
+long spillCount = 0;
 long refusals = 0;
 double setupTime = 0;
 struct NativeTimes {
     double seconds = 0;
     long functions = 0;
     ~NativeTimes() {
-        if (std::getenv("WW_TIME_NATIVE") != nullptr)
+        if (std::getenv("WW_TIME_NATIVE") != nullptr) {
             std::fprintf(stderr, "  hints %.1f, analysis %.1f, liveness %.1f, registers %.1f ms; %ld refused; setup %.1f ms\n", phaseTimes[0] * 1000, phaseTimes[1] * 1000, phaseTimes[2] * 1000, phaseTimes[3] * 1000, refusals, setupTime * 1000);
+            std::fprintf(stderr, "  of registers: colouring %.1f, spilling %.1f, liveness again %.1f ms (%ld spills); the code made %.1f ms\n", registerTimes[0] * 1000,
+                         registerTimes[1] * 1000, registerTimes[2] * 1000, spillCount, registerTimes[3] * 1000);
+        }
         if (std::getenv("WW_TIME_NATIVE") != nullptr) std::fprintf(stderr, "native code: %ld functions, %.1f ms making regions\n", functions, seconds * 1000);
     }
 } nativeTimes;
@@ -8044,18 +8195,29 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
             r.renameValues();
             r.findLive();
             lap(2);
-            while (!r.giveRegisters()) {
-                if (!r.spillOne()) refuse("more values at once than registers, and none can be kept in its slot");
+            // (Each part timed for WW_TIME_NATIVE: colouring, spilling, liveness again, the code made.)
+            auto part = [&](int k, auto&& work) {
+                const auto s0 = std::chrono::steady_clock::now();
+                auto result = work();
+                registerTimes[k] += std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count();
+                return result;
+            };
+            while (!part(0, [&] { return r.giveRegisters(); })) {
+                spillCount++;
+                if (!part(1, [&] { return r.spillOne(); })) refuse("more values at once than registers, and none can be kept in its slot");
                 if (dumping) {
                     std::fprintf(stderr, "== %s: kept in their slots:", f.name.c_str());
                     for (const Reg& s : r.spilled) std::fprintf(stderr, " %d%s", s.slot, s.cls == CF ? "f" : "");
                     std::fprintf(stderr, "\n");
                 }
-                r.findLive();
+                part(2, [&] {
+                    r.findLive();
+                    return 0;
+                });
             }
             lap(3);
             std::vector<std::string> names;
-            const auto ways = make(r, dumping ? &names : nullptr);
+            const auto ways = part(3, [&] { return make(r, dumping ? &names : nullptr); });
             if (ways.empty()) break;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
             for (size_t w = 0; w < ways.size(); w++) out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0, !r.prologue.empty()});
