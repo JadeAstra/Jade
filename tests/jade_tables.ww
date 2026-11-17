@@ -1,4 +1,4 @@
-// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// needs windows: it paints on the graphics card
 // The table and the combo box: a table's rows chosen, edited and acted on, its columns' widths
 // and their cap, a long table painting only what a view shows and staying cheap to lay out, and
 // a combo box's choice by the list and by the keys, its chevron and its field. These are

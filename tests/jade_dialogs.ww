@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // Jade's dialogs (M8), each in a hidden window, pressed and typed into as a user would: JadeUI's
 // JadeDialogsTest (its 20 cases of the dialogs that answer through onResult; the two others are
 // of the forms that wait, which Jade does not have) and the five such cases of BlockingDialogsTest.

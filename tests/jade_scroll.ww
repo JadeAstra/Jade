@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // A view up and down a component (Scroll): the wheel and its clamping, the offset reaching what
 // the child paints, the bar and its thumb, the wheel finding the innermost view that can move,
 // pictures that change on a scroll with nothing thrown away, and where a component in a moved

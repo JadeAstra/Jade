@@ -1,4 +1,4 @@
-// windows only: it paints, which is on Windows only so far (G56)
+// needs windows: it paints
 // The text area: lines and columns, the caret by rows and pages, indenting blocks, a read-only
 // area, where the caret is drawn, links under Shift, the debugger's band and status strip, the
 // bar along the bottom for long lines, and a large text drawing only what shows. JadeUI's own

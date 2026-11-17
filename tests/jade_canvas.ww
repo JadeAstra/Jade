@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // Drawing with Jade's native layer: every operation of the canvas, drawn on a surface by
 // the graphics card and read back pixel by pixel. No window is opened.
 import Jade.*

@@ -70,8 +70,13 @@ void main() {
         if (kind < 1.5) {
             d = roundedBox(vLocal, vHalf, vParams.y);
         } else {
-            float k = length(vLocal / vHalf);
-            d = (k - 1.0) / max(length(vec2(dFdx(k), dFdy(k))), 0.00001);
+            // How far out of the oval, in pixels: k's distance from 1 over how fast k grows
+            // there, worked out (k's gradient, (p / h²) / k) rather than taken from the
+            // screen's neighbouring pixels, whose differences drivers work out less alike
+            // (VirtualBox's SVGA3D left an outline's right edge grey).
+            vec2 q = vLocal / vHalf;
+            float k = length(q);
+            d = (k - 1.0) / max(length(q / vHalf) / max(k, 0.00001), 0.00001);
         }
         if (vParams.z > 0.0) d = abs(d + vParams.z * 0.5) - vParams.z * 0.5;
         frag = color * clamp(0.5 - d, 0.0, 1.0);

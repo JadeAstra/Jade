@@ -1,0 +1,103 @@
+// The Linux windows' step 1 (docs/linux-gui-plan.html), tried by hand: the clipboard both ways,
+// files dropped on the window, the window brought to the front or wanting attention, and the
+// pointer held. Each key says what it does in the window; what happens is listed there too.
+//
+//   ww bench/spike/linux_step1.ww
+import Jade.*
+
+val lines : open List<string> = []
+var heldX = 0.0          // how far the mouse has moved while the pointer is held
+var heldY = 0.0
+var moves = 0
+
+val body = Font(Font.sansSerif, 14)
+val mono = Font(Font.monospaced, 12)
+val paper = Color(0xF6F8FA)
+val ink = Color(0x1B1F23)
+val faint = Color(0x6A737D)
+
+fun note(text : string) {
+  print(text)
+  lines.add(text)
+  while (lines.size > 12) { lines.removeFirst() }
+}
+
+val window = NativeWindow("WinterWolf: Linux step 1", 720, 460)
+
+fun paint() {
+  val c = window.canvas()
+  c.color = paper
+  c.fillRect(0, 0, c.width, c.height)
+  c.font = body
+  c.color = ink
+  var y = 28
+  for (help in ["C: put \"WinterWolf ${clock().toInt()}\" on the clipboard (then paste it in another program)",
+                "V: read the clipboard (copy something in another program first)",
+                "F: in 3 s, bring this window to the front (click another window meanwhile)",
+                "A: in 3 s, ask for attention (click another window meanwhile)",
+                "L: hold the pointer, or let it go (the mouse's moves are added up below)",
+                "Drop files on the window: their paths are listed.     Escape: close"]) {
+    c.drawString(help, 20, y)
+    y += 22
+  }
+  c.color = faint
+  c.drawString(window.cursorMode == CursorMode.locked ? "pointer held: $moves moves, ${Math.round(heldX).toInt()}, ${Math.round(heldY).toInt()} pixels" :
+               "pointer free", 20, y + 8)
+  c.font = mono
+  c.color = ink
+  y += 40
+  for (line in lines) {
+    c.drawString(line, 20, y)
+    y += 18
+  }
+  window.present()
+}
+
+window.onInput = { event ->
+  when (event) {
+    is RawInput.PointerMove -> {
+      if (window.cursorMode == CursorMode.locked) {
+        moves += 1
+        heldX += event.dx
+        heldY += event.dy
+      }
+    }
+    is RawInput.KeyDown -> {
+      if (event.key == KeyCode.escape) {
+        window.close()
+      } else if (event.letter == "C") {
+        val text = "WinterWolf ${clock().toInt()}"
+        Native.clipboardText = text
+        note("copied: $text")
+      } else if (event.letter == "V") {
+        note("the clipboard: \"" + Native.clipboardText.take(70) + "\"")
+      } else if (event.letter == "F") {
+        note("to the front in 3 s")
+        EventLoop.after(3.seconds) { if (window.isOpen) { window.toFront(); note("asked to come to the front"); paint() } }
+      } else if (event.letter == "A") {
+        note("attention in 3 s")
+        EventLoop.after(3.seconds) { if (window.isOpen) { window.requestAttention(); note("asked for attention"); paint() } }
+      } else if (event.letter == "L") {
+        val held = window.cursorMode != CursorMode.locked
+        window.cursorMode = held ? CursorMode.locked : CursorMode.normal
+        moves = 0
+        heldX = 0.0
+        heldY = 0.0
+        note(held ? "pointer held" : "pointer let go")
+      }
+    }
+    is RawInput.Focus -> { note(event.focused ? "focus: in" : "focus: out") }
+    else -> {}
+  }
+  if (window.isOpen) { paint() }
+}
+window.onResize = { w, h -> paint() }
+window.onFilesDropped = { paths, x, y ->
+  note("dropped at $x, $y: ${paths.size} file(s)")
+  for (path in paths.take(4)) { note("  $path") }
+  paint()
+}
+
+paint()
+window.show()
+note("shown: ${Native.describe()}")

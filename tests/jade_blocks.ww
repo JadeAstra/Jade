@@ -1,4 +1,4 @@
-// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// needs windows: it paints on the graphics card
 // Blocks and documents: a block's header and view, its Edit/Done toggle swapping the view for its
 // source and making the view again, a click on the view choosing the block, a chromeless block,
 // and a document of blocks one under another that Tab, find and clicks reach into. These are

@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // A window that belongs to another (M8): when its owner closes first, it passes to its owner's
 // owner, or to none, rather than going with it, as the system would have it; and when a window in
 // front closes, the window it belongs to is in front again.

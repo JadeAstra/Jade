@@ -16,6 +16,7 @@
 #if defined(__linux__) && defined(WW_WAYLAND)
 
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <execinfo.h>
 #include <pthread.h>
 #include <signal.h>
@@ -26,6 +27,8 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cctype>
+#include <cerrno>
 #include <thread>
 #include <algorithm>
 #include <cmath>
@@ -79,6 +82,9 @@
 #include "fractional-scale-client.h"
 #include "viewporter-client.h"
 #include "xdg-decoration-client.h"
+#include "pointer-constraints-client.h"
+#include "relative-pointer-client.h"
+#include "xdg-activation-client.h"
 #include "xdg-shell-client.h"
 
 #define EGL_NO_X11
@@ -361,6 +367,8 @@ public:
     LinuxWindow* owner = nullptr;
     Cursor cursor = Cursor::Default;
     PointerMode pointerMode = PointerMode::Normal;
+    zwp_locked_pointer_v1* lock = nullptr;  // while the pointer mode is Locked
+    bool lockActive = false;                // the compositor holds the pointer now (it may let go and take it again)
     int buttons = 0;
 
     explicit LinuxWindow(LinuxPlatform& p) : platform(p) {}
@@ -407,8 +415,8 @@ public:
         resizable = on;
         applyLimits();
     }
-    void toFront() override {}
-    void requestAttention() override {}
+    void toFront() override;
+    void requestAttention() override;
     void setOwner(PlatformWindow* to) override {
         owner = static_cast<LinuxWindow*>(to);
         if (toplevel != nullptr) xdg_toplevel_set_parent(toplevel, owner != nullptr ? owner->toplevel : nullptr);
@@ -486,6 +494,32 @@ public:
     zxdg_decoration_manager_v1* decorations = nullptr;
     wp_viewporter* viewporter = nullptr;
     wp_fractional_scale_manager_v1* fractionalScales = nullptr;
+    xdg_activation_v1* activation = nullptr;
+    zwp_pointer_constraints_v1* constraints = nullptr;
+    zwp_relative_pointer_manager_v1* relativePointers = nullptr;
+    zwp_relative_pointer_v1* relativePointer = nullptr;
+    // The clipboard and what is dragged in: the compositor's offers (each with the kinds of data it
+    // can give, as it said them), the clipboard's now, ours where we set it, and a drag's while
+    // it is over one of our windows.
+    wl_data_device_manager* dataManager = nullptr;
+    uint32_t dataManagerVersion = 0;
+    wl_data_device* dataDevice = nullptr;
+    std::vector<std::pair<wl_data_offer*, std::vector<std::string>>> offers;
+    wl_data_offer* selectionOffer = nullptr;
+    wl_data_source* ownSource = nullptr;
+    std::string ownText;
+    wl_data_offer* dropOffer = nullptr;
+    LinuxWindow* dropWindow = nullptr;
+    double dropX = 0, dropY = 0;       // device pixels
+    // The last key or button pressed, or the keyboard's coming in: Wayland lets a program set the
+    // clipboard, or ask for a window to come to the front, only with such a serial.
+    uint32_t inputSerial = 0;
+    std::string startToken;            // XDG_ACTIVATION_TOKEN, as a launcher gave it: the first window shown with it
+    struct Activation {
+        LinuxPlatform* platform;
+        LinuxWindow* target;           // null once it is gone
+    };
+    std::vector<Activation*> activations;  // tokens asked for, not yet given
     struct Output {
         wl_output* output;
         uint32_t name;
@@ -573,8 +607,31 @@ public:
         error = "the file dialog is not there on Linux yet";
         return false;
     }
-    std::string clipboardText() override { return std::string(); }
-    void setClipboardText(const std::string&) override {}
+    std::string clipboardText() override;
+    void setClipboardText(const std::string& text) override;
+    const std::vector<std::string>* typesOf(wl_data_offer* offer) const {
+        for (const auto& [o, types] : offers)
+            if (o == offer) return &types;
+        return nullptr;
+    }
+    bool hasType(wl_data_offer* offer, const char* type) const {
+        const std::vector<std::string>* types = typesOf(offer);
+        return types != nullptr && std::find(types->begin(), types->end(), type) != types->end();
+    }
+    void forget(wl_data_offer* offer) {
+        if (offer == nullptr) return;
+        offers.erase(std::remove_if(offers.begin(), offers.end(), [&](const auto& o) { return o.first == offer; }), offers.end());
+        wl_data_offer_destroy(offer);
+    }
+    // What an offer gives as `type`, read through a pipe from the program that offers it (at most
+    // 2 s of waiting for it).
+    std::string readOffer(wl_data_offer* offer, const char* type);
+    // A window brought to the front (with the last input's serial, which says the user asked for
+    // it) or marked as wanting attention (without: the compositor will not raise it unasked).
+    void activate(LinuxWindow& target, bool asked);
+    void lockPointer(LinuxWindow& w, bool on);
+    // A pointer move given to the window, gathered with the others of one batch of events.
+    void moved(LinuxWindow* w, const RawEvent& e);
     int doubleClickTime() override { return 400; }
     double screenScale() override {
         int most = 1;
@@ -604,6 +661,21 @@ void LinuxPlatform::flushMove() {
     LinuxWindow* w = moveWindow;
     moveWindow = nullptr;
     w->emit(move);
+}
+
+void LinuxPlatform::moved(LinuxWindow* w, const RawEvent& e) {
+    if (moveWindow == w) {
+        move.x = e.x;
+        move.y = e.y;
+        move.dx += e.dx;
+        move.dy += e.dy;
+        move.buttons = e.buttons;
+        move.modifiers = e.modifiers;
+        return;
+    }
+    flushMove();
+    move = e;
+    moveWindow = w;
 }
 
 // ---- Listeners ----
@@ -746,18 +818,7 @@ void onPointerMotion(void* data, wl_pointer*, uint32_t, wl_fixed_t sx, wl_fixed_
     e.modifiers = p.modifiers();
     p.pointerX = nx;
     p.pointerY = ny;
-    if (p.moveWindow == p.pointerFocus) {
-        p.move.x = e.x;
-        p.move.y = e.y;
-        p.move.dx += e.dx;
-        p.move.dy += e.dy;
-        p.move.buttons = e.buttons;
-        p.move.modifiers = e.modifiers;
-        return;
-    }
-    p.flushMove();
-    p.move = e;
-    p.moveWindow = p.pointerFocus;
+    p.moved(p.pointerFocus, e);
 }
 void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state) {
     auto& p = *static_cast<LinuxPlatform*>(data);
@@ -769,6 +830,7 @@ void onPointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_
     const int which = static_cast<int>(button - 0x110);
     const bool down = state == WL_POINTER_BUTTON_STATE_PRESSED;
     LinuxWindow& w = *p.pointerFocus;
+    if (down) p.inputSerial = serial;
     if (down) w.buttons |= 1 << which;
     else w.buttons &= ~(1 << which);
     RawEvent e;
@@ -849,10 +911,11 @@ void onKeymap(void* data, wl_keyboard*, uint32_t format, int32_t fd, uint32_t si
     p.keyState = xkb.state_new(made);
     p.plainState = xkb.state_new(made);
 }
-void onKeyboardEnter(void* data, wl_keyboard*, uint32_t, wl_surface* surface, wl_array*) {
+void onKeyboardEnter(void* data, wl_keyboard*, uint32_t serial, wl_surface* surface, wl_array*) {
     auto& p = *static_cast<LinuxPlatform*>(data);
     p.flushMove();
     p.keyboardFocus = p.windowOf(surface);
+    p.inputSerial = serial;
     if (p.keyboardFocus == nullptr) return;
     RawEvent e;
     e.kind = RawEvent::Focus;
@@ -871,8 +934,9 @@ void onKeyboardLeave(void* data, wl_keyboard*, uint32_t, wl_surface*) {
     }
     p.keyboardFocus = nullptr;
 }
-void onKey(void* data, wl_keyboard*, uint32_t, uint32_t, uint32_t code, uint32_t state) {
+void onKey(void* data, wl_keyboard*, uint32_t serial, uint32_t, uint32_t code, uint32_t state) {
     auto& p = *static_cast<LinuxPlatform*>(data);
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED) p.inputSerial = serial;
     p.pressKey(code, state == WL_KEYBOARD_KEY_STATE_PRESSED, false);
 }
 void onModifiers(void* data, wl_keyboard*, uint32_t, uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
@@ -888,6 +952,199 @@ void onRepeatInfo(void* data, wl_keyboard*, int32_t rate, int32_t delay) {
 }
 const wl_keyboard_listener keyboardListener = {onKeymap, onKeyboardEnter, onKeyboardLeave, onKey, onModifiers, onRepeatInfo};
 
+// ---- The clipboard, and files dragged in ----
+
+// Each kind of data an offer can give, as it is told, before the offer is used.
+void onOfferType(void* data, wl_data_offer* offer, const char* type) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    for (auto& [o, types] : p.offers)
+        if (o == offer) types.emplace_back(type);
+}
+const wl_data_offer_listener offerListener = {onOfferType, [](void*, wl_data_offer*, uint32_t) {}, [](void*, wl_data_offer*, uint32_t) {}};
+
+void onDataOffer(void* data, wl_data_device*, wl_data_offer* offer) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.offers.emplace_back(offer, std::vector<std::string>());
+    wl_data_offer_add_listener(offer, &offerListener, &p);
+}
+// A drag over one of our windows: files (text/uri-list) taken, to be copied; nothing else.
+void onDragEnter(void* data, wl_data_device*, uint32_t serial, wl_surface* surface, wl_fixed_t x, wl_fixed_t y, wl_data_offer* offer) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    p.flushMove();
+    if (p.dropOffer != nullptr && p.dropOffer != p.selectionOffer) p.forget(p.dropOffer);
+    p.dropOffer = offer;
+    p.dropWindow = p.windowOf(surface);
+    const double s = p.dropWindow != nullptr ? p.dropWindow->scale() : 1;
+    p.dropX = wl_fixed_to_double(x) * s;
+    p.dropY = wl_fixed_to_double(y) * s;
+    if (offer == nullptr) return;
+    const bool files = p.dropWindow != nullptr && p.hasType(offer, "text/uri-list");
+    wl_data_offer_accept(offer, serial, files ? "text/uri-list" : nullptr);
+    if (p.dataManagerVersion >= 3)
+        wl_data_offer_set_actions(offer, files ? WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY : WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE,
+                                  files ? WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY : WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
+}
+void onDragLeave(void* data, wl_data_device*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.dropOffer != nullptr && p.dropOffer != p.selectionOffer) p.forget(p.dropOffer);
+    p.dropOffer = nullptr;
+    p.dropWindow = nullptr;
+}
+void onDragMotion(void* data, wl_data_device*, uint32_t, wl_fixed_t x, wl_fixed_t y) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    const double s = p.dropWindow != nullptr ? p.dropWindow->scale() : 1;
+    p.dropX = wl_fixed_to_double(x) * s;
+    p.dropY = wl_fixed_to_double(y) * s;
+}
+// %XX in a URI, as the byte it stands for.
+std::string unescaped(const std::string& text) {
+    std::string out;
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '%' && i + 2 < text.size() && std::isxdigit(static_cast<unsigned char>(text[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(text[i + 2]))) {
+            out += static_cast<char>(std::stoi(text.substr(i + 1, 2), nullptr, 16));
+            i += 2;
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+// Dropped: the files' URIs read (one to a line, file:// ones only, as paths) and given to the
+// window as Windows gives its dropped files.
+void onDrop(void* data, wl_data_device*) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    wl_data_offer* offer = p.dropOffer;
+    LinuxWindow* w = p.dropWindow;
+    p.dropOffer = nullptr;
+    p.dropWindow = nullptr;
+    if (offer == nullptr) return;
+    RawEvent e;
+    e.kind = RawEvent::FilesDropped;
+    e.x = static_cast<int>(std::floor(p.dropX));
+    e.y = static_cast<int>(std::floor(p.dropY));
+    if (w != nullptr && p.hasType(offer, "text/uri-list")) {
+        const std::string list = p.readOffer(offer, "text/uri-list");
+        size_t at = 0;
+        while (at < list.size()) {
+            size_t end = list.find('\n', at);
+            if (end == std::string::npos) end = list.size();
+            std::string line = list.substr(at, end - at);
+            at = end + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.rfind("file://", 0) != 0) continue;  // comments (#) and what is not a file
+            const size_t path = line.find('/', 7);       // past file:// and any host
+            if (path != std::string::npos) e.files.push_back(unescaped(line.substr(path)));
+        }
+        if (p.dataManagerVersion >= 3) wl_data_offer_finish(offer);
+    }
+    if (offer != p.selectionOffer) p.forget(offer);
+    if (w != nullptr && !e.files.empty()) {
+        p.flushMove();
+        w->emit(e);
+    }
+}
+// The clipboard now holds another offer (or nothing): the one before let go.
+void onSelection(void* data, wl_data_device*, wl_data_offer* offer) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.selectionOffer != nullptr && p.selectionOffer != offer && p.selectionOffer != p.dropOffer) p.forget(p.selectionOffer);
+    p.selectionOffer = offer;
+    if (tracing()) {
+        std::string types;
+        if (const std::vector<std::string>* t = p.typesOf(offer))
+            for (const std::string& type : *t) types += " " + type;
+        WW_TRACE("clipboard: %s%s", offer != nullptr ? "an offer of" : "empty", types.c_str());
+    }
+}
+const wl_data_device_listener dataDeviceListener = {onDataOffer, onDragEnter, onDragLeave, onDragMotion, onDrop, onSelection};
+
+// Our text on the clipboard, written to whoever pastes it; let go of when another program sets
+// the clipboard.
+void writeAll(int fd, const std::string& text) {
+    // A reader gone before the end would raise SIGPIPE, which ends the program: held back while
+    // writing, and any it raised taken.
+    sigset_t pipeOnly, before;
+    sigemptyset(&pipeOnly);
+    sigaddset(&pipeOnly, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipeOnly, &before);
+    size_t done = 0;
+    while (done < text.size()) {
+        const ssize_t n = write(fd, text.data() + done, text.size() - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        done += static_cast<size_t>(n);
+    }
+    sigset_t waiting;
+    sigpending(&waiting);
+    if (sigismember(&waiting, SIGPIPE)) {
+        const timespec none = {0, 0};
+        sigtimedwait(&pipeOnly, nullptr, &none);
+    }
+    pthread_sigmask(SIG_SETMASK, &before, nullptr);
+}
+void onSourceSend(void* data, wl_data_source*, const char*, int32_t fd) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    writeAll(fd, p.ownText);
+    close(fd);
+}
+void onSourceCancelled(void* data, wl_data_source* source) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    if (p.ownSource == source) p.ownSource = nullptr;
+    wl_data_source_destroy(source);
+}
+const wl_data_source_listener sourceListener = {
+    [](void*, wl_data_source*, const char*) {},  // target
+    onSourceSend,
+    onSourceCancelled,
+    [](void*, wl_data_source*) {},            // dnd_drop_performed
+    [](void*, wl_data_source*) {},            // dnd_finished
+    [](void*, wl_data_source*, uint32_t) {},  // action
+};
+
+// ---- A window to the front ----
+
+void onActivationToken(void* data, xdg_activation_token_v1* token, const char* name) {
+    auto* request = static_cast<LinuxPlatform::Activation*>(data);
+    LinuxPlatform& p = *request->platform;
+    if (request->target != nullptr && request->target->surface != nullptr && p.activation != nullptr)
+        xdg_activation_v1_activate(p.activation, name, request->target->surface);
+    xdg_activation_token_v1_destroy(token);
+    p.activations.erase(std::remove(p.activations.begin(), p.activations.end(), request), p.activations.end());
+    delete request;
+}
+const xdg_activation_token_v1_listener activationTokenListener = {onActivationToken};
+
+// ---- The pointer held (PointerMode::Locked) ----
+
+void onLocked(void* data, zwp_locked_pointer_v1*) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    w->lockActive = true;
+}
+void onUnlocked(void* data, zwp_locked_pointer_v1*) {
+    auto* w = static_cast<LinuxWindow*>(data);
+    w->lockActive = false;
+}
+const zwp_locked_pointer_v1_listener lockedListener = {onLocked, onUnlocked};
+
+// While held, the pointer does not move; how far the mouse moved comes here, as a move of the
+// window's with the pointer where it was held (as Windows' locked pointer, put back in the middle).
+void onRelativeMotion(void* data, zwp_relative_pointer_v1*, uint32_t, uint32_t, wl_fixed_t dx, wl_fixed_t dy, wl_fixed_t, wl_fixed_t) {
+    auto& p = *static_cast<LinuxPlatform*>(data);
+    LinuxWindow* w = p.pointerFocus;
+    if (w == nullptr || !w->lockActive) return;
+    const double s = w->scale();
+    RawEvent e;
+    e.kind = RawEvent::PointerMove;
+    e.x = static_cast<int>(std::floor(p.pointerX));
+    e.y = static_cast<int>(std::floor(p.pointerY));
+    e.dx = wl_fixed_to_double(dx) * s;
+    e.dy = wl_fixed_to_double(dy) * s;
+    e.buttons = w->buttons;
+    e.modifiers = p.modifiers();
+    p.moved(w, e);
+}
+const zwp_relative_pointer_v1_listener relativeListener = {onRelativeMotion};
+
 // ---- The seat: its pointer and keyboard as they come and go ----
 
 void onSeatCapabilities(void* data, wl_seat* seat, uint32_t capabilities) {
@@ -897,7 +1154,14 @@ void onSeatCapabilities(void* data, wl_seat* seat, uint32_t capabilities) {
     if (hasPointer && p.pointer == nullptr) {
         p.pointer = wl_seat_get_pointer(seat);
         wl_pointer_add_listener(p.pointer, &pointerListener, &p);
+        if (p.relativePointers != nullptr) {
+            p.relativePointer = zwp_relative_pointer_manager_v1_get_relative_pointer(p.relativePointers, p.pointer);
+            zwp_relative_pointer_v1_add_listener(p.relativePointer, &relativeListener, &p);
+        }
     } else if (!hasPointer && p.pointer != nullptr) {
+        if (p.relativePointer != nullptr) zwp_relative_pointer_v1_destroy(p.relativePointer);
+        p.relativePointer = nullptr;
+        for (LinuxWindow* w : p.windows) p.lockPointer(*w, false);
         wl_pointer_destroy(p.pointer);
         p.pointer = nullptr;
         p.pointerFocus = nullptr;
@@ -943,6 +1207,15 @@ void onGlobal(void* data, wl_registry* registry, uint32_t name, const char* inte
     } else if (what == "wp_fractional_scale_manager_v1" && std::getenv("WW_WAYLAND_NO_VIEWPORT") != nullptr) {
     } else if (what == "wp_fractional_scale_manager_v1") {
         p.fractionalScales = static_cast<wp_fractional_scale_manager_v1*>(bind(&wp_fractional_scale_manager_v1_interface, 1));
+    } else if (what == "wl_data_device_manager") {
+        p.dataManagerVersion = std::min(version, 3u);
+        p.dataManager = static_cast<wl_data_device_manager*>(bind(&wl_data_device_manager_interface, 3));
+    } else if (what == "xdg_activation_v1") {
+        p.activation = static_cast<xdg_activation_v1*>(bind(&xdg_activation_v1_interface, 1));
+    } else if (what == "zwp_pointer_constraints_v1") {
+        p.constraints = static_cast<zwp_pointer_constraints_v1*>(bind(&zwp_pointer_constraints_v1_interface, 1));
+    } else if (what == "zwp_relative_pointer_manager_v1") {
+        p.relativePointers = static_cast<zwp_relative_pointer_manager_v1*>(bind(&zwp_relative_pointer_manager_v1_interface, 1));
     }
 }
 
@@ -968,6 +1241,16 @@ bool LinuxPlatform::start(std::string& error) {
         return false;
     }
     wakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (dataManager != nullptr && seat != nullptr) {
+        dataDevice = wl_data_device_manager_get_data_device(dataManager, seat);
+        wl_data_device_add_listener(dataDevice, &dataDeviceListener, this);
+    }
+    // A launcher's token, to bring the first window shown to the front; not handed on to
+    // programs this one starts.
+    if (const char* token = std::getenv("XDG_ACTIVATION_TOKEN")) {
+        startToken = token;
+        unsetenv("XDG_ACTIVATION_TOKEN");
+    }
 
     keys = xkb.context_new(XKB_CONTEXT_NO_FLAGS);
     if (keys == nullptr) {
@@ -985,9 +1268,27 @@ bool LinuxPlatform::start(std::string& error) {
 
     // OpenGL 3.3, core, through EGL on the Wayland display: one context for every window, current
     // on whichever is being drawn, and on none (surfaceless) for pictures.
+    // Mesa says on standard error what it makes of the machine as EGL starts ("failed to get
+    // driver name", "ZINK: failed to choose pdev" under WSLg), which would be the program's own
+    // output: held back while it starts (an EGL that does not start is said below, in our words),
+    // unless the trace is on or the user asks for EGL's (EGL_LOG_LEVEL).
+    const bool quiet = !tracing() && std::getenv("EGL_LOG_LEVEL") == nullptr;
+    const int savedError = quiet ? dup(2) : -1;
+    if (savedError >= 0) {
+        const int nothing = open("/dev/null", O_WRONLY | O_CLOEXEC);
+        if (nothing >= 0) {
+            dup2(nothing, 2);
+            close(nothing);
+        }
+    }
     eglDisplay = egl.GetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, display, nullptr);
     EGLint major = 0, minor = 0;
-    if (eglDisplay == EGL_NO_DISPLAY || !egl.Initialize(eglDisplay, &major, &minor)) {
+    const bool initialized = eglDisplay != EGL_NO_DISPLAY && egl.Initialize(eglDisplay, &major, &minor);
+    if (savedError >= 0) {
+        dup2(savedError, 2);
+        close(savedError);
+    }
+    if (!initialized) {
         error = "cannot start EGL on the Wayland display";
         return false;
     }
@@ -1235,6 +1536,10 @@ LinuxWindow::~LinuxWindow() {
     for (LinuxWindow* w : p.windows)
         if (w->owner == this) w->owner = nullptr;
     p.posted.erase(std::remove_if(p.posted.begin(), p.posted.end(), [&](const auto& posted) { return posted.first == this; }), p.posted.end());
+    if (p.dropWindow == this) p.dropWindow = nullptr;
+    for (LinuxPlatform::Activation* request : p.activations)
+        if (request->target == this) request->target = nullptr;
+    p.lockPointer(*this, false);
     if (fractional != nullptr) wp_fractional_scale_v1_destroy(fractional);
     if (viewport != nullptr) wp_viewport_destroy(viewport);
     if (surface != nullptr) wl_surface_destroy(surface);
@@ -1267,6 +1572,11 @@ void LinuxWindow::show() {
     // Its first configure waited for, so that the program's first picture has a place to go.
     for (int i = 0; i < 100 && !configurePending && shown; i++) wl_display_roundtrip(p.display);
     configure();
+    if (!p.startToken.empty() && p.activation != nullptr) {
+        xdg_activation_v1_activate(p.activation, p.startToken.c_str(), surface);
+        p.startToken.clear();
+        wl_display_flush(p.display);
+    }
 }
 
 void LinuxWindow::hide() {
@@ -1324,7 +1634,97 @@ void LinuxWindow::setCursor(Cursor shape) {
 }
 void LinuxWindow::setPointerMode(PointerMode mode) {
     pointerMode = mode;
+    platform.lockPointer(*this, mode == PointerMode::Locked);
     if (platform.pointerFocus == this) platform.showCursor();
+}
+
+void LinuxWindow::toFront() { platform.activate(*this, true); }
+void LinuxWindow::requestAttention() { platform.activate(*this, false); }
+
+// Held where it is, for as long as the mode is Locked: given back when the window loses the pointer
+// and held again as it comes back (the lock lasts), the moves then coming as distances.
+void LinuxPlatform::lockPointer(LinuxWindow& w, bool on) {
+    if (on && w.lock == nullptr && constraints != nullptr && pointer != nullptr && w.surface != nullptr) {
+        w.lock = zwp_pointer_constraints_v1_lock_pointer(constraints, w.surface, pointer, nullptr, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+        zwp_locked_pointer_v1_add_listener(w.lock, &lockedListener, &w);
+        if (pointerFocus == &w) {
+            const double s = w.scale();
+            zwp_locked_pointer_v1_set_cursor_position_hint(w.lock, wl_fixed_from_double(pointerX / s), wl_fixed_from_double(pointerY / s));
+        }
+        wl_surface_commit(w.surface);
+    } else if (!on && w.lock != nullptr) {
+        zwp_locked_pointer_v1_destroy(w.lock);
+        w.lock = nullptr;
+        w.lockActive = false;
+    }
+    wl_display_flush(display);
+}
+
+void LinuxPlatform::activate(LinuxWindow& target, bool asked) {
+    if (activation == nullptr || target.surface == nullptr || !target.shown) return;
+    auto* request = new Activation{this, &target};
+    activations.push_back(request);
+    xdg_activation_token_v1* token = xdg_activation_v1_get_activation_token(activation);
+    xdg_activation_token_v1_add_listener(token, &activationTokenListener, request);
+    if (asked && inputSerial != 0 && seat != nullptr) xdg_activation_token_v1_set_serial(token, inputSerial, seat);
+    LinuxWindow* from = keyboardFocus != nullptr ? keyboardFocus : &target;
+    xdg_activation_token_v1_set_surface(token, from->surface);
+    xdg_activation_token_v1_set_app_id(token, "winterwolf");
+    xdg_activation_token_v1_commit(token);
+    wl_display_flush(display);
+}
+
+// ---- The clipboard ----
+
+// Ours where we set it (Wayland would ask us for it, and we would wait on ourselves), else the
+// offer's, as UTF-8 where it gives that.
+std::string LinuxPlatform::clipboardText() {
+    WW_TRACE("clipboard asked for: %s", ownSource != nullptr ? "ours" : (selectionOffer == nullptr ? "none" : (typesOf(selectionOffer) == nullptr ? "an offer not known" : "an offer")));
+    if (ownSource != nullptr) return ownText;
+    if (selectionOffer == nullptr) return std::string();
+    for (const char* type : {"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT"})
+        if (hasType(selectionOffer, type)) return readOffer(selectionOffer, type);
+    return std::string();
+}
+
+// Set as a source of text in every name for it that programs ask by, with the serial of the last
+// input: the compositor takes it from a program the user is using (Control+C), not otherwise.
+void LinuxPlatform::setClipboardText(const std::string& text) {
+    if (dataManager == nullptr || dataDevice == nullptr) return;
+    ownText = text;
+    wl_data_source* source = wl_data_device_manager_create_data_source(dataManager);
+    wl_data_source_add_listener(source, &sourceListener, this);
+    for (const char* type : {"text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "STRING", "TEXT"}) wl_data_source_offer(source, type);
+    wl_data_device_set_selection(dataDevice, source, inputSerial);
+    if (ownSource != nullptr) wl_data_source_destroy(ownSource);
+    ownSource = source;
+    wl_display_flush(display);
+}
+
+std::string LinuxPlatform::readOffer(wl_data_offer* offer, const char* type) {
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) != 0) return std::string();
+    wl_data_offer_receive(offer, type, fds[1]);
+    close(fds[1]);
+    wl_display_flush(display);
+    std::string text;
+    char buffer[4096];
+    const int64_t until = nowMillis() + 2000;
+    for (;;) {
+        const int64_t left = until - nowMillis();
+        if (left <= 0) break;
+        pollfd fd = {fds[0], POLLIN, 0};
+        const int ready = poll(&fd, 1, static_cast<int>(left));
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready <= 0) break;
+        const ssize_t n = read(fds[0], buffer, sizeof buffer);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        text.append(buffer, static_cast<size_t>(n));
+    }
+    close(fds[0]);
+    WW_TRACE("read %zu bytes of %s", text.size(), type);
+    return text;
 }
 
 void LinuxWindow::postForTest(const std::string& what) {
@@ -1406,6 +1806,9 @@ Platform* Platform::get(std::string& error) {
 #include "fractional-scale-protocol.c"
 #include "viewporter-protocol.c"
 #include "xdg-decoration-protocol.c"
+#include "pointer-constraints-protocol.c"
+#include "relative-pointer-protocol.c"
+#include "xdg-activation-protocol.c"
 #include "xdg-shell-protocol.c"
 
 #endif

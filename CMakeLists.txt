@@ -102,7 +102,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       "xdg-shell|${WW_PROTOCOLS}/stable/xdg-shell/xdg-shell.xml"
       "viewporter|${WW_PROTOCOLS}/stable/viewporter/viewporter.xml"
       "fractional-scale|${WW_PROTOCOLS}/staging/fractional-scale/fractional-scale-v1.xml"
-      "xdg-decoration|${WW_PROTOCOLS}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
+      "xdg-decoration|${WW_PROTOCOLS}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml"
+      "xdg-activation|${WW_PROTOCOLS}/staging/xdg-activation/xdg-activation-v1.xml"
+      "pointer-constraints|${WW_PROTOCOLS}/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"
+      "relative-pointer|${WW_PROTOCOLS}/unstable/relative-pointer/relative-pointer-unstable-v1.xml")
   set(WW_WAYLAND_FOUND ON)
   foreach(needed ${WW_WAYLAND_CORE} /usr/include/wayland-client-core.h /usr/include/wayland-egl-core.h /usr/include/EGL/egl.h
           /usr/include/xkbcommon/xkbcommon.h /usr/include/xkbcommon/xkbcommon-compose.h)

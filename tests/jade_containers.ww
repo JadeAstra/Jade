@@ -1,4 +1,4 @@
-// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// needs windows: it paints on the graphics card
 // The containers: a split and its divider, tabs and their chrome (the ∗, the ×, the choosing
 // click, the deck without its bar), the layout pass placing what is inside them, the layout
 // asked for when tabs change, which containers keep a picture of themselves, the toolbar's

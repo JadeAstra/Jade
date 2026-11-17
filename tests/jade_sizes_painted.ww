@@ -1,4 +1,4 @@
-// windows only: it paints, which is on Windows only so far (G56)
+// needs windows: it paints
 // What a component keeps of its content's sizes once it is painted, as jade_sizes.ww checks
 // before: a component with a caret inside it never keeps a picture of itself, and its sizes are
 // still asked for once; a picture made at another scale measures for that scale, and the next

@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // A Window and what it makes of the keyboard and the pointer: which widget a press belongs
 // to, what a drag and a release go to, who has the keyboard, what Tab does. The windows
 // here are never shown (Jade.windowOpener is the one for tests); the events are sent the
@@ -342,12 +342,13 @@ val longText = "the same colours, by day and by night, in a line long enough for
 val longLabel = label(longText)
 val dense = Window(grid { insets = Insets(10, 10, 10, 10); row { cell(denseButton, anchor = Anchor.west) }; row { cell(longLabel, anchor = Anchor.west) } }, "Dense", 600, 80, exitOnClose = false)
 dense.show()
-// Text is measured for the screen it is drawn on: at 2 pixels to the unit a line is a
-// little wider, in units, than the same line on an ordinary screen, and the label asks
-// for the room it really takes (it would be cut short otherwise).
+// Text is measured for the screen it is drawn on: at 2 pixels to the unit a line is not the
+// same width, in units, as on an ordinary screen (Segoe UI's is a little wider; DejaVu Sans's,
+// on Linux, a little narrower), and the label asks for the room it really takes there (it
+// would be cut short otherwise).
 val plainFont = Font(Font.sansSerif, 12)
 val onDense = Math.ceil(plainFont.width(longText, 2) / 2.0).toInt()
-print(longLabel.bounds.width * 2 >= plainFont.width(longText, 2) + 16, longLabel.bounds.width == onDense + 8, onDense > plainFont.width(longText))   // expect: true true true
+print(longLabel.bounds.width * 2 >= plainFont.width(longText, 2) + 16, longLabel.bounds.width == onDense + 8)   // expect: true true
 val labelShot = (dense.handle as WindowHost).snapshot().crop(longLabel.bounds.x * 2, longLabel.bounds.y * 2, longLabel.bounds.width * 2, longLabel.bounds.height * 2)
 val inked = labelShot.inkBox(Palette.headerBg)!!
 print(inked.x >= 8, inked.x + inked.width <= labelShot.width - 4)   // expect: true true

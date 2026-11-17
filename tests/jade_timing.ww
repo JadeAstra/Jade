@@ -1,4 +1,4 @@
-// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// needs windows: it paints on the graphics card
 // What a window does in time: a tip after the pointer has rested, the caret's blink, and a held
 // arrow repeating. A hidden window keeps no timer, so these call the host's tick with times of
 // their own, as JadeUI's tests drive its frame clock.

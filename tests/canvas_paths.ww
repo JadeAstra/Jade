@@ -1,4 +1,4 @@
-// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// needs windows: it draws on the graphics card
 // Paths, fill rules and transforms (N3): a Path made a piece at a time or read from SVG path
 // data, a Transform as a value, and a canvas's transform, which every fill goes through; the
 // image's canvas and the graphics card's fill alike.

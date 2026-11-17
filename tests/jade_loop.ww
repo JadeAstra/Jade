@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // The render loop's bookkeeping, the theme's colours, and the label that wraps. These are
 // JadeUI's own tests (RenderLoopTest, PaletteThemeTest, WrappedLabelTest), carried over
 // with their names. Two of PaletteThemeTest's are about widgets of later milestones.

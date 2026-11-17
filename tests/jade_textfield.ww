@@ -2,7 +2,7 @@
 // a field, undo, the clipboard and the right button. JadeUI's own tests (MirroredTextTest,
 // EditingTest, DeferredTest's two of a field, and the field's leg of TextNavParityTest), carried
 // over with their names; the parts of them for a text area come with TextArea.
-// windows only: it paints, which is on Windows only so far (G56)
+// needs windows: it paints
 import Jade.*
 
 val failed = []

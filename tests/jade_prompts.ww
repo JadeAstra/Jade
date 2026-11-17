@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // Jade's prompts (M8): each a dialog in a window of its own beside the one in front, driven here
 // in hidden windows with made-up keys. Enter answers and Escape cancels; a prompt of several
 // lines takes Enter as a new line; one that names its subject keeps a draft, comes forward when

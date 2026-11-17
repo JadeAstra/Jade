@@ -1,4 +1,4 @@
-// windows only: it draws text, whose fonts are found on Windows only so far (G56)
+// needs windows: it draws text
 // Charts (M8): JadeUI's six chart tests (ChartAxisTest, ChartCategoryColorTest, ChartHoverTest,
 // ChartLegendTest, ChartPaletteWrapTest, ChartViewTest), on images and on components laid out and
 // drawn with no window.

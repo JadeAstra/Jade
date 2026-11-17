@@ -9,6 +9,8 @@
 //   // expect compile error: <text>    compilation fails (exit code 65) and reports <text>
 //   // expect error output: <text>     the program finishes normally, having reported <text>
 //   // windows only: <why>             passed over elsewhere, and counted apart
+//   // needs windows: <why>            passed over where no window can open (Linux with no
+//                                      Wayland display), and counted apart
 //
 // Besides the tests/*.ww files: tests/check (`ww check`), tests/testing (`ww test`),
 // tests/shell (the shell), the cache's scenarios, the standard library and the examples checked
@@ -53,6 +55,8 @@ fun settingNamed(name : string) : Setting? => Setting.entries.firstOrNull { sett
 
 // Whether this is Windows, where a program can be built and a process's whole tree stopped.
 val onWindows : bool = FilePath.separator == "\\"
+// Whether a window can open here: on Windows, or on Linux in a Wayland session.
+val windowsHere : bool = onWindows or Program.environment["WAYLAND_DISPLAY"] != null
 
 // What a run is asked to do.
 class Options {
@@ -223,10 +227,12 @@ class Suite(val options : Options) {
     item.results.clear()
     item.note = ""
     if (item.kind == Kind.file or item.kind == Kind.checker or item.kind == Kind.testing) {
-      val why = marker(item.path!!.readText(), "// windows only: ")
-      if (why != "" and !onWindows) {
+      val text = item.path!!.readText()
+      val why = marker(text, "// windows only: ")
+      val needs = marker(text, "// needs windows: ")
+      if ((why != "" and !onWindows) or (needs != "" and !windowsHere)) {
         item.status = Status.skipped
-        item.note = "windows only: $why"
+        item.note = why != "" ? "windows only: $why" : "needs windows: $needs"
         onChange(item)
         return
       }
@@ -827,7 +833,7 @@ fun reportOf(items : List<Item>) : Pair<string, bool> {
   for (item in items) {
     if (item.measured != "") { lines.add("${item.name}:\n    " + item.measured.lines().join("\n    ")) }
   }
-  lines.add("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} windows only"))
+  lines.add("$passed passed, $failures failed" + (skipped.isEmpty() ? "" : ", ${skipped.size} passed over"))
   return Pair(lines.join("\n"), failures == 0)
 }
 

@@ -1,4 +1,4 @@
-// windows only: it paints on the graphics card, which is on Windows only so far (G56)
+// needs windows: it paints on the graphics card
 // The small controls (a check box, radio buttons, a slider, a toggle, a list, a spinner), the
 // tree, a list and a tree in a scroll that follows the keyboard, the changes of a list or a
 // tree reaching the screen and asking for a layout, and a spinner's first click. These are

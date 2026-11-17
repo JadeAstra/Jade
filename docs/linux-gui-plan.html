@@ -103,6 +103,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#lx-decided">Decided as the plan was asked for</a></li>
 <li><a href="#lx-questions">Questions for the user</a></li>
 <li><a href="#lx-spike">The spike, so far</a></li>
+<li><a href="#lx-step1">Step 1: clipboard, drops, activation, the held pointer</a></li>
 </ul>
 </nav>
 
@@ -168,7 +169,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <tr><td class="part">3</td><td>Jade's own title bar and edges, where the compositor does not decorate.</td><td>The VM's GNOME session; the KDE session unchanged.</td></tr>
 <tr><td class="part">4</td><td>Composed text (<code>text-input-v3</code>, for input methods), and the examples on both desktops.</td><td>The VM, both sessions; every example opened.</td></tr>
 </tbody></table>
-<p><strong>The spike's gate:</strong> a Jade example opens on WSLg and on the Fedora KDE VM, draws as it does on Windows (its snapshot compared byte for byte with Windows' at scale 1), resizes without tearing or leaving bands, takes pointer and keyboard input; and ww with no Wayland display (a plain shell) runs non-window programs as before. Where it does not, stop and report.</p>
+<p><strong>The spike's gate:</strong> a Jade example opens on WSLg and on the Fedora KDE VM, draws as it does on Windows (its shown picture the same bytes as the picture of a window never shown, and within one level of Windows' at scale 1 on Mesa's software renderer; changed from "byte for byte with Windows'" by the user, 2026-11-16, as no graphics driver draws Windows' bytes), resizes without tearing or leaving bands, takes pointer and keyboard input; and ww with no Wayland display (a plain shell) runs non-window programs as before. Where it does not, stop and report.</p>
 
 <h2 id="lx-risks">Risks</h2>
 <ul>
@@ -233,7 +234,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <section class="decision">
 <h3><span class="code">5</span>The spike's gate</h3>
 <ul>
-<li><strong>As above:</strong> an example on WSLg and on Fedora KDE, its snapshot the same bytes as Windows', resizing clean, input working, non-window programs unchanged without a display.</li>
+<li><strong>As above:</strong> an example on WSLg and on Fedora KDE, its snapshot the same bytes as Windows' (since changed: the same bytes as a window never shown, within one level of Windows' on Mesa's software renderer), resizing clean, input working, non-window programs unchanged without a display.</li>
 <li><strong>Less:</strong> a window that draws and takes input on WSLg alone.</li>
 </ul>
 <p><em>Recommended:</em> as above. WSLg alone would not show what a real desktop does (KDE's decorations, its scale, its cursor protocol).</p>
@@ -255,9 +256,21 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><em>The suite without Jade's tests</em> (<code>suite.sh</code>): 1452 passed, 4 failed, one line of <code>graphics.ww</code> four ways (Segoe UI's bold falls back to the plain face's, so their names are the same): for the fonts, later.</li>
 <li><em>To look into a window on Linux:</em> <code>WW_WAYLAND_TRACE=1</code> (what the compositor sends and how long the program takes; the main thread's stack printed if it is stuck 5 s), <code>WW_WAYLAND_READBACK=&lt;path&gt;</code> (the window's picture saved just before it goes to the screen, once for each size, as raw RGBA), <code>WW_WAYLAND_NO_VIEWPORT=1</code> (no viewporter or fractional scale).</li>
 </ul></li>
-<li><strong>The gate</strong> is met but for one line: the VM's picture is not Windows' byte for byte (nor is WSLg's, by one level). Proposed in its place: the same bytes as the picture of a window never shown, and within one level of Windows on Mesa's software renderer. That waits for the user.</li>
+<li><strong>The gate</strong> was met but for one line: the VM's picture is not Windows' byte for byte (nor is WSLg's, by one level). The user changed that line (2026-11-16, "go ahead"): the same bytes as the picture of a window never shown, and within one level of Windows on Mesa's software renderer. So changed, the gate is met: WSLg's shown window the same bytes as a hidden one, 187 pixels one level off Windows'. Step 1 begun the same day.</li>
 </ul>
 
+<h2 id="lx-step1">Step 1: clipboard, drops, activation, the held pointer</h2>
+<p>2026-11-16, at the user's "go ahead". <code>platform_linux.cpp</code> now has the whole of <code>platform.h</code> but the file dialog (step 2):</p>
+<ul>
+<li><strong>The clipboard</strong>, through the core protocol's data device: text set as a source in every name programs ask for it by (UTF-8 first), with the serial of the last key, button or keyboard arrival (a compositor takes the clipboard only from a program the user is using, as with Control+C); text read from another program's offer through a pipe, at most 2 s; ours answered from our own copy. Under WSLg, text copied on Windows read in a WinterWolf window and back (accents, Cyrillic, Greek); in the VM, copied to Kate and pasted from it.</li>
+<li><strong>Files dropped</strong> on a window: a drag offering <code>text/uri-list</code> taken as a copy, the <code>file://</code> URIs read and given as paths, as Windows gives them. Tried in the VM from Dolphin.</li>
+<li><strong>To the front, and attention</strong>, through xdg-activation: a token asked for with the last input's serial (to the front) or without one (attention, which KDE shows on the task bar), then used on the window; a launcher's <code>XDG_ACTIVATION_TOKEN</code> used on the first window shown. In the VM the window came back to the front 3 s after the user had clicked elsewhere. The compositor may refuse, as Windows' <code>SetForegroundWindow</code> does. Attention was not tried by hand.</li>
+<li><strong>The pointer held</strong> (<code>PointerMode::Locked</code>), through pointer-constraints and relative-pointer: the pointer stays where it is and the mouse's moves come as distances, gathered as other moves are. Tried in the VM.</li>
+<li><strong>Owners, cursors, focus, waiting and waking</strong> were there from the spike.</li>
+<li><strong>Mesa's start-up chatter</strong> on standard error ("failed to get driver name", "ZINK: failed to choose pdev", under WSLg) held back while EGL starts, unless the trace is on or <code>EGL_LOG_LEVEL</code> is set: it was the program's own output, and failed every window test there.</li>
+<li><strong>Ovals</strong> are now smoothed by their edge's distance worked out exactly (the gradient of |p / h|), not from the GPU's differences between neighbouring pixels: an outline's right edge was grey on VirtualBox's driver, and Windows' own rings were a little lumpy (405 pixels of the event window's picture up to 14 levels, all on oval edges). The gate's picture from Windows made again.</li>
+</ul>
+<p><strong>The tests:</strong> 27 files marked <code>// windows only</code> because windows were on Windows only (G56) are now marked <code>// needs windows</code>: the runner runs them where a window can open (Windows, or Linux with a Wayland display) and passes them over elsewhere. The three about Segoe UI keep <code>// windows only</code>. One line of <code>jade_host.ww</code> took for granted that text is a little wider at 2 pixels to the unit (Segoe UI's is, DejaVu Sans' is a little narrower): left out. Results: Windows 1928 passed; WSLg 1589 passed, 3 passed over; the VM 1585 passed, 4 failed, 3 passed over (the one line of <code>graphics.ww</code> about Segoe UI's bold, for the fonts later). <code>bench/spike/linux_step1.ww</code> is the window tried by hand.</p>
 </main>
 </body>
 </html>

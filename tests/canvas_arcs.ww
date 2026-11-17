@@ -1,4 +1,4 @@
-// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// needs windows: it draws on the graphics card
 // Arcs, wedges and line widths on a canvas (M8): the shapes say where they are and what they
 // hold as Java's do (the answers below are Java 23's Arc2D and Ellipse2D), and the image's
 // canvas and the graphics card's draw them alike, as thick as lineWidth says.

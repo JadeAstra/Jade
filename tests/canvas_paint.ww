@@ -1,4 +1,4 @@
-// windows only: it draws on the graphics card, which is on Windows only so far (G56)
+// needs windows: it draws on the graphics card
 // Paints, clips to a shape, the Clear composite, text and pictures through a transform, and
 // blur (N3): the image's canvas and the graphics card's draw them alike.
 import Jade.*

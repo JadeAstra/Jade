@@ -1,4 +1,4 @@
-// windows only: it opens windows, which are on Windows only so far (G56)
+// needs windows: it opens windows
 // A window's screen: its menu bar and the menus dropped from it, context menus, drop-down lists,
 // a program's own popups and tips over the content, the menus' accelerators, the hooks every
 // window hears, and all of it in a window driven as a person would. These are JadeUI's own tests

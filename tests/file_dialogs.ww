@@ -1,4 +1,4 @@
-// windows only: it opens a window, which is on Windows only so far (G56)
+// needs windows: it opens a window
 // File dialogs (N2, M8): before any window the file dialog cancels everything; a window on the
 // screen installs the system's (SystemFileDialog, shown by hand: it cannot be answered here), a
 // hidden one leaves what there is; a scripted one answers from its list and keeps what it was
