@@ -9258,8 +9258,8 @@ bool CompilerSession::findImport(const std::string& path, const std::string& fro
 
 // Before any of a program is compiled: a file and everything it imports, each parsed once and
 // handed to the checker, which then checks them together (M6.5 part 3), so that compiling
-// can use what it worked out. What cannot be found or read is passed over here; compiling the
-// import reports it.
+// can use what it worked out. A module that cannot be found is reported here; one that cannot
+// be read is passed over, and compiling the import reports it.
 void CompilerSession::gather(const std::string& key, const std::string& name, const std::string& directory,
                              const std::vector<StmtPtr>& statements, Namespace* ns, bool prelude) {
     // Each input of the shell is a unit of its own, under the one key, which takes over the
@@ -9279,7 +9279,10 @@ void CompilerSession::gather(const std::string& key, const std::string& name, co
         const auto& s = static_cast<const ImportStmt&>(*stmt);
         std::string found;
         bool folder = false;
-        if (!findImport(s.path, directory, name, found, folder)) continue;
+        // A module not found is said here, before anything is checked (2026-11-18): passed over,
+        // every name it would have given was reported missing first, page after page, and the
+        // cause only after them, as compiling reached the import.
+        if (!findImport(s.path, directory, name, found, folder)) throw CompileError(name, s.line, s.col, "cannot find module '" + s.path + "'");
         if (folder) {
             for (const fs::path& path : folderFiles(found)) ahead.emplace_back(fileKeyOf(path), path.filename().string());
         } else {

@@ -51,6 +51,12 @@ using namespace ww;
 
 namespace ww {
 int docCommand(const std::vector<std::string>& args);  // src/doc.cpp
+// The libraries ww.exe carries (lib/, packed by cmake/embed_lib.cmake, 2026-11-18).
+extern const unsigned char kLibSource[];
+extern const size_t kLibFileEnds[];
+extern const char* const kLibFileNames[];
+extern const size_t kLibFileCount;
+extern const char kLibHash[];
 }
 
 namespace {
@@ -247,12 +253,69 @@ const char* const kUsage =
     "  ww --version\n"
     "  ww --help\n";
 
-// Where the libraries that come with WinterWolf, such as Jade, live: a "lib" folder beside the executable, and
-// nowhere else, so that a folder someone else can write to is never searched.
+// The libraries ww.exe carries, written out once into a folder of this machine's cache named by
+// their hash (lib-<hash>), so that everything that reads a library's files (an import, a
+// folder's files, a kept program's look at what it was made from) reads them there as it would
+// any others. Written to a folder of this process's own and moved into place whole, so that two
+// ww's starting at once never see half of one. Empty where there is no cache folder or it cannot
+// be written; a folder of another hash, from another ww, is let go a month after it was made.
+std::string builtInLibraries() {
+    static const std::string folder = []() -> std::string {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path root = cacheRootFolder();
+        if (root.empty() || kLibFileCount == 0) return {};
+        const std::string name = "lib-" + std::string(kLibHash).substr(0, 16);
+        const fs::path dir = root / name;
+        if (fs::exists(dir / ".whole", ec)) return dir.string();
+#ifdef _WIN32
+        const unsigned long pid = GetCurrentProcessId();
+#else
+        const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+        const fs::path temporary = root / (name + "." + std::to_string(pid) + ".tmp");
+        fs::remove_all(temporary, ec);
+        fs::create_directories(temporary, ec);
+        size_t from = 0;
+        bool written = !ec;
+        for (size_t i = 0; written && i < kLibFileCount; i++) {
+            const fs::path file = temporary / fs::u8path(kLibFileNames[i]);
+            fs::create_directories(file.parent_path(), ec);
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(kLibSource + from), static_cast<std::streamsize>(kLibFileEnds[i] - from));
+            written = static_cast<bool>(out);
+            from = kLibFileEnds[i];
+        }
+        if (written) written = static_cast<bool>(std::ofstream(temporary / ".whole", std::ios::binary) << kLibHash);
+        if (written) fs::rename(temporary, dir, ec);
+        if (!written || ec) {
+            fs::remove_all(temporary, ec);
+            if (!fs::exists(dir / ".whole", ec)) return {};  // another ww may have put the same in place meanwhile
+        }
+        // The folders other ww's wrote, of other hashes, a month old; and any left half written.
+        const auto now = fs::file_time_type::clock::now();
+        for (const fs::directory_entry& e : fs::directory_iterator(root, ec)) {
+            const std::string entry = e.path().filename().string();
+            if (entry.rfind("lib-", 0) != 0 || entry == name || !e.is_directory(ec)) continue;
+            const bool half = entry.size() > 4 && entry.compare(entry.size() - 4, 4, ".tmp") == 0;
+            const auto made = fs::last_write_time(half ? e.path() : e.path() / ".whole", ec);
+            if (ec || now - made > (half ? std::chrono::hours(1) : std::chrono::hours(24 * 30))) fs::remove_all(e.path(), ec);
+        }
+        return dir.string();
+    }();
+    return folder;
+}
+
+// Where the libraries that come with WinterWolf, such as Jade, are looked for: a "lib" folder
+// beside the executable first, where there is one, whose libraries take the place of those ww
+// carries (a newer Jade without building ww again; `ww --version` says so); then those ww carries
+// (builtInLibraries). Nowhere else, so that a folder someone else can write to is never searched.
 std::vector<std::string> libraryPaths() {
     std::filesystem::path exe = executablePath();
     std::vector<std::string> paths;
-    if (!exe.empty()) paths.push_back((exe.parent_path() / "lib").string());
+    std::error_code ec;
+    if (!exe.empty() && std::filesystem::is_directory(exe.parent_path() / "lib", ec)) paths.push_back((exe.parent_path() / "lib").string());
+    if (const std::string inside = builtInLibraries(); !inside.empty()) paths.push_back(inside);
     return paths;
 }
 
@@ -1154,6 +1217,22 @@ int dispatch(const std::vector<std::string>& given) {
     }
     if (command == "--version" || command == "-v") {
         std::cout << "ww " WW_VERSION "\n";
+        // Each library ww carries, and where a program takes it from: a lib folder beside ww
+        // that has one is used in its place (libraryPaths), which is said, so that a copy left
+        // there is never used unawares.
+        std::vector<std::string> libraries;
+        for (size_t i = 0; i < kLibFileCount; i++) {
+            const std::string top = std::string(kLibFileNames[i]).substr(0, std::string(kLibFileNames[i]).find('/'));
+            if (std::find(libraries.begin(), libraries.end(), top) == libraries.end()) libraries.push_back(top);
+        }
+        const std::filesystem::path beside = executablePath().parent_path() / "lib";
+        for (const std::string& library : libraries) {
+            std::error_code ec;
+            if (std::filesystem::is_directory(beside / library, ec))
+                std::cout << library << ": from " << (beside / library).string() << ", in place of the one built in\n";
+            else
+                std::cout << library << ": built in\n";
+        }
         return 0;
     }
     if (command == "shell") return shell();

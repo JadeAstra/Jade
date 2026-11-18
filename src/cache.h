@@ -21,6 +21,9 @@ namespace ww {
 // Reads a whole file into `out`, in one read. False if it cannot be read.
 bool readWholeFile(const std::filesystem::path& path, std::string& out);
 
+// The cache's own folder (WW_CACHE, or this machine's place for it); empty where there is none.
+std::filesystem::path cacheRootFolder();
+
 // The standard library compiled when ww.exe was built (D145, point 3), attached to the end
 // of the file with its size and a marker: read from there without reading the rest, made into
 // a copy of the file with it attached, and taken off a file's image (for a built program,

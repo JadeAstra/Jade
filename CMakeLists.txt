@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 # M3.5 is 0.3.5, M4 is 0.4.0, M5 is 0.5.0, M6 is 0.6.0, M6.5 is 0.6.5, M6.6 is 0.6.6, M6.6.2 is
 # 0.6.6.2, M6.7 is 0.6.7, M7 is 0.7.0, M8 is 0.8.0, M9.5 (native code, docs/native-plan.html) is 0.9.5.
 # Between milestones each minor build counts up after it (the user, 2026-11-17): 0.9.5001, 0.9.5002...
-project(WinterWolf VERSION 0.9.5015 LANGUAGES CXX)
+project(WinterWolf VERSION 0.9.5016 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,21 @@ add_custom_command(
           -P "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
   DEPENDS ${WW_STD} "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
   COMMENT "Packing the standard library"
+  VERBATIM)
+
+# The libraries that come with WinterWolf (lib/: Jade) are carried inside ww.exe too
+# (2026-11-18), so that a lone ww.exe runs a program that imports them; a lib folder beside it,
+# where there is one, is looked in first (src/command.cpp, libraryPaths).
+file(GLOB_RECURSE WW_LIB RELATIVE "${CMAKE_SOURCE_DIR}/lib" CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/lib/*")
+list(SORT WW_LIB)
+string(REPLACE ";" "|" WW_LIB_ARG "${WW_LIB}")
+list(TRANSFORM WW_LIB PREPEND "${CMAKE_SOURCE_DIR}/lib/" OUTPUT_VARIABLE WW_LIB_FILES)
+add_custom_command(
+  OUTPUT "${CMAKE_BINARY_DIR}/lib_source.cpp"
+  COMMAND ${CMAKE_COMMAND} "-DOUT=${CMAKE_BINARY_DIR}/lib_source.cpp" "-DROOT=${CMAKE_SOURCE_DIR}/lib" "-DFILES=${WW_LIB_ARG}"
+          -P "${CMAKE_SOURCE_DIR}/cmake/embed_lib.cmake"
+  DEPENDS ${WW_LIB_FILES} "${CMAKE_SOURCE_DIR}/cmake/embed_lib.cmake"
+  COMMENT "Packing the libraries that come with WinterWolf"
   VERBATIM)
 
 # The executable in three parts (M6.5 part 5, D161): what every program needs to run, Jade's
@@ -82,6 +97,7 @@ add_library(ww_window OBJECT
 )
 add_library(ww_compiler OBJECT
   "${CMAKE_BINARY_DIR}/std_source.cpp"
+  "${CMAKE_BINARY_DIR}/lib_source.cpp"
   src/lexer.cpp
   src/parser.cpp
   src/checker.cpp
@@ -226,12 +242,9 @@ if(WIN32)
   target_link_libraries(ww_proof PRIVATE delayimp)
 endif()
 
-# ww looks for libraries such as Jade only in the lib folder beside itself, so every
-# build puts a copy of lib/ next to the executable.
-add_custom_target(ww_lib ALL
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/lib" "$<TARGET_FILE_DIR:ww>/lib"
-  COMMENT "Copying lib next to ww"
-  VERBATIM)
+# No copy of lib/ is put next to the executable (it was until 2026-11-18): ww carries lib/
+# inside itself, and a lib folder beside it would be used in its place, so the suite would not
+# test what a lone ww.exe does.
 
 if(MSVC)
   foreach(part ww ww_core ww_window ww_compiler ww_proof ww_proof_plain)

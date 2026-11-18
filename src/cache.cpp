@@ -235,6 +235,8 @@ void startKeeping() {
 
 bool fileStamp(const std::string& path, uintmax_t& size, long long& time) { return stamp(path, size, time); }
 
+fs::path cacheRootFolder() { return cacheRoot(); }
+
 namespace {
 const char kPreludeMarker[8] = {'A', 'S', 'T', 'R', 'A', 'S', 'T', 'D'};
 const size_t kPreludeTrailer = 8 + sizeof kPreludeMarker;  // the image's size, then the marker

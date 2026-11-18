@@ -35,7 +35,8 @@ build.bat
 ```
 
 This finds the MSVC toolchain, configures with the CMake and Ninja that ship with Visual
-Studio, and produces `build\ww.exe` with a copy of `lib` beside it. Any other CMake setup
+Studio, and produces `build\ww.exe`, which carries the standard library and `lib` inside
+itself. Any other CMake setup
 works too (`cmake -S . -B build && cmake --build build`).
 
 Linux with GCC 13 or later, or Clang 17 or later, and CMake:
@@ -2140,9 +2141,13 @@ A library is a folder directly inside `lib`, with everything below it, so `Jade`
 `Jade/Chart` can share `internal` names that programs using them cannot see. The folders of
 a program count as one library.
 
-An import is looked for next to the importing file, then in the `lib` folder beside
-`ww.exe`, and nowhere else. That is where the libraries that come with WinterWolf, such as `Jade`, live, so
-`ww.exe` and its `lib` folder belong together when ww is copied somewhere.
+An import is looked for next to the importing file, then in a `lib` folder beside `ww.exe`
+where there is one, then among the libraries `ww.exe` carries inside itself, and nowhere else.
+The libraries that come with WinterWolf, such as `Jade`, are inside `ww.exe`, so `ww.exe`
+alone runs and builds a program that imports them. A library in a `lib` folder beside it is
+used in place of the one of that name inside it, whole (a newer `Jade` without building ww
+again); `ww --version` says which each is. A module that cannot be found is said at once:
+`cannot find module 'Jade'`.
 
 **Order.** Within a file, and across the files of a folder that is imported as a whole, the
 order of declarations does not matter. Before anything else runs, the imports are loaded, the
