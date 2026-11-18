@@ -554,6 +554,10 @@ struct Region {
         if (l == nullptr || !l->packed) return -1;
         if (l->nullable) return -1;  // items that may be null: read by the VM (each step reading it would leave, 2026-11-16)
         if (l->store == ListStore::Narrow && l->narrow == Narrow::Byte) return CI;  // a List<byte>, read as bytes are
+        // A list of two- or four-byte whole numbers (List<int16>, <int32>, <uint16>, <uint32>,
+        // 2026-11-18), read as ints, each set checked to fit.
+        if (l->store == ListStore::Narrow && (l->narrow == Narrow::Int16 || l->narrow == Narrow::Int32 || l->narrow == Narrow::Uint16 || l->narrow == Narrow::Uint32))
+            return CI;
         return l->store == ListStore::Floats ? CF : l->store == ListStore::Ints ? CI : -1;
     }
     // What the list in a slot holds, in the call the region is made in: read by the region from a
@@ -4251,6 +4255,17 @@ struct Region {
             if (isPlain(l->stem)) l->ki = static_cast<int64_t>(widthOf(root));  // the class checked as it was looked at
             l->stem = "h" + l->stem;
             l->slot = k->second;
+            // A list of two- or four-byte whole numbers in the frame (2026-11-18): read and set through
+            // steps of their own (stencils.cpp's hidxn), the ones above left as they were.
+            if (root >= 0) {
+                const NativeSeen::List* narrow = listOf(frameAt(root));
+                if (narrow != nullptr && narrow->packed && narrow->store == ListStore::Narrow &&
+                    (narrow->narrow == Narrow::Int16 || narrow->narrow == Narrow::Int32 || narrow->narrow == Narrow::Uint16 || narrow->narrow == Narrow::Uint32)) {
+                    static const std::map<std::string, std::string> asNarrow = {
+                        {"hidxw", "hidxn"}, {"hidxwk", "hidxnk"}, {"hsetwi", "hsetni"}, {"hsetwb", "hsetnb"}};
+                    if (auto n = asNarrow.find(l->stem); n != asNarrow.end()) l->stem = n->second;
+                }
+            }
         }
         // A field of a Ref made from a list looked at once: read through what was looked at, where
         // the field is within the first 64 KB of its item.

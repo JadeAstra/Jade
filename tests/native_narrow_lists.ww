@@ -1,0 +1,103 @@
+// Lists of two- and four-byte whole numbers in native code (2026-11-18): List<int16>, <int32>,
+// <uint16> and <uint32> read and set in loops as ints are, looked at once and not, each set
+// checked to fit (one that does not leaves for the VM, which says so), a byte set into one, and
+// the same loop given lists of other kinds. Run as the VM runs it too (the suite's interpret way).
+
+fun sum16(items : List<int16>) : int {
+  var t = 0
+  for (i in 0 ..< items.size) { t += items[i] }
+  return t
+}
+fun sumU16(items : List<uint16>) : int {
+  var t = 0
+  for (i in 0 ..< items.size) { t += items[i] }
+  return t
+}
+fun sum32(items : List<int32>) : int {
+  var t = 0
+  for (i in 0 ..< items.size) { t += items[i] }
+  return t
+}
+fun sumU32(items : List<uint32>) : int {
+  var t = 0
+  for (i in 0 ..< items.size) { t += items[i] }
+  return t
+}
+
+val n = 5000
+val a : open List<int16> = List<int16>(n) { 0 }
+val b : open List<uint16> = List<uint16>(n) { 0 }
+val c : open List<int32> = List<int32>(n) { 0 }
+val d : open List<uint32> = List<uint32>(n) { 0 }
+// Set in a loop: each kind at its ends.
+for (i in 0 ..< n) {
+  a[i] = i % 2 == 0 ? 32767 - i : -32768 + i
+  b[i] = 65535 - i
+  c[i] = i % 2 == 0 ? 2147483647 - i : -2147483648 + i
+  d[i] = 4294967295 - i
+}
+print(sum16(a), sumU16(b), sum32(c), sumU32(d))   // expect: 0 315177500 0 21474823977500
+print(a[0], a[1], b[0], c[0], c[1], d[0])         // expect: 32767 -32767 65535 2147483647 -2147483647 4294967295
+
+// Read where an index is a constant, and changed in place (each item read, worked on, set back).
+for (i in 0 ..< n) { b[i] = b[i] / 2 }
+print(b[0], b[4999], b[7])                        // expect: 32767 30268 32764
+
+// A value that does not fit, set in a loop: the VM's own error, the items before it set.
+val small : open List<uint16> = List<uint16>(10) { 0 }
+try {
+  for (i in 0 ..< 10) { small[i] = i * 10000 }
+} catch (e) {
+  print(e.message)                                // expect: 70000 does not fit in a uint16, which holds 0 to 65535; toUint16Wrapped() keeps the low 16 bits
+}
+print(small[6], small[7])                         // expect: 60000 0
+val signed : open List<int16> = List<int16>(4) { 0 }
+try {
+  for (i in 0 ..< 4) { signed[i] = -20000 * i }
+} catch (e) {
+  print(e.message)                                // expect: -40000 does not fit in an int16, which holds -32768 to 32767; toInt16Wrapped() keeps the low 16 bits
+}
+
+// Bytes set into one, and items copied from bytes.
+val raw = Bytes([1, 2, 255])
+val wide : open List<uint32> = List<uint32>(3) { 0 }
+for (i in 0 ..< 3) { wide[i] = raw[i] }
+print(wide)                                       // expect: [1, 2, 255]
+
+// The LZW shape: a table of codes read at a key, set where it is 0; in a function, its lists in
+// locals, so looked at once as the loop starts (hidxn, hsetni), as GIF's writer has its table.
+fun codes(table : open List<uint16>, rounds : int) : int {
+  var next = 1
+  var found = 0
+  for (i in 0 ..< rounds) {
+    val key = (i * 7919) % 65536
+    if (table[key] != 0) {
+      found += 1
+      continue
+    }
+    table[key] = next
+    next = next % 4095 + 1
+  }
+  return found
+}
+val table : open List<uint16> = List<uint16>(65536) { 0 }
+print(codes(table, 200000), table[0], table[7919])   // expect: 134464 1 2
+// And a byte set through what was looked at (hsetnb), and a value too wide for it (hsetni leaves).
+fun fill(into : open List<int16>, from : Bytes) : int {
+  for (i in 0 ..< from.size) { into[i] = from[i] }
+  var t = 0
+  for (i in 0 ..< into.size) { into[i] = into[i] * 200 }
+  return t
+}
+val shorts : open List<int16> = List<int16>(3) { 0 }
+try { fill(shorts, Bytes([1, 100, 200])) } catch (e) { print(e.message) }
+// expect: 40000 does not fit in an int16, which holds -32768 to 32767; toInt16Wrapped() keeps the low 16 bits
+print(shorts)                                     // expect: [200, 20000, 200]
+
+// The same loop given lists of other kinds: ints, then int16 again.
+fun total(items : List<int>) : int {
+  var t = 0
+  for (i in 0 ..< items.size) { t += items[i] }
+  return t
+}
+print(total([1, 2, 3]), sum16([5, -5, 7]), total([10, 20]))   // expect: 6 7 30

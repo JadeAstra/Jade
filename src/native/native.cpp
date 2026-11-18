@@ -119,6 +119,9 @@ static_assert(PlaceArena::kStride == L::kPlaceStride && ObjPlace::kBytes == L::k
 static_assert(sizeof(ObjValue) == L::kValueData && offsetof(ObjValue, cls) == L::kPlaceClass && static_cast<int>(ObjType::Value) == L::kTypeValue, "layout.h: a value in a box");
 static_assert(offsetof(ObjPlace, cls) == L::kPlaceClass && offsetof(ObjPlace, type) == L::kPlaceType && sizeof(ObjPlace) == L::kPlaceData,
               "layout.h: a frame's place");
+static_assert(static_cast<int>(Narrow::Int16) == L::kNarrowInt16 && static_cast<int>(Narrow::Int32) == L::kNarrowInt32 &&
+                  static_cast<int>(Narrow::Uint16) == L::kNarrowUint16 && static_cast<int>(Narrow::Uint32) == L::kNarrowUint32,
+              "layout.h: the narrow whole numbers");
 static_assert(static_cast<int>(ListStore::Narrow) == L::kStoreNarrow && static_cast<int>(Narrow::Byte) == L::kNarrowByte &&
                   offsetof(PackedItems, narrow) == L::kPackNarrow && sizeof(Narrow) == 1,
               "layout.h: a list of narrow items");

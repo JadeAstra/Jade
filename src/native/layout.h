@@ -73,6 +73,9 @@ constexpr int kPackWidth = 4, kPackItemClass = 32;
 constexpr uint8_t kStoreItems = 5;
 // A list of narrow items (List<byte>, ...): ListStore::Narrow, what each is at kPackNarrow.
 constexpr uint8_t kStoreNarrow = 4, kNarrowByte = 1;
+// And the whole numbers of two and four bytes (Narrow's Int16, Int32, Uint16, Uint32, 2026-11-18),
+// read and set by native code as ints; a list of them looked at once says so as 16 + which.
+constexpr uint8_t kNarrowInt16 = 3, kNarrowInt32 = 4, kNarrowUint16 = 5, kNarrowUint32 = 6, kHeldNarrow = 16;
 // A captured variable's cell (ObjUpvalue): where its value is.
 constexpr int kUpvalueLocation = 24;
 constexpr int kPackNarrow = 40;

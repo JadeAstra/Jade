@@ -903,6 +903,56 @@ INLINE const uint8_t* bytesPack(const uint8_t* list) {
     const uint8_t* pack = packOf(list, kStoreNarrow);
     return pack != nullptr && pack[kPackNarrow] == kNarrowByte ? pack : nullptr;
 }
+// A List<int16>, List<int32>, List<uint16> or List<uint32>'s items (2026-11-18), two or four bytes
+// each, read and set as ints are: its pack, and which (`narrow`), or null.
+INLINE const uint8_t* wholesPack(const uint8_t* list, uint8_t& narrow) {
+    const uint8_t* pack = packOf(list, kStoreNarrow);
+    if (pack == nullptr) return nullptr;
+    narrow = pack[kPackNarrow];
+    return narrow >= kNarrowInt16 && narrow <= kNarrowUint32 ? pack : nullptr;
+}
+INLINE int64_t narrowRead(const uint8_t* block, uint64_t narrow, uint64_t index) {
+    if (narrow == kNarrowUint16) {
+        uint16_t v;
+        __builtin_memcpy(&v, block + index * 2, 2);
+        return v;
+    }
+    if (narrow == kNarrowInt16) {
+        int16_t v;
+        __builtin_memcpy(&v, block + index * 2, 2);
+        return v;
+    }
+    if (narrow == kNarrowInt32) {
+        int32_t v;
+        __builtin_memcpy(&v, block + index * 4, 4);
+        return v;
+    }
+    uint32_t v;
+    __builtin_memcpy(&v, block + index * 4, 4);
+    return v;
+}
+// An int set into such a list: false where it does not fit (the VM's, which says so).
+INLINE bool narrowWrite(uint8_t* block, uint64_t narrow, uint64_t index, int64_t v) {
+    if (narrow == kNarrowUint16 || narrow == kNarrowInt16) {
+        if (narrow == kNarrowUint16 ? static_cast<uint64_t>(v) > 65535 : (v < -32768 || v > 32767)) return false;
+        const uint16_t w = static_cast<uint16_t>(v);
+        __builtin_memcpy(block + index * 2, &w, 2);
+        return true;
+    }
+    if (narrow == kNarrowInt32 ? (v < -2147483648LL || v > 2147483647) : static_cast<uint64_t>(v) > 4294967295ULL) return false;
+    const uint32_t w = static_cast<uint32_t>(v);
+    __builtin_memcpy(block + index * 4, &w, 4);
+    return true;
+}
+// Such a list's block, to change item `index`: its core's own, not frozen, the item in range.
+INLINE uint8_t* wholesToChange(const Slot& s, int64_t index, const Ctx* ctx, uint8_t& narrow) {
+    if (s.kind != kKindObj) return nullptr;
+    const uint8_t* o = s.p;
+    if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
+    const uint8_t* pack = wholesPack(o, narrow);
+    if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
+    return word<uint8_t*>(pack + kPackBlock);
+}
 INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out) {
     if (s.kind != kKindObj) return false;
     const uint8_t* o = s.p;
@@ -921,7 +971,15 @@ INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out
         return true;
     }
     const uint8_t* pack = packOf(o, kStoreInts);
-    if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return false;
+    if (pack == nullptr) {
+        // (After ints: a list of two- or four-byte whole numbers, 2026-11-18.)
+        uint8_t narrow;
+        const uint8_t* wholes = wholesPack(o, narrow);
+        if (wholes == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(wholes + kPackCount)) return false;
+        out = narrowRead(word<const uint8_t*>(wholes + kPackBlock), narrow, static_cast<uint64_t>(index));
+        return true;
+    }
+    if (static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return false;
     out = word<int64_t>(word<const uint8_t*>(pack + kPackBlock) + index * 8);
     return true;
 }
@@ -1057,7 +1115,13 @@ F_A(SETF_A, x)
             NEXT;                                                               \
         }                                                                       \
         uint8_t* at = listToChange(s, i##c, kStoreInts, ctx);                   \
-        if (at == nullptr) EXIT;                                                \
+        if (at == nullptr) {                                                    \
+            /* a list of two- or four-byte whole numbers: one that fits */      \
+            uint8_t narrow;                                                     \
+            uint8_t* block = wholesToChange(s, i##c, ctx, narrow);              \
+            if (block == nullptr || !narrowWrite(block, narrow, static_cast<uint64_t>(i##c), i##v)) EXIT; \
+            NEXT;                                                               \
+        }                                                                       \
         __builtin_memcpy(at, &i##v, 8);                                              \
         NEXT;                                                                   \
     }                                                                           \
@@ -1066,7 +1130,12 @@ F_A(SETF_A, x)
         if (at == nullptr) {                                                    \
             /* a byte into a list of ints: the int it is */                     \
             uint8_t* item = listToChange((*slotAt(base)), i##c, kStoreInts, ctx); \
-            if (item == nullptr) EXIT;                                          \
+            if (item == nullptr) {                                              \
+                uint8_t narrow;                                                 \
+                uint8_t* block = wholesToChange((*slotAt(base)), i##c, ctx, narrow); \
+                if (block == nullptr || !narrowWrite(block, narrow, static_cast<uint64_t>(i##c), i##v)) EXIT; \
+                NEXT;                                                           \
+            }                                                                   \
             __builtin_memcpy(item, &i##v, 8);                                   \
             NEXT;                                                               \
         }                                                                       \
@@ -2281,12 +2350,18 @@ INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
         const uint8_t* pack = packOf(o, floats ? kStoreFloats : kStoreInts);
         if (pack == nullptr && !floats) {
             const uint8_t* narrow = packOf(o, kStoreNarrow);
-            if (narrow != nullptr && narrow[kPackNarrow] == kNarrowByte) {
+            const uint8_t which = narrow == nullptr ? 0 : narrow[kPackNarrow];
+            if (which == kNarrowByte) {
                 const uint64_t count = word<uint64_t>(narrow + kPackCount);
                 h[0] = word<uint64_t>(narrow + kPackBlock);
                 if (mayRead(o, ctx)) h[1] = count;
                 if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
                 h[3] = 3;
+            } else if (which >= kNarrowInt16 && which <= kNarrowUint32 && mayRead(o, ctx)) {
+                // Two- or four-byte whole numbers: their counts 0 here, and in the fourth word
+                // what hidxn and the others read (heldNarrow).
+                h[0] = word<uint64_t>(narrow + kPackBlock);
+                h[3] = kHeldNarrow + which | (o[kObjCore] == ctx->core && o[kObjFrozen] == 0 ? 0x80 : 0) | word<uint64_t>(narrow + kPackCount) << 8;
             }
             return;
         }
@@ -2391,6 +2466,48 @@ I_A(HIDXW_A, x)
         NEXT;                                                                   \
     }
 I_A(HIDXWK, x)
+// A list of two- or four-byte whole numbers looked at once (2026-11-18), through steps of their
+// own, so that the steps above stay as they were: lookAt leaves its counts 0 (where the steps
+// above leave, should one meet it), and keeps in the fourth word kHeldNarrow + which, bit 7 set
+// where it may be changed, and from bit 8 how many items may be read.
+INLINE bool heldNarrow(const uint64_t* h, uint64_t index, bool change, uint64_t& which) {
+    const uint64_t w = h[3];
+    which = (w & 0x7F) - kHeldNarrow;
+    return which >= kNarrowInt16 && which <= kNarrowUint32 && index < (w >> 8) && (!change || (w & 0x80) != 0);
+}
+#define HIDXN_B(c, a)                                                           \
+    STENCIL(hidxn_##a##_##c) {                                                  \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        uint64_t which;                                                         \
+        if (!heldNarrow(h, static_cast<uint64_t>(i##c), false, which)) EXIT;    \
+        i##a = narrowRead(reinterpret_cast<const uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c)); \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetni_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        uint64_t which;                                                         \
+        if (!heldNarrow(h, static_cast<uint64_t>(i##c), true, which) ||         \
+            !narrowWrite(reinterpret_cast<uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c), i##a)) EXIT; \
+        NEXT;                                                                   \
+    }                                                                           \
+    STENCIL(hsetnb_##a##_##c) {                                                 \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        uint64_t which;                                                         \
+        if (!heldNarrow(h, static_cast<uint64_t>(i##c), true, which)) EXIT;     \
+        narrowWrite(reinterpret_cast<uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c), i##a); /* a byte fits */ \
+        NEXT;                                                                   \
+    }
+#define HIDXN_A(a, ...) I_B(HIDXN_B, a)
+I_A(HIDXN_A, x)
+#define HIDXNK(a, ...)                                                          \
+    STENCIL(hidxnk_##a) {                                                       \
+        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        uint64_t which;                                                         \
+        if (!heldNarrow(h, static_cast<uint64_t>(ww_ki), false, which)) EXIT; \
+        i##a = narrowRead(reinterpret_cast<const uint8_t*>(h[0]), which, static_cast<uint64_t>(ww_ki)); \
+        NEXT;                                                                   \
+    }
+I_A(HIDXNK, x)
 
 // A list of a value type's items looked at once (M9.5 B1), as lookAt: in the context's words 4k
 // to 4k+3, its items' address, how many may be read, how many changed, and the list itself (what

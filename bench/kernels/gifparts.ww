@@ -54,7 +54,7 @@ for (size in ["1000", "4000"]) {
 // The GIF writer's LZW (src/std/gif.ww's __LzwTable, which a program cannot reach), the same code.
 class Lzw {
   // Zeros made at once by a grid's cells, rather than a million added one at a time.
-  private val children : open List<int> = List(4096 * 256) { 0 }
+  private val children : open List<uint16> = List<uint16>(4096 * 256) { 0 }
   // The keys put in the table since it was emptied: fewer than 4096.
   private val keys : open List<int> = List(4096) { 0 }
 

@@ -424,8 +424,10 @@ class __GifOut {
 // LZW for GIF: a table of the strings met, kept from one frame to the next and emptied of what a
 // frame put in it, by (code, next index) as a list rather than a map, for speed.
 class __LzwTable {
-  // Zeros made at once by a grid's cells, rather than a million added one at a time.
-  private val children : open List<int> = Grid<int>(4096 * 256, 1).cells
+  // Zeros made at once by a grid's cells, rather than a million added one at a time; each a code
+  // under 4096, two bytes (2026-11-18: 2 MB read at random, not 8, the C++ yardstick's table; 11%
+  // off the loop, now native code reads and sets such lists).
+  private val children : open List<uint16> = Grid<uint16>(4096 * 256, 1).cells
   // The keys put in the table since it was emptied: fewer than 4096.
   private val keys : open List<int> = Grid<int>(4096, 1).cells
 
