@@ -7408,9 +7408,24 @@ struct Region {
             }
         }
         if (best == nullptr) return spillHome();
-        const Reg r = *best;
+        spillInSlot(*best);
+        return true;
+    }
+    // What spilling did, in order ('S' a value kept in its slot, 'H' one in a cell), so that it can
+    // be done again from the region as it was (allocate).
+    std::vector<std::pair<char, Reg>> spillLog;
+    bool judgingSplits = false;
+    std::map<Reg, double> splitSavings;
+    // `r` kept in its slot everywhere: each read loaded first, each write written back after.
+    void spillInSlot(const Reg r) {
+        // In the first way (allocate): what splitting it instead would save, judged now, while it is
+        // still itself in the region; worth a try from a load or a store a time round.
+        if (judgingSplits) {
+            double saving = 0;
+            if (coldUse(r) >= 0 && splitOne(r, &saving) && saving >= 1.0) splitSavings[r] = saving;
+        }
+        spillLog.emplace_back('S', r);
         spilled.insert(r);
-        // Each read of it loaded first, into a register of its own; each write written back after.
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             Result& res = results[i];
@@ -7448,8 +7463,300 @@ struct Region {
             for (ExitPoint& e : res.exits)
                 std::erase_if(e.stores, [&](const LOp& l) { return !l.named.empty() && l.named[0] == r; });
         }
+    }
+
+    // ---- Giving registers, spilling where too few (with part C's splits, 2026-11-18) ----
+    //
+    // Registers given as before: where there are too few, a value at a time kept in its slot (or a
+    // cell) until all have one. Then, where what runs was counted and a value so kept is one the hot
+    // path uses, the same done again from the region as it was, each such value split instead
+    // (splitOne: in its register on the hot path, in its slot on the cold one) where that saves
+    // work; kept where every value then has a register, and otherwise the first way done again, as
+    // it was. So a split only ever takes the place of a value kept in memory everywhere: none is
+    // split that the first way left in a register (2026-11-18: split as values were chosen, the
+    // flood fill split two values it never had to keep in memory, and ran 10 to 20% slower).
+    // `onSpill` is told of each step taken; false where values cannot all be given registers.
+    template <class OnSpill>
+    bool allocate(OnSpill&& onSpill) {
+        struct Saved {
+            std::vector<Result> results;
+            int temps, homes;
+            std::set<Reg> spilled, housed, madeBySpill, splitValues;
+        };
+        const Saved before{results, temps, homes, spilled, housed, madeBySpill, splitValues};
+        auto restoreTo = [&](const Saved& s) {
+            results = s.results;
+            temps = s.temps, homes = s.homes;
+            spilled = s.spilled, housed = s.housed, madeBySpill = s.madeBySpill, splitValues = s.splitValues;
+            findLive();
+        };
+        auto restore = [&] { restoreTo(before); };
+        spillLog.clear();
+        splitSavings.clear();
+        judgingSplits = !hotPath().empty();
+        while (!giveRegisters()) {
+            if (!spillOne()) {
+                judgingSplits = false;
+                return false;
+            }
+            onSpill();
+            findLive();
+        }
+        judgingSplits = false;
+        // None worth splitting: the first way stands, nothing done again.
+        if (splitSavings.empty()) return true;
+        // The candidates: values kept in their slots that splitting would save work on (judged as
+        // each was kept so, splitSavings), the one it would save most on first.
+        const std::vector<std::pair<char, Reg>> logged = spillLog;
+        // The first way's region kept, to go back to without doing it again where nothing is split.
+        const Saved afterFirst{results, temps, homes, spilled, housed, madeBySpill, splitValues};
+        auto backToFirst = [&] {
+            restoreTo(afterFirst);
+            spillLog = logged;
+            return giveRegisters();
+        };
+        std::vector<std::pair<double, Reg>> candidates;
+        for (const auto& [r, saving] : splitSavings) candidates.emplace_back(saving, r);
+        const std::vector<std::pair<char, Reg>> first = logged;
+        std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        // The first way done again from the region as it was, the values in `split` split where
+        // splitOne finds it saves work; whether every value then has a register.
+        auto replay = [&](const std::set<Reg>& split) {
+            restore();
+            spillLog.clear();
+            for (const auto& [kind, r] : first) {
+                if (kind == 'H') spillHomeOf(r);
+                else if (split.count(r) && splitOne(r)) splitValues.insert(r);
+                else spillInSlot(r);
+                findLive();
+            }
+            return giveRegisters();
+        };
+        // One candidate at a time: kept split where the rest still have registers (each try the
+        // whole done again: a few at most, as only values the hot path uses are tried).
+        std::set<Reg> kept;
+        bool lastFits = false;  // the region as it now is: as it was before any spilling
+        for (const auto& [use, r] : candidates) {
+            std::set<Reg> trying = kept;
+            trying.insert(r);
+            lastFits = replay(trying);
+            static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
+            if (traceSplit)
+                std::fprintf(stderr, "split try %d (saving %.2f): %s, split now %zu\n", r.slot, use, lastFits ? "fits" : "does not fit", splitValues.size());
+            if (lastFits) kept = std::move(trying);
+        }
+        // The region left as the last try made it: done again with what was kept, unless that was it.
+        const bool fits = lastFits ? true : kept.empty() ? backToFirst() : replay(kept);
+        onSpill();
+        return fits;
+    }
+    // ---- A value's life split (registers-plan.html part C, 2026-11-18) ----
+    //
+    // The region's instructions in two: the hot path, those run at least half as often as the
+    // busiest (as the region made first counted), and the cold path, the rest. A value to be kept
+    // in its slot that the hot path uses is kept so only on the cold path, and keeps its register
+    // on the hot one. On the cold path each read is loaded first and each write written back, as
+    // spillOne does everywhere, and its ways out have it in its slot already. Where the hot path
+    // goes into the cold one with it wanted, its register is written to its slot; where the cold
+    // path comes back, it is loaded again. Each such step is put at the start of the instruction
+    // gone into where every way into it is from the other path (and the VM does not come in there),
+    // so that the path it comes from never runs it; on the way itself otherwise. Ways in are as
+    // before: a value wanted where the VM comes in is loaded from its slot. Only where it saves work
+    // as the counts weigh it (the cost check below), and only for a value allocate's first way kept
+    // in its slot. (Splitting the other way, a value only passing through the hot path kept in
+    // memory there, was tried on 2026-11-18 and was no better: the pressure is on the cold path.)
+    // False where it cannot be (nothing counted; not used on the hot path, or neither used nor
+    // wanted on the cold one; one kind of it not written back where it would be; saving nothing):
+    // kept in its slot everywhere instead. WW_TRACE_SPLIT=1 says, for each region, each value tried
+    // and whether the rest still had registers.
+    std::set<Reg> splitValues;
+    // The hot path: each instruction run at least half as often as the busiest, as counted; empty
+    // where nothing was.
+    std::vector<char> hotPath() const {
+        const size_t n = ins.size();
+        double top = 0;
+        for (size_t i = 0; i < n; i++)
+            if (in[i].known) top = std::max(top, perRound(i));
+        std::vector<char> hot;
+        if (top <= 0) return hot;
+        hot.assign(n, 0);
+        for (size_t i = 0; i < n; i++) hot[i] = in[i].known && !results[i].island && perRound(i) >= 0.5 * top;
+        return hot;
+    }
+    // How much the cold path uses a value the hot path uses (each use weighed by how often it
+    // runs a time round): what splitting it would cost; -1 where it is not one to split (nothing
+    // counted, not used on the hot path, or neither used nor wanted on the cold one).
+    double coldUse(const Reg& r) const {
+        const std::vector<char> hot = hotPath();
+        if (hot.empty()) return -1;
+        bool usedHot = false, onCold = false;
+        double cold = 0;
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops) {
+                const int k = static_cast<int>(std::count(l.uses.begin(), l.uses.end(), r) + std::count(l.defs.begin(), l.defs.end(), r));
+                if (k == 0) continue;
+                if (hot[i]) usedHot = true;
+                else onCold = true, cold += k * std::max(0.0, perRound(i));
+            }
+            if (!hot[i] && liveIn(i).count(r)) onCold = true;
+        }
+        return usedHot && onCold ? cold : -1;
+    }
+    // `saving`, where given: what splitting would save (the cost check below), nothing changed.
+    bool splitOne(const Reg& r, double* saving = nullptr) {
+        const size_t n = ins.size();
+        const std::vector<char> hot = hotPath();
+        if (hot.empty() || coldUse(r) < 0) return false;
+        // The cold path keeps it in memory.
+        std::vector<char> memory(n, 0);
+        for (size_t i = 0; i < n; i++) memory[i] = in[i].known && !hot[i];
+        // The ways from one instruction to another within the region: by a step's jump, or falling
+        // through after the last step (op -1).
+        struct Way {
+            size_t from;
+            int op;
+            size_t to;
+        };
+        std::vector<Way> ways;
+        std::vector<std::vector<size_t>> preds(n);
+        for (size_t i = 0; i < n; i++) {
+            if (!in[i].known) continue;
+            const Result& res = results[i];
+            for (size_t p = 0; p < res.ops.size(); p++)
+                if (res.ops[p].jumpTo >= 0) ways.push_back(Way{i, static_cast<int>(p), static_cast<size_t>(res.ops[p].jumpTo)});
+            if (res.fallsThrough && res.fallExit < 0 && i + 1 < n && in[i + 1].known) ways.push_back(Way{i, -1, i + 1});
+        }
+        for (const Way& w : ways) preds[w.to].push_back(w.from);
+        // What goes where the two sides meet, made before anything is rewritten: steps at an
+        // instruction's start, or on a way, keyed by which of its instruction's jumps the way is
+        // (its place among them: rewriting only puts steps in, so the k-th jump stays the k-th),
+        // -1 for falling through after the last step.
+        auto jumpOrdinal = [&](size_t i, int op) {
+            if (op < 0) return -1;
+            int k = 0;
+            for (int p = 0; p < op; p++)
+                if (results[i].ops[static_cast<size_t>(p)].jumpTo >= 0) k++;
+            return k;
+        };
+        std::map<size_t, std::vector<LOp>> atStart;
+        std::map<std::pair<size_t, int>, std::vector<LOp>> onWay;
+        std::set<size_t> startDone;
+        for (const Way& w : ways) {
+            if (memory[w.from] == memory[w.to] || !in[w.to].known || !liveIn(w.to).count(r)) continue;
+            LOp step;
+            if (!memory[w.from]) {  // into the side that keeps it in memory: written to its slot
+                step = storeOf(in[w.to], r);
+                if (step.stem.empty()) return false;
+                step.named = {r};
+                step.uses = {r};
+            } else {  // back to the side with its register: loaded again
+                step.stem = r.cls == CI ? "loadi" : "loadf";
+                step.named = {r};
+                step.defs = {r};
+                step.slot = r.slot;
+            }
+            bool allFromOther = !entries.count(static_cast<int>(w.to));
+            for (size_t p : preds[w.to]) allFromOther = allFromOther && memory[p] == memory[w.from];
+            if (allFromOther) {
+                if (startDone.insert(w.to).second) atStart[w.to].push_back(step);
+            } else {
+                onWay[{w.from, jumpOrdinal(w.from, w.op)}].push_back(step);
+            }
+        }
+        // Split only where it saves work, as the counts weigh it (2026-11-18: split whatever the
+        // cost, the first try slowed loops whose hot path is an inner loop by up to a fifth): kept
+        // in its slot everywhere, each read loads it and each write stores it (a write weighed as
+        // spillOne weighs one); split, only those on the cold path do, and the steps where the paths
+        // meet, each as often as where it is put runs.
+        {
+            auto often = [&](size_t i) {
+                const double p = perRound(i);
+                return p < 0 ? 1.0 : p;
+            };
+            double everywhere = 0, split = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (!in[i].known) continue;
+                for (const LOp& l : results[i].ops) {
+                    const double c = often(i) * (static_cast<double>(std::count(l.uses.begin(), l.uses.end(), r)) +
+                                                 writeWeight() * static_cast<double>(std::count(l.defs.begin(), l.defs.end(), r)));
+                    everywhere += c;
+                    if (memory[i]) split += c;
+                }
+            }
+            for (const auto& [at, steps] : atStart) split += often(at) * static_cast<double>(steps.size());
+            for (const auto& [key, steps] : onWay) split += often(key.first) * static_cast<double>(steps.size());
+            if (split >= everywhere) return false;
+            if (saving != nullptr) {
+                *saving = everywhere - split;
+                return true;
+            }
+        }
+        // Every write on the side that keeps it in memory written back as one kind.
+        for (size_t i = 0; i < n; i++) {
+            if (!memory[i]) continue;
+            for (const LOp& l : results[i].ops)
+                if (std::find(l.defs.begin(), l.defs.end(), r) != l.defs.end() && storeOf(results[i].after, r).stem.empty()) return false;
+        }
+        // That side: each read loaded first, each write written back after (as spillOne); its ways
+        // out have it in its slot already.
+        for (size_t i = 0; i < n; i++) {
+            if (!memory[i]) continue;
+            Result& res = results[i];
+            std::vector<LOp> out;
+            for (LOp l : res.ops) {
+                std::vector<LOp> after;
+                const bool reads = std::find(l.uses.begin(), l.uses.end(), r) != l.uses.end();
+                const bool writes = std::find(l.defs.begin(), l.defs.end(), r) != l.defs.end();
+                if (reads || writes) {
+                    const Reg t{-100 - temps++, r.cls};
+                    madeBySpill.insert(t);
+                    if (reads) {
+                        LOp load;
+                        load.stem = r.cls == CI ? "loadi" : "loadf";
+                        load.named = {t};
+                        load.defs = {t};
+                        load.slot = r.slot;
+                        out.push_back(load);
+                    }
+                    if (writes) {
+                        LOp store = storeOf(res.after, r);
+                        store.named = {t};
+                        store.uses = {t};
+                        after.push_back(store);
+                    }
+                    for (auto* list : {&l.named, &l.uses, &l.defs})
+                        for (Reg& x : *list)
+                            if (x == r) x = t;
+                }
+                out.push_back(l);
+                out.insert(out.end(), after.begin(), after.end());
+            }
+            res.ops = std::move(out);
+            for (ExitPoint& e : res.exits)
+                std::erase_if(e.stores, [&](const LOp& l) { return !l.named.empty() && l.named[0] == r; });
+        }
+        // Where the sides meet: the steps at an instruction's start, and each way's before its jump
+        // (found again by its place among the jumps) or after the last step.
+        for (size_t i = 0; i < n; i++) {
+            if (!in[i].known) continue;
+            Result& res = results[i];
+            std::vector<LOp> out;
+            if (auto s = atStart.find(i); s != atStart.end()) out.insert(out.end(), s->second.begin(), s->second.end());
+            int k = 0;
+            for (LOp& l : res.ops) {
+                if (l.jumpTo >= 0) {
+                    if (auto w = onWay.find({i, k}); w != onWay.end()) out.insert(out.end(), w->second.begin(), w->second.end());
+                    k++;
+                }
+                out.push_back(std::move(l));
+            }
+            if (auto e = onWay.find({i, -1}); e != onWay.end()) out.insert(out.end(), e->second.begin(), e->second.end());
+            res.ops = std::move(out);
+        }
         return true;
     }
+
     // Where no value can be kept in its slot: one kept in a cell of the region's own instead
     // (2026-11-13, at the user's word: any value may be moved out to memory), loaded where it is
     // read and stored where it is written, a way out that writes it back loading it first. Of
@@ -7493,7 +7800,12 @@ struct Region {
             }
         }
         if (best == nullptr) return false;
-        const Reg r = *best;
+        spillHomeOf(*best);
+        return true;
+    }
+    // `r` kept in a cell of the region's own: loaded where read, stored where written.
+    void spillHomeOf(const Reg r) {
+        spillLog.emplace_back('H', r);
         housed.insert(r);
         const int64_t cell = homes++;
         const char* load = r.cls == CI ? "homeli" : "homelf";
@@ -7545,7 +7857,6 @@ struct Region {
                 e.stores = std::move(stores);
             }
         }
-        return true;
     }
     std::set<Reg> housed, madeBySpill;  // kept in cells; the registers spilling made to load and store
     std::string name(const LOp& l) const {
@@ -8289,19 +8600,21 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
                 registerTimes[k] += std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count();
                 return result;
             };
-            while (!part(0, [&] { return r.giveRegisters(); })) {
-                spillCount++;
-                if (!part(1, [&] { return r.spillOne(); })) refuse("more values at once than registers, and none can be kept in its slot");
-                if (dumping) {
-                    std::fprintf(stderr, "== %s: kept in their slots:", f.name.c_str());
-                    for (const Reg& s : r.spilled) std::fprintf(stderr, " %d%s", s.slot, s.cls == CF ? "f" : "");
-                    std::fprintf(stderr, "\n");
-                }
-                part(2, [&] {
-                    r.findLive();
-                    return 0;
+            // (Colouring, spilling and liveness again timed together, as part 0, for WW_TIME_NATIVE.)
+            const bool given = part(0, [&] {
+                return r.allocate([&] {
+                    spillCount++;
+                    if (dumping) {
+                        std::fprintf(stderr, "== %s: kept in their slots:", f.name.c_str());
+                        for (const Reg& s : r.spilled) std::fprintf(stderr, " %d%s", s.slot, s.cls == CF ? "f" : "");
+                        std::fprintf(stderr, "; in registers on the hot path only:");
+                        for (const Reg& s : r.splitValues)
+                            if (!r.spilled.count(s)) std::fprintf(stderr, " %d%s", s.slot, s.cls == CF ? "f" : "");
+                        std::fprintf(stderr, "\n");
+                    }
                 });
-            }
+            });
+            if (!given) refuse("more values at once than registers, and none can be kept in its slot");
             lap(3);
             std::vector<std::string> names;
             const auto ways = part(3, [&] { return make(r, dumping ? &names : nullptr); });
