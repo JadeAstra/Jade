@@ -308,6 +308,212 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
     }
 }
 
+// ---- The table written compactly (2026-11-18) ----
+//
+// Of the 43,167 stencils most are one operation in every choice of registers: the same length
+// and gaps, a few bytes apart (a ModRM byte, a REX prefix's bits). Each family's stencils of one
+// shape (length and gaps) are a group: the group's code once (its first stencil's), the places
+// where any of them differs from it, and each stencil's bytes there. A gap list is kept once for
+// every group that has it, a constant once for every gap that carries it, and a name as its
+// family (absf) and its registers (_0_10). ww rebuilds a stencil from these the first time it is
+// asked for (src/native/native.cpp); every byte is still Clang's: the table is checked here,
+// each stencil rebuilt from it and compared with the object file's before it is written, and
+// ww --native-check rebuilds them all and compares the table's hash (kStencilsHash).
+
+namespace {
+
+// HoleKind's order (src/native/native.h), for the hash.
+const std::vector<std::string> kKinds = {"HoleNext",      "HoleJump",  "HoleExit", "HoleFloat",  "HoleInt",    "HoleSlot",
+                                         "HoleRet",       "HoleAttention", "HoleSlot2", "HoleData", "HoleSlotAt", "HoleSlot2At"};
+uint8_t kindNumber(const std::string& kind) {
+    const auto it = std::find(kKinds.begin(), kKinds.end(), kind);
+    if (it == kKinds.end()) fail("a gap of kind " + kind + ", which the table does not know");
+    return static_cast<uint8_t>(it - kKinds.begin());
+}
+
+// FNV-1a over every stencil, as native.cpp's stencilsHash takes it.
+struct Hash {
+    uint64_t h = 1469598103934665603ull;
+    void byte(uint8_t b) { h = (h ^ b) * 1099511628211ull; }
+    void word(uint32_t v) {
+        for (int i = 0; i < 4; i++) byte(static_cast<uint8_t>(v >> (8 * i)));
+    }
+    void bytes(const uint8_t* p, size_t n) {
+        for (size_t i = 0; i < n; i++) byte(p[i]);
+    }
+};
+uint64_t hashOf(const std::vector<Stencil>& all) {
+    Hash h;
+    for (const Stencil& st : all) {
+        h.bytes(reinterpret_cast<const uint8_t*>(st.name.data()), st.name.size());
+        h.byte(0);
+        h.word(static_cast<uint32_t>(st.code.size()));
+        h.bytes(st.code.data(), st.code.size());
+        h.word(static_cast<uint32_t>(st.holes.size()));
+        for (const Hole& hole : st.holes) {
+            h.word(hole.offset);
+            h.byte(kindNumber(hole.kind));
+            h.word(hole.after);
+            h.byte(static_cast<uint8_t>(hole.data.size()));
+            h.bytes(hole.data.data(), hole.data.size());
+        }
+    }
+    return h.h;
+}
+
+// A name as its family and its registers: absf_0_10 is absf and _0_10; loopback is itself.
+std::pair<std::string, std::string> splitName(const std::string& name) {
+    size_t end = name.size();
+    for (;;) {
+        const size_t u = end == 0 ? std::string::npos : name.rfind('_', end - 1);
+        if (u == std::string::npos || u == 0 || u + 1 == end) break;
+        bool digits = true;
+        for (size_t i = u + 1; i < end; i++) digits = digits && name[i] >= '0' && name[i] <= '9';
+        if (!digits) break;
+        end = u;
+    }
+    return {name.substr(0, end), name.substr(end)};
+}
+
+constexpr uint8_t kNoConstant = 0xFF;
+struct PackedHole {
+    uint16_t offset;
+    uint8_t kind;
+    uint8_t after;
+    uint8_t constant;
+};
+struct Group {
+    uint32_t templateAt = 0;
+    uint16_t size = 0;
+    uint8_t holeCount = 0;
+    uint16_t varyingCount = 0;
+    uint32_t holesAt = 0;
+    uint32_t varyingAt = 0;
+    std::vector<size_t> members;
+};
+struct Entry {
+    uint16_t family, suffix, group;
+    uint32_t bytesAt;
+};
+struct Table {
+    std::vector<std::string> families, suffixes;
+    std::vector<std::vector<uint8_t>> constants;
+    std::vector<PackedHole> holes;
+    std::vector<Group> groups;
+    std::vector<uint8_t> templates, bytes;
+    std::vector<uint16_t> varying;
+    std::vector<Entry> entries;
+};
+
+template <class T>
+uint32_t indexIn(std::vector<T>& list, std::map<T, uint32_t>& seen, const T& item) {
+    const auto found = seen.find(item);
+    if (found != seen.end()) return found->second;
+    seen.emplace(item, static_cast<uint32_t>(list.size()));
+    list.push_back(item);
+    return static_cast<uint32_t>(list.size() - 1);
+}
+
+Table pack(const std::vector<Stencil>& all) {
+    Table t;
+    std::map<std::string, uint32_t> familyAt, suffixAt;
+    std::map<std::vector<uint8_t>, uint32_t> constantAt;
+    std::map<std::string, uint32_t> holesAt;  // a gap list, written out, to where it starts
+    std::map<std::string, uint32_t> groupAt;  // family, length and gaps
+    std::vector<uint32_t> groupOf(all.size());
+    std::vector<std::vector<PackedHole>> packedHoles(all.size());
+    for (size_t k = 0; k < all.size(); k++) {
+        const Stencil& st = all[k];
+        if (st.code.size() > 0xFFFF) fail("stencil " + st.name + " is longer than the table's 65,535 bytes");
+        if (st.holes.size() > 0xFF) fail("stencil " + st.name + " has more gaps than the table's 255");
+        std::string key = splitName(st.name).first + "|" + std::to_string(st.code.size());
+        for (const Hole& h : st.holes) {
+            if (h.after > 0xFF) fail("stencil " + st.name + ": a gap's after past 255");
+            uint8_t constant = kNoConstant;
+            if (!h.data.empty()) {
+                const uint32_t c = indexIn(t.constants, constantAt, h.data);
+                if (c >= kNoConstant) fail("more constants than the table's 254");
+                constant = static_cast<uint8_t>(c);
+            }
+            packedHoles[k].push_back(PackedHole{static_cast<uint16_t>(h.offset), kindNumber(h.kind), static_cast<uint8_t>(h.after), constant});
+            key += "|" + std::to_string(h.offset) + "," + std::to_string(kindNumber(h.kind)) + "," + std::to_string(h.after) + "," + std::to_string(constant);
+        }
+        const auto found = groupAt.find(key);
+        if (found == groupAt.end()) {
+            groupAt.emplace(key, static_cast<uint32_t>(t.groups.size()));
+            groupOf[k] = static_cast<uint32_t>(t.groups.size());
+            t.groups.emplace_back();
+        } else {
+            groupOf[k] = found->second;
+        }
+        t.groups[groupOf[k]].members.push_back(k);
+    }
+    if (t.groups.size() > 0xFFFF) fail("more groups than the table's 65,535");
+    // Each group's code (its first stencil's), its gaps, and the places its stencils differ.
+    for (Group& g : t.groups) {
+        const Stencil& first = all[g.members.front()];
+        g.templateAt = static_cast<uint32_t>(t.templates.size());
+        g.size = static_cast<uint16_t>(first.code.size());
+        t.templates.insert(t.templates.end(), first.code.begin(), first.code.end());
+        std::string listKey;
+        for (const PackedHole& h : packedHoles[g.members.front()])
+            listKey += std::to_string(h.offset) + "," + std::to_string(h.kind) + "," + std::to_string(h.after) + "," + std::to_string(h.constant) + ";";
+        const auto known = holesAt.find(listKey);
+        if (known != holesAt.end()) {
+            g.holesAt = known->second;
+        } else {
+            g.holesAt = static_cast<uint32_t>(t.holes.size());
+            holesAt.emplace(listKey, g.holesAt);
+            t.holes.insert(t.holes.end(), packedHoles[g.members.front()].begin(), packedHoles[g.members.front()].end());
+        }
+        g.holeCount = static_cast<uint8_t>(packedHoles[g.members.front()].size());
+        g.varyingAt = static_cast<uint32_t>(t.varying.size());
+        for (size_t p = 0; p < first.code.size(); p++)
+            for (size_t m : g.members)
+                if (all[m].code[p] != first.code[p]) {
+                    t.varying.push_back(static_cast<uint16_t>(p));
+                    break;
+                }
+        g.varyingCount = static_cast<uint16_t>(t.varying.size() - g.varyingAt);
+    }
+    // Each stencil: its name's two parts, its group and its bytes where the group's differ.
+    for (size_t k = 0; k < all.size(); k++) {
+        const auto [family, suffix] = splitName(all[k].name);
+        const Group& g = t.groups[groupOf[k]];
+        Entry e{static_cast<uint16_t>(indexIn(t.families, familyAt, family)), static_cast<uint16_t>(indexIn(t.suffixes, suffixAt, suffix)),
+                static_cast<uint16_t>(groupOf[k]), static_cast<uint32_t>(t.bytes.size())};
+        for (uint16_t v = 0; v < g.varyingCount; v++) t.bytes.push_back(all[k].code[t.varying[g.varyingAt + v]]);
+        t.entries.push_back(e);
+    }
+    if (t.families.size() > 0xFFFF || t.suffixes.size() > 0xFFFF) fail("more names' parts than the table's 65,535");
+    return t;
+}
+
+// A stencil rebuilt from the table, as native.cpp rebuilds it.
+Stencil unpack(const Table& t, size_t k) {
+    const Entry& e = t.entries[k];
+    const Group& g = t.groups[e.group];
+    Stencil st;
+    st.name = t.families[e.family] + t.suffixes[e.suffix];
+    st.code.assign(t.templates.begin() + g.templateAt, t.templates.begin() + g.templateAt + g.size);
+    for (uint16_t v = 0; v < g.varyingCount; v++) st.code[t.varying[g.varyingAt + v]] = t.bytes[e.bytesAt + v];
+    for (uint8_t h = 0; h < g.holeCount; h++) {
+        const PackedHole& ph = t.holes[g.holesAt + h];
+        st.holes.push_back(Hole{ph.offset, kKinds[ph.kind], ph.after, ph.constant == kNoConstant ? std::vector<uint8_t>{} : t.constants[ph.constant]});
+    }
+    return st;
+}
+
+template <class T>
+void writeNumbers(std::ostringstream& out, const char* type, const char* name, const std::vector<T>& values) {
+    out << "static const " << type << " " << name << "[] = {";
+    for (size_t i = 0; i < values.size(); i++) out << (i ? (i % 64 == 0 ? ",\n" : ",") : "") << static_cast<uint64_t>(values[i]);
+    if (values.empty()) out << "0";
+    out << "};\n";
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     if (argc != 3) fail("usage: stencils <object file> <header written>");
     std::ifstream in(argv[1], std::ios::binary);
@@ -321,36 +527,68 @@ int main(int argc, char** argv) {
     // In name order, which ww looks them up by.
     std::sort(stencils.begin(), stencils.end(), [](const Stencil& a, const Stencil& b) { return a.name < b.name; });
 
+    for (size_t k = 1; k < stencils.size(); k++)
+        if (stencils[k - 1].name == stencils[k].name) fail("two stencils named " + stencils[k].name);
+
+    const Table t = pack(stencils);
+    // Every stencil rebuilt from the table is the object file's, byte for byte, gap for gap.
+    for (size_t k = 0; k < stencils.size(); k++) {
+        const Stencil back = unpack(t, k);
+        const Stencil& st = stencils[k];
+        bool same = back.name == st.name && back.code == st.code && back.holes.size() == st.holes.size();
+        for (size_t h = 0; same && h < st.holes.size(); h++)
+            same = back.holes[h].offset == st.holes[h].offset && back.holes[h].kind == st.holes[h].kind && back.holes[h].after == st.holes[h].after &&
+                   back.holes[h].data == st.holes[h].data;
+        if (!same) fail("stencil " + st.name + " rebuilt from the table differs from the object file's");
+    }
+
     std::ostringstream out;
     out << "// Made by tools/stencils from src/native/stencils.cpp: do not edit.\n";
-    out << "// " << stencils.size() << " stencils.\n\n";
+    out << "// " << stencils.size() << " stencils in " << t.groups.size() << " groups (tools/stencils/stencils.cpp, \"The table written compactly\").\n\n";
     out << "namespace ww::native {\n\n";
-    for (size_t k = 0; k < stencils.size(); k++) {
-        const Stencil& st = stencils[k];
-        out << "static const uint8_t kCode" << k << "[] = {";
-        for (size_t i = 0; i < st.code.size(); i++) out << (i ? "," : "") << static_cast<int>(st.code[i]);
-        out << "};\n";
-        if (!st.holes.empty()) {
-            out << "static const Hole kHoles" << k << "[] = {";
-            for (size_t i = 0; i < st.holes.size(); i++) {
-                out << (i ? ", " : "") << "{" << st.holes[i].offset << ", " << st.holes[i].kind << ", " << st.holes[i].after << ", "
-                    << st.holes[i].data.size() << ", {";
-                for (size_t b = 0; b < st.holes[i].data.size(); b++) out << (b ? "," : "") << static_cast<int>(st.holes[i].data[b]);
-                out << "}}";
-            }
-            out << "};\n";
-        }
+    out << "static constexpr uint32_t kStencilTotal = " << stencils.size() << ";\n";
+    char hash[32];
+    std::snprintf(hash, sizeof hash, "0x%016llxull", static_cast<unsigned long long>(hashOf(stencils)));
+    out << "static constexpr uint64_t kStencilsHash = " << hash << ";\n";
+    out << "static const char* const kFamilies[] = {";
+    for (size_t i = 0; i < t.families.size(); i++) out << (i ? ", " : "") << "\"" << t.families[i] << "\"";
+    out << "};\n";
+    out << "static const char* const kSuffixes[] = {";
+    for (size_t i = 0; i < t.suffixes.size(); i++) out << (i ? ", " : "") << "\"" << t.suffixes[i] << "\"";
+    out << "};\n";
+    out << "static const PackedConstant kConstants[] = {";
+    for (size_t i = 0; i < t.constants.size(); i++) {
+        out << (i ? ", " : "") << "{" << t.constants[i].size() << ", {";
+        for (size_t b = 0; b < t.constants[i].size(); b++) out << (b ? "," : "") << static_cast<int>(t.constants[i][b]);
+        out << "}}";
     }
-    out << "\nstatic const StencilCode kStencils[] = {\n";
-    for (size_t k = 0; k < stencils.size(); k++) {
-        const Stencil& st = stencils[k];
-        out << "    {\"" << st.name << "\", kCode" << k << ", " << st.code.size() << ", " << (st.holes.empty() ? "nullptr" : "kHoles" + std::to_string(k))
-            << ", " << st.holes.size() << "},\n";
+    if (t.constants.empty()) out << "{0, {}}";
+    out << "};\n";
+    out << "static const PackedHole kHoleList[] = {";
+    for (size_t i = 0; i < t.holes.size(); i++)
+        out << (i ? (i % 16 == 0 ? ",\n" : ", ") : "") << "{" << t.holes[i].offset << ", " << kKinds[t.holes[i].kind] << ", " << static_cast<int>(t.holes[i].after)
+            << ", " << static_cast<int>(t.holes[i].constant) << "}";
+    if (t.holes.empty()) out << "{0, HoleNext, 0, 255}";
+    out << "};\n";
+    out << "static const PackedGroup kGroups[] = {";
+    for (size_t i = 0; i < t.groups.size(); i++) {
+        const Group& g = t.groups[i];
+        out << (i ? (i % 8 == 0 ? ",\n" : ", ") : "") << "{" << g.templateAt << ", " << g.size << ", " << static_cast<int>(g.holeCount) << ", " << g.varyingCount << ", "
+            << g.holesAt << ", " << g.varyingAt << "}";
+    }
+    out << "};\n";
+    writeNumbers(out, "uint8_t", "kTemplates", t.templates);
+    writeNumbers(out, "uint16_t", "kVarying", t.varying);
+    writeNumbers(out, "uint8_t", "kVaryingBytes", t.bytes);
+    out << "static const PackedStencil kPacked[] = {";
+    for (size_t i = 0; i < t.entries.size(); i++) {
+        const Entry& e = t.entries[i];
+        out << (i ? (i % 8 == 0 ? ",\n" : ", ") : "") << "{" << e.family << ", " << e.suffix << ", " << e.group << ", " << e.bytesAt << "}";
     }
     out << "};\n\n}  // namespace ww::native\n";
     std::ofstream header(argv[2], std::ios::binary);
     header << out.str();
     if (!header) fail(std::string("cannot write ") + argv[2]);
-    std::printf("stencils: %zu stencils written to %s\n", stencils.size(), argv[2]);
+    std::printf("stencils: %zu stencils in %zu groups written to %s, each checked rebuilt from the table\n", stencils.size(), t.groups.size(), argv[2]);
     return 0;
 }

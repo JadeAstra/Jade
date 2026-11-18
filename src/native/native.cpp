@@ -13,10 +13,46 @@
 #include <cstddef>
 
 #if WW_NATIVE
+#include <atomic>
+#include <deque>
+#include <mutex>
+
 #include "../bytecode.h"
 #include "../value.h"
 #include "layout.h"
-#include "stencils.h"  // kStencils, made by tools/stencils when ww.exe is built, in name order
+
+namespace ww::native {
+// The stencils as tools/stencils writes them (its "The table written compactly"): each family's
+// stencils of one shape a group, the group's code once and each stencil's bytes where they
+// differ; gap lists and constants kept once; a name as its family and its registers.
+struct PackedConstant {
+    uint8_t size;
+    uint8_t data[16];
+};
+constexpr uint8_t kNoConstant = 0xFF;
+struct PackedHole {
+    uint16_t offset;
+    HoleKind kind;
+    uint8_t after;
+    uint8_t constant;  // in kConstants, or kNoConstant
+};
+struct PackedGroup {
+    uint32_t templateAt;  // its code in kTemplates
+    uint16_t size;
+    uint8_t holeCount;
+    uint16_t varyingCount;
+    uint32_t holesAt;     // its gaps in kHoleList
+    uint32_t varyingAt;   // where in its code its stencils differ, in kVarying
+};
+struct PackedStencil {
+    uint16_t family;      // its name: kFamilies[family] then kSuffixes[suffix]
+    uint16_t suffix;
+    uint16_t group;
+    uint32_t bytesAt;     // its bytes at the group's kVarying places, in kVaryingBytes
+};
+}  // namespace ww::native
+
+#include "stencils.h"  // the table, made by tools/stencils when ww.exe is built, in name order
 #endif
 
 #if WW_NATIVE && defined(_WIN32)
@@ -98,12 +134,94 @@ static_assert(static_cast<int>(ValueKind::Undefined) == L::kKindUndefined && sta
 #pragma clang diagnostic pop
 
 bool available() { return true; }
-size_t stencilCount() { return sizeof(kStencils) / sizeof(kStencils[0]); }
+size_t stencilCount() { return kStencilTotal; }
+
+namespace {
+
+// Stencil i's name against `n`, as std::string_view's compare: its family, then its registers.
+int nameOrder(uint32_t i, std::string_view n) {
+    const std::string_view family = kFamilies[kPacked[i].family], suffix = kSuffixes[kPacked[i].suffix];
+    const size_t common = std::min(family.size(), n.size());
+    if (const int c = family.compare(0, common, n.substr(0, common)); c != 0) return c;
+    if (family.size() > n.size()) return 1;
+    return suffix.compare(n.substr(family.size()));
+}
+
+// A stencil rebuilt from the table, kept for as long as the program runs (a step points at it).
+struct MadeStencil {
+    std::string name;
+    std::vector<uint8_t> code;
+    std::vector<Hole> holes;
+    StencilCode code_{};
+};
+std::atomic<const StencilCode*> madeStencils[kStencilTotal];
+std::mutex makingStencils;
+std::deque<MadeStencil> madeStore;  // under makingStencils
+
+// Stencil i, rebuilt the first time it is asked for, on whichever thread asks (the builder's, a
+// VM's, a section's core): once, under the lock, and read without it after.
+const StencilCode* stencilAt(uint32_t i) {
+    if (const StencilCode* made = madeStencils[i].load(std::memory_order_acquire)) return made;
+    std::lock_guard<std::mutex> hold(makingStencils);
+    if (const StencilCode* made = madeStencils[i].load(std::memory_order_relaxed)) return made;
+    const PackedStencil& p = kPacked[i];
+    const PackedGroup& g = kGroups[p.group];
+    MadeStencil& m = madeStore.emplace_back();
+    m.name = std::string(kFamilies[p.family]) + kSuffixes[p.suffix];
+    m.code.assign(kTemplates + g.templateAt, kTemplates + g.templateAt + g.size);
+    for (uint16_t v = 0; v < g.varyingCount; v++) m.code[kVarying[g.varyingAt + v]] = kVaryingBytes[p.bytesAt + v];
+    for (uint8_t h = 0; h < g.holeCount; h++) {
+        const PackedHole& ph = kHoleList[g.holesAt + h];
+        Hole hole{ph.offset, ph.kind, ph.after, 0, {}};
+        if (ph.constant != kNoConstant) {
+            hole.size = kConstants[ph.constant].size;
+            std::memcpy(hole.data, kConstants[ph.constant].data, sizeof hole.data);
+        }
+        m.holes.push_back(hole);
+    }
+    m.code_ = StencilCode{m.name.c_str(), m.code.data(), static_cast<uint32_t>(m.code.size()), m.holes.empty() ? nullptr : m.holes.data(),
+                          static_cast<uint32_t>(m.holes.size())};
+    madeStencils[i].store(&m.code_, std::memory_order_release);
+    return &m.code_;
+}
+
+// The hash tools/stencils took of the stencils as Clang made them (its hashOf), taken of them
+// as rebuilt here.
+uint64_t stencilsHash() {
+    uint64_t h = 1469598103934665603ull;
+    auto byte = [&](uint8_t b) { h = (h ^ b) * 1099511628211ull; };
+    auto word = [&](uint32_t v) {
+        for (int i = 0; i < 4; i++) byte(static_cast<uint8_t>(v >> (8 * i)));
+    };
+    for (uint32_t i = 0; i < kStencilTotal; i++) {
+        const StencilCode& s = *stencilAt(i);
+        for (const char* c = s.name; *c != '\0'; c++) byte(static_cast<uint8_t>(*c));
+        byte(0);
+        word(s.size);
+        for (uint32_t b = 0; b < s.size; b++) byte(s.code[b]);
+        word(s.holeCount);
+        for (uint32_t k = 0; k < s.holeCount; k++) {
+            const Hole& hole = s.holes[k];
+            word(hole.offset);
+            byte(static_cast<uint8_t>(hole.kind));
+            word(hole.after);
+            byte(hole.size);
+            for (uint8_t b = 0; b < hole.size; b++) byte(hole.data[b]);
+        }
+    }
+    return h;
+}
+
+}  // namespace
 
 const StencilCode* stencil(std::string_view name) {
-    const StencilCode* const end = kStencils + stencilCount();
-    const StencilCode* found = std::lower_bound(kStencils, end, name, [](const StencilCode& s, std::string_view n) { return std::string_view(s.name) < n; });
-    return found != end && std::string_view(found->name) == name ? found : nullptr;
+    uint32_t lo = 0, hi = kStencilTotal;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (nameOrder(mid, name) < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < kStencilTotal && nameOrder(lo, name) == 0 ? stencilAt(lo) : nullptr;
 }
 
 #else
@@ -487,13 +605,18 @@ int64_t mandelbrotInC(int64_t size, int64_t limit) {
 
 std::string check() {
     if (stencilCount() == 0) return "no stencils";
-    for (size_t i = 1; i < stencilCount(); i++)
-        if (!(std::string_view(kStencils[i - 1].name) < std::string_view(kStencils[i].name))) return "the stencils are not in name order";
+    for (uint32_t i = 1; i < kStencilTotal; i++)
+        if (!(std::string_view(stencilAt(i - 1)->name) < std::string_view(stencilAt(i)->name))) return "the stencils are not in name order";
+    for (uint32_t i = 0; i < kStencilTotal; i++)
+        if (stencil(stencilAt(i)->name) != stencilAt(i)) return std::string("stencil ") + stencilAt(i)->name + " is not found by its name";
+    // Every stencil rebuilt from the table as Clang made it (the tool's hash of the object file's).
+    if (stencilsHash() != kStencilsHash) return "the stencils rebuilt from the table are not those tools/stencils read";
     if (!vectorAsRead()) return "std::vector is not laid out as layout.h reads it";
     if (!stringAsRead()) return "std::string is not laid out as layout.h reads it";
     // Every stencil shaped both ways, its gaps inside it.
-    for (const StencilCode& s : kStencils)
+    for (uint32_t i = 0; i < kStencilTotal; i++)
         for (bool follows : {false, true}) {
+            const StencilCode& s = *stencilAt(i);
             const Piece p = shaped(s, follows);
             for (const Hole& h : p.holes)
                 if (h.offset + 4 > p.code.size()) return std::string("stencil ") + s.name + ": a gap past its end";
