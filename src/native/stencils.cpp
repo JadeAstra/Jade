@@ -1842,6 +1842,27 @@ STENCIL(loopback) {
     if (*ctx->attention != 0) EXIT;
     JUMP;
 }
+// The same, in a region made first (registers-plan.html part B), counting each time round of
+// any of its loops at the address ww_ki holds: an inner loop's end (loopbackn) only counts; the
+// region's own loop's (loopbackc), past kCountedRounds in all, leaves for the VM while the word
+// after the count is 0, which the VM sets as it has the region made again from what it counted
+// (so that it leaves once: at the end of a time round of its own, after one whole one at least).
+// The builder sets it 0 again as the region made again is put in, so that where this one runs on
+// (a long loop) it leaves once more, and the VM goes on in that one.
+STENCIL(loopbackc) {
+    uint64_t* const rounds = reinterpret_cast<uint64_t*>(ww_ki);
+    if (*ctx->attention != 0) EXIT;
+    if (++rounds[0] >= kCountedRounds && rounds[1] == 0) {
+        rounds[1] = 2;  // (left for the counts: the VM has it made again)
+        EXIT;
+    }
+    JUMP;
+}
+STENCIL(loopbackn) {
+    ++*reinterpret_cast<uint64_t*>(ww_ki);
+    if (*ctx->attention != 0) EXIT;
+    JUMP;
+}
 STENCIL(ret) { return ww_ret; }
 
 // A slot the region has not written, checked to hold what an untyped instruction is taken to

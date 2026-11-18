@@ -486,6 +486,31 @@ struct Region {
     std::set<int> outside;
     std::set<int> seeds;
     bool function = false;  // a whole function's region
+    // Registers plan part B (2026-11-17): a loop's region made first counts what it runs (each
+    // instruction, and its times round: `counts`, made with its code); one made again from those
+    // counts (NativeSeen::runs) chooses what to keep in memory by how often each value is used.
+    bool counting = false;
+    RegionCounts* counts = nullptr;
+    // What a value's uses are weighed against as one is chosen to be kept in memory (clashes over
+    // this plus its uses): 1 where each use counts one; where each counts how often it runs a time
+    // round, a thousandth, so that a value used a few times a round outside the hot loop weighs
+    // as little as it costs (a 1 drowned it: an outer loop's value weighed as much as an inner
+    // one's).
+    double spillFloor() const { return seen != nullptr && !seen->runs.empty() && seen->rounds > 0 ? 0.001 : 1.0; }
+    // And a write against a read, where each counts how often it runs: a value written in a loop and
+    // kept in memory is stored, then loaded again for its next use, on the way each time round
+    // must wait for (the gaussian kernel, 2026-11-17: its middle loop's counter kept in memory to
+    // spare its inner loop three loads of values it only reads cost 6%); one only read is loaded
+    // beside the work. Eight times (4 kept the counter in memory; 8, 16 and 32 measured alike, 8
+    // the gaussian kernel's best). 1 where each counts one, as before.
+    double writeWeight() const { return seen != nullptr && !seen->runs.empty() && seen->rounds > 0 ? 8.0 : 1.0; }
+    // How often instruction `i` ran each time round, as the region made first counted; -1 where
+    // nothing was counted.
+    double perRound(size_t i) const {
+        if (seen == nullptr || seen->runs.empty() || seen->rounds == 0) return -1;
+        auto found = seen->runs.find(ins[i].at);
+        return found == seen->runs.end() ? 0 : static_cast<double>(found->second) / static_cast<double>(seen->rounds);
+    }
     std::vector<Result> results;              // each instruction's, in its state
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
@@ -7322,7 +7347,7 @@ struct Region {
     // written, not changed in place by Math's functions, not one another is a copy of as
     // entered), the one clashing most for how often it is used. False where there is none.
     bool spillOne() {
-        std::map<Reg, int> used;
+        std::map<Reg, double> used;
         std::set<Reg> barred;
         for (const int slot : copySources()) {
             barred.insert(Reg{slot, CI});
@@ -7336,10 +7361,13 @@ struct Region {
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
             const Result& res = results[i];
+            // (Each use weighed by how often it runs a time round, where that was counted.)
+            const double counted = perRound(i);
+            const double weight = counted < 0 ? 1.0 : counted;
             for (const LOp& l : res.ops) {
-                for (const Reg& u : l.uses) used[u]++;
+                for (const Reg& u : l.uses) used[u] += weight;
                 for (const Reg& d : l.defs) {
-                    used[d]++;
+                    used[d] += weight * writeWeight();
                     if (ins[i].op == Op::Numeric || storeOf(res.after, d).stem.empty()) barred.insert(d);
                 }
                 for (const auto* list : {&l.uses, &l.defs})
@@ -7358,7 +7386,7 @@ struct Region {
         double bestScore = -1;
         for (const auto& [r, others] : clash) {
             if (r.slot < 0 || spilled.count(r) || barred.count(r)) continue;
-            const double score = static_cast<double>(others.size()) / (1.0 + used[r]);
+            const double score = static_cast<double>(others.size()) / (spillFloor() + used[r]);
             if (score > bestScore) {
                 bestScore = score;
                 best = &r;
@@ -7428,19 +7456,22 @@ struct Region {
         for (const LOp& l : headOps)
             for (const auto* list : {&l.named, &l.uses, &l.defs})
                 for (const Reg& r : *list) barred.insert(r);
-        std::map<Reg, int> used;
+        std::map<Reg, int> uses;
+        std::map<Reg, double> used;  // (weighed by how often each runs a time round, where counted)
         for (size_t i = 0; i < ins.size(); i++) {
             if (!in[i].known) continue;
+            const double counted = perRound(i);
+            const double weight = counted < 0 ? 1.0 : counted;
             for (const LOp& l : results[i].ops) {
-                for (const Reg& u : l.uses) used[u]++;
-                for (const Reg& d : l.defs) used[d]++;
+                for (const Reg& u : l.uses) uses[u]++, used[u] += weight;
+                for (const Reg& d : l.defs) uses[d]++, used[d] += weight * writeWeight();
             }
         }
         const Reg* best = nullptr;
         double bestScore = -1;
         for (const auto& [r, others] : clash) {
-            if (madeBySpill.count(r) || housed.count(r) || barred.count(r) || used[r] == 0) continue;  // (not a load of what is kept already)
-            const double score = static_cast<double>(others.size()) / (1.0 + used[r]);
+            if (madeBySpill.count(r) || housed.count(r) || barred.count(r) || uses[r] == 0) continue;  // (not a load of what is kept already)
+            const double score = static_cast<double>(others.size()) / (spillFloor() + used[r]);
             if (score > bestScore) {
                 bestScore = score;
                 best = &r;
@@ -7728,12 +7759,14 @@ void reportStepProfiles() {
         for (size_t k = 0; k < byKind.size() && k < 14 && byKind[k].first > 0; k++) line += " " + byKind[k].second + " " + millions(byKind[k].first) + ",";
         line.pop_back();
         std::fprintf(stderr, "%s\n", line.c_str());
-        // The busiest steps (each run at least a tenth as often as the busiest), in their order.
+        // The busiest steps (each run at least a tenth as often as the busiest; WW_PROFILE_SHARE=n,
+        // an n-th), in their order.
+        static const uint64_t share = std::getenv("WW_PROFILE_SHARE") != nullptr ? std::max(1, std::atoi(std::getenv("WW_PROFILE_SHARE"))) : 10;
         uint64_t top = 0;
         for (uint64_t c : p->counts) top = std::max(top, c);
         line = "   in order:";
         for (size_t s = 0; s < p->stems.size(); s++)
-            if (p->counts[s] > 0 && p->counts[s] * 10 >= top)
+            if (p->counts[s] > 0 && p->counts[s] * share >= top)
                 line += " " + p->stems[s] + (p->instruction[s] >= 0 ? "@" + std::to_string(p->instruction[s]) : "") + " " + millions(p->counts[s]) + ",";
         line.pop_back();
         std::fprintf(stderr, "%s\n", line.c_str());
@@ -7777,6 +7810,13 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         const ExitPoint* exit;
     };
     std::vector<Out> outs;
+    // A region made first counts (registers-plan.html part B): each instruction as it starts,
+    // and its times round at each loop's end (loopbackc), into counts kept with its code.
+    if (r.counting) {
+        r.counts = new RegionCounts();  // kept as the region's code is, for as long as the program runs
+        for (const Ins& x : r.ins) r.counts->at.push_back(x.at);
+        r.counts->runs = std::make_unique<uint64_t[]>(r.ins.size() + 2);  // (+ the times round, and loopbackc's word)
+    }
     // Leaving at a way in, before anything is done: back to the VM at that instruction.
     std::map<int, int> leaving;
     auto leaveAt = [&](int e) {
@@ -7805,6 +7845,10 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         a.at(labels[i]);
         if (!r.in[i].known) continue;
         doing = static_cast<int>(i);
+        if (r.counts != nullptr) {
+            a.add("count").ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(&r.counts->runs[i]));
+            if (names != nullptr) names->push_back("count");
+        }
         const Result& res = r.results[i];
         std::vector<int> exitLabels;
         for (size_t e = 0; e < res.exits.size(); e++) {
@@ -7814,8 +7858,10 @@ std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>
         for (const LOp& l : res.ops) {
             // A move to the register it is in: nothing.
             if ((l.stem == "movi" || l.stem == "movf") && l.named.size() == 2 && r.regs.at(l.named[0]) == r.regs.at(l.named[1])) continue;
-            Step& st = add(r.name(l));
-            st.ki = l.ki;
+            // (The region's own loop's end, back to its first instruction: loopbackc; an inner one's, loopbackn.)
+            const bool countsRounds = r.counts != nullptr && l.stem == "loopback";
+            Step& st = add(countsRounds ? std::string(l.jumpTo == 0 ? "loopbackc" : "loopbackn") : r.name(l));
+            st.ki = countsRounds ? static_cast<int64_t>(reinterpret_cast<intptr_t>(&r.counts->runs[r.ins.size()])) : l.ki;
             st.kf = l.kf;
             st.slot = l.slot;
             st.slot2 = l.slot2;
@@ -8174,6 +8220,12 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
         r.intLists = intLists;
         r.memorySlots = memorySlots;
         r.function = head == f.nativeCallHead;
+        // (A loop's, made first, counts what it runs; WW_NATIVE_COUNTS=0: none does.)
+        static const bool counted = [] {
+            const char* asked = std::getenv("WW_NATIVE_COUNTS");
+            return asked == nullptr || std::string(asked) != "0";
+        }();
+        r.counting = counted && !r.function && seen.runs.empty();
         for (const auto& [from, to] : leftOut) {
             for (int k = from; k <= to; k++) r.outside.insert(k - c.first);
             r.seeds.insert(to + 1 - c.first);
@@ -8240,13 +8292,15 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
             const auto ways = part(3, [&] { return make(r, dumping ? &names : nullptr); });
             if (ways.empty()) break;
             uint32_t* misses = new uint32_t(0);  // kept as the region's code is, for as long as the program runs
-            for (size_t w = 0; w < ways.size(); w++) out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0, !r.prologue.empty()});
+            for (size_t w = 0; w < ways.size(); w++)
+                out.push_back(FunctionProto::NativeRegion{ways[w].first, ways[w].second, misses, w == 0, !r.prologue.empty(), r.counts});
             made.push_back(c);
             if (dumping) {
                 int islands = 0;
                 for (size_t i = 0; i < r.ins.size(); i++) islands += r.in[i].known && r.results[i].island ? 1 : 0;
-                std::fprintf(stderr, "== %s: a region of %zu instructions at %u, %zu ways in, %d the VM's, %zu steps:\n  ", f.name.c_str(),
-                             r.ins.size(), r.ins[0].at, ways.size(), islands, names.size());
+                std::fprintf(stderr, "== %s: a region of %zu instructions at %u, %zu ways in, %d the VM's, %zu steps%s:\n  ", f.name.c_str(),
+                             r.ins.size(), r.ins[0].at, ways.size(), islands, names.size(),
+                             r.counting ? ", counting" : !seen.runs.empty() ? (", made again from " + std::to_string(seen.rounds) + " times round").c_str() : "");
                 for (const std::string& s : names) std::fprintf(stderr, "%s ", s.c_str());
                 std::fprintf(stderr, "\n");
                 for (size_t i = 0; i < r.ins.size(); i++)

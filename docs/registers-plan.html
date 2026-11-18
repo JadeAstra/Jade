@@ -88,13 +88,14 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: more registers for native code, and values kept in them where they are used</h1>
-<p class="lede">Written 2026-11-17, at the user's word ("can we do 1 and 2?"), after the speed plan's part 1 (<a href="speed-plan.html#sp-p1">GIF</a>) did not reach its gate: native code holds the GIF writer's LZW loop whole, but spills the values its hot path uses with those of its cold path, as it has nine registers for whole numbers and a way out after each check needs every value changed so far. Two things the user asked for: more registers (2), and a value kept in a register on the path that uses it most, in memory only on the path that needs its register for something else (1). Three parts, each with a spike and a gate; nothing built before the questions at the end are answered. All three answered as recommended (2026-11-17); part A's spike found RBX and R10 unsound (below).</p>
+<p class="lede">Written 2026-11-17, at the user's word ("can we do 1 and 2?"), after the speed plan's part 1 (<a href="speed-plan.html#sp-p1">GIF</a>) did not reach its gate: native code holds the GIF writer's LZW loop whole, but spills the values its hot path uses with those of its cold path, as it has nine registers for whole numbers and a way out after each check needs every value changed so far. Two things the user asked for: more registers (2), and a value kept in a register on the path that uses it most, in memory only on the path that needs its register for something else (1). Three parts, each with a spike and a gate; nothing built before the questions at the end are answered. All three answered as recommended (2026-11-17); part A's spike found RBX and R10 unsound (below). Part B built the same day: the LZW loop a quarter quicker (<a href="#rp-b">below</a>).</p>
 <nav>
 <h2>Contents</h2>
 <ul>
 <li><a href="#rp-now">How native code's registers are now</a></li>
 <li><a href="#rp-parts">The parts, each with its spike and gate</a></li>
 <li><a href="#rp-a">Part A's spike: RBX and R10 unsound</a></li>
+<li><a href="#rp-b">Part B, built: counts of what runs</a></li>
 <li><a href="#rp-after">After</a></li>
 <li><a href="#rp-questions">Questions for the user</a></li>
 </ul>
@@ -127,6 +128,27 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>No register left for Clang's own work.</strong> With twelve registers passed and two more bound, a stencil needing one more pushes RBP and pops it again: in most stencils, each step a push and a pop more.</li>
 </ul>
 <p>Undone; nothing of it is in the build but the tool's reading of the big form. A sound way to one more register, if wanted: the flag's register (RAX, the twelfth passed) given out as an ordinary register wherever no comparison's answer is in it, the allocator told where the flag lives (each comparison's step writing it, each jump or <code>and</code> reading it); stencils for register 9 that name the flag's. Ten registers, no binding.</p>
+
+<h2 id="rp-b">Part B, built: counts of what runs (2026-11-17)</h2>
+<p>At the user's word ("go ahead with B"), in 0.9.5008, after native code came to be made on another core (<a href="background-plan.html">background-plan.html</a>), which it uses:</p>
+<ul>
+<li><strong>A loop's region made first counts</strong> (<code>regions.cpp</code>'s make: Region::counting): a <code>count</code> step as each instruction starts, into counts kept with its code (RegionCounts, <code>bytecode.h</code>); each inner loop's end counting its times round (<code>loopbackn</code>), and the region's own loop's end (<code>loopbackc</code>) leaving for the VM once, past 1,000 times round in all, so that what it counted is a whole time round of its own at least. A whole function's region counts nothing. <code>WW_NATIVE_COUNTS=0</code>: none counts (the code as before).</li>
+<li><strong>Made again from the counts</strong> (VM::remakeCounted): as it leaves so, from the frame there, its counts given with what is taken (NativeSeen::runs), in place or by the builder as the first was. The region made first runs on meanwhile; as the new one is put in, its ways in take the place of the old one's, and the old one's word beside its count is cleared, so that where it is running on (a long loop) it leaves at its next time round and the VM goes on in the new one.</li>
+<li><strong>What is kept in memory, chosen from the counts</strong> (spillOne, spillHome): each use of a value weighed by how often it runs a time round; a write eight times a read (a value written in a loop and kept in memory is stored and loaded again on the way each time round waits for; one only read is loaded beside the work); against a thousandth, not 1 (which drowned the counts: an outer loop's value weighed as much as an inner one's).</li>
+</ul>
+<p><strong>Three faults found on the way</strong>, each fixed: the region made again from the way in it last came in by (after a call), where no loop starts, so made none, and counted on all the while (the GIF spike's <code>indices</code> 10.7 ms to 18.6); asked for at any way out, a call's too, before its time round was through (what came after the call counted as never run: <code>dithered</code>'s inner loop's values kept in memory, 84 k loads to 36 M); the weights above, found on the gaussian kernel (6% slower at a write weighed as a read and 4 times; 8, 16 and 32 alike).</p>
+<div class="table"><table>
+<thead><tr><th>Timed (pinned, best of three)</th><th class="num">Counts off</th><th class="num">On</th></tr></thead>
+<tbody>
+<tr><td>The GIF writer's LZW loop, 1000 by 1000</td><td class="num">14.1 ms</td><td class="num">10.6</td></tr>
+<tr><td>The same, 4000 by 3000</td><td class="num">157</td><td class="num">108</td></tr>
+<tr><td>The whole GIF, 1000 by 1000 / 4000 by 3000</td><td class="num">32.6 / 296</td><td class="num">30.7 / 248</td></tr>
+<tr><td>The first GIF in a fresh process, then the calls after</td><td class="num">41 / 35.5</td><td class="num">39 / 32.5</td></tr>
+<tr><td>Kernels: gaussian, shrink, blur, idct</td><td class="num">568, 68, 508, 390</td><td class="num">552, 64, 505, 386</td></tr>
+</tbody></table></div>
+<p>Nothing else slower past the noise (the kernels, the whole pictures, <code>bench/run.ps1</code>, each run again where a first run differed): the counting and the second making cost no benchmark anything measurable.</p>
+<p><strong>The gate:</strong> its measure, the GIF spike's indices as quick as the dropped guess made them, no longer applies: that loop keeps nothing in memory now (155 k of its 156 M steps), so no choice of what to keep changes it. Its dithering rows keep ten values in memory each time round, but there every instruction runs every time round (1,000 counted of 1,000): there is nothing colder to keep instead, and counts choose as the static choice did. Those wait for part C (a value's life split) or for more registers. The rest of the gate reached: the blur kernel as before, nothing slower, the counting nothing measurable. Where a loop has a cold path, as the LZW loop has, the counts paid: a quarter off it (the speed plan's part 1 gate, 7.1 ms, not reached yet).</p>
+<p><strong>Checked:</strong> the native code the same as 0.9.5007's with <code>WW_NATIVE_COUNTS=0</code> (every test's dumped: every region made the same; one loop refused by both, a window's frames, analysed with its places' caches as the window's timing left them); <code>tests/native_counted.ww</code> (spills, a rare branch, inner loops and a call, floats, a long run made again in it) the same as the VM's in place, in the background and with no counts. The suite: Windows, every way, 1948 passed; copy-reads, thread stress, native results, interpret, background 525 each, GC stress 521, none failed (two passed only when run again: <code>workers.ww</code> under GC stress past its time limit, and <code>parallel.ww</code> under thread stress, an older crash, one run in some 300, 0.9.5006's too: <a href="outstanding.html#o-pstress">outstanding</a>). Linux 1605 passed (3 passed over), background 521. ASan 525 in place (and the start-up budgets over, as ever) and 525 in the background.</p>
 
 <h2 id="rp-after">After</h2>
 <p>The speed plan's part 1 tried again: the LZW loop against its gate (at its C++'s speed), and the indices and dithering in WinterWolf (<code>bench/spike/gif_nearest.ww</code>) against the C++ they would replace. Then part 2, PNG, whose deflate is the same kind of loop.</p>

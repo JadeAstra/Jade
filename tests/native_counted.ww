@@ -1,0 +1,96 @@
+// A loop's region made first counts what it runs; at its 1,000th time round (a whole time round of
+// its own loop at least) it is made again from the counts, which choose what is kept in memory
+// by how often each value is used (registers-plan.html part B, 2026-11-17). The same answers as
+// the VM's, before the remake, after it, and across it: each loop here runs well past 1,000 times
+// round, with values enough to be spilled, a branch taken rarely, inner loops, a call out.
+
+// A hot path and a rare one, more values than registers: the rare one's kept in memory.
+fun mixed(n : int) : int {
+  var a = 1
+  var b = 2
+  var c = 3
+  var d = 4
+  var e = 5
+  var f = 6
+  var g = 7
+  var h = 8
+  var total = 0
+  for (i in 0 ..< n) {
+    a = (a * 31 + i) & 0xFFFF
+    b = (b + a) & 0xFFFF
+    if (i % 997 == 0) {
+      c = (c * 7 + a + b) & 0xFFFF
+      d = (d + c) ^ e
+      e = (e * 3 + d) & 0xFFFF
+      f = (f + e) & 0xFFFF
+      g = (g ^ f) + h
+      h = (h + g) & 0xFFFF
+    }
+    total = (total + a + b) & 0xFFFFFF
+  }
+  return total + c + d + e + f + g + h
+}
+print(mixed(5000), mixed(100000))   // expect: 7228090 12638071
+
+// Rows: two inner loops and a call in each time round of the outer one (a region of several
+// loops, left for the call and come back into).
+fun rowSum(row : List<int>, y : int) : int {
+  var s = 0
+  for (x in 0 ..< row.size) { s += row[x] * (y + 1) }
+  return s
+}
+fun rows(width : int, height : int) : int {
+  val row : open List<int> = List(width) { 0 }
+  var total = 0
+  for (y in 0 ..< height) {
+    val start = y * 3
+    for (x in 0 ..< width) { row[x] = (start + x) % 251 }
+    total = (total + rowSum(row, y)) % 1000000007
+    for (x in 0 ..< width) { row[x] = 0 }
+  }
+  return total
+}
+print(rows(300, 200), rows(37, 2000))   // expect: 745874022 353917541
+
+// Floats, a rare branch among them.
+fun waves(n : int) : float {
+  var x = 0.5
+  var y = 0.25
+  var z = 1.0
+  var w = 2.0
+  var sum = 0.0
+  for (i in 0 ..< n) {
+    x = x * 0.999 + 0.001 * y
+    y = y * 0.998 + 0.002 * x
+    if (i % 1000 == 999) {
+      z = z * 0.75 + w * 0.1
+      w = w * 0.5 + z * 0.25
+    }
+    sum += x * y + z * 0.000001
+  }
+  return Math.round((sum + w) * 1000000) / 1000000.0
+}
+print(waves(3000), waves(200000))   // expect: 507.453113 34699.127309
+
+// One long run: made again at its 1,000th time round, the rest of the run in the new region (in
+// the background: once it is put in, at its next time round).
+fun long(n : int) : int {
+  var p = 7
+  var q = 11
+  var r = 13
+  var s = 17
+  var t = 0
+  var i = 0
+  while (i < n) {
+    p = (p * 1103515245 + 12345) & 0x7FFFFFFF
+    q = (q + (p >> 16)) & 0xFFFFF
+    if ((p & 4095) == 0) {
+      r = (r * 5 + q) & 0xFFFF
+      s = (s ^ r) + 1
+    }
+    t = (t + q + r) & 0xFFFFFFF
+    i += 1
+  }
+  return t + s
+}
+print(long(2000000))   // expect: 18403890

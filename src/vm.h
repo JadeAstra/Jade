@@ -1416,6 +1416,7 @@ private:
     // now for `f`'s regions, and their making handed on or done here (vm.cpp's Builder).
     std::unique_ptr<NativeSeen> seenForRegions(const FunctionProto& f, const Value* base, const Value* top);
     void makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::unique_lock<std::mutex>& states, const Value* base, const Value* top);
+    bool remakeCounted(FunctionProto& f, const FunctionProto::NativeRegion& region, const Value* base, const Value* top);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif

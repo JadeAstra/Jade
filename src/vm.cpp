@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "native/native.h"
+#include "native/layout.h"
 
 #include "builtins.h"  // addOverflows and the like (D27)
 
@@ -6952,7 +6953,35 @@ struct Build {
     size_t which;  // the loop's (in nativeHeads), or kWholeFunction
     std::unique_ptr<NativeSeen> seen;
     bool done = false;
+    RegionCounts* counted = nullptr;  // made again from these (the region made first's)
 };
+// A loop's regions made again from what its region made first counted, published (under
+// nativeStates): they take the place of that one's (those of its counts) in the function's
+// list; its ways in that are not theirs the VM's own instructions again, theirs the VM's way
+// into them; its times round set one short of kCountedRounds, so that where it is running yet
+// (on a long loop) it leaves at its next, and the VM goes on in these. Made none (refused),
+// that one stays.
+void publishCounted(FunctionProto& f, RegionCounts* counted, const std::vector<FunctionProto::NativeRegion>& made) {
+    if (made.empty()) return;
+    auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
+    std::vector<uint32_t> old;
+    if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
+        for (const FunctionProto::NativeRegion& r : *now) {
+            if (r.counts == counted) old.push_back(r.head);
+            else if (*r.misses < kNativeMissLimit) list->push_back(r);
+        }
+    list->insert(list->end(), made.begin(), made.end());
+    f.regionsNow.store(list.get(), std::memory_order_release);
+    f.regionLists.push_back(std::move(list));
+    uint8_t* const run = f.run.data();
+    for (uint32_t at : old) {
+        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))];
+        std::memcpy(run + at, &own, kThreaded);
+    }
+    const TailFn enter = TailTable::nativeEntry();
+    for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+    counted->runs[counted->at.size() + 1] = 0;  // (where it runs on, it leaves at its next time round)
+}
 void makeAndPublish(Build& b) {
     std::vector<FunctionProto::NativeRegion> made;
     {
@@ -6960,7 +6989,8 @@ void makeAndPublish(Build& b) {
         if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(*b.f, *b.seen, b.head, made);
     }
     std::lock_guard<std::mutex> hold(nativeStates);
-    if (b.which == kWholeFunction) publishFunction(*b.f, made);
+    if (b.counted != nullptr) publishCounted(*b.f, b.counted, made);
+    else if (b.which == kWholeFunction) publishFunction(*b.f, made);
     else publishLoop(*b.f, b.which, made);
 }
 // The builder: one thread, started with the first build, taking them in turn. Never destroyed
@@ -7014,7 +7044,8 @@ public:
         std::lock_guard<std::mutex> states(nativeStates);
         const TailFn first = TailTable::nativeFirstEntry();
         for (const auto& b : dropped) {
-            if (b->which == kWholeFunction) continue;
+            if (b->counted != nullptr) b->counted->asked = false, b->counted->runs[b->counted->at.size() + 1] = 0;  // (asked for again as it next leaves)
+            if (b->which == kWholeFunction || b->counted != nullptr) continue;
             uint8_t& arrived = b->f->nativeArrivals[b->which];
             if (arrived != 5 && arrived != 6) continue;
             arrived = arrived == 6 ? 3 : 1;
@@ -7118,6 +7149,54 @@ void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::uniq
     states.unlock();
     Builder::builder().add(b);
     if (makeWay() == MakeWay::wait) Builder::builder().waitFor(*b);
+}
+
+// A region made first, at its kCountedRounds-th time round (registers-plan.html part B): made
+// again from what it counted, in place or by the builder (makeWay()), from the frame here; asked
+// for once. True where it was made again here (the VM goes into the new one at once).
+bool VM::remakeCounted(FunctionProto& f, const FunctionProto::NativeRegion& region, const Value* base, const Value* top) {
+    std::unique_lock<std::mutex> states(nativeStates);
+    RegionCounts* const counted = region.counts;
+    if (counted == nullptr || counted->asked || takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled()) return false;
+    // (Made from its start: the loop's head, its first way in, whichever way it left by.)
+    uint32_t head = UINT32_MAX;
+    if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
+        for (const FunctionProto::NativeRegion& r : *now)
+            if (r.counts == counted && r.first) head = r.head;
+    if (head == UINT32_MAX) return false;
+    counted->asked = true;
+    auto b = std::make_shared<Build>();
+    b->asker = this;
+    b->f = &f;
+    b->head = head;
+    b->which = 0;
+    b->counted = counted;
+    b->seen = seenForRegions(f, base, top);
+    b->seen->rounds = counted->runs[counted->at.size()];
+    for (size_t i = 0; i < counted->at.size(); i++) b->seen->runs[counted->at[i]] = counted->runs[i];
+    static const bool trace = std::getenv("WW_TRACE_BUILDS") != nullptr;
+    if (trace) std::fprintf(stderr, "build %s %p at %u, made again from %llu times round, core %p\n", f.name.c_str(), static_cast<void*>(&f), head,
+                            static_cast<unsigned long long>(b->seen->rounds), static_cast<const void*>(this));
+    if (trace) {  // (and what each instruction counted)
+        for (size_t i = 0; i < counted->at.size(); i++) std::fprintf(stderr, " %zu:%llu", i, static_cast<unsigned long long>(counted->runs[i]));
+        std::fprintf(stderr, "\n");
+    }
+    if (makeWay() == MakeWay::inPlace) {
+        std::vector<FunctionProto::NativeRegion> made;
+        {
+            std::lock_guard<std::mutex> making(nativeMaking);
+            makeNativeRegions(f, *b->seen, head, made);
+        }
+        publishCounted(f, counted, made);
+        return !made.empty();
+    }
+    states.unlock();
+    Builder::builder().add(b);
+    if (makeWay() == MakeWay::wait) {
+        Builder::builder().waitFor(*b);
+        return true;
+    }
+    return false;
 }
 
 void VM::dropWaitingBuilds() { Builder::builder().dropFor(this); }
@@ -7401,6 +7480,12 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
                         std::memcpy(const_cast<uint8_t*>(code) + r.head, &first, kThreaded);
                     }
             }
+        }
+        // Counted kCountedRounds times round (registers-plan.html part B): made again from its
+        // counts. Made here, the VM goes on into the new one (not this one, chained).
+        if (RegionCounts* const counted = region->counts; counted != nullptr && counted->runs[counted->at.size() + 1] == 2) {
+            counted->runs[counted->at.size() + 1] = 1;  // (left once: not again till it is made again, or that dropped)
+            if (!counted->asked && remakeCounted(*const_cast<FunctionProto*>(frame->closure->proto), *region, base, sp)) break;
         }
         // Left at another region's way in (a loop's region where its function's goes on after
         // the loop, and the function's at the start of a loop left to its own, 2026-11-15):

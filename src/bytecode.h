@@ -837,6 +837,10 @@ struct FunctionProto {
         // nothing of the context's lists and held fields is read, and none is set to nothing as
         // it is entered (2026-11-15: some 600 bytes, each time a function's region is entered).
         bool looks = true;
+        // A loop's region made first (registers-plan.html part B, 2026-11-17): how often each of its
+        // instructions ran, by where it starts in `run`, and its times round (`runs[at.size()]`); shared
+        // by its ways in. Null for one made again from them, or a whole function's.
+        struct RegionCounts* counts = nullptr;
     };
     // The regions made so far as published: a list never changed once published, replaced whole
     // as a loop's regions are added (under VM::nativeFirst's lock), so that a core reading it as
@@ -997,6 +1001,14 @@ extern void (*writeRunAddresses)(FunctionProto& f);
 // nativeHeads), true where it has any. The first time one of them starts (VM::nativeFirst):
 // its regions.
 extern bool (*findNativeLoops)(FunctionProto& f);
+// What a region made first counted (FunctionProto::NativeRegion::counts): each instruction's place
+// in `run`, how often each ran (one more: the times round), whether it has been asked for again.
+struct RegionCounts {
+    std::vector<uint32_t> at;
+    std::unique_ptr<uint64_t[]> runs;  // and runs[at.size()]: the times round; runs[at.size() + 1]: 2 where loopbackc left for the counts, 1 once asked
+    bool asked = false;
+};
+
 // What the running program held as a function's regions were asked for (2026-11-17,
 // background-plan.html): taken on the core running it (takeNativeSeen), and all the making
 // reads of what the program holds, so that it may run on another core while the program goes
@@ -1038,6 +1050,10 @@ struct NativeSeen {
     // For each string constant of the function, whether that bare name is no member of the
     // object in the frame's slot 0 (VM::noMemberForRegion), where it holds an object or a value.
     std::vector<std::pair<const ObjString*, bool>> noMember;
+    // Made again from what the region made first counted (registers-plan.html part B): how often
+    // each instruction ran, by where it starts in `run`, over its times round; empty the first time.
+    std::unordered_map<uint32_t, uint64_t> runs;
+    uint64_t rounds = 0;
     std::vector<Value> roots;  // marked by the VM as its own while the making may read them
 };
 // What the program holds, taken for `f`'s regions: `frame`, the call's `frameSlots` live slots;

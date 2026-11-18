@@ -115,4 +115,8 @@ constexpr int kValueData = 40;
 // this many bytes on from the one before: a frame's place k is k strides down from its first.
 constexpr int kPlaceStride = 104, kPlaceBytes = 64;
 
+// How many times round a region made first counts what it runs before it is made again from the
+// counts (registers-plan.html part B, 2026-11-17): its back edge leaves for the VM at this count.
+constexpr uint64_t kCountedRounds = 1000;
+
 }  // namespace ww::native::layout
