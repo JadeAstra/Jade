@@ -1410,11 +1410,19 @@ private:
     static int setForRegion(void* vm, const void* table, const void* key, const void* value);
     static bool plainKeyForRegion(const Value& k);
     // Whether a bare name in function `f` is no member of `receiver`, as implicitReceiver would
-    // find it, by its class alone (GlobalsSeen::noMember).
+    // find it, by its class alone (NativeSeen::noMember).
     static bool noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver);
+    // Native code made on another core (2026-11-17, background-plan.html): what the program holds
+    // now for `f`'s regions, and their making handed on or done here (vm.cpp's Builder).
+    std::unique_ptr<NativeSeen> seenForRegions(const FunctionProto& f, const Value* base, const Value* top);
+    void makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::unique_lock<std::mutex>& states, const Value* base, const Value* top);
     const Value* slowB_ = nullptr;
     const Value* slowC_ = nullptr;
 #endif
+    // The builds this VM asked the builder for, not made yet: what they read kept by the collector;
+    // dropped as the VM ends.
+    void markWaitingBuilds();
+    void dropWaitingBuilds();
     size_t liveBytes_ = 0;
     std::vector<Obj*> gray_;
     // A name's hash eight bytes at a time: the library's own goes a byte at a time on Windows,

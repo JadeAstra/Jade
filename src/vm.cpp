@@ -126,6 +126,7 @@ VM::VM(bool worker) : output(&std::cout), errorOutput(&std::cerr), input(&std::c
 }
 
 VM::~VM() {
+    dropWaitingBuilds();  // what this VM asked the builder for, which reads its objects
     parallelPool_.reset();  // its cores first: they work on this VM's objects
     releaseAllBlocks();
     Obj* obj = objects_;
@@ -6884,6 +6885,246 @@ const TailFn* TailTable::get() {
 // How often a region's quick ways may not do what they do before the VM stops going in.
 constexpr uint32_t kNativeMissLimit = 256;
 
+// ---- Native code made on another core (2026-11-17, background-plan.html) ----
+// Where a region is made (a loop's second time round, a whole function's return after its
+// calls are counted, one dropped made again), what the program holds is taken there
+// (takeNativeSeen) and the making handed to one builder thread; the program goes on in the VM
+// meanwhile, and the builder puts the regions in as they are made, as a core would. Where
+// WW_NATIVE_BACKGROUND is 0, made in place as before; `wait`, by the builder while the
+// program waits (made from what was taken either way, so the code is the same).
+namespace {
+enum class MakeWay { inPlace, background, wait };
+MakeWay makeWay() {
+    static const MakeWay way = [] {
+        const char* asked = std::getenv("WW_NATIVE_BACKGROUND");
+        if (asked == nullptr) return MakeWay::background;
+        const std::string a(asked);
+        return a == "0" ? MakeWay::inPlace : a == "wait" ? MakeWay::wait : MakeWay::background;
+    }();
+    return way;
+}
+// One region-making at a time, in place or the builder's (the executable memory and the
+// making's counters are shared); and, apart, the loops' states (nativeArrivals) and the
+// publishing of regions, held only briefly, so that a core handing a build on never waits for
+// one being made.
+std::mutex nativeMaking;
+std::mutex nativeStates;
+
+// A loop's regions published (under nativeStates): the function's list replaced whole (less
+// those dropped: one made again has the same ways in, found first otherwise), its head its own
+// instruction, each way in the VM's way into its region.
+void publishLoop(FunctionProto& f, size_t which, const std::vector<FunctionProto::NativeRegion>& made) {
+    auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
+    if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
+        for (const FunctionProto::NativeRegion& r : *now)
+            if (*r.misses < kNativeMissLimit) list->push_back(r);
+    list->insert(list->end(), made.begin(), made.end());
+    f.regionsNow.store(list.get(), std::memory_order_release);
+    f.regionLists.push_back(std::move(list));
+    uint8_t* const run = f.run.data();
+    const uint32_t head = f.nativeHeads[which];
+    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
+    std::memcpy(run + head, &own, kThreaded);
+    const TailFn enter = TailTable::nativeEntry();
+    for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+    const uint8_t was = f.nativeArrivals[which];
+    f.nativeArrivals[which] = was == 3 || was == 6 ? 4 : 2;
+}
+// A whole function's region published (its returns already their own instructions again).
+void publishFunction(FunctionProto& f, const std::vector<FunctionProto::NativeRegion>& made) {
+    if (made.empty()) return;
+    auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
+    if (const auto* now = f.regionsNow.load(std::memory_order_acquire))  // (less those dropped)
+        for (const FunctionProto::NativeRegion& r : *now)
+            if (*r.misses < kNativeMissLimit) list->push_back(r);
+    list->insert(list->end(), made.begin(), made.end());
+    f.regionsNow.store(list.get(), std::memory_order_release);
+    f.regionLists.push_back(std::move(list));
+    const TailFn enter = TailTable::nativeEntry();
+    for (const FunctionProto::NativeRegion& r : made) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
+}
+
+constexpr size_t kWholeFunction = SIZE_MAX;
+struct Build {
+    const VM* asker;
+    FunctionProto* f;
+    uint32_t head;
+    size_t which;  // the loop's (in nativeHeads), or kWholeFunction
+    std::unique_ptr<NativeSeen> seen;
+    bool done = false;
+};
+void makeAndPublish(Build& b) {
+    std::vector<FunctionProto::NativeRegion> made;
+    {
+        std::lock_guard<std::mutex> making(nativeMaking);
+        if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(*b.f, *b.seen, b.head, made);
+    }
+    std::lock_guard<std::mutex> hold(nativeStates);
+    if (b.which == kWholeFunction) publishFunction(*b.f, made);
+    else publishLoop(*b.f, b.which, made);
+}
+// The builder: one thread, started with the first build, taking them in turn. Never destroyed
+// (its thread is let go): as the program ends (stop) it finishes the build under way and drops
+// the rest.
+class Builder {
+public:
+    void add(const std::shared_ptr<Build>& b) {
+        std::lock_guard<std::mutex> hold(lock_);
+        if (stopping_) return;
+        if (!started_) {
+            started_ = true;
+            std::thread([this] { work(); }).detach();
+            std::atexit([] { builder().stop(); });
+        }
+        queue_.push_back(b);
+        more_.notify_one();
+    }
+    void waitFor(const Build& b) {
+        std::unique_lock<std::mutex> hold(lock_);
+        finished_.wait(hold, [&] { return b.done || stopping_; });
+    }
+    // Each value a build `asker` asked for keeps (marked by its collector).
+    template <class Mark>
+    void roots(const VM* asker, Mark mark) {
+        std::lock_guard<std::mutex> hold(lock_);
+        auto each = [&](const std::shared_ptr<Build>& b) {
+            if (b != nullptr && b->asker == asker)
+                for (const Value& v : b->seen->roots) mark(v);
+        };
+        for (const auto& b : queue_) each(b);
+        each(current_);
+    }
+    // The builds `asker` asked for dropped, the one under way finished (a VM ending).
+    // A loop's build dropped is asked for again by the next core to start the loop (its head
+    // VM::nativeFirst's again): cores share functions, and one ending drops what it asked for.
+    // (A whole function's stays unmade.)
+    void dropFor(const VM* asker) {
+        std::vector<std::shared_ptr<Build>> dropped;
+        {
+            std::unique_lock<std::mutex> hold(lock_);
+            for (auto it = queue_.begin(); it != queue_.end();)
+                if ((*it)->asker == asker) {
+                    dropped.push_back(*it);
+                    it = queue_.erase(it);
+                } else {
+                    ++it;
+                }
+            finished_.wait(hold, [&] { return current_ == nullptr || current_->asker != asker; });
+        }
+        std::lock_guard<std::mutex> states(nativeStates);
+        const TailFn first = TailTable::nativeFirstEntry();
+        for (const auto& b : dropped) {
+            if (b->which == kWholeFunction) continue;
+            uint8_t& arrived = b->f->nativeArrivals[b->which];
+            if (arrived != 5 && arrived != 6) continue;
+            arrived = arrived == 6 ? 3 : 1;
+            std::memcpy(b->f->run.data() + b->head, &first, kThreaded);
+        }
+    }
+    // The builds of functions a program owns, as it ends (the program goes before its VM).
+    void dropFunctions(const std::vector<std::unique_ptr<FunctionProto>>& owned) {
+        std::unique_lock<std::mutex> hold(lock_);
+        if (queue_.empty() && current_ == nullptr) return;
+        std::unordered_set<const FunctionProto*> mine;
+        for (const auto& p : owned) mine.insert(p.get());
+        std::erase_if(queue_, [&](const std::shared_ptr<Build>& b) { return mine.count(b->f) != 0; });
+        finished_.wait(hold, [&] { return current_ == nullptr || mine.count(current_->f) == 0; });
+    }
+    void stop() {
+        std::unique_lock<std::mutex> hold(lock_);
+        stopping_ = true;
+        queue_.clear();
+        finished_.notify_all();
+        finished_.wait(hold, [&] { return current_ == nullptr; });
+    }
+    static Builder& builder() {
+        static Builder* const one = new Builder;
+        return *one;
+    }
+
+private:
+    void work() {
+        std::unique_lock<std::mutex> hold(lock_);
+        for (;;) {
+            more_.wait(hold, [&] { return !queue_.empty(); });
+            current_ = queue_.front();
+            queue_.pop_front();
+            hold.unlock();
+            makeAndPublish(*current_);
+            hold.lock();
+            current_->done = true;
+            current_->seen.reset();
+            current_ = nullptr;
+            finished_.notify_all();
+        }
+    }
+    std::mutex lock_;
+    std::condition_variable more_, finished_;
+    std::deque<std::shared_ptr<Build>> queue_;
+    std::shared_ptr<Build> current_;
+    bool started_ = false;
+    bool stopping_ = false;
+};
+}  // namespace
+
+// What the program holds now, for `f`'s regions (on this core).
+std::unique_ptr<NativeSeen> VM::seenForRegions(const FunctionProto& f, const Value* base, const Value* top) {
+    return takeNativeSeen(f, base, static_cast<int>(top - base), globals_.data(), globals_.size(), &VM::noMemberForRegion, this);
+}
+
+// Each build this VM asked for that is not made yet keeps what it read (collectGarbage).
+void VM::markWaitingBuilds() {
+    Builder::builder().roots(this, [&](const Value& v) { markValue(v); });
+}
+
+// A build of `f`'s regions handed on (the builder's), or made here (in place), by makeWay();
+// `which` its loop, or kWholeFunction. Under nativeStates (`states`): let go here before any waiting.
+void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::unique_lock<std::mutex>& states, const Value* base, const Value* top) {
+    auto b = std::make_shared<Build>();
+    b->asker = this;
+    b->f = &f;
+    b->head = head;
+    b->which = which;
+    if (takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled()) {  // none made: as made, of no regions
+        if (which == kWholeFunction) publishFunction(f, {});
+        else publishLoop(f, which, {});
+        return;
+    }
+    b->seen = seenForRegions(f, base, top);
+    // WW_TRACE_BUILDS: each build said as it is asked for (the function, its loop's head, or a
+    // whole function's; how far the loop had got: 1 first, 3 made again; the core asking).
+    static const bool trace = std::getenv("WW_TRACE_BUILDS") != nullptr;
+    if (trace)
+        std::fprintf(stderr, "build %s %p at %u, %s %d, core %p\n", f.name.c_str(), static_cast<void*>(&f), head, which == kWholeFunction ? "whole" : "loop",
+                     which == kWholeFunction ? 0 : static_cast<int>(f.nativeArrivals[which]), static_cast<const void*>(this));
+    if (makeWay() == MakeWay::inPlace) {
+        std::vector<FunctionProto::NativeRegion> made;
+        {
+            std::lock_guard<std::mutex> making(nativeMaking);
+            makeNativeRegions(f, *b->seen, head, made);
+        }
+        if (which == kWholeFunction) publishFunction(f, made);
+        else publishLoop(f, which, made);
+        return;
+    }
+    // Meanwhile the loop's head is its own instruction again (its returns, a function's), and
+    // the loop is marked as being made (5; 6 made again).
+    if (which != kWholeFunction) {
+        uint8_t* const run = f.run.data();
+        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
+        std::memcpy(run + head, &own, kThreaded);
+        f.nativeArrivals[which] = f.nativeArrivals[which] == 3 ? 6 : 5;
+    }
+    states.unlock();
+    Builder::builder().add(b);
+    if (makeWay() == MakeWay::wait) Builder::builder().waitFor(*b);
+}
+
+void VM::dropWaitingBuilds() { Builder::builder().dropFor(this); }
+namespace {
+const bool buildsDropped = (dropNativeBuildsOf = [](const std::vector<std::unique_ptr<FunctionProto>>& owned) { Builder::builder().dropFunctions(owned); }, true);
+}  // namespace
+
 // The second time a loop starts (once the VM has run it a time round, its places' caches have
 // seen what they read, and its lists are in the frame): its regions made (by one thread or core
 // at a time), published, and addressed: its first instruction a region's way in, or the
@@ -6904,29 +7145,10 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
         [[clang::musttail]] return (this->*own)(WW_TAIL_ARGS);
     }
     if (which < f.nativeHeads.size()) {
-        static std::mutex making;
-        std::lock_guard<std::mutex> hold(making);
-        // 1: made the first time; 3: made again, its regions dropped past their misses' limit (2026-11-16).
-        if (f.nativeArrivals[which] == 1 || f.nativeArrivals[which] == 3) {
-            std::vector<FunctionProto::NativeRegion> made;
-            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size(), &VM::noMemberForRegion, this};
-            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), head, made);
-            nativeGlobalsSeen = GlobalsSeen{};
-            auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
-            // (Less those dropped: one made again has the same ways in, found first otherwise.)
-            if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
-                for (const FunctionProto::NativeRegion& r : *now)
-                    if (*r.misses < kNativeMissLimit) list->push_back(r);
-            list->insert(list->end(), made.begin(), made.end());
-            f.regionsNow.store(list.get(), std::memory_order_release);
-            f.regionLists.push_back(std::move(list));
-            uint8_t* const run = const_cast<uint8_t*>(code);
-            const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
-            std::memcpy(run + head, &own, kThreaded);
-            const TailFn enter = TailTable::nativeEntry();
-            for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
-            f.nativeArrivals[which] = f.nativeArrivals[which] == 3 ? 4 : 2;
-        }
+        std::unique_lock<std::mutex> states(nativeStates);
+        // 1: made the first time; 3: made again, its regions dropped past their misses' limit
+        // (2026-11-16). (5 and 6: being made by the builder, the head its own instruction.)
+        if (f.nativeArrivals[which] == 1 || f.nativeArrivals[which] == 3) makeRegionsFor(f, head, which, states, base, sp);
     }
     // On at this instruction, as it is now addressed.
     ip -= kThreaded + kOpBytes;
@@ -7074,29 +7296,14 @@ WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
     FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
     uint8_t* const run = const_cast<uint8_t*>(code);
     {
-        static std::mutex making;
-        std::lock_guard<std::mutex> hold(making);
+        std::unique_lock<std::mutex> states(nativeStates);
         if (f.nativeCallHead != UINT32_MAX && f.nativeCalls >= kNativeCallsFirst && f.nativeCalls != UINT32_MAX) {
             f.nativeCalls = UINT32_MAX;  // made, or refused: never again
-            std::vector<FunctionProto::NativeRegion> made;
-            nativeGlobalsSeen = GlobalsSeen{globals_.data(), globals_.size(), &VM::noMemberForRegion, this};
-            if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(f, base, static_cast<int>(sp - base), f.nativeCallHead, made);
-            nativeGlobalsSeen = GlobalsSeen{};
             for (uint32_t at : f.nativeReturns) {
                 const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))];
                 std::memcpy(run + at, &own, kThreaded);
             }
-            if (!made.empty()) {
-                auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
-                if (const auto* now = f.regionsNow.load(std::memory_order_acquire))  // (less those dropped)
-                    for (const FunctionProto::NativeRegion& r : *now)
-                        if (*r.misses < kNativeMissLimit) list->push_back(r);
-                list->insert(list->end(), made.begin(), made.end());
-                f.regionsNow.store(list.get(), std::memory_order_release);
-                f.regionLists.push_back(std::move(list));
-                const TailFn enter = TailTable::nativeEntry();
-                for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
-            }
+            makeRegionsFor(f, f.nativeCallHead, kWholeFunction, states, base, sp);
         }
     }
     ip -= kThreaded + kOpBytes;
@@ -7231,6 +7438,10 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
 #undef RUN_BASE
 #undef LABEL
 #undef JUMP_LABEL
+#endif
+#if !WW_TAIL_CALLS
+void VM::markWaitingBuilds() {}
+void VM::dropWaitingBuilds() {}
 #endif
 
 #undef LOAD_FRAME
@@ -7923,6 +8134,7 @@ void VM::collectGarbage() {
     for (const Value& task : loopTasks_) markValue(task);
     for (const Timer& timer : timers_) markValue(timer.task);
     for (const Value& global : globals_) markValue(global);
+    markWaitingBuilds();
     for (const Table& table : typeExtensions_) markTable(table);
     for (const std::deque<BuiltinFit>& fits : builtinFits_)
         for (const BuiltinFit& fit : fits) {

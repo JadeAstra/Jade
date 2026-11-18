@@ -1326,8 +1326,10 @@ void threadCode(FunctionProto& f, size_t opBytes) {
 
 void (*writeRunAddresses)(FunctionProto& f) = nullptr;
 bool (*findNativeLoops)(FunctionProto& f) = nullptr;
-void (*makeNativeRegions)(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made) = nullptr;
-GlobalsSeen nativeGlobalsSeen;
+void (*makeNativeRegions)(FunctionProto& f, const NativeSeen& seen, uint32_t head, std::vector<FunctionProto::NativeRegion>& made) = nullptr;
+std::unique_ptr<NativeSeen> (*takeNativeSeen)(const FunctionProto& f, const Value* frame, int frameSlots, const Value* globals, size_t globalCount, NoMemberFn noMember,
+                                              const void* vm) = nullptr;
+void (*dropNativeBuildsOf)(const std::vector<std::unique_ptr<FunctionProto>>& owned) = nullptr;
 
 void runLater(FunctionProto& f) {
     std::vector<uint8_t> run(kThreaded, 0);

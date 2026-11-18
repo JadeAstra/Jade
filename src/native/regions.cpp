@@ -35,6 +35,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../bytecode.h"
@@ -489,43 +490,61 @@ struct Region {
 
     explicit Region(const FunctionProto& fn) : f(fn) {}
 
-    // The slots of the call the regions are made in (VM::nativeFirst), or null: the list in a slot
-    // there says what a list read from that slot is likely to hold. A guess the steps check.
-    // Only the slots below the VM's top are read: those above may hold values the collector
-    // has freed since.
-    const Value* frame = nullptr;
-    int frameSlots = 0;
+    // What the program held as the regions were asked for (VM::nativeFirst): the slots of the
+    // call they are made in, its globals, and what the lists, objects and iterators held there
+    // held. The list in a slot says what a list read from that slot is likely to hold: a guess
+    // the steps check. Nothing of the program's own is read but through it (2026-11-17: the
+    // making may run on another core as the program goes on, background-plan.html); its objects'
+    // kinds (Obj::type, which never changes) are read, the collector keeping them meanwhile.
+    const NativeSeen* seen = nullptr;
+    // The frame's slot, as it was; null where it is not known.
+    const Value* frameAt(int slot) const {
+        if (seen == nullptr || slot < 0 || static_cast<size_t>(slot) >= seen->frame.size() || slot >= f.maxStack) return nullptr;
+        return &seen->frame[static_cast<size_t>(slot)];
+    }
+    // The list an object is, as it was (a Value holding it, or a Ref into it); null for any other.
+    const NativeSeen::List* listAt(const Obj* o) const {
+        if (seen == nullptr || o == nullptr) return nullptr;
+        auto it = seen->lists.find(o);
+        return it == seen->lists.end() ? nullptr : &it->second;
+    }
+    const NativeSeen::List* listOf(const Value& v) const { return v.isObjType(ObjType::List) ? listAt(v.as.obj) : nullptr; }
+    const NativeSeen::List* listOf(const Value* v) const { return v != nullptr ? listOf(*v) : nullptr; }
+    // The source of an iterator, as it was; null for any other.
+    const Value* sourceOf(const Value& v) const {
+        if (seen == nullptr || !v.isObjType(ObjType::Iterator)) return nullptr;
+        auto it = seen->iterated.find(v.as.obj);
+        return it == seen->iterated.end() ? nullptr : &it->second;
+    }
     // What a number in the frame's slot is now, where the region is made: CI, CF, or -1.
     int numberClass(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
-        const Value& v = frame[slot];
-        return v.isInt() ? CI : v.isFloat() ? CF : -1;
+        const Value* v = frameAt(slot);
+        if (v == nullptr) return -1;
+        return v->isInt() ? CI : v->isFloat() ? CF : -1;
     }
     // What a list (or bytes) holds: CI, CF, or -1 (not one, or of values).
-    static int listClass(const Value& v) {
+    int listClass(const Value& v) const {
         if (v.isObjType(ObjType::Bytes)) return CI;
-        if (!v.isObjType(ObjType::List) || !asList(v)->packed()) return -1;
-        if (asList(v)->pack->nullable) return -1;  // items that may be null: read by the VM (each step reading it would leave, 2026-11-16)
-        const ListStore store = asList(v)->store();
-        if (store == ListStore::Narrow && asList(v)->pack->narrow == Narrow::Byte) return CI;  // a List<byte>, read as bytes are
-        return store == ListStore::Floats ? CF : store == ListStore::Ints ? CI : -1;
+        const NativeSeen::List* l = listOf(v);
+        if (l == nullptr || !l->packed) return -1;
+        if (l->nullable) return -1;  // items that may be null: read by the VM (each step reading it would leave, 2026-11-16)
+        if (l->store == ListStore::Narrow && l->narrow == Narrow::Byte) return CI;  // a List<byte>, read as bytes are
+        return l->store == ListStore::Floats ? CF : l->store == ListStore::Ints ? CI : -1;
     }
     // What the list in a slot holds, in the call the region is made in: read by the region from a
     // field (fieldLists), what that field holds; otherwise the frame's slot.
     int frameClass(int slot) const {
         if (auto it = fieldLists.find(slot); it != fieldLists.end() && it->second >= 0) return it->second;
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return -1;
-        return listClass(frame[slot]);
+        const Value* v = frameAt(slot);
+        return v == nullptr ? -1 : listClass(*v);
     }
     // Whether the frame's slot holds a list kept as values, or packed ints, floats or bools any of
     // which may be null, where the region is made: what idxv reads (2026-11-16).
     bool frameValues(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
-        const Value& v = frame[slot];
-        if (!v.isObjType(ObjType::List)) return false;
-        if (!asList(v)->packed()) return true;
-        const ListStore store = asList(v)->store();
-        return store == ListStore::Ints || store == ListStore::Floats || store == ListStore::Bools;
+        const NativeSeen::List* l = listOf(frameAt(slot));
+        if (l == nullptr) return false;
+        if (!l->packed) return true;
+        return l->store == ListStore::Ints || l->store == ListStore::Floats || l->store == ListStore::Bools;
     }
     // Whether the frame's slot holds a map or a set, or an iterator through one, where the region is
     // made: no list step is made for it, which would miss each time (2026-11-16, sets-maps-plan
@@ -546,29 +565,28 @@ struct Region {
         if (slot < 0) return false;
         const Value* v = knownValue(s, slot);
         if (v == nullptr) return false;
-        if (v->isObjType(ObjType::Iterator)) v = &asIterator(*v)->source;
-        return v->isObjType(ObjType::Map) || v->isObjType(ObjType::Set);
+        if (v->isObjType(ObjType::Iterator)) v = sourceOf(*v);
+        return v != nullptr && (v->isObjType(ObjType::Map) || v->isObjType(ObjType::Set));
     }
     // Whether the frame's slot holds packed ints, floats or bools that may be null (setnullat).
     bool frameNullable(int slot) const {
         if (!frameValues(slot)) return false;
-        const ObjList* const list = asList(frame[slot]);
-        return list->packed() && list->pack->nullable;
+        const NativeSeen::List* l = listOf(frameAt(slot));
+        return l->packed && l->nullable;
     }
     // Whether the frame's slot holds a packed list whose items may be null, or an iterator through
     // one: never looked at once (its steps read the bits; a template would not).
     bool frameMayHoldNull(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
-        const Value* v = &frame[slot];
-        if (v->isObjType(ObjType::Iterator)) v = &asIterator(*v)->source;
-        return v->isObjType(ObjType::List) && asList(*v)->packed() && asList(*v)->pack->nullable;
+        const Value* v = frameAt(slot);
+        if (v != nullptr && v->isObjType(ObjType::Iterator)) v = sourceOf(*v);
+        const NativeSeen::List* l = listOf(v);
+        return l != nullptr && l->packed && l->nullable;
     }
     // Whether the frame's slot holds a List<bool> (packed, none null) where the region is made
     // (2026-11-15: its items read into the flag register and set from it; the steps check it).
     bool frameBools(int slot) const {
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return false;
-        const Value& v = frame[slot];
-        return v.isObjType(ObjType::List) && asList(v)->packed() && asList(v)->store() == ListStore::Bools && !asList(v)->pack->nullable;
+        const NativeSeen::List* l = listOf(frameAt(slot));
+        return l != nullptr && l->packed && l->store == ListStore::Bools && !l->nullable;
     }
     // What the list in a field holds, where the region is made: the field of the object in slot
     // `objSlot` (as the frame holds it) where the place's cache says, if the cache saw that
@@ -596,15 +614,13 @@ struct Region {
     // where they are kept in the value itself (a Color) with no type of their own; null for any other.
     // With `where`, of a list of any value type's items (any of them null), read where they are.
     const ObjClass* iteratedClass(int itSlot, bool where = false) const {
-        if (frame == nullptr || itSlot < 0 || itSlot >= frameSlots || itSlot >= f.maxStack) return nullptr;
-        const Value& v = frame[itSlot];
-        if (!v.isObjType(ObjType::Iterator)) return nullptr;
-        const Value& source = asIterator(v)->source;
-        if (!source.isObjType(ObjType::List) || asList(source)->store() != ListStore::Items) return nullptr;
-        const PackedItems& pack = *asList(source)->pack;
-        const ObjClass* const cls = pack.itemClass;
+        const Value* v = frameAt(itSlot);
+        if (v == nullptr || !v->isObjType(ObjType::Iterator)) return nullptr;
+        const NativeSeen::List* pack = listOf(sourceOf(*v));
+        if (pack == nullptr || pack->store != ListStore::Items) return nullptr;
+        const ObjClass* const cls = pack->itemClass;
         if (where) return cls;  // any of them null too (2026-11-16): null where it is, as the VM's IterNextRef gives it
-        if (cls == nullptr || cls->smallId == 0 || pack.itemType != nullptr || pack.typeSlot != 0) return nullptr;
+        if (cls == nullptr || cls->smallId == 0 || pack->itemType != nullptr || pack->typeSlot != 0) return nullptr;
         const ValueLayout* const layout = cls->layout.load(std::memory_order_acquire);
         return layout != nullptr && layout->size <= 8 ? cls : nullptr;
     }
@@ -614,10 +630,10 @@ struct Region {
         if (ending_.size() != ins.size()) ending_ = endingRuns(static_cast<int>(ins.size()), [&](int k) { return ins[static_cast<size_t>(k)].op; });
         return i >= 0 && static_cast<size_t>(i) < ending_.size() && ending_[static_cast<size_t>(i)];
     }
-    // What global `k` holds as the region is made (nativeGlobalsSeen); null where not known.
-    static const Value* globalSeen(int k) {
-        if (nativeGlobalsSeen.values == nullptr || k < 0 || static_cast<size_t>(k) >= nativeGlobalsSeen.count) return nullptr;
-        return nativeGlobalsSeen.values + k;
+    // What global `k` held as the regions were asked for (NativeSeen::globals); null where not known.
+    const Value* globalSeen(int k) const {
+        if (seen == nullptr || k < 0 || static_cast<size_t>(k) >= seen->globals.size()) return nullptr;
+        return &seen->globals[static_cast<size_t>(k)];
     }
     // The class an RCall at `i` makes a value of from its header alone, as the VM's RCall does at
     // once, where slot `callee` holds it as the region is made: kept in the value itself, every
@@ -708,20 +724,18 @@ struct Region {
     }
     // Whether the frame's iterator in slot `itSlot` goes through a list of a value type's items.
     bool iteratesItems(int itSlot) const {
-        if (frame == nullptr || itSlot < 0 || itSlot >= frameSlots || itSlot >= f.maxStack) return false;
-        const Value& v = frame[itSlot];
-        if (!v.isObjType(ObjType::Iterator)) return false;
-        const Value& source = asIterator(v)->source;
-        return source.isObjType(ObjType::List) && asList(source)->store() == ListStore::Items;
+        const Value* v = frameAt(itSlot);
+        if (v == nullptr || !v->isObjType(ObjType::Iterator)) return false;
+        const NativeSeen::List* l = listOf(sourceOf(*v));
+        return l != nullptr && l->store == ListStore::Items;
     }
     // The value type of the items of the list the frame holds in slot `listSlot`, where it holds a
     // list of a value type's items; null for anything else.
     const ObjClass* itemsClass(const State& s, int listSlot) const {
         if (const Fact* known = factOf(s, listSlot); known != nullptr && known->items != nullptr) return known->items;
-        if (frame == nullptr || listSlot < 0 || listSlot >= frameSlots || listSlot >= f.maxStack) return nullptr;
-        const Value& v = frame[listSlot];
-        if (!v.isObjType(ObjType::List) || asList(v)->store() != ListStore::Items) return nullptr;
-        return asList(v)->pack->itemClass;
+        const NativeSeen::List* l = listOf(frameAt(listSlot));
+        if (l == nullptr || l->store != ListStore::Items) return nullptr;
+        return l->itemClass;
     }
     // What the region knows a slot holds on the way to a step (K::fact): a value of a value type,
     // made or read there, of that type (an item read: a Ref or a Small value, B1); an object read
@@ -791,15 +805,18 @@ struct Region {
     }
     const ObjClass* valueClass(const State& s, int slot) const {
         if (const Fact* known = factOf(s, slot); known != nullptr && known->value != nullptr) return known->value;
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return nullptr;
-        const Value& v = frame[slot];
-        if (v.isSmall()) return smallClassOf(v);
-        if (v.isRef() && v.refDepth == 0 && v.refOffset == 0 && v.as.obj->type == ObjType::List && asList(v)->store() == ListStore::Items)
-            return asList(v)->pack->itemClass;
+        const Value* at = frameAt(slot);
+        if (at == nullptr) return nullptr;
+        const Value& v = *at;
+        if (v.isSmall()) return seen->frameSmall[static_cast<size_t>(slot)];
+        if (v.isRef() && v.refDepth == 0 && v.refOffset == 0 && v.as.obj->type == ObjType::List) {
+            const NativeSeen::List* l = listAt(v.as.obj);
+            return l != nullptr && l->store == ListStore::Items ? l->itemClass : nullptr;
+        }
         // A value in a place of a frame's (made where a call leaves it, 2026-11-13).
         if (v.isRef() && v.refDepth == 0 && v.refOffset == 0 && v.as.obj->type == ObjType::Places) {
-            const ObjPlace* place = static_cast<const ObjPlace*>(v.as.obj);
-            if (place->type == nullptr) return place->cls;
+            auto place = seen->places.find(v.as.obj);
+            if (place != seen->places.end() && place->second.type == nullptr) return place->second.cls;
         }
         return nullptr;
     }
@@ -816,12 +833,9 @@ struct Region {
     // items in slot `listSlot` and the place's cache knows the field: its class in `cls`. Null for
     // anything else.
     const ValueField* itemField(int listSlot, int cache, int32_t slow, const ObjClass*& cls) const {
-        if (frame == nullptr || listSlot < 0 || listSlot >= frameSlots || listSlot >= f.maxStack) return nullptr;
-        const Value& v = frame[listSlot];
-        if (!v.isObjType(ObjType::List)) return nullptr;
-        const ObjList* list = asList(v);
-        if (list->store() != ListStore::Items || list->pack->itemClass == nullptr) return nullptr;
-        const ObjClass* const c = list->pack->itemClass;
+        const NativeSeen::List* list = listOf(frameAt(listSlot));
+        if (list == nullptr || list->store != ListStore::Items || list->itemClass == nullptr) return nullptr;
+        const ObjClass* const c = list->itemClass;
         const ValueField* const field = fieldOf(c, cache, slow);
         if (field != nullptr) cls = c;
         return field;
@@ -865,19 +879,27 @@ struct Region {
         if (known == nullptr) return false;
         const Value& v = *known;
         if (!v.isObjType(ObjType::Instance) || f.caches == nullptr || cache < 0 || cache >= static_cast<int>(f.cacheCount)) return false;
-        const uint64_t seen = f.caches[cache].load(std::memory_order_relaxed);
-        const ObjInstance* const inst = asInstance(v);
-        if (seen == 0) {
+        const uint64_t cached = f.caches[cache].load(std::memory_order_relaxed);
+        auto found = seen->instances.find(v.as.obj);
+        if (found == seen->instances.end()) return false;
+        const NativeSeen::Instance& inst = found->second;
+        if (cached == 0) {
+            // ObjInstance::field, as the object was.
             const ObjString* const name = slowName(slow);
-            const Value* const field = name == nullptr ? nullptr : inst->field(name);
-            if (field == nullptr) return false;
-            out = *field;
-            return true;
+            if (name == nullptr) return false;
+            for (const auto& [named, slot] : inst.slots) {
+                if (named != name) continue;
+                const size_t at = inst.slotsStart + static_cast<size_t>(slot) * sizeof(Value);
+                if (slot < 0 || at + sizeof(Value) > inst.bytes.size()) return false;
+                std::memcpy(static_cast<void*>(&out), inst.bytes.data() + at, sizeof(Value));
+                return out.kind != ValueKind::Undefined;
+            }
+            return false;
         }
-        if ((seen & 0x80) != 0 || static_cast<uint32_t>(seen >> 32) != inst->shape) return false;
-        const size_t at = static_cast<size_t>((seen >> 16) & 0xFFFF);
-        if (at < sizeof(ObjInstance)) return false;
-        std::memcpy(static_cast<void*>(&out), reinterpret_cast<const uint8_t*>(inst) + at, sizeof(Value));
+        if ((cached & 0x80) != 0 || static_cast<uint32_t>(cached >> 32) != inst.shape) return false;
+        const size_t at = static_cast<size_t>((cached >> 16) & 0xFFFF);
+        if (at < sizeof(ObjInstance) || at + sizeof(Value) > inst.bytes.size()) return false;
+        std::memcpy(static_cast<void*>(&out), inst.bytes.data() + at, sizeof(Value));
         return true;
     }
     // What a slot holds where the region is made: what a field or global read in the region held
@@ -890,8 +912,7 @@ struct Region {
     }
     const Value* knownValue(const State& s, int slot) const {
         if (const Fact* known = factOf(s, slot); known != nullptr && known->hasObject) return &known->object;
-        if (frame == nullptr || slot < 0 || slot >= frameSlots || slot >= f.maxStack) return nullptr;
-        return &frame[slot];
+        return frameAt(slot);
     }
 
     // The address of a place's cache (GetProp's and the like), which the stencils read as the VM
@@ -1530,12 +1551,12 @@ struct Region {
     // where the VM does the instruction otherwise. Anything else, the instruction the VM's.
     void noMemberHere(Ctx& c, int nameAt) {
         const Value& name = constant(nameAt);
-        const GlobalsSeen& seen = nativeGlobalsSeen;
-        if (!name.isObjType(ObjType::String) || seen.noMember == nullptr || frame == nullptr || frameSlots < 1 || c.s.kind(0).bits != kEntry ||
-            hasImplicitFirst())
-            island();
-        const Value& self = frame[0];
-        if (!(self.isObjType(ObjType::Instance) || self.isObjType(ObjType::Value)) || !seen.noMember(seen.vm, f, asString(name), self)) island();
+        const Value* const held = frameAt(0);
+        if (!name.isObjType(ObjType::String) || held == nullptr || c.s.kind(0).bits != kEntry || hasImplicitFirst()) island();
+        const Value& self = *held;
+        bool none = false;  // (as VM::noMemberForRegion found it, as the regions were asked for)
+        for (const auto& [named, no] : seen->noMember) none = none || (named == asString(name) && no);
+        if (!(self.isObjType(ObjType::Instance) || self.isObjType(ObjType::Value)) || !none) island();
         LOp& check = c.op("nomember");
         check.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(classOf(self)));
         check.ret = static_cast<int64_t>(tableKeysChanged.load(std::memory_order_relaxed));
@@ -1745,11 +1766,9 @@ struct Region {
                 const int list = c.objectSlot(at);
                 // The list the frame holds as the region is made: one of another class's items
                 // would leave every time (a miss each): the VM's at once. One that may hold null is added to, 2026-11-16.
-                if (frame != nullptr && list < frameSlots && list < f.maxStack) {
-                    const Value& held = frame[list];
-                    if (!held.isObjType(ObjType::List) || asList(held)->store() != ListStore::Items ||
-                        asList(held)->pack->itemClass != cls)
-                        island();
+                if (const Value* const held = frameAt(list)) {
+                    const NativeSeen::List* const l = listOf(*held);
+                    if (l == nullptr || l->store != ListStore::Items || l->itemClass != cls) island();
                 }
                 const Reg acc{kScratchI, CI};
                 c.op("setik", {acc}, {}, {acc}).ki = 0;
@@ -1788,10 +1807,9 @@ struct Region {
                     // step checks the list, as the frame shows it here); null as it is.
                     const int list = ref->second;
                     const ObjClass* const cls = itemsClass(s, list);
-                    if (cls == nullptr || frame == nullptr || list >= frameSlots || list >= f.maxStack || !frame[list].isObjType(ObjType::List)) island();
-                    const ObjList* const held = asList(frame[list]);
-                    if (!held->packed() || held->pack->itemClass != cls || held->pack->itemType != nullptr || held->pack->typeSlot != 0 ||
-                        held->pack->width > ObjPlace::kBytes)
+                    const NativeSeen::List* const held = listOf(frameAt(list));
+                    if (cls == nullptr || held == nullptr) island();
+                    if (!held->packed || held->itemClass != cls || held->itemType != nullptr || held->typeSlot != 0 || held->width > ObjPlace::kBytes)
                         island();
                     if (slot != top) c.writeMemory(slot);
                     LOp& l = c.op("setplaceref");
@@ -1956,7 +1974,7 @@ struct Region {
                     c.leaves(*l);
                     c.write(a, K{kMem});  // written by the step, after its way out
                     // What it likely holds: the frame's list's first item (a string, whose size is read next).
-                    if (const ObjList* const held = asList(frame[list]); !held->packed() && held->size() > 0) noteFieldValue(s, a, held->values()[0]);
+                    if (const NativeSeen::List* const held = listOf(frameAt(list)); held != nullptr && !held->packed && held->size > 0) noteFieldValue(s, a, held->first);
                     s.top = u8(x, 3);
                     c.fall(s);
                     return;
@@ -2349,8 +2367,8 @@ struct Region {
                     c.leaves(l);
                     noteFact(s, top - 1, [&](Fact& f) { f.from = c.i; });
                     noteFieldValue(s, top - 1, held);
-                    if (held.isObjType(ObjType::List) && asList(held)->store() == ListStore::Items && asList(held)->pack->itemClass != nullptr)
-                        noteItems(s, top - 1, asList(held)->pack->itemClass);
+                    if (const NativeSeen::List* const l = listOf(held); l != nullptr && l->store == ListStore::Items && l->itemClass != nullptr)
+                        noteItems(s, top - 1, l->itemClass);
                     c.fall(s);
                     return;
                 }
@@ -2628,7 +2646,7 @@ struct Region {
                 const int it = c.objectSlot(u16(x, 0));
                 const int top = s.top;
                 const Value* const held = knownValue(s, it);
-                if (held == nullptr || !held->isObjType(ObjType::Iterator) || !asIterator(*held)->source.isObjType(ObjType::Map)) island();
+                if (held == nullptr || sourceOf(*held) == nullptr || !sourceOf(*held)->isObjType(ObjType::Map)) island();
                 const State none = s;
                 c.writeMemory(top);
                 c.writeMemory(top + 1);
@@ -2651,7 +2669,7 @@ struct Region {
                     // a map's keys, by its table (part 3, iterkey); over a map itself (its entries,
                     // made) the VM's.
                     const Value* const held = knownValue(s, it);
-                    if (held == nullptr || !held->isObjType(ObjType::Iterator) || !asIterator(*held)->source.isObjType(ObjType::Set)) island();
+                    if (held == nullptr || sourceOf(*held) == nullptr || !sourceOf(*held)->isObjType(ObjType::Set)) island();
                     const State none = s;
                     c.writeMemory(top);
                     LOp& l = c.op("iterkey");
@@ -2704,9 +2722,9 @@ struct Region {
                 if (cls < 0) cls = useClass(c.i, top, top + 1, 0, true);
                 // A list the frame's iterator goes through whose items are no such numbers (2026-11-16: a
                 // List<string> whose items are used as keys): read as values (iterv), not guessed.
-                if (cls >= 0 && frame != nullptr && it < frameSlots && it < f.maxStack && frame[it].isObjType(ObjType::Iterator)) {
-                    const Value& source = asIterator(frame[it])->source;
-                    if (source.isObjType(ObjType::List) && asList(source)->store() != (cls == CF ? ListStore::Floats : ListStore::Ints)) cls = -1;
+                if (const Value* const iter = frameAt(it); cls >= 0 && iter != nullptr && iter->isObjType(ObjType::Iterator)) {
+                    const NativeSeen::List* const source = listOf(sourceOf(*iter));
+                    if (source != nullptr && source->store != (cls == CF ? ListStore::Floats : ListStore::Ints)) cls = -1;
                 }
                 const State none = s;  // no more: nothing pushed
                 LOp* l;
@@ -2792,8 +2810,8 @@ struct Region {
                     }
                     if (Value field; fieldValue(s, obj, u16(x, 4), i32(x, 6), field)) {
                         if (field.kind == ValueKind::Obj) noteFieldValue(s, a, field);
-                        if (field.isObjType(ObjType::List) && asList(field)->store() == ListStore::Items && asList(field)->pack->itemClass != nullptr)
-                            noteItems(s, a, asList(field)->pack->itemClass);
+                        if (const NativeSeen::List* const l = listOf(field); l != nullptr && l->store == ListStore::Items && l->itemClass != nullptr)
+                            noteItems(s, a, l->itemClass);
                     }
                 }
                 l->slot = obj;
@@ -7987,7 +8005,7 @@ int functionHead(int count, MayDo mayDoAt, Ends endsAt, TargetOf targetOf, const
     return -1;
 }
 
-void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
+void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
 
 // A function's run code read as instructions, with where each starts -> its place.
 std::vector<Ins> readRun(const FunctionProto& f, std::unordered_map<uint32_t, int>* index) {
@@ -8045,6 +8063,8 @@ double phaseTimes[4] = {};  // each phase's time, for WW_TIME_NATIVE
 double registerTimes[4] = {};
 long spillCount = 0;
 long refusals = 0;
+double seenTime = 0;  // taking what the program holds (takeSeen), on the core running it
+long seenObjects = 0;
 double setupTime = 0;
 struct NativeTimes {
     double seconds = 0;
@@ -8055,13 +8075,14 @@ struct NativeTimes {
             std::fprintf(stderr, "  of registers: colouring %.1f, spilling %.1f, liveness again %.1f ms (%ld spills); the code made %.1f ms\n", registerTimes[0] * 1000,
                          registerTimes[1] * 1000, registerTimes[2] * 1000, spillCount, registerTimes[3] * 1000);
         }
+        if (std::getenv("WW_TIME_NATIVE") != nullptr) std::fprintf(stderr, "  what the program held, taken: %.2f ms, %ld objects\n", seenTime * 1000, seenObjects);
         if (std::getenv("WW_TIME_NATIVE") != nullptr) std::fprintf(stderr, "native code: %ld functions, %.1f ms making regions\n", functions, seconds * 1000);
     }
 } nativeTimes;
 
-void makeRegions(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
+void makeRegions(FunctionProto& f, const NativeSeen& seen, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     const auto start = std::chrono::steady_clock::now();
-    makeRegionsTimed(f, frame, frameSlots, head, out);
+    makeRegionsTimed(f, seen, head, out);
     const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     nativeTimes.seconds += took;
     static const bool each = std::getenv("WW_TIME_NATIVE") != nullptr && std::string(std::getenv("WW_TIME_NATIVE")) == "each";
@@ -8069,7 +8090,7 @@ void makeRegions(FunctionProto& f, const Value* frame, int frameSlots, uint32_t 
     nativeTimes.functions++;
 }
 
-void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
+void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, std::vector<FunctionProto::NativeRegion>& out) {
     if (!enabled()) return;
     const auto setupStart = std::chrono::steady_clock::now();
     std::unordered_map<uint32_t, int> index;
@@ -8148,8 +8169,7 @@ void makeRegionsTimed(FunctionProto& f, const Value* frame, int frameSlots, uint
         std::set<int> intLists, memorySlots;
         for (int attempt = 0; attempt < 4; attempt++) {
         Region r(f);
-        r.frame = frame;
-        r.frameSlots = frameSlots;
+        r.seen = &seen;
         r.tops = tops;
         r.intLists = intLists;
         r.memorySlots = memorySlots;
@@ -8292,8 +8312,142 @@ bool findLoops(FunctionProto& f) {
     return !f.nativeHeads.empty() || f.nativeCallHead != UINT32_MAX;
 }
 
+// What the program holds, taken for `f`'s regions on the core running it, before they are made
+// (2026-11-17, background-plan.html): the frame's live slots and the globals as they are, and
+// what the making reads of the objects in them, followed as the function's code may follow
+// them: a list's first item (a list of values), an iterator's source, an object's fields of
+// the names among its constants. At most kSeenObjects objects are read so; one past that is
+// known as nothing (its region guesses less).
+constexpr size_t kSeenObjects = 4096;
+constexpr int kSeenDepth = 12;
+
+std::unique_ptr<NativeSeen> takeSeen(const FunctionProto& f, const Value* frame, int frameSlots, const Value* globals, size_t globalCount,
+                                     NoMemberFn noMember, const void* vm) {
+    auto made = std::make_unique<NativeSeen>();
+    const auto started = std::chrono::steady_clock::now();
+    NativeSeen& s = *made;
+    // What the function's code reads: fields by name (GetProp, GetOwn: the slow ways of the R
+    // instructions too), globals, bare names (GetImplicit, InvokeImplicit).
+    std::vector<const ObjString*> names, bare;
+    std::vector<int> read;
+    auto nameAt = [&](int k) -> const ObjString* {
+        return k >= 0 && static_cast<size_t>(k) < f.constants.size() && f.constants[static_cast<size_t>(k)].isObjType(ObjType::String)
+                   ? asString(f.constants[static_cast<size_t>(k)])
+                   : nullptr;
+    };
+    auto add = [](std::vector<const ObjString*>& to, const ObjString* name) {
+        if (name != nullptr && std::find(to.begin(), to.end(), name) == to.end()) to.push_back(name);
+    };
+    for (const Ins& x : readRun(f, nullptr)) {
+        if (x.op == Op::GetProp || x.op == Op::GetOwn) add(names, nameAt(u16(x, 0)));
+        if (x.op == Op::RGetGlobal) read.push_back(u16(x, 3));
+        if (x.op == Op::GetImplicit || x.op == Op::InvokeImplicit) {
+            read.push_back(u16(x, 2));
+            add(bare, nameAt(u16(x, 0)));
+        }
+    }
+    std::unordered_set<const Obj*> met;
+    auto keep = [&](const Obj* o) {
+        if (o != nullptr) s.roots.push_back(Value::object(const_cast<Obj*>(o)));
+    };
+    std::function<void(const Value&, int)> follow = [&](const Value& v, int depth) {
+        const bool ref = v.kind == ValueKind::Ref && v.refDepth == 0 && v.refOffset == 0;
+        if ((v.kind != ValueKind::Obj && !ref) || v.as.obj == nullptr) return;
+        Obj* const o = v.as.obj;
+        if (met.size() >= kSeenObjects || !met.insert(o).second) return;
+        s.roots.push_back(v);
+        switch (o->type) {
+            case ObjType::List: {
+                const ObjList* const l = static_cast<const ObjList*>(o);
+                NativeSeen::List& seen = s.lists[o];
+                seen.store = l->store();
+                seen.packed = l->packed();
+                seen.size = l->size();
+                if (l->packed()) {
+                    const PackedItems& p = *l->pack;
+                    seen.nullable = p.nullable;
+                    seen.narrow = p.narrow;
+                    seen.itemClass = p.itemClass;
+                    seen.itemType = p.itemType;
+                    seen.typeSlot = p.typeSlot;
+                    seen.width = p.width;
+                    keep(p.itemClass);
+                    keep(p.itemType);
+                } else if (seen.size > 0) {
+                    seen.first = l->values()[0];
+                    if (depth < kSeenDepth) follow(seen.first, depth + 1);
+                }
+                break;
+            }
+            case ObjType::Iterator: {
+                if (ref) break;
+                const Value source = static_cast<const ObjIterator*>(o)->source;
+                s.iterated[o] = source;
+                if (depth < kSeenDepth) follow(source, depth + 1);
+                break;
+            }
+            case ObjType::Instance: {
+                if (ref) break;
+                const ObjInstance* const inst = static_cast<const ObjInstance*>(o);
+                NativeSeen::Instance& seen = s.instances[o];
+                seen.shape = inst->shape;
+                seen.slotsStart = inst->slotsStart;
+                const size_t end = inst->slotsStart + static_cast<size_t>(inst->fieldCount) * sizeof(Value);
+                seen.bytes.assign(reinterpret_cast<const uint8_t*>(inst), reinterpret_cast<const uint8_t*>(inst) + end);
+                keep(inst->cls);
+                // Every field's object kept (a cache may say any is read), those named followed.
+                for (uint32_t k = 0; k < inst->fieldCount; k++)
+                    if (inst->fields()[k].kind == ValueKind::Obj || inst->fields()[k].kind == ValueKind::Ref) s.roots.push_back(inst->fields()[k]);
+                for (const ObjString* name : names) {
+                    const int64_t slot = inst->fieldIndex(name);
+                    if (slot < 0) continue;
+                    seen.slots.emplace_back(name, slot);
+                    if (depth < kSeenDepth) follow(inst->fields()[slot], depth + 1);
+                }
+                break;
+            }
+            case ObjType::Places: {
+                const ObjPlace* const p = static_cast<const ObjPlace*>(o);
+                s.places[o] = NativeSeen::Place{p->type, p->cls};
+                keep(p->cls);
+                keep(p->type);
+                break;
+            }
+            case ObjType::Value:
+                if (!ref) keep(static_cast<const ObjValue*>(o)->cls);
+                break;
+            default:
+                break;
+        }
+    };
+    const int live = frame == nullptr ? 0 : std::max(0, std::min(frameSlots, f.maxStack));
+    s.frame.assign(frame, frame + live);
+    s.frameSmall.assign(static_cast<size_t>(live), nullptr);
+    for (int k = 0; k < live; k++) {
+        const Value& v = frame[k];
+        if (v.isSmall()) {
+            s.frameSmall[static_cast<size_t>(k)] = smallClassOf(v);
+            keep(smallClassOf(v));
+        }
+        follow(v, 0);
+    }
+    // The globals all, as they are; those the function reads (RGetGlobal, GetImplicit,
+    // InvokeImplicit) followed.
+    s.globals.assign(globals, globals + globalCount);
+    for (const int k : read)
+        if (static_cast<size_t>(k) < globalCount) follow(globals[k], 0);
+    // Whether each bare name is no member of the object the function runs on (noMemberHere).
+    if (noMember != nullptr && live > 0 && (frame[0].isObjType(ObjType::Instance) || frame[0].isObjType(ObjType::Value))) {
+        keep(frame[0].as.obj);
+        for (const ObjString* name : bare) s.noMember.emplace_back(name, noMember(vm, f, name, frame[0]));
+    }
+    seenTime += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    seenObjects += static_cast<long>(met.size());
+    return made;
+}
+
 #if WW_NATIVE
-const bool hooked = (findNativeLoops = &findLoops, makeNativeRegions = &makeRegions, true);
+const bool hooked = (findNativeLoops = &findLoops, makeNativeRegions = &makeRegions, takeNativeSeen = &takeSeen, true);
 #endif
 
 }  // namespace

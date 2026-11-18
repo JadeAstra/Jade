@@ -349,6 +349,10 @@ std::string typeText(uint8_t type, const std::string& className) {
     return text;
 }
 
+Program::~Program() {
+    if (dropNativeBuildsOf != nullptr) dropNativeBuildsOf(owned_);
+}
+
 FunctionProto* Program::newProto() {
     owned_.push_back(std::make_unique<FunctionProto>());
     return owned_.back().get();

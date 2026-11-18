@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: native code made on another core while the VM runs on</h1>
-<p class="lede">Written 2026-11-17, at the user's word ("look at background building first"), after the first call's cost of making regions was cut (0.9.5006, f1c0b48). Regions are still made on the core that runs the program, which stops while they are made: on the first GIF, 14 ms of its 50. Made on another core instead, the program would go on in the VM meanwhile and take the native code once it is ready. Measured below by a simulation; one spike and its gate; nothing built before the questions at the end are answered.</p>
+<p class="lede">Written 2026-11-17, at the user's word ("look at background building first"), after the first call's cost of making regions was cut (0.9.5006, f1c0b48). Regions are still made on the core that runs the program, which stops while they are made: on the first GIF, 14 ms of its 50. Made on another core instead, the program would go on in the VM meanwhile and take the native code once it is ready. Measured below by a simulation; one spike and its gate; nothing built before the questions at the end are answered. All four answered as recommended (2026-11-17). Built the same day: the first GIF 50 ms to 39.5, the same native code (<a href="#bp-built">below</a>).</p>
 <nav>
 <h2>Contents</h2>
 <ul>
@@ -97,6 +97,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><a href="#bp-reads">What the making reads of the running program</a></li>
 <li><a href="#bp-how">How it would go</a></li>
 <li><a href="#bp-spike">The spike and its gate</a></li>
+<li><a href="#bp-built">The spike, built: its gate reached</a></li>
 <li><a href="#bp-questions">Questions for the user</a></li>
 </ul>
 </nav>
@@ -147,6 +148,28 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <p><strong>Gate:</strong> the first GIF 41 ms or less (from 50); the calls after it, the kernels and <code>bench/run.ps1</code> no slower; ww.exe's start-up no slower.</p>
 <p>Then written into this page, timed, committed (a version a build) and reported; registers plan part B after, on the user's word.</p>
 
+<h2 id="bp-built">The spike, built: its gate reached (2026-11-17)</h2>
+<p>Built as planned, in 0.9.5007, with two changes from the plan found on the way:</p>
+<ul>
+<li><strong>The making reads more than the frame's slots.</strong> Beside the twenty readers, the analysis follows what the code reads: an object read from a field or a global is kept as a fact, and its own fields read in turn (<code>image.cells.cells</code>), as deep as the code goes. So what is taken (<code>NativeSeen</code>, <code>bytecode.h</code>; <code>takeSeen</code>, <code>regions.cpp</code>) follows the objects as the function's code may: from the frame's live slots and the globals the function reads (RGetGlobal, GetImplicit, InvokeImplicit), a list's first item (a list of values), an iterator's source, an object's fields whose names the function reads (GetProp, GetOwn, their slow ways too), at most 4,096 objects and 12 deep. A list as its store, kind of item, width and length; an object as its bytes to its slots' end and the slot of each name; a variable's place as its type and class; whether each bare name is a member of <code>this</code>. Every object it names kept from the collector (<code>roots</code>, VM::markWaitingBuilds) until the build is made. The making reads only that, in place too, so the code is the same either way.</li>
+<li><strong>Two locks.</strong> One lock at first, for both the loops' states and the making: a core coming to its next loop waited for the builder's build to hand its own on (the first GIF 46 ms). Now the making has its own lock, and a core takes the short one only (<code>nativeStates</code>): 39.5.</li>
+</ul>
+<p>And one fault found by the suite in the background, fixed: a program goes before its VM (run.cpp, command.cpp declare it after), so the builder could still be putting regions into its functions as they were freed (six tests crashed as they ended). A program now drops the builds of its functions as it ends, waiting for one under way (<code>~Program</code>, Builder::dropFunctions); a VM drops those it asked for, which read its objects, and a loop's is asked for again by the next core to start the loop (cores share functions).</p>
+<div class="table"><table>
+<thead><tr><th>The first GIF (1000 by 1000, a fresh process)</th><th class="num">ms</th></tr></thead>
+<tbody>
+<tr><td>Before (0.9.5006)</td><td class="num">49.4–54.2</td></tr>
+<tr><td>Now, made in place (<code>WW_NATIVE_BACKGROUND=0</code>)</td><td class="num">49.0–52.0</td></tr>
+<tr><td>Now, made in the background</td><td class="num">38.9–42.2</td></tr>
+<tr><td>What was taken, all 32 builds</td><td class="num">0.64 (320 objects)</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>The same code:</strong> every test's native code dumped and sorted: made from what was taken, in place, the same as 0.9.5006's from the frame on all 400 tests (2,182 regions), the 11 kernels and the GIF parts. Made by the builder while the program waits, the same but in two tests that run on several cores (<code>grid</code>, <code>parallel_tools</code>): one region made again past its misses' limit in place is not, the other core going on in the VM meanwhile.</li>
+<li><strong>The suite:</strong> Windows, every way, 1943 passed; copy-reads, thread stress, native results, interpret, background 524 each, GC stress 520, none failed. Linux 1601 passed (3 passed over), background 520. ASan: background 524 passed; in place 524 and the start-up budgets over (14.8 s to 1.6: the sanitizer's own slowness, as before). A program ending by <code>exit</code>, an error, or plainly with builds still waiting: eight runs each, clean.</li>
+<li><strong>Timed against 0.9.5006</strong> (pinned, best of three): the kernels, <code>bench/run.ps1</code> and the whole pictures even. One row twice as slow: <code>inkBox()</code> of a photo 1,000 times, 0.12 ms to 0.24, as its two regions (1.6 ms of making) are ready only some 1,500 calls in; the first 1,000 now take 0.48 ms to 2.16, the five rounds 1.5 to 2.6, but the row is the best round. Start-up the same (ww starting 23.3–23.5 ms to 23.9–24.3).</li>
+</ul>
+<p>Settings: <code>WW_NATIVE_BACKGROUND</code> (0 in place; <code>wait</code>, by the builder while the program waits), <code>WW_TRACE_BUILDS</code> (each build as it is asked for), and <code>WW_TIME_NATIVE</code> now says what taking cost. The test runner makes regions in place, and its <code>background</code> setting (in <code>--stress</code>) as programs do.</p>
+
 <h2 id="bp-questions">Questions for the user</h2>
 <p>Each with the recommendation and why.</p>
 
@@ -157,7 +180,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>The live frame, the analysis in place:</strong> the analysis (3.2 ms, the part that reads the frame) stays on the running core, the rest goes to the builder. Less to change; some 4 ms of the 11 kept.</li>
 </ul>
 <p><em>Recommended:</em> the facts. The readers are in one place, and the check above (in place against from the facts, the same code) shows if one is missed.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("go with the recommendations"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -167,7 +190,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Several</strong> (up to a quarter of the cores), each build on the first one free.</li>
 </ul>
 <p><em>Recommended:</em> one. Measured within 2 ms of no cost at all on the GIF; several would add the order between builds to think about, for little.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("go with the recommendations"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -177,7 +200,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>In the background</strong> always, as programs run.</li>
 </ul>
 <p><em>Recommended:</em> in place, with the background run at major checks. Most tests' loops would end before their regions were ready, so in the background the suite would no longer test native code; in place it tests it as now, and the background run tests the builder.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("go with the recommendations"): as recommended.</span></div>
 </section>
 
 <section class="decision">
@@ -187,7 +210,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Off</strong> unless asked.</li>
 </ul>
 <p><em>Recommended:</em> on. It is what makes a first call quick and keeps a window's frames from stopping; the cost is a second core busy for some milliseconds as a program starts its loops.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-17, the user ("go with the recommendations"): as recommended.</span></div>
 </section>
 </main>
 </body>

@@ -997,23 +997,60 @@ extern void (*writeRunAddresses)(FunctionProto& f);
 // nativeHeads), true where it has any. The first time one of them starts (VM::nativeFirst):
 // its regions.
 extern bool (*findNativeLoops)(FunctionProto& f);
-// The regions of the loop starting at `head` in `run` are added to `made`. `frame`: the slots of
-// the call running the function as they are made, which say what its lists hold (a guess the
-// regions check); null where there is none. `frameSlots`: how many of them are live (below the
-// VM's top); the rest may hold values already collected.
-extern void (*makeNativeRegions)(FunctionProto& f, const Value* frame, int frameSlots, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
-// The VM's globals as regions are made (set by the VM before makeNativeRegions, under its lock):
-// what a global holds then, a class called to make a value, say (B3). A guess the steps check.
-struct GlobalsSeen {
-    const Value* values = nullptr;
-    size_t count = 0;
-    // Whether a bare name in function `f` is no member of `receiver`, so that the VM takes the
-    // global of that name (VM::implicitReceiver; 2026-11-15, an INVOKE_IMPLICIT made native code
-    // where it makes a value); false where it may be one, or cannot be known by its class alone.
-    bool (*noMember)(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver) = nullptr;
-    const void* vm = nullptr;
+// What the running program held as a function's regions were asked for (2026-11-17,
+// background-plan.html): taken on the core running it (takeNativeSeen), and all the making
+// reads of what the program holds, so that it may run on another core while the program goes
+// on and changes it. Its objects (`roots`) are kept from the collector for as long as it is.
+struct NativeSeen {
+    // A list as it was: ObjList's store(), packed(), size(), and its pack's.
+    struct List {
+        ListStore store = ListStore::Values;
+        bool packed = false;
+        bool nullable = false;
+        Narrow narrow = Narrow::None;
+        const ObjClass* itemClass = nullptr;
+        const ObjTypeInfo* itemType = nullptr;
+        uint32_t typeSlot = 0;
+        uint32_t width = 0;
+        size_t size = 0;
+        Value first{};  // a list of values' first item, where it has one
+    };
+    // An object as it was: its bytes from its start to its slots' end, and the slot of each
+    // field named in the function's constants (ObjInstance::fieldIndex: -1 for none).
+    struct Instance {
+        uint32_t shape = 0;
+        uint16_t slotsStart = 0;
+        std::vector<uint8_t> bytes;
+        std::vector<std::pair<const ObjString*, int64_t>> slots;
+    };
+    // A variable's place as it was (ObjPlace's type and class).
+    struct Place {
+        const ObjTypeInfo* type = nullptr;
+        const ObjClass* cls = nullptr;
+    };
+    std::vector<Value> frame;                // the call's live slots
+    std::vector<const ObjClass*> frameSmall;  // for each, a Small value's class (smallClassOf)
+    std::vector<Value> globals;
+    std::unordered_map<const Obj*, List> lists;
+    std::unordered_map<const Obj*, Value> iterated;  // an iterator's source
+    std::unordered_map<const Obj*, Instance> instances;
+    std::unordered_map<const Obj*, Place> places;
+    // For each string constant of the function, whether that bare name is no member of the
+    // object in the frame's slot 0 (VM::noMemberForRegion), where it holds an object or a value.
+    std::vector<std::pair<const ObjString*, bool>> noMember;
+    std::vector<Value> roots;  // marked by the VM as its own while the making may read them
 };
-extern GlobalsSeen nativeGlobalsSeen;
+// What the program holds, taken for `f`'s regions: `frame`, the call's `frameSlots` live slots;
+// the VM's globals; `noMember` asks the VM (`vm`) whether a bare name is a member of an object.
+using NoMemberFn = bool (*)(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver);
+extern std::unique_ptr<NativeSeen> (*takeNativeSeen)(const FunctionProto& f, const Value* frame, int frameSlots, const Value* globals, size_t globalCount,
+                                                     NoMemberFn noMember, const void* vm);
+// The regions of the loop starting at `head` in `run` are added to `made`, from what the
+// program held as they were asked for (`seen`: the frame's slots say what its lists hold, a
+// guess the regions check). Reads nothing the program may change meanwhile.
+extern void (*makeNativeRegions)(FunctionProto& f, const NativeSeen& seen, uint32_t head, std::vector<FunctionProto::NativeRegion>& made);
+// The builds of a program's functions dropped as it ends (vm.cpp's builder; null where none).
+extern void (*dropNativeBuildsOf)(const std::vector<std::unique_ptr<FunctionProto>>& owned);
 
 constexpr uint8_t kReflectFields = 1, kReflectMethods = 2, kReflectExact = 4, kReflectAll = 8, kReflectNotMethods = 16;
 // A note of the Op::ClassMeta there, of a class no global holds (one declared inside a function,
@@ -1026,6 +1063,11 @@ constexpr uint16_t kNoGlobal = 0xFFFF;
 // A whole compiled program, ready to run or to write to a bytecode file.
 class Program {
 public:
+    Program() = default;
+    Program(Program&&) = default;
+    Program& operator=(Program&&) = default;
+    // Native code still to be made of its functions (the builder's, vm.cpp) dropped first.
+    ~Program();
     std::vector<std::string> globalNames;
 
     // Top-level function of each source file. Module 0 is always the prelude.
