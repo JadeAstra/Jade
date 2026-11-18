@@ -2899,7 +2899,7 @@ because the main thread waiting would stop the loop that brings the answer.
 | reading it | `get()` (waits; throws `ExecutionException` with the error as `cause`, or `CancellationException`), `get(timeout)` (`TimeoutException`), `getOrNull()`, `isDone`, `failed`, `isCancelled` |
 | hearing of it | `then { value -> }`, `onError { error -> }`, both run on the event loop |
 | ending it | `complete(value)`, `fail(error)`, `cancel(interrupt = false)`; with `interrupt = true` a task stops where it next waits, with a `CancellationException`, and a thread is interrupted |
-| several | `Job.all(jobs)` is a job of all their results, in order; `Job.any(jobs)` of the first to finish |
+| several | `Job.all(jobs)` is a job of all their results, in order; `Job.any(jobs)` of the first to succeed, failing with the last error if all fail |
 
 **Task scopes.** The tasks and threads started in a scope are its own (Kotlin's structured
 concurrency, M6.7): the scope ends only once all of them have, and where one fails, it cancels

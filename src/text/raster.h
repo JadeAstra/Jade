@@ -25,9 +25,11 @@ struct GlyphImage {
     bool empty() const { return width == 0 || height == 0; }
 };
 
-// How finely curves are cut into straight pieces: a glyph's, small, to within about a tenth of
-// a pixel; a shape's, which may be large, about ten times as closely, so that an oval's pixels
-// add up to its area.
+// How finely curves are cut into straight pieces (raster.cpp's flatten): a glyph's, small, to
+// within a sixth of a pixel at most (a twelfth for TrueType's quadratic curves: a piece strays
+// at most a quarter of the curve's bend over the pieces squared, a cubic's at most three
+// quarters); a shape's, which may be large, nine times as closely, so that an oval's pixels add
+// up to its area.
 constexpr float kGlyphFineness = 1.0f;
 constexpr float kShapeFineness = 9.0f;
 
