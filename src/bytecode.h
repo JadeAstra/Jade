@@ -971,7 +971,10 @@ struct FunctionProto {
 };
 
 // Reads a description kept apart into the function, and verifies it; nothing for one read.
-void loadDeferred(FunctionProto& f);
+// Safe from any thread: `reader`, the VM asking (a core's in a parallel section), makes its
+// names, which a core's does in its program's table under that table's lock; null for the
+// program's own.
+void loadDeferred(FunctionProto& f, VM* reader = nullptr);
 // Reads the body of a function read without it (FunctionProto::laterBody), and what it holds;
 // nothing for one that has its body. Safe from any thread.
 void loadBody(FunctionProto& f);

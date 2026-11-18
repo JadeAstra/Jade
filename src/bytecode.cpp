@@ -2048,12 +2048,14 @@ void loadBody(FunctionProto& f) {
     for (FunctionProto* nested : f.protos) verifyTree(*nested, *kept->program, false, true);
 }
 
-void loadDeferred(FunctionProto& f) {
+void loadDeferred(FunctionProto& f, VM* reader) {
     static std::mutex loading;
     std::lock_guard<std::mutex> hold(loading);
     if (f.deferred == nullptr) return;
     const std::unique_ptr<FunctionProto::Deferred> kept = std::move(f.deferred);
-    Reader r{kept->bytes, *kept->program, *kept->vm, 0};
+    // Read with no `defer` and no `lazyBodies`, so the VM makes only names (intern), and keeps
+    // no pointer to it.
+    Reader r{kept->bytes, *kept->program, reader != nullptr ? *reader : *kept->vm, 0};
     FunctionProto* read = r.proto(1);
     if (r.pos != kept->bytes.size()) r.corrupt();
     verifyTree(*read, *kept->program, true);  // read when asked for, perhaps in a parallel section: made now

@@ -1,0 +1,56 @@
+// Reflection inside a parallel section (o-reflect-section, 2026-11-18): a class's description is
+// made by the first core to ask and kept for all, so the others read what that core made.
+
+annotation Note(val text : string)
+
+@Note("zero") class C0(val a0 : int, val b0 : string) { fun m0(x : int) : int => x }
+@Note("one") class C1(val a1 : int, val b1 : string) { fun m1(x : int) : int => x }
+@Note("two") class C2(val a2 : int, val b2 : string) { fun m2(x : int) : int => x }
+@Note("three") class C3(val a3 : int, val b3 : string) { fun m3(x : int) : int => x }
+@Note("four") class C4(val a4 : int, val b4 : string) { fun m4(x : int) : int => x }
+@Note("five") class C5(val a5 : int, val b5 : string) { fun m5(x : int) : int => x }
+@Note("six") class C6(val a6 : int, val b6 : string) { fun m6(x : int) : int => x }
+@Note("seven") class C7(val a7 : int, val b7 : string) { fun m7(x : int) : int => x }
+@Note("eight") class C8(val a8 : int, val b8 : string) { fun m8(x : int) : int => x }
+@Note("nine") class C9(val a9 : int, val b9 : string) { fun m9(x : int) : int => x }
+@Note("ten") class C10(val a10 : int, val b10 : string) { fun m10(x : int) : int => x }
+@Note("eleven") class C11(val a11 : int, val b11 : string) { fun m11(x : int) : int => x }
+class D0(val d0 : int)
+class D1(val d1 : int)
+class D2(val d2 : int)
+class D3(val d3 : int)
+class D4(val d4 : int)
+class D5(val d5 : int)
+class D6(val d6 : int)
+class D7(val d7 : int)
+class Holder<T>(val item : T, val count : int)
+
+val objs : List<any> = [C0(0, "x"), C1(1, "x"), C2(2, "x"), C3(3, "x"), C4(4, "x"), C5(5, "x"), C6(6, "x"), C7(7, "x"), C8(8, "x"), C9(9, "x"), C10(10, "x"), C11(11, "x")]
+
+// Every core asks about every class, each in its own order, so most descriptions are made by one
+// core and read by the others while the section runs.
+fun look(n : int) : int {
+  var t = 0
+  for (k in 0 ..< 12) {
+    val o = objs[(n * 5 + k * 7) % 12]
+    t += o#.fields.size + o#.methods.size + o#.constructors[0].parameters.size + o#.annotation<Note>()!!.text.size
+  }
+  return t
+}
+val got = (0 ..< 64).toList().parallelStream().map { look(it) }.toList()
+print(got.toSet().size, got[0])                                        // expect: 1 109
+print(Holder<string>#.fields, (0 ..< 32).parallelStream().map { Holder<int>#.fields.toString() }.toList().toSet())
+// expect: [item : string, count : int] {"[item : int, count : int]"}
+
+// A field read and called by name on another core's description.
+fun firstField(o : any) : int {
+  try { return o#.fields[0].get(o) as int } catch (e : InvocationTargetException) { return -1 }
+}
+print((0 ..< 32).parallelStream().map { firstField(objs[it % 12]) }.toList().sum())   // expect: 160
+
+// In a section inside a section: what an inner core made stays shared once its piece is over.
+val ds : List<any> = [D0(0), D1(1), D2(2), D3(3), D4(4), D5(5), D6(6), D7(7)]
+print((0 ..< 16).parallelStream().map { r -> (0 ..< 8).parallelStream().map { c -> ds[(r + c) % 8]#.fields[0].name }.toList().size }.toList().sum(), ds.map { it#.fields[0].name }.join(" "))
+// expect: 128 d0 d1 d2 d3 d4 d5 d6 d7
+print(objs.map { it#.annotation<Note>()!!.text }.join(" "))
+// expect: zero one two three four five six seven eight nine ten eleven

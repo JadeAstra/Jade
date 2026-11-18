@@ -402,8 +402,10 @@ void VM::runParallelPiece(ParallelPiece& piece) {
         piece.failed = true;
         section.cancelled = true;
     }
-    // What the piece made becomes its starter's: the code that waits for it.
-    for (Obj* obj = objects_; obj != mark; obj = obj->next) obj->core = section.starter;
+    // What the piece made becomes its starter's: the code that waits for it. What it made shared
+    // (a box, a class's description) stays shared.
+    for (Obj* obj = objects_; obj != mark; obj = obj->next)
+        if (obj->core != 0) obj->core = section.starter;
     coreId_ = savedOwner;
     currentCore = savedOwner;
     readable_ = savedReadable;

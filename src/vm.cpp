@@ -221,14 +221,22 @@ Value VM::classDescription(ObjClass* cls, const ObjTypeInfo* own, int which) {
     // Made outside the lock, which making a type takes, as is the function; two cores may make
     // them at once, and the first kept is kept.
     if (meta == nullptr) {
-        // Read now, where the program's image left it to be (G47).
-        if (cls->metaProto[which]->deferred != nullptr) loadDeferred(const_cast<FunctionProto&>(*cls->metaProto[which]));
+        // Read now, where the program's image left it to be (G47). Asked under the lock it is
+        // read under, always: another core may be part way through reading it.
+        loadDeferred(const_cast<FunctionProto&>(*cls->metaProto[which]), this);
         meta = alloc<ObjClosure>(cls->metaProto[which], 0);
+        meta->core = 0;  // every core's to call: it holds nothing
         std::lock_guard<std::mutex> hold(root.internMutex_);
         if (cls->meta[which] == nullptr) cls->meta[which] = meta;
         meta = cls->meta[which];
     }
+    Obj* const before = objects_;
     const Value made = callWithTypes(Value::object(meta), own != nullptr ? own->args : std::vector<ObjTypeInfo*>{}, 0, nullptr);
+    // Kept for every core: what a core made for it becomes shared now, to be read by any core
+    // and changed by none until the section is over, as what the program had made before it.
+    if (coreId_ != 0)
+        for (Obj* obj = objects_; obj != before; obj = obj->next)
+            if (obj->core == coreId_) obj->core = 0;
     std::lock_guard<std::mutex> hold(root.internMutex_);
     return cls->described[which].emplace(own, made).first->second;
 }
