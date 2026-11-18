@@ -230,13 +230,8 @@ Value VM::classDescription(ObjClass* cls, const ObjTypeInfo* own, int which) {
         if (cls->meta[which] == nullptr) cls->meta[which] = meta;
         meta = cls->meta[which];
     }
-    Obj* const before = objects_;
-    const Value made = callWithTypes(Value::object(meta), own != nullptr ? own->args : std::vector<ObjTypeInfo*>{}, 0, nullptr);
-    // Kept for every core: what a core made for it becomes shared now, to be read by any core
-    // and changed by none until the section is over, as what the program had made before it.
-    if (coreId_ != 0)
-        for (Obj* obj = objects_; obj != before; obj = obj->next)
-            if (obj->core == coreId_) obj->core = 0;
+    // Kept for every core: what a core made for it is shared.
+    const Value made = makeShared([&] { return callWithTypes(Value::object(meta), own != nullptr ? own->args : std::vector<ObjTypeInfo*>{}, 0, nullptr); });
     std::lock_guard<std::mutex> hold(root.internMutex_);
     return cls->described[which].emplace(own, made).first->second;
 }
@@ -2963,8 +2958,12 @@ Value VM::getProperty(Value obj, ObjString* name) {
                 if (const Value* init = instance->cls->extendField(name)) return extraField(instance, name, *init);  // D157
                 if (const FieldDecl* decl = instance->declOf(name)) {
                     if (decl->payload == FieldDecl::NoPayload && instance->fields()[decl->slot].isLazy())
-                        return forceLazy(instance->fields()[decl->slot], [&](Value v) { instance->fields()[decl->slot] = v; },
-                                         "'" + name->utf8() + "' of " + instance->cls->name->utf8());
+                        // An object shared in a parallel section keeps its marker: another core may
+                        // read the field as it is written.
+                        return forceLazy(instance->fields()[decl->slot],
+                                         instance->core == coreId_ ? std::function<void(Value)>([&](Value v) { instance->fields()[decl->slot] = v; })
+                                                                   : std::function<void(Value)>(),
+                                         [&] { return "'" + name->utf8() + "' of " + instance->cls->name->utf8(); });
                     throw runtimeError(Thrown::IllegalStateException, "'" + name->utf8() + "' of " + instance->cls->name->utf8() + " is read before it is given a value " +
                                        "(a lateinit field is read only once it has one)");
                 }
@@ -2990,7 +2989,9 @@ Value VM::getProperty(Value obj, ObjString* name) {
                     if (!member->isLazy()) return *member;
                     for (ObjClass* k = cls; k != nullptr; k = k->super)
                         if (k->statics.find(name) != nullptr)
-                            return forceLazy(*member, [&](Value v) { k->statics.set(name, v); }, cls->name->utf8() + "." + name->utf8());
+                            // In a parallel section the class, every core's, keeps its marker.
+                            return forceLazy(*member, coreId_ == 0 ? std::function<void(Value)>([&](Value v) { k->statics.set(name, v); }) : std::function<void(Value)>(),
+                                             [&] { return cls->name->utf8() + "." + name->utf8(); });
                 }
                 for (const ObjClass* k = cls; k != nullptr; k = k->super) {
                     if (const Value* getter = k->staticGetters.find(name)) return call(*getter, 0, nullptr);
@@ -5496,18 +5497,24 @@ void VM::wakeLazyWaiters(ObjLazy* lazy) {
     monitorExit(key);
 }
 
-Value VM::forceLazy(Value marker, const std::function<void(Value)>& store, const std::string& what) {
+Value VM::forceLazy(Value marker, const std::function<void(Value)>& store, const std::function<std::string()>& what) {
     static thread_local char here;
     const uintptr_t me = reinterpret_cast<uintptr_t>(&here);
     ObjLazy* lazy = static_cast<ObjLazy*>(marker.as.obj);
     TempRoot keep(*this, Value::object(lazy));
+    // The cores of a parallel section run at once, not in turns: the state is claimed and
+    // published as one, the value written before it says 2.
+    std::atomic_ref<uint8_t> state(lazy->state);
+    std::atomic_ref<uintptr_t> owner(lazy->owner);
     for (;;) {
-        if (lazy->state == 2) {
-            store(lazy->value);
+        const uint8_t now = state.load(std::memory_order_acquire);
+        if (now == 2) {
+            if (store) store(lazy->value);
             return lazy->value;
         }
-        if (lazy->state == 1) {
-            if (lazy->owner == me) throw runtimeError(Thrown::IllegalStateException, what + " is read while its value is being worked out: its starting value needs itself");
+        if (now == 1) {
+            if (owner.load(std::memory_order_relaxed) == me)
+                throw runtimeError(Thrown::IllegalStateException, what() + " is read while its value is being worked out: its starting value needs itself");
             if (inParallelSection()) {
                 yieldLock();
                 continue;
@@ -5518,29 +5525,34 @@ Value VM::forceLazy(Value marker, const std::function<void(Value)>& store, const
             lazy->waiters++;
             bool interrupted = false;
             monitorEnter(key);
-            while (lazy->state == 1)
+            while (state.load(std::memory_order_acquire) == 1)
                 if (monitorWait(key, -1) == 2) interrupted = true;
             monitorExit(key);
             lazy->waiters--;
             if (interrupted) thread_->interrupted = true;  // for whoever asks next
             continue;
         }
-        lazy->state = 1;
-        lazy->owner = me;
+        uint8_t unclaimed = 0;
+        if (!state.compare_exchange_strong(unclaimed, 1, std::memory_order_acq_rel)) continue;
+        owner.store(me, std::memory_order_relaxed);
         Value result;
         try {
-            result = call(Value::object(lazy->init), 0, nullptr);
+            // Made in a parallel section for what every core reads (a global, a static, a shared
+            // object's field), it is shared, as made before the section; for this core's own
+            // object, its own.
+            auto make = [&] { return own(call(Value::object(lazy->init), 0, nullptr)); };
+            result = lazy->core != coreId_ ? makeShared(make) : make();
         } catch (...) {
             // A starting value that fails leaves it unset, for the next read to try again.
-            lazy->state = 0;
-            lazy->owner = 0;
+            owner.store(0, std::memory_order_relaxed);
+            state.store(0, std::memory_order_release);
             wakeLazyWaiters(lazy);
             throw;
         }
-        lazy->value = own(result);
-        lazy->state = 2;
+        lazy->value = result;
+        state.store(2, std::memory_order_release);
         wakeLazyWaiters(lazy);
-        store(lazy->value);
+        if (store) store(lazy->value);
         return lazy->value;
     }
 }
@@ -5548,7 +5560,8 @@ Value VM::forceLazy(Value marker, const std::function<void(Value)>& store, const
 Value VM::globalOrLazy(size_t index) {
     const Value value = globals_[index];
     if (!value.isLazy()) throw runtimeError(Thrown::IllegalStateException, "undefined variable '" + program_->globalNames[index] + "'");
-    return forceLazy(value, [&](Value v) { globals_[index] = v; }, "'" + program_->globalNames[index] + "'");
+    // A core's table of globals is its own copy: written, as the program's is.
+    return forceLazy(value, [&](Value v) { globals_[index] = v; }, [&] { return "'" + program_->globalNames[index] + "'"; });
 }
 
 std::vector<Value> VM::setItems(const ObjSet* set) {

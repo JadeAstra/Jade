@@ -1060,8 +1060,28 @@ public:
     // In a value's bytes laid out as `layout`, each list, map or set held given a frozen copy (G27).
     void freezeInside(uint8_t* at, const ValueLayout& layout, int depth);
     // A lazy field's, static's or global's value (D37), worked out on this first read and given
-    // to `store` for its place; `what` names it for the errors.
-    Value forceLazy(Value marker, const std::function<void(Value)>& store, const std::string& what);
+    // to `store` for its place, unless `store` is null; `what` names it for the errors. In a
+    // parallel section the cores may meet here at once: the first to come works it out, shared
+    // (makeShared), and the others wait for it.
+    Value forceLazy(Value marker, const std::function<void(Value)>& store, const std::function<std::string()>& what);
+    // Makes what is kept for every core (a lazy value, a class's description) with `make`. In a
+    // parallel section, what this core makes meanwhile becomes shared as it is kept, read by
+    // every core and changed by none until the section is over, as what was made before the
+    // section is; so does what the pieces of a section it starts meanwhile make.
+    template <class F>
+    Value makeShared(F&& make) {
+        if (coreId_ == 0) return make();
+        Obj* const before = objects_;
+        struct Making {
+            uint32_t& depth;
+            explicit Making(uint32_t& d) : depth(d) { depth++; }
+            ~Making() { depth--; }
+        } making(makingShared_);
+        const Value made = make();
+        for (Obj* obj = objects_; obj != before; obj = obj->next)
+            if (obj->core == coreId_) obj->core = 0;
+        return made;
+    }
     void wakeLazyWaiters(ObjLazy* lazy);
     // A global's value where a read finds none: a lazy one's, worked out; an error otherwise.
     Value globalOrLazy(size_t index);
@@ -1293,6 +1313,9 @@ private:
     // pieces (D96): each reads, besides its own and what is shared, what `readable_` holds,
     // the numbers of the pieces that started its section.
     uint8_t coreId_ = 0;
+    // Above 0 while this core makes something shared (makeShared): what the pieces of a section
+    // it starts make is shared when they end, not its own.
+    uint32_t makingShared_ = 0;
     const std::bitset<256>* readable_ = nullptr;
     ParallelSection* section_ = nullptr;   // the section of the piece running
     uint64_t seenGeneration_ = 0;          // the outermost section it last took the program's state for

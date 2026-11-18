@@ -1,0 +1,57 @@
+// What is worked out on first use, first used inside a parallel section (o-m8-parallel,
+// 2026-11-18): a named object, a lazy global, a lazy static, a lazy field of a shared object.
+// The first core to read it works it out, shared, as if it had been made before the section;
+// the others wait for it and read the same one.
+
+fun attempt(f : () -> any?) : string {
+  try { return "${f()}" } catch (e) { return "${e.message}" }
+}
+
+object Table {
+  val items = [1, 2, 3]
+  val names = {"one": 1, "two": 2}
+  fun total() : int => items.sum() + names.size
+}
+print((0 ..< 64).toList().parallelStream().map { Table.total() + it * 0 }.toList().toSet())   // expect: {8}
+
+lazy val squares : List<int> = (0 ..< 100).map { it * it }
+print((0 ..< 64).parallelStream().map { squares[it] }.toList().sum())   // expect: 85344
+
+class Config {
+  static {
+    lazy val limits : List<int> = [10, 20, 30]
+  }
+}
+print((0 ..< 64).parallelStream().map { Config.limits[it % 3] }.toList().sum())   // expect: 1270
+
+class Holder(val n : int) {
+  lazy val parts : List<int> = [n, n * 2]
+}
+val holder = Holder(5)
+print((0 ..< 64).parallelStream().map { holder.parts[1] }.toList().toSet(), holder.parts)   // expect: {10} [5, 10]
+
+// The same one for every core.
+object Marker
+print((0 ..< 64).parallelStream().map { Marker }.toList().toSet().size)   // expect: 1
+
+// Shared, so read and not changed in the section, as one made before it is; changed after it.
+object Log {
+  val lines : open List<string> = []
+}
+print(attempt { (0 ..< 4).parallelStream().forEach { Log.lines.add("x") } })
+// expect: a parallel section changes only the item it was given and what it makes itself: this List is shared with the other cores, so here it can be read and not changed
+Log.lines.add("after")
+print(Log.lines)   // expect: ["after"]
+
+// A lazy field of an object a core made itself is that core's own: it may change what it gives.
+class Bag {
+  lazy val items : open List<int> = []
+}
+print((0 ..< 16).parallelStream().map { n -> val b = Bag(); b.items.add(n); b.items.size }.toList().sum())   // expect: 16
+
+// One whose making starts a section of its own: what that section's pieces made is shared too.
+object Grid {
+  val rows : List<List<int>> = (0 ..< 8).parallelStream().map { r -> (0 ..< 4).map { c -> r * 4 + c } }.toList()
+}
+// Two pieces, the other cores idle to run the inner pieces: each piece reads every row.
+print((0 ..< 2).parallelStream().map { Grid.rows.map { r -> r.sum() }.sum() }.toList())   // expect: [496, 496]

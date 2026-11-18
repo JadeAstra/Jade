@@ -557,7 +557,7 @@ int VM::parallelCores() {
 void VM::runSection(ParallelSection& section) {
     parallelCores();  // the pool, made the first time
     ParallelPool& pool = *(root_ != nullptr ? root_ : this)->parallelPool_;
-    section.starter = coreId_;
+    section.starter = makingShared_ != 0 ? 0 : coreId_;  // what is made for every core is shared
     section.parent = section_;
     if (readable_ != nullptr) section.readable = *readable_;
     if (coreId_ != 0) section.readable.set(coreId_);
