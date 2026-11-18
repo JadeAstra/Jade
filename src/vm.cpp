@@ -7074,6 +7074,15 @@ public:
         std::unique_lock<std::mutex> hold(lock_);
         finished_.wait(hold, [&] { return b.done || stopping_; });
     }
+    // Until no build `asker` asked for waits or is under way.
+    void waitForAll(const VM* asker) {
+        std::unique_lock<std::mutex> hold(lock_);
+        finished_.wait(hold, [&] {
+            if (stopping_) return true;
+            if (current_ != nullptr && current_->asker == asker) return false;
+            return std::none_of(queue_.begin(), queue_.end(), [&](const std::shared_ptr<Build>& b) { return b->asker == asker; });
+        });
+    }
     // Each value a build `asker` asked for keeps (marked by its collector).
     template <class Mark>
     void roots(const VM* asker, Mark mark) {
@@ -7177,6 +7186,8 @@ std::unique_ptr<NativeSeen> VM::seenForRegions(const FunctionProto& f, const Val
 void VM::markWaitingBuilds() {
     Builder::builder().roots(this, [&](const Value& v) { markValue(v); });
 }
+
+void VM::waitForBuilds() { Builder::builder().waitForAll(this); }
 
 // A build of `f`'s regions handed on (the builder's), or made here (in place), by makeWay();
 // `which` its loop, or kWholeFunction. Under nativeStates (`states`): let go here before any waiting.
@@ -7616,6 +7627,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
 #endif
 #if !WW_TAIL_CALLS
 void VM::markWaitingBuilds() {}
+void VM::waitForBuilds() {}
 void VM::dropWaitingBuilds() {}
 void VM::writeWaitingWords() {}
 void VM::wholeAtReturn(FunctionProto&, const Value*, const Value*) {}

@@ -662,9 +662,13 @@ public:
     void account(size_t bytes) { bytesAllocated_ += bytes; }
     // A collection now, asked for by the program (Program.collectGarbage): none inside a key's
     // == or hashCode, nor on a core of a parallel section, where a safe point would not collect
-    // either.
+    // either. It waits first for the native code it asked the builder for (made on another core
+    // as it runs on): until made, a build keeps what the function had in hand when asked
+    // (markWaitingBuilds), which would be counted as in use, or not, by when the build ended.
     void collectNow() {
-        if (keyCalls_ == 0 && coreId_ == 0) collectGarbage();
+        if (keyCalls_ != 0 || coreId_ != 0) return;
+        waitForBuilds();
+        collectGarbage();
     }
     // The bytes the program's objects take now, the garbage not yet collected counted with them
     // (Program.memoryUsed); what is still in use, right after a collection.
@@ -1451,6 +1455,7 @@ private:
     // The builds this VM asked the builder for, not made yet: what they read kept by the collector;
     // dropped as the VM ends.
     void markWaitingBuilds();
+    void waitForBuilds();  // until no build this VM asked for waits or is under way
     void dropWaitingBuilds();
 public:
     // Run code's words written by a thread that may not write them (a section's core, the
