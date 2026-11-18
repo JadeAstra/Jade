@@ -274,7 +274,10 @@ void VM::acquireLock(ThreadState* me) {
     tempVectors.swap(me->tempVectors);
     loadContext(me->current);
     // Under the stress setting every safe point is a place to change threads.
-    attention_ = stopRequested_.load() || (threadStress_ && threads_.size() > 1);
+    attention_ = threadStress_ && threads_.size() > 1;
+    // And what other threads asked of this one meanwhile, asked about once the flag is set, as a
+    // safe point does: a stop, a time limit, words to write.
+    if (stopRequested_.load() || timeLimitPassed_.load() || wordsWaiting_.load()) attention_ = true;
 }
 
 // Lets another thread have the lock, and takes it back afterwards.
@@ -306,8 +309,16 @@ void VM::safePoint() {
     if (keyCalls_ > 0) return;  // inside a key's == or hashCode (D26)
     if (bytesAllocated_ > nextGC_) collectGarbage();
     if (attention_.load(std::memory_order_relaxed)) {
-        if (lockWaiters_.load() > 0) yieldLock();
-        else if (!threadStress_) attention_ = false;
+        if (lockWaiters_.load() > 0) {
+            yieldLock();
+        } else if (!threadStress_) {
+            attention_ = false;
+            // A stop or a time limit asked for since the checks above (a collection may have run
+            // between) is asked about again once the flag is down: put up between, it would be
+            // lost, and a loop in native code, which looks only at the flag, would never leave
+            // (workers.ww's worker that spins, stopped by terminate(), under GC stress).
+            if (stopRequested_.load() || timeLimitPassed_.load()) attention_ = true;
+        }
         // (After the flag is put down: words left waiting after this put it up again.)
         if (wordsWaiting_.load()) writeWaitingWords();
     }
