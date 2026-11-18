@@ -10,7 +10,7 @@ if (command.size < 2) {
   print("0 true true")
   print("64")
   print("0 true true true")
-  print("true")
+  print("true true")
   print("true true")
   print("64")
 } else {
@@ -44,7 +44,8 @@ if (command.size < 2) {
 
     // --help: every command and option listed; more on one; an option two commands take, of each.
     val help = Process.run([ww, "--help"]).output
-    print(["Commands:", "ww lib [<folder>] [options]", "--replace  (ww lib)", "--interpret", "ww --help settings"].all { help.contains(it) })   // expect: true
+    print(["Commands:", "ww lib [<folder>] [options]", "--interpret", "ww --help settings"].all { help.contains(it) },
+          help.indexOf("--replace") > help.indexOf("ww lib [<folder>]") and help.indexOf("--replace") < help.indexOf("ww doc"))   // expect: true true
     val both = Process.run([ww, "--help", "--std"]).output
     print(both.contains("(an option of ww check)"), both.contains("(an option of ww lib)"))   // expect: true true
     print(Process.run([ww, "--help", "nothing-such"]).exitCode)                    // expect: 64

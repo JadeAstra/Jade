@@ -361,14 +361,20 @@ const HelpEntry kHelp[] = {
 std::string helpOverview() {
     std::ostringstream out;
     out << "WinterWolf " WW_VERSION " - an object-oriented scripting language\n";
-    const char* const titles[] = {"Commands", "Options of the commands", "Before any command", "For building ww itself", "Settings"};
+    auto line = [&](const std::string& left, const char* summary) {
+        out << left << std::string(left.size() < 38 ? 38 - left.size() : 1, ' ') << summary << "\n";
+    };
+    // Each command, with the options it takes under it (2026-11-18, the user's way round).
+    const char* const titles[] = {"Commands", "", "Before any command", "For building ww itself", "Settings"};
     for (int section = 0; section <= 4; section++) {
+        if (section == 1) continue;
         out << "\n" << titles[section] << ":\n";
         for (const HelpEntry& e : kHelp) {
             if (e.section != section) continue;
-            const std::string left = section == 1 ? std::string(e.name) + "  (ww " + e.of + ")" : section == 0 ? e.brief : section == 4 ? "ww --help settings" : e.name;
-            out << "  " << left;
-            out << std::string(left.size() < 36 ? 36 - left.size() : 1, ' ') << e.summary << "\n";
+            line("  " + std::string(section == 0 ? e.brief : section == 4 ? "ww --help settings" : e.name), e.summary);
+            if (section != 0) continue;
+            for (const HelpEntry& option : kHelp)
+                if (option.section == 1 && std::string(option.of) == e.name) line("      " + std::string(option.name), option.summary);
         }
     }
     out << "\nMore on any of them: ww --help <command or option>, as in ww --help build, ww --help --exe.\n";
