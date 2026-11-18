@@ -1,0 +1,54 @@
+// `ww lib` and `ww --help` (2026-11-18): the libraries ww carries (Jade) written out as files, so that someone
+// with only ww.exe may change them; a library already there is left as it is unless --replace.
+// Run by ww itself; a built program, started alone, has no ww to ask, and says what ww says.
+
+val command = Process.currentCommand()
+if (command.size < 2) {
+  print("true true")
+  print("true true")
+  print("73 true true")
+  print("0 true true")
+  print("64")
+  print("0 true true true")
+  print("true")
+  print("true true")
+  print("64")
+} else {
+  val ww = command[0]
+  val folder = FilePath.createTempDirectory("ww_lib")
+  try {
+    val first = Process.run([ww, "lib", folder.text])
+    print(first.exitCode == 0, first.output.startsWith("Jade written to"))         // expect: true true
+    val files = folder.resolve("Jade").list().filter { it.name.endsWith(".ww") }
+    print(files.size > 20, files.any { it.name == "Window.ww" })                   // expect: true true
+
+    // A second time, with a file changed: refused, the change kept.
+    val block = folder.resolve("Jade").resolve("Block.ww")
+    val original = block.readText()
+    block.writeText(original + "// changed\n")
+    val again = Process.run([ww, "lib", folder.text])
+    print(again.exitCode, again.error.contains("is left as it is"), block.readText() != original)   // expect: 73 true true
+
+    // --replace: ww's own written over the change, a file added kept.
+    folder.resolve("Jade").resolve("Added.ww").writeText("// mine\n")
+    val replaced = Process.run([ww, "lib", folder.text, "--replace"])
+    print(replaced.exitCode, block.readText() == original, folder.resolve("Jade").resolve("Added.ww").exists())   // expect: 0 true true
+
+    print(Process.run([ww, "lib", "a", "b"]).exitCode)                             // expect: 64
+
+    // --std: the standard library's files, to be read, with the warning and a README saying so.
+    val std = Process.run([ww, "lib", "--std", folder.text])
+    val stdFiles = folder.resolve("std").list()
+    print(std.exitCode, stdFiles.any { it.name == "core.ww" }, std.error.contains("can't and won't use them"),
+          folder.resolve("std").resolve("README.txt").readText().contains("for reading only"))   // expect: 0 true true true
+
+    // --help: every command and option listed; more on one; an option two commands take, of each.
+    val help = Process.run([ww, "--help"]).output
+    print(["Commands:", "ww lib [<folder>] [options]", "--replace  (ww lib)", "--interpret", "ww --help settings"].all { help.contains(it) })   // expect: true
+    val both = Process.run([ww, "--help", "--std"]).output
+    print(both.contains("(an option of ww check)"), both.contains("(an option of ww lib)"))   // expect: true true
+    print(Process.run([ww, "--help", "nothing-such"]).exitCode)                    // expect: 64
+  } finally {
+    folder.deleteRecursively()
+  }
+}

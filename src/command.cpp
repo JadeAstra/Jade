@@ -57,6 +57,11 @@ extern const size_t kLibFileEnds[];
 extern const char* const kLibFileNames[];
 extern const size_t kLibFileCount;
 extern const char kLibHash[];
+// The standard library's sources ww.exe carries (cmake/embed.cmake), for `ww lib --std`.
+extern const unsigned char kStdSource[];
+extern const size_t kStdFileEnds[];
+extern const size_t kStdFileCount;
+extern const char* const kStdFileNames[];
 }
 
 namespace {
@@ -229,29 +234,296 @@ bool leaveOutSections(std::string& image, const std::vector<std::string>& names)
 }
 
 
-const char* const kUsage =
-    "WinterWolf " WW_VERSION " - an object-oriented scripting language\n"
-    "\n"
-    "Usage:\n"
-    "  ww                                  start the interactive shell\n"
-    "  ww <file> [args...]                 run a source (.ww) or bytecode (.wwc) file\n"
-    "  ww run <file> [args...]             same as above\n"
-    "  ww build <file> [-o <out.wwc>]      compile a source file to a bytecode file\n"
-    "  ww build <file> --exe [-o <app.exe>] [--windowed] [--icon <file.ico>]\n"
-    "                                      compile it into a program of its own;\n"
-    "                                      --windowed gives it no console window,\n"
-    "                                      --icon gives it an icon\n"
-    "  ww check <file>                     check a source file's types, running nothing\n"
-    "  ww test [<file or folder>...]       run the tests (@Test) of the files, or of those in\n"
-    "                                      the folders (the current one if none is given)\n"
-    "  ww dis <file>                       list the bytecode of a source or bytecode file\n"
-    "  ww doc <file>... [-o <page.html>]   a reference page of the files' declarations, from the\n"
-    "                                      comments written above them; --template <page.html>\n"
-    "                                      puts it where that page says <!-- ww doc -->,\n"
-    "                                      --missing lists what has none\n"
-    "  ww --interpret <any of the above>   the same, run by the VM alone, with no native code\n"
-    "  ww --version\n"
-    "  ww --help\n";
+// ---- Help (2026-11-18) ----
+//
+// Every command and option, each once, with what `ww --help` lists of it and what
+// `ww --help <name>` says of it, so that the two never differ. `of` is the command an option
+// belongs to ("" for a command, or for an option taken before any command); `section` groups the
+// list: 0 commands, 1 their options, 2 before any command, 3 for building ww itself, 4 settings.
+struct HelpEntry {
+    const char* name;
+    const char* of;
+    int section;
+    const char* usage;
+    const char* brief;  // the list's form of a command: its usage, shortened
+    const char* summary;
+    const char* details;
+};
+
+const HelpEntry kHelp[] = {
+    // -- Commands --
+    {"shell", "", 0, "ww   (or ww shell)", "ww", "start the interactive shell",
+     "Starts the shell: each line is WinterWolf, run as it is entered, its value shown. What a line declares (a val, a\n"
+     "function, a class) is kept for the lines after it, and an import brings a library in as in a file."},
+    {"run", "", 0, "ww <file> [args...]   (or ww run <file> [args...])", "ww <file> [args...]", "run a source (.ww) or bytecode (.wwc) file",
+     "Runs the file: a source file (.ww) is compiled first, with what it imports, and the program compiled is kept\n"
+     "in this machine's cache, so that its next run, with nothing changed, starts at once. A bytecode file (.wwc,\n"
+     "made by ww build) is run as it is. What follows the file is the program's, in Program.arguments.\n"
+     "An import is looked for next to the file, then in a lib folder beside ww.exe, then among the libraries\n"
+     "ww.exe carries (Jade); one that cannot be found is said at once."},
+    {"build", "", 0, "ww build <file> [-o <out>] [--exe] [--windowed] [--icon <file.ico>]", "ww build <file> [options]", "compile a source file to a bytecode file or a program",
+     "Compiles the file and what it imports. By itself, into a bytecode file (<file>.wwc), which ww runs; with --exe,\n"
+     "--windowed or --icon, or -o naming an .exe, into a program of its own, which runs with no ww: it carries what\n"
+     "it needs of ww and leaves the rest out (the compiler, the libraries' sources, the window code where the program\n"
+     "opens none). See ww --help --exe, --windowed, --icon and -o."},
+    {"check", "", 0, "ww check [--std] <file>", "ww check [--std] <file>", "check a source file's types, running nothing",
+     "Compiles the file and what it imports and checks their types, running nothing, and lists every problem\n"
+     "found, each as a compile error is said (file:line:column: error: ...). The exit code is 0 where there is none."},
+    {"test", "", 0, "ww test [<file or folder>...]", "ww test [<file or folder>...]", "run the tests (@Test) of the files or folders",
+     "Runs the functions and methods written @Test in the files named, or in the .ww files of the folders named (the\n"
+     "current folder where none is named), with @BeforeTest, @AfterTest, @BeforeAll and @AfterAll around them and\n"
+     "@Timeout stopping one that runs too long; says how each went, and how many passed and failed."},
+    {"dis", "", 0, "ww dis <file>", "ww dis <file>", "list the bytecode of a source or bytecode file",
+     "Lists the bytecode of every function of the file, compiled first where it is a source file: for looking at what\n"
+     "the compiler made."},
+    {"lib", "", 0, "ww lib [<folder>] [--replace]   or   ww lib --std <folder> [--replace]", "ww lib [<folder>] [options]",
+     "write the libraries ww carries (Jade) out as files, to change them",
+     "ww lib writes the libraries ww.exe carries (Jade) as files into the lib folder beside ww.exe, or into the folder\n"
+     "named. In the lib folder beside ww.exe they are used in place of those inside it, whole, so someone with only\n"
+     "ww.exe may change them; ww --version then says so, and deleting the folder goes back to those inside. In\n"
+     "another folder they are only to be read. A library already there is left as it is, its files perhaps changed,\n"
+     "unless --replace. ww lib --std <folder> writes the standard library's files instead, into <folder>/std, to be\n"
+     "read only: ww.exe can't and won't use them. See ww --help --replace and --std."},
+    {"doc", "", 0, "ww doc <file>... [-o <page.html>] [--template <page.html>] [--title <text>] [--missing]", "ww doc <file>... [options]",
+     "a reference page of the files' declarations, from their comments",
+     "Makes an HTML page of the files' declarations (classes, functions, fields), each described by the comment\n"
+     "written above it, and writes it to standard output, or to the file -o names. See ww --help --template,\n"
+     "--title, --missing and -o."},
+    {"--version", "", 0, "ww --version   (or -v)", "ww --version", "the version, and where each library comes from",
+     "Says ww's version, and for each library ww.exe carries (Jade) whether a program takes it from inside ww.exe\n"
+     "(\"built in\") or from a lib folder beside it, which is used in its place (see ww --help lib)."},
+    {"--help", "", 0, "ww --help [<command or option>]   (or -h, or help)", "ww --help [<command or option>]", "this list, or more on one command or option",
+     "With nothing after it, lists every command and option, one line each. With a command or an option after it,\n"
+     "says more of that one: ww --help build, ww --help --exe, ww --help settings."},
+    // -- Options of commands --
+    {"-o", "build", 1, "ww build <file> -o <out>", "", "where the bytecode file or the program is written",
+     "The file written. Without -o, beside the source, named as it is with .wwc (or the system's program extension,\n"
+     ".exe on Windows, for a program). Naming an .exe asks for a program, as --exe does."},
+    {"--exe", "build", 1, "ww build <file> --exe", "", "a program of its own, which runs with no ww",
+     "Compiles the file into a program of its own (an .exe on Windows), which runs on a machine with no ww: it carries\n"
+     "the part of ww it needs, the standard library compiled, and leaves out the compiler, the libraries' sources and,\n"
+     "where the program opens no window, the window code."},
+    {"--windowed", "build", 1, "ww build <file> --windowed", "", "a program that opens no console window (Windows)",
+     "As --exe, marked as a windowed program, so that starting it opens no console window beside its own: for a\n"
+     "program that imports Jade and opens a window. Its standard output goes nowhere."},
+    {"--icon", "build", 1, "ww build <file> --icon <file.ico>", "", "the program's icon (Windows)",
+     "As --exe, with the icon in the .ico file as the program's, as Explorer and the task bar show it."},
+    {"--std", "check", 1, "ww check --std <file>", "", "the standard library's own problems listed too",
+     "Lists what the check finds in the standard library as well as in the program: for working on the standard\n"
+     "library itself."},
+    {"--std", "lib", 1, "ww lib --std <folder> [--replace]", "", "the standard library's files, to be read only",
+     "Writes the standard library's files, as they were when ww.exe was built, into <folder>/std, with a README.txt\n"
+     "saying what this says: they are for reading only, and ww.exe can't and won't use them. It uses the copy\n"
+     "compiled into it whatever is changed there; changing the standard library means building ww.exe again. Never\n"
+     "into the lib folder beside ww.exe."},
+    {"--replace", "lib", 1, "ww lib [<folder>] --replace", "", "write over a library already there",
+     "Writes ww's own files over those of a library already in the folder (ww lib leaves one there as it is, its\n"
+     "files perhaps changed). Files added to the library, which ww does not carry, are kept."},
+    {"-o", "doc", 1, "ww doc <file>... -o <page.html>", "", "where the page is written",
+     "The file the page is written to; without -o, standard output."},
+    {"--template", "doc", 1, "ww doc <file>... --template <page.html>", "", "the page put into another, where it says",
+     "Puts the reference where the page named says <!-- ww doc -->, the rest of that page as it is: for a page with\n"
+     "a style and a story of its own around the reference."},
+    {"--title", "doc", 1, "ww doc <file>... --title <text>", "", "the page's title",
+     "The title of the page made (\"WinterWolf reference\" where none is given)."},
+    {"--missing", "doc", 1, "ww doc <file>... --missing", "", "list the declarations with no comment",
+     "Lists each declaration that has no comment above it (file:line and its name), and how many of all have one."},
+    // -- Before any command --
+    {"--interpret", "", 2, "ww --interpret <any command>", "", "run by the VM alone, with no native code",
+     "Written before any command (ww --interpret <file>, ww --interpret test ...): the program is run by the VM alone,\n"
+     "with no native code made for its loops and functions. For comparing, and for finding whether a problem is\n"
+     "native code's. WW_NATIVE=0 does the same (ww --help settings)."},
+    // -- For building ww itself --
+    {"--native-check", "", 3, "ww --native-check", "", "check native code (the build runs it)",
+     "Checks the stencils native code is made of, rebuilt from the table ww.exe carries, against the hash taken when\n"
+     "it was built, shapes each, and runs regions made of them beside C++'s answers. The build runs it."},
+    {"--check-sections", "", 3, "ww --check-sections <exe> <map> <map>", "", "check what a built program leaves out (the build runs it)",
+     "Checks that nothing a built program leaves out runs as it starts, and that the link maps of ww.exe and of the\n"
+     "build's proof programs put every part in the section a built program keeps or leaves out as it should."},
+    {"--attach-prelude", "", 3, "ww --attach-prelude <copy.exe>", "", "attach the compiled standard library (the build runs it)",
+     "Writes a copy of ww.exe with the standard library compiled and attached, so that no program compiles it again.\n"
+     "The build's last step, which then puts the copy in ww.exe's place."},
+    // -- Settings --
+    {"settings", "", 4, "WW_... environment variables", "", "WW_CACHE, WW_NATIVE, WW_CORES, WW_TIMES and the rest",
+     "Read as ww starts, from environment variables:\n"
+     "  WW_CACHE=<folder>            where compiled programs and the libraries' files are kept (otherwise\n"
+     "                               %LOCALAPPDATA%\\WinterWolf\\cache on Windows, ~/.cache/ww elsewhere)\n"
+     "  WW_NATIVE=0                  no native code, as ww --interpret\n"
+     "  WW_NATIVE_BACKGROUND=0       native code made on the program's own thread, not on another core\n"
+     "  WW_CORES=<n>                 how many cores a parallel section uses\n"
+     "  WW_TIMES=1                   how long the program took to be ready to run, and its parts, on standard error\n"
+     "For testing ww itself: WW_GC_STRESS=1 (a collection at every safe point), WW_THREAD_STRESS=1 (threads change\n"
+     "at every safe point), WW_CHECK_NATIVE_RESULTS=1 (every C++ function's result checked against its declaration),\n"
+     "WW_COPY_READS=1 (every read from a list of values a copy). Others, for working on native code, are described\n"
+     "where src/ reads them."},
+};
+
+std::string helpOverview() {
+    std::ostringstream out;
+    out << "WinterWolf " WW_VERSION " - an object-oriented scripting language\n";
+    const char* const titles[] = {"Commands", "Options of the commands", "Before any command", "For building ww itself", "Settings"};
+    for (int section = 0; section <= 4; section++) {
+        out << "\n" << titles[section] << ":\n";
+        for (const HelpEntry& e : kHelp) {
+            if (e.section != section) continue;
+            const std::string left = section == 1 ? std::string(e.name) + "  (ww " + e.of + ")" : section == 0 ? e.brief : section == 4 ? "ww --help settings" : e.name;
+            out << "  " << left;
+            out << std::string(left.size() < 36 ? 36 - left.size() : 1, ' ') << e.summary << "\n";
+        }
+    }
+    out << "\nMore on any of them: ww --help <command or option>, as in ww --help build, ww --help --exe.\n";
+    return out.str();
+}
+
+// `ww --help <name>`: each entry of that name (an option two commands take is said of each).
+int helpOn(const std::string& asked) {
+    std::string name = asked;
+    if (name == "-h" || name == "help") name = "--help";
+    if (name == "-v") name = "--version";
+    if (name == "ww") name = "shell";
+    if (name.rfind("WW_", 0) == 0) name = "settings";
+    bool found = false;
+    for (const HelpEntry& e : kHelp) {
+        if (name != e.name) continue;
+        if (found) std::cout << "\n";
+        found = true;
+        std::cout << e.usage << "\n";
+        if (*e.of != '\0') std::cout << "(an option of ww " << e.of << ")\n";
+        std::cout << "\n" << e.details << "\n";
+    }
+    if (found) return 0;
+    std::cerr << "ww: there is no command or option '" << asked << "'; ww --help lists them all\n";
+    return kExitUsage;
+}
+
+// The files of the libraries ww.exe carries written under `folder` (Jade/Block.ww and so on),
+// each as it was in lib/ when ww was built; false where one could not be written.
+bool writeLibraryFiles(const std::filesystem::path& folder) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    size_t from = 0;
+    for (size_t i = 0; i < kLibFileCount; i++) {
+        const fs::path file = folder / fs::u8path(kLibFileNames[i]);
+        fs::create_directories(file.parent_path(), ec);
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(kLibSource + from), static_cast<std::streamsize>(kLibFileEnds[i] - from));
+        if (!out) return false;
+        from = kLibFileEnds[i];
+    }
+    return true;
+}
+
+// The names of the libraries ww.exe carries: the folders directly inside lib/ (Jade).
+std::vector<std::string> builtInLibraryNames() {
+    std::vector<std::string> names;
+    for (size_t i = 0; i < kLibFileCount; i++) {
+        const std::string path = kLibFileNames[i];
+        const std::string top = path.substr(0, path.find('/'));
+        if (std::find(names.begin(), names.end(), top) == names.end()) names.push_back(top);
+    }
+    return names;
+}
+
+// Said wherever the standard library's files are written out (2026-11-18, the user's words: that
+// they are just for reading, and that ww.exe can't and won't use them).
+const char* const kStdReadOnly =
+    "these files of the standard library are for reading only: ww.exe can't and won't use them. It uses the copy "
+    "compiled into it when it was built, whatever is changed here; changing the standard library means building "
+    "ww.exe again.";
+
+// The standard library's files, as they were in src/std when ww was built, written into
+// `folder`, with a README.txt saying they are only to be read; false where one could not be.
+bool writeStdFiles(const std::filesystem::path& folder) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(folder, ec);
+    size_t from = 0;
+    for (size_t i = 0; i < kStdFileCount; i++) {
+        // Each file is followed by a line end of the packing's own (embed.cmake), not the file's.
+        std::ofstream out(folder / fs::u8path(kStdFileNames[i]), std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(kStdSource + from), static_cast<std::streamsize>(kStdFileEnds[i] - 1 - from));
+        if (!out) return false;
+        from = kStdFileEnds[i];
+    }
+    std::ofstream readme(folder / "README.txt", std::ios::binary | std::ios::trunc);
+    readme << "WinterWolf " WW_VERSION ": " << kStdReadOnly << "\n";
+    return static_cast<bool>(readme);
+}
+
+// `ww lib --std <folder> [--replace]`: the standard library's files written into <folder>/std,
+// to be read; never where ww looks for libraries, and ww never uses them (kStdReadOnly).
+int libStdCommand(const std::string& named, bool replace) {
+    namespace fs = std::filesystem;
+    if (named.empty()) {
+        std::cerr << "ww: usage: ww lib --std <folder> [--replace]: the standard library's files, written into <folder>/std to be read\n";
+        return kExitUsage;
+    }
+    std::error_code ec;
+    const fs::path to = fs::path(named) / "std";
+    if (fs::equivalent(fs::path(named), executablePath().parent_path() / "lib", ec)) {
+        std::cerr << "ww: the lib folder beside ww.exe is where ww looks for libraries; write the standard library's files somewhere else\n";
+        return kExitUsage;
+    }
+    if (!replace && fs::exists(to, ec)) {
+        std::cerr << "ww: " << to.string() << " is there already, and is left as it is; ww lib --std " << named << " --replace writes ww's own over it\n";
+        return kExitCannotWrite;
+    }
+    if (!writeStdFiles(to)) {
+        std::cerr << "ww: cannot write the standard library's files into " << to.string() << "\n";
+        return kExitCannotWrite;
+    }
+    std::cout << "the standard library written to " << to.string() << "\n";
+    std::cerr << "ww: warning: " << kStdReadOnly << "\n";
+    return 0;
+}
+
+// `ww lib [<folder>] [--replace]` (2026-11-18): the libraries ww.exe carries written out as files,
+// into the lib folder beside ww.exe unless another is named, so that someone who has only
+// ww.exe may change them: a lib folder beside ww.exe is used in place of what it carries
+// (libraryPaths). A library already there is left as it is, its files someone may have changed,
+// unless --replace says to write ww's over them (files added to it are kept either way).
+int libCommand(const std::vector<std::string>& args) {
+    namespace fs = std::filesystem;
+    bool replace = false, standard = false;
+    std::string named;
+    for (size_t i = 1; i < args.size(); i++) {
+        if (args[i] == "--replace") replace = true;
+        else if (args[i] == "--std") standard = true;
+        else if (named.empty() && args[i].rfind("--", 0) != 0) named = args[i];
+        else {
+            std::cerr << "ww: usage: ww lib [<folder>] [--replace], or ww lib --std <folder> [--replace]\n";
+            return kExitUsage;
+        }
+    }
+    if (standard) return libStdCommand(named, replace);
+    const fs::path beside = executablePath().parent_path() / "lib";
+    const fs::path to = named.empty() ? beside : fs::path(named);
+    std::error_code ec;
+    if (!replace) {
+        std::vector<std::string> there;
+        for (const std::string& library : builtInLibraryNames())
+            if (fs::exists(to / library, ec)) there.push_back((to / library).string());
+        if (!there.empty()) {
+            std::cerr << "ww: " << there[0] << (there.size() > 1 ? " and others are" : " is")
+                      << " there already, and is left as it is (its files may have been changed); "
+                      << "ww lib --replace writes ww's own over them\n";
+            return kExitCannotWrite;
+        }
+    }
+    if (!writeLibraryFiles(to)) {
+        std::cerr << "ww: cannot write the libraries into " << to.string() << "\n";
+        return kExitCannotWrite;
+    }
+    const bool inEffect = fs::equivalent(to, beside, ec);
+    for (const std::string& library : builtInLibraryNames())
+        std::cout << library << " written to " << (to / library).string() << "\n";
+    if (inEffect)
+        std::cout << "a program now takes them from there, in place of those built into ww.exe (ww --version says so); "
+                  << "delete the folder to go back to those\n";
+    else
+        std::cout << "a program takes them from there only once they are in a lib folder beside ww.exe\n";
+    return 0;
+}
 
 // The libraries ww.exe carries, written out once into a folder of this machine's cache named by
 // their hash (lib-<hash>), so that everything that reads a library's files (an import, a
@@ -276,16 +548,7 @@ std::string builtInLibraries() {
         const fs::path temporary = root / (name + "." + std::to_string(pid) + ".tmp");
         fs::remove_all(temporary, ec);
         fs::create_directories(temporary, ec);
-        size_t from = 0;
-        bool written = !ec;
-        for (size_t i = 0; written && i < kLibFileCount; i++) {
-            const fs::path file = temporary / fs::u8path(kLibFileNames[i]);
-            fs::create_directories(file.parent_path(), ec);
-            std::ofstream out(file, std::ios::binary | std::ios::trunc);
-            out.write(reinterpret_cast<const char*>(kLibSource + from), static_cast<std::streamsize>(kLibFileEnds[i] - from));
-            written = static_cast<bool>(out);
-            from = kLibFileEnds[i];
-        }
+        bool written = !ec && writeLibraryFiles(temporary);
         if (written) written = static_cast<bool>(std::ofstream(temporary / ".whole", std::ios::binary) << kLibHash);
         if (written) fs::rename(temporary, dir, ec);
         if (!written || ec) {
@@ -1212,21 +1475,21 @@ int dispatch(const std::vector<std::string>& given) {
 
     const std::string& command = args[0];
     if (command == "--help" || command == "-h" || command == "help") {
-        std::cout << kUsage;
-        return 0;
+        if (args.size() == 1) {
+            std::cout << helpOverview();
+            return 0;
+        }
+        if (args.size() == 2) return helpOn(args[1]);
+        std::cerr << "ww: usage: ww --help [<command or option>]\n";
+        return kExitUsage;
     }
     if (command == "--version" || command == "-v") {
         std::cout << "ww " WW_VERSION "\n";
         // Each library ww carries, and where a program takes it from: a lib folder beside ww
         // that has one is used in its place (libraryPaths), which is said, so that a copy left
         // there is never used unawares.
-        std::vector<std::string> libraries;
-        for (size_t i = 0; i < kLibFileCount; i++) {
-            const std::string top = std::string(kLibFileNames[i]).substr(0, std::string(kLibFileNames[i]).find('/'));
-            if (std::find(libraries.begin(), libraries.end(), top) == libraries.end()) libraries.push_back(top);
-        }
         const std::filesystem::path beside = executablePath().parent_path() / "lib";
-        for (const std::string& library : libraries) {
+        for (const std::string& library : builtInLibraryNames()) {
             std::error_code ec;
             if (std::filesystem::is_directory(beside / library, ec))
                 std::cout << library << ": from " << (beside / library).string() << ", in place of the one built in\n";
@@ -1236,6 +1499,7 @@ int dispatch(const std::vector<std::string>& given) {
         return 0;
     }
     if (command == "shell") return shell();
+    if (command == "lib") return libCommand(args);
 
     if (command == "run") {
         if (args.size() < 2) {
@@ -1353,7 +1617,7 @@ int dispatch(const std::vector<std::string>& given) {
     }
 
     if (command.size() > 1 && command[0] == '-') {
-        std::cerr << "ww: unknown option '" << command << "'\n" << kUsage;
+        std::cerr << "ww: unknown option '" << command << "'; ww --help lists them all\n";
         return kExitUsage;
     }
 

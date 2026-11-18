@@ -66,7 +66,14 @@ ww test [<file or folder>...]      run the tests (@Test) of the files, or of the
 ww dis <file>                      list the bytecode of a source or bytecode file
 ww doc <file>... [-o <page.html>]  a reference page of the files' declarations, from the
                                    comments above them (--template, --missing)
+ww lib [<folder>] [--replace]      write the libraries ww carries (Jade) out as files, to
+                                   change them; --std <folder>: the standard library's, to read
+ww --version                       the version, and where each library comes from
+ww --help [<command or option>]    every command and option; more on one of them
 ```
+
+`ww --help` lists every command and option, one line each; `ww --help build`, `ww --help --exe`
+or `ww --help settings` (the `WW_...` environment variables) says more of one.
 
 `ww doc` describes each declaration by the `//` comment written directly above it; a comment
 standing on its own (a blank line after it) is a heading, `// ---- Part ----` or `// -- Group --`,
@@ -2146,8 +2153,11 @@ where there is one, then among the libraries `ww.exe` carries inside itself, and
 The libraries that come with WinterWolf, such as `Jade`, are inside `ww.exe`, so `ww.exe`
 alone runs and builds a program that imports them. A library in a `lib` folder beside it is
 used in place of the one of that name inside it, whole (a newer `Jade` without building ww
-again); `ww --version` says which each is. A module that cannot be found is said at once:
-`cannot find module 'Jade'`.
+again); `ww --version` says which each is. `ww lib` writes the libraries `ww.exe` carries
+into that folder as files, so that someone with only `ww.exe` can change them; a library
+already there is left as it is unless `ww lib --replace` (files added to it are kept), and
+`ww lib <folder>` writes them anywhere else, to read. A module that cannot be found is said at
+once: `cannot find module 'Jade'`.
 
 **Order.** Within a file, and across the files of a folder that is imported as a whole, the
 order of declarations does not matter. Before anything else runs, the imports are loaded, the
