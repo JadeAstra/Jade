@@ -5249,7 +5249,7 @@ private:
         emitGet(innerBound, inner);
         emit(Op::StaticField);
         emitU16(stringConstant(inner.name));
-        emitU16(kFieldVal);
+        emitU16(kFieldVal | kFieldNested);
         emit(Op::Pop);
     }
 

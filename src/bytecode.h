@@ -651,6 +651,7 @@ inline int numericArity(uint8_t which) {
 const int kFieldVal = 0x100;       // the field can be assigned only once
 const int kFieldRequired = 0x200;  // the initializer has to assign it
 const int kFieldOverride = 0x400;  // declared again, in place of the superclass's field of that name
+const int kFieldNested = 0x800;    // a static: a class or an object declared inside the class (StaticField)
 
 // Maps a built-in type name to its TypeId; returns 0 for any other name.
 uint8_t builtinTypeId(const std::string& name);

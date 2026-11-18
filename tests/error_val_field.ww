@@ -1,0 +1,7 @@
+// A val field of a class given another value from outside it (o-m8-header, 2026-11-18): the
+// checker says so, where the program had stopped only as it ran.
+class Point(val x : int, var y : int)
+val p = Point(1, 2)
+p.y = 3
+p.x = 4
+// expect compile error: 'x' of Point is a val: it is given its value once, as its object is made; declare it var to change it

@@ -947,7 +947,7 @@ static int analyzeStack(FunctionProto& f, const Program& program, bool partial, 
                 case Op::StaticField: {
                     requireName(a);
                     int id = b & kTypeMask;
-                    if (id >= kTypeCount_ || (b & ~(0xFF | kFieldVal)) != 0) fail("bad field declaration");
+                    if (id >= kTypeCount_ || (b & ~(0xFF | kFieldVal | kFieldNested)) != 0) fail("bad field declaration");
                     pops = id == kTypeInstance ? 3 : 2;
                     pushes = 1;
                     break;

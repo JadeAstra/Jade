@@ -1,0 +1,7 @@
+// A header val given another value in its class's own init block (o-m8-header, 2026-11-18):
+// the header gives it its value first, so the checker refuses it, as the program would as it ran.
+class Thing(val n : int = 1) {
+  init { this.n = 2 }
+}
+print(Thing().n)
+// expect compile error: 'n' of Thing is a val, and has its value already here (its class's header gives it), so it cannot be given another; declare it var to change it

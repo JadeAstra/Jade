@@ -23,7 +23,7 @@ fun attempt(f : () -> any?) {
 print(attempt(fun() => unknown(Student)("Bob")))          // expect: Student.init() expects 2 argument(s) but got 1
 print(attempt(fun() => Student(unknown(7), 9)))           // expect: cannot assign a value of type int to field 'name' of Student, which is declared as string
 print(attempt(fun() { s.grade = unknown("A") }))          // expect: cannot assign a value of type string to field 'grade' of Student, which is declared as int
-print(attempt(fun() { v.x = 0 }))                // expect: cannot assign to val field 'x' of Vec2
+print(attempt(fun() { unknown(v).x = 0 }))      // expect: cannot assign to val field 'x' of Vec2
 print(attempt(fun() { unknown(s).nickname = "A" }))       // expect: Student has no field 'nickname'; fields must be declared in the class with val or var
 
 // header and body fields together; untyped and nullable header fields
@@ -68,7 +68,7 @@ print(Puppy("Bit").describe(), "/", Snake("Sid").describe())   // expect: Bit ha
 print(Puppy("Bit") is Animal, Puppy("Bit").breed)    // expect: true mutt
 print(attempt(fun() => Dog(unknown(5), "x")))             // expect: argument 'name' of Dog.init() must be string, got int
 print(attempt(fun() => Dog("Rex", unknown(5))))           // expect: cannot assign a value of type int to field 'breed' of Dog, which is declared as string
-print(attempt(fun() { Snake("Sid").name = "x" }))    // expect: cannot assign to val field 'name' of Snake
+print(attempt(fun() { unknown(Snake("Sid")).name = "x" }))    // expect: cannot assign to val field 'name' of Snake
 
 // superclasses with a hand-written init, with no init at all, and one that needs arguments
 class Base {

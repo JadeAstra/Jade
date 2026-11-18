@@ -1,0 +1,10 @@
+// `x!!` leaves x not null for the rest of the block (o-m8-smartcast), but not where the same
+// statement gives x another value: here node is what node!!.next was, which may be null.
+class Node(val n : int, val next : Node?)
+fun second(start : Node?) : int {
+  var node = start
+  node = node!!.next
+  return node.n
+}
+print(second(Node(1, Node(2, null))))
+// expect compile error: a Node? may be null, so .n cannot be used on it; use ?.n, or check it first

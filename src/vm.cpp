@@ -2622,6 +2622,11 @@ bool VM::invoke(ObjString* name, int argc, bool trailing) {
                 return true;
             }
             if (const int done = scopeFunction(name, argc)) return done == 2;
+            if (Value inner; nestedThrough(instance, name, inner)) {
+                // `Store.Box(1)`: a class declared inside the object's, made (o-m8-nested).
+                sp_[-argc - 1] = inner;
+                return trailing ? callValueTrailing(inner, argc) : callValue(inner, argc);
+            }
             throw runtimeError(Thrown::UnsupportedOperationException, "undefined method '" + name->utf8() + "' on " + instance->cls->name->utf8());
         }
 
@@ -2967,6 +2972,7 @@ Value VM::getProperty(Value obj, ObjString* name) {
                     throw runtimeError(Thrown::IllegalStateException, "'" + name->utf8() + "' of " + instance->cls->name->utf8() + " is read before it is given a value " +
                                        "(a lateinit field is read only once it has one)");
                 }
+                if (Value inner; nestedThrough(instance, name, inner)) return inner;  // `Store.Inner` (o-m8-nested)
                 throw runtimeError(Thrown::UnsupportedOperationException, "undefined property '" + name->utf8() + "' on " + instance->cls->name->utf8());
             }
             case ObjType::Value: {
@@ -4485,6 +4491,18 @@ Value VM::mapValues(ObjMap* map) {
     view->viewOf = map;
     view->values = true;
     return Value::object(view);
+}
+
+// A class or an object declared inside the class of `instance`, named through it: `Store.Box`
+// and `Store.Inner` where Store is an object (o-m8-nested), as `Outer.Box` is through a class.
+// Only a static marked so (kFieldNested), never the class's other statics.
+bool VM::nestedThrough(ObjInstance* instance, ObjString* name, Value& out) {
+    ObjClass* cls = instance->cls;
+    if (cls->staticInit != nullptr || (cls->super != nullptr && cls->super->staticInit != nullptr)) ensureClassInit(cls);
+    const Value* at = cls->staticIndex.find(name);
+    if (at == nullptr || !cls->staticDeclared[static_cast<size_t>(at->as.i)].nested) return false;
+    out = getProperty(Value::object(cls), name);
+    return true;
 }
 
 // Runs what works out a class's static values, if it has not run yet, superclasses first.

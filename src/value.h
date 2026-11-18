@@ -1018,6 +1018,10 @@ struct FieldDecl {
     // its object is made, first by the superclass and then by the subclass.
     bool overrides = false;
 
+    // A static that is a class or an object declared inside the class (kFieldNested): reached
+    // through an object's instance too, `Store.Box` (o-m8-nested).
+    bool nested = false;
+
     // For a class-typed field: the class is looked up on first use, by calling `typeThunk`,
     // so that a field may name a class that is declared later in the program.
     ObjClosure* typeThunk = nullptr;

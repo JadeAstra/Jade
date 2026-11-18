@@ -58,8 +58,8 @@ class Point {
 val p = Point(1, 2.5)
 p.tag = "pt"
 print(p, p.moved(1, 1))                 // expect: pt(1, 2.5) point(2, 3.5)
-print(attempt(fun() { p.x = 10 }))      // expect: cannot assign to val field 'x' of Point
-print(attempt(fun() { p.x += 1 }))      // expect: cannot assign to val field 'x' of Point
+print(attempt(fun() { unknown(p).x = 10 }))// expect: cannot assign to val field 'x' of Point
+print(attempt(fun() { unknown(p).x += 1 }))// expect: cannot assign to val field 'x' of Point
 print(attempt(fun() => Point(unknown("a"), 2)))  // expect: argument 'x' of Point.init() must be Number, got string
 print(p.x)                              // expect: 1
 
@@ -68,7 +68,7 @@ class Config {
   val version : int = 3
   val tags = ["a"]
   fun init() { }
-  fun tryChange() { this.version = 4 }
+  fun tryChange() { unknown(this).version = 4 }   // through a value the checker cannot see: it refuses this.version = 4 (2026-11-18)
 }
 val config = Config()
 config.tags.add("b")
@@ -140,7 +140,7 @@ val pup = Puppy("Bit")
 pup.tricks.add("sit")
 print(pup.speak(), pup.legs, pup.tricks, pup.sound2, pup.age)   // expect: Bit says woof 4 ["sit"] ...! 0
 print(attempt(fun() { pup.legs = unknown("many") }))   // expect: cannot assign a value of type string to field 'legs' of Puppy, which is declared as int
-print(attempt(fun() { pup.name = "Rex" }))    // expect: cannot assign to val field 'name' of Puppy
+print(attempt(fun() { unknown(pup).name = "Rex" }))    // expect: cannot assign to val field 'name' of Puppy
 print(attempt(fun() { pup.age = unknown(null) }))      // expect: cannot assign a value of type null to field 'age' of Puppy, which is declared as int
 
 // class-typed fields, including classes that refer to each other and to themselves

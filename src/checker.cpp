@@ -141,7 +141,12 @@ Type subst(const Type& t, const Env& env) {
         auto found = env.find(t.name);
         if (found == env.end()) return t;
         Type r = found->second;
-        if (t.nullable) r = withNull(r);
+        // `R?` where R is nothing: nothing?, which null fits, as `nothing?` written is (o-m8-nothing),
+        // not nothing, which no value has (withNull leaves nothing as it is).
+        if (t.nullable) {
+            if (r.kind == Type::Nothing) r.nullable = true;
+            else r = withNull(r);
+        }
         return r;
     }
     if (t.args.empty() && !t.result && !t.receiver) return t;
@@ -3321,6 +3326,105 @@ struct Checker::Impl {
 
     // What `cond` being true (or false) says about locals: `x != null`, `x is Box`, and their
     // combinations with `and`, `or` and `!`.
+    // `val a = e!!.n` then `e.n`, and `assertNotNull(e)` then `e.n` (o-m8-smartcast, 2026-11-18):
+    // where a statement's `x!!` or assertNotNull(x) always runs, x is not null for the rest of the
+    // block, as in Kotlin (the statement goes no further where it is null). Only the parts of the
+    // statement that always run are looked in: not a lambda's body, the right of && and ||, what
+    // follows ?:, a branch, nor a name the statement also assigns (`node = node!!.next`).
+    void keepNotNull(const Expr& e) {
+        if (narrowed.empty()) return;
+        std::unordered_map<std::string, Type> found;
+        std::unordered_set<std::string> assigned;
+        notNullIn(e, found, assigned);
+        for (const auto& [key, t] : found)
+            if (assigned.count(key) == 0) narrowed.back()[key] = t;
+    }
+    void notNullName(const Expr& name, std::unordered_map<std::string, Type>& into) {
+        if (name.kind == ExprKind::Name) {
+            const std::string& n = static_cast<const NameExpr&>(name).name;
+            if (Local* l = findLocal(n)) {
+                const Type t = localType(n, *l);
+                if (t.known() && t.nullable) into[n] = withNull(t, false);
+                return;
+            }
+        }
+        if (name.kind != ExprKind::Member && name.kind != ExprKind::Name) return;
+        const std::string key = stablePath(name);
+        if (key.empty()) return;
+        silent++;
+        const Type t = expr(name);
+        silent--;
+        if (t.known() && t.nullable) into[key] = withNull(t, false);
+    }
+    void notNullIn(const Expr& e, std::unordered_map<std::string, Type>& into, std::unordered_set<std::string>& assigned) {
+        switch (e.kind) {
+            case ExprKind::Unary: {
+                const auto& u = static_cast<const UnaryExpr&>(e);
+                notNullIn(*u.operand, into, assigned);
+                if (u.op == TokenType::BangBang) notNullName(*u.operand, into);
+                return;
+            }
+            case ExprKind::Binary: {
+                const auto& b = static_cast<const BinaryExpr&>(e);
+                notNullIn(*b.left, into, assigned);
+                notNullIn(*b.right, into, assigned);
+                return;
+            }
+            case ExprKind::Logical:
+                notNullIn(*static_cast<const LogicalExpr&>(e).left, into, assigned);
+                return;
+            case ExprKind::Elvis:
+                notNullIn(*static_cast<const ElvisExpr&>(e).left, into, assigned);
+                return;
+            case ExprKind::Ternary:
+                notNullIn(*static_cast<const TernaryExpr&>(e).condition, into, assigned);
+                return;
+            case ExprKind::Assign: {
+                const auto& a = static_cast<const AssignExpr&>(e);
+                if (a.target->kind == ExprKind::Name || a.target->kind == ExprKind::Member) assigned.insert(stablePathOrName(*a.target));
+                if (a.target->kind == ExprKind::Member) notNullIn(*static_cast<const MemberExpr&>(*a.target).object, into, assigned);
+                notNullIn(*a.value, into, assigned);
+                return;
+            }
+            case ExprKind::IncDec: {
+                const auto& i = static_cast<const IncDecExpr&>(e);
+                if (i.target->kind == ExprKind::Name || i.target->kind == ExprKind::Member) assigned.insert(stablePathOrName(*i.target));
+                return;
+            }
+            case ExprKind::Call: {
+                const auto& c = static_cast<const CallExpr&>(e);
+                if (c.callee->kind == ExprKind::Member) notNullIn(*static_cast<const MemberExpr&>(*c.callee).object, into, assigned);
+                for (const ExprPtr& a : c.args) notNullIn(*a, into, assigned);
+                if (c.callee->kind == ExprKind::Name && static_cast<const NameExpr&>(*c.callee).name == "assertNotNull" &&
+                    findLocal("assertNotNull") == nullptr && !nameIsMember("assertNotNull") && !c.args.empty())
+                    notNullName(*c.args[0], into);
+                return;
+            }
+            case ExprKind::Member:
+                notNullIn(*static_cast<const MemberExpr&>(e).object, into, assigned);
+                return;
+            case ExprKind::Index: {
+                const auto& i = static_cast<const IndexExpr&>(e);
+                notNullIn(*i.object, into, assigned);
+                notNullIn(*i.index, into, assigned);
+                return;
+            }
+            case ExprKind::Cast:
+                notNullIn(*static_cast<const CastExpr&>(e).value, into, assigned);
+                return;
+            case ExprKind::Interp:
+                for (const ExprPtr& part : static_cast<const InterpExpr&>(e).parts) notNullIn(*part, into, assigned);
+                return;
+            default:
+                return;  // a lambda, a when, an object, a list: not looked in
+        }
+    }
+    std::string stablePathOrName(const Expr& target) {
+        if (target.kind == ExprKind::Name && findLocal(static_cast<const NameExpr&>(target).name) != nullptr)
+            return static_cast<const NameExpr&>(target).name;
+        return stablePath(target);
+    }
+
     void narrowFrom(const Expr& cond, bool whenTrue, std::unordered_map<std::string, Type>& into) {
         switch (cond.kind) {
             case ExprKind::Unary: {
@@ -3529,9 +3633,11 @@ struct Checker::Impl {
                 wholeStatements.insert(static_cast<const ExprStmt&>(s).expr.get());
                 expr(*static_cast<const ExprStmt&>(s).expr);
                 unusedCopy(*static_cast<const ExprStmt&>(s).expr);
+                keepNotNull(*static_cast<const ExprStmt&>(s).expr);
                 break;
             case StmtKind::Var:
                 varStmt(static_cast<const VarStmt&>(s));
+                if (static_cast<const VarStmt&>(s).init) keepNotNull(*static_cast<const VarStmt&>(s).init);
                 break;
             case StmtKind::Block:
                 block(static_cast<const BlockStmt&>(s).statements);
@@ -3569,6 +3675,8 @@ struct Checker::Impl {
                         if (both.known()) narrowed.back()[name] = both;
                     }
                 }
+                // `if (x!!.ready)`: the condition ran whichever way it went.
+                keepNotNull(*i.condition);
                 // `if (x == null) return`: from here on x is not null.
                 if (alwaysLeaves(*i.then) && !narrowed.empty())
                     for (auto& [name, t] : no) narrowed.back()[name] = t;
@@ -4988,6 +5096,7 @@ struct Checker::Impl {
                 const auto& i = static_cast<const IncDecExpr&>(e);
                 atomicIncDec(i);
                 checkValueFieldWrite(*i.target);
+                checkClassValWrite(*i.target);
                 if (FieldInfo* p = propertyAssigned(*i.target)) noteAccessor(p, true, *i.target);
                 const Expr* const before = assigning;
                 if (i.target->kind == ExprKind::Member) assigning = i.target.get();
@@ -6251,6 +6360,68 @@ struct Checker::Impl {
             notePlaceChange(*object, owner);
     }
 
+    // Whether a class's init is the one made from its header (compiler.cpp's hasGeneratedInit).
+    static bool generatesInit(const ClassStmt& s) {
+        if (!s.hasHeader && !s.hasSuperArgs && s.initBlocks.empty()) return false;
+        for (const auto& method : s.methods)
+            if (!method->isStatic && method->accessor == FunctionDecl::Accessor::None && method->name == "init") return false;
+        return true;
+    }
+
+    // `x.name = v`, `name = v` or `name++` on a val field of a class (a value's: checkValueFieldWrite),
+    // which the run refuses (VM::checkFieldAssignment): a val is given its value once (o-m8-header,
+    // 2026-11-18; the checker had said nothing, and the program stopped where it ran). While its
+    // object is being made (an init, an init block, an initial value), `this.name` or `name` may give
+    // one that has no value yet; one has a value already where its class's header gives it (an init
+    // made from the header, or the header's `= value` in a class with its own init) or its declaration
+    // does, but for an override, given its value again as its object is made.
+    void checkClassValWrite(const Expr& target) {
+        ClassInfo* owner = nullptr;
+        std::string name;
+        bool onThis = false;
+        if (target.kind == ExprKind::Member) {
+            const auto& m = static_cast<const MemberExpr&>(target);
+            const Type type = typeQuietly(*m.object);
+            if (type.kind == Type::Class && type.cls != nullptr) owner = type.cls;
+            name = m.name;
+            onThis = m.object->kind == ExprKind::This;
+        } else if (target.kind == ExprKind::Name) {
+            const auto& n = static_cast<const NameExpr&>(target);
+            bool escape = false;
+            if (findLocal(n.name) != nullptr || onReceivers(n.name, escape) != nullptr || escape) return;
+            if (ctx != nullptr) owner = ctx->cls;
+            name = n.name;
+            onThis = true;
+        }
+        if (owner == nullptr || owner->isValue) return;
+        FieldInfo* field = fieldNamed(owner, name);
+        if (field == nullptr || !field->isVal || field->getterFn != nullptr || field->setterFn != nullptr || field->decl == nullptr) return;
+        if (field->decl->getter != nullptr || field->decl->setter != nullptr) return;
+        bool making = false;
+        for (FnCtx* c = ctx; c != nullptr && onThis; c = c->parent) {
+            if (c->cls != nullptr && isSubclass(c->cls, field->owner) && (c->noWait == ObjectMade || (c->fn != nullptr && c->fn->name == "init"))) {
+                making = true;
+                break;
+            }
+            if (!c->isLambda) break;
+        }
+        std::string given;
+        if (field->header != nullptr) {
+            const ClassStmt* cls = field->owner != nullptr ? field->owner->decl : nullptr;
+            if (cls != nullptr && generatesInit(*cls)) given = "its class's header gives it";
+            else if (field->header->defaultValue != nullptr) given = "it is given one in the class header";
+        } else if (field->decl->init != nullptr || field->decl->isLazy) {
+            given = "it is given one where it is declared";
+        }
+        if (making && (given.empty() || field->decl->isOverride)) return;
+        const std::string what = "'" + name + "' of " + field->owner->name + " is a val";
+        if (making)
+            report(target, what + ", and has its value already here (" + given + "), so it cannot be given another; declare it var " +
+                               "to change it");
+        else
+            report(target, what + ": it is given its value once, as its object is made; declare it var to change it");
+    }
+
     const CallExpr* methodCall = nullptr;  // the call callFunctions is checking
 
     // ---- Which lists a function may change (M6.6 part 4, value-lists.html section 6) ----
@@ -6752,6 +6923,7 @@ struct Checker::Impl {
         atomicAssign(a);
         noteStaticAssigned(*a.target);
         checkValueFieldWrite(*a.target);
+        checkClassValWrite(*a.target);
         if (FieldInfo* p = propertyAssigned(*a.target)) noteAccessor(p, true, *a.target);
         struct Restore {
             const Node*& at;
@@ -7052,6 +7224,9 @@ struct Checker::Impl {
         }
         Type obj = expr(*m.object);
         noteAskedOf(m, obj);
+        // `Store.Inner.size`: an object nested in an object, reached through the object's name, as
+        // through a class's (o-m8-nested); a class nested in it is a name, as staticMember says.
+        if (ClassInfo* inner = nestedInObject(obj, m.name)) return inner->isObject ? classType(inner) : unknownType();
         Type result = memberOf(obj, m.name, m, m.safe);
         if (obj.kind == Type::Class && obj.cls != nullptr) {
             if (FieldInfo* f = fieldNamed(obj.cls, m.name)) {
@@ -7219,6 +7394,19 @@ struct Checker::Impl {
             return written + "." + name + " is written " + written + "#.name, the name of its class; " + written + "# is the class itself (D48)";
         if (name == "class" || name == "javaClass") return written + "." + name + " is written " + written + "#, its class (D48)";
         return "";
+    }
+
+    // A class or object nested in the object `obj` is, named `name`, where the object has no member
+    // of that name (o-m8-nested): `Store.Box`, `Outer.Inner`. Null for anything else.
+    ClassInfo* nestedInObject(const Type& obj, const std::string& name) {
+        if (obj.kind != Type::Class || obj.cls == nullptr || !obj.cls->isObject || obj.nullable) return nullptr;
+        ClassInfo* const k = obj.cls;
+        auto inner = k->nested.find(name);
+        if (inner == k->nested.end()) return nullptr;
+        if (fieldNamed(k, name) != nullptr) return nullptr;
+        for (ClassInfo* c = k; c != nullptr; c = c->superclass)
+            if (c->methods.count(name) != 0 || c->getters.count(name) != 0) return nullptr;
+        return inner->second;
     }
 
     ClassInfo* classNamed(const std::string& base) {
@@ -10518,6 +10706,12 @@ struct Checker::Impl {
                 return unknownType();
             }
             if (obj.kind == Type::Nothing) return obj;
+            // `Store.Box(1)`: a class nested in an object, made through the object's name, as one
+            // nested in a class is through the class's (o-m8-nested).
+            if (ClassInfo* inner = nestedInObject(obj, m.name); inner != nullptr && !inner->isObject) {
+                Args args{c.args, c.names, c.trailingLambda, c.hasSpread, &c.spread};
+                return constructorCall(inner, args, c.typeArgs, c);
+            }
             if (obj.kind == Type::Null) {
                 // `null to x`, `null.let { }`: a function for any T takes null, as in Kotlin.
                 if (!m.safe) {

@@ -1582,6 +1582,7 @@ private:
     WwThrow accessError(Value target, const ObjString* name, const FunctionProto* proto);
     WwThrow undefinedName(const CallFrame* frame, const Value* base, const ObjString* name, size_t global);
     void ensureClassInit(ObjClass* cls);
+    bool nestedThrough(ObjInstance* instance, ObjString* name, Value& out);
 
 public:
     // One entry of a map, as `map.entries` gives it: an object with a key and a value.

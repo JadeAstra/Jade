@@ -2670,6 +2670,7 @@ CASE(StaticField) {
     field.name = name;
     field.type = static_cast<uint8_t>(flags & 0xFF);
     field.isVal = (flags & kFieldVal) != 0;
+    field.nested = (flags & kFieldNested) != 0;
     const bool classTyped = (field.type & kTypeMask) == kTypeInstance;
     Value value = sp_[-1];
     Value target = sp_[classTyped ? -3 : -2];
