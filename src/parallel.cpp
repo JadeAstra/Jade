@@ -656,8 +656,11 @@ void VM::runSection(ParallelSection& section) {
         }
     }
     // The outermost section over: what the cores made is the program's, and nobody's in particular.
-    if (section.parent == nullptr && coreId_ == 0)
+    if (section.parent == nullptr && coreId_ == 0) {
         for (VM* core : pool.vms) adoptObjects(*core);
+        // And the run code's words its cores wrote, which waited for them to stop (writeRunWord).
+        if (wordsWaiting_.load()) writeWaitingWords();
+    }
     for (const ParallelPiece& piece : section.pieces)
         if (piece.failed) throw piece.error;
 }

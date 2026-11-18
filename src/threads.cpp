@@ -308,6 +308,8 @@ void VM::safePoint() {
     if (attention_.load(std::memory_order_relaxed)) {
         if (lockWaiters_.load() > 0) yieldLock();
         else if (!threadStress_) attention_ = false;
+        // (After the flag is put down: words left waiting after this put it up again.)
+        if (wordsWaiting_.load()) writeWaitingWords();
     }
 }
 

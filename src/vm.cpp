@@ -129,6 +129,7 @@ VM::VM(bool worker) : output(&std::cout), errorOutput(&std::cerr), input(&std::c
 VM::~VM() {
     dropWaitingBuilds();  // what this VM asked the builder for, which reads its objects
     parallelPool_.reset();  // its cores first: they work on this VM's objects
+    dropWaitingBuilds();    // (and the run code words its cores left waiting for it as they ended)
     releaseAllBlocks();
     Obj* obj = objects_;
     while (obj != nullptr) {
@@ -2134,7 +2135,7 @@ void VM::callClosure(ObjClosure* closure, int argc, bool packed) {
                                     : nullptr;
 
     CallFrame& frame = frames_[static_cast<size_t>(frameCount_++)];
-    frame.dropResult = false;
+    frame.dropResult = 0;
     frame.repeats = 0;
     frame.closure = closure;
     // A generic function takes those WithTypes gave; a lambda has those of where it was made.
@@ -2780,7 +2781,7 @@ int VM::scopeFunction(ObjString* name, int argc) {
         *sp_++ = receiver;
         callClosure(asClosure(block), 1);
     }
-    frames_[static_cast<size_t>(frameCount_ - 1)].dropResult = true;
+    frames_[static_cast<size_t>(frameCount_ - 1)].dropResult |= kDropResult;
     return 2;
 }
 
@@ -5973,7 +5974,7 @@ void VM::run(int baseFrame) {
             for (int left_ = (argc); left_ < proto_->quickArity; left_++) *sp++ = Value::undefined();         \
             frame->ip = ip + (size);                                                                          \
             CallFrame& next_ = frames_[static_cast<size_t>(frameCount_++)];                                   \
-            next_.dropResult = false; next_.repeats = 0;                                                                         \
+            next_.dropResult = 0; next_.repeats = 0;                                                                             \
             next_.closure = quick_;                                                                           \
             next_.ip = proto_->run.data();                                                                    \
             next_.base = base_;                                                                               \
@@ -6911,10 +6912,55 @@ MakeWay makeWay() {
 std::mutex nativeMaking;
 std::mutex nativeStates;
 
+// ---- Run code's words, written while no other thread runs them (2026-11-18) ----
+// Each instruction's word (its function's address, kThreaded bytes) starts where the instruction
+// before it ends, at any byte: so one may lie across two cache lines, and a core reading it as
+// another writes it may take half of each address (o-pstress: parallel.ww under thread stress,
+// a core jumped to tail<Return>'s address with nativeReturn's low byte, one run in some 500).
+// So a word is written only by the program's own VM (VM::runsProgramAlone), under nativeStates:
+// while it runs no other thread runs the program's code. One written by a section's core or the
+// builder waits for it (VM::writeWaitingWords: at its next safe point, or as the section ends),
+// the latest for each word; meanwhile each VM::native* way in does rightly whatever its word says.
+struct WaitingWord {
+    const VM* program;
+    FunctionProto* f;
+    uint32_t at;
+    uint64_t word;
+};
+std::vector<WaitingWord> waitingWords;  // under nativeStates
+
+uint64_t wordOf(const TailFn& to) {
+    uint64_t word;
+    std::memcpy(&word, &to, kThreaded);
+    return word;
+}
+// Instruction `at`'s word in f's run code made `to`'s: here, by `by` running the program alone,
+// or waiting for the program's VM (`by` null: the builder, for `asker`). Under nativeStates.
+void writeRunWord(VM* by, const VM* asker, FunctionProto& f, uint32_t at, const TailFn& to) {
+    const uint64_t word = wordOf(to);
+    if (by != nullptr && by->runsProgramAlone()) {
+        // (One waiting for this word is older: dropped.)
+        if (!waitingWords.empty()) std::erase_if(waitingWords, [&](const WaitingWord& w) { return w.f == &f && w.at == at; });
+        std::memcpy(f.run.data() + at, &word, kThreaded);
+        return;
+    }
+    VM& program = const_cast<VM*>(by != nullptr ? by : asker)->programVM();
+    for (WaitingWord& w : waitingWords)
+        if (w.f == &f && w.at == at) {
+            w.word = word;
+            program.wordsWaiting();
+            return;
+        }
+    waitingWords.push_back({&program, &f, at, word});
+    program.wordsWaiting();
+}
+// The instruction's own function, as its word holds it with no native code.
+TailFn ownOf(const uint8_t* run, uint32_t at) { return TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))]; }
+
 // A loop's regions published (under nativeStates): the function's list replaced whole (less
 // those dropped: one made again has the same ways in, found first otherwise), its head its own
 // instruction, each way in the VM's way into its region.
-void publishLoop(FunctionProto& f, size_t which, const std::vector<FunctionProto::NativeRegion>& made) {
+void publishLoop(VM* by, const VM* asker, FunctionProto& f, size_t which, const std::vector<FunctionProto::NativeRegion>& made) {
     auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
     if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
         for (const FunctionProto::NativeRegion& r : *now)
@@ -6922,17 +6968,15 @@ void publishLoop(FunctionProto& f, size_t which, const std::vector<FunctionProto
     list->insert(list->end(), made.begin(), made.end());
     f.regionsNow.store(list.get(), std::memory_order_release);
     f.regionLists.push_back(std::move(list));
-    uint8_t* const run = f.run.data();
     const uint32_t head = f.nativeHeads[which];
-    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
-    std::memcpy(run + head, &own, kThreaded);
+    writeRunWord(by, asker, f, head, ownOf(f.run.data(), head));
     const TailFn enter = TailTable::nativeEntry();
-    for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+    for (const FunctionProto::NativeRegion& r : made) writeRunWord(by, asker, f, r.head, enter);
     const uint8_t was = f.nativeArrivals[which];
     f.nativeArrivals[which] = was == 3 || was == 6 ? 4 : 2;
 }
 // A whole function's region published (its returns already their own instructions again).
-void publishFunction(FunctionProto& f, const std::vector<FunctionProto::NativeRegion>& made) {
+void publishFunction(VM* by, const VM* asker, FunctionProto& f, const std::vector<FunctionProto::NativeRegion>& made) {
     if (made.empty()) return;
     auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
     if (const auto* now = f.regionsNow.load(std::memory_order_acquire))  // (less those dropped)
@@ -6942,7 +6986,7 @@ void publishFunction(FunctionProto& f, const std::vector<FunctionProto::NativeRe
     f.regionsNow.store(list.get(), std::memory_order_release);
     f.regionLists.push_back(std::move(list));
     const TailFn enter = TailTable::nativeEntry();
-    for (const FunctionProto::NativeRegion& r : made) std::memcpy(f.run.data() + r.head, &enter, kThreaded);
+    for (const FunctionProto::NativeRegion& r : made) writeRunWord(by, asker, f, r.head, enter);
 }
 
 constexpr size_t kWholeFunction = SIZE_MAX;
@@ -6961,7 +7005,7 @@ struct Build {
 // into them; its times round set one short of kCountedRounds, so that where it is running yet
 // (on a long loop) it leaves at its next, and the VM goes on in these. Made none (refused),
 // that one stays.
-void publishCounted(FunctionProto& f, RegionCounts* counted, const std::vector<FunctionProto::NativeRegion>& made) {
+void publishCounted(VM* by, const VM* asker, FunctionProto& f, RegionCounts* counted, const std::vector<FunctionProto::NativeRegion>& made) {
     if (made.empty()) return;
     auto list = std::make_unique<std::vector<FunctionProto::NativeRegion>>();
     std::vector<uint32_t> old;
@@ -6973,13 +7017,9 @@ void publishCounted(FunctionProto& f, RegionCounts* counted, const std::vector<F
     list->insert(list->end(), made.begin(), made.end());
     f.regionsNow.store(list.get(), std::memory_order_release);
     f.regionLists.push_back(std::move(list));
-    uint8_t* const run = f.run.data();
-    for (uint32_t at : old) {
-        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))];
-        std::memcpy(run + at, &own, kThreaded);
-    }
+    for (uint32_t at : old) writeRunWord(by, asker, f, at, ownOf(f.run.data(), at));
     const TailFn enter = TailTable::nativeEntry();
-    for (const FunctionProto::NativeRegion& r : made) std::memcpy(run + r.head, &enter, kThreaded);
+    for (const FunctionProto::NativeRegion& r : made) writeRunWord(by, asker, f, r.head, enter);
     counted->runs[counted->at.size() + 1] = 0;  // (where it runs on, it leaves at its next time round)
 }
 void makeAndPublish(Build& b) {
@@ -6989,9 +7029,9 @@ void makeAndPublish(Build& b) {
         if (makeNativeRegions != nullptr && native::enabled()) makeNativeRegions(*b.f, *b.seen, b.head, made);
     }
     std::lock_guard<std::mutex> hold(nativeStates);
-    if (b.counted != nullptr) publishCounted(*b.f, b.counted, made);
-    else if (b.which == kWholeFunction) publishFunction(*b.f, made);
-    else publishLoop(*b.f, b.which, made);
+    if (b.counted != nullptr) publishCounted(nullptr, b.asker, *b.f, b.counted, made);
+    else if (b.which == kWholeFunction) publishFunction(nullptr, b.asker, *b.f, made);
+    else publishLoop(nullptr, b.asker, *b.f, b.which, made);
 }
 // The builder: one thread, started with the first build, taking them in turn. Never destroyed
 // (its thread is let go): as the program ends (stop) it finishes the build under way and drops
@@ -7049,17 +7089,26 @@ public:
             uint8_t& arrived = b->f->nativeArrivals[b->which];
             if (arrived != 5 && arrived != 6) continue;
             arrived = arrived == 6 ? 3 : 1;
-            std::memcpy(b->f->run.data() + b->head, &first, kThreaded);
+            writeRunWord(const_cast<VM*>(asker), asker, *b->f, b->head, first);
         }
     }
     // The builds of functions a program owns, as it ends (the program goes before its VM).
     void dropFunctions(const std::vector<std::unique_ptr<FunctionProto>>& owned) {
-        std::unique_lock<std::mutex> hold(lock_);
-        if (queue_.empty() && current_ == nullptr) return;
         std::unordered_set<const FunctionProto*> mine;
-        for (const auto& p : owned) mine.insert(p.get());
-        std::erase_if(queue_, [&](const std::shared_ptr<Build>& b) { return mine.count(b->f) != 0; });
-        finished_.wait(hold, [&] { return current_ == nullptr || mine.count(current_->f) == 0; });
+        {
+            std::unique_lock<std::mutex> hold(lock_);
+            if (!queue_.empty() || current_ != nullptr) {
+                for (const auto& p : owned) mine.insert(p.get());
+                std::erase_if(queue_, [&](const std::shared_ptr<Build>& b) { return mine.count(b->f) != 0; });
+                finished_.wait(hold, [&] { return current_ == nullptr || mine.count(current_->f) == 0; });
+            }
+        }
+        // And their words waiting to be written (writeRunWord).
+        std::lock_guard<std::mutex> states(nativeStates);
+        if (waitingWords.empty()) return;
+        if (mine.empty())
+            for (const auto& p : owned) mine.insert(p.get());
+        std::erase_if(waitingWords, [&](const WaitingWord& w) { return mine.count(w.f) != 0; });
     }
     void stop() {
         std::unique_lock<std::mutex> hold(lock_);
@@ -7117,8 +7166,8 @@ void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::uniq
     b->head = head;
     b->which = which;
     if (takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled()) {  // none made: as made, of no regions
-        if (which == kWholeFunction) publishFunction(f, {});
-        else publishLoop(f, which, {});
+        if (which == kWholeFunction) publishFunction(this, this, f, {});
+        else publishLoop(this, this, f, which, {});
         return;
     }
     b->seen = seenForRegions(f, base, top);
@@ -7134,16 +7183,14 @@ void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::uniq
             std::lock_guard<std::mutex> making(nativeMaking);
             makeNativeRegions(f, *b->seen, head, made);
         }
-        if (which == kWholeFunction) publishFunction(f, made);
-        else publishLoop(f, which, made);
+        if (which == kWholeFunction) publishFunction(this, this, f, made);
+        else publishLoop(this, this, f, which, made);
         return;
     }
     // Meanwhile the loop's head is its own instruction again (its returns, a function's), and
     // the loop is marked as being made (5; 6 made again).
     if (which != kWholeFunction) {
-        uint8_t* const run = f.run.data();
-        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
-        std::memcpy(run + head, &own, kThreaded);
+        writeRunWord(this, this, f, head, ownOf(f.run.data(), head));
         f.nativeArrivals[which] = f.nativeArrivals[which] == 3 ? 6 : 5;
     }
     states.unlock();
@@ -7187,7 +7234,7 @@ bool VM::remakeCounted(FunctionProto& f, const FunctionProto::NativeRegion& regi
             std::lock_guard<std::mutex> making(nativeMaking);
             makeNativeRegions(f, *b->seen, head, made);
         }
-        publishCounted(f, counted, made);
+        publishCounted(this, this, f, counted, made);
         return !made.empty();
     }
     states.unlock();
@@ -7199,7 +7246,25 @@ bool VM::remakeCounted(FunctionProto& f, const FunctionProto::NativeRegion& regi
     return false;
 }
 
-void VM::dropWaitingBuilds() { Builder::builder().dropFor(this); }
+void VM::dropWaitingBuilds() {
+    Builder::builder().dropFor(this);
+    // The words waiting for this VM (as the program's), none to be written now.
+    std::lock_guard<std::mutex> states(nativeStates);
+    std::erase_if(waitingWords, [&](const WaitingWord& w) { return w.program == this; });
+}
+
+// The run code's words written elsewhere meanwhile (writeRunWord), where this VM runs the program
+// alone: at a safe point, or as a parallel section ends.
+void VM::writeWaitingWords() {
+    if (!runsProgramAlone()) return;
+    std::lock_guard<std::mutex> states(nativeStates);
+    wordsWaiting_ = false;
+    std::erase_if(waitingWords, [&](const WaitingWord& w) {
+        if (w.program != this) return false;
+        std::memcpy(w.f->run.data() + w.at, &w.word, kThreaded);
+        return true;
+    });
+}
 namespace {
 const bool buildsDropped = (dropNativeBuildsOf = [](const std::vector<std::unique_ptr<FunctionProto>>& owned) { Builder::builder().dropFunctions(owned); }, true);
 }  // namespace
@@ -7207,9 +7272,9 @@ const bool buildsDropped = (dropNativeBuildsOf = [](const std::vector<std::uniqu
 // The second time a loop starts (once the VM has run it a time round, its places' caches have
 // seen what they read, and its lists are in the frame): its regions made (by one thread or core
 // at a time), published, and addressed: its first instruction a region's way in, or the
-// instruction's own function again. A core running the function meanwhile reads either address,
-// each one aligned word, and either goes on rightly; a region is made whole before any way into
-// it is written.
+// instruction's own function again: written by the program's VM, or waiting for it where a
+// section's core made them (writeRunWord); meanwhile the head's word says nativeFirst still,
+// which goes into the region. A region is made whole before any way into it is published.
 WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
     FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
@@ -7223,18 +7288,16 @@ WW_TAIL_FN int VM::nativeFirst(WW_TAIL_PARAMS) {
         frame->ip = ip += kThreaded + kOpBytes;
         [[clang::musttail]] return (this->*own)(WW_TAIL_ARGS);
     }
-    if (which < f.nativeHeads.size()) {
+    // 1: made the first time; 3: made again, its regions dropped past their misses' limit
+    // (2026-11-16). (5 and 6: being made by the builder, the head its own instruction; 2 and 4
+    // made, the head's word not written yet, writeRunWord: on without the lock, as the word would.)
+    if (which < f.nativeHeads.size() && (f.nativeArrivals[which] == 1 || f.nativeArrivals[which] == 3)) {
         std::unique_lock<std::mutex> states(nativeStates);
-        // 1: made the first time; 3: made again, its regions dropped past their misses' limit
-        // (2026-11-16). (5 and 6: being made by the builder, the head its own instruction.)
         if (f.nativeArrivals[which] == 1 || f.nativeArrivals[which] == 3) makeRegionsFor(f, head, which, states, base, sp);
     }
-    // On at this instruction, as it is now addressed.
-    ip -= kThreaded + kOpBytes;
-    const TailFn to_ = tailAt(ip);
-    sp_ = sp;
-    frame->ip = ip += kThreaded + kOpBytes;
-    [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
+    // On at this instruction: into its region where one is published (nativeEnter, which does
+    // its own instruction where none is), as its word may not say yet (writeRunWord).
+    [[clang::musttail]] return nativeEnter(WW_TAIL_ARGS);
 }
 
 bool VM::noMemberForRegion(const void* vm, const FunctionProto& f, const ObjString* name, const Value& receiver) {
@@ -7354,13 +7417,23 @@ WW_TAIL_FN int VM::nativeCall(WW_TAIL_PARAMS) {
     FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
     uint8_t* const run = const_cast<uint8_t*>(code);
     const uint32_t head = static_cast<uint32_t>(ip - code) - static_cast<uint32_t>(kThreaded + kOpBytes);
-    if (head == f.nativeCallHead && ++f.nativeCalls == kNativeCallsFirst) {  // racing cores may count one call twice: as well
-        static std::mutex arming;
-        std::lock_guard<std::mutex> hold(arming);
-        const TailFn back = TailTable::nativeReturnEntry();
-        for (uint32_t at : f.nativeReturns) std::memcpy(run + at, &back, kThreaded);
-        const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + head + kThreaded))];
-        std::memcpy(run + head, &own, kThreaded);
+    if (head == f.nativeCallHead) {
+        // (Counted no further once counted: its word may stay this one a while, writeRunWord.)
+        if (f.nativeCalls < kNativeCallsFirst) ++f.nativeCalls;  // racing cores may count one call twice: as well
+        // Its region made (its word not yet the way into it): into it.
+        if (f.nativeCalls == UINT32_MAX) [[clang::musttail]] return nativeEnter(WW_TAIL_ARGS);
+        if (f.nativeCalls >= kNativeCallsFirst) {
+            if (runsProgramAlone()) {  // (counted here, or on a section's core before)
+                std::lock_guard<std::mutex> states(nativeStates);
+                const TailFn back = TailTable::nativeReturnEntry();
+                for (uint32_t at : f.nativeReturns) writeRunWord(this, this, f, at, back);
+                writeRunWord(this, this, f, head, ownOf(run, head));
+            } else {
+                // On a section's core, which writes no return's word: made at this call's return,
+                // or another's that gets there first.
+                frame->dropResult |= kMakeWhole;
+            }
+        }
     }
     ip -= kThreaded + kOpBytes;
     const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
@@ -7369,22 +7442,22 @@ WW_TAIL_FN int VM::nativeCall(WW_TAIL_PARAMS) {
     [[clang::musttail]] return (this->*to_)(WW_TAIL_ARGS);
 }
 
-// A return of a function called often (nativeCall): its whole region made, the frame's slots
-// saying what its locals hold; its start then the region's way in, and its returns their own.
-WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
-    FunctionProto& f = *const_cast<FunctionProto*>(frame->closure->proto);
-    uint8_t* const run = const_cast<uint8_t*>(code);
-    {
-        std::unique_lock<std::mutex> states(nativeStates);
-        if (f.nativeCallHead != UINT32_MAX && f.nativeCalls >= kNativeCallsFirst && f.nativeCalls != UINT32_MAX) {
-            f.nativeCalls = UINT32_MAX;  // made, or refused: never again
-            for (uint32_t at : f.nativeReturns) {
-                const TailFn own = TailTable::get()[static_cast<size_t>(opAt(run + at + kThreaded))];
-                std::memcpy(run + at, &own, kThreaded);
-            }
-            makeRegionsFor(f, f.nativeCallHead, kWholeFunction, states, base, sp);
-        }
+// Its whole region made at a return of `f`, a function called often (nativeCall), from the frame
+// there, its slots saying what its locals hold; once, its returns their own instructions again.
+// At a return made VM::nativeReturn's, or one whose frame asks (kMakeWhole, Return's slow way).
+void VM::wholeAtReturn(FunctionProto& f, const Value* base, const Value* top) {
+    std::unique_lock<std::mutex> states(nativeStates);
+    if (f.nativeCallHead != UINT32_MAX && f.nativeCalls >= kNativeCallsFirst && f.nativeCalls != UINT32_MAX) {
+        f.nativeCalls = UINT32_MAX;  // made, or refused: never again
+        for (uint32_t at : f.nativeReturns) writeRunWord(this, this, f, at, ownOf(f.run.data(), at));
+        makeRegionsFor(f, f.nativeCallHead, kWholeFunction, states, base, top);
     }
+}
+
+// A return of a function called often (nativeCall): its whole region made; its start then the
+// region's way in, and its returns their own.
+WW_TAIL_FN int VM::nativeReturn(WW_TAIL_PARAMS) {
+    wholeAtReturn(*const_cast<FunctionProto*>(frame->closure->proto), base, sp);
     ip -= kThreaded + kOpBytes;
     const TailFn to_ = TailTable::get()[static_cast<size_t>(opAt(ip + kThreaded))];
     sp_ = sp;
@@ -7401,7 +7474,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
     const std::vector<FunctionProto::NativeRegion>* regions = frame->closure->proto->regionsNow.load(std::memory_order_acquire);
     if (regions != nullptr)
         for (const FunctionProto::NativeRegion& r : *regions)
-            if (r.head == head) {
+            if (r.head == head && *r.misses < kNativeMissLimit) {  // (past its limit: its ways in are to be the VM's again)
                 region = &r;
                 break;
             }
@@ -7450,19 +7523,16 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         sp = base + ((static_cast<uint64_t>(out) >> 32) & 0xFFFF);
         ip = code + static_cast<uint32_t>(out);
         // A quick way that could not: past a limit, the region's ways in are the VM's own
-        // instructions again (one aligned word each, as the run code's addresses are written).
+        // instructions again (as writeRunWord writes them).
         const bool missed = ((static_cast<uint64_t>(out) >> 48) & 1) != 0;
         if (missed && ++*region->misses == kNativeMissLimit) {
+            std::lock_guard<std::mutex> states(nativeStates);
+            FunctionProto& fp = *const_cast<FunctionProto*>(frame->closure->proto);
             for (const FunctionProto::NativeRegion& r : *regions)
-                if (r.misses == region->misses) {
-                    uint8_t* way = const_cast<uint8_t*>(code) + r.head;
-                    const TailFn own = TailTable::get()[static_cast<size_t>(opAt(way + kThreaded))];
-                    std::memcpy(way, &own, kThreaded);
-                }
+                if (r.misses == region->misses) writeRunWord(this, this, fp, r.head, ownOf(code, r.head));
             // A loop's regions made again, once, from the frame the next time the loop starts
             // (2026-11-16: made for a list holding no null, their steps miss on one that may hold
             // some; made from a frame showing such a list, they read both kinds).
-            FunctionProto& fp = *const_cast<FunctionProto*>(frame->closure->proto);
             for (const FunctionProto::NativeRegion& r : *regions) {
                 if (r.misses != region->misses || !r.first) continue;
                 // A whole function's (2026-11-16): made again at its next return, from the frame
@@ -7471,13 +7541,12 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
                     fp.nativeCallsAgain = true;
                     fp.nativeCalls = kNativeCallsFirst;
                     const TailFn back = TailTable::nativeReturnEntry();
-                    for (uint32_t at : fp.nativeReturns) std::memcpy(const_cast<uint8_t*>(code) + at, &back, kThreaded);
+                    for (uint32_t at : fp.nativeReturns) writeRunWord(this, this, fp, at, back);
                 }
                 for (size_t k = 0; k < fp.nativeHeads.size(); k++)
                     if (fp.nativeHeads[k] == r.head && fp.nativeArrivals[k] == 2) {
                         fp.nativeArrivals[k] = 3;
-                        const TailFn first = TailTable::nativeFirstEntry();
-                        std::memcpy(const_cast<uint8_t*>(code) + r.head, &first, kThreaded);
+                        writeRunWord(this, this, fp, r.head, TailTable::nativeFirstEntry());
                     }
             }
         }
@@ -7497,7 +7566,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         if (std::memcmp(code + next, &enter, kThreaded) != 0) break;
         const FunctionProto::NativeRegion* other = nullptr;
         for (const FunctionProto::NativeRegion& r : *regions)
-            if (r.head == next) {
+            if (r.head == next && *r.misses < kNativeMissLimit) {
                 other = &r;
                 break;
             }
@@ -7527,6 +7596,8 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
 #if !WW_TAIL_CALLS
 void VM::markWaitingBuilds() {}
 void VM::dropWaitingBuilds() {}
+void VM::writeWaitingWords() {}
+void VM::wholeAtReturn(FunctionProto&, const Value*, const Value*) {}
 #endif
 
 #undef LOAD_FRAME

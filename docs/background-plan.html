@@ -131,7 +131,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Places' caches:</strong> read atomically already; one that changes after is a guess the region checks, as now.</li>
 <li><strong>What the facts point at</strong> (classes, their fields' layouts, strings): kept from the collector, as roots, until the build's regions are put in or dropped.</li>
 <li><strong>The making's own state:</strong> its time counters, <code>stepProfiles</code> (for <code>WW_PROFILE_NATIVE</code>) and the executable memory, used by one builder at a time; <code>maybeNullFacts</code> is a thread's own already.</li>
-<li><strong>Publishing</strong> (the function's list of regions replaced whole, then each way in written as one aligned word) is made already for several cores running the function as its regions come: unchanged.</li>
+<li><strong>Publishing</strong> (the function's list of regions replaced whole, then each way in written as one aligned word) is made already for several cores running the function as its regions come: unchanged. <em>(Wrong, found 2026-11-18: a word starts wherever the instruction before it ends, and one across two cache lines could be read half written; the builder now writes none: <a href="outstanding.html#o-pstress">outstanding.html, o-pstress</a>.)</em></li>
 </ul>
 
 <h2 id="bp-how">How it would go</h2>

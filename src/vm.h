@@ -40,13 +40,18 @@ struct WwExit {
     int code;
 };
 
+constexpr uint8_t kDropResult = 1;
+constexpr uint8_t kMakeWhole = 2;
 struct CallFrame {
     ObjClosure* closure;
     const uint8_t* ip;
     Value* base;  // slot 0: the receiver in methods, the callee itself otherwise
-    // The call's result is not wanted: what was under it on the stack is the result instead.
-    // This is how `apply` and `also` give back the value they were called on.
-    bool dropResult;
+    // What its return does besides returning (any of them: the return's slow way):
+    // kDropResult, the call's result is not wanted: what was under it on the stack is the result
+    // instead (this is how `apply` and `also` give back the value they were called on);
+    // kMakeWhole, its function's whole region is made there (VM::nativeCall, by a section's
+    // core, which writes no return's word: writeRunWord).
+    uint8_t dropResult;
     // How many times the function has started again, calling itself as its last step (D29).
     uint32_t repeats;
 };
@@ -1424,6 +1429,25 @@ private:
     // dropped as the VM ends.
     void markWaitingBuilds();
     void dropWaitingBuilds();
+public:
+    // Run code's words written by a thread that may not write them (a section's core, the
+    // builder), waiting for the program's own VM, the only one then running its code (vm.cpp's
+    // writeRunWord): written at its next safe point, or as its parallel section ends.
+    void writeWaitingWords();
+    // A function's whole region made at a return of it, counted (VM::nativeCall).
+    void wholeAtReturn(FunctionProto& f, const Value* base, const Value* top);
+    // Whether this VM is the program's own and running no section's pieces itself: while it runs,
+    // no other thread runs the program's code (its threads take turns with it; a section's cores
+    // run while it waits for them).
+    bool runsProgramAlone() const { return root_ == nullptr && coreId_ == 0; }
+    VM& programVM() { return root_ != nullptr ? *root_ : *this; }
+    // Some written: a safe point of the program's VM writes them.
+    void wordsWaiting() {
+        wordsWaiting_ = true;
+        attention_ = true;
+    }
+private:
+    std::atomic<bool> wordsWaiting_{false};
     size_t liveBytes_ = 0;
     std::vector<Obj*> gray_;
     // A name's hash eight bytes at a time: the library's own goes a byte at a time on Windows,

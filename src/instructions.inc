@@ -1898,6 +1898,11 @@ CASE(Return) {
 }
 COLD(Return) {
     {
+    // Its function's whole region made here, where a section's core counted its calls (nativeCall).
+    if ((frame->dropResult & kMakeWhole) != 0) {
+        frame->dropResult &= static_cast<uint8_t>(~kMakeWhole);
+        wholeAtReturn(*const_cast<FunctionProto*>(frame->closure->proto), base, sp);
+    }
     // As above, a place too, where it is kept as it is.
     if ((openUpvalues_ == nullptr || openUpvalues_->location < base) && !frame->dropResult &&
         frameCount_ - 1 != RUN_BASE && (handlers_.empty() || handlers_.back().frameIndex < frameCount_ - 1) &&
@@ -1916,7 +1921,7 @@ COLD(Return) {
     // Drop the catch blocks of a function that returned from inside a try.
     while (!handlers_.empty() && handlers_.back().frameIndex >= frameCount_) handlers_.pop_back();
     sp_ = base;
-    if (!frame->dropResult) *sp_++ = result;
+    if ((frame->dropResult & kDropResult) == 0) *sp_++ = result;
     if (frameCount_ == RUN_BASE) EXIT_RUN();
     LOAD_FRAME();
     DONE();
