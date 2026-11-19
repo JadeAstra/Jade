@@ -34,7 +34,8 @@ struct NativeCallGuard {
 
 }  // namespace
 
-VM::VM(bool worker) : output(&std::cout), errorOutput(&std::cerr), input(&std::cin), rng(std::random_device{}()), isWorker_(worker) {
+VM::VM(bool worker)
+    : output(&std::cout), errorOutput(&std::cerr), input(&std::cin), rng(std::random_device{}()), mainThread_(kStackSize, kMaxFrames, worker), isWorker_(worker) {
     // The thread that makes the VM is its main thread, and holds the lock from the start.
     mainThread_.name = "main";
     mainThread_.id = nextThreadId_++;

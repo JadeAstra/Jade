@@ -201,7 +201,7 @@ struct ThreadState {
     bool parkToken = false;
     bool notified = false;  // set by notify() for a thread in wait()
 
-    ThreadState(size_t stackSize, int frameLimit) : base(stackSize, frameLimit), current(&base) {}
+    ThreadState(size_t stackSize, int frameLimit, bool grows = false) : base(stackSize, frameLimit, grows), current(&base) {}
 };
 
 // Interned names the VM looks up by pointer.
@@ -1291,7 +1291,10 @@ private:
     void markContext(const Context& context);
 
     // Threads
-    ThreadState mainThread_{kStackSize, kMaxFrames};
+    // A worker's and a script's (VM(true)) grows as it is used, reserved whole but committed a page
+    // at a time, as a task's does: a script that needs little takes little (2026-11-19: 18 MB a
+    // script VM before, committed whole). The program's own is made whole.
+    ThreadState mainThread_;
     ThreadState* thread_ = &mainThread_;  // the one holding the lock
     std::vector<ThreadState*> threads_;   // all that are running, the main one first
     int64_t nextThreadId_ = 1;

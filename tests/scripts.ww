@@ -102,6 +102,13 @@ dir.resolve("helper.ww").writeText("fun triple(n : int) : int => n * 30\n")
 print(Script.load(dir.resolve("main.ww")).start().call("nine"))   // expect: 90
 dir.deleteRecursively()
 
+// A script's stack grows as it is used (reserved whole, committed as needed): deep calls reach
+// as far as a program's, and a recursion with no end is a StackOverflowError it may catch.
+val deep = Script.compile("fun down(n : int) : int => n == 0 ? 0 : 1 + down(n - 1)\nfun forever(n : int) : int => 1 + forever(n + 1)\nfun safe() : string {\n  try { forever(0) } catch (e : StackOverflowError) { return \"caught\" }\n  return \"no\"\n}", name = "deep.ww").start()
+print(deep.call("down", [15000]), deep.call("safe"))   // expect: 15000 caught
+print(failed { deep.call("forever", [0]) }.lines()[0])   // expect: ScriptException: deep.ww: StackOverflowError: stack overflow
+print(deep.call("down", [100]))                       // expect: 100
+
 // Running scripts the program no longer reaches are stopped when collected.
 for (i in 0 ..< 5) { counter.start() }
 Program.collectGarbage()
