@@ -1436,6 +1436,7 @@ private:
     int64_t stepsLeft_ = -1;
     int64_t stepsGiven_ = 0;
     size_t memoryLimit_ = 0;
+    std::string memoryLimitText() const;
     int depthLimit_ = 0;
     bool nativeOff_ = false;
     // Whether a safe point has work besides collecting, kept up while it has (a stop, a limit,

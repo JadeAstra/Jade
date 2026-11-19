@@ -2262,7 +2262,10 @@ void registerIo(VM& vm) {
 
     // Waits for a connection and gives it.
     def("accept", 1, 1, [](VM& vm, int, Value* args) -> Value {
-        auto s = streamOf(vm, args[0]);
+        // Closed before this thread got here, it is gone from the table: said as a socket closed
+        // while it waited is, whichever came first (io_streams.ww, under load).
+        auto s = findStream(args[0]);
+        if (s == nullptr) throw ioError(vm, "the socket is closed");
         auto out = std::make_shared<Outcome>();
         return vm.blocking([=] {
                                if (s->listener == nullptr) return acceptOn(*s, *out);

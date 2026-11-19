@@ -1103,7 +1103,9 @@ void registerListMethods(VM& vm) {
         const int64_t n = vm.toInt(args[0], "capacity");
         if (n < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "a capacity of " + std::to_string(n) + ": it cannot be negative");
         if (n > (int64_t{1} << 40)) throw vm.runtimeError(Thrown::IllegalArgumentException, "a capacity of " + std::to_string(n) + " items is more than a list can hold");
-        vm.listReserve(asList(self), static_cast<size_t>(n));
+        ObjList* list = asList(self);
+        vm.checkRoomFor(static_cast<uint64_t>(n) * (list->packed() ? list->pack->width : sizeof(Value)));
+        vm.listReserve(list, static_cast<size_t>(n));
         return Value::null();
     });
 

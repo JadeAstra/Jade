@@ -6232,8 +6232,9 @@ val earthlings = shared.compile(earthSource, name = &quot;earthlings.ww&quot;, a
 steps   each call from the program, a count of its steps (each time round a loop, each call),
         the same on every machine, for a game whose machines must agree (replays,
         multiplayer): a script counted runs with no native code, more slowly
-memory  the script's heap, in bytes: a collection that finds more live ends the call; one
-        large allocation may pass it before a collection sees it
+memory  the script's heap, in bytes: a collection that finds more live ends the call, and
+        one request for more than all of it (Bytes(n), a list's room) is refused at once,
+        nothing taken
 depth   how deep its calls go: deeper is a StackOverflowError in the script
 </pre>
 <p>The top level, as the script starts, is a call as any. A call that ends by a limit ends at once, no catch or finally of the script's run, and is a ScriptLimitException in the program; the script goes on for the next, what it was in the middle of left as it was. A program whose scripts keep passing their limits stops them (a game: a mod disabled after a few).</p>

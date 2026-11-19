@@ -27,6 +27,7 @@ size_t sizeArgument(VM& vm, Value v, const char* what) {
 // `count` copies of `value` added to the end of `list`.
 void appendCopies(VM& vm, ObjList* list, size_t count, Value value) {
     if (count == 0) return;
+    vm.checkRoomFor(static_cast<uint64_t>(count) * (list->packed() ? list->pack->width : sizeof(Value)));
     const size_t start = list->size();
     vm.listInsert(list, start, &value, 1);
     if (!list->packed()) {
@@ -66,6 +67,7 @@ void appendCopies(VM& vm, ObjList* list, size_t count, Value value) {
 // null where the type takes it. False where the type has no zero (a grid of objects).
 bool appendZeros(VM& vm, ObjList* list, size_t count) {
     if (count == 0) return true;
+    vm.checkRoomFor(static_cast<uint64_t>(count) * (list->packed() ? list->pack->width : sizeof(Value)));
     if (list->packed()) {
         PackedItems& pack = *list->pack;
         const size_t start = pack.count;

@@ -52,6 +52,13 @@ fun hoard() : int {
   return all.size
 }
 fun down(n : int) : int => n == 0 ? 0 : 1 + down(n - 1)
+fun huge() : int => Bytes(1024 * 1024 * 1024).size
+fun wide() : int => "x".repeat(500 * 1024 * 1024).size
+fun room() : int {
+  val l : open List<int> = []
+  l.ensureCapacity(100000000)
+  return 1
+}
 fun giveLater() {
   api.later { while (true) { progress += 1 } }
 }
@@ -105,6 +112,12 @@ print(failed { counted.call("spin") }, counted.call("reached"))   // expect: lim
 val hoarder = Script.compile(source, name = "hoarder.ww", api = SlowApi#).start(api = Slow(), limits = Limits(memory = 64 * 1024 * 1024))
 print(failed { hoarder.call("hoard") })                   // expect: limit: hoarder.ww: the script's heap grew past its limit of 64 MB
 print(hoarder.call("fast"), hoarder.call("count", [10]))  // expect: 1 45
+// One request past the whole limit is refused before anything is taken: no gigabyte made first.
+for (f in ["huge", "wide", "room"]) { print(failed { hoarder.call(f) }) }
+// expect: limit: hoarder.ww: the script's heap grew past its limit of 64 MB
+// expect: limit: hoarder.ww: the script's heap grew past its limit of 64 MB
+// expect: limit: hoarder.ww: the script's heap grew past its limit of 64 MB
+print(hoarder.call("fast"))                               // expect: 1
 
 // ---- Depth: a StackOverflowError in the script, which it may catch ----
 val deep = Script.compile(source, name = "deep.ww", api = SlowApi#).start(api = Slow(), limits = Limits(depth = 200))

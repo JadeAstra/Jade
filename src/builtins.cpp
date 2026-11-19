@@ -48,8 +48,15 @@ void (*registerScripts)(VM& vm) = nullptr;
 // A request for more memory than the machine could ever give, its memory and page file together,
 // is refused at once, with the same error that running out gives; below that the allocator
 // decides. (Asking anyway would also stop a program built with the address sanitizer, whose
-// allocator does not fail in the ordinary way.)
+// allocator does not fail in the ordinary way.) In a script's VM, one for more than its heap's
+// limit is refused before anything is taken, as the limit (limitMemory): its call ends.
 void VM::checkRoomFor(uint64_t bytes) {
+    if (memoryLimit_ > 0 && bytes > memoryLimit_) {
+        limitPassed(memoryLimitText());
+        WwThrow thrown{Value::null()};
+        thrown.limit = true;
+        throw thrown;
+    }
     static const uint64_t limit = [] {
 #ifdef _WIN32
         MEMORYSTATUSEX status{};

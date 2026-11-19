@@ -381,6 +381,12 @@ void VM::limitMemory(size_t bytes) {
     if (bytes > 0) nextGC_ = std::min(nextGC_, bytes);
 }
 
+std::string VM::memoryLimitText() const {
+    const size_t m = memoryLimit_;
+    return "the script's heap grew past its limit of " +
+           (m % (1024 * 1024) == 0 ? std::to_string(m >> 20) + " MB" : m % 1024 == 0 ? std::to_string(m >> 10) + " KB" : std::to_string(m) + " bytes");
+}
+
 void VM::limitDepth(int frames) {
     depthLimit_ = frames;
     if (frames > 0) frameLimit_ = std::min(frameLimit_, frames);

@@ -8475,11 +8475,7 @@ void VM::collectGarbage() {
     // A script's heap limit (limitMemory): passed where what is live is past it; else the next
     // collection comes before the heap could be far past it.
     if (memoryLimit_ > 0) {
-        if (liveBytes_ > memoryLimit_) {
-            const size_t m = memoryLimit_;
-            limitPassed("the script's heap grew past its limit of " +
-                        (m % (1024 * 1024) == 0 ? std::to_string(m >> 20) + " MB" : m % 1024 == 0 ? std::to_string(m >> 10) + " KB" : std::to_string(m) + " bytes"));
-        }
+        if (liveBytes_ > memoryLimit_) limitPassed(memoryLimitText());
         nextGC_ = std::min(nextGC_, std::max(memoryLimit_, liveBytes_ + memoryLimit_ / 4));
     }
 }

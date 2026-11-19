@@ -156,6 +156,11 @@ Thread.sleep(30.milliseconds)
 idle.close()
 accepting.get()
 print(acceptError)                                           // expect: the socket is closed
+// And one closed before the accept began says the same (the thread above, slow to start, may
+// come to accept after the close).
+val gone = ServerSocket(0, bindAddress = "127.0.0.1")
+gone.close()
+try { gone.accept() } catch (e : IOException) { print(e.message) }   // expect: the socket is closed
 // A read that has waited too long gives up.
 val silent = ServerSocket(0, bindAddress = "127.0.0.1")
 val patient = Socket("127.0.0.1", silent.localPort)
