@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snippy plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<main>
+<h1>Plan: Snippy, Python on WinterWolf's VM</h1>
+<p class="lede">Written 2026-11-19 as part 5 of the <a href="scripting-plan.html">scripting plan</a> began ("start scripting plan part 5"). The user set its aim on the way in: "it should be python like to the point you could feed it python scripts and it would mostly work", because "the point of snippy was so that people who knew python could use scripts in snips without learning anything new"; and asked that ww run and build Snippy programs ("ww.exe app.snippy and ww.exe build --exe app.snippy"). Question 9 of the scripting plan decided how: Snippy made into WinterWolf source of calls to a Snippy runtime written in WinterWolf.</p>
+
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#sn-now">What Snippy is now</a></li>
+<li><a href="#sn-gap">Where Snippy is not Python</a></li>
+<li><a href="#sn-design">The design</a></li>
+<li><a href="#sn-parts">The parts, each with its gate</a></li>
+<li><a href="#sn-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="sn-now">What Snippy is now</h2>
+<p>Read 2026-11-19 in <code>C:\Users\sciss\IdeaProjects\Snips\src\main\kotlin\com\snips\snippy</code>: a tree-walking interpreter in Kotlin, 3,448 lines (of which 636 are the editor's completion and help card), with 209 tests in 16 files (about 170 of them on the language; the rest on completion and help).</p>
+<ul>
+<li><strong>Has:</strong> Python's indentation, <code>def</code> with defaults and keyword arguments, <code>lambda</code>, <code>class</code> with inheritance and 30 of Python's special methods, <code>if/while/for/try/except/else/finally</code>, <code>raise</code>, <code>import</code> of other blocks, comprehensions of the four kinds, slices and slice assignment, ints of any size, floats and complex numbers, lists, tuples, dicts, sets and frozensets, 40 built-in functions, the <code>collections.abc</code> classes written in Snippy, Python's error names.</li>
+<li><strong>Snips' own:</strong> the <code>Table</code> module (the formula functions), values turned into cells and back (a bool shows as 1 or 0, a list of lists as a matrix, a dict with <code>"v"</code> as a styled cell), errors as <code>#VALUE!</code>, <code>#DIV/0!</code> and the like, imports that find a document's blocks, math sections and feature trackers, stepping (a run stopped at its n-th statement, its variables shown), limits (5 million steps, depth 200, collections of a million).</li>
+</ul>
+
+<h2 id="sn-gap">Where Snippy is not Python</h2>
+<p>Each is something a Python user would trip over. Two kinds: what Snippy <em>lacks</em> (a Python script using it fails to read or run), and what Snippy does <em>differently</em> (a script runs and gives another answer, which is worse).</p>
+<div class="table"><table>
+<tr><th>Lacks</th><th>Does differently</th></tr>
+<tr><td><ul>
+<li><code>print</code>, <code>input</code>, <code>open</code>, and so <code>enumerate zip map filter any all hash id divmod hex oct bin format getattr setattr hasattr callable super object</code></li>
+<li>Generators and <code>yield</code>; <code>with</code>; decorators; <code>global</code>, <code>nonlocal</code>, <code>del</code>, <code>assert</code></li>
+<li><code>*args</code>, <code>**kwargs</code>, keyword-only and positional-only parameters, <code>*</code> and <code>**</code> in calls and displays, starred assignment, chained assignment, the walrus</li>
+<li>f-strings, triple-quoted strings, <code>r</code>/<code>b</code> prefixes, <code>\x</code> and <code>\u</code> escapes, <code>%</code> formatting, <code>str.format</code></li>
+<li>Hex, octal and binary literals; <code>~</code>, <code>@</code>, <code>&lt;&lt;=</code>, <code>&gt;&gt;=</code>; <code>;</code> between statements; backslash continuation</li>
+<li><code>for</code>/<code>while</code> ... <code>else</code>; <code>except (A, B)</code>; bare <code>raise</code>; <code>raise ... from</code></li>
+<li>Most methods of str (<code>split</code> with maxsplit, <code>strip</code> with characters, <code>format</code>, <code>isdigit</code>, <code>zfill</code> ...), <code>list.sort(key=..., reverse=...)</code>, attributes of numbers (<code>z.real</code>)</li>
+<li><code>bytes</code>, <code>bytearray</code>, properties, <code>classmethod</code>, <code>staticmethod</code>, <code>super()</code>, <code>__hash__</code>, <code>__enter__</code>/<code>__exit__</code>, reflected operators (<code>__radd__</code>)</li>
+<li>The standard library: <code>math random re json collections itertools functools string time datetime</code> and the rest</li>
+</ul></td><td><ul>
+<li>Defaults evaluated at each call (Python: once, as the function is made)</li>
+<li><code>a &lt; b &lt; c</code> is <code>(a &lt; b) &lt; c</code> (Python chains it)</li>
+<li><code>xs += [1]</code> makes a new list (Python extends the one there, which its aliases see)</li>
+<li><code>try ... else</code>: the else's errors are caught by the same <code>except</code></li>
+<li>No <code>global</code>: <code>x = x + 1</code> in a function reads the outer x (Python: UnboundLocalError)</li>
+<li>A float printed to 15 digits: <code>0.1 + 0.2</code> shows <code>0.3</code> (Python: <code>0.30000000000000004</code>); <code>1e-05</code> shows <code>1e-5</code></li>
+<li><code>type(x)</code> gives the name as text; <code>range</code> gives a list; <code>dict.keys()</code> a list</li>
+<li><code>repr</code> of text always in single quotes, nothing but <code>\</code> and <code>'</code> escaped</li>
+<li>Tuples cannot be ordered; a list never equals a tuple (right) but <code>not</code>, <code>and</code>, <code>or</code> ignore <code>__bool__</code></li>
+<li>An exception made without <code>__init__</code> drops its arguments, so <code>ValueError("msg")</code> has no message</li>
+<li>Some errors no <code>try</code> can catch (<code>min([])</code>, a method given too few arguments)</li>
+</ul></td></tr>
+</table></div>
+
+<h2 id="sn-design">The design</h2>
+<h3>The pieces, in WinterWolf</h3>
+<ul>
+<li><strong>Reading:</strong> a lexer and parser for Python 3's grammar (as of Python 3.14, the version CPython has in this machine's WSL), giving a tree with each node's line and column; Python's own <code>SyntaxError</code> messages where it can.</li>
+<li><strong>Translating:</strong> Python's scopes worked out as CPython does (which names are local, global, free, and the cells closures share), then the tree made into WinterWolf source: one function for each Python function, each value <code>any?</code>, each operation a call of the runtime (<code>a + b</code> into <code>Py.add(a, b)</code>), so that Python's rules live in one place. Each line of the made source carries the Python line it came from, so that errors and tracebacks name the script's own lines.</li>
+<li><strong>The runtime:</strong> Python's values and their rules, its built-in functions, and the modules of its standard library that ordinary scripts use, in WinterWolf (as <code>lib/Snippy</code>, carried inside ww.exe as Jade is).</li>
+</ul>
+<h3>Python's values as WinterWolf's</h3>
+<p>Where WinterWolf has a value of the same nature, a Python value is that value, so that what a Snippy script gives or takes crosses to WinterWolf code and to a script's api (part 2's contracts) as it is: <code>None</code> is null; a bool a bool; an int an int, made a <code>BigInt</code> where it outgrows 64 bits (Python's ints have no end) and back where it fits; a float a float; a complex a <code>Complex</code>; a str a string; a list a list; a dict a map and a set a set (both keep the order things were added in, as Python's dict does). A tuple, a frozenset, bytes, a range, a function and a class are the runtime's own classes; an object of a Python class has its attributes in a table of its own, as Python's do, so that they can be added as it runs. Each operation asks what it was given and does as Python does: <code>1 + 2.5</code>, <code>"a" * 3</code>, <code>[1] + [2]</code>, an object's <code>__add__</code>, then the other's <code>__radd__</code>.</p>
+<h3>The harder parts of Python, and how</h3>
+<ul>
+<li><strong>Generators</strong> on WinterWolf's tasks, as <code>sequence { yield(...) }</code> already is: a generator function made into one whose body runs as a task that hands each value over; <code>send</code>, <code>throw</code>, <code>close</code> and <code>yield from</code> on the same.</li>
+<li><strong>Exceptions:</strong> a Python exception thrown as one WinterWolf throwable carrying the Python object, so that <code>try</code>, <code>except</code> by class (with Python's class hierarchy), <code>finally</code>, <code>with</code> and tracebacks all work; errors the VM itself throws (a division by zero, an index out of range) turned into Python's (<code>ZeroDivisionError</code>, <code>IndexError</code>) where they are caught.</li>
+<li><strong>Classes:</strong> Python's method resolution order (C3), <code>super()</code>, properties and descriptors, <code>classmethod</code> and <code>staticmethod</code>, class attributes, the special methods Python looks up on the class.</li>
+<li><strong>Text:</strong> Python's <code>repr</code> and <code>str</code> for every value (a float as the shortest text that reads back as it, as Python's), <code>format</code> and its mini-language, f-strings, <code>%</code>; a str indexed by code point, as Python's is (WinterWolf's strings count UTF-16 units).</li>
+</ul>
+<h3>Snippy programs and scripts</h3>
+<ul>
+<li><code>ww app.snippy</code> runs one and <code>ww build --exe app.snippy</code> builds one, through the same pieces: the ending picks the reader; the made source is compiled as any program, cached as any, in the five ways. A Snippy program is trusted, as a <code>.ww</code> one is: it prints, reads its arguments (<code>sys.argv</code>), opens files.</li>
+<li>A Snippy script is a <code>Script</code> like any (<code>Script.compile(source, language = Language.snippy, ...)</code>): safe unless trusted, limited, given an api and giving hooks as part 2 made them.</li>
+<li>What Snips alone needs (its <code>Table</code> module, its cells, its blocks found by import, stepping) is Snips' part, for when Snips runs on WinterWolf (the formula plan); this part gives it what it needs to hang those on: an import resolver the host gives, modules the host makes, a hook at each statement.</li>
+</ul>
+<h3>Speed</h3>
+<p>Each operation a call of the runtime, as decided: about what Snips' interpreter pays, faster for what the VM's native code takes over (a loop's counting, a call's frame). Made into typed code where it knows the types, later, where scripts need it.</p>
+
+<h2 id="sn-parts">The parts, each with its gate</h2>
+<p>CPython 3.14 in WSL is the measure throughout: a test program is run by CPython and by ww, and what each prints must be the same.</p>
+<div class="table"><table>
+<tr><th>Part</th><th>What</th><th>Gate</th></tr>
+<tr><td class="part">5.1 Reading</td><td>Lexer and parser for Python 3's grammar, tree with places, Python's syntax errors.</td><td>Every <code>.py</code> file of CPython's standard library in WSL (624 files, <code>/usr/lib/python3.14</code>) read without error, the 27 that use <code>async</code> among them (question 2), and the tree's shape checked against Python's <code>ast</code> module for a sample.</td></tr>
+<tr><td class="part">5.2 The core</td><td>Scopes, the translator, the runtime's values, operations, functions of every parameter kind, classes, exceptions, generators, <code>with</code>, comprehensions, formatting; <code>ww app.snippy</code>.</td><td>A set of test programs, one for each of these (about 60, written for it, each printing what it does), the same output as CPython's; tracebacks naming the script's lines.</td></tr>
+<tr><td class="part">5.3 Built-ins and modules</td><td>Python's built-in functions and the methods of its types, whole; the standard modules question 3 chooses.</td><td>A test program for each built-in type and each module, the same output as CPython's.</td></tr>
+<tr><td class="part">5.4 Programs and scripts</td><td><code>ww build --exe app.snippy</code>; <code>Script.compile(..., language = Language.snippy)</code> with api, gives, safety and limits; the host's hooks (import resolver, modules, statement hook).</td><td>Built programs run the 5.2 and 5.3 tests; a Snippy mod in <code>tests/scripts_mods.ww</code>'s game beside a WinterWolf one; Snips' language tests (about 170) ported as Snippy files, with Python's answers where Python and Snippy differ.</td></tr>
+<tr><td class="part">5.5 Real scripts</td><td>Python scripts not written for this, as found.</td><td>A corpus of ordinary Python programs (algorithms, text processing, small games' logic, data handling: about 50, gathered from what Python users write) run with CPython's output; what fails listed and fixed or written down.</td></tr>
+</table></div>
+
+<h2 id="sn-questions">Questions for the user</h2>
+
+<section class="decision">
+<h3><span class="code">1</span>Where Snippy and Python differ: which way?</h3>
+<ul>
+<li><strong>Python's way:</strong> what a Python user expects; Snips' documents that lean on Snippy's ways (a default made each call, <code>0.1 + 0.2</code> showing <code>0.3</code> in a script's repr, <code>type(x)</code> as text) give Python's answers once Snips runs Snippy here.</li>
+<li><strong>Snippy's way:</strong> Snips' documents unchanged; a Python user trips over each.</li>
+</ul>
+<p><em>Recommended:</em> Python's way throughout, as the user's reason for Snippy asks; the differences listed above written into the guide for Snips' users. (A cell still shows 15 digits: that is Snips' display, not the language.)</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: Python's way (as recommended).</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>How much of Python's language?</h3>
+<ul>
+<li><strong>All of it but <code>async</code>/<code>await</code>:</strong> generators, <code>with</code>, decorators, every parameter kind, f-strings, <code>match</code>, the walrus, starred forms, <code>global</code>/<code>nonlocal</code>, type annotations (read and kept, not checked, as Python does).</li>
+<li><strong>All of it:</strong> <code>async</code>/<code>await</code> too, on WinterWolf's tasks; little used in the scripts this is for, and <code>asyncio</code> is a large module.</li>
+<li><strong>What ordinary scripts use:</strong> leave <code>match</code> and the rarer forms for later.</li>
+</ul>
+<p><em>Recommended:</em> all but <code>async</code>/<code>await</code>, which can come later on the same tasks.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: all of it, <code>async</code>/<code>await</code> too, on WinterWolf's tasks (not as recommended). So 5.1 reads every file of CPython's library, the 27 with <code>async</code> among them, and <code>asyncio</code>'s core goes with 5.2's generators.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>Which modules of Python's standard library?</h3>
+<ul>
+<li><strong>For every script:</strong> <code>math cmath random string re json collections itertools functools operator copy time datetime statistics fractions textwrap dataclasses enum abc typing</code> (the last as names only, as Python itself checks nothing).</li>
+<li><strong>For trusted programs too:</strong> <code>sys os os.path pathlib io</code> and <code>open</code>, refused in a safe script as files are.</li>
+<li><strong>Later, or never:</strong> <code>decimal</code> (large), <code>asyncio</code>, <code>subprocess</code>, <code>socket</code>, <code>threading</code>, <code>tkinter</code>, <code>sqlite3</code>, <code>urllib</code>, and C extensions such as numpy (which could not be).</li>
+</ul>
+<p><em>Recommended:</em> the first two lists; the third as asked for. <code>re</code> on WinterWolf's regular expressions, with Python's syntax where they differ.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: the common modules for every script, and <code>sys os os.path pathlib io open</code> for trusted programs (as recommended); the rest as asked for.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>Which file endings?</h3>
+<ul>
+<li><strong><code>.snippy</code> alone</strong>, as the user wrote.</li>
+<li><strong><code>.snippy</code> and <code>.py</code>:</strong> a Python script run as it is (<code>ww hello.py</code>), which is what "feed it python scripts" means at the command line.</li>
+</ul>
+<p><em>Recommended:</em> both.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: both, <code>.snippy</code> and <code>.py</code> (as recommended).</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>Snippy and WinterWolf code together</h3>
+<ul>
+<li><strong>Snippy imports Snippy</strong> (a <code>.snippy</code> or <code>.py</code> file beside it, as Python finds them) <strong>and WinterWolf's libraries</strong> (<code>import jade</code>: Jade's windows from Python, its classes used as Python classes are); WinterWolf importing Snippy later.</li>
+<li><strong>Snippy imports Snippy alone</strong>; WinterWolf reached only through a script's api.</li>
+<li><strong>Both ways now.</strong></li>
+</ul>
+<p><em>Recommended:</em> the first: a Python user's program can then have a window, which no Snippy program could otherwise; the other way round can wait for a use.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: Snippy imports Snippy and Python files and WinterWolf's libraries; WinterWolf importing Snippy later (as recommended).</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span>When</h3>
+<p>The parts are many and some large (the runtime and the modules most): 5.1 a session or two, 5.2 several, 5.3 several, 5.4 and 5.5 one or two each. Part 6 of the scripting plan (written up) and the formula plan come after it, then the emitter.</p>
+<ul>
+<li><strong>All of it now,</strong> before the formula plan and the emitter.</li>
+<li><strong>5.1 to 5.4 now,</strong> 5.5 (the corpus) beside later work.</li>
+<li><strong>The formula plan first</strong>, as Snips needs both.</li>
+</ul>
+<p><em>Recommended:</em> all of it now, in order, each part shown before the next.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: taken from "start scripting plan part 5": all of it now, in order, each part shown before the next.</span></div>
+</section>
+</main>
+</body>
+</html>
