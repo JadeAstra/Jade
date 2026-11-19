@@ -19,6 +19,9 @@
 // or a function, each call of which comes back here.
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -29,6 +32,7 @@
 
 #include "builtins.h"
 #include "bytecode.h"
+#include "cache.h"
 #include "compiler.h"
 #include "run.h"
 #include "vm.h"
@@ -547,15 +551,28 @@ void registerScriptsHere(VM& vm) {
             std::thread([&] {
                 std::lock_guard<std::mutex> one(compiling);
                 try {
+                    // With WW_TIMES set, how long each part of a script's compile took, on standard error.
+                    using Clock = std::chrono::steady_clock;
+                    const auto began = Clock::now();
+                    auto since = [](Clock::time_point from) { return std::chrono::duration<double, std::milli>(Clock::now() - from).count(); };
                     VM own(true);
+                    const double vmMade = since(began);
                     CompilerSession session(own);
+                    const double prelude = since(began) - vmMade;
                     session.libraryPaths = commandLibraryPaths();
                     auto compiled = std::make_shared<CompiledScript>();
                     compiled->name = name;
                     compiled->gives = !gives.empty();
                     compiled->entry = session.compileScript(source, name, directory, compiled->names, contractSource, contractName, api, gives, compiled->modules);
+                    const double compiledAt = since(began);
                     std::ostringstream image;
                     writeProgram(session.program, image);
+                    // What it kept compiled (a library it imports) is written from this session's
+                    // code, so before the session goes.
+                    finishKeeping();
+                    if (std::getenv("WW_TIMES") != nullptr)
+                        std::fprintf(stderr, "ww: script %s compiled in %.1f ms: a VM %.1f, the standard library %.1f, the script %.1f, its image (%zu bytes) and what was kept %.1f\n",
+                                     name.c_str(), since(began), vmMade, prelude, compiledAt - vmMade - prelude, image.str().size(), since(began) - compiledAt);
                     compiled->image = image.str();
                     made = std::move(compiled);
                 } catch (const CompileError& e) {

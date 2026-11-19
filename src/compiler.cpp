@@ -8828,7 +8828,8 @@ void CompilerSession::planReuse() {
         units.emplace_back("folder:" + folder, files);
     }
     for (const auto& [file, directory] : directoryOf_)
-        if (inFolders.count(file) == 0 && file.rfind("<worker>", 0) != 0) units.emplace_back("file:" + file, std::vector<std::string>{file});
+        // Not a worker's script, nor a script's units (<script>, <contract>...): only files are kept.
+        if (inFolders.count(file) == 0 && file.rfind("<", 0) != 0) units.emplace_back("file:" + file, std::vector<std::string>{file});
     // Each unit's kept entry read first, a few at a time: reading a file takes the system a while,
     // and 276 of them one after another were about 15 ms of a start after a one-line change
     // (2026-11-09). Then each planned, in order, by this thread alone.
@@ -9726,6 +9727,10 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
                                    const std::string& contractName, const std::string& api, const std::string& gives,
                                    std::vector<int>& modules) {
     forgetPaths();
+    // What the script imports (a library, a folder of its own) is put back from the units ww keeps
+    // compiled where nothing it was made from has changed, and kept so where compiled here: a
+    // library is compiled once, for every script and every program that imports it (D145).
+    keepingUnits_ = stopAtTypeErrors;
     const std::string key = "<script>" + name;
     std::unique_ptr<Namespace>& ns = namespaces_[key];
     ns = std::make_unique<Namespace>();
@@ -9741,7 +9746,9 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
         sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parseSource(text, unitName)));
         std::vector<StmtPtr>& statements = *sources_.back();
         gather(unitKey, unitName, baseDirectory, statements, ns.get(), false);
+        if (unitKey == key) planReuse();
         check();
+        if (unitKey == key) settleReuse();
         program.modules[static_cast<size_t>(index)] = compileStatements(statements, unitName, baseDirectory, unitKey, false, ns.get());
         checkConstAssignments();
         globalAssignments_.clear();
@@ -9778,10 +9785,14 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
         }
     } catch (...) {
         globalAssignments_.clear();
+        toKeep_.clear();
+        keepingUnits_ = false;
         throw;
     }
     for (const auto& [n, global] : ns->names)
         if (global.declared && contractNames.count(n) == 0) names[n] = global.slot;
+    keepUnits();
+    keepingUnits_ = false;
     program.entry = entry;
     return entry;
 }

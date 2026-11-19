@@ -95,6 +95,11 @@ dir.resolve("main.ww").writeText("import \"helper.ww\"\nfun nine() : int => help
 val loaded = Script.load(dir.resolve("main.ww")).start()
 print(loaded.call("nine"), loaded.script.name)      // expect: 9 main.ww
 loaded.stop()
+// A library a script imports is kept compiled (D145) and put back for the next script that
+// imports it, unless it has changed since, as here.
+print(Script.load(dir.resolve("main.ww")).start().call("nine"))   // expect: 9
+dir.resolve("helper.ww").writeText("fun triple(n : int) : int => n * 30\n")
+print(Script.load(dir.resolve("main.ww")).start().call("nine"))   // expect: 90
 dir.deleteRecursively()
 
 // Running scripts the program no longer reaches are stopped when collected.
