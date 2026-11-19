@@ -88,7 +88,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <body>
 <main>
 <h1>Plan: native code written by ww itself, for x86-64 and ARM64</h1>
-<p class="lede">Written 2026-11-19 at the user's word ("write the plan for after we're done with image io, before we continue M9.5", then "maybe it would be better to do the emitter before image io?"). Why: games made with the engine are to run fast on ARM computers too ("people on arm computers who buy any game made with our engine will not be able to play what they paid for if it runs too slow for them"), where ww has no native code now; and on x86-64, native code made by ww's own instructions rather than copied from Clang's stencils has more registers and less waste. Nothing here is built until the questions at the end are answered.</p>
+<p class="lede">Written 2026-11-19 at the user's word ("write the plan for after we're done with image io, before we continue M9.5", then "maybe it would be better to do the emitter before image io?"). Why: games made with the engine are to run fast on ARM computers too ("people on arm computers who buy any game made with our engine will not be able to play what they paid for if it runs too slow for them"), where ww has no native code now; and on x86-64, native code made by ww's own instructions rather than copied from Clang's stencils has more registers and less waste. The questions at the end answered 2026-11-19 (the user: "go with the recommendations"): before the image parts, part 1 first.</p>
 
 <nav>
 <h2>Contents</h2>
@@ -180,7 +180,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>After:</strong> PNG and WebP sooner, their new stencils written again for the emitter later.</li>
 </ul>
 <p><em>Recommended:</em> before. PNG and WebP keep their C++ encoders meanwhile: nothing is missing, only slower to come; and work done twice is avoided.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): before the speed plan's image parts (PNG, WebP), their new steps written for the emitter only.</span></div>
 </section>
 
 <section class="decision">
@@ -190,7 +190,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>Once:</strong> steps written in a small machine language (load, store, add, compare-and-jump...) that each encoder translates; less per processor, but a layer of its own between, and each processor's best forms harder to reach (x86's memory operands, ARM's three registers).</li>
 </ul>
 <p><em>Recommended:</em> for each encoder, with the large steps shared as C++ calls. Two processors, 60 kinds: the duplicated part is small, and each step can use its processor well.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): each hot step written for each encoder; the large steps shared as calls to C++.</span></div>
 </section>
 
 <section class="decision">
@@ -200,7 +200,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>All at once:</strong> the emitter written whole, then switched to.</li>
 </ul>
 <p><em>Recommended:</em> together. Each part stays small enough to find what it broke, and a part that does not reach its gate costs only itself.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): stencils and emitted steps side by side while the steps are moved, a group at a time (parts 2 and 3).</span></div>
 </section>
 
 <section class="decision">
@@ -210,7 +210,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>14:</strong> RBP given out too, saved as the region is entered.</li>
 </ul>
 <p><em>Recommended:</em> 13 first, 14 tried in part 4 and kept only where a loop is measurably faster.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): 13 registers first, 14 tried in part 4 and kept only where a loop is measurably faster.</span></div>
 </section>
 
 <section class="decision">
@@ -220,7 +220,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>With part 5:</strong> one ARM stretch of work, later.</li>
 </ul>
 <p><em>Recommended:</em> first. It needs no ARM computer (QEMU), and it tells how much of ww is x86 only before anything depends on it.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): part 1 (ARM64 with the VM alone, under QEMU) first.</span></div>
 </section>
 
 <section class="decision">
@@ -231,7 +231,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>An ARM computer:</strong> a Mac mini with Apple Silicon is the cheapest real target, and the one a Mac release would be tested on.</li>
 </ul>
 <p><em>Recommended:</em> decided at part 5; until then QEMU checks what is correct. Each is an account or a purchase of the user's.</p>
-<div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations"): the ARM computer for timings chosen when part 5 comes; QEMU until then.</span></div>
 </section>
 </main>
 </body>
