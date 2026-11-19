@@ -129,6 +129,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     o.setting = Setting.entries[Math.max(0, settingBox.selected)]
     o.timeLimit = start.timeLimit
     o.keep = start.keep
+    o.live = start.live
     return o
   }
 

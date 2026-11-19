@@ -29,6 +29,10 @@
 //                         whole (moved into place), while the window stays open where something
 //                         failed: wait for the file, not for the window to close
 //   --close-after <s>     (window, with --run) 10 if not given; -1 keeps it open
+//   --live <file>         each failure added to the file the moment it is found, a line each
+//                         (`FAIL <setting> <name> [<ways>]: what was wrong`), with each
+//                         setting's `START` and `END` and what each check run again alone gave
+//                         (`ALONE ...`): to be watched while the run goes on
 //   --snapshot <png>      (window) a test of the window: hidden, it runs the checks, saves a
 //                         picture of itself and ends
 //
@@ -57,6 +61,7 @@ var runAtOnce = false
 var report : FilePath? = null
 var closeAfter = 10
 var keep = false
+var live : FilePath? = null
 var bad = ""
 
 val arguments = Program.arguments
@@ -85,6 +90,7 @@ while (i < arguments.size) {
     "--run" -> runAtOnce = true
     "--keep" -> keep = true
     "--report" -> { report = FilePath(value); i += 1 }
+    "--live" -> { live = FilePath(value); i += 1 }
     "--close-after" -> { closeAfter = value.toIntOrNull() ?: -2; i += 1 }
     else -> bad = "'$a' is not an option"
   }
@@ -104,6 +110,7 @@ fun options(s : Setting, w : List<Way>?) : Options {
   o.setting = s
   o.timeLimit = timeLimit
   o.keep = keep
+  o.live = live
   return o
 }
 
