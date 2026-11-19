@@ -245,6 +245,7 @@ public:
 
     void translate() {
         f_.runTops.clear();
+        f_.runLiveAt.clear();
         f_.runOrigins.clear();
         f_.runLive.clear();
         f_.runLiveWords = static_cast<uint8_t>((std::max(f_.maxStack, 1) + 63) / 64);
@@ -291,11 +292,12 @@ public:
             newAt_[at] = static_cast<uint32_t>(out_.size());
             // Where the VM's top is as this instruction's run code starts (where it is jumped to,
             // the stack's depth): kept for native code, which may go in at any instruction.
-            if (top_ >= 0 && top_ <= 0xFFFF) {
-                f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(top_));
-                // And where in the stack code it is, with the locals the stack held here names
-                // still, which the run code read there reads (FunctionProto::runLive).
-                f_.runOrigins.push_back(static_cast<uint32_t>(at));
+            if (top_ >= 0 && top_ <= 0xFFFF) f_.runTops.emplace_back(newAt_[at], static_cast<uint16_t>(top_));
+            // And, top known or not, where in the stack code it is, with the locals the stack held
+            // here names still, which the run code read there reads (FunctionProto::runLive).
+            f_.runLiveAt.push_back(newAt_[at]);
+            f_.runOrigins.push_back(static_cast<uint32_t>(at));
+            {
                 const size_t first = f_.runLive.size();
                 f_.runLive.resize(first + f_.runLiveWords, 0);
                 for (const Entry& e : stack_)
@@ -1322,34 +1324,41 @@ void threadCode(FunctionProto& f, size_t opBytes) {
     if (opBytes == kOpBytes && !f.runTops.empty()) {
         // Each where an instruction starts; one inside an instruction (a comparison the jump
         // after it was joined to) is dropped.
-        // (What each says of the stack code, runOrigins and runLive, kept beside it.)
-        const bool origins = f.runOrigins.size() == f.runTops.size() && f.runLive.size() == f.runTops.size() * f.runLiveWords;
+        std::erase_if(f.runTops, [&](const auto& t) { return t.first >= moved.size() || moved[t.first] == UINT32_MAX; });
+        for (auto& [at, top] : f.runTops) at = where(at);
+        // And the slots read again (runLiveAt, runOrigins and runLive, side by side) so too.
         const size_t words = f.runLiveWords;
-        size_t kept = 0;
-        for (size_t k = 0; k < f.runTops.size(); k++) {
-            const auto t = f.runTops[k];
-            if (t.first >= moved.size() || moved[t.first] == UINT32_MAX) continue;
-            f.runTops[kept] = {where(t.first), t.second};
-            if (origins) {
+        if (f.runOrigins.size() == f.runLiveAt.size() && f.runLive.size() == f.runLiveAt.size() * words) {
+            size_t kept = 0;
+            for (size_t k = 0; k < f.runLiveAt.size(); k++) {
+                const uint32_t at = f.runLiveAt[k];
+                if (at >= moved.size() || moved[at] == UINT32_MAX) continue;
+                f.runLiveAt[kept] = where(at);
                 f.runOrigins[kept] = f.runOrigins[k];
                 for (size_t w = 0; w < words; w++) f.runLive[kept * words + w] = f.runLive[k * words + w];
+                kept++;
             }
-            kept++;
-        }
-        f.runTops.resize(kept);
-        if (origins) {
+            f.runLiveAt.resize(kept);
             f.runOrigins.resize(kept);
             f.runLive.resize(kept * words);
         } else {
+            f.runLiveAt.clear();
             f.runOrigins.clear();
             f.runLive.clear();
         }
         loops = findNativeLoops != nullptr && findNativeLoops(f);
+        // Room past its slots for its regions' context (FunctionProto::nativeContextSlot).
+        if (loops && f.nativeContextSlot == 0) {
+            f.nativeContextSlot = f.maxStack;
+            f.maxStack += kNativeContextSlots;
+        }
     }
     // Kept for the regions only where there are loops to make them of.
     if (!loops) {
         f.runTops.clear();
         f.runTops.shrink_to_fit();
+        f.runLiveAt.clear();
+        f.runLiveAt.shrink_to_fit();
         f.runOrigins.clear();
         f.runOrigins.shrink_to_fit();
         f.runLive.clear();
@@ -1469,13 +1478,14 @@ static void slotsLive(FunctionProto& f, const std::vector<int>& depths, const St
     auto none = [&] {
         f.runLive.clear();
         f.runLiveWords = 0;
+        f.runLiveAt.clear();
         f.runOrigins.clear();
     };
-    if (words == 0 || steps.pops.size() != n || steps.pushes.size() != n || depths.size() != n || f.runOrigins.size() != f.runTops.size() ||
-        f.runLive.size() != f.runTops.size() * words)
+    if (words == 0 || steps.pops.size() != n || steps.pushes.size() != n || depths.size() != n || f.runOrigins.size() != f.runLiveAt.size() ||
+        f.runLive.size() != f.runLiveAt.size() * words)
         return none();
-    for (size_t k = 1; k < f.runTops.size(); k++)
-        if (f.runTops[k].first < f.runTops[k - 1].first) return none();
+    for (size_t k = 1; k < f.runLiveAt.size(); k++)
+        if (f.runLiveAt[k] < f.runLiveAt[k - 1]) return none();
     const int slots = static_cast<int>(64 * words);
     struct Step {
         std::vector<uint64_t> gen, kill;
@@ -1627,7 +1637,7 @@ static void slotsLive(FunctionProto& f, const std::vector<int>& depths, const St
         }
     }
     // Each run code instruction's: its stack code instruction's, and the locals its stack names.
-    for (size_t k = 0; k < f.runTops.size(); k++) {
+    for (size_t k = 0; k < f.runLiveAt.size(); k++) {
         const uint32_t origin = f.runOrigins[k];
         for (size_t w = 0; w < words; w++)
             f.runLive[k * words + w] |= origin < n && !in[origin].empty() ? in[origin][w] : ~uint64_t{0};
@@ -1659,6 +1669,7 @@ void translate(FunctionProto& f, const std::vector<int>& depths, const StackStep
         } else {
             f.runLive.clear();
             f.runLiveWords = 0;
+            f.runLiveAt.clear();
         }
         f.runOrigins.clear();
     };

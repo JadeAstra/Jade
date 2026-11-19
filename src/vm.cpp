@@ -7528,6 +7528,11 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
                 region = &r;
                 break;
             }
+    // The region's context is laid in the frame past the function's own slots (nativeContextSlot,
+    // 2026-11-19), which a frame made before the function was translated may have no room for:
+    // the VM's way there.
+    const int64_t contextSlot = frame->closure->proto->nativeContextSlot;
+    if (contextSlot <= 0 || stackEnd_ - base < contextSlot + kNativeContextSlots) region = nullptr;
     uint32_t at = head;
     for (int chained = 0; region != nullptr; chained++) {
         // The context, its lists and held fields set to nothing only at the region's start: they
@@ -7538,7 +7543,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
         // (2026-11-17: a loop that calls out and comes back looks at its lists and fields again)
         // sets each of those it reads, as the start does. A loop template's words are never set to
         // nothing: each that its shape reads is set by the steps just before it runs.
-        native::RegionContext context;
+        native::RegionContext& context = native::contextAt(base, contextSlot);
         context.attention = reinterpret_cast<const volatile uint8_t*>(&attention_);
         context.core = coreId_;
         context.band = bandObject_;
@@ -7561,7 +7566,7 @@ WW_TAIL_FN int VM::nativeEnter(WW_TAIL_PARAMS) {
             }
             std::memset(context.heldAt, 0, sizeof context.heldAt);
         }
-        const int64_t out = native::runRegion(region->code, base, &context);
+        const int64_t out = native::runRegion(region->code, base);
         // WW_TRACE_EXITS=n: the first n ways in and out (at least 30).
         static const int traceExits = std::getenv("WW_TRACE_EXITS") == nullptr ? 0 : std::max(std::atoi(std::getenv("WW_TRACE_EXITS")), 30);
         static int traced = 0;

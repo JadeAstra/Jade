@@ -381,6 +381,12 @@ struct Reg {
     bool operator==(const Reg& o) const { return slot == o.slot && cls == o.cls; }
 };
 constexpr int kScratchF = -1, kScratchI = -2;
+// The registers given out for whole numbers (stencils.cpp): i0 to i10 (2026-11-19: nine before, the
+// context then taking one and the flag another). The flag, where a comparison puts its answer
+// and the jumps after it read it, is always i9: a value of its own (kFlagSlot), which every step that
+// writes or reads it names (Region::markFlag), given i9 before the rest are given registers, so
+// that a value alive where an answer is wanted is given another, and any value i9 elsewhere.
+constexpr int kIntRegisters = 11, kFlagRegister = 9, kFlagSlot = -3;
 // The float registers given out (stencils.cpp): f0 to f15, two to each XMM register.
 constexpr int kFloatRegisters = 16;
 constexpr int kAnyNumber = 2;  // an operand's class: an int or a float, read as a float
@@ -6911,6 +6917,30 @@ struct Region {
     // no longer clash as one wherever any of them is wanted. A value a way out writes back, or
     // that is wanted where a jump goes, keeps the slot's name.
     int renamed = 0;
+    // The flag named by every step that writes or reads it (stencils.cpp's i9, 2026-11-19): the
+    // comparisons and the steps that find a bool (writers), the jumps on it and the steps that
+    // keep it (readers), in the region's instructions, its ways out and the steps before it. So
+    // its life is found as any value's is, and what is alive beside it is given another register.
+    void markFlag() {
+        static const std::set<std::string> writers = {"isnull", "hasi", "hasv", "hask", "setadd", "noflag", "loadflag", "idxbool",
+                                                      "hidxbool", "clsflag", "eqsm", "notflag"};
+        static const std::set<std::string> readers = {"jfalse", "jtrue", "notflag", "setbool", "hsetbool", "storeb"};
+        const Reg flag{kFlagSlot, CI};
+        auto mark = [&](LOp& l) {
+            const std::string& s = l.stem;
+            const bool compares = s.size() == 4 && (s.rfind("lt", 0) == 0 || s.rfind("le", 0) == 0 || s.rfind("gt", 0) == 0 || s.rfind("ge", 0) == 0 || s.rfind("eq", 0) == 0) &&
+                                  (s.substr(2) == "ii" || s.substr(2) == "ik" || s.substr(2) == "ff" || s.substr(2) == "fk");
+            if (readers.count(s) && std::find(l.uses.begin(), l.uses.end(), flag) == l.uses.end()) l.uses.push_back(flag);
+            if ((compares || writers.count(s)) && std::find(l.defs.begin(), l.defs.end(), flag) == l.defs.end()) l.defs.push_back(flag);
+        };
+        for (size_t i = 0; i < ins.size(); i++) {
+            if (!in[i].known) continue;
+            for (LOp& l : results[i].ops) mark(l);
+            for (ExitPoint& e : results[i].exits)
+                for (LOp& l : e.stores) mark(l);
+        }
+        for (LOp& l : headOps) mark(l);
+    }
     // `a != b` jumped on (2026-11-18): `!=` is `==` and a not to the VM, so three steps, the
     // comparison into the flag, the flag turned round and a jump where it is false, made one jump
     // on the comparison itself, where it holds (on ints: `<` turned round, jumped on where false,
@@ -7341,7 +7371,7 @@ struct Region {
                 size_t pick = left.size();
                 for (size_t j = 0; j < left.size(); j++) {
                     const size_t k = left[j];
-                    if (degree[k] < (denseRegs[k].cls == CI ? 9 : kFloatRegisters) && (pick == left.size() || traffic[k] < traffic[left[pick]])) pick = j;
+                    if (degree[k] < (denseRegs[k].cls == CI ? kIntRegisters : kFloatRegisters) && (pick == left.size() || traffic[k] < traffic[left[pick]])) pick = j;
                 }
                 if (pick == left.size())
                     for (size_t j = 0; j < left.size(); j++)
@@ -7358,8 +7388,12 @@ struct Region {
             }
             std::reverse(order.begin(), order.end());
         }
+        // The flag first, in its own register.
+        const Reg flag{kFlagSlot, CI};
+        if (clash.count(flag)) regs[flag] = kFlagRegister;
         for (const Reg& r : order) {
-            const int limit = r.cls == CI ? 9 : kFloatRegisters;
+            if (r == flag) continue;
+            const int limit = r.cls == CI ? kIntRegisters : kFloatRegisters;
             std::vector<bool> taken(static_cast<size_t>(limit), false);
             for (const Reg& o : clash[r]) {
                 auto g = regs.find(o);
@@ -7890,7 +7924,7 @@ struct Region {
         const Reg* best = nullptr;
         double bestScore = -1;
         for (const auto& [r, others] : clash) {
-            if (madeBySpill.count(r) || housed.count(r) || barred.count(r) || uses[r] == 0) continue;  // (not a load of what is kept already)
+            if (madeBySpill.count(r) || housed.count(r) || barred.count(r) || uses[r] == 0 || r.slot == kFlagSlot) continue;  // (not a load of what is kept already)
             const double score = static_cast<double>(others.size()) / (spillFloor() + used[r]);
             if (score > bestScore) {
                 bestScore = score;
@@ -8213,6 +8247,8 @@ StepProfile* newStepProfile(const Region& r) {
 std::vector<std::pair<uint32_t, void*>> make(Region& r, std::vector<std::string>* names) {
     r.markWhole();
     Assembler a;
+    // Where the VM keeps the region's context as it runs (none: the region refused as it is finished).
+    a.contextSlot = r.f.nativeContextSlot > 0 ? r.f.nativeContextSlot : -1;
     std::vector<int> labels(r.ins.size());
     for (int& l : labels) l = a.label();
     // With a profile, each step counted as it runs (a `count` step before it).
@@ -8689,6 +8725,7 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
             }
             if (r.twoItemsAtOnce()) r.findLive();
             r.jumpsOnNot();
+            r.markFlag();
             r.renameValues();
             r.findLive();
             lap(2);
@@ -8901,7 +8938,7 @@ std::unique_ptr<NativeSeen> takeSeen(const FunctionProto& f, const Value* frame,
                 break;
         }
     };
-    const int live = frame == nullptr ? 0 : std::max(0, std::min(frameSlots, f.maxStack));
+    const int live = frame == nullptr ? 0 : std::max(0, std::min(frameSlots, f.nativeContextSlot > 0 ? f.nativeContextSlot : f.maxStack));
     s.frame.assign(frame, frame + live);
     s.frameSmall.assign(static_cast<size_t>(live), nullptr);
     for (int k = 0; k < live; k++) {

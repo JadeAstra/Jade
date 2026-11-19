@@ -36,11 +36,15 @@ const std::map<std::string, std::string> kHoles = {
     {"ww_next", "HoleNext"},   {"ww_jump", "HoleJump"},   {"ww_exit", "HoleExit"},
     {"ww_kf", "HoleFloat"},    {"ww_ki", "HoleInt"},      {"ww_slot", "HoleSlot"},
     {"ww_ret", "HoleRet"},     {"ww_attention", "HoleAttention"}, {"ww_slot2", "HoleSlot2"},
-    {"ww_slotat", "HoleSlotAt"}, {"ww_slot2at", "HoleSlot2At"},
+    {"ww_slotat", "HoleSlotAt"}, {"ww_slot2at", "HoleSlot2At"}, {"ww_ctxat", "HoleContextAt"}, {"ww_listat", "HoleListAt"},
 };
 // The gaps filled with a value itself, not the distance to it: a slot's offset in the frame,
-// built into the instruction (an absolute 32-bit relocation; what it adds kept in `after`).
-bool absolute(const std::string& kind) { return kind == "HoleSlotAt" || kind == "HoleSlot2At"; }
+// built into the instruction (an absolute 32-bit relocation; what it adds kept in `after`); the
+// region's context's and a list's it looks at once (2026-11-19) so too.
+bool absolute(const std::string& kind) { return kind == "HoleSlotAt" || kind == "HoleSlot2At" || kind == "HoleContextAt" || kind == "HoleListAt"; }
+// What such a gap may add: within a slot (16 bytes); within a list's four words; within the
+// context's first words (the table keeps it in a byte).
+int32_t mostAdded(const std::string& kind) { return kind == "HoleContextAt" ? 255 : kind == "HoleListAt" ? 31 : 15; }
 
 struct Hole {
     uint32_t offset;   // of the 32 bits filled in, in the stencil
@@ -132,7 +136,7 @@ void readCoff(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
             if (hole != kHoles.end() && absolute(hole->second)) {
                 if (type != 2) fail("stencil " + st.name + ": " + target + " reached other than as a 32-bit value");
                 const int32_t addend = static_cast<int32_t>(u32(st.code, offset));
-                if (addend < 0 || addend > 15) fail("stencil " + st.name + ": " + target + " with an addend past its slot");
+                if (addend < 0 || addend > mostAdded(hole->second)) fail("stencil " + st.name + ": " + target + " with an addend past its slot");
                 std::memset(&st.code[offset], 0, 4);
                 st.holes.push_back(Hole{offset, hole->second, static_cast<uint32_t>(addend), {}});
                 continue;
@@ -271,7 +275,7 @@ void readElf(const std::vector<uint8_t>& obj, std::vector<Stencil>& stencils) {
                 // R_X86_64_32 and _32S: the value itself, plus the addend (a slot's offset).
                 if (hole != kHoles.end() && absolute(hole->second)) {
                     if (type != 10 && type != 11) fail("stencil " + st.name + ": " + target.name + " reached other than as a 32-bit value");
-                    if (addend < 0 || addend > 15) fail("stencil " + st.name + ": " + target.name + " with an addend past its slot");
+                    if (addend < 0 || addend > mostAdded(hole->second)) fail("stencil " + st.name + ": " + target.name + " with an addend past its slot");
                     st.holes.push_back(Hole{static_cast<uint32_t>(offset), hole->second, static_cast<uint32_t>(addend), {}});
                     continue;
                 }
@@ -324,7 +328,7 @@ namespace {
 
 // HoleKind's order (src/native/native.h), for the hash.
 const std::vector<std::string> kKinds = {"HoleNext",      "HoleJump",  "HoleExit", "HoleFloat",  "HoleInt",    "HoleSlot",
-                                         "HoleRet",       "HoleAttention", "HoleSlot2", "HoleData", "HoleSlotAt", "HoleSlot2At"};
+                                         "HoleRet",       "HoleAttention", "HoleSlot2", "HoleData", "HoleSlotAt", "HoleSlot2At", "HoleContextAt", "HoleListAt"};
 uint8_t kindNumber(const std::string& kind) {
     const auto it = std::find(kKinds.begin(), kKinds.end(), kind);
     if (it == kKinds.end()) fail("a gap of kind " + kind + ", which the table does not know");

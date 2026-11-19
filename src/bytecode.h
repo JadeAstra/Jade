@@ -812,24 +812,37 @@ struct FunctionProto {
     // regions made); and the regions made, each way in where in `run` its instruction starts
     // (whose address in the code is then the VM's way into it) with its machine code.
     std::vector<std::pair<uint32_t, uint16_t>> runTops;
-    // Beside each of runTops (2026-11-19): the slots the VM may read again from there before
-    // writing them, `runLiveWords` words of bits each (slotsLive, registers.cpp), which a way out
-    // of native code writes back; empty where not worked out (every slot may be read). While
-    // translating, each one's stack code instruction and the locals the stack the translator
-    // holds there still names (runOrigins, then runLive).
+    // Where its regions' context is kept as they run (2026-11-19: a register held its address
+    // before): in the frame, from this slot on, past its own, kNativeContextSlots of them (native::
+    // RegionContext, laid there by the VM as a region is gone into, at an offset from the frame
+    // the stencils have built in: ww_ctxat). Given where native code may be made of it (its loops
+    // found), maxStack that much more, so that a call leaves room for it. 0: none.
+    int nativeContextSlot = 0;
+    // For each instruction of the run code, where it starts (runLiveAt, in order; 2026-11-19): the
+    // slots the VM may read again from there before writing them, `runLiveWords` words of bits
+    // each (slotsLive, registers.cpp), which a way out of native code writes back; empty where not
+    // worked out (every slot may be read). Each stack code instruction's, where it starts, whether
+    // the translator knew the VM's top there or not (runTops has only those it did). While
+    // translating, each one's stack code instruction and the locals the stack the translator holds
+    // there still names (runOrigins, then runLive).
+    std::vector<uint32_t> runLiveAt;
     std::vector<uint32_t> runOrigins;
     std::vector<uint64_t> runLive;
     uint8_t runLiveWords = 0;
     // Whether slot `slot` may be read again from run code offset `at` (an instruction's start);
-    // true where that is not known.
+    // true where that is not known. A run code instruction no stack code instruction starts at is
+    // the rest of the one before it that does (a value the stack held put in its slot, then the
+    // instruction itself, 2026-11-19): what may be read there, it may.
     bool slotLiveAt(uint32_t at, int slot) const {
-        if (runLiveWords == 0 || runLive.size() != runTops.size() * runLiveWords || slot < 0 || slot >= 64 * runLiveWords) return true;
-        auto it = std::lower_bound(runTops.begin(), runTops.end(), at, [](const std::pair<uint32_t, uint16_t>& t, uint32_t a) { return t.first < a; });
-        if (it == runTops.end() || it->first != at) return true;
+        if (runLiveWords == 0 || runLive.size() != runLiveAt.size() * runLiveWords || slot < 0 || slot >= 64 * runLiveWords) return true;
+        auto it = std::upper_bound(runLiveAt.begin(), runLiveAt.end(), at);
+        if (it == runLiveAt.begin()) return true;
+        const uint32_t from = *(it - 1);
+        it = std::lower_bound(runLiveAt.begin(), runLiveAt.end(), from);
         bool live = false;
-        // Every entry starting there (an instruction joined of several): live where any has it.
-        for (; it != runTops.end() && it->first == at; ++it) {
-            const uint64_t word = runLive[static_cast<size_t>(it - runTops.begin()) * runLiveWords + static_cast<size_t>(slot) / 64];
+        // Every one starting there (an instruction joined of several): live where any has it.
+        for (; it != runLiveAt.end() && *it == from; ++it) {
+            const uint64_t word = runLive[static_cast<size_t>(it - runLiveAt.begin()) * runLiveWords + static_cast<size_t>(slot) / 64];
             live = live || ((word >> (slot % 64)) & 1) != 0;
         }
         return live;
@@ -1007,6 +1020,10 @@ void loadBody(FunctionProto& f);
 // where it starts, besides the stack's depth before it: how many values it takes off the stack
 // and puts on, and where else than on to the next it goes (from, to). Kept for the slots a way
 // out of native code writes back (slotsLive, registers.cpp, 2026-11-19).
+// The slots a function's regions' context takes in its frame (FunctionProto::nativeContextSlot):
+// native.cpp checks native::RegionContext fits.
+constexpr int kNativeContextSlots = 200;
+
 struct StackSteps {
     std::vector<uint16_t> pops, pushes;
     std::vector<std::pair<uint32_t, uint32_t>> jumps;

@@ -390,7 +390,7 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
         at += pieces.back().code.size();
         for (const Hole& h : pieces.back().holes) {
             if (h.kind == HoleData) constants++;
-            else if (h.kind >= HoleFloat && h.kind != HoleSlotAt && h.kind != HoleSlot2At) words++;
+            else if (h.kind >= HoleFloat && h.kind != HoleSlotAt && h.kind != HoleSlot2At && h.kind != HoleContextAt && h.kind != HoleListAt) words++;
         }
     }
     start[all.size()] = at;
@@ -431,6 +431,20 @@ void* Assembler::finish(const std::vector<Step>& exitSteps, size_t* bytes) {
                     const int64_t slot = hole.kind == HoleSlotAt ? st.slot : st.slot2;
                     const int64_t v = slot * static_cast<int64_t>(sizeof(Value)) + static_cast<int64_t>(hole.after);
                     if (slot < 0 || v > INT32_MAX) throw std::runtime_error("native code: a slot too far for an instruction to reach");
+                    const int32_t v32 = static_cast<int32_t>(v);
+                    std::memcpy(mem + place, &v32, 4);
+                    break;
+                }
+                case HoleContextAt:
+                case HoleListAt: {
+                    // The context's place in the frame, built in as a slot's is (2026-11-19); or that
+                    // of its words for the list the step looks at (lists[4 * ww_slot]).
+                    int64_t v = contextSlot * static_cast<int64_t>(sizeof(Value)) + static_cast<int64_t>(hole.after);
+                    if (hole.kind == HoleListAt) {
+                        if (st.slot < 0 || st.slot >= kRegionLists) throw std::runtime_error("native code: a list looked at past those a region has");
+                        v += static_cast<int64_t>(offsetof(RegionContext, lists)) + st.slot * 4 * static_cast<int64_t>(sizeof(uint64_t));
+                    }
+                    if (contextSlot < 0 || v > INT32_MAX) throw std::runtime_error("native code: a region with no room for its context");
                     const int32_t v32 = static_cast<int32_t>(v);
                     std::memcpy(mem + place, &v32, 4);
                     break;
@@ -479,10 +493,15 @@ void* Assembler::address(int label) const {
 namespace {
 
 volatile uint8_t checkFlag = 0;
+// The check's regions' context: past the slots they use (each frame given 32, then its room).
+constexpr int64_t kCheckContextSlot = 31;
+static_assert(sizeof(RegionContext) <= static_cast<size_t>(kNativeContextSlots) * 16 && alignof(RegionContext) <= 16,
+              "a region's context fits the slots a frame keeps for it");
 
 int64_t run(void* code, Value* slots) {
-    RegionContext context{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-    return runRegion(code, slots, &context);
+    contextAt(slots, kCheckContextSlot) =
+        RegionContext{&checkFlag, 0, nullptr, {}, {}, nullptr, {}, {}, {}, nullptr, unitTable(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    return runRegion(code, slots);
 }
 
 // std::string as the stencils read it (layout.h's stringUnits, 2026-11-16): a string's characters,
@@ -625,9 +644,10 @@ std::string check() {
                 if (h.offset + 4 > p.code.size()) return std::string("stencil ") + s.name + ": a gap past its end";
         }
     // A region's answer beside C++'s.
-    std::vector<Value> slots(8);
+    std::vector<Value> slots(32 + kNativeContextSlots);
     {
         Assembler a;
+        a.contextSlot = kCheckContextSlot;
         void* code = mandelbrot(a);
         if (code == nullptr) return "no code memory";
         slots[1] = Value::integer(60), slots[2] = Value::integer(80);
@@ -645,9 +665,10 @@ std::string check() {
         // eqfk_8 to eqfk_15 the constant sat one byte off, the predicate after it uncounted).
         static const char* const ops[] = {"lt", "le", "gt", "ge", "eq"};
         static const double values[] = {1.25, 2.5, 3.75};
-        std::vector<Value> out(16);
+        std::vector<Value> out(32 + kNativeContextSlots);
         for (int r = 0; r < 16; r++) {
             Assembler a;
+            a.contextSlot = kCheckContextSlot;
             int s = 0;
             for (double v : values)
                 for (const char* op : ops) {
@@ -673,6 +694,7 @@ std::string check() {
     {
         // An int's overflow leaves for the VM before the int is changed.
         Assembler a;
+        a.contextSlot = kCheckContextSlot;
         a.add("loadi_0").slot = 1;
         a.add("inci_0");
         a.add("inci_0");

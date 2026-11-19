@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,8 +16,14 @@ namespace ww::native {
 // What fills a stencil's gap (src/native/stencils.cpp names them ww_next and so on).
 // HoleSlotAt and HoleSlot2At (ww_slotat, ww_slot2at, 2026-11-14) are the byte offset of the
 // frame's slot ww_slot (ww_slot2) itself, built into the instruction that reads or writes it;
-// every other gap is the distance to what fills it (a word placed after the code, or code).
-enum HoleKind : uint8_t { HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData, HoleSlotAt, HoleSlot2At };
+// HoleContextAt (ww_ctxat, 2026-11-19) so too: the offset of the region's context (from the
+// Assembler's contextSlot), which the VM lays in the frame as the region runs; and HoleListAt
+// (ww_listat) that of the context's words for the list ww_slot looks at once (lookAt). Every
+// other gap is the distance to what fills it (a word placed after the code, or code).
+enum HoleKind : uint8_t {
+    HoleNext, HoleJump, HoleExit, HoleFloat, HoleInt, HoleSlot, HoleRet, HoleAttention, HoleSlot2, HoleData, HoleSlotAt, HoleSlot2At,
+    HoleContextAt, HoleListAt
+};
 // A gap: where its 32 bits are in the stencil, and how many bytes of the instruction follow them
 // (what its offset is counted from: REL32_1 to REL32_5); for HoleSlotAt and HoleSlot2At, what is
 // added to the slot's offset instead (8: its payload).
@@ -65,6 +72,9 @@ public:
     void* finish(const std::vector<Step>& exitSteps, size_t* bytes = nullptr);
     // Where a label is in the finished code (a region's other ways in).
     void* address(int label) const;
+    // The frame's slot the region's context is kept in as it runs (FunctionProto::
+    // nativeContextSlot), which every ww_ctxat gap is filled with the offset of.
+    int64_t contextSlot = -1;
 
 private:
     std::vector<Step> steps_;
@@ -79,7 +89,9 @@ constexpr int kRegionFields = 16;
 
 // What a region is given besides the frame's slots: the VM's flag (a collection or another
 // thread waiting), and for its reads and writes of objects, the core of a parallel section it
-// runs on (0 outside one) and the object lent to that core, which only the VM reads.
+// runs on (0 outside one) and the object lent to that core, which only the VM reads. Laid in
+// the frame itself, past the function's slots (FunctionProto::nativeContextSlot, 2026-11-19: a
+// register held its address before), where the stencils find its words at offsets built in.
 constexpr int kRegionHomes = 32;
 struct RegionContext {
     const volatile uint8_t* attention;
@@ -142,12 +154,17 @@ const double* unitTable();
 #define WW_REGION_CALL
 #endif
 using Lanes = double __attribute__((vector_size(16)));  // two float registers (stencils.cpp)
-using RegionFn = int64_t(WW_REGION_CALL *)(void* slots, RegionContext* context, int64_t, int64_t, int64_t, int64_t, int64_t,
-                                                          int64_t, int64_t, int64_t, int64_t, int64_t, Lanes, Lanes, Lanes, Lanes, Lanes,
-                                                          Lanes, Lanes, Lanes);
-inline int64_t runRegion(void* code, void* slots, RegionContext* context) {
+using RegionFn = int64_t(WW_REGION_CALL *)(void* slots, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+                                                          int64_t, int64_t, int64_t, Lanes, Lanes, Lanes, Lanes, Lanes, Lanes, Lanes, Lanes);
+// Its context is the frame's own, past the function's slots (FunctionProto::nativeContextSlot),
+// laid there by the caller (contextAt): the stencils find it at an offset from the frame built
+// into them (2026-11-19: a register held its address before).
+inline RegionContext& contextAt(void* slots, int64_t contextSlot) {
+    return *reinterpret_cast<RegionContext*>(static_cast<uint8_t*>(slots) + contextSlot * 16);
+}
+inline int64_t runRegion(void* code, void* slots) {
     const Lanes z{0, 0};
-    return reinterpret_cast<RegionFn>(code)(slots, context, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, z, z, z, z, z, z);
+    return reinterpret_cast<RegionFn>(code)(slots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z, z, z, z, z, z, z, z);
 }
 
 // Whether regions are made (ww --interpret, or WW_NATIVE=0, says not).

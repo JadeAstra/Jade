@@ -2,15 +2,16 @@
 // compiled by Clang when ww.exe is built, never called as itself, but read out of the object
 // file by tools/stencils and copied, end to end, into a region's machine code as it runs.
 //
-// Every stencil has the same parameters: the frame's slots, the region's context (the VM's flag,
-// a collection or another thread waiting; the core of a parallel section it runs on and the
-// object lent to it), then the region's registers, ints i0 to i9 and floats f0 to f15, which
-// `preserve_none` keeps in the processor's registers (all twelve of the processor's it gives for
-// ints; for floats all eight XMM registers it gives, two floats to each since 2026-11-14: see
-// f0 below). A stencil does one thing to them and goes on to the next with
-// `musttail`, which Clang makes a plain jump; a register it does not touch is passed through as
-// it is. i9 is the region's flag register: a comparison's result, which the jumps and `and`
-// after it read (src/native/regions.cpp gives out i0 to i8).
+// Every stencil has the same parameters: the frame's slots, then the region's registers, ints i0
+// to i10 and floats f0 to f15, which `preserve_none` keeps in the processor's registers (all
+// twelve of the processor's it gives for ints; for floats all eight XMM registers it gives, two
+// floats to each since 2026-11-14: see f0 below). A stencil does one thing to them and goes on to
+// the next with `musttail`, which Clang makes a plain jump; a register it does not touch is passed
+// through as it is. The region's context (the VM's flag, a collection or another thread waiting;
+// the core of a parallel section it runs on and the object lent to it; what it looks at once) is
+// read from the frame (contextOf, 2026-11-19: it took a register before). i9 is where a comparison
+// puts its answer, which the jumps and `and` after it read: a register like the others where no
+// answer is wanted (regions.cpp gives out i0 to i10, the flag's value always i9).
 //
 // Its gaps are references to the names below, filled in when it is copied:
 //   ww_next, ww_jump, ww_exit   where it goes on: the stencil after it, a jump's target,
@@ -78,8 +79,26 @@ INLINE const uint8_t* objectIn(const Slot& s, uint8_t type) {
     if (s.kind != kKindObj || s.p[kObjType] != type) return nullptr;
     return s.p;
 }
-INLINE bool mayRead(const uint8_t* o, const Ctx* ctx) {
-    return o != ctx->band && (o[kObjCore] == ctx->core || o[kObjCore] == 0);
+// The context's words a stencil reads most, read straight from the frame, the word's place built
+// in (no register held for the context's address: in a stencil with many values alive, one more
+// held had Clang keep them all on the stack about its work, 2026-11-19).
+INLINE const volatile uint8_t* ctxAttention(Slot* base) {
+    const volatile uint8_t* v;
+    __asm__("movq ww_ctxat(%1), %0" : "=r"(v) : "r"(base));
+    return v;
+}
+INLINE uint64_t ctxCore(Slot* base) {
+    uint64_t v;
+    __asm__("movq ww_ctxat+8(%1), %0" : "=r"(v) : "r"(base));
+    return v;
+}
+INLINE const void* ctxBand(Slot* base) {
+    const void* v;
+    __asm__("movq ww_ctxat+16(%1), %0" : "=r"(v) : "r"(base));
+    return v;
+}
+INLINE bool mayRead(const uint8_t* o, Slot* base) {
+    return o != ctxBand(base) && (o[kObjCore] == ctxCore(base) || o[kObjCore] == 0);
 }
 template <typename T>
 INLINE T word(const uint8_t* at) {
@@ -119,6 +138,23 @@ INLINE Slot* slot2At(Slot* base) {
     __asm__("leaq ww_slot2at(%1), %0" : "=r"(s) : "r"(base));
     return s;
 }
+// The region's context (2026-11-19): not passed in a register, which went to the region's own
+// values, but laid in the frame by the VM as it goes in, past the function's own slots
+// (FunctionProto::nativeContextSlot): its address the frame's and an offset built into the
+// instruction (the gap ww_ctxat), no load. A stencil names it `ctx`, as it did the parameter.
+INLINE struct Ctx* contextOf(Slot* base) {
+    struct Ctx* c;
+    __asm__("leaq ww_ctxat(%1), %0" : "=r"(c) : "r"(base));
+    return c;
+}
+// The context's four words for the list ww_slot looks at once (ctx->lists + 4 * ww_slot), their
+// place in the frame built in whole (the gap ww_listat): one instruction, where the list's number
+// was read from a word after the code, shifted, and added to the context's address.
+INLINE uint64_t* heldList(Slot* base) {
+    uint64_t* h;
+    __asm__("leaq ww_listat(%1), %0" : "=r"(h) : "r"(base));
+    return h;
+}
 // Slot ww_slot (ww_slot2) written whole, in one store (see storeSlot), the store's place built in.
 INLINE void storeSlotAt(Slot* base, uint8_t kind, uint64_t bits) {
     const __m128i v = _mm_set_epi64x(static_cast<int64_t>(bits), kind);
@@ -137,10 +173,11 @@ INLINE void storeSlot(Slot* base, int64_t slot, uint8_t kind, uint64_t bits) {
 }  // namespace
 
 #define PARAMS                                                                                                         \
-    Slot *base, Ctx *ctx, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, int64_t i5, int64_t i6,    \
-        int64_t i7, int64_t i8, int64_t i9, __m128d v0, __m128d v1, __m128d v2, __m128d v3, __m128d v4, __m128d v5,  \
-        __m128d v6, __m128d v7
-#define ARGS base, ctx, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, v0, v1, v2, v3, v4, v5, v6, v7
+    Slot *base, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int64_t i4, int64_t i5, int64_t i6, int64_t i7,  \
+        int64_t i8, int64_t i9, int64_t i10, __m128d v0, __m128d v1, __m128d v2, __m128d v3, __m128d v4,            \
+        __m128d v5, __m128d v6, __m128d v7
+#define ARGS base, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, v0, v1, v2, v3, v4, v5, v6, v7
+#define ctx (contextOf(base))
 // The sixteen float registers: two to each of the processor's eight XMM registers preserve_none
 // passes, f0 to f7 their low halves, f8 to f15 their high ones. A write to one half keeps the
 // other, and so waits for whatever last wrote the register; f16 to f23 are f0 to f7 written whole
@@ -242,9 +279,9 @@ extern "C" const int64_t ww_ret;
 // The float registers a stencil writes: each of the sixteen, and f0 to f7 written whole.
 #define F_W(M, ...) F_A(M, __VA_ARGS__) M(16, __VA_ARGS__) M(17, __VA_ARGS__) M(18, __VA_ARGS__) M(19, __VA_ARGS__) M(20, __VA_ARGS__) M(21, __VA_ARGS__) M(22, __VA_ARGS__) M(23, __VA_ARGS__)
 #define F_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__) M(11, __VA_ARGS__) M(12, __VA_ARGS__) M(13, __VA_ARGS__) M(14, __VA_ARGS__) M(15, __VA_ARGS__)
-#define I_A(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
-#define I_B(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
-#define I_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__)
+#define I_A(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__)
+#define I_B(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__)
+#define I_C(M, ...) M(0, __VA_ARGS__) M(1, __VA_ARGS__) M(2, __VA_ARGS__) M(3, __VA_ARGS__) M(4, __VA_ARGS__) M(5, __VA_ARGS__) M(6, __VA_ARGS__) M(7, __VA_ARGS__) M(8, __VA_ARGS__) M(9, __VA_ARGS__) M(10, __VA_ARGS__)
 
 // The range a float may have to be made an int, as the VM's toInt, floor, ceil and round ask.
 #define FITS_INT(x) ((x) > -9.2e18 && (x) < 9.2e18)
@@ -592,7 +629,7 @@ STENCIL(isnull) {
 // map, or a set), by the VM's way (ctx->findKey, which runs no WinterWolf code): 1 found (a map's
 // value copied to `out`, where given), 0 not, -1 the VM's (anything else, a key of another
 // kind, a stored key that may have an == of its own).
-INLINE int findKey(const Ctx* ctx, Slot* base, const Slot& key, Slot* out) {
+INLINE int findKey(Slot* base, const Slot& key, Slot* out) {
     const Slot& table = (*slotAt(base));
     if (table.kind != kKindObj || table.p[kObjType] != static_cast<uint8_t>(ww_ret)) return -1;
     return ctx->findKey(table.p, &key, out);
@@ -717,7 +754,7 @@ INLINE int probeKey(const Slot& table, const Slot& key, const uint8_t*& value) {
         if (r < 0) {                                                            \
             Slot key;                                                           \
             storeSlot(&key, 0, kKindInt, static_cast<uint64_t>(i##c));          \
-            r = findKey(ctx, base, key, &(*slot2At(base)));                     \
+            r = findKey(base, key, &(*slot2At(base)));                     \
             if (r < 0) EXIT;                                                    \
             if (r == 1) NEXT;                                                   \
         }                                                                       \
@@ -726,21 +763,21 @@ INLINE int probeKey(const Slot& table, const Slot& key, const uint8_t*& value) {
     }
 I_A(MAPGETI, x)
 // The key probed in the step where it is an int or a string (probeKey), else by the VM's way.
-INLINE int lookUp(const Ctx* ctx, Slot* base, const Slot& key, Slot* out) {
+INLINE int lookUp(Slot* base, const Slot& key, Slot* out) {
     const uint8_t* value;
     const int r = probeKey((*slotAt(base)), key, value);
     if (r == 1 && out != nullptr) __builtin_memcpy(out, value, sizeof(Slot));
     if (r >= 0) return r;
-    return findKey(ctx, base, key, out);
+    return findKey(base, key, out);
 }
 STENCIL(mapgetv) {
-    const int r = lookUp(ctx, base, base[ww_ki], &(*slot2At(base)));
+    const int r = lookUp(base, base[ww_ki], &(*slot2At(base)));
     if (r < 0) EXIT;
     if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
     NEXT;
 }
 STENCIL(mapgetk) {
-    const int r = lookUp(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), &(*slot2At(base)));
+    const int r = lookUp(base, *reinterpret_cast<const Slot*>(ww_ki), &(*slot2At(base)));
     if (r < 0) EXIT;
     if (r == 0) storeSlot(&(*slot2At(base)), 0, kKindNull, 0);
     NEXT;
@@ -754,7 +791,7 @@ STENCIL(mapgetk) {
         if (r < 0) {                                                            \
             Slot key;                                                           \
             storeSlot(&key, 0, kKindInt, static_cast<uint64_t>(i##c));          \
-            r = findKey(ctx, base, key, nullptr);                               \
+            r = findKey(base, key, nullptr);                               \
             if (r < 0) EXIT;                                                    \
         }                                                                       \
         i9 = r;                                                                 \
@@ -762,13 +799,13 @@ STENCIL(mapgetk) {
     }
 I_A(HASI, x)
 STENCIL(hasv) {
-    const int r = lookUp(ctx, base, base[ww_ki], nullptr);
+    const int r = lookUp(base, base[ww_ki], nullptr);
     if (r < 0) EXIT;
     i9 = r;
     NEXT;
 }
 STENCIL(hask) {
-    const int r = lookUp(ctx, base, *reinterpret_cast<const Slot*>(ww_ki), nullptr);
+    const int r = lookUp(base, *reinterpret_cast<const Slot*>(ww_ki), nullptr);
     if (r < 0) EXIT;
     i9 = r;
     NEXT;
@@ -783,7 +820,7 @@ STENCIL(mapset) {
     const Slot& value = (*slot2At(base));
     if (value.kind != kKindRef) {
         const uint8_t* at;
-        if (probeKey(table, key, at) == 1 && table.p[kObjCore] == ctx->core && table.p[kObjFrozen] == 0) {
+        if (probeKey(table, key, at) == 1 && table.p[kObjCore] == ctxCore(base) && table.p[kObjFrozen] == 0) {
             __builtin_memcpy(const_cast<uint8_t*>(at), &value, sizeof(Slot));
             NEXT;
         }
@@ -880,7 +917,7 @@ STENCIL(loadflag) {
 #define IDXF_B(c, a)                                                            \
     STENCIL(idxf_##a##_##c) {                                                   \
         const uint8_t* list = objectIn((*slotAt(base)), kTypeList);             \
-        if (list == nullptr || !mayRead(list, ctx)) EXIT;                       \
+        if (list == nullptr || !mayRead(list, base)) EXIT;                       \
         const uint8_t* pack = packOf(list, kStoreFloats);                       \
         if (pack == nullptr || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
         f##a = word<double>(word<const uint8_t*>(pack + kPackBlock) + i##c * 8); \
@@ -891,7 +928,7 @@ F_W(IDXF_A, x)
 #define IDXFK(a, ...)                                                           \
     STENCIL(idxfk_##a) {                                                        \
         const uint8_t* list = objectIn((*slotAt(base)), kTypeList);             \
-        if (list == nullptr || !mayRead(list, ctx)) EXIT;                       \
+        if (list == nullptr || !mayRead(list, base)) EXIT;                       \
         const uint8_t* pack = packOf(list, kStoreFloats);                       \
         if (pack == nullptr || static_cast<uint64_t>(ww_ki) >= word<uint64_t>(pack + kPackCount)) EXIT; \
         f##a = word<double>(word<const uint8_t*>(pack + kPackBlock) + ww_ki * 8); \
@@ -949,18 +986,18 @@ INLINE bool narrowWrite(uint8_t* block, uint64_t narrow, uint64_t index, int64_t
     return true;
 }
 // Such a list's block, to change item `index`: its core's own, not frozen, the item in range.
-INLINE uint8_t* wholesToChange(const Slot& s, int64_t index, const Ctx* ctx, uint8_t& narrow) {
+INLINE uint8_t* wholesToChange(const Slot& s, int64_t index, Slot* base, uint8_t& narrow) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
+    if (o[kObjType] != kTypeList || o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0) return nullptr;
     const uint8_t* pack = wholesPack(o, narrow);
     if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
     return word<uint8_t*>(pack + kPackBlock);
 }
-INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out) {
+INLINE bool wholeItem(const Slot& s, int64_t index, Slot* base, int64_t& out) {
     if (s.kind != kKindObj) return false;
     const uint8_t* o = s.p;
-    if (!mayRead(o, ctx)) return false;
+    if (!mayRead(o, base)) return false;
     if (o[kObjType] == kTypeBytes) {
         const uint8_t* first = word<const uint8_t*>(o + kBytesData);
         const uint8_t* end = word<const uint8_t*>(o + kBytesData + 8);
@@ -990,7 +1027,7 @@ INLINE bool wholeItem(const Slot& s, int64_t index, const Ctx* ctx, int64_t& out
 #define IDXW_B(c, a)                                                            \
     STENCIL(idxw_##a##_##c) {                                                   \
         int64_t v;                                                              \
-        if (!wholeItem((*slotAt(base)), i##c, ctx, v)) EXIT;                    \
+        if (!wholeItem((*slotAt(base)), i##c, base, v)) EXIT;                    \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -999,7 +1036,7 @@ I_A(IDXW_A, x)
 #define IDXWK(a, ...)                                                           \
     STENCIL(idxwk_##a) {                                                        \
         int64_t v;                                                              \
-        if (!wholeItem((*slotAt(base)), ww_ki, ctx, v)) EXIT;                 \
+        if (!wholeItem((*slotAt(base)), ww_ki, base, v)) EXIT;                 \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -1014,10 +1051,10 @@ INLINE bool plainStore(const uint8_t* pack) {
     const uint8_t store = pack[kPackStore];
     return store == kStoreInts || store == kStoreFloats || store == kStoreBools;
 }
-INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, const Ctx* ctx) {
+INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, Slot* base) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
+    if (o[kObjType] != kTypeList || o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0) return nullptr;
     const uint8_t* pack = word<const uint8_t*>(o + kListPack);
     if (pack == nullptr || pack[kPackStore] != store || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
     // A list whose items may be null (2026-11-16): the item's bit cleared, as the VM's writeItem
@@ -1033,7 +1070,7 @@ INLINE uint8_t* listToChange(const Slot& s, int64_t index, uint8_t store, const 
         const Slot& s = (*slotAt(base));                                        \
         if (s.kind != kKindObj) EXIT;                                           \
         const uint8_t* o = s.p;                                                 \
-        if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0) EXIT; \
+        if (o[kObjType] != kTypeList || o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0) EXIT; \
         const uint8_t* pack = word<const uint8_t*>(o + kListPack);              \
         if (pack == nullptr || !plainStore(pack) || pack[kPackNullable] == 0) EXIT; \
         const uint64_t index = static_cast<uint64_t>(i##c);                     \
@@ -1048,11 +1085,11 @@ I_A(SETNULLAT, x)
 // A List<bool>'s item (2026-11-15: a Mask's pixels, a flood's marks): a packed list of bools, a
 // byte each (0 or 1), none null, the item in range; to read (its core's or none's) or to change
 // (its core's own, not frozen). Null where not: the VM's.
-INLINE uint8_t* boolItem(const Slot& s, int64_t index, const Ctx* ctx, bool change) {
+INLINE uint8_t* boolItem(const Slot& s, int64_t index, Slot* base, bool change) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] != kTypeList) return nullptr;
-    if (change ? (o[kObjCore] != ctx->core || o[kObjFrozen] != 0) : !mayRead(o, ctx)) return nullptr;
+    if (change ? (o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0) : !mayRead(o, base)) return nullptr;
     const uint8_t* pack = packOf(o, kStoreBools);
     if (pack == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
     return word<uint8_t*>(pack + kPackBlock) + index;
@@ -1060,41 +1097,41 @@ INLINE uint8_t* boolItem(const Slot& s, int64_t index, const Ctx* ctx, bool chan
 // The flag register = item ic of a List<bool>; item ic = the flag register.
 #define IDXBOOL(c, ...)                                                         \
     STENCIL(idxbool_##c) {                                                      \
-        const uint8_t* at = boolItem((*slotAt(base)), i##c, ctx, false);        \
+        const uint8_t* at = boolItem((*slotAt(base)), i##c, base, false);        \
         if (at == nullptr) EXIT;                                                \
         i9 = *at != 0;                                                          \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setbool_##c) {                                                      \
-        uint8_t* at = boolItem((*slotAt(base)), i##c, ctx, true);               \
+        uint8_t* at = boolItem((*slotAt(base)), i##c, base, true);               \
         if (at == nullptr) EXIT;                                                \
         *at = i9 != 0;                                                          \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hidxbool_##c) {                                                     \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         i9 = reinterpret_cast<const uint8_t*>(h[0])[i##c] != 0;                 \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetbool_##c) {                                                     \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         reinterpret_cast<uint8_t*>(h[0])[i##c] = i9 != 0;                       \
         NEXT;                                                                   \
     }
 I_A(IDXBOOL, x)
-INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
+INLINE uint8_t* byteToChange(const Slot& s, int64_t index, Slot* base) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
     if (o[kObjType] == kTypeList) {
         // A List<byte>: its core's own and not frozen, as a list to change is.
-        if (o[kObjCore] != ctx->core || o[kObjFrozen] != 0) return nullptr;
+        if (o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0) return nullptr;
         const uint8_t* bytes = bytesPack(o);
         if (bytes == nullptr || static_cast<uint64_t>(index) >= word<uint64_t>(bytes + kPackCount)) return nullptr;
         return word<uint8_t*>(bytes + kPackBlock) + index;
     }
-    if (o[kObjType] != kTypeBytes || o[kObjCore] != ctx->core) return nullptr;
+    if (o[kObjType] != kTypeBytes || o[kObjCore] != ctxCore(base)) return nullptr;
     uint8_t* first = word<uint8_t*>(o + kBytesData);
     const uint8_t* end = word<const uint8_t*>(o + kBytesData + 8);
     if (static_cast<uint64_t>(index) >= static_cast<uint64_t>(end - first)) return nullptr;
@@ -1102,7 +1139,7 @@ INLINE uint8_t* byteToChange(const Slot& s, int64_t index, const Ctx* ctx) {
 }
 #define SETF_B(c, v)                                                            \
     STENCIL(setf_##v##_##c) {                                                   \
-        uint8_t* at = listToChange((*slotAt(base)), i##c, kStoreFloats, ctx);   \
+        uint8_t* at = listToChange((*slotAt(base)), i##c, kStoreFloats, base);   \
         if (at == nullptr) EXIT;                                                \
         { const double d_ = f##v; __builtin_memcpy(at, &d_, 8); }                                              \
         NEXT;                                                                   \
@@ -1113,16 +1150,16 @@ F_A(SETF_A, x)
     STENCIL(setwi_##v##_##c) {                                                  \
         const Slot& s = (*slotAt(base));                                        \
         if (s.kind == kKindObj && (s.p[kObjType] == kTypeBytes || (s.p[kObjType] == kTypeList && bytesPack(s.p) != nullptr))) { \
-            uint8_t* at = byteToChange(s, i##c, ctx);                           \
+            uint8_t* at = byteToChange(s, i##c, base);                           \
             if (at == nullptr || static_cast<uint64_t>(i##v) > 255) EXIT;       \
             *at = static_cast<uint8_t>(i##v);                                   \
             NEXT;                                                               \
         }                                                                       \
-        uint8_t* at = listToChange(s, i##c, kStoreInts, ctx);                   \
+        uint8_t* at = listToChange(s, i##c, kStoreInts, base);                   \
         if (at == nullptr) {                                                    \
             /* a list of two- or four-byte whole numbers: one that fits */      \
             uint8_t narrow;                                                     \
-            uint8_t* block = wholesToChange(s, i##c, ctx, narrow);              \
+            uint8_t* block = wholesToChange(s, i##c, base, narrow);              \
             if (block == nullptr || !narrowWrite(block, narrow, static_cast<uint64_t>(i##c), i##v)) EXIT; \
             NEXT;                                                               \
         }                                                                       \
@@ -1130,13 +1167,13 @@ F_A(SETF_A, x)
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setwb_##v##_##c) {                                                  \
-        uint8_t* at = byteToChange((*slotAt(base)), i##c, ctx);                 \
+        uint8_t* at = byteToChange((*slotAt(base)), i##c, base);                 \
         if (at == nullptr) {                                                    \
             /* a byte into a list of ints: the int it is */                     \
-            uint8_t* item = listToChange((*slotAt(base)), i##c, kStoreInts, ctx); \
+            uint8_t* item = listToChange((*slotAt(base)), i##c, kStoreInts, base); \
             if (item == nullptr) {                                              \
                 uint8_t narrow;                                                 \
-                uint8_t* block = wholesToChange((*slotAt(base)), i##c, ctx, narrow); \
+                uint8_t* block = wholesToChange((*slotAt(base)), i##c, base, narrow); \
                 if (block == nullptr || !narrowWrite(block, narrow, static_cast<uint64_t>(i##c), i##v)) EXIT; \
                 NEXT;                                                           \
             }                                                                   \
@@ -1153,10 +1190,10 @@ I_A(SETW_A, x)
 // it is (`items[i].x`, M9.5 B1): the list's items of the class ww_ki, none null, the item in
 // range, the field ww_slot2 bytes into it; a byte (idxpb), an int (idxpi) or a float (idxpf).
 // Anything else the VM's.
-INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
+INLINE const uint8_t* itemField(const Slot& s, int64_t index, Slot* base) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) return nullptr;
     const uint8_t* pack = packOf(o, kStoreItems);
     if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
     if (static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return nullptr;
@@ -1164,13 +1201,13 @@ INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
 }
 #define IDXP_B(c, a)                                                            \
     STENCIL(idxpb_##a##_##c) {                                                  \
-        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, base);              \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(idxpi_##a##_##c) {                                                  \
-        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, base);              \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
@@ -1179,7 +1216,7 @@ INLINE const uint8_t* itemField(const Slot& s, int64_t index, const Ctx* ctx) {
 I_A(IDXP_A, x)
 #define IDXPF_B(c, a)                                                           \
     STENCIL(idxpf_##a##_##c) {                                                  \
-        const uint8_t* at = itemField((*slotAt(base)), i##c, ctx);              \
+        const uint8_t* at = itemField((*slotAt(base)), i##c, base);              \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -1229,10 +1266,10 @@ INLINE void moveBytes(uint8_t* o, const uint8_t* x, uint64_t n) {
     }
     __asm__ volatile("rep movsb" : "+D"(o), "+S"(x), "+c"(n) : : "memory");
 }
-INLINE const uint8_t* itemsList(const Slot& s, const Ctx* ctx) {
+INLINE const uint8_t* itemsList(const Slot& s, Slot* base) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) return nullptr;
     const uint8_t* pack = word<const uint8_t*>(o + kListPack);
     return pack != nullptr && pack[kPackStore] == kStoreItems ? o : nullptr;
 }
@@ -1243,7 +1280,7 @@ INLINE bool nullItem(const uint8_t* pack, uint64_t index) {
 // (The list's items may be null: null for a null item, as the VM's GetIndexRef gives it.)
 #define IREF(c, ...)                                                            \
     STENCIL(iref_##c) {                                                         \
-        const uint8_t* list = itemsList((*slotAt(base)), ctx);                  \
+        const uint8_t* list = itemsList((*slotAt(base)), base);                  \
         if (list == nullptr) EXIT;                                              \
         const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
         if (static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
@@ -1261,7 +1298,7 @@ I_A(IREF, x)
 // number (ww_slot2 >> 32). Anything else the VM's.
 #define IDXSM(c, ...)                                                           \
     STENCIL(idxsm_##c) {                                                        \
-        const uint8_t* list = itemsList((*slotAt(base)), ctx);                  \
+        const uint8_t* list = itemsList((*slotAt(base)), base);                  \
         if (list == nullptr) EXIT;                                              \
         const uint8_t* pack = word<const uint8_t*>(list + kListPack);           \
         if (word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr || \
@@ -1373,7 +1410,7 @@ STENCIL(setplaceref) {
     }
     if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
     const uint8_t* o = v.p;
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) EXIT;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) EXIT;
     const uint8_t* pack = word<const uint8_t*>(o + kListPack);
     if (pack == nullptr || pack[kPackStore] != kStoreItems || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0)
@@ -1427,7 +1464,7 @@ F_A(BOXF, x)
 #define PLACEI(c, ...)                                                          \
     STENCIL(placei_##c) {                                                       \
         const Slot& s = (*slotAt(base));                                        \
-        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
+        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctxCore(base) || s.p[kObjFrozen] != 0 || s.p == ctxBand(base)) EXIT; \
         const uint8_t* pack = packOf(s.p, kStoreItems);                         \
         if (pack == nullptr || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) EXIT; \
         putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, reinterpret_cast<uint64_t>(s.p)); \
@@ -1442,7 +1479,7 @@ I_A(PLACEI, x)
 #define SETSM(c, ...)                                                           \
     STENCIL(setsm_##c) {                                                        \
         const Slot& s = (*slotAt(base));                                        \
-        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctx->core || s.p[kObjFrozen] != 0 || s.p == ctx->band) EXIT; \
+        if (s.kind != kKindObj || s.p[kObjType] != kTypeList || s.p[kObjCore] != ctxCore(base) || s.p[kObjFrozen] != 0 || s.p == ctxBand(base)) EXIT; \
         const uint8_t* pack = packOf(s.p, kStoreItems);                         \
         if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr || \
             word<uint32_t>(pack + kPackTypeSlot) != 0 || static_cast<uint64_t>(i##c) >= word<uint64_t>(pack + kPackCount)) \
@@ -1478,10 +1515,10 @@ INLINE bool nullWordAt(const uint8_t* pack, uint64_t index) {
 // the bit of, where the bit's word is there; never a template, which writes many.)
 // (full: set where the list is one to add to but has no room, its block's or its bits': the VM's
 // add makes it, which a step takes as no miss.)
-INLINE uint8_t* roomToAdd(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack, bool nullsToo = false, bool* full = nullptr) {
+INLINE uint8_t* roomToAdd(const Slot& s, Slot* base, uint8_t store, uint8_t*& pack, bool nullsToo = false, bool* full = nullptr) {
     if (s.kind != kKindObj) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) return nullptr;
+    if (o[kObjType] != kTypeList || o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0 || o == ctxBand(base)) return nullptr;
     pack = word<uint8_t*>(o + kListPack);
     if (pack == nullptr || pack[kPackStore] != store) return nullptr;
     if (pack[kPackNullable] != 0 && !nullsToo) return nullptr;
@@ -1498,11 +1535,11 @@ INLINE uint8_t* roomToAdd(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*
 // no room and the step may have room made (ww_ret: the region keeps no list's block address,
 // 2026-11-16), made by the VM (ctx->makeRoom: twice the items, at least 8), and looked for again.
 // Without it each add to a list made afresh, as it grows, left for the VM's.
-INLINE uint8_t* roomMade(const Slot& s, const Ctx* ctx, uint8_t store, uint8_t*& pack, bool& full) {
-    uint8_t* at = roomToAdd(s, ctx, store, pack, true, &full);
+INLINE uint8_t* roomMade(const Slot& s, Slot* base, uint8_t store, uint8_t*& pack, bool& full) {
+    uint8_t* at = roomToAdd(s, base, store, pack, true, &full);
     if (at == nullptr && full && ww_ret != 0 && ctx->makeRoom(ctx->vm, s.p)) {
         full = false;
-        at = roomToAdd(s, ctx, store, pack, true, &full);
+        at = roomToAdd(s, base, store, pack, true, &full);
     }
     return at;
 }
@@ -1529,7 +1566,7 @@ INLINE void added(uint8_t* pack) {
         const Slot& s = (*slotAt(base));                                        \
         if (s.kind != kKindObj) EXIT;                                           \
         const uint8_t* o = s.p;                                                 \
-        if (o[kObjType] != kTypeList || o[kObjCore] != ctx->core || o[kObjFrozen] != 0 || o == ctx->band) EXIT; \
+        if (o[kObjType] != kTypeList || o[kObjCore] != ctxCore(base) || o[kObjFrozen] != 0 || o == ctxBand(base)) EXIT; \
         uint8_t* const pack = word<uint8_t*>(o + kListPack);                    \
         if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki || \
             word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) \
@@ -1558,7 +1595,7 @@ I_A(ADDSM, x)
     STENCIL(pushi_##a) {                                                        \
         uint8_t* pack;                                                          \
         bool full = false;                                                      \
-        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreInts, pack, full); \
+        uint8_t* at = roomMade((*slotAt(base)), base, kStoreInts, pack, full); \
         if (at == nullptr) {                                                    \
             if (full) JUMP; /* no room: the VM's add makes it (no miss) */      \
             EXIT;                                                               \
@@ -1571,12 +1608,12 @@ I_A(ADDSM, x)
     STENCIL(pushb_##a) {                                                        \
         uint8_t* pack;                                                          \
         bool full = false;                                                      \
-        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreInts, pack, full); \
+        uint8_t* at = roomMade((*slotAt(base)), base, kStoreInts, pack, full); \
         if (full) JUMP;                                                         \
         if (at != nullptr) {                                                    \
             __builtin_memcpy(at, &i##a, 8);                                     \
         } else {                                                                \
-            at = roomMade((*slotAt(base)), ctx, kStoreNarrow, pack, full); \
+            at = roomMade((*slotAt(base)), base, kStoreNarrow, pack, full); \
             if (at == nullptr) {                                                \
                 if (full) JUMP;                                                 \
                 EXIT;                                                           \
@@ -1593,7 +1630,7 @@ I_A(ADDLI, x)
     STENCIL(pushf_##a) {                                                        \
         uint8_t* pack;                                                          \
         bool full = false;                                                      \
-        uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreFloats, pack, full); \
+        uint8_t* at = roomMade((*slotAt(base)), base, kStoreFloats, pack, full); \
         if (at == nullptr) {                                                    \
             if (full) JUMP; /* no room: the VM's add makes it (no miss) */      \
             EXIT;                                                               \
@@ -1624,7 +1661,7 @@ STENCIL(pushv) {
     if (p == nullptr || !plainStore(p)) EXIT;
     uint8_t* pack;
     bool full = false;
-    uint8_t* const at = roomMade(s, ctx, p[kPackStore], pack, full);
+    uint8_t* const at = roomMade(s, base, p[kPackStore], pack, full);
     if (at == nullptr) {
         if (full) JUMP;  // no room: the VM's add makes it (no miss)
         EXIT;
@@ -1661,7 +1698,7 @@ STENCIL(pushv) {
 STENCIL(pushsm) {
     uint8_t* pack;
     bool full = false;
-    uint8_t* at = roomMade((*slotAt(base)), ctx, kStoreItems, pack, full);
+    uint8_t* at = roomMade((*slotAt(base)), base, kStoreItems, pack, full);
     if (at == nullptr && full) JUMP;  // no room: the VM's add makes it (no miss)
     if (at == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0)
@@ -1692,7 +1729,7 @@ STENCIL(pushsm) {
     } else {
         if ((head & 0xFFFFFFFF) != kKindRef) EXIT;
         const uint8_t* from = v.p;
-        if (from[kObjType] != kTypeList || !mayRead(from, ctx)) EXIT;
+        if (from[kObjType] != kTypeList || !mayRead(from, base)) EXIT;
         const uint8_t* fromPack = word<const uint8_t*>(from + kListPack);  // its items may be null; this one not
         if (fromPack == nullptr || fromPack[kPackStore] != kStoreItems || word<int64_t>(fromPack + kPackItemClass) != ww_ki ||
             word<const void*>(fromPack + kPackItemType) != nullptr || word<uint32_t>(fromPack + kPackTypeSlot) != 0 ||
@@ -1726,7 +1763,7 @@ STENCIL(ownsm) {
         putValue(&s, kKindSmall | (what >> 32) << 32, bits);
         NEXT;
     }
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) EXIT;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) EXIT;
     const uint8_t* pack = packOf(o, kStoreItems);
     if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0 || (head >> 32) >= word<uint64_t>(pack + kPackCount))
@@ -1769,7 +1806,7 @@ STENCIL(keepl) {
 // numbered (ww_slot2 >> 32), or a Ref, none deep, to an item of a list of the class ww_ki's
 // items, or one in a box or a place (boxedBytes); the field (ww_slot2 & 0xFFFFFFFF) bytes into
 // it. Anything else the VM's.
-INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
+INLINE const uint8_t* valueField(const Slot& s, Slot* base) {
     // Its kind, how deep, where in the item and the index or type number, in one word.
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
     const uint32_t offset = static_cast<uint32_t>(ww_slot2);
@@ -1780,7 +1817,7 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
     if (const uint8_t* const boxed = boxedBytes(s, head)) return boxed + offset;
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;  // a Ref none deep, at its item's start
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) return nullptr;
     const uint8_t* pack = word<const uint8_t*>(o + kListPack);  // its items may be null; this one not (2026-11-16)
     if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
     const uint64_t index = head >> 32;
@@ -1791,13 +1828,13 @@ INLINE const uint8_t* valueField(const Slot& s, const Ctx* ctx) {
 // a value type whose == is its bytes', regions.cpp's bytesCompared): each a Small value of the
 // type numbered (ww_kf's bits >> 32), or a Ref, none deep, to an item of a list of the class
 // ww_ki's items; (ww_kf's bits & 0xFF) bytes. Anything else the VM's.
-INLINE const uint8_t* valueBytes(const Slot& s, const Ctx* ctx, uint64_t id) {
+INLINE const uint8_t* valueBytes(const Slot& s, Slot* base, uint64_t id) {
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
     if ((head & 0xFF) == kKindSmall) return (head >> 32) == id ? reinterpret_cast<const uint8_t*>(&s.i) : nullptr;
     if (const uint8_t* const boxed = boxedBytes(s, head)) return boxed;
     if ((head & 0xFFFFFFFF) != kKindRef) return nullptr;
     const uint8_t* o = s.p;
-    if (o[kObjType] != kTypeList || !mayRead(o, ctx)) return nullptr;
+    if (o[kObjType] != kTypeList || !mayRead(o, base)) return nullptr;
     const uint8_t* pack = word<const uint8_t*>(o + kListPack);  // its items may be null; this one not (2026-11-16)
     if (pack == nullptr || pack[kPackStore] != kStoreItems || word<int64_t>(pack + kPackItemClass) != ww_ki) return nullptr;
     const uint64_t index = head >> 32;
@@ -1806,8 +1843,8 @@ INLINE const uint8_t* valueBytes(const Slot& s, const Ctx* ctx, uint64_t id) {
 }
 STENCIL(eqsm) {
     const uint64_t what = word<uint64_t>(reinterpret_cast<const uint8_t*>(&ww_kf));
-    const uint8_t* x = valueBytes((*slotAt(base)), ctx, what >> 32);
-    const uint8_t* y = valueBytes((*slot2At(base)), ctx, what >> 32);
+    const uint8_t* x = valueBytes((*slotAt(base)), base, what >> 32);
+    const uint8_t* y = valueBytes((*slot2At(base)), base, what >> 32);
     if (x == nullptr || y == nullptr) EXIT;
     bool same = true;
     for (uint64_t k = 0; k < (what & 0xFF); k++) same &= x[k] == y[k];
@@ -1816,25 +1853,25 @@ STENCIL(eqsm) {
 }
 #define VALP(a, ...)                                                            \
     STENCIL(valpb_##a) {                                                        \
-        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), base);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(valpi_##a) {                                                        \
-        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), base);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(valph_##a) {                                                        \
-        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), base);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = word<uint16_t>(at);                                              \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(valpw_##a) {                                                        \
-        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), base);                   \
         if (at == nullptr) EXIT;                                                \
         i##a = word<uint32_t>(at);                                              \
         NEXT;                                                                   \
@@ -1842,7 +1879,7 @@ STENCIL(eqsm) {
 I_A(VALP, x)
 #define VALPF(a, ...)                                                           \
     STENCIL(valpf_##a) {                                                        \
-        const uint8_t* at = valueField((*slotAt(base)), ctx);                   \
+        const uint8_t* at = valueField((*slotAt(base)), base);                   \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -1921,11 +1958,11 @@ STENCIL(count) {
 // the region's end, giving where the VM goes on.
 STENCIL(jump) { JUMP; }
 STENCIL(safepoint) {
-    if (*ctx->attention != 0) EXIT;
+    if (*ctxAttention(base) != 0) EXIT;
     NEXT;
 }
 STENCIL(loopback) {
-    if (*ctx->attention != 0) EXIT;
+    if (*ctxAttention(base) != 0) EXIT;
     JUMP;
 }
 // The same, in a region made first (registers-plan.html part B), counting each time round of
@@ -1937,7 +1974,7 @@ STENCIL(loopback) {
 // (a long loop) it leaves once more, and the VM goes on in that one.
 STENCIL(loopbackc) {
     uint64_t* const rounds = reinterpret_cast<uint64_t*>(ww_ki);
-    if (*ctx->attention != 0) EXIT;
+    if (*ctxAttention(base) != 0) EXIT;
     if (++rounds[0] >= kCountedRounds && rounds[1] == 0) {
         rounds[1] = 2;  // (left for the counts: the VM has it made again)
         EXIT;
@@ -1946,7 +1983,7 @@ STENCIL(loopbackc) {
 }
 STENCIL(loopbackn) {
     ++*reinterpret_cast<uint64_t*>(ww_ki);
-    if (*ctx->attention != 0) EXIT;
+    if (*ctxAttention(base) != 0) EXIT;
     JUMP;
 }
 STENCIL(ret) { return ww_ret; }
@@ -2030,12 +2067,12 @@ STENCIL(chkbyk) {
 // address: the place's cache, which the VM fills) says it is, its layout the one the cache
 // saw; read where the object's core may read it (or change it, `change`: its own core's).
 // Null where not: the VM's.
-INLINE uint8_t* fieldAt(const Slot& s, const Ctx* ctx, bool change, uint64_t& seen) {
+INLINE uint8_t* fieldAt(const Slot& s, Slot* base, bool change, uint64_t& seen) {
     if (s.kind != kKindObj || s.p[kObjType] != kTypeInstance) return nullptr;
     seen = *reinterpret_cast<const volatile uint64_t*>(ww_ki);
     if (static_cast<uint32_t>(seen >> 32) != word<uint32_t>(s.p + kInstShape)) return nullptr;
     const uint8_t core = s.p[kObjCore];
-    if (change ? core != ctx->core : (core != 0 && core != ctx->core)) return nullptr;
+    if (change ? core != ctxCore(base) : (core != 0 && core != ctxCore(base))) return nullptr;
     return const_cast<uint8_t*>(s.p) + ((seen >> 16) & 0xFFFF);
 }
 // A field read as a number of kind `kind`: kept as its payload alone, or as a value.
@@ -2052,9 +2089,9 @@ INLINE bool numberField(const uint8_t* at, uint64_t seen, uint8_t kind, uint64_t
 // A number written to a field, as the VM's SetProp does at once: kept as its payload alone (its
 // kind the field's, the field not one set only once and set already), or as a value of a field
 // declared with no type or that number's type; anything else the VM's.
-INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t typeId, uint64_t bits) {
+INLINE bool setNumberField(const Slot& s, Slot* base, uint8_t kind, uint8_t typeId, uint64_t bits) {
     uint64_t seen;
-    uint8_t* at = fieldAt(s, ctx, true, seen);
+    uint8_t* at = fieldAt(s, base, true, seen);
     if (at == nullptr) return false;
     if ((seen & 0x80) != 0) {
         if ((seen & 3) != kind) return false;
@@ -2079,7 +2116,7 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
 #define GETPF(a, ...)                                                           \
     STENCIL(getpf_##a) {                                                        \
         uint64_t seen, bits;                                                    \
-        const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);         \
+        const uint8_t* at = fieldAt((*slotAt(base)), base, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindFloat, bits)) EXIT;    \
         { double d_; __builtin_memcpy(&d_, &bits, 8); f##a = d_; }                                           \
         NEXT;                                                                   \
@@ -2087,33 +2124,33 @@ INLINE bool setNumberField(const Slot& s, const Ctx* ctx, uint8_t kind, uint8_t 
     STENCIL(setpf_##a) {                                                        \
         uint64_t bits;                                                          \
         { const double d_ = f##a; __builtin_memcpy(&bits, &d_, 8); }                                           \
-        if (!setNumberField((*slotAt(base)), ctx, kKindFloat, kTypeIdFloat, bits)) EXIT; \
+        if (!setNumberField((*slotAt(base)), base, kKindFloat, kTypeIdFloat, bits)) EXIT; \
         NEXT;                                                                   \
     }
 F_W(GETPF, x)
 #define GETPI(a, ...)                                                           \
     STENCIL(getpi_##a) {                                                        \
         uint64_t seen, bits;                                                    \
-        const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);         \
+        const uint8_t* at = fieldAt((*slotAt(base)), base, false, seen);         \
         if (at == nullptr || !numberField(at, seen, kKindInt, bits)) EXIT;      \
         i##a = static_cast<int64_t>(bits);                                      \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(setpi_##a) {                                                        \
-        if (!setNumberField((*slotAt(base)), ctx, kKindInt, kTypeIdInt, static_cast<uint64_t>(i##a))) EXIT; \
+        if (!setNumberField((*slotAt(base)), base, kKindInt, kTypeIdInt, static_cast<uint64_t>(i##a))) EXIT; \
         NEXT;                                                                   \
     }
 I_A(GETPI, x)
 // ia = the size of the list or bytes in slot ww_slot, as `size` gives it (a while loop's
 // `i < items.size`); anything else the VM's.
-INLINE bool sizeOf(const Slot& s, const Ctx* ctx, int64_t& out) {
+INLINE bool sizeOf(const Slot& s, Slot* base, int64_t& out) {
     if (s.kind != kKindObj) return false;
     const uint8_t* o = s.p;
     if (o[kObjType] == kTypeString) {  // its characters (2026-11-16): a string never changes, whoever holds it
         out = word<int64_t>(o + kStringLength);
         return true;
     }
-    if (!mayRead(o, ctx)) return false;
+    if (!mayRead(o, base)) return false;
     if (o[kObjType] == kTypeBytes) {
         out = word<const uint8_t*>(o + kBytesData + 8) - word<const uint8_t*>(o + kBytesData);
         return true;
@@ -2130,7 +2167,7 @@ INLINE bool sizeOf(const Slot& s, const Ctx* ctx, int64_t& out) {
 #define SIZEW(a, ...)                                                           \
     STENCIL(sizew_##a) {                                                        \
         int64_t v;                                                              \
-        if (!sizeOf((*slotAt(base)), ctx, v)) EXIT;                             \
+        if (!sizeOf((*slotAt(base)), base, v)) EXIT;                             \
         i##a = v;                                                               \
         NEXT;                                                                   \
     }
@@ -2139,7 +2176,7 @@ I_A(SIZEW, x)
 // A field of any kind copied to slot ww_slot2, as the VM copies it (no value held elsewhere).
 STENCIL(getpv) {
     uint64_t seen;
-    const uint8_t* at = fieldAt((*slotAt(base)), ctx, false, seen);
+    const uint8_t* at = fieldAt((*slotAt(base)), base, false, seen);
     if (at == nullptr) EXIT;
     if ((seen & 0x80) != 0) {
         uint64_t bits;
@@ -2177,9 +2214,9 @@ INLINE void plainItem(Slot* to, const uint8_t* pack, uint64_t index) {
 // Slot ww_slot2 = item ic (or item K) of the list in slot ww_slot, as a value: of a list kept as
 // values, a copy; of packed ints, floats or bools, any of them null, the item or null
 // (2026-11-16: `val n = ints[i]` of a List<int?>). The item in range; anything else the VM's.
-INLINE bool valueItem(Slot* base, int64_t index, const Ctx* ctx) {
+INLINE bool valueItem(Slot* base, int64_t index) {
     const Slot& s = (*slotAt(base));
-    if (s.kind != kKindObj || s.p[kObjType] != kTypeList || !mayRead(s.p, ctx)) return false;
+    if (s.kind != kKindObj || s.p[kObjType] != kTypeList || !mayRead(s.p, base)) return false;
     const uint8_t* const list = s.p;
     if (const uint8_t* pack = word<const uint8_t*>(list + kListPack)) {
         if (!plainStore(pack) || static_cast<uint64_t>(index) >= word<uint64_t>(pack + kPackCount)) return false;
@@ -2194,12 +2231,12 @@ INLINE bool valueItem(Slot* base, int64_t index, const Ctx* ctx) {
 }
 #define IDXV(c, ...)                                                            \
     STENCIL(idxv_##c) {                                                         \
-        if (!valueItem(base, i##c, ctx)) EXIT;                                  \
+        if (!valueItem(base, i##c)) EXIT;                                  \
         NEXT;                                                                   \
     }
 I_A(IDXV, x)
 STENCIL(idxvk) {
-    if (!valueItem(base, ww_ki, ctx)) EXIT;
+    if (!valueItem(base, ww_ki)) EXIT;
     NEXT;
 }
 // The next item of a list kept as values, to slot ww_slot2; to the jump's target where there
@@ -2214,7 +2251,7 @@ STENCIL(iterv) {
             // value of each, as the VM's smallFrom makes it (2026-11-16: a List<any?> given a
             // List<Color?> after a List<int?>). Not where the items keep a type of their own, or
             // the list's item type has type arguments (the VM numbers those).
-            if (!mayRead(list, ctx) || word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) EXIT;
+            if (!mayRead(list, base) || word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0) EXIT;
             const uint8_t* const cls = word<const uint8_t*>(pack + kPackItemClass);
             const uint32_t id = word<uint32_t>(cls + kClassSmallId);
             const uint32_t width = word<uint32_t>(pack + kPackWidth);
@@ -2242,7 +2279,7 @@ STENCIL(iterv) {
             NEXT;
         }
         // Packed ints, floats or bools, any of them null (2026-11-16: a for over a List<int?>).
-        if (!plainStore(pack) || !mayRead(list, ctx)) EXIT;
+        if (!plainStore(pack) || !mayRead(list, base)) EXIT;
         const uint64_t index = word<uint64_t>(it + kIterIndex);
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;
         plainItem(&(*slot2At(base)), pack, index);
@@ -2261,16 +2298,16 @@ STENCIL(iterv) {
 }
 // The next item of a packed list of floats (ints), none null, into fa (ia), where the list is
 // not the one lent to a parallel section's core.
-INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, const Ctx* ctx, uint8_t*& it) {
+INLINE const uint8_t* packedIterator(const Slot& s, uint8_t store, Slot* base, uint8_t*& it) {
     const uint8_t* list;
     it = listIterator(s, list);
-    if (it == nullptr || list == ctx->band) return nullptr;
+    if (it == nullptr || list == ctxBand(base)) return nullptr;
     return packOf(list, store);
 }
 #define ITERF(a, ...)                                                           \
     STENCIL(iterf_##a) {                                                        \
         uint8_t* it;                                                            \
-        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreFloats, ctx, it); \
+        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreFloats, base, it); \
         if (pack == nullptr) EXIT;                                              \
         const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
@@ -2283,7 +2320,7 @@ F_W(ITERF, x)
 #define ITERI(a, ...)                                                           \
     STENCIL(iteri_##a) {                                                        \
         uint8_t* it;                                                            \
-        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreInts, ctx, it); \
+        const uint8_t* pack = packedIterator((*slotAt(base)), kStoreInts, base, it); \
         if (pack == nullptr) EXIT;                                              \
         const uint64_t index = word<uint64_t>(it + kIterIndex);                 \
         if (index >= word<uint64_t>(pack + kPackCount)) JUMP;                   \
@@ -2298,7 +2335,7 @@ I_A(ITERI, x)
 STENCIL(iterref) {
     const uint8_t* list;
     uint8_t* it = listIterator((*slotAt(base)), list);
-    if (it == nullptr || list == ctx->band) EXIT;
+    if (it == nullptr || list == ctxBand(base)) EXIT;
     const uint8_t* const pack = word<const uint8_t*>(list + kListPack);
     if (pack == nullptr || pack[kPackStore] != kStoreItems) EXIT;
     const uint64_t index = word<uint64_t>(it + kIterIndex);
@@ -2320,7 +2357,7 @@ STENCIL(iterref) {
 // type numbered (ww_slot2 >> 32), to slot (ww_slot2 >> 8 & 0xFFFFFF) (M9.5 B1).
 STENCIL(itersm) {
     uint8_t* it;
-    const uint8_t* pack = packedIterator((*slotAt(base)), kStoreItems, ctx, it);
+    const uint8_t* pack = packedIterator((*slotAt(base)), kStoreItems, base, it);
     if (pack == nullptr || word<int64_t>(pack + kPackItemClass) != ww_ki || word<const void*>(pack + kPackItemType) != nullptr ||
         word<uint32_t>(pack + kPackTypeSlot) != 0)
         EXIT;
@@ -2358,7 +2395,7 @@ STENCIL(setfalse) {
 // changed (0 where the object may not be, or is not what the region reads as), and what they are
 // (1 ints, 2 floats, 3 bytes: a Bytes, or a List<byte>, whose items are kept as a Bytes keeps
 // them, 2026-11-13). slot: the object; ww_ki: k.
-INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
+INLINE void lookAt(const Slot& s, Slot* base, int64_t k, bool floats) {
     uint64_t* h = ctx->lists + 4 * k;
     h[0] = h[1] = h[2] = h[3] = 0;
     if (s.kind != kKindObj) return;
@@ -2371,39 +2408,39 @@ INLINE void lookAt(const Slot& s, Ctx* ctx, int64_t k, bool floats) {
             if (which == kNarrowByte) {
                 const uint64_t count = word<uint64_t>(narrow + kPackCount);
                 h[0] = word<uint64_t>(narrow + kPackBlock);
-                if (mayRead(o, ctx)) h[1] = count;
-                if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+                if (mayRead(o, base)) h[1] = count;
+                if (o[kObjCore] == ctxCore(base) && o[kObjFrozen] == 0) h[2] = count;
                 h[3] = 3;
-            } else if (which >= kNarrowInt16 && which <= kNarrowUint32 && mayRead(o, ctx)) {
+            } else if (which >= kNarrowInt16 && which <= kNarrowUint32 && mayRead(o, base)) {
                 // Two- or four-byte whole numbers: their counts 0 here, and in the fourth word
                 // what hidxn and the others read (heldNarrow).
                 h[0] = word<uint64_t>(narrow + kPackBlock);
-                h[3] = kHeldNarrow + which | (o[kObjCore] == ctx->core && o[kObjFrozen] == 0 ? 0x80 : 0) | word<uint64_t>(narrow + kPackCount) << 8;
+                h[3] = kHeldNarrow + which | (o[kObjCore] == ctxCore(base) && o[kObjFrozen] == 0 ? 0x80 : 0) | word<uint64_t>(narrow + kPackCount) << 8;
             }
             return;
         }
         if (pack == nullptr) return;
         const uint64_t count = word<uint64_t>(pack + kPackCount);
         h[0] = word<uint64_t>(pack + kPackBlock);
-        if (mayRead(o, ctx)) h[1] = count;
-        if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+        if (mayRead(o, base)) h[1] = count;
+        if (o[kObjCore] == ctxCore(base) && o[kObjFrozen] == 0) h[2] = count;
         h[3] = floats ? 2 : 1;
     } else if (!floats && o[kObjType] == kTypeBytes) {
         const uint8_t* first = word<const uint8_t*>(o + kBytesData);
         const uint8_t* end = word<const uint8_t*>(o + kBytesData + 8);
         const uint64_t count = static_cast<uint64_t>(end - first);
         h[0] = reinterpret_cast<uint64_t>(first);
-        if (mayRead(o, ctx)) h[1] = count;
-        if (o[kObjCore] == ctx->core) h[2] = count;
+        if (mayRead(o, base)) h[1] = count;
+        if (o[kObjCore] == ctxCore(base)) h[2] = count;
         h[3] = 3;
     }
 }
 STENCIL(lookf) {
-    lookAt((*slotAt(base)), ctx, ww_ki, true);
+    lookAt((*slotAt(base)), base, ww_ki, true);
     NEXT;
 }
 STENCIL(lookw) {
-    lookAt((*slotAt(base)), ctx, ww_ki, false);
+    lookAt((*slotAt(base)), base, ww_ki, false);
     NEXT;
 }
 // A List<bool> looked at once (2026-11-15): its bytes, how many may be read and changed, 4.
@@ -2416,8 +2453,8 @@ STENCIL(lookbool) {
         if (const uint8_t* pack = packOf(o, kStoreBools)) {
             const uint64_t count = word<uint64_t>(pack + kPackCount);
             h[0] = word<uint64_t>(pack + kPackBlock);
-            if (mayRead(o, ctx)) h[1] = count;
-            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0) h[2] = count;
+            if (mayRead(o, base)) h[1] = count;
+            if (o[kObjCore] == ctxCore(base) && o[kObjFrozen] == 0) h[2] = count;
             h[3] = 4;
         }
     }
@@ -2427,13 +2464,13 @@ STENCIL(lookbool) {
 // against the count, nothing else.
 #define HIDXF_B(c, a)                                                           \
     STENCIL(hidxf_##a##_##c) {                                                  \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         f##a = reinterpret_cast<const double*>(h[0])[i##c];                     \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetf_##a##_##c) {                                                  \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         reinterpret_cast<double*>(h[0])[i##c] = f##a;                           \
         NEXT;                                                                   \
@@ -2442,7 +2479,7 @@ STENCIL(lookbool) {
 F_W(HIDXF_A, x)
 #define HIDXFK(a, ...)                                                          \
     STENCIL(hidxfk_##a) {                                                       \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(ww_ki) >= h[1]) EXIT;                       \
         f##a = reinterpret_cast<const double*>(h[0])[ww_ki];                  \
         NEXT;                                                                   \
@@ -2450,13 +2487,13 @@ F_W(HIDXF_A, x)
 F_W(HIDXFK, x)
 #define HIDXW_B(c, a)                                                           \
     STENCIL(hidxw_##a##_##c) {                                                  \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         i##a = h[3] == 3 ? reinterpret_cast<const uint8_t*>(h[0])[i##c] : reinterpret_cast<const int64_t*>(h[0])[i##c]; \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetwi_##a##_##c) {                                                 \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         if (h[3] == 3) {                                                        \
             if (static_cast<uint64_t>(i##a) > 255) EXIT;                        \
@@ -2467,7 +2504,7 @@ F_W(HIDXFK, x)
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetwb_##a##_##c) {                                                 \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         if (h[3] == 3) reinterpret_cast<uint8_t*>(h[0])[i##c] = static_cast<uint8_t>(i##a); \
         else reinterpret_cast<int64_t*>(h[0])[i##c] = i##a; /* a byte into ints: the int it is */ \
@@ -2477,7 +2514,7 @@ F_W(HIDXFK, x)
 I_A(HIDXW_A, x)
 #define HIDXWK(a, ...)                                                          \
     STENCIL(hidxwk_##a) {                                                       \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(ww_ki) >= h[1]) EXIT;                       \
         i##a = h[3] == 3 ? reinterpret_cast<const uint8_t*>(h[0])[ww_ki] : reinterpret_cast<const int64_t*>(h[0])[ww_ki]; \
         NEXT;                                                                   \
@@ -2515,19 +2552,19 @@ INLINE bool setHeldItem(const uint64_t* h, uint64_t index, int64_t v) {
 }
 #define HIDXN_KIND(c, a, n, which, T)                                           \
     STENCIL(hidxn##n##_##a##_##c) {                                             \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (!heldNarrow(h, static_cast<uint64_t>(i##c), which)) EXIT;           \
         i##a = heldItem<T>(h, static_cast<uint64_t>(i##c));                     \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetni##n##_##a##_##c) {                                            \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (!heldNarrowToChange(h, static_cast<uint64_t>(i##c), which) ||       \
             !setHeldItem<T>(h, static_cast<uint64_t>(i##c), i##a)) EXIT;        \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetnb##n##_##a##_##c) {                                            \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (!heldNarrowToChange(h, static_cast<uint64_t>(i##c), which)) EXIT;   \
         setHeldItem<T>(h, static_cast<uint64_t>(i##c), i##a); /* a byte fits */ \
         NEXT;                                                                   \
@@ -2541,7 +2578,7 @@ INLINE bool setHeldItem(const uint64_t* h, uint64_t index, int64_t v) {
 I_A(HIDXN_A, x)
 #define HIDXNK_KIND(a, n, which, T)                                             \
     STENCIL(hidxnk##n##_##a) {                                                  \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (!heldNarrow(h, static_cast<uint64_t>(ww_ki), which)) EXIT;        \
         i##a = heldItem<T>(h, static_cast<uint64_t>(ww_ki));                  \
         NEXT;                                                                   \
@@ -2560,7 +2597,7 @@ I_A(HIDXNK, x)
 // copied out or set as the bytes they are); anything else leaves all four 0, and every step
 // through them leaves for the VM. How many changed: 0 for the object lent to a parallel section,
 // whose parts are the VM's to check. ww_slot: the list; ww_slot2 & 0xFF: k.
-INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
+INLINE void lookAtItems(const Slot& s, Slot* base) {
     uint64_t* h = ctx->lists + 4 * (static_cast<uint64_t>(ww_slot2) & 0xFF);
     h[0] = h[1] = h[2] = h[3] = 0;
     if (s.kind == kKindObj && s.p[kObjType] == kTypeList) {
@@ -2572,8 +2609,8 @@ INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
              (word<const void*>(pack + kPackItemType) == nullptr && word<uint32_t>(pack + kPackTypeSlot) == 0))) {
             const uint64_t count = word<uint64_t>(pack + kPackCount);
             h[0] = word<uint64_t>(pack + kPackBlock);
-            if (mayRead(o, ctx)) h[1] = count;
-            if (o[kObjCore] == ctx->core && o[kObjFrozen] == 0 && o != ctx->band) h[2] = count;
+            if (mayRead(o, base)) h[1] = count;
+            if (o[kObjCore] == ctxCore(base) && o[kObjFrozen] == 0 && o != ctxBand(base)) h[2] = count;
             h[3] = reinterpret_cast<uint64_t>(o);
         }
     }
@@ -2582,12 +2619,12 @@ INLINE void lookAtItems(const Slot& s, Ctx* ctx) {
 // writes): as getpv reads it, into the context's held words 2k and 2k+1 (k: ww_slot2), from the
 // object in slot ww_slot (lookp) or held as ww_slot (lookph), where the place's cache at
 // ww_ki says. One it cannot read so is held as Undefined, and each read of it is the VM's.
-INLINE const Slot& heldSlot(const Ctx* ctx, int64_t k) { return reinterpret_cast<const Slot*>(ctx->held)[k]; }
-INLINE void lookAtField(const Slot& s, Ctx* ctx) {
+INLINE const Slot& heldSlot(Slot* base, int64_t k) { return reinterpret_cast<const Slot*>(ctx->held)[k]; }
+INLINE void lookAtField(const Slot& s, Slot* base) {
     Slot* const held = reinterpret_cast<Slot*>(ctx->held);
     storeSlot(held, ww_slot2, kKindUndefined, 0);
     uint64_t seen;
-    const uint8_t* at = fieldAt(s, ctx, false, seen);
+    const uint8_t* at = fieldAt(s, base, false, seen);
     if (at == nullptr) return;
     if ((seen & 0x80) != 0) {
         uint64_t bits;
@@ -2599,12 +2636,12 @@ INLINE void lookAtField(const Slot& s, Ctx* ctx) {
     __builtin_memcpy(&held[ww_slot2], at, sizeof(Slot));
 }
 STENCIL(lookp) {
-    lookAtField((*slotAt(base)), ctx);
+    lookAtField((*slotAt(base)), base);
     NEXT;
 }
 STENCIL(lookph) {
-    const Slot from = heldSlot(ctx, ww_slot);
-    lookAtField(from, ctx);
+    const Slot from = heldSlot(base, ww_slot);
+    lookAtField(from, base);
     NEXT;
 }
 // A field the region writes, looked at once (lookpw, lookpwh): held as lookp holds it, where it
@@ -2613,12 +2650,12 @@ STENCIL(lookph) {
 // of no type or that number's, not one set only once), and its address in heldAt[k] (bit 0: kept
 // as its payload alone). One that may not is held as Undefined, and each read and write of it is
 // the VM's.
-INLINE void lookAtFieldToChange(const Slot& s, Ctx* ctx) {
+INLINE void lookAtFieldToChange(const Slot& s, Slot* base) {
     Slot* const held = reinterpret_cast<Slot*>(ctx->held);
     storeSlot(held, ww_slot2, kKindUndefined, 0);
     ctx->heldAt[ww_slot2] = 0;
     uint64_t seen;
-    uint8_t* at = fieldAt(s, ctx, true, seen);
+    uint8_t* at = fieldAt(s, base, true, seen);
     if (at == nullptr) return;
     if ((seen & 0x80) != 0) {
         const uint8_t kind = static_cast<uint8_t>(seen & 3);
@@ -2642,19 +2679,19 @@ INLINE void lookAtFieldToChange(const Slot& s, Ctx* ctx) {
     ctx->heldAt[ww_slot2] = reinterpret_cast<uint64_t>(at);
 }
 STENCIL(lookpw) {
-    lookAtFieldToChange((*slotAt(base)), ctx);
+    lookAtFieldToChange((*slotAt(base)), base);
     NEXT;
 }
 STENCIL(lookpwh) {
-    const Slot from = heldSlot(ctx, ww_slot);
-    lookAtFieldToChange(from, ctx);
+    const Slot from = heldSlot(base, ww_slot);
+    lookAtFieldToChange(from, base);
     NEXT;
 }
 // A field held so written back to its object (a way out): where it may be.
 STENCIL(putp) {
     const uint64_t at = ctx->heldAt[ww_slot];
     if (at != 0) {
-        const Slot& h = heldSlot(ctx, ww_slot);
+        const Slot& h = heldSlot(base, ww_slot);
         if ((at & 1) != 0) __builtin_memcpy(reinterpret_cast<uint8_t*>(at & ~uint64_t{1}), &h.i, 8);
         else __builtin_memcpy(reinterpret_cast<uint8_t*>(at), &h, sizeof(Slot));
     }
@@ -2680,7 +2717,7 @@ F_A(HSETPF, x)
 // Reads of a field looked at once (held as ww_slot): its kind checked, nothing else.
 #define HGETPI(a, ...)                                                          \
     STENCIL(hgetpi_##a) {                                                       \
-        const Slot& h = heldSlot(ctx, ww_slot);                               \
+        const Slot& h = heldSlot(base, ww_slot);                               \
         if (h.kind != kKindInt) EXIT;                                           \
         i##a = h.i;                                                             \
         NEXT;                                                                   \
@@ -2688,43 +2725,43 @@ F_A(HSETPF, x)
 I_A(HGETPI, x)
 #define HGETPF(a, ...)                                                          \
     STENCIL(hgetpf_##a) {                                                       \
-        const Slot& h = heldSlot(ctx, ww_slot);                               \
+        const Slot& h = heldSlot(base, ww_slot);                               \
         if (h.kind != kKindFloat) EXIT;                                         \
         f##a = h.d;                                                             \
         NEXT;                                                                   \
     }
 F_W(HGETPF, x)
 STENCIL(hgetpv) {
-    const Slot& h = heldSlot(ctx, ww_slot);
+    const Slot& h = heldSlot(base, ww_slot);
     if (h.kind == kKindUndefined) EXIT;
     __builtin_memcpy(&(*slot2At(base)), &h, sizeof(Slot));
     NEXT;
 }
 // Lists a field looked at once holds (held as ww_slot), looked at as a slot's are.
 STENCIL(lookfh) {
-    const Slot from = heldSlot(ctx, ww_slot);
-    lookAt(from, ctx, ww_ki, true);
+    const Slot from = heldSlot(base, ww_slot);
+    lookAt(from, base, ww_ki, true);
     NEXT;
 }
 STENCIL(lookwh) {
-    const Slot from = heldSlot(ctx, ww_slot);
-    lookAt(from, ctx, ww_ki, false);
+    const Slot from = heldSlot(base, ww_slot);
+    lookAt(from, base, ww_ki, false);
     NEXT;
 }
 STENCIL(lookih) {
-    const Slot from = heldSlot(ctx, ww_slot);
-    lookAtItems(from, ctx);
+    const Slot from = heldSlot(base, ww_slot);
+    lookAtItems(from, base);
     NEXT;
 }
 STENCIL(looki) {
-    lookAtItems((*slotAt(base)), ctx);
+    lookAtItems((*slotAt(base)), base);
     NEXT;
 }
 // The same for the list the iterator in slot ww_slot goes through (a for over it).
 STENCIL(lookit) {
     const Slot& s = (*slotAt(base));
     if (s.kind == kKindObj && s.p[kObjType] == kTypeIterator) {
-        lookAtItems(*reinterpret_cast<const Slot*>(s.p + kIterSource), ctx);
+        lookAtItems(*reinterpret_cast<const Slot*>(s.p + kIterSource), base);
     } else {
         uint64_t* h = ctx->lists + 4 * (static_cast<uint64_t>(ww_slot2) & 0xFF);
         h[0] = h[1] = h[2] = h[3] = 0;
@@ -2736,13 +2773,13 @@ STENCIL(lookit) {
 // checked against the count, nothing else.
 #define HIDXP_B(c, a)                                                           \
     STENCIL(hidxpb_##a##_##c) {                                                 \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         i##a = reinterpret_cast<const uint8_t*>(h[0])[i##c * (static_cast<uint64_t>(ww_slot2) >> 32) + static_cast<uint32_t>(ww_slot2)]; \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hidxpi_##a##_##c) {                                                 \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         i##a = word<int64_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * (static_cast<uint64_t>(ww_slot2) >> 32) + static_cast<uint32_t>(ww_slot2)); \
         NEXT;                                                                   \
@@ -2754,19 +2791,19 @@ I_A(HIDXP_A, x)
 // twoItemsAtOnce): both indexes checked against the count.
 #define HIDXP2_B(c, a)                                                          \
     STENCIL(hidxp2i_##a##_##c) {                                                \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
         i##a = word<int64_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * 4); \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hidxp2w_##a##_##c) {                                                \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
         i##a = word<uint32_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * 2); \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hidxp2h_##a##_##c) {                                                \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1] || static_cast<uint64_t>(i##c) + 1 >= h[1]) EXIT; \
         i##a = word<uint16_t>(reinterpret_cast<const uint8_t*>(h[0]) + i##c); \
         NEXT;                                                                   \
@@ -2775,7 +2812,7 @@ I_A(HIDXP_A, x)
 I_A(HIDXP2_A, x)
 #define HIDXPF_B(c, a)                                                          \
     STENCIL(hidxpf_##a##_##c) {                                                 \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         f##a = word<double>(reinterpret_cast<const uint8_t*>(h[0]) + i##c * (static_cast<uint64_t>(ww_slot2) >> 32) + static_cast<uint32_t>(ww_slot2)); \
         NEXT;                                                                   \
@@ -2785,7 +2822,7 @@ F_W(HIDXPF_A, x)
 // Slot ww_slot2 = a Ref to item ic of a list of items looked at once (k in ww_slot).
 #define HIREF(c, ...)                                                           \
     STENCIL(hiref_##c) {                                                        \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
         NEXT;                                                                   \
@@ -2795,7 +2832,7 @@ I_A(HIREF, x)
 // `id`): a Small one; a Ref, none deep, to an item of a list of that class's items, none with a
 // type of its own (2026-11-16: `grid[x, y] = c`, c given as `colors[100]`); or one in a frame's
 // place or in a box of that class, with no type of its own. False for anything else.
-INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, const Ctx* ctx, uint64_t& bits) {
+INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, Slot* base, uint64_t& bits) {
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&v));
     if ((head & 0xFF) == kKindSmall) {
         if ((head >> 32) != id) return false;
@@ -2809,7 +2846,7 @@ INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, co
     } else if ((head & 0xFFFFFFFF) == kKindRef) {
         if (o[kObjType] == kTypePlaces) {
             if ((head >> 32) == 0 && word<int64_t>(o + kPlaceClass) == cls && word<const void*>(o + kPlaceType) == nullptr) from = o + kPlaceData;
-        } else if (o[kObjType] == kTypeList && mayRead(o, ctx)) {
+        } else if (o[kObjType] == kTypeList && mayRead(o, base)) {
             const uint8_t* pack = packOf(o, kStoreItems);
             if (pack != nullptr && word<int64_t>(pack + kPackItemClass) == cls && word<const void*>(pack + kPackItemType) == nullptr &&
                 word<uint32_t>(pack + kPackTypeSlot) == 0 && (head >> 32) < word<uint64_t>(pack + kPackCount))
@@ -2827,7 +2864,7 @@ INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, co
 // type of their own, checked as it was looked at).
 #define HIDXSM(c, ...)                                                          \
     STENCIL(hidxsm_##c) {                                                       \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[1]) EXIT;                          \
         const uint64_t what = static_cast<uint64_t>(ww_slot2);                \
         const uint32_t size = static_cast<uint32_t>(what & 0xFF), id = static_cast<uint32_t>(what >> 32); \
@@ -2838,7 +2875,7 @@ INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, co
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hsetsm_##c) {                                                       \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         const uint64_t what = static_cast<uint64_t>(ww_slot2);                \
         const Slot& v = base[what & 0xFFFFFF];                                  \
@@ -2851,14 +2888,14 @@ INLINE bool valueBits(const Slot& v, int64_t cls, uint64_t id, uint64_t size, co
         } else {                                                                \
             /* Of the class of the list's items (2026-11-16): an item of another list, a value in a place or a box. */ \
             const uint8_t* const pack = word<const uint8_t*>(reinterpret_cast<const uint8_t*>(h[3]) + kListPack); \
-            if (pack == nullptr || !valueBits(v, word<int64_t>(pack + kPackItemClass), what >> 32, size, ctx, bits)) EXIT; \
+            if (pack == nullptr || !valueBits(v, word<int64_t>(pack + kPackItemClass), what >> 32, size, base, bits)) EXIT; \
         }                                                                       \
         uint8_t* to = reinterpret_cast<uint8_t*>(h[0]) + i##c * ww_ki;        \
         for (uint32_t k = 0; k < size; k++) to[k] = static_cast<uint8_t>(bits >> (8 * k)); \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hplacei_##c) {                                                      \
-        const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
+        const uint64_t* h = heldList(base);                         \
         if (static_cast<uint64_t>(i##c) >= h[2]) EXIT;                          \
         putValue(&(*slot2At(base)), kKindRef | static_cast<uint64_t>(i##c) << 32, h[3]); \
         NEXT;                                                                   \
@@ -2867,7 +2904,7 @@ I_A(HIDXSM, x)
 // ia (or fa) = a field of the value in slot ww_slot, as valp: a Small value of the type numbered
 // (ww_slot2 >> 32), or a Ref, none deep, to an item of the list looked at once as k (ww_ki);
 // the field (ww_slot2 & 0xFFFF) bytes into an item ((ww_slot2 >> 16) & 0xFFFF) bytes wide.
-INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
+INLINE const uint8_t* lookedField(const Slot& s, Slot* base) {
     const uint64_t head = word<uint64_t>(reinterpret_cast<const uint8_t*>(&s));
     const uint64_t what = static_cast<uint64_t>(ww_slot2);
     if ((head & 0xFF) == kKindSmall) {
@@ -2880,25 +2917,25 @@ INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
 }
 #define HVALP(a, ...)                                                           \
     STENCIL(hvalpb_##a) {                                                       \
-        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), base);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = *at;                                                             \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hvalpi_##a) {                                                       \
-        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), base);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = word<int64_t>(at);                                               \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hvalph_##a) {                                                       \
-        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), base);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = word<uint16_t>(at);                                              \
         NEXT;                                                                   \
     }                                                                           \
     STENCIL(hvalpw_##a) {                                                       \
-        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), base);                  \
         if (at == nullptr) EXIT;                                                \
         i##a = word<uint32_t>(at);                                              \
         NEXT;                                                                   \
@@ -2906,7 +2943,7 @@ INLINE const uint8_t* lookedField(const Slot& s, const Ctx* ctx) {
 I_A(HVALP, x)
 #define HVALPF(a, ...)                                                          \
     STENCIL(hvalpf_##a) {                                                       \
-        const uint8_t* at = lookedField((*slotAt(base)), ctx);                  \
+        const uint8_t* at = lookedField((*slotAt(base)), base);                  \
         if (at == nullptr) EXIT;                                                \
         f##a = word<double>(at);                                                \
         NEXT;                                                                   \
@@ -2970,7 +3007,7 @@ INLINE bool storeWhole(const Items& out, int64_t j, int64_t v) {
     }
     return true;
 }
-INLINE int64_t wholeMap(const Ctx* ctx, int64_t v, bool& fine) {
+INLINE int64_t wholeMap(Slot* base, int64_t v, bool& fine) {
     const uint64_t* t = ctx->t;
     int64_t r;
     if (__builtin_mul_overflow(v, static_cast<int64_t>(t[7]), &r) || __builtin_add_overflow(r, static_cast<int64_t>(t[8]), &r)) {
@@ -2986,7 +3023,7 @@ INLINE int64_t wholeMap(const Ctx* ctx, int64_t v, bool& fine) {
     return r;
 }
 
-INLINE Items itemsOf(Ctx* ctx, int which) {
+INLINE Items itemsOf(Slot* base, int which) {
     const int64_t k = static_cast<int64_t>(ctx->t[4 + which]);
     return Items{k < 0 || k >= 6 ? nullptr : ctx->lists + 4 * k};
 }
@@ -3002,7 +3039,7 @@ INLINE bool small(uint64_t w) { return static_cast<int64_t>(w) > -(1 << 20) && s
 // A template's operand (2026-11-13): words d and v, d's low byte its kind: 0 the constant v, 1
 // the counter plus v, 2 v itself (a register stored there by the steps before), 3 the int field
 // held as v, 4 the bool field held as v (1 or 0); for 2 and 3, d's bits from 16 a constant added.
-INLINE bool operand(const Ctx* ctx, uint64_t d, uint64_t v, int64_t counter, int64_t& out) {
+INLINE bool operand(Slot* base, uint64_t d, uint64_t v, int64_t counter, int64_t& out) {
     const int64_t plus = static_cast<int64_t>(d) >> 16;
     switch (d & 0xFF) {
         case 0: out = static_cast<int64_t>(v); return true;
@@ -3028,7 +3065,7 @@ INLINE bool operand(const Ctx* ctx, uint64_t d, uint64_t v, int64_t counter, int
 // with an operand, 2 its max, 3 a constant added), the operand (or the constant). Worked out for
 // `rounds` times round from `first` at once: a min of the counter plus a constant takes the
 // first, a max the last, the rest the same each time; an add the constant times the rounds.
-INLINE bool heldUpdates(Ctx* ctx, int64_t first, int64_t rounds, bool apply) {
+INLINE bool heldUpdates(Slot* base, int64_t first, int64_t rounds, bool apply) {
     const uint64_t* t = ctx->t;
     if (t[70] > 6) return false;
     Slot* held = reinterpret_cast<Slot*>(ctx->held);
@@ -3043,7 +3080,7 @@ INLINE bool heldUpdates(Ctx* ctx, int64_t first, int64_t rounds, bool apply) {
         } else if (w[1] == 1 || w[1] == 2) {
             int64_t o;
             const int64_t at = w[1] == 1 ? first : first + rounds - 1;  // the counter rising: the least first, the most last
-            if (!operand(ctx, w[2], w[3], at, o)) return false;
+            if (!operand(base, w[2], w[3], at, o)) return false;
             v = w[1] == 1 ? (o < v ? o : v) : (o > v ? o : v);
         } else {
             return false;
@@ -3054,15 +3091,15 @@ INLINE bool heldUpdates(Ctx* ctx, int64_t first, int64_t rounds, bool apply) {
 }
 // Where items of a list looked at once start: base from words 50 to 54 (0 none, 1 an operand, 2
 // one times another, each two words), plus the counter.
-INLINE bool itemBase(const Ctx* ctx, int64_t& at, int w = 50) {
+INLINE bool itemBase(Slot* base, int64_t& at, int w = 50) {
     const uint64_t* t = ctx->t;
     at = 0;
     if (t[w] == 0) return true;
     if (t[w] != 1 && t[w] != 2) return false;
-    if (!operand(ctx, t[w + 1], t[w + 2], 0, at)) return false;
+    if (!operand(base, t[w + 1], t[w + 2], 0, at)) return false;
     if (t[w] == 2) {
         int64_t by;
-        if (!operand(ctx, t[w + 3], t[w + 4], 0, by) || __builtin_mul_overflow(at, by, &at)) return false;
+        if (!operand(base, t[w + 3], t[w + 4], 0, by) || __builtin_mul_overflow(at, by, &at)) return false;
     }
     return true;
 }
@@ -3070,7 +3107,7 @@ INLINE bool itemBase(const Ctx* ctx, int64_t& at, int w = 50) {
 // each five words from 17: its comparison, then its operands). A guard is the condition of a
 // way to a throw or a return; each side of it the counter plus a constant or the same each time
 // round, so that where it holds at neither end it holds nowhere between.
-INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
+INLINE bool guardsHold(Slot* base, int64_t first, int64_t last) {
     const uint64_t* t = ctx->t;
     if (t[16] > 12) return false;
     for (uint64_t g = 0; g < t[16]; g++) {
@@ -3078,7 +3115,7 @@ INLINE bool guardsHold(const Ctx* ctx, int64_t first, int64_t last) {
         const int64_t ends[2] = {first, last};
         for (const int64_t c : ends) {
             int64_t a, b;
-            if (!operand(ctx, w[1], w[2], c, a) || !operand(ctx, w[3], w[4], c, b)) return false;
+            if (!operand(base, w[1], w[2], c, a) || !operand(base, w[3], w[4], c, b)) return false;
             bool fires;
             switch (w[0]) {
                 case 1: fires = a < b; break;
@@ -3166,7 +3203,7 @@ struct FloatMix {
     }
 };
 
-INLINE void runLoop(Slot* base, Ctx* ctx) {
+INLINE void runLoop(Slot* base) {
     uint64_t* t = ctx->t;
     // A variable the loop reads and never writes, checked as its steps check it each time round
     // (14: its slot, or all ones; 15: 1 a float, 2 an int, 3 an int or a byte).
@@ -3194,8 +3231,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     if (t[0] == kLoopWIterSumField || t[242] == 1) {
         const uint8_t* list;
         iterator = listIterator(base[t[60]], list);
-        const Items items = itemsOf(ctx, 1);
-        if (iterator == nullptr || list == ctx->band || !items.ok() || reinterpret_cast<const uint8_t*>(items.h[3]) != list) return;
+        const Items items = itemsOf(base, 1);
+        if (iterator == nullptr || list == ctxBand(base) || !items.ok() || reinterpret_cast<const uint8_t*>(items.h[3]) != list) return;
         const uint64_t index = word<uint64_t>(iterator + kIterIndex);
         if (index >= items.h[1]) return;
         t[1] = index;
@@ -3209,7 +3246,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     uint8_t* addAt = nullptr;
     if (t[0] == kLoopWMixItems && (t[96] & 2) != 0) {
         const uint64_t width = t[100] >> 32;
-        addAt = roomToAdd(base[t[240]], ctx, kStoreItems, addPack);
+        addAt = roomToAdd(base[t[240]], base, kStoreItems, addPack);
         if (addAt == nullptr || width == 0 || width > 8 || word<int64_t>(addPack + kPackItemClass) != static_cast<int64_t>(t[98]) ||
             word<const void*>(addPack + kPackItemType) != nullptr || word<uint32_t>(addPack + kPackTypeSlot) != 0 || word<uint32_t>(addPack + kPackWidth) != width)
             return;
@@ -3220,9 +3257,9 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
     const int64_t next = static_cast<int64_t>(t[1]), left = static_cast<int64_t>(t[2]);
     if (next < 0 || left <= 0 || next > INT64_MAX - left) return;
     const int64_t end = next + left;
-    if (!guardsHold(ctx, next, end - 1)) return;
-    if (t[70] != 0 && !heldUpdates(ctx, next, left, false)) return;
-    const Items out = itemsOf(ctx, 0), a = itemsOf(ctx, 1), b = itemsOf(ctx, 2);
+    if (!guardsHold(base, next, end - 1)) return;
+    if (t[70] != 0 && !heldUpdates(base, next, left, false)) return;
+    const Items out = itemsOf(base, 0), a = itemsOf(base, 1), b = itemsOf(base, 2);
     if (t[13] != 0 && (!out.ok() || out.kind() != 3)) return;  // a byte's value: into bytes alone
     if (sharedInPart(out, a, end) || sharedInPart(out, b, end)) return;
     const double c1 = bitsF(t[7]), c2 = bitsF(t[8]);
@@ -3419,7 +3456,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             }
             for (int64_t j = next; j < end; j++) {
                 bool fine = true;
-                const int64_t v = wholeMap(ctx, a.whole(j), fine);
+                const int64_t v = wholeMap(base, a.whole(j), fine);
                 if (!fine || !storeWhole(out, j, v)) {
                     done = j - next;
                     break;
@@ -3479,7 +3516,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // Read at its base plus the counter; written there too, or (into another list) at
             // that list's own base plus the counter (2026-11-15: words 56 to 60).
             int64_t outAt = 0, oFirst, oLast;
-            if (!itemBase(ctx, at)) return;
+            if (!itemBase(base, at)) return;
             if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1])
                 return;
             const uint8_t* x = reinterpret_cast<const uint8_t*>(a.h[0]) + static_cast<uint64_t>(first) * rw;
@@ -3492,7 +3529,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 o = addAt;
             } else {
                 if (!into) outAt = at;
-                else if (!itemBase(ctx, outAt, 56)) return;
+                else if (!itemBase(base, outAt, 56)) return;
                 if (__builtin_add_overflow(outAt, next, &oFirst) || __builtin_add_overflow(outAt, end - 1, &oLast) || oFirst < 0 ||
                     static_cast<uint64_t>(oLast) >= out.h[2])
                     return;
@@ -3730,8 +3767,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // bits 24 to 31, the type number). Moved at once: the bytes the steps would move.
             if (!a.ok() || !out.ok()) return;
             int64_t to = 0, from = 0, toFirst, toLast, fromFirst, fromLast;
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, to)) return;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, from)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, to)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, from)) return;
             if (__builtin_add_overflow(to, next, &toFirst) || __builtin_add_overflow(to, end - 1, &toLast) || __builtin_add_overflow(from, next, &fromFirst) ||
                 __builtin_add_overflow(from, end - 1, &fromLast) || toFirst < 0 || fromFirst < 0 || static_cast<uint64_t>(toLast) >= out.h[2] ||
                 static_cast<uint64_t>(fromLast) >= a.h[1])
@@ -3768,14 +3805,14 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // but where the same list is read through another name, and then only those it had.
             if (!a.ok()) return;
             int64_t from = 0, fromFirst, fromLast;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, from)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, from)) return;
             if (__builtin_add_overflow(from, next, &fromFirst) || __builtin_add_overflow(from, end - 1, &fromLast) || fromFirst < 0 ||
                 static_cast<uint64_t>(fromLast) >= a.h[1])
                 return;
             const uint8_t* fromList = reinterpret_cast<const uint8_t*>(a.h[3]);
             const uint8_t* fromPack = packOf(fromList, kStoreItems);
             uint8_t* pack;
-            uint8_t* at = roomToAdd(base[t[55]], ctx, kStoreItems, pack);
+            uint8_t* at = roomToAdd(base[t[55]], base, kStoreItems, pack);
             if (at == nullptr || fromPack == nullptr) return;
             const int64_t cls = static_cast<int64_t>(t[56]);
             if (word<int64_t>(pack + kPackItemClass) != cls || word<const void*>(pack + kPackItemType) != nullptr || word<uint32_t>(pack + kPackTypeSlot) != 0 ||
@@ -3814,7 +3851,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint64_t n = t[128], width = t[129], nt = t[130];
             if (n == 0 || n > 8 || width == 0 || width > 0xFFFF || nt > 4) return;
             int64_t at = 0, first, last;
-            if (!itemBase(ctx, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
+            if (!itemBase(base, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
                 static_cast<uint64_t>(last) >= a.h[1])
                 return;
             uint64_t toff[4] = {0, 0, 0, 0}, tshr[4] = {0, 0, 0, 0}, tshl[4] = {0, 0, 0, 0};
@@ -4003,7 +4040,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const double op = bitsF(t[129]);
             if (op != op) return;
             int64_t sb = 0, db = 0, sFirst, sLast, dFirst, dLast;
-            if (!itemBase(ctx, sb) || !itemBase(ctx, db, 56)) return;
+            if (!itemBase(base, sb) || !itemBase(base, db, 56)) return;
             if (__builtin_add_overflow(sb, next, &sFirst) || __builtin_add_overflow(sb, end - 1, &sLast) || __builtin_add_overflow(db, next, &dFirst) ||
                 __builtin_add_overflow(db, end - 1, &dLast) || sFirst < 0 || dFirst < 0 || static_cast<uint64_t>(sLast) >= a.h[1] ||
                 static_cast<uint64_t>(dLast) >= out.h[1] || static_cast<uint64_t>(dLast) >= out.h[2])
@@ -4046,8 +4083,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const Slot* g = reinterpret_cast<const Slot*>(ctx->globals) + t[97];
             if (g->kind != kKindObj || reinterpret_cast<uint64_t>(g->p) != t[98]) return;  // the class mksm checks
             int64_t xb = 0, yb = 0, ob = 0, w = 0, h = 0;
-            if (!itemBase(ctx, xb) || !itemBase(ctx, yb, 63) || !itemBase(ctx, ob, 56) || !operand(ctx, t[130], t[131], 0, w) ||
-                !operand(ctx, t[132], t[133], 0, h))
+            if (!itemBase(base, xb) || !itemBase(base, yb, 63) || !itemBase(base, ob, 56) || !operand(base, t[130], t[131], 0, w) ||
+                !operand(base, t[132], t[133], 0, h))
                 return;
             // Every place held to the picture is in it.
             if (w < 1 || h < 1 || w > (int64_t{1} << 31) || h > (int64_t{1} << 31) || static_cast<uint64_t>(w * h) > b.h[1]) return;
@@ -4112,17 +4149,17 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         }
         case kLoopWFindWord: {
             // Items four bytes wide, each read as one word, until one is not `want` (regions.cpp,
-            // recognise, kLoopWFindWord: inkBox's scans): item base + dir (next + j), dir 1 or -1.
+            // recognise, kLoopWFindWord: inkBox's scans): item first + dir (next + j), dir 1 or -1.
             // It stops before that one, for the loop's own steps to find it. Words 50 to 53 the
-            // base, 54 dir, 130 and 131 the word. Four items a compare.
+            // first (the base), 54 dir, 130 and 131 the word. Four items a compare.
             static_assert(kLoopWFindWord == 33, "regions.cpp's ah.shape 33");
             if (!a.ok() || a.kind() <= 3) return;
             const int64_t lim = int64_t{1} << 50, dir = static_cast<int64_t>(t[54]);
-            int64_t base = 0, want = 0;
-            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, base)) || !operand(ctx, t[130], t[131], 0, want)) return;
-            if ((dir != 1 && dir != -1) || !small(t[53]) || base < -lim || base > lim || next > lim || end > lim) return;
-            base += static_cast<int64_t>(t[53]);
-            const int64_t i0 = base + dir * next, i1 = base + dir * (end - 1);
+            int64_t first = 0, want = 0;
+            if ((t[50] == 1 && !operand(base, t[51], t[52], 0, first)) || !operand(base, t[130], t[131], 0, want)) return;
+            if ((dir != 1 && dir != -1) || !small(t[53]) || first < -lim || first > lim || next > lim || end > lim) return;
+            first += static_cast<int64_t>(t[53]);
+            const int64_t i0 = first + dir * next, i1 = first + dir * (end - 1);
             if (i0 < 0 || i1 < 0 || static_cast<uint64_t>(i0) >= a.h[1] || static_cast<uint64_t>(i1) >= a.h[1]) return;
             if (want < 0 || want > 0xFFFFFFFF) {  // no item's word is it: the steps from the first
                 done = 0;
@@ -4173,13 +4210,13 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             if (!out.ok() || out.kind() != 2 || !a.ok() || a.kind() != 2 || out.h[0] == a.h[0]) return;
             const int64_t lim = int64_t{1} << 50;
             int64_t ob = 0, xb[4] = {0, 0, 0, 0};
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) return;
             if (!small(t[53]) || ob < -lim || ob > lim || next > lim || end > lim) return;
             ob += static_cast<int64_t>(t[53]);
             if (ob + next < 0 || static_cast<uint64_t>(ob + end - 1) >= out.h[1] || static_cast<uint64_t>(ob + end - 1) >= out.h[2]) return;
             for (int q = 0; q < 4; q++) {
                 const uint64_t* w4 = t + 130 + 4 * q;
-                if (w4[0] == 1 && !operand(ctx, w4[1], w4[2], 0, xb[q])) return;
+                if (w4[0] == 1 && !operand(base, w4[1], w4[2], 0, xb[q])) return;
                 if (!small(w4[3]) || xb[q] < -lim || xb[q] > lim) return;
                 xb[q] += static_cast<int64_t>(w4[3]);
                 if (xb[q] + next < 0 || static_cast<uint64_t>(xb[q] + end - 1) >= a.h[1]) return;
@@ -4226,8 +4263,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint64_t* hw = ctx->lists + 4 * wk;
             if (hw[3] != 2 || hw[0] == out.h[0]) return;
             int64_t ob = 0, ib = 0, from = 0;
-            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ib)) ||
-                (t[130] == 1 && !operand(ctx, t[131], t[132], 0, from)))
+            if ((t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(base, t[64], t[65], 0, ib)) ||
+                (t[130] == 1 && !operand(base, t[131], t[132], 0, from)))
                 return;
             const int64_t lim = int64_t{1} << 50;
             if (!small(t[53]) || !small(t[66]) || ob < -lim || ob > lim || ib < -lim || ib > lim || from < -lim || from > lim || next > lim || end > lim) return;
@@ -4270,8 +4307,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             static_assert(kLoopWApartItems == 30, "regions.cpp's ah.shape 30");
             if (!out.ok() || out.kind() != 1 || !a.ok() || a.kind() <= 3 || !b.ok() || b.kind() <= 3) return;
             int64_t ob = 0, pb = 0, qb = 0;
-            if ((t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(ctx, t[64], t[65], 0, pb)) ||
-                (t[130] == 1 && !operand(ctx, t[131], t[132], 0, qb)))
+            if ((t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) || (t[63] == 1 && !operand(base, t[64], t[65], 0, pb)) ||
+                (t[130] == 1 && !operand(base, t[131], t[132], 0, qb)))
                 return;
             const int64_t lim = int64_t{1} << 50;
             if (!small(t[53]) || !small(t[66]) || !small(t[133]) || ob < -lim || ob > lim || pb < -lim || pb > lim || qb < -lim || qb > lim || next > lim ||
@@ -4321,8 +4358,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const uint64_t* hw = ctx->lists + 4 * wk;
             if (hw[3] != 2 || hw[0] == out.h[0] || a.h[0] == out.h[0]) return;
             int64_t ob = 0, ib = 0;
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ib)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, ib)) return;
             if (!small(t[66]) || ob < -(int64_t{1} << 50) || ob > (int64_t{1} << 50) || ib < -(int64_t{1} << 50) || ib > (int64_t{1} << 50) ||
                 next > (int64_t{1} << 50) || end > (int64_t{1} << 50))
                 return;
@@ -4364,8 +4401,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             const Items& items = to ? a : out;
             if (!floats.ok() || floats.kind() != 2 || !items.ok() || items.kind() <= 3) return;
             int64_t ob = 0, ab = 0;
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ab)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, ab)) return;
             if (!small(t[53]) || !small(t[66]) || ob < -(int64_t{1} << 50) || ob > (int64_t{1} << 50) || ab < -(int64_t{1} << 50) || ab > (int64_t{1} << 50) ||
                 next > (int64_t{1} << 50) || end > (int64_t{1} << 50))
                 return;
@@ -4451,8 +4488,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // time, as the steps go: the same where the two are one list.
             if (!out.ok() || !a.ok() || out.kind() != 2 || a.kind() != 2) return;
             int64_t ob = 0, ab = 0, oFirst, oLast, aFirst, aLast;
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, ob)) return;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, ab)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, ob)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, ab)) return;
             if (__builtin_add_overflow(ob, next, &oFirst) || __builtin_add_overflow(ob, end - 1, &oLast) || __builtin_add_overflow(ab, next, &aFirst) ||
                 __builtin_add_overflow(ab, end - 1, &aLast) || oFirst < 0 || aFirst < 0 || static_cast<uint64_t>(oLast) >= out.h[2] ||
                 static_cast<uint64_t>(oLast) >= out.h[1] || static_cast<uint64_t>(aLast) >= a.h[1])
@@ -4489,8 +4526,8 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // the same moved past; the first two that differ left to the loop's own steps.
             if (!a.ok() || !b.ok()) return;
             int64_t atA = 0, atB = 0, firstA, lastA, firstB, lastB;
-            if (t[50] == 1 && !operand(ctx, t[51], t[52], 0, atA)) return;
-            if (t[63] == 1 && !operand(ctx, t[64], t[65], 0, atB)) return;
+            if (t[50] == 1 && !operand(base, t[51], t[52], 0, atA)) return;
+            if (t[63] == 1 && !operand(base, t[64], t[65], 0, atB)) return;
             if (__builtin_add_overflow(atA, next, &firstA) || __builtin_add_overflow(atA, end - 1, &lastA) || __builtin_add_overflow(atB, next, &firstB) ||
                 __builtin_add_overflow(atB, end - 1, &lastB) || firstA < 0 || firstB < 0 || static_cast<uint64_t>(lastA) >= a.h[1] ||
                 static_cast<uint64_t>(lastB) >= b.h[1])
@@ -4527,7 +4564,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // in the high half, how many of its bytes in bits 24 to 31).
             if (!out.ok()) return;
             int64_t at, first, last;
-            if (!itemBase(ctx, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
+            if (!itemBase(base, at) || __builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 ||
                 static_cast<uint64_t>(last) >= out.h[2])
                 return;
             const Slot* from = t[56] == 1 ? &base[t[57]] : t[56] == 2 ? word<const Slot*>(ctx->upvalues[t[57]] + kUpvalueLocation) : nullptr;
@@ -4547,7 +4584,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
                 // An item of another list of the class of the items set, or a value in a box of it
                 // (2026-11-16: `fill(grid, colors[100])`).
                 const uint8_t* const outPack = word<const uint8_t*>(reinterpret_cast<const uint8_t*>(out.h[3]) + kListPack);
-                if (out.h[3] == 0 || outPack == nullptr || !valueBits(*from, word<int64_t>(outPack + kPackItemClass), what >> 32, size, ctx, bits)) return;
+                if (out.h[3] == 0 || outPack == nullptr || !valueBits(*from, word<int64_t>(outPack + kPackItemClass), what >> 32, size, base, bits)) return;
             }
             uint8_t* o = reinterpret_cast<uint8_t*>(out.h[0]) + static_cast<uint64_t>(first) * width;
             if (width == 4 && size == 4) {
@@ -4584,7 +4621,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
             // bytes alone, added together for each item. An overflow stops it before the item.
             if (!a.ok()) return;
             int64_t at;
-            if (!itemBase(ctx, at)) return;
+            if (!itemBase(base, at)) return;
             int64_t first, last;
             if (__builtin_add_overflow(at, next, &first) || __builtin_add_overflow(at, end - 1, &last) || first < 0 || static_cast<uint64_t>(last) >= a.h[1]) return;
             const uint64_t width = t[55] >> 32, offset = (t[55] >> 8) & 0xFFFFFF, size = t[55] & 0xFF;
@@ -4786,7 +4823,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
         __builtin_memcpy(addPack + kPackCount, &items, 8);
         if (static_cast<int64_t>(t[241]) >= 0) storeSlot(base, static_cast<int64_t>(t[241]), kKindBool, 1);
     }
-    if (t[70] != 0 && done > 0) heldUpdates(ctx, next, done, true);
+    if (t[70] != 0 && done > 0) heldUpdates(base, next, done, true);
     t[1] = static_cast<uint64_t>(next + done);
     t[2] = static_cast<uint64_t>(left - done);
     if (iterator != nullptr) {
@@ -4797,7 +4834,7 @@ INLINE void runLoop(Slot* base, Ctx* ctx) {
 #undef reads
 #undef writes
 STENCIL(tloop) {
-    runLoop(base, ctx);
+    runLoop(base);
     NEXT;
 }
 // The template's words set: a constant (word ww_slot = ww_ki), a register stored, or loaded.
