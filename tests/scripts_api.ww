@@ -1,0 +1,128 @@
+// A script and the program it runs in, talking through a contract (the scripting plan, part 2):
+// the script calls the game's api, ten functions of it, and is handed entities as handles,
+// whose calls run on the game's own objects; it gives the game an object of GameScript, made of
+// its top-level functions; lambdas it hands the api are called back in it, one in the middle of
+// an api call. A script that calls what the contract has not, or gives the interface with a
+// function of another type, does not compile.
+import scripts.game_contract.*
+
+class Creature(override val id : int, val kind : string, var at : Point, var hp : int) : Entity {
+  override fun name() : string => kind + "#" + id
+  override fun position() : Point => at
+  override fun health() : int => hp
+}
+
+class Game : GameApi {
+  val creatures : open List<Creature> = []
+  val said : open List<string> = []
+  val timers : open List<Pair<int, (int) -> unit>> = []
+  val stored : open Map<string, Map<string, int>> = {:}
+  var turnNumber = 0
+
+  fun init() {
+    creatures.add(Creature(1, "hero", Point(0, 0), 100))
+  }
+
+  override fun player() : Entity => creatures[0]
+  override fun spawn(kind : string, at : Point) : Entity {
+    val made = Creature(creatures.size + 1, kind, at, 30)
+    creatures.add(made)
+    return made
+  }
+  override fun entitiesNear(at : Point, radius : int) : List<Entity> =>
+    creatures.filter { Math.abs(it.at.x - at.x) + Math.abs(it.at.y - at.y) <= radius }
+  override fun moveTo(entity : Entity, at : Point) {
+    (entity as Creature).at = at
+  }
+  override fun damage(entity : Entity, hit : Hit) : int {
+    val creature = entity as Creature
+    creature.hp -= hit.damage
+    return creature.hp
+  }
+  override fun say(text : string) {
+    said.add(text)
+  }
+  override fun turn() : int => turnNumber
+  override fun onTurn(every : int, then : (int) -> unit) {
+    timers.add(Pair(every, then))
+  }
+  override fun ask(question : string, answer : (string) -> bool) : bool => answer(question.endsWith("?") ? "yes" : "no")
+  override fun store(key : string, values : Map<string, int>) {
+    stored[key] = values
+  }
+
+  fun advance() {
+    turnNumber += 1
+    for (timer in timers) {
+      if (turnNumber % timer.first == 0) { timer.second(turnNumber) }
+    }
+  }
+}
+
+val source = """
+var greeted = 0
+val hero = api.player()
+api.say("hello " + hero.name())
+
+fun onStart(level : string) : int {
+  val goblin = api.spawn("goblin", Point(3, 4))
+  api.moveTo(goblin, Point(1, 1))
+  val near = api.entitiesNear(Point(0, 0), 2)
+  api.say("near: " + near.map { it.name() }.join(", "))
+  api.onTurn(2) { n -> api.say("turn " + n + " of " + api.turn() + ", hero at " + hero.position()) }
+  api.store("stats", {"level": level.size, "near": near.size})
+  return near.size
+}
+
+fun onEnter(who : Entity) : string {
+  greeted += 1
+  return who.name() + " entered, " + greeted + " so far, health " + who.health() + ", id " + who.id
+}
+
+fun onHit(who : Entity, hit : Hit) : bool {
+  val left = api.damage(who, hit)
+  val sure = api.ask("strike back?") { answer -> answer == "yes" }
+  return left > 0 and sure
+}
+"""
+
+val game = Game()
+val script = Script.compile(source, name = "game_script.ww", api = GameApi#, gives = GameScript#)
+print(script.names)                                   // expect: ["greeted", "hero", "onEnter", "onHit", "onStart"]
+val running = script.start(api = game)
+print(game.said)                                      // expect: ["hello hero#1"]
+val logic = running.gives as GameScript
+print(logic is GameScript, logic.onStart("cave"))     // expect: true 2
+print(game.said.last(), game.creatures[1].at)          // expect: near: hero#1, goblin#2 Point(x=1, y=1)
+print(logic.onEnter(game.creatures[1]))               // expect: goblin#2 entered, 1 so far, health 30, id 2
+print(logic.onEnter(game.player()))                   // expect: hero#1 entered, 2 so far, health 100, id 1
+game.advance()
+game.advance()
+print(game.said.last())                               // expect: turn 2 of 2, hero at Point(x=0, y=0)
+print(logic.onHit(game.creatures[1], Hit(10, "sword")), game.creatures[1].hp)   // expect: true 20
+print(logic.onHit(game.creatures[1], Hit(25, "axe")), game.creatures[1].hp)     // expect: false -5
+print(game.stored)                                    // expect: {"stats": {"level": 4, "near": 2}}
+// The same object, the same handle: the script's greeting count kept per script, the calls many.
+var lastLine = ""
+for (i in 0 ..< 50) { lastLine = logic.onEnter(game.player()) }
+print(lastLine)                                       // expect: hero#1 entered, 52 so far, health 100, id 1
+
+// ---- What does not compile, or start ----
+fun problem(text : string, api : Class? = null, gives : Class? = null) : string {
+  try {
+    Script.compile(text, name = "bad.ww", api = api, gives = gives)
+    return "compiled"
+  } catch (e : ScriptError) {
+    return e.problems[0].toString()
+  }
+}
+print(problem("fun f() { api.fly(3) }", api = GameApi#))   // expect: bad.ww:1:15: error: GameApi has no method 'fly'
+print(problem("fun f() { api.say(3) }", api = GameApi#))   // expect: bad.ww:1:19: error: GameApi.say(...) takes a string for 'text', not an int
+print(problem("fun onStart(level : string) : int => 1", api = GameApi#, gives = GameScript#))
+// expect: bad.ww:1:1: error: the script gives GameScript, whose onEnter it does not declare
+print(problem("fun onStart(level : int) : int => level\nfun onEnter(who : Entity) : string => \"\"\nfun onHit(who : Entity, hit : Hit) : bool => true", api = GameApi#, gives = GameScript#))
+// expect: bad.ww (as GameScript):1:70: error: onStart(...) takes an int for 'level', not a string
+try { script.start() } catch (e : IllegalArgumentException) { print(e.message) }
+// expect: game_script.ww was compiled with api = GameApi#: start it with an object of GameApi
+running.stop()
+print(running.isRunning)                              // expect: false

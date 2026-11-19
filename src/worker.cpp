@@ -82,6 +82,8 @@ struct Message {
     }
 };
 
+thread_local HandleWays* handleWays = nullptr;
+
 namespace {
 
 // The message being written on this thread, which what it carries is noted in.
@@ -190,7 +192,7 @@ SharedBlock* shareFrozen(VM& vm, Value v) {
 // of items, whole. Frozen data travels as the block it is shared as; bytes handed over travel
 // as their own buffer, moved.
 
-enum : char { kNull, kFalse, kTrue, kInt, kFloat, kString, kBytes, kList, kMap, kChar, kByte, kSet, kShared, kHandedOver, kData, kPackedList };
+enum : char { kNull, kFalse, kTrue, kInt, kFloat, kString, kBytes, kList, kMap, kChar, kByte, kSet, kShared, kHandedOver, kData, kPackedList, kHandle };
 
 void putRaw(std::string& out, const void* data, size_t size) { out.append(static_cast<const char*>(data), size); }
 
@@ -379,6 +381,19 @@ void encode(VM& vm, Value v, std::string& out, int depth) {
             encode(vm, entry.key, out, depth + 1);
             encode(vm, entry.value, out, depth + 1);
         }
+    } else if (int64_t id = 0; handleWays != nullptr && [&] {
+                   bool home = false, function = false;
+                   std::vector<std::string> interfaces;
+                   if (!handleWays->give(vm, v, id, home, function, interfaces)) return false;
+                   // A script's handle (script.cpp): its id, whose it is, and what it implements.
+                   out += kHandle;
+                   out += home ? '\1' : '\0';
+                   out += function ? '\1' : '\0';
+                   putRaw(out, &id, sizeof id);
+                   putSize(out, interfaces.size());
+                   for (const std::string& name : interfaces) putText(out, name);
+                   return true;
+               }()) {
     } else {
         const ObjClass* of = classOf(v);
         const bool ordinary = of != nullptr && v.isObjType(ObjType::Instance) && !of->isEnum;
@@ -430,6 +445,17 @@ Value decode(VM& vm, Reader& in) {
         }
         case kByte: return Value::byte(static_cast<uint8_t>(in.raw<int64_t>()));
         case kString: return vm.str(std::string(in.text()));
+        case kHandle: {
+            // A script's handle (script.cpp): made into what stands for it here.
+            const bool home = *in.at++ != 0;
+            const bool function = *in.at++ != 0;
+            const int64_t id = in.raw<int64_t>();
+            const uint32_t count = in.raw<uint32_t>();
+            std::vector<std::string> interfaces;
+            for (uint32_t i = 0; i < count && in.at < in.end; i++) interfaces.emplace_back(in.text());
+            if (handleWays == nullptr) throw vm.runtimeError(Thrown::IllegalStateException, "a script's handle where no script's message is read");
+            return handleWays->take(vm, id, home, function, interfaces);
+        }
         case kShared: {
             // What frozen data was shared as: held by this VM too, if it does not hold the
             // block already; the message lets go of its own hold when it is dropped.
@@ -520,7 +546,10 @@ ObjClass* takeClass(VM& vm, Reader& in, std::string& name) {
     const int slot = in.raw<int32_t>();
     name = std::string(in.text());
     ObjClass* cls = vm.classInGlobal(slot);
-    return cls != nullptr && cls->name->utf8() == name ? cls : nullptr;
+    if (cls != nullptr && cls->name->utf8() == name) return cls;
+    // A script and its program are two programs, whose globals differ: there a class of the
+    // contract both compile (script.cpp) is found by its name.
+    return handleWays != nullptr ? vm.classNamed(name) : nullptr;
 }
 
 // A packed list sent whole (G6): one of the same type here, packed the same way, given the

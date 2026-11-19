@@ -1191,6 +1191,21 @@ public:
     void releaseAllBlocks();
     // The Worker objects of the workers this VM has started, by id.
     std::unordered_map<int64_t, Value> workerObjects;
+    // This VM's objects and functions handed to the other side of a script as handles
+    // (script.cpp, the scripting plan's part 2): by id, each with the run it was handed over in,
+    // and kept from the collector until that run ends; and the id each object has, by run, so
+    // that the same object goes as the same handle.
+    struct ScriptHandle {
+        Value value;
+        const void* run;
+    };
+    std::unordered_map<int64_t, ScriptHandle> scriptHandles;
+    std::unordered_map<const void*, std::unordered_map<const Obj*, int64_t>> scriptHandleIds;
+    int64_t nextScriptHandle = 1;
+    // The class a global of this name holds (the last such global), or null.
+    ObjClass* classNamed(const std::string& name);
+    // The value of the first global of this name, or null.
+    Value globalNamed(const std::string& name);
     std::unordered_map<int64_t, std::shared_ptr<WorkerLink>> workerLinks;
     int64_t nextWorkerId = 1;
     void workerStarted() { liveWorkers_++; }
@@ -1816,6 +1831,19 @@ void registerWorkers(VM& vm);  // worker.cpp: isolated workers
 struct Message;
 std::shared_ptr<Message> messageFor(VM& vm, Value v);
 Value readMessage(VM& vm, const Message& message);
+// What a script's messages do with what cannot be copied (script.cpp): an object of an ordinary
+// class or a function goes to the other side as a handle, made there into an object of an
+// interface it implements, or a function, whose calls come back to it. Set on the thread for
+// as long as a script's message is written or read; null for a worker's, which refuses them.
+struct HandleWays {
+    // The handle `v` goes as: its id, whether it is the reader's own object coming home, whether it
+    // is a function, and the interfaces it implements; false where it cannot go so.
+    virtual bool give(VM& vm, Value v, int64_t& id, bool& home, bool& function, std::vector<std::string>& interfaces) = 0;
+    // What the reader makes of a handle.
+    virtual Value take(VM& vm, int64_t id, bool home, bool function, const std::vector<std::string>& interfaces) = 0;
+    virtual ~HandleWays() = default;
+};
+extern thread_local HandleWays* handleWays;
 // The scripts a program compiles and runs as it runs (script.cpp, the scripting plan): set by
 // ww's main, whose compiler side they are part of, and registered where that side is in the
 // file (a built program keeps it only where it uses Script, D161).

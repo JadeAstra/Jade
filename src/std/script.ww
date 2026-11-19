@@ -17,37 +17,89 @@
 // started any number of times, each run with its own VM. A program built into an executable
 // that uses Script keeps the compiler (and the standard library's source) in its file.
 //
-// So far scripts are trusted: they reach what any program reaches. The API a program gives
-// its scripts, safe scripts and limits come next (docs/scripting-plan.html).
+// The program and its scripts talk through interfaces (the scripting plan, part 2), declared in
+// a file of their own, the contract, which both compile: it imports nothing and holds only
+// declarations. The script is given an object of one of them, its `api`, and may give the program
+// one of another, made of its own top-level functions:
+//
+//   // door_contract.ww
+//   interface DoorApi {
+//     fun open(door : int)
+//     fun isLocked(door : int) : bool
+//     fun onTimer(seconds : int, then : () -> unit)
+//   }
+//   interface DoorScript { fun onEnter(player : int) }
+//
+//   // the program, which imports door_contract.ww
+//   val script = Script.compile(source, name = "door.ww", api = DoorApi#, gives = DoorScript#)
+//   val running = script.start(api = game.doors)          // game.doors is a DoorApi
+//   val door = running.gives as DoorScript
+//   door.onEnter(7)                                        // runs the script's onEnter
+//
+//   // door.ww, the script: `api` is a DoorApi; it gives DoorScript with this onEnter
+//   fun onEnter(player : int) {
+//     if (!api.isLocked(3)) { api.open(3) }
+//     api.onTimer(2) { api.open(4) }
+//   }
+//
+// A script that calls a member the contract does not have, or gives the interface with a
+// function of another type, does not compile. Data (numbers, text, lists, maps, sets, the
+// contract's data classes and value types) is copied; an object of an interface of the contract
+// goes as a handle, an object of that interface on the other side whose calls run on the object
+// itself; a function given goes so too, so a script's lambda is called back in the script. A
+// handle that comes back is the object itself again.
+//
+// So far scripts are trusted: they reach what any program reaches. Safe scripts and limits
+// come next (docs/scripting-plan.html).
 class Script {
   internal val handle : any
   // The name it was compiled under, which its errors and stack traces give.
   val name : string
+  // The interface its `api` is an object of, where it was compiled with api = ...
+  val api : Class?
+  // The interface it gives, where it was compiled with gives = ...
+  val gives : Class?
 
-  internal fun init(handle : any, name : string) {
+  internal fun init(handle : any, name : string, api : Class?, gives : Class?) {
     this.handle = handle
     this.name = name
+    this.api = api
+    this.gives = gives
   }
 
   static {
     // `source` compiled, as a file named `name` in `folder` (by default where the program
     // runs), which its imports are looked for from; a ScriptError listing each problem, with its
-    // line and column, where it does not compile.
-    fun compile(source : string, name : string = "script.ww", folder : FilePath? = null) : Script throws ScriptError {
-      val made = __script.compile(source, name, (folder ?: FilePath(".")).absolute.toString())
+    // line and column, where it does not compile. With `api`, an interface of a contract written
+    // here by its name (api = DoorApi#), the script has `api`, an object of it, and sees the
+    // contract's declarations; with `gives`, another of them, its top-level functions are made
+    // an object of that interface, which the program gets from RunningScript.gives.
+    fun compile(source : string, name : string = "script.ww", folder : FilePath? = null, api : Class? = null,
+                gives : Class? = null) : Script throws ScriptError {
+      var contract : Pair<string, string>? = null
+      for (named in [api, gives]) {
+        if (named == null) { continue }
+        val found = __scriptContracts[named!!.name]
+        if (found == null) {
+          throw IllegalArgumentException("${named!!.name} is not an interface of a script's contract: name it in the call itself, api = ${named!!.name}#")
+        }
+        contract = found
+      }
+      val made = __script.compile(source, name, (folder ?: FilePath(".")).absolute.toString(), contract?.first ?: "", contract?.second ?: "",
+                                  api?.name ?: "", gives?.name ?: "")
       if (made is List) {
         val problems = (made as List<List<any>>).map {
           ScriptProblem(it[0] as string, it[1] as int, it[2] as int, it[3] as string)
         }
         throw ScriptError(problems)
       }
-      return Script(made, name)
+      return Script(made, name, api, gives)
     }
 
-    // The file read and compiled, its imports looked for from its folder; a ScriptError where it
-    // does not compile, an IOException where it cannot be read.
-    fun load(path : FilePath) : Script throws IOException | ScriptError =>
-      compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."))
+    // The file read and compiled, its imports looked for from its folder, as compile does; a
+    // ScriptError where it does not compile, an IOException where it cannot be read.
+    fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError =>
+      compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."), api, gives)
   }
 
   // What it declares at its top level, its functions among them, sorted.
@@ -55,9 +107,14 @@ class Script {
     get() => __script.names(handle) as List<string>
 
   // Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for
-  // calls. A ScriptException where the top level throws.
-  fun start() : RunningScript {
-    val started = __script.start(handle)
+  // calls. `api` is what the script's `api` stands for: an object of the interface it was
+  // compiled with, whose calls from the script run here. A ScriptException where the top level
+  // throws.
+  fun start(api : any? = null) : RunningScript {
+    if (this.api != null and api == null) {
+      throw IllegalArgumentException("$name was compiled with api = ${this.api!!.name}#: start it with an object of ${this.api!!.name}")
+    }
+    val started = __script.start(handle, api)
     if (started is string) { throw ScriptException("$name: ${started as string}") }
     return RunningScript(started, this)
   }
@@ -92,6 +149,15 @@ class RunningScript {
     __script.stop(handle)
   }
 
+  // The object of the interface the script gives (compiled with gives = DoorScript#), made of its
+  // own top-level functions: its calls run in the script. A ScriptException where it gives none.
+  val gives : any?
+    get() {
+      val answer = __script.gives(handle) as List<any?>
+      if (!(answer[0] as bool)) { throw ScriptException("${script.name}: ${answer[1] as string}") }
+      return answer[1]
+    }
+
   // True until it ends: stopped, or ended by itself (its top level called exit).
   val isRunning : bool
     get() => __script.isRunning(handle) as bool
@@ -111,3 +177,36 @@ class ScriptError(val problems : List<ScriptProblem>) : Exception(problems.map {
 
 // A script that threw, has no function of the name called, or is no longer running.
 class ScriptException(message : string? = null) : RuntimeException(message)
+
+// ---- What the compiler and the contract's proxies call ----
+
+// The contract each interface named in Script.compile(..., api = DoorApi#) is declared in: its
+// file's name and text, by the interface's name. The compiler writes the call that fills it in
+// place of the `DoorApi#` (CompilerSession::useContract).
+internal val __scriptContracts : open Map<string, Pair<string, string>> = {:}
+
+fun __scriptContract(type : Class, file : string, source : string) : Class {
+  __scriptContracts[type.name] = Pair(file, source)
+  return type
+}
+
+// A call of a method of the object a proxy stands for, on the other side.
+fun __scriptForward(handle : any, member : string, arguments : List<any?>) : any? {
+  val answer = __script.forward(handle, 1, member, arguments) as List<any?>
+  if (!(answer[0] as bool)) { throw ScriptException(__scriptFailure(answer[1] as string)) }
+  return answer[1]
+}
+
+// A val of the object a proxy stands for, on the other side.
+fun __scriptGet(handle : any, member : string) : any? {
+  val answer = __script.forward(handle, 2, member, []) as List<any?>
+  if (!(answer[0] as bool)) { throw ScriptException(__scriptFailure(answer[1] as string)) }
+  return answer[1]
+}
+
+// In a script compiled with api = ...: the program's object its `api` stands for.
+fun __scriptApi() : any => __script.api()
+
+// What the other side threw, as this side's ScriptException says it: a ScriptException that
+// crossed already said once.
+fun __scriptFailure(text : string) : string => text.startsWith("ScriptException: ") ? text[17 ..< text.size] : text

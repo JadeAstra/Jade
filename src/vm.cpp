@@ -356,6 +356,20 @@ int VM::globalSlotOf(const ObjClass* cls) {
     return -1;
 }
 
+ObjClass* VM::classNamed(const std::string& name) {
+    // The last such: a class of a script's contract comes after the standard library's of the
+    // same name (Point), which a message finds by its global first anyway (worker.cpp, takeClass).
+    for (size_t i = globals_.size(); i-- > 0;)
+        if (globals_[i].isObjType(ObjType::Class) && asClass(globals_[i])->name->utf8() == name) return asClass(globals_[i]);
+    return nullptr;
+}
+
+Value VM::globalNamed(const std::string& name) {
+    for (size_t i = 0; i < globals_.size() && i < program_->globalNames.size(); i++)
+        if (program_->globalNames[i] == name) return globals_[i];
+    return Value::null();
+}
+
 ObjClass* VM::classInGlobal(int slot) const {
     if (slot < 0 || static_cast<size_t>(slot) >= globals_.size() || !globals_[static_cast<size_t>(slot)].isObjType(ObjType::Class)) return nullptr;
     return asClass(globals_[static_cast<size_t>(slot)]);
@@ -8374,6 +8388,7 @@ void VM::collectGarbage() {
     for (const Value& error : freedFailures) markValue(error);
     for (const auto& [job, error] : unaskedFailures) markValue(error);  // the job is held weakly
     for (const auto& worker : workerObjects) markValue(worker.second);
+    for (const auto& handed : scriptHandles) markValue(handed.second.value);
     for (const Value& task : loopTasks_) markValue(task);
     for (const Timer& timer : timers_) markValue(timer.task);
     for (const Value& global : globals_) markValue(global);

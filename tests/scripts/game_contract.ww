@@ -1,0 +1,37 @@
+// The contract of tests/scripts_api.ww: what the game and its scripts say to each other. It
+// imports nothing and holds only declarations, as a script's contract does.
+
+// A position, copied wherever it goes.
+value Point(val x : int, val y : int)
+
+// What a script is told of a hit.
+data Hit(val damage : int, val kind : string)
+
+// One of the game's entities: the script holds a handle, each call runs on the game's own.
+interface Entity {
+  val id : int
+  fun name() : string
+  fun position() : Point
+  fun health() : int
+}
+
+// What the game gives its scripts.
+interface GameApi {
+  fun player() : Entity
+  fun spawn(kind : string, at : Point) : Entity
+  fun entitiesNear(at : Point, radius : int) : List<Entity>
+  fun moveTo(entity : Entity, at : Point)
+  fun damage(entity : Entity, hit : Hit) : int
+  fun say(text : string)
+  fun turn() : int
+  fun onTurn(every : int, then : (int) -> unit)
+  fun ask(question : string, answer : (string) -> bool) : bool
+  fun store(key : string, values : Map<string, int>)
+}
+
+// What a script gives the game.
+interface GameScript {
+  fun onStart(level : string) : int
+  fun onEnter(who : Entity) : string
+  fun onHit(who : Entity, hit : Hit) : bool
+}

@@ -2294,6 +2294,39 @@ private:
         workerSpec_ = std::string(1, '\x01') + std::to_string(module) + '\x01' + literal.stringValue;
     }
 
+    // Script.compile(source, api = Door#, gives = DoorScript#), or Script.load(...) so (the
+    // scripting plan, part 2): the file that declares the interfaces is the script's contract,
+    // whose proxies are compiled into the program here, and the `Door#` written becomes a call
+    // that gives the class with the contract's name and text, which the script is compiled with.
+    std::unordered_map<const ClassOfExpr*, const CompilerSession::ScriptContract*> contractArgs_;
+
+    void noteScriptContract(const CallExpr& e) {
+        if (e.callee->kind != ExprKind::Member || session_.checker == nullptr) return;
+        const auto& member = static_cast<const MemberExpr&>(*e.callee);
+        if ((member.name != "compile" && member.name != "load") || member.object->kind != ExprKind::Name ||
+            static_cast<const NameExpr&>(*member.object).name != "Script")
+            return;
+        auto builtin = session_.builtins_->names.find("Script");
+        if (builtin == session_.builtins_->names.end() || findGlobal("Script", e, true) != &builtin->second) return;
+        const CompilerSession::ScriptContract* contract = nullptr;
+        for (size_t i = 0; i < e.args.size(); i++) {
+            if ((e.names[i] != "api" && e.names[i] != "gives") || e.args[i]->kind != ExprKind::ClassOf) continue;
+            const auto& named = static_cast<const ClassOfExpr&>(*e.args[i]);
+            RuntimeType type;
+            if (session_.checker->namedClassOf(named, type) != 1 || type.kind != RuntimeType::Class || type.ns == nullptr || !type.privateFile.empty())
+                throw error(named, "a script's " + e.names[i] + " is an interface declared at the top level of its contract, written here by its name: " + e.names[i] + " = Door#");
+            auto declared = type.ns->names.find(type.global);
+            if (declared == type.ns->names.end() || declared->second.file.empty())
+                throw error(named, "a script's " + e.names[i] + " is an interface declared at the top level of its contract");
+            const std::string path = (fs::path(type.ns->directory) / declared->second.file).string();
+            const CompilerSession::ScriptContract& used = session_.useContract(path, file_, named);
+            if (contract != nullptr && contract != &used)
+                throw error(named, "a script's api and what it gives are declared in one contract, not in " + contract->name + " and " + used.name);
+            contract = &used;
+            contractArgs_[&named] = &used;
+        }
+    }
+
     // A global of the standard library's that the compiler calls itself, by its name.
     int stdGlobal(const std::string& name, const Node& at) const {
         auto found = session_.builtins_->names.find(name);
@@ -6985,6 +7018,7 @@ private:
                     compileExpr(*e.args[0]);  // `Action { ... }`: the lambda, as the interface (D28)
                     break;
                 }
+                noteScriptContract(e);
                 if (compileRangeCall(e) || compileBoundCall(e) || compileInlineCall(e) || compileCallOn(e)) break;
                 noteWorkerScript(e);
                 // A lambda after the call belongs to the last parameter, which only the
@@ -7205,6 +7239,14 @@ private:
                 // the function written here, whose rights to members it has.
                 const auto& e = static_cast<const ClassOfExpr&>(expr);
                 line_ = e.line;
+                // A script's interface (noteScriptContract): the proxies run first, then the class is
+                // given with its contract.
+                const auto contract = contractArgs_.find(&e);
+                if (contract != contractArgs_.end()) {
+                    emit(Op::Import, contract->second->proxies);
+                    emit(Op::Pop);
+                    emit(Op::GetGlobal, stdGlobal("__scriptContract", e));
+                }
                 emit(Op::GetGlobal, stdGlobal("__classOf", e));
                 RuntimeType named;
                 const int how = session_.checker != nullptr ? session_.checker->namedClassOf(e, named) : 0;
@@ -7222,6 +7264,13 @@ private:
                 emitByte(how == 1 ? 0 : how == 2 ? 2 : 1);
                 emit(Op::Call);
                 emitByte(2);
+                if (contract != contractArgs_.end()) {
+                    emit(Op::Const, stringConstant(contract->second->name));
+                    emit(Op::Const, stringConstant(contract->second->source));
+                    emit(Op::Call);
+                    emitByte(3);
+                    contractArgs_.erase(contract);
+                }
                 break;
             }
 
@@ -9425,34 +9474,301 @@ FunctionProto* CompilerSession::compileStatements(const std::vector<StmtPtr>& st
     return proto;
 }
 
-int CompilerSession::compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
-                                   std::unordered_map<std::string, int>& names) {
-    forgetPaths();
-    const std::string key = "<script>" + name;
+// ---- A script's contract (the scripting plan, part 2) ----
+//
+// The interfaces a program and its scripts talk through, and the data they pass, are declared
+// in a file of their own, the contract, which both compile. For every interface of it each side
+// is given a class that implements it by sending each call to the other side, where the object
+// it stands for is (a handle): __ScriptProxy_Door for Door. They are written here as source,
+// from the contract's own declarations, so that they are checked as any code is.
+
+namespace {
+
+// A type as it would be written again.
+std::string typeSource(const TypeAnnotation& t) {
+    if (t.star) return "*";
+    if (!t.present()) return "any?";
+    if (!t.unionOf.empty()) {
+        std::string text;
+        for (size_t i = 0; i < t.unionOf.size(); i++) text += (i > 0 ? " | " : "") + typeSource(t.unionOf[i]);
+        return text;
+    }
+    if (t.isFunction()) {
+        std::string text = t.isSuspend ? "suspend " : "";
+        if (!t.receiver.empty()) text += typeSource(t.receiver[0]) + ".";
+        text += "(";
+        for (size_t i = 0; i < t.params.size(); i++) text += (i > 0 ? ", " : "") + typeSource(t.params[i]);
+        text += ") -> " + typeSource(t.result[0]);
+        return t.nullable ? "(" + text + ")?" : text;
+    }
+    std::string text = std::string(t.isOpen ? "open " : "") + (t.accepts ? "accepts " : "") + t.name;
+    if (!t.args.empty()) {
+        text += "<";
+        for (size_t i = 0; i < t.args.size(); i++) text += (i > 0 ? ", " : "") + typeSource(t.args[i]);
+        text += ">";
+    }
+    return t.nullable ? text + "?" : text;
+}
+
+std::string typeParamsSource(const std::vector<TypeParam>& params, bool bounds) {
+    if (params.empty()) return "";
+    std::string text = "<";
+    for (size_t i = 0; i < params.size(); i++) {
+        text += (i > 0 ? ", " : "") + params[i].name;
+        if (bounds && params[i].bound.present()) text += " : " + typeSource(params[i].bound);
+    }
+    return text + ">";
+}
+
+// The interfaces of a contract, by name.
+std::unordered_map<std::string, const ClassStmt*> contractInterfaces(const std::vector<StmtPtr>& statements) {
+    std::unordered_map<std::string, const ClassStmt*> found;
+    for (const StmtPtr& s : statements)
+        if (s->kind == StmtKind::Class && static_cast<const ClassStmt&>(*s).isInterface)
+            found[static_cast<const ClassStmt&>(*s).name] = &static_cast<const ClassStmt&>(*s);
+    return found;
+}
+
+// What a class implementing `c` has to write: its abstract methods and properties, its
+// super-interfaces' (of the contract) among them. A problem with the contract, as words, in `why`.
+void abstractMembers(const ClassStmt& c, const std::unordered_map<std::string, const ClassStmt*>& interfaces,
+                     std::vector<const FunctionDecl*>& methods, std::vector<const VarStmt*>& properties, std::string& why,
+                     std::unordered_set<const ClassStmt*>& seen) {
+    if (!seen.insert(&c).second) return;
+    for (const auto& m : c.methods) {
+        if (m->isStatic || !m->isAbstract) continue;
+        if (m->varargIndex >= 0) why = "its interface " + c.name + " has a vararg method, " + m->name + ", which a script's handle does not pass on";
+        if (m->isSuspend) why = "its interface " + c.name + " has a suspend method, " + m->name + ", which a script's handle does not pass on";
+        methods.push_back(m.get());
+    }
+    for (const auto& f : c.fields) {
+        if (!f->isVal) why = "its interface " + c.name + " has a var, " + f->name + ": a script's handle passes on methods and vals";
+        properties.push_back(f.get());
+    }
+    for (const std::string& super : c.supertypes) {
+        const std::string plain = super.substr(0, super.find('<'));
+        auto found = interfaces.find(plain);
+        if (found == interfaces.end()) {
+            why = "its interface " + c.name + " extends " + plain + ", which is not of the contract: a contract's interfaces extend only each other";
+            continue;
+        }
+        abstractMembers(*found->second, interfaces, methods, properties, why, seen);
+    }
+}
+
+std::string parametersSource(const FunctionDecl& m) {
+    std::string text = "(";
+    for (size_t i = 0; i < m.params.size(); i++)
+        text += (i > 0 ? ", " : "") + m.params[i] + " : " + (i < m.paramTypes.size() ? typeSource(m.paramTypes[i]) : std::string("any?"));
+    return text + ")";
+}
+
+std::string argumentsSource(const FunctionDecl& m) {
+    std::string text;
+    for (size_t i = 0; i < m.params.size(); i++) text += (i > 0 ? ", " : "") + m.params[i];
+    return text;
+}
+
+}  // namespace
+
+std::string contractProblem(const std::vector<StmtPtr>& statements) {
+    for (const StmtPtr& s : statements) {
+        if (s->kind == StmtKind::Import) return "imports nothing";
+        if (s->kind != StmtKind::Class && s->kind != StmtKind::Function && s->kind != StmtKind::TypeAlias)
+            return "holds only declarations (interfaces, classes, data and value types, enums, functions)";
+    }
+    const auto interfaces = contractInterfaces(statements);
+    for (const auto& [name, c] : interfaces) {
+        std::vector<const FunctionDecl*> methods;
+        std::vector<const VarStmt*> properties;
+        std::string why;
+        std::unordered_set<const ClassStmt*> seen;
+        abstractMembers(*c, interfaces, methods, properties, why, seen);
+        if (!why.empty()) return why;
+    }
+    return "";
+}
+
+std::string contractProxies(const std::vector<StmtPtr>& statements) {
+    const auto interfaces = contractInterfaces(statements);
+    std::string out;
+    // The contract's data classes and value types, named here so that a built program keeps them
+    // (bytecode.cpp, leaveOutUnreachable): one may arrive in a message it never names itself.
+    for (const StmtPtr& s : statements)
+        if (s->kind == StmtKind::Class && (static_cast<const ClassStmt&>(*s).isData || static_cast<const ClassStmt&>(*s).isValue))
+            out += "internal val __scriptKeeps_" + static_cast<const ClassStmt&>(*s).name + " = " + static_cast<const ClassStmt&>(*s).name + "#\n";
+    for (const StmtPtr& s : statements) {
+        if (s->kind != StmtKind::Class || !static_cast<const ClassStmt&>(*s).isInterface) continue;
+        const auto& c = static_cast<const ClassStmt&>(*s);
+        std::vector<const FunctionDecl*> methods;
+        std::vector<const VarStmt*> properties;
+        std::string why;
+        std::unordered_set<const ClassStmt*> seen;
+        abstractMembers(c, interfaces, methods, properties, why, seen);
+        out += "internal class __ScriptProxy_" + c.name + typeParamsSource(c.typeParams, true) + "(internal val __handle : any) : " + c.name +
+               typeParamsSource(c.typeParams, false) + " {\n";
+        for (const FunctionDecl* m : methods) {
+            const bool unit = !m->returnType.present() || m->returnType.name == "unit";
+            const std::string call = "__scriptForward(__handle, \"" + m->name + "\", [" + argumentsSource(*m) + "])";
+            out += "  override fun " + (m->typeParams.empty() ? std::string() : typeParamsSource(m->typeParams, true) + " ") + m->name + parametersSource(*m);
+            out += unit ? " { " + call + " }\n" : " : " + typeSource(m->returnType) + " => " + call + " as " + typeSource(m->returnType) + "\n";
+        }
+        for (const VarStmt* p : properties)
+            out += "  override val " + p->name + " : " + typeSource(p->type) + "\n    get() => __scriptGet(__handle, \"" + p->name + "\") as " +
+                   typeSource(p->type) + "\n";
+        out += "}\n";
+    }
+    return out;
+}
+
+// What makes a script the implementation of the interface it gives: a function per member that
+// calls the script's own, and an object of the interface that calls those.
+std::string contractGives(const std::vector<StmtPtr>& statements, const std::string& gives, std::string& why) {
+    const auto interfaces = contractInterfaces(statements);
+    auto found = interfaces.find(gives);
+    if (found == interfaces.end()) {
+        why = gives + " is not an interface of the contract";
+        return "";
+    }
+    if (!found->second->typeParams.empty()) {
+        why = "a script cannot give " + gives + ", which takes type arguments";
+        return "";
+    }
+    std::vector<const FunctionDecl*> methods;
+    std::vector<const VarStmt*> properties;
+    std::unordered_set<const ClassStmt*> seen;
+    abstractMembers(*found->second, interfaces, methods, properties, why, seen);
+    std::string helpers, object = "internal val __scriptGives : " + gives + " = object : " + gives + " {\n";
+    int n = 0;
+    for (const FunctionDecl* m : methods) {
+        const std::string helper = "__scriptGives" + std::to_string(n++) + "_" + m->name;
+        const bool unit = !m->returnType.present() || m->returnType.name == "unit";
+        const std::string tps = m->typeParams.empty() ? std::string() : typeParamsSource(m->typeParams, true) + " ";
+        const std::string result = unit ? std::string() : " : " + typeSource(m->returnType);
+        helpers += "internal fun " + tps + helper + parametersSource(*m) + result + " => " + m->name + "(" + argumentsSource(*m) + ")\n";
+        object += "  override fun " + tps + m->name + parametersSource(*m) + result + " => " + helper + "(" + argumentsSource(*m) + ")\n";
+    }
+    for (const VarStmt* p : properties) {
+        const std::string helper = "__scriptGives" + std::to_string(n++) + "_" + p->name;
+        helpers += "internal fun " + helper + "() : " + typeSource(p->type) + " => " + p->name + "\n";
+        object += "  override val " + p->name + " : " + typeSource(p->type) + "\n    get() => " + helper + "()\n";
+    }
+    return helpers + object + "}\n";
+}
+
+// The names a script has to declare to give `gives`: its abstract members'.
+std::vector<std::string> contractGivesNames(const std::vector<StmtPtr>& statements, const std::string& gives) {
+    const auto interfaces = contractInterfaces(statements);
+    std::vector<std::string> names;
+    auto found = interfaces.find(gives);
+    if (found == interfaces.end()) return names;
+    std::vector<const FunctionDecl*> methods;
+    std::vector<const VarStmt*> properties;
+    std::string why;
+    std::unordered_set<const ClassStmt*> seen;
+    abstractMembers(*found->second, interfaces, methods, properties, why, seen);
+    for (const FunctionDecl* m : methods) names.push_back(m->name);
+    for (const VarStmt* p : properties) names.push_back(p->name);
+    return names;
+}
+
+const CompilerSession::ScriptContract& CompilerSession::useContract(const std::string& file, const std::string& fromFile, const Node& at) {
+    if (auto known = contracts_.find(file); known != contracts_.end()) return known->second;
+    const std::vector<StmtPtr>* statements = statementsOf(file);
+    std::string text;
+    if (statements == nullptr || !readFile(file, text))
+        throw CompileError(fromFile, at.line, at.col, "a script's contract is a file of its own, which the interface named here is not declared in");
+    if (const std::string problem = contractProblem(*statements); !problem.empty())
+        throw CompileError(fromFile, at.line, at.col,
+                           "the interfaces a script is given or gives are declared in a file of its own, its contract, which both sides compile; " +
+                               fs::path(file).filename().string() + " is the contract here, and a contract " + problem);
+    ScriptContract& contract = contracts_[file];
+    contract.file = file;
+    contract.name = fs::path(file).filename().string();
+    contract.source = text;
+    // The program's own proxies: a module of its folder's names, run before the call that names it.
+    const std::string key = "<script proxies>" + file;
+    const std::string directory = fs::path(file).parent_path().string();
     const int index = static_cast<int>(program.modules.size());
     program.modules.push_back(nullptr);
     modules_[key] = index;
     noteModule(index, key);
+    Namespace* ns = namespaceOf(directory);
+    sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parseSource(contractProxies(*statements), contract.name + " (proxies)")));
+    std::vector<StmtPtr>& proxies = *sources_.back();
+    gather(key, contract.name + " (proxies)", directory, proxies, ns, false);
+    check();
+    program.modules[static_cast<size_t>(index)] = compileStatements(proxies, contract.name + " (proxies)", directory, key, false, ns);
+    contract.proxies = index;
+    return contract;
+}
+
+int CompilerSession::compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
+                                   std::unordered_map<std::string, int>& names) {
+    std::vector<int> modules;
+    return compileScript(source, name, baseDirectory, names, "", "", "", "", modules);
+}
+
+int CompilerSession::compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
+                                   std::unordered_map<std::string, int>& names, const std::string& contractSource,
+                                   const std::string& contractName, const std::string& api, const std::string& gives,
+                                   std::vector<int>& modules) {
+    forgetPaths();
+    const std::string key = "<script>" + name;
     std::unique_ptr<Namespace>& ns = namespaces_[key];
     ns = std::make_unique<Namespace>();
     ns->directory = baseDirectory;
     ns->library = "<program>";
-    sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parseSource(source, name)));
-    std::vector<StmtPtr>& statements = *sources_.back();
-    try {
-        gather(key, name, baseDirectory, statements, ns.get(), false);
+    // One unit of the script's names, compiled after those before it: the contract, then what the
+    // script is given, then the script, then what makes it give its interface.
+    auto unit = [&](const std::string& text, const std::string& unitName, const std::string& unitKey) {
+        const int index = static_cast<int>(program.modules.size());
+        program.modules.push_back(nullptr);
+        modules_[unitKey] = index;
+        noteModule(index, unitKey);
+        sources_.push_back(std::make_unique<std::vector<StmtPtr>>(parseSource(text, unitName)));
+        std::vector<StmtPtr>& statements = *sources_.back();
+        gather(unitKey, unitName, baseDirectory, statements, ns.get(), false);
         check();
-        program.modules[static_cast<size_t>(index)] = compileStatements(statements, name, baseDirectory, key, false, ns.get());
+        program.modules[static_cast<size_t>(index)] = compileStatements(statements, unitName, baseDirectory, unitKey, false, ns.get());
         checkConstAssignments();
+        globalAssignments_.clear();
+        modules.push_back(index);
+        return index;
+    };
+    int entry = -1;
+    std::unordered_set<std::string> contractNames;
+    try {
+        const std::vector<StmtPtr>* contract = nullptr;
+        if (!contractSource.empty()) {
+            unit(contractSource, contractName, "<contract>" + contractName);
+            contract = sources_.back().get();
+            std::string given = contractProxies(*contract);
+            if (!api.empty()) given += "internal val api : " + api + " = __scriptApi() as " + api + "\n";
+            unit(given, contractName + " (proxies)", "<script proxies>" + contractName);
+        }
+        // What the contract and its proxies declared is not the script's own.
+        for (const auto& [n, global] : ns->names) contractNames.insert(n);
+        entry = unit(source, name, key);
+        if (contract != nullptr && !gives.empty()) {
+            // Each member it gives, written in the script: a name missing is told as such, before the
+            // object that calls them is checked against the interface.
+            for (const std::string& member : contractGivesNames(*contract, gives))
+                if (auto found = ns->names.find(member); found == ns->names.end() || !found->second.declared)
+                    throw CompileError(name, 1, 1, "the script gives " + gives + ", whose " + member + " it does not declare");
+            std::string why;
+            const std::string glue = contractGives(*contract, gives, why);
+            if (!why.empty()) throw CompileError(name, 1, 1, why);
+            unit(glue, name + " (as " + gives + ")", "<script gives>" + name);
+        }
     } catch (...) {
         globalAssignments_.clear();
         throw;
     }
-    globalAssignments_.clear();
     for (const auto& [n, global] : ns->names)
-        if (global.declared) names[n] = global.slot;
-    program.entry = index;
-    return index;
+        if (global.declared && contractNames.count(n) == 0) names[n] = global.slot;
+    program.entry = entry;
+    return entry;
 }
 
 // The script named in `Worker("physics.ww")`, looked for next to the file that names it.

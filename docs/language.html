@@ -598,13 +598,13 @@ addButton(widgets)</pre></dd>
 <li><a href="#Regex"><code>Regex</code></a> (21)</li>
 <li><a href="#RegexOption"><code>RegexOption</code></a> (1)</li>
 <li><a href="#Result"><code>Result</code></a> (13)</li>
-<li><a href="#RunningScript"><code>RunningScript</code></a> (6)</li>
+<li><a href="#RunningScript"><code>RunningScript</code></a> (7)</li>
 <li><a href="#RuntimeException"><code>RuntimeException</code></a> (1)</li>
 <li><a href="#Sandbox"><code>Sandbox</code></a> (9)</li>
 <li><a href="#SandboxFiles"><code>SandboxFiles</code></a> (2)</li>
 <li><a href="#SandboxProcess"><code>SandboxProcess</code></a> (8)</li>
 <li><a href="#Sandboxed"><code>Sandboxed</code></a> (1)</li>
-<li><a href="#Script"><code>Script</code></a> (7)</li>
+<li><a href="#Script"><code>Script</code></a> (9)</li>
 <li><a href="#ScriptError"><code>ScriptError</code></a> (1)</li>
 <li><a href="#ScriptException"><code>ScriptException</code></a> (1)</li>
 <li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
@@ -6108,22 +6108,50 @@ print(running.call(&quot;double&quot;, [21]))   // 42
 running.stop()
 </pre>
 <p>A script that does not compile is a ScriptError listing what is wrong and where; one that throws is a ScriptException in the program, with what it threw. A script compiled once can be started any number of times, each run with its own VM. A program built into an executable that uses Script keeps the compiler (and the standard library's source) in its file.</p>
-<p>So far scripts are trusted: they reach what any program reaches. The API a program gives its scripts, safe scripts and limits come next (docs/scripting-plan.html).</p>
+<p>The program and its scripts talk through interfaces (the scripting plan, part 2), declared in a file of their own, the contract, which both compile: it imports nothing and holds only declarations. The script is given an object of one of them, its <code>api</code>, and may give the program one of another, made of its own top-level functions:</p>
+<pre>// door_contract.ww
+interface DoorApi {
+  fun open(door : int)
+  fun isLocked(door : int) : bool
+  fun onTimer(seconds : int, then : () -&gt; unit)
+}
+interface DoorScript { fun onEnter(player : int) }
+</pre>
+<pre>// the program, which imports door_contract.ww
+val script = Script.compile(source, name = &quot;door.ww&quot;, api = DoorApi#, gives = DoorScript#)
+val running = script.start(api = game.doors)          // game.doors is a DoorApi
+val door = running.gives as DoorScript
+door.onEnter(7)                                        // runs the script's onEnter
+</pre>
+<pre>// door.ww, the script: `api` is a DoorApi; it gives DoorScript with this onEnter
+fun onEnter(player : int) {
+  if (!api.isLocked(3)) { api.open(3) }
+  api.onTimer(2) { api.open(4) }
+}
+</pre>
+<p>A script that calls a member the contract does not have, or gives the interface with a function of another type, does not compile. Data (numbers, text, lists, maps, sets, the contract's data classes and value types) is copied; an object of an interface of the contract goes as a handle, an object of that interface on the other side whose calls run on the object itself; a function given goes so too, so a script's lambda is called back in the script. A handle that comes back is the object itself again.</p>
+<p>So far scripts are trusted: they reach what any program reaches. Safe scripts and limits come next (docs/scripting-plan.html).</p>
 </div>
 <div class="entry member" id="Script.name"><code class="sig">val name : string</code><a class="anchor" href="#Script.name">#</a>
 <p>The name it was compiled under, which its errors and stack traces give.</p>
 </div>
-<div class="entry member" id="Script.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null) : Script</code><a class="anchor" href="#Script.compile">#</a>
-<p><code>source</code> compiled, as a file named <code>name</code> in <code>folder</code> (by default where the program runs), which its imports are looked for from; a ScriptError listing each problem, with its line and column, where it does not compile.</p>
+<div class="entry member" id="Script.api"><code class="sig">val api : Class?</code><a class="anchor" href="#Script.api">#</a>
+<p>The interface its <code>api</code> is an object of, where it was compiled with api = ...</p>
 </div>
-<div class="entry member" id="Script.load"><code class="sig">fun load(path : FilePath) : Script throws IOException</code><a class="anchor" href="#Script.load">#</a>
-<p>The file read and compiled, its imports looked for from its folder; a ScriptError where it does not compile, an IOException where it cannot be read.</p>
+<div class="entry member" id="Script.gives"><code class="sig">val gives : Class?</code><a class="anchor" href="#Script.gives">#</a>
+<p>The interface it gives, where it was compiled with gives = ...</p>
+</div>
+<div class="entry member" id="Script.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null, api : Class? = null, gives : Class? = null) : Script throws ScriptError</code><a class="anchor" href="#Script.compile">#</a>
+<p><code>source</code> compiled, as a file named <code>name</code> in <code>folder</code> (by default where the program runs), which its imports are looked for from; a ScriptError listing each problem, with its line and column, where it does not compile. With <code>api</code>, an interface of a contract written here by its name (api = DoorApi#), the script has <code>api</code>, an object of it, and sees the contract's declarations; with <code>gives</code>, another of them, its top-level functions are made an object of that interface, which the program gets from RunningScript.gives.</p>
+</div>
+<div class="entry member" id="Script.load"><code class="sig">fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError</code><a class="anchor" href="#Script.load">#</a>
+<p>The file read and compiled, its imports looked for from its folder, as compile does; a ScriptError where it does not compile, an IOException where it cannot be read.</p>
 </div>
 <div class="entry member" id="Script.names"><code class="sig">val names : List&lt;string&gt;</code><a class="anchor" href="#Script.names">#</a>
 <p>What it declares at its top level, its functions among them, sorted.</p>
 </div>
-<div class="entry member" id="Script.start"><code class="sig">fun start() : RunningScript</code><a class="anchor" href="#Script.start">#</a>
-<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. A ScriptException where the top level throws.</p>
+<div class="entry member" id="Script.start"><code class="sig">fun start(api : any? = null) : RunningScript</code><a class="anchor" href="#Script.start">#</a>
+<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. <code>api</code> is what the script's <code>api</code> stands for: an object of the interface it was compiled with, whose calls from the script run here. A ScriptException where the top level throws.</p>
 </div>
 <div class="entry member" id="Script.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Script.toString">#</a>
 <p>As &quot;Script(door.ww)&quot;.</p>
@@ -6139,6 +6167,9 @@ running.stop()
 </div>
 <div class="entry member" id="RunningScript.stop"><code class="sig">fun stop()</code><a class="anchor" href="#RunningScript.stop">#</a>
 <p>Stops the script, whatever it is doing (at its next call or loop round), and waits until it has ended. A call after that is a ScriptException.</p>
+</div>
+<div class="entry member" id="RunningScript.gives"><code class="sig">val gives : any?</code><a class="anchor" href="#RunningScript.gives">#</a>
+<p>The object of the interface the script gives (compiled with gives = DoorScript#), made of its own top-level functions: its calls run in the script. A ScriptException where it gives none.</p>
 </div>
 <div class="entry member" id="RunningScript.isRunning"><code class="sig">val isRunning : bool</code><a class="anchor" href="#RunningScript.isRunning">#</a>
 <p>True until it ends: stopped, or ended by itself (its top level called exit).</p>
@@ -6158,6 +6189,7 @@ running.stop()
 <div class="entry" id="ScriptException"><code class="sig">class ScriptException(message : string? = null) : RuntimeException(message)</code><a class="anchor" href="#ScriptException">#</a>
 <p>A script that threw, has no function of the name called, or is no longer running.</p>
 </div>
+<h3>What the compiler and the contract's proxies call</h3>
 </section>
 <section class="file" id="file-sequence-ww">
 <h2>sequence.ww</h2>

@@ -2806,6 +2806,9 @@ LeftOut leaveOutUnreachable(Program& program, const std::vector<std::string>& gl
     for (size_t slot = 0; slot < program.globalNames.size(); slot++)
         for (const std::string& name : globalsByName)
             if (program.globalNames[slot] == name) reach.global(static_cast<int>(slot));
+    // A script's proxies (script.cpp): found by their names when a handle arrives.
+    for (size_t slot = 0; slot < program.globalNames.size(); slot++)
+        if (program.globalNames[slot].rfind("__ScriptProxy_", 0) == 0) reach.global(static_cast<int>(slot));
     for (const std::string& name : membersByName) reach.name(name);
     for (FunctionProto* module : program.modules)
         if (module != nullptr) reach.function(module);

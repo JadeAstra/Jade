@@ -154,8 +154,28 @@ public:
     // declares at its top level, which the program calls its functions by.
     int compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
                       std::unordered_map<std::string, int>& names);
+    // The same with a contract (part 2): its source compiled first, among the script's names, then
+    // its proxies and `api` (an object of the interface named `api`, where one is), then the
+    // script, then what makes it give the interface named `gives` (where one is). `modules` gets
+    // each of these modules, in the order they are to run.
+    int compileScript(const std::string& source, const std::string& name, const std::string& baseDirectory,
+                      std::unordered_map<std::string, int>& names, const std::string& contractSource,
+                      const std::string& contractName, const std::string& api, const std::string& gives,
+                      std::vector<int>& modules);
+
+    // A file named as a script's contract (Script.compile(..., api = Door#)): checked to be one
+    // (it imports nothing and holds only declarations), and its proxies compiled into this program
+    // as a module of their own, which the call runs first.
+    struct ScriptContract {
+        std::string file;
+        std::string name;
+        std::string source;
+        int proxies = -1;
+    };
+    const ScriptContract& useContract(const std::string& file, const std::string& fromFile, const Node& at);
 
 private:
+    std::unordered_map<std::string, ScriptContract> contracts_;
     friend class ModuleCompiler;
 
     VM& vm_;
