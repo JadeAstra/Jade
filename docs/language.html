@@ -544,6 +544,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Job"><code>Job</code></a> (15)</li>
 <li><a href="#JobQueue"><code>JobQueue</code></a> (1)</li>
 <li><a href="#Library"><code>Library</code></a> (4)</li>
+<li><a href="#Limits"><code>Limits</code></a> (1)</li>
 <li><a href="#Line"><code>Line</code></a> (4)</li>
 <li><a href="#LineCap"><code>LineCap</code></a> (1)</li>
 <li><a href="#LineIndex"><code>LineIndex</code></a> (12)</li>
@@ -607,6 +608,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#Script"><code>Script</code></a> (9)</li>
 <li><a href="#ScriptError"><code>ScriptError</code></a> (1)</li>
 <li><a href="#ScriptException"><code>ScriptException</code></a> (1)</li>
+<li><a href="#ScriptLimitException"><code>ScriptLimitException</code></a> (1)</li>
 <li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
 <li><a href="#ScriptVM"><code>ScriptVM</code></a> (6)</li>
 <li><a href="#SecurityException"><code>SecurityException</code></a> (1)</li>
@@ -6136,7 +6138,10 @@ fun onEnter(player : int) {
 </pre>
 <p>A member with a body in the contract is a hook a script may leave out (fun onBoard(player : int, ship : int) {}): its own where it declares one, the contract's body where not, so each of a game's mods declares only the hooks it wants. One with no body, it has to declare.</p>
 <p>A script that calls a member the contract does not have, or gives the interface with a function of another type, does not compile. Data (numbers, text, lists, maps, sets, the contract's data classes and value types) is copied; an object of an interface of the contract goes as a handle, an object of that interface on the other side whose calls run on the object itself; a function given goes so too, so a script's lambda is called back in the script. A handle that comes back is the object itself again.</p>
-<p>A script is safe unless compiled <code>trusted</code>: it reaches nothing outside the program but through its api (each try a SecurityException), what it prints goes to a function of the program's or nowhere, and exit ends it alone. Limits on its time and memory come next (the scripting plan).</p>
+<p>A script is safe unless compiled <code>trusted</code>: it reaches nothing outside the program but through its api (each try a SecurityException), what it prints goes to a function of the program's or nowhere, and exit ends it alone.</p>
+<p>What a script may take is given as it starts (Limits): each call's time, or a count of its steps for a game whose machines must agree; its heap; how deep its calls go. A call past one is a ScriptLimitException in the program, and the script goes on for the next:</p>
+<pre>val running = script.start(api = game, limits = Limits(time = 2.milliseconds, memory = 32 * 1024 * 1024))
+</pre>
 </div>
 <div class="entry member" id="Script.name"><code class="sig">val name : string</code><a class="anchor" href="#Script.name">#</a>
 <p>The name it was compiled under, which its errors and stack traces give.</p>
@@ -6156,8 +6161,8 @@ fun onEnter(player : int) {
 <div class="entry member" id="Script.names"><code class="sig">val names : List&lt;string&gt;</code><a class="anchor" href="#Script.names">#</a>
 <p>What it declares at its top level, its functions among them, sorted.</p>
 </div>
-<div class="entry member" id="Script.start"><code class="sig">fun start(api : any? = null, output : ((string) -&gt; unit)? = null) : RunningScript</code><a class="anchor" href="#Script.start">#</a>
-<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. <code>api</code> is what the script's <code>api</code> stands for: an object of the interface it was compiled with, whose calls from the script run here. A ScriptException where the top level throws. <code>output</code> gets each line it prints (on the program's event loop); with none, a safe one's go nowhere and a trusted one's to the program's own output.</p>
+<div class="entry member" id="Script.start"><code class="sig">fun start(api : any? = null, output : ((string) -&gt; unit)? = null, limits : Limits? = null) : RunningScript</code><a class="anchor" href="#Script.start">#</a>
+<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. <code>api</code> is what the script's <code>api</code> stands for: an object of the interface it was compiled with, whose calls from the script run here. A ScriptException where the top level throws. <code>output</code> gets each line it prints (on the program's event loop); with none, a safe one's go nowhere and a trusted one's to the program's own output. <code>limits</code> are what it may take, its top level a call as any (one compiled in a ScriptVM has the ScriptVM's).</p>
 </div>
 <div class="entry member" id="Script.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Script.toString">#</a>
 <p>As &quot;Script(door.ww)&quot;.</p>
@@ -6169,7 +6174,7 @@ fun onEnter(player : int) {
 <p>The script it runs.</p>
 </div>
 <div class="entry member" id="RunningScript.call"><code class="sig">fun call(function : string, arguments : List&lt;any?&gt; = []) : any?</code><a class="anchor" href="#RunningScript.call">#</a>
-<p>Calls the function the script declares under <code>function</code>, with <code>arguments</code> copied over, and gives what it returns, copied back. The program waits until it answers. A ScriptException where the script throws (with what it threw, and where), has no such function, or has ended.</p>
+<p>Calls the function the script declares under <code>function</code>, with <code>arguments</code> copied over, and gives what it returns, copied back. The program waits until it answers. A ScriptException where the script throws (with what it threw, and where), has no such function, or has ended; a ScriptLimitException where it ran past its limits.</p>
 </div>
 <div class="entry member" id="RunningScript.stop"><code class="sig">fun stop()</code><a class="anchor" href="#RunningScript.stop">#</a>
 <p>Stops the script, whatever it is doing (at its next call or loop round), and waits until it has ended. A call after that is a ScriptException.</p>
@@ -6216,6 +6221,22 @@ val earthlings = shared.compile(earthSource, name = &quot;earthlings.ww&quot;, a
 </div>
 <div class="entry" id="ScriptException"><code class="sig">class ScriptException(message : string? = null) : RuntimeException(message)</code><a class="anchor" href="#ScriptException">#</a>
 <p>A script that threw, has no function of the name called, or is no longer running.</p>
+</div>
+<div class="entry" id="ScriptLimitException"><code class="sig">class ScriptLimitException(message : string? = null) : ScriptException(message)</code><a class="anchor" href="#ScriptLimitException">#</a>
+<p>A call of a script's that ran past its limits (Limits): its time, its steps or its heap. The script goes on, for the next call.</p>
+</div>
+<div class="entry" id="Limits"><code class="sig">value Limits(val time : Duration? = null, val steps : int? = null, val memory : int? = null, val depth : int? = null)</code><a class="anchor" href="#Limits">#</a>
+<p>What a script may take (the scripting plan, part 4), each null for no limit:</p>
+<pre>time    each call from the program, the script's own time in it (not the program's, while
+        the script waits on its api): past it, the call ends
+steps   each call from the program, a count of its steps (each time round a loop, each call),
+        the same on every machine, for a game whose machines must agree (replays,
+        multiplayer): a script counted runs with no native code, more slowly
+memory  the script's heap, in bytes: a collection that finds more live ends the call; one
+        large allocation may pass it before a collection sees it
+depth   how deep its calls go: deeper is a StackOverflowError in the script
+</pre>
+<p>The top level, as the script starts, is a call as any. A call that ends by a limit ends at once, no catch or finally of the script's run, and is a ScriptLimitException in the program; the script goes on for the next, what it was in the middle of left as it was. A program whose scripts keep passing their limits stops them (a game: a mod disabled after a few).</p>
 </div>
 <h3>What the compiler and the contract's proxies call</h3>
 </section>

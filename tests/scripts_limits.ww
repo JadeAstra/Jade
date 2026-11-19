@@ -1,0 +1,138 @@
+// Limits on scripts (the scripting plan, part 4): each call's time (the script's own, not the
+// program's), or a count of its steps, the same on every machine; the script's heap; how deep its
+// calls go. A call past its time, steps or heap ends at once, no catch or finally of the script's
+// running, and is a ScriptLimitException in the program; the script goes on for the next call.
+import scripts.limits_contract.*
+
+class Slow : SlowApi {
+  var held : (() -> unit)? = null
+  override fun pause(millis : int) {
+    val start = Instant.now()
+    while (millisSince(start) < millis) { }
+  }
+  override fun later(then : () -> unit) {
+    held = then
+  }
+}
+
+val source = """
+var progress = 0
+var finished = false
+fun spin() : int {
+  while (true) { progress += 1 }
+  return 0
+}
+fun guarded() : string {
+  try {
+    while (true) { progress += 1 }
+  } catch (e : Throwable) {
+    return "caught"
+  } finally {
+    finished = true
+  }
+  return "no"
+}
+suspend fun nap() {
+  Thread.sleep(10.seconds)
+}
+fun fast() : int => 1
+fun seen() : List<bool> => [progress > 0, finished]
+fun count(n : int) : int {
+  var s = 0
+  for (i in 0 ..< n) { s += i }
+  return s
+}
+fun waits() : string {
+  api.pause(300)
+  return "waited"
+}
+fun hoard() : int {
+  val all : open List<Bytes> = []
+  while (true) { all.add(Bytes(1024 * 1024)) }
+  return all.size
+}
+fun down(n : int) : int => n == 0 ? 0 : 1 + down(n - 1)
+fun giveLater() {
+  api.later { while (true) { progress += 1 } }
+}
+fun reached() : int => progress
+"""
+
+fun failed(block : () -> any?) : string {
+  try {
+    block()
+    return "no error"
+  } catch (e : ScriptLimitException) {
+    return "limit: ${e.message}"
+  } catch (e : ScriptException) {
+    return "script: ${e.message!!.lines()[0]}"
+  }
+}
+fun millisSince(start : Instant) : int => (Instant.now().epochNanoseconds - start.epochNanoseconds) / 1000000
+
+// ---- Time ----
+val timed = Script.compile(source, name = "timed.ww", api = SlowApi#).start(api = Slow(), limits = Limits(time = 50.milliseconds))
+print(failed { timed.call("spin") })                      // expect: limit: timed.ww: the call ran past its time limit of 50 ms
+print(timed.isRunning, timed.call("fast"))                // expect: true 1
+// No catch of the script's takes it, and no finally runs.
+print(failed { timed.call("guarded") })                   // expect: limit: timed.ww: the call ran past its time limit of 50 ms
+print(timed.call("seen"))                                 // expect: [true, false]
+// A sleep is woken.
+val napped = Instant.now()
+print(failed { timed.call("nap") }, millisSince(napped) < 5000)   // expect: limit: timed.ww: the call ran past its time limit of 50 ms true
+// The program's time, while the script waits on its api, is not the script's.
+print(timed.call("waits"))                                // expect: waited
+// The top level is a call as any.
+print(failed { Script.compile("while (true) { }", name = "top.ww").start(limits = Limits(time = 50.milliseconds)) })
+// expect: limit: top.ww: the call ran past its time limit of 50 ms
+// A function the script gave the program, called back past its time.
+val slow = Slow()
+val giver = Script.compile(source, name = "giver.ww", api = SlowApi#).start(api = slow, limits = Limits(time = 50.milliseconds))
+giver.call("giveLater")
+try { slow.held!!() } catch (e : ScriptLimitException) { print("callback:", e.message) }
+// expect: callback: the call ran past its time limit of 50 ms
+print(giver.call("fast"))                                 // expect: 1
+
+// ---- Steps: the same count on every machine, native code or none, however the collector runs ----
+val counted = Script.compile(source, name = "counted.ww", api = SlowApi#).start(api = Slow(), limits = Limits(steps = 1000))
+print(counted.call("count", [100]))                       // expect: 4950
+print(failed { counted.call("count", [100000]) })         // expect: limit: counted.ww: the call ran past its limit of 1000 steps
+print(failed { counted.call("spin") })                    // expect: limit: counted.ww: the call ran past its limit of 1000 steps
+print(counted.call("reached"))                            // expect: 1001
+print(failed { counted.call("spin") }, counted.call("reached"))   // expect: limit: counted.ww: the call ran past its limit of 1000 steps 2002
+
+// ---- Memory ----
+val hoarder = Script.compile(source, name = "hoarder.ww", api = SlowApi#).start(api = Slow(), limits = Limits(memory = 64 * 1024 * 1024))
+print(failed { hoarder.call("hoard") })                   // expect: limit: hoarder.ww: the script's heap grew past its limit of 64 MB
+print(hoarder.call("fast"), hoarder.call("count", [10]))  // expect: 1 45
+
+// ---- Depth: a StackOverflowError in the script, which it may catch ----
+val deep = Script.compile(source, name = "deep.ww", api = SlowApi#).start(api = Slow(), limits = Limits(depth = 200))
+print(deep.call("down", [100]))                           // expect: 100
+print(failed { deep.call("down", [1000]) })               // expect: script: deep.ww: StackOverflowError: stack overflow
+
+// ---- A ScriptVM's limits are its scripts' ----
+val shared = ScriptVM(limits = Limits(time = 50.milliseconds))
+val looping = shared.compile(source, name = "looping.ww", api = SlowApi#).start(api = Slow())
+val other = shared.compile("fun hi() : string => \"hi\"", name = "other.ww").start()
+print(failed { looping.call("spin") }, other.call("hi"))  // expect: limit: looping.ww: the call ran past its time limit of 50 ms hi
+try { shared.compile("fun f() : int => 1", name = "own.ww").start(limits = Limits(depth = 10)) } catch (e : IllegalArgumentException) { print(e.message) }
+// expect: own.ww runs in a ScriptVM, whose limits are its scripts': give them to ScriptVM(limits = ...)
+shared.stop()
+
+// ---- What a limit may be ----
+for (bad in [{ Limits(time = 0.milliseconds) }, { Limits(steps = -1) }, { Limits(memory = 0) }, { Limits(depth = 0) }]) {
+  try { bad() } catch (e : IllegalArgumentException) { print(e.message) }
+}
+// expect: a script's time limit is more than nothing, not 0s
+// expect: a script's steps cannot be fewer than none, not -1
+// expect: a script's memory limit is more than nothing, not 0
+// expect: a script's depth is a call or more, not 0
+
+// Scripts stopped by their limits again and again, and then stopped, leave nothing behind.
+for (i in 0 ..< 10) {
+  val again = Script.compile("fun spin() : int {\n  var n = 0\n  while (true) { n += 1 }\n  return n\n}", name = "again.ww").start(limits = Limits(time = 10.milliseconds))
+  failed { again.call("spin") }
+  again.stop()
+}
+print("done")                                             // expect: done

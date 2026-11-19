@@ -1711,7 +1711,7 @@ const std::vector<std::string>& VM::globalsFoundByName() {
         "RuntimeException", "ArithmeticException", "IndexOutOfBoundsException", "NullPointerException", "ClassCastException",
         "IllegalArgumentException", "NumberFormatException", "IllegalStateException", "UnsupportedOperationException",
         "NoSuchElementException", "ConcurrentModificationException", "AssertionError", "StackOverflowError", "OutOfMemoryError",
-        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "CancellationException", "SecurityException",
+        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "CancellationException", "SecurityException", "ScriptLimitException",
         "MapEntry"};
     return names;
 }
@@ -6382,6 +6382,11 @@ void VM::run(int baseFrame) {
     // The frame that was running knows where it was: each instruction, as it starts, writes down
     // where it is (M6.5 part 4), so that the loop's own `ip` can stay in a register.
     auto handled = [&](WwThrow& thrown) {
+        if (thrown.limit) {  // a script's limit: no catch or finally of this run takes it
+            while (!handlers_.empty() && handlers_.back().frameIndex >= baseFrame) handlers_.pop_back();
+            unwindTo(baseFrame);
+            return false;
+        }
         if (!thrown.hasTrace && handlers_.empty()) {
             thrown.trace = captureTrace();
             thrown.hasTrace = true;
@@ -7267,7 +7272,7 @@ void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::uniq
     b->f = &f;
     b->head = head;
     b->which = which;
-    if (takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled()) {  // none made: as made, of no regions
+    if (takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled() || nativeOff_) {  // none made: as made, of no regions
         if (which == kWholeFunction) publishFunction(this, this, f, {});
         else publishLoop(this, this, f, which, {});
         return;
@@ -7306,7 +7311,7 @@ void VM::makeRegionsFor(FunctionProto& f, uint32_t head, size_t which, std::uniq
 bool VM::remakeCounted(FunctionProto& f, const FunctionProto::NativeRegion& region, const Value* base, const Value* top) {
     std::unique_lock<std::mutex> states(nativeStates);
     RegionCounts* const counted = region.counts;
-    if (counted == nullptr || counted->asked || takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled()) return false;
+    if (counted == nullptr || counted->asked || takeNativeSeen == nullptr || makeNativeRegions == nullptr || !native::enabled() || nativeOff_) return false;
     // (Made from its start: the loop's head, its first way in, whichever way it left by.)
     uint32_t head = UINT32_MAX;
     if (const auto* now = f.regionsNow.load(std::memory_order_acquire))
@@ -8467,6 +8472,16 @@ void VM::collectGarbage() {
     sweep();
     bytesAllocated_ = liveBytes_;
     nextGC_ = gcStress_ ? 0 : std::max(liveBytes_ * 2, kMinHeap);
+    // A script's heap limit (limitMemory): passed where what is live is past it; else the next
+    // collection comes before the heap could be far past it.
+    if (memoryLimit_ > 0) {
+        if (liveBytes_ > memoryLimit_) {
+            const size_t m = memoryLimit_;
+            limitPassed("the script's heap grew past its limit of " +
+                        (m % (1024 * 1024) == 0 ? std::to_string(m >> 20) + " MB" : m % 1024 == 0 ? std::to_string(m >> 10) + " KB" : std::to_string(m) + " bytes"));
+        }
+        nextGC_ = std::min(nextGC_, std::max(memoryLimit_, liveBytes_ + memoryLimit_ / 4));
+    }
 }
 
 void VM::markContext(const Context& context) {

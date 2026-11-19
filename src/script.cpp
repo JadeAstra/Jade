@@ -32,6 +32,7 @@
 #include <ostream>
 #include <streambuf>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -82,7 +83,18 @@ struct Request {
     std::shared_ptr<Message> arguments;
     std::shared_ptr<Message> result;
     std::string failure;  // what was thrown, as text
+    bool limited = false;  // what failed it was a limit of the script's (part 4)
     bool done = false;
+};
+
+// What a script may take (the scripting plan, part 4): each call from the program its time, in
+// nanoseconds, and its count of steps (-1: none); the VM its heap, in bytes, and its depth, in
+// calls (0: none).
+struct Limits {
+    int64_t time = 0;
+    int64_t steps = -1;
+    int64_t memory = 0;
+    int depth = 0;
 };
 
 // A VM scripts run in, and its thread. Everything in it is guarded by the mutex, so that either
@@ -103,6 +115,8 @@ struct ScriptHost {
     int64_t output = -1;
     std::unique_ptr<std::streambuf> outputBuffer;
     std::unique_ptr<std::ostream> outputStream;
+    Limits limits;
+    int calls = 0;  // the program's calls being served now, one inside another (the script's thread's)
 };
 
 // A script started, in a host.
@@ -112,6 +126,7 @@ struct ScriptRun {
     bool ready = false;   // its top level has run: it takes calls
     bool ended = false;   // it, or its host, has ended (a ScriptVM's: it was stopped alone)
     std::string failure;  // why it ended, where it failed
+    bool limited = false;  // its top level failed by a limit
     std::shared_ptr<Message> api;  // the program's object for the script's `api`
 };
 
@@ -345,6 +360,141 @@ Value read(VM& vm, const std::shared_ptr<ScriptRun>& run, Side side, const Messa
     return readMessage(vm, message);
 }
 
+// ---- Limits (the scripting plan, part 4) ----
+//
+// A call's time is kept by one thread for the whole process, which tells a script's VM when its
+// limit has passed (VM::limitPassed). Its clock runs while the script works on the call, not
+// while it waits for the program to answer it: the program's time is not the script's.
+
+using Steady = std::chrono::steady_clock;
+
+// A length of time as a limit says it: "20 ms", "1.5 ms", "300 µs".
+std::string timeText(int64_t nanos) {
+    if (nanos % 1000000 == 0) return std::to_string(nanos / 1000000) + " ms";
+    if (nanos >= 1000000) {
+        char text[32];
+        std::snprintf(text, sizeof text, "%.3g ms", static_cast<double>(nanos) / 1e6);
+        return text;
+    }
+    if (nanos % 1000 == 0) return std::to_string(nanos / 1000) + " \xC2\xB5s";
+    return std::to_string(nanos) + " ns";
+}
+
+class Watchdog {
+public:
+    static Watchdog& the() {
+        static Watchdog* const made = new Watchdog;  // never freed: its thread runs as long as the process
+        return *made;
+    }
+
+    // The call `host` is serving now has `nanos` of its own time.
+    void arm(const ScriptHost* host, VM* vm, int64_t nanos) {
+        std::lock_guard<std::mutex> hold(mutex_);
+        if (!started_) {
+            started_ = true;
+            std::thread([this] { run(); }).detach();
+        }
+        clocks_[host] = Clock{vm, nanos, nanos, Steady::now(), true, false};
+        changed_.notify_all();
+    }
+    // The script waits for the program meanwhile: its clock stopped, and started again.
+    void pause(const ScriptHost* host) {
+        std::lock_guard<std::mutex> hold(mutex_);
+        auto found = clocks_.find(host);
+        if (found == clocks_.end() || !found->second.running) return;
+        Clock& c = found->second;
+        c.left -= std::chrono::duration_cast<std::chrono::nanoseconds>(Steady::now() - c.since).count();
+        c.running = false;
+    }
+    void resume(const ScriptHost* host) {
+        std::lock_guard<std::mutex> hold(mutex_);
+        auto found = clocks_.find(host);
+        if (found == clocks_.end() || found->second.running) return;
+        found->second.since = Steady::now();
+        found->second.running = true;
+        changed_.notify_all();
+    }
+    // The call has ended: its VM is no longer told anything.
+    void disarm(const ScriptHost* host) {
+        std::lock_guard<std::mutex> hold(mutex_);
+        clocks_.erase(host);
+    }
+
+private:
+    struct Clock {
+        VM* vm;
+        int64_t given;
+        int64_t left;
+        Steady::time_point since;
+        bool running;
+        bool fired;
+    };
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::unordered_map<const ScriptHost*, Clock> clocks_;
+    bool started_ = false;
+
+    void run() {
+        std::unique_lock<std::mutex> hold(mutex_);
+        for (;;) {
+            const Steady::time_point now = Steady::now();
+            Steady::time_point next = Steady::time_point::max();
+            for (auto& [host, c] : clocks_) {
+                if (!c.running || c.fired) continue;
+                const Steady::time_point due = c.since + std::chrono::nanoseconds(c.left);
+                if (due <= now) {
+                    c.fired = true;
+                    c.vm->limitPassed("the call ran past its time limit of " + timeText(c.given));
+                } else {
+                    next = std::min(next, due);
+                }
+            }
+            if (next == Steady::time_point::max()) changed_.wait(hold);
+            else changed_.wait_until(hold, next);
+        }
+    }
+};
+
+// The limits of a call from the program as the script serves it: of the outermost one (what the
+// program asks while the script waits on it is within that call), its steps counted and its
+// time kept; as it ends, its limit forgotten.
+class CallLimits {
+public:
+    CallLimits(VM& vm, ScriptHost& host) : vm_(vm), host_(host) {
+        if (host_.calls++ != 0) return;
+        if (host_.limits.steps >= 0) vm_.countSteps(host_.limits.steps);
+        if (host_.limits.time > 0) Watchdog::the().arm(&host_, &vm_, host_.limits.time);
+    }
+    ~CallLimits() {
+        if (--host_.calls != 0) return;
+        if (host_.limits.time > 0) Watchdog::the().disarm(&host_);
+        vm_.clearLimit();
+    }
+    CallLimits(const CallLimits&) = delete;
+    CallLimits& operator=(const CallLimits&) = delete;
+
+private:
+    VM& vm_;
+    ScriptHost& host_;
+};
+
+// A script's clock stopped while it waits on the program (within a call that keeps time).
+class ClockPaused {
+public:
+    explicit ClockPaused(const ScriptHost& host, bool on) : host_(host), on_(on && host.limits.time > 0 && host.calls > 0) {
+        if (on_) Watchdog::the().pause(&host_);
+    }
+    ~ClockPaused() {
+        if (on_) Watchdog::the().resume(&host_);
+    }
+    ClockPaused(const ClockPaused&) = delete;
+    ClockPaused& operator=(const ClockPaused&) = delete;
+
+private:
+    const ScriptHost& host_;
+    bool on_;
+};
+
 // ---- Requests ----
 
 // Does one request, on the side that owns what it calls (`me`), with that VM's lock held.
@@ -353,6 +503,9 @@ void serve(VM& vm, Side me, const std::shared_ptr<Request>& request) {
     std::shared_ptr<Message> result;
     std::string failure;
     bool stopped = false;
+    bool limited = false;
+    std::optional<CallLimits> limits;
+    if (me == kScript) limits.emplace(vm, *run->host);
     try {
         const Value arguments = request->arguments != nullptr ? read(vm, run, me, *request->arguments) : Value::null();
         TempRoot keepArguments(vm, arguments);
@@ -397,7 +550,8 @@ void serve(VM& vm, Side me, const std::shared_ptr<Request>& request) {
         TempRoot keepAnswer(vm, answered);
         if (failure.empty()) result = write(vm, run, me, answered);
     } catch (WwThrow& thrown) {
-        failure = describe(vm, thrown);
+        limited = thrown.limit;
+        failure = limited ? vm.limitText() : describe(vm, thrown);
     } catch (const WorkerStop&) {
         failure = "the script was stopped";
         stopped = true;
@@ -407,6 +561,7 @@ void serve(VM& vm, Side me, const std::shared_ptr<Request>& request) {
         std::lock_guard<std::mutex> hold(host.mutex);
         request->result = std::move(result);
         request->failure = std::move(failure);
+        request->limited = limited;
         request->done = true;
     }
     host.changed.notify_all();
@@ -448,6 +603,7 @@ void waitServing(VM& vm, const std::shared_ptr<ScriptHost>& host, Side me, Finis
     for (;;) {
         bool serveNow = false;
         {
+            ClockPaused paused(*host, me == kScript);  // the program's time is not the script's
             LockReleased released(vm);
             std::unique_lock<std::mutex> hold(host->mutex);
             host->changed.wait(hold, [&] { return finished() || host->ended || !host->asked[me].empty(); });
@@ -468,6 +624,14 @@ Value answerPair(VM& vm, bool ok, Value v) {
     vm.listAdd(pair, Value::boolean(ok));
     vm.listAdd(pair, v);
     return Value::object(pair);
+}
+
+// What failed, as a list: [false, what went wrong, as text, whether a limit of the script's
+// failed it].
+Value failurePair(VM& vm, const std::string& failure, bool limited) {
+    const Value pair = answerPair(vm, false, vm.str(failure));
+    vm.listAdd(asList(pair), Value::boolean(limited));
+    return pair;
 }
 
 // Why a run is not there to ask, as text.
@@ -491,13 +655,15 @@ Value request(VM& vm, Side me, const std::shared_ptr<Request>& asked) {
     }
     waitServing(vm, host, me, [&] { return asked->done; });
     std::string failure;
+    bool limited = false;
     {
         std::lock_guard<std::mutex> hold(host->mutex);
         failure = asked->done ? asked->failure
                               : "the " + std::string(me == kProgram ? "script" : "program") + " ended before it answered" +
                                     (host->failure.empty() ? std::string() : ": " + host->failure);
+        limited = asked->done && asked->limited;
     }
-    if (!failure.empty()) return answerPair(vm, false, vm.str(failure));
+    if (!failure.empty()) return failurePair(vm, failure, limited);
     // What this side cannot make again (a data class it has not) fails as the call.
     try {
         return answerPair(vm, true, asked->result != nullptr ? read(vm, run, me, *asked->result) : Value::null());
@@ -524,7 +690,10 @@ Value Ways::forwardCall(VM& vm, Value handleValue, Request::Kind kind, const std
     // A function value's call answers itself, or throws where the other side threw.
     if (kind == Request::Function) {
         ObjList* pair = asList(answer);
-        if (!vm.listGet(pair, 0).truthy()) throw vm.runtimeError(Thrown::IllegalStateException, vm.stringify(vm.listGet(pair, 1)));
+        if (!vm.listGet(pair, 0).truthy()) {
+            const bool limited = pair->size() > 2 && vm.listGet(pair, 2).truthy();  // a function of the script's, run past its limit
+            throw vm.runtimeError(limited ? Thrown::ScriptLimitException : Thrown::IllegalStateException, vm.stringify(vm.listGet(pair, 1)));
+        }
         return vm.listGet(pair, 1);
     }
     return answer;
@@ -669,6 +838,11 @@ void routeOutput(VM& vm, const std::shared_ptr<ScriptHost>& host, bool safe) {
 void prepare(VM& vm, const std::shared_ptr<ScriptHost>& host, bool safe) {
     if (safe) makeSafe(vm);
     routeOutput(vm, host, safe);
+    // Its limits that are the VM's; steps counted, the same on every machine, with no native code.
+    const Limits& limits = host->limits;
+    if (limits.memory > 0) vm.limitMemory(static_cast<size_t>(limits.memory));
+    if (limits.depth > 0) vm.limitDepth(limits.depth);
+    if (limits.steps >= 0) vm.nativeCodeOff();
     if (!vm.hasBuiltin("__jade"))
         vm.absentGlobals["__jade"] = safe ? VM::Absent{Thrown::SecurityException, "a safe script has no windows, screen or clipboard: it draws through what its api gives it"}
                                           : VM::Absent{Thrown::IllegalStateException, "a script has no windows, screen or clipboard, as a worker has none: the program draws"};
@@ -693,10 +867,15 @@ std::string runTopLevel(VM& vm, const std::shared_ptr<ScriptRun>& run) {
         starting[&vm] = run;
     }
     std::string failure;
-    try {
-        for (int module : run->compiled->modules) vm.runModule(module);
-    } catch (WwThrow& thrown) {
-        failure = describe(vm, thrown);
+    bool limited = false;
+    {
+        CallLimits limits(vm, *run->host);  // the top level is the first call, and limited as one
+        try {
+            for (int module : run->compiled->modules) vm.runModule(module);
+        } catch (WwThrow& thrown) {
+            limited = thrown.limit;
+            failure = limited ? vm.limitText() : describe(vm, thrown);
+        }
     }
     ScriptHost& host = *run->host;
     {
@@ -705,6 +884,7 @@ std::string runTopLevel(VM& vm, const std::shared_ptr<ScriptRun>& run) {
         else {
             run->ended = true;
             run->failure = failure;
+            run->limited = limited;
         }
     }
     host.changed.notify_all();
@@ -740,6 +920,7 @@ void ownMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<ScriptRun> run, s
     try {
         readProgram(*program, *vm, compiled->image, true);
         vm->load(*program);
+        vm->runModule(0);  // the standard library's top level, before the script's: not counted in its limits
         vm->jobStarted();  // it waits for calls until it is stopped
         waiting = true;
         {
@@ -961,6 +1142,27 @@ bool waitUp(VM& vm, const std::shared_ptr<ScriptHost>& host) {
     return host->up && !host->ended;
 }
 
+// A script's Limits, as script.ww's Limits gives them: [time in nanoseconds, steps, memory in
+// bytes, depth], each null for none; or null for none at all.
+Limits limitsOf(VM& vm, Value v) {
+    Limits limits;
+    if (v.isNull()) return limits;
+    if (!v.isObjType(ObjType::List) || asList(v)->size() != 4) throw vm.runtimeError(Thrown::IllegalArgumentException, "not a script's limits");
+    auto at = [&](size_t i, const char* what) -> int64_t {
+        const Value item = vm.listGet(asList(v), i);
+        if (item.isNull()) return -1;
+        const int64_t n = vm.toInt(item, what);
+        if (n < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, std::string("not a script's ") + what);  // Limits checks them
+        return n;
+    };
+    limits.time = std::max<int64_t>(at(0, "time"), 0);
+    limits.steps = at(1, "steps");
+    limits.memory = std::max<int64_t>(at(2, "memory"), 0);
+    const int64_t depth = at(3, "depth");
+    limits.depth = depth > 0 ? static_cast<int>(std::min<int64_t>(depth, ObjFiber::kMaxFrames)) : 0;
+    return limits;
+}
+
 }  // namespace
 
 void registerScriptsHere(VM& vm) {
@@ -969,13 +1171,14 @@ void registerScriptsHere(VM& vm) {
         script->statics.set(vm.intern(name), Value::object(vm.alloc<ObjNative>(std::string("script.") + name, minArgs, maxArgs, fn)));
     };
 
-    // vm(): a ScriptVM, its thread started and its VM made, the standard library loaded.
-    // vm(safe, output): a ScriptVM, its thread started and its VM made (safe or trusted, as one), the
-    // standard library loaded; `output` the program's function for what its scripts print, if any.
-    def("vm", 2, 2, [](VM& vm, int, Value* args) -> Value {
+    // vm(safe, output, limits): a ScriptVM, its thread started and its VM made (safe or trusted, as
+    // one), the standard library loaded; `output` the program's function for what its scripts
+    // print, if any; `limits` its scripts' (limitsOf), each call's and the VM's.
+    def("vm", 3, 3, [](VM& vm, int, Value* args) -> Value {
         auto host = std::make_shared<ScriptHost>();
         host->shared = true;
         host->safe = args[0].truthy();
+        host->limits = limitsOf(vm, args[2]);
         host->output = keepOutput(vm, args[1], host.get());
         host->sides[kProgram] = &vm;
         vm.scriptStarted();
@@ -1052,16 +1255,19 @@ void registerScriptsHere(VM& vm) {
         return Value::object(list);
     });
 
-    // start(script, api): the script running, its top level run; or, where that failed, what it
-    // threw, as text. `api` is what the script's `api` stands for, if anything. A script of its
-    // own gets a VM of its own (with `output` the program's function for what it prints, if any);
-    // one compiled in a ScriptVM starts there, once.
-    def("start", 3, 3, [](VM& vm, int, Value* args) -> Value {
+    // start(script, api, output, limits): the script running, its top level run; or, where that
+    // failed, [false, what it threw as text, whether a limit failed it]. `api` is what the
+    // script's `api` stands for, if anything. A script of its own gets a VM of its own (with
+    // `output` the program's function for what it prints, and `limits` what it may take, if
+    // any); one compiled in a ScriptVM starts there, once, with the ScriptVM's.
+    def("start", 4, 4, [](VM& vm, int, Value* args) -> Value {
         std::shared_ptr<const CompiledScript> compiled = compiledOf(vm, args[0]);
         auto run = std::make_shared<ScriptRun>();
         run->compiled = compiled;
         std::shared_ptr<ScriptHost> host;
         if (compiled->image.empty()) {
+            if (!args[3].isNull())
+                throw vm.runtimeError(Thrown::IllegalArgumentException, compiled->name + " runs in a ScriptVM, whose limits are its scripts': give them to ScriptVM(limits = ...)");
             host = compiled->in->host;
             {
                 std::lock_guard<std::mutex> hold(host->mutex);
@@ -1079,6 +1285,7 @@ void registerScriptsHere(VM& vm) {
             if (there == nullptr) throw vm.runtimeError(Thrown::IllegalStateException, "the ScriptVM has been stopped");
         } else {
             host = std::make_shared<ScriptHost>();
+            host->limits = limitsOf(vm, args[3]);
             host->sides[kProgram] = &vm;
             host->output = keepOutput(vm, args[2], host.get());
             run->host = host;
@@ -1089,13 +1296,15 @@ void registerScriptsHere(VM& vm) {
         // Its top level may call the program's api: served here while this waits.
         waitServing(vm, host, kProgram, [&] { return run->ready || run->ended; });
         std::string failure;
+        bool limited = false;
         {
             std::lock_guard<std::mutex> hold(host->mutex);
             if (!run->ready) failure = !run->failure.empty() ? run->failure : host->failure.empty() ? "the script ended before its top level had run" : host->failure;
+            limited = run->limited;
         }
         if (!failure.empty()) {
             forgetHandles(vm, run.get());
-            return vm.str(failure);
+            return failurePair(vm, failure, limited);
         }
         auto* kept = new std::shared_ptr<ScriptRun>(run);
         return Value::object(vm.alloc<ObjResource>("running script", reinterpret_cast<int64_t>(kept), &releaseRun));

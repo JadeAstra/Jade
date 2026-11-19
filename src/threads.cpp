@@ -159,9 +159,10 @@ bool Context::grow(const Value* top, int wanted) {
 }
 
 bool VM::growContext(const Value* top, int frames) {
+    if (depthLimit_ > 0 && frames > depthLimit_) return false;  // a script's limit (limitDepth)
     if (!context_->growable || !context_->grow(top, frames)) return false;
     stackEnd_ = context_->stackEnd;
-    frameLimit_ = context_->frameLimit;
+    frameLimit_ = depthLimit_ > 0 ? std::min(context_->frameLimit, depthLimit_) : context_->frameLimit;
     return true;
 }
 
@@ -226,7 +227,7 @@ void VM::loadContext(Context* c) {
     frames_ = c->frames;
     frameCount_ = c->frameCount;
     maxFrames_ = c->maxFrames;
-    frameLimit_ = c->frameLimit;
+    frameLimit_ = depthLimit_ > 0 ? std::min(c->frameLimit, depthLimit_) : c->frameLimit;
     handlers_ = std::move(c->handlers);
     c->handlers.clear();
     openUpvalues_ = c->openUpvalues;
@@ -279,7 +280,7 @@ void VM::acquireLock(ThreadState* me) {
     attention_ = threadStress_ && threads_.size() > 1;
     // And what other threads asked of this one meanwhile, asked about once the flag is set, as a
     // safe point does: a stop, a time limit, words to write.
-    if (stopRequested_.load() || timeLimitPassed_.load() || wordsWaiting_.load()) attention_ = true;
+    if (wantsAttention() || wordsWaiting_.load()) attention_ = true;
 }
 
 // Lets another thread have the lock, and takes it back afterwards.
@@ -303,8 +304,22 @@ void VM::yieldLock() {
 }
 
 void VM::safePoint() {
+    // A step counted with nothing else to do (the most of them, in a script whose steps are
+    // counted): counted, and on, the flag left up.
+    if (stepsLeft_ > 0 && !stopRequested_.load(std::memory_order_relaxed) && !timeLimitPassed_.load(std::memory_order_relaxed) &&
+        bytesAllocated_ <= nextGC_ && lockWaiters_.load(std::memory_order_relaxed) == 0 && !wordsWaiting_.load(std::memory_order_relaxed)) {
+        stepsLeft_--;
+        return;
+    }
     if (stopRequested_.load(std::memory_order_relaxed)) throw WorkerStop{};
+    if (stepsLeft_ >= 0 && --stepsLeft_ < 0) limitPassed("the call ran past its limit of " + std::to_string(stepsGiven_) + " steps");
     if (timeLimitPassed_.load(std::memory_order_relaxed) && keyCalls_ == 0) {
+        // A script's limit: thrown here and at every safe point after, till its call ends.
+        if (limitHit_.load(std::memory_order_relaxed)) {
+            WwThrow thrown{Value::null()};
+            thrown.limit = true;
+            throw thrown;
+        }
         timeLimitPassed_ = false;
         throw runtimeError(Thrown::AssertionError, "the test ran longer than its time limit, " + std::to_string(timeLimitMillis_.load()) + " ms");
     }
@@ -319,7 +334,7 @@ void VM::safePoint() {
             // between) is asked about again once the flag is down: put up between, it would be
             // lost, and a loop in native code, which looks only at the flag, would never leave
             // (workers.ww's worker that spins, stopped by terminate(), under GC stress).
-            if (stopRequested_.load() || timeLimitPassed_.load()) attention_ = true;
+            if (wantsAttention()) attention_ = true;
         }
         // (After the flag is put down: words left waiting after this put it up again.)
         if (wordsWaiting_.load()) writeWaitingWords();
@@ -330,6 +345,45 @@ void VM::safePoint() {
 void VM::wakeForTimeLimit() {
     unpark(&mainThread_);
     wakeLoop();
+}
+
+void VM::limitPassed(const std::string& what) {
+    {
+        std::lock_guard<std::mutex> hold(limitMutex_);
+        if (limitHit_.load()) return;  // the first to pass is the one the call says
+        limitText_ = what;
+        limitHit_ = true;
+    }
+    timeLimitPassed(0);  // the way a test's time limit is acted on: at a safe point, or waking a wait
+}
+
+void VM::clearLimit() {
+    std::lock_guard<std::mutex> hold(limitMutex_);
+    limitHit_ = false;
+    limitText_.clear();
+    clearTimeLimit();
+    stepsLeft_ = -1;
+}
+
+std::string VM::limitText() {
+    std::lock_guard<std::mutex> hold(limitMutex_);
+    return limitText_;
+}
+
+void VM::countSteps(int64_t steps) {
+    stepsLeft_ = steps;
+    stepsGiven_ = steps;
+    if (steps >= 0) attention_ = true;
+}
+
+void VM::limitMemory(size_t bytes) {
+    memoryLimit_ = bytes;
+    if (bytes > 0) nextGC_ = std::min(nextGC_, bytes);
+}
+
+void VM::limitDepth(int frames) {
+    depthLimit_ = frames;
+    if (frames > 0) frameLimit_ = std::min(frameLimit_, frames);
 }
 
 void VM::requestStop() {

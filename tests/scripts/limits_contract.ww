@@ -1,0 +1,6 @@
+// The contract of tests/scripts_limits.ww: an api that takes the program's time, and a function a
+// script gives the program to call back.
+interface SlowApi {
+  fun pause(millis : int)
+  fun later(then : () -> unit)
+}

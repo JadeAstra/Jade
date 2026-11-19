@@ -33,6 +33,9 @@ struct WwThrow {
     // Call stack at the throw site, innermost first. Only captured when nothing will catch it.
     std::vector<std::string> trace{};
     bool hasTrace = false;
+    // A script's limit passed (VM::limitPassed): it unwinds every frame of the run that has it,
+    // taken by no catch and running no finally; its value is null.
+    bool limit = false;
 };
 
 // Raised by the exit() builtin.
@@ -271,7 +274,7 @@ enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
     IllegalArgumentException, NumberFormatException, IllegalStateException, UnsupportedOperationException,
     NoSuchElementException, ConcurrentModificationException, AssertionError, StackOverflowError, OutOfMemoryError,
-    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, SecurityException, Count_
+    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, SecurityException, ScriptLimitException, Count_
 };
 
 // The instructions as functions (M6.7): built with Clang, each instruction of instructions.inc is
@@ -731,6 +734,27 @@ public:
     Value globalAt(int slot) const {
         return slot >= 0 && static_cast<size_t>(slot) < globals_.size() ? globals_[static_cast<size_t>(slot)] : Value::null();
     }
+    // ---- A script's limits (script.cpp; the scripting plan, part 4) ----
+    // A limit passed (from any thread): the next safe point throws what no catch or finally of
+    // the script's takes (WwThrow::limit), and so does every one after it, until clearLimit() as
+    // the call it limits ends; a wait (a sleep, a lock) is woken to throw it. `what` says which.
+    void limitPassed(const std::string& what);
+    void clearLimit();
+    bool limitWasPassed() const { return limitHit_.load(); }
+    std::string limitText();
+    // A count of safe points (each time round a loop, each call) the call now starting may pass;
+    // -1 for none. Counted, a safe point is passed at every one, so that the count is the same
+    // on every machine: with native code off (nativeCodeOff), which leaves its loops only now
+    // and then.
+    void countSteps(int64_t steps);
+    // The heap's size past which a collection finds the limit passed (0: none). Collections
+    // come before it is reached.
+    void limitMemory(size_t bytes);
+    // Calls deeper than `frames` are a StackOverflowError (0: as deep as the stack goes).
+    void limitDepth(int frames);
+    // No native code is made for this VM's functions.
+    void nativeCodeOff() { nativeOff_ = true; }
+
     // A test's time limit, `millis` long, is kept from now on: a read made meanwhile can be
     // stopped when it passes (G45).
     void armTimeLimit(int64_t millis) { timeLimitMillis_ = millis; }
@@ -1405,6 +1429,18 @@ private:
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> timeLimitPassed_{false};
     std::atomic<int64_t> timeLimitMillis_{0};
+    // A script's limits (limitPassed and the rest, above).
+    std::atomic<bool> limitHit_{false};
+    std::mutex limitMutex_;
+    std::string limitText_;
+    int64_t stepsLeft_ = -1;
+    int64_t stepsGiven_ = 0;
+    size_t memoryLimit_ = 0;
+    int depthLimit_ = 0;
+    bool nativeOff_ = false;
+    // Whether a safe point has work besides collecting, kept up while it has (a stop, a limit,
+    // steps counted).
+    bool wantsAttention() const { return stopRequested_.load() || timeLimitPassed_.load() || stepsLeft_ >= 0; }
 
     // Worker threads for work that blocks (see blocking()).
     struct Workers;

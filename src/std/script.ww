@@ -55,7 +55,13 @@
 //
 // A script is safe unless compiled `trusted`: it reaches nothing outside the program but through
 // its api (each try a SecurityException), what it prints goes to a function of the program's or
-// nowhere, and exit ends it alone. Limits on its time and memory come next (the scripting plan).
+// nowhere, and exit ends it alone.
+//
+// What a script may take is given as it starts (Limits): each call's time, or a count of its
+// steps for a game whose machines must agree; its heap; how deep its calls go. A call past one
+// is a ScriptLimitException in the program, and the script goes on for the next:
+//
+//   val running = script.start(api = game, limits = Limits(time = 2.milliseconds, memory = 32 * 1024 * 1024))
 class Script {
   internal val handle : any
   // The name it was compiled under, which its errors and stack traces give.
@@ -102,13 +108,14 @@ class Script {
   // calls. `api` is what the script's `api` stands for: an object of the interface it was
   // compiled with, whose calls from the script run here. A ScriptException where the top level
   // throws. `output` gets each line it prints (on the program's event loop); with none, a safe
-  // one's go nowhere and a trusted one's to the program's own output.
-  fun start(api : any? = null, output : ((string) -> unit)? = null) : RunningScript {
+  // one's go nowhere and a trusted one's to the program's own output. `limits` are what it may
+  // take, its top level a call as any (one compiled in a ScriptVM has the ScriptVM's).
+  fun start(api : any? = null, output : ((string) -> unit)? = null, limits : Limits? = null) : RunningScript {
     if (this.api != null and api == null) {
       throw IllegalArgumentException("$name was compiled with api = ${this.api!!.name}#: start it with an object of ${this.api!!.name}")
     }
-    val started = __script.start(handle, api, output)
-    if (started is string) { throw ScriptException("$name: ${started as string}") }
+    val started = __script.start(handle, api, output, limits?.forScript())
+    if (started is List<any?>) { throw __scriptFailed(name, started as List<any?>) }
     return RunningScript(started, this)
   }
 
@@ -129,10 +136,11 @@ class RunningScript {
 
   // Calls the function the script declares under `function`, with `arguments` copied over, and
   // gives what it returns, copied back. The program waits until it answers. A ScriptException
-  // where the script throws (with what it threw, and where), has no such function, or has ended.
+  // where the script throws (with what it threw, and where), has no such function, or has ended;
+  // a ScriptLimitException where it ran past its limits.
   fun call(function : string, arguments : List<any?> = []) : any? {
     val answer = __script.call(handle, function, arguments) as List<any?>
-    if (!(answer[0] as bool)) { throw ScriptException("${script.name}: ${answer[1] as string}") }
+    if (!(answer[0] as bool)) { throw __scriptFailed(script.name, answer) }
     return answer[1]
   }
 
@@ -147,7 +155,7 @@ class RunningScript {
   val gives : any?
     get() {
       val answer = __script.gives(handle) as List<any?>
-      if (!(answer[0] as bool)) { throw ScriptException("${script.name}: ${answer[1] as string}") }
+      if (!(answer[0] as bool)) { throw __scriptFailed(script.name, answer) }
       return answer[1]
     }
 
@@ -176,8 +184,10 @@ class ScriptVM {
   // Starts it: its thread, its VM, the standard library loaded. Its scripts are safe unless
   // `trusted`, as Script.compile's are; `output` gets each line they print (on the program's
   // event loop), and with none a safe one's go nowhere and a trusted one's to the program's own.
-  fun init(trusted : bool = false, output : ((string) -> unit)? = null) {
-    handle = __script.vm(!trusted, output)
+  // `limits` are its scripts': each call's time or steps, and the VM's memory and depth, which
+  // they share.
+  fun init(trusted : bool = false, output : ((string) -> unit)? = null, limits : Limits? = null) {
+    handle = __script.vm(!trusted, output, limits?.forScript())
   }
 
   // `source` compiled into this VM, as Script.compile compiles one of its own; it starts here,
@@ -214,6 +224,35 @@ class ScriptError(val problems : List<ScriptProblem>) : Exception(problems.map {
 // A script that threw, has no function of the name called, or is no longer running.
 class ScriptException(message : string? = null) : RuntimeException(message)
 
+// A call of a script's that ran past its limits (Limits): its time, its steps or its heap. The
+// script goes on, for the next call.
+class ScriptLimitException(message : string? = null) : ScriptException(message)
+
+// What a script may take (the scripting plan, part 4), each null for no limit:
+//   time    each call from the program, the script's own time in it (not the program's, while
+//           the script waits on its api): past it, the call ends
+//   steps   each call from the program, a count of its steps (each time round a loop, each call),
+//           the same on every machine, for a game whose machines must agree (replays,
+//           multiplayer): a script counted runs with no native code, more slowly
+//   memory  the script's heap, in bytes: a collection that finds more live ends the call; one
+//           large allocation may pass it before a collection sees it
+//   depth   how deep its calls go: deeper is a StackOverflowError in the script
+// The top level, as the script starts, is a call as any. A call that ends by a limit ends at
+// once, no catch or finally of the script's run, and is a ScriptLimitException in the program;
+// the script goes on for the next, what it was in the middle of left as it was. A program whose
+// scripts keep passing their limits stops them (a game: a mod disabled after a few).
+value Limits(val time : Duration? = null, val steps : int? = null, val memory : int? = null, val depth : int? = null) {
+  init {
+    if (time != null and time!!.inNanoseconds <= 0) { throw IllegalArgumentException("a script's time limit is more than nothing, not $time") }
+    if (steps != null and steps!! < 0) { throw IllegalArgumentException("a script's steps cannot be fewer than none, not $steps") }
+    if (memory != null and memory!! <= 0) { throw IllegalArgumentException("a script's memory limit is more than nothing, not $memory") }
+    if (depth != null and depth!! <= 0) { throw IllegalArgumentException("a script's depth is a call or more, not $depth") }
+  }
+
+  // As __script takes them: [nanoseconds, steps, bytes, calls], each null for none.
+  internal fun forScript() : List<any?> => [time?.inNanoseconds, steps, memory, depth]
+}
+
 // ---- What the compiler and the contract's proxies call ----
 
 // The contract each interface named in Script.compile(..., api = DoorApi#) is declared in: its
@@ -229,15 +268,22 @@ fun __scriptContract(type : Class, file : string, source : string) : Class {
 // A call of a method of the object a proxy stands for, on the other side.
 fun __scriptForward(handle : any, member : string, arguments : List<any?>) : any? {
   val answer = __script.forward(handle, 1, member, arguments) as List<any?>
-  if (!(answer[0] as bool)) { throw ScriptException(__scriptFailure(answer[1] as string)) }
+  if (!(answer[0] as bool)) { throw __scriptFailed(null, answer) }
   return answer[1]
 }
 
 // A val of the object a proxy stands for, on the other side.
 fun __scriptGet(handle : any, member : string) : any? {
   val answer = __script.forward(handle, 2, member, []) as List<any?>
-  if (!(answer[0] as bool)) { throw ScriptException(__scriptFailure(answer[1] as string)) }
+  if (!(answer[0] as bool)) { throw __scriptFailed(null, answer) }
   return answer[1]
+}
+
+// What a failed answer ([false, what went wrong, whether a limit failed it]) throws: a
+// ScriptLimitException or a ScriptException, its text after `name` where there is one.
+fun __scriptFailed(name : string?, answer : List<any?>) : ScriptException {
+  val text = name == null ? __scriptFailure(answer[1] as string) : "$name: ${answer[1] as string}"
+  return answer.size > 2 and answer[2] as bool ? ScriptLimitException(text) : ScriptException(text)
 }
 
 // In a script compiled with api = ...: the program's object its `api` stands for.
