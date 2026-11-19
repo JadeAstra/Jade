@@ -121,3 +121,22 @@ try { Regex("a").allSpans("ab", 1, 0) } catch (e : IndexOutOfBoundsException) { 
 // A Regex made outside a parallel section matches inside it, where it is shared and read only.
 val word = Regex("(?<w>[a-z]+)")
 print((1..200).map { "w$it" }.parallelStream().map { word.find(it)!!.groups["w"]!!.value.size }.sumOf { it })   // expect: 200
+
+// Patterns that once ran the stack out or took for ever to compile: groups and classes nested
+// more than 256 deep are refused (a few thousand ended the process), a class's &&s count as
+// depth too, and a part that compiles to nothing is not compiled over and over.
+fun nestError(pattern : string) {
+  try { Regex(pattern) } catch (e : PatternSyntaxException) { print(e.description, e.index) }
+}
+print(Regex("(".repeat(256) + "a" + ")".repeat(256)).matches("a"), Regex("(?:".repeat(256) + "a" + ")".repeat(256)).matches("a"))   // expect: true true
+nestError("(".repeat(257) + "a" + ")".repeat(257))   // expect: Nested too deeply: more than 256 groups or classes inside each other 256
+nestError("(".repeat(20000) + "a" + ")".repeat(20000))   // expect: Nested too deeply: more than 256 groups or classes inside each other 256
+nestError("[".repeat(20000) + "a" + "]".repeat(20000))   // expect: Nested too deeply: more than 256 groups or classes inside each other 256
+nestError("(?=".repeat(300) + "a" + ")".repeat(300))   // expect: Nested too deeply: more than 256 groups or classes inside each other 768
+print(Regex("[".repeat(256) + "a" + "]".repeat(256)).matches("a"), Regex("[a-z" + "&&[a-y]".repeat(200) + "]").matches("b"))   // expect: true true
+nestError("[a" + "&&a".repeat(300) + "]")   // expect: Nested too deeply: more than 256 groups or classes inside each other 767
+val empty = clock()
+print(Regex("(?:(?:){1000000000}){1000000000}x").matches("x"), Regex("a(?:){0,1000000000}b").matches("ab"), Regex("(){3}a").find("a")?.groups?.size, clock() - empty < 1.0)   // expect: true true 2 true
+// A back reference inside its own group sees the group's last whole match, as in Java: a new
+// start is not taken with the old end.
+print(Regex("(ab|c\\1)+\$").find("abc"), Regex("(ab|c\\1)+").find("abcab")!!.groups[1]?.value, Regex("(a|b\\1)+").matchEntire("aba")!!.groups[1]?.value)   // expect: null cab ba

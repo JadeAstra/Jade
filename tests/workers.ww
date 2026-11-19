@@ -91,6 +91,15 @@ task {
   endOf(pool[1])
   print(pool[1].isAlive)                                     // expect: false
 
+  // Nor one inside a regex match that would back out for ever.
+  val matcher = listenTo(Worker("workers/echo.ww"))
+  matcher.post("regex")
+  print(next(matcher), next(matcher))                         // expect: ready, in a worker: true matching
+  delay(50.milliseconds)
+  matcher.terminate()
+  endOf(matcher)
+  print(matcher.isAlive)                                     // expect: false
+
   // The script has to be named in the call itself, so that it is built into the program.
   val name = "workers/echo.ww"
   try { Worker(name) } catch (e) { print(e.message) }

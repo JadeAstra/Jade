@@ -1198,6 +1198,12 @@ public:
     // Asks this VM, from another thread, to stop what it is doing: every one of its threads
     // gets a WorkerStop at its next safe point.
     void requestStop();
+    // For long work inside a built-in function (a regex match): throws what a safe point would
+    // for a stop asked for or a time limit passed, and nothing else.
+    void throwIfStopped() {
+        if (stopRequested_.load(std::memory_order_relaxed)) throw WorkerStop{};
+        throwIfTimeLimitPassed();
+    }
 
     // For a built-in function that ends by calling a WinterWolf function: sets that call going
     // in its own place, so that the function runs as part of the program rather than inside

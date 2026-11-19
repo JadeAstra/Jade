@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -53,7 +54,8 @@ public:
     // A match in `text` from `from` (Search: the first at or after it; AtStart: one starting
     // there; Entire: one starting there and running to the end). On success `groups` holds
     // start and end for the whole match and each group, -1 for a group that took no part.
-    bool match(const ObjString* text, size_t from, Mode mode, std::vector<int64_t>& groups) const;
+    // `stop`, where given, is called now and then as a long match goes on, and throws to end it.
+    bool match(const ObjString* text, size_t from, Mode mode, std::vector<int64_t>& groups, const std::function<void()>* stop = nullptr) const;
 
 private:
     std::unique_ptr<Program> program_;

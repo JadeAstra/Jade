@@ -383,8 +383,23 @@ private:
     uint32_t flags_;
     Program& p_;
     size_t at_ = 0;
+    int depth_ = 0;
 
     [[noreturn]] void fail(const std::string& what, int at) { throw SyntaxError(what, at, utf8_); }
+
+    // Groups and classes (and a class's &&s) inside each other, at most kMaxNesting deep: every
+    // pass over the pattern (parsing, compiling, the lengths, matching a look-around) goes down
+    // them by recursion, and a pattern of some thousands ran the stack out and ended the process.
+    // The language's own parser stops at the same depth.
+    static constexpr int kMaxNesting = 256;
+    void deeper(size_t at) {
+        if (++depth_ > kMaxNesting) fail("Nested too deeply: more than 256 groups or classes inside each other", static_cast<int>(at));
+    }
+    struct Nest {
+        Parser& p;
+        Nest(Parser& parser, size_t at) : p(parser) { p.deeper(at); }
+        ~Nest() { p.depth_--; }
+    };
 
     int add(Node n) {
         nodes_.push_back(std::move(n));
@@ -567,6 +582,7 @@ private:
 
     // After "(".
     int group(size_t begin) {
+        const Nest nest(*this, begin);
         int index = -1;
         std::string name;
         Node::Kind kind = Node::Group;
@@ -916,6 +932,8 @@ private:
 
     // After "[": the class, as an index into p_.classes.
     int charClass(size_t begin) {
+        const Nest nest(*this, begin);
+        const int depthBefore = depth_;  // each && below makes the class one deeper
         ClassNode node;
         if (more() && peek() == '^') {
             node.negated = true;
@@ -949,6 +967,7 @@ private:
                 continue;
             }
             if (ch == '&' && at_ + 1 < s_.size() && s_[at_ + 1] == '&') {
+                deeper(at_);
                 at_ += 2;
                 const int operand = finishOperand(current);
                 if (left < 0) {
@@ -1021,6 +1040,7 @@ private:
             node.kids = std::move(current.kids);
         }
         p_.classes[static_cast<size_t>(self)] = std::move(node);
+        depth_ = depthBefore;
         return self;
     }
 };
@@ -1221,7 +1241,13 @@ public:
                 const int child = n.kids[0];
                 const int min = n.min, max = n.max;
                 const bool lazy = n.greed == Node::Lazy && i != greedyOnce_;
-                for (int k = 0; k < min; k++) compile(child);
+                // A part that compiles to nothing (an empty group) is compiled once, not min times:
+                // (?:(?:){1000000000}){1000000000} took for ever, adding nothing.
+                const int before = here();
+                for (int k = 0; k < min; k++) {
+                    compile(child);
+                    if (here() == before) break;
+                }
                 const Node::Kind childKind = n_[static_cast<size_t>(child)].kind;
                 if (max < 0 && !lazy && (childKind == Node::Char || childKind == Node::Class || childKind == Node::Dot)) {
                     // X* of one character: one Run.
@@ -1264,6 +1290,11 @@ public:
                         splits.push_back(split);
                         at(split).a = here();
                         compile(child);
+                        if (here() == split + 1) {  // nothing to make optional
+                            p_.code.pop_back();
+                            splits.pop_back();
+                            break;
+                        }
                     }
                     const int out = here();
                     for (int split : splits) {
@@ -1382,12 +1413,24 @@ std::vector<Entry>& scratchStack() {
 
 class Runner {
 public:
-    Runner(const Program& p, const ObjString* s, std::vector<int64_t>& caps, size_t searchStart)
-        : p_(p), s_(s), n_(s->length), caps_(caps), regs_(static_cast<size_t>(p.loops), -1), stack_(scratchStack()), searchStart_(searchStart) {}
+    Runner(const Program& p, const ObjString* s, std::vector<int64_t>& caps, size_t searchStart, const std::function<void()>* stop)
+        : p_(p), s_(s), n_(s->length), caps_(caps), regs_(static_cast<size_t>(p.loops + p.groups + 1), -1), stack_(scratchStack()), searchStart_(searchStart), stop_(stop) {}
+
+    // Every 65,536 times a match backs out or starts a part, the caller is asked whether to stop
+    // (it throws to stop): a pattern that backs out exponentially, such as (a*)*b, runs on until
+    // the program's own limits stop it (a worker's terminate(), a test's time limit), as code in
+    // the VM does at its safe points.
+    void poll() {
+        if (stop_ != nullptr && ++steps_ == 65536) {
+            steps_ = 0;
+            (*stop_)();
+        }
+    }
 
     // Runs the program from `pc` at `pos`; on success `end` is where the match ended. With a
     // target, a look-behind's program, it must end there; with requireEnd, at the end of the input.
     bool run(int pc, int64_t pos, int64_t& end, int64_t target = -1, bool requireEnd = false) {
+        poll();
         const size_t base = stack_.size();
         for (;;) {
             const Inst& inst = p_.code[static_cast<size_t>(pc)];
@@ -1431,8 +1474,21 @@ public:
                     pc = inst.a;
                     break;
                 case Op::Save:
-                    stack_.push_back(Entry{Entry::Capture, 0, caps_[static_cast<size_t>(inst.a)], inst.a});
-                    caps_[static_cast<size_t>(inst.a)] = pos;
+                    // A group's start is held aside as it opens and written with its end as it
+                    // closes, as Java's are: a back reference inside the group, or a later look at
+                    // it, sees its last whole match, never a new start with the old end
+                    // ((ab|c\1)+$ matched "abc").
+                    if (inst.a % 2 == 0) {
+                        const size_t held = static_cast<size_t>(p_.loops + inst.a / 2);
+                        stack_.push_back(Entry{Entry::Register, 0, regs_[held], static_cast<int>(held)});
+                        regs_[held] = pos;
+                    } else {
+                        const int start = inst.a - 1;
+                        stack_.push_back(Entry{Entry::Capture, 0, caps_[static_cast<size_t>(start)], start});
+                        stack_.push_back(Entry{Entry::Capture, 0, caps_[static_cast<size_t>(inst.a)], inst.a});
+                        caps_[static_cast<size_t>(start)] = regs_[static_cast<size_t>(p_.loops + start / 2)];
+                        caps_[static_cast<size_t>(inst.a)] = pos;
+                    }
                     pc++;
                     break;
                 case Op::LoopSet:
@@ -1582,6 +1638,7 @@ public:
             }
             if (ok) continue;
             // Back to the last alternative, putting back what was changed since.
+            poll();
             bool resumed = false;
             while (stack_.size() > base) {
                 const Entry e = stack_.back();
@@ -1687,6 +1744,8 @@ private:
     std::vector<int64_t> regs_;
     std::vector<Entry>& stack_;
     const size_t searchStart_;
+    const std::function<void()>* stop_;
+    uint32_t steps_ = 0;
     // Which branch points failed at which positions, once the search has taken enough branches
     // for it to pay; refused where the table would be too large.
     static constexpr uint64_t kMemoAfter = 20000;
@@ -1777,9 +1836,15 @@ Pattern::Pattern(const std::u32string& pattern, uint32_t flags) : program_(std::
     }
     p.start = 0;
     firstOf(nodes, root, p);
-    // Which ASCII characters each class holds, worked out once.
-    p.asciiBits.resize(p.classes.size());
+    // Which ASCII characters each class holds, worked out once: for the classes the program tests
+    // only, not the parts of one ([a[b]], [a&&b]), so that each part is looked at under one class
+    // alone (classes nested thousands deep took time as the square of their depth).
+    p.asciiBits.assign(p.classes.size(), std::array<uint64_t, 2>{0, 0});
+    std::vector<bool> tested(p.classes.size(), false);
+    for (const Node& node : nodes)
+        if (node.kind == Node::Class) tested[static_cast<size_t>(node.cls)] = true;
     for (size_t k = 0; k < p.classes.size(); k++) {
+        if (!tested[k]) continue;
         std::array<uint64_t, 2> bits{0, 0};
         for (uint32_t c = 0; c < 128; c++) {
             bool in = inClassRaw(p, static_cast<int>(k), c);
@@ -1804,12 +1869,12 @@ Pattern::~Pattern() = default;
 int Pattern::groupCount() const { return program_->groups; }
 const std::map<std::string, int>& Pattern::groupNames() const { return program_->names; }
 
-bool Pattern::match(const ObjString* text, size_t from, Mode mode, std::vector<int64_t>& groups) const {
+bool Pattern::match(const ObjString* text, size_t from, Mode mode, std::vector<int64_t>& groups, const std::function<void()>* stop) const {
     const Program& p = *program_;
     groups.assign(static_cast<size_t>(2 * (p.groups + 1)), -1);
     const size_t n = text->length;
     if (from > n) return false;
-    Runner runner(p, text, groups, from);
+    Runner runner(p, text, groups, from, stop);
     if (mode != Mode::Search) {
         int64_t end;
         if (!runner.run(p.start, static_cast<int64_t>(from), end, -1, mode == Mode::Entire)) return false;

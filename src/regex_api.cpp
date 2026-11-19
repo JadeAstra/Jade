@@ -155,19 +155,21 @@ void registerRegex(VM& vm) {
     // part), or null. Mode 0 looks for one, 1 wants one starting there, 2 one running to the end.
     def("find", 4, 4, [](VM& vm, int, Value* args) -> Value {
         const Pattern& pattern = patternOf(vm, args[0]);
+        const std::function<void()> stop = [&vm] { vm.throwIfStopped(); };
         const ObjString* text = textOf(vm, args[1]);
         const int64_t from = vm.toInt(args[2], "position");
         if (from < 0 || static_cast<size_t>(from) > text->length)
             throw vm.runtimeError(Thrown::IndexOutOfBoundsException,
                                   "start index " + std::to_string(from) + " is out of bounds of a text of " + std::to_string(text->length) + " characters");
         std::vector<int64_t>& groups = scratchGroups();
-        if (!pattern.match(text, static_cast<size_t>(from), modeOf(vm.toInt(args[3], "mode")), groups)) return Value::null();
+        if (!pattern.match(text, static_cast<size_t>(from), modeOf(vm.toInt(args[3], "mode")), groups, &stop)) return Value::null();
         return intList(vm, groups.data(), groups.size());
     });
     // Every match from `from` that ends by `to`, as findAll finds them: each one's places, as
     // find gives them, one after another in one List<int>.
     def("allSpans", 4, 4, [](VM& vm, int, Value* args) -> Value {
         const Pattern& pattern = patternOf(vm, args[0]);
+        const std::function<void()> stop = [&vm] { vm.throwIfStopped(); };
         const ObjString* text = textOf(vm, args[1]);
         const int64_t start = vm.toInt(args[2], "startIndex");
         const int64_t end = vm.toInt(args[3], "endIndex");
@@ -182,7 +184,7 @@ void registerRegex(VM& vm) {
         all.clear();
         std::vector<int64_t>& groups = scratchGroups();
         size_t from = static_cast<size_t>(start);
-        while (static_cast<int64_t>(from) <= end && pattern.match(text, from, Pattern::Mode::Search, groups) && groups[1] <= end) {
+        while (static_cast<int64_t>(from) <= end && pattern.match(text, from, Pattern::Mode::Search, groups, &stop) && groups[1] <= end) {
             all.insert(all.end(), groups.begin(), groups.end());
             const size_t b = static_cast<size_t>(groups[0]), e = static_cast<size_t>(groups[1]);
             from = e == b ? e + 1 : e;
@@ -192,6 +194,7 @@ void registerRegex(VM& vm) {
     // Every match, or the first, replaced by `replacement` in Java's way ($1, ${name}, \$).
     def("replace", 4, 4, [](VM& vm, int, Value* args) -> Value {
         const Pattern& pattern = patternOf(vm, args[0]);
+        const std::function<void()> stop = [&vm] { vm.throwIfStopped(); };
         const ObjString* text = textOf(vm, args[1]);
         const ObjString* replacement = textOf(vm, args[2]);
         const bool firstOnly = args[3].truthy();
@@ -199,7 +202,7 @@ void registerRegex(VM& vm) {
         size_t last = 0, from = 0;
         bool any = false;
         std::vector<int64_t> groups;
-        while (from <= text->length && pattern.match(text, from, Pattern::Mode::Search, groups)) {
+        while (from <= text->length && pattern.match(text, from, Pattern::Mode::Search, groups, &stop)) {
             any = true;
             const size_t b = static_cast<size_t>(groups[0]), e = static_cast<size_t>(groups[1]);
             appendRange(out, text, last, b);
@@ -216,6 +219,7 @@ void registerRegex(VM& vm) {
     // number), the last holding the rest; empty pieces kept, at either end too.
     def("split", 3, 3, [](VM& vm, int, Value* args) -> Value {
         const Pattern& pattern = patternOf(vm, args[0]);
+        const std::function<void()> stop = [&vm] { vm.throwIfStopped(); };
         const ObjString* text = textOf(vm, args[1]);
         const int64_t limit = vm.toInt(args[2], "limit");
         if (limit < 0) throw vm.runtimeError(Thrown::IllegalArgumentException, "Limit must be non-negative, but was " + std::to_string(limit));
@@ -223,7 +227,7 @@ void registerRegex(VM& vm) {
         std::vector<int64_t> groups;
         size_t last = 0, from = 0;
         if (limit != 1) {
-            while (from <= text->length && pattern.match(text, from, Pattern::Mode::Search, groups)) {
+            while (from <= text->length && pattern.match(text, from, Pattern::Mode::Search, groups, &stop)) {
                 const size_t b = static_cast<size_t>(groups[0]), e = static_cast<size_t>(groups[1]);
                 pieces.push_back({last, b});
                 last = e;
