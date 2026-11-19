@@ -81,6 +81,11 @@ class Options {
   // end and what each check run again alone gave (2026-11-19: so that what fails is seen at once,
   // not when the whole run and its runs alone are done). Null: none.
   var live : FilePath? = null
+  // Under GC stress, the tests at their full length (--full, for milestones); otherwise quick: each
+  // program is given WW_TEST_QUICK=1, and a test that repeats its work does less of it (fewer
+  // rounds, shallower, shorter), every case still run once (2026-11-19: of the six faults GC stress
+  // had found, none needed a test's repeats; each showed in the first pass of the case that found it).
+  var full = false
 
   fun init(ww : FilePath, tests : FilePath) {
     this.ww = ww
@@ -96,6 +101,9 @@ class Options {
     if (setting != Setting.gcStress) { return 120 }
     return sanitized() ? 2400 : 600
   }
+
+  // Whether the tests run quick (above).
+  fun quick() : bool => setting == Setting.gcStress and !full
 
   // Whether the ww tested is the sanitizer's build.
   fun sanitized() : bool {
@@ -203,7 +211,7 @@ class Suite(val options : Options) {
     }
     // The budgets after everything else, alone: they are times.
     val timed = chosen.filter { it.kind == Kind.budgets }
-    val setting = settingName(options.setting)
+    val setting = settingName(options.setting) + (options.quick() ? " (quick)" : "")
     tell("START $setting: ${chosen.size} checks")
     val pool = ThreadPool(Math.max(1, options.parallel), daemon = true)
     val jobs = chosen.filter { it.kind != Kind.budgets }.map { item -> pool.submit {
@@ -319,6 +327,7 @@ class Suite(val options : Options) {
       val v = settingVariable(s)
       if (v != null) { environment[v] = s == options.setting ? settingValue(s) : settingOff(s) }
     }
+    environment["WW_TEST_QUICK"] = options.quick() ? "1" : null
     for ((k, v) in extra) { environment[k] = v }
     val stamp = lock.useKey {
       Suite.runs += 1

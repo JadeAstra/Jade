@@ -1,0 +1,43 @@
+// Sets and maps in native code (2026-11-16, docs/sets-maps-plan.html): map[k], set.contains(k),
+// k in set, k in map.keys (looked up by the step for an int key, by the VM's way for another);
+// map[k] = v and set.add(k) (an existing int key's value written by the step, a new key added by
+// the VM's way); a for over a set, over a map's keys, and over a map's keys and values. Then the
+// keys the VM must decide: a float equal to an int, a byte, strings, values of a value type, objects
+// of a class with its own == and hashCode; a map changed in a for over it. Each
+// loop run often enough for its region to be made: the same answers as the VM's.
+//
+// This part (of native_sets_maps.ww): map[k] = v and set.add(k), an existing int key's value written
+// by the step, a new key added by the VM's way.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer calls each round
+
+fun setAll(m : open Map<int, int>, n : int) : int {
+  for (i in 0 ..< n) { m[i] = i * 3 }
+  return m.size
+}
+fun addAll(s : open Set<int>, n : int) : int {
+  var added = 0
+  for (i in 0 ..< n) {
+    if (s.add(i % 50)) { added += 1 }
+  }
+  return added
+}
+
+val calls = quick ? 70 : 200   // each round; 210 in all when quick
+for (round in 0 ..< 3) {
+  var e = 0
+  val filled : open Map<int, int> = {:}
+  val grown : open Set<int> = Set([])
+  for (r in 0 ..< calls) {
+    e = setAll(filled, 700)
+    e += addAll(grown, 300)
+  }
+  print(e)
+  print(filled[0], filled[699], filled[700], grown.size, grown.contains(49), grown.contains(50))
+}
+// expect: 700
+// expect: 0 2097 null 50 true false
+// expect: 700
+// expect: 0 2097 null 50 true false
+// expect: 700
+// expect: 0 2097 null 50 true false

@@ -445,7 +445,7 @@ expandingATreeReachesTheComponent()
 
 // aHiddenRowFilterReachesTheComponent: waits for the sheet (Sheet).
 // aLabelsTextReachesTheComponent: not a list or a tree (a label's).
-// replacingAComboSItemsReachesTheComponentAndReclampsSelection: in tests/jade_tables.ww.
+// replacingAComboSItemsReachesTheComponentAndReclampsSelection: in tests/jade_tables_combo.ww.
 // shrinkingASheetReclampsItsSelection: waits for the sheet (Sheet).
 // mathResultsReachTheComponent: waits for the math block (MathBlock).
 print("ContentInvalidationTest:", checks, "checks,", failed)   // expect: ContentInvalidationTest: 73 checks, []
@@ -466,8 +466,8 @@ fun layoutsAskedFor(body : () -> unit) : int {
 }
 
 // changing a label's text, a label's font, a button's caption: not a list or a tree.
-// replacing a table's rows requests a layout: in tests/jade_tables.ww.
-// replacing a combo's items requests a layout: in tests/jade_tables.ww.
+// replacing a table's rows requests a layout: in tests/jade_tables_combo.ww.
+// replacing a combo's items requests a layout: in tests/jade_tables_combo.ww.
 
 // expanding a tree requests a layout
 same("opening a tree asks for one layout", layoutsAskedFor {
@@ -476,7 +476,7 @@ same("opening a tree asks for one layout", layoutsAskedFor {
   tree.expandAll()
 }, 1)
 
-// a paint-only change does not request a layout: the check box's half; the table's in tests/jade_tables.ww.
+// a paint-only change does not request a layout: the check box's half; the table's in tests/jade_tables_combo.ww.
 same("ticking a check box asks for no layout", layoutsAskedFor {
   val check = CheckBox("same width either way")
   Component(check)
@@ -500,5 +500,5 @@ fun clickingTheSpinnerTextBeforeAnyPaintDoesNotStepTheValue() {
 }
 clickingTheSpinnerTextBeforeAnyPaintDoesNotStepTheValue()
 
-// theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint: in tests/jade_tables.ww.
+// theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint: in tests/jade_tables_combo.ww.
 print("FirstClickTest:", checks, "checks,", failed)   // expect: FirstClickTest: 76 checks, []

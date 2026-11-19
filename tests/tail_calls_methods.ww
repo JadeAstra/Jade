@@ -1,0 +1,24 @@
+// A function calling itself as its last step is a loop (D29): deep recursion of that shape
+// does not run out of stack. Part two of tail_calls.ww: a method on its own object, tail, and
+// closures made in each round.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: shallower
+val depth = quick ? 10000 : 500000
+
+// A method calling itself on its own object, where no subclass overrides it.
+class Counter {
+  fun count(n : int, acc : int) : int => n == 0 ? acc : this.count(n - 1, acc + 1)
+}
+print(Counter().count(depth, 0) == depth)          // expect: true
+
+// tail asks for every call of itself to be its last step.
+tail fun down(n : int) : int => n <= 0 ? n : down(n - 2)
+print(down(quick ? 10001 : 300001))                // expect: -1
+
+// A closure made in one round keeps that round's values.
+fun keep(n : int, out : List<() -> int>) : List<() -> int> {
+  if (n == 0) { return out }
+  val k = n
+  return keep(n - 1, out + [{ k }])
+}
+print(keep(3, []).map { it() })                    // expect: [3, 2, 1]

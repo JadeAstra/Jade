@@ -1,0 +1,124 @@
+// needs windows: it opens windows
+// A view up and down a component (Scroll), its second part: the wheel finding the innermost view
+// that can move, text cut to fit, and where a component in a moved view is in the window. These
+// are JadeUI's own tests (NestedScrollTest, ElideTest, WindowPositionScrollTest), carried over
+// with their names; split off from jade_scroll.ww (2026-11-19) so that the two run side by side.
+// The view's own bookkeeping (maxScrollY) is internal to Jade: where JadeUI reads it, these read
+// what it shows instead.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// -- NestedScrollTest --
+// JadeUI scrolls a JadeTextArea of many lines (not built yet); here a tall grid of labels.
+// JadeUI also reads the outer view's maxScrollY, internal here: that the outer can move is
+// seen from its child being taller than it.
+
+fun tallLines(lines : int) : Component => grid {
+  for (i in 1 .. lines) { row { cell(label("line $i")) } }
+}
+
+// theInnerViewportScrollsNotTheOuter: the wheel over a view inside a view moves the inner one,
+// though both could move.
+fun theInnerViewportScrollsNotTheOuter() {
+  val inner = Scroll(tallLines(200))
+  val outer = Scroll(Component(inner).preferredSize(Size(200, 400)))
+  val root = Component(outer)
+  root.layout(300, 200)
+  yes("precondition: the outer view can move too", outer.child.bounds.height > outer.viewportHeight)
+  root.dispatch(Event.Wheel(50, 50, 40))
+  yes("the inner view moved", inner.scrollY > 0)
+  same("the outer view did not take the wheel", outer.scrollY, 0)
+}
+theInnerViewportScrollsNotTheOuter()
+
+// theOuterViewportTakesOverWhenTheInnerCannotMove: JadeUI puts the two side by side in a
+// JadeSplit (not built yet); here in a grid of two equal columns.
+fun theOuterViewportTakesOverWhenTheInnerCannotMove() {
+  val inner = Scroll(label("short"))            // nothing to move
+  val outer = Scroll(tallLines(200))
+  val root = grid {
+    row {
+      cell(Component(inner), fill = Fill.both, weightX = 1.0, weightY = 1.0)
+      cell(Component(outer), fill = Fill.both, weightX = 1.0, weightY = 1.0)
+    }
+  }
+  root.layout(400, 200)
+  root.dispatch(Event.Wheel(350, 50, 40))
+  yes("the view under the pointer that can move moved", outer.scrollY > 0)
+}
+theOuterViewportTakesOverWhenTheInnerCannotMove()
+print("NestedScrollTest:", checks, "checks,", failed)   // expect: NestedScrollTest: 4 checks, []
+
+// -- ElideTest --
+
+val f = Font(Font.sansSerif, 12)
+
+// shortTextIsUntouched
+same("short text as it is", elide("hi", f, 500), "hi")
+
+// longTextGetsAnEllipsisAndFits
+val out = elide("a considerably longer label than fits", f, 80)
+yes("cut text ends with an ellipsis: '$out'", out.endsWith("…"))
+yes("and it fits: '$out'", f.width(out) <= 80)
+
+// noRoomAtAllYieldsNothing
+same("no room: nothing", elide("anything", f, 1), "")
+print("ElideTest:", checks, "checks,", failed)   // expect: ElideTest: 8 checks, []
+
+// -- WindowPositionScrollTest --
+// JadeUI scrolls a JadeDocView of paragraphs (not built yet); here a grid of labels, and the
+// blocks are its labels. JadeUI reads the view's maxScrollY, internal here: that it can move
+// is seen from its child being taller than it.
+
+fun paragraphs(text : string) : List<Component> {
+  val out = []
+  for (i in 1 .. 20) { out.add(label(text.replace("#", "$i"))) }
+  return out
+}
+
+// aComponentInsideAScrolledViewportShiftsByTheScrollAmount
+fun aComponentInsideAScrolledViewportShiftsByTheScrollAmount() {
+  val blocks = paragraphs("paragraph number #, long enough to wrap a little")
+  val doc = grid { for (b in blocks) { row { cell(b) } } }
+  val sc = Scroll(doc)
+  val root = Component(sc)
+  root.layout(400, 150)                          // 20 paragraphs in 150: it can move
+  yes("precondition: the view can move", doc.bounds.height > sc.viewportHeight)
+  val block = blocks.last()
+  val atTop = block.windowPosition().y
+  root.dispatch(Event.Wheel(50, 50, 80))
+  val sy = sc.scrollY
+  yes("the wheel moved the view", sy > 0)
+  same("the block's window y goes up by the scroll exactly", block.windowPosition().y, atTop - sy)
+}
+aComponentInsideAScrolledViewportShiftsByTheScrollAmount()
+
+// anUnscrolledViewportIsUnchanged: not moved, a component's window y is its bounds added up.
+fun anUnscrolledViewportIsUnchanged() {
+  val blocks = paragraphs("line #")
+  val doc = grid { for (b in blocks) { row { cell(b) } } }
+  val sc = Scroll(doc)
+  val root = Component(sc)
+  root.layout(400, 150)
+  val block = blocks.first()
+  same("not moved", sc.scrollY, 0)
+  var y = 0
+  var c : Component? = block
+  while (c != null) {
+    y += c.bounds.y
+    c = c.parent
+  }
+  same("not moved, nothing is taken off", block.windowPosition().y, y)
+}
+anUnscrolledViewportIsUnchanged()
+print("WindowPositionScrollTest:", checks, "checks,", failed)   // expect: WindowPositionScrollTest: 13 checks, []

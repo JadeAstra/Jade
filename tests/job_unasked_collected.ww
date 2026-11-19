@@ -1,6 +1,7 @@
 // A failed job nothing asked about is taken by Program.onUncaughtError once nothing can ask: when
 // it is collected, before the program ends, so that a program running for a long time does not
 // keep every one (8.7a). With a handler, the exit code is the program's own.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: it collects at every safe point anyway
 var handled = 0
 Program.onUncaughtError = { error ->
   if (error.message == "lost -1") { print("at the end:", error.message, handled > 0) } else { handled++ }
@@ -8,12 +9,13 @@ Program.onUncaughtError = { error ->
 fun broken(i : int) : int throws IllegalStateException { throw IllegalStateException("lost $i") }
 for (i in 0..<2000) { task { broken(i) } }       // nothing keeps the jobs
 // Garbage enough for the collector to run; the errors it finds come on the event loop.
+val rounds = quick ? 10000 : 300000
 var made = 0
-for (i in 0..<300000) {
+for (i in 0..<rounds) {
   val parts = [i, "s$i"]
   made += parts.size
 }
-EventLoop.after(20.milliseconds) { print(handled > 0, handled <= 2000, made) }   // expect: true true 600000
+EventLoop.after(20.milliseconds) { print(handled > 0, handled <= 2000, made == 2 * rounds) }   // expect: true true true
 
 // One still held is reported as the program ends, to the handler as well.
 val kept = task { broken(-1) }

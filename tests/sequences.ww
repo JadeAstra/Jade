@@ -1,4 +1,5 @@
 // Sequences (D98): items worked out one at a time, as they are asked for.
+// Part one: making them and the operations; their stacks are in sequences_stacks.ww.
 
 // Endless, and nothing done ahead.
 val squares = generateSequence(1) { it + 1 }.map { it * it }
@@ -99,16 +100,6 @@ val items = failing.iterator()
 print(items.next())                                           // expect: 1
 try { items.hasNext() } catch (e : IllegalStateException) { print("caught", e.message) }   // expect: caught boom
 print(items.hasNext())                                        // expect: false
-
-// Each block runs on a stack of its own that starts small and grows: many can be alive at
-// once, and each can go deep.
-val many = (1..2000).map { k -> sequence { yield(k); yield(k + 1) }.iterator() }
-var total = 0
-for g in many { total += g.next() }
-print(total)                                                  // expect: 2001000
-fun depth(k : int) : int => k == 0 ? 0 : 1 + depth(k - 1)
-print(sequence { yield(depth(15000)) }.first())               // expect: 15000
-try { sequence { yield(depth(1_000_000)) }.first() } catch (e : StackOverflowError) { print(e.message) }   // expect: stack overflow
 
 // A sequence gone over in a task: the task waits as it likes between items.
 task {

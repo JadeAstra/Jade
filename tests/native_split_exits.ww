@@ -1,0 +1,70 @@
+// A value's life split (registers-plan.html part C, 2026-11-18): in a loop with a hot path and a
+// cold one, and more values than registers, a value the hot path uses keeps its register there and
+// is kept in memory only on the cold path, stored where the hot path goes into the cold one and
+// loaded where it comes back. Each loop here is made again from what its first 1,000 times round
+// counted, and split so (WW_TRACE_SPLIT says which), and gives what the VM gives (the suite's
+// interpret way), whichever way it leaves: back round, out of the loop from either path, by a throw
+// from the cold path, and through the VM in the hot path.
+//
+// This part (of native_split.ww): left from the hot path by a break, and from the cold one by a throw.
+
+fun input(n : int) : Bytes {
+  val b = Bytes(n)
+  var s = 12345
+  for (i in 0 ..< n) {
+    s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+    b[i] = (s % 4 + (i / 5000) % 3).toByte()  // few kinds of byte: mostly found in the table
+  }
+  return b
+}
+
+// The table, every item 0, made by doubling: a list made by a function given each item would call it
+// a million times, a collection at each under GC stress; this makes a few lists.
+fun zeros(n : int) : open List<uint16> {
+  val t : open List<uint16> = [0]
+  while (t.size < n) { t.addAll(t.toList()) }
+  return t
+}
+
+// The LZW shape (native_split.ww), left from the hot path (a break once the table holds enough) and
+// from the cold one (a throw past a count), each with what the loop changed read after it.
+fun until(input : Bytes, table : open List<uint16>, stopAt : int, failAt : int) : string {
+  var prefix = input[0].toInt()
+  var acc = 0
+  var bits = 0
+  var next = 258
+  var hits = 0
+  var i = 1
+  var x1 = 0
+  var x2 = 0
+  var x3 = 0
+  try {
+    while (i < input.size) {
+      val key = (prefix << 8) | input[i].toInt()
+      val found = table[key]
+      if (found != 0) {
+        prefix = found
+        hits += 1
+        x1 += found
+        x2 ^= key
+        x3 += x1 & 7
+        if (hits == stopAt) { break }
+        i += 1
+        continue
+      }
+      acc = acc ^ (prefix << (bits % 16)) ^ x1 ^ (x2 << 1) ^ x3
+      bits += 3
+      if (next == failAt) { throw IllegalStateException("cold path at $next") }
+      table[key] = next
+      next += 1
+      prefix = input[i].toInt()
+      i += 1
+    }
+  } catch (e : IllegalStateException) {
+    return "${e.message}: prefix $prefix, hits $hits, i $i, acc $acc, $x1 $x2 $x3"
+  }
+  return "stopped: prefix $prefix, hits $hits, i $i, next $next, acc $acc, $x1 $x2 $x3"
+}
+val data = input(200000)
+print(until(data, zeros(4096 * 256), 150000, 100000))   // expect: stopped: prefix 2167, hits 150000, i 151913, next 2171, acc 33652155, 133432091 348422 525941
+print(until(data, zeros(4096 * 256), 1000000, 700))     // expect: cold path at 700: prefix 689, hits 9918, i 10361, acc 14461128, 4208026 78336 34661

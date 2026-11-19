@@ -1,0 +1,26 @@
+// More calls of itself as the last step are loops (D29, G33): each goes deeper here than the
+// stack would allow as calls. Part three of tail_calls_more.ww: where a branch of when or if gives
+// what is returned.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: shallower
+val depth = quick ? 10000 : 1000000
+
+// Where a branch of when or if gives what is returned, in a block of its own too.
+fun steps(n : int, acc : int) : int => when {
+  n == 0 -> acc
+  n % 2 == 0 -> steps(n - 1, acc + 1)
+  else -> {
+    val next = n - 1
+    steps(next, acc + 1)
+  }
+}
+print(steps(depth, 0) == depth)                          // expect: true
+fun digits(n : int, acc : int) : int => when (n) {
+  0 -> acc
+  else -> digits(n / 10, acc + 1)
+}
+print(digits(987654, 0))                                 // expect: 6
+fun halve(n : int) : int {
+  return if (n <= 1) { n } else { halve(n - 2) }
+}
+print(halve(depth + 1))                                  // expect: 1

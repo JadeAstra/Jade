@@ -5,6 +5,9 @@
 // counted, and split so (WW_TRACE_SPLIT says which), and gives what the VM gives (the suite's
 // interpret way), whichever way it leaves: back round, out of the loop from either path, by a throw
 // from the cold path, and through the VM in the hot path.
+//
+// This part: the LZW shape, left back round. native_split_exits.ww has the ways out, native_split_vm.ww
+// the VM in the hot path.
 
 // The LZW shape: a table looked up every time round (hot), codes put out now and then (cold), the
 // cold path using many values at once.
@@ -65,77 +68,14 @@ fun input(n : int) : Bytes {
   }
   return b
 }
+
+// The table, every item 0, made by doubling: a list made by a function given each item would call it
+// a million times, a collection at each under GC stress; this makes a few lists.
+fun zeros(n : int) : open List<uint16> {
+  val t : open List<uint16> = [0]
+  while (t.size < n) { t.addAll(t.toList()) }
+  return t
+}
+
 val data = input(200000)
-print(codes(data, List<uint16>(4096 * 256) { 0 }))   // expect: [878, 38, 6, 2202, 391788]
-
-// The same, left from the hot path (a break once the table holds enough) and from the cold one (a
-// throw past a count), each with what the loop changed read after it.
-fun until(input : Bytes, table : open List<uint16>, stopAt : int, failAt : int) : string {
-  var prefix = input[0].toInt()
-  var acc = 0
-  var bits = 0
-  var next = 258
-  var hits = 0
-  var i = 1
-  var x1 = 0
-  var x2 = 0
-  var x3 = 0
-  try {
-    while (i < input.size) {
-      val key = (prefix << 8) | input[i].toInt()
-      val found = table[key]
-      if (found != 0) {
-        prefix = found
-        hits += 1
-        x1 += found
-        x2 ^= key
-        x3 += x1 & 7
-        if (hits == stopAt) { break }
-        i += 1
-        continue
-      }
-      acc = acc ^ (prefix << (bits % 16)) ^ x1 ^ (x2 << 1) ^ x3
-      bits += 3
-      if (next == failAt) { throw IllegalStateException("cold path at $next") }
-      table[key] = next
-      next += 1
-      prefix = input[i].toInt()
-      i += 1
-    }
-  } catch (e : IllegalStateException) {
-    return "${e.message}: prefix $prefix, hits $hits, i $i, acc $acc, $x1 $x2 $x3"
-  }
-  return "stopped: prefix $prefix, hits $hits, i $i, next $next, acc $acc, $x1 $x2 $x3"
-}
-print(until(data, List<uint16>(4096 * 256) { 0 }, 150000, 100000))   // expect: stopped: prefix 2167, hits 150000, i 151913, next 2171, acc 33652155, 133432091 348422 525941
-print(until(data, List<uint16>(4096 * 256) { 0 }, 1000000, 700))     // expect: cold path at 700: prefix 689, hits 9918, i 10361, acc 14461128, 4208026 78336 34661
-
-// A call on the hot path that the VM does (a lambda), the split values around it.
-fun mapped(input : Bytes, f : (int) -> int) : int {
-  var prefix = 0
-  var a = 0
-  var b = 0
-  var c = 0
-  var d = 0
-  var e = 0
-  var g = 0
-  var h = 0
-  var t = 0
-  for (i in 0 ..< input.size) {
-    val v = input[i].toInt()
-    if (v != 0) {
-      prefix = f(prefix + v)
-      continue
-    }
-    a += prefix
-    b += a
-    c ^= b
-    d += c & 255
-    e += d % 7
-    g += e
-    h += g & 15
-    t += a + b + c + d + e + g + h
-  }
-  return prefix + t
-}
-print(mapped(data, { it % 1000 }))   // expect: 761351192074280
+print(codes(data, zeros(4096 * 256)))   // expect: [878, 38, 6, 2202, 391788]

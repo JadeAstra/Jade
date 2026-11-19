@@ -5,6 +5,10 @@
 // keys the VM must decide: a float equal to an int, a byte, strings, values of a value type, objects
 // of a class with its own == and hashCode; a map changed in a for over it. Each
 // loop run often enough for its region to be made: the same answers as the VM's.
+//
+// This part: int keys looked up and gone through, and keys the VM decides (other parts:
+// native_sets_maps_keys.ww, k in map.keys; native_sets_maps_strings.ww, string keys;
+// native_sets_maps_writes.ww, map[k] = v and set.add(k)).
 
 class Key(val n : int) {
   op ==(other : any?) => other is Key and other.n % 10 == n % 10
@@ -30,29 +34,6 @@ fun inAll(s : Set<int>, n : int) : int {
   }
   return t
 }
-fun inKeys(m : Map<int, int>, n : int) : int {
-  var t = 0
-  for (i in 0 ..< n) {
-    if (i in m.keys) { t += 1 }
-  }
-  return t
-}
-fun setAll(m : open Map<int, int>, n : int) : int {
-  for (i in 0 ..< n) { m[i] = i * 3 }
-  return m.size
-}
-fun addAll(s : open Set<int>, n : int) : int {
-  var added = 0
-  for (i in 0 ..< n) {
-    if (s.add(i % 50)) { added += 1 }
-  }
-  return added
-}
-fun counts(words : List<string>) : string {
-  val m : open Map<string, int> = {:}
-  for (w in words) { m[w] = (m[w] ?: 0) + 1 }
-  return "${m.size} ${m["w3"]} ${m["w96"]} ${m["none"]}"
-}
 fun sumSet(s : Set<int>) : int {
   var t = 0
   for (n in s) { t += n }
@@ -73,13 +54,6 @@ fun anyGet(m : Map<any, int>, keys : List<any>) : int {
   for (i in 0 ..< keys.size) { t += m[keys[i]] ?: 100 }
   return t
 }
-fun strings(s : Set<string>, words : List<string>) : int {
-  var t = 0
-  for (w in words) {
-    if (s.contains(w)) { t += 1 }
-  }
-  return t
-}
 fun changeWhileGoing(m : open Map<int, int>) : string {
   var t = 0
   try {
@@ -93,22 +67,6 @@ fun changeWhileGoing(m : open Map<int, int>) : string {
   return "went through, $t"
 }
 
-fun wideKeys(m : Map<string, int>, n : int) : int {
-  var t = 0
-  for (i in 0 ..< n) {
-    t += m["é${i % 30}"] ?: 1000
-    t += m["日本${i % 30}"] ?: 1000
-    t += m["😀${i % 30}"] ?: 1000
-    t += m["plain${i % 30}"] ?: 1000
-  }
-  return t
-}
-fun charOrString(m : Map<any, int>, keys : List<string>) : int {
-  var t = 0
-  for (k in keys) { t += m[k] ?: 7 }
-  return t
-}
-
 val map : open Map<int, int> = {:}
 val set : open Set<int> = Set([])
 for (i in 0 ..< 2000) {
@@ -117,40 +75,25 @@ for (i in 0 ..< 2000) {
     set.add(i)
   }
 }
-val words = (0 ..< 1500).map { "w${it % 97}" }
-val vocabulary : Set<string> = Set((0 ..< 40).map { "w$it" })
 for (round in 0 ..< 3) {
   var a = 0
   var b = 0
   var c = 0
-  var d = 0
-  var e = 0
-  var f = ""
   var g = 0
   var h = 0
   var p = 0
-  var w = 0
   for (r in 0 ..< 200) {
     a = getAll(map, 2100)
     b = containsAll(set, 2100)
     c = inAll(set, 2100)
-    d = inKeys(map, 2100)
-    f = counts(words)
     g = sumSet(set)
     h = sumKeys(map)
     p = sumPairs(map)
-    w = strings(vocabulary, words)
   }
-  val filled : open Map<int, int> = {:}
-  val grown : open Set<int> = Set([])
-  for (r in 0 ..< 200) {
-    e = setAll(filled, 700)
-    e += addAll(grown, 300)
-  }
-  print(a, b, c, d, e, g, h, p, w, f)
-  print(filled[0], filled[699], filled[700], grown.size, grown.contains(49), grown.contains(50))
+  print(a, b, c, g, h, p)
 }
-// Keys the VM decides: a float equal to an int, a byte, a string, a value, an object of its own ==.
+// Keys the VM decides: a float equal to an int, a byte, a string, a value, an object of its own ==
+// (string keys of every width, and a char beside a string, in native_sets_maps_strings.ww).
 val mixed : open Map<any, int> = {:}
 mixed[1.0] = 10
 mixed[2] = 20
@@ -165,31 +108,8 @@ val numbers : open Map<int, int> = {:}
 for (i in 0 ..< 20) { numbers[i] = i }
 for (r in 0 ..< 300) { numbers[1000 + 7] = 1; numbers.remove(1007) }
 print(changeWhileGoing(numbers), numbers.size)
-// String keys of every width, made afresh in the loop (their hash not worked out yet), and a
-// char beside a string of it alone (one key, as the VM has it).
-val wide : open Map<string, int> = {:}
-for (i in 0 ..< 20) {
-  wide["é$i"] = i
-  wide["日本$i"] = i * 2
-  wide["😀$i"] = i * 3
-  wide["plain$i"] = i * 4
-}
-var ws = 0
-for (r in 0 ..< 300) { ws = wideKeys(wide, 120) }
-print(ws)
-val withChar : open Map<any, int> = {:}
-withChar['a'] = 1
-withChar["bc"] = 2
-var cs = 0
-for (r in 0 ..< 300) { cs = charOrString(withChar, ["a", "bc", "b", "a"]) }
-print(cs)
-// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
-// expect: 0 2097 null 50 true false
-// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
-// expect: 0 2097 null 50 true false
-// expect: 2664567 1332667 1333 1333 700 1332667 1332667 5330668 640 97 16 15 null
-// expect: 0 2097 null 50 true false
+// expect: 2664567 1332667 1333 1332667 1332667 5330668
+// expect: 2664567 1332667 1333 1332667 1332667 5330668
+// expect: 2664567 1332667 1333 1332667 1332667 5330668
 // expect: 475
 // expect: stopped after 28 21
-// expect: 167600
-// expect: 11

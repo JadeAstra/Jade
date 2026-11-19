@@ -2,6 +2,7 @@
 // Charts (M8): JadeUI's six chart tests (ChartAxisTest, ChartCategoryColorTest, ChartHoverTest,
 // ChartLegendTest, ChartPaletteWrapTest, ChartViewTest), on images and on components laid out and
 // drawn with no window.
+// The colours of categories are in jade_charts_colors.ww.
 import Jade.*
 
 fun render(data : ChartData, w : int = 420, h : int = 260) : Image {
@@ -79,47 +80,6 @@ render(ChartData(ChartType.line, [ChartSeries([1.0, 2.0])], [], "t"), w = 30, h 
 render(ChartData(ChartType.line, [ChartSeries([5.0])], [], "t"))
 render(ChartData(ChartType.pie, [ChartSeries([0.0, 0.0])], ["a", "b"], "t"))
 print("drawn")   // expect: drawn
-
-print("-- colours of categories")   // expect: -- colours of categories
-val nearWhite = Color(0xF7, 0xF7, 0xF7)
-val pieLabels = ["Nonpaged", "Paged res.", "Cache", "Processes", "Free"]
-val pieValues = [12.4, 4.7, 1.3, 12.8, 8.5]
-fun pie(overrides : List<Color?> = []) : ChartView => shown(ChartData(ChartType.pie, [ChartSeries(pieValues)], pieLabels, "Physical RAM (GB)", categoryColors = overrides)).first
-val plain = colorsOf(pie())
-val overridden = colorsOf(pie([null, null, null, null, nearWhite]))
-// One category's own colour changes that category only.
-print(overridden[4] == nearWhite, plain.take(4) == overridden.take(4))   // expect: true true
-// A short list, or one of nulls, changes nothing.
-print(colorsOf(pie([null, null])) == plain, colorsOf(pie([null, null, null, null, null])) == plain)   // expect: true true
-// Two categories may have the same colour (Free and Unused are the same nothing).
-val twin = colorsOf(pie([nearWhite, null, null, null, nearWhite]))
-print(twin[0] == twin[4])   // expect: true
-// A bar chart takes them under colorByCategory.
-val barOwn = shown(ChartData(ChartType.bar, [ChartSeries(pieValues)], pieLabels, "Physical RAM (GB)", colorByCategory = true,
-                             categoryColors = [null, null, null, null, nearWhite])).first
-print(barOwn.layout().hits.first { it.point == 4 }.color == nearWhite)   // expect: true
-// A near-white slice still has an edge on white: some pixel in it darker than its fill.
-fun darkerInside(view : ChartView, hit : ChartHit, test : (Color) -> bool) : int {
-  val image = render(view.data, 500, 300)
-  val b = hit.shape.bounds
-  var n = 0
-  for (x in b.x ..< b.x + b.width) {
-    for (y in b.y ..< b.y + b.height) {
-      if (x < 0 or x >= 500 or y < 0 or y >= 300) { continue }
-      if (!hit.shape.contains(x.toFloat(), y.toFloat())) { continue }
-      if (test(image.get(x, y))) { n += 1 }
-    }
-  }
-  return n
-}
-val whiteSlice = pie([null, null, null, null, nearWhite])
-val whiteHit = whiteSlice.layout().hits.first { it.point == 4 and !isRect(it) }
-print(darkerInside(whiteSlice, whiteHit) { it.red < 0xC0 and it.green < 0xC0 and it.blue < 0xC0 } > 0)   // expect: true
-// Every slice is outlined, not only the one under the pointer.
-val anyPie = pie()
-val firstSlice = anyPie.layout().hits.first { !isRect(it) }
-val fill = firstSlice.color
-print(darkerInside(anyPie, firstSlice) { it.red < fill.red and it.green < fill.green and it.blue < fill.blue } > 0)   // expect: true
 
 print("-- the datum under the pointer")   // expect: -- the datum under the pointer
 val barLabels = ["Nonpaged", "Paged res.", "Cache", "Processes", "Free"]
@@ -237,6 +197,8 @@ render(ChartData(ChartType.line, [ChartSeries((0 ..< 8).toList().map { 10.0 + it
 render(ChartData(ChartType.line, [series("a name far too long for this chart", 10.0), series("another very long one", 20.0)], [], "t"), 120, 90)
 print("drawn")   // expect: drawn
 
+// A colour near white, as a category's own (as in jade_charts_colors.ww).
+val nearWhite = Color(0xF7, 0xF7, 0xF7)
 print("-- the palette going round")   // expect: -- the palette going round
 fun colorsFor(count : int) : List<Color> =>
   colorsOf(shown(ChartData(ChartType.pie, [ChartSeries((0 ..< count).toList().map { (count - it).toFloat() })], (0 ..< count).toList().map { "cat $it" }, "wrapping"), 600, 360).first)

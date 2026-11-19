@@ -1,0 +1,76 @@
+// Sets and maps in native code (2026-11-16, docs/sets-maps-plan.html): map[k], set.contains(k),
+// k in set, k in map.keys (looked up by the step for an int key, by the VM's way for another);
+// map[k] = v and set.add(k) (an existing int key's value written by the step, a new key added by
+// the VM's way); a for over a set, over a map's keys, and over a map's keys and values. Then the
+// keys the VM must decide: a float equal to an int, a byte, strings, values of a value type, objects
+// of a class with its own == and hashCode; a map changed in a for over it. Each
+// loop run often enough for its region to be made: the same answers as the VM's.
+//
+// This part (of native_sets_maps.ww): string keys, a map of counts written by the VM's way, a set
+// of strings, keys of every width, and a char beside a string.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer calls each round
+
+fun counts(words : List<string>) : string {
+  val m : open Map<string, int> = {:}
+  for (w in words) { m[w] = (m[w] ?: 0) + 1 }
+  return "${m.size} ${m["w3"]} ${m["w96"]} ${m["none"]}"
+}
+fun strings(s : Set<string>, words : List<string>) : int {
+  var t = 0
+  for (w in words) {
+    if (s.contains(w)) { t += 1 }
+  }
+  return t
+}
+fun wideKeys(m : Map<string, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    t += m["é${i % 30}"] ?: 1000
+    t += m["日本${i % 30}"] ?: 1000
+    t += m["😀${i % 30}"] ?: 1000
+    t += m["plain${i % 30}"] ?: 1000
+  }
+  return t
+}
+fun charOrString(m : Map<any, int>, keys : List<string>) : int {
+  var t = 0
+  for (k in keys) { t += m[k] ?: 7 }
+  return t
+}
+
+val words = (0 ..< 1500).map { "w${it % 97}" }
+val vocabulary : Set<string> = Set((0 ..< 40).map { "w$it" })
+val calls = quick ? 70 : 200   // each round; 210 in all when quick
+for (round in 0 ..< 3) {
+  var f = ""
+  var w = 0
+  for (r in 0 ..< calls) {
+    f = counts(words)
+    w = strings(vocabulary, words)
+  }
+  print(w, f)
+}
+// String keys of every width, made afresh in the loop (their hash not worked out yet), and a
+// char beside a string of it alone (one key, as the VM has it).
+val wide : open Map<string, int> = {:}
+for (i in 0 ..< 20) {
+  wide["é$i"] = i
+  wide["日本$i"] = i * 2
+  wide["😀$i"] = i * 3
+  wide["plain$i"] = i * 4
+}
+var ws = 0
+for (r in 0 ..< 300) { ws = wideKeys(wide, 120) }
+print(ws)
+val withChar : open Map<any, int> = {:}
+withChar['a'] = 1
+withChar["bc"] = 2
+var cs = 0
+for (r in 0 ..< 300) { cs = charOrString(withChar, ["a", "bc", "b", "a"]) }
+print(cs)
+// expect: 640 97 16 15 null
+// expect: 640 97 16 15 null
+// expect: 640 97 16 15 null
+// expect: 167600
+// expect: 11

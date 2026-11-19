@@ -1,0 +1,202 @@
+// needs windows: it opens windows
+// Jade's dialogs (M8), part two (of jade_dialogs.ww): the choices, the forms, the options and the
+// image dialog, each in a hidden window, pressed and typed into as a user would. From JadeUI's
+// JadeDialogsTest; split off 2026-11-19.
+import Jade.*
+
+val none = Modifiers.none
+val opener = HiddenWindowOpener()
+Jade.windowOpener = opener
+val main = Window(label("main"), "Main", 400, 300, exitOnClose = false)
+main.show()
+
+// A case starts with no dialogs, no drafts, and Jade's own dialogs in their slots.
+var first = 0
+fun fresh(name : string) {
+  Jade.closeAllDialogs()
+  Jade.windowOpener = opener
+  Jade.drafts.clear()
+  Dialogs.install()
+  first = opener.opened.size
+  print("--", name)
+}
+// The windows a case opened, the first at 0; and the last one.
+fun win(i : int) : WindowHost => opener.opened[first + i] as WindowHost
+fun last() : WindowHost => opener.opened[opener.opened.size - 1] as WindowHost
+fun opened() : int => opener.opened.size - first
+
+// What a window shows (laid out and painted first), what is in it, and a user's clicks and keys.
+fun all(h : WindowHost) : List<Component> {
+  h.frame()
+  return h.window.root.descendants()
+}
+fun click(h : WindowHost, c : Component) {
+  val p = c.windowPosition()
+  h.send(RawInput.PointerDown(p.x + 3, p.y + 3, PointerButton.left, none))
+  h.send(RawInput.PointerUp(p.x + 3, p.y + 3, PointerButton.left, none))
+}
+fun buttonOf(h : WindowHost, text : string) : Component => all(h).first { it.content is Button and (it.content as Button).text == text }
+fun hasButton(h : WindowHost, text : string) : bool => all(h).any { it.content is Button and (it.content as Button).text == text }
+fun press(h : WindowHost, text : string) {
+  click(h, buttonOf(h, text))
+}
+fun key(h : WindowHost, code : KeyCode, ctrl : bool = false) {
+  h.send(RawInput.KeyDown(code, Modifiers(ctrl = ctrl)))
+}
+fun fields(h : WindowHost) : List<Component> => all(h).filter { it.content is TextField or it.content is TextArea }
+fun text(h : WindowHost, i : int = 0) : string => (fields(h)[i].content as TextEditable).model.text
+// Typing over what a field holds: a click into it, all of it chosen, and the text.
+fun type(h : WindowHost, text : string, i : int = 0) {
+  val f = fields(h)[i]
+  click(h, f)
+  (f.content as TextEditable).model.selectAll()
+  h.send(RawInput.Text(text))
+}
+fun boxes(h : WindowHost) : List<Component> => all(h).filter { it.content is CheckBox }
+fun labels(h : WindowHost) : List<string> => all(h).filter { it.content is Label }.map { (it.content as Label).text }
+
+var answer : any? = "unset"
+
+// ---- choices ----
+
+fresh("choose has a button for each option; Enter presses only a default")   // expect: -- choose has a button for each option; Enter presses only a default
+answer = -1
+Jade.choiceDialog.choose(ChoiceSpec("Paste", "A picture with this name is already there.", ["Replace", "Keep Both", "Skip", "Rename..."])) { answer = it }
+val paste = last()
+print(labels(paste).contains("A picture with this name is already there."))   // expect: true
+key(paste, KeyCode.enter)
+print(answer, paste.native.isOpen)   // expect: -1 true
+press(paste, "Skip")
+print(answer)   // expect: 2
+Jade.choiceDialog.choose(ChoiceSpec("Merge", "Merge the layers?", ["Merge", "Keep Apart"], defaultOption = 1)) { answer = it }
+key(last(), KeyCode.enter)
+print(answer)   // expect: 1
+
+fresh("a pick with a name")   // expect: -- a pick with a name
+answer = null
+Jade.choiceDialog.pick(PickSpec("New", "Type:", ["Text", "Table", "Chart"], initial = 1, nameLabel = "Name:", defaultName = "Untitled")) { answer = it }
+val newWin = last()
+print(text(newWin))   // expect: Untitled
+(all(newWin).first { it.content is ListBox }.content as ListBox).selected = 2
+type(newWin, "Sales")
+press(newWin, "OK")
+val picked = answer as PickResult
+print(picked.index, picked.name)   // expect: 2 Sales
+
+fresh("a checklist: All, None and a filter")   // expect: -- a checklist: All, None and a filter
+val items = (1 .. 20).toList().map { "Value $it" }
+answer = null
+Jade.checklistDialog.check(ChecklistSpec("Filter", "Show rows whose value is:", items, setOf("Value 1"))) { answer = it }
+val list = last()
+print(boxes(list).size, boxes(list).count { (it.content as CheckBox).checked })   // expect: 20 1
+press(list, "All")
+print(boxes(list).all { (it.content as CheckBox).checked })   // expect: true
+type(list, "1")   // the filter box: Value 1, and 10 to 19
+print(boxes(list).size)   // expect: 11
+press(list, "None")
+press(list, "OK")
+print(answer == items.filter { !it.contains("1") }.toSet())   // expect: true
+
+// JadeUI kept a checklist's draft one item to a line, so that an item holding a line break came
+// back as two items that are not there; it comes back whole here.
+fresh("a checklist's draft keeps an item holding a line break")   // expect: -- a checklist's draft keeps an item holding a line break
+answer = null
+val odd = ["one\ntwo", "back\\slash", "plain"]
+Jade.checklistDialog.check(ChecklistSpec("Pick", "", odd, setOf(), draftKey = "odd")) { answer = it }
+click(last(), boxes(last())[0])
+click(last(), boxes(last())[1])
+key(last(), KeyCode.escape)
+Jade.checklistDialog.check(ChecklistSpec("Pick", "", odd, setOf(), draftKey = "odd")) { answer = it }
+print(boxes(last()).map { (it.content as CheckBox).checked })   // expect: [true, true, false]
+press(last(), "OK")
+print(answer == setOf("one\ntwo", "back\\slash"))   // expect: true
+
+// ---- forms, options, the image ----
+
+fresh("a form switches kind as it goes, and Pick... keeps the rest as a draft")   // expect: -- a form switches kind as it goes, and Pick... keeps the rest as a draft
+val kinds = [
+  FormKind("bar", "Bar chart", [FormField("range", "Data:", pickable = true), FormField("title", "Title:")]),
+  FormKind("pie", "Pie chart", [FormField("range", "Data:", pickable = true), FormField("labels", "Labels:")])
+]
+val formSeen = []
+answer = null
+val chart = FormSpec("Chart", kinds, "bar", {"range": "A1:A4"}, { k, v -> formSeen.add("$k:${v["title"]}") })
+chart.draftKey = "chart:B2"
+Jade.formDialog.edit(chart) { answer = it }
+val form = last()
+print(labels(form).filter { it.endsWith(":") })   // expect: ["Kind:", "Data:", "Title:"]
+type(form, "Sales", 1)
+print(formSeen.last())   // expect: bar:Sales
+// Switching kind and back loses nothing.
+val combo = all(form).first { it.content is ComboBox }.content as ComboBox
+combo.dropdownChoose(1)
+print(formSeen.last(), labels(form).filter { it.endsWith(":") })   // expect: pie:Sales ["Kind:", "Data:", "Labels:"]
+combo.dropdownChoose(0)
+print(text(form, 1))   // expect: Sales
+press(form, "Pick...")
+val formAnswer = answer as FormResult
+print(formAnswer.pick, formAnswer.values["title"], Jade.drafts["chart:B2"])   // expect: range Sales {"f:title": "Sales"}
+val again = FormSpec("Chart", kinds, "bar", {"range": "B1:B9"})
+again.draftKey = "chart:B2"
+Jade.formDialog.edit(again) { answer = it }
+print(text(last(), 0), text(last(), 1))   // expect: B1:B9 Sales
+
+fresh("options give their values, and the action pressed")   // expect: -- options give their values, and the action pressed
+answer = null
+val contents = OptionsSpec("Contents", [ChoiceOption("depth", "Levels:", ["1", "2", "3"], 1), CheckOption("numbers", "Page numbers", true)],
+                           actions = ["Update", "Remove"], message = "The table of contents at the top.")
+Jade.optionsDialog.show(contents) { answer = it }
+val opts = last()
+click(opts, all(opts).first { it.content is RadioButton and (it.content as RadioButton).label == "3" })
+click(opts, boxes(opts)[0])
+press(opts, "Update")
+val chosen = answer as OptionsResult
+print(chosen.values, chosen.action)   // expect: {"depth": "2", "numbers": "false"} Update
+// An action answers as OK does: with its subject gone, the actions are off with OK.
+Jade.optionsDialog.show(contents) { answer = it }
+last().frame()
+Jade.openDialogs()[0].detach("The table was deleted.")
+print(buttonOf(last(), "Update").enabled, buttonOf(last(), "OK").enabled, buttonOf(last(), "Cancel").enabled)   // expect: false false true
+
+fresh("the image dialog previews what the program draws")   // expect: -- the image dialog previews what the program draws
+answer = null
+// The program's picture, red: the preview shows it in the dialog's picture.
+val pic = Image(40, 20)
+val pen = pic.canvas()
+pen.color = Color.red
+pen.fillRect(0, 0, 40, 20)
+fun showsRed(h : WindowHost) : bool {
+  h.frame()
+  val shot = h.native.snapshot()
+  for (y in 0 ..< shot.height step 2) {
+    for (x in 0 ..< shot.width step 2) {
+      if (shot.get(x, y).argb == 0xFFFF0000) { return true }
+    }
+  }
+  return false
+}
+val asked = []
+Jade.imageDialog.choose(ImageSpec({ src, v ->
+  asked.add("$src")
+  src == ImageSource.svgCode and v.startsWith("<svg") ? pic : null
+}, source = ImageSource.svgCode)) { answer = it }
+val img = last()
+print(asked, showsRed(img))   // expect: [] false
+type(img, "<svg width='40'/>")   // the markup box: the file box is hidden
+print(asked.last(), showsRed(img))   // expect: svgCode true
+press(img, "Insert")
+val inserted = answer as ImageChoice
+print(inserted.source, inserted.value)   // expect: svgCode <svg width='40'/>
+// A file chosen with Browse... (the file dialog is the program's: here, a scripted one).
+val script = ScriptedFileDialog()
+script.answers.add("C:\\pictures\\cat.png")
+Jade.fileDialog = script
+Jade.imageDialog.choose(ImageSpec({ src, v -> null })) { answer = it }
+press(last(), "Browse...")
+print(text(last()), script.asked[0].title, script.asked[0].filters[0].extensions.size)   // expect: C:\pictures\cat.png Choose a Picture 6
+press(last(), "Insert")
+print((answer as ImageChoice).source, (answer as ImageChoice).value)   // expect: file C:\pictures\cat.png
+Jade.fileDialog = NoFileDialog()
+
+Jade.closeAllDialogs()
+main.close()

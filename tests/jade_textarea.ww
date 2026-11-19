@@ -1,13 +1,14 @@
 // needs windows: it paints
-// The text area: lines and columns, the caret by rows and pages, indenting blocks, a read-only
-// area, where the caret is drawn, links under Shift, the debugger's band and status strip, the
-// bar along the bottom for long lines, and a large text drawing only what shows. JadeUI's own
-// tests (TextAreaTest, CaretRectTest, TextAreaLinksTest, TextAreaCurrentLineTest,
-// TextAreaHScrollTest, TextAreaLargeTextTest, the area's legs of TextNavParityTest and
-// NestedScrollTest as JadeUI wrote it, with text areas), carried over with their names. The
-// area's bookkeeping (wrapCount, statusH, contentWidth, pageRows, the bar's height) and the
-// view's (maxScrollY, innerW) are internal to Jade: where JadeUI reads them, these read what
-// shows instead.
+// The text area, part one: lines and columns, the caret by rows and pages, indenting blocks, a
+// read-only area, where the caret is drawn, links under Shift, the debugger's band and status
+// strip, and the bar along the bottom for long lines. JadeUI's own tests (TextAreaTest,
+// CaretRectTest, TextAreaLinksTest, TextAreaCurrentLineTest, TextAreaHScrollTest, the area's legs
+// of TextNavParityTest and NestedScrollTest as JadeUI wrote it, with text areas), carried over with
+// their names. A large text drawing only what shows (TextAreaLargeTextTest) is in
+// jade_textarea_large.ww and jade_textarea_highlight.ww (split 2026-11-19: it is most of the time
+// under GC stress). The area's bookkeeping (wrapCount, statusH, contentWidth, pageRows, the bar's
+// height) and the view's (maxScrollY, innerW) are internal to Jade: where JadeUI reads them, these
+// read what shows instead.
 import Jade.*
 
 val failed = []
@@ -537,81 +538,6 @@ theBlockMakesRoomForTheBarOnlyWhenItHasOne()
 
 // inADocumentTheWheelSidewaysScrollsTheBlock: waits for the document view (JadeDocView).
 print("TextAreaHScrollTest:", checks, "checks,", failed)   // expect: TextAreaHScrollTest: 22 checks, []
-
-// -- TextAreaLargeTextTest --
-
-checks = 0
-val lineCount = 5000
-val bigText = numbered("line ", 0, lineCount)
-fun shownTexts(ops : List<DrawOp>) : List<string> => texts(ops).map { it.text }
-
-// onlyTheRowsInTheViewportAreDrawn
-fun onlyTheRowsInTheViewportAreDrawn() {
-  val m = SharedTextModel(bigText)
-  val sc = scroll(Component(TextArea(m)))
-  val top = shownTexts(sc.record(400, 200))
-  yes("the first screenful is drawn", top.contains("line 0"))
-  yes("a screenful of rows, not all $lineCount: ${top.size}", top.count { it.startsWith("line ") } < 40)
-  yes("the last line is far below the view", !top.contains("line 4999"))
-  (sc.content as Scroll).scrollTo(int.maxValue)
-  val bottom = shownTexts(sc.record(400, 200))
-  yes("scrolled to the end, the last line is drawn", bottom.contains("line 4999"))
-  yes("and the first is not", !bottom.contains("line 0"))
-  yes("still a screenful: ${bottom.size}", bottom.count { it.startsWith("line ") } < 40)
-}
-onlyTheRowsInTheViewportAreDrawn()
-
-// highlightedTextIsCulledToo
-fun highlightedTextIsCulledToo() {
-  val m = SharedTextModel(bigText)
-  val runs = []
-  for (i in 0 ..< lineCount) {
-    val s = Math.max(m.text.indexOf("line $i\n"), 0)
-    runs.add(StyleRun(s, s + 4, Color.red))
-  }
-  m.setStyleRuns(runs)
-  val sc = scroll(Component(TextArea(m)))
-  val ops = texts(sc.record(400, 200))
-  yes("the run's colour is drawn", ops.any { it.text == "line" and it.color == Color.red })
-  yes("two pieces a row, a screenful of rows: ${ops.size}", ops.size < 80)
-}
-highlightedTextIsCulledToo()
-
-// aWholeSelectionShadesOnlyTheRowsOnScreen
-fun aWholeSelectionShadesOnlyTheRowsOnScreen() {
-  val m = SharedTextModel(bigText)
-  m.setFocused(true)
-  m.select(0, m.length)
-  val sc = scroll(Component(TextArea(m)))
-  val shaded = rects(sc.record(400, 200)).count { it.fill and it.color.alpha == 0x88 }
-  yes("a screenful of selected rows: $shaded", shaded in 1 ..< 40)
-}
-aWholeSelectionShadesOnlyTheRowsOnScreen()
-
-// squigglesAreDrawnOnlyOnScreen
-fun squigglesAreDrawnOnlyOnScreen() {
-  val m = SharedTextModel(bigText)
-  val area = TextArea(m)
-  area.squiggles = [0 ..< m.length]
-  val sc = scroll(Component(area))
-  val zig = sc.record(400, 200).count { it is DrawOp.Line }
-  yes("zigzags on a screenful of rows only: $zig", zig in 1 ..< 40 * 40)
-}
-squigglesAreDrawnOnlyOnScreen()
-
-// visibleBoundsIsTheCanvasWithinItsClips: JadeUI's live canvas is an AwtCanvas on a picture; here a Surface's.
-fun visibleBoundsIsTheCanvasWithinItsClips() {
-  val rec = RecordingCanvas(400, 200, [])
-  same("the whole canvas", rec.visibleBounds, Rect(0, 0, 400, 200))
-  // A child moved up by 300 inside it: the part showing is its y 300 to 500.
-  val child = rec.sub(0, -300, 400, 5000)
-  same("the child's part showing", child.visibleBounds, Rect(0, 300, 400, 200))
-  same("clips nest", child.sub(0, 250, 400, 150).visibleBounds, Rect(0, 50, 400, 100))
-  val live = Surface(400, 200).canvas()
-  same("a live canvas: its clip", live.sub(0, -300, 400, 5000).visibleBounds, Rect(0, 300, 400, 200))
-}
-visibleBoundsIsTheCanvasWithinItsClips()
-print("TextAreaLargeTextTest:", checks, "checks,", failed)   // expect: TextAreaLargeTextTest: 14 checks, []
 
 // -- TextNavParityTest: the area's legs (the field's are in jade_textfield; prose waits for the prose view) --
 

@@ -2,7 +2,13 @@
 // past the cache, 64 bytes at a time, after the bytes up to a 64-byte boundary. A picture's copy,
 // a part of whole rows starting part way in, a part of rows narrower than the picture, items set
 // one list from another, and along one list each way (where they overlap, as the steps go). The
-// same as the VM's; each run three times (a loop's region is made the second time it starts).
+// same as the VM's; each run three times (a loop's region is made the second time it starts), the
+// first time's answers printed and the others' compared with them.
+
+// The runner's quick GC stress: two rounds, the fewest that reach the loops' native regions.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val rounds = quick ? 2 : 3
+
 fun picture(w : int, h : int, seed : int) : Image {
   val im = Image(w, h)
   var s = seed
@@ -40,38 +46,40 @@ fun up(xs : open List<Color>, n : int) {
 }
 
 val big = picture(701, 503, 9)
-for (round in 0 ..< 3) {
+var firstAnswers : List<string> = []
+var sameEachRound = true
+for (round in 0 ..< rounds) {
+  val answers : open List<string> = []
   val copy = big.copy()
-  print(copy == big, copy.hashCode() == big.hashCode(), sum(copy.pixels.toList()))
+  answers.add("${copy == big} ${copy.hashCode() == big.hashCode()} ${sum(copy.pixels.toList())}")
   val rows = big.pixels[0 .. 700, 3 .. 500]
-  print(rows.width, rows.height, same(rows, big.pixels, 0, 3))
+  answers.add("${rows.width} ${rows.height} ${same(rows, big.pixels, 0, 3)}")
   val narrow = big.pixels[5 .. 690, 1 .. 499]
-  print(narrow.width, narrow.height, same(narrow, big.pixels, 5, 1))
+  answers.add("${narrow.width} ${narrow.height} ${same(narrow, big.pixels, 5, 1)}")
   val from = big.pixels.toList()
-  val to : open List<Color> = []
-  for (i in 0 ..< from.size) { to.add(Color.black) }
+  // As many black items, made at once (not added one by one: under GC stress, 352,603 adds that
+  // stay in the VM cost minutes, and the case is setAll's loop).
+  val to : open List<Color> = Grid<Color>(big.width, big.height, fill = Color.black).toList()
   setAll(from, to, from.size)
-  print(sum(to) == sum(from))
+  answers.add("${sum(to) == sum(from)}")
   val d : open List<Color> = []
   d.addAll(from)
   down(d, d.size - 3)
   val u : open List<Color> = []
   u.addAll(from)
   up(u, u.size - 3)
-  print(sum(d), sum(u))
+  answers.add("${sum(d)} ${sum(u)}")
+  if (round == 0) {
+    firstAnswers = answers
+    for (line in answers) { print(line) }
+  } else if (answers != firstAnswers) {
+    sameEachRound = false
+    print("round $round: $answers")
+  }
 }
 // expect: true true 971052267
 // expect: 701 498 true
 // expect: 686 499 true
 // expect: true
 // expect: 333286007 951100535
-// expect: true true 971052267
-// expect: 701 498 true
-// expect: 686 499 true
-// expect: true
-// expect: 333286007 951100535
-// expect: true true 971052267
-// expect: 701 498 true
-// expect: 686 499 true
-// expect: true
-// expect: 333286007 951100535
+print("the same each round:", sameEachRound)   // expect: the same each round: true

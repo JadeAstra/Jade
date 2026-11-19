@@ -1,0 +1,16 @@
+// Sequences (D98): items worked out one at a time, as they are asked for. Part two of
+// sequences.ww: the stacks their blocks run on.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer and shallower
+val alive = quick ? 1500 : 2000
+val deep = quick ? 5000 : 15000
+
+// Each block runs on a stack of its own that starts small and grows: many can be alive at
+// once, and each can go deep.
+val many = (1..alive).map { k -> sequence { yield(k); yield(k + 1) }.iterator() }
+var total = 0
+for g in many { total += g.next() }
+print(total == alive * (alive + 1) / 2)                       // expect: true
+fun depth(k : int) : int => k == 0 ? 0 : 1 + depth(k - 1)
+print(sequence { yield(depth(deep)) }.first() == deep)        // expect: true
+try { sequence { yield(depth(1_000_000)) }.first() } catch (e : StackOverflowError) { print(e.message) }   // expect: stack overflow

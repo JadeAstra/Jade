@@ -1,0 +1,132 @@
+// Parallel sections: the items of a list worked on by several cores at once, each core
+// allowed to change its own items and what it makes, and to read everything else.
+// This part, split off from parallel.ww (2026-11-19): what a section may not do, a buffer in
+// parts, and sections started from a thread and from a task.
+
+class Ball(var x : Number, var y : Number, var dx : Number, var dy : Number) {
+  var trail = []
+  fun move(width : int, height : int, steps : int) {
+    x += dx * steps
+    y += dy * steps
+    if x < 0 or x > width { dx = -dx }
+    if y < 0 or y > height { dy = -dy }
+  }
+}
+fun balls(count : int) => List(count) { n -> Ball(n % 70, n % 50, 1.5, -2.5) }
+fun places(list : List<Ball>) => list.map { [it.x, it.y, it.dx, it.dy] }
+
+// What the sections below work on and read, as in parallel.ww: the balls moved once, by a loop
+// and by a section, to be the same at the end however the refusals went.
+val width = 76
+val height = 52
+val plain = balls(3000)
+val shared = balls(3000)
+for ball in plain { ball.move(width, height, 1) }
+shared.parallelStream().forEach { it.move(width, height, 1) }
+val numbers = (1..1000).toList()
+val prices = {"apple": 3, "pear": 5}
+val names = ["apple", "pear", "apple", "fig"]
+val settings = Ball(1, 2, 3, 4)
+// Items that are lists, changed by their cores.
+val rows = List(200) { n -> [n] }
+rows.parallelStream().forEach { row -> row.add(row[0] * 2); row[0] = -row[0]; row.sort() }
+
+// ---- What a section may not do ----
+// Each of these is an error where it is tried, and nothing is damaged.
+fun refused(action : (Ball) -> unit) {
+  try {
+    shared.parallelStream().forEach(action)
+    print("not refused")
+  } catch (e) {
+    print(e.message)
+  }
+}
+
+val moved = []
+var total = 0
+refused { moved.add(it) }
+// expect: a parallel section changes only the item it was given and what it makes itself: this List is shared with the other cores, so here it can be read and not changed
+refused { total += 1 }
+// expect: a parallel section changes only the item it was given and what it makes itself: the variable 'total' is shared
+refused { prices["new"] = 1 }
+// expect: a parallel section changes only the item it was given and what it makes itself: this Map is shared with the other cores, so here it can be read and not changed
+refused { settings.x = 99 }
+// expect: a parallel section changes only the item it was given and what it makes itself: this Ball is shared with the other cores, so here it can be read and not changed
+refused { names[0] = "changed" }
+// expect: a parallel section changes only the item it was given and what it makes itself: this List is shared with the other cores, so here it can be read and not changed
+refused { names.clear() }
+// expect: a parallel section changes only the item it was given and what it makes itself: this List is shared with the other cores, so here it can be read and not changed
+// What an item holds that is an object of its own is shared too: it was not dealt out.
+refused { it.trail.add(1) }
+// expect: a parallel section changes only the item it was given and what it makes itself: this List is shared with the other cores, so here it can be read and not changed
+fun inside() {
+  var local = 0
+  shared.parallelStream().forEach { local += 1 }
+}
+try { inside() } catch (e) { print(e.message) }
+// expect: a parallel section changes only the item it was given and what it makes itself: a variable from outside the section is shared
+print(moved.size, total, prices.size, settings.x, names)      // expect: 0 0 2 1 ["apple", "pear", "apple", "fig"]
+
+// Another core's item cannot be looked into, let alone changed. (With one core there is no
+// other core, and nothing to refuse.)
+if (availableProcessors() > 1) {
+  refused { shared[shared.size - 1].x + shared[0].x }
+} else {
+  print("this Ball is another core's item in this parallel section: a core looks only into its own items and into what is shared")
+}
+// expect: this Ball is another core's item in this parallel section: a core looks only into its own items and into what is shared. To read every item, go over the positions instead: items.indices.parallelStream()
+
+// The same object twice in a stream would be two cores' item at once.
+val one = Ball(0, 0, 1, 1)
+try { [one, Ball(1, 1, 1, 1), one].parallelStream().forEach { it.move(9, 9, 1) } } catch (e) { print(e.message) }
+// expect: the same Ball is in the stream more than once (it is item 2 as well): each core has to have its items to itself
+
+// Nothing waits in a section.
+val lock = Lock()
+refused { lock.useKey { it.x } }
+// expect: thread.enter() cannot be used in a parallel section: nothing waits there, and what the whole program has one of is left alone
+refused { try { FilePath("x").readText() } catch (e : IOException) { } }
+// expect: FilePath.read() cannot be used in a parallel section: nothing waits there, and what the whole program has one of is left alone
+// A section may start another inside it, its items dealt out from what its core has.
+print(rows.parallelStream().map { row -> row.parallelStream().map { it * 2 }.toList() }.toList()[3])   // expect: [-6, 12]
+refused { task { 1 } }
+// expect: task.start() cannot be used in a parallel section: nothing waits there, and what the whole program has one of is left alone
+
+// An error in the lambda comes out of the call, and the next section runs as usual.
+try { numbers.parallelStream().map { if (it == 500) { throw RuntimeException("item 500 failed") }; it }.toList() } catch (e) { print(e.message) }   // expect: item 500 failed
+print(numbers.parallelStream().map { it + 1 }.sumOf { it })  // expect: 501500
+print(places(plain) == places(shared))                       // expect: true
+
+// ---- A buffer, in parts ----
+// Each core gets the positions of one part, and may write those and no others.
+val buffer = Bytes(10000)
+buffer.parallelChunks { positions -> for i in positions { buffer[i] = (i % 251).toByte() } }
+print(buffer[0], buffer[250], buffer[251], buffer[9999], (0..<10000).all { buffer[it] == it % 251 })   // expect: 0 250 0 210 true
+val firstParts = []
+buffer.parallelChunks { positions -> buffer[positions.first] = 255 }
+print((0..<10000).count { buffer[it] == 255 } == Math.min(availableProcessors(), 10000))   // expect: true
+try {
+  buffer.parallelChunks { positions -> buffer[(positions.last + 1) % 10000] = 1 }
+  print(availableProcessors() == 1 ? "outside this core's part" : "not refused")
+} catch (e) {
+  print(e.message!!.contains("is outside this core's part of the buffer") ? "outside this core's part" : e.message)
+}
+// expect: outside this core's part
+// Nor read another core's part, which that core may be writing (8.7h).
+try {
+  buffer.parallelChunks { positions -> buffer[positions.first] = buffer[(positions.last + 1) % 10000] }
+  print(availableProcessors() == 1 ? "another core's" : "not refused")
+} catch (e) {
+  print(e.message!!.contains("of the buffer is another core's in this parallel section") ? "another core's" : e.message)
+}
+// expect: another core's
+try { buffer.parallelChunks { buffer.fill(0) } } catch (e) { print(e.message) }
+// expect: a parallel section changes only the item it was given and what it makes itself: this Bytes is shared with the other cores, so here it can be read and not changed
+
+// ---- From a thread, and from a task ----
+var fromThread : int? = null
+thread { fromThread = numbers.parallelStream().sumOf { it } }.get()
+task {
+  delay(1.milliseconds)
+  print(fromThread, numbers.parallelStream().map { it }.toList().size)   // expect: 500500 1000
+}

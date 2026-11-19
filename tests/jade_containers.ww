@@ -558,4 +558,4 @@ print("WheelRoutingTest:", checks, "checks,", failed)   // expect: WheelRoutingT
 
 // -- ScrollRepaintTest --
 // it works through the nesting a real window has: in tests/jade_screen.ww; the rest is in
-//   tests/jade_scroll.ww, and the table's in tests/jade_tables.ww.
+//   tests/jade_scroll.ww, and the table's in tests/jade_tables_combo.ww.

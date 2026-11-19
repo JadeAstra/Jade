@@ -133,6 +133,7 @@ fun showRunner(start : Options, only : List<string>? = null, snapshot : FilePath
     o.timeLimit = start.timeLimit
     o.keep = start.keep
     o.live = start.live
+    o.full = start.full
     return o
   }
 

@@ -1,0 +1,88 @@
+// needs windows: it paints
+// The text area, part two (of jade_textarea.ww): a large text drawing only what shows, scrolled,
+// selected whole and underlined whole. JadeUI's TextAreaLargeTextTest but its second case (in
+// jade_textarea_highlight.ww), carried over with its names; split off 2026-11-19.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts and the rectangles a component draws.
+fun texts(ops : List<DrawOp>) : List<DrawOp.Text> => ops.filter { it is DrawOp.Text }.map { it as DrawOp.Text }
+fun rects(ops : List<DrawOp>) : List<DrawOp.Rect> => ops.filter { it is DrawOp.Rect }.map { it as DrawOp.Rect }
+
+// Lines "<prefix>0" to "<prefix>(n - 1)", or from 1 with `from`.
+fun numbered(prefix : string, from : int, until : int) : string {
+  val out = []
+  for (i in from ..< until) { out.add("$prefix$i") }
+  return out.join("\n")
+}
+
+// -- TextAreaLargeTextTest --
+
+// The runner's quick GC stress: a text of 500 lines rather than 5000, still many views long.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val lineCount = quick ? 500 : 5000
+val lastLine = "line ${lineCount - 1}"
+val bigText = numbered("line ", 0, lineCount)
+fun shownTexts(ops : List<DrawOp>) : List<string> => texts(ops).map { it.text }
+
+// onlyTheRowsInTheViewportAreDrawn
+fun onlyTheRowsInTheViewportAreDrawn() {
+  val m = SharedTextModel(bigText)
+  val sc = scroll(Component(TextArea(m)))
+  val top = shownTexts(sc.record(400, 200))
+  yes("the first screenful is drawn", top.contains("line 0"))
+  yes("a screenful of rows, not all $lineCount: ${top.size}", top.count { it.startsWith("line ") } < 40)
+  yes("the last line is far below the view", !top.contains(lastLine))
+  (sc.content as Scroll).scrollTo(int.maxValue)
+  val bottom = shownTexts(sc.record(400, 200))
+  yes("scrolled to the end, the last line is drawn", bottom.contains(lastLine))
+  yes("and the first is not", !bottom.contains("line 0"))
+  yes("still a screenful: ${bottom.size}", bottom.count { it.startsWith("line ") } < 40)
+}
+onlyTheRowsInTheViewportAreDrawn()
+
+// aWholeSelectionShadesOnlyTheRowsOnScreen
+fun aWholeSelectionShadesOnlyTheRowsOnScreen() {
+  val m = SharedTextModel(bigText)
+  m.setFocused(true)
+  m.select(0, m.length)
+  val sc = scroll(Component(TextArea(m)))
+  val shaded = rects(sc.record(400, 200)).count { it.fill and it.color.alpha == 0x88 }
+  yes("a screenful of selected rows: $shaded", shaded in 1 ..< 40)
+}
+aWholeSelectionShadesOnlyTheRowsOnScreen()
+
+// squigglesAreDrawnOnlyOnScreen
+fun squigglesAreDrawnOnlyOnScreen() {
+  val m = SharedTextModel(bigText)
+  val area = TextArea(m)
+  area.squiggles = [0 ..< m.length]
+  val sc = scroll(Component(area))
+  val zig = sc.record(400, 200).count { it is DrawOp.Line }
+  yes("zigzags on a screenful of rows only: $zig", zig in 1 ..< 40 * 40)
+}
+squigglesAreDrawnOnlyOnScreen()
+
+// visibleBoundsIsTheCanvasWithinItsClips: JadeUI's live canvas is an AwtCanvas on a picture; here a Surface's.
+fun visibleBoundsIsTheCanvasWithinItsClips() {
+  val rec = RecordingCanvas(400, 200, [])
+  same("the whole canvas", rec.visibleBounds, Rect(0, 0, 400, 200))
+  // A child moved up by 300 inside it: the part showing is its y 300 to 500.
+  val child = rec.sub(0, -300, 400, 5000)
+  same("the child's part showing", child.visibleBounds, Rect(0, 300, 400, 200))
+  same("clips nest", child.sub(0, 250, 400, 150).visibleBounds, Rect(0, 50, 400, 100))
+  val live = Surface(400, 200).canvas()
+  same("a live canvas: its clip", live.sub(0, -300, 400, 5000).visibleBounds, Rect(0, 300, 400, 200))
+}
+visibleBoundsIsTheCanvasWithinItsClips()
+print("TextAreaLargeTextTest:", checks, "checks,", failed)   // expect: TextAreaLargeTextTest: 12 checks, []

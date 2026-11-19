@@ -3,6 +3,8 @@
 // changes a variable inside it reads the variable as it was; what keeps a value longer than its
 // frame, or a variable with no place of its own, takes a copy.
 
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer rounds
+
 value R(var x : int, var y : int, var w : int, var h : int) {
   mutating fun grow() { w += 1; h += 1 }
   fun moved(d : int) : R => R(x + d, y + d, w, h)
@@ -28,12 +30,13 @@ print(show(r, r.also { r.grow() }))   // expect: R(x=100, y=3, w=11, h=21) R(x=1
 print(r.w)   // expect: 12
 
 // One place for a variable declared in a loop, a million times over.
+val rounds = quick ? 10000 : 1000000
 var sum = 0
-for (i in 0 ..< 1000000) {
+for (i in 0 ..< rounds) {
   val m = make(i)
   sum += m.x + m.w
 }
-print(sum)   // expect: 500009500000
+print(sum == rounds * (rounds - 1) / 2 + 10 * rounds)   // expect: true
 // A variable with no place of its own keeps its copy as the place changes.
 var keep : any = r
 r.x = 7
@@ -81,11 +84,12 @@ v.x = 40
 print(list[0].x, map["v"]!!.x, holder.kept.x, seq[0].x, seq[1].x, v.x)   // expect: 4 4 4 4 50 40
 
 // A value holding an object, kept in a place while the collector runs (garbage made meanwhile).
+val junkRounds = quick ? 5000 : 20000
 var named = Named("first", 1)
 for (i in 0 ..< 3) {
   val made = Named("name " + i, i)
   var junk = 0
-  for (k in 0 ..< 20000) { junk += ("x" + k).size }
+  for (k in 0 ..< junkRounds) { junk += ("x" + k).size }
   if (i == 2) { named = made }
 }
 print(named, named.name.size)   // expect: Named(name="name 2", n=2) 6

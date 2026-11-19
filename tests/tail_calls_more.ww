@@ -1,5 +1,9 @@
 // More calls of itself as the last step are loops (D29, G33): each goes deeper here than the
-// stack would allow as calls.
+// stack would allow as calls. Part one: a function inside another; generic ones are in
+// tail_calls_more_generic.ww, the branches of when and if in tail_calls_more_branches.ww.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: shallower
+val depth = quick ? 10000 : 1000000
 
 // A function declared inside another.
 fun countUp(n : int) : int {
@@ -9,33 +13,4 @@ fun countUp(n : int) : int {
   }
   return loop(n, 0)
 }
-print(countUp(1000000))                                  // expect: 1000000
-
-// A generic function giving itself its own type parameters again; one giving others stays a
-// call, its frame taking the new ones (G33).
-fun <T> repeatValue(x : T, n : int) : T => n == 0 ? x : repeatValue(x, n - 1)
-print(repeatValue("a", 1000000))                         // expect: a
-fun <T> lastIs(x : any?, probe : T, n : int) : bool => n == 0 ? x is T : lastIs(x, "text", n - 1)
-print(lastIs("a", 1, 3), lastIs("a", 1, 0))              // expect: true false
-tail fun <T> drop(items : List<T>, n : int) : List<T> => n == 0 ? items : drop(items, n - 1)
-print(drop([1, 2], 1000000))                             // expect: [1, 2]
-
-// Where a branch of when or if gives what is returned, in a block of its own too.
-fun steps(n : int, acc : int) : int => when {
-  n == 0 -> acc
-  n % 2 == 0 -> steps(n - 1, acc + 1)
-  else -> {
-    val next = n - 1
-    steps(next, acc + 1)
-  }
-}
-print(steps(1000000, 0))                                 // expect: 1000000
-fun digits(n : int, acc : int) : int => when (n) {
-  0 -> acc
-  else -> digits(n / 10, acc + 1)
-}
-print(digits(987654, 0))                                 // expect: 6
-fun halve(n : int) : int {
-  return if (n <= 1) { n } else { halve(n - 2) }
-}
-print(halve(1000001))                                    // expect: 1
+print(countUp(depth) == depth)                           // expect: true

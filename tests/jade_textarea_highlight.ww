@@ -1,0 +1,53 @@
+// needs windows: it paints
+// The text area, part three (of jade_textarea.ww): a large text highlighted all through still
+// draws only what shows. JadeUI's TextAreaLargeTextTest, its second case, carried over with its
+// name; split off 2026-11-19, as finding where each of its lines starts is the slowest part of
+// the area's tests under GC stress.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts and the rectangles a component draws.
+fun texts(ops : List<DrawOp>) : List<DrawOp.Text> => ops.filter { it is DrawOp.Text }.map { it as DrawOp.Text }
+fun rects(ops : List<DrawOp>) : List<DrawOp.Rect> => ops.filter { it is DrawOp.Rect }.map { it as DrawOp.Rect }
+
+// Lines "<prefix>0" to "<prefix>(n - 1)", or from 1 with `from`.
+fun numbered(prefix : string, from : int, until : int) : string {
+  val out = []
+  for (i in from ..< until) { out.add("$prefix$i") }
+  return out.join("\n")
+}
+
+// -- TextAreaLargeTextTest --
+
+// The runner's quick GC stress: a text of 500 lines rather than 5000, still many views long.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val lineCount = quick ? 500 : 5000
+val bigText = numbered("line ", 0, lineCount)
+fun shownTexts(ops : List<DrawOp>) : List<string> => texts(ops).map { it.text }
+
+// highlightedTextIsCulledToo
+fun highlightedTextIsCulledToo() {
+  val m = SharedTextModel(bigText)
+  val runs = []
+  for (i in 0 ..< lineCount) {
+    val s = Math.max(m.text.indexOf("line $i\n"), 0)
+    runs.add(StyleRun(s, s + 4, Color.red))
+  }
+  m.setStyleRuns(runs)
+  val sc = scroll(Component(TextArea(m)))
+  val ops = texts(sc.record(400, 200))
+  yes("the run's colour is drawn", ops.any { it.text == "line" and it.color == Color.red })
+  yes("two pieces a row, a screenful of rows: ${ops.size}", ops.size < 80)
+}
+highlightedTextIsCulledToo()
+print("TextAreaLargeTextTest:", checks, "checks,", failed)   // expect: TextAreaLargeTextTest: 2 checks, []

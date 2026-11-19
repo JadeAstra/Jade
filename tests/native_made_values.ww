@@ -30,6 +30,8 @@ fun boxes(n : int) : int {
   for (i in 0 ..< n) { t += Rect(i, 2, i % 7, 4).width + Point(i, -i).y }
   return t
 }
+// What boxes(n) gives, worked out without a value: the widths i % 7 summed, less the sum of i.
+fun boxesWorkedOut(n : int) : int => 21 * (n / 7) + (n % 7) * (n % 7 - 1) / 2 - n * (n - 1) / 2
 
 fun spans(n : int) : string {
   var s = Span(0.0, 0.0, 0.toByte())
@@ -69,11 +71,16 @@ class Maker(k : int) : Base(k) {
 }
 val maker = Maker(5)
 
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer boxes
+// Each box made by the VM's call where a collection is due: one at each under GC stress. Quick, still
+// many thousands, the loop well past being made and made again.
+val boxCount = quick ? 20000 : 300000
+print(boxesWorkedOut(300000))   // expect: -44998950003
 for (round in 0 ..< 3) {
   var ones = 0
   for (i in -3 ..< 300) { ones += maker.one(i, maker.k)?.width ?: 100 }
-  print(rects(50), swaps(101), boxes(300000), spans(1000), same(1200), maker.many(500, maker.k), ones)
+  print(rects(50), swaps(101), boxes(boxCount) == boxesWorkedOut(boxCount), spans(1000), same(1200), maker.many(500, maker.k), ones)
 }
-// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650
-// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650
-// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) -44998950003 223875.5 199 300 127250 46650
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) true 223875.5 199 300 127250 46650
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) true 223875.5 199 300 127250 46650
+// expect: 1425 Rect(49, 50, 3 x 50) Point(51, 52) true 223875.5 199 300 127250 46650

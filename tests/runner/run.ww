@@ -20,6 +20,8 @@
 //   --time-limit <s>      seconds a run may take (120; 600 under gc-stress; 2400 for that with the
 //                         sanitizer's build)
 //   --only <a,b>          only the checks with these names (the window: run at once)
+//   --full                under gc-stress, the tests at full length (for milestones); without it
+//                         they run quick, given WW_TEST_QUICK=1, repeating less of their work
 //   --keep                the folder the checks ran in left, its path printed: the budgets'
 //                         program is in its start-up_budgets/program
 //   --run                 (window) start at once; when the run ends, print what it gave as the
@@ -61,6 +63,7 @@ var runAtOnce = false
 var report : FilePath? = null
 var closeAfter = 10
 var keep = false
+var full = false
 var live : FilePath? = null
 var bad = ""
 
@@ -89,6 +92,7 @@ while (i < arguments.size) {
     "--snapshot" -> { snapshot = FilePath(value); i += 1 }
     "--run" -> runAtOnce = true
     "--keep" -> keep = true
+    "--full" -> full = true
     "--report" -> { report = FilePath(value); i += 1 }
     "--live" -> { live = FilePath(value); i += 1 }
     "--close-after" -> { closeAfter = value.toIntOrNull() ?: -2; i += 1 }
@@ -110,6 +114,7 @@ fun options(s : Setting, w : List<Way>?) : Options {
   o.setting = s
   o.timeLimit = timeLimit
   o.keep = keep
+  o.full = full
   o.live = live
   return o
 }

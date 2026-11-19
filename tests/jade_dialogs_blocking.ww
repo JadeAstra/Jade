@@ -1,0 +1,166 @@
+// needs windows: it opens windows
+// Jade's dialogs (M8), part three (of jade_dialogs.ww): the panels that stay open, the slots, and
+// the five cases of JadeUI's BlockingDialogsTest of the dialogs that answer through onResult, each
+// in a hidden window, pressed and typed into as a user would. Split off 2026-11-19.
+import Jade.*
+
+val none = Modifiers.none
+val opener = HiddenWindowOpener()
+Jade.windowOpener = opener
+val main = Window(label("main"), "Main", 400, 300, exitOnClose = false)
+main.show()
+
+// A case starts with no dialogs, no drafts, and Jade's own dialogs in their slots.
+var first = 0
+fun fresh(name : string) {
+  Jade.closeAllDialogs()
+  Jade.windowOpener = opener
+  Jade.drafts.clear()
+  Dialogs.install()
+  first = opener.opened.size
+  print("--", name)
+}
+// The windows a case opened, the first at 0; and the last one.
+fun win(i : int) : WindowHost => opener.opened[first + i] as WindowHost
+fun last() : WindowHost => opener.opened[opener.opened.size - 1] as WindowHost
+fun opened() : int => opener.opened.size - first
+
+// What a window shows (laid out and painted first), what is in it, and a user's clicks and keys.
+fun all(h : WindowHost) : List<Component> {
+  h.frame()
+  return h.window.root.descendants()
+}
+fun click(h : WindowHost, c : Component) {
+  val p = c.windowPosition()
+  h.send(RawInput.PointerDown(p.x + 3, p.y + 3, PointerButton.left, none))
+  h.send(RawInput.PointerUp(p.x + 3, p.y + 3, PointerButton.left, none))
+}
+fun buttonOf(h : WindowHost, text : string) : Component => all(h).first { it.content is Button and (it.content as Button).text == text }
+fun hasButton(h : WindowHost, text : string) : bool => all(h).any { it.content is Button and (it.content as Button).text == text }
+fun press(h : WindowHost, text : string) {
+  click(h, buttonOf(h, text))
+}
+fun key(h : WindowHost, code : KeyCode, ctrl : bool = false) {
+  h.send(RawInput.KeyDown(code, Modifiers(ctrl = ctrl)))
+}
+fun fields(h : WindowHost) : List<Component> => all(h).filter { it.content is TextField or it.content is TextArea }
+fun text(h : WindowHost, i : int = 0) : string => (fields(h)[i].content as TextEditable).model.text
+// Typing over what a field holds: a click into it, all of it chosen, and the text.
+fun type(h : WindowHost, text : string, i : int = 0) {
+  val f = fields(h)[i]
+  click(h, f)
+  (f.content as TextEditable).model.selectAll()
+  h.send(RawInput.Text(text))
+}
+fun boxes(h : WindowHost) : List<Component> => all(h).filter { it.content is CheckBox }
+fun labels(h : WindowHost) : List<string> => all(h).filter { it.content is Label }.map { (it.content as Label).text }
+
+var answer : any? = "unset"
+var firstAnswer : any? = "unset"
+var secondAnswer : any? = "unset"
+
+// ---- the panels that stay open ----
+
+fresh("the find panel is one, and calls back")   // expect: -- the find panel is one, and calls back
+val found = []
+var closed = 0
+val opt = FindOption("Match case")
+val findSpec = FindSpec(showReplace = true, initialQuery = "cat", onFindNext = { found.add(it) }, onClosed = { closed += 1 }, options = [opt])
+val findA = Jade.findDialog.show(findSpec)
+val findB = Jade.findDialog.show(findSpec)
+print(findA === findB, opened(), findA.title)   // expect: true 1 Replace
+val find = last()
+key(find, KeyCode.enter)
+press(find, "Find Next")
+print(found)   // expect: ["cat", "cat"]
+click(find, boxes(find)[0])
+print(opt.checked)   // expect: true
+type(find, "dog")
+findA.close()
+print(closed)   // expect: 1
+Jade.findDialog.show(FindSpec(showReplace = true, initialQuery = "cat"))
+print(text(last()))   // expect: dog
+// Find to Replace is another panel; the program is not told the panel closed. (JadeUI told it.)
+closed = 0
+Jade.findDialog.show(FindSpec(showReplace = false, onClosed = { closed += 1 }))
+Jade.findDialog.show(FindSpec(showReplace = true, onClosed = { closed += 1 }))
+print(closed, Jade.openDialogs().size, Jade.openDialogs()[0].title, hasButton(last(), "Replace All"))   // expect: 0 1 Replace true
+Jade.findDialog.close()
+print(closed)   // expect: 1
+
+fresh("the source window is live, shows edits from elsewhere without telling them back, and moves")   // expect: -- the source window is live, shows edits from elsewhere without telling them back, and moves
+val changes = []
+var closedA = 0
+Jade.sourceWindow.show(SourceSpec("a", "Block A", "<b/>", { changes.add(it) }, onClose = { closedA += 1 }))
+print(Jade.sourceWindow.showing)   // expect: a
+val source = last()
+type(source, "<i/>")
+print(changes)   // expect: ["<i/>"]
+Jade.sourceWindow.syncIfShowing("a", "<u/>")
+print(text(source), changes)   // expect: <u/> ["<i/>"]
+Jade.sourceWindow.show(SourceSpec("b", "Block B", "<p/>", {}))
+print(opened(), closedA, Jade.sourceWindow.showing, text(source), source.window.title)   // expect: 1 1 b <p/> Block B
+Jade.sourceWindow.close()
+print(Jade.sourceWindow.showing, Jade.drafts["source-window"])   // expect: null null
+
+fresh("the slots hold Jade's dialogs")   // expect: -- the slots hold Jade's dialogs
+print(Jade.inputDialog#, Jade.choiceDialog#, Jade.findDialog#)   // expect: PromptDialogs ChoiceDialogs FindPanel
+
+// ---- BlockingDialogsTest: the dialogs that answer through onResult ----
+
+fresh("nothing these open is modal, and each is a window")   // expect: -- nothing these open is modal, and each is a window
+val kinds1 = [FormKind("bar", "Bar", [FormField("range", "Data:")])]
+Jade.inputDialog.prompt(PromptSpec("T", draftKey = "a")) {}
+Jade.inputDialog.prompt(PromptSpec("T")) {}
+Jade.inputDialog.promptValueAndFormat(ValueFormatSpec("T", "v", "f")) {}
+Jade.choiceDialog.choose(ChoiceSpec("T", "m", ["A"])) {}
+Jade.choiceDialog.pick(PickSpec("T", "m", ["A"])) {}
+Jade.checklistDialog.check(ChecklistSpec("T", "m", ["a"], setOf())) {}
+Jade.formDialog.edit(FormSpec("T", kinds1, "bar", {:})) {}
+Jade.optionsDialog.show(OptionsSpec("T", [])) {}
+Jade.imageDialog.choose(ImageSpec({ s, v -> null })) {}
+Jade.findDialog.show(FindSpec())
+Jade.sourceWindow.show(SourceSpec("s", "Source", "", {}))
+print(opened(), Jade.openDialogs().size)   // expect: 11 11
+
+fresh("a prompt without a key keeps no draft")   // expect: -- a prompt without a key keeps no draft
+answer = "unset"
+Jade.inputDialog.prompt(PromptSpec("Rename", "Name:", "Layer 1")) { answer = it }
+type(last(), "typed about layer 1")
+key(last(), KeyCode.escape)
+print(answer, Jade.drafts.keys)   // expect: null {}
+Jade.inputDialog.prompt(PromptSpec("Rename", "Name:", "Layer 2")) {}
+print(text(last()))   // expect: Layer 2
+
+fresh("a prompt without a key ignores a draft filed under its title")   // expect: -- a prompt without a key ignores a draft filed under its title
+Jade.drafts.put("prompt:Rename", {"text": "stale"})
+Jade.inputDialog.prompt(PromptSpec("Rename", "", "fresh")) {}
+print(text(last()))   // expect: fresh
+press(last(), "OK")
+print(Jade.drafts["prompt:Rename"])   // expect: {"text": "stale"}
+
+fresh("two requests without a key are two dialogs, each answering its own")   // expect: -- two requests without a key are two dialogs, each answering its own
+firstAnswer = "unset"
+secondAnswer = "unset"
+val twoA = Jade.inputDialog.prompt(PromptSpec("Rename", "", "Layer 1")) { firstAnswer = it }
+val twoB = Jade.inputDialog.prompt(PromptSpec("Rename", "", "Layer 2")) { secondAnswer = it }
+print(twoA === twoB, opened(), text(win(0)))   // expect: false 2 Layer 1
+print(Jade.openDialogs().map { it.key })   // expect: ["prompt:Rename", "prompt:Rename"]
+type(win(1), "B")
+press(win(1), "OK")
+print(firstAnswer, secondAnswer, twoA.open)   // expect: unset B true
+press(win(0), "OK")
+print(firstAnswer, Jade.openDialogs())   // expect: Layer 1 []
+
+fresh("with a key, the draft and the same-dialog rule are as before")   // expect: -- with a key, the draft and the same-dialog rule are as before
+val keyedA = Jade.inputDialog.prompt(PromptSpec("Rename", "", "Layer 1", draftKey = "rename:layer:1")) {}
+val keyedB = Jade.inputDialog.prompt(PromptSpec("Rename", "", "Layer 1", draftKey = "rename:layer:1")) {}
+print(keyedA === keyedB, opened())   // expect: true 1
+type(last(), "half")
+keyedA.close()
+print(Jade.drafts["rename:layer:1"])   // expect: {"text": "half"}
+Jade.inputDialog.prompt(PromptSpec("Rename", "", "Layer 1", draftKey = "rename:layer:1")) {}
+print(text(last()))   // expect: half
+
+Jade.closeAllDialogs()
+main.close()

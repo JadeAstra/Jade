@@ -1,0 +1,45 @@
+// needs windows: it paints on the graphics card
+// The table, part two (of jade_tables.ww): a long table scrolled brings later rows into view.
+// JadeUI's TablePerformanceTest, its third case, carried over with its name; split off
+// (2026-11-19) because a big table measured is most of the time under GC stress.
+import Jade.*
+
+val failed = []
+var checks = 0
+fun same(what : string, got : any?, want : any?) {
+  checks += 1
+  if (!(got == want)) { failed.add("$what: got $got, wanted $want") }
+}
+fun yes(what : string, condition : bool) {
+  checks += 1
+  if (!condition) { failed.add(what) }
+}
+
+// The texts a component draws.
+fun texts(ops : List<DrawOp>) : List<DrawOp.Text> => ops.filter { it is DrawOp.Text }.map { it as DrawOp.Text }
+
+// -- TablePerformanceTest --
+
+// The runner's quick GC stress: a big table of 400 rows rather than 4000, still many views long.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val bigRows = quick ? 400 : 4000
+
+fun bigTable(rows : int = bigRows) : Table {
+  val data = []
+  for (i in 1 .. rows) { data.add(["T%04d".format(i), "driver$i.sys", "$i MB", "$i KB"]) }
+  return Table(["Tag", "Driver", "Paged", "Nonpaged"], data)
+}
+
+// scrolling down brings later rows into view
+fun scrollingDownBringsLaterRowsIntoView() {
+  val table = bigTable()
+  val viewport = scroll(Component(table))
+  viewport.layout(600, 300)
+  viewport.record(600, 300)
+  for (i in 0 ..< 40) { viewport.dispatch(Event.Wheel(100, 100, 60)) }
+  val ops = texts(viewport.record(600, 300)).map { it.text }
+  yes("the first row went out of view", ops.none { it == "T0001" })
+  yes("later rows are in view: ${ops.take(6)}", ops.any { it.startsWith("T0") })
+}
+scrollingDownBringsLaterRowsIntoView()
+print("TablePerformanceTest:", checks, "checks,", failed)   // expect: TablePerformanceTest: 2 checks, []

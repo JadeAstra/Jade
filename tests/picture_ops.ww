@@ -1,6 +1,7 @@
 // Picture operations (M9/M10, questions 5 and 17): grids of colours worked on in C++, each
 // answer beside a loop in WinterWolf doing the same; the blend modes against the W3C's formulas; and
 // the Image methods built on them.
+// The colour tables are in picture_ops_lookup.ww.
 
 fun rgba(c : Color) : string => "${c.red} ${c.green} ${c.blue} ${c.alpha}"
 // A picture of every sort of colour, see-through parts among them.
@@ -149,14 +150,6 @@ for (mode in [BlendMode.normal, BlendMode.multiply, BlendMode.screen, BlendMode.
 print(blended(b, s, BlendMode.normal, 0.5), blended(Color.clear, s, BlendMode.multiply), blended(b, Color.clear, BlendMode.screen))   // expect: 150 125 150 255 100 150 250 255 200 100 50 255
 // The non-separable modes keep the backdrop's brightness (luminosity) or take the source's.
 print(blended(Color(128, 128, 128), Color(255, 0, 0), BlendMode.color), blended(Color(255, 0, 0), Color(128, 128, 128), BlendMode.luminosity), blended(Color(255, 0, 0), Color(128, 128, 128), BlendMode.saturation))   // expect: 255 74 74 255 255 74 74 255 77 77 77 255
-
-// -- Colour tables --
-
-val same = ColorLookup { it }
-print(worst(px.mapColors(same), px) <= 1)   // expect: true
-val swap = ColorLookup { c -> Color(c.blue.toInt(), c.green.toInt(), c.red.toInt(), 255) }
-val swapped = px.mapColors(swap)
-print(worst(swapped, px.map { c -> Color(c.blue, c.green, c.red, c.alpha) }) <= 1)   // expect: true
 
 // -- The Image methods --
 

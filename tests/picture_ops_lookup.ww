@@ -1,0 +1,33 @@
+// Picture operations (M9/M10, questions 5 and 17), the colour tables: a grid's colours put
+// through a ColorLookup, beside a loop doing the same. A part of picture_ops.ww, split off
+// (2026-11-19): a ColorLookup calls its function 35,937 times, most of the file's time under GC
+// stress.
+
+// A picture of every sort of colour, see-through parts among them.
+val pic = Image(16, 12)
+pic.editPixels { g ->
+  for (y in 0 ..< 12) {
+    for (x in 0 ..< 16) { g[x, y] = Color((x * 17) % 256, (y * 23) % 256, (x * y * 7) % 256, (x + y) % 4 == 0 ? 128 : 255) }
+  }
+}
+val px = pic.pixels
+// The most any part of any pixel differs between two grids of colours.
+fun worst(a : Grid<Color>, b : Grid<Color>) : int {
+  var most = 0
+  for (y in 0 ..< a.height) {
+    for (x in 0 ..< a.width) {
+      val p = a[x, y]
+      val q = b[x, y]
+      most = Math.max(most, Math.max(Math.max(Math.abs(p.red - q.red), Math.abs(p.green - q.green)), Math.max(Math.abs(p.blue - q.blue), Math.abs(p.alpha - q.alpha))))
+    }
+  }
+  return most
+}
+
+// -- Colour tables --
+
+val same = ColorLookup { it }
+print(worst(px.mapColors(same), px) <= 1)   // expect: true
+val swap = ColorLookup { c -> Color(c.blue.toInt(), c.green.toInt(), c.red.toInt(), 255) }
+val swapped = px.mapColors(swap)
+print(worst(swapped, px.map { c -> Color(c.blue, c.green, c.red, c.alpha) }) <= 1)   // expect: true

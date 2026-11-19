@@ -1,0 +1,18 @@
+// Parallel sections: the items of a list worked on by several cores at once, each core
+// allowed to change its own items and what it makes, and to read everything else.
+// This part, split off from parallel.ww (2026-11-19): what a core makes is the program's
+// afterwards, and is still there after the collector has been through.
+
+// The runner's quick GC stress: fewer rounds of garbage made for the collector.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+
+val numbers = (1..1000).toList()
+
+// A core may make whatever it likes, and what it makes is the program's afterwards.
+class Report(val name : string, val parts : List)
+val reports = numbers.parallelStream().map { n -> Report("r$n", [n, [n + 1], {"n": n, "text": "é" + n}]) }.toList()
+print(reports.size, reports[0].name, reports[999].parts, reports[499].parts[2]["text"][0])   // expect: 1000 r1 [1000, [1001], {"n": 1000, "text": "é1000"}] é
+// ...and is still there after the collector has been through.
+var junk = []
+for round in 1..(quick ? 3 : 50) { junk = List(2000) { [it, "s$it"] } }
+print(reports.sumOf { it.parts[0] }, reports.all { it.parts[1][0] == it.parts[0] + 1 })   // expect: 500500 true

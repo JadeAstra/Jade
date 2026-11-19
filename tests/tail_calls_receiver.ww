@@ -1,5 +1,9 @@
 // A call of itself on another receiver as the last step is a loop too (8.4c): an extension's
 // (n.next.last()) or a method's that no class overrides, so a long chain walks in one frame.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: a shorter chain
+val length = quick ? 5000 : 30000                         // in full, more than a thread has frames
+
 class Node(val value : int, val next : Node?) {
   fun last() : Node => next == null ? this : next!!.last()
   fun sumFrom(total : int) : int => next == null ? total + value : next!!.sumFrom(total + value)
@@ -9,8 +13,8 @@ fun Node.lastByExtension() : Node {
   return n == null ? this : n.lastByExtension()
 }
 var head : Node? = null
-for (i in 0..<30000) { head = Node(i, head) }      // more than a thread has frames
-print(head!!.last().value, head!!.lastByExtension().value, head!!.sumFrom(0))   // expect: 0 0 449985000
+for (i in 0..<length) { head = Node(i, head) }
+print(head!!.last().value, head!!.lastByExtension().value, head!!.sumFrom(0) == length * (length - 1) / 2)   // expect: 0 0 true
 
 // The arguments are worked out with the receiver it was called on, before it changes.
 class Counter(val n : int, val below : Counter?) {

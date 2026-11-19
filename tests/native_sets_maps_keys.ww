@@ -1,0 +1,35 @@
+// Sets and maps in native code (2026-11-16, docs/sets-maps-plan.html): map[k], set.contains(k),
+// k in set, k in map.keys (looked up by the step for an int key, by the VM's way for another);
+// map[k] = v and set.add(k) (an existing int key's value written by the step, a new key added by
+// the VM's way); a for over a set, over a map's keys, and over a map's keys and values. Then the
+// keys the VM must decide: a float equal to an int, a byte, strings, values of a value type, objects
+// of a class with its own == and hashCode; a map changed in a for over it. Each
+// loop run often enough for its region to be made: the same answers as the VM's.
+//
+// This part (of native_sets_maps.ww): k in map.keys, an int key looked up by the step.
+
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer calls each round
+
+fun inKeys(m : Map<int, int>, n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    if (i in m.keys) { t += 1 }
+  }
+  return t
+}
+
+val map : open Map<int, int> = {:}
+for (i in 0 ..< 2000) {
+  if (i % 3 != 0) {
+    map[i] = i * 2
+  }
+}
+val calls = quick ? 35 : 200   // each round; 105 in all when quick, its whole-function region made at the 64th
+for (round in 0 ..< 3) {
+  var d = 0
+  for (r in 0 ..< calls) { d = inKeys(map, 2100) }
+  print(d)
+}
+// expect: 1333
+// expect: 1333
+// expect: 1333

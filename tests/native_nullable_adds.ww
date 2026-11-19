@@ -53,13 +53,17 @@ fun sumInts(items : List<int?>) : int {
 
 val colors : open List<Color?> = []
 for (i in 0 ..< 300) { colors.add(i % 6 == 0 ? null : Color((i % 256).toByte(), 2.toByte(), 3.toByte(), 4.toByte())) }
+val quick = Program.environment["WW_TEST_QUICK"] == "1"   // the runner's quick GC stress: fewer calls each round
+// Each list made afresh, the last one's items printed. Quick, 300 calls of each in all (each one's
+// whole-function region made at the 64th), not 900.
+val calls = quick ? 100 : 300
 for (round in 0 ..< 3) {
   var a : List<int?> = []
   var f : List<float?> = []
   var b : List<bool?> = []
   var c : List<Color?> = []
   var n : List<Color?> = []
-  for (r in 0 ..< 300) {
+  for (r in 0 ..< calls) {
     a = addInts(700, 7)
     f = addFloats(500)
     b = addBools(400)

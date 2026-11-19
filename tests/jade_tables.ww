@@ -1,12 +1,12 @@
 // needs windows: it paints on the graphics card
-// The table and the combo box: a table's rows chosen, edited and acted on, its columns' widths
-// and their cap, a long table painting only what a view shows and staying cheap to lay out, and
-// a combo box's choice by the list and by the keys, its chevron and its field. These are
-// JadeUI's own tests (the table's of CollectionsTest, TableActivateTest, TableColumnWidthTest,
-// TablePerformanceTest, ComboTest, and the legs of FirstClickTest, ContentInvalidationTest,
-// InvalidateLayoutTest, ScrollTest and ScrollRepaintTest needing a table or a combo box),
-// carried over with their names. The table's and the combo's bookkeeping is internal to Jade:
-// these read what shows instead.
+// The table and the combo box, part one: a table's rows chosen, edited and acted on, its columns'
+// widths and their cap, and a long table painting only what a view shows. These are JadeUI's own
+// tests (the table's of CollectionsTest, TableActivateTest, TableColumnWidthTest and the first of
+// TablePerformanceTest), carried over with their names. The rest of TablePerformanceTest is in
+// jade_tables_bigscroll.ww and jade_tables_combo.ww, with ComboTest and the legs of FirstClickTest,
+// ContentInvalidationTest, InvalidateLayoutTest, ScrollTest and ScrollRepaintTest needing a table
+// or a combo box (split 2026-11-19: a big table measured is most of the time under GC stress). The
+// table's and the combo's bookkeeping is internal to Jade: these read what shows instead.
 import Jade.*
 
 val failed = []
@@ -203,7 +203,11 @@ print("TableColumnWidthTest:", checks, "checks,", failed)   // expect: TableColu
 
 // -- TablePerformanceTest --
 
-fun bigTable(rows : int = 4000) : Table {
+// The runner's quick GC stress: a big table of 400 rows rather than 4000, still many views long.
+val quick = Program.environment["WW_TEST_QUICK"] == "1"
+val bigRows = quick ? 400 : 4000
+
+fun bigTable(rows : int = bigRows) : Table {
   val data = []
   for (i in 1 .. rows) { data.add(["T%04d".format(i), "driver$i.sys", "$i MB", "$i KB"]) }
   return Table(["Tag", "Driver", "Paged", "Nonpaged"], data)
@@ -215,8 +219,8 @@ fun aScrolledTablePaintsOnlyTheRowsInView() {
   val viewport = scroll(Component(table))
   viewport.layout(600, 300)
   val ops = texts(viewport.record(600, 300))
-  // Four columns over some 20 rows in view and the header: nowhere near 4000 times 4.
-  yes("drew ${ops.size} texts for a view 300 high over 4000 rows", ops.size < 400)
+  // Four columns over some 20 rows in view and the header: nowhere near the rows times 4.
+  yes("drew ${ops.size} texts for a view 300 high over $bigRows rows", ops.size < 400)
   yes("drew only ${ops.size}: the rows in view are missing", ops.size > 20)
 }
 aScrolledTablePaintsOnlyTheRowsInView()
@@ -229,273 +233,4 @@ fun anUnscrolledTableStillPaintsEveryRow() {
   same("every row and the header drawn", texts(component.record(600, 2000)).size, 4 * 31)
 }
 anUnscrolledTableStillPaintsEveryRow()
-
-// scrolling down brings later rows into view
-fun scrollingDownBringsLaterRowsIntoView() {
-  val table = bigTable()
-  val viewport = scroll(Component(table))
-  viewport.layout(600, 300)
-  viewport.record(600, 300)
-  for (i in 0 ..< 40) { viewport.dispatch(Event.Wheel(100, 100, 60)) }
-  val ops = texts(viewport.record(600, 300)).map { it.text }
-  yes("the first row went out of view", ops.none { it == "T0001" })
-  yes("later rows are in view: ${ops.take(6)}", ops.any { it.startsWith("T0") })
-}
-scrollingDownBringsLaterRowsIntoView()
-
-// laying out a large table repeatedly does not re-measure every cell. (Here a bare component's
-// layout does not ask its content's sizes at all, so this is cheap whatever the table keeps.)
-fun layingOutALargeTableRepeatedlyDoesNotReMeasureEveryCell() {
-  val table = bigTable()
-  val component = Component(table)
-  component.layout(600, 300)                       // the first layout measures
-  component.prefSize()
-  val started = clock()
-  for (i in 0 ..< 200) {
-    Jade.invalidateRenderCaches()                  // as a frame does
-    component.layout(600, 300)
-  }
-  val millis = (clock() - started) * 1000
-  yes("200 layouts of a 4000-row table took $millis ms", millis < 1500)
-}
-layingOutALargeTableRepeatedlyDoesNotReMeasureEveryCell()
-
-// changing the rows re-measures the columns
-fun changingTheRowsReMeasuresTheColumns() {
-  val table = Table(["A"], [["x"]])
-  val component = Component(table)
-  val narrow = component.prefSize().width
-  table.setRows([["a much wider cell value than before"]])
-  yes("the widths kept outlived new rows: the column is too narrow", component.prefSize().width > narrow)
-}
-changingTheRowsReMeasuresTheColumns()
-
-// changing the columns re-measures them
-fun changingTheColumnsReMeasuresThem() {
-  val table = Table(["A"], [["x"]])
-  val component = Component(table)
-  val narrow = component.prefSize().width
-  table.columns = ["a considerably longer header"]
-  yes("the widths kept outlived new columns", component.prefSize().width > narrow)
-}
-changingTheColumnsReMeasuresThem()
-print("TablePerformanceTest:", checks, "checks,", failed)   // expect: TablePerformanceTest: 28 checks, []
-
-// -- ComboTest --
-
-// paintsSelectedLabel
-fun paintsSelectedLabel() {
-  val combo = ComboBox(["Red", "Green", "Blue"], selected = 2)
-  same("shows the item chosen", texts(Component(combo).record(120, 28)).map { it.text }, ["Blue"])
-}
-paintsSelectedLabel()
-
-// dropdownChooseSetsSelectionAndFires: choosing sets the choice and says so.
-fun dropdownChooseSetsSelectionAndFires() {
-  var picked = -1
-  val combo = ComboBox(["Red", "Green", "Blue"], onSelect = { picked = it })
-  (combo as DropdownProvider).dropdownChoose(1)
-  same("chosen", combo.selected, 1)
-  same("onSelect told", picked, 1)
-  same("the list shows it chosen", combo.dropdownSelected, 1)
-}
-dropdownChooseSetsSelectionAndFires()
-
-// keyboardChangesSelectionWithinBounds: held at both ends, not wrapping round.
-fun keyboardChangesSelectionWithinBounds() {
-  var picked = -1
-  val combo = ComboBox(["A", "B", "C"], selected = 0, onSelect = { picked = it })
-  val comp = Component(combo)
-  comp.dispatch(Event.KeyPress(Key.up))
-  same("at the top already", combo.selected, 0)
-  comp.dispatch(Event.KeyPress(Key.down))
-  same("down", combo.selected, 1)
-  comp.dispatch(Event.KeyPress(Key.down))
-  same("down again", combo.selected, 2)
-  comp.dispatch(Event.KeyPress(Key.down))
-  same("held at the bottom", combo.selected, 2)
-  same("onSelect told", picked, 2)
-}
-keyboardChangesSelectionWithinBounds()
-
-// comboBoxIsTabFocusable
-fun comboBoxIsTabFocusable() {
-  val ui = grid { row { cell(comboBox(["x", "y"]).withId("c")) } }
-  same("the combo takes the keyboard", ui.focusables().map { it.id }, ["c"])
-}
-comboBoxIsTabFocusable()
-
-// editableComboArrowTriggersDropdownButFieldDoesNot: on an editable combo the chevron opens
-// the list and the field does not, as a click in the text is to type.
-fun editableComboArrowTriggersDropdownButFieldDoesNot() {
-  val combo = ComboBox(["Red", "Green", "Blue"], editable = true)
-  Component(combo).record(120, 26)                 // painted at 120 wide: the chevron the last 18
-  yes("over the chevron: the list opens", combo.isDropdownTrigger(112, 10))
-  yes("over the field: it is edited, the list does not open", !combo.isDropdownTrigger(30, 10))
-}
-editableComboArrowTriggersDropdownButFieldDoesNot()
-
-// editablePickFillsField
-fun editablePickFillsField() {
-  val combo = ComboBox(["Red", "Green", "Blue"], editable = true)
-  (combo as DropdownProvider).dropdownChoose(2)
-  same("a pick fills the field", combo.text(), "Blue")
-}
-editablePickFillsField()
-
-// editableComboAcceptsTypedText
-fun editableComboAcceptsTypedText() {
-  val combo = ComboBox(["Small", "Medium", "Large"], editable = true)
-  val comp = Component(combo)
-  combo.model.setText("")                          // the first value cleared
-  comp.dispatch(Event.KeyType("XL"))               // a value of its own typed
-  same("the typed text taken", combo.text(), "XL")
-}
-editableComboAcceptsTypedText()
-
-// showSetsTheValueWithoutFiringOnSelect: showing a value is not picking one; -1 shows nothing.
-fun showSetsTheValueWithoutFiringOnSelect() {
-  var picked = -1
-  val combo = ComboBox(["Normal", "Heading 1", "Heading 2"], onSelect = { picked = it })
-  combo.show(2)
-  same("shown", combo.selected, 2)
-  same("no onSelect", picked, -1)
-  combo.show(-1)
-  same("-1 shows nothing", combo.text(), "")
-  combo.dropdownChoose(1)
-  same("a real pick still fires", picked, 1)
-}
-showSetsTheValueWithoutFiringOnSelect()
-print("ComboTest:", checks, "checks,", failed)   // expect: ComboTest: 46 checks, []
-
-// -- FirstClickTest (the combo's test) --
-
-// theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint
-fun theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint() {
-  val combo = ComboBox(["alpha", "beta"], editable = true)
-  Component(combo).layout(200, 24)                 // laid out, never painted
-  same("the left edge is the field, not the chevron", combo.isDropdownTrigger(4, 12), false)
-}
-theComboChevronZoneIsNotTheWholeWidgetBeforeAnyPaint()
-print("FirstClickTest:", checks, "checks,", failed)   // expect: FirstClickTest: 47 checks, []
-
-// -- ContentInvalidationTest (the combo's test) --
-
-fun pixels(s : Surface) => s.toImage().pixels.toBytes()
-
-// Painted, changed, and painted again as the window paints: with nothing thrown away and no
-// layout, so that only the widget's own word that it changed makes the picture change.
-fun rendersDifferentlyAfter(c : Component, w : int, h : int, change : () -> unit) : bool {
-  val target = Surface(w, h)
-  c.layout(w, h)
-  c.renderInto(target, w, h, 1.0, 1.0, true)
-  val before = pixels(target)
-  change()
-  c.renderInto(target, w, h, 1.0, 1.0, false)
-  return pixels(target) != before
-}
-
-// replacingAComboSItemsReachesTheComponentAndReclampsSelection
-fun replacingAComboSItemsReachesTheComponentAndReclampsSelection() {
-  val combo = ComboBox(["alpha", "bravo", "charlie"], selected = 2)
-  val comp = Component(combo)
-  yes("replacing the choices repaints the combo", rendersDifferentlyAfter(comp, 240, 32) { combo.items = ["x"] })
-  same("a choice past the new end is pulled back, not left hanging", combo.selected, 0)
-}
-replacingAComboSItemsReachesTheComponentAndReclampsSelection()
-print("ContentInvalidationTest:", checks, "checks,", failed)   // expect: ContentInvalidationTest: 49 checks, []
-
-// -- InvalidateLayoutTest (the table's and the combo's legs) --
-
-// Counts the layouts asked for while `body` runs.
-fun layoutsAskedFor(body : () -> unit) : int {
-  var requests = 0
-  val hook = { requests += 1 }
-  Jade.onLayoutNeeded(hook)
-  try {
-    body()
-  } finally {
-    Jade.removeLayoutHook(hook)
-  }
-  return requests
-}
-
-// replacing a table's rows requests a layout
-same("new rows in a table ask for one layout", layoutsAskedFor {
-  val table = Table(["a"], [["1"]])
-  Component(table)
-  table.setRows([["a considerably wider cell value"]])
-}, 1)
-
-// replacing a combo's items requests a layout
-val comboLayouts = layoutsAskedFor {
-  val combo = ComboBox(["a"])
-  Component(combo)
-  combo.items = ["a much wider choice than the first one"]
-}
-yes("new choices in a combo ask for a layout ($comboLayouts)", comboLayouts >= 1)
-
-// a paint-only change does not request a layout: the table's half (the check box's is in
-// jade_controls.ww).
-same("choosing a table row asks for no layout", layoutsAskedFor {
-  val table = Table(["a"], [["1"], ["2"]])
-  Component(table)
-  table.selected = 1
-}, 0)
-print("InvalidateLayoutTest:", checks, "checks,", failed)   // expect: InvalidateLayoutTest: 52 checks, []
-
-// -- ScrollTest (the table's test) --
-
-// keyboardSelectionScrollsTableRowIntoView: as the list's, through code of its own.
-fun keyboardSelectionScrollsTableRowIntoView() {
-  val data = []
-  for (i in 0 ..< 40) { data.add(["r$i"]) }
-  val tblComp = Component(Table(["N"], data))
-  val sc = scroll(tblComp)
-  val js = sc.content as Scroll
-  sc.record(120, 100)
-  for (i in 0 ..< 30) { tblComp.dispatch(Event.KeyPress(Key.down)) }
-  sc.record(120, 100)
-  yes("the view followed the choice down (${js.scrollY})", js.scrollY > 0)
-}
-keyboardSelectionScrollsTableRowIntoView()
-print("ScrollTest:", checks, "checks,", failed)   // expect: ScrollTest: 53 checks, []
-
-// -- ScrollRepaintTest (the table's test) --
-
-// The pixels in a band across the picture that are drawn: not clear, and not white.
-fun inkInBand(image : Image, top : int, bottom : int) : int {
-  var n = 0
-  for (y in top ..< bottom) {
-    for (x in 0 ..< image.width) {
-      val c = image[x, y]
-      if (c.alpha != 0 and !(c.red == 255 and c.green == 255 and c.blue == 255)) { n += 1 }
-    }
-  }
-  return n
-}
-
-// rows revealed by scrolling are actually drawn: a table painting only the band in view keeps a
-// picture blank elsewhere; rows a scroll brings in must not come out blank from it.
-fun rowsRevealedByScrollingAreActuallyDrawn() {
-  val data = []
-  for (i in 1 .. 400) { data.add(["cell $i", "value $i"]) }
-  val table = Table(["A", "B"], data)
-  val viewport = scroll(Component(table))
-  val root = grid { row { cell(viewport, fill = Fill.both, weightX = 1.0, weightY = 1.0) } }
-  val w = 320
-  val h = 240
-  val target = Surface(w, h)
-  root.layout(w, h)
-  root.renderInto(target, w, h, 1.0, 1.0, false)   // as the window paints a scroll
-  val inkBefore = inkInBand(target.toImage(), h / 2, h)
-  yes("sanity: the lower half is full of rows ($inkBefore)", inkBefore > 200)
-  // Far enough that every row now in the lower half is one the picture never held.
-  for (i in 0 ..< 6) { root.dispatch(Event.Wheel(100, 100, 120)) }
-  yes("precondition: the offset moved", (viewport.content as Scroll).scrollY > 0)
-  root.renderInto(target, w, h, 1.0, 1.0, false)
-  val inkAfter = inkInBand(target.toImage(), h / 2, h)
-  yes("rows brought in came out blank: $inkBefore px of ink before, $inkAfter after", inkAfter > inkBefore / 2)
-}
-rowsRevealedByScrollingAreActuallyDrawn()
-print("ScrollRepaintTest:", checks, "checks,", failed)   // expect: ScrollRepaintTest: 56 checks, []
+print("TablePerformanceTest:", checks, "checks,", failed)   // expect: TablePerformanceTest: 23 checks, []
