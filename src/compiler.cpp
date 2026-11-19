@@ -9529,14 +9529,21 @@ std::unordered_map<std::string, const ClassStmt*> contractInterfaces(const std::
     return found;
 }
 
-// What a class implementing `c` has to write: its abstract methods and properties, its
-// super-interfaces' (of the contract) among them. A problem with the contract, as words, in `why`.
+std::string parametersSource(const FunctionDecl& m);
+
+// The members of `c` a class implementing it writes or may: its methods (`isAbstract` those it
+// has to) and properties, its super-interfaces' (of the contract) among them, one a sub-interface
+// declared already (giving it a body, say) left at that. A problem with the contract, as words,
+// in `why`.
 void abstractMembers(const ClassStmt& c, const std::unordered_map<std::string, const ClassStmt*>& interfaces,
                      std::vector<const FunctionDecl*>& methods, std::vector<const VarStmt*>& properties, std::string& why,
                      std::unordered_set<const ClassStmt*>& seen) {
     if (!seen.insert(&c).second) return;
     for (const auto& m : c.methods) {
-        if (m->isStatic || !m->isAbstract) continue;
+        if (m->isStatic || std::any_of(methods.begin(), methods.end(), [&](const FunctionDecl* known) {
+                return known->name == m->name && signatureText(*known) == signatureText(*m);
+            }))
+            continue;
         if (m->varargIndex >= 0) why = "its interface " + c.name + " has a vararg method, " + m->name + ", which a script's handle does not pass on";
         if (m->isSuspend) why = "its interface " + c.name + " has a suspend method, " + m->name + ", which a script's handle does not pass on";
         methods.push_back(m.get());
@@ -9622,8 +9629,11 @@ std::string contractProxies(const std::vector<StmtPtr>& statements) {
 }
 
 // What makes a script the implementation of the interface it gives: a function per member that
-// calls the script's own, and an object of the interface that calls those.
-std::string contractGives(const std::vector<StmtPtr>& statements, const std::string& gives, std::string& why) {
+// calls the script's own, and an object of the interface that calls those. A member with a body
+// in the contract (a hook a script may leave out) is the script's where it declares one of that
+// name (`declared`), and the contract's own otherwise.
+std::string contractGives(const std::vector<StmtPtr>& statements, const std::string& gives, std::string& why,
+                          const std::function<bool(const std::string&)>& declared) {
     const auto interfaces = contractInterfaces(statements);
     auto found = interfaces.find(gives);
     if (found == interfaces.end()) {
@@ -9641,6 +9651,7 @@ std::string contractGives(const std::vector<StmtPtr>& statements, const std::str
     std::string helpers, object = "internal val __scriptGives : " + gives + " = object : " + gives + " {\n";
     int n = 0;
     for (const FunctionDecl* m : methods) {
+        if (!m->isAbstract && !declared(m->name)) continue;
         const std::string helper = "__scriptGives" + std::to_string(n++) + "_" + m->name;
         const bool unit = !m->returnType.present() || m->returnType.name == "unit";
         const std::string tps = m->typeParams.empty() ? std::string() : typeParamsSource(m->typeParams, true) + " ";
@@ -9656,7 +9667,7 @@ std::string contractGives(const std::vector<StmtPtr>& statements, const std::str
     return helpers + object + "}\n";
 }
 
-// The names a script has to declare to give `gives`: its abstract members'.
+// The names a script has to declare to give `gives`: its members with no body in the contract.
 std::vector<std::string> contractGivesNames(const std::vector<StmtPtr>& statements, const std::string& gives) {
     const auto interfaces = contractInterfaces(statements);
     std::vector<std::string> names;
@@ -9667,7 +9678,8 @@ std::vector<std::string> contractGivesNames(const std::vector<StmtPtr>& statemen
     std::string why;
     std::unordered_set<const ClassStmt*> seen;
     abstractMembers(*found->second, interfaces, methods, properties, why, seen);
-    for (const FunctionDecl* m : methods) names.push_back(m->name);
+    for (const FunctionDecl* m : methods)
+        if (m->isAbstract) names.push_back(m->name);
     for (const VarStmt* p : properties) names.push_back(p->name);
     return names;
 }
@@ -9757,7 +9769,10 @@ int CompilerSession::compileScript(const std::string& source, const std::string&
                 if (auto found = ns->names.find(member); found == ns->names.end() || !found->second.declared)
                     throw CompileError(name, 1, 1, "the script gives " + gives + ", whose " + member + " it does not declare");
             std::string why;
-            const std::string glue = contractGives(*contract, gives, why);
+            const std::string glue = contractGives(*contract, gives, why, [&](const std::string& member) {
+                auto known = ns->names.find(member);
+                return known != ns->names.end() && known->second.declared && contractNames.count(member) == 0;
+            });
             if (!why.empty()) throw CompileError(name, 1, 1, why);
             unit(glue, name + " (as " + gives + ")", "<script gives>" + name);
         }

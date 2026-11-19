@@ -6129,6 +6129,7 @@ fun onEnter(player : int) {
   api.onTimer(2) { api.open(4) }
 }
 </pre>
+<p>A member with a body in the contract is a hook a script may leave out (fun onBoard(player : int, ship : int) {}): its own where it declares one, the contract's body where not, so each of a game's mods declares only the hooks it wants. One with no body, it has to declare.</p>
 <p>A script that calls a member the contract does not have, or gives the interface with a function of another type, does not compile. Data (numbers, text, lists, maps, sets, the contract's data classes and value types) is copied; an object of an interface of the contract goes as a handle, an object of that interface on the other side whose calls run on the object itself; a function given goes so too, so a script's lambda is called back in the script. A handle that comes back is the object itself again.</p>
 <p>So far scripts are trusted: they reach what any program reaches. Safe scripts and limits come next (docs/scripting-plan.html).</p>
 </div>

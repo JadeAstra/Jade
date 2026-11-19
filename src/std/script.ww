@@ -42,6 +42,10 @@
 //     api.onTimer(2) { api.open(4) }
 //   }
 //
+// A member with a body in the contract is a hook a script may leave out (fun onBoard(player : int,
+// ship : int) {}): its own where it declares one, the contract's body where not, so each of a
+// game's mods declares only the hooks it wants. One with no body, it has to declare.
+//
 // A script that calls a member the contract does not have, or gives the interface with a
 // function of another type, does not compile. Data (numbers, text, lists, maps, sets, the
 // contract's data classes and value types) is copied; an object of an interface of the contract

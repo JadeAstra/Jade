@@ -1,0 +1,25 @@
+// The contract of tests/scripts_mods.ww: a game and its mods, as JadeGate's are. Every hook has
+// a body here, doing nothing, so a mod declares only those it wants.
+
+// A kind of room a mod registers; the same id again replaces it.
+data RoomType(val name : string, val color : string, val helm : bool = false)
+
+// What the game gives its mods. Players and ships are numbers, as JadeGate's are.
+interface ModApi {
+  fun registerRoomType(id : string, room : RoomType)
+  fun spawnShip(kind : string, x : float, y : float) : int
+  fun giveShip(player : int, ship : int) : bool
+  fun playerShip(player : int) : int?
+  fun shipsOfType(kind : string) : List<int>
+  fun placeShip(ship : int, x : float, y : float)
+  fun log(text : string)
+}
+
+// What a mod may give the game: each hook optional.
+interface ModHooks {
+  fun onStart() {}
+  fun onPlayerJoin(player : int) {}
+  fun onBoard(player : int, ship : int) {}
+  // What it says it is, where asked; a default for those that do not say.
+  fun describe() : string => "a mod"
+}

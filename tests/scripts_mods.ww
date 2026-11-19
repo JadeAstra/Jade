@@ -1,0 +1,104 @@
+// Mods as JadeGate has them (the scripting plan, part 2, its hooks optional): the core loaded
+// first, then a mod that depends on it, each a script of its own with the hooks it wants and
+// no others; the game calls each hook in every mod that has it, in load order, so a later mod
+// works on what the core did (moving the skiff it launched) and replaces what it registered.
+import scripts.mods_contract.*
+
+class Ship(val kind : string, var x : float, var y : float)
+
+class Game : ModApi {
+  val rooms : open Map<string, RoomType> = {:}
+  val ships : open List<Ship> = []
+  val owned : open Map<int, int> = {:}
+  val logged : open List<string> = []
+
+  override fun registerRoomType(id : string, room : RoomType) {
+    rooms[id] = room
+  }
+  override fun spawnShip(kind : string, x : float, y : float) : int {
+    ships.add(Ship(kind, x, y))
+    return ships.size - 1
+  }
+  override fun giveShip(player : int, ship : int) : bool {
+    owned[player] = ship
+    return true
+  }
+  override fun playerShip(player : int) : int? => owned[player]
+  override fun shipsOfType(kind : string) : List<int> => (0 ..< ships.size).filter { ships[it].kind == kind }
+  override fun placeShip(ship : int, x : float, y : float) {
+    ships[ship].x = x
+    ships[ship].y = y
+  }
+  override fun log(text : string) {
+    logged.add(text)
+  }
+}
+
+val core = """
+api.registerRoomType("cockpit", RoomType("Cockpit", "#2a9d78", helm = true))
+api.registerRoomType("hall", RoomType("Hall", "#6b7480"))
+
+fun onStart() {
+  api.spawnShip("frigate", 30.0, 0.0)
+  api.log("a derelict frigate drifts nearby")
+}
+
+fun onPlayerJoin(player : int) {
+  val ship = api.spawnShip("skiff", -30.0, (player - 1) * 16.0)
+  api.giveShip(player, ship)
+  api.log("player " + player + " launched in a skiff")
+}
+
+fun onBoard(player : int, ship : int) {
+  api.log("player " + player + " boarded ship " + ship)
+}
+"""
+
+val earthlings = """
+// Its cockpit replaces the core's: registered later, by the same id.
+api.registerRoomType("cockpit", RoomType("Bridge", "#3355aa", helm = true))
+
+fun onPlayerJoin(player : int) {
+  val skiff = api.playerShip(player)
+  val frigates = api.shipsOfType("frigate")
+  if (skiff == null or frigates.isEmpty()) { return }
+  api.placeShip(skiff!!, 25.0, 0.0)
+  api.log("player " + player + " starts beside the frigate")
+}
+
+fun describe() : string => "Earthlings"
+"""
+
+// Loaded in order: the core first, then the mods that depend on it; each with its own VM.
+val game = Game()
+val mods : open List<ModHooks> = []
+val running : open List<RunningScript> = []
+for (mod in [Pair("core.ww", core), Pair("earthlings.ww", earthlings), Pair("quiet.ww", "val nothing = 0")]) {
+  val script = Script.compile(mod.second, name = mod.first, api = ModApi#, gives = ModHooks#)
+  val run = script.start(api = game)
+  running.add(run)
+  mods.add(run.gives as ModHooks)
+}
+print(game.rooms["cockpit"], game.rooms.size)        // expect: RoomType(name="Bridge", color="#3355aa", helm=true) 2
+
+for (mod in mods) { mod.onStart() }
+for (mod in mods) { mod.onPlayerJoin(1) }
+for (mod in mods) { mod.onPlayerJoin(2) }
+for (mod in mods) { mod.onBoard(1, 0) }
+for (line in game.logged) { print(line) }
+// expect: a derelict frigate drifts nearby
+// expect: player 1 launched in a skiff
+// expect: player 1 starts beside the frigate
+// expect: player 2 launched in a skiff
+// expect: player 2 starts beside the frigate
+// expect: player 1 boarded ship 0
+print(game.ships.map { it.kind + " " + it.x + " " + it.y })   // expect: ["frigate 30.0 0.0", "skiff 25.0 0.0", "skiff 25.0 0.0"]
+print(mods.map { it.describe() })                    // expect: ["a mod", "Earthlings", "a mod"]
+
+// A hook the contract has no body for is still required; one of the wrong type is still an error.
+try {
+  Script.compile("fun onPlayerJoin(player : string) { }", name = "wrong.ww", api = ModApi#, gives = ModHooks#)
+} catch (e : ScriptError) {
+  print(e.problems[0].message)                       // expect: onPlayerJoin(...) takes a string for 'player', not an int
+}
+for (run in running) { run.stop() }
