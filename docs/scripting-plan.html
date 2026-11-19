@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scripting plan</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d2422; --muted: #5d6763; --line: #dfe3e0;
+  --accent: #1f5fa8; --accent-soft: #e8f0fa; --decide: #a8551f; --decide-soft: #fbefe5;
+  --code-bg: #eef1ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+    --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+    --code-bg: #262c2a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161a19; --surface: #1d2221; --ink: #e4e9e6; --muted: #9aa5a0; --line: #2e3533;
+  --accent: #7fb2ec; --accent-soft: #1e2a38; --decide: #e7a06b; --decide-soft: #3a2a1f;
+  --code-bg: #262c2a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 80px; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 8px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+h2 { font-size: 1.3rem; line-height: 1.3; margin: 32px 0 12px; }
+h3 { font-size: 1.05rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+ul { margin: 0 0 12px; padding-left: 22px; }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+code {
+  font: 0.88em/1.4 Consolas, "Cascadia Mono", monospace; background: var(--code-bg);
+  padding: 1px 5px; border-radius: 4px;
+}
+nav {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin: 0 0 8px;
+}
+nav h2 { font-size: 1rem; margin: 0 0 8px; color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 0; }
+nav a { text-decoration: none; color: var(--ink); }
+nav a:hover { color: var(--accent); }
+.code { font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+section.decision {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px 24px 16px; margin: 0 0 18px;
+}
+.verdict {
+  display: flex; align-items: center; gap: 14px; background: var(--decide-soft);
+  border: 1px dashed var(--decide); border-radius: 6px; padding: 10px 14px; margin-top: 12px;
+}
+.label { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict .label { color: var(--decide); white-space: nowrap; }
+.verdict .blank { flex: 1; border-bottom: 1px solid var(--decide); height: 1.2em; opacity: 0.6; }
+.verdict .note { font-size: 0.92rem; }
+.verdict.decided { border-style: solid; align-items: flex-start; }
+.verdict.decided .label { padding-top: 2px; }
+.table { overflow-x: auto; margin: 4px 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; border-top: none; border-bottom: 2px solid var(--line); }
+td.part { white-space: nowrap; color: var(--muted); }
+td.when { min-width: 9em; }
+.note { color: var(--muted); font-size: 0.93rem; }
+@media (max-width: 600px) {
+  main { padding-top: 24px; }
+  h1 { font-size: 1.5rem; }
+  section.decision { padding: 14px 14px 10px; }
+}
+h4 { font-size: 1rem; margin: 18px 0 8px; }
+h5 { font-size: 0.95rem; margin: 14px 0 6px; }
+section.source { border-top: 2px solid var(--line); margin-top: 48px; padding-top: 8px; }
+.from { color: var(--muted); font-size: 0.9rem; margin: 0 0 16px; }
+pre { background: var(--code-bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+<h1>Plan: scripts run by a WinterWolf program, and safe ones</h1>
+<p class="lede">Written 2026-11-19 at the user's word: "we also need a way to run scripts (.ww files or an in memory ww file) in a ww app, either built or scripted and a way to run it in a sandbox where it has no file/network/hardware access (for safe scripts in snips and games)", and "the scripts would need to be able to call app api (game scripts would call game functions that are safe)". Its questions answered 2026-11-19 (2 and 6 by the user's own words, the rest as recommended): next after the work in hand (whole numbers of any size and complex numbers, asked for the same day), before the emitter plan.</p>
+
+<nav>
+<h2>Contents</h2>
+<ul>
+<li><a href="#sc-now">What ww has now</a></li>
+<li><a href="#sc-want">What is wanted</a></li>
+<li><a href="#sc-design">The design</a></li>
+<li><a href="#sc-safe">What a safe script cannot do</a></li>
+<li><a href="#sc-snippy">Snippy on the same VM</a></li>
+<li><a href="#sc-parts">The parts, each with its gate</a></li>
+<li><a href="#sc-questions">Questions for the user</a></li>
+</ul>
+</nav>
+
+<h2 id="sc-now">What ww has now</h2>
+<ul>
+<li><strong>No way to compile and run source as a program runs.</strong> A program is compiled before it starts; workers (<code>Worker("primes.ww")</code>) run scripts compiled into the program then (<code>CompilerSession::loadWorker</code>), not text given later.</li>
+<li><strong>A built program leaves the compiler out</strong> (D161: <code>ww build</code> keeps only the sections a program needs; the compiler and the ww command are a section of their own).</li>
+<li><strong>Workers:</strong> a second VM, on a thread of its own, with its own heap; it shares nothing with the program, and messages are copied between them (frozen data shared, D97). The isolation a safe script wants, already built and tested.</li>
+<li><strong>The Host:</strong> every file the program reads or writes goes through the VM's host (<code>host.h</code>); the network and processes through <code>io.cpp</code>, which asks whether it runs in a sandbox (32 places refuse or redirect so: <code>refuseInSandbox</code>).</li>
+<li><strong>The Sandbox (M6.6.2) is for tests:</strong> a block given files of its own in memory, simulated hosts, a clock that moves when told; meant to make failures happen, not to keep a program from what it should not reach. Code in it can still call <code>Foreign</code> (native libraries), open windows, use reflection.</li>
+</ul>
+
+<h2 id="sc-want">What is wanted</h2>
+<ul>
+<li>A program (run by ww, or built) loads a script, from a <code>.ww</code> file or from text in memory, compiles it, runs it and calls its functions.</li>
+<li>The script calls the program's API: what the program chooses to give it (a game's functions that are safe).</li>
+<li>A safe script reaches nothing else: no files, no network, no processes, no hardware (windows, the screen, sound, input, the clipboard), no native libraries; and cannot hang or exhaust the program (a <code>while (true) {}</code> in a game's script must not stop the game).</li>
+<li>For snips and games: scripts written by players or downloaded with content.</li>
+</ul>
+
+<h2 id="sc-design">The design</h2>
+<h3>In WinterWolf</h3>
+<pre><code>// The API a game gives its scripts: an interface, which the script is checked against.
+interface DoorApi {
+  fun open(door : int)
+  fun isLocked(door : int) : bool
+  fun say(text : string)
+}
+
+val source = FilePath("mods/door.ww").readText()      // or text made in memory
+val script = Script.compile(source, name = "door.ww", api = DoorApi::class)   // a ScriptError, with its lines, if it does not compile
+val running = script.start(game.doors, safety = Safety.safe, limits = Limits(time = 20.milliseconds))
+running.call("onEnter", [playerId])                    // a function the script defines
+running.stop()
+
+// door.ww, the script: the API is `api`, typed as DoorApi.
+fun onEnter(player : int) {
+  if (!api.isLocked(3)) { api.open(3) } else { api.say("locked") }
+}</code></pre>
+<h3>How it works</h3>
+<ul>
+<li><strong>Compiled as the program runs:</strong> <code>Script.compile</code> runs the compiler on the text (parser, checker, bytecode) against the standard library ww already carries compiled, and the API's interface. Errors come back as a list of what is wrong and where, never a crash of the program.</li>
+<li><strong>Run in a VM of its own</strong> (question 1), as a worker is: its own heap, its own thread or the caller's, nothing shared. A call from the program to the script, and from the script to the API, crosses between the two VMs: numbers, strings, lists, maps and values of value types copied; frozen data shared; an object of the program given to a script as a handle (question 3), which the script can only pass back to the API.</li>
+<li><strong>The API, both ways</strong> (question 2, decided): an interface the program writes, which the script is type-checked against as it compiles; the program gives an object that implements it, and the script reaches that object's interface members, nothing else of the program. And an interface for what the script gives the program (its <code>onEnter</code>, <code>onUse</code>): the script compiled as an implementation of it, refused as it loads where a member is missing or of another type, and called by the program as any object of that interface (<code>Script.compile(source, gives = DoorScript::class, api = GameApi::class)</code>, then <code>running.script.onUse(player)</code>). A function the script hands the API (a callback, <code>api.onTimer(2.seconds) { ... }</code>) is called back in the script's VM, under its limits. The interfaces, with their comments, are what <code>ww doc</code> makes a modding reference of.</li>
+<li><strong>Safe or trusted</strong> (question 4): a trusted script reaches what any program does (a plug-in a user installs on purpose); a safe one reaches only the API and the safe part of the standard library (below).</li>
+<li><strong>Limits</strong> (question 5): each call into the script given a time (or a count of instructions, for a game that wants the same result on every machine); past it the script is stopped at its next safe point and the call fails with a <code>ScriptStoppedException</code>; its heap given a size it may not grow past; its calls a depth. The program goes on.</li>
+<li><strong>Built programs</strong> (question 6): <code>ww build</code> keeps the compiler where the program uses <code>Script</code>, as it keeps Jade's window where it uses that.</li>
+<li><strong>Native code</strong> runs in a script's VM as in any: a script's loops are as fast as a program's.</li>
+</ul>
+
+<h2 id="sc-safe">What a safe script cannot do</h2>
+<div class="table"><table>
+<tr><th>Kept from it</th><th>How</th></tr>
+<tr><td>Files</td><td>its VM's host refuses every path (a host of its own: nothing found, nothing written)</td></tr>
+<tr><td>The network, Unix domain sockets</td><td>refused, as in a sandbox, with no hosts of its own</td></tr>
+<tr><td>Processes, the environment, exit</td><td>refused; <code>exit</code> ends the script, not the program</td></tr>
+<tr><td>Native libraries (<code>Foreign</code>)</td><td>refused</td></tr>
+<tr><td>Windows, the screen, sound, input, the clipboard</td><td>Jade's window and the platform refused; a script draws or plays only through what the API gives it</td></tr>
+<tr><td>Workers, threads</td><td>refused (question 7)</td></tr>
+<tr><td>Reflection</td><td>its own classes only: never the API object's or the program's</td></tr>
+<tr><td>Printing</td><td>given to a function of the program's (a console in the game, or nowhere)</td></tr>
+<tr><td>Time, randomness</td><td>allowed (a clock, <code>Random</code>); with an instruction count as its limit, the clock the game's and randomness from a seed the program gives, so that it runs the same everywhere</td></tr>
+</table></div>
+<p>Allowed: the language, collections, text, maths, regular expressions, time and dates, JSON-like data, images in memory (no files), everything that computes. The test of it is a list of every member of the standard library that reaches outside, each tried from a safe script and seen refused (part 3's gate), so that one added later without a refusal fails the test.</p>
+
+<h2 id="sc-snippy">Snippy on the same VM</h2>
+<p>Asked 2026-11-19 (the user: "right now snips also supports snippy (a custom python like scripting language), can we have that run on our vm as well?"). A second front end: Snippy's text read by a parser of its own and made into what the VM runs, so that a Snippy script is a <code>Script</code> like any (<code>Script.compile(source, language = Language.snippy, ...)</code>), with the same API, safety, limits and native code. Two ways (question 9): Snippy made into WinterWolf's source and compiled as that (its errors mapped back to Snippy's lines), or into the compiler's tree, or bytecode, directly. Dynamic typing the VM already has (<code>any</code>); indentation is the parser's; Python's ways where WinterWolf's differ (whole numbers without a limit, empty lists and strings false, how a dictionary is gone through) each a small part of the runtime or a choice to be made, from Snippy's own description and its implementation in Snips.</p>
+<p><strong>What Snippy is</strong> (read 2026-11-19 in <code>C:\Users\sciss\IdeaProjects\Snips</code>, <code>src/main/kotlin/com/snips/snippy</code>: a tree-walking interpreter in Kotlin, 3,448 lines, with 2,484 lines of tests): Snips' own Python-flavoured language for its script blocks. Python's numeric tower (<code>bool</code> within <code>int</code>, of any size, within <code>float</code> within <code>complex</code>, mixed arithmetic promoted as Python does); lists, tuples, dicts, sets and frozensets, slices, comprehensions (eager: no lazy generators); functions with defaults (evaluated at each call, not once as Python does), keyword arguments and lambdas; classes with Python's special methods (<code>__getitem__</code>, <code>__iter__</code>, <code>__next__</code>, <code>__str__</code> and the rest), the <code>collections.abc</code> mixins written in Snippy itself; exceptions with <code>try</code>, <code>except</code>, <code>else</code>, <code>finally</code>; imports between a document's script blocks; stepping (a run to its n-th statement, again from the start, as a script is a pure calculation: no clock, no randomness). Already safe and limited by construction (no files, network or reflection; <code>SnippyLimits</code>). At its edge, values become Snips' cell values and its errors Snips' (<code>#VALUE!</code>, <code>#DIV/0!</code>).</p>
+<p><strong>What WinterWolf lacks for it:</strong> whole numbers of any size and complex numbers (neither is in the standard library); classes whose objects gain attributes as they run (the VM keeps such extra fields already, <code>VM::extraField</code>); Python's special-method rules. So Snippy on the VM is a compiler from Snippy to what the VM runs <em>and</em> a Snippy runtime: its values, its operators and their promotions, its equality, hashing, truthiness, <code>str</code> and <code>repr</code>, its built-in functions and methods, written in WinterWolf (whole numbers of any size a class of the standard library's, useful beyond Snippy). Its tests, ported as Snippy files with what Snips gives for each, are the gate: the same answers as Snips' interpreter.</p>
+
+<h2 id="sc-parts">The parts, each with its gate</h2>
+<div class="table"><table>
+<tr><th>Part</th><th>What</th><th>Gate</th></tr>
+<tr><td class="part">1. Scripts compiled and run</td><td><code>Script.compile</code> and <code>Script.load</code> (text or a file), errors as values; <code>start</code> in a VM of its own; <code>call</code> its functions, values copied both ways; trusted only; built programs keep the compiler.</td><td>A script compiled and called from a program run by ww and from a built one; compile errors with their lines; a call round trip timed (the cost of crossing between VMs).</td></tr>
+<tr><td class="part">2. The program's API</td><td>The interfaces both ways: the API, checked as the script compiles, calls from the script into the program's object; what the script gives, checked as it loads, called by the program with its types; callbacks; handles for the program's objects.</td><td>A game-shaped example: a script calling ten API functions and given entities as handles; a wrong call a compile error in the script.</td></tr>
+<tr><td class="part">3. Safe scripts</td><td>The refusing host and every refusal in the table above.</td><td>The list of every member of the standard library that reaches outside, each refused from a safe script; the suite's stress settings.</td></tr>
+<tr><td class="part">4. Limits</td><td>Time or instruction counts per call, heap size, call depth; a stopped script's VM freed.</td><td>A script in an endless loop, one that allocates without end, one that recurses without end: each stopped, the program going on, nothing leaked.</td></tr>
+<tr><td class="part">5. Snippy</td><td>Its parser and its translation (question 9), its runtime's differences from WinterWolf's, its errors on its own lines.</td><td>Snips' Snippy scripts (its tests and examples) run on the VM with the same results as in Snips now; safe and limited as any script.</td></tr>
+<tr><td class="part">6. Written up</td><td>The guide's chapter, an example game script and a Snippy one, how to give a script a seed and a clock.</td><td>The examples run as tests.</td></tr>
+</table></div>
+<p>Each part finished, tested, committed and reported before the next, on the user's word. Its place among the other work: question 8.</p>
+
+<h2 id="sc-questions">Questions for the user</h2>
+<p>Each with the recommendation and why.</p>
+
+<section class="decision">
+<h3><span class="code">1</span>A script's own VM, or the program's?</h3>
+<ul>
+<li><strong>Its own</strong> (as a worker has): a script cannot reach or change the program's objects, can be stopped or thrown away whole, and its memory counted apart; a call between the two copies what it passes (some microseconds a call).</li>
+<li><strong>The program's:</strong> calls as fast as any, objects shared; but a safe script then shares the program's heap, its stopping is harder, and every object passed is reachable whole.</li>
+</ul>
+<p><em>Recommended:</em> its own, for safe and trusted scripts alike: one design, and the isolation workers already have. A game calls a script a few times a frame, where microseconds do not matter.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): its own VM, for safe and trusted scripts alike, as a worker has.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">2</span>The API: an interface, or functions registered by name?</h3>
+<ul>
+<li><strong>An interface</strong> the program writes and implements: the script is type-checked against it as it compiles (a wrong name or type an error with its line), and the program's other members cannot be reached.</li>
+<li><strong>Functions registered by name</strong> (<code>api.add("open") { door -&gt; ... }</code>): quick to add one; checked only when called.</li>
+</ul>
+<p><em>Recommended:</em> an interface. Script writers get errors where they write, and what is given is written down in one place.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: "yes, interfaces both ways": the API the program gives is an interface the script is checked against; and what a script gives the program is an interface too (<code>DoorScript</code>: its <code>onEnter</code>, <code>onUse</code>), the script compiled as one, refused as it loads where a member is missing or of another type, and called by the program with its types (<code>script.onUse(player)</code>). Functions a script hands the API (callbacks) are called back in its VM, under its limits. Snippy scripts call the same interfaces, checked as each call runs.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">3</span>The program's objects in a script: handles, or copies?</h3>
+<ul>
+<li><strong>Handles:</strong> an entity given to a script is an opaque value it can only pass back to the API (<code>api.health(enemy)</code>), the object staying the program's.</li>
+<li><strong>Copies:</strong> the object's fields copied into the script's VM; changing them changes nothing in the game.</li>
+</ul>
+<p><em>Recommended:</em> handles for objects, copies for plain data (numbers, text, lists, maps, values of value types).</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): handles for the program's objects, copies for plain data (numbers, text, lists, maps, values of value types).</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">4</span>Trusted scripts too, or safe ones only?</h3>
+<ul>
+<li><strong>Both:</strong> trusted for a program's own plug-ins and tools (full access, chosen by the program), safe for anything a player or the internet gives.</li>
+<li><strong>Safe only.</strong></li>
+</ul>
+<p><em>Recommended:</em> both, safe the default: <code>Safety.trusted</code> must be asked for.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): both, safe the default; <code>Safety.trusted</code> must be asked for.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">5</span>A script's limit: time, or a count of instructions?</h3>
+<ul>
+<li><strong>Time</strong> (milliseconds a call): simple; a slow machine stops a script a fast one lets finish.</li>
+<li><strong>Instructions</strong> (a count a call): the same result on every machine (replays, multiplayer that must agree); counting costs a little on loops.</li>
+</ul>
+<p><em>Recommended:</em> both offered, time the default; a game that needs to agree across machines asks for the count.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): both offered, time the default; a count of instructions for a game that must agree across machines.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">6</span>The compiler in built programs</h3>
+<ul>
+<li><strong>Kept where the program uses <code>Script</code></strong>, found as it is built; a built program that runs scripts grows by the compiler's size (measured in part 1).</li>
+<li><strong>Always kept.</strong></li>
+</ul>
+<p><em>Recommended:</em> kept where used: a program that runs no scripts stays as small as now.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user: "right now a built exe only carries the libraries it needs, so if no scripting is used, the built exes can leave out whats needed to run scripts": kept where the program uses <code>Script</code>, left out otherwise.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">7</span>Threads and workers in safe scripts</h3>
+<ul>
+<li><strong>Refused:</strong> a safe script runs on the thread that calls it; nothing of it runs after the call returns but what the API's callbacks start.</li>
+<li><strong>Allowed, counted:</strong> threads and tasks within the script's limits.</li>
+</ul>
+<p><em>Recommended:</em> refused at first (coroutines of its own, <code>sequence { }</code>, still allowed: they run within its calls); allowed later if a use appears.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): threads and workers refused in safe scripts at first; their coroutines and <code>sequence { }</code> allowed.</span></div>
+</section>
+
+<section class="decision">
+<h3><span class="code">8</span>When: before or after the emitter plan?</h3>
+<ul>
+<li><strong>Before</strong> the emitter (emitter-plan.html): scripts usable sooner; the emitter after.</li>
+<li><strong>After</strong> the emitter's x86-64 parts.</li>
+</ul>
+<p><em>Recommended:</em> before. It needs nothing of the emitter (a script's VM uses the native code there is), and it is a feature programs and games need, where the emitter is speed and ARM; the emitter's part 1 (ARM64 with the VM alone) can go first or between, as the user prefers.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): before the emitter plan: scripts first, then the emitter, then the speed plan's image parts.</span></div>
+</section>
+<section class="decision">
+<h3><span class="code">9</span>Snippy: made into WinterWolf's source, or straight into what the VM runs?</h3>
+<ul>
+<li><strong>Into WinterWolf's source:</strong> the quickest and easiest to look into (the made source can be read and stepped through); WinterWolf's checker and compiler do the rest; errors mapped back to Snippy's lines.</li>
+<li><strong>Into the compiler's tree or bytecode:</strong> no round trip through text, and Snippy's ways need not be expressible as WinterWolf's source; more of the compiler to learn and keep in step.</li>
+</ul>
+<p><em>Recommended</em> (Snippy read 2026-11-19): into WinterWolf's source made of calls to the Snippy runtime (<code>a + b</code> made <code>SnippyRt.add(a, b)</code>, a method call <code>SnippyRt.call(x, "name", [args])</code>), each value <code>any?</code>: WinterWolf's typing has nothing to check there, the runtime holds all of Python's rules in one place, and the made source can be read and stepped through. Its operations then cost a call each, about what Snips' tree-walking interpreter pays; made into bytecode directly, with what the types allow worked out as it compiles, later, where scripts need the speed.</p>
+<div class="verdict decided"><span class="label">Decided</span><span class="note">2026-11-19, the user ("go with the recommendations for the rest"): Snippy made into WinterWolf's source of calls to a Snippy runtime written in WinterWolf; into bytecode directly later, where speed needs it.</span></div>
+</section>
+</main>
+</body>
+</html>
