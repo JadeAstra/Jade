@@ -17,6 +17,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <afunix.h>  // AF_UNIX: Windows 10 1803 on
 #include <windows.h>
 #else
 #include <arpa/inet.h>
@@ -29,6 +30,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -353,6 +355,10 @@ struct Stream {
     Kind kind;
     HANDLE handle = INVALID_HANDLE_VALUE;
     SOCKET socket = INVALID_SOCKET;
+    // A Unix domain socket's file (2026-11-19), the one it connected to or listens on; a
+    // listener that made the file removes it as it is closed.
+    std::string unixPath;
+    bool removesFile = false;
     DWORD pid = 0;
 
     std::atomic<bool> closed{false};
@@ -406,6 +412,7 @@ struct Stream {
                 closesocket(socket);  // a thread in accept or recv returns with an error
                 socket = INVALID_SOCKET;
             }
+            if (removesFile) DeleteFileW(widen(unixPath).c_str());
             return;
         }
         if (handle == INVALID_HANDLE_VALUE) return;
@@ -508,6 +515,10 @@ struct Stream {
     enum class Kind { File, Pipe, Socket, Listener, Process };
     Kind kind;
     int fd = -1;
+    // A Unix domain socket's file (2026-11-19), the one it connected to or listens on; a
+    // listener that made the file removes it as it is closed.
+    std::string unixPath;
+    bool removesFile = false;
     pid_t pid = 0;
     int readTimeout = 0;  // a socket's, in ms; 0 for none
 
@@ -563,6 +574,7 @@ struct Stream {
         while (users.load() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         ::close(fd);
         fd = -1;
+        if (removesFile) ::unlink(unixPath.c_str());
     }
 };
 
@@ -1127,10 +1139,12 @@ void acceptOn(Stream& s, Outcome& out) {
     }
     out.made = std::make_shared<Stream>(Stream::Kind::Socket);
     out.made->socket = connection;
+    out.made->unixPath = s.unixPath;
 }
 
 // The local port, and the remote address and port, of a socket; false for one it cannot say.
 bool localPort(Stream& s, int& port) {
+    if (!s.unixPath.empty()) return false;  // a Unix domain socket: a file, no port
     sockaddr_storage address{};
     int size = sizeof(address);
     if (getsockname(s.socket, reinterpret_cast<sockaddr*>(&address), &size) != 0) return false;
@@ -1138,6 +1152,7 @@ bool localPort(Stream& s, int& port) {
     return true;
 }
 bool remoteEnd(Stream& s, std::string& host, int& port) {
+    if (!s.unixPath.empty()) return false;
     sockaddr_storage address{};
     int size = sizeof(address);
     if (getpeername(s.socket, reinterpret_cast<sockaddr*>(&address), &size) != 0) return false;
@@ -1156,6 +1171,93 @@ void setReadTimeout(Stream& s, int64_t limit) {
 }
 
 void shutdownOutput(Stream& s) { shutdown(s.socket, SD_SEND); }
+
+// ---- Unix domain sockets (2026-11-19): a file of the file system as the address ----
+
+// The address of the socket file `path`, false (and why) where the path will not fit.
+bool unixAddress(const std::string& path, sockaddr_un& address, std::string& why) {
+    address = sockaddr_un{};
+    address.sun_family = AF_UNIX;
+    if (path.empty()) {
+        why = "a Unix domain socket's path is empty";
+        return false;
+    }
+    if (path.size() >= sizeof(address.sun_path)) {
+        why = "a Unix domain socket's path is at most " + std::to_string(sizeof(address.sun_path) - 1) + " bytes, not " + std::to_string(path.size());
+        return false;
+    }
+    std::memcpy(address.sun_path, path.data(), path.size());
+    return true;
+}
+// Why a Unix domain socket could not be made, where the system has none.
+std::string unixMissing(int error) {
+    return error == WSAEAFNOSUPPORT ? "Unix domain sockets need Windows 10 (1803) or later" : systemMessage(static_cast<DWORD>(error));
+}
+
+// A connection to the socket file `path`, tried for at most `timeout` ms where that is not
+// negative.
+void connectUnix(const std::string& path, int64_t timeout, Outcome& out) {
+    sockaddr_un address;
+    if (!unixAddress(path, address, out.error)) return;
+    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) {
+        out.error = "cannot connect to " + path + ": " + unixMissing(WSAGetLastError());
+        return;
+    }
+    bool connected;
+    int lastError = 0;
+    if (timeout < 0) {
+        connected = ::connect(s, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+        if (!connected) lastError = WSAGetLastError();
+    } else {
+        u_long nonBlocking = 1;
+        ioctlsocket(s, FIONBIO, &nonBlocking);
+        connected = ::connect(s, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+        if (!connected) lastError = WSAGetLastError();
+        if (!connected && lastError == WSAEWOULDBLOCK) {
+            fd_set writable, failed;
+            FD_ZERO(&writable);
+            FD_ZERO(&failed);
+            FD_SET(s, &writable);
+            FD_SET(s, &failed);
+            timeval limit{static_cast<long>(timeout / 1000), static_cast<long>((timeout % 1000) * 1000)};
+            const int ready = select(0, nullptr, &writable, &failed, &limit);
+            connected = ready > 0 && FD_ISSET(s, &writable);
+            lastError = ready == 0 ? WSAETIMEDOUT : WSAECONNREFUSED;
+        }
+        nonBlocking = 0;
+        ioctlsocket(s, FIONBIO, &nonBlocking);
+    }
+    if (!connected) {
+        closesocket(s);
+        out.error = "cannot connect to " + path + ": " + (lastError == WSAETIMEDOUT ? "timed out" : systemMessage(static_cast<DWORD>(lastError)));
+        return;
+    }
+    out.made = std::make_shared<Stream>(Stream::Kind::Socket);
+    out.made->socket = s;
+    out.made->unixPath = path;
+}
+
+// A socket that takes connections at the socket file `path`, made now (an IOException where
+// a file of that name is there already); closed, it removes the file.
+std::shared_ptr<Stream> listenUnix(VM& vm, const std::string& path, int backlog) {
+    sockaddr_un address;
+    std::string why;
+    if (!unixAddress(path, address, why)) throw ioError(vm, why);
+    SOCKET s = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) throw ioError(vm, "cannot listen on " + path + ": " + unixMissing(WSAGetLastError()));
+    if (bind(s, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(s, backlog) != 0) {
+        const int error = WSAGetLastError();
+        closesocket(s);
+        throw ioError(vm, "cannot listen on " + path + ": " +
+                              (error == WSAEADDRINUSE ? std::string("a file of that name is there already") : systemMessage(static_cast<DWORD>(error))));
+    }
+    auto listener = std::make_shared<Stream>(Stream::Kind::Listener);
+    listener->socket = s;
+    listener->unixPath = path;
+    listener->removesFile = true;
+    return listener;
+}
 
 #else  // POSIX
 
@@ -1479,6 +1581,7 @@ void acceptOn(Stream& s, Outcome& out) {
     ::fcntl(connection, F_SETFD, FD_CLOEXEC);
     out.made = std::make_shared<Stream>(Stream::Kind::Socket);
     out.made->fd = connection;
+    out.made->unixPath = s.unixPath;
 }
 
 int portOf(const sockaddr_storage& address) {
@@ -1487,6 +1590,7 @@ int portOf(const sockaddr_storage& address) {
 
 // The local port, and the remote address and port, of a socket; false for one it cannot say.
 bool localPort(Stream& s, int& port) {
+    if (!s.unixPath.empty()) return false;  // a Unix domain socket: a file, no port
     sockaddr_storage address{};
     socklen_t size = sizeof(address);
     if (::getsockname(s.fd, reinterpret_cast<sockaddr*>(&address), &size) != 0) return false;
@@ -1494,6 +1598,7 @@ bool localPort(Stream& s, int& port) {
     return true;
 }
 bool remoteEnd(Stream& s, std::string& host, int& port) {
+    if (!s.unixPath.empty()) return false;
     sockaddr_storage address{};
     socklen_t size = sizeof(address);
     if (::getpeername(s.fd, reinterpret_cast<sockaddr*>(&address), &size) != 0) return false;
@@ -1509,6 +1614,87 @@ bool remoteEnd(Stream& s, std::string& host, int& port) {
 void setReadTimeout(Stream& s, int64_t limit) { s.readTimeout = static_cast<int>(std::min<int64_t>(limit, 2000000000)); }
 
 void shutdownOutput(Stream& s) { ::shutdown(s.fd, SHUT_WR); }
+
+// ---- Unix domain sockets (2026-11-19): a file of the file system as the address ----
+
+// The address of the socket file `path`, false (and why) where the path will not fit.
+bool unixAddress(const std::string& path, sockaddr_un& address, std::string& why) {
+    address = sockaddr_un{};
+    address.sun_family = AF_UNIX;
+    if (path.empty()) {
+        why = "a Unix domain socket's path is empty";
+        return false;
+    }
+    if (path.size() >= sizeof(address.sun_path)) {
+        why = "a Unix domain socket's path is at most " + std::to_string(sizeof(address.sun_path) - 1) + " bytes, not " + std::to_string(path.size());
+        return false;
+    }
+    std::memcpy(address.sun_path, path.data(), path.size());
+    return true;
+}
+
+// A connection to the socket file `path`, tried for at most `timeout` ms where that is not
+// negative.
+void connectUnix(const std::string& path, int64_t timeout, Outcome& out) {
+    sockaddr_un address;
+    if (!unixAddress(path, address, out.error)) return;
+    const int fd = newSocket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        out.error = "cannot connect to " + path + ": " + systemMessage(errno);
+        return;
+    }
+    bool connected;
+    int lastError = 0;
+    bool timedOut = false;
+    if (timeout < 0) {
+        connected = ::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+        if (!connected) lastError = errno;
+    } else {
+        const int flags = ::fcntl(fd, F_GETFL);
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        connected = ::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+        if (!connected && (errno == EINPROGRESS || errno == EAGAIN)) {
+            pollfd waiting{fd, POLLOUT, 0};
+            const int ready = ::poll(&waiting, 1, static_cast<int>(std::min<int64_t>(timeout, 2000000000)));
+            int failure = 0;
+            socklen_t size = sizeof(failure);
+            if (ready > 0) ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &size);
+            connected = ready > 0 && failure == 0;
+            timedOut = ready == 0;
+            lastError = ready > 0 ? failure : errno;
+        } else if (!connected) {
+            lastError = errno;
+        }
+        ::fcntl(fd, F_SETFL, flags);
+    }
+    if (!connected) {
+        ::close(fd);
+        out.error = "cannot connect to " + path + ": " + (timedOut ? "timed out" : systemMessage(lastError));
+        return;
+    }
+    out.made = std::make_shared<Stream>(Stream::Kind::Socket);
+    out.made->fd = fd;
+    out.made->unixPath = path;
+}
+
+// A socket that takes connections at the socket file `path`, made now (an IOException where
+// a file of that name is there already); closed, it removes the file.
+std::shared_ptr<Stream> listenUnix(VM& vm, const std::string& path, int backlog) {
+    sockaddr_un address;
+    std::string why;
+    if (!unixAddress(path, address, why)) throw ioError(vm, why);
+    const int fd = newSocket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || ::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(fd, backlog) != 0) {
+        const int error = errno;
+        if (fd >= 0) ::close(fd);
+        throw ioError(vm, "cannot listen on " + path + ": " + (error == EADDRINUSE ? std::string("a file of that name is there already") : systemMessage(error)));
+    }
+    auto listener = std::make_shared<Stream>(Stream::Kind::Listener);
+    listener->fd = fd;
+    listener->unixPath = path;
+    listener->removesFile = true;
+    return listener;
+}
 
 #endif
 
@@ -2095,6 +2281,37 @@ void registerIo(VM& vm) {
                                if (!out->error.empty()) throw ioError(vm, *out);
                                return Value::integer(keep(out->made));
                            });
+    });
+
+    // connectUnix(path, timeout): a connection to a Unix domain socket's file, tried for at most
+    // `timeout` ms if given (2026-11-19).
+    def("connectUnix", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
+        refuseInSandbox(vm, "connecting to a Unix domain socket");
+        startNetworking(vm);
+        const std::string path = vm.toStr(args[0], "path");
+        const int64_t timeout = argc > 1 && !args[1].isNull() ? std::max<int64_t>(vm.toInt(args[1], "time limit"), 0) : -1;
+        auto out = std::make_shared<Outcome>();
+        return vm.blocking([=] { connectUnix(path, timeout, *out); },
+                           [out](VM& vm) -> Value {
+                               if (!out->error.empty()) throw ioError(vm, *out);
+                               return Value::integer(keep(out->made));
+                           });
+    });
+
+    // listenUnix(path, backlog): a socket that takes connections at a Unix domain socket's file,
+    // made now; closed, it removes the file.
+    def("listenUnix", 1, 2, [](VM& vm, int argc, Value* args) -> Value {
+        refuseInSandbox(vm, "listening on a Unix domain socket");
+        startNetworking(vm);
+        const std::string path = vm.toStr(args[0], "path");
+        const int backlog = argc > 1 && !args[1].isNull() ? static_cast<int>(vm.toInt(args[1], "backlog")) : 50;
+        return Value::integer(keep(listenUnix(vm, path, backlog)));
+    });
+
+    // The file of a Unix domain socket, or of one that listens; null for any other.
+    def("socketPath", 1, 1, [](VM& vm, int, Value* args) -> Value {
+        const auto s = streamOf(vm, args[0]);
+        return s->isSocket() && !s->unixPath.empty() ? vm.str(s->unixPath) : Value::null();
     });
 
     // [local port, remote address, remote port] of a socket; the last two null for one that listens.

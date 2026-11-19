@@ -48,7 +48,13 @@ public:
 
     bool exists(const std::string& path) override {
         std::error_code ec;
-        return fs::exists(toPath(path), ec);
+        const fs::path p = toPath(path);
+        if (fs::exists(p, ec)) return true;
+        // A file the system cannot follow to anything it knows, but there itself: a Unix domain
+        // socket's on Windows (2026-11-19), a reparse point of its own kind. A symbolic link to
+        // nothing is still not there.
+        const fs::file_status itself = fs::symlink_status(p, ec);
+        return !ec && fs::exists(itself) && !fs::is_symlink(itself);
     }
     bool isFile(const std::string& path) override {
         std::error_code ec;

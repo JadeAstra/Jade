@@ -1,0 +1,80 @@
+// Unix domain sockets (2026-11-19): a ServerSocket and a Socket given a FilePath where a port and
+// a host go, the connection made through a socket file of the file system, for programs on this
+// machine alone; read and written as a TCP connection is. On Linux, macOS and Windows (10 from
+// version 1803), with nothing more than ww.
+
+val dir = FilePath.createTempDirectory("ww_uds")
+val path = dir.resolve("echo.sock")
+
+// A server at the file, two clients one after the other, each line given back.
+val server = ServerSocket(path)
+print(server.path == path, path.exists())   // expect: true true
+val served = thread {
+  val lines : open List<string> = []
+  for (round in 0 ..< 2) {
+    val client = server.accept()
+    val line = client.reader.readLine() ?: "(nothing)"
+    lines.add(line)
+    client.writer.write("echo: $line\n")
+    client.close()
+  }
+  lines
+}
+val first = Socket(path)
+first.writer.write("hello\n")
+print(first.reader.readLine(), first.path == path, first.isConnected)   // expect: echo: hello true true
+first.close()
+val second = Socket()
+second.connect(path, 2.seconds)
+second.writer.write("again\n")
+print(second.reader.readLine())   // expect: echo: again
+try { print(second.localPort) } catch (e : IllegalStateException) { print(e.message) }      // expect: a Unix domain socket has a path, not a port
+second.close()
+print(served.get())   // expect: ["hello", "again"]
+
+// No port for the server either: it has a path.
+try { print(server.localPort) } catch (e : IllegalStateException) { print(e.message) }      // expect: a Unix domain socket has a path, not a port
+
+// The end read once the other side says it writes no more; a read that waits too long.
+val ends = thread {
+  val client = server.accept()
+  client.writer.write("one\ntwo\n")
+  client.shutdownOutput()
+  client.reader.readLine()   // waits for the other side
+  client.close()
+}
+val reading = Socket(path)
+print(reading.reader.readLine(), reading.reader.readLine(), reading.reader.readLine())   // expect: one two null
+reading.close()
+ends.get()
+val slow = thread {
+  val client = server.accept()
+  Thread.sleep(2.seconds)
+  client.close()
+}
+val waiting = Socket(path)
+waiting.readTimeout = 100.milliseconds
+try { waiting.reader.readLine() } catch (e : SocketTimeoutException) { print("timed out") }   // expect: timed out
+waiting.close()
+slow.get()
+
+// The file made as it listens, removed as it is closed; one of the same name there already, or
+// nothing listening, an IOException.
+try { ServerSocket(path) } catch (e : IOException) { print("taken") }   // expect: taken
+server.close()
+print(path.exists())   // expect: false
+try { Socket(path) } catch (e : IOException) { print("nothing there") }   // expect: nothing there
+path.writeText("not a socket")
+try { ServerSocket(path) } catch (e : IOException) { print(e.message!!.endsWith("a file of that name is there already")) }   // expect: true
+path.delete()
+
+// A path past what the system takes (107 bytes), and an address where a file is the address.
+try { ServerSocket(dir.resolve("x".repeat(120))) } catch (e : IOException) { print(e.message!!.contains("at most 107 bytes")) }   // expect: true
+try { ServerSocket(path, bindAddress = "127.0.0.1") } catch (e : IllegalArgumentException) { print(e.message) }
+// expect: a Unix domain socket listens at its file, with no address to bind
+
+// TCP as before: a path of null, a port.
+val tcp = ServerSocket(0, bindAddress = "127.0.0.1")
+print(tcp.path, tcp.localPort > 0)   // expect: null true
+tcp.close()
+dir.deleteRecursively()

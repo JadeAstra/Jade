@@ -286,24 +286,33 @@ fun __redirect(target : Stream | FilePath, which : string, toFile : string) : st
 
 // ---- Sockets (D120) ----
 
-// One end of a TCP connection.
+// One end of a TCP connection, or of a Unix domain socket's: given a FilePath where a host and a
+// port go, the connection is to the socket file of that path, which a program on this machine
+// listens on (a ServerSocket given the same path). Both are read and written alike.
 //
 //   Socket("example.org", 80).use { socket ->
 //     socket.writer.write("GET / HTTP/1.0\r\n\r\n")
 //     print(socket.reader.readLine())
 //   }
+//   Socket(FilePath("/run/app.sock")).use { it.writer.write("status\n") }
 //
 // Its reads and writes block the thread they run on; a server serves each connection from a
-// thread or a pool's job.
+// thread or a pool's job. Unix domain sockets are the system's own: on Linux, macOS and Windows
+// (10, from version 1803; a path at most 107 bytes long there as everywhere).
 class Socket : AutoCloseable {
   private var handle : any? = null
   private var input : Reader? = null
   private var output : Writer? = null
   private var readLimit : Duration? = null
 
-  // Socket(host, port) connects at once; Socket() waits for connect().
-  fun init(host : string? = null, port : int = 0) throws IOException {
-    if (host != null) { connect(host, port) }
+  // Socket(host, port), or Socket(path) for a Unix domain socket, connects at once; Socket()
+  // waits for connect().
+  fun init(host : (string | FilePath)? = null, port : int = 0) throws IOException {
+    if (host is FilePath) {
+      connect(host as FilePath)
+    } else if (host != null) {
+      connect(host as string, port)
+    }
   }
 
   // With a time limit, gives up when it runs out.
@@ -312,6 +321,14 @@ class Socket : AutoCloseable {
     // In a sandbox, one of its hosts (M6.6.2): never the network.
     val box = Sandbox.current
     adopt(box == null ? __io.connect(host, port, timeout?.waitMilliseconds) : box.network.connectTo(host, port))
+    return this
+  }
+
+  // To the Unix domain socket whose file is `path` (2026-11-19); with a time limit, gives up
+  // when it runs out. Not in a sandbox, which reaches no socket but its own (an IOException).
+  fun connect(path : FilePath, timeout : Duration? = null) : Socket throws IOException {
+    if (handle != null) { throw IOException("the socket is already connected") }
+    adopt(__io.connectUnix(path.text, timeout?.waitMilliseconds))
     return this
   }
 
@@ -345,15 +362,24 @@ class Socket : AutoCloseable {
   val isClosed : bool
     get() => handle != null and !__io.isOpen(handle)
   // The port of this end of the connection. An IllegalStateException while the socket is not
-  // connected, an IOException once it is closed.
+  // connected, or where it is a Unix domain socket's (which has a path, no port), an IOException
+  // once it is closed.
   val localPort : int
-    get() => __io.socketInfo(connected())[0] as int
+    get() => __socketPart(connected(), 0) as int
   // The address of the other side, as "127.0.0.1"; the same errors as localPort.
   val remoteAddress : string
-    get() => __io.socketInfo(connected())[1] as string
+    get() => __socketPart(connected(), 1) as string
   // The port of the other side; the same errors as localPort.
   val port : int
-    get() => __io.socketInfo(connected())[2] as int
+    get() => __socketPart(connected(), 2) as int
+  // The file of a Unix domain socket's connection; null for a TCP one, or a socket not connected.
+  val path : FilePath?
+    get() {
+      val held = handle
+      if (held == null) { return null }
+      val text = __io.socketPath(held)
+      return text == null ? null : FilePath(text!!)
+    }
 
   // How long a read waits before it fails with a SocketTimeoutException, an IOException; null
   // for as long as it takes (Java's soTimeout). It can be set before connect().
@@ -377,29 +403,47 @@ class Socket : AutoCloseable {
   }
 }
 
-// A socket that waits for connections to this machine.
+// A socket that waits for connections to this machine: at a port, or at a Unix domain socket's
+// file, given a FilePath in place of the port (2026-11-19).
 //
 //   val server = ServerSocket(8080)
 //   while (true) {
 //     val client = server.accept()          // a Socket
 //     thread { serve(client) }
 //   }
+//   val local = ServerSocket(FilePath("/run/app.sock"))   // for programs on this machine alone
 //
 // Port 0 lets the system pick a free one (see localPort). With no address it takes
-// connections from anywhere; "127.0.0.1" keeps it to programs on this machine.
+// connections from anywhere; "127.0.0.1" keeps it to programs on this machine. A Unix domain
+// socket's file is made as it starts listening (an IOException where a file of that name is
+// there already: one an earlier program left is deleted first) and removed as it is closed;
+// who may connect is who may open that file.
 class ServerSocket : AutoCloseable {
   private val handle : any
 
-  fun init(port : int = 0, backlog : int = 50, bindAddress : string? = null) throws IOException {
+  fun init(port : int | FilePath = 0, backlog : int = 50, bindAddress : string? = null) throws IOException {
+    if (port is FilePath) {
+      if (bindAddress != null) { throw IllegalArgumentException("a Unix domain socket listens at its file, with no address to bind") }
+      // Not in a sandbox, which reaches no socket but its own (an IOException).
+      this.handle = __io.listenUnix((port as FilePath).text, backlog)
+      return
+    }
     // In a sandbox, a port of its own, which its network.connect reaches (M6.6.2).
     val box = Sandbox.current
-    this.handle = box == null ? __io.listen(port, bindAddress, backlog) : box.network.listen(port)
+    this.handle = box == null ? __io.listen(port as int, bindAddress, backlog) : box.network.listen(port as int)
   }
 
   // The port it listens on, the one the system picked where it was made with port 0; an
-  // IOException once it is closed.
+  // IllegalStateException where it listens at a Unix domain socket's file, an IOException once
+  // it is closed.
   val localPort : int
-    get() => __io.socketInfo(handle)[0] as int
+    get() => __socketPart(handle, 0) as int
+  // The file it listens at, for a Unix domain socket; null where it listens on a port.
+  val path : FilePath?
+    get() {
+      val text = __io.socketPath(handle)
+      return text == null ? null : FilePath(text!!)
+    }
   // Whether it has been closed.
   val isClosed : bool
     get() => !__io.isOpen(handle)
@@ -411,6 +455,16 @@ class ServerSocket : AutoCloseable {
   override fun close() {
     __io.close(handle)
   }
+}
+
+// Part `which` of a socket's socketInfo (its port, the other side's address, its port), where a
+// Unix domain socket has none: an IllegalStateException saying so.
+fun __socketPart(handle : any, which : int) : any? {
+  val part = __io.socketInfo(handle)[which]
+  if (part == null and __io.socketPath(handle) != null) {
+    throw IllegalStateException("a Unix domain socket has a path, not " + (which == 1 ? "an address" : "a port"))
+  }
+  return part
 }
 
 // What the classes above are built on (io.cpp), declared with its types and what it throws.
@@ -454,6 +508,9 @@ external object __io {
   fun listen(port : int, bindAddress : string? = null, backlog : int = 50) : any throws IOException
   fun accept(handle : any) : any throws IOException
   fun socketInfo(handle : any) : List<any?>
+  fun connectUnix(path : string, timeout : int? = null) : any throws IOException
+  fun listenUnix(path : string, backlog : int = 50) : any throws IOException
+  fun socketPath(handle : any) : string?
   fun socketTimeout(handle : any, millis : int)
   fun shutdownOutput(handle : any) throws IOException
 }
