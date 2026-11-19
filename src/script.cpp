@@ -28,6 +28,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <iostream>
+#include <ostream>
+#include <streambuf>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -49,6 +52,7 @@ std::vector<std::string> commandLibraryPaths();  // command.cpp: where `import J
 namespace {
 
 struct ScriptHost;
+struct HostKeeper;
 
 // A script compiled: what a start runs. For one with a VM of its own, its program's image,
 // which the start reads into that VM; for one compiled in a ScriptVM, its modules are that VM's
@@ -56,12 +60,13 @@ struct ScriptHost;
 struct CompiledScript {
     std::string name;
     std::string image;                           // empty for one compiled in a ScriptVM
-    std::weak_ptr<ScriptHost> in;                // the ScriptVM it was compiled in, if any
+    std::shared_ptr<HostKeeper> in;              // the ScriptVM it was compiled in, if any, kept going
     std::vector<int> modules;                    // to run, in order: the contract's, the script's
     std::unordered_map<std::string, int> names;  // what it declares at its top level: global slots
     std::unordered_map<std::string, int> contractSlots;  // its contract's classes and proxies
     bool gives = false;                          // it gives its contract's interface
     mutable bool started = false;
+    bool safe = true;                            // its VM reaches nothing outside the program (part 3)
 };
 
 enum Side : int { kProgram = 0, kScript = 1 };
@@ -92,6 +97,12 @@ struct ScriptHost {
     std::string failure;  // why it ended, where it failed
     std::deque<std::shared_ptr<Request>> asked[2];  // what each side has to do for the other
     CompilerSession* session = nullptr;             // a ScriptVM's compiler, on its own thread
+    bool safe = true;                               // a ScriptVM's: its scripts reach nothing outside
+    // Where its scripts' print goes, where the program gave a function for it: that function's
+    // handle in the program's VM (-1 for none), and the stream that sends it each line.
+    int64_t output = -1;
+    std::unique_ptr<std::streambuf> outputBuffer;
+    std::unique_ptr<std::ostream> outputStream;
 };
 
 // A script started, in a host.
@@ -176,7 +187,20 @@ std::shared_ptr<const CompiledScript>& compiledOf(VM& vm, Value v) {
     return *resourceOf<std::shared_ptr<const CompiledScript>>(vm, v, "script", "a compiled script");
 }
 std::shared_ptr<ScriptRun>& runOf(VM& vm, Value v) { return *resourceOf<std::shared_ptr<ScriptRun>>(vm, v, "running script", "a running script"); }
-std::shared_ptr<ScriptHost>& hostOf(VM& vm, Value v) { return *resourceOf<std::shared_ptr<ScriptHost>>(vm, v, "script vm", "a ScriptVM"); }
+
+// What keeps a ScriptVM going: held by the program's ScriptVM, by each script compiled in it and
+// so by each started there. As the last of them goes, nothing can give it a script or call one
+// any more, and it is stopped. Its thread holds the host alone, not this.
+struct HostKeeper {
+    std::shared_ptr<ScriptHost> host;
+    explicit HostKeeper(std::shared_ptr<ScriptHost> h) : host(std::move(h)) {}
+    ~HostKeeper();
+    HostKeeper(const HostKeeper&) = delete;
+    HostKeeper& operator=(const HostKeeper&) = delete;
+};
+
+std::shared_ptr<HostKeeper>& keeperOf(VM& vm, Value v) { return *resourceOf<std::shared_ptr<HostKeeper>>(vm, v, "script vm", "a ScriptVM"); }
+std::shared_ptr<ScriptHost>& hostOf(VM& vm, Value v) { return keeperOf(vm, v)->host; }
 
 void releaseCompiled(int64_t id) { delete reinterpret_cast<std::shared_ptr<const CompiledScript>*>(id); }
 void releaseHandle(int64_t id) { delete reinterpret_cast<Handle*>(id); }
@@ -187,13 +211,10 @@ void stopHost(ScriptHost& host) {
     if (host.sides[kScript] != nullptr) host.sides[kScript]->requestStop();
 }
 
-// A ScriptVM the program no longer reaches: stopped, as nothing can give it a script any more
-// (those it runs hold it while the program holds them).
-void releaseHost(int64_t id) {
-    auto* host = reinterpret_cast<std::shared_ptr<ScriptHost>*>(id);
-    stopHost(**host);
-    delete host;
-}
+HostKeeper::~HostKeeper() { stopHost(*host); }
+
+// A ScriptVM the program no longer reaches: let go of, stopped once no script of it is held either.
+void releaseHost(int64_t id) { delete reinterpret_cast<std::shared_ptr<HostKeeper>*>(id); }
 
 // A running script the program no longer reaches: stopped, as nothing can call it any more;
 // in a ScriptVM, it alone, which ends it there (the VM going on for the others).
@@ -430,8 +451,10 @@ void waitServing(VM& vm, const std::shared_ptr<ScriptHost>& host, Side me, Finis
             LockReleased released(vm);
             std::unique_lock<std::mutex> hold(host->mutex);
             host->changed.wait(hold, [&] { return finished() || host->ended || !host->asked[me].empty(); });
-            if (finished() || (host->ended && host->asked[me].empty())) return;
+            // What the other side asked before its answer came is served first, so that a line a
+            // script printed in a call is the program's before the call returns.
             serveNow = !host->asked[me].empty();
+            if (!serveNow && (finished() || host->ended)) return;
         }
         if (serveNow) serveAsked(vm, host, me);
     }
@@ -507,6 +530,159 @@ Value Ways::forwardCall(VM& vm, Value handleValue, Request::Kind kind, const std
     return answer;
 }
 
+// ---- Safe scripts (the scripting plan, part 3) ----
+//
+// A safe script's VM reaches nothing outside the program: as it is made, every built-in that
+// would (files, streams, sockets and processes, native libraries, threads and workers, parallel
+// sections, sandboxes and scripts of its own, the system's fonts, standard input, the program's
+// arguments, environment and machine) is replaced in that VM by one that throws a
+// SecurityException; the program's own VM is not touched. What it prints goes to a function of
+// the program's, or nowhere; exit ends it, not the program. It reaches the program only through
+// its api.
+
+#define WW_REFUSE(fnName, words) \
+    Value fnName(VM& vm, int, Value*) { throw vm.errorOf("SecurityException", std::string("a safe script ") + (words)); }
+WW_REFUSE(refuseFiles, "reaches no files: what it needs is given it through its api")
+WW_REFUSE(refuseStreams, "reaches no streams, sockets or processes: what it needs is given it through its api")
+WW_REFUSE(refuseForeign, "loads no native libraries")
+WW_REFUSE(refuseThreads, "starts no threads, workers or parallel sections")
+WW_REFUSE(refuseNesting, "makes no sandboxes and runs no scripts of its own")
+WW_REFUSE(refuseFonts, "reads no fonts of the system's: Fonts.load(bytes) takes those it is given")
+WW_REFUSE(refuseInput, "reads no standard input")
+WW_REFUSE(refuseProgram, "sees nothing of the program's arguments, environment or machine")
+#undef WW_REFUSE
+
+// A native that refuses, standing in for `original`: of its name, its arguments' counts and
+// names, so that a library compiled against it finds it as it was (the checker compares them).
+Value refusing(VM& vm, Value original, NativeFn refusal) {
+    const ObjNative* was = static_cast<const ObjNative*>(original.as.obj);
+    ObjNative* made = vm.alloc<ObjNative>(was->name, was->minArgs, was->maxArgs, refusal);
+    made->params = was->params;
+    made->parallelSafe = was->parallelSafe;
+    return Value::object(made);
+}
+
+// The natives of a built-in object refused, every one or those named in `only`, but those named
+// in `keep`.
+void refuseIn(VM& vm, const char* global, NativeFn refusal, std::initializer_list<const char*> only = {},
+              std::initializer_list<const char*> keep = {}) {
+    Value* holder = vm.builtinNamed(global);
+    if (holder == nullptr || !holder->isObjType(ObjType::Class)) return;
+    ObjClass* cls = asClass(*holder);
+    std::vector<ObjString*> names;
+    const Table::Entry* entries = cls->statics.entries();
+    for (uint32_t i = 0; entries != nullptr && i < cls->statics.capacity(); i++) {
+        if (entries[i].key == nullptr || !entries[i].value.isObjType(ObjType::Native)) continue;
+        const std::string name = entries[i].key->utf8();
+        const bool listed = only.size() == 0 || std::find_if(only.begin(), only.end(), [&](const char* n) { return name == n; }) != only.end();
+        const bool kept = std::find_if(keep.begin(), keep.end(), [&](const char* n) { return name == n; }) != keep.end();
+        if (listed && !kept) names.push_back(entries[i].key);
+    }
+    for (ObjString* name : names)
+        cls->statics.set(name, refusing(vm, *cls->statics.find(name), refusal));
+}
+
+void refuseGlobal(VM& vm, const char* name, NativeFn refusal) {
+    if (Value* original = vm.builtinNamed(name); original != nullptr && original->isObjType(ObjType::Native)) vm.defineGlobal(name, refusing(vm, *original, refusal));
+}
+
+// Makes a script's VM safe, before anything of the program is in it.
+void makeSafe(VM& vm) {
+    refuseIn(vm, "__file", refuseFiles, {}, {"separator"});
+    refuseIn(vm, "__io", refuseStreams);
+    refuseIn(vm, "__foreign", refuseForeign);
+    refuseIn(vm, "__thread", refuseThreads, {"start"});
+    refuseIn(vm, "__worker", refuseThreads, {"start"});
+    refuseIn(vm, "__parallel", refuseThreads, {"run", "replace", "chunks", "functions", "gather"});
+    refuseIn(vm, "__sandbox", refuseNesting, {"make", "enter"});
+    refuseIn(vm, "__script", refuseNesting, {"vm", "compile", "start"});  // its own api and handles go on
+    refuseIn(vm, "__text", refuseFonts, {"families", "hasFamily", "typefaces", "countIn", "load", "find", "fallback"});
+    refuseGlobal(vm, "input", refuseInput);
+    for (const char* name : {"__arguments", "__environment", "__processId", "__hostName"}) refuseGlobal(vm, name, refuseProgram);
+}
+
+// Where a script's print goes when the program gave a function for it: each line a call of that
+// function, asked of the program as the script's api calls are, so that it comes in its place
+// among them (served at once by a program waiting on the script, else on its event loop); a line
+// not ended is sent as the stream is flushed. Written on the script's thread, by its VM.
+class LineOut final : public std::streambuf {
+public:
+    LineOut(VM& vm, std::shared_ptr<ScriptRun> run, int64_t callback) : vm_(vm), run_(std::move(run)), callback_(callback) {}
+
+protected:
+    int overflow(int c) override {
+        if (c == EOF) return 0;
+        if (c == '\n') send();
+        else line_ += static_cast<char>(c);
+        return c;
+    }
+    std::streamsize xsputn(const char* text, std::streamsize n) override {
+        for (std::streamsize i = 0; i < n; i++) overflow(static_cast<unsigned char>(text[i]));
+        return n;
+    }
+    int sync() override {
+        if (!line_.empty()) send();
+        return 0;
+    }
+
+private:
+    void send() {
+        std::string text = std::move(line_);
+        line_.clear();
+        ObjList* list = newList(vm_);
+        TempRoot keep(vm_, Value::object(list));
+        vm_.listAdd(list, vm_.str(text));
+        auto asked = std::make_shared<Request>();
+        asked->kind = Request::Function;
+        asked->run = run_;
+        asked->target = callback_;
+        asked->arguments = messageFor(vm_, Value::object(list));
+        ask(kScript, asked);  // not waited for: printing goes on
+    }
+    VM& vm_;
+    std::shared_ptr<ScriptRun> run_;  // the host's, standing for its scripts in these calls
+    int64_t callback_;
+    std::string line_;
+};
+
+// A script VM's print: to the program's function for it, or, with none, nowhere for a safe one
+// and the program's own output for a trusted one.
+void routeOutput(VM& vm, const std::shared_ptr<ScriptHost>& host, bool safe) {
+    if (host->output >= 0) {
+        auto run = std::make_shared<ScriptRun>();
+        run->host = host;
+        run->compiled = std::make_shared<CompiledScript>();
+        host->outputBuffer = std::make_unique<LineOut>(vm, run, host->output);
+        host->outputStream = std::make_unique<std::ostream>(host->outputBuffer.get());
+    } else if (safe) {
+        host->outputStream = std::make_unique<std::ostream>(nullptr);  // nowhere: a stream with no buffer writes nothing
+    } else {
+        return;
+    }
+    vm.output = host->outputStream.get();
+    vm.errorOutput = host->outputStream.get();
+}
+
+// A script's VM as its kind of script has it: a safe one's refusing, its print where the program
+// says. Neither kind has windows, the screen or the clipboard (Jade's __jade), as a worker has
+// none: the program draws; a use of them says so.
+void prepare(VM& vm, const std::shared_ptr<ScriptHost>& host, bool safe) {
+    if (safe) makeSafe(vm);
+    routeOutput(vm, host, safe);
+    if (!vm.hasBuiltin("__jade"))
+        vm.absentGlobals["__jade"] = safe ? VM::Absent{Thrown::SecurityException, "a safe script has no windows, screen or clipboard: it draws through what its api gives it"}
+                                          : VM::Absent{Thrown::IllegalStateException, "a script has no windows, screen or clipboard, as a worker has none: the program draws"};
+}
+
+// The program's function for a script's print, kept from the collector for as long as the
+// program is (in its handles, under the host).
+int64_t keepOutput(VM& vm, Value function, const ScriptHost* host) {
+    if (function.isNull()) return -1;
+    const int64_t id = vm.nextScriptHandle++;
+    vm.scriptHandles[id] = VM::ScriptHandle{function, host};
+    return id;
+}
+
 // ---- Starting a script, on its host's thread ----
 
 // Runs a script's top levels in its host's VM (the library's first, where none has run yet).
@@ -554,6 +730,7 @@ void ownMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<ScriptRun> run, s
     // Kept on the heap: if threads of its own are still running when it ends, the VM is left as
     // it is rather than taken apart under them (as a worker's is).
     VM* vm = new VM(true);
+    prepare(*vm, host, run->compiled->safe);
     Program* program = new Program;
     std::shared_ptr<const CompiledScript> compiled = run->compiled;
     vm->host = std::move(files);  // in the sandbox of the code that started it, if any
@@ -600,13 +777,15 @@ void ownMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<ScriptRun> run, s
 // both on this thread, which compiles and runs the scripts the program gives it.
 void sharedMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<Host> files, VM* parent) {
     VM* vm = new VM(true);
+    prepare(*vm, host, host->safe);
     vm->host = std::move(files);
     std::string failure;
     bool waiting = false;
     {
         parsePreludeAlone(true);  // see compiler.h
-        auto* session = new CompilerSession(*vm);
+        CompilerSession* session = nullptr;
         try {
+            session = new CompilerSession(*vm);  // within the try: making it may throw (a compile of the library)
             session->libraryPaths = commandLibraryPaths();
             vm->load(session->program);
             vm->jobStarted();  // it waits for scripts and calls until it is stopped
@@ -632,7 +811,7 @@ void sharedMain(std::shared_ptr<ScriptHost> host, std::shared_ptr<Host> files, V
         }
         // What its compiles kept is written from the session's code, so before the session goes.
         finishKeeping();
-        if (!vm->threadsAlive()) delete session;
+        if (session != nullptr && !vm->threadsAlive()) delete session;
     }
     hostEnded(*host, failure);
     {
@@ -673,6 +852,8 @@ Value problemList(VM& vm, std::vector<Problem> problems) {
 // What a script's compile is given.
 struct CompileArgs {
     std::string source, name, directory, contractName, contractSource, api, gives;
+    bool safe = true;
+    std::string importRoot;  // a safe one's imports only from under it (and the libraries ww carries)
 };
 
 // Compiles a script into a program of its own, on a thread of its own with a VM of its own (a
@@ -694,6 +875,9 @@ void compileAlone(const CompileArgs& a, std::shared_ptr<CompiledScript>& made, s
             auto compiled = std::make_shared<CompiledScript>();
             compiled->name = a.name;
             compiled->gives = !a.gives.empty();
+            compiled->safe = a.safe;
+            session.importsLimited = a.safe;
+            if (!a.importRoot.empty()) session.importRoots = {a.importRoot};
             session.compileScript(a.source, a.name, a.directory, compiled->names, a.contractSource, a.contractName, a.api, a.gives, compiled->modules,
                                   &compiled->contractSlots);
             const double compiledAt = since(began);
@@ -742,7 +926,10 @@ void compileShared(VM& vm, const std::shared_ptr<ScriptHost>& host, const std::s
             auto compiled = std::make_shared<CompiledScript>();
             compiled->name = a.name;
             compiled->gives = !a.gives.empty();
-            compiled->in = host;
+            compiled->safe = host->safe;  // a ScriptVM's scripts are as it is
+            session->importsLimited = host->safe;
+            session->importRoots.clear();
+            if (!a.importRoot.empty()) session->importRoots.push_back(a.importRoot);
             session->compileScript(a.source, a.name, a.directory, compiled->names, a.contractSource, a.contractName, a.api, a.gives, compiled->modules,
                                    &compiled->contractSlots);
             vm.load(session->program);
@@ -783,9 +970,13 @@ void registerScriptsHere(VM& vm) {
     };
 
     // vm(): a ScriptVM, its thread started and its VM made, the standard library loaded.
-    def("vm", 0, 0, [](VM& vm, int, Value*) -> Value {
+    // vm(safe, output): a ScriptVM, its thread started and its VM made (safe or trusted, as one), the
+    // standard library loaded; `output` the program's function for what its scripts print, if any.
+    def("vm", 2, 2, [](VM& vm, int, Value* args) -> Value {
         auto host = std::make_shared<ScriptHost>();
         host->shared = true;
+        host->safe = args[0].truthy();
+        host->output = keepOutput(vm, args[1], host.get());
         host->sides[kProgram] = &vm;
         vm.scriptStarted();
         std::thread(sharedMain, host, vm.currentHostShared(), &vm).detach();
@@ -797,17 +988,19 @@ void registerScriptsHere(VM& vm) {
             }
             throw vm.runtimeError(Thrown::IllegalStateException, "a ScriptVM could not start" + (failure.empty() ? std::string() : ": " + failure));
         }
-        auto* kept = new std::shared_ptr<ScriptHost>(host);
+        auto* kept = new std::shared_ptr<HostKeeper>(std::make_shared<HostKeeper>(host));
         return Value::object(vm.alloc<ObjResource>("script vm", reinterpret_cast<int64_t>(kept), &releaseHost));
     });
 
-    // compile(vm, source, name, directory, contractName, contractSource, api, gives): the script
-    // compiled (in the ScriptVM `vm`, or, where it is null, as a program of its own), or a list
-    // of what is wrong with it. This thread lets the program's other threads go on meanwhile.
-    def("compile", 8, 8, [](VM& vm, int, Value* args) -> Value {
+    // compile(vm, source, name, directory, contractName, contractSource, api, gives, safe,
+    // importRoot): the script compiled (in the ScriptVM `vm`, which says whether it is safe, or,
+    // where it is null, as a program of its own, safe as `safe` says), or a list of what is wrong
+    // with it. A safe one imports only from under `importRoot` and the libraries ww carries. This
+    // thread lets the program's other threads go on meanwhile.
+    def("compile", 10, 10, [](VM& vm, int, Value* args) -> Value {
         CompileArgs a{vm.toStr(args[1], "the script's source"), vm.toStr(args[2], "the script's name"), vm.toStr(args[3], "the script's folder"),
                       vm.toStr(args[4], "the contract's name"), vm.toStr(args[5], "the contract"), vm.toStr(args[6], "the api's interface"),
-                      vm.toStr(args[7], "the interface it gives")};
+                      vm.toStr(args[7], "the interface it gives"), args[8].truthy(), args[9].isNull() ? std::string() : vm.toStr(args[9], "the folder of its imports")};
         std::shared_ptr<CompiledScript> made;
         std::vector<Problem> problems;
         std::string broke;
@@ -815,7 +1008,8 @@ void registerScriptsHere(VM& vm) {
             LockReleased released(vm);
             compileAlone(a, made, problems, broke);
         } else {
-            std::shared_ptr<ScriptHost> host = hostOf(vm, args[0]);
+            std::shared_ptr<HostKeeper> keeper = keeperOf(vm, args[0]);
+            std::shared_ptr<ScriptHost> host = keeper->host;
             auto job = std::make_shared<SharedCompile>();
             job->args = std::move(a);
             VM* there = nullptr;
@@ -832,6 +1026,7 @@ void registerScriptsHere(VM& vm) {
                 if (!job->done) broke = "the ScriptVM ended" + (host->failure.empty() ? std::string() : ": " + host->failure);
             }
             made = job->made;
+            if (made != nullptr) made->in = keeper;
             problems = job->problems;
             if (broke.empty()) broke = job->broke;
         }
@@ -859,15 +1054,15 @@ void registerScriptsHere(VM& vm) {
 
     // start(script, api): the script running, its top level run; or, where that failed, what it
     // threw, as text. `api` is what the script's `api` stands for, if anything. A script of its
-    // own gets a VM of its own; one compiled in a ScriptVM starts there, once.
-    def("start", 2, 2, [](VM& vm, int, Value* args) -> Value {
+    // own gets a VM of its own (with `output` the program's function for what it prints, if any);
+    // one compiled in a ScriptVM starts there, once.
+    def("start", 3, 3, [](VM& vm, int, Value* args) -> Value {
         std::shared_ptr<const CompiledScript> compiled = compiledOf(vm, args[0]);
         auto run = std::make_shared<ScriptRun>();
         run->compiled = compiled;
         std::shared_ptr<ScriptHost> host;
         if (compiled->image.empty()) {
-            host = compiled->in.lock();
-            if (host == nullptr) throw vm.runtimeError(Thrown::IllegalStateException, "the ScriptVM it was compiled in has ended");
+            host = compiled->in->host;
             {
                 std::lock_guard<std::mutex> hold(host->mutex);
                 if (compiled->started) throw vm.runtimeError(Thrown::IllegalStateException, compiled->name + " has been started in its ScriptVM already: compile it again for another");
@@ -885,6 +1080,7 @@ void registerScriptsHere(VM& vm) {
         } else {
             host = std::make_shared<ScriptHost>();
             host->sides[kProgram] = &vm;
+            host->output = keepOutput(vm, args[2], host.get());
             run->host = host;
             if (!args[1].isNull()) run->api = write(vm, run, kProgram, args[1]);
             vm.scriptStarted();

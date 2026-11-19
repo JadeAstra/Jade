@@ -53,8 +53,9 @@
 // itself; a function given goes so too, so a script's lambda is called back in the script. A
 // handle that comes back is the object itself again.
 //
-// So far scripts are trusted: they reach what any program reaches. Safe scripts and limits
-// come next (docs/scripting-plan.html).
+// A script is safe unless compiled `trusted`: it reaches nothing outside the program but through
+// its api (each try a SecurityException), what it prints goes to a function of the program's or
+// nowhere, and exit ends it alone. Limits on its time and memory come next (the scripting plan).
 class Script {
   internal val handle : any
   // The name it was compiled under, which its errors and stack traces give.
@@ -78,13 +79,19 @@ class Script {
     // here by its name (api = DoorApi#), the script has `api`, an object of it, and sees the
     // contract's declarations; with `gives`, another of them, its top-level functions are made
     // an object of that interface, which the program gets from RunningScript.gives.
+    // A script is safe unless `trusted`: it reaches nothing outside the program (files, the
+    // network, processes, native libraries, threads and workers, the system's fonts, standard
+    // input, the program's arguments and environment), each a SecurityException, only its api;
+    // and it imports only files under `folder` (none where no folder is given) and the libraries
+    // ww carries. A trusted one reaches what any program does.
     fun compile(source : string, name : string = "script.ww", folder : FilePath? = null, api : Class? = null,
-                gives : Class? = null) : Script throws ScriptError => __scriptCompile(null, source, name, folder, api, gives)
+                gives : Class? = null, trusted : bool = false) : Script throws ScriptError =>
+      __scriptCompile(null, source, name, folder, api, gives, trusted)
 
     // The file read and compiled, its imports looked for from its folder, as compile does; a
     // ScriptError where it does not compile, an IOException where it cannot be read.
-    fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError =>
-      compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."), api, gives)
+    fun load(path : FilePath, api : Class? = null, gives : Class? = null, trusted : bool = false) : Script throws IOException | ScriptError =>
+      compile(path.readText(), path.name, path.absolute.parent ?: FilePath("."), api, gives, trusted)
   }
 
   // What it declares at its top level, its functions among them, sorted.
@@ -94,12 +101,13 @@ class Script {
   // Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for
   // calls. `api` is what the script's `api` stands for: an object of the interface it was
   // compiled with, whose calls from the script run here. A ScriptException where the top level
-  // throws.
-  fun start(api : any? = null) : RunningScript {
+  // throws. `output` gets each line it prints (on the program's event loop); with none, a safe
+  // one's go nowhere and a trusted one's to the program's own output.
+  fun start(api : any? = null, output : ((string) -> unit)? = null) : RunningScript {
     if (this.api != null and api == null) {
       throw IllegalArgumentException("$name was compiled with api = ${this.api!!.name}#: start it with an object of ${this.api!!.name}")
     }
-    val started = __script.start(handle, api)
+    val started = __script.start(handle, api, output)
     if (started is string) { throw ScriptException("$name: ${started as string}") }
     return RunningScript(started, this)
   }
@@ -165,15 +173,17 @@ class RunningScript {
 class ScriptVM {
   internal val handle : any
 
-  // Starts it: its thread, its VM, the standard library loaded.
-  fun init() {
-    handle = __script.vm()
+  // Starts it: its thread, its VM, the standard library loaded. Its scripts are safe unless
+  // `trusted`, as Script.compile's are; `output` gets each line they print (on the program's
+  // event loop), and with none a safe one's go nowhere and a trusted one's to the program's own.
+  fun init(trusted : bool = false, output : ((string) -> unit)? = null) {
+    handle = __script.vm(!trusted, output)
   }
 
   // `source` compiled into this VM, as Script.compile compiles one of its own; it starts here,
   // once (compile it again for another run).
   fun compile(source : string, name : string = "script.ww", folder : FilePath? = null, api : Class? = null,
-              gives : Class? = null) : Script throws ScriptError => __scriptCompile(handle, source, name, folder, api, gives)
+              gives : Class? = null) : Script throws ScriptError => __scriptCompile(handle, source, name, folder, api, gives, false)
 
   // The file read and compiled into this VM, as Script.load does.
   fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError =>
@@ -240,7 +250,8 @@ fun __scriptFailure(text : string) : string => text.startsWith("ScriptException:
 // Script.compile's and ScriptVM.compile's work: the contract of the interfaces named found (the
 // compiler put it there), and the script compiled, in the ScriptVM `vm` or, where it is null, as
 // a program of its own.
-fun __scriptCompile(vm : any?, source : string, name : string, folder : FilePath?, api : Class?, gives : Class?) : Script throws ScriptError {
+fun __scriptCompile(vm : any?, source : string, name : string, folder : FilePath?, api : Class?, gives : Class?,
+                    trusted : bool) : Script throws ScriptError {
   var contract : Pair<string, string>? = null
   for (named in [api, gives]) {
     if (named == null) { continue }
@@ -251,7 +262,7 @@ fun __scriptCompile(vm : any?, source : string, name : string, folder : FilePath
     contract = found
   }
   val made = __script.compile(vm, source, name, (folder ?: FilePath(".")).absolute.toString(), contract?.first ?: "", contract?.second ?: "",
-                              api?.name ?: "", gives?.name ?: "")
+                              api?.name ?: "", gives?.name ?: "", !trusted, folder?.absolute?.toString())
   if (made is List) {
     val problems = (made as List<List<any>>).map {
       ScriptProblem(it[0] as string, it[1] as int, it[2] as int, it[3] as string)

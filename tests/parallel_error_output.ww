@@ -1,0 +1,5 @@
+// printError from a core of a parallel section (2026-11-19): a core's VM copied where its
+// program's output goes but not where its error output goes, and printError there crashed.
+(1..64).toList().parallelStream().forEach { n -> if (n == 32) { printError("from a core") } }
+print("done")                                       // expect: done
+// expect error output: from a core

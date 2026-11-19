@@ -609,6 +609,7 @@ addButton(widgets)</pre></dd>
 <li><a href="#ScriptException"><code>ScriptException</code></a> (1)</li>
 <li><a href="#ScriptProblem"><code>ScriptProblem</code></a> (2)</li>
 <li><a href="#ScriptVM"><code>ScriptVM</code></a> (6)</li>
+<li><a href="#SecurityException"><code>SecurityException</code></a> (1)</li>
 <li><a href="#Sequence"><code>Sequence</code></a> (40)</li>
 <li><a href="#SequenceScope"><code>SequenceScope</code></a> (7)</li>
 <li><a href="#ServerSocket"><code>ServerSocket</code></a> (6)</li>
@@ -2533,6 +2534,9 @@ Exception: everything else, which a bare `catch (e)` catches.
 </div>
 <div class="entry" id="UnsupportedOperationException"><code class="sig">class UnsupportedOperationException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)</code><a class="anchor" href="#UnsupportedOperationException">#</a>
 <p>Something a value does not do: changing what is frozen, a member it has not.</p>
+</div>
+<div class="entry" id="SecurityException"><code class="sig">class SecurityException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)</code><a class="anchor" href="#SecurityException">#</a>
+<p>What a safe script may not do: reach files, the network, processes, native libraries, threads and the rest outside the program (Script, the scripting plan's part 3).</p>
 </div>
 <div class="entry" id="NoSuchElementException"><code class="sig">class NoSuchElementException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)</code><a class="anchor" href="#NoSuchElementException">#</a>
 <p>The first of nothing, a key that is not there.</p>
@@ -6132,7 +6136,7 @@ fun onEnter(player : int) {
 </pre>
 <p>A member with a body in the contract is a hook a script may leave out (fun onBoard(player : int, ship : int) {}): its own where it declares one, the contract's body where not, so each of a game's mods declares only the hooks it wants. One with no body, it has to declare.</p>
 <p>A script that calls a member the contract does not have, or gives the interface with a function of another type, does not compile. Data (numbers, text, lists, maps, sets, the contract's data classes and value types) is copied; an object of an interface of the contract goes as a handle, an object of that interface on the other side whose calls run on the object itself; a function given goes so too, so a script's lambda is called back in the script. A handle that comes back is the object itself again.</p>
-<p>So far scripts are trusted: they reach what any program reaches. Safe scripts and limits come next (docs/scripting-plan.html).</p>
+<p>A script is safe unless compiled <code>trusted</code>: it reaches nothing outside the program but through its api (each try a SecurityException), what it prints goes to a function of the program's or nowhere, and exit ends it alone. Limits on its time and memory come next (the scripting plan).</p>
 </div>
 <div class="entry member" id="Script.name"><code class="sig">val name : string</code><a class="anchor" href="#Script.name">#</a>
 <p>The name it was compiled under, which its errors and stack traces give.</p>
@@ -6143,17 +6147,17 @@ fun onEnter(player : int) {
 <div class="entry member" id="Script.gives"><code class="sig">val gives : Class?</code><a class="anchor" href="#Script.gives">#</a>
 <p>The interface it gives, where it was compiled with gives = ...</p>
 </div>
-<div class="entry member" id="Script.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null, api : Class? = null, gives : Class? = null) : Script throws ScriptError</code><a class="anchor" href="#Script.compile">#</a>
-<p><code>source</code> compiled, as a file named <code>name</code> in <code>folder</code> (by default where the program runs), which its imports are looked for from; a ScriptError listing each problem, with its line and column, where it does not compile. With <code>api</code>, an interface of a contract written here by its name (api = DoorApi#), the script has <code>api</code>, an object of it, and sees the contract's declarations; with <code>gives</code>, another of them, its top-level functions are made an object of that interface, which the program gets from RunningScript.gives.</p>
+<div class="entry member" id="Script.compile"><code class="sig">fun compile(source : string, name : string = &quot;script.ww&quot;, folder : FilePath? = null, api : Class? = null, gives : Class? = null, trusted : bool = false) : Script throws ScriptError</code><a class="anchor" href="#Script.compile">#</a>
+<p><code>source</code> compiled, as a file named <code>name</code> in <code>folder</code> (by default where the program runs), which its imports are looked for from; a ScriptError listing each problem, with its line and column, where it does not compile. With <code>api</code>, an interface of a contract written here by its name (api = DoorApi#), the script has <code>api</code>, an object of it, and sees the contract's declarations; with <code>gives</code>, another of them, its top-level functions are made an object of that interface, which the program gets from RunningScript.gives. A script is safe unless <code>trusted</code>: it reaches nothing outside the program (files, the network, processes, native libraries, threads and workers, the system's fonts, standard input, the program's arguments and environment), each a SecurityException, only its api; and it imports only files under <code>folder</code> (none where no folder is given) and the libraries ww carries. A trusted one reaches what any program does.</p>
 </div>
-<div class="entry member" id="Script.load"><code class="sig">fun load(path : FilePath, api : Class? = null, gives : Class? = null) : Script throws IOException | ScriptError</code><a class="anchor" href="#Script.load">#</a>
+<div class="entry member" id="Script.load"><code class="sig">fun load(path : FilePath, api : Class? = null, gives : Class? = null, trusted : bool = false) : Script throws IOException | ScriptError</code><a class="anchor" href="#Script.load">#</a>
 <p>The file read and compiled, its imports looked for from its folder, as compile does; a ScriptError where it does not compile, an IOException where it cannot be read.</p>
 </div>
 <div class="entry member" id="Script.names"><code class="sig">val names : List&lt;string&gt;</code><a class="anchor" href="#Script.names">#</a>
 <p>What it declares at its top level, its functions among them, sorted.</p>
 </div>
-<div class="entry member" id="Script.start"><code class="sig">fun start(api : any? = null) : RunningScript</code><a class="anchor" href="#Script.start">#</a>
-<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. <code>api</code> is what the script's <code>api</code> stands for: an object of the interface it was compiled with, whose calls from the script run here. A ScriptException where the top level throws.</p>
+<div class="entry member" id="Script.start"><code class="sig">fun start(api : any? = null, output : ((string) -&gt; unit)? = null) : RunningScript</code><a class="anchor" href="#Script.start">#</a>
+<p>Starts it: a VM of its own, on a thread of its own, runs its top level, and waits for calls. <code>api</code> is what the script's <code>api</code> stands for: an object of the interface it was compiled with, whose calls from the script run here. A ScriptException where the top level throws. <code>output</code> gets each line it prints (on the program's event loop); with none, a safe one's go nowhere and a trusted one's to the program's own output.</p>
 </div>
 <div class="entry member" id="Script.toString"><code class="sig">override fun toString() : string</code><a class="anchor" href="#Script.toString">#</a>
 <p>As &quot;Script(door.ww)&quot;.</p>

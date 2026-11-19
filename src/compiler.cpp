@@ -9285,6 +9285,25 @@ std::vector<StmtPtr>* CompilerSession::parseFile(const std::string& key, const s
 // next to the importing file first, then in the library directories. A file never imports
 // itself: a script called Shapes.ww that says `import Shapes` means the library, so the
 // importing file is passed over.
+bool CompilerSession::importAllowed(const std::string& found) const {
+    if (!importsLimited) return true;
+    std::error_code ec;
+    const fs::path file = canonicalPath(fs::path(found), ec);
+    auto under = [&](const std::string& root) {
+        if (root.empty()) return false;
+        const fs::path base = canonicalPath(fs::path(root), ec);
+        auto f = file.begin();
+        for (auto b = base.begin(); b != base.end(); ++b, ++f)
+            if (f == file.end() || *f != *b) return false;
+        return true;
+    };
+    for (const std::string& root : importRoots)
+        if (under(root)) return true;
+    for (const std::string& library : libraryPaths)
+        if (under(library)) return true;
+    return false;
+}
+
 bool CompilerSession::findImport(const std::string& path, const std::string& fromDirectory, const std::string& file,
                                  std::string& found, bool& folder) const {
     std::vector<fs::path> places;
@@ -9345,6 +9364,8 @@ void CompilerSession::gather(const std::string& key, const std::string& name, co
         // every name it would have given was reported missing first, page after page, and the
         // cause only after them, as compiling reached the import.
         if (!findImport(s.path, directory, name, found, folder)) throw CompileError(name, s.line, s.col, "cannot find module '" + s.path + "'");
+        if (!importAllowed(found))
+            throw CompileError(name, s.line, s.col, "a safe script imports only files of its own folder and the libraries ww carries, not '" + s.path + "'");
         if (folder) {
             for (const fs::path& path : folderFiles(found)) ahead.emplace_back(fileKeyOf(path), path.filename().string());
         } else {
@@ -9358,7 +9379,7 @@ void CompilerSession::gather(const std::string& key, const std::string& name, co
         const auto& s = static_cast<const ImportStmt&>(*stmt);
         std::string found;
         bool folder = false;
-        if (!findImport(s.path, directory, name, found, folder)) continue;
+        if (!findImport(s.path, directory, name, found, folder) || !importAllowed(found)) continue;
         Namespace* imported = nullptr;
         if (folder) {
             imported = namespaceOf(found);
@@ -10029,6 +10050,8 @@ Namespace* CompilerSession::importModule(const std::string& path, const std::str
     bool folder = false;
     if (!findImport(path, fromDirectory, file, found, folder))
         throw CompileError(file, at.line, at.col, "cannot find module '" + path + "'");
+    if (!importAllowed(found))
+        throw CompileError(file, at.line, at.col, "a safe script imports only files of its own folder and the libraries ww carries, not '" + path + "'");
     if (folder) {
         loadFolder(found, path, file, at, modules);
         return namespaceOf(found);

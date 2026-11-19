@@ -82,4 +82,12 @@ print(bystander.call("hello"))                                   // expect: hell
 try { quitter.call("quit") } catch (e : ScriptException) { print(e.message) }
 // expect: quitter.ww: the script ended before it answered
 print(second.isRunning, bystander.isRunning)                     // expect: false false
+
+// A script compiled in a ScriptVM the program no longer holds keeps that VM going, and so does
+// one started there; it stops once neither is held.
+val kept = ScriptVM().compile("fun three() : int => 3", name = "kept.ww")
+Program.collectGarbage()
+val keptRunning = kept.start()
+Program.collectGarbage()
+print(keptRunning.call("three"), keptRunning.isRunning)          // expect: 3 true
 print("done")                                                    // expect: done

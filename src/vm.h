@@ -271,7 +271,7 @@ enum class Thrown : uint8_t {
     RuntimeException, ArithmeticException, IndexOutOfBoundsException, NullPointerException, ClassCastException,
     IllegalArgumentException, NumberFormatException, IllegalStateException, UnsupportedOperationException,
     NoSuchElementException, ConcurrentModificationException, AssertionError, StackOverflowError, OutOfMemoryError,
-    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, Count_
+    InternalError, IOException, Throwable, SocketTimeoutException, TimeoutException, CancellationException, SecurityException, Count_
 };
 
 // The instructions as functions (M6.7): built with Clang, each instruction of instructions.inc is
@@ -927,7 +927,22 @@ public:
     }
 
     void defineGlobal(const std::string& name, Value value) { builtins_[name] = value; }
+    // A built-in global by its name, as defineGlobal gave it (a safe script's VM changes some,
+    // script.cpp); null where there is none.
+    Value* builtinNamed(const std::string& name) {
+        auto found = builtins_.find(name);
+        return found == builtins_.end() ? nullptr : &found->second;
+    }
     bool hasBuiltin(const std::string& name) const { return builtins_.count(name) != 0; }
+    // A built-in global this VM has not (a script's has no windows, as a worker's has none), and
+    // what its use throws instead of "undefined variable": a safe script's VM says it is refused.
+    struct Absent {
+        Thrown thrown;
+        std::string message;
+    };
+    std::unordered_map<std::string, Absent> absentGlobals;
+    // What the use of the global `name`, unset, throws.
+    WwThrow undefinedGlobal(const std::string& name);
     // What the C++ provides, for `external` declarations to be checked against: whether a global
     // function, or a built-in type's method, exists, and how many arguments it takes (-1: any).
     bool builtinArity(const std::string& name, int& minArgs, int& maxArgs) const;

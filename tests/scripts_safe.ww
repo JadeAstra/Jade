@@ -1,0 +1,139 @@
+// Safe scripts (the scripting plan, part 3): a script is safe unless compiled trusted, and a safe
+// one reaches nothing outside the program but through its api. Each way out the standard library
+// has is tried here from a safe script, and each is a SecurityException; what is no way out
+// (computing, text, maths, time, randomness) works; what it prints goes to the function given
+// for it; exit ends it alone. A trusted script reaches what a program does.
+
+val dir = FilePath.createTempDirectory("ww_safe")
+dir.resolve("secret.txt").writeText("the program's own")
+val secret = dir.resolve("secret.txt").toString().replace("\\", "/")
+
+// Each attempt in the script: the name of what it threw, or "allowed".
+val source = """
+fun tried(what : () -> any?) : string {
+  try {
+    what()
+    return "allowed"
+  } catch (e : Exception) {
+    return e#.name
+  }
+}
+
+fun attempts() : List<string> => [
+  // Files
+  tried { FilePath("SECRET").readText() },
+  tried { FilePath("out.txt").writeText("x") },
+  tried { FilePath("SECRET").exists() },
+  tried { FilePath(".").list() },
+  tried { FilePath("SECRET").delete() },
+  tried { FilePath("made").mkdir() },
+  tried { FilePath.createTempFile() },
+  tried { FilePath(".").absolute },
+  tried { FilePath.roots() },
+  tried { FilePath(".").totalSpace },
+  tried { RandomAccessFile("SECRET") },
+  tried { PagedFile("SECRET") },
+  // Streams, sockets, processes: one opened elsewhere in the process too (its handle a number)
+  tried { Reader(3).readText() },
+  tried { Writer(-1).write("x") },
+  tried { Program.output.write("x") },
+  tried { Socket("localhost", 80) },
+  tried { ServerSocket(0) },
+  tried { Socket(FilePath("a.sock")) },
+  tried { Process("cmd") },
+  tried { Process.run("cmd") },
+  tried { Process.currentPid() },
+  tried { Process.currentCommand() },
+  // Native libraries
+  tried { Library("kernel32") },
+  tried { Memory(16) },
+  // Threads and parallel sections
+  tried { thread { 1 } },
+  tried { (1..8).toList().parallelStream().forEach { } },
+  // Sandboxes and scripts of its own
+  tried { Sandbox.run { 1 } },
+  tried { Script.compile("fun f() : int => 1") },
+  tried { ScriptVM() },
+  // The system's fonts
+  tried { Fonts.families() },
+  tried { Fonts.find("Arial") },
+  // Standard input, and the program's own
+  tried { input() },
+  tried { Program.arguments },
+  tried { Program.environment },
+  tried { Program.processId },
+  tried { Program.hostName }
+]
+
+// What reaches nothing outside: allowed.
+fun allowed() : List<string> => [
+  tried { "abc".upper() + [3, 1, 2].sorted().toString() },
+  tried { Math.sqrt(2.0) + Math.random() },
+  tried { Instant.now() },
+  tried { Regex("a+").find("baaa") },
+  tried { mapOf("k" to [1, 2]).toString() },
+  tried { FilePath.separator }
+]
+
+fun talk() : string {
+  print("a line from the script")
+  return "said"
+}
+
+fun quit() {
+  exit(4)
+}
+""".replace("SECRET", secret)
+
+val printed : open List<string> = []
+val safe = Script.compile(source, name = "safe.ww").start(output = { line -> printed.add(line) })
+val refused = safe.call("attempts") as List<string>
+print(refused.size, refused.filter { it == "SecurityException" }.size)   // expect: 36 36
+for ((i, r) in refused.withIndex()) {
+  if (r != "SecurityException") { print("not refused:", i, r) }
+}
+print(safe.call("allowed"))   // expect: ["allowed", "allowed", "allowed", "allowed", "allowed", "allowed"]
+print(safe.call("talk"), printed)                      // expect: said ["a line from the script"]
+// A refusal says what it refuses.
+val reader = Script.compile("fun read() : string => FilePath(\"x\").readText()", name = "reader.ww").start()
+try { reader.call("read") } catch (e : ScriptException) { print(e.message!!.lines()[0]) }
+// expect: reader.ww: SecurityException: a safe script reaches no files: what it needs is given it through its api
+
+// exit ends the script alone.
+try { safe.call("quit") } catch (e : ScriptException) { print(e.message) }
+// expect: safe.ww: the script ended before it answered
+print(safe.isRunning)                                  // expect: false
+
+// A trusted script reaches what a program does.
+val trusted = Script.compile("fun read() : string => FilePath(\"SECRET\").readText()".replace("SECRET", secret), name = "trusted.ww", trusted = true).start()
+print(trusted.call("read"))                            // expect: the program's own
+
+// A ScriptVM is safe unless made trusted, as every script in it is.
+val shared = ScriptVM()
+try { shared.compile("fun read() : string => FilePath(\"x\").readText()", name = "shared.ww").start().call("read") } catch (e : ScriptException) { print(e.message!!.lines()[0]) }
+// expect: shared.ww: SecurityException: a safe script reaches no files: what it needs is given it through its api
+print(ScriptVM(trusted = true).compile("fun read() : string => FilePath(\"SECRET\").readText()".replace("SECRET", secret)).start().call("read"))
+// expect: the program's own
+shared.stop()
+
+// Neither kind has windows, the screen or the clipboard, as a worker has none: the program draws.
+for (t in [false, true]) {
+  val s = Script.compile("import Jade.*\nfun clip() : string => Native.clipboardText", name = "jade.ww", trusted = t).start()
+  try { s.call("clip") } catch (e : ScriptException) { print(e.message!!.lines()[0]) }
+}
+// expect: jade.ww: SecurityException: a safe script has no windows, screen or clipboard: it draws through what its api gives it
+// expect: jade.ww: IllegalStateException: a script has no windows, screen or clipboard, as a worker has none: the program draws
+
+// A safe script imports only from under its own folder (and the libraries ww carries).
+dir.resolve("mod").mkdir()
+dir.resolve("mod/helper.ww").writeText("fun twice(n : int) : int => n * 2\n")
+dir.resolve("outside.ww").writeText("fun leak() : int => 1\n")
+dir.resolve("mod/main.ww").writeText("import \"helper.ww\"\nfun four() : int => helper.twice(2)\n")
+print(Script.load(dir.resolve("mod/main.ww")).start().call("four"))   // expect: 4
+dir.resolve("mod/escape.ww").writeText("import \"../outside.ww\" as outside\nfun one() : int => outside.leak()\n")
+try { Script.load(dir.resolve("mod/escape.ww")) } catch (e : ScriptError) { print(e.problems[0].message) }
+// expect: a safe script imports only files of its own folder and the libraries ww carries, not '../outside.ww'
+try { Script.compile("import \"" + dir.resolve("outside.ww").toString().replace("\\", "/") + "\"\nfun one() : int => 1", name = "text.ww") } catch (e : ScriptError) { print(e.problems[0].message.startsWith("a safe script imports only")) }
+// expect: true
+print(Script.load(dir.resolve("mod/escape.ww"), trusted = true).start().call("one"))   // expect: 1
+dir.deleteRecursively()

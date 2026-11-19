@@ -1662,7 +1662,7 @@ WwThrow VM::undefinedName(const CallFrame* frame, const Value* base, const ObjSt
         Value outer = *cell->location;
         if (kept(outer)) return accessError(outer, name, proto);
     }
-    return runtimeError(Thrown::IllegalStateException, "undefined variable '" + program_->globalNames[global] + "'");
+    return undefinedGlobal(program_->globalNames[global]);
 }
 
 // Runs a method that takes no arguments on `receiver` and returns its result.
@@ -1711,7 +1711,8 @@ const std::vector<std::string>& VM::globalsFoundByName() {
         "RuntimeException", "ArithmeticException", "IndexOutOfBoundsException", "NullPointerException", "ClassCastException",
         "IllegalArgumentException", "NumberFormatException", "IllegalStateException", "UnsupportedOperationException",
         "NoSuchElementException", "ConcurrentModificationException", "AssertionError", "StackOverflowError", "OutOfMemoryError",
-        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "CancellationException", "MapEntry"};
+        "InternalError", "IOException", "Throwable", "SocketTimeoutException", "TimeoutException", "CancellationException", "SecurityException",
+        "MapEntry"};
     return names;
 }
 
@@ -1885,10 +1886,15 @@ void VM::checkArity(const std::string& name, int minArgs, int maxArgs, int argc)
     throw runtimeError(Thrown::IllegalArgumentException, name + "() expects " + expected + " argument(s) but got " + std::to_string(argc));
 }
 
+WwThrow VM::undefinedGlobal(const std::string& name) {
+    if (auto found = absentGlobals.find(name); found != absentGlobals.end()) return runtimeError(found->second.thrown, found->second.message);
+    return runtimeError(Thrown::IllegalStateException, "undefined variable '" + name + "'");
+}
+
 // A bare name was passed where nothing says which enum it could belong to.
 WwThrow VM::unsettledName(Value pending) {
     pendingEnums_--;
-    return runtimeError(Thrown::IllegalStateException, "undefined variable '" + static_cast<ObjString*>(pending.as.obj)->utf8() + "'");
+    return undefinedGlobal(static_cast<ObjString*>(pending.as.obj)->utf8());
 }
 
 void VM::rejectPendingNames(const Value* args, int argc) {
@@ -5623,7 +5629,7 @@ Value VM::forceLazy(Value marker, const std::function<void(Value)>& store, const
 
 Value VM::globalOrLazy(size_t index) {
     const Value value = globals_[index];
-    if (!value.isLazy()) throw runtimeError(Thrown::IllegalStateException, "undefined variable '" + program_->globalNames[index] + "'");
+    if (!value.isLazy()) throw undefinedGlobal(program_->globalNames[index]);
     // A core's table of globals is its own copy: written, as the program's is.
     return forceLazy(value, [&](Value v) { globals_[index] = v; }, [&] { return "'" + program_->globalNames[index] + "'"; });
 }

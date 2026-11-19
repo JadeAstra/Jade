@@ -181,6 +181,12 @@ public:
     };
     const ScriptContract& useContract(const std::string& file, const std::string& fromFile, const Node& at);
 
+    // For a safe script (the scripting plan, part 3): what it imports only from under these
+    // folders (its own, where it was given one) and the libraries ww carries.
+    bool importsLimited = false;
+    std::vector<std::string> importRoots;
+    bool importAllowed(const std::string& found) const;
+
 private:
     std::unordered_map<std::string, ScriptContract> contracts_;
     int scriptsCompiled_ = 0;  // compileScript's, for keys of their own

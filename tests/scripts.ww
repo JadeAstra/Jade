@@ -58,10 +58,12 @@ try {
   // expect: bad.ww 3 11
   print(e.problems[0].message)                       // expect: this function gives an int; it cannot return a string
 }
-// One whose top level throws does not start.
-print(failed { Script.compile("print(\"starting\")\nthrow IllegalStateException(\"no\")", name = "top.ww").start() }.lines()[0])
-// expect: starting
+// One whose top level throws does not start. What it printed first went to the function given
+// for its output, in its place: before the call that started it returned.
+val printed : open List<string> = []
+print(failed { Script.compile("print(\"starting\")\nthrow IllegalStateException(\"no\")", name = "top.ww").start(output = { line -> printed.add(line) }) }.lines()[0])
 // expect: ScriptException: top.ww: IllegalStateException: no
+print(printed)                                       // expect: ["starting"]
 
 // ---- Each start a VM of its own ----
 val counter = Script.compile("var count = 0\nfun next() : int { count += 1\nreturn count }", name = "counter.ww")

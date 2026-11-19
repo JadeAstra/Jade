@@ -115,6 +115,9 @@ class PatternSyntaxException(val description : string, val pattern : string, val
 class IllegalStateException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // Something a value does not do: changing what is frozen, a member it has not.
 class UnsupportedOperationException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
+// What a safe script may not do: reach files, the network, processes, native libraries, threads
+// and the rest outside the program (Script, the scripting plan's part 3).
+class SecurityException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // The first of nothing, a key that is not there.
 class NoSuchElementException(message : string? = null, cause : Throwable? = null) : RuntimeException(message, cause)
 // A collection changed while it was gone through: a set or a map whose keys change during a for
