@@ -1,10 +1,10 @@
-// Snippy's syntax errors (the Snippy plan, part 5.1): each broken program of python/errors.txt
+// Snippy's syntax errors (the Snippy plan, part 5.1): each broken program of snippy_programs/errors.txt
 // read, and what Snippy's reader says of it, as CPython 3.14's ast.parse says it (the expect
 // lines are CPython's, made by tools/snippy/errors.py): the error's kind, its message, and
 // where (line and column, from 1).
 import Snippy.*
 
-val cases = FilePath("python/errors.txt").readText().replace("\r\n", "\n").split("\n===\n")
+val cases = FilePath("snippy_programs/errors.txt").readText().replace("\r\n", "\n").split("\n===\n")
 for (case in cases) {
   try {
     pyParse(case, "<case>")

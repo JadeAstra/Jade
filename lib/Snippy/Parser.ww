@@ -1,11 +1,12 @@
-// Python's source read into its syntax tree (Ast.ww), as CPython 3.14's parser reads it: its
+import Snippy.Text.*
+// Snippy's source read into its syntax tree (Ast.ww), as CPython 3.14's parser reads it: its
 // grammar (Grammar/python.gram) by recursive descent, going back to try another way where
 // Python's does (a parenthesized with, a match statement, a lambda's or call's arguments).
 //
 //   val tree = pyParse("print(f'{1 + 2 = }')", "hello.py")
 //   print(pyDump(tree))
 
-// The tree of a module's source; a PySyntaxError where it is not Python.
+// The tree of a module's source; a PySyntaxError where it is not Snippy.
 fun pyParse(source : string, file : string = "<unknown>") : PyModule throws PySyntaxError => PyParser(source, file).parseModule()
 
 // Python's hard keywords: never a name.

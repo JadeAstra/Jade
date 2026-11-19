@@ -1,0 +1,34 @@
+seed 1: draw
+ O | X | O
+ X | X | O
+ X | O | X
+seed 7: draw
+ O | X | O
+ X | X | O
+ X | O | X
+seed 42: draw
+ X | O | O
+ O | X | X
+ X | X | O
+> look
+A long hall. Exits: east, north. Items: ['lamp']
+> take lamp
+Taken: lamp.
+> go north
+You walk north to the library.
+> look
+Dusty shelves. Exits: south. Items: ['book', 'key']
+> take key
+Taken: key.
+> take sword
+There is no sword here.
+> go west
+You cannot go west.
+> go south
+You walk south to the hall.
+> go east
+You walk east to the kitchen.
+> inv
+You carry ['key', 'lamp'].
+> dance
+What?

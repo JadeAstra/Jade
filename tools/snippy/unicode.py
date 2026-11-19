@@ -1,8 +1,8 @@
-# Makes lib/Snippy/Unicode.ww: the general category of every code point, as the Unicode database
+# Makes lib/Snippy/Text/Unicode.ww: the general category of every code point, as the Unicode database
 # of the CPython that runs this has it (CPython 3.14: Unicode 16.0), so that Snippy's answers are
 # Python's (str.isprintable, repr, str.isalpha and the rest). From the repository's top, in WSL:
 #
-#   python3 tools/snippy/unicode.py > lib/Snippy/Unicode.ww
+#   python3 tools/snippy/unicode.py > lib/Snippy/Text/Unicode.ww
 #
 # The table is the runs of one category: each a letter for the category, then how far past the
 # last run's start this one starts, in base 32 (digits 0-9 and a-v).
@@ -40,7 +40,7 @@ for start, cat in runs:
 table = "".join(parts)
 lines = [table[i:i + 96] for i in range(0, len(table), 96)]
 
-print("// Python's Unicode database, as Snippy needs it: the general category of every code point,")
+print("// The Unicode database Snippy needs (Python's): the general category of every code point,")
 print("// Unicode " + unicodedata.unidata_version + ", made by tools/snippy/unicode.py from the CPython it ran on. Do not edit.")
 print("")
 print("// The 30 general categories, in the order the table's letters stand for them.")

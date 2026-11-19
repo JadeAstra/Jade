@@ -1,0 +1,10 @@
+['Plugin', 'Audio'] Registry True
+['One', 'Two'] first none
+Dynamic 5 10 Dynamic
+True
+Box of int list[int] dict[str, int]
+making Made (3,)
+3
+hi False
+2
+True 1 2

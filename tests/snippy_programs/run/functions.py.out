@@ -1,0 +1,27 @@
+Hello, Ann! Hi, Bob! Hey, Cy! Hello, Di! Hello, Ed!
+((), {}) ((1, 2), {}) ((), {'a': 1}) ((1,), {'b': 2}) ((1, 2, 3), {'x': 1, 'y': 2})
+(1, 2, 3) (1, 5, 4)
+(1, 2, 3, 4) (1, 2, 3, 4)
+(1, 2, 3, (), 4, 5, {}) (1, 2, 3, (4, 5), 6, 7, {'f': 8})
+[1, 2] [1, 2] [3]
+1 6 10 3
+late path
+None early None
+36 28
+1225
+TypeError: greet() missing 1 required positional argument: 'name'
+TypeError: greet() takes from 1 to 2 positional arguments but 3 were given
+TypeError: greet() got an unexpected keyword argument 'nope'
+TypeError: greet() got multiple values for argument 'name'
+TypeError: kwonly() takes 1 positional argument but 2 were given
+TypeError: kwonly() missing 1 required keyword-only argument: 'b'
+TypeError: posonly() got some positional-only arguments passed as keyword arguments: 'b'
+TypeError: posonly() takes 3 positional arguments but 4 were given
+TypeError: <lambda>() takes 0 positional arguments but 1 was given
+TypeError: <lambda>() missing 1 required positional argument: 'y'
+TypeError: many() missing 5 required positional arguments: 'd', 'e', 'f', 'g', and 'h'
+greet ('Hello',) {'c': 3} ([1, 2],)
+The docstring. documented <lambda>
+outer.<locals>.inner 1
+Hello, Z! True True False
+9 [3, 2, 1] Yo, W!

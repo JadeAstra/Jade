@@ -1,0 +1,11 @@
+1000 Savings('Ann', 1300.00) 1300 [('deposit', 500), ('withdraw', 200)]
+1001 Checking('Bob', -70.00) -70 [('withdraw', 120)]
+1002 Account('Cy', 75.50) 75.5 [('deposit', 75.5)]
+[Checking('Bob', -70.00), Account('Cy', 75.50), Savings('Ann', 1300.00)] Ann 1305.5
+[39.0, -0.0, 0.0] [Savings('Ann', 1339.00), Checking('Bob', -70.00), Account('Cy', 75.50)]
+InsufficientFunds: needed 500.00, only 30.00 available 500
+ValueError: deposit must be positive
+InsufficientFunds: needed 1000000.00, only 1339.00 available 1000000
+AttributeError: property 'balance' of 'Savings' object has no setter
+True 0.03 0.0 1003
+{'deposit': 575.5, 'withdraw': 320}

@@ -1,0 +1,695 @@
+import Snippy.Text.*
+// Attributes as Python finds them: an object's class's data descriptors first, then its own
+// table, then the class's other attributes (a function there becomes a method bound to it), then
+// __getattr__; a class's along its MRO, then its metaclass's; property, classmethod,
+// staticmethod and super.
+
+// ---- Descriptors ----
+
+class PyProperty(val fget : any?, val fset : any?, val fdel : any?, var doc : any?) : PyIdentified() {
+  var name : any? = null
+
+  fun get(obj : any?) : any? {
+    if (fget == null) { throw pyAttributeError("property ${__pyPropName(this)}of '${pyTypeName(obj)}' object has no getter", obj, "") }
+    return pyCall1(fget, obj)
+  }
+
+  fun set(obj : any?, v : any?) {
+    if (fset == null) { throw pyAttributeError("property ${__pyPropName(this)}of '${pyTypeName(obj)}' object has no setter", obj, "") }
+    pyCall2(fset, obj, v)
+  }
+
+  fun delete(obj : any?) {
+    if (fdel == null) { throw pyAttributeError("property ${__pyPropName(this)}of '${pyTypeName(obj)}' object has no deleter", obj, "") }
+    pyCall1(fdel, obj)
+  }
+}
+
+internal fun __pyPropName(p : PyProperty) : string => p.name is string ? "'${p.name}' " : ""
+
+class PyClassMethod(val function : any?) : PyIdentified()
+class PyStaticMethod(val function : any?) : PyIdentified()
+
+// super(): what the class after `start` in obj's MRO has.
+class PySuper(val start : PyType, val obj : any?) : PyIdentified() {
+  fun find(name : string) : any? {
+    val objType = obj is PyType and (obj as PyType).isSubtype(start) ? obj as PyType : pyTypeOf(obj)
+    val mro = objType.mro
+    var i = 0
+    while (i < mro.size and mro[i] !== start) { i += 1 }
+    i += 1
+    while (i < mro.size) {
+      val v = mro[i].dict[name, default = pyUnbound]
+      if (v !== pyUnbound) {
+        if (v === __pyObjectNew) { return v }
+        if (obj is PyType and obj === objType) {
+          return when (v) {
+            is PyClassMethod -> PyMethod((v as PyClassMethod).function, obj)
+            is PyStaticMethod -> (v as PyStaticMethod).function
+            else -> v
+          }
+        }
+        return pyBindDescriptor(v, obj, objType)
+      }
+      i += 1
+    }
+    return pyUnbound
+  }
+}
+
+fun pySuper(cell : any?, self : any?) : any? {
+  if (cell == null or !(cell is PyType)) { throw pyRuntimeError("super(): __class__ cell not found") }
+  if (self === pyUnbound) { throw pyRuntimeError("super(): no arguments") }
+  return PySuper(cell as PyType, self)
+}
+
+// What `v`, found on `cls` for `obj`, is when reached through obj: a function bound to it...
+fun pyBindDescriptor(v : any?, obj : any?, cls : PyType) : any? {
+  return when (v) {
+    is PyFunction -> PyMethod(v, obj)
+    is PyClassMethod -> PyMethod((v as PyClassMethod).function, cls)
+    is PyStaticMethod -> (v as PyStaticMethod).function
+    is PyProperty -> (v as PyProperty).get(obj)
+    is PyMethodDescriptor -> PyMethod(v, obj)
+    is PyBuiltin -> (v as PyBuiltin).owner != null ? PyMethod(v, obj) : v
+    is PyObject -> {
+      val get = (v as PyObject).cls.lookup("__get__")
+      if (get !== pyUnbound and get != null) { pyCall3(get, v, obj, cls) } else { v }
+    }
+    else -> v
+  }
+}
+
+// Whether `v` on a class is a data descriptor: one that decides assignments too.
+fun pyIsDataDescriptor(v : any?) : bool {
+  if (v is PyProperty) { return true }
+  if (v is PyObject) {
+    val c = (v as PyObject).cls
+    return c.lookup("__get__") !== pyUnbound and (c.lookup("__set__") !== pyUnbound or c.lookup("__delete__") !== pyUnbound)
+  }
+  return false
+}
+
+// ---- getattr ----
+
+fun pyGetAttr(o : any?, name : string) : any? {
+  return when (o) {
+    is PyObject -> __pyObjectGetAttr(o as PyObject, name)
+    is PyModule -> {
+      val v = (o as PyModule).get(name)
+      if (v !== pyUnbound) { return v }
+      if (name == "__dict__") { return pyGlobalsOf(o as PyModule) }
+      if (name == "__name__") { return (o as PyModule).name }
+      val ga = (o as PyModule).get("__getattr__")
+      if (ga !== pyUnbound) { return pyCall1(ga, name) }
+      throw pyAttributeError("module '${(o as PyModule).name}' has no attribute '$name'", o, name)
+    }
+    is PyType -> __pyTypeGetAttr(o as PyType, name)
+    is PySuper -> {
+      if (name == "__class__") { return pySuperType }
+      val v = (o as PySuper).find(name)
+      if (v === pyUnbound) { throw pyAttributeError("'super' object has no attribute '$name'", o, name) }
+      v
+    }
+    else -> __pyBuiltinGetAttr(o, name)
+  }
+}
+
+// getattr(o, name, default).
+fun pyGetAttrOr(o : any?, name : string, otherwise : any?) : any? {
+  try {
+    return pyGetAttr(o, name)
+  } catch (e : PyError) {
+    if (e.exc.cls.isSubtype(pyAttributeErrorType)) { return otherwise }
+    throw e
+  }
+}
+
+internal fun __pyObjectGetAttr(o : PyObject, name : string) : any? {
+  val cls = o.cls
+  val ga = cls.lookup("__getattribute__")
+  if (ga !== pyUnbound and !(ga is PyMethodDescriptor) and !(ga is PyBuiltin)) {
+    try {
+      return pyCall2(ga, o, name)
+    } catch (e : PyError) {
+      if (!e.exc.cls.isSubtype(pyAttributeErrorType)) { throw e }
+      val gattr = cls.lookup("__getattr__")
+      if (gattr === pyUnbound) { throw e }
+      return pyCall2(gattr, o, name)
+    }
+  }
+  val v = pyGenericGetAttr(o, name)
+  if (v !== pyUnbound) { return v }
+  val gattr = cls.lookup("__getattr__")
+  if (gattr !== pyUnbound and gattr != null) { return __pyCall2Special(gattr, o, name) }
+  throw pyAttributeError("'${cls.name}' object has no attribute '$name'", o, name)
+}
+
+// object.__getattribute__: the attribute, or pyUnbound where there is none.
+fun pyGenericGetAttr(o : PyObject, name : string) : any? {
+  val cls = o.cls
+  if (name.startsWith("__")) {
+    when (name) {
+      "__class__" -> return cls
+      "__dict__" -> {
+        if (o.dict == null or cls.slots != null) { return pyUnbound }
+        return o.dict
+      }
+      else -> {}
+    }
+  }
+  if (o is PyExc) {
+    val s = __pyExcAttr(o as PyExc, name)
+    if (s !== pyUnbound) { return s }
+  }
+  val ca = cls.lookup(name)
+  if (ca !== pyUnbound and pyIsDataDescriptor(ca)) { return pyBindDescriptor(ca, o, cls) }
+  val d = o.dict
+  if (d != null) {
+    val own = d!!.get(name, pyUnbound)
+    if (own !== pyUnbound) { return own }
+  }
+  if (ca !== pyUnbound) { return pyBindDescriptor(ca, o, cls) }
+  if (o.cls.layout >= 2 and o.value != null) {
+    val v = __pyBuiltinAttrOrUnbound(o.value, name)
+    if (v !== pyUnbound) { return v }
+  }
+  return pyUnbound
+}
+
+internal fun __pyExcAttr(e : PyExc, name : string) : any? {
+  return when (name) {
+    "args" -> e.args
+    "__cause__" -> e.cause
+    "__context__" -> e.context
+    "__suppress_context__" -> e.suppressContext
+    "__traceback__" -> e.thrown == null and e.frames == null ? null : PyTraceback(e)
+    "__notes__" -> {
+      val n = e.dict!!.get("__notes__", pyUnbound)
+      n
+    }
+    "value" -> e.cls.isSubtype(pyStopIterationType) ? (e.args.items.isEmpty() ? null : e.args.items[0]) : pyUnbound
+    "code" -> e.cls.isSubtype(pySystemExitType) ? (e.args.items.isEmpty() ? null : e.args.items.size == 1 ? e.args.items[0] : e.args) : pyUnbound
+    "errno" -> e.cls.isSubtype(pyOSErrorType) ? (e.args.items.size >= 2 ? e.args.items[0] : null) : pyUnbound
+    "strerror" -> e.cls.isSubtype(pyOSErrorType) ? (e.args.items.size >= 2 ? e.args.items[1] : null) : pyUnbound
+    "filename" -> e.cls.isSubtype(pyOSErrorType) ? e.dict!!.get("filename", null) : pyUnbound
+    "msg" -> e.cls.isSubtype(pySyntaxErrorType) ? (e.args.items.isEmpty() ? null : e.args.items[0]) : pyUnbound
+    "exceptions" -> e.cls.isSubtype(pyBaseExceptionGroupType) ? (e.args.items.size >= 2 ? PyTuple(pyIterable(e.args.items[1])) : pyEmptyTuple) : pyUnbound
+    "message" -> e.cls.isSubtype(pyBaseExceptionGroupType) ? (e.args.items.isEmpty() ? null : e.args.items[0]) : pyUnbound
+    else -> pyUnbound
+  }
+}
+
+// A traceback object: what it was made from, enough for tb_lineno and traceback's functions.
+class PyTraceback(val exc : PyExc) : PyIdentified()
+
+internal fun __pyTypeGetAttr(t : PyType, name : string) : any? {
+  if (name.startsWith("__")) {
+    when (name) {
+      "__name__" -> return t.name
+      "__qualname__" -> return t.qualname
+      "__module__" -> {
+        val m = t.dict["__module__", default = pyUnbound]
+        return m !== pyUnbound ? m : t.module
+      }
+      "__bases__" -> return PyTuple(pyListOfAny(t.bases))
+      "__base__" -> return t.bases.isEmpty() ? null : t.bases[0]
+      "__mro__" -> return PyTuple(pyListOfAny(t.mro))
+      "__dict__" -> {
+        val d = pyNewDict()
+        for (k, v) in t.dict { d.set(k, v) }
+        return d
+      }
+      "__class__" -> return pyTypeOf(t)
+      "__doc__" -> {
+        val d = t.dict["__doc__", default = pyUnbound]
+        return d === pyUnbound ? null : d
+      }
+      "__subclasses__" -> return PyBuiltin("__subclasses__", { a, k -> pyNewList([]) })
+      else -> {}
+    }
+  }
+  val meta = pyTypeOf(t)
+  val metaAttr = meta === pyTypeType ? pyUnbound : meta.lookup(name)
+  if (metaAttr !== pyUnbound and pyIsDataDescriptor(metaAttr)) { return pyBindDescriptor(metaAttr, t, meta) }
+  val v = t.lookup(name)
+  if (v !== pyUnbound) {
+    return when (v) {
+      is PyClassMethod -> PyMethod((v as PyClassMethod).function, t)
+      is PyStaticMethod -> (v as PyStaticMethod).function
+      is PyObject -> {
+        val get = (v as PyObject).cls.lookup("__get__")
+        if (get !== pyUnbound and get != null) { pyCall3(get, v, null, t) } else { v }
+      }
+      else -> v
+    }
+  }
+  if (metaAttr !== pyUnbound) { return pyBindDescriptor(metaAttr, t, meta) }
+  if (name == "mro") { return PyBuiltin("mro", { a, k -> pyListOfAny(t.mro) }) }
+  if (meta !== pyTypeType) {
+    val ga = meta.lookup("__getattr__")
+    if (ga !== pyUnbound) { return pyCall2(ga, t, name) }
+  }
+  throw pyAttributeError("type object '${t.name}' has no attribute '$name'", t, name)
+}
+
+internal fun __pyBuiltinGetAttr(o : any?, name : string) : any? {
+  val v = __pyBuiltinAttrOrUnbound(o, name)
+  if (v !== pyUnbound) { return v }
+  throw pyAttributeError("'${pyTypeName(o)}' object has no attribute '$name'", o, name)
+}
+
+// An attribute of a value of a builtin type, or pyUnbound.
+internal fun __pyBuiltinAttrOrUnbound(o : any?, name : string) : any? {
+  if (name == "__class__") { return pyTypeOf(o) }
+  if (o is PyNative) {
+    val v = (o as PyNative).attr(name)
+    if (v !== pyUnbound) { return v }
+  }
+  when (o) {
+    is PyFunction -> {
+      val f = o as PyFunction
+      when (name) {
+        "__name__" -> return f.name
+        "__qualname__" -> return f.qualname
+        "__module__" -> return f.module
+        "__doc__" -> return f.doc
+        "__defaults__" -> return f.defaults == null ? null : PyTuple(f.defaults!!)
+        "__kwdefaults__" -> {
+          if (f.kwdefaults == null) { return null }
+          val d = pyNewDict()
+          for (k, v) in f.kwdefaults!! { d.set(k, v) }
+          return d
+        }
+        "__dict__" -> {
+          if (f.attrs == null) { f.attrs = PyDict() }
+          return f.attrs
+        }
+        "__annotations__" -> return f.annotations ?: pyNewDict()
+        "__closure__" -> return null
+        "__code__" -> return PyCode(f.spec)
+        "__globals__" -> return pyNewDict()
+        "__type_params__" -> return pyEmptyTuple
+        else -> {
+          val a = f.attrs
+          if (a != null) {
+            val v = a!!.get(name, pyUnbound)
+            if (v !== pyUnbound) { return v }
+          }
+        }
+      }
+    }
+    is PyMethod -> {
+      val m = o as PyMethod
+      when (name) {
+        "__self__" -> return m.self
+        "__func__" -> return m.function
+        else -> return pyGetAttrOr(m.function, name, pyUnbound)
+      }
+    }
+    is PyBuiltin -> {
+      when (name) {
+        "__name__" -> return (o as PyBuiltin).name
+        "__qualname__" -> return (o as PyBuiltin).name
+        "__self__" -> return (o as PyBuiltin).self
+        "__doc__" -> return null
+        "__module__" -> return "builtins"
+        else -> {}
+      }
+    }
+    is PyBoundBuiltin -> {
+      when (name) {
+        "__name__" -> return (o as PyBoundBuiltin).name
+        "__self__" -> return (o as PyBoundBuiltin).self
+        else -> {}
+      }
+    }
+    is PyMethodDescriptor -> {
+      when (name) {
+        "__name__" -> return (o as PyMethodDescriptor).name
+        "__objclass__" -> return (o as PyMethodDescriptor).owner
+        else -> {}
+      }
+    }
+    is PyProperty -> {
+      val p = o as PyProperty
+      when (name) {
+        "fget" -> return p.fget
+        "fset" -> return p.fset
+        "fdel" -> return p.fdel
+        "__doc__" -> return p.doc
+        "getter" -> return PyBuiltin("getter", { a, k -> __pyCopyProperty(p, a[0], p.fset, p.fdel) })
+        "setter" -> return PyBuiltin("setter", { a, k -> __pyCopyProperty(p, p.fget, a[0], p.fdel) })
+        "deleter" -> return PyBuiltin("deleter", { a, k -> __pyCopyProperty(p, p.fget, p.fset, a[0]) })
+        "__isabstractmethod__" -> return false
+        else -> {}
+      }
+    }
+    is PyClassMethod -> if (name == "__func__" or name == "__wrapped__") { return (o as PyClassMethod).function }
+    is PyStaticMethod -> if (name == "__func__" or name == "__wrapped__") { return (o as PyStaticMethod).function }
+    is PySlice -> {
+      when (name) {
+        "start" -> return (o as PySlice).lower
+        "stop" -> return (o as PySlice).upper
+        "step" -> return (o as PySlice).step
+        else -> {}
+      }
+    }
+    is PyRange -> {
+      when (name) {
+        "start" -> return (o as PyRange).start
+        "stop" -> return (o as PyRange).stop
+        "step" -> return (o as PyRange).step
+        else -> {}
+      }
+    }
+    is PyGenerator -> {
+      when (name) {
+        "__name__" -> return (o as PyGenerator).spec.name
+        "__qualname__" -> return (o as PyGenerator).spec.qualname
+        "gi_running", "cr_running", "ag_running" -> return (o as PyGenerator).state == 2
+        "gi_frame", "cr_frame", "ag_frame" -> return (o as PyGenerator).state == 3 ? null : o
+        "f_lineno" -> return (o as PyGenerator).spec.line
+        "gi_code", "cr_code" -> return PyCode((o as PyGenerator).spec)
+        "gi_yieldfrom", "cr_await" -> return null
+        "gi_suspended", "cr_suspended" -> return (o as PyGenerator).state == 1
+        else -> {}
+      }
+    }
+    is PyTraceback -> {
+      val e = (o as PyTraceback).exc
+      when (name) {
+        "tb_lineno" -> {
+          val lines = pyTracebackLines(pyExcFrames(e))
+          return 0
+        }
+        "tb_next" -> return null
+        "tb_frame" -> return null
+        else -> {}
+      }
+    }
+    is PyCode -> {
+      val c = o as PyCode
+      when (name) {
+        "co_name" -> return c.spec.name
+        "co_qualname" -> return c.spec.qualname
+        "co_firstlineno" -> return c.spec.line
+        "co_argcount" -> return c.spec.positional
+        "co_posonlyargcount" -> return c.spec.posonly
+        "co_kwonlyargcount" -> return c.spec.kwonly
+        "co_varnames" -> return PyTuple(c.spec.params)
+        "co_filename" -> return pyMainFile
+        else -> {}
+      }
+    }
+    is Complex -> {
+      when (name) {
+        "real" -> return (o as Complex).re
+        "imag" -> return (o as Complex).im
+        else -> {}
+      }
+    }
+    is float -> {
+      when (name) {
+        "real" -> return o
+        "imag" -> return 0.0
+        else -> {}
+      }
+    }
+    is int, is bool, is BigInt -> {
+      when (name) {
+        "real", "numerator" -> return o is bool ? ((o as bool) ? 1 : 0) : o
+        "imag" -> return 0
+        "denominator" -> return 1
+        else -> {}
+      }
+    }
+    else -> {}
+  }
+  val t = pyTypeOf(o)
+  val v = t.lookup(name)
+  if (v !== pyUnbound) {
+    return when (v) {
+      is PyMethodDescriptor -> PyBoundBuiltin(o, name)
+      is PyClassMethod -> PyMethod((v as PyClassMethod).function, t)
+      is PyStaticMethod -> (v as PyStaticMethod).function
+      is PyBuiltin -> (v as PyBuiltin).owner != null ? PyMethod(v, o) : v
+      else -> v
+    }
+  }
+  return pyUnbound
+}
+
+internal fun __pyCopyProperty(p : PyProperty, fget : any?, fset : any?, fdel : any?) : any? {
+  val doc = p.doc == null and fget != null ? pyGetAttrOr(fget, "__doc__", null) : p.doc
+  val made = PyProperty(fget, fset, fdel, doc)
+  made.name = p.name
+  return made
+}
+
+// A function's code, as far as scripts look at it.
+class PyCode(val spec : PySpec) : PyIdentified()
+
+// ---- setattr and delattr ----
+
+fun pySetAttr(o : any?, name : string, v : any?) {
+  when (o) {
+    is PyObject -> {
+      val ob = o as PyObject
+      val sa = ob.cls.lookup("__setattr__")
+      if (sa !== pyUnbound and !(sa is PyMethodDescriptor) and !(sa is PyBuiltin)) {
+        pyCall3(sa, o, name, v)
+        return
+      }
+      pyGenericSetAttr(ob, name, v)
+    }
+    is PyType -> {
+      val t = o as PyType
+      if (t.builtin) { throw pyTypeError("cannot set '$name' attribute of immutable type '${t.name}'") }
+      when (name) {
+        "__name__" -> t.name = v as string
+        "__qualname__" -> t.qualname = v as string
+        else -> t.dict[name] = v
+      }
+      if (v is PyObject) {
+        val setName = (v as PyObject).cls.lookup("__set_name__")
+        if (setName !== pyUnbound and false) { pyCall3(setName, v, t, name) }
+      }
+      pyTypeChanged()
+    }
+    is PyModule -> (o as PyModule).set(name, v)
+    is PyFunction -> {
+      val f = o as PyFunction
+      when (name) {
+        "__name__" -> f.name = v as string
+        "__qualname__" -> f.qualname = v as string
+        "__doc__" -> f.doc = v
+        "__module__" -> f.module = v
+        "__defaults__" -> f.defaults = v == null ? null : pyIterable(v)
+        "__annotations__" -> f.annotations = v
+        "__kwdefaults__" -> {
+          if (v == null) { f.kwdefaults = null } else {
+            val m : open Map<string, any?> = {:}
+            for k in pyIterable(v) { m[k as string] = pyGetItem(v, k) }
+            f.kwdefaults = m
+          }
+        }
+        else -> {
+          if (f.attrs == null) { f.attrs = PyDict() }
+          f.attrs!!.set(name, v)
+        }
+      }
+    }
+    is PyProperty -> {
+      if (name == "__doc__") { (o as PyProperty).doc = v } else { throw pyAttributeError("'property' object has no attribute '$name'", o, name) }
+    }
+    else -> {
+      if (__pyBuiltinAttrOrUnbound(o, name) !== pyUnbound) {
+        throw pyAttributeError("attribute '$name' of '${pyTypeName(o)}' objects is not writable", o, name)
+      }
+      throw pyAttributeError("'${pyTypeName(o)}' object has no attribute '$name' and no __dict__ for setting new attributes", o, name)
+    }
+  }
+}
+
+// object.__setattr__.
+fun pyGenericSetAttr(o : PyObject, name : string, v : any?) {
+  val ca = o.cls.lookup(name)
+  if (ca !== pyUnbound) {
+    if (ca is PyProperty) {
+      (ca as PyProperty).set(o, v)
+      return
+    }
+    if (ca is PyObject) {
+      val set = (ca as PyObject).cls.lookup("__set__")
+      if (set !== pyUnbound) {
+        pyCall3(set, ca, o, v)
+        return
+      }
+    }
+  }
+  if (o is PyExc) {
+    val e = o as PyExc
+    when (name) {
+      "args" -> { e.args = PyTuple(pyIterable(v)); return }
+      "__cause__" -> { e.cause = v; e.suppressContext = true; return }
+      "__context__" -> { e.context = v; return }
+      "__suppress_context__" -> { e.suppressContext = pyTruth(v); return }
+      "__traceback__" -> return
+      else -> {}
+    }
+  }
+  if (name == "__class__") {
+    if (!(v is PyType)) { throw pyTypeError("__class__ must be set to a class, not '${pyTypeName(v)}' object") }
+    o.cls = v as PyType
+    return
+  }
+  if (name == "__dict__") {
+    val d = pyAsDict(v)
+    if (d == null) { throw pyTypeError("__dict__ must be set to a dictionary, not a '" + pyTypeName(v) + "'") }
+    o.dict = d
+    return
+  }
+  val d = o.dict
+  if (d == null or (o.cls.slots != null and !(name in o.cls.slots!!))) { throw pyAttributeError("'${o.cls.name}' object has no attribute '$name' and no __dict__ for setting new attributes", o, name) }
+  d!!.set(name, v)
+}
+
+fun pyDelAttr(o : any?, name : string) {
+  when (o) {
+    is PyObject -> {
+      val ob = o as PyObject
+      val da = ob.cls.lookup("__delattr__")
+      if (da !== pyUnbound and !(da is PyMethodDescriptor) and !(da is PyBuiltin)) {
+        pyCall2(da, o, name)
+        return
+      }
+      pyGenericDelAttr(ob, name)
+    }
+    is PyType -> {
+      if ((o as PyType).builtin) { throw pyTypeError("cannot delete '$name' attribute of immutable type '${(o as PyType).name}'") }
+      if (!(name in (o as PyType).dict.keys)) { throw pyAttributeError("type object '${(o as PyType).name}' has no attribute '$name'", o, name) }
+      (o as PyType).dict.remove(name)
+      pyTypeChanged()
+    }
+    is PyModule -> {
+      if (!(o as PyModule).delete(name)) { throw pyAttributeError("module '${(o as PyModule).name}' has no attribute '$name'", o, name) }
+    }
+    is PyFunction -> {
+      val a = (o as PyFunction).attrs
+      if (a == null or !a!!.remove(name)) { throw pyAttributeError("'function' object has no attribute '$name'", o, name) }
+    }
+    else -> throw pyAttributeError("'${pyTypeName(o)}' object has no attribute '$name'", o, name)
+  }
+}
+
+fun pyGenericDelAttr(o : PyObject, name : string) {
+  val ca = o.cls.lookup(name)
+  if (ca is PyProperty) {
+    (ca as PyProperty).delete(o)
+    return
+  }
+  if (ca is PyObject) {
+    val del = (ca as PyObject).cls.lookup("__delete__")
+    if (del !== pyUnbound) {
+      pyCall2(del, ca, o)
+      return
+    }
+  }
+  val d = o.dict
+  if (d == null or !d!!.remove(name)) { throw pyAttributeError("'${o.cls.name}' object has no attribute '$name'", o, name) }
+}
+
+// ---- Method calls ----
+
+// o.name(args), without making a bound method where the class has a plain function.
+internal fun __pyMethodOf(o : PyObject, name : string) : any? {
+  val d = o.dict
+  if (d != null) {
+    val own = d!!.get(name, pyUnbound)
+    if (own !== pyUnbound) { return own }
+  }
+  return pyUnbound
+}
+
+fun pyCallM0(o : any?, name : string) : any? {
+  if (o is PyObject) {
+    val f = (o as PyObject).cls.lookup(name)
+    if (f is PyFunction and __pyMethodOf(o as PyObject, name) === pyUnbound and (o as PyObject).cls.lookup("__getattribute__") is PyMethodDescriptor) {
+      return (f as PyFunction).call1(o)
+    }
+    return pyCall0(pyGetAttr(o, name))
+  }
+  if (o is PyModule or o is PyType or o is PySuper) { return pyCall0(pyGetAttr(o, name)) }
+  return pyCallMethodV(o, name, [], null)
+}
+
+fun pyCallM1(o : any?, name : string, a : any?) : any? {
+  if (o is PyObject) {
+    val f = (o as PyObject).cls.lookup(name)
+    if (f is PyFunction and __pyMethodOf(o as PyObject, name) === pyUnbound and (o as PyObject).cls.lookup("__getattribute__") is PyMethodDescriptor) {
+      return (f as PyFunction).call2(o, a)
+    }
+    return pyCall1(pyGetAttr(o, name), a)
+  }
+  if (o is open List<any?> and name == "append") {
+    (o as open List<any?>).add(a)
+    return null
+  }
+  if (o is PyModule or o is PyType or o is PySuper) { return pyCall1(pyGetAttr(o, name), a) }
+  return pyCallMethodV(o, name, [a], null)
+}
+
+fun pyCallM2(o : any?, name : string, a : any?, b : any?) : any? {
+  if (o is PyObject) {
+    val f = (o as PyObject).cls.lookup(name)
+    if (f is PyFunction and __pyMethodOf(o as PyObject, name) === pyUnbound and (o as PyObject).cls.lookup("__getattribute__") is PyMethodDescriptor) {
+      return (f as PyFunction).call3(o, a, b)
+    }
+    return pyCall2(pyGetAttr(o, name), a, b)
+  }
+  if (o is PyModule or o is PyType or o is PySuper) { return pyCall2(pyGetAttr(o, name), a, b) }
+  return pyCallMethodV(o, name, [a, b], null)
+}
+
+fun pyCallM3(o : any?, name : string, a : any?, b : any?, c : any?) : any? {
+  if (o is PyObject) {
+    val f = (o as PyObject).cls.lookup(name)
+    if (f is PyFunction and __pyMethodOf(o as PyObject, name) === pyUnbound and (o as PyObject).cls.lookup("__getattribute__") is PyMethodDescriptor) {
+      return (f as PyFunction).call4(o, a, b, c)
+    }
+    return pyCall3(pyGetAttr(o, name), a, b, c)
+  }
+  if (o is PyModule or o is PyType or o is PySuper) { return pyCall3(pyGetAttr(o, name), a, b, c) }
+  return pyCallMethodV(o, name, [a, b, c], null)
+}
+
+// hasattr, getattr, setattr, delattr.
+fun pyHasAttr(o : any?, name : any?) : any? {
+  if (!(name is string)) { throw pyTypeError("attribute name must be string, not '${pyTypeName(name)}'") }
+  try {
+    pyGetAttr(o, name as string)
+    return true
+  } catch (e : PyError) {
+    if (e.exc.cls.isSubtype(pyAttributeErrorType)) { return false }
+    throw e
+  }
+}
+fun pyGetAttrOf2(o : any?, name : any?) : any? {
+  if (!(name is string)) { throw pyTypeError("attribute name must be string, not '${pyTypeName(name)}'") }
+  return pyGetAttr(o, name as string)
+}
+fun pyGetAttrOf3(o : any?, name : any?, otherwise : any?) : any? {
+  if (!(name is string)) { throw pyTypeError("attribute name must be string, not '${pyTypeName(name)}'") }
+  return pyGetAttrOr(o, name as string, otherwise)
+}
+fun pySetAttrOf(o : any?, name : any?, v : any?) : any? {
+  if (!(name is string)) { throw pyTypeError("attribute name must be string, not '${pyTypeName(name)}'") }
+  pySetAttr(o, name as string, v)
+  return null
+}
+fun pyDelAttrOf(o : any?, name : any?) : any? {
+  if (!(name is string)) { throw pyTypeError("attribute name must be string, not '${pyTypeName(name)}'") }
+  pyDelAttr(o, name as string)
+  return null
+}

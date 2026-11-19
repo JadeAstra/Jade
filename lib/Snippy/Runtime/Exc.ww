@@ -1,0 +1,346 @@
+import Snippy.Text.*
+// Snippy's exceptions, as Python's: each thrown as one WinterWolf throwable carrying the Snippy object, so that
+// try, except by class (Python's hierarchy), finally and with work as Python's; the errors the VM
+// throws itself turned into Python's where they are caught; and a traceback written as Python's.
+
+// A Snippy exception on its way: unchecked, so that any code passes it on.
+class PyError(val exc : PyExc) : RuntimeException(null) {
+  // The Snippy calls under way where it was raised, innermost first, all of them.
+  val snippyFrames : List<string> = __snippyFrames()
+  override fun toString() : string => pyExcLine(exc)
+}
+
+fun pyError(t : PyType, message : string) : PyError {
+  val e = pyNewException(t, [message])
+  val err = PyError(e)
+  e.thrown = err
+  return err
+}
+
+fun pyTypeError(message : string) : PyError => pyError(pyTypeErrorType, message)
+fun pyValueError(message : string) : PyError => pyError(pyValueErrorType, message)
+fun pyIndexError(message : string) : PyError => pyError(pyIndexErrorType, message)
+fun pyOverflowError(message : string) : PyError => pyError(pyOverflowErrorType, message)
+fun pyZeroDivisionError(message : string) : PyError => pyError(pyZeroDivisionErrorType, message)
+fun pyRuntimeError(message : string) : PyError => pyError(pyRuntimeErrorType, message)
+fun pyKeyError(key : any?) : PyError {
+  val e = pyNewException(pyKeyErrorType, [key])
+  val err = PyError(e)
+  e.thrown = err
+  return err
+}
+fun pyAttributeError(message : string, obj : any?, name : string) : PyError {
+  val err = pyError(pyAttributeErrorType, message)
+  err.exc.dict!!.set("name", name)
+  err.exc.dict!!.set("obj", obj)
+  return err
+}
+fun pyNotImplementedError(message : string) : PyExc => pyNewException(pyNotImplementedErrorType, [message])
+fun pyStopIteration(value : any?) : PyError {
+  val e = pyNewException(pyStopIterationType, value == null ? [] : [value])
+  val err = PyError(e)
+  e.thrown = err
+  return err
+}
+
+// Throws `x` where an expression is wanted.
+fun pyRaiseNow(x : any?) : nothing {
+  throw pyRaise(x)
+}
+
+// ---- What is being handled ----
+
+// The exceptions being handled, innermost last: what a bare raise raises again, and what a new
+// exception is raised during the handling of (its __context__).
+val __pyHandling : open List<PyExc> = []
+
+fun pyHandling(e : PyExc) {
+  __pyHandling.add(e)
+}
+
+fun pyHandled() {
+  if (__pyHandling.isNotEmpty()) { __pyHandling.removeLast() }
+}
+
+// The exception being handled, or None: sys.exception().
+fun pyCurrentException() : any? => __pyHandling.isEmpty() ? null : __pyHandling[__pyHandling.size - 1]
+
+// ---- raise ----
+
+// The exception `x` stands for: an object of an exception class, or a class, made with no arguments.
+fun pyExceptionOf(x : any?) : PyExc {
+  if (x is PyExc) { return x as PyExc }
+  if (x is PyType and (x as PyType).isSubtype(pyBaseExceptionType)) {
+    val made = pyCall0(x)
+    if (made is PyExc) { return made as PyExc }
+    throw pyTypeError("calling ${pyRepr(x)} should have returned an instance of BaseException, not ${pyTypeName(made)}")
+  }
+  throw pyTypeError("exceptions must derive from BaseException")
+}
+
+// raise x: what to throw.
+fun pyRaise(x : any?) : PyError {
+  val e = pyExceptionOf(x)
+  if (__pyHandling.isNotEmpty()) {
+    val ctx = __pyHandling[__pyHandling.size - 1]
+    if (ctx !== e) {
+      // As Python: no loop of contexts.
+      var c : any? = ctx
+      while (c is PyExc) {
+        if ((c as PyExc).context === e) { (c as PyExc).context = null; break }
+        c = (c as PyExc).context
+      }
+      e.context = ctx
+    }
+  }
+  val err = PyError(e)
+  e.thrown = err
+  e.frames = null
+  return err
+}
+
+// raise x from cause.
+fun pyRaiseFrom(x : any?, cause : any?) : PyError {
+  val err = pyRaise(x)
+  val e = err.exc
+  if (cause == null) {
+    e.cause = null
+  } else if (cause is PyExc) {
+    e.cause = cause
+  } else if (cause is PyType and (cause as PyType).isSubtype(pyBaseExceptionType)) {
+    e.cause = pyExceptionOf(cause)
+  } else {
+    throw pyTypeError("exception causes must derive from BaseException")
+  }
+  e.suppressContext = true
+  return err
+}
+
+// A bare raise: the exception being handled, as it was thrown.
+fun pyReraise() : PyError {
+  if (__pyHandling.isEmpty()) { return pyRuntimeError("No active exception to reraise") }
+  return pyThrowable(__pyHandling[__pyHandling.size - 1])
+}
+
+fun pyThrowable(e : PyExc) : PyError {
+  val had = e.thrown
+  if (had != null) { return had!! }
+  val err = PyError(e)
+  e.thrown = err
+  return err
+}
+
+fun pyAssertFailed(message : any?) : PyError {
+  val e = message === pyNoMessage ? pyNewException(pyAssertionErrorType, []) : pyNewException(pyAssertionErrorType, [message])
+  return pyRaise(e)
+}
+
+// ---- except ----
+
+// The Snippy exception a caught throwable is: its own, or the VM's error made Python's.
+fun pyCaught(t : Throwable) : PyExc {
+  if (t is PyError) {
+    val e = (t as PyError).exc
+    e.caughtDepth = __pyDepthHere()
+    return e
+  }
+  val text = t.message ?: ""
+  val made : PyExc = when (t) {
+    is StackOverflowError -> pyNewException(pyRecursionErrorType, ["maximum recursion depth exceeded"])
+    is OutOfMemoryError -> pyNewException(pyMemoryErrorType, [])
+    is ArithmeticException -> text.contains("zero") ? pyNewException(pyZeroDivisionErrorType, ["division by zero"])
+                                                    : pyNewException(pyOverflowErrorType, [text])
+    is IndexOutOfBoundsException -> pyNewException(pyIndexErrorType, [text])
+    is ClassCastException -> pyNewException(pyTypeErrorType, [text])
+    is IllegalArgumentException -> pyNewException(pyValueErrorType, [text])
+    is ConcurrentModificationException -> pyNewException(pyRuntimeErrorType, ["dictionary changed size during iteration"])
+    is NoSuchElementException -> pyNewException(pyStopIterationType, [])
+    else -> pyNewException(pySystemErrorType, [t.toString()])
+  }
+  made.frames = __environment()["SNIPPY_DEBUG", default = ""] != "" ? t.stackTrace : t.stackTrace.filter { pyIsSnippyFrame(it) }
+  made.caughtDepth = __pyDepthHere()
+  val err = PyError(made)
+  made.thrown = err
+  if (__pyHandling.isNotEmpty()) { made.context = __pyHandling[__pyHandling.size - 1] }
+  return made
+}
+
+// except T: whether `e` is a T, T a class or a tuple of them.
+fun pyExcMatch(e : PyExc, t : any?) : bool {
+  if (t is PyType) {
+    if (!(t as PyType).isSubtype(pyBaseExceptionType)) {
+      throw pyTypeError("catching classes that do not inherit from BaseException is not allowed")
+    }
+    return e.cls.isSubtype(t as PyType)
+  }
+  if (t is PyTuple) {
+    for x in (t as PyTuple).items { if (pyExcMatch(e, x)) { return true } }
+    return false
+  }
+  throw pyTypeError("catching classes that do not inherit from BaseException is not allowed")
+}
+
+// ---- What an exception says ----
+
+// str(e) for an exception of a class that does not write its own.
+fun pyExcStr(e : PyExc) : string {
+  val args = e.args.items
+  if (e.cls.isSubtype(pyKeyErrorType) and args.size == 1) { return pyRepr(args[0]) }
+  if (args.isEmpty()) { return "" }
+  if (args.size == 1) { return pyStr(args[0]) }
+  return pyRepr(e.args)
+}
+
+fun pyExcRepr(e : PyExc) : string {
+  val args = e.args.items
+  if (args.size == 1) { return e.cls.name + "(" + pyRepr(args[0]) + ")" }
+  return e.cls.name + pyRepr(e.args)
+}
+
+// The last line of a traceback: the class, and what str gives, if anything.
+fun pyExcLine(e : PyExc) : string {
+  var name = e.cls.qualname
+  if (e.cls.module != "__main__" and e.cls.module != "builtins") { name = e.cls.module + "." + name }
+  var text = ""
+  try {
+    text = pyStr(e)
+  } catch (t : Throwable) {
+    text = "<exception str() failed>"
+  }
+  return text.isEmpty() ? name : name + ": " + text
+}
+
+// ---- Tracebacks ----
+
+// The program's lines, read once for each file a traceback names.
+internal val __pySourceLines : open Map<string, List<string>> = {:}
+
+internal fun __pySourceLine(file : string, line : int) : string? {
+  var lines = __pySourceLines[file]
+  if (lines == null) {
+    var path : string? = null
+    for m in pyModules.valueList() {
+      if (m is PyModule and FilePath((m as PyModule).file).name == file) { path = (m as PyModule).file }
+    }
+    lines = []
+    try {
+      if (path != null) { lines = FilePath(path!!).readText().split("\n") }
+    } catch (e : Throwable) {}
+    __pySourceLines[file] = lines!!
+  }
+  val all = lines!!
+  return line >= 1 and line <= all.size ? all[line - 1].trim() : null
+}
+
+// The name of a Snippy function a WinterWolf one was made from: f12_name for name.
+fun pyFrameName(ww : string) : string {
+  var name = ww
+  if (name.startsWith("f")) {
+    var i = 1
+    while (i < name.size and name[i] >= '0' and name[i] <= '9') { i += 1 }
+    if (i > 1 and i < name.size and name[i] == '_') { name = name[(i + 1)..] }
+  }
+  return when (name) {
+    "_module_" -> "<module>"
+    else -> name.contains("lb") and name.contains("@") ? "<lambda>" : name
+  }
+}
+
+// The frames of the Snippy files among `frames` (WinterWolf's, innermost first), outermost first,
+// each as a traceback writes it.
+fun pyTracebackLines(frames : List<string>) : List<string> {
+  val out : open List<string> = []
+  for i in (frames.size - 1) downTo 0 {
+    val f = frames[i]
+    // "at name (file:line)"
+    val open = f.lastIndexOf(" (")
+    if (!f.startsWith("at ") or open < 0 or !f.endsWith(")")) { continue }
+    val where = f[(open + 2)..<(f.size - 1)]
+    val colon = where.lastIndexOf(":")
+    if (colon < 0) { continue }
+    val file = where[..<colon]
+    if (!(file.endsWith(".py") or file.endsWith(".snippy"))) { continue }
+    val line = where[(colon + 1)..].toIntOrNull() ?: 0
+    if (f[3..<open] == "<script>") { continue }
+    var path = file
+    for m in pyModules.valueList() {
+      if (m is PyModule and FilePath((m as PyModule).file).name == file) { path = (m as PyModule).file }
+    }
+    val wwName = f[3..<open]
+    val shown = wwName == "<lambda>" ? pyLambdaName(file, line) : pyFrameName(wwName)
+    out.add("  File \"$path\", line $line, in $shown")
+    val text = __pySourceLine(file, line)
+    if (text != null and text!!.isNotEmpty()) { out.add("    " + text!!) }
+  }
+  return out
+}
+
+// Whether a frame of a WinterWolf trace ("at name (file:line)") is one of a Snippy file's own
+// functions (not the top level that starts the program).
+fun pyIsSnippyFrame(f : string) : bool {
+  if (f.startsWith("at <script> ")) { return false }
+  val close = f.lastIndexOf(":")
+  val open = f.lastIndexOf(" (")
+  if (open < 0 or close < open) { return false }
+  val file = f[(open + 2)..<close]
+  return file.endsWith(".py") or file.endsWith(".snippy")
+}
+
+// How many Snippy calls are under way here.
+internal fun __pyDepthHere() : int => __snippyFrames().count { !it.startsWith("at <script> ") }
+
+// The frames of an exception's traceback, innermost first: from where it was raised to where it
+// was last caught.
+fun pyExcFrames(e : PyExc) : List<string> {
+  val base : open List<string> = (e.frames ?: (e.thrown?.snippyFrames ?: [])).toOpenList()
+  if (e.outerFrames != null) { base.addAll(e.outerFrames!!) }
+  val all = base.filter { !it.startsWith("at <script> ") }
+  if (e.caughtDepth < 0) { return all }
+  var keep = all.size - e.caughtDepth + 1
+  if (keep > all.size) { keep = all.size }
+  if (keep < 1) { keep = all.size < 1 ? 0 : 1 }
+  return all[..<keep]
+}
+
+// The traceback of `e` as Python writes it, what caused it first.
+fun pyFormatException(e : PyExc, seen : open List<PyExc>) : List<string> {
+  val out : open List<string> = []
+  seen.add(e)
+  val cause = e.cause
+  val context = e.context
+  if (cause is PyExc and !seen.any { it === cause }) {
+    out.addAll(pyFormatException(cause as PyExc, seen))
+    out.add("")
+    out.add("The above exception was the direct cause of the following exception:")
+    out.add("")
+  } else if (context is PyExc and !e.suppressContext and !seen.any { it === context }) {
+    out.addAll(pyFormatException(context as PyExc, seen))
+    out.add("")
+    out.add("During handling of the above exception, another exception occurred:")
+    out.add("")
+  }
+  val frames = pyTracebackLines(pyExcFrames(e))
+  if (frames.isNotEmpty()) {
+    out.add("Traceback (most recent call last):")
+    out.addAll(frames)
+  }
+  out.add(pyExcLine(e))
+  return out
+}
+
+// An error nothing caught, written to standard error as Python does; the exit code it makes.
+fun pyReportUncaught(t : Throwable) : int {
+  val e = pyCaught(t)
+  if (e.cls.isSubtype(pySystemExitType)) {
+    val code = e.args.items.isEmpty() ? null : e.args.items[0]
+    if (code == null) { return 0 }
+    if (code is int) { return code as int }
+    pyFlushOutput()
+    printError(pyStr(code))
+    return 1
+  }
+  pyFlushOutput()
+  if (__environment()["SNIPPY_DEBUG", default = ""] != "") { for f in pyExcFrames(e) { printError("  [ww] " + f) } }
+  for line in pyFormatException(e, []) { printError(line) }
+  return 1
+}

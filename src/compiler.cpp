@@ -8550,6 +8550,7 @@ int CompilerSession::compileFile(const std::string& path) {
         const fs::path canonical(key);
         const std::string name = canonical.filename().string();
         const std::string directory = canonical.parent_path().string();
+        mainKey_ = key;
         if (std::vector<StmtPtr>* statements = parseFile(key, key, name)) {
             gather(key, name, directory, *statements, namespaceOf(directory), false);
             planReuse();
@@ -9273,7 +9274,10 @@ std::vector<StmtPtr>* CompilerSession::parseFile(const std::string& key, const s
     std::string source;
     if (!readFile(path, source)) return nullptr;
     SourceRead read{path, textHash(source)};
-    textHashes_[key] = read.hash;
+    // Snippy is made into WinterWolf first; its units are kept by what it was made into, so
+    // that a new translator never puts back units of an old one's.
+    if (isSnippyPath(path)) source = translateSnippy(path, name, source, key == mainKey_);
+    textHashes_[key] = textHash(source);
     if (fileStamp(path, read.size, read.time)) sourcesRead_.push_back(std::move(read));
     auto statements = std::make_unique<std::vector<StmtPtr>>(parseSource(source, name, true, &skeletons_[key]));
     std::vector<StmtPtr>* raw = statements.get();
@@ -9410,7 +9414,7 @@ void CompilerSession::gather(const std::string& key, const std::string& name, co
 void CompilerSession::prefetch(const std::vector<std::pair<std::string, std::string>>& files) {
     std::vector<std::pair<std::string, std::string>> todo;
     for (const auto& [key, name] : files)
-        if (parsed_.count(key) == 0 && prefetched_.count(key) == 0) {
+        if (parsed_.count(key) == 0 && prefetched_.count(key) == 0 && !isSnippyPath(key)) {  // Snippy: one translator, in order
             prefetched_[key];
             todo.emplace_back(key, name);
         }

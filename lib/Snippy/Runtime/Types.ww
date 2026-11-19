@@ -1,0 +1,507 @@
+import Snippy.Text.*
+// Snippy's builtin types and its exceptions as PyType objects; the type of each value; classes made
+// by class statements (their MRO by C3, their metaclass, __init_subclass__ and __set_name__); and
+// making an object of a class.
+
+// ---- The builtin types ----
+
+internal fun __pyNewBuiltinType(name : string, base : PyType?, layout : int) : PyType {
+  val t = PyType(name, name, "builtins")
+  t.builtin = true
+  t.layout = layout
+  if (base != null) {
+    t.bases = [base!!]
+    val m : open List<PyType> = [t]
+    m.addAll(base!!.mro)
+    t.mro = m
+  } else {
+    t.mro = [t]
+  }
+  return t
+}
+
+val pyObjectType : PyType = __pyNewBuiltinType("object", null, 0)
+val pyTypeType : PyType = __pyNewBuiltinType("type", pyObjectType, 0)
+val pyNoneType : PyType = __pyNewBuiltinType("NoneType", pyObjectType, 0)
+val pyIntType : PyType = __pyNewBuiltinType("int", pyObjectType, 5)
+val pyBoolType : PyType = __pyNewBuiltinType("bool", pyIntType, 5)
+val pyFloatType : PyType = __pyNewBuiltinType("float", pyObjectType, 6)
+val pyComplexType : PyType = __pyNewBuiltinType("complex", pyObjectType, 10)
+val pyStrType : PyType = __pyNewBuiltinType("str", pyObjectType, 7)
+val pyBytesType : PyType = __pyNewBuiltinType("bytes", pyObjectType, 11)
+val pyByteArrayType : PyType = __pyNewBuiltinType("bytearray", pyObjectType, 12)
+val pyListType : PyType = __pyNewBuiltinType("list", pyObjectType, 2)
+val pyTupleType : PyType = __pyNewBuiltinType("tuple", pyObjectType, 8)
+val pyDictType : PyType = __pyNewBuiltinType("dict", pyObjectType, 3)
+val pySetType : PyType = __pyNewBuiltinType("set", pyObjectType, 4)
+val pyFrozenSetType : PyType = __pyNewBuiltinType("frozenset", pyObjectType, 9)
+val pyRangeType : PyType = __pyNewBuiltinType("range", pyObjectType, 0)
+val pySliceType : PyType = __pyNewBuiltinType("slice", pyObjectType, 0)
+val pyFunctionType : PyType = __pyNewBuiltinType("function", pyObjectType, 0)
+val pyBuiltinFunctionType : PyType = __pyNewBuiltinType("builtin_function_or_method", pyObjectType, 0)
+val pyMethodType : PyType = __pyNewBuiltinType("method", pyObjectType, 0)
+val pyMethodDescriptorType : PyType = __pyNewBuiltinType("method_descriptor", pyObjectType, 0)
+val pyModuleType : PyType = __pyNewBuiltinType("module", pyObjectType, 0)
+val pyGeneratorType : PyType = __pyNewBuiltinType("generator", pyObjectType, 0)
+val pyCoroutineType : PyType = __pyNewBuiltinType("coroutine", pyObjectType, 0)
+val pyAsyncGeneratorType : PyType = __pyNewBuiltinType("async_generator", pyObjectType, 0)
+val pyEllipsisType : PyType = __pyNewBuiltinType("ellipsis", pyObjectType, 0)
+val pyNotImplementedType : PyType = __pyNewBuiltinType("NotImplementedType", pyObjectType, 0)
+val pyPropertyType : PyType = __pyNewBuiltinType("property", pyObjectType, 0)
+val pyClassMethodType : PyType = __pyNewBuiltinType("classmethod", pyObjectType, 0)
+val pyStaticMethodType : PyType = __pyNewBuiltinType("staticmethod", pyObjectType, 0)
+val pySuperType : PyType = __pyNewBuiltinType("super", pyObjectType, 0)
+val pyIteratorType : PyType = __pyNewBuiltinType("iterator", pyObjectType, 0)
+val pyCellType : PyType = __pyNewBuiltinType("cell", pyObjectType, 0)
+val pyTextIOType : PyType = __pyNewBuiltinType("TextIOWrapper", pyObjectType, 0)
+
+// ---- Exceptions ----
+
+internal fun __pyExc(name : string, base : PyType?) : PyType {
+  val t = __pyNewBuiltinType(name, base ?: pyObjectType, 1)
+  return t
+}
+
+val pyBaseExceptionType : PyType = __pyExc("BaseException", null)
+val pySystemExitType : PyType = __pyExc("SystemExit", pyBaseExceptionType)
+val pyKeyboardInterruptType : PyType = __pyExc("KeyboardInterrupt", pyBaseExceptionType)
+val pyGeneratorExitType : PyType = __pyExc("GeneratorExit", pyBaseExceptionType)
+val pyExceptionType : PyType = __pyExc("Exception", pyBaseExceptionType)
+val pyStopIterationType : PyType = __pyExc("StopIteration", pyExceptionType)
+val pyStopAsyncIterationType : PyType = __pyExc("StopAsyncIteration", pyExceptionType)
+val pyArithmeticErrorType : PyType = __pyExc("ArithmeticError", pyExceptionType)
+val pyFloatingPointErrorType : PyType = __pyExc("FloatingPointError", pyArithmeticErrorType)
+val pyOverflowErrorType : PyType = __pyExc("OverflowError", pyArithmeticErrorType)
+val pyZeroDivisionErrorType : PyType = __pyExc("ZeroDivisionError", pyArithmeticErrorType)
+val pyAssertionErrorType : PyType = __pyExc("AssertionError", pyExceptionType)
+val pyAttributeErrorType : PyType = __pyExc("AttributeError", pyExceptionType)
+val pyBufferErrorType : PyType = __pyExc("BufferError", pyExceptionType)
+val pyEOFErrorType : PyType = __pyExc("EOFError", pyExceptionType)
+val pyImportErrorType : PyType = __pyExc("ImportError", pyExceptionType)
+val pyModuleNotFoundErrorType : PyType = __pyExc("ModuleNotFoundError", pyImportErrorType)
+val pyLookupErrorType : PyType = __pyExc("LookupError", pyExceptionType)
+val pyIndexErrorType : PyType = __pyExc("IndexError", pyLookupErrorType)
+val pyKeyErrorType : PyType = __pyExc("KeyError", pyLookupErrorType)
+val pyMemoryErrorType : PyType = __pyExc("MemoryError", pyExceptionType)
+val pyNameErrorType : PyType = __pyExc("NameError", pyExceptionType)
+val pyUnboundLocalErrorType : PyType = __pyExc("UnboundLocalError", pyNameErrorType)
+val pyOSErrorType : PyType = __pyExc("OSError", pyExceptionType)
+val pyBlockingIOErrorType : PyType = __pyExc("BlockingIOError", pyOSErrorType)
+val pyChildProcessErrorType : PyType = __pyExc("ChildProcessError", pyOSErrorType)
+val pyConnectionErrorType : PyType = __pyExc("ConnectionError", pyOSErrorType)
+val pyBrokenPipeErrorType : PyType = __pyExc("BrokenPipeError", pyConnectionErrorType)
+val pyConnectionAbortedErrorType : PyType = __pyExc("ConnectionAbortedError", pyConnectionErrorType)
+val pyConnectionRefusedErrorType : PyType = __pyExc("ConnectionRefusedError", pyConnectionErrorType)
+val pyConnectionResetErrorType : PyType = __pyExc("ConnectionResetError", pyConnectionErrorType)
+val pyFileExistsErrorType : PyType = __pyExc("FileExistsError", pyOSErrorType)
+val pyFileNotFoundErrorType : PyType = __pyExc("FileNotFoundError", pyOSErrorType)
+val pyInterruptedErrorType : PyType = __pyExc("InterruptedError", pyOSErrorType)
+val pyIsADirectoryErrorType : PyType = __pyExc("IsADirectoryError", pyOSErrorType)
+val pyNotADirectoryErrorType : PyType = __pyExc("NotADirectoryError", pyOSErrorType)
+val pyPermissionErrorType : PyType = __pyExc("PermissionError", pyOSErrorType)
+val pyProcessLookupErrorType : PyType = __pyExc("ProcessLookupError", pyOSErrorType)
+val pyTimeoutErrorType : PyType = __pyExc("TimeoutError", pyOSErrorType)
+val pyReferenceErrorType : PyType = __pyExc("ReferenceError", pyExceptionType)
+val pyRuntimeErrorType : PyType = __pyExc("RuntimeError", pyExceptionType)
+val pyNotImplementedErrorType : PyType = __pyExc("NotImplementedError", pyRuntimeErrorType)
+val pyRecursionErrorType : PyType = __pyExc("RecursionError", pyRuntimeErrorType)
+val pyPythonFinalizationErrorType : PyType = __pyExc("PythonFinalizationError", pyRuntimeErrorType)
+val pySyntaxErrorType : PyType = __pyExc("SyntaxError", pyExceptionType)
+val pyIndentationErrorType : PyType = __pyExc("IndentationError", pySyntaxErrorType)
+val pyTabErrorType : PyType = __pyExc("TabError", pyIndentationErrorType)
+val pySystemErrorType : PyType = __pyExc("SystemError", pyExceptionType)
+val pyTypeErrorType : PyType = __pyExc("TypeError", pyExceptionType)
+val pyValueErrorType : PyType = __pyExc("ValueError", pyExceptionType)
+val pyUnicodeErrorType : PyType = __pyExc("UnicodeError", pyValueErrorType)
+val pyUnicodeDecodeErrorType : PyType = __pyExc("UnicodeDecodeError", pyUnicodeErrorType)
+val pyUnicodeEncodeErrorType : PyType = __pyExc("UnicodeEncodeError", pyUnicodeErrorType)
+val pyUnicodeTranslateErrorType : PyType = __pyExc("UnicodeTranslateError", pyUnicodeErrorType)
+val pyWarningType : PyType = __pyExc("Warning", pyExceptionType)
+val pyUserWarningType : PyType = __pyExc("UserWarning", pyWarningType)
+val pyDeprecationWarningType : PyType = __pyExc("DeprecationWarning", pyWarningType)
+val pyPendingDeprecationWarningType : PyType = __pyExc("PendingDeprecationWarning", pyWarningType)
+val pySyntaxWarningType : PyType = __pyExc("SyntaxWarning", pyWarningType)
+val pyRuntimeWarningType : PyType = __pyExc("RuntimeWarning", pyWarningType)
+val pyFutureWarningType : PyType = __pyExc("FutureWarning", pyWarningType)
+val pyImportWarningType : PyType = __pyExc("ImportWarning", pyWarningType)
+val pyUnicodeWarningType : PyType = __pyExc("UnicodeWarning", pyWarningType)
+val pyBytesWarningType : PyType = __pyExc("BytesWarning", pyWarningType)
+val pyResourceWarningType : PyType = __pyExc("ResourceWarning", pyWarningType)
+val pyEncodingWarningType : PyType = __pyExc("EncodingWarning", pyWarningType)
+val pyBaseExceptionGroupType : PyType = __pyExc("BaseExceptionGroup", pyBaseExceptionType)
+val pyExceptionGroupType : PyType = __pyExceptionGroup()
+
+internal fun __pyExceptionGroup() : PyType {
+  val t = PyType("ExceptionGroup", "ExceptionGroup", "builtins")
+  t.builtin = true
+  t.layout = 1
+  t.bases = [pyBaseExceptionGroupType, pyExceptionType]
+  t.mro = [t, pyBaseExceptionGroupType, pyExceptionType, pyBaseExceptionType, pyObjectType]
+  return t
+}
+
+// Every exception type of the builtins, for the builtins' names.
+fun pyExceptionTypes() : List<PyType> => [pyBaseExceptionType, pySystemExitType, pyKeyboardInterruptType, pyGeneratorExitType,
+  pyExceptionType, pyStopIterationType, pyStopAsyncIterationType, pyArithmeticErrorType, pyFloatingPointErrorType,
+  pyOverflowErrorType, pyZeroDivisionErrorType, pyAssertionErrorType, pyAttributeErrorType, pyBufferErrorType, pyEOFErrorType,
+  pyImportErrorType, pyModuleNotFoundErrorType, pyLookupErrorType, pyIndexErrorType, pyKeyErrorType, pyMemoryErrorType,
+  pyNameErrorType, pyUnboundLocalErrorType, pyOSErrorType, pyBlockingIOErrorType, pyChildProcessErrorType,
+  pyConnectionErrorType, pyBrokenPipeErrorType, pyConnectionAbortedErrorType, pyConnectionRefusedErrorType,
+  pyConnectionResetErrorType, pyFileExistsErrorType, pyFileNotFoundErrorType, pyInterruptedErrorType,
+  pyIsADirectoryErrorType, pyNotADirectoryErrorType, pyPermissionErrorType, pyProcessLookupErrorType, pyTimeoutErrorType,
+  pyReferenceErrorType, pyRuntimeErrorType, pyNotImplementedErrorType, pyRecursionErrorType, pyPythonFinalizationErrorType,
+  pySyntaxErrorType, pyIndentationErrorType, pyTabErrorType, pySystemErrorType, pyTypeErrorType, pyValueErrorType,
+  pyUnicodeErrorType, pyUnicodeDecodeErrorType, pyUnicodeEncodeErrorType, pyUnicodeTranslateErrorType, pyWarningType,
+  pyUserWarningType, pyDeprecationWarningType, pyPendingDeprecationWarningType, pySyntaxWarningType, pyRuntimeWarningType,
+  pyFutureWarningType, pyImportWarningType, pyUnicodeWarningType, pyBytesWarningType, pyResourceWarningType,
+  pyEncodingWarningType, pyBaseExceptionGroupType, pyExceptionGroupType]
+
+// ---- The type of a value ----
+
+fun pyTypeOf(x : any?) : PyType {
+  return when (x) {
+    null -> pyNoneType
+    is bool -> pyBoolType
+    is int -> pyIntType
+    is float -> pyFloatType
+    is string -> pyStrType
+    is PyObject -> (x as PyObject).cls
+    is open List<any?> -> pyListType
+    is PyDict -> pyDictType
+    is PyTuple -> pyTupleType
+    is PySet -> (x as PySet).frozen ? pyFrozenSetType : pySetType
+    is BigInt -> pyIntType
+    is PyFunction -> pyFunctionType
+    is PyType -> (x as PyType).metaclass ?: pyTypeType
+    is PyMethod -> pyMethodType
+    is PyBuiltin -> pyBuiltinFunctionType
+    is PyBoundBuiltin -> pyBuiltinFunctionType
+    is PyMethodDescriptor -> pyMethodDescriptorType
+    is Complex -> pyComplexType
+    is PyRange -> pyRangeType
+    is PySlice -> pySliceType
+    is PyModule -> pyModuleType
+    is PyGenerator -> (x as PyGenerator).kind == 1 ? pyCoroutineType : (x as PyGenerator).kind == 2 ? pyAsyncGeneratorType : pyGeneratorType
+    is PyIterator -> (x as PyIterator).pyType()
+    is Bytes -> pyBytesType
+    is PyByteArray -> pyByteArrayType
+    is PyProperty -> pyPropertyType
+    is PyClassMethod -> pyClassMethodType
+    is PyStaticMethod -> pyStaticMethodType
+    is PySuper -> pySuperType
+    is PyDictView -> (x as PyDictView).pyType()
+    is PyStdStream -> pyTextIOType
+    is PyNative -> (x as PyNative).pyType()
+    else -> {
+      if (x === pyEllipsis) { pyEllipsisType } else if (x === pyNotImplemented) { pyNotImplementedType } else { pyForeignType(x) }
+    }
+  }
+}
+
+// A WinterWolf value Python reaches that is none of Python's: its class, named as WinterWolf's.
+internal val __pyForeignTypes : open Map<string, PyType> = {:}
+fun pyForeignType(x : any?) : PyType {
+  val name = x#.name
+  val had = __pyForeignTypes[name]
+  if (had != null) { return had!! }
+  val t = __pyNewBuiltinType(name, pyObjectType, 0)
+  t.module = "jade"
+  __pyForeignTypes[name] = t
+  return t
+}
+
+fun pyTypeName(x : any?) : string => pyTypeOf(x).name
+
+fun pyTypeOfB(x : any?) : any? => pyTypeOf(x)
+
+// isinstance(x, cls), cls a class or a tuple of them.
+fun pyIsInstance(x : any?, cls : any?) : bool {
+  if (cls is PyType) {
+    val c = cls as PyType
+    if (c === pyObjectType) { return true }
+    val t = pyTypeOf(x)
+    if (t === c or t.isSubtype(c)) { return true }
+    val check = pyTypeOf(c).lookup("__instancecheck__")
+    if (check !== pyUnbound and !pyTypeOf(c).builtin) { return pyTruth(pyCall2(check, c, x)) }
+    return false
+  }
+  if (cls is PyTuple) {
+    for c in (cls as PyTuple).items { if (pyIsInstance(x, c)) { return true } }
+    return false
+  }
+  if (cls is PyObject) {
+    val check = (cls as PyObject).cls.lookup("__instancecheck__")
+    if (check !== pyUnbound) { return pyTruth(pyCall2(check, cls, x)) }
+  }
+  throw pyTypeError("isinstance() arg 2 must be a type, a tuple of types, or a union")
+}
+
+fun pyIsInstanceB(x : any?, cls : any?) : bool => pyIsInstance(x, cls)
+
+fun pyIsSubclass(x : any?, cls : any?) : bool {
+  if (!(x is PyType)) { throw pyTypeError("issubclass() arg 1 must be a class") }
+  if (cls is PyType) {
+    if ((x as PyType).isSubtype(cls as PyType)) { return true }
+    val check = pyTypeOf(cls).lookup("__subclasscheck__")
+    if (check !== pyUnbound and !pyTypeOf(cls).builtin) { return pyTruth(pyCall2(check, cls, x)) }
+    return false
+  }
+  if (cls is PyTuple) {
+    for c in (cls as PyTuple).items { if (pyIsSubclass(x, c)) { return true } }
+    return false
+  }
+  throw pyTypeError("issubclass() arg 2 must be a class, a tuple of classes, or a union")
+}
+
+// ---- Making classes ----
+
+// The order Python looks for a class's attributes in: C3's merge of its bases' orders.
+fun pyMro(t : PyType, bases : List<PyType>) : List<PyType> {
+  val seqs : open List<open List<PyType>> = []
+  for b in bases { seqs.add(b.mro.toOpenList()) }
+  seqs.add(bases.toOpenList())
+  val out : open List<PyType> = [t]
+  while (true) {
+    seqs.removeIf { it.isEmpty() }
+    if (seqs.isEmpty()) { return out }
+    var head : PyType? = null
+    for s in seqs {
+      val candidate = s[0]
+      var inTail = false
+      for other in seqs {
+        for k in 1..<other.size { if (other[k] === candidate) { inTail = true } }
+      }
+      if (!inTail) {
+        head = candidate
+        break
+      }
+    }
+    if (head == null) {
+      throw pyTypeError("Cannot create a consistent method resolution order (MRO) for bases " + bases.map { it.name }.join(", "))
+    }
+    out.add(head!!)
+    for s in seqs { if (s.isNotEmpty() and s[0] === head) { s.removeAt(0) } }
+  }
+}
+
+// The class a class statement makes: its body run with `body` into a new namespace first.
+fun pyMakeClass(name : string, qualname : string, module : string, bases : List<any?>, kwnames : List<string>, kwvalues : List<any?>,
+                body : (PyDict) -> unit) : any? {
+  var meta : any? = null
+  val kw : open List<string> = []
+  val kwv : open List<any?> = []
+  for (i, k) in kwnames.withIndex() {
+    if (k == "metaclass") { meta = kwvalues[i] } else { kw.add(k); kwv.add(kwvalues[i]) }
+  }
+  val realBases : open List<any?> = []
+  for b in bases {
+    if (b is PyType) {
+      realBases.add(b)
+    } else {
+      val entries = pyTypeOf(b).lookup("__mro_entries__")
+      if (entries === pyUnbound) { throw pyTypeError("bases must be types") }
+      for x in pyIterable(pyCall2(entries, b, PyTuple(bases))) { realBases.add(x) }
+    }
+  }
+  if (meta == null) {
+    var winner : PyType = pyTypeType
+    for b in realBases {
+      val m = pyTypeOf(b)
+      if (m.isSubtype(winner)) { winner = m }
+    }
+    meta = winner
+  }
+  val ns = PyDict()
+  ns.set("__module__", module)
+  ns.set("__qualname__", qualname)
+  if (meta is PyType and meta !== pyTypeType) {
+    val prepare = pyGetAttrOr(meta, "__prepare__", null)
+    if (prepare != null and !((meta as PyType).isSubtype(pyTypeType) and pyTypeType.dict["__prepare__"] === prepare)) {
+      val made = pyCallKw(prepare, ([name, PyTuple(realBases)] as List<any?>) + kwv, kw)
+      if (made is PyDict) {
+        pyDictUpdate(made as PyDict, ns)
+        body(made as PyDict)
+        return pyFinishClass(meta, name, realBases, made as PyDict, kw, kwv)
+      }
+    }
+  }
+  body(ns)
+  return pyFinishClass(meta, name, realBases, ns, kw, kwv)
+}
+
+internal fun pyFinishClass(meta : any?, name : string, bases : List<any?>, ns : PyDict, kw : List<string>, kwv : List<any?>) : any? {
+  if (meta === pyTypeType) { return pyNewClass(pyTypeType, name, bases, ns, kw, kwv) }
+  val args : open List<any?> = [name, PyTuple(bases), ns]
+  args.addAll(kwv)
+  return pyCallV(meta, args, kw.isEmpty() ? null : kw)
+}
+
+// type.__new__(meta, name, bases, ns): a new class.
+fun pyNewClass(meta : PyType, name : string, baseList : List<any?>, ns : PyDict, kw : List<string>, kwv : List<any?>) : PyType {
+  val bases : open List<PyType> = []
+  for b in baseList {
+    if (!(b is PyType)) { throw pyTypeError("bases must be types") }
+    val bt = b as PyType
+    if (bt === pyBoolType) { throw pyTypeError("type 'bool' is not an acceptable base type") }
+    bases.add(bt)
+  }
+  if (bases.isEmpty()) { bases.add(pyObjectType) }
+  val qual = ns.get("__qualname__", null)
+  val mod = ns.get("__module__", null)
+  val t = PyType(name, qual is string ? qual as string : name, mod is string ? mod as string : "__main__")
+  t.bases = bases
+  t.mro = pyMro(t, bases)
+  if (meta !== pyTypeType) { t.metaclass = meta }
+  var layout = 0
+  for b in bases {
+    for m in b.mro {
+      if (m.layout != 0) {
+        if (layout != 0 and layout != m.layout and !(layout == 1 or m.layout == 1)) {
+          throw pyTypeError("multiple bases have instance lay-out conflict")
+        }
+        if (layout == 0) { layout = m.layout }
+        break
+      }
+    }
+  }
+  t.layout = layout
+  for k in ns.keyList() {
+    val v = ns.get(k, null)
+    if (!(k is string)) { continue }
+    val key = k as string
+    if (key == "__qualname__") { continue }
+    var value = v
+    if ((key == "__new__") and value is PyFunction) { value = PyStaticMethod(value) }
+    if ((key == "__init_subclass__" or key == "__class_getitem__") and value is PyFunction) { value = PyClassMethod(value) }
+    t.dict[key] = value
+  }
+  if ("__eq__" in t.dict.keys and !("__hash__" in t.dict.keys)) { t.dict["__hash__"] = null }
+  // __slots__: the names its objects may have, if every class above it lists its own.
+  if ("__slots__" in t.dict.keys) {
+    val all : open Set<string> = Set<string>()
+    var whole = true
+    for m in t.mro {
+      if (m === pyObjectType or m.builtin) { continue }
+      val own = m.dict["__slots__", default = pyUnbound]
+      if (own === pyUnbound) { whole = false; break }
+      for n in own is string ? [own] : pyIterable(own) { all.add(n as string) }
+    }
+    if (whole and !("__dict__" in all)) { t.slots = all }
+  }
+  if (!("__doc__" in t.dict.keys)) { t.dict["__doc__"] = null }
+  pyTypeChanged()
+  // __set_name__ of what the class holds, then the base's __init_subclass__.
+  for (k, v) in t.dict.toMap() {
+    if (v is PyProperty and (v as PyProperty).name == null) { (v as PyProperty).name = k }
+    if (v is PyObject) {
+      val setName = (v as PyObject).cls.lookup("__set_name__")
+      if (setName !== pyUnbound) { pyCall3(setName, v, t, k) }
+    }
+  }
+  val sup = PySuper(t, t)
+  val init = pyGetAttrOr(sup, "__init_subclass__", null)
+  if (init != null) { pyCallV(init, kwv, kw.isEmpty() ? null : kw) }
+  return t
+}
+
+// ---- Making objects ----
+
+// cls(args): __new__, then __init__ if what __new__ made is a cls.
+fun pyConstruct(cls : PyType, args : List<any?>, kwnames : List<string>?) : any? {
+  if (cls === pyTypeType) {
+    if (args.size == 1 and kwnames == null) { return pyTypeOf(args[0]) }
+    if (args.size == 3) {
+      val bases = args[1]
+      return pyNewClass(pyTypeType, args[0] as string, bases is PyTuple ? (bases as PyTuple).items : [], pyAsDict(args[2])!!, [], [])
+    }
+    throw pyTypeError("type() takes 1 or 3 arguments")
+  }
+  val meta = cls.metaclass
+  if (meta != null) {
+    val call = meta!!.lookup("__call__")
+    if (call !== pyUnbound and !(call is PyBuiltin)) {
+      val all : open List<any?> = [cls]
+      all.addAll(args)
+      return pyCallV(call, all, kwnames)
+    }
+  }
+  return pyTypeCall(cls, args, kwnames)
+}
+
+// type.__call__: what making an object of a class does.
+fun pyTypeCall(cls : PyType, args : List<any?>, kwnames : List<string>?) : any? {
+  if (cls.builtin and cls.construct != null) { return cls.construct!!(cls, args, kwnames) }
+  val newF = cls.lookup("__new__")
+  val initF = cls.lookup("__init__")
+  val ownNew = newF !== pyUnbound and newF !== __pyObjectNew
+  val ownInit = initF !== pyUnbound and initF !== __pyObjectInit
+  var obj : any? = null
+  if (ownNew) {
+    val all : open List<any?> = [cls]
+    all.addAll(args)
+    val f = newF is PyStaticMethod ? (newF as PyStaticMethod).function : newF
+    obj = pyCallV(f, all, kwnames)
+  } else {
+    if (!ownInit and args.isNotEmpty() and cls.layout == 0) { throw pyTypeError("${cls.name}() takes no arguments") }
+    obj = pyMakeInstance(cls, args, kwnames)
+  }
+  if (ownInit and pyIsInstance(obj, cls)) {
+    val all : open List<any?> = [obj]
+    all.addAll(args)
+    val r = pyCallV(initF, all, kwnames)
+    if (r != null) { throw pyTypeError("__init__() should return None, not '${pyTypeName(r)}'") }
+  }
+  return obj
+}
+
+// object.__new__(cls, ...): an empty object of the class, or for a class made from a builtin, one
+// standing for that builtin's value.
+fun pyMakeInstance(cls : PyType, args : List<any?>, kwnames : List<string>?) : any? {
+  if (cls.layout == 1) {
+    val e = PyExc(cls)
+    val n = kwnames == null ? args.size : args.size - kwnames!!.size
+    e.args = PyTuple(args[..<n])
+    return e
+  }
+  val o = PyObject(cls)
+  if (cls.layout >= 2) {
+    var base : PyType? = null
+    for m in cls.mro { if (m.builtin and m.layout == cls.layout) { base = m; break } }
+    o.value = when (cls.layout) {
+      2 -> pyNewList([])
+      3 -> pyNewDict()
+      4 -> pyNewSet()
+      else -> base!!.construct!!(base!!, args, kwnames)
+    }
+  }
+  return o
+}
+
+// object.__new__ and object.__init__, as they are found by a lookup.
+internal val __pyObjectNew : PyBuiltin = PyBuiltin("__new__", { args, kw ->
+  if (args.isEmpty() or !(args[0] is PyType)) { throw pyTypeError("object.__new__(X): X is not a type object") }
+  pyMakeInstance(args[0] as PyType, args[1..], kw)
+})
+internal val __pyObjectInit : PyBuiltin = PyBuiltin("__init__", { args, kw -> null })
+
+// An exception: its arguments, and what Python keeps with one.
+class PyExc(cls : PyType) : PyObject(cls) {
+  var args : PyTuple = pyEmptyTuple
+  var cause : any? = null
+  var context : any? = null
+  var suppressContext = false
+  var thrown : PyError? = null
+  var frames : List<string>? = null
+  // How many Snippy calls were under way where it was last caught: its traceback runs from
+  // where it was raised to there.
+  var caughtDepth = -1
+  // The calls of the stacks it left as it came out of generators, each outside the last.
+  var outerFrames : open List<string>? = null
+}
+
+// An exception of a builtin type with `args`.
+fun pyNewException(t : PyType, args : List<any?>) : PyExc {
+  val e = PyExc(t)
+  e.args = PyTuple(args)
+  return e
+}

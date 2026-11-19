@@ -1,3 +1,4 @@
+import Snippy.Text.*
 // A syntax tree written as CPython 3.14's ast.dump(tree) writes it (its defaults: fields named,
 // no places, None fields and empty lists left out), so that a tree read here can be compared
 // with Python's own.

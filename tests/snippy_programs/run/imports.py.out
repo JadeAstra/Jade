@@ -1,0 +1,15 @@
+importing _shapes as _shapes
+__main__ _shapes True Shapes, a module the import test imports.
+12.57 3.14 3.14159 True
+hello ann, unit circle has area 3.14 1 1
+2 3 3
+3 3
+new attribute True False
+AttributeError: module '_shapes' has no attribute 'nope'
+ImportError: ImportError
+ModuleNotFoundError: No module named 'no_module_named_this'
+True <class 'list'> True 9223372036854775807 True
+3
+27 False False
+written to stdout
+one-two!

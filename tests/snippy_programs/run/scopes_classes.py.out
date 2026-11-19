@@ -1,0 +1,11 @@
+class seen in body global A ['global', 'global']
+class body sees enclosing
+enclosing enclosing
+1 2 3
+child + base hello ['base hello', 'base hello']
+2 2
+Dyn of size 3 5
+[1, 2, 3] 3
+5 3
+loop variable after 2
+NameError: name 'i' is not defined

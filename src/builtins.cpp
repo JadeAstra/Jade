@@ -452,6 +452,8 @@ void registerGlobals(VM& vm) {
     // The program's name, by default: its own file's, without .ww (Program.name, D184).
     // Where an error is being made, for Throwable's frames (VM::stackHere).
     vm.defineNative("__stackHere", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.stackHere(); });
+    // The calls under way in Snippy files, for Snippy's tracebacks (VM::snippyFrames).
+    vm.defineNative("__snippyFrames", 0, 0, [](VM& vm, int, Value*) -> Value { return vm.snippyFrames(); });
     vm.defineNative("__programName", 0, 0, [](VM& vm, int, Value*) -> Value {
         return vm.str(vm.mainFileName());
     });

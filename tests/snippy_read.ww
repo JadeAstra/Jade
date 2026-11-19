@@ -1,4 +1,4 @@
-// Snippy reads Python as CPython does (the Snippy plan, part 5.1): python/grammar.py, a program
+// Snippy's reader against CPython's (the Snippy plan, part 5.1): snippy_programs/grammar.py, a program
 // that uses every part of Python 3.14's grammar, read by Snippy's parser, its tree dumped as
 // ast.dump writes it and its nodes' places listed, and each compared with what CPython gives
 // (grammar.py.dump and grammar.py.pos, made by tools/snippy/astdump.py --beside and astpos.py).
@@ -17,10 +17,10 @@ fun compare(what : string, cpython : string, snippy : string) {
   print("  snippy: ", snippy[Math.max(0, at - 60) ..< Math.min(snippy.size, at + 60)])
 }
 
-val source = FilePath("python/grammar.py").readText()
+val source = FilePath("snippy_programs/grammar.py").readText()
 val tree = pyParse(source, "grammar.py")
-compare("tree:", FilePath("python/grammar.py.dump").readText(), pyDump(tree))            // expect: tree: as CPython's
-compare("places:", FilePath("python/grammar.py.pos").readText().replace("\r\n", "\n"), pyPositions(tree))   // expect: places: as CPython's
+compare("tree:", FilePath("snippy_programs/grammar.py.dump").readText(), pyDump(tree))            // expect: tree: as CPython's
+compare("places:", FilePath("snippy_programs/grammar.py.pos").readText().replace("\r\n", "\n"), pyPositions(tree))   // expect: places: as CPython's
 
 // Lines that end in \r\n read as those that end in \n, and a byte order mark is passed over.
 print(pyDump(pyParse("\u{FEFF}x = 1\r\nif x:\r\n    y = 'a\\\r\nb'\r\n")) == pyDump(pyParse("x = 1\nif x:\n    y = 'ab'\n")))   // expect: true

@@ -1,0 +1,27 @@
+48 16 [('it', 8), ('of', 8), ('the', 8), ('was', 8), ('age', 2), ('epoch', 2)]
+it        8 ########
+of        8 ########
+the       8 ########
+was       8 ########
+age       2 ##
+epoch     2 ##
+Khoor, Zruog! Hello, World! abc
+['racecar', 'A man, a plan, a canal: Panama', 'Was it a car or a cat I saw?']
+[['listen', 'silent', 'enlist'], ['google', 'gooegl'], ['cat', 'act', 'tac']]
+|It was the best of times, it  |
+|was the worst of times, it was|
+|the age of wisdom, it was the |
+|age of foolishness, it was the|
+|epoch of belief, it was the   |
+|epoch of incredulity, it was  |
+|the season of Light, it was   |
+|the season of Darkness.       |
+vowels 68 capitals ['I', 'L', 'D'] lines 3
+It Was The Best Of Times, It Was The Wor 7 8 64 90
+[{'name': 'Ann', 'age': '30', 'city': 'Paris'}, {'name': 'Bob', 'age': '25', 'city': 'Rome'}, {'name': 'Cy', 'age': '35', 'city': 'Oslo'}]
+Bob 30.0
+ name  |  age   |  city 
+ Ann   |   30   | Paris 
+ Bob   |   25   |  Rome 
+  Cy   |   35   |  Oslo 
+PNG SnakeCaseName camelCaseName

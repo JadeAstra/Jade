@@ -1,0 +1,1346 @@
+import Snippy.Text.*
+// The methods of Snippy's builtin types (str, list, dict, set, tuple, int, float...), each named
+// in its type's table as Python lists them, so that "a".upper, str.upper and a class made from
+// str all reach them; and the special methods every builtin type has.
+
+// ---- Each type's methods ----
+
+internal fun __pyCommonDunders() : List<string> => ["__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__", "__hash__", "__repr__",
+  "__str__", "__format__", "__getattribute__", "__setattr__", "__delattr__", "__dir__", "__reduce__", "__reduce_ex__",
+  "__sizeof__", "__getstate__"]
+
+internal fun __pyNumberDunders() : List<string> => ["__add__", "__radd__", "__sub__", "__rsub__", "__mul__", "__rmul__",
+  "__truediv__", "__rtruediv__", "__floordiv__", "__rfloordiv__", "__mod__", "__rmod__", "__pow__", "__rpow__", "__neg__",
+  "__pos__", "__abs__", "__bool__", "__int__", "__float__", "__round__", "__trunc__", "__floor__", "__ceil__", "__divmod__",
+  "__rdivmod__", "__getnewargs__"]
+
+internal fun __pyIntDunders() : List<string> => ["__and__", "__rand__", "__or__", "__ror__", "__xor__", "__rxor__", "__lshift__",
+  "__rlshift__", "__rshift__", "__rrshift__", "__invert__", "__index__"]
+
+internal fun __pyStrNames() : List<string> => ["capitalize", "casefold", "center", "count", "encode", "endswith", "expandtabs",
+  "find", "format", "format_map", "index", "isalnum", "isalpha", "isascii", "isdecimal", "isdigit", "isidentifier", "islower",
+  "isnumeric", "isprintable", "isspace", "istitle", "isupper", "join", "ljust", "lower", "lstrip", "partition", "removeprefix",
+  "removesuffix", "replace", "rfind", "rindex", "rjust", "rpartition", "rsplit", "rstrip", "split", "splitlines", "startswith",
+  "strip", "swapcase", "title", "translate", "upper", "zfill", "__len__", "__getitem__", "__iter__", "__contains__", "__add__",
+  "__mul__", "__rmul__", "__mod__", "__rmod__", "__getnewargs__"]
+
+internal fun __pyListNames() : List<string> => ["append", "clear", "copy", "count", "extend", "index", "insert", "pop", "remove",
+  "reverse", "sort", "__len__", "__getitem__", "__setitem__", "__delitem__", "__iter__", "__contains__", "__add__", "__mul__",
+  "__rmul__", "__iadd__", "__imul__", "__reversed__", "__init__", "__class_getitem__"]
+
+internal fun __pyDictNames() : List<string> => ["clear", "copy", "get", "items", "keys", "pop", "popitem", "setdefault", "update",
+  "values", "__len__", "__getitem__", "__setitem__", "__delitem__", "__iter__", "__contains__", "__or__", "__ror__", "__ior__",
+  "__reversed__", "__init__", "__class_getitem__"]
+
+internal fun __pySetNames(frozen : bool) : List<string> {
+  val names : open List<string> = ["copy", "difference", "intersection", "isdisjoint", "issubset", "issuperset",
+    "symmetric_difference", "union", "__len__", "__iter__", "__contains__", "__and__", "__rand__", "__or__", "__ror__", "__xor__",
+    "__rxor__", "__sub__", "__rsub__", "__class_getitem__"]
+  if (!frozen) {
+    names.addAll(["add", "clear", "difference_update", "discard", "intersection_update", "pop", "remove",
+                  "symmetric_difference_update", "update", "__iand__", "__ior__", "__ixor__", "__isub__", "__init__"])
+  }
+  return names
+}
+
+internal fun __pyTupleNames() : List<string> => ["count", "index", "__len__", "__getitem__", "__iter__", "__contains__", "__add__",
+  "__mul__", "__rmul__", "__getnewargs__", "__class_getitem__"]
+
+internal fun __pyIntNames() : List<string> => ["as_integer_ratio", "bit_count", "bit_length", "conjugate", "to_bytes", "is_integer"]
+internal fun __pyFloatNames() : List<string> => ["as_integer_ratio", "conjugate", "hex", "is_integer"]
+internal fun __pyBytesNames() : List<string> => ["decode", "hex", "count", "endswith", "find", "index", "join", "lower", "upper",
+  "replace", "split", "startswith", "strip", "lstrip", "rstrip", "isdigit", "isalpha", "__len__", "__getitem__", "__iter__",
+  "__contains__", "__add__", "__mul__"]
+
+internal var __pyInitDone = false
+
+// Fills the builtin types' tables: their methods, constructors and exceptions' own.
+fun pyInitRuntime() {
+  if (__pyInitDone) { return }
+  __pyInitDone = true
+  __pyConstructors()
+  fun fill(t : PyType, names : List<string>) {
+    for n in names { t.dict[n] = PyMethodDescriptor(t, n) }
+  }
+  fill(pyObjectType, __pyCommonDunders())
+  pyObjectType.dict["__init__"] = __pyObjectInit
+  pyObjectType.dict["__new__"] = __pyObjectNew
+  pyObjectType.dict["__init_subclass__"] = PyClassMethod(PyBuiltin("__init_subclass__", { a, k -> null }))
+  pyObjectType.dict["__subclasshook__"] = PyClassMethod(PyBuiltin("__subclasshook__", { a, k -> pyNotImplemented }))
+  pyObjectType.dict["__doc__"] = "The base class of the class hierarchy."
+  __pyObjectInit.owner = "object"
+  for t in [pyIntType, pyFloatType, pyComplexType] { fill(t, __pyNumberDunders()) }
+  fill(pyIntType, __pyIntDunders())
+  fill(pyIntType, __pyIntNames())
+  pyIntType.dict["from_bytes"] = PyClassMethod(PyBuiltin("from_bytes", { a, k -> pyIntFromBytes(PyArgs(a, k, "from_bytes()")) }))
+  fill(pyFloatType, __pyFloatNames())
+  pyFloatType.dict["fromhex"] = PyClassMethod(PyBuiltin("fromhex", { a, k -> pyFloatFromHex(a[1] as string) }))
+  fill(pyComplexType, ["conjugate"])
+  fill(pyStrType, __pyStrNames())
+  pyStrType.dict["maketrans"] = PyStaticMethod(PyBuiltin("maketrans", { a, k -> pyMakeTrans(a) }))
+  fill(pyListType, __pyListNames())
+  fill(pyDictType, __pyDictNames())
+  pyDictType.dict["fromkeys"] = PyClassMethod(PyBuiltin("fromkeys", { a, k ->
+    val d = pyCall0(a[0])
+    for x in pyIterable(a[1]) { pySetItem(d, x, a.size > 2 ? a[2] : null) }
+    d
+  }))
+  fill(pySetType, __pySetNames(false))
+  fill(pyFrozenSetType, __pySetNames(true))
+  fill(pyTupleType, __pyTupleNames())
+  fill(pyBytesType, __pyBytesNames())
+  fill(pyRangeType, ["count", "index", "__len__", "__getitem__", "__iter__", "__contains__", "__reversed__"])
+  fill(pyNoneType, ["__bool__"])
+  fill(pyTextIOType, ["write", "flush", "writelines", "isatty", "fileno"])
+  fill(pyGeneratorType, ["send", "throw", "close", "__next__", "__iter__"])
+  fill(pyCoroutineType, ["send", "throw", "close", "__await__"])
+  fill(pyAsyncGeneratorType, ["asend", "athrow", "aclose", "__anext__", "__aiter__"])
+  fill(pyFunctionType, ["__call__", "__get__"])
+  fill(pyMethodType, ["__call__"])
+  fill(pyBuiltinFunctionType, ["__call__"])
+  fill(pyPropertyType, ["__get__", "__set__", "__delete__", "getter", "setter", "deleter"])
+  fill(pyTypeType, ["mro", "__subclasses__", "__instancecheck__", "__subclasscheck__", "__call__", "__prepare__"])
+  pyTypeType.dict["__init__"] = __pyObjectInit
+  pyTypeType.dict["__new__"] = PyStaticMethod(PyBuiltin("__new__", { a, k ->
+    val meta = a[0] as PyType
+    if (a.size == 2) { pyTypeOf(a[1]) } else {
+      val bases = a[2]
+      val kwN = k ?: []
+      val nPos = a.size - kwN.size
+      pyNewClass(meta, a[1] as string, bases is PyTuple ? (bases as PyTuple).items : [], pyAsDict(a[3])!!, kwN, a[nPos..])
+    }
+  }))
+  pyTypeType.dict["__prepare__"] = PyClassMethod(PyBuiltin("__prepare__", { a, k -> pyNewDict() }))
+  val excInit = PyBuiltin("__init__", { a, k ->
+    val e = a[0]
+    if (e is PyExc) {
+      val n = k == null ? a.size : a.size - k!!.size
+      (e as PyExc).args = PyTuple(a[1..<n])
+    }
+    null
+  })
+  excInit.owner = "BaseException"
+  pyBaseExceptionType.dict["__init__"] = excInit
+  __pyExcStrBuiltin.owner = "BaseException"
+  pyBaseExceptionType.dict["__str__"] = __pyExcStrBuiltin
+  fill(pyBaseExceptionType, ["__repr__", "with_traceback", "add_note", "__reduce__", "__setstate__"])
+  pyTypeChanged()
+}
+
+// ---- Calling a method of a builtin value ----
+
+fun pyCallMethodV(self : any?, name : string, args : List<any?>, kw : List<string>?) : any? {
+  if (!(self is PyObject) and !(self is PyType) and pyTypeOf(self).lookup(name) === pyUnbound) {
+    throw pyAttributeError("'${pyTypeName(self)}' object has no attribute '$name'", self, name)
+  }
+  val a = PyArgs(args, kw, name + "()")
+  return when (self) {
+    is string -> __pyStrMethod(self as string, name, a)
+    is open List<any?> -> __pyListMethod(self as open List<any?>, name, a)
+    is PyDict -> __pyDictMethod(self as PyDict, name, a)
+    is PySet -> __pySetMethod(self as PySet, name, a)
+    is PyTuple -> __pyTupleMethod(self as PyTuple, name, a)
+    is int, is bool, is BigInt -> __pyIntMethod(self, name, a)
+    is float -> __pyFloatMethod(self as float, name, a)
+    is Complex -> {
+      if (name == "conjugate") { Complex((self as Complex).re, -(self as Complex).im) } else { __pyCommonMethod(self, name, a) }
+    }
+    is PyGenerator -> __pyGenMethod(self as PyGenerator, name, a)
+    is PyIterator -> {
+      when (name) {
+        "__next__" -> pyNextOf1(self)
+        "__iter__" -> self
+        "__length_hint__" -> (self as PyIterator).left()
+        else -> __pyCommonMethod(self, name, a)
+      }
+    }
+    is PyExc -> __pyExcMethod(self as PyExc, name, a)
+    is PyStdStream -> __pyStreamMethod(self as PyStdStream, name, a)
+    is PyNative -> (self as PyNative).call(name, a)
+    is PyRange -> {
+      when (name) {
+        "count" -> pyIterable(self).count { pyEqB(it, a.pos[0]) }
+        "index" -> {
+          val i = pyIterable(self).indexOfFirst { pyEqB(it, a.pos[0]) }
+          if (i < 0) { throw pyValueError("${pyRepr(a.pos[0])} is not in range") }
+          i
+        }
+        else -> __pyCommonMethod(self, name, a)
+      }
+    }
+    is Bytes -> __pyBytesMethod(self as Bytes, name, a)
+    is PyFunction, is PyMethod, is PyBuiltin, is PyBoundBuiltin -> {
+      when (name) {
+        "__call__" -> pyCallV(self, args, kw)
+        "__get__" -> a.pos[0] == null ? self : PyMethod(self, a.pos[0])
+        else -> __pyCommonMethod(self, name, a)
+      }
+    }
+    is PyProperty -> {
+      when (name) {
+        "__get__" -> a.pos[0] == null ? self : (self as PyProperty).get(a.pos[0])
+        "__set__" -> { (self as PyProperty).set(a.pos[0], a.pos[1]); null }
+        "__delete__" -> { (self as PyProperty).delete(a.pos[0]); null }
+        else -> pyCallV(pyGetAttr(self, name), args, kw)
+      }
+    }
+    is PyType -> {
+      when (name) {
+        "mro" -> pyListOfAny((self as PyType).mro)
+        "__subclasses__" -> pyNewList([])
+        "__instancecheck__" -> pyIsInstance(a.pos[0], self)
+        "__subclasscheck__" -> pyIsSubclass(a.pos[0], self)
+        "__call__" -> pyTypeCall(self as PyType, args, kw)
+        else -> __pyCommonMethod(self, name, a)
+      }
+    }
+    else -> __pyCommonMethod(self, name, a)
+  }
+}
+
+// The special methods every value has, and an AttributeError for the rest.
+internal fun __pyCommonMethod(self : any?, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  val opIndex = __pyOpNames.indexOf(name)
+  if (opIndex >= 0) { return pyBuiltinOp(self, p[0], opIndex) }
+  val ropIndex = __pyROpNames.indexOf(name)
+  if (ropIndex >= 0) { return pyBuiltinOp(p[0], self, ropIndex) }
+  val iopIndex = __pyIOpNames.indexOf(name)
+  if (iopIndex >= 0) { return pyInplace(self, p[0], iopIndex) }
+  val cmp = __pyCmpNames.indexOf(name)
+  if (cmp >= 0) {
+    if (self is PyObject) {
+      // object's own: == by identity, != its opposite, the rest not there.
+      if (cmp == 0) { return self === p[0] ? true : pyNotImplemented }
+      if (cmp == 1) {
+        val eq = (self as PyObject).cls.lookup("__eq__")
+        if (eq is PyMethodDescriptor) { return self === p[0] ? false : pyNotImplemented }
+        val r = __pyCall2Special(eq, self, p[0])
+        return r === pyNotImplemented ? r : !pyTruth(r)
+      }
+      return pyNotImplemented
+    }
+    val r = __pyBuiltinCompare(self, pyUnwrap(p[0]), cmp)
+    return r
+  }
+  return when (name) {
+    "__hash__" -> self is PyObject ? (self as PyObject).identity() >>> 4 : pyHash(self)
+    "__repr__" -> self is PyObject ? __pyDefaultRepr(self as PyObject) : pyRepr(self)
+    "__str__" -> self is PyObject ? pyRepr(self) : pyStr(self)
+    "__format__" -> {
+      val spec = p[0] as string
+      if (self is PyObject) {
+        if (spec.isNotEmpty()) { throw pyTypeError("unsupported format string passed to ${(self as PyObject).cls.name}.__format__") }
+        pyStr(self)
+      } else { pyFormat(self, spec) }
+    }
+    "__bool__" -> pyTruth(self)
+    "__len__" -> pyLength(self)
+    "__iter__" -> pyIter(self)
+    "__contains__" -> pyContains(self, p[0])
+    "__getitem__" -> pyGetItem(self, p[0])
+    "__setitem__" -> { pySetItem(self, p[0], p[1]); null }
+    "__delitem__" -> { pyDelItem(self, p[0]); null }
+    "__neg__" -> pyNeg(self)
+    "__pos__" -> pyPos(self)
+    "__abs__" -> pyAbs(self)
+    "__invert__" -> pyInvert(self)
+    "__int__" -> pyIntOf1(self)
+    "__float__" -> pyFloatOf1(self)
+    "__index__" -> pyIndexValue(self)
+    "__trunc__", "__floor__", "__ceil__" -> {
+      if (self is float) {
+        val f = self as float
+        pyIntOf1(name == "__floor__" ? pyFloor(f) : name == "__ceil__" ? -pyFloor(-f) : Math.trunc(f))
+      } else { pyIndexValue(self) }
+    }
+    "__round__" -> p.isEmpty() ? pyRound1(self) : pyRound2(self, p[0])
+    "__divmod__" -> pyDivmod(self, p[0])
+    "__rdivmod__" -> pyDivmod(p[0], self)
+    "__reversed__" -> pyReversed(self)
+    "__getattribute__" -> {
+      if (self is PyObject) {
+        val v = pyGenericGetAttr(self as PyObject, p[0] as string)
+        if (v === pyUnbound) { throw pyAttributeError("'${pyTypeName(self)}' object has no attribute '${p[0]}'", self, p[0] as string) }
+        v
+      } else { pyGetAttr(self, p[0] as string) }
+    }
+    "__setattr__" -> {
+      if (self is PyObject) { pyGenericSetAttr(self as PyObject, p[0] as string, p[1]) } else { pySetAttr(self, p[0] as string, p[1]) }
+      null
+    }
+    "__delattr__" -> {
+      if (self is PyObject) { pyGenericDelAttr(self as PyObject, p[0] as string) } else { pyDelAttr(self, p[0] as string) }
+      null
+    }
+    "__dir__" -> pyDir(self)
+    "__sizeof__" -> 64
+    "__init__" -> null
+    "__reduce__", "__reduce_ex__" -> PyTuple([pyTypeOf(self), pyEmptyTuple])
+    "__getstate__" -> self is PyObject ? (self as PyObject).dict : null
+    "__getnewargs__" -> PyTuple([self])
+    "__class_getitem__" -> PyGenericAlias(self is PyType ? self as PyType : pyTypeOf(self), p[0])
+    else -> throw pyAttributeError("'${pyTypeName(self)}' object has no attribute '$name'", self, name)
+  }
+}
+
+// ---- str ----
+
+// Python's whitespace: what str.split() and strip() take away.
+fun pyIsSpace(c : char) : bool {
+  val cp = pyOrd(c)
+  if (cp == 32 or (cp >= 9 and cp <= 13) or (cp >= 28 and cp <= 31) or cp == 0x85 or cp == 0xA0) { return true }
+  if (cp < 128) { return false }
+  val cat = pyCategory(cp)
+  return cat == "Zs" or cat == "Zl" or cat == "Zp" or cp == 0x1680
+}
+
+internal fun __pyStrArg(x : any?, method : string) : string {
+  if (x is string) { return x as string }
+  throw pyTypeError("$method arg must be None or str")
+}
+
+// The start and end a str method's optional start and end arguments give.
+internal fun __pyRange(size : int, start : any?, end : any?) : Pair<int, int> {
+  var s = start == null ? 0 : pyIndex(start)
+  var e = end == null ? size : pyIndex(end)
+  if (s < 0) { s += size; if (s < 0) { s = 0 } }
+  if (e < 0) { e += size; if (e < 0) { e = 0 } }
+  if (e > size) { e = size }
+  return Pair(s, e)
+}
+
+internal fun __pyFind(s : string, sub : string, start : any?, end : any?, last : bool) : int {
+  val r = __pyRange(s.size, start, end)
+  if (r.first > s.size or r.first > r.second) { return sub.isEmpty() and r.first <= s.size and r.first <= r.second ? r.first : -1 }
+  val part = s[r.first..<r.second]
+  val i = last ? part.lastIndexOf(sub) : part.indexOf(sub)
+  return i < 0 ? -1 : i + r.first
+}
+
+internal fun __pyStripChars(a : PyArgs, method : string) : string? {
+  val c = a.pos.isEmpty() ? null : a.pos[0]
+  if (c == null) { return null }
+  if (!(c is string)) { throw pyTypeError("$method arg must be None or str") }
+  return c as string
+}
+
+internal fun __pyStrip(s : string, chars : string?, left : bool, right : bool) : string {
+  var i = 0
+  var j = s.size
+  fun strippable(c : char) : bool => chars == null ? pyIsSpace(c) : chars!!.contains(c.toString())
+  if (left) { while (i < j and strippable(s[i])) { i += 1 } }
+  if (right) { while (j > i and strippable(s[j - 1])) { j -= 1 } }
+  return s[i..<j]
+}
+
+fun pySplitWhitespace(s : string, maxsplit : int) : open List<any?> {
+  val out : open List<any?> = []
+  var i = 0
+  val n = s.size
+  var splits = 0
+  while (i < n) {
+    while (i < n and pyIsSpace(s[i])) { i += 1 }
+    if (i >= n) { break }
+    if (maxsplit >= 0 and splits >= maxsplit) {
+      out.add(s[i..])
+      return out
+    }
+    var j = i
+    while (j < n and !pyIsSpace(s[j])) { j += 1 }
+    out.add(s[i..<j])
+    splits += 1
+    i = j
+  }
+  return out
+}
+
+internal fun __pyRSplitWhitespace(s : string, maxsplit : int) : open List<any?> {
+  val out : open List<any?> = []
+  var j = s.size
+  var splits = 0
+  while (j > 0) {
+    while (j > 0 and pyIsSpace(s[j - 1])) { j -= 1 }
+    if (j <= 0) { break }
+    if (maxsplit >= 0 and splits >= maxsplit) {
+      out.add(0, s[..<j])
+      return out
+    }
+    var i = j
+    while (i > 0 and !pyIsSpace(s[i - 1])) { i -= 1 }
+    out.add(0, s[i..<j])
+    splits += 1
+    j = i
+  }
+  return out
+}
+
+internal fun __pyIsLineBreak(c : char) : bool {
+  val cp = pyOrd(c)
+  return cp == 10 or cp == 13 or cp == 11 or cp == 12 or cp == 0x1C or cp == 0x1D or cp == 0x1E or cp == 0x85 or cp == 0x2028 or cp == 0x2029
+}
+
+internal fun __pyIsCased(c : char) : bool {
+  val cat = pyCategory(pyOrd(c))
+  return cat == "Lu" or cat == "Ll" or cat == "Lt"
+}
+
+internal fun __pyStrMethod(s : string, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "upper" -> pyUpper(s)
+    "lower" -> s.lower()
+    "casefold" -> s.lower().replace("ß", "ss")
+    "strip" -> __pyStrip(s, __pyStripChars(a, "strip"), true, true)
+    "lstrip" -> __pyStrip(s, __pyStripChars(a, "lstrip"), true, false)
+    "rstrip" -> __pyStrip(s, __pyStripChars(a, "rstrip"), false, true)
+    "split", "rsplit" -> {
+      a.only(["sep", "maxsplit"])
+      val sep = p.size > 0 ? p[0] : a.get("sep", null)
+      val maxsplit = pyIndex(p.size > 1 ? p[1] : a.get("maxsplit", -1))
+      if (sep == null) {
+        name == "split" ? pySplitWhitespace(s, maxsplit) : __pyRSplitWhitespace(s, maxsplit)
+      } else {
+        val sp = __pyStrArg(sep, "must be str or None, not ${pyTypeName(sep)}")
+        if (sp.isEmpty()) { throw pyValueError("empty separator") }
+        val out : open List<any?> = []
+        if (name == "split") {
+          var start = 0
+          var splits = 0
+          while (true) {
+            if (maxsplit >= 0 and splits >= maxsplit) { break }
+            val i = s.indexOf(sp, start)
+            if (i < 0) { break }
+            out.add(s[start..<i])
+            start = i + sp.size
+            splits += 1
+          }
+          out.add(s[start..])
+        } else {
+          var end = s.size
+          var splits = 0
+          while (true) {
+            if (maxsplit >= 0 and splits >= maxsplit) { break }
+            if (end < sp.size) { break }
+            val i = s[..<end].lastIndexOf(sp)
+            if (i < 0) { break }
+            out.add(0, s[(i + sp.size)..<end])
+            end = i
+            splits += 1
+          }
+          out.add(0, s[..<end])
+        }
+        out
+      }
+    }
+    "splitlines" -> {
+      val keep = pyTruth(p.isNotEmpty() ? p[0] : a.get("keepends", false))
+      val out : open List<any?> = []
+      var i = 0
+      var start = 0
+      while (i < s.size) {
+        val c = s[i]
+        if (__pyIsLineBreak(c)) {
+          var end = i + 1
+          if (c == '\r' and i + 1 < s.size and s[i + 1] == '\n') { end = i + 2 }
+          out.add(keep ? s[start..<end] : s[start..<i])
+          start = end
+          i = end
+        } else {
+          i += 1
+        }
+      }
+      if (start < s.size) { out.add(s[start..]) }
+      out
+    }
+    "join" -> {
+      val items = pyIterable(p[0])
+      val sb = StringBuilder()
+      for (i, x) in items.withIndex() {
+        if (!(x is string)) { throw pyTypeError("sequence item $i: expected str instance, ${pyTypeName(x)} found") }
+        if (i > 0) { sb.append(s) }
+        sb.append(x as string)
+      }
+      sb.toString()
+    }
+    "replace" -> {
+      a.only(["count"])
+      val old = __pyStrArg(p[0], "replace() argument 1")
+      val new = __pyStrArg(p[1], "replace() argument 2")
+      val count = pyIndex(p.size > 2 ? p[2] : a.get("count", -1))
+      if (count < 0) {
+        if (old.isEmpty()) {
+          val sb = StringBuilder()
+          sb.append(new)
+          for c in s { sb.append(c); sb.append(new) }
+          sb.toString()
+        } else { s.replace(old, new) }
+      } else {
+        val sb = StringBuilder()
+        var start = 0
+        var done = 0
+        while (done < count) {
+          if (old.isEmpty()) {
+            sb.append(new)
+            if (start < s.size) { sb.append(s[start]) }
+            start += 1
+            done += 1
+            if (start > s.size) { break }
+            continue
+          }
+          val i = s.indexOf(old, start)
+          if (i < 0) { break }
+          sb.append(s[start..<i])
+          sb.append(new)
+          start = i + old.size
+          done += 1
+        }
+        if (start < s.size) { sb.append(s[start..]) }
+        sb.toString()
+      }
+    }
+    "find" -> __pyFind(s, __pyStrArg(p[0], "find"), p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null, false)
+    "rfind" -> __pyFind(s, __pyStrArg(p[0], "rfind"), p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null, true)
+    "index", "rindex" -> {
+      val i = __pyFind(s, __pyStrArg(p[0], name), p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null, name == "rindex")
+      if (i < 0) { throw pyValueError("substring not found") }
+      i
+    }
+    "count" -> {
+      val sub = __pyStrArg(p[0], "count")
+      val r = __pyRange(s.size, p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null)
+      if (r.first > r.second) { 0 } else {
+        val part = s[r.first..<r.second]
+        if (sub.isEmpty()) { part.size + 1 } else {
+          var n = 0
+          var i = part.indexOf(sub)
+          while (i >= 0) {
+            n += 1
+            i = part.indexOf(sub, i + sub.size)
+          }
+          n
+        }
+      }
+    }
+    "startswith", "endswith" -> {
+      val prefix = p[0]
+      val r = __pyRange(s.size, p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null)
+      val part = r.first <= r.second and r.first <= s.size ? s[r.first..<r.second] : null
+      val options = prefix is PyTuple ? (prefix as PyTuple).items : [prefix]
+      var found = false
+      for o in options {
+        if (!(o is string)) {
+          throw pyTypeError("$name first arg must be str or a tuple of str, not ${pyTypeName(o)}")
+        }
+        if (part != null and (name == "startswith" ? part!!.startsWith(o as string) : part!!.endsWith(o as string))) { found = true }
+      }
+      found
+    }
+    "isdigit", "isdecimal", "isnumeric" -> {
+      if (s.isEmpty()) { false } else {
+        var ok = true
+        for c in s {
+          val cat = pyCategory(pyOrd(c))
+          val good = name == "isdecimal" ? cat == "Nd" : name == "isdigit" ? (cat == "Nd" or (cat == "No" and __pyIsDigitNo(pyOrd(c)))) : (cat == "Nd" or cat == "Nl" or cat == "No" or __pyIsNumericOther(pyOrd(c)))
+          if (!good) { ok = false; break }
+        }
+        ok
+      }
+    }
+    "isalpha" -> s.isNotEmpty() and s.all { pyCategory(pyOrd(it)).startsWith("L") }
+    "isalnum" -> s.isNotEmpty() and s.all { val cat = pyCategory(pyOrd(it)); cat.startsWith("L") or cat == "Nd" or cat == "Nl" or cat == "No" }
+    "isspace" -> s.isNotEmpty() and s.all { pyIsSpace(it) }
+    "isascii" -> s.all { pyOrd(it) < 128 }
+    "isupper" -> {
+      var cased = false
+      var ok = true
+      for c in s {
+        val cat = pyCategory(pyOrd(c))
+        if (cat == "Ll" or cat == "Lt") { ok = false }
+        if (cat == "Lu") { cased = true }
+      }
+      ok and cased
+    }
+    "islower" -> {
+      var cased = false
+      var ok = true
+      for c in s {
+        val cat = pyCategory(pyOrd(c))
+        if (cat == "Lu" or cat == "Lt") { ok = false }
+        if (cat == "Ll") { cased = true }
+      }
+      ok and cased
+    }
+    "istitle" -> {
+      var cased = false
+      var previousCased = false
+      var ok = true
+      for c in s {
+        val cat = pyCategory(pyOrd(c))
+        if (cat == "Lu" or cat == "Lt") {
+          if (previousCased) { ok = false }
+          previousCased = true
+          cased = true
+        } else if (cat == "Ll") {
+          if (!previousCased) { ok = false }
+          previousCased = true
+          cased = true
+        } else {
+          previousCased = false
+        }
+      }
+      ok and cased
+    }
+    "isidentifier" -> pyIsIdentifier(s)
+    "isprintable" -> s.all { pyIsPrintable(pyOrd(it)) }
+    "capitalize" -> s.isEmpty() ? s : s[0].toString().upper() + s[1..].lower()
+    "title" -> {
+      val sb = StringBuilder()
+      var previousCased = false
+      for c in s {
+        if (__pyIsCased(c)) {
+          sb.append(previousCased ? c.toString().lower() : c.toString().upper())
+          previousCased = true
+        } else {
+          sb.append(c)
+          previousCased = false
+        }
+      }
+      sb.toString()
+    }
+    "swapcase" -> {
+      val sb = StringBuilder()
+      for c in s {
+        val cat = pyCategory(pyOrd(c))
+        sb.append(cat == "Lu" ? c.toString().lower() : cat == "Ll" ? c.toString().upper() : c.toString())
+      }
+      sb.toString()
+    }
+    "center", "ljust", "rjust" -> {
+      val width = pyIndex(p[0])
+      val fill = p.size > 1 ? p[1] : " "
+      if (!(fill is string) or (fill as string).size != 1) { throw pyTypeError("The fill character must be exactly one character long") }
+      if (width <= s.size) { s } else {
+        val pad = width - s.size
+        when (name) {
+          "ljust" -> s + (fill as string).repeat(pad)
+          "rjust" -> (fill as string).repeat(pad) + s
+          else -> {
+            val left = pad / 2 + (pad & width & 1)
+            (fill as string).repeat(left) + s + (fill as string).repeat(pad - left)
+          }
+        }
+      }
+    }
+    "zfill" -> {
+      val width = pyIndex(p[0])
+      if (width <= s.size) { s } else {
+        val pad = "0".repeat(width - s.size)
+        s.startsWith("-") or s.startsWith("+") ? s[0].toString() + pad + s[1..] : pad + s
+      }
+    }
+    "partition", "rpartition" -> {
+      val sep = __pyStrArg(p[0], name)
+      if (sep.isEmpty()) { throw pyValueError("empty separator") }
+      val i = name == "partition" ? s.indexOf(sep) : s.lastIndexOf(sep)
+      if (i < 0) {
+        name == "partition" ? PyTuple([s, "", ""]) : PyTuple(["", "", s])
+      } else {
+        PyTuple([s[..<i], sep, s[(i + sep.size)..]])
+      }
+    }
+    "removeprefix" -> {
+      val x = __pyStrArg(p[0], name)
+      s.startsWith(x) ? s[x.size..] : s
+    }
+    "removesuffix" -> {
+      val x = __pyStrArg(p[0], name)
+      x.isNotEmpty() and s.endsWith(x) ? s[..<(s.size - x.size)] : s
+    }
+    "expandtabs" -> {
+      val tab = pyIndex(p.isNotEmpty() ? p[0] : a.get("tabsize", 8))
+      val sb = StringBuilder()
+      var col = 0
+      for c in s {
+        if (c == '\t') {
+          if (tab > 0) {
+            val n = tab - col % tab
+            sb.append(" ".repeat(n))
+            col += n
+          }
+        } else if (c == '\n' or c == '\r') {
+          sb.append(c)
+          col = 0
+        } else {
+          sb.append(c)
+          col += 1
+        }
+      }
+      sb.toString()
+    }
+    "format" -> pyStrFormat(s, p, a.kw)
+    "format_map" -> pyStrFormatMap(s, p[0])
+    "encode" -> pyEncode(s, p.isNotEmpty() ? p[0] as string : a.get("encoding", "utf-8") as string,
+                         p.size > 1 ? p[1] as string : a.get("errors", "strict") as string)
+    "translate" -> {
+      val table = p[0]
+      val sb = StringBuilder()
+      for c in s {
+        val r = __pyTranslateOne(table, pyOrd(c))
+        if (r === pyUnbound) { sb.append(c) }
+        else if (r == null) {}
+        else if (r is string) { sb.append(r as string) }
+        else { sb.append(pyChar(pyIndex(r))) }
+      }
+      sb.toString()
+    }
+    "__getnewargs__" -> PyTuple([s])
+    else -> __pyCommonMethod(s, name, a)
+  }
+}
+
+internal fun __pyTranslateOne(table : any?, cp : int) : any? {
+  try {
+    return pyGetItem(table, cp)
+  } catch (e : PyError) {
+    if (e.exc.cls.isSubtype(pyLookupErrorType)) { return pyUnbound }
+    throw e
+  }
+}
+
+internal fun __pyIsDigitNo(cp : int) : bool => (cp >= 0xB2 and cp <= 0xB3) or cp == 0xB9 or (cp >= 0x2070 and cp <= 0x2079) or
+  (cp >= 0x2080 and cp <= 0x2089) or (cp >= 0x2460 and cp <= 0x2468) or (cp >= 0x2474 and cp <= 0x247C) or
+  (cp >= 0x2488 and cp <= 0x2490) or (cp >= 0x24F5 and cp <= 0x24FD) or cp == 0x24EA or cp == 0x24FF or
+  (cp >= 0x2776 and cp <= 0x277E) or (cp >= 0x2780 and cp <= 0x2788) or (cp >= 0x278A and cp <= 0x2792)
+
+internal fun __pyIsNumericOther(cp : int) : bool => (cp >= 0x4E00 and cp <= 0x9FFF and
+  (cp == 0x4E00 or cp == 0x4E8C or cp == 0x4E09 or cp == 0x56DB or cp == 0x4E94 or cp == 0x516D or cp == 0x4E03 or cp == 0x516B or
+   cp == 0x4E5D or cp == 0x5341 or cp == 0x767E or cp == 0x5343 or cp == 0x4E07 or cp == 0x5104 or cp == 0x96F6))
+
+fun pyIsIdentifier(s : string) : bool {
+  if (s.isEmpty()) { return false }
+  for i in 0..<s.size {
+    val c = s[i]
+    val cp = pyOrd(c)
+    val cat = pyCategory(cp)
+    val start = c == '_' or cat == "Lu" or cat == "Ll" or cat == "Lt" or cat == "Lm" or cat == "Lo" or cat == "Nl"
+    val cont = start or cat == "Mn" or cat == "Mc" or cat == "Nd" or cat == "Pc"
+    if (i == 0 ? !start : !cont) { return false }
+  }
+  return true
+}
+
+fun pyMakeTrans(a : List<any?>) : any? {
+  val d = pyNewDict()
+  if (a.size == 1) {
+    for k in pyIterable(a[0]) { val v = pyGetItem(a[0], k)
+      val key = k is string ? pyOrd((k as string)[0]) : k
+      d.set(key, v)
+    }
+    return d
+  }
+  val x = a[0] as string
+  val y = a[1] as string
+  if (x.size != y.size) { throw pyValueError("the first two maketrans arguments must have equal length") }
+  for i in 0..<x.size { d.set(pyOrd(x[i]), pyOrd(y[i])) }
+  if (a.size > 2) { for c in a[2] as string { d.set(pyOrd(c), null) } }
+  return d
+}
+
+// str.format: {} {0} {name} {0.attr} {0[key]} with !r !s !a and a spec, which may hold fields.
+fun pyStrFormat(fmt : string, args : List<any?>, kwargs : Map<string, any?>) : string {
+  var auto = 0
+  var mode = 0  // 0 not known yet, 1 automatic, 2 numbered
+  fun field(text : string) : any? {
+    var i = 0
+    while (i < text.size and text[i] != '.' and text[i] != '[') { i += 1 }
+    val head = text[..<i]
+    var value : any?
+    if (head.isEmpty()) {
+      if (mode == 2) { throw pyValueError("cannot switch from manual field specification to automatic field numbering") }
+      mode = 1
+      if (auto >= args.size) { throw pyIndexError("Replacement index $auto out of range for positional args tuple") }
+      value = args[auto]
+      auto += 1
+    } else if (head.all { it >= '0' and it <= '9' }) {
+      if (mode == 1) { throw pyValueError("cannot switch from automatic field numbering to manual field specification") }
+      mode = 2
+      val n = head.toInt()
+      if (n >= args.size) { throw pyIndexError("Replacement index $n out of range for positional args tuple") }
+      value = args[n]
+    } else {
+      value = kwargs[head, default = pyUnbound]
+      if (value === pyUnbound) { throw pyKeyError(head) }
+    }
+    while (i < text.size) {
+      if (text[i] == '.') {
+        var j = i + 1
+        while (j < text.size and text[j] != '.' and text[j] != '[') { j += 1 }
+        value = pyGetAttr(value, text[(i + 1)..<j])
+        i = j
+      } else {
+        val close = text.indexOf("]", i)
+        if (close < 0) { throw pyValueError("Missing ']' in format string") }
+        val key = text[(i + 1)..<close]
+        value = key.isNotEmpty() and key.all { it >= '0' and it <= '9' } ? pyGetItem(value, key.toInt()) : pyGetItem(value, key)
+        i = close + 1
+      }
+    }
+    return value
+  }
+  fun render(f : string, depth : int) : string {
+    val sb = StringBuilder()
+    var i = 0
+    while (i < f.size) {
+      val c = f[i]
+      if (c == '{') {
+        if (i + 1 < f.size and f[i + 1] == '{') {
+          sb.append('{')
+          i += 2
+          continue
+        }
+        // The field runs to its matching }.
+        var level = 1
+        var j = i + 1
+        var inKey = false
+        while (j < f.size) {
+          if (f[j] == '[') { inKey = true }
+          if (f[j] == ']') { inKey = false }
+          if (!inKey and f[j] == '{') { level += 1 }
+          if (!inKey and f[j] == '}') {
+            level -= 1
+            if (level == 0) { break }
+          }
+          j += 1
+        }
+        if (j >= f.size) { throw pyValueError("expected '}' before end of string") }
+        val inside = f[(i + 1)..<j]
+        var name = inside
+        var conv = -1
+        var spec = ""
+        var k = 0
+        var bracket = false
+        while (k < inside.size) {
+          if (inside[k] == '[') { bracket = true }
+          if (inside[k] == ']') { bracket = false }
+          if (!bracket and (inside[k] == '!' or inside[k] == ':')) { break }
+          k += 1
+        }
+        name = inside[..<k]
+        var rest = inside[k..]
+        if (rest.startsWith("!")) {
+          if (rest.size < 2) { throw pyValueError("end of string while looking for conversion specifier") }
+          val ch = rest[1]
+          if (ch != 'r' and ch != 's' and ch != 'a') { throw pyValueError("Unknown conversion specifier ${ch}") }
+          conv = ch.code
+          rest = rest[2..]
+          if (rest.isNotEmpty() and !rest.startsWith(":")) { throw pyValueError("expected ':' after conversion specifier") }
+        }
+        if (rest.startsWith(":")) { spec = rest[1..] }
+        if (depth > 1) { throw pyValueError("Max string recursion exceeded") }
+        if (spec.contains("{")) { spec = render(spec, depth + 1) }
+        sb.append(pyFormatValue(field(name), conv, spec))
+        i = j + 1
+      } else if (c == '}') {
+        if (i + 1 < f.size and f[i + 1] == '}') {
+          sb.append('}')
+          i += 2
+          continue
+        }
+        throw pyValueError("Single '}' encountered in format string")
+      } else {
+        sb.append(c)
+        i += 1
+      }
+    }
+    return sb.toString()
+  }
+  return render(fmt, 0)
+}
+
+fun pyStrFormatMap(fmt : string, mapping : any?) : string {
+  val kw : open Map<string, any?> = {:}
+  // Each name asked for is looked up in the mapping as it is met.
+  val text = fmt
+  val names : open List<string> = []
+  var i = 0
+  while (i < text.size) {
+    if (text[i] == '{' and i + 1 < text.size and text[i + 1] != '{') {
+      var j = i + 1
+      while (j < text.size and text[j] != '}' and text[j] != '!' and text[j] != ':' and text[j] != '.' and text[j] != '[') { j += 1 }
+      val name = text[(i + 1)..<j]
+      if (name.isNotEmpty() and !name.all { it >= '0' and it <= '9' }) { kw[name] = pyGetItem(mapping, name) }
+      i = j
+    } else if (text[i] == '{') {
+      i += 2
+    } else {
+      i += 1
+    }
+  }
+  return pyStrFormat(fmt, [], kw)
+}
+
+// ---- list ----
+
+internal fun __pyListMethod(l : open List<any?>, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "append" -> { l.add(p[0]); null }
+    "extend" -> {
+      val items = p[0] === l ? l.toList() : pyIterable(p[0])
+      l.addAll(items)
+      null
+    }
+    "insert" -> {
+      var i = pyIndex(p[0])
+      if (i < 0) { i += l.size; if (i < 0) { i = 0 } }
+      if (i > l.size) { i = l.size }
+      l.add(i, p[1])
+      null
+    }
+    "pop" -> {
+      if (l.isEmpty()) { throw pyIndexError("pop from empty list") }
+      var i = p.isEmpty() ? l.size - 1 : pyIndex(p[0])
+      if (i < 0) { i += l.size }
+      if (i < 0 or i >= l.size) { throw pyIndexError("pop index out of range") }
+      l.removeAt(i)
+    }
+    "remove" -> {
+      var at = -1
+      for (i, x) in l.withIndex() {
+        if (pyEqB(x, p[0])) { at = i; break }
+      }
+      if (at < 0) { throw pyValueError("list.remove(x): x not in list") }
+      l.removeAt(at)
+      null
+    }
+    "index" -> {
+      val r = __pyRange(l.size, p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null)
+      var at = -1
+      for i in r.first..<r.second {
+        if (pyEqB(l[i], p[0])) { at = i; break }
+      }
+      if (at < 0) { throw pyValueError("list.index(x): x not in list") }
+      at
+    }
+    "count" -> l.count { pyEqB(it, p[0]) }
+    "clear" -> { l.clear(); null }
+    "copy" -> l.toOpenList()
+    "reverse" -> {
+      val n = l.size
+      for i in 0..<(n / 2) {
+        val t = l[i]
+        l[i] = l[n - 1 - i]
+        l[n - 1 - i] = t
+      }
+      null
+    }
+    "sort" -> {
+      a.only(["key", "reverse"])
+      if (p.isNotEmpty()) { throw pyTypeError("sort() takes no positional arguments") }
+      pySortList(l, a.get("key", null), pyTruth(a.get("reverse", false)))
+      null
+    }
+    "__init__" -> {
+      l.clear()
+      if (p.isNotEmpty()) { l.addAll(pyIterable(p[0])) }
+      null
+    }
+    else -> __pyCommonMethod(l, name, a)
+  }
+}
+
+// ---- dict ----
+
+internal fun __pyDictMethod(d : PyDict, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "get" -> d.get(p[0], p.size > 1 ? p[1] : null)
+    "keys" -> PyDictView(d, 0)
+    "values" -> PyDictView(d, 1)
+    "items" -> PyDictView(d, 2)
+    "setdefault" -> {
+      val v = d.get(p[0], pyUnbound)
+      if (v === pyUnbound) {
+        val dv = p.size > 1 ? p[1] : null
+        d.set(p[0], dv)
+        dv
+      } else { v }
+    }
+    "pop" -> {
+      val i = d.find(p[0])
+      if (i < 0) {
+        if (p.size > 1) { p[1] } else { throw pyKeyError(p[0]) }
+      } else {
+        val v = d.vals[i]
+        d.removeAt(i)
+        v
+      }
+    }
+    "popitem" -> {
+      if (d.count == 0) { throw pyError(pyKeyErrorType, "popitem(): dictionary is empty") }
+      val i = d.lastBefore(d.keys.size)
+      val k = d.keys[i]
+      val v = d.vals[i]
+      d.removeAt(i)
+      PyTuple([k, v])
+    }
+    "update" -> {
+      if (p.size > 1) { throw pyTypeError("update expected at most 1 argument, got ${p.size}") }
+      if (p.isNotEmpty()) { pyDictUpdate(d, p[0]) }
+      for (k, v) in a.kw { d.set(k, v) }
+      null
+    }
+    "copy" -> d.copy()
+    "clear" -> { d.clear(); null }
+    "__init__" -> {
+      d.clear()
+      if (p.isNotEmpty()) { pyDictUpdate(d, p[0]) }
+      for (k, v) in a.kw { d.set(k, v) }
+      null
+    }
+    else -> __pyCommonMethod(d, name, a)
+  }
+}
+
+// ---- set ----
+
+internal fun __pySetMethod(s : PySet, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "add" -> { s.add(p[0]); null }
+    "remove" -> {
+      if (!s.discard(p[0])) { throw pyKeyError(p[0]) }
+      null
+    }
+    "discard" -> { s.discard(p[0]); null }
+    "pop" -> s.pop()
+    "clear" -> { s.clear(); null }
+    "copy" -> s.frozen ? s : s.copy(false)
+    "update" -> { for x in p { s.update(x) }; null }
+    "union" -> {
+      val r = s.copy(s.frozen)
+      for x in p { r.update(x) }
+      r
+    }
+    "intersection" -> {
+      var r = s.copy(s.frozen)
+      for x in p { r = r.intersection(pyAsSet(x)) }
+      if (p.isEmpty()) { r = s.copy(s.frozen) }
+      r
+    }
+    "intersection_update" -> {
+      for x in p { s.updateWith(pyAsSet(x), 10) }
+      null
+    }
+    "difference" -> {
+      var r = s.copy(s.frozen)
+      for x in p { r = r.difference(pyAsSet(x)) }
+      r
+    }
+    "difference_update" -> {
+      for x in p { for k in pyIterable(x) { s.discard(k) } }
+      null
+    }
+    "symmetric_difference" -> s.operate(pyAsSet(p[0]), 11)
+    "symmetric_difference_update" -> { s.updateWith(pyAsSet(p[0]), 11); null }
+    "issubset" -> s.isSubsetOf(pyAsSet(p[0]))
+    "issuperset" -> pyAsSet(p[0]).isSubsetOf(s)
+    "isdisjoint" -> {
+      var none = true
+      for x in pyIterable(p[0]) { if (s.contains(x)) { none = false; break } }
+      none
+    }
+    "__init__" -> {
+      s.clear()
+      if (p.isNotEmpty()) { s.update(p[0]) }
+      null
+    }
+    else -> __pyCommonMethod(s, name, a)
+  }
+}
+
+// ---- tuple ----
+
+internal fun __pyTupleMethod(t : PyTuple, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "count" -> t.items.count { pyEqB(it, p[0]) }
+    "index" -> {
+      val r = __pyRange(t.items.size, p.size > 1 ? p[1] : null, p.size > 2 ? p[2] : null)
+      var at = -1
+      for i in r.first..<r.second {
+        if (pyEqB(t.items[i], p[0])) { at = i; break }
+      }
+      if (at < 0) { throw pyValueError("tuple.index(x): x not in tuple") }
+      at
+    }
+    else -> __pyCommonMethod(t, name, a)
+  }
+}
+
+// ---- int and float ----
+
+internal fun __pyIntMethod(x : any?, name : string, a : PyArgs) : any? {
+  val n = pyIndexValue(x)
+  return when (name) {
+    "bit_length" -> {
+      val b = pyBig(n).abs()
+      var len = 0
+      var v = b
+      while (v > BigInt.of(0)) {
+        v = v >> 1
+        len += 1
+      }
+      len
+    }
+    "bit_count" -> {
+      var v = pyBig(n).abs()
+      var c = 0
+      while (v > BigInt.of(0)) {
+        if (v.testBit(0)) { c += 1 }
+        v = v >> 1
+      }
+      c
+    }
+    "conjugate" -> n
+    "is_integer" -> true
+    "as_integer_ratio" -> PyTuple([n, 1])
+    "to_bytes" -> {
+      val length = pyIndex(a.pos.size > 0 ? a.pos[0] : a.get("length", 1))
+      val order = a.pos.size > 1 ? a.pos[1] as string : a.get("byteorder", "big") as string
+      val signed = pyTruth(a.get("signed", false))
+      var v = pyBig(n)
+      if (v < 0) {
+        if (!signed) { throw pyOverflowError("can't convert negative int to unsigned") }
+        v = v + (BigInt.of(1) << (length * 8))
+      }
+      if (v >= (BigInt.of(1) << (length * 8)) or (signed and pyBig(n) >= (BigInt.of(1) << (length * 8 - 1)))) {
+        throw pyOverflowError("int too big to convert")
+      }
+      val out = Bytes(length)
+      for i in 0..<length {
+        val byte = (v >> (8 * i)).floorMod(BigInt.of(256)).toInt()
+        out[order == "little" ? i : length - 1 - i] = byte.toByte()
+      }
+      out
+    }
+    else -> __pyCommonMethod(x, name, a)
+  }
+}
+
+fun pyIntFromBytes(a : PyArgs) : any? {
+  val bytes = pyBytesOf(a.pos[1], null) as Bytes
+  val order = a.pos.size > 2 ? a.pos[2] as string : a.get("byteorder", "big") as string
+  val signed = pyTruth(a.get("signed", false))
+  var v = BigInt.of(0)
+  for i in 0..<bytes.size {
+    val byte = bytes[order == "little" ? bytes.size - 1 - i : i]
+    v = (v << 8) + BigInt.of(byte)
+  }
+  if (signed and bytes.size > 0 and v.testBit(bytes.size * 8 - 1)) { v = v - (BigInt.of(1) << (bytes.size * 8)) }
+  return pyNorm(v)
+}
+
+internal fun __pyFloatMethod(x : float, name : string, a : PyArgs) : any? {
+  return when (name) {
+    "is_integer" -> !x.isNaN() and !x.isInfinite() and x == pyFloor(x)
+    "conjugate" -> x
+    "as_integer_ratio" -> {
+      if (x.isNaN()) { throw pyValueError("cannot convert NaN to integer ratio") }
+      if (x.isInfinite()) { throw pyOverflowError("cannot convert Infinity to integer ratio") }
+      val parts = __pyFloatParts(Math.abs(x))
+      var num = parts.first
+      var den = BigInt.of(1)
+      val e = parts.second
+      if (e >= 0) { num = num << e } else { den = den << (-e) }
+      val g = num.gcd(den)
+      if (g > BigInt.of(1)) {
+        num = num / g
+        den = den / g
+      }
+      PyTuple([pyNorm(x < 0.0 ? -num : num), pyNorm(den)])
+    }
+    "hex" -> pyFloatHex(x)
+    else -> __pyCommonMethod(x, name, a)
+  }
+}
+
+fun pyFloatHex(x : float) : string {
+  if (x.isNaN()) { return "nan" }
+  if (x.isInfinite()) { return x > 0.0 ? "inf" : "-inf" }
+  if (x == 0.0) { return 1.0 / x < 0.0 ? "-0x0.0p+0" : "0x0.0p+0" }
+  val parts = __pyFloatParts(Math.abs(x))
+  var m = parts.first
+  var e = parts.second
+  // Normalise to 1.hhhh * 2**exp with 52 bits after the point.
+  var bits = 0
+  var t = m
+  while (t > BigInt.of(0)) { t = t >> 1; bits += 1 }
+  val shift = 53 - bits
+  m = m << shift
+  e -= shift
+  val exp = e + 52
+  val frac = (m - (BigInt.of(1) << 52)).toString(16).padStart(13, '0').let { pyTrimEndChar(it, '0') }
+  return (x < 0.0 ? "-" : "") + "0x1." + (frac.isEmpty() ? "0" : frac) + "p" + (exp >= 0 ? "+" : "") + exp.toString()
+}
+
+fun pyFloatFromHex(s : string) : any? {
+  var t = s.trim().lower()
+  var negative = false
+  if (t.startsWith("-") or t.startsWith("+")) {
+    negative = t.startsWith("-")
+    t = t[1..]
+  }
+  if (t.startsWith("0x")) { t = t[2..] }
+  var exp = 0
+  val pAt = t.indexOf("p")
+  if (pAt >= 0) {
+    exp = t[(pAt + 1)..].toInt()
+    t = t[..<pAt]
+  }
+  val dot = t.indexOf(".")
+  val whole = dot >= 0 ? t[..<dot] : t
+  val frac = dot >= 0 ? t[(dot + 1)..] : ""
+  val digits = (whole + frac).isEmpty() ? "0" : whole + frac
+  val v = BigInt.parse(digits, 16)
+  val e2 = exp - 4 * frac.size
+  var r = v.toFloat()
+  r = e2 >= 0 ? r * 2.0.pow(e2) : r / 2.0.pow(-e2)
+  return negative ? -r : r
+}
+
+// ---- generators and exceptions ----
+
+internal fun __pyGenMethod(g : PyGenerator, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "send" -> g.send(p[0])
+    "__next__" -> {
+      val v = g.resume(null)
+      if (v === pyEnd) { throw pyStopIteration(g.result) }
+      v
+    }
+    "__iter__" -> g
+    "__await__" -> g
+    "__aiter__" -> g
+    "__anext__" -> PyANextAwaitable(g, null, null)
+    "asend" -> PyANextAwaitable(g, p[0], null)
+    "athrow" -> PyANextAwaitable(g, null, pyExceptionOf(p[0]))
+    "aclose" -> {
+      pyNativeCoroutine("aclose", { gen ->
+        if (g.state == 1) {
+          try {
+            pyAwaitANext(gen, PyANextAwaitable(g, null, pyNewException(pyGeneratorExitType, [])))
+            throw pyRuntimeError("async generator ignored GeneratorExit")
+          } catch (e : PyError) {
+            if (!e.exc.cls.isSubtype(pyGeneratorExitType) and !e.exc.cls.isSubtype(pyStopAsyncIterationType)) { throw e }
+          }
+        }
+        g.state = 3
+        null
+      })
+    }
+    "throw" -> {
+      var e : PyExc = pyNewException(pyTypeErrorType, [])
+      val first = p[0]
+      if (first is PyType) {
+        e = p.size > 1 and p[1] is PyExc ? p[1] as PyExc : pyExceptionOf(p.size > 1 and p[1] != null ? pyCall1(first, p[1]) : first)
+      } else {
+        e = pyExceptionOf(first)
+      }
+      g.throwInto(e)
+    }
+    "close" -> { g.close(); null }
+    else -> __pyCommonMethod(g, name, a)
+  }
+}
+
+internal fun __pyExcMethod(e : PyExc, name : string, a : PyArgs) : any? {
+  return when (name) {
+    "with_traceback" -> e
+    "add_note" -> {
+      val note = a.pos[0]
+      if (!(note is string)) { throw pyTypeError("note must be a str, not '${pyTypeName(note)}'") }
+      var notes = e.dict!!.get("__notes__", pyUnbound)
+      if (notes === pyUnbound) {
+        notes = pyNewList([])
+        e.dict!!.set("__notes__", notes)
+      }
+      (notes as open List<any?>).add(note)
+      null
+    }
+    "__str__" -> pyExcStr(e)
+    "__repr__" -> pyExcRepr(e)
+    "__reduce__" -> PyTuple([e.cls, e.args])
+    "__init__" -> {
+      e.args = PyTuple(a.pos)
+      null
+    }
+    else -> __pyCommonMethod(e, name, a)
+  }
+}
+
+// ---- bytes ----
+
+internal fun __pyBytesMethod(b : Bytes, name : string, a : PyArgs) : any? {
+  val p = a.pos
+  return when (name) {
+    "decode" -> pyDecode(b, p.isNotEmpty() ? p[0] as string : a.get("encoding", "utf-8") as string,
+                         p.size > 1 ? p[1] as string : a.get("errors", "strict") as string)
+    "hex" -> {
+      val sb = StringBuilder()
+      for i in 0..<b.size { sb.append(pyHex(b[i], 2)) }
+      sb.toString()
+    }
+    "upper", "lower" -> {
+      val out = Bytes(b.size)
+      for i in 0..<b.size {
+        var v : int = b[i]
+        if (name == "upper" and v >= 97 and v <= 122) { v -= 32 }
+        if (name == "lower" and v >= 65 and v <= 90) { v += 32 }
+        out[i] = v.toByte()
+      }
+      out
+    }
+    "startswith", "endswith", "find", "count", "index", "replace", "split", "strip", "lstrip", "rstrip", "join", "isdigit", "isalpha" -> {
+      // As the text of its bytes, one character each.
+      val text = pyBytesText(b)
+      val args = p.map { it is Bytes ? pyBytesText(it as Bytes) : it is PyTuple ? PyTuple((it as PyTuple).items.map { x -> x is Bytes ? pyBytesText(x as Bytes) : x }) : it is List<any?> ? (it as List<any?>).map { x -> x is Bytes ? pyBytesText(x as Bytes) : x } : it }
+      val r = __pyStrMethod(text, name, PyArgs(args, null, name + "()"))
+      when (r) {
+        is string -> pyBytesOfLatin1(r as string)
+        is List<any?> -> (r as List<any?>).map { pyBytesOfLatin1(it as string) }.toOpenList()
+        else -> r
+      }
+    }
+    else -> __pyCommonMethod(b, name, a)
+  }
+}
+
+// str.upper(): what WinterWolf's upper gives, with Python's full mappings for the characters
+// that become more than one (ß to SS, the ligatures).
+fun pyUpper(s : string) : string {
+  val u = s.upper()
+  var plain = true
+  for c in u {
+    val cp = pyOrd(c)
+    if (cp == 0xDF or cp == 0x149 or (cp >= 0xFB00 and cp <= 0xFB06)) { plain = false; break }
+  }
+  if (plain) { return u }
+  val sb = StringBuilder()
+  for c in u {
+    when (pyOrd(c)) {
+      0xDF -> sb.append("SS")
+      0x149 -> sb.append("\u{2BC}N")
+      0xFB00 -> sb.append("FF")
+      0xFB01 -> sb.append("FI")
+      0xFB02 -> sb.append("FL")
+      0xFB03 -> sb.append("FFI")
+      0xFB04 -> sb.append("FFL")
+      0xFB05, 0xFB06 -> sb.append("ST")
+      else -> sb.append(c)
+    }
+  }
+  return sb.toString()
+}

@@ -1,0 +1,740 @@
+import Snippy.Text.*
+// async and await (the Snippy plan, question 2: all of the language, async too): coroutines are
+// generators (Iter.ww) that give out what they wait for; asyncio's core is an event loop that
+// runs tasks as CPython's does (callbacks in the order they are made ready, timers by their
+// time), with futures, sleep, gather, wait_for, queues, events, locks and semaphores.
+
+// ---- Objects of this library's with methods of their own ----
+
+// An object this library makes for Snippy (an asyncio queue, a lock...): its type, its methods
+// and attributes.
+abstract class PyNative : PyIdentified() {
+  abstract fun pyType() : PyType
+  abstract fun call(name : string, a : PyArgs) : any?
+  fun attr(name : string) : any? => pyUnbound
+}
+
+// The type of such objects: named, with its methods listed, made with `construct`.
+fun pyNativeType(name : string, module : string, methods : List<string>, construct : ((PyType, List<any?>, List<string>?) -> any?)?) : PyType {
+  val t = PyType(name, name, module)
+  t.builtin = true
+  t.bases = [pyObjectType]
+  t.mro = [t, pyObjectType]
+  for m in methods { t.dict[m] = PyMethodDescriptor(t, m) }
+  t.construct = construct
+  return t
+}
+
+// ---- Futures and tasks ----
+
+lazy val pyCancelledErrorType : PyType = __pyExc("CancelledError", pyBaseExceptionType).also { it.module = "asyncio" }
+lazy val pyInvalidStateErrorType : PyType = __pyExc("InvalidStateError", pyExceptionType).also { it.module = "asyncio" }
+
+internal lazy val __pyFutureType : PyType = pyNativeType("Future", "asyncio",
+  ["done", "result", "exception", "set_result", "set_exception", "cancel", "cancelled", "add_done_callback", "__await__"],
+  { t, args, kw -> PyFuture(__pyRunningLoop()) })
+internal lazy val __pyTaskType : PyType = pyNativeType("Task", "asyncio",
+  ["done", "result", "exception", "cancel", "cancelled", "add_done_callback", "get_name", "__await__"], null)
+
+class PyFuture(val loop : PyLoop) : PyNative() {
+  var state = 0   // 0 pending, 1 done, 2 cancelled
+  var value : any? = null
+  var error : PyExc? = null
+  val callbacks : open List<any?> = []
+
+  override fun pyType() : PyType => __pyFutureType
+  fun done() : bool => state != 0
+
+  fun setResult(v : any?) {
+    if (state != 0) { throw pyError(pyInvalidStateErrorType, "invalid state") }
+    value = v
+    state = 1
+    schedule()
+  }
+
+  fun setException(e : PyExc) {
+    if (state != 0) { throw pyError(pyInvalidStateErrorType, "invalid state") }
+    error = e
+    state = 1
+    schedule()
+  }
+
+  fun cancel() : bool {
+    if (state != 0) { return false }
+    state = 2
+    schedule()
+    return true
+  }
+
+  // Its callbacks made ready, in the order they were added.
+  fun schedule() {
+    val cbs = callbacks.toList()
+    callbacks.clear()
+    for cb in cbs {
+      val me = this
+      loop.callSoon({ -> __pyRunCallback(cb, me) })
+    }
+  }
+
+  fun addDone(cb : any?) {
+    if (state != 0) {
+      val me = this
+      loop.callSoon({ -> __pyRunCallback(cb, me) })
+    } else {
+      callbacks.add(cb)
+    }
+  }
+
+  // What awaiting it gives: its result, or its exception raised.
+  fun outcome() : any? {
+    if (state == 2) { throw PyError(pyNewException(pyCancelledErrorType, [])) }
+    if (state == 0) { throw pyError(pyInvalidStateErrorType, "Result is not ready.") }
+    val e = error
+    if (e != null) { throw pyThrowable(e!!) }
+    return value
+  }
+
+  override fun call(name : string, a : PyArgs) : any? {
+    return when (name) {
+      "done" -> done()
+      "cancelled" -> state == 2
+      "result" -> outcome()
+      "exception" -> {
+        if (state == 2) { throw PyError(pyNewException(pyCancelledErrorType, [])) }
+        error
+      }
+      "set_result" -> { setResult(a.pos[0]); null }
+      "set_exception" -> { setException(pyExceptionOf(a.pos[0])); null }
+      "cancel" -> cancel()
+      "add_done_callback" -> { addDone(a.pos[0]); null }
+      "get_name" -> this is PyTask ? (this as PyTask).name : null
+      "__await__" -> PyAwaitFuture(this)
+      else -> throw pyAttributeError("'${pyTypeName(this)}' object has no attribute '$name'", this, name)
+    }
+  }
+}
+
+internal fun __pyRunCallback(cb : any?, f : PyFuture) {
+  if (cb is PyTask) {
+    (cb as PyTask).wakeup()
+  } else {
+    pyCall1(cb, f)
+  }
+}
+
+// A future's __await__: the iterator that gives the future out until it is done.
+class PyAwaitFuture(val future : PyFuture) : PyIterator() {
+  var given = false
+  override fun next() : any? {
+    if (!future.done() and !given) {
+      given = true
+      return future
+    }
+    return pyEnd
+  }
+}
+
+// A coroutine run by the loop: each step runs it to what it waits for next.
+class PyTask(val coro : PyGenerator, loop : PyLoop, val name : string) : PyFuture(loop) {
+  var waiting : PyFuture? = null
+  var mustCancel = false
+
+  override fun pyType() : PyType => __pyTaskType
+
+  fun step() {
+    if (done()) { return }
+    var thrown : PyExc? = null
+    if (mustCancel) {
+      mustCancel = false
+      thrown = pyNewException(pyCancelledErrorType, [])
+    }
+    val previous = loop.current
+    loop.current = this
+    var r : any? = null
+    try {
+      if (thrown != null) {
+        if (coro.state == 0) {
+          coro.state = 3
+          throw pyThrowable(thrown!!)
+        }
+        coro.throwIn = thrown
+      }
+      r = coro.resume(null)
+    } catch (t : Throwable) {
+      loop.current = previous
+      val e = pyCaught(t)
+      if (e.cls.isSubtype(pyCancelledErrorType)) {
+        super.cancel()
+      } else {
+        setException(e)
+      }
+      return
+    }
+    loop.current = previous
+    if (r === pyEnd) {
+      setResult(coro.result)
+      return
+    }
+    if (r is PyFuture) {
+      val f = r as PyFuture
+      waiting = f
+      f.addDone(this)
+      if (mustCancel and f.cancel()) { mustCancel = false }
+      return
+    }
+    if (r == null) {
+      val me = this
+      loop.callSoon({ -> me.step() })
+      return
+    }
+    val me = this
+    val bad = pyRuntimeError("Task got bad yield: ${pyRepr(r)}")
+    loop.callSoon({ ->
+      me.mustCancel = false
+      me.coro.throwIn = bad.exc
+      me.step()
+    })
+  }
+
+  // The future it waited for is done: it goes on.
+  fun wakeup() {
+    waiting = null
+    step()
+  }
+
+  override fun cancel() : bool {
+    if (done()) { return false }
+    val w = waiting
+    if (w != null and w!!.cancel()) { return true }
+    mustCancel = true
+    return true
+  }
+}
+
+// ---- The loop ----
+
+class PyLoop : PyIdentified() {
+  val ready : open List<() -> unit> = []
+  var readyAt = 0
+  // Timers: when each is due, in the order they were made where two are due together.
+  val timers : open List<PyTimer> = []
+  var timerSeq = 0
+  var current : PyTask? = null
+  val tasks : open List<PyTask> = []
+  val start = __epochNanoseconds()
+
+  fun time() : float => (__epochNanoseconds() - start).toFloat() / 1.0e9
+
+  fun callSoon(cb : () -> unit) {
+    ready.add(cb)
+  }
+
+  fun callLater(delay : float, cb : () -> unit) : PyTimer {
+    timerSeq += 1
+    val t = PyTimer(time() + delay, timerSeq, cb)
+    var i = timers.size
+    while (i > 0 and (timers[i - 1].due > t.due or (timers[i - 1].due == t.due and timers[i - 1].seq > t.seq))) { i -= 1 }
+    timers.add(i, t)
+    return t
+  }
+
+  // One round, as CPython's _run_once: wait for the next timer if nothing is ready, make the
+  // timers due ready, then run what was ready when the round began.
+  fun runOnce() {
+    while (timers.isNotEmpty() and timers[0].cancelled) { timers.removeAt(0) }
+    if (readyAt >= ready.size and timers.isNotEmpty()) {
+      val wait = timers[0].due - time()
+      if (wait > 0.0) { __thread.sleep(Math.ceil(wait * 1000.0)) }
+    }
+    val now = time()
+    while (timers.isNotEmpty() and (timers[0].cancelled or timers[0].due <= now + 0.001)) {
+      val t = timers.removeAt(0)
+      if (!t.cancelled) { ready.add(t.callback) }
+    }
+    val todo = ready.size
+    while (readyAt < todo) {
+      val cb = ready[readyAt]
+      readyAt += 1
+      cb()
+    }
+    if (readyAt > 1000 and readyAt == ready.size) {
+      ready.clear()
+      readyAt = 0
+    }
+  }
+
+  fun runUntilComplete(f : PyFuture) {
+    while (!f.done()) {
+      if (readyAt >= ready.size and timers.isEmpty()) { throw pyRuntimeError("Event loop stopped before Future completed.") }
+      runOnce()
+    }
+  }
+
+  fun createTask(coro : any?, name : any?) : PyTask {
+    if (!(coro is PyGenerator) or (coro as PyGenerator).kind != 1) {
+      throw pyTypeError("a coroutine was expected, got ${pyRepr(coro)}")
+    }
+    val t = PyTask(coro as PyGenerator, this, name == null ? "Task-${tasks.size + 1}" : pyStr(name))
+    tasks.add(t)
+    callSoon({ -> t.step() })
+    return t
+  }
+}
+
+class PyTimer(val due : float, val seq : int, val callback : () -> unit) : PyIdentified() {
+  var cancelled = false
+}
+
+internal var __pyLoop : PyLoop? = null
+
+internal fun __pyRunningLoop() : PyLoop {
+  val l = __pyLoop
+  if (l == null) { throw pyRuntimeError("no running event loop") }
+  return l!!
+}
+
+// An awaitable as a future of the loop: a coroutine made a task.
+fun pyEnsureFuture(x : any?) : PyFuture {
+  if (x is PyFuture) { return x as PyFuture }
+  if (x is PyGenerator and (x as PyGenerator).kind == 1) { return __pyRunningLoop().createTask(x, null) }
+  throw pyTypeError("An asyncio.Future, a coroutine or an awaitable is required")
+}
+
+// await on a future: given out until it is done, then its outcome.
+suspend fun pyAwaitFuture(g : any?, f : PyFuture) : any? {
+  if (!f.done()) { pyYield(g, f) }
+  return f.outcome()
+}
+
+// ---- async for and async with ----
+
+fun pyAIter(x : any?) : any? {
+  val m = pyTypeOf(x).lookup("__aiter__")
+  if (m === pyUnbound and !(x is PyGenerator and (x as PyGenerator).kind == 2)) {
+    throw pyTypeError("'async for' requires an object with __aiter__ method, got ${pyTypeName(x)}")
+  }
+  return pyCallM0(x, "__aiter__")
+}
+
+// The next item of an async iterator, awaited; pyEnd at StopAsyncIteration.
+suspend fun pyANext(g : any?, it : any?) : any? {
+  try {
+    return pyAwait(g, pyCallM0(it, "__anext__"))
+  } catch (e : PyError) {
+    if (e.exc.cls.isSubtype(pyStopAsyncIterationType)) { return pyEnd }
+    throw e
+  }
+}
+
+fun pyACtxExit(m : any?) : any? {
+  val t = pyTypeOf(m)
+  val exit = t.lookup("__aexit__")
+  if (exit === pyUnbound) {
+    throw pyTypeError("'${t.name}' object does not support the asynchronous context manager protocol (missed __aexit__ method)")
+  }
+  if (t.lookup("__aenter__") === pyUnbound) {
+    throw pyTypeError("'${t.name}' object does not support the asynchronous context manager protocol (missed __aenter__ method)")
+  }
+  return pyBindDescriptor(exit, m, t)
+}
+
+fun pyACtxEnter(m : any?) : any? => pyCallM0(m, "__aenter__")
+
+// ---- Async generators ----
+
+// A value an async generator yields, told apart from what its awaits give out.
+class PyAGValue(val value : any?)
+
+suspend fun pyAYield(g : any?, v : any?) : any? => pyYield(g, PyAGValue(v))
+
+// What __anext__ (or asend, athrow) of an async generator gives: an awaitable that runs it to
+// its next value.
+class PyANextAwaitable(val agen : PyGenerator, val send : any?, val thrown : PyExc?) : PyIdentified()
+
+suspend fun pyAwaitANext(g : any?, a : PyANextAwaitable) : any? {
+  val agen = a.agen
+  var send = a.send
+  if (a.thrown != null) {
+    if (agen.state == 0 or agen.state == 3) {
+      agen.state = 3
+      throw pyThrowable(a.thrown!!)
+    }
+    agen.throwIn = a.thrown
+  }
+  while (true) {
+    if (agen.state == 3) { throw PyError(pyNewException(pyStopAsyncIterationType, [])) }
+    val r = agen.resume(send)
+    if (r === pyEnd) { throw PyError(pyNewException(pyStopAsyncIterationType, [])) }
+    if (r is PyAGValue) { return (r as PyAGValue).value }
+    // What an await inside it gives out: passed up to the loop.
+    send = pyYield(g, r)
+  }
+  return null
+}
+
+// ---- await ----
+
+// await x: a coroutine run to its end, a future waited for, an object's __await__ gone through.
+suspend fun pyAwait(g : any?, x : any?) : any? {
+  if (x is PyGenerator and (x as PyGenerator).kind == 1) { return pyYieldFrom(g, x) }
+  if (x is PyFuture) { return pyAwaitFuture(g, x as PyFuture) }
+  if (x is PyANextAwaitable) { return pyAwaitANext(g, x as PyANextAwaitable) }
+  if (x is PyObject) {
+    val m = (x as PyObject).cls.lookup("__await__")
+    if (m !== pyUnbound) { return pyYieldFrom(g, __pyCall1Special(m, x)) }
+  }
+  throw pyTypeError("'${pyTypeName(x)}' object can't be awaited")
+}
+
+// ---- The asyncio module ----
+
+internal fun __pyCoroSpec(name : string) : PySpec => PySpec(name, name, "asyncio", [], 0, 0, 0, false, false, 0, 2)
+
+// A coroutine of this library's, its body given.
+fun pyNativeCoroutine(name : string, body : suspend (PyGenerator) -> any?) : PyGenerator => PyGenerator(__pyCoroSpec(name), 1, body)
+
+fun pyAsyncioModule() : PyModule {
+  val values : open Map<string, any?> = {:}
+  values["run"] = __pyB("run") { a ->
+    a.only(["debug"])
+    val coro = a.pos[0]
+    if (__pyLoop != null) { throw pyRuntimeError("asyncio.run() cannot be called from a running event loop") }
+    if (!(coro is PyGenerator) or (coro as PyGenerator).kind != 1) { throw pyValueError("a coroutine was expected, got ${pyRepr(coro)}") }
+    val loop = PyLoop()
+    __pyLoop = loop
+    try {
+      val main = loop.createTask(coro, null)
+      loop.runUntilComplete(main)
+      // What is still running is cancelled, and given the chance to end.
+      val left = loop.tasks.filter { !it.done() }
+      for t in left { t.cancel() }
+      var rounds = 0
+      while (left.any { !it.done() } and rounds < 100) {
+        loop.runOnce()
+        rounds += 1
+      }
+      main.outcome()
+    } finally {
+      __pyLoop = null
+    }
+  }
+  values["sleep"] = __pyB("sleep") { a ->
+    val delay = pyToFloat(a.pos.isNotEmpty() ? a.pos[0] : a.get("delay", 0))
+    val result = a.pos.size > 1 ? a.pos[1] : a.get("result", null)
+    pyNativeCoroutine("sleep", { g ->
+      if (delay <= 0.0) {
+        pyYield(g, null)
+        result
+      } else {
+        val loop = __pyRunningLoop()
+        val f = PyFuture(loop)
+        val timer = loop.callLater(delay, { -> if (!f.done()) { f.setResult(result) } })
+        try {
+          pyAwaitFuture(g, f)
+        } finally {
+          timer.cancelled = true
+        }
+      }
+    })
+  }
+  values["create_task"] = __pyB("create_task") { a -> __pyRunningLoop().createTask(a.pos[0], a.get("name", null)) }
+  values["ensure_future"] = __pyB("ensure_future") { a -> pyEnsureFuture(a.pos[0]) }
+  values["gather"] = __pyB("gather") { a ->
+    a.only(["return_exceptions"])
+    val returnExceptions = pyTruth(a.get("return_exceptions", false))
+    val loop = __pyRunningLoop()
+    val children = a.pos.map { pyEnsureFuture(it) }
+    val outer = PyFuture(loop)
+    if (children.isEmpty()) {
+      outer.setResult(pyNewList([]))
+    } else {
+      var left = children.size
+      for child in children {
+        child.addDone(PyBuiltin("_done", { args, kw ->
+          val c = args[0] as PyFuture
+          if (!outer.done()) {
+            if (!returnExceptions and c.state == 2) {
+              outer.setException(pyNewException(pyCancelledErrorType, []))
+            } else if (!returnExceptions and c.error != null) {
+              outer.setException(c.error!!)
+            } else {
+              left -= 1
+              if (left == 0) {
+                val results : open List<any?> = []
+                for ch in children {
+                  results.add(ch.state == 2 ? pyNewException(pyCancelledErrorType, []) : ch.error != null ? ch.error : ch.value)
+                }
+                outer.setResult(results)
+              }
+            }
+          }
+          null
+        }))
+      }
+    }
+    outer
+  }
+  values["wait_for"] = __pyB("wait_for") { a ->
+    val aw = a.pos[0]
+    val timeout = a.pos.size > 1 ? a.pos[1] : a.get("timeout", null)
+    pyNativeCoroutine("wait_for", { g ->
+      val loop = __pyRunningLoop()
+      val inner = pyEnsureFuture(aw)
+      if (timeout == null) {
+        pyAwaitFuture(g, inner)
+      } else {
+        var timedOut = false
+        val timer = loop.callLater(pyToFloat(timeout), { ->
+          if (!inner.done()) {
+            timedOut = true
+            inner.cancel()
+          }
+        })
+        try {
+          if (!inner.done()) { pyYield(g, inner) }
+          if (timedOut and inner.state == 2) { throw pyError(pyTimeoutErrorType, "") }
+          inner.outcome()
+        } finally {
+          timer.cancelled = true
+        }
+      }
+    })
+  }
+  values["get_running_loop"] = __pyB("get_running_loop") { a -> PyLoopObject(__pyRunningLoop()) }
+  values["get_event_loop"] = __pyB("get_event_loop") { a -> PyLoopObject(__pyRunningLoop()) }
+  values["current_task"] = __pyB("current_task") { a -> __pyRunningLoop().current }
+  values["all_tasks"] = __pyB("all_tasks") { a ->
+    val s = PySet(false)
+    for t in __pyRunningLoop().tasks { if (!t.done()) { s.add(t) } }
+    s
+  }
+  values["iscoroutine"] = __pyB("iscoroutine") { a -> a.pos[0] is PyGenerator and (a.pos[0] as PyGenerator).kind == 1 }
+  values["iscoroutinefunction"] = __pyB("iscoroutinefunction") { a -> a.pos[0] is PyFunction and ((a.pos[0] as PyFunction).spec.flags & 2) != 0 }
+  values["Future"] = __pyFutureType
+  values["Task"] = __pyTaskType
+  values["Queue"] = __pyQueueType
+  values["Event"] = __pyEventType
+  values["Lock"] = __pyLockType
+  values["Semaphore"] = __pySemaphoreType
+  values["CancelledError"] = pyCancelledErrorType
+  values["TimeoutError"] = pyTimeoutErrorType
+  values["InvalidStateError"] = pyInvalidStateErrorType
+  values["QueueEmpty"] = __pyQueueEmptyType
+  values["QueueFull"] = __pyQueueFullType
+  return pyNativeModule("asyncio", values)
+}
+
+internal lazy val __pyLoopType : PyType = pyNativeType("_UnixSelectorEventLoop", "asyncio", ["time", "create_future", "create_task", "call_soon", "call_later"], null)
+
+class PyLoopObject(val loop : PyLoop) : PyNative() {
+  override fun pyType() : PyType => __pyLoopType
+  override fun call(name : string, a : PyArgs) : any? {
+    return when (name) {
+      "time" -> loop.time()
+      "create_future" -> PyFuture(loop)
+      "create_task" -> loop.createTask(a.pos[0], a.get("name", null))
+      "call_soon" -> {
+        val f = a.pos[0]
+        val rest = a.pos[1..]
+        loop.callSoon({ -> pyCallV(f, rest, null) })
+        null
+      }
+      "call_later" -> {
+        val f = a.pos[1]
+        val rest = a.pos[2..]
+        loop.callLater(pyToFloat(a.pos[0]), { -> pyCallV(f, rest, null) })
+        null
+      }
+      else -> throw pyAttributeError("'${pyTypeName(this)}' object has no attribute '$name'", this, name)
+    }
+  }
+}
+
+// ---- Queues, events, locks, semaphores ----
+
+internal lazy val __pyQueueEmptyType : PyType = __pyExc("QueueEmpty", pyExceptionType).also { it.module = "asyncio" }
+internal lazy val __pyQueueFullType : PyType = __pyExc("QueueFull", pyExceptionType).also { it.module = "asyncio" }
+
+internal lazy val __pyQueueType : PyType = pyNativeType("Queue", "asyncio",
+  ["put", "get", "put_nowait", "get_nowait", "empty", "full", "qsize", "task_done", "join"],
+  { t, args, kw -> PyQueue(args.isNotEmpty() ? pyIndex(args[0]) : PyArgs(args, kw, "Queue()").get("maxsize", 0).let { pyIndex(it) }) })
+
+class PyQueue(val maxsize : int) : PyNative() {
+  val items : open List<any?> = []
+  val getters : open List<PyFuture> = []
+  val putters : open List<PyFuture> = []
+  var unfinished = 0
+  var finished : PyFuture? = null
+
+  override fun pyType() : PyType => __pyQueueType
+
+  fun full() : bool => maxsize > 0 and items.size >= maxsize
+
+  private fun wakeOne(waiters : open List<PyFuture>) {
+    while (waiters.isNotEmpty()) {
+      val w = waiters.removeAt(0)
+      if (!w.done()) {
+        w.setResult(null)
+        return
+      }
+    }
+  }
+
+  fun putNow(item : any?) {
+    if (full()) { throw PyError(pyNewException(__pyQueueFullType, [])) }
+    items.add(item)
+    unfinished += 1
+    wakeOne(getters)
+  }
+
+  fun getNow() : any? {
+    if (items.isEmpty()) { throw PyError(pyNewException(__pyQueueEmptyType, [])) }
+    val item = items.removeAt(0)
+    wakeOne(putters)
+    return item
+  }
+
+  override fun call(name : string, a : PyArgs) : any? {
+    return when (name) {
+      "put_nowait" -> { putNow(a.pos[0]); null }
+      "get_nowait" -> getNow()
+      "empty" -> items.isEmpty()
+      "full" -> full()
+      "qsize" -> items.size
+      "put" -> {
+        val item = a.pos[0]
+        val q = this
+        pyNativeCoroutine("put", { g ->
+          while (q.full()) {
+            val f = PyFuture(__pyRunningLoop())
+            q.putters.add(f)
+            pyAwaitFuture(g, f)
+          }
+          q.putNow(item)
+          null
+        })
+      }
+      "get" -> {
+        val q = this
+        pyNativeCoroutine("get", { g ->
+          while (q.items.isEmpty()) {
+            val f = PyFuture(__pyRunningLoop())
+            q.getters.add(f)
+            pyAwaitFuture(g, f)
+          }
+          q.getNow()
+        })
+      }
+      "task_done" -> {
+        if (unfinished <= 0) { throw pyValueError("task_done() called too many times") }
+        unfinished -= 1
+        if (unfinished == 0 and finished != null) {
+          finished!!.setResult(null)
+          finished = null
+        }
+        null
+      }
+      "join" -> {
+        val q = this
+        pyNativeCoroutine("join", { g ->
+          if (q.unfinished > 0) {
+            if (q.finished == null) { q.finished = PyFuture(__pyRunningLoop()) }
+            pyAwaitFuture(g, q.finished!!)
+          }
+          null
+        })
+      }
+      else -> throw pyAttributeError("'Queue' object has no attribute '$name'", this, name)
+    }
+  }
+}
+
+internal lazy val __pyEventType : PyType = pyNativeType("Event", "asyncio", ["set", "clear", "is_set", "wait"], { t, args, kw -> PyEvent() })
+
+class PyEvent : PyNative() {
+  var flag = false
+  val waiters : open List<PyFuture> = []
+  override fun pyType() : PyType => __pyEventType
+  override fun call(name : string, a : PyArgs) : any? {
+    return when (name) {
+      "is_set" -> flag
+      "clear" -> { flag = false; null }
+      "set" -> {
+        if (!flag) {
+          flag = true
+          for w in waiters { if (!w.done()) { w.setResult(true) } }
+          waiters.clear()
+        }
+        null
+      }
+      "wait" -> {
+        val e = this
+        pyNativeCoroutine("wait", { g ->
+          if (e.flag) { true } else {
+            val f = PyFuture(__pyRunningLoop())
+            e.waiters.add(f)
+            pyAwaitFuture(g, f)
+          }
+        })
+      }
+      else -> throw pyAttributeError("'Event' object has no attribute '$name'", this, name)
+    }
+  }
+}
+
+internal lazy val __pyLockType : PyType = pyNativeType("Lock", "asyncio", ["acquire", "release", "locked", "__aenter__", "__aexit__"], { t, args, kw -> PyLockObj(1) })
+internal lazy val __pySemaphoreType : PyType = pyNativeType("Semaphore", "asyncio", ["acquire", "release", "locked", "__aenter__", "__aexit__"],
+  { t, args, kw -> PyLockObj(args.isEmpty() ? 1 : pyIndex(args[0])) })
+
+// A lock (one holder) or semaphore (`count` holders): its waiters in the order they came.
+class PyLockObj(var count : int) : PyNative() {
+  val isLock : bool = count == 1
+  val waiters : open List<PyFuture> = []
+  override fun pyType() : PyType => isLock ? __pyLockType : __pySemaphoreType
+
+  fun acquireCoro() : any? {
+    val l = this
+    return pyNativeCoroutine("acquire", { g ->
+      while (l.count <= 0 or l.waiters.any { !it.done() and it.value != true }) {
+        if (l.count > 0 and l.waiters.isEmpty()) { break }
+        val f = PyFuture(__pyRunningLoop())
+        l.waiters.add(f)
+        pyAwaitFuture(g, f)
+        l.waiters.remove(f)
+        if (l.count > 0) { break }
+      }
+      l.count -= 1
+      true
+    })
+  }
+
+  fun releaseNow() {
+    count += 1
+    for w in waiters {
+      if (!w.done()) {
+        w.setResult(true)
+        break
+      }
+    }
+  }
+
+  override fun call(name : string, a : PyArgs) : any? {
+    return when (name) {
+      "acquire", "__aenter__" -> acquireCoro()
+      "release" -> {
+        if (isLock and count >= 1) { throw pyRuntimeError("Lock is not acquired.") }
+        releaseNow()
+        null
+      }
+      "__aexit__" -> {
+        val l = this
+        pyNativeCoroutine("__aexit__", { g ->
+          l.releaseNow()
+          null
+        })
+      }
+      "locked" -> count <= 0
+      else -> throw pyAttributeError("'${pyTypeName(this)}' object has no attribute '$name'", this, name)
+    }
+  }
+}

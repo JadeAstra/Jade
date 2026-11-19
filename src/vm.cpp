@@ -1798,6 +1798,32 @@ Value VM::stackHere() {
     return traceList(*this, captureTraceFrom(top));
 }
 
+Value VM::snippyFrames() {
+    auto snippy = [](const std::string& source) {
+        auto ends = [&](const char* tail) {
+            const size_t n = std::strlen(tail);
+            return source.size() >= n && source.compare(source.size() - n, n, tail) == 0;
+        };
+        return ends(".py") || ends(".snippy");
+    };
+    std::vector<std::string> trace;
+    for (int i = frameCount_ - 1; i >= 0; i--) {
+        const CallFrame& f = frames_[static_cast<size_t>(i)];
+        const FunctionProto* p = f.closure->proto;
+        size_t offset = static_cast<size_t>(f.ip - p->run.data());
+        if (offset > 0) offset--;
+        int at = p->runLines[offset];
+        while (at >= kInlinedLine && static_cast<size_t>(at - kInlinedLine) < p->inlined.size()) {
+            const FunctionProto::InlinedCall& call = p->inlined[static_cast<size_t>(at - kInlinedLine)];
+            if (snippy(call.source)) trace.push_back("at " + call.name + " (" + call.source + ":" + std::to_string(call.line) + ")");
+            at = call.callLine;
+        }
+        if (!snippy(p->source)) continue;
+        trace.push_back("at " + p->name + " (" + p->source + ":" + std::to_string(at) + ")");
+    }
+    return traceList(*this, trace);
+}
+
 // Transfers control to the innermost catch block, if it belongs to the run() that is asking.
 bool VM::tryHandle(Value exception, int baseFrame) {
     if (handlers_.empty()) return false;

@@ -1,0 +1,17 @@
+got 1
+caught from generator
+a
+generator finally
+after break
+returned ['inner try', 'inner finally', 'outer except', 'outer finally']
+RuntimeError from __exit__ context: ValueError('original')
+TypeError('second') ValueError('first')
+[0, '.', 'err1', '.', 2, '.', 'err3', '.', 4, '.']
+received 1
+handled in generator 'thrown'
+received 2
+finally after return value computed
+value
+KeyError('b') True
+ZeroDivisionError
+finally on break

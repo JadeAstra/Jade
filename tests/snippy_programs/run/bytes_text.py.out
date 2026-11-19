@@ -1,0 +1,15 @@
+tab	here new
+line back\slash quote"s single's b'bell\x07' Aé😀 A
+1 2 raw\t RAW\n ab
+'\x00\x1f\x7f\x80ÿ' '\u2028\xad\u200b' 'é ñ 中 😀' 'ok'
+b'hello' 104 b'el' 111 5 [104, 101, 108, 108, 111] b'hello world' b'hellohello' True True b'HELLO' hello
+b'Hi' b'\x00\x00\x00' b'\xc3\xa9' b'\xc3\xa9' b'\xe9' é
+True True True b'\x00\n\t\'"' 78 fromhex
+[b'a', b'b', b'c'] b'x' True 2 2 b'a-b'
+bytearray(b'Abc') b'Abc' 3 98
+b'a\xf0\x9f\x98\x80b' 6 b'ascii' b'?n?c?d?' b'ncd'
+UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 0: ordinal not in range(128)
+UnicodeDecodeError: 'ascii' codec can't decode byte 0xff in position 0: ordinal not in range(128)
+b'bytes' b'x' b'y' 256 b'\x00\x01' b'\xff'
+ÜNÏCÖDÉ TEXT ünïcödé text Ünïcödé Text ünïcödé text 12 Ü False b'\xc3\x9cn\xc3'
+named escapes in 5.3 True True True ['x\u200by']

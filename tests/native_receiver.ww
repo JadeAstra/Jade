@@ -1,0 +1,28 @@
+// A whole function's region leaving at a field read that missed (2026-11-19, found by Snippy's
+// prog_matrix.py): `direct`, its region made for objects of FnA, is called on an FnB; the read of
+// `spec` misses there, and the VM, reading the field again, must find the receiver (`this`,
+// pushed as a copy never written) in the slot it reads, not what the slot held before.
+class Spec(val positional : int)
+abstract class Fn(val spec : Spec) {
+  var defaults : List<any?>? = null
+  fun direct(count : int) : bool {
+    if (count == spec.positional) { return true }
+    val d = defaults
+    return d != null and spec.positional - count <= d!!.size
+  }
+}
+class FnA(spec : Spec) : Fn(spec)
+class FnB(spec : Spec) : Fn(spec)
+fun bind(f : Fn, args : List<any?>) : int {
+  if (f.direct(args.size)) { return 1 }
+  return 0
+}
+val a = FnA(Spec(3))
+a.defaults = [1]
+val b = FnB(Spec(2))
+var t = 0
+for i in 0..<5000 {
+  t += bind(a, [0, i])
+  t += bind(b, [0, [i]])
+}
+print(t)   // expect: 10000

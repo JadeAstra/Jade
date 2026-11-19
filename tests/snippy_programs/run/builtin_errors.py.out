@@ -1,0 +1,62 @@
+1 / 0 -> ZeroDivisionError: division by zero
+1 // 0 -> ZeroDivisionError: division by zero
+1 % 0 -> ZeroDivisionError: division by zero
+1.0 / 0 -> ZeroDivisionError: division by zero
+divmod(1, 0) -> ZeroDivisionError: division by zero
+[][1] -> IndexError: list index out of range
+()[0] -> IndexError: tuple index out of range
+'abc'[5] -> IndexError: string index out of range
+{}['k'] -> KeyError: 'k'
+{}[(1, 2)] -> KeyError: (1, 2)
+1 + 'a' -> TypeError: unsupported operand type(s) for +: 'int' and 'str'
+'a' + 1 -> TypeError: can only concatenate str (not "int") to str
+[] + () -> TypeError: can only concatenate list (not "tuple") to list
+'a' * 'b' -> TypeError: can't multiply sequence by non-int of type 'str'
+-'a' -> TypeError: bad operand type for unary -: 'str'
+1 < 'a' -> TypeError: '<' not supported between instances of 'int' and 'str'
+None + 1 -> TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
+len(5) -> TypeError: object of type 'int' has no len()
+5() -> TypeError: 'int' object is not callable
+None.x -> AttributeError: 'NoneType' object has no attribute 'x'
+'a'.nope -> AttributeError: 'str' object has no attribute 'nope'
+(1).real = 2 -> AttributeError: attribute 'real' of 'int' objects is not writable
+int('x') -> ValueError: invalid literal for int() with base 10: 'x'
+int('1.5') -> ValueError: invalid literal for int() with base 10: '1.5'
+float('x') -> ValueError: could not convert string to float: 'x'
+int(None) -> TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
+[1, 2].index(3) -> ValueError: list.index(x): x not in list
+[].pop() -> IndexError: pop from empty list
+[1].remove(2) -> ValueError: list.remove(x): x not in list
+'abc'.index('z') -> ValueError: substring not found
+iter(5) -> TypeError: 'int' object is not iterable
+next(iter([])) -> StopIteration: 
+hash([]) -> TypeError: unhashable type: 'list'
+{[]: 1} -> TypeError: cannot use 'list' as a dict key (unhashable type: 'list')
+set([[1]]) -> TypeError: cannot use 'list' as a set element (unhashable type: 'list')
+'a'[1:2] = 'b' -> AttributeError: 'str' object has no attribute '__setitem__'
+(1, 2)[0] = 5 -> AttributeError: 'tuple' object has no attribute '__setitem__'
+chr(-1) -> ValueError: chr() arg not in range(0x110000)
+ord('ab') -> TypeError: ord() expected a character, but string of length 2 found
+range(1, 2, 0) -> ValueError: range() arg 3 must not be zero
+0.1
+0 ** -1 -> ZeroDivisionError: zero to a negative power
+2.0 ** 10000 -> OverflowError: (34, 'Numerical result out of range')
+max([]) -> ValueError: max() iterable argument is empty
+1 in 5 -> TypeError: argument of type 'int' is not a container or iterable
+5 in 'abc' -> TypeError: 'in <string>' requires string as left operand, not int
+sum(['a']) -> TypeError: unsupported operand type(s) for +: 'int' and 'str'
+sorted([1, 'a']) -> TypeError: '<' not supported between instances of 'str' and 'int'
+isinstance(1, 5) -> TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union
+x = undefined_name -> NameError: name 'undefined_name' is not defined
+'%d' % 'a' -> TypeError: %d format: a real number is required, not str
+'%s %s' % (1,) -> TypeError: not enough arguments for format string
+'{}'.format() -> IndexError: Replacement index 0 out of range for positional args tuple
+f'{1:q}' -> ValueError: Unknown format code 'q' for object of type 'int'
+'abc'.split('') -> ValueError: empty separator
+dict([1, 2]) -> TypeError: object is not iterable
+bytes([300]) -> ValueError: bytes must be in range(0, 256)
+object().x = 1 -> AttributeError: 'object' object has no attribute 'x' and no __dict__ for setting new attributes
+int.x -> AttributeError: type object 'int' has no attribute 'x'
+del {}['a'] -> KeyError: 'a'
+list(5) -> TypeError: 'int' object is not iterable
+a, b = 1, 2, 3 -> NameError: name 'exec_unpack' is not defined

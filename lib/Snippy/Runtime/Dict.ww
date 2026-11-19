@@ -1,0 +1,231 @@
+import Snippy.Text.*
+// Snippy's dict, as Python's: its entries in the order they were added, found by Python's rules (1, 1.0 and
+// True one key; a tuple or an object by its __hash__ and __eq__). Plain keys (str, int, float,
+// None, bool) are found through a WinterWolf map; the others through a map from Python's hash to
+// the entries that have it. A removed entry is a gap until there are as many gaps as entries.
+
+object PyDeletedT
+
+// No entries with a hash, for a lookup that finds none.
+internal val __pyNoChain : open List<int> = []
+
+class PyDict : PyIdentified() {
+  val keys : open List<any?> = []
+  val vals : open List<any?> = []
+  private val plain : open Map<any?, int> = {:}
+  private var hashed : open Map<int, open List<int>>? = null
+  var count = 0
+  // Changed by every entry added or removed, for iterators to notice.
+  var version = 0
+
+  val size : int get() => count
+
+  fun hashCode() : int => identity()
+  op ==(other : any?) : bool => this === other
+  override fun toString() : string => pyRepr(this)
+
+  // A plain key as the WinterWolf map holds it: a bool as its int, as Python's True is 1.
+  private fun plainKey(k : any?) : any? => k is bool ? ((k as bool) ? 1 : 0) : k
+
+  private fun isPlain(k : any?) : bool {
+    if (k is string or k is int or k is bool or k === null) { return true }
+    if (k is float) { return !(k as float).isNaN() }
+    return false
+  }
+
+  // The entry `k` is in, or -1.
+  fun find(k : any?) : int {
+    if (isPlain(k)) {
+      return plain[plainKey(k), default = -1]
+    }
+    val h = pyKeyHash(k, "dict key")
+    val table = hashed
+    if (table == null) { return -1 }
+    val chain = table!![h, default = __pyNoChain]
+    for i in chain {
+      val stored = keys[i]
+      if (pySame(stored, k) or pyEqB(stored, k)) { return i }
+    }
+    return -1
+  }
+
+  fun get(k : any?, otherwise : any?) : any? {
+    val i = find(k)
+    return i < 0 ? otherwise : vals[i]
+  }
+
+  fun has(k : any?) : bool => find(k) >= 0
+
+  fun set(k : any?, v : any?) {
+    if (isPlain(k)) {
+      val pk = plainKey(k)
+      val i = plain[pk, default = -1]
+      if (i >= 0) {
+        vals[i] = v
+        return
+      }
+      plain[pk] = keys.size
+    } else {
+      val h = pyKeyHash(k, "dict key")
+      var table = hashed
+      if (table == null) {
+        table = {:}
+        hashed = table
+      }
+      val chain = table!![h, default = __pyNoChain]
+      if (chain !== __pyNoChain) {
+        for i in chain {
+          val stored = keys[i]
+          if (pySame(stored, k) or pyEqB(stored, k)) {
+            vals[i] = v
+            return
+          }
+        }
+        chain.add(keys.size)
+      } else {
+        table!![h] = [keys.size]
+      }
+    }
+    keys.add(k)
+    vals.add(v)
+    count += 1
+    version += 1
+  }
+
+  // Removes `k`'s entry; whether there was one.
+  fun remove(k : any?) : bool {
+    val i = find(k)
+    if (i < 0) { return false }
+    removeAt(i)
+    return true
+  }
+
+  fun removeAt(i : int) {
+    val k = keys[i]
+    if (isPlain(k)) {
+      plain.remove(plainKey(k))
+    } else {
+      val chain = hashed!![pyHash(k)]!!
+      chain.remove(i)
+      if (chain.isEmpty()) { hashed!!.remove(pyHash(k)) }
+    }
+    keys[i] = PyDeletedT
+    vals[i] = null
+    count -= 1
+    version += 1
+    if (keys.size > 16 and count * 2 < keys.size) { compact() }
+  }
+
+  // The entries closed up, their gaps gone, and found again.
+  fun compact() {
+    val ks : open List<any?> = []
+    val vs : open List<any?> = []
+    for i in 0..<keys.size {
+      if (keys[i] !== PyDeletedT) {
+        ks.add(keys[i])
+        vs.add(vals[i])
+      }
+    }
+    keys.clear()
+    vals.clear()
+    plain.clear()
+    hashed = null
+    count = 0
+    for i in 0..<ks.size { set(ks[i], vs[i]) }
+    version += 1
+  }
+
+  fun clear() {
+    keys.clear()
+    vals.clear()
+    plain.clear()
+    hashed = null
+    count = 0
+    version += 1
+  }
+
+  // Its keys, values and pairs, in order.
+  fun keyList() : List<any?> {
+    val out : open List<any?> = []
+    for k in keys { if (k !== PyDeletedT) { out.add(k) } }
+    return out
+  }
+
+  fun valueList() : List<any?> {
+    val out : open List<any?> = []
+    for i in 0..<keys.size { if (keys[i] !== PyDeletedT) { out.add(vals[i]) } }
+    return out
+  }
+
+  // The entry before `i` that is not a gap, or -1: for popitem and reversed.
+  fun lastBefore(i : int) : int {
+    var j = i - 1
+    while (j >= 0 and keys[j] === PyDeletedT) { j -= 1 }
+    return j
+  }
+
+  fun copy() : PyDict {
+    val d = PyDict()
+    for i in 0..<keys.size { if (keys[i] !== PyDeletedT) { d.set(keys[i], vals[i]) } }
+    return d
+  }
+}
+
+fun pyIsDict(x : any?) : bool => x is PyDict
+
+// A dict standing for a WinterWolf map (or the dict an object of a class made from dict holds).
+fun pyAsDict(x : any?) : PyDict? {
+  if (x is PyDict) { return x as PyDict }
+  if (x is PyObject and (x as PyObject).cls.layout == 3) { return (x as PyObject).value as PyDict }
+  return null
+}
+
+// A dict of a WinterWolf map's entries.
+fun pyDictOfMap(m : Map<any?, any?>) : PyDict {
+  val d = PyDict()
+  for (k, v) in m { d.set(k, v) }
+  return d
+}
+
+// A dict's keys, values or items (`kind` 0, 1, 2), an error if it changes size on the way.
+class PyDictIter(val dict : PyDict, val kind : int) : PyIterator() {
+  var i = 0
+  val size = dict.count
+  val version = dict.version
+  override fun next() : any? {
+    if (dict.count != size) {
+      i = dict.keys.size
+      throw pyRuntimeError("dictionary changed size during iteration")
+    }
+    if (dict.version != version) {
+      i = dict.keys.size
+      throw pyRuntimeError("dictionary keys changed during iteration")
+    }
+    while (i < dict.keys.size) {
+      val k = dict.keys[i]
+      i += 1
+      if (k === PyDeletedT) { continue }
+      return when (kind) {
+        0 -> k
+        1 -> dict.vals[i - 1]
+        else -> PyTuple([k, dict.vals[i - 1]])
+      }
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType(kind == 0 ? "dict_keyiterator" : kind == 1 ? "dict_valueiterator" : "dict_itemiterator")
+}
+
+// Python's hash of a key, its TypeError for an unhashable one said as CPython 3.14 says it
+// (`what` "dict key" or "set element").
+fun pyKeyHash(k : any?, what : string) : int {
+  try {
+    return pyHash(k)
+  } catch (e : PyError) {
+    if (e.exc.cls === pyTypeErrorType) {
+      val text = pyExcStr(e.exc)
+      if (text.startsWith("unhashable type")) { throw pyTypeError("cannot use '" + pyTypeName(k) + "' as a " + what + " (" + text + ")") }
+    }
+    throw e
+  }
+}

@@ -1,0 +1,14 @@
+[2.0, 5.0] [0.5] 3 ['a', 'b']
+5
+False 3 False
+1 2 3
+6
+[1, 2, 3] parenthesized
+None Placeholder ellipsis True
+run as the program
+MIXED_CASE
+1 nonempty empty
+stopped at 4
+([1, 2], {1: 1, 2: 2}) ([1, 2], {1: 1, 2: 2})
+{'double': 14, 'square': 49}
+7.5 33 True [1, 2, 3]

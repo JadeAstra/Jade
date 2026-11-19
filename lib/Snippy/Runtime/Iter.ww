@@ -1,0 +1,548 @@
+import Snippy.Text.*
+// Iteration as Python's: iter() and next() on its values and on objects with __iter__ and
+// __next__; range; unpacking; and generators, each running on a task of its own (as a sequence's
+// block does), set aside at each yield, with send, throw, close and yield from.
+
+// ---- Iterators ----
+
+// An iterator of this library's: next gives pyEnd at the end, and goes on giving it.
+abstract class PyIterator : PyIdentified() {
+  abstract fun next() : any?
+  fun pyType() : PyType => pyIteratorType
+  // What it has left, if known (__length_hint__).
+  fun left() : int => -1
+}
+
+internal fun __pyIterType(name : string) : PyType {
+  val t = __pyIterTypes[name]
+  if (t != null) { return t!! }
+  val made = PyType(name, name, "builtins")
+  made.builtin = true
+  made.bases = [pyObjectType]
+  made.mro = [made, pyObjectType]
+  made.dict["__next__"] = PyMethodDescriptor(made, "__next__")
+  made.dict["__iter__"] = PyMethodDescriptor(made, "__iter__")
+  __pyIterTypes[name] = made
+  return made
+}
+internal val __pyIterTypes : open Map<string, PyType> = {:}
+
+class PyListIter(var list : List<any?>?) : PyIterator() {
+  var i = 0
+  override fun next() : any? {
+    val l = list
+    if (l == null) { return pyEnd }
+    if (i < l!!.size) {
+      i += 1
+      return l!![i - 1]
+    }
+    list = null
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("list_iterator")
+  override fun left() : int => list == null ? 0 : list!!.size - i
+}
+
+class PyReversedListIter(var list : List<any?>?) : PyIterator() {
+  var i = list!!.size - 1
+  override fun next() : any? {
+    val l = list
+    if (l == null) { return pyEnd }
+    if (i >= 0 and i < l!!.size) {
+      i -= 1
+      return l!![i + 1]
+    }
+    list = null
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("list_reverseiterator")
+}
+
+class PyTupleIter(val items : List<any?>) : PyIterator() {
+  var i = 0
+  override fun next() : any? {
+    if (i < items.size) {
+      i += 1
+      return items[i - 1]
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("tuple_iterator")
+  override fun left() : int => items.size - i
+}
+
+class PyStrIter(val s : string) : PyIterator() {
+  var i = 0
+  override fun next() : any? {
+    if (i < s.size) {
+      i += 1
+      return s[i - 1].toString()
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("str_ascii_iterator")
+}
+
+class PyBytesIter(val b : Bytes) : PyIterator() {
+  var i = 0
+  override fun next() : any? {
+    if (i < b.size) {
+      i += 1
+      return b[i - 1]
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("bytes_iterator")
+}
+
+class PyRangeIter(var cur : int, val stop : int, val step : int) : PyIterator() {
+  override fun next() : any? {
+    if (step > 0 ? cur < stop : cur > stop) {
+      val v = cur
+      cur += step
+      return v
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("range_iterator")
+}
+
+// An object's own iterator, asked through __next__.
+class PyObjIter(val obj : any?) : PyIterator() {
+  override fun next() : any? => pyNext(obj)
+}
+
+// An object with __getitem__ but no __iter__: its items from 0 until IndexError.
+class PySeqIter(val obj : any?) : PyIterator() {
+  var i = 0
+  var done = false
+  override fun next() : any? {
+    if (done) { return pyEnd }
+    try {
+      val v = pyGetItem(obj, i)
+      i += 1
+      return v
+    } catch (e : PyError) {
+      if (e.exc.cls.isSubtype(pyIndexErrorType) or e.exc.cls.isSubtype(pyStopIterationType)) {
+        done = true
+        return pyEnd
+      }
+      throw e
+    }
+  }
+}
+
+// iter(f, sentinel): f() until it gives the sentinel.
+class PyCallIter(val f : any?, val sentinel : any?) : PyIterator() {
+  var done = false
+  override fun next() : any? {
+    if (done) { return pyEnd }
+    val v = pyCall0(f)
+    if (pyEqB(v, sentinel)) {
+      done = true
+      return pyEnd
+    }
+    return v
+  }
+  override fun pyType() : PyType => __pyIterType("callable_iterator")
+}
+
+// An iterator made of a function: the builtins' map, filter, zip... (Builtins.ww).
+class PyFnIter(val typeName : string, val step : () -> any?) : PyIterator() {
+  var done = false
+  override fun next() : any? {
+    if (done) { return pyEnd }
+    val v = step()
+    if (v === pyEnd) { done = true }
+    return v
+  }
+  override fun pyType() : PyType => __pyIterType(typeName)
+}
+
+// iter(x).
+fun pyIter(x : any?) : any? {
+  return when (x) {
+    is PyIterator -> x
+    is List<any?> -> PyListIter(x as List<any?>)
+    is string -> PyStrIter(x as string)
+    is PyTuple -> PyTupleIter((x as PyTuple).items)
+    is PyDict -> PyDictIter(x as PyDict, 0)
+    is PySet -> (x as PySet).iterator()
+    is PyRange -> PyRangeIter((x as PyRange).start, (x as PyRange).stop, (x as PyRange).step)
+    is PyDictView -> (x as PyDictView).iterator()
+    is Bytes -> PyBytesIter(x as Bytes)
+    is PyByteArray -> PyBytesIter((x as PyByteArray).bytes)
+    is PyObject -> {
+      val o = x as PyObject
+      val m = o.cls.lookup("__iter__")
+      if (m === null) { throw pyTypeError("'${o.cls.name}' object is not iterable") }
+      if (m !== pyUnbound) {
+        if (m is PyMethodDescriptor and o.cls.layout >= 2) { return pyIter(o.value) }
+        val it = __pyCall1Special(m, x)
+        if (it is PyIterator) { return it }
+        if (!(it is PyObject) or (it as PyObject).cls.lookup("__next__") === pyUnbound) {
+          throw pyTypeError("iter() returned non-iterator of type '${pyTypeName(it)}'")
+        }
+        return it
+      }
+      if (o.cls.lookup("__getitem__") !== pyUnbound) { return PySeqIter(x) }
+      throw pyTypeError("'${o.cls.name}' object is not iterable")
+    }
+    else -> {
+      if (x is PyType) {
+        val meta = pyTypeOf(x)
+        val m = meta.lookup("__iter__")
+        if (m !== pyUnbound and !meta.builtin) { return pyCall1(m, x) }
+      }
+      throw pyTypeError("'${pyTypeName(x)}' object is not iterable")
+    }
+  }
+}
+
+fun pyIterOf(x : any?) : any? => pyIter(x)
+
+// next(it): the next item, or pyEnd.
+fun pyNext(it : any?) : any? {
+  if (it is PyIterator) { return (it as PyIterator).next() }
+  if (it is PyObject) {
+    val m = (it as PyObject).cls.lookup("__next__")
+    if (m === pyUnbound or m == null) { throw pyTypeError("'${pyTypeName(it)}' object is not an iterator") }
+    try {
+      return __pyCall1Special(m, it)
+    } catch (e : PyError) {
+      if (e.exc.cls.isSubtype(pyStopIterationType)) { return pyEnd }
+      throw e
+    }
+  }
+  throw pyTypeError("'${pyTypeName(it)}' object is not an iterator")
+}
+
+// next(it) and next(it, default) as the builtin.
+fun pyNextOf1(it : any?) : any? {
+  if (it is PyGenerator) {
+    val g = it as PyGenerator
+    val v = g.resume(null)
+    if (v === pyEnd) { throw pyStopIteration(g.result) }
+    return v
+  }
+  if (!(it is PyIterator) and !(it is PyObject and (it as PyObject).cls.lookup("__next__") !== pyUnbound)) {
+    throw pyTypeError("'${pyTypeName(it)}' object is not an iterator")
+  }
+  if (it is PyObject) { return __pyCall1Special((it as PyObject).cls.lookup("__next__"), it) }
+  val v = pyNext(it)
+  if (v === pyEnd) { throw pyStopIteration(null) }
+  return v
+}
+fun pyNextOf2(it : any?, otherwise : any?) : any? {
+  if (!(it is PyIterator) and !(it is PyObject and (it as PyObject).cls.lookup("__next__") !== pyUnbound)) {
+    throw pyTypeError("'${pyTypeName(it)}' object is not an iterator")
+  }
+  val v = pyNext(it)
+  return v === pyEnd ? otherwise : v
+}
+
+// The items of an iterable, as a list.
+fun pyIterable(x : any?) : List<any?> {
+  if (x is List<any?>) { return x as List<any?> }
+  if (x is PyTuple) { return (x as PyTuple).items }
+  val out : open List<any?> = []
+  val it = pyIter(x)
+  while (true) {
+    val v = pyNext(it)
+    if (v === pyEnd) { break }
+    out.add(v)
+  }
+  return out
+}
+
+// ---- Unpacking ----
+
+internal fun __pyKnownSize(v : any?) : int {
+  return when (v) {
+    is List<any?> -> (v as List<any?>).size
+    is PyTuple -> (v as PyTuple).items.size
+    is string -> (v as string).size
+    is PyDict -> (v as PyDict).count
+    is PySet -> (v as PySet).size
+    else -> -1
+  }
+}
+
+// a, b = v: exactly `n` items.
+fun pyUnpack(v : any?, n : int) : List<any?> {
+  if (v is PyTuple and (v as PyTuple).items.size == n) { return (v as PyTuple).items }
+  if (v is List<any?> and (v as List<any?>).size == n) { return (v as List<any?>).toList() }
+  val known = __pyKnownSize(v)
+  if (!(v is PyIterator) and !(v is PyObject) and !(v is PyGenerator)) {
+    if (known >= 0 and known > n) { throw pyValueError("too many values to unpack (expected $n, got $known)") }
+  }
+  val it = pyIterSafe(v, "cannot unpack non-iterable ${pyTypeName(v)} object")
+  val out : open List<any?> = []
+  while (out.size < n) {
+    val x = pyNext(it)
+    if (x === pyEnd) { throw pyValueError("not enough values to unpack (expected $n, got ${out.size})") }
+    out.add(x)
+  }
+  if (pyNext(it) !== pyEnd) {
+    throw pyValueError(known >= 0 ? "too many values to unpack (expected $n, got $known)" : "too many values to unpack (expected $n)")
+  }
+  return out
+}
+
+// a, *b, c = v: `before` items, a list of the middle, `after` items.
+fun pyUnpackStar(v : any?, before : int, after : int) : List<any?> {
+  val it = pyIterSafe(v, "cannot unpack non-iterable ${pyTypeName(v)} object")
+  val all : open List<any?> = []
+  while (true) {
+    val x = pyNext(it)
+    if (x === pyEnd) { break }
+    all.add(x)
+  }
+  if (all.size < before + after) {
+    throw pyValueError("not enough values to unpack (expected at least ${before + after}, got ${all.size})")
+  }
+  val out : open List<any?> = []
+  for i in 0..<before { out.add(all[i]) }
+  val middle : open List<any?> = []
+  for i in before..<(all.size - after) { middle.add(all[i]) }
+  out.add(middle)
+  for i in (all.size - after)..<all.size { out.add(all[i]) }
+  return out
+}
+
+fun pyIterSafe(v : any?, message : string) : any? {
+  try {
+    return pyIter(v)
+  } catch (e : PyError) {
+    if (e.exc.cls === pyTypeErrorType and e.exc.args.items.size == 1 and (pyStr(e.exc.args.items[0])).endsWith("is not iterable")) {
+      throw pyTypeError(message)
+    }
+    throw e
+  }
+}
+
+// ---- range ----
+
+class PyRange(val start : int, val stop : int, val step : int) : PyIdentified() {
+  fun length() : int {
+    if (step > 0) { return start < stop ? (stop - start - 1) / step + 1 : 0 }
+    return start > stop ? (start - stop - 1) / (-step) + 1 : 0
+  }
+  fun item(i : int) : int => start + i * step
+  fun has(x : any?) : bool {
+    if (!(x is int or x is bool)) {
+      for v in pyIterable(this) { if (pyEqB(v, x)) { return true } }
+      return false
+    }
+    val n = x is bool ? ((x as bool) ? 1 : 0) : x as int
+    if (step > 0 ? (n < start or n >= stop) : (n > start or n <= stop)) { return false }
+    return (n - start) % step == 0
+  }
+  fun sameAs(o : PyRange) : bool {
+    val n = length()
+    if (n != o.length()) { return false }
+    if (n == 0) { return true }
+    if (start != o.start) { return false }
+    return n == 1 or step == o.step
+  }
+  fun hashCode() : int => pyHash(this)
+  op ==(other : any?) : bool => other is PyRange and sameAs(other as PyRange)
+  override fun toString() : string => pyRepr(this)
+}
+
+fun pyRangeOf1(stop : any?) : any? => PyRange(0, pyIndex(stop), 1)
+fun pyRangeOf2(start : any?, stop : any?) : any? => PyRange(pyIndex(start), pyIndex(stop), 1)
+fun pyRangeOf3(start : any?, stop : any?, step : any?) : any? {
+  val s = pyIndex(step)
+  if (s == 0) { throw pyValueError("range() arg 3 must not be zero") }
+  return PyRange(pyIndex(start), pyIndex(stop), s)
+}
+
+// ---- Generators ----
+
+// A generator (kind 0), coroutine (1) or async generator (2): its body a task of its own, set
+// aside at each yield. `state` 0 not started, 1 set aside at a yield, 2 running, 3 finished.
+class PyGenerator(val spec : PySpec, val kind : int, val body : suspend (PyGenerator) -> any?) : PyIterator() {
+  var fiber : any? = null
+  var state = 0
+  // The value a yield gives out, then the value sent in.
+  var transfer : any? = null
+  var throwIn : PyExc? = null
+  var result : any? = null
+  // What yield from is going through, for gi_yieldfrom and throw.
+  var delegate : any? = null
+
+  override fun next() : any? => resume(null)
+  override fun pyType() : PyType => kind == 1 ? pyCoroutineType : kind == 2 ? pyAsyncGeneratorType : pyGeneratorType
+
+  // Runs the body to its next yield, with `value` sent in: what is yielded, or pyEnd at its end.
+  fun resume(value : any?) : any? {
+    if (state == 2) { throw pyValueError(kind == 1 ? "coroutine already executing" : "generator already executing") }
+    if (state == 3) {
+      if (kind == 1) { throw pyRuntimeError("cannot reuse already awaited coroutine") }
+      return pyEnd
+    }
+    transfer = value
+    state = 2
+    val saved = __pyHandling.size
+    try {
+      if (fiber == null) {
+        val me = this
+        val run : suspend () -> unit = { me.result = me.body(me) }
+        fiber = __task.generate(run)
+      } else {
+        __task.next(fiber)
+      }
+    } catch (t : Throwable) {
+      state = 3
+      while (__pyHandling.size > saved) { __pyHandling.removeLast() }
+      if (t is PyError) {
+        // Its traceback goes on in the stack that resumed the generator.
+        val e = (t as PyError).exc
+        if (e.outerFrames == null) { e.outerFrames = [] }
+        e.outerFrames!!.addAll(__snippyFrames())
+      }
+      if (t is PyError and (t as PyError).exc.cls.isSubtype(pyStopIterationType)) {
+        val err = pyRuntimeError(kind == 1 ? "coroutine raised StopIteration" : "generator raised StopIteration")
+        err.exc.cause = (t as PyError).exc
+        err.exc.context = (t as PyError).exc
+        err.exc.suppressContext = true
+        throw err
+      }
+      throw t
+    }
+    if (__task.finished(fiber) as bool) {
+      state = 3
+      return pyEnd
+    }
+    state = 1
+    return transfer
+  }
+
+  // send(v): the next value yielded; StopIteration with the result at the end.
+  fun send(v : any?) : any? {
+    if (state == 0 and v != null) { throw pyTypeError("can't send non-None value to a just-started ${kindName()}") }
+    val r = resume(v)
+    if (r === pyEnd) { throw pyStopIteration(result) }
+    return r
+  }
+
+  // throw(e): e raised where the body is set aside.
+  fun throwInto(e : PyExc) : any? {
+    if (state == 0 or state == 3) {
+      state = 3
+      throw pyThrowable(e)
+    }
+    throwIn = e
+    val r = resume(null)
+    if (r === pyEnd) { throw pyStopIteration(result) }
+    return r
+  }
+
+  fun close() {
+    if (state == 0 or state == 3) {
+      state = 3
+      return
+    }
+    throwIn = pyNewException(pyGeneratorExitType, [])
+    try {
+      val r = resume(null)
+      if (r !== pyEnd) { throw pyRuntimeError("${kindName()} ignored GeneratorExit") }
+    } catch (e : PyError) {
+      if (!e.exc.cls.isSubtype(pyGeneratorExitType) and !e.exc.cls.isSubtype(pyStopIterationType)) { throw e }
+    }
+  }
+
+  fun kindName() : string => kind == 1 ? "coroutine" : kind == 2 ? "async generator" : "generator"
+}
+
+fun pyGenerator(spec : PySpec, body : suspend (PyGenerator) -> any?) : any? => PyGenerator(spec, 0, body)
+fun pyCoroutine(spec : PySpec, body : suspend (PyGenerator) -> any?) : any? => PyGenerator(spec, 1, body)
+fun pyAsyncGenerator(spec : PySpec, body : suspend (PyGenerator) -> any?) : any? => PyGenerator(spec, 2, body)
+
+// A generator expression: its body given the iterator of its first for.
+fun pyGenExp(spec : PySpec, first : any?, body : suspend (PyGenerator, any?) -> any?) : any? {
+  return PyGenerator(spec, 0, { g -> body(g, first) })
+}
+
+// yield v: gives v out; what is sent in, or the exception thrown in, when it goes on.
+suspend fun pyYield(g : any?, v : any?) : any? {
+  val gen = g as PyGenerator
+  gen.transfer = v
+  __task.yield()
+  val t = gen.throwIn
+  if (t != null) {
+    gen.throwIn = null
+    throw pyThrowable(t!!)
+  }
+  return gen.transfer
+}
+
+// yield from x: x's items given out in turn, what is sent and thrown passed on to it; its result.
+suspend fun pyYieldFrom(g : any?, x : any?) : any? {
+  val gen = g as PyGenerator
+  if (x is PyGenerator) {
+    val sub = x as PyGenerator
+    gen.delegate = sub
+    try {
+      var r = sub.resume(null)
+      while (true) {
+        if (r === pyEnd) { return sub.result }
+        gen.transfer = r
+        __task.yield()
+        val t = gen.throwIn
+        if (t != null) {
+          gen.throwIn = null
+          if (t!!.cls.isSubtype(pyGeneratorExitType)) {
+            sub.close()
+            throw pyThrowable(t!!)
+          }
+          if (sub.state == 3) { throw pyThrowable(t!!) }
+          sub.throwIn = t
+          r = sub.resume(null)
+          continue
+        }
+        r = sub.resume(gen.transfer)
+      }
+      return null
+    } finally {
+      gen.delegate = null
+    }
+  }
+  val it = pyIter(x)
+  gen.delegate = it
+  try {
+    while (true) {
+      val v = pyNext(it)
+      if (v === pyEnd) { return null }
+      gen.transfer = v
+      __task.yield()
+      val t = gen.throwIn
+      if (t != null) {
+        gen.throwIn = null
+        val th = it is PyObject ? pyGetAttrOr(it, "throw", null) : null
+        if (th != null and !t!!.cls.isSubtype(pyGeneratorExitType)) {
+          pyCall1(th, t)
+          continue
+        }
+        throw pyThrowable(t!!)
+      }
+      if (gen.transfer != null) {
+        if (it is PyObject) {
+          pyCallM1(it, "send", gen.transfer)
+          continue
+        }
+        throw pyAttributeError("'${pyTypeName(it)}' object has no attribute 'send'", it, "send")
+      }
+    }
+    return null
+  } finally {
+    gen.delegate = null
+  }
+}
+
+
+// A generator a for loop made itself, closed as the loop ends.
+fun pyCloseTemp(it : any?) {
+  if (it is PyGenerator and (it as PyGenerator).kind == 0 and (it as PyGenerator).state == 1) { (it as PyGenerator).close() }
+}

@@ -1,0 +1,5 @@
+import Snippy.*
+// The program ww runs to make Snippy into WinterWolf (src/snippy.cpp): loaded once as a Snippy
+// file is first compiled, and asked for each through snippyTranslate.
+
+fun snippyTranslate(source : string, path : string, main : bool) : string => pyTranslate(source, path, main)

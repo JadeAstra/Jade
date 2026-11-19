@@ -1,0 +1,17 @@
+Employee('Ann', 'eng', 120, 34) Fay Cy
+eng    3 people, total  360, mean 120.00, names ['Ann', 'Cy', 'Fay']
+ops    2 people, total  185, mean  92.50, names ['Bob', 'Ed']
+sales  1 people, total   80, mean  80.00, names ['Di']
+True True 6
+{'Ann': 126.0, 'Cy': 115.5, 'Fay': 136.5}
+['Bob', 'Di', 'Fay'] True False
+Name  Dept   Salary
+Fay   eng       130
+Ann   eng       120
+Cy    eng       110
+Ed    ops        95
+Bob   ops        90
+Di    sales      80
+AttributeError: AttributeError
+{'x': 1, 'y': 2} {'x': 5, 'y': 2} {'x': 1, 'y': 2, 'z': 3} [('y', 2), ('x', 1)]
+{'team': {'lead': 'Ann', 'size': 6}, 'tags': ['a', 'b']} {'team': {'lead': 'Ann', 'size': 0}, 'tags': ['a', 'b', 'c']}

@@ -1,0 +1,10 @@
+HELLO ANN hello
+[10, 10, 10]
+3 [('outer', 'wrapper', (1, 2)), ('inner', 'add', (1, 2))]
+True
+computing 4
+computing 5
+16 16 25 [(4, 16), (5, 25)]
+HI BO static al Greeter
+['second applied', 'first applied']
+1 2 3

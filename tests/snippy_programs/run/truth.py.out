@@ -1,0 +1,25 @@
+0 False True
+1 True False
+-1 True False
+0.0 False True
+2.5 True False
+'' False True
+'a' True False
+[] False True
+[0] True False
+() False True
+(0,) True False
+{} False True
+{0: 0} True False
+set() False True
+None False True
+True True False
+False False True
+range(0, 0) False True
+range(0, 3) True False
+2 0 1 2 default 0
+[] [2] 0.0 None
+True False True
+2 True True True True
+2 False True False
+False False True fallback

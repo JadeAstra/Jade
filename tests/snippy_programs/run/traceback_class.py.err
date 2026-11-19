@@ -1,0 +1,6 @@
+1
+line 10, in <module>
+line 15, in Service
+line 4, in check
+line 8, in validate
+TypeError: bad_method is not allowed

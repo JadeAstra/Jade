@@ -1,0 +1,29 @@
+enter a
+inside with A
+exit a None None
+enter b
+exit b ValueError swallowed
+after swallowed
+enter c
+exit c KeyError 'passed on'
+caught KeyError('passed on')
+enter outer
+enter inner
+both OUTER INNER
+exit inner None None
+exit outer None None
+enter ret
+exit ret None None
+returned
+enter loop0
+exit loop0 None None
+enter loop1
+exit loop1 None None
+True True
+TypeError: 'int' object does not support the context manager protocol (missed __exit__ method)
+['open', 'work', 'close', 'handled']
+enter nested1
+enter nested2
+exit nested2 RuntimeError deep
+still in nested1
+exit nested1 None None

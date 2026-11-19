@@ -1,0 +1,83 @@
+import Snippy.Text.*
+// The standard modules (after Python's) this library makes (part 5.3 adds the rest): each
+// made the first time it is imported.
+
+fun pyStandardModules() : open Map<string, () -> PyModule> {
+  val m : open Map<string, () -> PyModule> = {:}
+  m["sys"] = { -> pySysModule() }
+  m["asyncio"] = { -> pyAsyncioModule() }
+  return m
+}
+
+internal fun __pyStream(isError : bool) : any? {
+  val s = PyStdStream(isError)
+  return s
+}
+
+fun pySysModule() : PyModule {
+  val out = PyStdStream(false)
+  val err = PyStdStream(true)
+  pyStderr = err
+  val argv = pyNewList([])
+  argv.add(pyMainFile)
+  for a in Program.arguments { argv.add(a) }
+  val values : open Map<string, any?> = {:}
+  values["argv"] = argv
+  values["stdout"] = out
+  values["stderr"] = err
+  values["__stdout__"] = out
+  values["__stderr__"] = err
+  values["maxsize"] = 9223372036854775807
+  values["byteorder"] = "little"
+  values["version"] = "3.14.0 (Snippy, WinterWolf)"
+  values["version_info"] = PyTuple([3, 14, 0, "final", 0])
+  values["hexversion"] = 0x030E00F0
+  values["platform"] = "win32"
+  values["implementation"] = pyNativeModule("implementation", {"name": "snippy"})
+  values["modules"] = pyModules
+  values["path"] = pyNewList([])
+  values["executable"] = ""
+  values["float_info"] = PyTuple([1.7976931348623157e+308, 1024, 308, 2.2250738585072014e-308, -1021, -307, 15, 53, 2.220446049250313e-16, 2, 1])
+  values["exit"] = __pyB("exit") { a -> throw PyError(pyNewException(pySystemExitType, a.pos.isEmpty() ? [] : [a.pos[0]])) }
+  values["getrecursionlimit"] = __pyB("getrecursionlimit") { a -> pyRecursionLimit }
+  values["setrecursionlimit"] = __pyB("setrecursionlimit") { a ->
+    pyRecursionLimit = pyIndex(a.pos[0])
+    null
+  }
+  values["exc_info"] = __pyB("exc_info") { a ->
+    val e = pyCurrentException()
+    e == null ? PyTuple([null, null, null]) : PyTuple([(e as PyExc).cls, e, PyTraceback(e as PyExc)])
+  }
+  values["exception"] = __pyB("exception") { a -> pyCurrentException() }
+  values["intern"] = __pyB("intern") { a -> a.pos[0] }
+  values["getsizeof"] = __pyB("getsizeof") { a -> 64 }
+  values["getdefaultencoding"] = __pyB("getdefaultencoding") { a -> "utf-8" }
+  return pyNativeModule("sys", values)
+}
+
+var pyRecursionLimit = 1000
+
+// sys.stdout's and sys.stderr's methods.
+internal fun __pyStreamMethod(s : PyStdStream, name : string, a : PyArgs) : any? {
+  return when (name) {
+    "write" -> {
+      val text = a.pos[0]
+      if (!(text is string)) { throw pyTypeError("write() argument must be str, not ${pyTypeName(text)}") }
+      if (s.isError) {
+        flush()
+        __pyWriteError(text as string)
+      } else {
+        write(text as string)
+      }
+      (text as string).size
+    }
+    "flush" -> { flush(); null }
+    "writelines" -> {
+      for line in pyIterable(a.pos[0]) { __pyStreamMethod(s, "write", PyArgs([line], null, "write()")) }
+      null
+    }
+    "isatty" -> false
+    "fileno" -> s.isError ? 2 : 1
+    else -> throw pyAttributeError("'_io.TextIOWrapper' object has no attribute '$name'", s, name)
+  }
+}

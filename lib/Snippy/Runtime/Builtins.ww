@@ -1,0 +1,1021 @@
+import Snippy.Text.*
+// Snippy's builtin functions (Python's) and the constructors of its builtin types, and the table the
+// builtins' names are found in.
+
+// ---- Output ----
+
+// What print writes to: standard output, or an object with write() given as sys.stdout.
+var pyStdout : any? = null
+var pyStderr : any? = null
+
+fun pyFlushOutput() {
+  flush()
+}
+
+internal fun __pyWriteTo(file : any?, text : string, isError : bool) {
+  if (file == null) {
+    if (isError) {
+      flush()
+      __pyWriteError(text)
+    } else {
+      write(text)
+    }
+    return
+  }
+  pyCallM1(file, "write", text)
+}
+
+internal fun __pyWriteError(text : string) {
+  // printError ends each with a line end: write the text's lines with it.
+  if (text.endsWith("\n")) {
+    printError(text[..<(text.size - 1)])
+  } else {
+    printError(text)
+  }
+}
+
+// print(a, b, ...) with no keywords.
+fun pyPrint(args : List<any?>) : any? {
+  val text = args.size == 1 ? pyStr(args[0]) : args.map { pyStr(it) }.join(" ")
+  if (pyStdout == null) {
+    print(text)
+  } else {
+    pyCallM1(pyStdout, "write", text + "\n")
+  }
+  return null
+}
+
+internal fun __pyPrintFull(args : List<any?>, kw : Map<string, any?>) : any? {
+  val sep = kw["sep", default = null]
+  val end = kw["end", default = null]
+  val file = kw["file", default = null]
+  if (sep != null and !(sep is string)) { throw pyTypeError("sep must be None or a string, not ${pyTypeName(sep)}") }
+  if (end != null and !(end is string)) { throw pyTypeError("end must be None or a string, not ${pyTypeName(end)}") }
+  val text = args.map { pyStr(it) }.join(sep == null ? " " : sep as string) + (end == null ? "\n" : end as string)
+  val target = file ?: pyStdout
+  if (target == null) {
+    write(text)
+  } else if (target === pyStderr and pyStderr is PyStdStream) {
+    flush()
+    __pyWriteError(text)
+  } else {
+    pyCallM1(target, "write", text)
+  }
+  if (pyTruth(kw["flush", default = false])) { flush() }
+  return null
+}
+
+// sys.stdout and sys.stderr: Python's text streams over WinterWolf's output.
+class PyStdStream(val isError : bool) : PyIdentified()
+
+// ---- Arguments of builtins ----
+
+// Positional and keyword arguments taken apart, for a builtin with keywords.
+class PyArgs(val args : List<any?>, kwnames : List<string>?, val fname : string) {
+  var pos : List<any?> = []
+  val kw : open Map<string, any?> = {:}
+  init {
+    val n = kwnames == null ? 0 : kwnames!!.size
+    pos = args[..<(args.size - n)]
+    for i in 0..<n { kw[kwnames!![i]] = args[args.size - n + i] }
+  }
+  fun has(name : string) : bool => name in kw.keys
+  fun get(name : string, otherwise : any?) : any? => kw[name, default = otherwise]
+  // Only these keywords.
+  fun only(names : List<string>) {
+    for k in kw.keys {
+      if (!(k in names)) { throw pyTypeError("$fname got an unexpected keyword argument '$k'") }
+    }
+  }
+}
+
+internal fun __pyB(name : string, code : (PyArgs) -> any?) : PyBuiltin {
+  return PyBuiltin(name, { args, kw -> code(PyArgs(args, kw, name + "()")) })
+}
+
+// ---- Numbers from text ----
+
+// int(text, base) as Python reads it: blanks around it, a sign, _ between digits, 0x and the
+// other prefixes (with base 16 or 0).
+fun pyIntFromText(text0 : string, base : int) : any? {
+  val text = text0.trim()
+  val bad = { -> pyValueError("invalid literal for int() with base $base: ${pyRepr(text0)}") }
+  var s = text
+  var negative = false
+  if (s.startsWith("-") or s.startsWith("+")) {
+    negative = s.startsWith("-")
+    s = s[1..]
+  }
+  var b = base
+  val lower = s.lower()
+  var prefixed = false
+  if ((b == 16 or b == 0) and lower.startsWith("0x")) { s = s[2..]; b = 16; prefixed = true }
+  else if ((b == 8 or b == 0) and lower.startsWith("0o")) { s = s[2..]; b = 8; prefixed = true }
+  else if ((b == 2 or b == 0) and lower.startsWith("0b")) { s = s[2..]; b = 2; prefixed = true }
+  else if (b == 0) {
+    b = 10
+    if (s.size > 1 and s.startsWith("0") and s.replace("_", "").let { pyTrimChar(it, '0') }.isNotEmpty()) { throw bad() }
+  }
+  if (prefixed and s.startsWith("_")) { s = s[1..] }
+  if (s.startsWith("_")) { throw bad() }
+  if (s.isEmpty() or s.endsWith("_") or s.contains("__")) { throw bad() }
+  val digits = s.replace("_", "")
+  for c in digits {
+    var d = -1
+    if (c >= '0' and c <= '9') { d = c.code - 48 }
+    else if (c >= 'a' and c <= 'z') { d = c.code - 87 }
+    else if (c >= 'A' and c <= 'Z') { d = c.code - 55 }
+    else if (pyCategory(pyOrd(c)) == "Nd") { d = __pyUnicodeDigit(c) }
+    if (d < 0 or d >= b) { throw bad() }
+  }
+  var ascii = StringBuilder()
+  for c in digits {
+    if (c.code >= 128) { ascii.append(__pyUnicodeDigit(c).toString()) } else { ascii.append(c) }
+  }
+  val v = BigInt.parse(ascii.toString(), b)
+  return pyNorm(negative ? -v : v)
+}
+
+internal fun __pyUnicodeDigit(c : char) : int {
+  // Each run of ten Nd digits starts at a code ending in 0 or 6 (the few others are rare).
+  val cp = pyOrd(c)
+  var z = cp
+  while (z > 0 and pyCategory(z - 1) == "Nd") { z -= 1 }
+  return (cp - z) % 10
+}
+
+fun pyFloatFromText(text0 : string) : any? {
+  val s = text0.trim().replace("_", "").lower()
+  val body = s.startsWith("-") or s.startsWith("+") ? s[1..] : s
+  val negative = s.startsWith("-")
+  if (body == "inf" or body == "infinity") { return negative ? -pyInf : pyInf }
+  if (body == "nan") { return pyNaN }
+  var ok = body.isNotEmpty() and !text0.trim().startsWith("_") and !text0.trim().endsWith("_") and !text0.contains("__")
+  var seenDigit = false
+  var seenDot = false
+  var seenE = false
+  var i = 0
+  while (ok and i < body.size) {
+    val c = body[i]
+    if (c >= '0' and c <= '9') { seenDigit = true }
+    else if (c == '.' and !seenDot and !seenE) { seenDot = true }
+    else if (c == 'e' and !seenE and seenDigit) {
+      seenE = true
+      seenDigit = false
+      if (i + 1 < body.size and (body[i + 1] == '+' or body[i + 1] == '-')) { i += 1 }
+    } else { ok = false }
+    i += 1
+  }
+  if (!ok or !seenDigit) { throw pyValueError("could not convert string to float: ${pyRepr(text0)}") }
+  val v = body.toFloatOrNull()
+  if (v == null) { throw pyValueError("could not convert string to float: ${pyRepr(text0)}") }
+  return negative ? -(v!!) : v!!
+}
+
+// int(x) and int(x, base).
+fun pyIntOf0() : any? => 0
+fun pyIntOf1(x : any?) : any? {
+  return when (x) {
+    is int -> x
+    is bool -> (x as bool) ? 1 : 0
+    is BigInt -> x
+    is float -> {
+      val f = x as float
+      if (f.isNaN()) { throw pyValueError("cannot convert float NaN to integer") }
+      if (f.isInfinite()) { throw pyOverflowError("cannot convert float infinity to integer") }
+      val t = Math.trunc(f)
+      t > -9.0e18 and t < 9.0e18 ? t.toInt() : pyNorm(BigInt.of(t))
+    }
+    is string -> pyIntFromText(x as string, 10)
+    is Bytes -> pyIntFromText(pyBytesText(x as Bytes), 10)
+    is PyObject -> {
+      val o = x as PyObject
+      for name in ["__int__", "__index__", "__trunc__"] {
+        val m = o.cls.lookup(name)
+        if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor)) {
+          val r = __pyCall1Special(m, o)
+          if (!pyIsInt(r)) { throw pyTypeError("$name returned non-int (type ${pyTypeName(r)})") }
+          return pyIndexValue(r)
+        }
+      }
+      if (o.cls.layout >= 2 and o.value != null) { return pyIntOf1(o.value) }
+      throw pyTypeError("int() argument must be a string, a bytes-like object or a real number, not '${o.cls.name}'")
+    }
+    else -> throw pyTypeError("int() argument must be a string, a bytes-like object or a real number, not '${pyTypeName(x)}'")
+  }
+}
+fun pyIntOf2(x : any?, base : any?) : any? {
+  val b = pyIndex(base)
+  if (b != 0 and (b < 2 or b > 36)) { throw pyValueError("int() base must be >= 2 and <= 36, or 0") }
+  if (x is string) { return pyIntFromText(x as string, b) }
+  if (x is Bytes) { return pyIntFromText(pyBytesText(x as Bytes), b) }
+  throw pyTypeError("int() can't convert non-string with explicit base")
+}
+
+fun pyBytesText(b : Bytes) : string {
+  val sb = StringBuilder()
+  for i in 0..<b.size { sb.append((b[i] + 0).char) }
+  return sb.toString()
+}
+
+fun pyFloatOf0() : any? => 0.0
+fun pyFloatOf1(x : any?) : any? {
+  return when (x) {
+    is float -> x
+    is int -> (x as int).toFloat()
+    is bool -> (x as bool) ? 1.0 : 0.0
+    is BigInt -> pyToFloat(x)
+    is string -> pyFloatFromText(x as string)
+    is PyObject -> {
+      val o = x as PyObject
+      val m = o.cls.lookup("__float__")
+      if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor)) {
+        val r = __pyCall1Special(m, o)
+        if (!(r is float)) { throw pyTypeError("${o.cls.name}.__float__ returned non-float (type ${pyTypeName(r)})") }
+        return r
+      }
+      val ix = o.cls.lookup("__index__")
+      if (ix !== pyUnbound and ix != null and !(ix is PyMethodDescriptor)) { return pyToFloat(pyIndexValue(o)) }
+      if (o.cls.layout >= 2 and o.value != null) { return pyFloatOf1(o.value) }
+      throw pyTypeError("float() argument must be a string or a real number, not '${o.cls.name}'")
+    }
+    else -> throw pyTypeError("float() argument must be a string or a real number, not '${pyTypeName(x)}'")
+  }
+}
+
+// ---- Builtin functions ----
+
+fun pyChrOf(x : any?) : any? {
+  val n = pyIndexValue(x)
+  if (!(n is int) or (n as int) < 0 or (n as int) > 0x10FFFF) { throw pyValueError("chr() arg not in range(0x110000)") }
+  return pyChar(n as int).toString()
+}
+
+fun pyOrdOf(x : any?) : any? {
+  if (x is string) {
+    val s = x as string
+    if (s.size != 1) { throw pyTypeError("ord() expected a character, but string of length ${s.size} found") }
+    return pyOrd(s[0])
+  }
+  if (x is Bytes) {
+    if ((x as Bytes).size != 1) { throw pyTypeError("ord() expected a character, but string of length ${(x as Bytes).size} found") }
+    return (x as Bytes)[0]
+  }
+  throw pyTypeError("ord() expected string of length 1, but ${pyTypeName(x)} found")
+}
+
+fun pyCallable(x : any?) : any? {
+  if (x is PyCallable) { return true }
+  if (x is PyObject) { return (x as PyObject).cls.lookup("__call__") !== pyUnbound }
+  return false
+}
+
+fun pyDivmod(a : any?, b : any?) : any? {
+  if (a is PyObject or b is PyObject) {
+    if (a is PyObject) {
+      val m = (a as PyObject).cls.lookup("__divmod__")
+      if (m !== pyUnbound) {
+        val r = __pyCall2Special(m, a, b)
+        if (r !== pyNotImplemented) { return r }
+      }
+    }
+    if (b is PyObject) {
+      val m = (b as PyObject).cls.lookup("__rdivmod__")
+      if (m !== pyUnbound) {
+        val r = __pyCall2Special(m, b, a)
+        if (r !== pyNotImplemented) { return r }
+      }
+    }
+    throw pyTypeError("unsupported operand type(s) for divmod(): '${pyTypeName(a)}' and '${pyTypeName(b)}'")
+  }
+  if (!pyIsNumber(a) or !pyIsNumber(b) or a is Complex or b is Complex) {
+    throw pyTypeError("unsupported operand type(s) for divmod(): '${pyTypeName(a)}' and '${pyTypeName(b)}'")
+  }
+  return PyTuple([pyFloorDiv(a, b), pyMod(a, b)])
+}
+
+fun pyPowOf2(a : any?, b : any?) : any? => pyPow(a, b)
+fun pyPowOf3(a : any?, b : any?, m : any?) : any? => m == null ? pyPow(a, b) : pyPowMod(a, b, m)
+
+fun pyAny(x : any?) : any? {
+  val it = pyIter(x)
+  while (true) {
+    val v = pyNext(it)
+    if (v === pyEnd) { return false }
+    if (pyTruth(v)) { return true }
+  }
+  return false
+}
+
+fun pyAll(x : any?) : any? {
+  val it = pyIter(x)
+  while (true) {
+    val v = pyNext(it)
+    if (v === pyEnd) { return true }
+    if (!pyTruth(v)) { return false }
+  }
+  return true
+}
+
+// sum(iterable, start), as CPython's: ints added as ints while they fit, floats with Neumaier's
+// compensation (3.12 on).
+fun pySum1(x : any?) : any? => pySum2(x, 0)
+fun pySum2(x : any?, start : any?) : any? {
+  if (start is string) { throw pyTypeError("sum() can't sum strings [use ''.join(seq) instead]") }
+  if (start is Bytes) { throw pyTypeError("sum() can't sum bytes [use b''.join(seq) instead]") }
+  if (start is PyByteArray) { throw pyTypeError("sum() can't sum bytearray [use b''.join(seq) instead]") }
+  val it = pyIter(x)
+  var result : any? = start
+  if (result is int or result is bool) {
+    var i = result is bool ? ((result as bool) ? 1 : 0) : result as int
+    while (true) {
+      val item = pyNext(it)
+      if (item === pyEnd) { return i }
+      if (item is int or item is bool) {
+        val b = item is bool ? ((item as bool) ? 1 : 0) : item as int
+        val r = i &+ b
+        if (((i ^ r) & (b ^ r)) >= 0) {
+          i = r
+          continue
+        }
+      }
+      result = pyAdd(i, item)
+      break
+    }
+  }
+  if (result is float) {
+    var f = result as float
+    var c = 0.0
+    while (true) {
+      val item = pyNext(it)
+      if (item === pyEnd) {
+        if (c != 0.0 and !c.isNaN() and !c.isInfinite()) { f += c }
+        return f
+      }
+      if (item is float or item is int or item is bool) {
+        val v = pyToFloat(item)
+        val t = f + v
+        if (Math.abs(f) >= Math.abs(v)) { c += (f - t) + v } else { c += (v - t) + f }
+        f = t
+        continue
+      }
+      result = pyAdd(f + c, item)
+      break
+    }
+  }
+  while (true) {
+    val item = pyNext(it)
+    if (item === pyEnd) { return result }
+    result = pyAdd(result, item)
+  }
+  return result
+}
+
+fun pyEnumerate1(x : any?) : any? => pyEnumerate2(x, 0)
+fun pyEnumerate2(x : any?, start : any?) : any? {
+  val it = pyIter(x)
+  var n : any? = pyIndexValue(start)
+  return PyFnIter("enumerate", {
+    val v = pyNext(it)
+    if (v === pyEnd) { pyEnd } else {
+      val r = PyTuple([n, v])
+      n = pyAdd(n, 1)
+      r
+    }
+  })
+}
+
+fun pyZip(iterables : List<any?>) : any? => __pyZip(iterables, false)
+
+internal fun __pyZip(iterables : List<any?>, strict : bool) : any? {
+  val its = iterables.map { pyIterSafe(it, "zip() argument #${iterables.indexOf(it) + 1} must support iteration") }
+  return PyFnIter("zip", {
+    if (its.isEmpty()) { pyEnd } else {
+      val items : open List<any?> = []
+      var ended = -1
+      for (i, it) in its.withIndex() {
+        val v = pyNext(it)
+        if (v === pyEnd) {
+          ended = i
+          break
+        }
+        items.add(v)
+      }
+      if (ended >= 0) {
+        if (strict) {
+          if (ended > 0) { throw pyValueError("zip() argument ${ended + 1} is shorter than argument${ended > 1 ? "s 1-$ended" : " 1"}") }
+          for j in 1..<its.size {
+            if (pyNext(its[j]) !== pyEnd) { throw pyValueError("zip() argument ${j + 1} is longer than argument${j > 1 ? "s 1-$j" : " 1"}") }
+          }
+        }
+        pyEnd
+      } else {
+        PyTuple(items)
+      }
+    }
+  })
+}
+
+fun pyReversed(x : any?) : any? {
+  return when (x) {
+    is List<any?> -> PyReversedListIter(x as List<any?>)
+    is PyTuple -> PyReversedListIter((x as PyTuple).items)
+    is string -> PyReversedListIter(pyIterable(x))
+    is PyRange -> {
+      val r = x as PyRange
+      val n = r.length()
+      PyRangeIter(r.item(n - 1), r.start - r.step, -r.step)
+    }
+    is PyDict -> PyReversedListIter((x as PyDict).keyList())
+    is PyDictView -> PyReversedListIter((x as PyDictView).items())
+    is PyObject -> {
+      val o = x as PyObject
+      val m = o.cls.lookup("__reversed__")
+      if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor)) { return __pyCall1Special(m, o) }
+      if (o.cls.layout >= 2 and o.value != null) { return pyReversed(o.value) }
+      if (o.cls.lookup("__len__") !== pyUnbound and o.cls.lookup("__getitem__") !== pyUnbound) {
+        var i = pyLength(o) - 1
+        return PyFnIter("reversed", {
+          if (i < 0) { pyEnd } else {
+            i -= 1
+            pyGetItem(o, i + 1)
+          }
+        })
+      }
+      throw pyTypeError("'${o.cls.name}' object is not reversible")
+    }
+    else -> throw pyTypeError("'${pyTypeName(x)}' object is not reversible")
+  }
+}
+
+fun pyListOf0() : any? => pyNewList([])
+fun pyListOf1(x : any?) : any? {
+  if (x is List<any?>) { return (x as List<any?>).toOpenList() }
+  return pyIterable(x).toOpenList()
+}
+fun pyTupleOf0() : any? => pyEmptyTuple
+fun pyTupleOf1(x : any?) : any? {
+  if (x is PyTuple) { return x }
+  return PyTuple(pyIterable(x).toList())
+}
+
+// round(x) and round(x, n), half to even as Python's.
+fun pyRound1(x : any?) : any? {
+  if (x is float) {
+    val f = x as float
+    if (f.isNaN()) { throw pyValueError("cannot convert float NaN to integer") }
+    if (f.isInfinite()) { throw pyOverflowError("cannot convert float infinity to integer") }
+    var r = pyFloor(f)
+    val diff = f - r
+    if (diff > 0.5 or (diff == 0.5 and pyFloor(r / 2.0) * 2.0 != r)) { r += 1.0 }
+    return pyIntOf1(r)
+  }
+  if (pyIsInt(x)) { return pyIndexValue(x) }
+  return __pyRoundSpecial(x, null, false)
+}
+fun pyRound2(x : any?, n : any?) : any? {
+  if (n == null) { return pyRound1(x) }
+  val digits = pyIndex(n)
+  if (x is float) {
+    val f = x as float
+    if (f.isNaN() or f.isInfinite() or f == 0.0) { return f }
+    if (digits > 330) { return f }
+    if (digits < -330) { return f < 0.0 ? -0.0 : 0.0 }
+    val q = __pyScaledRound(f, digits)
+    val text = (f < 0.0 ? "-" : "") + q.toString() + "e" + (-digits).toString()
+    val r = text.toFloatOrNull() ?: 0.0
+    if (r.isInfinite()) { throw pyOverflowError("rounded value too large to represent") }
+    return r == 0.0 and f < 0.0 ? -0.0 : r
+  }
+  if (pyIsInt(x)) {
+    val v = pyBig(pyIndexValue(x))
+    if (digits >= 0) { return pyNorm(v) }
+    val p = BigInt.of(10).pow(-digits)
+    val qr = v.divRem(p)
+    var q = v.floorDiv(p)
+    val rem = v - q * p
+    val twice = rem * BigInt.of(2)
+    val c = twice.compareTo(p)
+    if (c > 0 or (c == 0 and q.testBit(0))) { q = q + BigInt.of(1) }
+    return pyNorm(q * p)
+  }
+  return __pyRoundSpecial(x, n, true)
+}
+
+internal fun __pyRoundSpecial(x : any?, n : any?, withN : bool) : any? {
+  if (x is PyObject) {
+    val m = (x as PyObject).cls.lookup("__round__")
+    if (m !== pyUnbound) { return withN ? __pyCall2Special(m, x, n) : __pyCall1Special(m, x) }
+  }
+  throw pyTypeError("type ${pyTypeName(x)} doesn't define __round__ method")
+}
+
+// ---- Sorting: a stable merge sort that asks only <, as Python's sort does ----
+
+fun pySortList(items : open List<any?>, key : any?, reverse : bool) {
+  if (items.size < 2) { return }
+  val keys : List<any?> = key == null ? items.toList() : items.map { pyCall1(key, it) }
+  val order : open List<int> = []
+  for i in 0..<items.size { order.add(i) }
+  val tmp : open List<int> = order.toOpenList()
+  __pyMergeSort(order, tmp, 0, order.size, keys, reverse)
+  val copy = items.toList()
+  for i in 0..<order.size { items[i] = copy[order[i]] }
+}
+
+internal fun __pyBefore(a : any?, b : any?, reverse : bool) : bool => reverse ? pyLtB(a, b) : pyLtB(b, a)
+
+internal fun __pyMergeSort(order : open List<int>, tmp : open List<int>, lo : int, hi : int, keys : List<any?>, reverse : bool) {
+  if (hi - lo < 2) { return }
+  if (hi - lo <= 8) {
+    // Insertion sort, stable: an item moves left past those it is less than.
+    for i in (lo + 1)..<hi {
+      val v = order[i]
+      var j = i - 1
+      while (j >= lo and (reverse ? pyLtB(keys[order[j]], keys[v]) : pyLtB(keys[v], keys[order[j]]))) {
+        order[j + 1] = order[j]
+        j -= 1
+      }
+      order[j + 1] = v
+    }
+    return
+  }
+  val mid = (lo + hi) / 2
+  __pyMergeSort(order, tmp, lo, mid, keys, reverse)
+  __pyMergeSort(order, tmp, mid, hi, keys, reverse)
+  if (!(reverse ? pyLtB(keys[order[mid - 1]], keys[order[mid]]) : pyLtB(keys[order[mid]], keys[order[mid - 1]]))) { return }
+  for i in lo..<hi { tmp[i] = order[i] }
+  var i = lo
+  var j = mid
+  var k = lo
+  while (i < mid and j < hi) {
+    val takeRight = reverse ? pyLtB(keys[tmp[i]], keys[tmp[j]]) : pyLtB(keys[tmp[j]], keys[tmp[i]])
+    if (takeRight) {
+      order[k] = tmp[j]
+      j += 1
+    } else {
+      order[k] = tmp[i]
+      i += 1
+    }
+    k += 1
+  }
+  while (i < mid) { order[k] = tmp[i]; i += 1; k += 1 }
+  while (j < hi) { order[k] = tmp[j]; j += 1; k += 1 }
+}
+
+// min() and max(): of an iterable or of the arguments, with key and default.
+internal fun __pyMinMax(a : PyArgs, isMax : bool) : any? {
+  val name = isMax ? "max" : "min"
+  a.only(["key", "default"])
+  val key = a.get("key", null)
+  var items : List<any?> = []
+  if (a.pos.size == 1) {
+    items = pyIterable(a.pos[0])
+    if (items.isEmpty()) {
+      if (a.has("default")) { return a.get("default", null) }
+      throw pyValueError("$name() iterable argument is empty")
+    }
+  } else if (a.pos.isEmpty()) {
+    throw pyTypeError("$name expected at least 1 argument, got 0")
+  } else {
+    if (a.has("default")) { throw pyTypeError("Cannot specify a default for $name() with multiple positional arguments") }
+    items = a.pos
+  }
+  var best = items[0]
+  var bestKey = key == null ? best : pyCall1(key, best)
+  for i in 1..<items.size {
+    val v = items[i]
+    val k = key == null ? v : pyCall1(key, v)
+    if (isMax ? pyGtB(k, bestKey) : pyLtB(k, bestKey)) {
+      best = v
+      bestKey = k
+    }
+  }
+  return best
+}
+
+// ---- The builtins table ----
+
+internal var __pyBuiltinsMade : open Map<string, any?>? = null
+
+fun __pyBuiltinTable() : open Map<string, any?> {
+  if (__pyBuiltinsMade == null) { __pyBuiltinsMade = __pyMakeBuiltins() }
+  return __pyBuiltinsMade!!
+}
+
+// A builtin's value by its name, for a name the module does not bind.
+fun pyBuiltin(name : string) : any? {
+  pyInitRuntime()
+  val v = __pyBuiltinTable()[name, default = pyUnbound]
+  if (v === pyUnbound) { return PyBuiltin(name, { a, k -> throw pyNameError(name) }) }
+  return v
+}
+
+internal fun __pyMakeBuiltins() : open Map<string, any?> {
+  pyInitRuntime()
+  val b : open Map<string, any?> = {:}
+  for t in [pyObjectType, pyTypeType, pyIntType, pyBoolType, pyFloatType, pyComplexType, pyStrType, pyBytesType, pyByteArrayType,
+            pyListType, pyTupleType, pyDictType, pySetType, pyFrozenSetType, pyRangeType, pySliceType, pyPropertyType,
+            pyClassMethodType, pyStaticMethodType, pySuperType] { b[t.name] = t }
+  for t in pyExceptionTypes() { b[t.name] = t }
+  b["EnvironmentError"] = pyOSErrorType
+  b["IOError"] = pyOSErrorType
+  b["None"] = null
+  b["True"] = true
+  b["False"] = false
+  b["Ellipsis"] = pyEllipsis
+  b["NotImplemented"] = pyNotImplemented
+  b["__debug__"] = true
+  b["__name__"] = "builtins"
+  fun fixed(name : string, min : int, max : int, code : (List<any?>) -> any?) {
+    b[name] = __pyB(name) { a ->
+      a.only([])
+      if (a.pos.size < min or a.pos.size > max) {
+        if (min == max) { throw pyTypeError("$name() takes exactly ${min == 1 ? "one argument" : "$min arguments"} (${a.pos.size} given)") }
+        if (a.pos.size < min) { throw pyTypeError("$name expected at least $min argument${min == 1 ? "" : "s"}, got ${a.pos.size}") }
+        throw pyTypeError("$name expected at most $max argument${max == 1 ? "" : "s"}, got ${a.pos.size}")
+      }
+      code(a.pos)
+    }
+  }
+  fixed("len", 1, 1) { a -> pyLen(a[0]) }
+  fixed("repr", 1, 1) { a -> pyRepr(a[0]) }
+  fixed("ascii", 1, 1) { a -> pyAscii(a[0]) }
+  fixed("abs", 1, 1) { a -> pyAbs(a[0]) }
+  fixed("chr", 1, 1) { a -> pyChrOf(a[0]) }
+  fixed("ord", 1, 1) { a -> pyOrdOf(a[0]) }
+  fixed("hash", 1, 1) { a -> pyHash(a[0]) }
+  fixed("id", 1, 1) { a -> pyId(a[0]) }
+  fixed("callable", 1, 1) { a -> pyCallable(a[0]) }
+  fixed("isinstance", 2, 2) { a -> pyIsInstance(a[0], a[1]) }
+  fixed("issubclass", 2, 2) { a -> pyIsSubclass(a[0], a[1]) }
+  fixed("hasattr", 2, 2) { a -> pyHasAttr(a[0], a[1]) }
+  fixed("getattr", 2, 3) { a -> a.size == 2 ? pyGetAttrOf2(a[0], a[1]) : pyGetAttrOf3(a[0], a[1], a[2]) }
+  fixed("setattr", 3, 3) { a -> pySetAttrOf(a[0], a[1], a[2]) }
+  fixed("delattr", 2, 2) { a -> pyDelAttrOf(a[0], a[1]) }
+  fixed("divmod", 2, 2) { a -> pyDivmod(a[0], a[1]) }
+  fixed("hex", 1, 1) { a -> pyHexOf(a[0]) }
+  fixed("oct", 1, 1) { a -> pyOctOf(a[0]) }
+  fixed("bin", 1, 1) { a -> pyBinOf(a[0]) }
+  fixed("any", 1, 1) { a -> pyAny(a[0]) }
+  fixed("all", 1, 1) { a -> pyAll(a[0]) }
+  fixed("format", 1, 2) { a -> a.size == 1 ? pyFormatOf1(a[0]) : pyFormatOf2(a[0], a[1]) }
+  fixed("iter", 1, 2) { a -> a.size == 1 ? pyIter(a[0]) : PyCallIter(a[0], a[1]) }
+  fixed("next", 1, 2) { a -> a.size == 1 ? pyNextOf1(a[0]) : pyNextOf2(a[0], a[1]) }
+  fixed("reversed", 1, 1) { a -> pyReversed(a[0]) }
+  fixed("vars", 0, 1) { a ->
+    if (a.isEmpty()) { pyNewDict() } else {
+      val d = pyGetAttrOr(a[0], "__dict__", pyUnbound)
+      if (d === pyUnbound) { throw pyTypeError("vars() argument must have __dict__ attribute") }
+      d
+    }
+  }
+  fixed("dir", 0, 1) { a -> a.isEmpty() ? pyNewList([]) : pyDir(a[0]) }
+  fixed("globals", 0, 0) { a -> pyNewDict() }
+  fixed("locals", 0, 0) { a -> pyNewDict() }
+  b["print"] = __pyB("print") { a ->
+    a.only(["sep", "end", "file", "flush"])
+    a.kw.isEmpty() ? pyPrint(a.pos) : __pyPrintFull(a.pos, a.kw)
+  }
+  b["input"] = __pyB("input") { a ->
+    a.only([])
+    if (a.pos.size > 1) { throw pyTypeError("input expected at most 1 argument, got ${a.pos.size}") }
+    pyInput(a.pos.isEmpty() ? null : a.pos[0])
+  }
+  b["sum"] = __pyB("sum") { a ->
+    a.only(["start"])
+    if (a.pos.isEmpty()) { throw pyTypeError("sum() takes at least 1 positional argument (0 given)") }
+    pySum2(a.pos[0], a.pos.size > 1 ? a.pos[1] : a.get("start", 0))
+  }
+  b["min"] = __pyB("min") { a -> __pyMinMax(a, false) }
+  b["max"] = __pyB("max") { a -> __pyMinMax(a, true) }
+  b["sorted"] = __pyB("sorted") { a ->
+    a.only(["key", "reverse"])
+    if (a.pos.size != 1) { throw pyTypeError("sorted expected 1 argument, got ${a.pos.size}") }
+    val l = pyIterable(a.pos[0]).toOpenList()
+    pySortList(l, a.get("key", null), pyTruth(a.get("reverse", false)))
+    l
+  }
+  b["enumerate"] = __pyB("enumerate") { a ->
+    a.only(["start", "iterable"])
+    val it = a.pos.isNotEmpty() ? a.pos[0] : a.get("iterable", pyUnbound)
+    if (it === pyUnbound) { throw pyTypeError("enumerate() missing required argument 'iterable'") }
+    pyEnumerate2(it, a.pos.size > 1 ? a.pos[1] : a.get("start", 0))
+  }
+  b["zip"] = __pyB("zip") { a ->
+    a.only(["strict"])
+    __pyZip(a.pos, pyTruth(a.get("strict", false)))
+  }
+  b["map"] = __pyB("map") { a ->
+    a.only([])
+    if (a.pos.size < 2) { throw pyTypeError("map() must have at least two arguments.") }
+    val f = a.pos[0]
+    val its = a.pos[1..].map { pyIter(it) }
+    PyFnIter("map", {
+      val items : open List<any?> = []
+      var done = false
+      for it in its {
+        val v = pyNext(it)
+        if (v === pyEnd) { done = true; break }
+        items.add(v)
+      }
+      done ? pyEnd : (items.size == 1 ? pyCall1(f, items[0]) : pyCallV(f, items, null))
+    })
+  }
+  b["filter"] = __pyB("filter") { a ->
+    a.only([])
+    if (a.pos.size != 2) { throw pyTypeError("filter expected 2 arguments, got ${a.pos.size}") }
+    val f = a.pos[0]
+    val it = pyIter(a.pos[1])
+    PyFnIter("filter", {
+      var found : any? = pyEnd
+      while (true) {
+        val v = pyNext(it)
+        if (v === pyEnd) { break }
+        if (f == null ? pyTruth(v) : pyTruth(pyCall1(f, v))) { found = v; break }
+      }
+      found
+    })
+  }
+  b["round"] = __pyB("round") { a ->
+    a.only(["ndigits", "number"])
+    val x = a.pos.isNotEmpty() ? a.pos[0] : a.get("number", null)
+    val n = a.pos.size > 1 ? a.pos[1] : a.get("ndigits", null)
+    n == null ? pyRound1(x) : pyRound2(x, n)
+  }
+  b["pow"] = __pyB("pow") { a ->
+    a.only(["base", "exp", "mod"])
+    val x = a.pos.size > 0 ? a.pos[0] : a.get("base", null)
+    val y = a.pos.size > 1 ? a.pos[1] : a.get("exp", null)
+    val m = a.pos.size > 2 ? a.pos[2] : a.get("mod", null)
+    pyPowOf3(x, y, m)
+  }
+  b["exit"] = __pyB("exit") { a -> throw PyError(pyNewException(pySystemExitType, a.pos.isEmpty() ? [] : [a.pos[0]])) }
+  b["quit"] = b["exit"]
+  b["open"] = __pyB("open") { a -> pyOpen(a) }
+  b["breakpoint"] = __pyB("breakpoint") { a -> null }
+  b["help"] = __pyB("help") { a -> null }
+  b["__import__"] = __pyB("__import__") { a -> pyImport(a.pos[0] as string, 0, PyModule("<import>", "", [], { i : int -> null }, { i : int, v : any? -> }, null)) }
+  b["aiter"] = __pyB("aiter") { a -> pyCallM0(a.pos[0], "__aiter__") }
+  b["anext"] = __pyB("anext") { a -> pyCallM0(a.pos[0], "__anext__") }
+  b["eval"] = __pyB("eval") { a -> throw pyError(pyNotImplementedErrorType, "eval() is not available in Snippy") }
+  b["exec"] = __pyB("exec") { a -> throw pyError(pyNotImplementedErrorType, "exec() is not available in Snippy") }
+  b["compile"] = __pyB("compile") { a -> throw pyError(pyNotImplementedErrorType, "compile() is not available in Snippy") }
+  b["memoryview"] = __pyB("memoryview") { a -> throw pyError(pyNotImplementedErrorType, "memoryview is not available in Snippy") }
+  return b
+}
+
+fun pyInput(prompt : any?) : any? {
+  if (prompt != null) {
+    write(pyStr(prompt))
+    flush()
+  }
+  val line = input("")
+  if (line == null) { throw pyError(pyEOFErrorType, "EOF when reading a line") }
+  return line
+}
+
+// dir(x): the names of its attributes, sorted.
+fun pyDir(x : any?) : any? {
+  val names : open List<any?> = []
+  val seen : open Set<string> = Set<string>()
+  fun add(n : any?) {
+    if (n is string and !((n as string) in seen)) {
+      seen.add(n as string)
+      names.add(n)
+    }
+  }
+  when (x) {
+    is PyModule -> for n in (x as PyModule).bound() { add(n) }
+    is PyType -> for t in (x as PyType).mro { for k in t.dict.keys { add(k) } }
+    is PyObject -> {
+      val d = (x as PyObject).dict
+      if (d != null) { for k in d!!.keys { add(k) } }
+      for t in (x as PyObject).cls.mro { for k in t.dict.keys { add(k) } }
+    }
+    else -> for t in pyTypeOf(x).mro { for k in t.dict.keys { add(k) } }
+  }
+  pySortList(names, null, false)
+  return names
+}
+
+// open(): files, for trusted programs (5.3 makes it whole).
+fun pyOpen(a : PyArgs) : any? {
+  throw pyError(pyNotImplementedErrorType, "open() comes with Snippy's io module")
+}
+
+// ---- Constructors of the builtin types ----
+
+internal fun __pyTakes(name : string, a : PyArgs, max : int) {
+  if (a.pos.size > max) { throw pyTypeError("$name expected at most $max argument${max == 1 ? "" : "s"}, got ${a.pos.size}") }
+}
+
+internal fun __pyConstructors() {
+  pyObjectType.construct = { t, args, kw ->
+    if (args.isNotEmpty()) { throw pyTypeError("object() takes no arguments") }
+    PyObject(pyObjectType).also { it.dict = null }
+  }
+  pyIntType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "int()")
+    a.only(["base"])
+    __pyTakes("int", a, 2)
+    if (a.pos.isEmpty()) {
+      if (a.has("base")) { throw pyTypeError("int() missing string argument") }
+      0
+    } else if (a.pos.size == 2 or a.has("base")) {
+      pyIntOf2(a.pos[0], a.pos.size == 2 ? a.pos[1] : a.get("base", 10))
+    } else {
+      pyIntOf1(a.pos[0])
+    }
+  }
+  pyBoolType.construct = { t, args, kw ->
+    if (args.size > 1) { throw pyTypeError("bool expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? false : pyTruth(args[0])
+  }
+  pyFloatType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("float() takes no keyword arguments") }
+    if (args.size > 1) { throw pyTypeError("float expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? 0.0 : pyFloatOf1(args[0])
+  }
+  pyComplexType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "complex()")
+    val re = a.pos.size > 0 ? a.pos[0] : a.get("real", 0)
+    val im = a.pos.size > 1 ? a.pos[1] : a.get("imag", 0)
+    if (re is string) { pyComplexFromText(re as string) } else {
+      val r = __pyToComplex(re is Complex ? re : pyToFloat(re))
+      val i = __pyToComplex(im is Complex ? im : pyToFloat(im))
+      Complex(r.re - i.im, r.im + i.re)
+    }
+  }
+  pyStrType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "str()")
+    a.only(["object", "encoding", "errors"])
+    val obj = a.pos.size > 0 ? a.pos[0] : a.get("object", "")
+    if (a.pos.size > 1 or a.has("encoding")) {
+      val enc = a.pos.size > 1 ? a.pos[1] : a.get("encoding", "utf-8")
+      pyDecode(obj, enc as string, a.pos.size > 2 ? a.pos[2] as string : a.get("errors", "strict") as string)
+    } else {
+      pyStr(obj)
+    }
+  }
+  pyListType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("list() takes no keyword arguments") }
+    if (args.size > 1) { throw pyTypeError("list expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? pyNewList([]) : pyListOf1(args[0])
+  }
+  pyTupleType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("tuple() takes no keyword arguments") }
+    if (args.size > 1) { throw pyTypeError("tuple expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? pyEmptyTuple : pyTupleOf1(args[0])
+  }
+  pyDictType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "dict()")
+    if (a.pos.size > 1) { throw pyTypeError("dict expected at most 1 argument, got ${a.pos.size}") }
+    val d = pyNewDict()
+    if (a.pos.isNotEmpty()) { pyDictUpdate(d, a.pos[0]) }
+    for (k, v) in a.kw { d.set(k, v) }
+    d
+  }
+  pySetType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("set() takes no keyword arguments") }
+    if (args.size > 1) { throw pyTypeError("set expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? pySetOf0() : pySetOf1(args[0])
+  }
+  pyFrozenSetType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("frozenset() takes no keyword arguments") }
+    if (args.size > 1) { throw pyTypeError("frozenset expected at most 1 argument, got ${args.size}") }
+    args.isEmpty() ? pyFrozenSetOf0() : pyFrozenSetOf1(args[0])
+  }
+  pyRangeType.construct = { t, args, kw ->
+    if (kw != null) { throw pyTypeError("range() takes no keyword arguments") }
+    when (args.size) {
+      1 -> pyRangeOf1(args[0])
+      2 -> pyRangeOf2(args[0], args[1])
+      3 -> pyRangeOf3(args[0], args[1], args[2])
+      0 -> throw pyTypeError("range expected at least 1 argument, got 0")
+      else -> throw pyTypeError("range expected at most 3 arguments, got ${args.size}")
+    }
+  }
+  pySliceType.construct = { t, args, kw ->
+    when (args.size) {
+      1 -> PySlice(null, args[0], null)
+      2 -> PySlice(args[0], args[1], null)
+      3 -> PySlice(args[0], args[1], args[2])
+      else -> throw pyTypeError("slice expected at least 1 argument, got 0")
+    }
+  }
+  pyBytesType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "bytes()")
+    if (a.pos.isEmpty()) { Bytes(0) } else { pyBytesOf(a.pos[0], a.pos.size > 1 ? a.pos[1] : a.get("encoding", null)) }
+  }
+  pyByteArrayType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "bytearray()")
+    PyByteArray(a.pos.isEmpty() ? Bytes(0) : pyBytesOf(a.pos[0], a.pos.size > 1 ? a.pos[1] : a.get("encoding", null)) as Bytes)
+  }
+  pyPropertyType.construct = { t, args, kw ->
+    val a = PyArgs(args, kw, "property()")
+    val fget = a.pos.size > 0 ? a.pos[0] : a.get("fget", null)
+    val doc = a.pos.size > 3 ? a.pos[3] : a.get("doc", null)
+    PyProperty(fget, a.pos.size > 1 ? a.pos[1] : a.get("fset", null), a.pos.size > 2 ? a.pos[2] : a.get("fdel", null),
+               doc == null and fget != null ? pyGetAttrOr(fget, "__doc__", null) : doc)
+  }
+  pyClassMethodType.construct = { t, args, kw -> PyClassMethod(args[0]) }
+  pyStaticMethodType.construct = { t, args, kw -> PyStaticMethod(args[0]) }
+  pySuperType.construct = { t, args, kw ->
+    if (args.size != 2) { throw pyRuntimeError("super(): no arguments") }
+    if (!(args[0] is PyType)) { throw pyTypeError("super() argument 1 must be a type, not ${pyTypeName(args[0])}") }
+    PySuper(args[0] as PyType, args[1])
+  }
+}
+
+fun pyComplexFromText(s0 : string) : any? {
+  var s = s0.trim().replace("_", "")
+  if (s.startsWith("(") and s.endsWith(")")) { s = s[1..<(s.size - 1)].trim() }
+  val bad = { -> pyValueError("complex() arg is a malformed string") }
+  if (s.isEmpty()) { throw bad() }
+  if (!s.endsWith("j") and !s.endsWith("J")) { return Complex(pyFloatFromText(s) as float, 0.0) }
+  val body = s[..<(s.size - 1)]
+  // Find where the imaginary part starts: the last + or - not after an e.
+  var at = -1
+  for i in (body.size - 1) downTo 1 {
+    if ((body[i] == '+' or body[i] == '-') and body[i - 1] != 'e' and body[i - 1] != 'E') {
+      at = i
+      break
+    }
+  }
+  if (at < 0) {
+    val im = body == "" or body == "+" ? 1.0 : body == "-" ? -1.0 : pyFloatFromText(body) as float
+    return Complex(0.0, im)
+  }
+  val re = pyFloatFromText(body[..<at]) as float
+  val imText = body[at..]
+  val im = imText == "+" ? 1.0 : imText == "-" ? -1.0 : pyFloatFromText(imText) as float
+  return Complex(re, im)
+}
+
+// bytes(x): from a count of zeros, from ints, from text with an encoding, from bytes.
+fun pyBytesOf(x : any?, encoding : any?) : any? {
+  if (x is string) {
+    if (encoding == null) { throw pyTypeError("string argument without an encoding") }
+    return pyEncode(x as string, encoding as string, "strict")
+  }
+  if (pyIsInt(x)) {
+    val n = pyIndex(x)
+    if (n < 0) { throw pyValueError("negative count") }
+    return Bytes(n)
+  }
+  if (x is Bytes) { return Bytes(x as Bytes) }
+  if (x is PyByteArray) { return Bytes((x as PyByteArray).bytes) }
+  val items = pyIterable(x)
+  val b = Bytes(items.size)
+  for (i, v) in items.withIndex() {
+    val n = pyIndex(v)
+    if (n < 0 or n > 255) { throw pyValueError("bytes must be in range(0, 256)") }
+    b[i] = n.toByte()
+  }
+  return b
+}
+
+// Text as bytes, and back, in the encodings scripts use.
+fun pyEncode(s : string, encoding : string, errors : string) : any? {
+  val enc = encoding.lower().replace("_", "-")
+  if (enc == "utf-8" or enc == "utf8") { return s.toBytes() }
+  if (enc == "ascii" or enc == "latin-1" or enc == "latin1" or enc == "iso-8859-1") {
+    val limit = enc == "ascii" ? 128 : 256
+    val out : open List<int> = []
+    for i in 0..<s.size {
+      val c = s[i]
+      val cp = pyOrd(c)
+      if (cp >= limit) {
+        if (errors == "ignore") { continue }
+        if (errors == "replace") { out.add(63); continue }
+        val shown = cp < 0x100 ? "\\x" + pyHex(cp, 2) : cp < 0x10000 ? "\\u" + pyHex(cp, 4) : "\\U" + pyHex(cp, 8)
+        throw pyError(pyUnicodeEncodeErrorType, "'${enc == "ascii" ? "ascii" : "latin-1"}' codec can't encode character '" + shown + "' in position $i: ordinal not in range($limit)")
+      }
+      out.add(cp)
+    }
+    return Bytes(out)
+  }
+  throw pyError(pyLookupErrorType, "unknown encoding: $encoding")
+}
+
+fun pyDecode(b0 : any?, encoding : string, errors : string) : any? {
+  val b = b0 is PyByteArray ? (b0 as PyByteArray).bytes : b0
+  if (!(b is Bytes)) { throw pyTypeError("decoding to str: need a bytes-like object, ${pyTypeName(b0)} found") }
+  val enc = encoding.lower().replace("_", "-")
+  if (enc == "utf-8" or enc == "utf8") { return (b as Bytes).decodeToString() }
+  if (enc == "ascii" or enc == "latin-1" or enc == "latin1" or enc == "iso-8859-1") {
+    val sb = StringBuilder()
+    for i in 0..<(b as Bytes).size {
+      val v = (b as Bytes)[i]
+      if (enc == "ascii" and v >= 128) {
+        if (errors == "ignore") { continue }
+        if (errors == "replace") { sb.append('\u{FFFD}'); continue }
+        throw pyError(pyUnicodeDecodeErrorType, "'ascii' codec can't decode byte 0x${pyHex(v, 2)} in position $i: ordinal not in range(128)")
+      }
+      sb.append((v + 0).char)
+    }
+    return sb.toString()
+  }
+  throw pyError(pyLookupErrorType, "unknown encoding: $encoding")
+}

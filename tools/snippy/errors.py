@@ -2,7 +2,7 @@
 # error's kind, message, line and column (from 1, in characters), one line a case, for
 # tests/snippy_errors.ww to compare Snippy's with, as ast.parse raises them. In WSL:
 #
-#   python3 tools/snippy/errors.py tests/python/errors.txt
+#   python3 tools/snippy/errors.py tests/snippy_programs/errors.txt
 import ast
 import sys
 

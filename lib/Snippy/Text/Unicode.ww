@@ -1,4 +1,4 @@
-// Python's Unicode database, as Snippy needs it: the general category of every code point,
+// The Unicode database Snippy needs (Python's): the general category of every code point,
 // Unicode 16.0.0, made by tools/snippy/unicode.py from the CPython it ran on. Do not edit.
 
 // The 30 general categories, in the order the table's letters stand for them.

@@ -1,4 +1,4 @@
-// Python's text for its values, as repr() gives it: what ast.dump shows of a constant, and what
+// Snippy's text for its values, as repr() gives it: what ast.dump shows of a constant, and what
 // the runtime's repr() and str() will give. Each matches CPython 3.14's.
 
 // ---- Unicode categories (Unicode.ww's table) ----
@@ -59,7 +59,7 @@ fun pyIsPrintable(cp : int) : bool {
 }
 
 // ---- Surrogates ----
-// A Python str may hold a lone surrogate (U+D800 to U+DFFF: '\udc80', as os keeps a file name's
+// A str (in Python) may hold a lone surrogate (U+D800 to U+DFFF: '\udc80', as os keeps a file name's
 // undecodable bytes), which a WinterWolf string cannot. Snippy keeps each as a code point of
 // Unicode's last private use area, U+10F800 plus its offset, and gives it back as the surrogate
 // wherever Python shows it (repr, ord, encoding). Python's text does not use that range.
@@ -79,7 +79,7 @@ fun pyOrd(c : char) : int {
 
 internal val __pyHexDigits = "0123456789abcdef"
 
-internal fun __pyHex(n : int, width : int) : string {
+fun pyHex(n : int, width : int) : string {
   val sb = StringBuilder()
   var shift = (width - 1) * 4
   while (shift >= 0) {
@@ -109,11 +109,11 @@ fun pyReprStr(s : string) : string {
     } else if (pyIsPrintable(cp)) {
       sb.append(c)
     } else if (cp < 0x100) {
-      sb.append("\\x" + __pyHex(cp, 2))
+      sb.append("\\x" + pyHex(cp, 2))
     } else if (cp < 0x10000) {
-      sb.append("\\u" + __pyHex(cp, 4))
+      sb.append("\\u" + pyHex(cp, 4))
     } else {
-      sb.append("\\U" + __pyHex(cp, 8))
+      sb.append("\\U" + pyHex(cp, 8))
     }
   }
   sb.append(quote)
@@ -145,7 +145,7 @@ fun pyReprBytes(b : Bytes) : string {
     } else if (v == 13) {
       sb.append("\\r")
     } else if (v < 32 or v >= 127) {
-      sb.append("\\x" + __pyHex(v, 2))
+      sb.append("\\x" + pyHex(v, 2))
     } else {
       sb.append(v.char)
     }
@@ -182,6 +182,37 @@ fun pyReprFloat(x : float, addDotZero : bool = true) : string {
   while (end > 1 and digits[end - 1] == '0') { end -= 1 }
   digits = digits[0 ..< end]
   if (digits == "0") { return (negative ? "-" : "") + (addDotZero ? "0.0" : "0") }
+  if (digits.size > 17) {
+    // WinterWolf wrote every digit of a large whole number: the fewest that read back as it.
+    val target = negative ? -x : x
+    for n in 1..17 {
+      var kept = digits[0 ..< n]
+      if (digits[n] >= '5') {
+        // Rounded up, a carry going left; 999 becoming 1000 moves the point.
+        val chars = kept.toList().toOpenList()
+        var i = n - 1
+        while (i >= 0 and chars[i] == '9') {
+          chars[i] = '0'
+          i -= 1
+        }
+        if (i < 0) {
+          chars.add(0, '1')
+        } else {
+          chars[i] = (chars[i].code + 1).char
+        }
+        kept = chars.join("")
+      }
+      val shift = kept.size - n
+      val back = ("0." + kept + "e" + (point + shift).toString()).toFloatOrNull()
+      if (back != null and back!! == target) {
+        point += shift
+        var e2 = kept.size
+        while (e2 > 1 and kept[e2 - 1] == '0') { e2 -= 1 }
+        digits = kept[0 ..< e2]
+        break
+      }
+    }
+  }
   val sb = StringBuilder()
   if (negative) { sb.append('-') }
   if (point <= -4 or point > 16) {

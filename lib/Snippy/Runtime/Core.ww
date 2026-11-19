@@ -1,0 +1,764 @@
+import Snippy.Text.*
+// The Snippy runtime (docs/snippy-plan.html, part 5.2): Snippy's values and rules (Python's), for the code
+// the translator (lib/Snippy/Translate.ww) makes of a Snippy file. A Snippy value is the
+// WinterWolf value of the same nature where there is one (None null, bool, int with BigInt past
+// 64 bits, float, Complex, str a string, list an open List<any?>, dict the runtime's PyDict, its own order and Python's keys);
+// the rest are classes of this library.
+//
+// This file: the sentinels, Python's objects, types, functions and their calls, modules.
+
+// ---- Sentinels ----
+
+// What a variable holds before it is given a value, and after del.
+object PyUnboundT {
+  override fun toString() : string => "<unbound>"
+}
+val pyUnbound : any = PyUnboundT
+
+// What an iterator's next gives at its end.
+object PyEndT {
+  override fun toString() : string => "<end>"
+}
+val pyEnd : any = PyEndT
+
+// No message given to assert.
+object PyNoMessageT
+val pyNoMessage : any = PyNoMessageT
+
+// Python's Ellipsis and NotImplemented.
+object PyEllipsisT {
+  override fun toString() : string => "Ellipsis"
+}
+val pyEllipsis : any = PyEllipsisT
+object PyNotImplementedT {
+  override fun toString() : string => "NotImplemented"
+}
+val pyNotImplemented : any = PyNotImplementedT
+
+val pyInf : float = 1.0 / 0.0
+val pyNaN : float = 0.0 / 0.0
+
+// A block worked out where it is written, for code that needs statements inside an expression.
+inline fun <R> pyDo(block : () -> R) : R => block()
+
+fun pyDiscard(value : any?) {}
+
+// ---- Identity ----
+
+internal var __pyNextId = 0x7f3a00001000
+
+// The numbers id() gives: an object of this library keeps its own.
+abstract class PyIdentified {
+  var pyId = 0
+  fun identity() : int {
+    if (pyId == 0) {
+      __pyNextId += 16
+      pyId = __pyNextId
+    }
+    return pyId
+  }
+}
+
+// ---- Objects and types ----
+
+// An object of a Snippy class: its attributes in a table of its own, as Python's are; `value`
+// the int, str, list, dict... it is, for an object of a class made from one of those.
+class PyObject(var cls : PyType) : PyIdentified() {
+  var dict : PyDict? = PyDict()
+  var value : any? = null
+
+  // Python's hash and ==, so that an object is a key of a dict and a member of a set as in Python.
+  fun hashCode() : int => pyHash(this)
+  op ==(other : any?) : bool => this === other or (other !== null and pyEqB(this, other))
+  override fun toString() : string => pyStr(this)
+}
+
+// A Snippy class.
+class PyType(var name : string, var qualname : string, var module : string) : PyCallable() {
+  op ==(other : any?) : bool => this === other
+  var bases : List<PyType> = []
+  var mro : List<PyType> = []
+  val dict : open Map<string, any?> = {:}
+  var metaclass : PyType? = null
+  // Made by this library (int, str, list, ValueError...), not by a class statement.
+  var builtin = false
+  // What its objects are made as: 0 a PyObject; 1 an exception; 2 to 9 a builtin's own value
+  // (see pyMakeInstance).
+  var layout = 0
+  // The attributes its objects may have, where it and every class above it list __slots__.
+  var slots : Set<string>? = null
+  // Its own constructor, for a builtin type.
+  var construct : ((PyType, List<any?>, List<string>?) -> any?)? = null
+  // What a lookup found, kept until a class changes.
+  private val found : open Map<string, any?> = {:}
+  private var foundEpoch = -1
+
+  // `name` in the class or one above it in its MRO, or pyUnbound.
+  fun lookup(name : string) : any? {
+    if (foundEpoch != __pyTypeEpoch) {
+      found.clear()
+      foundEpoch = __pyTypeEpoch
+    }
+    val had = found[name, default = pyUnbound]
+    if (had !== pyUnbound) { return had }
+    var result : any? = pyUnbound
+    for t in mro {
+      val v = t.dict[name, default = pyUnbound]
+      if (v !== pyUnbound) {
+        result = v
+        break
+      }
+    }
+    found[name] = result
+    return result
+  }
+
+  // Whether it is `other` or a class under it.
+  fun isSubtype(other : PyType) : bool {
+    if (this === other) { return true }
+    for t in mro { if (t === other) { return true } }
+    return false
+  }
+
+  fun hashCode() : int => identity()
+  override fun toString() : string => pyRepr(this)
+
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? => pyConstruct(this, args, kwnames)
+}
+
+// Changed whenever a class's attributes change, which every type's lookups are kept by.
+var __pyTypeEpoch = 0
+
+fun pyTypeChanged() {
+  __pyTypeEpoch += 1
+}
+
+// ---- Callables ----
+
+// Anything Snippy code calls: each call shape has its own entry, which a function of that many
+// parameters answers directly.
+abstract class PyCallable : PyIdentified() {
+  // A call with `args`, the last kwnames.size of them given by keyword.
+  abstract fun callv(args : List<any?>, kwnames : List<string>?) : any?
+  fun call0() : any? => callv([], null)
+  fun call1(a : any?) : any? => callv([a], null)
+  fun call2(a : any?, b : any?) : any? => callv([a, b], null)
+  fun call3(a : any?, b : any?, c : any?) : any? => callv([a, b, c], null)
+  fun call4(a : any?, b : any?, c : any?, d : any?) : any? => callv([a, b, c, d], null)
+}
+
+// What a function's parameters are: written once for each def and lambda.
+class PySpec(val name : string, val qualname : string, val module : string, val params : List<string>, val posonly : int,
+             val positional : int, val kwonly : int, val hasVarargs : bool, val hasKwargs : bool, val line : int, val flags : int) {
+  // Only positional parameters, so that a call of as many fills them in order.
+  val simple : bool = !hasVarargs and !hasKwargs and kwonly == 0
+  val isGenerator : bool get() => (flags & 1) != 0
+}
+
+// A Snippy function: a WinterWolf function of as many parameters as it has (the *args a tuple,
+// the **kwargs a dict, in their places), with Python's ways of calling it on top.
+abstract class PyFunction(val spec : PySpec, var defaults : List<any?>?, var kwdefaults : Map<string, any?>?) : PyCallable() {
+  var name : string = spec.name
+  var qualname : string = spec.qualname
+  var module : any? = spec.module
+  var doc : any? = null
+  var attrs : PyDict? = null
+  var annotations : any? = null
+
+  // Runs the body with its parameters bound, in order.
+  abstract fun invoke(slots : List<any?>) : any?
+
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? => invoke(pyBind(this, args, kwnames))
+
+  // A call of `count` positional arguments that the body takes as they are (defaults after them).
+  fun direct(count : int) : bool {
+    if (!spec.simple or count > spec.positional) { return false }
+    if (count == spec.positional) { return true }
+    val d = defaults
+    return d != null and spec.positional - count <= d!!.size
+  }
+
+  // The positional arguments `given`, the defaults filling the rest.
+  fun filled(given : List<any?>) : List<any?> {
+    if (given.size == spec.positional) { return given }
+    val out : open List<any?> = given.toOpenList()
+    val d = defaults!!
+    val start = d.size - (spec.positional - given.size)
+    for i in start..<d.size { out.add(d[i]) }
+    return out
+  }
+
+  override fun toString() : string => pyRepr(this)
+}
+
+class PyFunction0(val code : () -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code()
+  override fun call0() : any? => spec.simple ? code() : callv([], null)
+}
+class PyFunction1(val code : (any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0])
+  override fun call1(a : any?) : any? => spec.simple ? code(a) : callv([a], null)
+  override fun call0() : any? => direct(0) ? code(defaults!![0]) : callv([], null)
+}
+class PyFunction2(val code : (any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0], slots[1])
+  override fun call2(a : any?, b : any?) : any? => spec.simple ? code(a, b) : callv([a, b], null)
+  override fun call1(a : any?) : any? => direct(1) ? code(a, defaults!![defaults!!.size - 1]) : callv([a], null)
+}
+class PyFunction3(val code : (any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0], slots[1], slots[2])
+  override fun call3(a : any?, b : any?, c : any?) : any? => spec.simple ? code(a, b, c) : callv([a, b, c], null)
+  override fun call2(a : any?, b : any?) : any? => direct(2) ? code(a, b, defaults!![defaults!!.size - 1]) : callv([a, b], null)
+}
+class PyFunction4(val code : (any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0], slots[1], slots[2], slots[3])
+  override fun call4(a : any?, b : any?, c : any?, d : any?) : any? => spec.simple ? code(a, b, c, d) : callv([a, b, c, d], null)
+}
+class PyFunction5(val code : (any?, any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0], slots[1], slots[2], slots[3], slots[4])
+}
+class PyFunction6(val code : (any?, any?, any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots[0], slots[1], slots[2], slots[3], slots[4], slots[5])
+}
+class PyFunctionN(val code : (List<any?>) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : PyFunction(spec, defaults, kw) {
+  override fun invoke(slots : List<any?>) : any? => code(slots)
+}
+
+fun pyDef0(code : () -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction0(code, spec, defaults, kw)
+fun pyDef1(code : (any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction1(code, spec, defaults, kw)
+fun pyDef2(code : (any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction2(code, spec, defaults, kw)
+fun pyDef3(code : (any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction3(code, spec, defaults, kw)
+fun pyDef4(code : (any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction4(code, spec, defaults, kw)
+fun pyDef5(code : (any?, any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction5(code, spec, defaults, kw)
+fun pyDef6(code : (any?, any?, any?, any?, any?, any?) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunction6(code, spec, defaults, kw)
+fun pyDefN(code : (List<any?>) -> any?, spec : PySpec, defaults : List<any?>?, kw : Map<string, any?>?) : any? => PyFunctionN(code, spec, defaults, kw)
+
+fun pyKwDefaults(pairs : List<any?>) : Map<string, any?> {
+  val m : open Map<string, any?> = {:}
+  var i = 0
+  while (i < pairs.size) {
+    m[pairs[i] as string] = pairs[i + 1]
+    i += 2
+  }
+  return m
+}
+
+// A function and the object it was reached through, which it is called with first.
+class PyMethod(val function : any?, val self : any?) : PyCallable() {
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? {
+    val all : open List<any?> = [self]
+    all.addAll(args)
+    return pyCallV(function, all, kwnames)
+  }
+  override fun call0() : any? => pyCall1(function, self)
+  override fun call1(a : any?) : any? => pyCall2(function, self, a)
+  override fun call2(a : any?, b : any?) : any? => pyCall3(function, self, a, b)
+  override fun call3(a : any?, b : any?, c : any?) : any? => pyCall4(function, self, a, b, c)
+  fun hashCode() : int => pyHash(self) ^ pyHash(function)
+  op ==(other : any?) : bool => other is PyMethod and (other as PyMethod).self === self and (other as PyMethod).function === function
+  override fun toString() : string => pyRepr(this)
+}
+
+// A function of this library's that Snippy code calls: its name, and what it does with the arguments.
+class PyBuiltin(val name : string, val code : (List<any?>, List<string>?) -> any?) : PyCallable() {
+  var self : any? = null      // the object it was reached through, for a method
+  var owner : string? = null  // the type whose method it is
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? => code(args, kwnames)
+  override fun toString() : string => pyRepr(this)
+}
+
+// A method of a builtin type, as Python reaches it through the type (str.upper) or an object
+// ("a".upper): called, it is that method of the object it is given or was reached through.
+class PyMethodDescriptor(val owner : PyType, val name : string) : PyCallable() {
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? {
+    if (args.isEmpty() or (kwnames != null and args.size <= kwnames!!.size)) {
+      throw pyTypeError("unbound method ${owner.name}.$name() needs an argument")
+    }
+    return pyCallMethodV(pyBuiltinSelf(args[0], owner), name, args[1..], kwnames)
+  }
+  override fun toString() : string => "<method '$name' of '${owner.name}' objects>"
+}
+
+// A builtin method reached through an object: "a".upper.
+class PyBoundBuiltin(val self : any?, val name : string) : PyCallable() {
+  override fun callv(args : List<any?>, kwnames : List<string>?) : any? => pyCallMethodV(self, name, args, kwnames)
+  fun hashCode() : int => pyHash(self) ^ name.hashCode()
+  op ==(other : any?) : bool => other is PyBoundBuiltin and (other as PyBoundBuiltin).self === self and (other as PyBoundBuiltin).name == name
+  override fun toString() : string => "<built-in method $name of ${pyTypeName(self)} object at ${pyHexId(self)}>"
+}
+
+// The value an object of a class made from a builtin stands for: its own, for the builtin's methods.
+fun pyBuiltinSelf(o : any?, owner : PyType) : any? {
+  if (o is PyObject and (o as PyObject).cls.layout >= 2) { return (o as PyObject).value }
+  return o
+}
+
+// ---- Binding arguments to parameters ----
+
+// The parameters' values for a call of `f` with `args` (the last kwnames.size by keyword), as
+// Python binds them, with its messages for what does not fit.
+fun pyBind(f : PyFunction, args : List<any?>, kwnames : List<string>?) : List<any?> {
+  val sp = f.spec
+  val nkw = kwnames == null ? 0 : kwnames!!.size
+  val npos = args.size - nkw
+  if (nkw == 0 and sp.simple and f.direct(npos)) { return f.filled(args) }
+  val total = sp.params.size
+  val slots : open List<any?> = []
+  for i in 0..<total { slots.add(pyUnbound) }
+  val fname = sp.qualname + "()"
+  // Positional arguments into the positional parameters, the rest into *args.
+  val takes = npos < sp.positional ? npos : sp.positional
+  for i in 0..<takes { slots[i] = args[i] }
+  var extra : PyDict? = sp.hasKwargs ? PyDict() : null
+  if (sp.hasVarargs) {
+    slots[sp.positional] = PyTuple(npos > sp.positional ? args[sp.positional..<npos] : [])
+  } else if (npos > sp.positional) {
+    var kwGiven = 0
+    if (kwnames != null) {
+      for k in kwnames!! {
+        val at = sp.params.indexOf(k)
+        if (at >= sp.positional and at < sp.positional + sp.kwonly + (sp.hasVarargs ? 1 : 0)) { kwGiven += 1 }
+      }
+    }
+    val ndef = f.defaults == null ? 0 : f.defaults!!.size
+    val takesText = ndef > 0 ? "from ${sp.positional - ndef} to ${sp.positional}" : sp.positional.toString()
+    val plural = sp.positional == 1 and ndef == 0 ? "" : "s"
+    val given = kwGiven > 0 ? "$npos positional argument${npos == 1 ? "" : "s"} (and $kwGiven keyword-only argument${kwGiven == 1 ? "" : "s"}) were given"
+                            : "$npos ${npos == 1 ? "was" : "were"} given"
+    throw pyTypeError("$fname takes $takesText positional argument$plural but $given")
+  }
+  // Keyword arguments into their parameters, the rest into **kwargs.
+  val kwStart = sp.positional + (sp.hasVarargs ? 1 : 0)
+  val posonlyByKw : open List<string> = []
+  if (kwnames != null) {
+    for (j, k) in kwnames!!.withIndex() {
+      val v = args[npos + j]
+      var at = -1
+      for i in 0..<sp.positional {
+        if (sp.params[i] == k) { at = i; break }
+      }
+      if (at < 0) {
+        for i in kwStart..<(kwStart + sp.kwonly) {
+          if (sp.params[i] == k) { at = i; break }
+        }
+      }
+      if (at >= 0 and at < sp.posonly) {
+        if (extra != null) { pyDictSet(extra!!, k, v); continue }
+        posonlyByKw.add(k)
+        continue
+      }
+      if (at < 0) {
+        if (extra != null) {
+          if (extra!!.has(k)) { throw pyTypeError("$fname got multiple values for keyword argument '$k'") }
+          extra!!.set(k, v)
+          continue
+        }
+        throw pyTypeError("$fname got an unexpected keyword argument '$k'")
+      }
+      if (slots[at] !== pyUnbound) { throw pyTypeError("$fname got multiple values for argument '$k'") }
+      slots[at] = v
+    }
+  }
+  if (posonlyByKw.isNotEmpty()) {
+    throw pyTypeError("$fname got some positional-only arguments passed as keyword arguments: '${posonlyByKw.join(", ")}'")
+  }
+  // Defaults, then what is still missing.
+  val d = f.defaults
+  val ndef = d == null ? 0 : d!!.size
+  val missing : open List<string> = []
+  for i in 0..<sp.positional {
+    if (slots[i] === pyUnbound) {
+      val di = i - (sp.positional - ndef)
+      if (di >= 0) { slots[i] = d!![di] } else { missing.add(sp.params[i]) }
+    }
+  }
+  if (missing.isNotEmpty()) {
+    throw pyTypeError("$fname missing ${missing.size} required positional argument${missing.size == 1 ? "" : "s"}: ${pyNameList(missing)}")
+  }
+  for i in kwStart..<(kwStart + sp.kwonly) {
+    if (slots[i] === pyUnbound) {
+      val kd = f.kwdefaults
+      val name = sp.params[i]
+      if (kd != null and name in kd!!.keys) { slots[i] = kd!![name] } else { missing.add(name) }
+    }
+  }
+  if (missing.isNotEmpty()) {
+    throw pyTypeError("$fname missing ${missing.size} required keyword-only argument${missing.size == 1 ? "" : "s"}: ${pyNameList(missing)}")
+  }
+  if (sp.hasKwargs) { slots[total - 1] = extra }
+  return slots
+}
+
+// 'a', 'a' and 'b', 'a', 'b', and 'c': as Python's messages list names.
+fun pyNameList(names : List<string>) : string {
+  val q = names.map { "'$it'" }
+  if (q.size == 1) { return q[0] }
+  if (q.size == 2) { return q[0] + " and " + q[1] }
+  return q[..<(q.size - 1)].join(", ") + ", and " + q[q.size - 1]
+}
+
+// ---- Calls ----
+
+fun pyCall0(f : any?) : any? => f is PyCallable ? (f as PyCallable).call0() : pyCallObject(f, [], null)
+fun pyCall1(f : any?, a : any?) : any? => f is PyCallable ? (f as PyCallable).call1(a) : pyCallObject(f, [a], null)
+fun pyCall2(f : any?, a : any?, b : any?) : any? => f is PyCallable ? (f as PyCallable).call2(a, b) : pyCallObject(f, [a, b], null)
+fun pyCall3(f : any?, a : any?, b : any?, c : any?) : any? => f is PyCallable ? (f as PyCallable).call3(a, b, c) : pyCallObject(f, [a, b, c], null)
+fun pyCall4(f : any?, a : any?, b : any?, c : any?, d : any?) : any? =>
+  f is PyCallable ? (f as PyCallable).call4(a, b, c, d) : pyCallObject(f, [a, b, c, d], null)
+fun pyCallV(f : any?, args : List<any?>, kwnames : List<string>?) : any? =>
+  f is PyCallable ? (f as PyCallable).callv(args, kwnames) : pyCallObject(f, args, kwnames)
+fun pyCallKw(f : any?, values : List<any?>, names : List<string>) : any? => pyCallV(f, values, names)
+
+// A call with *args and **kwargs among the arguments: `pos` already spread, `kw` as pairs of
+// name and value, a null name before a mapping to spread.
+fun pyCallEx(f : any?, pos : List<any?>, kw : List<any?>) : any? {
+  if (kw.isEmpty()) { return pyCallV(f, pos, null) }
+  val names : open List<string> = []
+  val values : open List<any?> = pos.toOpenList()
+  var i = 0
+  while (i < kw.size) {
+    val k = kw[i]
+    val v = kw[i + 1]
+    if (k == null) {
+      for key in pyIterable(pyCallM0(v, "keys")) {
+        if (!(key is string)) { throw pyTypeError("keywords must be strings") }
+        if (key as string in names) { throw pyTypeError("${pyCallableName(f)} got multiple values for keyword argument '$key'") }
+        names.add(key as string)
+        values.add(pyGetItem(v, key))
+      }
+    } else {
+      if (k as string in names) { throw pyTypeError("${pyCallableName(f)} got multiple values for keyword argument '$k'") }
+      names.add(k as string)
+      values.add(v)
+    }
+    i += 2
+  }
+  return pyCallV(f, values, names.isEmpty() ? null : names)
+}
+
+fun pyCallableName(f : any?) : string => when (f) {
+  is PyFunction -> (f as PyFunction).qualname + "()"
+  is PyType -> (f as PyType).name + "()"
+  is PyBuiltin -> (f as PyBuiltin).name + "()"
+  else -> pyTypeName(f) + " object"
+}
+
+// A call of something that is not a function: an object whose class has __call__.
+fun pyCallObject(f : any?, args : List<any?>, kwnames : List<string>?) : any? {
+  if (f is PyObject) {
+    val call = (f as PyObject).cls.lookup("__call__")
+    if (call !== pyUnbound) {
+      val all : open List<any?> = [f]
+      all.addAll(args)
+      return pyCallV(call, all, kwnames)
+    }
+  }
+  throw pyTypeError("'${pyTypeName(f)}' object is not callable")
+}
+
+// A marker for *x in a call's arguments or a display, spread where it is.
+class PyStarArg(val value : any?)
+
+// The list of arguments with each *x spread into its items.
+fun pyArgsStar(items : List<any?>) : open List<any?> {
+  val out : open List<any?> = []
+  for item in items {
+    if (item is PyStarArg) {
+      for x in pyIterable((item as PyStarArg).value) { out.add(x) }
+    } else {
+      out.add(item)
+    }
+  }
+  return out
+}
+
+// ---- Variables ----
+
+class PyNameErrorHint(val name : string)
+
+// A local read where it may not be bound yet.
+fun pyL(v : any?, name : string) : any? {
+  if (v === pyUnbound) { throw pyError(pyUnboundLocalErrorType, "cannot access local variable '$name' where it is not associated with a value") }
+  return v
+}
+
+// A variable of an enclosing function read where it may not be bound yet.
+fun pyF(v : any?, name : string) : any? {
+  if (v === pyUnbound) {
+    throw pyError(pyNameErrorType, "cannot access free variable '$name' where it is not associated with a value in enclosing scope")
+  }
+  return v
+}
+
+// A global, which the module binds somewhere.
+fun pyG(v : any?, name : string) : any? {
+  if (v === pyUnbound) { throw pyNameError(name) }
+  return v
+}
+
+// A global that is also a builtin's name: the builtin while the module has not bound it.
+fun pyGB(v : any?, builtin : any?) : any? => v === pyUnbound ? builtin : v
+
+// A global the module never binds, unless it was given by globals() or import *.
+fun pyGlobalDyn(m : PyModule, name : string) : any? {
+  val v = m.get(name)
+  if (v !== pyUnbound) { return v }
+  val b = __pyBuiltinTable()[name, default = pyUnbound]
+  if (b !== pyUnbound) { return b }
+  throw pyNameError(name)
+}
+
+fun pyNameError(name : string) : PyError {
+  val e = pyNewException(pyNameErrorType, [ "name '$name' is not defined" ])
+  e.dict!!.set("name", name)
+  return PyError(e)
+}
+
+// del of a local or global: unbound after it, an error if it already was.
+fun pyDelL(v : any?, name : string) : any? {
+  if (v === pyUnbound) { throw pyError(pyUnboundLocalErrorType, "cannot access local variable '$name' where it is not associated with a value") }
+  return pyUnbound
+}
+fun pyDelG(v : any?, name : string) : any? {
+  if (v === pyUnbound) { throw pyNameError(name) }
+  return pyUnbound
+}
+
+// A class body's namespace.
+fun pyNsHas(ns : PyDict, name : string) : bool => ns.has(name)
+fun pyNsDel(ns : PyDict, name : string) {
+  if (!ns.remove(name)) { throw pyNameError(name) }
+}
+fun pyNsDelQuiet(ns : PyDict, name : string) {
+  ns.remove(name)
+}
+
+// ---- Modules ----
+
+// A Snippy module: its globals are WinterWolf variables of the file it was made into, reached by
+// name through `getter` and `setter`; those given it otherwise (setattr, import *) in `extra`.
+class PyModule(val name : string, val file : string, val names : List<string>, val getter : (int) -> any?,
+               val setter : (int, any?) -> unit, val body : (() -> unit)?) : PyIdentified() {
+  private val index : open Map<string, int> = {:}
+  val extra : open Map<string, any?> = {:}
+  var ran = false
+  var running = false
+
+  init {
+    for (i, n) in names.withIndex() { index[n] = i }
+  }
+
+  fun get(name : string) : any? {
+    val i = index[name, default = -1]
+    if (i >= 0) { return getter(i) }
+    return extra[name, default = pyUnbound]
+  }
+
+  fun set(name : string, v : any?) {
+    val i = index[name, default = -1]
+    if (i >= 0) { setter(i, v) } else { extra[name] = v }
+  }
+
+  fun delete(name : string) : bool {
+    val i = index[name, default = -1]
+    if (i >= 0) {
+      if (getter(i) === pyUnbound) { return false }
+      setter(i, pyUnbound)
+      return true
+    }
+    if (!(name in extra.keys)) { return false }
+    extra.remove(name)
+    return true
+  }
+
+  // Its names with values, in order.
+  fun bound() : List<string> {
+    val out : open List<string> = []
+    for (i, n) in names.withIndex() { if (getter(i) !== pyUnbound) { out.add(n) } }
+    for n in extra.keys { out.add(n) }
+    return out
+  }
+
+  op ==(other : any?) : bool => this === other
+  fun hashCode() : int => identity()
+  override fun toString() : string => pyRepr(this)
+}
+
+// The modules imported so far, by name.
+val pyModules : PyDict = PyDict()
+
+// A module of the program's own files, run the first time it is imported.
+fun pyImportFile(m : PyModule) : any? {
+  if (!m.ran) {
+    m.ran = true
+    if (!pyModules.has(m.name)) { pyModules.set(m.name, m) }
+    m.running = true
+    try {
+      m.body!!()
+    } catch (t : Throwable) {
+      pyModules.remove(m.name)
+      throw t
+    } finally {
+      m.running = false
+    }
+  }
+  return m
+}
+
+// A module of this library's (math, sys...), by its name.
+fun pyImport(name : string, level : int, from : PyModule) : any? {
+  if (level > 0) { throw pyError(pyImportErrorType, "attempted relative import with no known parent package") }
+  val had = pyModules.get(name, pyUnbound)
+  if (had !== pyUnbound) { return had }
+  val maker = __pyModuleMakers()[name]
+  if (maker == null) {
+    val e = pyNewException(pyModuleNotFoundErrorType, ["No module named '$name'"])
+    e.dict!!.set("name", name)
+    throw PyError(e)
+  }
+  val m = maker!!()
+  pyModules.set(name, m)
+  return m
+}
+
+fun pyImportFrom(m : any?, name : string) : any? {
+  if (m is PyModule) {
+    val v = (m as PyModule).get(name)
+    if (v !== pyUnbound) { return v }
+    val e = pyNewException(pyImportErrorType, ["cannot import name '$name' from '${(m as PyModule).name}' (${(m as PyModule).file})"])
+    e.dict!!.set("name", name)
+    throw PyError(e)
+  }
+  return pyGetAttr(m, name)
+}
+
+fun pyImportStar(m : any?, into : PyModule) {
+  if (m is PyModule) {
+    val mod = m as PyModule
+    val all = mod.get("__all__")
+    val names = all !== pyUnbound ? pyIterable(all).map { it as string } : mod.bound().filter { !it.startsWith("_") }
+    for n in names { into.set(n, mod.get(n)) }
+  }
+}
+
+// The modules a name gives, made the first time each is imported (Modules.ww adds to these).
+internal var __pyMakers : open Map<string, () -> PyModule>? = null
+fun __pyModuleMakers() : open Map<string, () -> PyModule> {
+  if (__pyMakers == null) { __pyMakers = pyStandardModules() }
+  return __pyMakers!!
+}
+
+// A module made by this library, its names in a table.
+fun pyNativeModule(name : string, values : Map<string, any?>) : PyModule {
+  val m = PyModule(name, "<built-in>", [], { i : int -> pyUnbound }, { i : int, v : any? -> }, null)
+  m.extra["__name__"] = name
+  for (k, v) in values { m.extra[k] = v }
+  m.ran = true
+  return m
+}
+
+// ---- Tuples, slices ----
+
+// A tuple: what it holds, never changed.
+class PyTuple(val items : List<any?>) : PyIdentified() {
+  val size : int get() => items.size
+  op [](i : int) : any? => items[i]
+  fun hashCode() : int => pyHash(this)
+  op ==(other : any?) : bool => other is PyTuple and pyEqB(this, other)
+  override fun toString() : string => pyRepr(this)
+}
+
+val pyEmptyTuple : PyTuple = PyTuple([])
+
+// A slice: a[lower:upper:step], any of them None.
+class PySlice(val lower : any?, val upper : any?, val step : any?) {
+  override fun toString() : string => pyRepr(this)
+}
+
+// The program's own file: run, an uncaught error written as Python writes its traceback.
+fun pyRunMain(m : PyModule) {
+  pyInitRuntime()
+  pyModules.set("__main__", m)
+  pyMainFile = m.file
+  var code = 0
+  try {
+    pyImportFile(m)
+  } catch (t : Throwable) {
+    code = pyReportUncaught(t)
+  }
+  pyFlushOutput()
+  if (code != 0) { exit(code) }
+}
+
+var pyMainFile = ""
+
+// ---- Small helpers ----
+
+// A list of any values with the items of a list of one kind.
+fun <T> pyListOfAny(items : List<T>) : open List<any?> {
+  val out : open List<any?> = []
+  for x in items { out.add(x) }
+  return out
+}
+
+fun pyTrimChar(s : string, c : char) : string => pyTrimEndChar(pyTrimStartChar(s, c), c)
+
+fun pyTrimStartChar(s : string, c : char) : string {
+  var i = 0
+  while (i < s.size and s[i] == c) { i += 1 }
+  return s[i..]
+}
+
+fun pyTrimEndChar(s : string, c : char) : string {
+  var j = s.size
+  while (j > 0 and s[j - 1] == c) { j -= 1 }
+  return s[..<j]
+}
+
+// Whether two values are the same one: === where a float, which === compares by value, is not
+// one of them (an int and a float that round alike are not the same).
+fun pySame(a : any?, b : any?) : bool => a === b and !(a is float) and !(b is float)
+
+// A function given its docstring.
+fun pyDoc(f : any?, doc : string) : any? {
+  if (f is PyFunction) { (f as PyFunction).doc = doc }
+  return f
+}
+
+// The cell a class keeps itself in for super() and __class__ in its methods.
+class PyCellBox {
+  var value : any? = null
+}
+
+fun pyCellSet(box : PyCellBox, cls : any?) : any? {
+  box.value = cls
+  return cls
+}
+
+// The Python names of a file's bodies made as lambdas (class bodies, decorated functions,
+// generator expressions), each by the lines it spans: what a traceback calls a "<lambda>"
+// frame there, the innermost one holding its line.
+val pyFrameTables : open Map<string, List<any?>> = {:}
+
+fun pyFrameNames(file : string, spans : List<any?>) : bool {
+  pyFrameTables[file] = spans
+  return true
+}
+
+fun pyLambdaName(file : string, line : int) : string {
+  val spans = pyFrameTables[file]
+  if (spans == null) { return "<lambda>" }
+  var best = "<lambda>"
+  var bestSize = 1 << 40
+  var i = 0
+  while (i < spans!!.size) {
+    val start = spans!![i] as int
+    val end = spans!![i + 1] as int
+    if (line >= start and line <= end and end - start < bestSize) {
+      best = spans!![i + 2] as string
+      bestSize = end - start
+    }
+    i += 3
+  }
+  return best
+}

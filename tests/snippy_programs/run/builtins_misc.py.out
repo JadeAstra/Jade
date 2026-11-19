@@ -1,0 +1,22 @@
+1 3 a 0 5 3
+6 13 1.0 [1, 2] 11
+[1, 2, 3] ['a', 'b', 'c'] [3, 2, 1] ['a', 'b'] [(1, 'a'), (1, 'b')]
+3 3.5 0.0 3.14 2 -2 10 20 20
+(3, 2) (-4, 3) (3.0, 2.5) 256 1 8.0 0
+False True True False True False
+a 97 € 8364 0xff 0o377 0b11111111 0x0 -0b11
+True True True 1 0 -2 0 1
+True True True True False True
+True True True True True
+True False True True 3 2 1 10
+'a\nb' 1.0 [1, 'x'] '\xe9\u2192x' 3.14 101010   x   1,234,567
+True True NoneType builtin_function_or_method function builtin_function_or_method
+{'a': 1, 'b': 2} 1 None True ['a', 'b']
+{'b': 2, 'c': 3} True True
+int ABC list {'a': None, 'b': None} a,b 255
+2.5 -1.5 banana ['A', 'b', 'c']
+0 2 2.67 -1.0 120.0 True
+4 100 0.25 -3 1 -4
+True (0, 1) {0, 1, 2} frozenset({0, 1}) {'a': 1}
+False True 1 0.0 None bytes-str
+[1, 2, 3] True True True

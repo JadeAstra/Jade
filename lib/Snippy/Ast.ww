@@ -1,4 +1,4 @@
-// Python's syntax tree, as CPython 3.14's ast module has it: a class for each of its nodes (named
+// Snippy's syntax tree, as CPython 3.14's ast module has it: a class for each of its nodes (named
 // as Python's, Py before), with its fields in Python's order, so that pyDump writes a tree as
 // ast.dump does. Each node knows where it is in the source.
 

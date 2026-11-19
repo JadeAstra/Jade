@@ -1,0 +1,14 @@
+25 77.0
+100 212.0 The temperature.
+ValueError: below absolute zero
+AttributeError: property 'fahrenheit' of 'Celsius' object has no setter
+deleting
+False
+Ann 30 {'_name': 'Ann', '_age': 30} Typed
+TypeError: age must be int
+1 computed anything computed other
+['a', 'b', 'del a'] 2 False
+HI
+3.14 True
+10 the balance
+2

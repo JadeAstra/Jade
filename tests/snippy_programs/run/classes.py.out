@@ -1,0 +1,17 @@
+Rex says woof Fido says woof 1 5 3 2 2 dog dog
+canis canis Dog True True Dog
+{'name': 'Rex', 'age': 3} ['age', 'name'] Dog Dog __main__
+own canis canis
+canis
+4 True False none
+brown brown
+False
+AttributeError: 'Dog' object has no attribute 'missing'
+AttributeError: type object 'Dog' has no attribute 'missing'
+Rex says woof True True Fido says woof
+1 Empty True (<class 'object'>,) (<class '__main__.Empty'>, <class 'object'>)
+25 25
+42 42 Nested.Inner
+added later Rex
+1 0
+<class 'type'> <class 'type'> True int True

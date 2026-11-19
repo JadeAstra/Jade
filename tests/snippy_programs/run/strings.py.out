@@ -1,0 +1,19 @@
+Hello, Wörld! 😀 15 H 😀 Wörld 😀 !dlröW ,olleH Hlo öl!😀  ! 😀
+eoWl    Hel
+abcd ababab xxx  True True True True True
+True True True 3 7 4
+"it's" 'say "hi"' 'both \' and "' 'tab\tnew\nline\\' '\x00\x7f\u200b\xa0é😀'
+123 1.5 [1, 'a'] None [1, 'a', 2.5, None]
+a 97 a 0x61
+ñ 241 ñ 0xf1
+😀 128512 😀 0x1f600
+A 😀 8364
+abcdef ABCDEF fedcba ['a', 'a', 'a', 'b', 'n', 'n'] ['a', 'b', 'c'] cba
+o e a-b-c x,y,z
+a   b ***x*** 005 -005 abc  |   abc
+line one
+line two
+  indented
+['line one', 'line two', '  indented'] 3
+C:\new\table 12 True
+x and 'y' abc implicit concatenation

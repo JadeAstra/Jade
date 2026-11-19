@@ -1,0 +1,7 @@
+1
+line 16, in <module>
+line 14, in report
+line 13, in <lambda>
+line 11, in names
+line 7, in take
+KeyError: 'pear'

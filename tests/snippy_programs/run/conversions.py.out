@@ -1,0 +1,32 @@
+42 -7 3 1000 255 255 511 35 3
+3 -3 1 123 1208925819614629174706176
+3.5 -1000.0 inf 0.0025 7.0 10.5 0.5 5.0
+1 1.0 -0.0 True [1, 2] (1,) {'a': 1} {1} None 1e+100
+False False False True False True False False False
+(1+0j) (1.5-2j) (3+4j) -2j (10+10j)
+['a', 'b', 'c'] [0, 1, 2] [1, 2] ['x'] (1, 2) ('a', 'b') True
+{1: 2, 3: 4} {'a': 0, 'b': 1, 'c': 2} {'a': 1, 'b': 2} {'x': 1, 'y': 2} {'k': 'override'}
+[1, 2, 3] [1.0, 2.5] 2 8
+int: invalid literal for int() with base 10: 'abc'
+int: invalid literal for int() with base 10: '1.5'
+int: invalid literal for int() with base 10: ''
+int: invalid literal for int() with base 10: ' '
+int: invalid literal for int() with base 10: '1e3'
+int: invalid literal for int() with base 10: '0x10'
+int: invalid literal for int() with base 10: '--1'
+int: invalid literal for int() with base 10: '1__0'
+int: invalid literal for int() with base 10: '_1'
+float: could not convert string to float: 'abc'
+float: could not convert string to float: ''
+float: could not convert string to float: '1.2.3'
+float: could not convert string to float: 'e5'
+float: could not convert string to float: 'inf inity'
+ValueError: int() base must be >= 2 and <= 36, or 0
+TypeError: int() can't convert non-string with explicit base
+ValueError: cannot convert float NaN to integer
+OverflowError: cannot convert float infinity to integer
+10000000000000000 999999999999999999999999999999 1e+30 0 0.7999999999999999
+12345678901234567890 1e+22 0.0001 123456789.0 0.30000000000000004
+0b1010 10 0xff 255 0o10 8
+65 B [104, 105] Hi
+['1', '2', '3'] 42 True 10.0

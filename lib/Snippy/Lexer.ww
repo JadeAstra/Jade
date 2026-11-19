@@ -1,4 +1,5 @@
-// Python's source read into tokens, as CPython 3.14's tokenizer reads it: logical lines and their
+import Snippy.Text.*
+// Snippy's source read into tokens, as CPython 3.14's tokenizer reads it: logical lines and their
 // indentation, names, numbers, strings with their prefixes, operators, and f-strings and
 // t-strings in pieces (PEP 701), the expressions inside them read as any others.
 
@@ -494,7 +495,7 @@ class PyLexer {
     } else if ("+-*/%@&|^~<>()[]{},:.;=!".contains(c)) {
       op = c.toString()
     } else {
-      throw error(c.code < 0x80 ? "invalid syntax" : pyIsPrintable(c.code) ? "invalid character '$c' (U+" + __pyHex(c.code, 4).upper() + ")" : "invalid non-printable character U+" + __pyHex(c.code, 4).upper())
+      throw error(c.code < 0x80 ? "invalid syntax" : pyIsPrintable(c.code) ? "invalid character '$c' (U+" + pyHex(c.code, 4).upper() + ")" : "invalid non-printable character U+" + pyHex(c.code, 4).upper())
     }
     // Inside an f-string's field, ':' at the field's own depth begins its format spec, and its
     // '}' ends it; '!' (not '!=') is the conversion's.

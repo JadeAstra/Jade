@@ -1,0 +1,20 @@
+item        cat        price      qty    sold       value   sell%
+-----------------------------------------------------------------
+whatsit     misc       99.95       12       3    1,199.40   20.0%
+thingamajig parts       7.00        0      75        0.00  100.0%
+doohickey   parts       0.35   25,000  18,000    8,750.00   41.9%
+gadget      tools      12.99      150     120    1,948.50   44.4%
+widget      tools       2.50    1,200     340    3,000.00   22.1%
+-----------------------------------------------------------------
+total                          26,362  18,538   14,897.90
+  misc: whatsit                        revenue     299.85
+ parts: doohickey, thingamajig         revenue   6,825.00
+ tools: gadget, widget                 revenue   2,408.80
+out: ['thingamajig'] low: ['whatsit', 'gadget']
+best seller by revenue: doohickey 6,300.00
+      widget #                                 340
+      gadget                                   120
+   doohickey ##############################  18000
+ thingamajig                                    75
+     whatsit                                     3
+50% 33.333% +1,234.5 -1.00e-04 0x002a 3 1e-10

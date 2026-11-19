@@ -424,7 +424,7 @@ class Suite(val options : Options) {
     val text = path.readText()
     val name = path.nameWithoutExtension
     val cache = FilePath(dir, "cache")
-    // A folder of the tests the test names ("python/grammar.py") is copied where it runs, as a
+    // A folder of the tests the test names ("snippy_programs/grammar.py") is copied where it runs, as a
     // built program's parts are given theirs: what it reads as it runs is found from there.
     val t = path.parent!!
     for (f in t.list().filter { it.isDirectory() and it.name !in ["check", "testing", "shell", "runner"] }) {

@@ -1,0 +1,52 @@
+// Snippy's test programs against what CPython 3.14 gives for them (the Snippy plan, part 5.2's gate): each program of
+// snippy_programs/run (a .py or .snippy file; one whose name starts with _ is a module the others import),
+// run by `ww <file>`, gives what CPython gave: its output (<file>.out), and in <file>.err its exit
+// code, each traceback frame's line and function, and the last line it wrote to standard error.
+// Those were made by tools/snippy/expect.sh in WSL; tools/snippy/check.sh compares the same by hand.
+// Run by ww itself; a built program, started alone, has no ww to ask, and says what ww says.
+
+// What a run's standard error tells of it, as expect.sh writes it: the exit code, then
+// "line N, in name" for each frame of a traceback, then the last line.
+fun summary(code : int, error : string) : string {
+  val lines = error.replace("\r\n", "\n").split("\n").filter { it.isNotEmpty() }
+  val out : open List<string> = ["$code"]
+  for line in lines {
+    if (line.startsWith("  File \"") and line.contains("\", line ")) {
+      val at = line.indexOf("\", line ")
+      out.add("line " + line[(at + 8)..])
+    }
+  }
+  if (lines.isNotEmpty()) { out.add(lines[lines.size - 1]) }
+  return out.map { "$it\n" }.join("")
+}
+
+val command = Process.currentCommand()
+if (command.size < 2) {
+  print("snippy programs: all as CPython's")
+  print("true")
+} else {
+  val ww = command[0]
+  val folder = FilePath("snippy_programs/run")
+  val programs = folder.list().filter { (it.name.endsWith(".py") or it.name.endsWith(".snippy")) and !it.name.startsWith("_") }
+                     .sortedBy { it.name }
+  val differ : open List<string> = []
+  for p in programs {
+    val run = Process.run([ww, p.name], directory = folder)
+    val output = run.output.replace("\r\n", "\n")
+    val expected = folder.resolve(p.name + ".out").readText()
+    val err = summary(run.exitCode, run.error)
+    val expectedErr = folder.resolve(p.name + ".err").readText().replace("\r\n", "\n")
+    if (output != expected or err != expectedErr) {
+      var at = 0
+      while (at < output.size and at < expected.size and output[at] == expected[at]) { at += 1 }
+      differ.add("${p.name}: output from ${at}: ${output[at..<Math.min(output.size, at + 60)]} | ${expected[at..<Math.min(expected.size, at + 60)]}; errors: ${err.replace("\n", " / ")} | ${expectedErr.replace("\n", " / ")}")
+    }
+  }
+  if (differ.isEmpty()) { print("snippy programs: all as CPython's") } else {
+    print("snippy programs: ${differ.size} of ${programs.size} differ")
+    for d in differ { print("  " + d) }
+  }
+  print(programs.size >= 60)
+}
+// expect: snippy programs: all as CPython's
+// expect: true

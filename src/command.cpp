@@ -255,9 +255,11 @@ const HelpEntry kHelp[] = {
     {"shell", "", 0, "ww   (or ww shell)", "ww", "start the interactive shell",
      "Starts the shell: each line is WinterWolf, run as it is entered, its value shown. What a line declares (a val, a\n"
      "function, a class) is kept for the lines after it, and an import brings a library in as in a file."},
-    {"run", "", 0, "ww <file> [args...]   (or ww run <file> [args...])", "ww <file> [args...]", "run a source (.ww) or bytecode (.wwc) file",
+    {"run", "", 0, "ww <file> [args...]   (or ww run <file> [args...])", "ww <file> [args...]", "run a source (.ww), Snippy (.snippy, .py) or bytecode (.wwc) file",
      "Runs the file: a source file (.ww) is compiled first, with what it imports, and the program compiled is kept\n"
-     "in this machine's cache, so that its next run, with nothing changed, starts at once. A bytecode file (.wwc,\n"
+     "in this machine's cache, so that its next run, with nothing changed, starts at once. A Snippy file (.snippy or\n"
+     ".py; Snippy is a Python-like scripting language) is made into WinterWolf first, then compiled and kept the\n"
+     "same way, the Snippy files it imports with it. A bytecode file (.wwc,\n"
      "made by ww build) is run as it is. What follows the file is the program's, in Program.arguments.\n"
      "An import is looked for next to the file, then in a lib folder beside ww.exe, then among the libraries\n"
      "ww.exe carries (Jade); one that cannot be found is said at once."},
@@ -1644,5 +1646,11 @@ int wwCommandMain(const std::vector<std::string>& args) { return dispatch(args);
 // For scripts compiled as a program runs (script.cpp): where their imports of the libraries
 // ww carries are looked for, as for the program's own.
 std::vector<std::string> commandLibraryPaths() { return libraryPaths(); }
+
+// For Snippy's translator (snippy.cpp): its program loaded as `ww` loads any, kept and all.
+int commandLoadProgram(const std::string& path, VM& vm, CompilerSession*& session, Program*& program,
+                       std::unique_ptr<CompilerSession>& sessionOwner, std::unique_ptr<Program>& programOwner) {
+    return loadProgram(path, vm, session, program, sessionOwner, programOwner);
+}
 
 }  // namespace ww

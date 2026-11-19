@@ -1655,13 +1655,16 @@ struct Region {
             }
         }
         if (place >= 0) madeInPlace[c.i] = MadeInPlace{place, boxed, a};
-        c.writeMemory(a);
+        // The callee's slot (where the value goes) as it was on the step's way out, where the
+        // VM, making it again, reads the class.
+        c.writeMemoryLater(a);
         LOp& made = c.op(place >= 0 ? "mkplace" : "mkbox");
         made.slot = callee;
         made.slot2 = a;
         made.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(boxed));
         made.ret = place;
         c.leaves(made);
+        c.write(a, K{kMem});
         for (const Part& p : parts) {
             const bool isFloat = p.field->kind == ValueField::Float, isByte = p.field->kind == ValueField::Narrow;
             Reg r = p.reg;
@@ -2147,11 +2150,14 @@ struct Region {
                 const ObjClass* const boxed = boxedClass(asClass(*global), argc, c.i, place);
                 if (boxed == nullptr) island();
                 noMemberHere(c, u16(x, 0));
-                c.writeMemory(at);
+                // The receiver's slot as it was on the step's way out, where the VM, doing the
+                // instruction again, reads it (as GetOwn's, 2026-11-19).
+                c.writeMemoryLater(at);
                 LOp& read = c.op("getg");
                 read.ki = u16(x, 2);
                 read.slot2 = at;
                 c.leaves(read);
+                c.write(at, K{kMem});
                 makeValue(c, boxed, place, at, at, argc, [&](int k) { return std::pair<int, bool>(top - argc + k, false); });
                 s.top = at + 1;
                 c.fall(s);
@@ -2202,12 +2208,13 @@ struct Region {
                 const Reg acc{kScratchI, CI};
                 c.op("setik", {acc}, {}, {acc}).ki = static_cast<int64_t>(constant);
                 for (const auto& [reg, offset] : parts) c.op("packb", {acc, reg}, {acc, reg}, {acc}).ki = 8 * offset;
-                c.writeMemory(a);
+                c.writeMemoryLater(a);
                 LOp& l = c.op("mksm", {acc}, {acc});
                 l.slot = callee;
                 l.slot2 = static_cast<int64_t>((static_cast<uint64_t>(cls->smallId) << 32) | static_cast<uint64_t>(a));
                 l.ki = static_cast<int64_t>(reinterpret_cast<intptr_t>(cls));
                 c.leaves(l);
+                c.write(a, K{kMem});
                 noteValue(s, a, cls);
                 s.top = u8(x, 2);
                 c.fall(s);
@@ -2421,13 +2428,18 @@ struct Region {
                     // is, to be looked at once. Anything else the VM's.
                     Value held;
                     if (!fieldValue(s, obj, u16(x, 2), -1, held) || held.kind != ValueKind::Obj) island();
-                    c.writeMemory(top - 1);
+                    // The object's slot as it was on the step's way out, where the VM, doing the
+                    // instruction again, reads it (2026-11-19: a receiver pushed as a copy of
+                    // `this`, never written, was taken as written where a read of a field missed,
+                    // and the VM read what the slot held before; bench/snippy/inlined_receiver.ww).
+                    c.writeMemoryLater(top - 1);
                     LOp& l = c.op("getpv");
                     l.slot = obj;
                     l.slot2 = top - 1;
                     l.ki = cacheAddress(u16(x, 2));
                     l.field = name.isObjType(ObjType::String) ? asString(name) : nullptr;
                     c.leaves(l);
+                    c.write(top - 1, K{kMem});
                     noteFact(s, top - 1, [&](Fact& f) { f.from = c.i; });
                     noteFieldValue(s, top - 1, held);
                     if (const NativeSeen::List* const l = listOf(held); l != nullptr && l->store == ListStore::Items && l->itemClass != nullptr)
@@ -2856,31 +2868,42 @@ struct Region {
                     else if (seen == 0) cls = useClass(c.i, a, u8(x, 2), 0, true);
                 }
                 LOp* l;
+                // The destination as it was on the step's way out, where the VM, doing the
+                // instruction again, may read it as the object (`x = x.field`), its kind set once
+                // the way out is noted.
+                c.writeMemoryLater(a);
+                K made{kMem};
                 if (cls >= 0) {
                     const Reg dst{a, static_cast<Cls>(cls)};
                     l = &c.op(cls == CF ? "getpf" : "getpi", {dst}, {}, {dst});
-                    c.write(a, K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)});
+                    made = K{static_cast<uint16_t>(cls == CF ? kFloat : kInt)};
                 } else {
-                    c.writeMemory(a);
                     l = &c.op("getpv");
                     l->slot2 = a;
-                    noteFact(s, a, [&](Fact& f) { f.from = c.i; });
                     // A list read from a field: what it holds, for the items read from it.
                     const int held = fieldClass(s, obj, u16(x, 4), i32(x, 6));
                     if (held >= 0) {
                         auto [it, added] = fieldLists.emplace(a, held);
                         if (!added && it->second != held) it->second = -2;
                     }
-                    if (Value field; fieldValue(s, obj, u16(x, 4), i32(x, 6), field)) {
-                        if (field.kind == ValueKind::Obj) noteFieldValue(s, a, field);
-                        if (const NativeSeen::List* const l = listOf(field); l != nullptr && l->store == ListStore::Items && l->itemClass != nullptr)
-                            noteItems(s, a, l->itemClass);
-                    }
                 }
                 l->slot = obj;
                 l->ki = cache;
                 l->field = slowName(i32(x, 6));
+                // What the field was seen to hold, for the object's own facts, read before the
+                // destination is written (it may be the object's slot).
+                Value field;
+                const bool seenField = cls < 0 && fieldValue(s, obj, u16(x, 4), i32(x, 6), field);
                 c.leaves(*l);
+                c.write(a, made);
+                if (cls < 0) {
+                    noteFact(s, a, [&](Fact& f) { f.from = c.i; });
+                    if (seenField) {
+                        if (field.kind == ValueKind::Obj) noteFieldValue(s, a, field);
+                        if (const NativeSeen::List* const fl = listOf(field); fl != nullptr && fl->store == ListStore::Items && fl->itemClass != nullptr)
+                            noteItems(s, a, fl->itemClass);
+                    }
+                }
                 s.top = u8(x, 2);
                 c.fall(s);
                 return;
@@ -8769,6 +8792,17 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
                 std::fprintf(stderr, "\n");
                 for (size_t i = 0; i < r.ins.size(); i++)
                     if (r.in[i].known && r.results[i].island) std::fprintf(stderr, "  the VM's: %s at %u\n", opName(r.ins[i].op), r.ins[i].at);
+                // Each instruction: where it is, the stack's top as it starts, and its steps (a
+                // step's slots, and where it leaves or jumps).
+                for (size_t i = 0; i < r.ins.size(); i++) {
+                    std::fprintf(stderr, "  %4u %-16s top %d%s:", r.ins[i].at, opName(r.ins[i].op), r.in[i].known ? r.in[i].top : -1,
+                                 r.in[i].known && r.results[i].island ? " (VM's)" : "");
+                    if (r.in[i].known)
+                        for (const LOp& l : r.results[i].ops)
+                            std::fprintf(stderr, " %s[%lld,%lld%s%s]", l.stem.c_str(), static_cast<long long>(l.slot), static_cast<long long>(l.slot2),
+                                         l.exit >= 0 ? (" exit" + std::to_string(l.exit)).c_str() : "", l.jumpExit >= 0 ? (" jexit" + std::to_string(l.jumpExit)).c_str() : "");
+                    std::fprintf(stderr, "\n");
+                }
                 std::fprintf(stderr, "  lists read as ints:");
                 for (int s : intLists) std::fprintf(stderr, " %d", s);
                 std::fprintf(stderr, "; slots written where they meet memory:");
@@ -8802,9 +8836,16 @@ bool findLoops(FunctionProto& f) {
             const char* asked = std::getenv("WW_NATIVE_FUNCTIONS");
             return asked == nullptr || std::string(asked) != "0";
         }();
+        // WW_NATIVE_FUNCTIONS_ONLY=a,b: whole-function regions for those functions alone, to find
+        // which one a fault is in.
+        static const std::string only = [] {
+            const char* asked = std::getenv("WW_NATIVE_FUNCTIONS_ONLY");
+            return asked == nullptr ? std::string() : "," + std::string(asked) + ",";
+        }();
+        const bool chosen = only.empty() || only.find("," + f.name + ",") != std::string::npos;
         std::unordered_map<uint32_t, int> index;
         const std::vector<Ins> all = readRun(f, &index);
-        const int fh = wholeFunctions ? functionHeadOf(f, all, index) : -1;
+        const int fh = wholeFunctions && chosen ? functionHeadOf(f, all, index) : -1;
         const int last = fh >= 0 ? lastOwn(f, index) : -1;
         if (fh >= 0 && last > fh) {
             f.nativeCallHead = all[static_cast<size_t>(fh)].at;

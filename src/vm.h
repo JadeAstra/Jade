@@ -989,6 +989,9 @@ public:
     // as an uncaught error's are shown, leaving out the error's own constructors (the innermost
     // calls whose receiver is the object being made), as Java's fillInStackTrace does.
     Value stackHere();
+    // The calls under way in Snippy files (.py, .snippy), innermost first, every one: what a
+    // Snippy traceback is made of (lib/Snippy/Runtime/Exc.ww).
+    Value snippyFrames();
 
     std::ostream* output;
     std::ostream* errorOutput;  // printError's, and Program.errors'

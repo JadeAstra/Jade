@@ -1,0 +1,4 @@
+# A Snippy program by its own ending: read and run as a .py file is.
+import sys
+values = [n * n for n in range(5)]
+print("snippy", values, sum(values), sys.argv[0].endswith(".snippy"))

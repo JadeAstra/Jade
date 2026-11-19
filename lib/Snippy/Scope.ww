@@ -1,0 +1,426 @@
+// Snippy's scopes, as CPython's symbol table works them out (Python/symtable.c): for each module,
+// function, lambda, class, comprehension and generator expression, the names bound in it, those
+// it declares global or nonlocal, and so, for each name used, where it lives: a local of its own,
+// a variable of an enclosing function (which the translator's WinterWolf closures share, as
+// Python's cells are shared), a module global, or the class namespace being made.
+
+// What a scope is.
+enum PyScopeKind { Module, Function, Class, Comprehension }
+
+// Where a name lives, as seen from one scope: `ww` is the WinterWolf variable that holds it
+// (null for a class namespace's own names and for a global the module never binds).
+enum PyRefKind { Local, Free, Global, ClassName }
+class PyRef(val kind : PyRefKind, val ww : string?, val scope : PyScope?)
+
+class PyScope(val kind : PyScopeKind, val name : string, val parent : PyScope?, val id : int) {
+  val bound : open Set<string> = Set<string>()
+  val params : open List<string> = []
+  val globals : open Set<string> = Set<string>()
+  val nonlocals : open Set<string> = Set<string>()
+  val deleted : open Set<string> = Set<string>()
+  // Parameters given another value in the body (or deleted): held in a var of their own.
+  val assignedParams : open Set<string> = Set<string>()
+  val used : open Set<string> = Set<string>()
+  var isGenerator = false
+  var isCoroutine = false
+  // A generator expression: a function of its own, which a walrus inside it passes over.
+  var isGenExp = false
+  // A class whose functions use super() or __class__, which then hold the class made in a cell.
+  var needsClassCell = false
+  // A function that uses super() or __class__.
+  var usesClassCell = false
+  var importsStar = false
+  // The qualified name of what it makes (Python's __qualname__).
+  var qualname = ""
+
+  // The WinterWolf variable of a name bound here.
+  fun wwName(name : string) : string => when (kind) {
+    PyScopeKind.Module -> "g_" + pyMangle(name)
+    PyScopeKind.Comprehension -> "v_" + pyMangle(name) + "_c" + id
+    else -> "v_" + pyMangle(name)
+  }
+
+  // A function, lambda, generator expression or comprehension: one whose bound names are its own.
+  val isFunctionLike : bool
+    get() => kind == PyScopeKind.Function or kind == PyScopeKind.Comprehension
+
+  // Where `name`, used here, lives.
+  fun resolve(name : string) : PyRef {
+    if (kind == PyScopeKind.Module) { return PyRef(PyRefKind.Global, "g_" + pyMangle(name), null) }
+    if (name in globals) { return pyGlobalRef(this, name) }
+    if (kind == PyScopeKind.Class) {
+      if (name in nonlocals) { return outer(name) }
+      if (name in bound) { return PyRef(PyRefKind.ClassName, null, this) }
+      return outer(name)
+    }
+    if (name in nonlocals) { return outer(name) }
+    if (name in bound) { return PyRef(PyRefKind.Local, wwName(name), this) }
+    return outer(name)
+  }
+
+  // Where `name` lives for this scope when it is not its own: in an enclosing function (class
+  // scopes passed over, as Python's are), or a global.
+  fun outer(name : string) : PyRef {
+    var p = parent
+    while (p != null) {
+      val s = p!!
+      if (s.kind == PyScopeKind.Class) {
+        if (name == "__class__" and s.needsClassCell) { return PyRef(PyRefKind.Free, "k_" + s.id + ".value", s) }
+        p = s.parent
+        continue
+      }
+      if (s.kind == PyScopeKind.Module) { return pyGlobalRef(s, name) }
+      if (name in s.globals) { return pyGlobalRef(s, name) }
+      if (name in s.bound and !(name in s.nonlocals)) { return PyRef(PyRefKind.Free, s.wwName(name), s) }
+      p = s.parent
+    }
+    return PyRef(PyRefKind.Global, "g_" + pyMangle(name), null)
+  }
+
+  // The module scope this one is in.
+  val module : PyScope
+    get() {
+      var s = this
+      while (s.parent != null) { s = s.parent!! }
+      return s
+    }
+}
+
+internal fun pyGlobalRef(any : PyScope, name : string) : PyRef => PyRef(PyRefKind.Global, "g_" + pyMangle(name), null)
+
+// A Snippy name as a WinterWolf one: letters, digits and _ as they are, anything else as _x and
+// its code in hex and _.
+fun pyMangle(name : string) : string {
+  var plain = true
+  for c in name {
+    if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_')) { plain = false }
+  }
+  if (plain) { return name }
+  val sb = StringBuilder()
+  for c in name {
+    if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') { sb.append(c) } else { sb.append("_x" + c.code.toString(16) + "_") }
+  }
+  return sb.toString()
+}
+
+// The scopes of a module: each made as the tree is walked, kept by the node that makes it.
+class PyScopes(val file : string) {
+  val byNode : open Map<PyNode, PyScope> = {:}
+  var count = 0
+  lateinit var module : PyScope
+  // A SyntaxError the symbol table finds (a nonlocal with no binding, return outside a function).
+  var problem : PySyntaxError? = null
+
+  fun make(kind : PyScopeKind, name : string, parent : PyScope?, node : PyNode?) : PyScope {
+    val s = PyScope(kind, name, parent, count)
+    count += 1
+    if (node != null) { byNode[node!!] = s }
+    if (parent == null) {
+      s.qualname = ""
+    } else {
+      val p = parent!!
+      val prefix = p.kind == PyScopeKind.Module ? "" : p.kind == PyScopeKind.Class ? p.qualname + "." : p.qualname + ".<locals>."
+      s.qualname = prefix + name
+    }
+    return s
+  }
+
+  fun fail(text : string, node : PyNode) {
+    if (problem == null) { problem = PySyntaxError(text, file, node.line, node.col) }
+  }
+
+  // Works out the scopes of `tree`; a SyntaxError found is kept in `problem`.
+  fun analyze(tree : PyModule) {
+    module = make(PyScopeKind.Module, "<module>", null, tree)
+    for s in tree.body { stmt(s, module) }
+    check(module)
+  }
+
+  // The SyntaxErrors CPython's symbol table raises once a scope is whole.
+  private fun check(s : PyScope) {
+    for name in s.nonlocals {
+      val r = s.outer(name)
+      if (r.kind != PyRefKind.Free) { problem = problem ?: PySyntaxError("no binding for nonlocal '$name' found", file, 1, 0) }
+    }
+  }
+
+  fun bind(name : string, s : PyScope) {
+    if (name in s.params) { s.assignedParams.add(name) }
+    s.bound.add(name)
+  }
+
+  fun stmts(list : List<PyStmt>, s : PyScope) {
+    for st in list { stmt(st, s) }
+  }
+
+  fun stmt(st : PyStmt, s : PyScope) {
+    when (st) {
+      is PyFunctionDef -> {
+        for d in st.decoratorList { expr(d, s) }
+        args(st.args, s)
+        bind(st.name, s)
+        val f = make(PyScopeKind.Function, st.name, s, st)
+        f.isCoroutine = st.isAsync
+        bindParams(st.args, f)
+        stmts(st.body, f)
+        if (f.isCoroutine and f.isGenerator) { f.isGenerator = true }
+        check(f)
+      }
+      is PyClassDef -> {
+        for d in st.decoratorList { expr(d, s) }
+        for b in st.bases { expr(b, s) }
+        for k in st.keywords { expr(k.value, s) }
+        bind(st.name, s)
+        val c = make(PyScopeKind.Class, st.name, s, st)
+        stmts(st.body, c)
+      }
+      is PyReturn -> {
+        if (!s.isFunctionLike or s.kind == PyScopeKind.Comprehension) { fail("'return' outside function", st) }
+        if (st.value != null) { expr(st.value!!, s) }
+      }
+      is PyDelete -> for t in st.targets { expr(t, s) }
+      is PyAssign -> {
+        expr(st.value, s)
+        for t in st.targets { expr(t, s) }
+      }
+      is PyTypeAlias -> {
+        expr(st.name, s)
+      }
+      is PyAugAssign -> {
+        expr(st.value, s)
+        expr(st.target, s)
+        if (st.target is PyName) { s.used.add((st.target as PyName).id) }
+      }
+      is PyAnnAssign -> {
+        if (st.value != null) { expr(st.value!!, s) }
+        if (st.target is PyName) {
+          if (st.value != null or s.kind != PyScopeKind.Module) { bind((st.target as PyName).id, s) }
+          if (st.value == null and s.kind != PyScopeKind.Module and s.kind != PyScopeKind.Class) { s.bound.add((st.target as PyName).id) }
+        } else {
+          expr(st.target, s)
+        }
+      }
+      is PyFor -> {
+        expr(st.iter, s)
+        expr(st.target, s)
+        stmts(st.body, s)
+        stmts(st.orelse, s)
+      }
+      is PyWhile -> {
+        expr(st.test, s)
+        stmts(st.body, s)
+        stmts(st.orelse, s)
+      }
+      is PyIf -> {
+        expr(st.test, s)
+        stmts(st.body, s)
+        stmts(st.orelse, s)
+      }
+      is PyWith -> {
+        for item in st.items {
+          expr(item.contextExpr, s)
+          if (item.optionalVars != null) { expr(item.optionalVars!!, s) }
+        }
+        stmts(st.body, s)
+      }
+      is PyMatch -> {
+        expr(st.subject, s)
+        for c in st.cases {
+          pattern(c.pattern, s)
+          if (c.guard != null) { expr(c.guard!!, s) }
+          stmts(c.body, s)
+        }
+      }
+      is PyRaise -> {
+        if (st.exc != null) { expr(st.exc!!, s) }
+        if (st.cause != null) { expr(st.cause!!, s) }
+      }
+      is PyTry -> {
+        stmts(st.body, s)
+        for h in st.handlers {
+          if (h.type != null) { expr(h.type!!, s) }
+          if (h.name != null) {
+            bind(h.name!!, s)
+            s.deleted.add(h.name!!)
+          }
+          stmts(h.body, s)
+        }
+        stmts(st.orelse, s)
+        stmts(st.finalbody, s)
+      }
+      is PyAssert -> {
+        expr(st.test, s)
+        if (st.msg != null) { expr(st.msg!!, s) }
+      }
+      is PyImport -> for a in st.names {
+        bind(a.asname ?: a.name.split(".")[0], s)
+      }
+      is PyImportFrom -> for a in st.names {
+        if (a.name == "*") { s.importsStar = true } else { bind(a.asname ?: a.name, s) }
+      }
+      is PyGlobal -> for n in st.names {
+        if (n in s.params) { fail("name '$n' is parameter and global", st) }
+        s.globals.add(n)
+      }
+      is PyNonlocal -> for n in st.names {
+        if (s.kind == PyScopeKind.Module) { fail("nonlocal declaration not allowed at module level", st) }
+        if (n in s.params) { fail("name '$n' is parameter and nonlocal", st) }
+        s.nonlocals.add(n)
+      }
+      is PyExprStmt -> expr(st.value, s)
+      else -> {}
+    }
+  }
+
+  // Defaults are worked out where the function is made; annotations are not (PEP 649).
+  private fun args(a : PyArguments, s : PyScope) {
+    for d in a.defaults { expr(d, s) }
+    for d in a.kwDefaults {
+      if (d != null) { expr(d!!, s) }
+    }
+  }
+
+  private fun bindParams(a : PyArguments, f : PyScope) {
+    val seen : open Set<string> = Set<string>()
+    fun add(p : PyArg) {
+      if (p.arg in seen) { fail("duplicate argument '${p.arg}' in function definition", p) }
+      seen.add(p.arg)
+      f.params.add(p.arg)
+      f.bound.add(p.arg)
+    }
+    for p in a.posonlyargs { add(p) }
+    for p in a.args { add(p) }
+    if (a.vararg != null) { add(a.vararg!!) }
+    for p in a.kwonlyargs { add(p) }
+    if (a.kwarg != null) { add(a.kwarg!!) }
+  }
+
+  // The scope a walrus in `s` binds in: the nearest that is not a comprehension.
+  private fun walrusScope(s : PyScope, node : PyNode) : PyScope {
+    var t = s
+    while (t.kind == PyScopeKind.Comprehension or t.isGenExp) { t = t.parent!! }
+    if (t.kind == PyScopeKind.Class and t !== s) { fail("assignment expression within a comprehension cannot be used in a class body", node) }
+    return t
+  }
+
+  // A comprehension or generator expression: its first iterable is worked out outside it.
+  private fun comprehension(node : PyExpr, gens : List<PyComprehension>, parts : List<PyExpr>, s : PyScope, genexp : bool) {
+    expr(gens[0].iter, s)
+    val name = when (node) {
+      is PyListComp -> "<listcomp>"
+      is PySetComp -> "<setcomp>"
+      is PyDictComp -> "<dictcomp>"
+      else -> "<genexpr>"
+    }
+    val c = make(genexp ? PyScopeKind.Function : PyScopeKind.Comprehension, name, s, node)
+    if (genexp) {
+      c.isGenExp = true
+      c.isGenerator = true
+    }
+    for (i, g) in gens.withIndex() {
+      if (i > 0) { expr(g.iter, c) }
+      expr(g.target, c)
+      for cond in g.ifs { expr(cond, c) }
+    }
+    for p in parts { expr(p, c) }
+  }
+
+  fun expr(e : PyExpr, s : PyScope) {
+    when (e) {
+      is PyName -> {
+        if (e.ctx == PyCtx.Load) {
+          s.used.add(e.id)
+          if (e.id == "super" or e.id == "__class__") { classCell(s) }
+        } else {
+          bind(e.id, s)
+          if (e.ctx == PyCtx.Del) { s.deleted.add(e.id) }
+        }
+      }
+      is PyNamedExpr -> {
+        expr(e.value, s)
+        val t = walrusScope(s, e)
+        val name = (e.target as PyName).id
+        bind(name, t)
+      }
+      is PyLambda -> {
+        args(e.args, s)
+        val f = make(PyScopeKind.Function, "<lambda>", s, e)
+        bindParams(e.args, f)
+        expr(e.body, f)
+      }
+      is PyListComp -> comprehension(e, e.generators, [e.elt], s, false)
+      is PySetComp -> comprehension(e, e.generators, [e.elt], s, false)
+      is PyDictComp -> comprehension(e, e.generators, [e.key, e.value], s, false)
+      is PyGeneratorExp -> comprehension(e, e.generators, [e.elt], s, true)
+      is PyYield -> {
+        markGenerator(s, e)
+        if (e.value != null) { expr(e.value!!, s) }
+      }
+      is PyYieldFrom -> {
+        markGenerator(s, e)
+        expr(e.value, s)
+      }
+      is PyAwait -> {
+        expr(e.value, s)
+      }
+      else -> {
+        for f in e.fields() {
+          if (f is PyExpr) { expr(f as PyExpr, s) }
+          else if (f is PyNode) { node(f as PyNode, s) }
+          else if (f is List<any?>) {
+            for item in f as List<any?> {
+              if (item is PyExpr) { expr(item as PyExpr, s) } else if (item is PyNode) { node(item as PyNode, s) }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // The parts of expressions that are not expressions: keywords, slices' parts.
+  private fun node(n : PyNode, s : PyScope) {
+    if (n is PyKeyword) { expr((n as PyKeyword).value, s) }
+  }
+
+  private fun markGenerator(s : PyScope, node : PyNode) {
+    if (s.kind == PyScopeKind.Comprehension or (s.isGenExp and false)) { fail("'yield' inside list comprehension", node) }
+    if (s.kind != PyScopeKind.Function) { fail("'yield' outside function", node); return }
+    s.isGenerator = true
+  }
+
+  // super() or __class__ in a function: the class it is written in keeps itself in a cell.
+  private fun classCell(s : PyScope) {
+    var f : PyScope? = s
+    while (f != null and f!!.kind != PyScopeKind.Function) { f = f!!.parent }
+    if (f == null) { return }
+    var c = f!!.parent
+    while (c != null and c!!.kind != PyScopeKind.Class) { c = c!!.parent }
+    if (c == null) { return }
+    f!!.usesClassCell = true
+    c!!.needsClassCell = true
+  }
+
+  fun pattern(p : PyPattern, s : PyScope) {
+    when (p) {
+      is PyMatchValue -> expr(p.value, s)
+      is PyMatchSequence -> for q in p.patterns { pattern(q, s) }
+      is PyMatchMapping -> {
+        for k in p.keys { expr(k, s) }
+        for q in p.patterns { pattern(q, s) }
+        if (p.rest != null) { bind(p.rest!!, s) }
+      }
+      is PyMatchClass -> {
+        expr(p.cls, s)
+        for q in p.patterns { pattern(q, s) }
+        for q in p.kwdPatterns { pattern(q, s) }
+      }
+      is PyMatchStar -> if (p.name != null) { bind(p.name!!, s) }
+      is PyMatchAs -> {
+        if (p.pattern != null) { pattern(p.pattern!!, s) }
+        if (p.name != null) { bind(p.name!!, s) }
+      }
+      is PyMatchOr -> for q in p.patterns { pattern(q, s) }
+      else -> {}
+    }
+  }
+}

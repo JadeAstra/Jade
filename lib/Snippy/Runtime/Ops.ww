@@ -1,0 +1,1311 @@
+import Snippy.Text.*
+// Snippy's operators, as Python's: arithmetic on its numbers (an int a WinterWolf int while it fits, a BigInt
+// past that, back where it fits again), its sequences' + and *, and an object's special methods
+// with Python's order (the right operand's reflected method first where its class is under the
+// left's); comparisons, truth, hashing as CPython hashes, len and in.
+
+internal val __pyOpNames : List<string> = ["__add__", "__sub__", "__mul__", "__matmul__", "__truediv__", "__floordiv__", "__mod__",
+  "__pow__", "__lshift__", "__rshift__", "__and__", "__xor__", "__or__"]
+internal val __pyROpNames : List<string> = ["__radd__", "__rsub__", "__rmul__", "__rmatmul__", "__rtruediv__", "__rfloordiv__",
+  "__rmod__", "__rpow__", "__rlshift__", "__rrshift__", "__rand__", "__rxor__", "__ror__"]
+internal val __pyIOpNames : List<string> = ["__iadd__", "__isub__", "__imul__", "__imatmul__", "__itruediv__", "__ifloordiv__",
+  "__imod__", "__ipow__", "__ilshift__", "__irshift__", "__iand__", "__ixor__", "__ior__"]
+internal val __pyOpSymbols : List<string> = ["+", "-", "*", "@", "/", "//", "%", "** or pow()", "<<", ">>", "&", "^", "|"]
+
+// ---- Ints ----
+
+// A BigInt as Python's int: an int where it fits.
+fun pyNorm(b : BigInt) : any? {
+  val small = b.toIntOrNull()
+  return small != null ? small : b
+}
+
+fun pyBigConst(text : string) : any? => pyNorm(BigInt.parse(text))
+
+fun pyBig(x : any?) : BigInt => when (x) {
+  is int -> BigInt.of(x as int)
+  is bool -> BigInt.of((x as bool) ? 1 : 0)
+  else -> x as BigInt
+}
+
+// An int, a bool or a BigInt: what Snippy counts as an int.
+fun pyIsInt(x : any?) : bool => x is int or x is bool or x is BigInt
+
+fun pyIsNumber(x : any?) : bool => x is int or x is float or x is bool or x is BigInt or x is Complex
+
+// The value under an object of a class made from a builtin.
+fun pyUnwrap(x : any?) : any? => x is PyObject and (x as PyObject).cls.layout >= 2 ? (x as PyObject).value : x
+
+// operator.index: an int, from an int, a bool or an object's __index__.
+fun pyIndexValue(x : any?) : any? {
+  if (x is int) { return x }
+  if (x is bool) { return (x as bool) ? 1 : 0 }
+  if (x is BigInt) { return x }
+  if (x is PyObject) {
+    val m = (x as PyObject).cls.lookup("__index__")
+    if (m !== pyUnbound) {
+      val r = pyCall1(m, x)
+      if (!pyIsInt(r)) { throw pyTypeError("__index__ returned non-int (type ${pyTypeName(r)})") }
+      return r is bool ? ((r as bool) ? 1 : 0) : r
+    }
+    if ((x as PyObject).cls.layout == 5) { return pyIndexValue((x as PyObject).value) }
+  }
+  throw pyTypeError("'${pyTypeName(x)}' object cannot be interpreted as an integer")
+}
+
+// An index as a WinterWolf int.
+fun pyIndex(x : any?) : int {
+  if (x is int) { return x as int }
+  val v = pyIndexValue(x)
+  if (v is int) { return v as int }
+  throw pyError(pyOverflowErrorType, "int too large to convert to C ssize_t")
+}
+
+fun pyToFloat(x : any?) : float {
+  return when (x) {
+    is float -> x as float
+    is int -> (x as int).toFloat()
+    is bool -> (x as bool) ? 1.0 : 0.0
+    is BigInt -> {
+      val f = (x as BigInt).toFloat()
+      if (f.isInfinite()) { throw pyOverflowError("int too large to convert to float") }
+      f
+    }
+    else -> pyFloatOf1(x) as float
+  }
+}
+
+internal fun __pyIntAdd(a : int, b : int) : any? {
+  val r = a &+ b
+  if (((a ^ r) & (b ^ r)) < 0) { return pyNorm(BigInt.of(a) + BigInt.of(b)) }
+  return r
+}
+
+internal fun __pyIntSub(a : int, b : int) : any? {
+  val r = a &- b
+  if (((a ^ b) & (a ^ r)) < 0) { return pyNorm(BigInt.of(a) - BigInt.of(b)) }
+  return r
+}
+
+internal fun __pyIntMul(a : int, b : int) : any? {
+  if (a > -3037000499 and a < 3037000499 and b > -3037000499 and b < 3037000499) { return a * b }
+  return pyNorm(BigInt.of(a) * BigInt.of(b))
+}
+
+internal fun __pyFloorDivInt(a : int, b : int) : any? {
+  if (b == 0) { throw pyZeroDivisionError("division by zero") }
+  if (a == -9223372036854775807 - 1 and b == -1) { return pyNorm(BigInt.of(a) * BigInt.of(-1)) }
+  var q = a / b
+  if ((a % b != 0) and ((a < 0) != (b < 0))) { q -= 1 }
+  return q
+}
+
+internal fun __pyModInt(a : int, b : int) : any? {
+  if (b == 0) { throw pyZeroDivisionError("division by zero") }
+  if (b == -1) { return 0 }
+  val r = a % b
+  return r != 0 and ((r < 0) != (b < 0)) ? r + b : r
+}
+
+internal fun __pyBigFloorDiv(a : BigInt, b : BigInt) : any? {
+  if (b == BigInt.of(0)) { throw pyZeroDivisionError("division by zero") }
+  return pyNorm(a.floorDiv(b))
+}
+
+internal fun __pyBigMod(a : BigInt, b : BigInt) : any? {
+  if (b == BigInt.of(0)) { throw pyZeroDivisionError("division by zero") }
+  return pyNorm(a.floorMod(b))
+}
+
+internal fun __pyIntPow(a : any?, b : any?) : any? {
+  val bv = pyIndexValue(b)
+  if (bv is BigInt) {
+    val av = pyIndexValue(a)
+    if (av == 0 or av == 1) { return av }
+    if (av == -1) { return (bv as BigInt).testBit(0) ? -1 : 1 }
+    if ((bv as BigInt) < 0) { return pyToFloat(a).pow(pyToFloat(b)) }
+    throw pyError(pyMemoryErrorType, "")
+  }
+  val e = bv as int
+  if (e < 0) {
+    val base = pyToFloat(a)
+    if (base == 0.0) { throw pyZeroDivisionError("zero to a negative power") }
+    return base.pow(e.toFloat())
+  }
+  val av = pyIndexValue(a)
+  if (av is int) {
+    var result = 1
+    var base = av as int
+    var n = e
+    var overflow = false
+    while (n > 0) {
+      if ((n & 1) == 1) {
+        val r = __pyIntMul(result, base)
+        if (!(r is int)) { overflow = true; break }
+        result = r as int
+      }
+      n = n >> 1
+      if (n > 0) {
+        val sq = __pyIntMul(base, base)
+        if (!(sq is int)) { overflow = true; break }
+        base = sq as int
+      }
+    }
+    if (!overflow) { return result }
+  }
+  return pyNorm(pyBig(av).pow(e))
+}
+
+internal fun __pyShift(a : any?, b : any?, left : bool) : any? {
+  val n = pyIndexValue(b)
+  if (n is BigInt) {
+    if ((n as BigInt) < 0) { throw pyValueError("negative shift count") }
+    if (left) { if (pyIndexValue(a) == 0) { return 0 }; throw pyOverflowError("too many digits in integer") }
+    return pyBig(pyIndexValue(a)) < 0 ? -1 : 0
+  }
+  val s = n as int
+  if (s < 0) { throw pyValueError("negative shift count") }
+  val av = pyIndexValue(a)
+  if (av is int) {
+    val x = av as int
+    if (!left) { return s >= 64 ? (x < 0 ? -1 : 0) : x >> s }
+    if (x == 0) { return 0 }
+    if (s < 63) {
+      val r = x << s
+      if ((r >> s) == x) { return r }
+    }
+  }
+  return left ? pyNorm(pyBig(av) << s) : pyNorm(pyBig(av) >> s)
+}
+
+// ---- Floats ----
+
+internal fun __pyFloatDivmod(vx : float, wx : float) : Pair<float, float> {
+  var mod = vx % wx
+  var div = (vx - mod) / wx
+  if (mod != 0.0) {
+    if ((wx < 0.0) != (mod < 0.0)) {
+      mod += wx
+      div -= 1.0
+    }
+  } else {
+    mod = wx < 0.0 ? -0.0 : 0.0
+  }
+  var floordiv = 0.0
+  if (div != 0.0) {
+    floordiv = pyFloor(div)
+    if (div - floordiv > 0.5) { floordiv += 1.0 }
+  } else {
+    floordiv = (vx / wx) < 0.0 ? -0.0 : 0.0
+  }
+  return Pair(floordiv, mod)
+}
+
+fun pyFloor(x : float) : float {
+  if (x.isNaN() or x.isInfinite()) { return x }
+  val t = Math.trunc(x)
+  return t > x ? t - 1.0 : t
+}
+
+internal fun __pyFloatPow(a : float, b : float) : any? {
+  if (a == 0.0 and b < 0.0) { throw pyZeroDivisionError("zero to a negative power") }
+  if (a < 0.0 and b != pyFloor(b) and !b.isInfinite()) { return __pyComplexPow(Complex(a, 0.0), Complex(b, 0.0)) }
+  val r = a.pow(b)
+  if (r.isInfinite() and !a.isInfinite() and !b.isInfinite()) { throw pyOverflowError("(34, 'Numerical result out of range')") }
+  return r
+}
+
+internal fun __pyComplexPow(a : Complex, b : Complex) : any? {
+  if (b.im == 0.0 and b.re == pyFloor(b.re) and Math.abs(b.re) <= 100.0) {
+    // A whole power by multiplying, as CPython's c_powi.
+    val n = Math.trunc(b.re).toInt()
+    val p = __pyComplexPowU(a, n < 0 ? -n : n)
+    return n < 0 ? __pyComplexQuot(Complex(1.0, 0.0), p) : p
+  }
+  if (b.re == 0.0 and b.im == 0.0) { return Complex(1.0, 0.0) }
+  if (a.re == 0.0 and a.im == 0.0) {
+    if (b.im != 0.0 or b.re < 0.0) { throw pyZeroDivisionError("zero to a negative or complex power") }
+    return Complex(0.0, 0.0)
+  }
+  val vabs = Math.hypot(a.re, a.im)
+  var len = vabs.pow(b.re)
+  val at = Math.atan2(a.im, a.re)
+  var phase = at * b.re
+  if (b.im != 0.0) {
+    len /= Math.exp(at * b.im)
+    phase += b.im * Math.ln(vabs)
+  }
+  return Complex(len * Math.cos(phase), len * Math.sin(phase))
+}
+
+fun pyComplex(re : float, im : float) : any? => Complex(re, im)
+
+internal fun __pyToComplex(x : any?) : Complex => x is Complex ? x as Complex : Complex(pyToFloat(x), 0.0)
+
+// ---- Arithmetic of the builtin values ----
+
+// a op b for values of builtin types; NotImplemented where they have no such operation together.
+fun pyBuiltinOp(a0 : any?, b0 : any?, op : int) : any? {
+  val a = pyUnwrap(a0)
+  val b = pyUnwrap(b0)
+  val an = pyIsNumber(a)
+  val bn = pyIsNumber(b)
+  if (an and bn) { return __pyNumberOp(a, b, op) }
+  // keys() and items() take set operators, giving sets, as CPython's views do.
+  if ((op == 1 or op >= 10) and ((a is PyDictView and (a as PyDictView).kind != 1) or (b is PyDictView and (b as PyDictView).kind != 1))) {
+    val left = PySet(false)
+    left.update(a is PyDictView ? (a as PyDictView).items() : a)
+    val right = pyAsSet(b is PyDictView ? (b as PyDictView).items() : b)
+    if (op == 1) {
+      for k in right.items() { left.discard(k) }
+      return left
+    }
+    left.updateWith(right, op)
+    return left
+  }
+  when (op) {
+    0 -> {
+      if (a is string and b is string) { return (a as string) + (b as string) }
+      if (a is List<any?> and b is List<any?> and !(a is PyTuple)) {
+        val out : open List<any?> = (a as List<any?>).toOpenList()
+        out.addAll(b as List<any?>)
+        return out
+      }
+      if (a is PyTuple and b is PyTuple) { return PyTuple((a as PyTuple).items + (b as PyTuple).items) }
+      if (a is Bytes and b is Bytes) { return (a as Bytes) + (b as Bytes) }
+    }
+    2 -> {
+      if (pyIsInt(b) and !(a is float) and !(a is Complex)) { return __pySeqRepeat(a, b) }
+      if (pyIsInt(a)) { return __pySeqRepeat(b, a) }
+    }
+    6 -> {
+      if (a is string) { return pyPercentFormat(a as string, b) }
+      if (a is Bytes) { return pyPercentBytes(a as Bytes, b) }
+    }
+    10, 11, 12 -> {
+      if (a is PySet and b is PySet) { return (a as PySet).operate(b as PySet, op) }
+      if (op == 12 and a is PyDict and b is PyDict) {
+        val out = (a as PyDict).copy()
+        pyDictUpdate(out, b)
+        return out
+      }
+    }
+    1 -> {
+      if (a is PySet and b is PySet) { return (a as PySet).operate(b as PySet, 1) }
+    }
+    else -> {}
+  }
+  return pyNotImplemented
+}
+
+// `seq` repeated `n` times: a str, list, tuple or bytes; NotImplemented for anything else.
+internal fun __pySeqRepeat(seq : any?, n0 : any?) : any? {
+  if (!(seq is string or seq is List<any?> or seq is PyTuple or seq is Bytes)) { return pyNotImplemented }
+  val nv = pyIndexValue(n0)
+  if (nv is BigInt) {
+    if ((nv as BigInt) < 0) { return pyRepeatOf(seq, 0) }
+    throw pyOverflowError("cannot fit 'int' into an index-sized integer")
+  }
+  return pyRepeatOf(seq, nv as int)
+}
+
+fun pyRepeatOf(seq : any?, n : int) : any? {
+  val count = n < 0 ? 0 : n
+  return when (seq) {
+    is string -> (seq as string).repeat(count)
+    is PyTuple -> {
+      val out : open List<any?> = []
+      for i in 0..<count { out.addAll((seq as PyTuple).items) }
+      PyTuple(out)
+    }
+    is List<any?> -> {
+      val out : open List<any?> = []
+      for i in 0..<count { out.addAll(seq as List<any?>) }
+      out
+    }
+    is Bytes -> {
+      var out = Bytes(0)
+      for i in 0..<count { out = out + (seq as Bytes) }
+      out
+    }
+    else -> pyNotImplemented
+  }
+}
+
+internal fun __pyNumberOp(a : any?, b : any?, op : int) : any? {
+  if (a is Complex or b is Complex) { return __pyComplexOp(__pyToComplex(a), __pyToComplex(b), op) }
+  if (a is float or b is float) {
+    if (op >= 8) { return pyNotImplemented }
+    if (op == 3) { return pyNotImplemented }
+    val x = pyToFloat(a)
+    val y = pyToFloat(b)
+    return when (op) {
+      0 -> x + y
+      1 -> x - y
+      2 -> x * y
+      4 -> {
+        if (y == 0.0) { throw pyZeroDivisionError("division by zero") }
+        x / y
+      }
+      5 -> {
+        if (y == 0.0) { throw pyZeroDivisionError("division by zero") }
+        __pyFloatDivmod(x, y).first
+      }
+      6 -> {
+        if (y == 0.0) { throw pyZeroDivisionError("division by zero") }
+        __pyFloatDivmod(x, y).second
+      }
+      7 -> __pyFloatPow(x, y)
+      else -> pyNotImplemented
+    }
+  }
+  // Ints (bools among them).
+  val x = a is bool ? ((a as bool) ? 1 : 0) : a
+  val y = b is bool ? ((b as bool) ? 1 : 0) : b
+  if (x is int and y is int) {
+    val i = x as int
+    val j = y as int
+    return when (op) {
+      0 -> __pyIntAdd(i, j)
+      1 -> __pyIntSub(i, j)
+      2 -> __pyIntMul(i, j)
+      3 -> pyNotImplemented
+      4 -> {
+        if (j == 0) { throw pyZeroDivisionError("division by zero") }
+        if (i > -9007199254740992 and i < 9007199254740992 and j > -9007199254740992 and j < 9007199254740992) { i.toFloat() / j.toFloat() }
+        else { __pyBigTrueDiv(BigInt.of(i), BigInt.of(j)) }
+      }
+      5 -> __pyFloorDivInt(i, j)
+      6 -> __pyModInt(i, j)
+      7 -> __pyIntPow(i, j)
+      8 -> __pyShift(i, j, true)
+      9 -> __pyShift(i, j, false)
+      10 -> a is bool and b is bool ? (a as bool) and (b as bool) : i & j
+      11 -> a is bool and b is bool ? (a as bool) != (b as bool) : i ^ j
+      12 -> a is bool and b is bool ? (a as bool) or (b as bool) : i | j
+      else -> pyNotImplemented
+    }
+  }
+  val p = pyBig(x)
+  val q = pyBig(y)
+  return when (op) {
+    0 -> pyNorm(p + q)
+    1 -> pyNorm(p - q)
+    2 -> pyNorm(p * q)
+    3 -> pyNotImplemented
+    4 -> {
+      if (q == BigInt.of(0)) { throw pyZeroDivisionError("division by zero") }
+      __pyBigTrueDiv(p, q)
+    }
+    5 -> __pyBigFloorDiv(p, q)
+    6 -> __pyBigMod(p, q)
+    7 -> __pyIntPow(x, y)
+    8 -> __pyShift(x, y, true)
+    9 -> __pyShift(x, y, false)
+    10 -> pyNorm(p & q)
+    11 -> pyNorm(p ^ q)
+    12 -> pyNorm(p | q)
+    else -> pyNotImplemented
+  }
+}
+
+internal fun __pyBigTrueDiv(p : BigInt, q : BigInt) : float {
+  // Exact where the quotient is whole; otherwise as near as the two floats give.
+  val qr = p.divRem(q)
+  if (qr.second == BigInt.of(0)) { return qr.first.toFloat() }
+  val f = p.toFloat() / q.toFloat()
+  if (f.isNaN() or f.isInfinite()) { throw pyOverflowError("integer division result too large for a float") }
+  return f
+}
+
+internal fun __pyComplexOp(a : Complex, b : Complex, op : int) : any? {
+  return when (op) {
+    0 -> Complex(a.re + b.re, a.im + b.im)
+    1 -> Complex(a.re - b.re, a.im - b.im)
+    2 -> Complex(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
+    4 -> __pyComplexQuot(a, b)
+    7 -> __pyComplexPow(a, b)
+    else -> pyNotImplemented
+  }
+}
+
+// ---- Binary operators ----
+
+
+// a op b with Python's order of asking: a's method, then b's reflected one (b's first where b's
+// class is under a's and has its own).
+fun pyBinary(a : any?, b : any?, op : int) : any? {
+  if (!(a is PyObject) and !(b is PyObject)) {
+    val r = pyBuiltinOp(a, b, op)
+    if (r !== pyNotImplemented) { return r }
+    throw pyUnsupported(a, b, op)
+  }
+  val ta = pyTypeOf(a)
+  val tb = pyTypeOf(b)
+  var triedB = false
+  if (ta !== tb and tb.isSubtype(ta)) {
+    val rm = tb.lookup(__pyROpNames[op])
+    if (rm !== pyUnbound and rm != null and rm !== ta.lookup(__pyROpNames[op])) {
+      triedB = true
+      val r = __pyCall2Special(rm, b, a)
+      if (r !== pyNotImplemented) { return r }
+    }
+  }
+  val am = ta.lookup(__pyOpNames[op])
+  if (am !== pyUnbound and am != null) {
+    val r = __pyCall2Special(am, a, b)
+    if (r !== pyNotImplemented) { return r }
+  } else if (!(a is PyObject)) {
+    val r = pyBuiltinOp(a, b, op)
+    if (r !== pyNotImplemented) { return r }
+  }
+  if (!triedB and ta !== tb) {
+    val rm = tb.lookup(__pyROpNames[op])
+    if (rm !== pyUnbound and rm != null) {
+      val r = __pyCall2Special(rm, b, a)
+      if (r !== pyNotImplemented) { return r }
+    } else if (!(b is PyObject)) {
+      val r = pyBuiltinOp(a, b, op)
+      if (r !== pyNotImplemented) { return r }
+    }
+  }
+  throw pyUnsupported(a, b, op)
+}
+
+// A special method `m` found on self's class, called with self and one argument.
+fun __pyCall2Special(m : any?, self : any?, other : any?) : any? {
+  if (m is PyFunction) { return (m as PyFunction).call2(self, other) }
+  if (m is PyMethodDescriptor) {
+    return pyCallMethodV(pyBuiltinSelf(self, (m as PyMethodDescriptor).owner), (m as PyMethodDescriptor).name, [other], null)
+  }
+  if (m is PyBuiltin) { return (m as PyBuiltin).callv([self, other], null) }
+  return pyCall1(pyBindDescriptor(m, self, pyTypeOf(self)), other)
+}
+
+fun __pyCall1Special(m : any?, self : any?) : any? {
+  if (m is PyFunction) { return (m as PyFunction).call1(self) }
+  if (m is PyMethodDescriptor) {
+    return pyCallMethodV(pyBuiltinSelf(self, (m as PyMethodDescriptor).owner), (m as PyMethodDescriptor).name, [], null)
+  }
+  if (m is PyBuiltin) { return (m as PyBuiltin).callv([self], null) }
+  return pyCall0(pyBindDescriptor(m, self, pyTypeOf(self)))
+}
+
+fun pyUnsupported(a : any?, b : any?, op : int) : PyError {
+  if (op == 7) { return pyTypeError("unsupported operand type(s) for ** or pow(): '${pyTypeName(a)}' and '${pyTypeName(b)}'") }
+  if (op == 0 and a is string) { return pyTypeError("can only concatenate str (not \"${pyTypeName(b)}\") to str") }
+  if (op == 0 and a is List<any?> and !(a is PyTuple)) { return pyTypeError("can only concatenate list (not \"${pyTypeName(b)}\") to list") }
+  if (op == 0 and a is PyTuple) { return pyTypeError("can only concatenate tuple (not \"${pyTypeName(b)}\") to tuple") }
+  if (op == 2 and (a is string or a is List<any?> or a is PyTuple) and !(b is PyObject)) {
+    return pyTypeError("can't multiply sequence by non-int of type '${pyTypeName(b)}'")
+  }
+  return pyTypeError("unsupported operand type(s) for ${__pyOpSymbols[op]}: '${pyTypeName(a)}' and '${pyTypeName(b)}'")
+}
+
+fun pyAdd(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntAdd(a as int, b as int) }
+  if (a is float and b is float) { return (a as float) + (b as float) }
+  if (a is string and b is string) { return (a as string) + (b as string) }
+  return pyBinary(a, b, 0)
+}
+fun pySub(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntSub(a as int, b as int) }
+  if (a is float and b is float) { return (a as float) - (b as float) }
+  return pyBinary(a, b, 1)
+}
+fun pyMul(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntMul(a as int, b as int) }
+  if (a is float and b is float) { return (a as float) * (b as float) }
+  return pyBinary(a, b, 2)
+}
+fun pyMatMul(a : any?, b : any?) : any? => pyBinary(a, b, 3)
+fun pyDiv(a : any?, b : any?) : any? {
+  if (a is float and b is float and (b as float) != 0.0) { return (a as float) / (b as float) }
+  return pyBinary(a, b, 4)
+}
+fun pyFloorDiv(a : any?, b : any?) : any? {
+  if (a is int and b is int and (b as int) > 0) {
+    val i = a as int
+    val j = b as int
+    return i >= 0 ? i / j : __pyFloorDivInt(i, j)
+  }
+  return pyBinary(a, b, 5)
+}
+fun pyMod(a : any?, b : any?) : any? {
+  if (a is int and b is int and (b as int) > 0) {
+    val r = (a as int) % (b as int)
+    return r < 0 ? r + (b as int) : r
+  }
+  return pyBinary(a, b, 6)
+}
+fun pyPow(a : any?, b : any?) : any? => pyBinary(a, b, 7)
+fun pyLShift(a : any?, b : any?) : any? => pyBinary(a, b, 8)
+fun pyRShift(a : any?, b : any?) : any? => pyBinary(a, b, 9)
+fun pyAnd(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) & (b as int) }
+  return pyBinary(a, b, 10)
+}
+fun pyXor(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) ^ (b as int) }
+  return pyBinary(a, b, 11)
+}
+fun pyOr(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) | (b as int) }
+  return pyBinary(a, b, 12)
+}
+
+// a op= b: the object's own in-place method where it has one (a list's += extends it, as its
+// aliases see), else a op b.
+fun pyInplace(a : any?, b : any?, op : int) : any? {
+  if (a is open List<any?> and !(a is PyTuple)) {
+    if (op == 0) {
+      val items = pyIterable(b)
+      (a as open List<any?>).addAll(items)
+      return a
+    }
+    if (op == 2) {
+      val n = pyIndex(b)
+      val copy = (a as List<any?>).toList()
+      (a as open List<any?>).clear()
+      for i in 0..<n { (a as open List<any?>).addAll(copy) }
+      return a
+    }
+  }
+  if (a is PySet and !(a as PySet).frozen and b is PySet and (op == 1 or op >= 10)) {
+    (a as PySet).updateWith(b as PySet, op)
+    return a
+  }
+  if (op == 12 and a is PyDict) {
+    pyDictUpdate(a as PyDict, b)
+    return a
+  }
+  if (a is PyObject) {
+    val m = (a as PyObject).cls.lookup(__pyIOpNames[op])
+    if (m !== pyUnbound and m != null) {
+      val r = __pyCall2Special(m, a, b)
+      if (r !== pyNotImplemented) { return r }
+    }
+  }
+  return pyBinary(a, b, op)
+}
+
+fun pyIAdd(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntAdd(a as int, b as int) }
+  if (a is float and b is float) { return (a as float) + (b as float) }
+  if (a is string and b is string) { return (a as string) + (b as string) }
+  return pyInplace(a, b, 0)
+}
+fun pyISub(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntSub(a as int, b as int) }
+  return pyInplace(a, b, 1)
+}
+fun pyIMul(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return __pyIntMul(a as int, b as int) }
+  return pyInplace(a, b, 2)
+}
+fun pyIMatMul(a : any?, b : any?) : any? => pyInplace(a, b, 3)
+fun pyIDiv(a : any?, b : any?) : any? => pyInplace(a, b, 4)
+fun pyIFloorDiv(a : any?, b : any?) : any? => pyInplace(a, b, 5)
+fun pyIMod(a : any?, b : any?) : any? => pyInplace(a, b, 6)
+fun pyIPow(a : any?, b : any?) : any? => pyInplace(a, b, 7)
+fun pyILShift(a : any?, b : any?) : any? => pyInplace(a, b, 8)
+fun pyIRShift(a : any?, b : any?) : any? => pyInplace(a, b, 9)
+fun pyIAnd(a : any?, b : any?) : any? => pyInplace(a, b, 10)
+fun pyIXor(a : any?, b : any?) : any? => pyInplace(a, b, 11)
+fun pyIOr(a : any?, b : any?) : any? => pyInplace(a, b, 12)
+
+// pow(a, b, m): a to the b modulo m.
+fun pyPowMod(a : any?, b : any?, m : any?) : any? {
+  if (!(pyIsInt(a) and pyIsInt(b) and pyIsInt(m))) {
+    if (a is PyObject) {
+      val f = (a as PyObject).cls.lookup("__pow__")
+      if (f !== pyUnbound) { return pyCall3(f, a, b, m) }
+    }
+    throw pyTypeError("pow() 3rd argument not allowed unless all arguments are integers")
+  }
+  val mod = pyBig(m)
+  if (mod == BigInt.of(0)) { throw pyValueError("pow() 3rd argument cannot be 0") }
+  var e = pyBig(b)
+  var base = pyBig(a)
+  if (e < 0) {
+    base = base.modInverse(mod.abs())
+    e = -e
+  }
+  var r = base.modPow(e, mod.abs())
+  if (mod < 0 and r != BigInt.of(0)) { r = r + mod }
+  return pyNorm(r)
+}
+
+// ---- Unary operators ----
+
+internal fun __pyUnary(x : any?, name : string, what : string) : any? {
+  if (x is PyObject) {
+    val m = (x as PyObject).cls.lookup(name)
+    if (m !== pyUnbound and m != null) { return __pyCall1Special(m, x) }
+  }
+  throw pyTypeError("bad operand type for $what: '${pyTypeName(x)}'")
+}
+
+fun pyNeg(x : any?) : any? {
+  return when (x) {
+    is int -> (x as int) == -9223372036854775807 - 1 ? pyNorm(-BigInt.of(x as int)) : -(x as int)
+    is float -> -(x as float)
+    is bool -> (x as bool) ? -1 : 0
+    is BigInt -> pyNorm(-(x as BigInt))
+    is Complex -> Complex(-(x as Complex).re, -(x as Complex).im)
+    else -> {
+      val v = pyUnwrap(x)
+      if (v !== x and pyIsNumber(v) and (x as PyObject).cls.lookup("__neg__") is PyMethodDescriptor) { pyNeg(v) } else { __pyUnary(x, "__neg__", "unary -") }
+    }
+  }
+}
+
+fun pyPos(x : any?) : any? {
+  return when (x) {
+    is int -> x
+    is float -> x
+    is bool -> (x as bool) ? 1 : 0
+    is BigInt -> x
+    is Complex -> x
+    else -> __pyUnary(x, "__pos__", "unary +")
+  }
+}
+
+fun pyInvert(x : any?) : any? {
+  return when (x) {
+    is int -> -(x as int) - 1
+    is bool -> (x as bool) ? -2 : -1
+    is BigInt -> pyNorm(-(x as BigInt) - BigInt.of(1))
+    else -> __pyUnary(x, "__invert__", "unary ~")
+  }
+}
+
+fun pyAbs(x : any?) : any? {
+  return when (x) {
+    is int -> (x as int) < 0 ? pyNeg(x) : x
+    is float -> Math.abs(x as float)
+    is bool -> (x as bool) ? 1 : 0
+    is BigInt -> pyNorm((x as BigInt).abs())
+    is Complex -> Math.hypot((x as Complex).re, (x as Complex).im)
+    else -> __pyUnary(x, "__abs__", "abs()")
+  }
+}
+
+// ---- Truth ----
+
+fun pyTruth(x : any?) : bool {
+  return when (x) {
+    null -> false
+    is bool -> x as bool
+    is int -> (x as int) != 0
+    is string -> (x as string).isNotEmpty()
+    is float -> (x as float) != 0.0
+    is List<any?> -> (x as List<any?>).isNotEmpty()
+    is PyDict -> (x as PyDict).count != 0
+    is PyTuple -> (x as PyTuple).items.isNotEmpty()
+    is PySet -> (x as PySet).size != 0
+    is BigInt -> true
+    is Complex -> (x as Complex).re != 0.0 or (x as Complex).im != 0.0
+    is PyObject -> __pyObjectTruth(x as PyObject)
+    is PyRange -> (x as PyRange).length() != 0
+    is Bytes -> (x as Bytes).size != 0
+    is PyByteArray -> (x as PyByteArray).bytes.size != 0
+    is PyDictView -> (x as PyDictView).size() != 0
+    else -> true
+  }
+}
+
+internal fun __pyObjectTruth(o : PyObject) : bool {
+  val b = o.cls.lookup("__bool__")
+  if (b !== pyUnbound and b != null) {
+    val r = __pyCall1Special(b, o)
+    if (!(r is bool)) { throw pyTypeError("__bool__ should return bool, returned ${pyTypeName(r)}") }
+    return r as bool
+  }
+  val l = o.cls.lookup("__len__")
+  if (l !== pyUnbound and l != null) {
+    val r = pyIndex(__pyCall1Special(l, o))
+    if (r < 0) { throw pyValueError("__len__() should return >= 0") }
+    return r != 0
+  }
+  return true
+}
+
+fun pyBoolOf0() : any? => false
+fun pyBoolOf1(x : any?) : any? => pyTruth(x)
+
+// ---- Equality and order ----
+
+fun pyIs(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return a == b }
+  if (a is float and b is float) { return a == b }
+  return a === b
+}
+
+// a == b as Python's: a bool.
+fun pyEqB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return a == b }
+  if (a is string and b is string) { return a == b }
+  if (pySame(a, b)) { return true }
+  if (!(a is PyObject) and !(b is PyObject)) { return pyBuiltinEq(a, b) }
+  return pyTruth(pyEq(a, b))
+}
+
+fun pyNeB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return a != b }
+  if (a is string and b is string) { return a != b }
+  if (!(a is PyObject) and !(b is PyObject)) { return !pyBuiltinEq(a, b) }
+  return pyTruth(pyNe(a, b))
+}
+
+// Equality of values of builtin types.
+fun pyBuiltinEq(a0 : any?, b0 : any?) : bool {
+  val a = pyUnwrap(a0)
+  val b = pyUnwrap(b0)
+  if (pySame(a, b)) { return true }
+  if (pyIsNumber(a) and pyIsNumber(b)) { return __pyNumberEq(a, b) }
+  if (a is string and b is string) { return a == b }
+  if (a is PyTuple and b is PyTuple) { return __pyListEq((a as PyTuple).items, (b as PyTuple).items) }
+  if (a is List<any?> and b is List<any?>) { return __pyListEq(a as List<any?>, b as List<any?>) }
+  if (a is PyDict and b is PyDict) {
+    val x = a as PyDict
+    val y = b as PyDict
+    if (x.count != y.count) { return false }
+    for i in 0..<x.keys.size {
+      val k = x.keys[i]
+      if (k === PyDeletedT) { continue }
+      val v = x.vals[i]
+      val w = y.get(k, pyUnbound)
+      if (w === pyUnbound) { return false }
+      if (!pyEqB(v, w)) { return false }
+    }
+    return true
+  }
+  if (a is PySet and b is PySet) { return (a as PySet).sameAs(b as PySet) }
+  if (a is PyRange and b is PyRange) { return (a as PyRange).sameAs(b as PyRange) }
+  if (a is Bytes and b is Bytes) { return a == b }
+  if (a is PyByteArray and b is PyByteArray) { return (a as PyByteArray).bytes == (b as PyByteArray).bytes }
+  if (a is Bytes and b is PyByteArray) { return a == (b as PyByteArray).bytes }
+  if (a is PyByteArray and b is Bytes) { return (a as PyByteArray).bytes == b }
+  if (a is PyDictView and b is PyDictView) { return (a as PyDictView).sameAs(b as PyDictView) }
+  if (a is PyDictView and b is PySet) { return (a as PyDictView).sameAs(b) }
+  if (a is PySet and b is PyDictView) { return (b as PyDictView).sameAs(a) }
+  if (a is PySlice and b is PySlice) {
+    return pyEqB((a as PySlice).lower, (b as PySlice).lower) and pyEqB((a as PySlice).upper, (b as PySlice).upper) and
+           pyEqB((a as PySlice).step, (b as PySlice).step)
+  }
+  if (a is PyMethod or a is PyBoundBuiltin) { return a == b }
+  return false
+}
+
+internal fun __pyNumberEq(a : any?, b : any?) : bool {
+  if (a is Complex or b is Complex) {
+    val x = __pyToComplex(a)
+    val y = __pyToComplex(b)
+    return x.re == y.re and x.im == y.im
+  }
+  if (a is float or b is float) {
+    if (a is float and b is float) { return (a as float) == (b as float) }
+    val f = a is float ? a as float : b as float
+    val i = a is float ? b : a
+    if (f.isNaN() or f.isInfinite()) { return false }
+    if (f != pyFloor(f)) { return false }
+    if (i is int) { return (i as int).toFloat() == f and pyBig(i) == BigInt.of(f) }
+    if (i is bool) { return ((i as bool) ? 1.0 : 0.0) == f }
+    return pyBig(i) == BigInt.of(f)
+  }
+  val x = a is bool ? ((a as bool) ? 1 : 0) : a
+  val y = b is bool ? ((b as bool) ? 1 : 0) : b
+  if (x is int and y is int) { return x == y }
+  return pyBig(x) == pyBig(y)
+}
+
+internal fun __pyListEq(x : List<any?>, y : List<any?>) : bool {
+  if (x.size != y.size) { return false }
+  for i in 0..<x.size {
+    val p = x[i]
+    val q = y[i]
+    if (!pyEqB(p, q)) { return false }
+  }
+  return true
+}
+
+// The rich comparisons: an object's methods (the reflected one of the right operand first where
+// its class is under the left's), then the builtin values' own; `op` 0 ==, 1 !=, 2 <, 3 <=, 4 >, 5 >=.
+internal val __pyCmpNames : List<string> = ["__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__"]
+internal val __pyCmpSwapped : List<int> = [0, 1, 4, 5, 2, 3]
+internal val __pyCmpSymbols : List<string> = ["==", "!=", "<", "<=", ">", ">="]
+
+fun pyRichCompare(a : any?, b : any?, op : int) : any? {
+  val ta = pyTypeOf(a)
+  val tb = pyTypeOf(b)
+  var triedB = false
+  if (ta !== tb and tb.isSubtype(ta) and b is PyObject) {
+    val rm = tb.lookup(__pyCmpNames[__pyCmpSwapped[op]])
+    if (rm !== pyUnbound and rm != null) {
+      triedB = true
+      val r = __pyCall2Special(rm, b, a)
+      if (r !== pyNotImplemented) { return r }
+    }
+  }
+  if (a is PyObject) {
+    val m = ta.lookup(__pyCmpNames[op])
+    if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor and (m as PyMethodDescriptor).owner === pyObjectType)) {
+      val r = __pyCall2Special(m, a, b)
+      if (r !== pyNotImplemented) { return r }
+    } else if (op == 1) {
+      val eq = ta.lookup("__eq__")
+      if (eq !== pyUnbound and eq != null and !(eq is PyMethodDescriptor and (eq as PyMethodDescriptor).owner === pyObjectType)) {
+        val r = __pyCall2Special(eq, a, b)
+        if (r !== pyNotImplemented) { return !pyTruth(r) }
+      }
+    }
+  } else {
+    val r = __pyBuiltinCompare(a, b, op)
+    if (r !== pyNotImplemented) { return r }
+  }
+  if (!triedB and b is PyObject) {
+    val rm = tb.lookup(__pyCmpNames[__pyCmpSwapped[op]])
+    if (rm !== pyUnbound and rm != null and !(rm is PyMethodDescriptor and (rm as PyMethodDescriptor).owner === pyObjectType)) {
+      val r = __pyCall2Special(rm, b, a)
+      if (r !== pyNotImplemented) { return r }
+    } else if (op == 1) {
+      val eq = tb.lookup("__eq__")
+      if (eq !== pyUnbound and eq != null and !(eq is PyMethodDescriptor and (eq as PyMethodDescriptor).owner === pyObjectType)) {
+        val r = __pyCall2Special(eq, b, a)
+        if (r !== pyNotImplemented) { return !pyTruth(r) }
+      }
+    }
+  } else if (!triedB and !(b is PyObject) and a is PyObject) {
+    val r = __pyBuiltinCompare(pyUnwrap(a), b, op)
+    if (r !== pyNotImplemented and pyUnwrap(a) !== a) { return r }
+  }
+  if (a is PyObject and pyUnwrap(a) !== a) {
+    val r = __pyBuiltinCompare(pyUnwrap(a), pyUnwrap(b), op)
+    if (r !== pyNotImplemented) { return r }
+  }
+  if (op == 0) { return a === b }
+  if (op == 1) { return a !== b }
+  throw pyTypeError("'${__pyCmpSymbols[op]}' not supported between instances of '${ta.name}' and '${tb.name}'")
+}
+
+// A comparison of builtin values; NotImplemented where they are not ordered together.
+internal fun __pyBuiltinCompare(a : any?, b : any?, op : int) : any? {
+  if (op == 0) { return pyBuiltinEq(a, b) }
+  if (op == 1) { return !pyBuiltinEq(a, b) }
+  val c = __pyOrder(a, b)
+  if (c === pyNotImplemented) {
+    if (a is PySet and b is PySet) {
+      val x = a as PySet
+      val y = b as PySet
+      return when (op) {
+        2 -> x.size < y.size and x.isSubsetOf(y)
+        3 -> x.isSubsetOf(y)
+        4 -> x.size > y.size and y.isSubsetOf(x)
+        else -> y.isSubsetOf(x)
+      }
+    }
+    return pyNotImplemented
+  }
+  if (c === pyNaN) { return false }
+  val n = c as int
+  return when (op) {
+    2 -> n < 0
+    3 -> n <= 0
+    4 -> n > 0
+    else -> n >= 0
+  }
+}
+
+// -1, 0 or 1 as `a` is before, with or after `b`; NaN where a float NaN makes them unordered;
+// NotImplemented where they are not ordered together.
+internal fun __pyOrder(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) < (b as int) ? -1 : (a == b ? 0 : 1) }
+  if (pyIsNumber(a) and pyIsNumber(b)) {
+    if (a is Complex or b is Complex) { return pyNotImplemented }
+    if ((a is float and b is BigInt) or (a is BigInt and b is float)) {
+      // Exactly, as Python compares them: an int too large for a float is still ordered.
+      val f = a is float ? a as float : b as float
+      if (f.isNaN()) { return pyNaN }
+      var c = 0
+      if (f.isInfinite()) {
+        c = f > 0.0 ? -1 : 1
+      } else {
+        val i = pyBig(a is float ? b : a)
+        val floor = pyFloor(f)
+        c = i.compareTo(BigInt.of(floor))
+        if (c == 0 and f > floor) { c = -1 }
+        c = c < 0 ? -1 : (c == 0 ? 0 : 1)
+      }
+      return a is float ? -c : c
+    }
+    if (a is float or b is float) {
+      val x = pyToFloat(a)
+      val y = pyToFloat(b)
+      if (x.isNaN() or y.isNaN()) { return pyNaN }
+      if (!(a is float and b is float) and x == y and !(x.isInfinite())) {
+        // An int and a float that look equal: compared exactly.
+        val i = a is float ? b : a
+        val f = a is float ? a as float : b as float
+        if (f == pyFloor(f)) {
+          val ib = pyBig(i)
+          val fb = BigInt.of(f)
+          val c = ib.compareTo(fb)
+          return a is float ? -c : c
+        }
+      }
+      return x < y ? -1 : (x == y ? 0 : 1)
+    }
+    return pyBig(a).compareTo(pyBig(b)).let { it < 0 ? -1 : (it == 0 ? 0 : 1) }
+  }
+  if (a is string and b is string) {
+    val c = (a as string).compareTo(b as string)
+    return c < 0 ? -1 : (c == 0 ? 0 : 1)
+  }
+  if (a is PyTuple and b is PyTuple) { return __pySeqOrder((a as PyTuple).items, (b as PyTuple).items) }
+  if (a is List<any?> and b is List<any?> and !(a is PyTuple) and !(b is PyTuple)) { return __pySeqOrder(a as List<any?>, b as List<any?>) }
+  if (a is Bytes and b is Bytes) {
+    val x = a as Bytes
+    val y = b as Bytes
+    for i in 0..<(x.size < y.size ? x.size : y.size) {
+      if (x[i] != y[i]) { return x[i] < y[i] ? -1 : 1 }
+    }
+    return x.size < y.size ? -1 : (x.size == y.size ? 0 : 1)
+  }
+  return pyNotImplemented
+}
+
+internal fun __pySeqOrder(x : List<any?>, y : List<any?>) : any? {
+  val n = x.size < y.size ? x.size : y.size
+  for i in 0..<n {
+    val p = x[i]
+    val q = y[i]
+    if (pyEqB(p, q)) { continue }
+    return pyLtB(p, q) ? -1 : 1
+  }
+  return x.size < y.size ? -1 : (x.size == y.size ? 0 : 1)
+}
+
+fun pyEq(a : any?, b : any?) : any? {
+  if (!(a is PyObject) and !(b is PyObject)) { return pyBuiltinEq(a, b) }
+  return pyRichCompare(a, b, 0)
+}
+fun pyNe(a : any?, b : any?) : any? {
+  if (!(a is PyObject) and !(b is PyObject)) { return !pyBuiltinEq(a, b) }
+  return pyRichCompare(a, b, 1)
+}
+fun pyLt(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) < (b as int) }
+  return pyRichCompare(a, b, 2)
+}
+fun pyLe(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) <= (b as int) }
+  return pyRichCompare(a, b, 3)
+}
+fun pyGt(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) > (b as int) }
+  return pyRichCompare(a, b, 4)
+}
+fun pyGe(a : any?, b : any?) : any? {
+  if (a is int and b is int) { return (a as int) >= (b as int) }
+  return pyRichCompare(a, b, 5)
+}
+fun pyLtB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return (a as int) < (b as int) }
+  if (a is float and b is float) { return (a as float) < (b as float) }
+  return pyTruth(pyRichCompare(a, b, 2))
+}
+fun pyLeB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return (a as int) <= (b as int) }
+  if (a is float and b is float) { return (a as float) <= (b as float) }
+  return pyTruth(pyRichCompare(a, b, 3))
+}
+fun pyGtB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return (a as int) > (b as int) }
+  if (a is float and b is float) { return (a as float) > (b as float) }
+  return pyTruth(pyRichCompare(a, b, 4))
+}
+fun pyGeB(a : any?, b : any?) : bool {
+  if (a is int and b is int) { return (a as int) >= (b as int) }
+  if (a is float and b is float) { return (a as float) >= (b as float) }
+  return pyTruth(pyRichCompare(a, b, 5))
+}
+
+// ---- Hashing, as CPython hashes ----
+
+internal const __pyHashModulus = 2305843009213693951  // 2**61 - 1
+
+fun pyHash(x : any?) : int {
+  return when (x) {
+    null -> 4238894112
+    is bool -> (x as bool) ? 1 : 0
+    is int -> __pyHashInt(x as int)
+    is string -> pyHashString(x as string)
+    is float -> pyHashFloat(x as float)
+    is PyTuple -> __pyHashTuple(x as PyTuple)
+    is BigInt -> __pyHashBig(x as BigInt)
+    is PyObject -> __pyHashObject(x as PyObject)
+    is PySet -> {
+      if (!(x as PySet).frozen) { throw pyTypeError("unhashable type: 'set'") }
+      (x as PySet).frozenHash()
+    }
+    is Complex -> {
+      var h = pyHashFloat((x as Complex).re) &+ 1000003 &* pyHashFloat((x as Complex).im)
+      h == -1 ? -2 : h
+    }
+    is List<any?> -> throw pyTypeError("unhashable type: 'list'")
+    is PyDict -> throw pyTypeError("unhashable type: 'dict'")
+    is PyByteArray -> throw pyTypeError("unhashable type: 'bytearray'")
+    is Bytes -> __pyHashBytes(x as Bytes)
+    is PyRange -> __pyHashTuple(PyTuple([(x as PyRange).length(), (x as PyRange).start, (x as PyRange).step]))
+    is PyIdentified -> (x as PyIdentified).identity() >>> 4
+    else -> __hashCode(x)
+  }
+}
+
+internal fun __pyHashInt(n : int) : int {
+  if (n >= 0) {
+    val h = n < __pyHashModulus ? n : n % __pyHashModulus
+    return h
+  }
+  if (n == -1) { return -2 }
+  val m = -(n == -9223372036854775807 - 1 ? -((n + __pyHashModulus) % __pyHashModulus) - __pyHashModulus : n)
+  val h = m < __pyHashModulus ? m : m % __pyHashModulus
+  val r = -h
+  return r == -1 ? -2 : r
+}
+
+internal fun __pyHashBig(b : BigInt) : int {
+  val m = BigInt.of(__pyHashModulus)
+  var h = b.abs() % m
+  var r = h.toInt()
+  if (b < 0) { r = -r }
+  return r == -1 ? -2 : r
+}
+
+fun pyHashFloat(v : float) : int {
+  if (v.isNaN()) { return 0 }
+  if (v.isInfinite()) { return v > 0.0 ? 314159 : -314159 }
+  if (v == pyFloor(v) and v > -9.0e18 and v < 9.0e18) { return __pyHashInt(Math.trunc(v).toInt()) }
+  // frexp: v = m * 2**e, 0.5 <= |m| < 1.
+  var m = v
+  var sign = 1
+  if (m < 0.0) {
+    sign = -1
+    m = -m
+  }
+  var e = 0
+  while (m >= 1.0) { m = m / 2.0; e += 1 }
+  while (m < 0.5) { m = m * 2.0; e -= 1 }
+  var x = 0
+  while (m != 0.0) {
+    x = ((x << 28) & __pyHashModulus) | (x >>> (61 - 28))
+    m *= 268435456.0
+    e -= 28
+    val y = Math.trunc(m)
+    m -= y
+    x += y.toInt()
+    if (x >= __pyHashModulus) { x -= __pyHashModulus }
+  }
+  e = e >= 0 ? e % 61 : 61 - 1 - ((-1 - e) % 61)
+  x = ((x << e) & __pyHashModulus) | (x >>> (61 - e))
+  x = x &* sign
+  return x == -1 ? -2 : x
+}
+
+internal fun __pyHashTuple(t : PyTuple) : int {
+  var acc = 2870177450012600261
+  for item in t.items {
+    val lane = pyHash(item)
+    acc = acc &+ (lane &* -4417276706812531889)
+    acc = (acc << 31) | (acc >>> 33)
+    acc = acc &* -7046029288634856825
+  }
+  acc = acc &+ (t.items.size ^ (2870177450012600261 ^ 3527539))
+  return acc == -1 ? 1546275796 : acc
+}
+
+internal fun __pyHashObject(o : PyObject) : int {
+  val h = o.cls.lookup("__hash__")
+  if (h == null) { throw pyTypeError("unhashable type: '${o.cls.name}'") }
+  if (h === pyUnbound or (h is PyMethodDescriptor and (h as PyMethodDescriptor).owner === pyObjectType)) { return o.identity() >>> 4 }
+  if (h is PyMethodDescriptor and o.cls.layout >= 2) { return pyHash(o.value) }
+  val r = __pyCall1Special(h, o)
+  if (r is int) { return r == -1 ? -2 : r as int }
+  if (r is BigInt) { return __pyHashBig(r as BigInt) }
+  if (r is bool) { return (r as bool) ? 1 : 0 }
+  throw pyTypeError("__hash__ method should return an integer")
+}
+
+// CPython's string hash with hashing made fixed (PYTHONHASHSEED=0): SipHash-1-3 with a key of
+// zeros, over the string's characters at the width CPython keeps them (1, 2 or 4 bytes each).
+fun pyHashString(s : string) : int {
+  if (s.isEmpty()) { return 0 }
+  var width = 1
+  for c in s {
+    val cp = pyOrd(c)
+    if (cp > 0xFFFF) { width = 4; break }
+    if (cp > 0xFF) { width = 2 }
+  }
+  val bytes : open List<int> = []
+  for c in s {
+    var cp = pyOrd(c)
+    for k in 0..<width {
+      bytes.add(cp & 0xFF)
+      cp = cp >> 8
+    }
+  }
+  val h = __pySipHash13(bytes)
+  return h == -1 ? -2 : h
+}
+
+internal fun __pyHashBytes(b : Bytes) : int {
+  if (b.size == 0) { return 0 }
+  val bytes : open List<int> = []
+  for i in 0..<b.size { bytes.add(b[i]) }
+  val h = __pySipHash13(bytes)
+  return h == -1 ? -2 : h
+}
+
+internal fun __pyRotl(x : int, b : int) : int => (x << b) | (x >>> (64 - b))
+
+internal fun __pySipHash13(src : List<int>) : int {
+  var v0 = 0x736f6d6570736575
+  var v1 = 0x646f72616e646f6d
+  var v2 = 0x6c7967656e657261
+  var v3 = 0x7465646279746573
+  val size = src.size
+  var b = size << 56
+  var i = 0
+  while (size - i >= 8) {
+    var mi = 0
+    for k in 0..<8 { mi = mi | (src[i + k] << (8 * k)) }
+    v3 = v3 ^ mi
+    // One round.
+    v0 = v0 &+ v1; v2 = v2 &+ v3; v1 = __pyRotl(v1, 13) ^ v0; v3 = __pyRotl(v3, 16) ^ v2; v0 = __pyRotl(v0, 32)
+    v2 = v2 &+ v1; v0 = v0 &+ v3; v1 = __pyRotl(v1, 17) ^ v2; v3 = __pyRotl(v3, 21) ^ v0; v2 = __pyRotl(v2, 32)
+    v0 = v0 ^ mi
+    i += 8
+  }
+  var t = 0
+  var k = 0
+  while (i < size) {
+    t = t | (src[i] << (8 * k))
+    i += 1
+    k += 1
+  }
+  b = b | t
+  v3 = v3 ^ b
+  v0 = v0 &+ v1; v2 = v2 &+ v3; v1 = __pyRotl(v1, 13) ^ v0; v3 = __pyRotl(v3, 16) ^ v2; v0 = __pyRotl(v0, 32)
+  v2 = v2 &+ v1; v0 = v0 &+ v3; v1 = __pyRotl(v1, 17) ^ v2; v3 = __pyRotl(v3, 21) ^ v0; v2 = __pyRotl(v2, 32)
+  v0 = v0 ^ b
+  v2 = v2 ^ 0xff
+  for r in 0..<3 {
+    v0 = v0 &+ v1; v2 = v2 &+ v3; v1 = __pyRotl(v1, 13) ^ v0; v3 = __pyRotl(v3, 16) ^ v2; v0 = __pyRotl(v0, 32)
+    v2 = v2 &+ v1; v0 = v0 &+ v3; v1 = __pyRotl(v1, 17) ^ v2; v3 = __pyRotl(v3, 21) ^ v0; v2 = __pyRotl(v2, 32)
+  }
+  return (v0 ^ v1) ^ (v2 ^ v3)
+}
+
+// ---- len and in ----
+
+fun pyLen(x : any?) : any? => pyLength(x)
+
+fun pyLength(x : any?) : int {
+  return when (x) {
+    is string -> (x as string).size
+    is List<any?> -> (x as List<any?>).size
+    is PyDict -> (x as PyDict).count
+    is PyTuple -> (x as PyTuple).items.size
+    is PySet -> (x as PySet).size
+    is PyRange -> (x as PyRange).length()
+    is Bytes -> (x as Bytes).size
+    is PyByteArray -> (x as PyByteArray).bytes.size
+    is PyDictView -> (x as PyDictView).size()
+    is PyObject -> {
+      val m = (x as PyObject).cls.lookup("__len__")
+      if (m === pyUnbound or m == null) { throw pyTypeError("object of type '${pyTypeName(x)}' has no len()") }
+      val r = __pyCall1Special(m, x)
+      if (!pyIsInt(r)) { throw pyTypeError("'${pyTypeName(r)}' object cannot be interpreted as an integer") }
+      val n = pyIndex(r)
+      if (n < 0) { throw pyValueError("__len__() should return >= 0") }
+      n
+    }
+    else -> throw pyTypeError("object of type '${pyTypeName(x)}' has no len()")
+  }
+}
+
+// item in container.
+fun pyContains(c : any?, item : any?) : bool {
+  return when (c) {
+    is string -> {
+      if (!(item is string)) { throw pyTypeError("'in <string>' requires string as left operand, not ${pyTypeName(item)}") }
+      (c as string).contains(item as string)
+    }
+    is List<any?> -> {
+      for x in c as List<any?> { if (pyEqB(x, item)) { return true } }
+      false
+    }
+    is PyDict -> (c as PyDict).has(item)
+    is PySet -> (c as PySet).contains(item)
+    is PyTuple -> {
+      for x in (c as PyTuple).items { if (pyEqB(x, item)) { return true } }
+      false
+    }
+    is PyRange -> (c as PyRange).has(item)
+    is PyDictView -> (c as PyDictView).has(item)
+    is Bytes -> pyBytesContains(c as Bytes, item)
+    is PyObject -> {
+      val m = (c as PyObject).cls.lookup("__contains__")
+      if (m !== pyUnbound and m != null) { return pyTruth(__pyCall2Special(m, c, item)) }
+      val it = pyIter(c)
+      while (true) {
+        val x = pyNext(it)
+        if (x === pyEnd) { return false }
+        if (pyEqB(x, item)) { return true }
+      }
+      false
+    }
+    else -> {
+      if (pyTypeOf(c).lookup("__iter__") === pyUnbound and !(c is PyIterator)) {
+        throw pyTypeError("argument of type '${pyTypeName(c)}' is not a container or iterable")
+      }
+      val it = pyIter(c)
+      while (true) {
+        val x = pyNext(it)
+        if (x === pyEnd) { return false }
+        if (pyEqB(x, item)) { return true }
+      }
+      false
+    }
+  }
+}
+
+internal fun __pyComplexProd(a : Complex, b : Complex) : Complex => Complex(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re)
+
+internal fun __pyComplexPowU(x : Complex, n : int) : Complex {
+  var r = Complex(1.0, 0.0)
+  var p = x
+  var mask = 1
+  while (mask > 0 and n >= mask) {
+    if ((n & mask) != 0) { r = __pyComplexProd(r, p) }
+    mask = mask << 1
+    p = __pyComplexProd(p, p)
+  }
+  return r
+}
+
+// a / b as CPython divides complex numbers (Smith's way, by the larger part of b).
+internal fun __pyComplexQuot(a : Complex, b : Complex) : Complex {
+  val absRe = Math.abs(b.re)
+  val absIm = Math.abs(b.im)
+  if (absRe >= absIm) {
+    if (absRe == 0.0) { throw pyZeroDivisionError("division by zero") }
+    val ratio = b.im / b.re
+    val denom = b.re + b.im * ratio
+    return Complex((a.re + a.im * ratio) / denom, (a.im - a.re * ratio) / denom)
+  }
+  val ratio = b.re / b.im
+  val denom = b.re * ratio + b.im
+  return Complex((a.re * ratio + a.im) / denom, (a.im * ratio - a.re) / denom)
+}

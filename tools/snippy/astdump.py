@@ -3,10 +3,10 @@
 # (name.py.dump), for tools/snippy/compare.ww to read the copies and compare. In WSL:
 #
 #   python3 tools/snippy/astdump.py <out folder> [<folder of .py files>]
-#   python3 tools/snippy/astdump.py --beside tests/python
+#   python3 tools/snippy/astdump.py --beside tests/snippy_programs
 #
 # With --beside, the dumps are written beside the files of the folder given, nothing copied (the
-# suite's tests/python, for tests/snippy_read.ww).
+# suite's tests/snippy_programs, for tests/snippy_read.ww).
 #
 # The second folder is the standard library's (sysconfig's stdlib path) when none is given.
 import ast

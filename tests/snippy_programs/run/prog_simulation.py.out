@@ -1,0 +1,13 @@
+22 3 0 [C1, C2, C3, C4, C5] [C24, C25, C26]
+mean wait 1.955, longest 7, shortest 0
+  0 | *********   | 9
+  1 | *           | 1
+  2 | *****       | 5
+  3 | *           | 1
+  4 | ***         | 3
+  5 | **          | 2
+  7 | *           | 1
+seed 1: served  34, waiting 2, left  4, mean 8.62
+seed 2: served  37, waiting 1, left  0, mean 1.22
+seed 3: served  35, waiting 5, left  1, mean 5.14
+0.4860 0.0813 [97, 113, 103, 116, 96, 88, 102, 100, 92, 93] 0.00166 0.99939

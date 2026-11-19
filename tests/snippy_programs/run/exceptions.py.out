@@ -1,0 +1,34 @@
+ok: OK
+finally for ok
+NotFound: missing not found missing 404 ('missing not found',) True True
+finally for missing
+ValueError/TypeError: ('bad key', 42) ('bad key', 42) ValueError('bad key', 42)
+finally for bad
+AppError() True ()
+('one', 2, [3]) Exception('one', 2, [3])
+logging, then raising again
+outer caught: division by zero
+inner: KeyError('k')
+outer: KeyError 'k'
+kept RuntimeError
+NameError: name 'e' is not defined
+finally runs before the return
+from try
+finally 0
+body 0
+finally 1
+finally 2
+body 2
+cleanup
+after cleanup: first
+None True
+custom message WithStr(1, 2) (1, 2)
+AssertionError: math is broken
+AssertionError: AssertionError()
+1
+expected int, got str
+expected int, got float
+several 2 ['ValueError', 'TypeError']
+['first note'] True
+SystemExit code 3
+StopIteration value 5

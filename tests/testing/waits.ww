@@ -16,8 +16,11 @@ fun daemon(task : suspend () -> any?) : Thread {
 }
 @Test @RealHost @Timeout(200.milliseconds) suspend fun locks() {
   val key = Lock()
-  daemon { key.useKey { Thread.sleep(60.seconds) } }
-  Thread.sleep(50.milliseconds)
+  // Asked for only once the other thread holds it (2026-11-19: a sleep of 50 ms, under the
+  // native-results setting and a full machine, ended before that thread had started).
+  val holding = Channel<bool>(capacity = 1)
+  daemon { key.useKey { holding.send(true); Thread.sleep(60.seconds) } }
+  holding.receive()
   key.useKey { }
 }
 @Test @RealHost @Timeout(200.milliseconds) fun loops() {
@@ -43,12 +46,12 @@ fun daemon(task : suspend () -> any?) : Thread {
 // expect:           at joins (waits.ww:15)
 // expect:   FAIL  locks
 // expect:         AssertionError: the test ran longer than its time limit, 200 ms
-// expect:           at locks (waits.ww:21)
+// expect:           at locks (waits.ww:24)
 // expect:   FAIL  loops
 // expect:         AssertionError: the test ran longer than its time limit, 200 ms
-// expect:           at loops (waits.ww:28)
+// expect:           at loops (waits.ww:31)
 // expect:   FAIL  reads
 // expect:         AssertionError: the test ran longer than its time limit, 500 ms
-// expect:           at reads (waits.ww:34)
+// expect:           at reads (waits.ww:37)
 // expect:   ok    after
 // expect: 6 tests: 1 passed, 5 failed

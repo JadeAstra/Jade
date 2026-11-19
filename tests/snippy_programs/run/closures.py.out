@@ -1,0 +1,16 @@
+1 2 7 1
+[12, 12, 12]
+[10, 11, 12]
+12
+made inside
+local x global x
+global x
+UnboundLocalError: cannot access local variable 'y_local' where it is not associated with a value
+NameError: name 'not_defined_anywhere' is not defined
+3 5 7
+2
+2
+NameError: cannot access free variable 'later' where it is not associated with a value in enclosing scope
+5
+cannot access local variable 'v' where it is not associated with a value
+[0, 10, 20]

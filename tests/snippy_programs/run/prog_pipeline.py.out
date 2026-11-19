@@ -1,0 +1,14 @@
+6 ['ann', 'bob', 'ann', 'cy', 'bob', 'ann'] {'time': '10:02:30', 'level': 'ERROR', 'user': 'cy', 'action': 'pay', 'amount': '12.50'}
+['10:00:01', '10:01:00', '10:03:00', '10:05:00'] 12.50
+{'INFO': 4, 'WARN': 1, 'ERROR': 1} ['ann', 'bob', 'cy']
+['remembered ann', 'welcome ann']
+['remembered bob', 'welcome bob']
+['ann', 'bob'] []
+open -> opened
+close -> closed
+lock -> locked
+ValueError: cannot open when locked
+unlock -> closed
+open -> opened
+['d', 'b', 'e'] None B
+[10.0, 15.0, 20.0, 25.0]

@@ -1,0 +1,397 @@
+import Snippy.Text.*
+// Snippy's set and frozenset, kept as CPython keeps its (Objects/setobject.c): a table probed linearly
+// nine places and then by perturbed jumps, grown at three fifths full, with the same hashes
+// (Ops.ww), so that a set iterates, prints and pops in the order CPython's does.
+
+object PySetEmptyT
+object PySetDummyT
+
+class PySet(var frozen : bool) : PyIdentified() {
+  var keys : open List<any?> = __pySetBlank(8)
+  var hashes : open List<int> = __pySetZeros(8)
+  var mask = 7
+  var fill = 0
+  var used = 0
+  var finger = 0
+
+  val size : int get() => used
+
+  fun hashCode() : int => pyHash(this)
+  op ==(other : any?) : bool => other is PySet and sameAs(other as PySet)
+  override fun toString() : string => pyRepr(this)
+
+  // The slot holding `key`, or -1.
+  fun find(key : any?, hash : int) : int {
+    var perturb = hash
+    var i = hash & mask
+    while (true) {
+      var probes = i + 9 <= mask ? 9 : 0
+      var j = i
+      while (true) {
+        val k = keys[j]
+        val h = hashes[j]
+        if (h == 0 and k === PySetEmptyT) { return -1 }
+        if (h == hash and k !== PySetDummyT) {
+          if (pySame(k, key)) { return j }
+          if (k is string and key is string and k == key) { return j }
+          if (pyEqB(k, key)) { return j }
+        }
+        if (probes == 0) { break }
+        probes -= 1
+        j += 1
+      }
+      perturb = perturb >>> 5
+      i = (i &* 5 &+ 1 &+ perturb) & mask
+    }
+    return -1
+  }
+
+  fun contains(key : any?) : bool => find(key, pyKeyHash(key, "set element")) >= 0
+
+  fun add(key : any?) {
+    addEntry(key, pyKeyHash(key, "set element"))
+  }
+
+  fun addEntry(key : any?, hash : int) {
+    var perturb = hash
+    var i = hash & mask
+    var freeslot = -1
+    while (true) {
+      var probes = i + 9 <= mask ? 9 : 0
+      var j = i
+      while (true) {
+        val k = keys[j]
+        val h = hashes[j]
+        if (h == 0 and k === PySetEmptyT) {
+          if (freeslot >= 0) {
+            used += 1
+            keys[freeslot] = key
+            hashes[freeslot] = hash
+            return
+          }
+          fill += 1
+          used += 1
+          keys[j] = key
+          hashes[j] = hash
+          if (fill * 5 < mask * 3) { return }
+          resize(used > 50000 ? used * 2 : used * 4)
+          return
+        }
+        if (h == hash and k !== PySetDummyT) {
+          if (pySame(k, key) or (k is string and key is string and k == key) or pyEqB(k, key)) { return }
+        } else if (h == -1 and k === PySetDummyT and freeslot < 0) {
+          freeslot = j
+        }
+        if (probes == 0) { break }
+        probes -= 1
+        j += 1
+      }
+      perturb = perturb >>> 5
+      i = (i &* 5 &+ 1 &+ perturb) & mask
+    }
+  }
+
+  private fun insertClean(tk : open List<any?>, th : open List<int>, m : int, key : any?, hash : int) {
+    var perturb = hash
+    var i = hash & m
+    while (true) {
+      if (tk[i] === PySetEmptyT) {
+        tk[i] = key
+        th[i] = hash
+        return
+      }
+      if (i + 9 <= m) {
+        var j = i
+        for n in 0..<9 {
+          j += 1
+          if (tk[j] === PySetEmptyT) {
+            tk[j] = key
+            th[j] = hash
+            return
+          }
+        }
+      }
+      perturb = perturb >>> 5
+      i = (i &* 5 &+ 1 &+ perturb) & m
+    }
+  }
+
+  fun resize(minused : int) {
+    var newsize = 8
+    while (newsize <= minused) { newsize = newsize << 1 }
+    val oldKeys = keys
+    val oldHashes = hashes
+    val tk = __pySetBlank(newsize)
+    val th = __pySetZeros(newsize)
+    val m = newsize - 1
+    for i in 0..<oldKeys.size {
+      val k = oldKeys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT) { insertClean(tk, th, m, k, oldHashes[i]) }
+    }
+    fill = used
+    keys = tk
+    hashes = th
+    mask = m
+  }
+
+  fun discard(key : any?) : bool {
+    val j = find(key, pyKeyHash(key, "set element"))
+    if (j < 0) { return false }
+    keys[j] = PySetDummyT
+    hashes[j] = -1
+    used -= 1
+    return true
+  }
+
+  fun clear() {
+    keys = __pySetBlank(8)
+    hashes = __pySetZeros(8)
+    mask = 7
+    fill = 0
+    used = 0
+    finger = 0
+  }
+
+  fun pop() : any? {
+    if (used == 0) { throw pyError(pyKeyErrorType, "pop from an empty set") }
+    var i = finger & mask
+    while (keys[i] === PySetEmptyT or keys[i] === PySetDummyT) {
+      i += 1
+      if (i > mask) { i = 0 }
+    }
+    val k = keys[i]
+    keys[i] = PySetDummyT
+    hashes[i] = -1
+    used -= 1
+    finger = i + 1
+    return k
+  }
+
+  // Its members in table order.
+  fun items() : List<any?> {
+    val out : open List<any?> = []
+    for i in 0..<keys.size {
+      val k = keys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT) { out.add(k) }
+    }
+    return out
+  }
+
+  fun iterator() : PyIterator => PySetIter(this)
+
+  // set_merge: other's members added, as CPython adds a set's.
+  fun merge(other : PySet) {
+    if (other.used == 0) { return }
+    if ((fill + other.used) * 5 >= mask * 3) { resize((used + other.used) * 2) }
+    if (fill == 0 and mask == other.mask and other.fill == other.used) {
+      for i in 0..<other.keys.size {
+        keys[i] = other.keys[i]
+        hashes[i] = other.hashes[i]
+      }
+      fill = other.fill
+      used = other.used
+      return
+    }
+    if (fill == 0) {
+      fill = other.used
+      used = other.used
+      for i in 0..<other.keys.size {
+        val k = other.keys[i]
+        if (k !== PySetEmptyT and k !== PySetDummyT) { insertClean(keys, hashes, mask, k, other.hashes[i]) }
+      }
+      return
+    }
+    for i in 0..<other.keys.size {
+      val k = other.keys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT) { addEntry(k, other.hashes[i]) }
+    }
+  }
+
+  // set.update(iterable).
+  fun update(other : any?) {
+    if (other is PySet) {
+      merge(other as PySet)
+      return
+    }
+    if (other is PyDict) {
+      val d = other as PyDict
+      if ((fill + d.count) * 5 >= mask * 3) { resize((used + d.count) * 2) }
+      for k in d.keyList() { add(k) }
+      return
+    }
+    for x in pyIterable(other) { add(x) }
+  }
+
+  fun copy(frozenCopy : bool) : PySet {
+    val s = PySet(frozenCopy)
+    s.merge(this)
+    return s
+  }
+
+  fun isSubsetOf(other : PySet) : bool {
+    if (used > other.used) { return false }
+    for k in items() { if (!other.contains(k)) { return false } }
+    return true
+  }
+
+  fun sameAs(other : PySet) : bool => used == other.used and isSubsetOf(other)
+
+  // a op b for two sets: 1 -, 10 &, 11 ^, 12 |, as CPython makes each result.
+  fun operate(other : PySet, op : int) : PySet {
+    return when (op) {
+      12 -> {
+        val r = copy(frozen)
+        r.merge(other)
+        r
+      }
+      10 -> intersection(other)
+      1 -> difference(other)
+      else -> {
+        val r = other.copy(frozen)
+        r.symmetricUpdate(this)
+        r
+      }
+    }
+  }
+
+  fun intersection(other0 : PySet) : PySet {
+    val result = PySet(frozen)
+    var so = this
+    var other = other0
+    if (other.used > so.used) {
+      val t = so
+      so = other
+      other = t
+    }
+    for i in 0..<other.keys.size {
+      val k = other.keys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT and so.find(k, other.hashes[i]) >= 0) { result.addEntry(k, other.hashes[i]) }
+    }
+    return result
+  }
+
+  fun difference(other : PySet) : PySet {
+    if ((used >> 2) > other.used) {
+      val r = copy(frozen)
+      for k in other.items() { r.discard(k) }
+      return r
+    }
+    val result = PySet(frozen)
+    for i in 0..<keys.size {
+      val k = keys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT and other.find(k, hashes[i]) < 0) { result.addEntry(k, hashes[i]) }
+    }
+    return result
+  }
+
+  fun symmetricUpdate(other : PySet) {
+    for i in 0..<other.keys.size {
+      val k = other.keys[i]
+      if (k === PySetEmptyT or k === PySetDummyT) { continue }
+      if (!discard(k)) { addEntry(k, other.hashes[i]) }
+    }
+  }
+
+  // a op= b.
+  fun updateWith(other : PySet, op : int) {
+    when (op) {
+      12 -> merge(other)
+      10 -> {
+        val r = intersection(other)
+        keys = r.keys
+        hashes = r.hashes
+        mask = r.mask
+        fill = r.fill
+        used = r.used
+      }
+      1 -> {
+        if (other === this) { clear(); return }
+        for k in other.items() { discard(k) }
+      }
+      else -> {
+        if (other === this) { clear(); return }
+        symmetricUpdate(other)
+      }
+    }
+  }
+
+  // frozenset's hash, as CPython's.
+  fun frozenHash() : int {
+    var hash = 0
+    for i in 0..<keys.size {
+      val k = keys[i]
+      if (k !== PySetEmptyT and k !== PySetDummyT) { hash = hash ^ __pyShuffleBits(hashes[i]) }
+    }
+    hash = hash ^ ((used + 1) &* 1927868237)
+    hash = hash ^ ((hash >>> 11) ^ (hash >>> 25))
+    hash = hash &* 69069 &+ 907133923
+    return hash == -1 ? 590923713 : hash
+  }
+}
+
+internal fun __pyShuffleBits(h : int) : int => ((h ^ 89869747) ^ (h << 16)) &* 3644798167
+
+internal fun __pySetBlank(n : int) : open List<any?> {
+  val l : open List<any?> = []
+  for i in 0..<n { l.add(PySetEmptyT) }
+  return l
+}
+
+internal fun __pySetZeros(n : int) : open List<int> {
+  val l : open List<int> = []
+  for i in 0..<n { l.add(0) }
+  return l
+}
+
+class PySetIter(val set : PySet) : PyIterator() {
+  var i = 0
+  val used = set.used
+  override fun next() : any? {
+    if (set.used != used) {
+      i = set.keys.size
+      throw pyRuntimeError("Set changed size during iteration")
+    }
+    while (i < set.keys.size) {
+      val k = set.keys[i]
+      i += 1
+      if (k !== PySetEmptyT and k !== PySetDummyT) { return k }
+    }
+    return pyEnd
+  }
+  override fun pyType() : PyType => __pyIterType("set_iterator")
+}
+
+fun pyNewSet() : PySet => PySet(false)
+
+fun pySetAdd(s : PySet, x : any?) {
+  s.add(x)
+}
+
+// A set display: its items added in order, *x spread.
+fun pySetOfList(items : List<any?>) : any? {
+  val s = PySet(false)
+  for x in items { s.add(x) }
+  return s
+}
+
+fun pySetOf0() : any? => PySet(false)
+fun pySetOf1(x : any?) : any? {
+  val s = PySet(false)
+  s.update(x)
+  return s
+}
+fun pyFrozenSetOf0() : any? => PySet(true)
+fun pyFrozenSetOf1(x : any?) : any? {
+  if (x is PySet and (x as PySet).frozen) { return x }
+  val s = PySet(true)
+  s.update(x)
+  return s
+}
+
+// A set from any iterable, for the set methods that take one.
+fun pyAsSet(x : any?) : PySet {
+  if (x is PySet) { return x as PySet }
+  val s = PySet(false)
+  s.update(x)
+  return s
+}

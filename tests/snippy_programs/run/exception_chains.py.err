@@ -1,0 +1,8 @@
+1
+line 37, in outer
+line 33, in level1
+line 31, in level2
+line 29, in level3
+line 40, in <module>
+line 39, in outer
+LookupError: wrapped

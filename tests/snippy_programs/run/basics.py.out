@@ -1,0 +1,15 @@
+hello, world
+1 2 3
+1, 2, 3
+no newline|after
+
+ab
+13 7 30 3.3333333333333335 3 1 1000
+-4 2 -4 -2
+Hi Snippy ! 6
+<class 'int'> <class 'float'> <class 'str'> <class 'NoneType'> <class 'bool'> <class 'list'> <class 'tuple'> <class 'dict'> <class 'set'>
+5 5 5
+2 1
+None True False Ellipsis
+0.30000000000000004 0.3333333333333333 1.0 1e+16 1e-05 123456789.12345679
+100000000000000000000 1267650600228229401496703205376 -9223372036854775808 9223372036854775807

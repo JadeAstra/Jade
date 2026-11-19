@@ -1,0 +1,37 @@
+long list 5
+[24, 14, 40] 40
+chunk a
+chunk b
+0 -> zero
+2 -> small
+-5 -> negative -5
+7.5 -> number
+'' -> empty string
+'hi' -> string 'hi'
+[] -> empty list
+[9] -> one item 9
+[1, 2] -> pair 1, 2
+[1, 2, 3, 4] -> starts with 1, then 3 more
+{'type': 'point', 'x': 1, 'y': 2} -> point at 1, 2
+{'type': 'box', 'w': 1, 'h': 2} -> type box with ['h', 'w']
+None -> none
+(1, 2) -> pair 1, 2
+{1, 2} -> something else
+origin
+on the x axis at 3
+on the y axis at 4
+on the diagonal
+somewhere
+not a point
+go north -> going north
+take sword shield -> taking sword, shield
+take -> unknown
+quit -> bye
+exit -> bye
+look -> looking around
+see -> seeing around
+dance now -> unknown
+tuple of int and str (1, 'a')
+a is 1
+captured 42
+matched True

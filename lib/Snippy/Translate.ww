@@ -1,0 +1,1370 @@
+import Snippy.Text.*
+// Snippy made into WinterWolf source (docs/snippy-plan.html, part 5.2): each Snippy value an
+// any?, each operation a call of the Snippy runtime (lib/Snippy/Runtime), which keeps Python's
+// rules in one place; each function a WinterWolf function, its locals WinterWolf variables, which
+// the closures of the functions inside it share as Python's cells are shared. Every line of what
+// it is made into is the Snippy line it came from (statements on one line joined with ;), so that
+// an error, a traceback and the compiler's messages name the script's own lines.
+//
+// ww calls pyTranslate for each .py or .snippy file it compiles (src/snippy.cpp).
+
+// What `source`, the Snippy file at `path`, is made into; `main` for the program's own file. A
+// SyntaxError comes back as "\u{1}line\u{1}column\u{1}SyntaxError: what".
+fun pyTranslate(source : string, path : string, main : bool) : string {
+  val file = FilePath(path).name
+  try {
+    val tree = pyParse(source, file)
+    val scopes = PyScopes(file)
+    scopes.analyze(tree)
+    val problem = scopes.problem
+    if (problem != null) { throw problem!! }
+    return PyTranslator(tree, scopes, path, main).run()
+  } catch (e : PySyntaxError) {
+    return "\u{1}${e.line}\u{1}${e.col + 1}\u{1}${e.kind}: ${e.description}"
+  }
+}
+
+// The names Python's builtins module has (3.14), which a global the module never binds may be.
+internal val __pyBuiltinNames : Set<string> = setOf(
+  "abs", "aiter", "all", "anext", "any", "ascii", "bin", "bool", "breakpoint", "bytearray", "bytes", "callable", "chr",
+  "classmethod", "compile", "complex", "copyright", "credits", "delattr", "dict", "dir", "divmod", "enumerate", "eval", "exec",
+  "exit", "filter", "float", "format", "frozenset", "getattr", "globals", "hasattr", "hash", "help", "hex", "id", "input", "int",
+  "isinstance", "issubclass", "iter", "len", "license", "list", "locals", "map", "max", "memoryview", "min", "next", "object",
+  "oct", "open", "ord", "pow", "print", "property", "quit", "range", "repr", "reversed", "round", "set", "setattr", "slice",
+  "sorted", "staticmethod", "str", "sum", "super", "tuple", "type", "vars", "zip", "__import__", "__build_class__",
+  "None", "Ellipsis", "NotImplemented", "True", "False", "__debug__",
+  "BaseException", "BaseExceptionGroup", "Exception", "ExceptionGroup", "ArithmeticError", "AssertionError", "AttributeError",
+  "BufferError", "EOFError", "FloatingPointError", "GeneratorExit", "ImportError", "ModuleNotFoundError", "IndexError",
+  "KeyError", "KeyboardInterrupt", "LookupError", "MemoryError", "NameError", "NotImplementedError", "OSError",
+  "OverflowError", "RecursionError", "ReferenceError", "RuntimeError", "StopAsyncIteration", "StopIteration",
+  "SyntaxError", "IndentationError", "TabError", "SystemError", "SystemExit", "TypeError", "UnboundLocalError",
+  "UnicodeError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeTranslateError", "ValueError", "ZeroDivisionError",
+  "EnvironmentError", "IOError", "WindowsError", "BlockingIOError", "ChildProcessError", "ConnectionError", "BrokenPipeError",
+  "ConnectionAbortedError", "ConnectionRefusedError", "ConnectionResetError", "FileExistsError", "FileNotFoundError",
+  "InterruptedError", "IsADirectoryError", "NotADirectoryError", "PermissionError", "ProcessLookupError", "TimeoutError",
+  "Warning", "UserWarning", "DeprecationWarning", "PendingDeprecationWarning", "SyntaxWarning", "RuntimeWarning",
+  "FutureWarning", "ImportWarning", "UnicodeWarning", "BytesWarning", "ResourceWarning", "EncodingWarning",
+  "PythonFinalizationError", "_IncompleteInputError")
+
+// Builtins called with positional arguments alone, each a function of the runtime's of its own:
+// the name, then the fewest and most arguments it is called so with.
+internal val __pyDirectCalls : Map<string, Triple<string, int, int>> = {
+  "print": Triple("pyPrint", 0, 1000), "len": Triple("pyLen", 1, 1), "repr": Triple("pyRepr", 1, 1),
+  "str": Triple("pyStrOf", 0, 1), "int": Triple("pyIntOf", 0, 2), "float": Triple("pyFloatOf", 0, 1),
+  "bool": Triple("pyBoolOf", 0, 1), "abs": Triple("pyAbs", 1, 1), "isinstance": Triple("pyIsInstance", 2, 2),
+  "issubclass": Triple("pyIsSubclass", 2, 2), "type": Triple("pyTypeOf", 1, 1), "ord": Triple("pyOrdOf", 1, 1),
+  "chr": Triple("pyChrOf", 1, 1), "hash": Triple("pyHash", 1, 1), "id": Triple("pyId", 1, 1),
+  "iter": Triple("pyIterOf", 1, 1), "next": Triple("pyNextOf", 1, 2), "list": Triple("pyListOf", 0, 1),
+  "tuple": Triple("pyTupleOf", 0, 1), "set": Triple("pySetOf", 0, 1), "frozenset": Triple("pyFrozenSetOf", 0, 1),
+  "range": Triple("pyRangeOf", 1, 3), "hasattr": Triple("pyHasAttr", 2, 2), "getattr": Triple("pyGetAttrOf", 2, 3),
+  "setattr": Triple("pySetAttrOf", 3, 3), "delattr": Triple("pyDelAttrOf", 2, 2), "callable": Triple("pyCallable", 1, 1),
+  "divmod": Triple("pyDivmod", 2, 2), "any": Triple("pyAny", 1, 1), "all": Triple("pyAll", 1, 1),
+  "sum": Triple("pySum", 1, 2), "reversed": Triple("pyReversed", 1, 1), "enumerate": Triple("pyEnumerate", 1, 2),
+  "zip": Triple("pyZip", 0, 1000), "ascii": Triple("pyAscii", 1, 1), "format": Triple("pyFormatOf", 1, 2),
+  "hex": Triple("pyHexOf", 1, 1), "oct": Triple("pyOctOf", 1, 1), "bin": Triple("pyBinOf", 1, 1),
+  "round": Triple("pyRound", 1, 2), "pow": Triple("pyPowOf", 2, 3)
+}
+
+internal fun __pyBinOp(op : PyOperator) : string => when (op) {
+  PyOperator.Add -> "pyAdd"
+  PyOperator.Sub -> "pySub"
+  PyOperator.Mult -> "pyMul"
+  PyOperator.MatMult -> "pyMatMul"
+  PyOperator.Div -> "pyDiv"
+  PyOperator.Mod -> "pyMod"
+  PyOperator.Pow -> "pyPow"
+  PyOperator.LShift -> "pyLShift"
+  PyOperator.RShift -> "pyRShift"
+  PyOperator.BitOr -> "pyOr"
+  PyOperator.BitXor -> "pyXor"
+  PyOperator.BitAnd -> "pyAnd"
+  PyOperator.FloorDiv -> "pyFloorDiv"
+}
+
+internal fun __pyCmpOp(op : PyCmpOp) : string => when (op) {
+  PyCmpOp.Eq -> "pyEq"
+  PyCmpOp.NotEq -> "pyNe"
+  PyCmpOp.Lt -> "pyLt"
+  PyCmpOp.LtE -> "pyLe"
+  PyCmpOp.Gt -> "pyGt"
+  PyCmpOp.GtE -> "pyGe"
+  else -> ""
+}
+
+// What the translator knows where it is: the scope, the names sure to be bound at this point, and
+// what a return, a yield and a break turn into here.
+internal class __PyCtx(val scope : PyScope, val parent : __PyCtx?) {
+  var sure : open Set<string> = Set<string>()
+  // Names of enclosing functions sure to be bound whenever this function runs.
+  var freeSafe : Set<string> = Set<string>()
+  var gen : string? = null        // the generator's variable, in a generator's body
+  var returnLabel : string? = null
+  var selfName : string? = null   // the first parameter, for super()
+  var ns : string? = null         // the namespace being filled, in a class body
+  // The loops this code is in, innermost last: the flag a break sets where the loop has an else.
+  val loops : open List<string?> = []
+}
+
+class PyTranslator(val tree : PyModule, val scopes : PyScopes, val path : string, val main : bool) {
+  private val out = StringBuilder()
+  private var line = 1
+  private var sep = false
+  private var n = 0
+  // What goes on the first line, before the module's code: imports, its globals, constants.
+  private val prologue : open List<string> = []
+  private val hoisted : open Map<string, string> = {:}
+  // The Snippy files it imports, each by the name WinterWolf's import gives it.
+  private val imports : open Map<string, string> = {:}
+  // The Python names of the bodies made as lambdas (class bodies, decorated functions, generator
+  // expressions): the lines each spans, for tracebacks, which see only "<lambda>".
+  private val frameNames : open List<Triple<int, int, string>> = []
+  private val file = FilePath(path).name
+  private val stem = file.contains(".") ? file[..<file.lastIndexOf(".")] : file
+  private val moduleVal = "pyModule_" + pyMangle(stem)
+  private val moduleName = main ? "__main__" : stem
+  // Every name the module holds as a global: those it binds, and those a function says are global.
+  private val globalNames : open Set<string> = Set<string>()
+  private lateinit var cx : __PyCtx
+
+  fun run() : string {
+    val m = scopes.module
+    for name in ["__name__", "__file__", "__doc__"] { m.bound.add(name) }
+    globalNames.addAll(m.bound)
+    for s in scopes.byNode.values { globalNames.addAll(s.globals) }
+    cx = __PyCtx(m, null)
+    out.append("private fun f0__module_() {")
+    emit("g___name__ = ${moduleVal}.name; g___file__ = ${moduleVal}.file; g___doc__ = null")
+    cx.sure.addAll(["__name__", "__file__", "__doc__"])
+    if (tree.body.isNotEmpty() and tree.body[0] is PyExprStmt and (tree.body[0] as PyExprStmt).value is PyConstant and
+        ((tree.body[0] as PyExprStmt).value as PyConstant).value is string) {
+      emit("g___doc__ = " + wwString(((tree.body[0] as PyExprStmt).value as PyConstant).value as string))
+    }
+    body(tree.body)
+    out.append(" }")
+    // The module object, its globals reached by name, on the last line.
+    val names = globalNames.toList()
+    val sb = StringBuilder()
+    sb.append("; val $moduleVal = PyModule(${wwString(moduleName)}, ${wwString(path)}, [")
+    sb.append(names.map { wwString(it) }.join(", "))
+    sb.append("], { i : int -> when (i) { ")
+    for (i, name) in names.withIndex() { sb.append("$i -> g_${pyMangle(name)}; ") }
+    sb.append("else -> pyUnbound } }, { i : int, v : any? -> when (i) { ")
+    for (i, name) in names.withIndex() { sb.append("$i -> { g_${pyMangle(name)} = v }; ") }
+    sb.append("else -> {} } }, f0__module_)")
+    if (main) { sb.append("; pyRunMain($moduleVal)") }
+    out.append(sb.toString())
+    val first = StringBuilder()
+    first.append("import Snippy.Runtime.*; ")
+    for (found, alias) in imports { first.append("import ${wwString(found)} as $alias; ") }
+    for name in names { first.append("private var g_${pyMangle(name)} : any? = pyUnbound; ") }
+    for p in prologue { first.append(p + "; ") }
+    if (frameNames.isNotEmpty()) {
+      val parts = frameNames.map { "${it.first}, ${it.second}, ${wwString(it.third)}" }.join(", ")
+      first.append("private val framesOf = pyFrameNames(${wwString(file)}, [$parts]); ")
+    }
+    return first.toString() + out.toString() + "\n"
+  }
+
+  // ---- Writing ----
+
+  private fun next() : int {
+    n += 1
+    return n
+  }
+
+  private fun goTo(target : int) {
+    while (line < target) {
+      out.append("\n")
+      line += 1
+      sep = false
+    }
+  }
+
+  private fun emit(text : string) {
+    if (sep) { out.append("; ") } else if (out.size > 0 and !out.toString().endsWith("\n")) { out.append(" ") }
+    out.append(text)
+    sep = true
+  }
+
+  private fun open(text : string) {
+    emit(text + " {")
+    sep = false
+  }
+
+  private fun close() {
+    out.append(" }")
+    sep = true
+  }
+
+  private fun closeOpen(text : string) {
+    out.append(" } $text {")
+    sep = false
+  }
+
+  // A value kept once for the module, on the first line: a big int, a builtin, a function's spec.
+  private fun hoist(key : string, make : () -> string) : string {
+    val had = hoisted[key]
+    if (had != null) { return had!! }
+    val name = "c" + next()
+    prologue.add("private val $name = ${make()}")
+    hoisted[key] = name
+    return name
+  }
+
+  // ---- Statements ----
+
+  private fun body(list : List<PyStmt>) {
+    for s in list {
+      goTo(startLine(s))
+      stmt(s)
+    }
+  }
+
+  // The line a statement starts on: a decorated one's first decorator's.
+  private fun startLine(s : PyStmt) : int {
+    if (s is PyFunctionDef and (s as PyFunctionDef).decoratorList.isNotEmpty()) { return (s as PyFunctionDef).decoratorList[0].line }
+    if (s is PyClassDef and (s as PyClassDef).decoratorList.isNotEmpty()) { return (s as PyClassDef).decoratorList[0].line }
+    return s.line
+  }
+
+  private fun ends(list : List<PyStmt>) : bool {
+    if (list.isEmpty()) { return false }
+    val last = list[list.size - 1]
+    return last is PyReturn or last is PyRaise or last is PyBreak or last is PyContinue
+  }
+
+  // A block in a new copy of the sure names; gives the names sure at its end (all, if it does
+  // not end there).
+  private fun branch(list : List<PyStmt>, from : Set<string>) : Set<string>? {
+    cx.sure = from.toOpenSet()
+    body(list)
+    return ends(list) ? null : cx.sure
+  }
+
+  private fun meet(a : Set<string>?, b : Set<string>?) : open Set<string> {
+    if (a == null) { return (b ?: Set<string>()).toOpenSet() }
+    if (b == null) { return a!!.toOpenSet() }
+    val out : open Set<string> = Set<string>()
+    for x in a!! { if (x in b!!) { out.add(x) } }
+    return out
+  }
+
+  private fun stmt(s : PyStmt) {
+    when (s) {
+      is PyExprStmt -> {
+        val v = s.value
+        if (v is PyConstant) { return }
+        emit(ex(v))
+      }
+      is PyAssign -> {
+        val value = ex(s.value)
+        if (s.targets.size == 1 and s.targets[0] is PyName) {
+          assign(s.targets[0], value)
+        } else {
+          val t = "t" + next()
+          emit("val $t : any? = $value")
+          for target in s.targets { assign(target, t) }
+        }
+      }
+      is PyAugAssign -> augAssign(s)
+      is PyAnnAssign -> {
+        if (s.value != null) { assign(s.target, ex(s.value!!)) }
+      }
+      is PyIf -> {
+        open("if (${cond(s.test)})")
+        val before = cx.sure.toSet()
+        val a = branch(s.body, before)
+        if (s.orelse.isNotEmpty()) {
+          closeOpen("else")
+          val b = branch(s.orelse, before)
+          close()
+          cx.sure = meet(a, b)
+        } else {
+          close()
+          cx.sure = meet(a, before)
+        }
+      }
+      is PyWhile -> {
+        val flag = s.orelse.isNotEmpty() ? "b" + next() : null
+        if (flag != null) { emit("var $flag = false") }
+        open("while (${cond(s.test)})")
+        val before = cx.sure.toSet()
+        cx.loops.add(flag)
+        branch(s.body, before)
+        cx.loops.removeLast()
+        close()
+        cx.sure = before.toOpenSet()
+        if (flag != null) {
+          open("if (!$flag)")
+          branch(s.orelse, before)
+          close()
+          cx.sure = before.toOpenSet()
+        }
+      }
+      is PyFor -> forLoop(s)
+      is PyBreak -> {
+        val flag = cx.loops.isEmpty() ? null : cx.loops[cx.loops.size - 1]
+        emit(flag != null ? "$flag = true; break" : "break")
+      }
+      is PyContinue -> emit("continue")
+      is PyPass -> {}
+      is PyReturn -> {
+        val value = s.value == null ? "null" : ex(s.value!!)
+        emit(cx.returnLabel != null ? "return@${cx.returnLabel} $value" : "return $value")
+      }
+      is PyFunctionDef -> functionDef(s)
+      is PyClassDef -> classDef(s)
+      is PyRaise -> {
+        if (s.exc == null) { emit("throw pyReraise()") }
+        else if (s.cause == null) { emit("throw pyRaise(${ex(s.exc!!)})") }
+        else { emit("throw pyRaiseFrom(${ex(s.exc!!)}, ${ex(s.cause!!)})") }
+      }
+      is PyTry -> tryStmt(s)
+      is PyWith -> withStmt(s, 0)
+      is PyAssert -> {
+        open("if (!(${cond(s.test)}))")
+        emit("throw pyAssertFailed(${s.msg == null ? "pyNoMessage" : ex(s.msg!!)})")
+        close()
+      }
+      is PyDelete -> for t in s.targets { delete(t) }
+      is PyGlobal -> {}
+      is PyNonlocal -> {}
+      is PyImport -> for a in s.names { importName(a) }
+      is PyImportFrom -> importFrom(s)
+      is PyMatch -> matchStmt(s)
+      is PyTypeAlias -> {}
+      else -> emit("throw pyRaise(pyNotImplementedError(${wwString("this statement is not supported yet")}))")
+    }
+  }
+
+  // ---- Names ----
+
+  private fun isBuiltin(name : string) : bool => name in __pyBuiltinNames and !(name in globalNames)
+
+  private fun builtinValue(name : string) : string => hoist("b:" + name) { "pyBuiltin(${wwString(name)})" }
+
+  // The value of `name` where it is read here.
+  private fun load(name : string) : string {
+    val r = cx.scope.resolve(name)
+    return when (r.kind) {
+      PyRefKind.Local -> name in cx.sure ? r.ww!! : "pyL(${r.ww}, ${wwString(name)})"
+      PyRefKind.Free -> (name in cx.freeSafe and !(name in r.scope!!.deleted)) or r.ww!!.startsWith("k_") ? r.ww!!
+                         : "pyF(${r.ww}, ${wwString(name)})"
+      PyRefKind.Global -> globalLoad(name)
+      PyRefKind.ClassName -> "(if (pyNsHas(${cx.ns}, ${wwString(name)})) { ${cx.ns}.get(${wwString(name)}, null) } else { ${globalLoad(name)} })"
+    }
+  }
+
+  private fun globalLoad(name : string) : string {
+    if (name in globalNames) {
+      val g = "g_" + pyMangle(name)
+      if (cx.scope.kind == PyScopeKind.Module and name in cx.sure) { return g }
+      return name in __pyBuiltinNames ? "pyGB($g, ${builtinValue(name)})" : "pyG($g, ${wwString(name)})"
+    }
+    if (scopes.module.importsStar) { return "pyGlobalDyn($moduleVal, ${wwString(name)})" }
+    if (name in __pyBuiltinNames) { return builtinValue(name) }
+    return "pyGlobalDyn($moduleVal, ${wwString(name)})"
+  }
+
+  // Code that gives `name`, bound here, the value `value`.
+  private fun store(name : string, value : string) : string {
+    val r = cx.scope.resolve(name)
+    return when (r.kind) {
+      PyRefKind.Local -> {
+        cx.sure.add(name)
+        "${r.ww} = $value"
+      }
+      PyRefKind.Free -> "${r.ww} = $value"
+      PyRefKind.Global -> {
+        if (cx.scope.kind == PyScopeKind.Module) { cx.sure.add(name) }
+        "g_${pyMangle(name)} = $value"
+      }
+      PyRefKind.ClassName -> "${cx.ns}.set(${wwString(name)}, $value)"
+    }
+  }
+
+  private fun deleteName(name : string) : string {
+    val r = cx.scope.resolve(name)
+    return when (r.kind) {
+      PyRefKind.Local, PyRefKind.Free -> {
+        cx.sure.remove(name)
+        "${r.ww} = pyDelL(${r.ww}, ${wwString(name)})"
+      }
+      PyRefKind.Global -> {
+        if (cx.scope.kind == PyScopeKind.Module) { cx.sure.remove(name) }
+        "g_${pyMangle(name)} = pyDelG(g_${pyMangle(name)}, ${wwString(name)})"
+      }
+      PyRefKind.ClassName -> "pyNsDel(${cx.ns}, ${wwString(name)})"
+    }
+  }
+
+  // ---- Assignment ----
+
+  private fun assign(target : PyExpr, value : string) {
+    emit(assignText(target, value))
+  }
+
+  // An assignment of `value` to `target` as code on one line.
+  private fun assignText(target : PyExpr, value : string) : string {
+    return when (target) {
+      is PyName -> store(target.id, value)
+      is PyAttribute -> "pySetAttr(${ex(target.value)}, ${wwString(target.attr)}, $value)"
+      is PySubscript -> {
+        val sl = target.slice
+        if (sl is PySlice) {
+          "pySetSlice(${ex(target.value)}, ${opt(sl.lower)}, ${opt(sl.upper)}, ${opt(sl.step)}, $value)"
+        } else {
+          "pySetItem(${ex(target.value)}, ${ex(sl)}, $value)"
+        }
+      }
+      is PyTuple -> unpack(target.elts, value)
+      is PyListExpr -> unpack(target.elts, value)
+      is PyStarred -> assignText(target.value, value)
+      else -> "throw pyRaise(pyNotImplementedError(\"cannot assign here\"))"
+    }
+  }
+
+  private fun unpack(elts : List<PyExpr>, value : string) : string {
+    val t = "u" + next()
+    val star = elts.indexOfFirst { it is PyStarred }
+    val parts : open List<string> = []
+    parts.add(star < 0 ? "val $t = pyUnpack($value, ${elts.size})" : "val $t = pyUnpackStar($value, $star, ${elts.size - star - 1})")
+    for (i, e) in elts.withIndex() { parts.add(assignText(e, "$t[$i]")) }
+    return parts.join("; ")
+  }
+
+  private fun augAssign(s : PyAugAssign) {
+    val op = "pyI" + __pyBinOp(s.op)[2..]
+    val target = s.target
+    when (target) {
+      is PyName -> {
+        val now = load(target.id)
+        emit(store(target.id, "$op($now, ${ex(s.value)})"))
+      }
+      is PyAttribute -> {
+        val o = "o" + next()
+        emit("val $o : any? = ${ex(target.value)}")
+        emit("pySetAttr($o, ${wwString(target.attr)}, $op(pyGetAttr($o, ${wwString(target.attr)}), ${ex(s.value)}))")
+      }
+      is PySubscript -> {
+        val o = "o" + next()
+        val k = "k" + n
+        emit("val $o : any? = ${ex(target.value)}")
+        val sl = target.slice
+        if (sl is PySlice) {
+          emit("val $k : any? = PySlice(${opt(sl.lower)}, ${opt(sl.upper)}, ${opt(sl.step)})")
+        } else {
+          emit("val $k : any? = ${ex(sl)}")
+        }
+        emit("pySetItem($o, $k, $op(pyGetItem($o, $k), ${ex(s.value)}))")
+      }
+      else -> {}
+    }
+  }
+
+  private fun delete(target : PyExpr) {
+    when (target) {
+      is PyName -> emit(deleteName(target.id))
+      is PyAttribute -> emit("pyDelAttr(${ex(target.value)}, ${wwString(target.attr)})")
+      is PySubscript -> {
+        val sl = target.slice
+        if (sl is PySlice) { emit("pyDelItem(${ex(target.value)}, PySlice(${opt(sl.lower)}, ${opt(sl.upper)}, ${opt(sl.step)}))") }
+        else { emit("pyDelItem(${ex(target.value)}, ${ex(sl)})") }
+      }
+      is PyTuple -> for e in target.elts { delete(e) }
+      is PyListExpr -> for e in target.elts { delete(e) }
+      else -> {}
+    }
+  }
+
+  // ---- Loops ----
+
+  private fun forLoop(s : PyFor) {
+    val id = next()
+    var temporary = false
+    val flag = s.orelse.isNotEmpty() ? "b$id" : null
+    if (flag != null) { emit("var $flag = false") }
+    val before = cx.sure.toSet()
+    val it = s.iter
+    val fast = !s.isAsync and it is PyCall and (it as PyCall).func is PyName and ((it as PyCall).func as PyName).id == "range" and
+               isBuiltin("range") and !scopes.module.importsStar and (it as PyCall).keywords.isEmpty() and
+               (it as PyCall).args.size >= 1 and (it as PyCall).args.size <= 3 and (it as PyCall).args.none { it is PyStarred }
+    var stepSign = 1
+    if (fast and (it as PyCall).args.size == 3) {
+      val step = (it as PyCall).args[2]
+      stepSign = 0
+      if (step is PyConstant and (step as PyConstant).value is int and (step as PyConstant).value != 0) { stepSign = 1 }
+      if (step is PyUnaryOpExpr and (step as PyUnaryOpExpr).op == PyUnaryOp.USub and (step as PyUnaryOpExpr).operand is PyConstant and
+          ((step as PyUnaryOpExpr).operand as PyConstant).value is int and ((step as PyUnaryOpExpr).operand as PyConstant).value != 0) { stepSign = -1 }
+    }
+    if (fast and stepSign != 0) {
+      // for i in range(...): counted in a WinterWolf int, as fast as a loop of its own.
+      val args = (it as PyCall).args
+      val start = args.size == 1 ? "0" : "pyIndex(${ex(args[0])})"
+      val stop = args.size == 1 ? "pyIndex(${ex(args[0])})" : "pyIndex(${ex(args[1])})"
+      val step = args.size == 3 ? "pyIndex(${ex(args[2])})" : "1"
+      emit("var i$id = $start; val e$id = $stop; val s$id = $step")
+      open("while (i$id ${stepSign > 0 ? "<" : ">"} e$id)")
+      emit("val n$id : any? = i$id; i$id += s$id")
+    } else if (s.isAsync) {
+      emit("val i$id = pyAIter(${ex(it)})")
+      open("while (true)")
+      emit("val n$id = pyANext(${cx.gen ?: "null"}, i$id); if (n$id === pyEnd) { break }")
+    } else {
+      emit("val i$id = pyIter(${ex(it)})")
+      // A generator the loop made itself is closed as the loop ends, as CPython closes it
+      // when nothing holds it any more (its finally blocks run then).
+      temporary = it is PyCall or it is PyGeneratorExp
+      if (temporary) { open("try") }
+      open("while (true)")
+      emit("val n$id = pyNext(i$id); if (n$id === pyEnd) { break }")
+    }
+    assign(s.target, "n$id")
+    cx.loops.add(flag)
+    val inside = cx.sure.toSet()
+    branch(s.body, inside)
+    cx.loops.removeLast()
+    close()
+    if (temporary) {
+      closeOpen("finally")
+      emit("pyCloseTemp(i$id)")
+      close()
+    }
+    cx.sure = before.toOpenSet()
+    if (flag != null) {
+      open("if (!$flag)")
+      branch(s.orelse, before)
+      close()
+      cx.sure = before.toOpenSet()
+    }
+  }
+
+  // ---- try and with ----
+
+  private fun tryStmt(s : PyTry) {
+    val id = next()
+    val before = cx.sure.toSet()
+    val hasFinally = s.finalbody.isNotEmpty()
+    val hasElse = s.orelse.isNotEmpty()
+    if (hasElse) { emit("var ok$id = false") }
+    if (hasFinally) { open("try") }
+    var after : Set<string>? = null
+    if (s.handlers.isNotEmpty()) {
+      open("try")
+      var a = branch(s.body, before)
+      if (hasElse) { emit("ok$id = true") }
+      closeOpen("catch (t$id : Throwable)")
+      emit("val e$id = pyCaught(t$id)")
+      var result : Set<string>? = null
+      var first = true
+      var all = false
+      for h in s.handlers {
+        val test = h.type == null ? null : "pyExcMatch(e$id, ${ex(h.type!!)})"
+        if (test == null) {
+          if (first) { open("if (true)") } else { closeOpen("else") }
+          all = true
+        } else {
+          if (first) { open("if ($test)") } else { closeOpen("else if ($test)") }
+        }
+        first = false
+        goTo(h.line)
+        emit("pyHandling(e$id)")
+        open("try")
+        cx.sure = before.toOpenSet()
+        if (h.name != null) { emit(store(h.name!!, "e$id")) }
+        val hb = branch(h.body, cx.sure.toSet())
+        closeOpen("finally")
+        emit("pyHandled()")
+        if (h.name != null) { emit(deleteNameQuiet(h.name!!)) }
+        close()
+        val hEnd = hb == null ? null : hb!!.toOpenSet().also { if (h.name != null) { it.remove(h.name!!) } }
+        result = result == null ? hEnd : meet(result, hEnd)
+        if (hb == null and result == null) { result = null }
+      }
+      if (!all) { closeOpen("else"); emit("throw pyThrowable(e$id)") }
+      close()
+      close()
+      if (hasElse) {
+        open("if (ok$id)")
+        val e = branch(s.orelse, a ?: before)
+        close()
+        a = e
+      }
+      after = meet(a, result)
+    } else {
+      after = branch(s.body, before)
+      if (hasElse) { after = branch(s.orelse, after ?: before) }
+    }
+    if (hasFinally) {
+      closeOpen("finally")
+      val f = branch(s.finalbody, before)
+      close()
+      val joined = (after ?: before).toOpenSet()
+      if (f != null) { for x in f!! { joined.add(x) } }
+      cx.sure = joined
+    } else {
+      cx.sure = (after ?: before).toOpenSet()
+    }
+  }
+
+  // An except's name, unbound at its end, whether or not it was bound.
+  private fun deleteNameQuiet(name : string) : string {
+    val r = cx.scope.resolve(name)
+    return when (r.kind) {
+      PyRefKind.Local, PyRefKind.Free -> "${r.ww} = pyUnbound"
+      PyRefKind.Global -> "g_${pyMangle(name)} = pyUnbound"
+      PyRefKind.ClassName -> "pyNsDelQuiet(${cx.ns}, ${wwString(name)})"
+    }
+  }
+
+  private fun withStmt(s : PyWith, index : int) {
+    if (index == s.items.size) {
+      body(s.body)
+      return
+    }
+    val item = s.items[index]
+    val id = next()
+    val before = cx.sure.toSet()
+    val g = cx.gen ?: "null"
+    if (s.isAsync) {
+      emit("val m$id : any? = ${ex(item.contextExpr)}; val x$id = pyACtxExit(m$id); val r$id = pyAwait($g, pyACtxEnter(m$id))")
+    } else {
+      emit("val m$id : any? = ${ex(item.contextExpr)}; val x$id = pyCtxExit(m$id); val r$id = pyCtxEnter(m$id)")
+    }
+    val exitCall = { args : string -> s.isAsync ? "pyAwait($g, pyCall3(x$id, $args))" : "pyCall3(x$id, $args)" }
+    if (item.optionalVars != null) { assign(item.optionalVars!!, "r$id") }
+    val bound = cx.sure.toSet()
+    emit("var ok$id = true")
+    open("try")
+    withStmt(s, index + 1)
+    closeOpen("catch (t$id : Throwable)")
+    emit("ok$id = false; val e$id = pyCaught(t$id); pyHandling(e$id)")
+    open("try")
+    emit("if (!pyTruth(${exitCall("pyTypeOf(e$id), e$id, pyTracebackOf(e$id)")})) { throw pyThrowable(e$id) }")
+    closeOpen("finally")
+    emit("pyHandled()")
+    close()
+    closeOpen("finally")
+    emit("if (ok$id) { ${exitCall("null, null, null")} }")
+    close()
+    cx.sure = bound.toOpenSet()
+  }
+
+  // ---- Functions and classes ----
+
+  private fun paramList(a : PyArguments) : List<PyArg> {
+    val all : open List<PyArg> = []
+    all.addAll(a.posonlyargs)
+    all.addAll(a.args)
+    if (a.vararg != null) { all.add(a.vararg!!) }
+    all.addAll(a.kwonlyargs)
+    if (a.kwarg != null) { all.add(a.kwarg!!) }
+    return all
+  }
+
+  // The spec of a function: its names and the shape of its parameters, kept once.
+  private fun spec(name : string, f : PyScope, a : PyArguments, line : int, flags : int) : string {
+    val names = paramList(a).map { wwString(it.arg) }.join(", ")
+    val positional = a.posonlyargs.size + a.args.size
+    val text = "PySpec(${wwString(name)}, ${wwString(f.qualname)}, ${wwString(moduleName)}, [$names], ${a.posonlyargs.size}, $positional, " +
+               "${a.kwonlyargs.size}, ${a.vararg != null}, ${a.kwarg != null}, $line, $flags)"
+    val c = "c" + next()
+    prologue.add("private val $c = $text")
+    return c
+  }
+
+  private fun defaults(a : PyArguments) : string {
+    val d = a.defaults.isEmpty() ? "null" : "pyNewList([${a.defaults.map { ex(it) }.join(", ")}])"
+    var kw = "null"
+    if (a.kwDefaults.any { it != null }) {
+      val parts : open List<string> = []
+      for (i, k) in a.kwonlyargs.withIndex() {
+        val dv = a.kwDefaults[i]
+        if (dv != null) { parts.add(wwString(k.arg)); parts.add(ex(dv!!)) }
+      }
+      kw = "pyKwDefaults([${parts.join(", ")}])"
+    }
+    return "$d, $kw"
+  }
+
+  // The context of a function's body: what of the enclosing ones it may read without a check.
+  private fun innerCtx(f : PyScope) : __PyCtx {
+    val c = __PyCtx(f, cx)
+    val safe : open Set<string> = Set<string>()
+    if (cx.scope.kind != PyScopeKind.Class) { safe.addAll(cx.sure) }
+    safe.addAll(cx.freeSafe)
+    c.freeSafe = safe
+    return c
+  }
+
+  // The parameters of a function as WinterWolf's: a parameter given another value is held in a
+  // var of its own; the locals, each in a var that starts unbound.
+  private fun paramName(f : PyScope, p : string) : string => p in f.assignedParams ? "p_" + pyMangle(p) : f.wwName(p)
+
+  private fun declareLocals(f : PyScope, ps : List<PyArg>, fromList : bool) {
+    for (i, p) in ps.withIndex() {
+      if (fromList) {
+        val v = p.arg in f.assignedParams ? "var" : "val"
+        emit("$v ${f.wwName(p.arg)} : any? = a[$i]")
+      } else if (p.arg in f.assignedParams) {
+        emit("var ${f.wwName(p.arg)} : any? = ${paramName(f, p.arg)}")
+      }
+    }
+    for name in f.bound {
+      if (name in f.params or name in f.globals or name in f.nonlocals) { continue }
+      emit("var ${f.wwName(name)} : any? = pyUnbound")
+    }
+  }
+
+  // The function's parameters as a WinterWolf function's or lambda's, and its locals declared.
+  private fun paramText(f : PyScope, ps : List<PyArg>, many : bool) : string =>
+    many ? "a : List<any?>" : ps.map { paramName(f, it.arg) + " : any?" }.join(", ")
+
+  // The body of a function: statements, with what a generator or coroutine needs around them.
+  // `labelled` for a lambda's body, which returns through its label and ends in its value.
+  private fun functionBody(s : PyFunctionDef, f : PyScope, ps : List<PyArg>, many : bool, id : int, sp : string, label : string?) {
+    if (f.isGenerator or f.isCoroutine) {
+      val g = "gen$id"
+      val maker = f.isCoroutine ? (f.isGenerator ? "pyAsyncGenerator" : "pyCoroutine") : "pyGenerator"
+      if (many) { declareLocals(f, ps, true) }
+      // The body a local function of its own, named as the Snippy function, for tracebacks.
+      open("suspend fun f${id}_${pyMangle(s.name)}($g : PyGenerator) : any?")
+      if (!many) {
+        for p in ps { if (p.arg in f.assignedParams) { emit("var ${f.wwName(p.arg)} : any? = ${paramName(f, p.arg)}") } }
+        for name in f.bound {
+          if (name in f.params or name in f.globals or name in f.nonlocals) { continue }
+          emit("var ${f.wwName(name)} : any? = pyUnbound")
+        }
+      }
+      cx.gen = g
+      cx.returnLabel = null
+      body(s.body)
+      if (!endsInReturn(s.body)) { emit("return null") }
+      close()
+      emit(label == null ? "return $maker($sp, f${id}_${pyMangle(s.name)})" : "$maker($sp, f${id}_${pyMangle(s.name)})")
+    } else {
+      declareLocals(f, ps, many)
+      cx.returnLabel = label
+      body(s.body)
+      if (!endsInReturn(s.body)) { emit(label == null ? "return null" : "null") }
+    }
+  }
+
+  private fun endsInReturn(list : List<PyStmt>) : bool =>
+    list.isNotEmpty() and (list[list.size - 1] is PyReturn or list[list.size - 1] is PyRaise)
+
+  private fun functionDef(s : PyFunctionDef) {
+    val f = scopes.byNode[s]!!
+    val id = next()
+    goTo(s.decoratorList.isEmpty() ? s.line : s.decoratorList[0].line)
+    // Decorators worked out first, then defaults, then the function made and decorated.
+    val decorators = s.decoratorList.map { ex(it) }
+    val ps = paramList(s.args)
+    val flags = (f.isGenerator ? 1 : 0) + (f.isCoroutine ? 2 : 0)
+    val sp = spec(s.name, f, s.args, s.line, flags)
+    val dflt = defaults(s.args)
+    val many = ps.size > 6
+    val outer = cx
+    val inner = innerCtx(f)
+    val doc = docstring(s.body)
+    if (decorators.isEmpty()) {
+      // A local function, named for the traceback: f12_name.
+      val ww = (f.isGenerator or f.isCoroutine ? "m" : "f") + "${id}_${pyMangle(s.name)}"
+      open("fun $ww(${paramText(f, ps, many)}) : any?")
+      cx = inner
+      for p in ps { cx.sure.add(p.arg) }
+      if (ps.isNotEmpty()) { cx.selfName = f.wwName(ps[0].arg) }
+      functionBody(s, f, ps, many, id, sp, null)
+      cx = outer
+      close()
+      var made = "pyDef${many ? "N" : ps.size.toString()}($ww, $sp, $dflt)"
+      if (doc != null) { made = "pyDoc($made, ${wwString(doc!!)})" }
+      emit(store(s.name, made))
+      return
+    }
+    // A decorated function: one expression from its first decorator's line, so that what the
+    // decorators do is said to happen there, its body a lambda named by the frame table.
+    frameNames.add(Triple(s.line, s.endLine, s.name))
+    val label = "lb$id"
+    val whole = store(s.name, "\u{0}")
+    val cut = whole.indexOf("\u{0}")
+    var head = whole[..<cut]
+    var tail = whole[(cut + 1)..]
+    for d in decorators { head += "pyCall1($d, "; tail = ")" + tail }
+    if (doc != null) { head += "pyDoc("; tail = ", ${wwString(doc!!)})" + tail }
+    head += "pyDef${many ? "N" : ps.size.toString()}($label@ { "
+    if (ps.isNotEmpty() or many) { head += paramText(f, ps, many) + " ->" }
+    emit(head)
+    sep = false
+    cx = inner
+    for p in ps { cx.sure.add(p.arg) }
+    if (ps.isNotEmpty()) { cx.selfName = f.wwName(ps[0].arg) }
+    functionBody(s, f, ps, many, id, sp, label)
+    cx = outer
+    out.append(" }, $sp, $dflt)" + tail)
+    sep = true
+  }
+
+  private fun classDef(s : PyClassDef) {
+    val c = scopes.byNode[s]!!
+    val id = next()
+    goTo(s.decoratorList.isEmpty() ? s.line : s.decoratorList[0].line)
+    // Decorators, then bases and keywords, then the body run, the class made and decorated:
+    // one expression from the first line, the body a lambda named by the frame table.
+    if (c.needsClassCell) { emit("val k_${c.id} = PyCellBox()") }
+    val decorators = s.decoratorList.map { ex(it) }
+    val bases = args(s.bases)
+    val kwNames = s.keywords.filter { it.arg != null }.map { wwString(it.arg!!) }.join(", ")
+    val kwValues = s.keywords.filter { it.arg != null }.map { ex(it.value) }.join(", ")
+    frameNames.add(Triple(s.line, s.endLine, s.name))
+    val ns = "ns$id"
+    val whole = store(s.name, "\u{0}")
+    val cut = whole.indexOf("\u{0}")
+    var head = whole[..<cut]
+    var tail = whole[(cut + 1)..]
+    for d in decorators { head += "pyCall1($d, "; tail = ")" + tail }
+    if (c.needsClassCell) { head += "pyCellSet(k_${c.id}, "; tail = ")" + tail }
+    head += "pyMakeClass(${wwString(s.name)}, ${wwString(c.qualname)}, ${wwString(moduleName)}, $bases, [$kwNames], pyNewList([$kwValues]), cb$id@ { $ns : PyDict ->"
+    emit(head)
+    sep = false
+    val outer = cx
+    val inner = __PyCtx(c, cx)
+    val safe : open Set<string> = Set<string>()
+    if (cx.scope.kind != PyScopeKind.Class) { safe.addAll(cx.sure) }
+    safe.addAll(cx.freeSafe)
+    inner.freeSafe = safe
+    inner.ns = ns
+    cx = inner
+    val classDoc = docstring(s.body)
+    if (classDoc != null) { emit("$ns.set(\"__doc__\", ${wwString(classDoc!!)})") }
+    body(s.body)
+    cx = outer
+    out.append(" })" + tail)
+    sep = true
+  }
+
+  // The docstring of a body: its first statement, where that is a string.
+  private fun docstring(body : List<PyStmt>) : string? {
+    if (body.isEmpty() or !(body[0] is PyExprStmt)) { return null }
+    val v = (body[0] as PyExprStmt).value
+    if (v is PyConstant and (v as PyConstant).value is string) { return (v as PyConstant).value as string }
+    return null
+  }
+
+  // ---- Imports ----
+
+  // The Snippy file `dotted` names beside this one, if there is one: its path, as WinterWolf's
+  // import writes it.
+  private fun moduleFile(dotted : string, level : int) : string? {
+    var dir = FilePath(path).parent
+    if (dir == null) { return null }
+    var d = dir!!
+    for i in 1..<(level > 0 ? level : 1) {
+      val up = d.parent
+      if (up == null) { return null }
+      d = up!!
+    }
+    val parts = dotted.split(".")
+    for ext in [".py", ".snippy"] {
+      var p = d
+      for (i, part) in parts.withIndex() {
+        p = i == parts.size - 1 ? p.resolve(part + ext) : p.resolve(part)
+      }
+      if (p.exists()) { return p.toString().replace("\\", "/") }
+    }
+    return null
+  }
+
+  private fun moduleRef(dotted : string, level : int) : string {
+    val found = moduleFile(dotted, level)
+    if (found != null) {
+      var alias = imports[found!!]
+      if (alias == null) {
+        alias = "pm" + next()
+        imports[found!!] = alias!!
+      }
+      val name = FilePath(found!!).name
+      val stemOf = name.contains(".") ? name[..<name.lastIndexOf(".")] : name
+      return "pyImportFile(${alias}.pyModule_${pyMangle(stemOf)})"
+    }
+    return "pyImport(${wwString(dotted)}, $level, $moduleVal)"
+  }
+
+  private fun importName(a : PyAlias) {
+    val m = moduleRef(a.name, 0)
+    if (a.asname != null) {
+      emit(store(a.asname!!, m))
+    } else if (a.name.contains(".")) {
+      emit("pyDiscard($m)")
+      emit(store(a.name.split(".")[0], moduleRef(a.name.split(".")[0], 0)))
+    } else {
+      emit(store(a.name, m))
+    }
+  }
+
+  private fun importFrom(s : PyImportFrom) {
+    val id = next()
+    emit("val m$id = ${moduleRef(s.module ?: "", s.level)}")
+    for a in s.names {
+      if (a.name == "*") { emit("pyImportStar(m$id, $moduleVal)") }
+      else { emit(store(a.asname ?: a.name, "pyImportFrom(m$id, ${wwString(a.name)})")) }
+    }
+  }
+
+  // ---- match ----
+
+  private fun matchStmt(s : PyMatch) {
+    val id = next()
+    emit("val sj$id : any? = ${ex(s.subject)}")
+    val before = cx.sure.toSet()
+    var result : Set<string>? = null
+    var anyEnds = false
+    var first = true
+    emit("var done$id = false")
+    for c in s.cases {
+      goTo(c.line)
+      open("if (!done$id)")
+      cx.sure = before.toOpenSet()
+      val test = pattern(c.pattern, "sj$id")
+      open("if ($test)")
+      if (c.guard != null) {
+        open("if (${cond(c.guard!!)})")
+      }
+      emit("done$id = true")
+      val e = branch(c.body, cx.sure.toSet())
+      if (c.guard != null) { close() }
+      close()
+      close()
+      result = first ? e : meet(result, e)
+      if (first and e == null) { anyEnds = true }
+      first = false
+    }
+    cx.sure = meet(result, before)
+  }
+
+  // A test that `subject` (a variable) fits `p`, binding its names as it goes.
+  private fun pattern(p : PyPattern, subject : string) : string {
+    return when (p) {
+      is PyMatchValue -> "pyMatchValue($subject, ${ex(p.value)})"
+      is PyMatchSingleton -> "($subject === ${p.value == null ? "null" : p.value.toString()})"
+      is PyMatchAs -> {
+        val inner = p.pattern == null ? "true" : pattern(p.pattern!!, subject)
+        if (p.name == null) { inner } else { "($inner and pyDo { ${store(p.name!!, subject)}; true })" }
+      }
+      is PyMatchOr -> "(" + p.patterns.map { pattern(it, subject) }.join(" or ") + ")"
+      is PyMatchSequence -> {
+        val id = next()
+        val star = p.patterns.indexOfFirst { it is PyMatchStar }
+        val items = "q$id"
+        val count = p.patterns.size
+        val take = star < 0 ? "pyMatchSeq($subject, $count, -1)" : "pyMatchSeq($subject, ${count - 1}, $star)"
+        var tests = ""
+        for (i, q) in p.patterns.withIndex() {
+          val sub = "$items!![$i]"
+          if (q is PyMatchStar) {
+            val name = (q as PyMatchStar).name
+            if (name != null) { tests += " and pyDo { ${store(name!!, sub)}; true }" }
+          } else {
+            val v = "w${id}_$i"
+            tests += " and pyDo { val $v : any? = $sub; ${pattern(q, v)} }"
+          }
+        }
+        "pyDo { val $items = $take; $items != null$tests }"
+      }
+      is PyMatchMapping -> {
+        val id = next()
+        val m = "q$id"
+        var tests = "pyMatchMap($subject)"
+        val keys = p.keys.map { ex(it) }
+        var inner = ""
+        for (i, k) in keys.withIndex() {
+          val v = "w${id}_$i"
+          inner += " and pyDo { val $v : any? = pyMatchKey($subject, $k); $v !== pyUnbound and ${pattern(p.patterns[i], v)} }"
+        }
+        if (p.rest != null) { inner += " and pyDo { ${store(p.rest!!, "pyMatchRest($subject, pyNewList([${keys.join(", ")}]))")}; true }" }
+        "($tests$inner)"
+      }
+      is PyMatchClass -> {
+        val id = next()
+        val cls = ex(p.cls)
+        var tests = "pyIsInstanceB($subject, $cls)"
+        if (p.patterns.isNotEmpty()) {
+          tests += " and pyDo { val q$id = pyMatchArgs($subject, $cls, ${p.patterns.size}); q$id != null"
+          for (i, q) in p.patterns.withIndex() {
+            val v = "w${id}_$i"
+            tests += " and pyDo { val $v : any? = q$id!![$i]; ${pattern(q, v)} }"
+          }
+          tests += " }"
+        }
+        for (i, name) in p.kwdAttrs.withIndex() {
+          val v = "x${id}_$i"
+          tests += " and pyDo { val $v : any? = pyMatchAttr($subject, ${wwString(name)}); $v !== pyUnbound and ${pattern(p.kwdPatterns[i], v)} }"
+        }
+        "($tests)"
+      }
+      else -> "false"
+    }
+  }
+
+  // ---- Expressions ----
+
+  private fun opt(e : PyExpr?) : string => e == null ? "null" : ex(e!!)
+
+  // A list of expressions, starred ones among them, as a WinterWolf open List<any?>.
+  private fun args(list : List<PyExpr>) : string {
+    if (list.any { it is PyStarred }) {
+      return "pyArgsStar([" + list.map { it is PyStarred ? "PyStarArg(${ex((it as PyStarred).value)})" : ex(it) }.join(", ") + "])"
+    }
+    return "pyNewList([" + list.map { ex(it) }.join(", ") + "])"
+  }
+
+  // The expression `e` as a WinterWolf bool, as Python's if and while take it.
+  private fun cond(e : PyExpr) : string {
+    when (e) {
+      is PyConstant -> if (e.value is bool) { return e.value.toString() }
+      is PyUnaryOpExpr -> if (e.op == PyUnaryOp.Not) { return "!(${cond(e.operand)})" }
+      is PyBoolOpExpr -> return "(" + e.values.map { cond(it) }.join(e.op == PyBoolOp.And ? " and " : " or ") + ")"
+      is PyCompare -> return compare(e, true)
+      else -> {}
+    }
+    return "pyTruth(${ex(e)})"
+  }
+
+  private fun cmpOne(op : PyCmpOp, a : string, b : string, asBool : bool) : string {
+    return when (op) {
+      PyCmpOp.Is -> b == "null" ? "($a == null)" : "pyIs($a, $b)"
+      PyCmpOp.IsNot -> b == "null" ? "($a != null)" : "!pyIs($a, $b)"
+      PyCmpOp.In -> "pyContains($b, $a)"
+      PyCmpOp.NotIn -> "!pyContains($b, $a)"
+      else -> asBool ? "${__pyCmpOp(op)}B($a, $b)" : "${__pyCmpOp(op)}($a, $b)"
+    }
+  }
+
+  private fun compare(e : PyCompare, asBool : bool) : string {
+    if (e.ops.size == 1) {
+      val r = cmpOne(e.ops[0], ex(e.left), ex(e.comparators[0]), asBool)
+      val isBoolOp = e.ops[0] == PyCmpOp.Is or e.ops[0] == PyCmpOp.IsNot or e.ops[0] == PyCmpOp.In or e.ops[0] == PyCmpOp.NotIn
+      return r
+    }
+    // a < b < c: each worked out once, the rest only while each holds.
+    val id = next()
+    val sb = StringBuilder()
+    sb.append("pyDo { val c${id}_0 : any? = ${ex(e.left)}; ")
+    fun step(i : int) : string {
+      val a = "c${id}_$i"
+      val b = "c${id}_${i + 1}"
+      val head = "val $b : any? = ${ex(e.comparators[i])}; "
+      if (i == e.ops.size - 1) { return head + cmpOne(e.ops[i], a, b, asBool) }
+      if (asBool) { return head + cmpOne(e.ops[i], a, b, true) + " and pyDo { " + step(i + 1) + " }" }
+      val r = "r${id}_$i"
+      return head + "val $r : any? = ${cmpOne(e.ops[i], a, b, false)}; if (pyTruth($r)) { ${step(i + 1)} } else { $r }"
+    }
+    sb.append(step(0))
+    sb.append(" }")
+    return sb.toString()
+  }
+
+  fun ex(e : PyExpr) : string {
+    return when (e) {
+      is PyConstant -> constant(e.value)
+      is PyName -> load(e.id)
+      is PyBinOp -> "${__pyBinOp(e.op)}(${ex(e.left)}, ${ex(e.right)})"
+      is PyUnaryOpExpr -> when (e.op) {
+        PyUnaryOp.Not -> "!(${cond(e.operand)})"
+        PyUnaryOp.USub -> negative(e.operand)
+        PyUnaryOp.UAdd -> "pyPos(${ex(e.operand)})"
+        PyUnaryOp.Invert -> "pyInvert(${ex(e.operand)})"
+      }
+      is PyBoolOpExpr -> boolOp(e.op, e.values, 0)
+      is PyCompare -> compare(e, false)
+      is PyCall -> call(e)
+      is PyAttribute -> "pyGetAttr(${ex(e.value)}, ${wwString(e.attr)})"
+      is PySubscript -> {
+        val sl = e.slice
+        if (sl is PySlice) { "pyGetSlice(${ex(e.value)}, ${opt(sl.lower)}, ${opt(sl.upper)}, ${opt(sl.step)})" }
+        else { "pyGetItem(${ex(e.value)}, ${ex(sl)})" }
+      }
+      is PySlice -> "PySlice(${opt(e.lower)}, ${opt(e.upper)}, ${opt(e.step)})"
+      is PyListExpr -> args(e.elts)
+      is PyTuple -> e.elts.any { it is PyStarred } ? "PyTuple(${args(e.elts)})" :
+                      e.elts.isEmpty() ? "pyEmptyTuple" : "PyTuple([${e.elts.map { ex(it) }.join(", ")}])"
+      is PySet -> "pySetOfList(${args(e.elts)})"
+      is PyDict -> {
+        if (e.keys.any { it == null }) {
+          val parts : open List<string> = []
+          for (i, k) in e.keys.withIndex() {
+            if (k == null) { parts.add("PyStarArg(${ex(e.values[i])})"); parts.add("null") } else { parts.add(ex(k!!)); parts.add(ex(e.values[i])) }
+          }
+          "pyDictOfPairs([${parts.join(", ")}])"
+        } else {
+          val parts : open List<string> = []
+          for (i, k) in e.keys.withIndex() { parts.add(ex(k!!)); parts.add(ex(e.values[i])) }
+          "pyDictOfPairs([${parts.join(", ")}])"
+        }
+      }
+      is PyIfExp -> "(if (${cond(e.test)}) { ${ex(e.body)} } else { ${ex(e.orelse)} })"
+      is PyLambda -> lambda(e)
+      is PyNamedExpr -> {
+        val t = "t" + next()
+        val target = (e.target as PyName).id
+        val saved = cx
+        // The walrus binds in the function around a comprehension.
+        "pyDo { val $t : any? = ${ex(e.value)}; ${storeWalrus(target, t)}; $t }"
+      }
+      is PyListComp -> comprehension(e, 0)
+      is PySetComp -> comprehension(e, 1)
+      is PyDictComp -> comprehension(e, 2)
+      is PyGeneratorExp -> genExp(e)
+      is PyYield -> (cx.scope.isCoroutine and cx.scope.isGenerator ? "pyAYield(" : "pyYield(") + (cx.gen ?: "null") + ", " + opt(e.value) + ")"
+      is PyYieldFrom -> "pyYieldFrom(${cx.gen ?: "null"}, ${ex(e.value)})"
+      is PyAwait -> "pyAwait(${cx.gen ?: "null"}, ${ex(e.value)})"
+      is PyJoinedStr -> e.values.isEmpty() ? "\"\"" : "(" + e.values.map { fpart(it) }.join(" + ") + ")"
+      is PyFormattedValue -> fpart(e)
+      is PyStarred -> "PyStarArg(${ex(e.value)})"
+      else -> "pyRaiseNow(pyNotImplementedError(${wwString("this expression is not supported yet")}))"
+    }
+  }
+
+  private fun storeWalrus(name : string, value : string) : string {
+    var s = cx.scope
+    while (s.kind == PyScopeKind.Comprehension or s.isGenExp) { s = s.parent!! }
+    if (s === cx.scope) { return store(name, value) }
+    val r = cx.scope.resolve(name)
+    return r.kind == PyRefKind.Global ? "g_${pyMangle(name)} = $value" : "${s.wwName(name)} = $value"
+  }
+
+  // -1 written as a constant where it is one.
+  private fun negative(e : PyExpr) : string {
+    if (e is PyConstant) {
+      val v = (e as PyConstant).value
+      if (v is int and v != 0) { return "(-${v})" }
+      if (v is float and !(v as float).isNaN() and !(v as float).isInfinite()) { return "(-${constant(v)})" }
+    }
+    return "pyNeg(${ex(e)})"
+  }
+
+  private fun fpart(e : PyExpr) : string {
+    if (e is PyConstant) { return wwString((e as PyConstant).value as string) }
+    if (e is PyFormattedValue) {
+      val f = e as PyFormattedValue
+      val spec = f.formatSpec == null ? "\"\"" : ex(f.formatSpec!!)
+      return "pyFormatValue(${ex(f.value)}, ${f.conversion}, $spec)"
+    }
+    return "pyStrOf(${ex(e)})"
+  }
+
+  private fun boolOp(op : PyBoolOp, values : List<PyExpr>, i : int) : string {
+    if (i == values.size - 1) { return ex(values[i]) }
+    val t = "t" + next()
+    val rest = boolOp(op, values, i + 1)
+    return op == PyBoolOp.And ? "pyDo { val $t : any? = ${ex(values[i])}; if (pyTruth($t)) { $rest } else { $t } }"
+                              : "pyDo { val $t : any? = ${ex(values[i])}; if (pyTruth($t)) { $t } else { $rest } }"
+  }
+
+  private fun constant(v : any?) : string {
+    if (v == null) { return "null" }
+    if (v is bool) { return v.toString() }
+    if (v is int) {
+      if (v == -9223372036854775807 - 1) { return hoist("i:$v") { "pyBigConst(\"$v\")" } }
+      return v.toString()
+    }
+    if (v is BigInt) { return hoist("i:$v") { "pyBigConst(\"$v\")" } }
+    if (v is float) {
+      val x = v as float
+      if (x.isNaN()) { return "pyNaN" }
+      if (x.isInfinite()) { return x > 0.0 ? "pyInf" : "(-pyInf)" }
+      val r = pyReprFloat(x)
+      return r.contains(".") or r.contains("e") ? r : r + ".0"
+    }
+    if (v is string) { return wwString(v as string) }
+    if (v is Complex) { return "pyComplex(${constant((v as Complex).re)}, ${constant((v as Complex).im)})" }
+    if (v is Bytes) {
+      val b = v as Bytes
+      val sb = StringBuilder()
+      for i in 0..<b.size { sb.append((b[i] + 0).char) }
+      return "pyBytesOfLatin1(${wwString(sb.toString())})"
+    }
+    if (v === PyEllipsis) { return "pyEllipsis" }
+    return "null"
+  }
+
+  private fun call(c : PyCall) : string {
+    val plain = c.keywords.isEmpty() and c.args.none { it is PyStarred }
+    val f = c.func
+    if (f is PyName and isBuiltin((f as PyName).id) and !scopes.module.importsStar) {
+      val name = (f as PyName).id
+      if (name == "super" and c.args.isEmpty() and c.keywords.isEmpty()) {
+        val cell = cx.scope.outer("__class__")
+        val cellName = cell.kind == PyRefKind.Free ? cell.ww!! : "null"
+        return "pySuper($cellName, ${cx.selfName ?: "pyUnbound"})"
+      }
+      if (name == "locals" and c.args.isEmpty()) { return "pyNewDict()" }
+      if (name == "globals" and c.args.isEmpty()) { return "pyGlobalsOf($moduleVal)" }
+      val direct = __pyDirectCalls[name]
+      if (plain and direct != null and c.args.size >= direct!!.second and c.args.size <= direct!!.third) {
+        val tail = name == "range" or name == "int" or name == "next" or name == "getattr" or name == "sum" or name == "enumerate" or
+                   name == "format" or name == "round" or name == "pow" or name == "str" or name == "list" or name == "tuple" or
+                   name == "set" or name == "frozenset" or name == "float" or name == "bool"
+        val argText = c.args.map { ex(it) }
+        if (tail) {
+          // Each shape its own: pyRangeOf1, pyRangeOf2...
+          return "${direct!!.first}${c.args.size}(${argText.join(", ")})"
+        }
+        if (name == "print" or name == "zip") { return "${direct!!.first}(pyNewList([${argText.join(", ")}]))" }
+        return "${direct!!.first}(${argText.join(", ")})"
+      }
+    }
+    if (plain and f is PyAttribute and c.args.size <= 3) {
+      val a = f as PyAttribute
+      val rest = c.args.map { ", " + ex(it) }.join("")
+      return "pyCallM${c.args.size}(${ex(a.value)}, ${wwString(a.attr)}$rest)"
+    }
+    val fn = ex(f)
+    if (plain and c.args.size <= 4) {
+      val rest = c.args.map { ", " + ex(it) }.join("")
+      return "pyCall${c.args.size}($fn$rest)"
+    }
+    if (c.args.none { it is PyStarred } and c.keywords.all { it.arg != null }) {
+      val values = c.args.map { ex(it) } + c.keywords.map { ex(it.value) }
+      val names = c.keywords.map { wwString(it.arg!!) }.join(", ")
+      return "pyCallKw($fn, pyNewList([${values.join(", ")}]), [$names])"
+    }
+    val kw : open List<string> = []
+    for k in c.keywords {
+      if (k.arg == null) { kw.add("null"); kw.add(ex(k.value)) } else { kw.add(wwString(k.arg!!)); kw.add(ex(k.value)) }
+    }
+    return "pyCallEx($fn, ${args(c.args)}, pyNewList([${kw.join(", ")}]))"
+  }
+
+  private fun lambda(e : PyLambda) : string {
+    val f = scopes.byNode[e]!!
+    val id = next()
+    val ps = paramList(e.args)
+    val sp = spec("<lambda>", f, e.args, e.line, 0)
+    val dflt = defaults(e.args)
+    val outer = cx
+    val inner = innerCtx(f)
+    cx = inner
+    for p in ps { cx.sure.add(p.arg) }
+    val many = ps.size > 6
+    val sb = StringBuilder()
+    sb.append("lb$id@ { ")
+    if (many) { sb.append("a : List<any?> -> ") }
+    else if (ps.isNotEmpty()) { sb.append(ps.map { paramName(f, it.arg) + " : any?" }.join(", ") + " -> ") }
+    for (i, p) in ps.withIndex() {
+      if (many) { sb.append("${p.arg in f.assignedParams ? "var" : "val"} ${f.wwName(p.arg)} : any? = a[$i]; ") }
+      else if (p.arg in f.assignedParams) { sb.append("var ${f.wwName(p.arg)} : any? = ${paramName(f, p.arg)}; ") }
+    }
+    for name in f.bound {
+      if (name in f.params) { continue }
+      sb.append("var ${f.wwName(name)} : any? = pyUnbound; ")
+    }
+    sb.append(ex(e.body))
+    sb.append(" }")
+    cx = outer
+    var text = sb.toString()
+    return "pyDef${many ? "N" : ps.size.toString()}($text, $sp, $dflt)"
+  }
+
+  // [elt for ...], {elt for ...}, {k: v for ...}: worked out in place, its names its own.
+  private fun comprehension(e : PyExpr, kind : int) : string {
+    val c = scopes.byNode[e]!!
+    val id = next()
+    val gens = when (e) {
+      is PyListComp -> e.generators
+      is PySetComp -> e.generators
+      is PyDictComp -> e.generators
+      else -> []
+    }
+    val firstIter = ex(gens[0].iter)
+    val outer = cx
+    val inner = __PyCtx(c, cx)
+    inner.sure = cx.scope.kind == PyScopeKind.Class ? Set<string>() : cx.sure.toOpenSet()
+    inner.freeSafe = cx.freeSafe
+    inner.gen = cx.gen
+    inner.selfName = cx.selfName
+    cx = inner
+    val sb = StringBuilder()
+    sb.append("pyDo { ")
+    for name in c.bound { sb.append("var ${c.wwName(name)} : any? = pyUnbound; ") }
+    val r = "r$id"
+    sb.append(when (kind) { 0 -> "val $r = pyNewList([]); "; 1 -> "val $r = pyNewSet(); "; else -> "val $r = pyNewDict(); " })
+    val add = { -> when (e) {
+      is PyListComp -> "$r.add(${ex(e.elt)})"
+      is PySetComp -> "pySetAdd($r, ${ex(e.elt)})"
+      is PyDictComp -> { val k = ex(e.key); "pyDictSet($r, $k, ${ex(e.value)})" }
+      else -> ""
+    } }
+    sb.append(loops(gens, 0, gens[0].isAsync != 0 ? "pyAIter($firstIter)" : "pyIter($firstIter)", id, add))
+    sb.append("; $r }")
+    cx = outer
+    return sb.toString()
+  }
+
+  // The loops of a comprehension, from generator `i` in, around `inner`.
+  private fun loops(gens : List<PyComprehension>, i : int, firstIter : string?, id : int, inner : () -> string) : string {
+    if (i == gens.size) { return inner() }
+    val g = gens[i]
+    val it = "i${id}_$i"
+    val nx = "n${id}_$i"
+    val sb = StringBuilder()
+    if (g.isAsync != 0) {
+      val first = firstIter ?: "pyAIter(${ex(g.iter)})"
+      sb.append("val $it : any? = $first; while (true) { val $nx : any? = pyANext(${cx.gen ?: "null"}, $it); if ($nx === pyEnd) { break }; ")
+    } else {
+      sb.append("val $it : any? = ${firstIter ?: "pyIter(${ex(g.iter)})"}; while (true) { val $nx : any? = pyNext($it); if ($nx === pyEnd) { break }; ")
+    }
+    sb.append(assignText(g.target, nx))
+    for test in g.ifs { sb.append("; if (!(${cond(test)})) { continue }") }
+    sb.append("; ")
+    // The inner parts are worked out after the target is bound.
+    val rest = loops(gens, i + 1, null, id, inner)
+    sb.append(rest)
+    sb.append(" }")
+    return sb.toString()
+  }
+
+  private fun genExp(e : PyGeneratorExp) : string {
+    val c = scopes.byNode[e]!!
+    val id = next()
+    val firstIter = ex(e.generators[0].iter)
+    val sp = hoist("genexpr:" + c.qualname + ":" + id) {
+      "PySpec(\"<genexpr>\", ${wwString(c.qualname)}, ${wwString(moduleName)}, [], 0, 0, 0, false, false, ${e.line}, 1)"
+    }
+    val outer = cx
+    val inner = innerCtx(c)
+    cx = inner
+    val g = "gen$id"
+    cx.gen = g
+    val sb = StringBuilder()
+    frameNames.add(Triple(e.line, e.endLine, "<genexpr>"))
+    sb.append("pyGenExp($sp, pyIter($firstIter), gx$id@ { $g : PyGenerator, it$id : any? -> ")
+    for name in c.bound { sb.append("var ${c.wwName(name)} : any? = pyUnbound; ") }
+    sb.append(loops(e.generators, 0, "it$id", id, { -> "pyYield($g, ${ex(e.elt)})" }))
+    sb.append("; null })")
+    cx = outer
+    return sb.toString()
+  }
+}
+
+// `s` as a WinterWolf string literal.
+fun wwString(s : string) : string {
+  val sb = StringBuilder()
+  sb.append('"')
+  for c in s {
+    val code = c.code
+    when {
+      c == '\\' -> sb.append("\\\\")
+      c == '"' -> sb.append("\\\"")
+      c == '$' -> sb.append("\\$")
+      c == '\n' -> sb.append("\\n")
+      c == '\r' -> sb.append("\\r")
+      c == '\t' -> sb.append("\\t")
+      code < 0x20 or code == 0x7F or (code >= 0x80 and code < 0xA0) or code == 0x2028 or code == 0x2029 or code >= 0xF0000 ->
+        sb.append("\\u{" + code.toString(16) + "}")
+      else -> sb.append(c)
+    }
+  }
+  sb.append('"')
+  return sb.toString()
+}

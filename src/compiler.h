@@ -19,6 +19,10 @@ class VM;
 class Checker;
 
 // A name declared at the top level of a file.
+// Snippy files (.py, .snippy), made into WinterWolf source as they are read (snippy.cpp).
+bool isSnippyPath(const std::string& path);
+std::string translateSnippy(const std::string& path, const std::string& name, const std::string& source, bool main);
+
 struct GlobalName {
     enum Visibility : uint8_t { Public, Internal, Private };
 
@@ -226,6 +230,8 @@ private:
     std::vector<ShellImport> shellImports_;
     void check();
     std::vector<StmtPtr>* parseFile(const std::string& key, const std::string& path, const std::string& name);
+    // The program's own file, whose Snippy, if it is Snippy, is the __main__ module (snippy.cpp).
+    std::string mainKey_;
     // Files read and parsed ahead, a few at a time on threads of their own, for parseFile to
     // take: the files a file imports, before they are gathered in order.
     struct Prefetched {

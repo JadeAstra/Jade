@@ -1,0 +1,15 @@
+1 + 2 * 3 = 7
+(1 + 2) * 3 = 9
+2 ^ 3 ^ 2 = 512
+x := 10
+x * pi = 31.4159
+max(1, x, 7) - min(4, 2) = 8
+-x + 1 = -9
+7 / 2 = 3.5
+abs(-3.5) = 3.5
+1 / 0 -> ZeroDivisionError: division by zero
+y + 1 -> NameError: unknown variable y
+3 + -> SyntaxError: expected more, got None
+2 $ 2 -> SyntaxError: unexpected '$' at 2
+round(2.567, 2) = 2.57
+[name:a1, op:+, num:22, op:*, op:(, name:b, op:)]

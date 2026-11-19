@@ -1,0 +1,4 @@
+caught exit 0
+caught builtin exit 5
+working
+finally still runs

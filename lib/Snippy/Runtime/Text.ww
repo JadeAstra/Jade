@@ -1,0 +1,721 @@
+import Snippy.Text.*
+// Snippy's text of its values, as Python's: repr() and str() of each, format() and its mini-language (what
+// f-strings and str.format use), and % formatting; floats written exactly as CPython writes them,
+// worked out from their binary value.
+
+// ---- repr and str ----
+
+// The containers repr is inside, so that one inside itself is written [...].
+internal val __pyReprStack : open List<any?> = []
+
+internal fun __pyReprInside(x : any?) : bool {
+  for y in __pyReprStack { if (y === x) { return true } }
+  return false
+}
+
+fun pyHexId(x : any?) : string => "0x" + (pyId(x) as int).toString(16).padStart(12, '0')
+
+fun pyId(x : any?) : any? {
+  if (x is PyIdentified) { return (x as PyIdentified).identity() }
+  if (x == null) { return 140737488355328 }
+  return (__hashCode(x) & 0xFFFFFFFFFF) * 16 + 0x7f0000000000
+}
+
+fun pyRepr(x : any?) : string {
+  return when (x) {
+    null -> "None"
+    is bool -> (x as bool) ? "True" : "False"
+    is int -> (x as int).toString()
+    is string -> pyReprStr(x as string)
+    is float -> pyReprFloat(x as float)
+    is BigInt -> (x as BigInt).toString()
+    is PyObject -> __pyObjectRepr(x as PyObject)
+    is List<any?> -> {
+      if (__pyReprInside(x)) { return "[...]" }
+      __pyReprStack.add(x)
+      try {
+        "[" + (x as List<any?>).map { pyRepr(it) }.join(", ") + "]"
+      } finally {
+        __pyReprStack.removeLast()
+      }
+    }
+    is PyTuple -> {
+      val items = (x as PyTuple).items
+      if (items.size == 1) { return "(" + pyRepr(items[0]) + ",)" }
+      if (__pyReprInside(x)) { return "(...)" }
+      __pyReprStack.add(x)
+      try {
+        "(" + items.map { pyRepr(it) }.join(", ") + ")"
+      } finally {
+        __pyReprStack.removeLast()
+      }
+    }
+    is PyDict -> {
+      if (__pyReprInside(x)) { return "{...}" }
+      __pyReprStack.add(x)
+      try {
+        val parts : open List<string> = []
+        val d = x as PyDict
+        for i in 0..<d.keys.size { if (d.keys[i] !== PyDeletedT) { parts.add(pyRepr(d.keys[i]) + ": " + pyRepr(d.vals[i])) } }
+        "{" + parts.join(", ") + "}"
+      } finally {
+        __pyReprStack.removeLast()
+      }
+    }
+    is PySet -> {
+      val s = x as PySet
+      if (s.size == 0) { return s.frozen ? "frozenset()" : "set()" }
+      if (__pyReprInside(x)) { return s.frozen ? "frozenset(...)" : "{...}" }
+      __pyReprStack.add(x)
+      try {
+        val body = "{" + s.items().map { pyRepr(it) }.join(", ") + "}"
+        s.frozen ? "frozenset($body)" : body
+      } finally {
+        __pyReprStack.removeLast()
+      }
+    }
+    is Complex -> pyReprComplex((x as Complex).re, (x as Complex).im)
+    is PyFunction -> "<function ${(x as PyFunction).qualname} at ${pyHexId(x)}>"
+    is PyType -> {
+      val t = x as PyType
+      val m = t.dict["__module__", default = pyUnbound]
+      val module = m is string ? m as string : t.module
+      module == "builtins" ? "<class '${t.qualname}'>" : "<class '$module.${t.qualname}'>"
+    }
+    is PyMethod -> {
+      val f = (x as PyMethod).function
+      val name = f is PyFunction ? (f as PyFunction).qualname : f is PyBuiltin ? (f as PyBuiltin).name : pyStr(pyGetAttrOr(f, "__qualname__", "?"))
+      "<bound method $name of ${pyRepr((x as PyMethod).self)}>"
+    }
+    is PyBuiltin -> "<built-in function ${(x as PyBuiltin).name}>"
+    is PyBoundBuiltin -> "<built-in method ${(x as PyBoundBuiltin).name} of ${pyTypeName((x as PyBoundBuiltin).self)} object at ${pyHexId((x as PyBoundBuiltin).self)}>"
+    is PyMethodDescriptor -> "<method '${(x as PyMethodDescriptor).name}' of '${(x as PyMethodDescriptor).owner.name}' objects>"
+    is PyModule -> {
+      val m = x as PyModule
+      m.file == "<built-in>" ? "<module '${m.name}' (built-in)>" : "<module '${m.name}' from '${m.file}'>"
+    }
+    is PyRange -> {
+      val r = x as PyRange
+      r.step == 1 ? "range(${r.start}, ${r.stop})" : "range(${r.start}, ${r.stop}, ${r.step})"
+    }
+    is PySlice -> "slice(${pyRepr((x as PySlice).lower)}, ${pyRepr((x as PySlice).upper)}, ${pyRepr((x as PySlice).step)})"
+    is Bytes -> pyReprBytes(x as Bytes)
+    is PyByteArray -> "bytearray(${pyReprBytes((x as PyByteArray).bytes)})"
+    is PyGenerator -> "<${(x as PyGenerator).kindName()} object ${(x as PyGenerator).spec.qualname} at ${pyHexId(x)}>"
+    is PyDictView -> {
+      val v = x as PyDictView
+      val name = v.kind == 0 ? "dict_keys" : v.kind == 1 ? "dict_values" : "dict_items"
+      "$name(" + pyRepr(v.items()) + ")"
+    }
+    is PyIterator -> "<${(x as PyIterator).pyType().name} object at ${pyHexId(x)}>"
+    is PyProperty -> "<property object at ${pyHexId(x)}>"
+    is PyClassMethod -> "<classmethod(${pyRepr((x as PyClassMethod).function)})>"
+    is PyStaticMethod -> "<staticmethod(${pyRepr((x as PyStaticMethod).function)})>"
+    is PySuper -> "<super: <class '${(x as PySuper).start.name}'>, <${pyTypeName((x as PySuper).obj)} object>>"
+    is PyGenericAlias -> {
+      val a = (x as PyGenericAlias).args
+      val inner = a is PyTuple ? (a as PyTuple).items.map { __pyTypeText(it) }.join(", ") : __pyTypeText(a)
+      "${(x as PyGenericAlias).origin.name}[$inner]"
+    }
+    is PyTraceback -> "<traceback object at ${pyHexId(x)}>"
+    is PyCode -> "<code object ${(x as PyCode).spec.name} at ${pyHexId(x)}, file \"$pyMainFile\", line ${(x as PyCode).spec.line}>"
+    else -> {
+      if (x === pyEllipsis) { "Ellipsis" } else if (x === pyNotImplemented) { "NotImplemented" } else { x.toString() }
+    }
+  }
+}
+
+internal fun __pyTypeText(x : any?) : string => x is PyType ? ((x as PyType).module == "builtins" ? (x as PyType).name : pyRepr(x)) : pyRepr(x)
+
+internal fun __pyObjectRepr(o : PyObject) : string {
+  val m = o.cls.lookup("__repr__")
+  if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor) and m !== __pyObjectReprBuiltin) {
+    if (__pyReprInside(o) and false) { return "..." }
+    val r = __pyCall1Special(m, o)
+    if (!(r is string)) { throw pyTypeError("__repr__ returned non-string (type ${pyTypeName(r)})") }
+    return r as string
+  }
+  if (o is PyExc) { return pyExcRepr(o as PyExc) }
+  if (o.cls.layout >= 2 and o.value != null and m is PyMethodDescriptor) {
+    if (o.cls.layout == 3 or o.cls.layout == 2 or o.cls.layout == 4 or o.cls.layout == 9) { return pyRepr(o.value) }
+    return pyRepr(o.value)
+  }
+  return __pyDefaultRepr(o)
+}
+
+internal fun __pyDefaultRepr(o : PyObject) : string {
+  val m = o.cls.dict["__module__", default = pyUnbound]
+  val module = m is string ? m as string : o.cls.module
+  return "<$module.${o.cls.qualname} object at ${pyHexId(o)}>"
+}
+
+internal val __pyObjectReprBuiltin : PyBuiltin = PyBuiltin("__repr__", { a, k -> __pyDefaultRepr(a[0] as PyObject) })
+
+fun pyStr(x : any?) : string {
+  return when (x) {
+    is string -> x as string
+    is int -> (x as int).toString()
+    is PyObject -> {
+      val o = x as PyObject
+      val m = o.cls.lookup("__str__")
+      if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor) and m !== __pyExcStrBuiltin) {
+        val r = __pyCall1Special(m, o)
+        if (!(r is string)) { throw pyTypeError("__str__ returned non-string (type ${pyTypeName(r)})") }
+        return r as string
+      }
+      if (o is PyExc) { return pyExcStr(o as PyExc) }
+      if (o.cls.layout >= 2 and o.value != null and (o.cls.lookup("__repr__") is PyMethodDescriptor)) { return pyStr(o.value) }
+      __pyObjectRepr(o)
+    }
+    else -> pyRepr(x)
+  }
+}
+
+internal val __pyExcStrBuiltin : PyBuiltin = PyBuiltin("__str__", { a, k -> pyExcStr(a[0] as PyExc) })
+
+fun pyStrOf0() : any? => ""
+fun pyStrOf1(x : any?) : any? => pyStr(x)
+
+// ascii(x): repr with what is not ASCII escaped.
+fun pyAscii(x : any?) : any? => pyAsciiText(pyRepr(x))
+
+fun pyAsciiText(s : string) : string {
+  val sb = StringBuilder()
+  for c in s {
+    val cp = pyOrd(c)
+    if (cp < 128) { sb.append(c) }
+    else if (cp < 256) { sb.append("\\x" + pyHex(cp, 2)) }
+    else if (cp < 65536) { sb.append("\\u" + pyHex(cp, 4)) }
+    else { sb.append("\\U" + pyHex(cp, 8)) }
+  }
+  return sb.toString()
+}
+
+// ---- f-strings ----
+
+// A field of an f-string: the value converted (`conv` 's', 'r' or 'a' as a code, -1 for none),
+// then formatted by `spec`.
+fun pyFormatValue(value : any?, conv : int, spec : string) : string {
+  var v = value
+  if (conv == 115) { v = pyStr(value) } else if (conv == 114) { v = pyRepr(value) } else if (conv == 97) { v = pyAscii(value) }
+  if (spec.isEmpty()) {
+    if (v is string) { return v as string }
+    if (v is int) { return (v as int).toString() }
+  }
+  return pyFormat(v, spec)
+}
+
+fun pyFormatOf1(x : any?) : any? => pyFormat(x, "")
+fun pyFormatOf2(x : any?, spec : any?) : any? {
+  if (!(spec is string)) { throw pyTypeError("format() argument 2 must be str, not ${pyTypeName(spec)}") }
+  return pyFormat(x, spec as string)
+}
+
+// format(value, spec), as the value's __format__ does it.
+fun pyFormat(value : any?, spec : string) : string {
+  if (value is PyObject) {
+    val o = value as PyObject
+    val m = o.cls.lookup("__format__")
+    if (m !== pyUnbound and m != null and !(m is PyMethodDescriptor)) {
+      val r = __pyCall2Special(m, o, spec)
+      if (!(r is string)) { throw pyTypeError("__format__ must return a str, not ${pyTypeName(r)}") }
+      return r as string
+    }
+    if (o.cls.layout >= 2 and o.value != null) { return pyFormat(o.value, spec) }
+    if (spec.isEmpty()) { return pyStr(value) }
+    throw pyTypeError("unsupported format string passed to ${o.cls.name}.__format__")
+  }
+  return when (value) {
+    is string -> __pyFormatStr(value as string, spec)
+    is bool -> spec.isEmpty() ? pyStr(value) : __pyFormatInt(BigInt.of((value as bool) ? 1 : 0), value, spec)
+    is int -> __pyFormatInt(BigInt.of(value as int), value, spec)
+    is BigInt -> __pyFormatInt(value as BigInt, value, spec)
+    is float -> __pyFormatFloat(value as float, spec)
+    is Complex -> spec.isEmpty() ? pyStr(value) : __pyFormatComplex(value as Complex, spec)
+    else -> {
+      if (spec.isEmpty()) { pyStr(value) } else { throw pyTypeError("unsupported format string passed to ${pyTypeName(value)}.__format__") }
+    }
+  }
+}
+
+// A format spec taken apart: [[fill]align][sign][z][#][0][width][grouping][.precision][type].
+class PyFormatSpec(val text : string) {
+  var fill : char = ' '
+  var align : char = '\u{0}'
+  var sign : char = '-'
+  var z = false
+  var alt = false
+  var zero = false
+  var width = -1
+  var grouping : char = '\u{0}'
+  var precision = -1
+  var type : char = '\u{0}'
+
+  init {
+    var i = 0
+    val s = text
+    if (s.size >= 2 and (s[1] == '<' or s[1] == '>' or s[1] == '^' or s[1] == '=')) {
+      fill = s[0]
+      align = s[1]
+      i = 2
+    } else if (s.size >= 1 and (s[0] == '<' or s[0] == '>' or s[0] == '^' or s[0] == '=')) {
+      align = s[0]
+      i = 1
+    }
+    if (i < s.size and (s[i] == '+' or s[i] == '-' or s[i] == ' ')) {
+      sign = s[i]
+      i += 1
+    }
+    if (i < s.size and s[i] == 'z') {
+      z = true
+      i += 1
+    }
+    if (i < s.size and s[i] == '#') {
+      alt = true
+      i += 1
+    }
+    if (i < s.size and s[i] == '0') {
+      zero = true
+      i += 1
+    }
+    var w = 0
+    var hasWidth = false
+    while (i < s.size and s[i] >= '0' and s[i] <= '9') {
+      w = w * 10 + (s[i].code - 48)
+      hasWidth = true
+      i += 1
+    }
+    if (hasWidth) { width = w }
+    if (i < s.size and (s[i] == ',' or s[i] == '_')) {
+      grouping = s[i]
+      i += 1
+    }
+    if (i < s.size and s[i] == '.') {
+      i += 1
+      var p = 0
+      var hasP = false
+      while (i < s.size and s[i] >= '0' and s[i] <= '9') {
+        p = p * 10 + (s[i].code - 48)
+        hasP = true
+        i += 1
+      }
+      if (!hasP) { throw pyValueError("Format specifier missing precision") }
+      precision = p
+    }
+    if (i < s.size) {
+      type = s[i]
+      i += 1
+    }
+    if (i < s.size) { throw pyValueError("Invalid format specifier '$text' for object of type '${'$'}'") }
+    if (zero and align == '\u{0}') {
+      fill = '0'
+      align = '='
+    }
+  }
+}
+
+// `body` (and its sign) padded to the spec's width as its alignment says.
+internal fun __pyPad(sign : string, body : string, f : PyFormatSpec, defaultAlign : char) : string {
+  val align = f.align == '\u{0}' ? defaultAlign : f.align
+  val size = sign.size + body.size
+  if (f.width <= size) { return sign + body }
+  val pad = f.width - size
+  val fill = f.fill.toString()
+  return when (align) {
+    '<' -> sign + body + fill.repeat(pad)
+    '^' -> fill.repeat(pad / 2) + sign + body + fill.repeat(pad - pad / 2)
+    '=' -> sign + fill.repeat(pad) + body
+    else -> fill.repeat(pad) + sign + body
+  }
+}
+
+internal fun __pyFormatStr(s : string, spec : string) : string {
+  if (spec.isEmpty()) { return s }
+  val f = PyFormatSpec(spec)
+  if (f.type != '\u{0}' and f.type != 's') { throw pyValueError("Unknown format code '${f.type}' for object of type 'str'") }
+  if (f.sign != '-') { throw pyValueError("Sign not allowed in string format specifier") }
+  if (f.align == '=') { throw pyValueError("'=' alignment not allowed in string format specifier") }
+  val body = f.precision >= 0 and f.precision < s.size ? s[..<f.precision] : s
+  return __pyPad("", body, f, '<')
+}
+
+// Digits grouped by `sep` every `every` from the right.
+internal fun __pyGroup(digits : string, sep : char, every : int) : string {
+  if (sep == '\u{0}' or digits.size <= every) { return digits }
+  val sb = StringBuilder()
+  val first = digits.size % every
+  if (first > 0) { sb.append(digits[..<first]) }
+  var i = first
+  while (i < digits.size) {
+    if (sb.size > 0) { sb.append(sep) }
+    sb.append(digits[i..<(i + every)])
+    i += every
+  }
+  return sb.toString()
+}
+
+internal fun __pySignText(negative : bool, f : PyFormatSpec) : string {
+  if (negative) { return "-" }
+  return f.sign == '+' ? "+" : f.sign == ' ' ? " " : ""
+}
+
+internal fun __pyFormatInt(n : BigInt, original : any?, spec : string) : string {
+  val f = PyFormatSpec(spec)
+  val t = f.type
+  if (t == 'e' or t == 'E' or t == 'f' or t == 'F' or t == 'g' or t == 'G' or t == '%') {
+    return __pyFormatFloat(n.toFloat(), spec)
+  }
+  if (f.precision >= 0) { throw pyValueError("Precision not allowed in integer format specifier") }
+  val negative = n < 0
+  val mag = n.abs()
+  var digits = ""
+  var prefix = ""
+  when (t) {
+    '\u{0}', 'd', 'n' -> digits = mag.toString()
+    'x' -> { digits = mag.toString(16); prefix = f.alt ? "0x" : "" }
+    'X' -> { digits = mag.toString(16).upper(); prefix = f.alt ? "0X" : "" }
+    'o' -> { digits = mag.toString(8); prefix = f.alt ? "0o" : "" }
+    'b' -> { digits = mag.toString(2); prefix = f.alt ? "0b" : "" }
+    'c' -> {
+      val cp = n.toInt()
+      if (cp < 0 or cp > 0x10FFFF) { throw pyOverflowError("%c arg not in range(0x110000)") }
+      return __pyPad("", pyChar(cp).toString(), f, '<')
+    }
+    else -> throw pyValueError("Unknown format code '$t' for object of type '${pyTypeName(original)}'")
+  }
+  if (f.grouping != '\u{0}') {
+    val every = (t == 'x' or t == 'X' or t == 'o' or t == 'b') ? 4 : 3
+    if (f.zero and f.width > 0 and f.align == '=') {
+      // Zero padding is grouped too.
+      val signText = __pySignText(negative, f)
+      var want = f.width - signText.size - prefix.size
+      var grouped = __pyGroup(digits, f.grouping, every)
+      while (grouped.size < want) {
+        digits = "0" + digits
+        grouped = __pyGroup(digits, f.grouping, every)
+      }
+      return signText + prefix + grouped
+    }
+    digits = __pyGroup(digits, f.grouping, every)
+  }
+  return __pyPad(__pySignText(negative, f) + prefix, digits, f, '>')
+}
+
+// ---- Floats written exactly ----
+
+// The float's exact value as mantissa * 2**exponent, the mantissa a BigInt.
+internal fun __pyFloatParts(x : float) : Pair<BigInt, int> {
+  val b = Bytes(8)
+  b.putFloat64(0, x)
+  val bits = b.int64(0)
+  val exp = ((bits >>> 52) & 0x7FF).toInt()
+  var mant = bits & 0xFFFFFFFFFFFFF
+  var e = 0
+  if (exp == 0) { e = -1074 } else {
+    mant = mant | (1 << 52)
+    e = exp - 1075
+  }
+  return Pair(BigInt.of(mant), e)
+}
+
+// round(|x| * 10**scale) to an integer, half to even, exactly.
+internal fun __pyScaledRound(x : float, scale : int) : BigInt {
+  val parts = __pyFloatParts(Math.abs(x))
+  var num = parts.first
+  var den = BigInt.of(1)
+  val e = parts.second
+  if (e >= 0) { num = num << e } else { den = den << (-e) }
+  if (scale >= 0) { num = num * BigInt.of(10).pow(scale) } else { den = den * BigInt.of(10).pow(-scale) }
+  val qr = num.divRem(den)
+  var q = qr.first
+  val twice = qr.second * BigInt.of(2)
+  val c = twice.compareTo(den)
+  if (c > 0 or (c == 0 and q.testBit(0))) { q = q + BigInt.of(1) }
+  return q
+}
+
+// |x| with `precision` digits after the point.
+fun pyFixedDigits(x : float, precision : int) : string {
+  val q = __pyScaledRound(x, precision).toString()
+  if (precision == 0) { return q }
+  val padded = q.size <= precision ? "0".repeat(precision - q.size + 1) + q : q
+  return padded[..<(padded.size - precision)] + "." + padded[(padded.size - precision)..]
+}
+
+// |x| as `precision` digits after the first, and the exponent of ten: d.ddd * 10**exp.
+fun pyExpDigits(x : float, precision : int) : Pair<string, int> {
+  val a = Math.abs(x)
+  if (a == 0.0) { return Pair("0".repeat(precision + 1), 0) }
+  var k = Math.floor(Math.log10(a))
+  var q = __pyScaledRound(a, precision - k)
+  val limit = BigInt.of(10).pow(precision + 1)
+  if (q >= limit) {
+    k += 1
+    q = __pyScaledRound(a, precision - k)
+  } else if (q < BigInt.of(10).pow(precision)) {
+    k -= 1
+    q = __pyScaledRound(a, precision - k)
+    if (q >= limit) {
+      k += 1
+      q = __pyScaledRound(a, precision - k)
+    }
+  }
+  return Pair(q.toString(), k)
+}
+
+internal fun __pyExpText(digits : string, exp : int, upper : bool, alt : bool) : string {
+  val sb = StringBuilder()
+  sb.append(digits[0])
+  if (digits.size > 1 or alt) { sb.append('.') }
+  sb.append(digits[1..])
+  sb.append(upper ? 'E' : 'e')
+  sb.append(exp < 0 ? '-' : '+')
+  val m = Math.abs(exp)
+  if (m < 10) { sb.append('0') }
+  sb.append(m.toString())
+  return sb.toString()
+}
+
+// |x| in Python's 'g' form with `precision` significant digits; `keepPoint` for format's
+// default, which keeps one digit past a point.
+internal fun __pyGeneral(x : float, precision0 : int, upper : bool, alt : bool, keepPoint : bool) : string {
+  val precision = precision0 == 0 ? 1 : precision0
+  val a = Math.abs(x)
+  if (a == 0.0) {
+    if (alt) { return "0." + "0".repeat(precision - 1) }
+    return keepPoint ? "0.0" : "0"
+  }
+  val ed = pyExpDigits(a, precision - 1)
+  val exp = ed.second
+  if (exp >= -4 and exp < precision) {
+    var text = pyFixedDigits(a, precision - 1 - exp)
+    if (!alt and text.contains(".")) {
+      text = text.let { pyTrimEndChar(it, '0') }
+      if (text.endsWith(".")) { text = keepPoint ? text + "0" : text[..<(text.size - 1)] }
+    } else if (alt and !text.contains(".")) {
+      text = text + "."
+    }
+    return text
+  }
+  var digits = ed.first
+  if (!alt) {
+    digits = digits.let { pyTrimEndChar(it, '0') }
+    if (digits.isEmpty()) { digits = "0" }
+  }
+  return __pyExpText(digits, exp, upper, alt)
+}
+
+internal fun __pyFormatFloat(x : float, spec : string) : string {
+  if (spec.isEmpty()) { return pyReprFloat(x) }
+  val f = PyFormatSpec(spec)
+  var t = f.type
+  val negative = x < 0.0 or (x == 0.0 and 1.0 / x < 0.0)
+  var body = ""
+  if (x.isNaN() or x.isInfinite()) {
+    body = x.isNaN() ? "nan" : "inf"
+    if (t == 'E' or t == 'F' or t == 'G') { body = body.upper() }
+    if (t == '%') { body = body + "%" }
+    val s = x.isNaN() ? __pySignText(false, f) : __pySignText(negative, f)
+    return __pyPad(s, body, PyFormatSpec(spec).also { if (it.fill == '0' and it.align == '=') { it.fill = ' '; it.align = '>' } }, '>')
+  }
+  val p = f.precision
+  when (t) {
+    'f', 'F' -> body = pyFixedDigits(x, p < 0 ? 6 : p).let { f.alt and !it.contains(".") ? it + "." : it }
+    'e', 'E' -> {
+      val ed = pyExpDigits(x, p < 0 ? 6 : p)
+      body = __pyExpText(ed.first, ed.second, t == 'E', f.alt)
+    }
+    'g', 'G' -> body = __pyGeneral(x, p < 0 ? 6 : p, t == 'G', f.alt, false)
+    'n' -> body = __pyGeneral(x, p < 0 ? 6 : p, false, f.alt, false)
+    '%' -> body = pyFixedDigits(x * 100.0, p < 0 ? 6 : p) + "%"
+    '\u{0}' -> {
+      if (p < 0) {
+        body = pyReprFloat(Math.abs(x))
+      } else {
+        body = __pyGeneral(x, p, false, f.alt, true)
+      }
+    }
+    else -> throw pyValueError("Unknown format code '$t' for object of type 'float'")
+  }
+  var isNegative = negative
+  if (f.z and isNegative) {
+    // z: a negative zero after rounding written as zero.
+    var allZero = true
+    for c in body { if (c >= '1' and c <= '9') { allZero = false } }
+    if (allZero) { isNegative = false }
+  }
+  if (f.grouping != '\u{0}') {
+    var intEnd = 0
+    while (intEnd < body.size and body[intEnd] >= '0' and body[intEnd] <= '9') { intEnd += 1 }
+    body = __pyGroup(body[..<intEnd], f.grouping, 3) + body[intEnd..]
+  }
+  return __pyPad(__pySignText(isNegative, f), body, f, '>')
+}
+
+internal fun __pyFormatComplex(c : Complex, spec : string) : string {
+  val f = PyFormatSpec(spec)
+  val inner = spec.size > 0 ? (f.type == '\u{0}' ? spec + "g" : spec) : ""
+  val re = __pyFormatFloat(c.re, PyFormatSpec(inner).let { inner.replace(f.width.toString(), "") })
+  val im = __pyFormatFloat(c.im, "+" + (inner.startsWith("+") ? inner[1..] : inner).replace(f.width.toString(), ""))
+  val text = c.re == 0.0 and f.type == '\u{0}' ? im[1..] + "j" : "(" + re + im + "j)"
+  return __pyPad("", text, f, '>')
+}
+
+// ---- % formatting ----
+
+fun pyPercentFormat(fmt : string, args0 : any?) : string {
+  val sb = StringBuilder()
+  val isTuple = args0 is PyTuple
+  val args = isTuple ? (args0 as PyTuple).items : [args0]
+  val mapping = !isTuple and (args0 is PyDict or (args0 is PyObject and pyTypeOf(args0).lookup("__getitem__") !== pyUnbound and !(args0 is PyExc)))
+  var ai = 0
+  var i = 0
+  var usedMapping = false
+  fun nextArg() : any? {
+    if (ai >= args.size) { throw pyTypeError("not enough arguments for format string") }
+    ai += 1
+    return args[ai - 1]
+  }
+  while (i < fmt.size) {
+    val c = fmt[i]
+    if (c != '%') {
+      sb.append(c)
+      i += 1
+      continue
+    }
+    i += 1
+    if (i >= fmt.size) { throw pyValueError("incomplete format") }
+    var key : any? = pyUnbound
+    if (fmt[i] == '(') {
+      var depth = 1
+      var j = i + 1
+      while (j < fmt.size and depth > 0) {
+        if (fmt[j] == '(') { depth += 1 }
+        if (fmt[j] == ')') { depth -= 1 }
+        j += 1
+      }
+      if (depth > 0) { throw pyValueError("incomplete format key") }
+      key = fmt[(i + 1)..<(j - 1)]
+      i = j
+      usedMapping = true
+    }
+    var flags = ""
+    while (i < fmt.size and (fmt[i] == '-' or fmt[i] == '+' or fmt[i] == ' ' or fmt[i] == '#' or fmt[i] == '0')) {
+      flags += fmt[i].toString()
+      i += 1
+    }
+    var width = -1
+    if (i < fmt.size and fmt[i] == '*') {
+      width = pyIndex(nextArg())
+      i += 1
+    } else {
+      var w = 0
+      var has = false
+      while (i < fmt.size and fmt[i] >= '0' and fmt[i] <= '9') {
+        w = w * 10 + (fmt[i].code - 48)
+        has = true
+        i += 1
+      }
+      if (has) { width = w }
+    }
+    var precision = -1
+    if (i < fmt.size and fmt[i] == '.') {
+      i += 1
+      if (i < fmt.size and fmt[i] == '*') {
+        precision = pyIndex(nextArg())
+        i += 1
+      } else {
+        var p = 0
+        while (i < fmt.size and fmt[i] >= '0' and fmt[i] <= '9') {
+          p = p * 10 + (fmt[i].code - 48)
+          i += 1
+        }
+        precision = p
+      }
+    }
+    while (i < fmt.size and (fmt[i] == 'h' or fmt[i] == 'l' or fmt[i] == 'L')) { i += 1 }
+    if (i >= fmt.size) { throw pyValueError("incomplete format") }
+    val type = fmt[i]
+    i += 1
+    if (type == '%') {
+      sb.append('%')
+      continue
+    }
+    val arg = key !== pyUnbound ? pyGetItem(args0, key) : nextArg()
+    var spec = ""
+    var left = flags.contains("-")
+    var text = ""
+    when (type) {
+      's' -> text = pyStr(arg)
+      'r' -> text = pyRepr(arg)
+      'a' -> text = pyAscii(arg) as string
+      'd', 'i', 'u' -> {
+        if (!pyIsNumber(arg) and !(arg is PyObject)) { throw pyTypeError("%$type format: a real number is required, not ${pyTypeName(arg)}") }
+        val n = arg is float ? pyIntOf1(arg) : pyIndexOrInt(arg)
+        text = __pyPercentInt(pyBig(n), 10, flags, precision, false)
+      }
+      'x', 'X', 'o' -> {
+        if (!pyIsInt(arg) and !(arg is PyObject)) { throw pyTypeError("%$type format: an integer is required, not ${pyTypeName(arg)}") }
+        val n = pyBig(pyIndexValue(arg))
+        text = __pyPercentInt(n, type == 'o' ? 8 : 16, flags, precision, type == 'X')
+      }
+      'e', 'E', 'f', 'F', 'g', 'G' -> {
+        if (!pyIsNumber(arg) and !(arg is PyObject)) { throw pyTypeError("must be real number, not ${pyTypeName(arg)}") }
+        val x = pyToFloat(pyFloatOf1(arg))
+        val sign = flags.contains("+") ? "+" : flags.contains(" ") ? " " : ""
+        text = __pyFormatFloat(x, sign + (flags.contains("#") ? "#" : "") + "." + (precision < 0 ? 6 : precision).toString() + type.toString())
+      }
+      'c' -> {
+        text = arg is string ? arg as string : pyChar(pyIndex(arg)).toString()
+      }
+      else -> throw pyValueError("unsupported format character '$type' (0x${type.code.toString(16)}) at index ${i - 1}")
+    }
+    if (width > text.size) {
+      val pad = width - text.size
+      if (left) { text = text + " ".repeat(pad) }
+      else if (flags.contains("0") and type != 's' and type != 'r' and type != 'a' and type != 'c') {
+        var signLen = 0
+        if (text.startsWith("-") or text.startsWith("+") or text.startsWith(" ")) { signLen = 1 }
+        if (text[signLen..].startsWith("0x") or text[signLen..].startsWith("0X") or text[signLen..].startsWith("0o")) { signLen += 2 }
+        text = text[..<signLen] + "0".repeat(pad) + text[signLen..]
+      } else { text = " ".repeat(pad) + text }
+    }
+    sb.append(text)
+  }
+  if (!usedMapping and ai < args.size and !mapping) { throw pyTypeError("not all arguments converted during string formatting") }
+  return sb.toString()
+}
+
+internal fun pyIndexOrInt(x : any?) : any? {
+  if (pyIsInt(x)) { return pyIndexValue(x) }
+  return pyIntOf1(x)
+}
+
+internal fun __pyPercentInt(n : BigInt, base : int, flags : string, precision : int, upper : bool) : string {
+  var digits = n.abs().toString(base)
+  if (upper) { digits = digits.upper() }
+  if (precision > digits.size) { digits = "0".repeat(precision - digits.size) + digits }
+  if (flags.contains("#")) {
+    if (base == 16) { digits = (upper ? "0X" : "0x") + digits }
+    if (base == 8) { digits = "0o" + digits }
+  }
+  val sign = n < 0 ? "-" : flags.contains("+") ? "+" : flags.contains(" ") ? " " : ""
+  return sign + digits
+}
+
+fun pyPercentBytes(fmt : Bytes, args : any?) : any? {
+  val s = StringBuilder()
+  for i in 0..<fmt.size { s.append((fmt[i] + 0).char) }
+  val text = pyPercentFormat(s.toString(), args)
+  return pyBytesOfLatin1(text)
+}
+
+// hex(), oct(), bin().
+fun pyHexOf(x : any?) : any? => __pyBase(x, 16, "0x")
+fun pyOctOf(x : any?) : any? => __pyBase(x, 8, "0o")
+fun pyBinOf(x : any?) : any? => __pyBase(x, 2, "0b")
+
+internal fun __pyBase(x : any?, base : int, prefix : string) : string {
+  val n = pyBig(pyIndexValue(x))
+  return (n < 0 ? "-" : "") + prefix + n.abs().toString(base)
+}

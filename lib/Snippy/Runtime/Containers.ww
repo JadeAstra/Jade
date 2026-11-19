@@ -1,0 +1,548 @@
+import Snippy.Text.*
+// Indexing and slicing as Python's (negative indexes, slices with steps, slice assignment);
+// lists, dicts and their views; bytearray; the with statement's protocol; and what match tests.
+
+// ---- Making them ----
+
+fun pyNewList(items : open List<any?>) : open List<any?> => items
+fun pyNewDict() : PyDict => PyDict()
+
+// A dict display: keys and values in turn, a PyStarArg key standing for **mapping.
+fun pyDictOfPairs(items : List<any?>) : PyDict {
+  val d = PyDict()
+  var i = 0
+  while (i < items.size) {
+    val k = items[i]
+    if (k is PyStarArg) {
+      pyDictUpdate(d, (k as PyStarArg).value)
+    } else {
+      d.set(k, items[i + 1])
+    }
+    i += 2
+  }
+  return d
+}
+
+// d[k] = v.
+fun pyDictSet(d : PyDict, k : any?, v : any?) {
+  d.set(k, v)
+}
+
+// d.update(other): a mapping (with keys()) or pairs.
+fun pyDictUpdate(d : PyDict, other : any?) {
+  val od = pyAsDict(other)
+  if (od != null and (other is PyDict or (other as PyObject).cls.lookup("keys") is PyMethodDescriptor)) {
+    for i in 0..<od!!.keys.size {
+      val k = od!!.keys[i]
+      if (k !== PyDeletedT) { d.set(k, od!!.vals[i]) }
+    }
+    return
+  }
+  if (other is Map<any?, any?>) {
+    for (k, v) in other as Map<any?, any?> { d.set(k, v) }
+    return
+  }
+  if (pyTypeOf(other).lookup("keys") !== pyUnbound) {
+    for k in pyIterable(pyCallM0(other, "keys")) { d.set(k, pyGetItem(other, k)) }
+    return
+  }
+  var i = 0
+  for item in pyIterable(other) {
+    val pair = pyIterSafe(item, "object is not iterable")
+    val parts = pyIterable(pair)
+    if (parts.size != 2) { throw pyValueError("dictionary update sequence element #$i has length ${parts.size}; 2 is required") }
+    d.set(parts[0], parts[1])
+    i += 1
+  }
+}
+
+fun pyGlobalsOf(m : PyModule) : any? {
+  val d = PyDict()
+  for name in m.bound() { d.set(name, m.get(name)) }
+  return d
+}
+
+// ---- Indexes and slices ----
+
+// An index into `size` items, negative from the end; -1 where it is outside.
+internal fun __pyAt(k : any?, size : int) : int {
+  var i = k is int ? k as int : pyIndex(k)
+  if (i < 0) { i += size }
+  return i < 0 or i >= size ? -1 : i
+}
+
+// What a slice picks out of `size` items: start, stop, step and how many, as CPython's
+// PySlice_AdjustIndices works them out.
+fun pySliceIndices(s : PySlice, size : int) : List<int> {
+  var step = 1
+  if (s.step != null) {
+    step = pyIndex(s.step)
+    if (step == 0) { throw pyValueError("slice step cannot be zero") }
+  }
+  val lowDefault = step < 0 ? size - 1 : 0
+  val highDefault = step < 0 ? -1 : size
+  var start = lowDefault
+  var stop = highDefault
+  if (s.lower != null) {
+    start = __pyClampIndex(s.lower, size, step < 0)
+  }
+  if (s.upper != null) {
+    stop = __pyClampIndex(s.upper, size, step < 0)
+  }
+  var count = 0
+  if (step > 0) {
+    if (start < stop) { count = (stop - start - 1) / step + 1 }
+  } else {
+    if (stop < start) { count = (start - stop - 1) / (-step) + 1 }
+  }
+  return [start, stop, step, count]
+}
+
+internal fun __pyClampIndex(x : any?, size : int, back : bool) : int {
+  val v = pyIndexValue(x)
+  var i = 0
+  if (v is BigInt) {
+    i = (v as BigInt) < 0 ? -9223372036854775807 : 9223372036854775807
+  } else {
+    i = v as int
+  }
+  if (i < 0) {
+    i += size
+    if (i < 0) { i = back ? -1 : 0 }
+  } else if (i >= size) {
+    i = back ? size - 1 : size
+  }
+  return i
+}
+
+fun pyGetItem(o : any?, k : any?) : any? {
+  if (o is List<any?> and k is int) {
+    val l = o as List<any?>
+    var i = k as int
+    if (i < 0) { i += l.size }
+    if (i < 0 or i >= l.size) { throw pyIndexError("list index out of range") }
+    return l[i]
+  }
+  return when (o) {
+    is PyDict -> {
+      val v = (o as PyDict).get(k, pyUnbound)
+      if (v === pyUnbound) { throw pyKeyError(k) }
+      v
+    }
+    is List<any?> -> {
+      if (k is PySlice) { return __pySliceList(o as List<any?>, k as PySlice) }
+      if (!pyIsInt(k) and !(k is PyObject)) { throw pyTypeError("list indices must be integers or slices, not ${pyTypeName(k)}") }
+      val i = __pyAt(k, (o as List<any?>).size)
+      if (i < 0) { throw pyIndexError("list index out of range") }
+      (o as List<any?>)[i]
+    }
+    is string -> {
+      if (k is PySlice) { return __pySliceStr(o as string, k as PySlice) }
+      if (!pyIsInt(k) and !(k is PyObject)) { throw pyTypeError("string indices must be integers, not '${pyTypeName(k)}'") }
+      val i = __pyAt(k, (o as string).size)
+      if (i < 0) { throw pyIndexError("string index out of range") }
+      (o as string)[i].toString()
+    }
+    is PyTuple -> {
+      if (k is PySlice) { return PyTuple(__pySliceList((o as PyTuple).items, k as PySlice)) }
+      if (!pyIsInt(k) and !(k is PyObject)) { throw pyTypeError("tuple indices must be integers or slices, not ${pyTypeName(k)}") }
+      val i = __pyAt(k, (o as PyTuple).items.size)
+      if (i < 0) { throw pyIndexError("tuple index out of range") }
+      (o as PyTuple).items[i]
+    }
+    is PyRange -> {
+      val r = o as PyRange
+      if (k is PySlice) {
+        val ix = pySliceIndices(k as PySlice, r.length())
+        return PyRange(r.item(ix[0]), r.item(ix[0]) + ix[3] * r.step * ix[2], r.step * ix[2])
+      }
+      val i = __pyAt(k, r.length())
+      if (i < 0) { throw pyIndexError("range object index out of range") }
+      r.item(i)
+    }
+    is Bytes -> {
+      if (k is PySlice) { return __pySliceBytes(o as Bytes, k as PySlice) }
+      val i = __pyAt(k, (o as Bytes).size)
+      if (i < 0) { throw pyIndexError("index out of range") }
+      (o as Bytes)[i]
+    }
+    is PyByteArray -> {
+      if (k is PySlice) { return PyByteArray(__pySliceBytes((o as PyByteArray).bytes, k as PySlice)) }
+      val i = __pyAt(k, (o as PyByteArray).bytes.size)
+      if (i < 0) { throw pyIndexError("bytearray index out of range") }
+      (o as PyByteArray).bytes[i]
+    }
+    is PyObject -> {
+      val ob = o as PyObject
+      val m = ob.cls.lookup("__getitem__")
+      if (m === pyUnbound or m == null) { throw pyTypeError("'${ob.cls.name}' object is not subscriptable") }
+      if (m is PyMethodDescriptor) {
+        if (ob.cls.layout == 3) {
+          val d = ob.value as PyDict
+          val v = d.get(k, pyUnbound)
+          if (v !== pyUnbound) { return v }
+          val missing = ob.cls.lookup("__missing__")
+          if (missing !== pyUnbound) { return __pyCall2Special(missing, o, k) }
+          pyHash(k)
+          throw pyKeyError(k)
+        }
+        return pyGetItem(ob.value, k)
+      }
+      __pyCall2Special(m, o, k)
+    }
+    is PyType -> {
+      val t = o as PyType
+      val m = t.lookup("__class_getitem__")
+      if (m !== pyUnbound) { return pyCall1(pyBindDescriptor(m, t, t), k) }
+      if (t.builtin) { return PyGenericAlias(t, k) }
+      throw pyTypeError("type '${t.name}' is not subscriptable")
+    }
+    else -> throw pyTypeError("'${pyTypeName(o)}' object is not subscriptable")
+  }
+}
+
+// list[int], dict[str, int]...: what an annotation writes, kept as Python keeps it.
+class PyGenericAlias(val origin : PyType, val args : any?) : PyIdentified() {
+  override fun toString() : string => pyRepr(this)
+}
+
+fun pyGetSlice(o : any?, lower : any?, upper : any?, step : any?) : any? => pyGetItem(o, PySlice(lower, upper, step))
+
+internal fun __pySliceList(l : List<any?>, s : PySlice) : open List<any?> {
+  val ix = pySliceIndices(s, l.size)
+  val out : open List<any?> = []
+  if (ix[2] == 1) {
+    for i in ix[0]..<(ix[0] + ix[3]) { out.add(l[i]) }
+    return out
+  }
+  var i = ix[0]
+  for n in 0..<ix[3] {
+    out.add(l[i])
+    i += ix[2]
+  }
+  return out
+}
+
+internal fun __pySliceStr(str : string, s : PySlice) : string {
+  val ix = pySliceIndices(s, str.size)
+  if (ix[2] == 1) { return str[ix[0]..<(ix[0] + ix[3])] }
+  val sb = StringBuilder()
+  var i = ix[0]
+  for n in 0..<ix[3] {
+    sb.append(str[i])
+    i += ix[2]
+  }
+  return sb.toString()
+}
+
+internal fun __pySliceBytes(b : Bytes, s : PySlice) : Bytes {
+  val ix = pySliceIndices(s, b.size)
+  val out = Bytes(ix[3])
+  var i = ix[0]
+  for n in 0..<ix[3] {
+    out[n] = b[i]
+    i += ix[2]
+  }
+  return out
+}
+
+fun pySetItem(o : any?, k : any?, v : any?) {
+  if (o is open List<any?> and k is int) {
+    val l = o as open List<any?>
+    var i = k as int
+    if (i < 0) { i += l.size }
+    if (i < 0 or i >= l.size) { throw pyIndexError("list assignment index out of range") }
+    l[i] = v
+    return
+  }
+  when (o) {
+    is PyDict -> (o as PyDict).set(k, v)
+    is open List<any?> -> {
+      if (k is PySlice) {
+        __pySetListSlice(o as open List<any?>, k as PySlice, v)
+        return
+      }
+      if (!pyIsInt(k) and !(k is PyObject)) { throw pyTypeError("list indices must be integers or slices, not ${pyTypeName(k)}") }
+      val i = __pyAt(k, (o as List<any?>).size)
+      if (i < 0) { throw pyIndexError("list assignment index out of range") }
+      (o as open List<any?>)[i] = v
+    }
+    is PyByteArray -> {
+      val b = o as PyByteArray
+      if (k is PySlice) {
+        val l : open List<any?> = []
+        for i in 0..<b.bytes.size { l.add(b.bytes[i]) }
+        __pySetListSlice(l, k as PySlice, pyIterable(v is Bytes ? PyByteArray(v as Bytes) : v))
+        b.bytes = Bytes(l)
+        return
+      }
+      val i = __pyAt(k, b.bytes.size)
+      if (i < 0) { throw pyIndexError("bytearray index out of range") }
+      val n = pyIndex(v)
+      if (n < 0 or n > 255) { throw pyValueError("byte must be in range(0, 256)") }
+      b.bytes[i] = n.toByte()
+    }
+    is PyObject -> {
+      val ob = o as PyObject
+      val m = ob.cls.lookup("__setitem__")
+      if (m === pyUnbound or m == null) { throw pyTypeError("'${ob.cls.name}' object does not support item assignment") }
+      if (m is PyMethodDescriptor) {
+        pySetItem(ob.value, k, v)
+        return
+      }
+      pyCall2(pyBindDescriptor(m, o, ob.cls), k, v)
+    }
+    else -> throw pyTypeError("'${pyTypeName(o)}' object does not support item assignment")
+  }
+}
+
+fun pySetSlice(o : any?, lower : any?, upper : any?, step : any?, v : any?) => pySetItem(o, PySlice(lower, upper, step), v)
+
+internal fun __pySetListSlice(l : open List<any?>, s : PySlice, v : any?) {
+  val items = v === l ? l.toList() : pyIterable(pyIterSafe(v, "must assign iterable to extended slice"))
+  val ix = pySliceIndices(s, l.size)
+  if (ix[2] == 1) {
+    val start = ix[0]
+    val stop = ix[0] + ix[3]
+    for i in 0..<(stop - start) { l.removeAt(start) }
+    for (j, x) in items.withIndex() { l.add(start + j, x) }
+    return
+  }
+  if (items.size != ix[3]) {
+    throw pyValueError("attempt to assign sequence of size ${items.size} to extended slice of size ${ix[3]}")
+  }
+  var i = ix[0]
+  for x in items {
+    l[i] = x
+    i += ix[2]
+  }
+}
+
+fun pyDelItem(o : any?, k : any?) {
+  when (o) {
+    is PyDict -> {
+      if (!(o as PyDict).remove(k)) { throw pyKeyError(k) }
+    }
+    is open List<any?> -> {
+      val l = o as open List<any?>
+      if (k is PySlice) {
+        val ix = pySliceIndices(k as PySlice, l.size)
+        if (ix[2] == 1) {
+          for i in 0..<ix[3] { l.removeAt(ix[0]) }
+          return
+        }
+        val gone : open List<int> = []
+        var i = ix[0]
+        for n in 0..<ix[3] {
+          gone.add(i)
+          i += ix[2]
+        }
+        gone.sort()
+        for j in (gone.size - 1) downTo 0 { l.removeAt(gone[j]) }
+        return
+      }
+      val i = __pyAt(k, l.size)
+      if (i < 0) { throw pyIndexError("list assignment index out of range") }
+      l.removeAt(i)
+    }
+    is PyObject -> {
+      val ob = o as PyObject
+      val m = ob.cls.lookup("__delitem__")
+      if (m === pyUnbound or m == null) { throw pyTypeError("'${ob.cls.name}' object doesn't support item deletion") }
+      if (m is PyMethodDescriptor) {
+        pyDelItem(ob.value, k)
+        return
+      }
+      __pyCall2Special(m, o, k)
+    }
+    else -> throw pyTypeError("'${pyTypeName(o)}' object doesn't support item deletion")
+  }
+}
+
+// ---- Dict views ----
+
+// d.keys(), d.values(), d.items(): `kind` 0, 1, 2; they follow the dict as it changes.
+class PyDictView(val map : PyDict, val kind : int) : PyIdentified() {
+  fun size() : int => map.count
+  fun iterator() : any? => PyDictIter(map, kind)
+  fun pyType() : PyType => kind == 0 ? __pyIterType("dict_keys") : kind == 1 ? __pyIterType("dict_values") : __pyIterType("dict_items")
+  fun has(x : any?) : bool {
+    return when (kind) {
+      0 -> map.has(x)
+      1 -> {
+        for v in map.valueList() { if (pyEqB(v, x)) { return true } }
+        false
+      }
+      else -> {
+        if (!(x is PyTuple) or (x as PyTuple).items.size != 2) { return false }
+        val v = map.get((x as PyTuple).items[0], pyUnbound)
+        v !== pyUnbound and pyEqB(v, (x as PyTuple).items[1])
+      }
+    }
+  }
+  fun items() : List<any?> => pyIterable(iterator())
+  fun sameAs(other : any?) : bool {
+    if (kind == 1) { return this === other }
+    if (pyLength(other) != size()) { return false }
+    for x in pyIterable(other) { if (!has(x)) { return false } }
+    return true
+  }
+}
+
+// ---- bytearray ----
+
+class PyByteArray(var bytes : Bytes) : PyIdentified() {
+  override fun toString() : string => pyRepr(this)
+}
+
+fun pyBytesOfLatin1(s : string) : any? {
+  val b = Bytes(s.size)
+  for i in 0..<s.size { b[i] = s[i].code.toByte() }
+  return b
+}
+
+fun pyBytesContains(b : Bytes, item : any?) : bool {
+  if (pyIsInt(item)) {
+    val n = pyIndex(item)
+    if (n < 0 or n > 255) { throw pyValueError("byte must be in range(0, 256)") }
+    for i in 0..<b.size { if (b[i] == n) { return true } }
+    return false
+  }
+  if (item is Bytes) { return __pyBytesFind(b, item as Bytes, 0) >= 0 }
+  throw pyTypeError("a bytes-like object is required, not '${pyTypeName(item)}'")
+}
+
+internal fun __pyBytesFind(b : Bytes, sub : Bytes, from : int) : int {
+  if (sub.size == 0) { return from <= b.size ? from : -1 }
+  var i = from
+  while (i + sub.size <= b.size) {
+    var ok = true
+    for j in 0..<sub.size {
+      if (b[i + j] != sub[j]) { ok = false; break }
+    }
+    if (ok) { return i }
+    i += 1
+  }
+  return -1
+}
+
+// ---- with ----
+
+fun pyCtxEnter(m : any?) : any? {
+  val t = pyTypeOf(m)
+  val enter = t.lookup("__enter__")
+  if (enter === pyUnbound or enter == null) {
+    throw pyTypeError("'${t.name}' object does not support the context manager protocol")
+  }
+  return __pyCall1Special(enter, m)
+}
+
+fun pyCtxExit(m : any?) : any? {
+  val t = pyTypeOf(m)
+  val exit = t.lookup("__exit__")
+  if (exit === pyUnbound or exit == null) {
+    throw pyTypeError("'${t.name}' object does not support the context manager protocol (missed __exit__ method)")
+  }
+  val enter = t.lookup("__enter__")
+  if (enter === pyUnbound or enter == null) {
+    throw pyTypeError("'${t.name}' object does not support the context manager protocol (missed __enter__ method)")
+  }
+  return pyBindDescriptor(exit, m, t)
+}
+
+fun pyTracebackOf(e : PyExc) : any? => PyTraceback(e)
+
+// ---- match ----
+
+fun pyMatchValue(subject : any?, v : any?) : bool => pyEqB(subject, v)
+
+// A sequence pattern: the subject's items if it is a sequence of the right length (`count` items,
+// or at least that many with a star at `star`, whose items come as one list there); else null.
+fun pyMatchSeq(subject : any?, count : int, star : int) : List<any?>? {
+  var items : List<any?>? = null
+  if (subject is List<any?>) { items = subject as List<any?> }
+  else if (subject is PyTuple) { items = (subject as PyTuple).items }
+  else if (subject is PyRange) { items = pyIterable(subject) }
+  else if (subject is PyObject and ((subject as PyObject).cls.layout == 2 or (subject as PyObject).cls.layout == 8)) {
+    items = pyIterable((subject as PyObject).value)
+  } else if (subject is PyObject and pyIsSequenceClass((subject as PyObject).cls)) {
+    items = pyIterable(subject)
+  }
+  if (items == null) { return null }
+  val all = items!!
+  if (star < 0) {
+    if (all.size != count) { return null }
+    return all
+  }
+  if (all.size < count) { return null }
+  val out : open List<any?> = []
+  for i in 0..<star { out.add(all[i]) }
+  val middle : open List<any?> = []
+  for i in star..<(all.size - (count - star)) { middle.add(all[i]) }
+  out.add(middle)
+  for i in (all.size - (count - star))..<all.size { out.add(all[i]) }
+  return out
+}
+
+// Whether a class is registered as a sequence (collections.abc.Sequence) for match.
+fun pyIsSequenceClass(t : PyType) : bool {
+  for m in t.mro { if (m.name == "Sequence" and m.module == "collections.abc") { return true } }
+  return false
+}
+
+fun pyMatchMap(subject : any?) : bool {
+  if (subject is PyDict) { return true }
+  if (subject is PyObject) {
+    if ((subject as PyObject).cls.layout == 3) { return true }
+    for m in (subject as PyObject).cls.mro { if (m.name == "Mapping" and m.module == "collections.abc") { return true } }
+  }
+  return false
+}
+
+fun pyMatchKey(subject : any?, key : any?) : any? {
+  if (subject is PyDict) { return (subject as PyDict).get(key, pyUnbound) }
+  val v = pyCallM2(subject, "get", key, pyUnbound)
+  return v
+}
+
+fun pyMatchRest(subject : any?, keys : List<any?>) : any? {
+  val d = pyNewDict()
+  if (subject is PyDict) {
+    val m = subject as PyDict
+    for k in m.keyList() { if (!keys.any { pyEqB(it, k) }) { d.set(k, m.get(k, null)) } }
+    return d
+  }
+  for k in pyIterable(pyCallM0(subject, "keys")) {
+    if (!keys.any { pyEqB(it, k) }) { d.set(k, pyGetItem(subject, k)) }
+  }
+  return d
+}
+
+internal val __pySelfMatching : List<string> = ["bool", "bytearray", "bytes", "dict", "float", "frozenset", "int", "list", "set", "str", "tuple"]
+
+// Class(p1, p2): the values the positional subpatterns are matched against, or null.
+fun pyMatchArgs(subject : any?, cls : any?, n : int) : List<any?>? {
+  val t = cls as PyType
+  val args = t.lookup("__match_args__")
+  if (args === pyUnbound) {
+    var selfMatching = false
+    for m in t.mro { if (m.builtin and m.name in __pySelfMatching) { selfMatching = true } }
+    if (selfMatching) {
+      if (n > 1) { throw pyTypeError("${t.name}() accepts 1 positional sub-pattern ($n given)") }
+      return [subject]
+    }
+    if (n > 0) { throw pyTypeError("${t.name}() accepts 0 positional sub-patterns ($n given)") }
+    return []
+  }
+  val names = pyIterable(args)
+  if (n > names.size) { throw pyTypeError("${t.name}() accepts ${names.size} positional sub-pattern${names.size == 1 ? "" : "s"} ($n given)") }
+  val out : open List<any?> = []
+  for i in 0..<n {
+    val v = pyMatchAttr(subject, names[i] as string)
+    if (v === pyUnbound) { return null }
+    out.add(v)
+  }
+  return out
+}
+
+fun pyMatchAttr(subject : any?, name : string) : any? => pyGetAttrOr(subject, name, pyUnbound)
