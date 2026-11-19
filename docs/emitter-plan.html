@@ -148,16 +148,17 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <tr><th>Part</th><th>What</th><th>Gate</th></tr>
 <tr><td class="part">1. ARM64, the VM alone</td><td>ww built for ARM64: Linux (aarch64, Clang or GCC) and Windows on ARM (clang-cl, <code>--target=arm64-pc-windows-msvc</code>); whatever does not build there made to (x86 intrinsics in image and text code given plain ways; the native code switched off). Run under QEMU on this machine (WSL, aarch64 Linux).</td><td>The suite passes under QEMU on aarch64 Linux, native code off; the Windows on ARM build links.</td></tr>
 <tr><td class="part">2. The x86-64 encoder</td><td>The encoder and its test (every instruction form against bytes kept in the test, made once with an assembler); the steps of whole number arithmetic, slots, moves, comparisons and jumps emitted, the others still stencils, in the same regions; the registers and conventions as now.</td><td>The suite, every setting (check-live too); <code>ww --native-check</code>; no kernel slower.</td></tr>
-<tr><td class="part">3. Its registers and flags</td><td>Every hot step emitted; 13 whole number registers (14 tried); comparisons on the flags; floats in whole XMM registers.</td><td>Faster: the kernels' tight loops by a fifth at least, LZW no slower; nothing slower.</td></tr>
-<tr><td class="part">4. The stencils gone</td><td>The large steps and the templates as calls to C++; <code>stencils.cpp</code>'s stencil forms, <code>tools/stencils</code> and the table deleted; native code in MSVC and GCC builds and on Linux.</td><td>The suite, every setting, on Windows (Clang and MSVC builds) and on Linux (WSL, the Fedora VM); no kernel slower than part 3; ww.exe smaller.</td></tr>
+<tr><td class="part">3. The stencils gone</td><td>Every hot step emitted; the large steps and the templates as calls to C++; <code>stencils.cpp</code>'s stencil forms, <code>tools/stencils</code> and the table deleted; native code in MSVC and GCC builds and on Linux. The conventions still the stencils': eleven registers, the flag in i9, floats as halves.</td><td>The suite, every setting, on Windows (Clang and MSVC builds) and on Linux (WSL, the Fedora VM); no kernel slower; ww.exe smaller.</td></tr>
+<tr><td class="part">4. Its registers and flags</td><td>With no stencil left in any region, the conventions changed at once: 13 whole number registers (14 tried); comparisons on the processor's flags; floats in whole XMM registers.</td><td>Faster: the kernels' tight loops by a fifth at least, LZW no slower; nothing slower.</td></tr>
 <tr><td class="part">5. The ARM64 encoder</td><td>The AArch64 encoder and its test; the steps for it; code memory as ARM wants it.</td><td>The suite, every setting, under QEMU on aarch64 Linux with native code; then timed on an ARM computer (question 6): its loops as much faster than its VM as x86's are.</td></tr>
 </table></div>
+<p>Why the stencils go before the conventions change (2026-11-19, the user: "yes, fix the order"): while a region has stencils and emitted steps side by side, the emitted steps keep the stencils' conventions, as a stencil sees only the eleven registers <code>preserve_none</code> passes and finds its answers in i9; so more registers and the flags come only once no stencil is left, the large steps calls to C++ first. Side by side holds through parts 2 and 3, where the steps are moved a group at a time; part 4 is one change, with nothing mixed.</p>
 <p>Each part finished, tested, committed (a version a build) and reported before the next, on the user's word. Then the speed plan's image parts (PNG, WebP; question 1), their new steps written for the emitter only.</p>
 
 <h2 id="ep-checks">How it is checked</h2>
 <ul>
 <li><strong>The encoders' bytes:</strong> each instruction form with each register, encoded and compared with bytes kept in the test (made once by an assembler, written into the test: nothing of LLVM needed to build or test ww).</li>
-<li><strong>Stencil against emitter (parts 2 and 3):</strong> a setting that makes each region both ways and runs each, comparing the frame and what it gives back, while both exist.</li>
+<li><strong>Stencil against emitter (parts 2 and 3, while both exist):</strong> a setting that makes each region both ways and runs each, comparing the frame and what it gives back, while both exist.</li>
 <li><strong>The suite:</strong> every way and every stress setting, check-live among them (each slot left unwritten poisoned), as now; the ASan build at each part's end.</li>
 <li><strong>ARM:</strong> under QEMU (correct, not timed); timings only on an ARM computer.</li>
 </ul>
@@ -195,7 +196,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <section class="decision">
 <h3><span class="code">3</span>Stencils and emitted steps in the same region while it changes, or all at once?</h3>
 <ul>
-<li><strong>Together:</strong> steps moved to the emitter a group at a time, each group tested and timed; the stencils' conventions kept until part 3.</li>
+<li><strong>Together:</strong> steps moved to the emitter a group at a time, each group tested and timed, and each emitted step compared with its stencil; the stencils' conventions kept until none is left (part 4).</li>
 <li><strong>All at once:</strong> the emitter written whole, then switched to.</li>
 </ul>
 <p><em>Recommended:</em> together. Each part stays small enough to find what it broke, and a part that does not reach its gate costs only itself.</p>
@@ -208,7 +209,7 @@ td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: t
 <li><strong>13:</strong> RBP left as the frame pointer: a crash inside native code still shows the stack of calls past it.</li>
 <li><strong>14:</strong> RBP given out too, saved as the region is entered.</li>
 </ul>
-<p><em>Recommended:</em> 13 first, 14 tried in part 3 and kept only where a loop is measurably faster.</p>
+<p><em>Recommended:</em> 13 first, 14 tried in part 4 and kept only where a loop is measurably faster.</p>
 <div class="verdict"><span class="label">Decision</span><span class="blank"></span></div>
 </section>
 
