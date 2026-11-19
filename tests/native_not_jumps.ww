@@ -1,0 +1,90 @@
+// Jumps on a comparison turned round (2026-11-18): `a != b` is `==` and a not to the VM, and
+// `!(a < b)` a comparison and a not; native code jumps on the comparison itself where it holds (one
+// step, jeqik, jnge and the rest, Region::jumpsOnNot). Each kind, against a constant and against a
+// value, in loops native code makes whole; floats (a NaN holds no comparison, so never turned
+// round) and a not kept as a value beside them. Each gives what the VM gives (the suite's interpret
+// way).
+
+fun counts(n : int, k : int) : List<int> {
+  var ne = 0
+  var neK = 0
+  var notLt = 0
+  var notLe = 0
+  var notGt = 0
+  var notGe = 0
+  var notLtK = 0
+  var notGeK = 0
+  for (i in 0 ..< n) {
+    val v = (i * 7) % 13
+    if (v != k) { ne += 1 }
+    if (v != 5) { neK += v }
+    if (!(v < k)) { notLt += 1 }
+    if (!(v <= k)) { notLe += v }
+    if (!(v > k)) { notGt += 1 }
+    if (!(v >= k)) { notGe += v }
+    if (!(v < 3)) { notLtK += 1 }
+    if (!(v >= 9)) { notGeK += 1 }
+  }
+  return [ne, neK, notLt, notLe, notGt, notGe, notLtK, notGeK]
+}
+print(counts(10000, 6))   // expect: [9231, 56145, 5384, 43840, 5385, 11536, 7691, 6924]
+print(counts(10000, 0))   // expect: [9230, 56145, 10000, 59990, 770, 0, 7691, 6924]
+
+// As a while loop's test, after an `and`.
+fun firstEqual(items : List<int>, k : int) : int {
+  var i = 0
+  while (i < items.size and items[i] != k) { i += 1 }
+  return i
+}
+val items = (0 ..< 5000).map { (it * 31) % 1009 }
+print(firstEqual(items, 500), firstEqual(items, 2000))   // expect: 602 5000
+
+// The answer kept as a value, not jumped on: left as it was.
+fun kept(n : int) : int {
+  var t = 0
+  for (i in 0 ..< n) {
+    val differs = i % 3 != 0
+    if (differs) { t += 1 }
+    val notSmall = !(i < 10)
+    t += notSmall ? 2 : 0
+  }
+  return t
+}
+print(kept(1000))   // expect: 2646
+
+// Floats: `!=` and `!(a < b)`, with a NaN among them.
+fun floats(values : List<float>) : List<int> {
+  var ne = 0
+  var notLt = 0
+  for (x in values) {
+    if (x != 0.5) { ne += 1 }
+    if (!(x < 0.5)) { notLt += 1 }
+  }
+  return [ne, notLt]
+}
+val fs : open List<float> = (0 ..< 2000).map { (it % 4) * 0.25 }
+fs[7] = 0.0 / 0.0
+print(floats(fs))   // expect: [1500, 1000]
+
+// Both sides worked out, not variables: the VM's answer goes to the first operand's slot, so the
+// jump reads the operands where the comparison did (2026-11-18: read again after, `pixels.size !=
+// width * height * 4` in Image.of compared the size with a slot the answer had taken).
+fun worked(n : int) : List<int> {
+  var ne = 0
+  var notLt = 0
+  var notGe = 0
+  for (i in 0 ..< n) {
+    if (i * 3 % 7 != (i + 1) % 5) { ne += 1 }
+    if (!(i % 11 * 2 < i % 13 + 3)) { notLt += 1 }
+    if (!((i & 15) + 1 >= 9)) { notGe += 1 }
+  }
+  return [ne, notLt, notGe]
+}
+print(worked(5000))   // expect: [4286, 2830, 2504]
+fun sized(pixels : Bytes, width : int, height : int) : bool {
+  if (pixels.size != width * height * 4) { return false }
+  return true
+}
+var fits = 0
+for (i in 0 ..< 300) { if (sized(Bytes(960), 20, 12 + i % 2)) { fits += 1 } }
+print(fits)   // expect: 150

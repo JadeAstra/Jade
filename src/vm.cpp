@@ -8421,6 +8421,7 @@ void VM::markContext(const Context& context) {
     }
     for (ObjUpvalue* upvalue = context.openUpvalues; upvalue != nullptr; upvalue = upvalue->nextOpen) markObject(upvalue);
     markObject(context.fiber);
+    markValue(context.pendingDestination);
 }
 
 // What the value in a frame's place holds of other objects (D149), where its type's layout says:

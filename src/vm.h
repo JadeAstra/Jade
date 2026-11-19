@@ -94,6 +94,11 @@ struct Context {
     // The type arguments a call about to be made was given (Op::WithTypes): a thread may give
     // way between them and the call, so they are its own.
     const ObjTypeInfo* pendingTypeArgs = nullptr;
+    // And where the value the next call gives is to be made (VM::pendingDestination_), for the
+    // same reason (2026-11-19: kept in the VM alone, a thread that gave way between WithDestination
+    // and its Rect's making had its place taken by another thread's Duration, which a Rect then
+    // wrote over: the test runner's `p.waitFor(limit.seconds)` given a Rect, once in a suite).
+    Value pendingDestination = Value::null();
     // What ImplicitFirst gave the next lookup of a bare name (D58, D59): a thread may give way
     // between them (at InvokeImplicit's safe point), so they too are its own.
     Value implicitFirst[8];

@@ -4261,9 +4261,11 @@ struct Region {
                 const NativeSeen::List* narrow = listOf(frameAt(root));
                 if (narrow != nullptr && narrow->packed && narrow->store == ListStore::Narrow &&
                     (narrow->narrow == Narrow::Int16 || narrow->narrow == Narrow::Int32 || narrow->narrow == Narrow::Uint16 || narrow->narrow == Narrow::Uint32)) {
+                    // Each kind's own (hidxn16u for a List<uint16>): a list of another leaves.
                     static const std::map<std::string, std::string> asNarrow = {
                         {"hidxw", "hidxn"}, {"hidxwk", "hidxnk"}, {"hsetwi", "hsetni"}, {"hsetwb", "hsetnb"}};
-                    if (auto n = asNarrow.find(l->stem); n != asNarrow.end()) l->stem = n->second;
+                    const char* kind = narrow->narrow == Narrow::Int16 ? "16s" : narrow->narrow == Narrow::Uint16 ? "16u" : narrow->narrow == Narrow::Int32 ? "32s" : "32u";
+                    if (auto n = asNarrow.find(l->stem); n != asNarrow.end()) l->stem = n->second + kind;
                 }
             }
         }
@@ -6881,6 +6883,57 @@ struct Region {
     // no longer clash as one wherever any of them is wanted. A value a way out writes back, or
     // that is wanted where a jump goes, keeps the slot's name.
     int renamed = 0;
+    // `a != b` jumped on (2026-11-18): `!=` is `==` and a not to the VM, so three steps, the
+    // comparison into the flag, the flag turned round and a jump where it is false, made one jump
+    // on the comparison itself, where it holds (on ints: `<` turned round, jumped on where false,
+    // jumps where `<` holds, as jnge does; `==` so is jeq). The jump takes the comparison's place,
+    // where its operands are as it read them (the VM's answer goes to the first operand's slot:
+    // read again at the jump, that slot is the answer), the not and the jump left with no steps.
+    // Only where nothing comes in at the not or the jump, nor leaves there, the jump goes to an
+    // instruction of the region, and the answer is wanted nowhere else: its slot, and the not's,
+    // above the top once the jump is done (the LZW loop's `found != 0`, each time round).
+    void jumpsOnNot() {
+        const size_t n = ins.size();
+        std::vector<char> comesIn(n, 0);
+        for (size_t i = 0; i < n; i++) {
+            if (!in[i].known) continue;
+            for (const LOp& l : results[i].ops)
+                if (l.jumpTo >= 0 && static_cast<size_t>(l.jumpTo) < n) comesIn[static_cast<size_t>(l.jumpTo)] = 1;
+            for (const int r : results[i].resumes)
+                if (r >= 0 && static_cast<size_t>(r) < n) comesIn[static_cast<size_t>(r)] = 1;
+            for (const ExitPoint& e : results[i].exits)
+                if (e.toEntry >= 0 && static_cast<size_t>(e.toEntry) < n) comesIn[static_cast<size_t>(e.toEntry)] = 1;
+        }
+        for (const std::set<int>* s : {&entries, &resumed})
+            for (const int e : *s)
+                if (e >= 0 && static_cast<size_t>(e) < n) comesIn[static_cast<size_t>(e)] = 1;
+        static const std::map<std::string, std::string> holds = {{"lt", "jnge"}, {"le", "jngt"}, {"gt", "jnle"}, {"ge", "jnlt"}, {"eq", "jeq"}};
+        for (size_t i = 0; i + 2 < n; i++) {
+            if (!in[i].known || !in[i + 1].known || !in[i + 2].known || comesIn[i + 1] || comesIn[i + 2]) continue;
+            Result& a = results[i];
+            Result& b = results[i + 1];
+            Result& c = results[i + 2];
+            if (a.island || b.island || c.island || a.ops.empty() || !a.fallsThrough || a.fallExit >= 0 || !b.fallsThrough || b.fallExit >= 0) continue;
+            if (b.ops.size() != 1 || b.ops[0].stem != "notflag" || !b.exits.empty()) continue;
+            if (c.ops.size() != 1 || c.ops[0].stem != "jfalse" || c.ops[0].exit >= 0 || c.ops[0].jumpExit >= 0 || c.ops[0].jumpTo < 0) continue;
+            LOp& compare = a.ops.back();
+            if (compare.stem.size() != 4 || compare.exit >= 0 || compare.jumpTo >= 0 || compare.jumpExit >= 0) continue;
+            const std::string operands = compare.stem.substr(2);
+            const auto turned = holds.find(compare.stem.substr(0, 2));
+            if ((operands != "ii" && operands != "ik") || turned == holds.end()) continue;
+            // The answer's slot (the comparison's and the not's, each its first operand) above the
+            // top the jump leaves, on both its ways: wanted by nothing after.
+            const Ins& isNot = ins[i + 1];
+            const Ins& jumps = ins[i + 2];
+            if (isNot.op != Op::RNot || jumps.op != Op::RJumpIfFalse || u8(isNot, 1) != u8(ins[i], 0) || u8(jumps, 0) != u8(isNot, 0)) continue;
+            const int top = u8(jumps, 1);  // the top on both ways (RJumpIfFalse: u8 B, u8 T)
+            if (u8(ins[i], 0) < top || u8(isNot, 0) < top) continue;
+            compare.stem = turned->second + operands;
+            compare.jumpTo = c.ops[0].jumpTo;
+            b.ops.clear();
+            c.ops.clear();
+        }
+    }
     void renameValues() {
         std::vector<bool> joined(ins.size(), false);
         if (!joined.empty()) joined[0] = true;
@@ -7536,13 +7589,12 @@ struct Region {
         // whole done again: a few at most, as only values the hot path uses are tried).
         std::set<Reg> kept;
         bool lastFits = false;  // the region as it now is: as it was before any spilling
+        static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
         for (const auto& [use, r] : candidates) {
             std::set<Reg> trying = kept;
             trying.insert(r);
             lastFits = replay(trying);
-            static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
-            if (traceSplit)
-                std::fprintf(stderr, "split try %d (saving %.2f): %s, split now %zu\n", r.slot, use, lastFits ? "fits" : "does not fit", splitValues.size());
+            if (traceSplit) std::fprintf(stderr, "split try %d (saving %.2f): %s\n", r.slot, use, lastFits ? "fits" : "does not fit");
             if (lastFits) kept = std::move(trying);
         }
         // The region left as the last try made it: done again with what was kept, unless that was it.
@@ -7553,7 +7605,8 @@ struct Region {
     // ---- A value's life split (registers-plan.html part C, 2026-11-18) ----
     //
     // The region's instructions in two: the hot path, those run at least half as often as the
-    // busiest (as the region made first counted), and the cold path, the rest. A value to be kept
+    // busiest (as the region made first counted) and reached from the loop's start through others
+    // so, and the cold path, the rest. A value to be kept
     // in its slot that the hot path uses is kept so only on the cold path, and keeps its register
     // on the hot one. On the cold path each read is loaded first and each write written back, as
     // spillOne does everywhere, and its ways out have it in its slot already. Where the hot path
@@ -7579,8 +7632,25 @@ struct Region {
             if (in[i].known) top = std::max(top, perRound(i));
         std::vector<char> hot;
         if (top <= 0) return hot;
+        std::vector<char> often(n, 0);
+        for (size_t i = 0; i < n; i++) often[i] = in[i].known && !results[i].island && perRound(i) >= 0.5 * top;
+        // Only those reached from the loop's start through others so: an inner loop's start the cold
+        // path alone goes to is cold, however often it runs (the LZW loop's codes put out a byte at a
+        // time, its `while` run about half as often as the loop, 2026-11-18).
         hot.assign(n, 0);
-        for (size_t i = 0; i < n; i++) hot[i] = in[i].known && !results[i].island && perRound(i) >= 0.5 * top;
+        std::vector<size_t> work;
+        if (often[0]) hot[0] = 1, work.push_back(0);
+        while (!work.empty()) {
+            const size_t i = work.back();
+            work.pop_back();
+            const Result& res = results[i];
+            auto reach = [&](size_t to) {
+                if (to < n && often[to] && !hot[to]) hot[to] = 1, work.push_back(to);
+            };
+            for (const LOp& l : res.ops)
+                if (l.jumpTo >= 0) reach(static_cast<size_t>(l.jumpTo));
+            if (res.fallsThrough && res.fallExit < 0) reach(i + 1);
+        }
         return hot;
     }
     // How much the cold path uses a value the hot path uses (each use weighed by how often it
@@ -8590,6 +8660,7 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
                 if (r.templates > 0) r.findLive();
             }
             if (r.twoItemsAtOnce()) r.findLive();
+            r.jumpsOnNot();
             r.renameValues();
             r.findLive();
             lap(2);

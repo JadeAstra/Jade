@@ -211,6 +211,7 @@ void VM::saveContext() {
     c.nativeDepth = nativeDepth_;
     c.nativeBase = nativeBase_;
     c.pendingTypeArgs = pendingTypeArgs_;
+    c.pendingDestination = std::exchange(pendingDestination_, Value::null());
     std::copy(implicitFirst_, implicitFirst_ + implicitFirstCount_, c.implicitFirst);
     c.implicitFirstCount = std::exchange(implicitFirstCount_, uint8_t{0});
     c.implicitOnly = std::exchange(implicitOnly_, false);
@@ -232,6 +233,7 @@ void VM::loadContext(Context* c) {
     nativeDepth_ = c->nativeDepth;
     nativeBase_ = c->nativeBase;
     pendingTypeArgs_ = c->pendingTypeArgs;
+    pendingDestination_ = std::exchange(c->pendingDestination, Value::null());
     std::copy(c->implicitFirst, c->implicitFirst + c->implicitFirstCount, implicitFirst_);
     implicitFirstCount_ = std::exchange(c->implicitFirstCount, uint8_t{0});
     implicitOnly_ = std::exchange(c->implicitOnly, false);

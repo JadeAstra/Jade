@@ -1,0 +1,277 @@
+diff --git a/src/native/regions.cpp b/src/native/regions.cpp
+index a4ac13a..08f34d6 100644
+--- a/src/native/regions.cpp
++++ b/src/native/regions.cpp
+@@ -4261,9 +4261,11 @@ struct Region {
+                 const NativeSeen::List* narrow = listOf(frameAt(root));
+                 if (narrow != nullptr && narrow->packed && narrow->store == ListStore::Narrow &&
+                     (narrow->narrow == Narrow::Int16 || narrow->narrow == Narrow::Int32 || narrow->narrow == Narrow::Uint16 || narrow->narrow == Narrow::Uint32)) {
++                    // Each kind's own (hidxn16u for a List<uint16>): a list of another leaves.
+                     static const std::map<std::string, std::string> asNarrow = {
+                         {"hidxw", "hidxn"}, {"hidxwk", "hidxnk"}, {"hsetwi", "hsetni"}, {"hsetwb", "hsetnb"}};
+-                    if (auto n = asNarrow.find(l->stem); n != asNarrow.end()) l->stem = n->second;
++                    const char* kind = narrow->narrow == Narrow::Int16 ? "16s" : narrow->narrow == Narrow::Uint16 ? "16u" : narrow->narrow == Narrow::Int32 ? "32s" : "32u";
++                    if (auto n = asNarrow.find(l->stem); n != asNarrow.end()) l->stem = n->second + kind;
+                 }
+             }
+         }
+@@ -6881,6 +6883,50 @@ struct Region {
+     // no longer clash as one wherever any of them is wanted. A value a way out writes back, or
+     // that is wanted where a jump goes, keeps the slot's name.
+     int renamed = 0;
++    // `a != b` jumped on (2026-11-18): `!=` is `==` and a not to the VM, so three steps, the
++    // comparison into the flag, the flag turned round and a jump where it is false, made one jump
++    // on the comparison itself, where it holds (on ints: `<` turned round, jumped on where false,
++    // jumps where `<` holds, as jnge does; `==` so is jeq). Only where nothing comes in at the not
++    // or the jump, nor leaves there; the comparison's answer is wanted nowhere else, a slot above
++    // the top once the jump is done (the LZW loop's `found != 0`, each time round).
++    void jumpsOnNot() {
++        const size_t n = ins.size();
++        std::vector<char> comesIn(n, 0);
++        for (size_t i = 0; i < n; i++) {
++            if (!in[i].known) continue;
++            for (const LOp& l : results[i].ops)
++                if (l.jumpTo >= 0 && static_cast<size_t>(l.jumpTo) < n) comesIn[static_cast<size_t>(l.jumpTo)] = 1;
++            for (const int r : results[i].resumes)
++                if (r >= 0 && static_cast<size_t>(r) < n) comesIn[static_cast<size_t>(r)] = 1;
++            for (const ExitPoint& e : results[i].exits)
++                if (e.toEntry >= 0 && static_cast<size_t>(e.toEntry) < n) comesIn[static_cast<size_t>(e.toEntry)] = 1;
++        }
++        for (const std::set<int>* s : {&entries, &resumed})
++            for (const int e : *s)
++                if (e >= 0 && static_cast<size_t>(e) < n) comesIn[static_cast<size_t>(e)] = 1;
++        static const std::map<std::string, std::string> holds = {{"lt", "jnge"}, {"le", "jngt"}, {"gt", "jnle"}, {"ge", "jnlt"}, {"eq", "jeq"}};
++        for (size_t i = 0; i + 2 < n; i++) {
++            if (!in[i].known || !in[i + 1].known || !in[i + 2].known || comesIn[i + 1] || comesIn[i + 2]) continue;
++            Result& a = results[i];
++            Result& b = results[i + 1];
++            Result& c = results[i + 2];
++            if (a.island || b.island || c.island || a.ops.empty() || !a.fallsThrough || a.fallExit >= 0 || !b.fallsThrough || b.fallExit >= 0) continue;
++            if (b.ops.size() != 1 || b.ops[0].stem != "notflag" || !b.exits.empty()) continue;
++            if (c.ops.size() != 1 || c.ops[0].stem != "jfalse" || c.ops[0].exit >= 0) continue;
++            const LOp& compare = a.ops.back();
++            if (compare.stem.size() != 4 || compare.exit >= 0 || compare.jumpTo >= 0 || compare.jumpExit >= 0) continue;
++            const std::string operands = compare.stem.substr(2);
++            const auto turned = holds.find(compare.stem.substr(0, 2));
++            if ((operands != "ii" && operands != "ik") || turned == holds.end()) continue;
++            LOp& jump = c.ops[0];
++            jump.stem = turned->second + operands;
++            jump.named = compare.named;
++            jump.uses = compare.uses;
++            jump.ki = compare.ki;
++            a.ops.pop_back();
++            b.ops.clear();
++        }
++    }
+     void renameValues() {
+         std::vector<bool> joined(ins.size(), false);
+         if (!joined.empty()) joined[0] = true;
+@@ -7416,6 +7462,7 @@ struct Region {
+     std::vector<std::pair<char, Reg>> spillLog;
+     bool judgingSplits = false;
+     std::map<Reg, double> splitSavings;
++    std::set<Reg> splitColdSide;  // of them, those split the other way (splitOne's coldSide)
+     // `r` kept in its slot everywhere: each read loaded first, each write written back after.
+     void spillInSlot(const Reg r) {
+         // In the first way (allocate): what splitting it instead would save, judged now, while it is
+@@ -7423,6 +7470,7 @@ struct Region {
+         if (judgingSplits) {
+             double saving = 0;
+             if (coldUse(r) >= 0 && splitOne(r, &saving) && saving >= 1.0) splitSavings[r] = saving;
++            else if (coldOnly(r) && splitOne(r, &saving, true) && saving >= 1.0) splitSavings[r] = saving, splitColdSide.insert(r);
+         }
+         spillLog.emplace_back('S', r);
+         spilled.insert(r);
+@@ -7493,6 +7541,7 @@ struct Region {
+         auto restore = [&] { restoreTo(before); };
+         spillLog.clear();
+         splitSavings.clear();
++        splitColdSide.clear();
+         judgingSplits = !hotPath().empty();
+         while (!giveRegisters()) {
+             if (!spillOne()) {
+@@ -7526,30 +7575,99 @@ struct Region {
+             spillLog.clear();
+             for (const auto& [kind, r] : first) {
+                 if (kind == 'H') spillHomeOf(r);
+-                else if (split.count(r) && splitOne(r)) splitValues.insert(r);
++                else if (split.count(r) && splitOne(r, nullptr, splitColdSide.count(r) != 0)) splitValues.insert(r);
+                 else spillInSlot(r);
+                 findLive();
+             }
+             return giveRegisters();
+         };
+         // One candidate at a time: kept split where the rest still have registers (each try the
+-        // whole done again: a few at most, as only values the hot path uses are tried).
++        // whole done again: a few at most, as only values the hot path uses are tried). Those that
++        // did not fit tried once more after the rest: a value split one way frees registers on the
++        // cold path that one split the other way wants (the LZW loop's range on the hot side,
++        // then `acc` on the cold one).
+         std::set<Reg> kept;
+         bool lastFits = false;  // the region as it now is: as it was before any spilling
+-        for (const auto& [use, r] : candidates) {
+-            std::set<Reg> trying = kept;
+-            trying.insert(r);
+-            lastFits = replay(trying);
+-            static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
+-            if (traceSplit)
+-                std::fprintf(stderr, "split try %d (saving %.2f): %s, split now %zu\n", r.slot, use, lastFits ? "fits" : "does not fit", splitValues.size());
+-            if (lastFits) kept = std::move(trying);
++        for (int round = 0; round < 2; round++) {
++            const size_t before = kept.size();
++            for (const auto& [use, r] : candidates) {
++                if (kept.count(r)) continue;
++                std::set<Reg> trying = kept;
++                trying.insert(r);
++                lastFits = replay(trying);
++                static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
++                if (traceSplit) {
++                    std::fprintf(stderr, "split try %d%s (saving %.2f): %s\n", r.slot, splitColdSide.count(r) ? " (cold side)" : "", use,
++                                 lastFits ? "fits" : "does not fit");
++                    if (!lastFits) {
++                        const std::vector<char> hot = hotPath();
++                        for (size_t i = 0; i < ins.size(); i++) {
++                            if (!in[i].known) continue;
++                            int ints = 0;
++                            for (const Reg& x : liveIn(i)) ints += x.cls == CI;
++                            if (ints < 8) continue;
++                            std::fprintf(stderr, "    %zu%s (%u):", i, hot[i] ? " hot" : "", ins[i].at);
++                            for (const Reg& x : liveIn(i))
++                                if (x.cls == CI) std::fprintf(stderr, " %d", x.slot);
++                            std::fprintf(stderr, "\n");
++                        }
++                    }
++                }
++                if (lastFits) kept = std::move(trying);
++            }
++            if (kept.size() == before || kept.size() == candidates.size()) break;
+         }
+         // The region left as the last try made it: done again with what was kept, unless that was it.
+         const bool fits = lastFits ? true : kept.empty() ? backToFirst() : replay(kept);
++        // With values split, the cold path has registers to spare that the first way's spilling did
++        // not: done again from the region as it was, the kept ones split first, then values kept in
++        // their slots afresh, a value at a time until all have registers (the LZW loop's bits put
++        // out a byte at a time, kept in memory only because the split values once wanted their
++        // registers, 2026-11-18). Kept where it costs fewer loads and stores as the counts weigh them.
++        if (fits && !kept.empty()) {
++            const double replayed = memoryCost();
++            const Saved asReplayed{results, temps, homes, spilled, housed, madeBySpill, splitValues};
++            const std::vector<std::pair<char, Reg>> replayedLog = spillLog;
++            restore();
++            spillLog.clear();
++            for (const auto& [kind, r] : first)
++                if (kind == 'S' && kept.count(r) && splitOne(r, nullptr, splitColdSide.count(r) != 0)) {
++                    splitValues.insert(r);
++                    findLive();
++                }
++            bool fresh = true;
++            while (fresh && !giveRegisters()) {
++                fresh = spillOne();
++                if (fresh) findLive();
++            }
++            const double afresh = fresh ? memoryCost() : 0;
++            static const bool traceSplit = std::getenv("WW_TRACE_SPLIT") != nullptr;
++            if (traceSplit)
++                std::fprintf(stderr, "split values kept in memory afresh: %s, %.2f against %.2f\n", fresh ? "fits" : "does not fit", afresh, replayed);
++            if (!fresh || afresh >= replayed) {
++                restoreTo(asReplayed);
++                spillLog = replayedLog;
++                giveRegisters();
++            }
++        }
+         onSpill();
+         return fits;
+     }
++    // The loads and stores spilling put in, each weighed by how often its instruction runs a time
++    // round (a store as a write is in spillOne): what two ways of giving registers are compared by.
++    double memoryCost() const {
++        double cost = 0;
++        for (size_t i = 0; i < ins.size(); i++) {
++            if (!in[i].known) continue;
++            const double counted = std::max(0.0, perRound(i));
++            for (const LOp& l : results[i].ops) {
++                if (l.slot < 0 && (l.named.empty() || !madeBySpill.count(l.named[0]))) continue;
++                if (l.stem == "loadi" || l.stem == "loadf") cost += counted;
++                else if (l.stem.rfind("store", 0) == 0) cost += counted * writeWeight();
++            }
++        }
++        return cost;
++    }
+     // ---- A value's life split (registers-plan.html part C, 2026-11-18) ----
+     //
+     // The region's instructions in two: the hot path, those run at least half as often as the
+@@ -7579,8 +7697,25 @@ struct Region {
+             if (in[i].known) top = std::max(top, perRound(i));
+         std::vector<char> hot;
+         if (top <= 0) return hot;
++        std::vector<char> often(n, 0);
++        for (size_t i = 0; i < n; i++) often[i] = in[i].known && !results[i].island && perRound(i) >= 0.5 * top;
++        // Only those reached from the loop's start through others so: an inner loop's start the cold
++        // path alone goes to is cold, however often it runs (the LZW loop's codes put out a byte at a
++        // time, its `while` run about half as often as the loop, 2026-11-18).
+         hot.assign(n, 0);
+-        for (size_t i = 0; i < n; i++) hot[i] = in[i].known && !results[i].island && perRound(i) >= 0.5 * top;
++        std::vector<size_t> work;
++        if (often[0]) hot[0] = 1, work.push_back(0);
++        while (!work.empty()) {
++            const size_t i = work.back();
++            work.pop_back();
++            const Result& res = results[i];
++            auto reach = [&](size_t to) {
++                if (to < n && often[to] && !hot[to]) hot[to] = 1, work.push_back(to);
++            };
++            for (const LOp& l : res.ops)
++                if (l.jumpTo >= 0) reach(static_cast<size_t>(l.jumpTo));
++            if (res.fallsThrough && res.fallExit < 0) reach(i + 1);
++        }
+         return hot;
+     }
+     // How much the cold path uses a value the hot path uses (each use weighed by how often it
+@@ -7603,14 +7738,35 @@ struct Region {
+         }
+         return usedHot && onCold ? cold : -1;
+     }
++    // Whether the cold path alone uses a value that the hot path passes on (wanted where some of
++    // it starts): one to split the other way, in its slot on the hot path, where it is neither
++    // read nor written, and in a register on the cold one, loaded as that is gone into and written
++    // back as it is left (2026-11-18: the LZW loop's bits put out a byte at a time, `acc`, `bits`
++    // and `size`, kept in memory everywhere only because the hot path wanted their registers).
++    bool coldOnly(const Reg& r) const {
++        const std::vector<char> hot = hotPath();
++        if (hot.empty()) return false;
++        bool usedCold = false, passedOn = false;
++        for (size_t i = 0; i < ins.size(); i++) {
++            if (!in[i].known) continue;
++            for (const LOp& l : results[i].ops) {
++                if (std::find(l.uses.begin(), l.uses.end(), r) == l.uses.end() && std::find(l.defs.begin(), l.defs.end(), r) == l.defs.end()) continue;
++                if (hot[i]) return false;
++                usedCold = true;
++            }
++            if (hot[i] && liveIn(i).count(r)) passedOn = true;
++        }
++        return usedCold && passedOn;
++    }
+     // `saving`, where given: what splitting would save (the cost check below), nothing changed.
+-    bool splitOne(const Reg& r, double* saving = nullptr) {
++    // `coldSide`: split the other way, a value coldOnly finds, in a register on the cold path only.
++    bool splitOne(const Reg& r, double* saving = nullptr, bool coldSide = false) {
+         const size_t n = ins.size();
+         const std::vector<char> hot = hotPath();
+-        if (hot.empty() || coldUse(r) < 0) return false;
+-        // The cold path keeps it in memory.
++        if (hot.empty() || (coldSide ? !coldOnly(r) : coldUse(r) < 0)) return false;
++        // The side that keeps it in memory: the cold path, or the hot one where split the other way.
+         std::vector<char> memory(n, 0);
+-        for (size_t i = 0; i < n; i++) memory[i] = in[i].known && !hot[i];
++        for (size_t i = 0; i < n; i++) memory[i] = in[i].known && (coldSide ? hot[i] != 0 : !hot[i]);
+         // The ways from one instruction to another within the region: by a step's jump, or falling
+         // through after the last step (op -1).
+         struct Way {
+@@ -8590,6 +8746,7 @@ void makeRegionsTimed(FunctionProto& f, const NativeSeen& seen, uint32_t head, s
+                 if (r.templates > 0) r.findLive();
+             }
+             if (r.twoItemsAtOnce()) r.findLive();
++            r.jumpsOnNot();
+             r.renameValues();
+             r.findLive();
+             lap(2);

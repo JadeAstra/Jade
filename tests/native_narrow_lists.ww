@@ -101,3 +101,38 @@ fun total(items : List<int>) : int {
   return t
 }
 print(total([1, 2, 3]), sum16([5, -5, 7]), total([10, 20]))   // expect: 6 7 30
+
+// Each kind looked at once in a function (hidxn16s, hidxnk32u and the rest: steps of each kind's
+// own since 2026-11-18), read at an index and at a constant one, and set, at each kind's ends; and
+// a set that does not fit leaving for the VM, which says so.
+fun held16(t : open List<int16>) : int {
+  var s = 0
+  for (i in 0 ..< t.size) {
+    s += t[i] + t[1]
+    t[i] = t[i] - 1
+  }
+  return s
+}
+fun held32(t : open List<int32>) : int {
+  var s = 0
+  for (i in 0 ..< t.size) {
+    s += t[i] + t[1]
+    t[i] = t[i] - 1
+  }
+  return s
+}
+fun heldU32(t : open List<uint32>) : int {
+  var s = 0
+  for (i in 0 ..< t.size) {
+    s += t[i] + t[1]
+    t[i] = t[i] + 1
+  }
+  return s
+}
+val h16 : open List<int16> = List<int16>(3000) { it % 2 == 0 ? -32767 + it : 32767 - it }
+val h32 : open List<int32> = List<int32>(3000) { it % 2 == 0 ? -2147483647 + it : 2147483647 - it }
+val hU32 : open List<uint32> = List<uint32>(3000) { 4294967294 - it }
+print(held16(h16), held32(h32), heldU32(hU32))   // expect: 98293502 6442450933502 25769799265498
+print(h16[0], h16[1], h32[0], h32[1], hU32[0], hU32[2999])   // expect: -32768 32765 -2147483648 2147483645 4294967295 4294964296
+try { held16(h16) } catch (e) { print(e.message) }   // expect: -32769 does not fit in an int16, which holds -32768 to 32767; toInt16Wrapped() keeps the low 16 bits
+try { heldU32(hU32) } catch (e) { print(e.message) }   // expect: 4294967296 does not fit in a uint32, which holds 0 to 4294967295; toUint32Wrapped() keeps the low 32 bits

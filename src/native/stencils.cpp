@@ -528,13 +528,16 @@ I_A(ICHECK, x)
 #define IJUMP_A(a, ...) I_B(IJUMP_B, a)
 I_A(IJUMP_A, x)
 
-// The VM's typed jumps on ints: to the target where `ia op ib` (or `ia op K`) does not hold.
+// The VM's typed jumps on ints: to the target where `ia op ib` (or `ia op K`) does not hold; and
+// jeq, where they are equal (`a != b` jumped on, a comparison, its answer turned round and a jump
+// where false made one: Region::jumpsOnNot, 2026-11-18).
 #define IJN_B(b, a)                                                             \
     STENCIL(jnltii_##a##_##b) { if (!(i##a < i##b)) JUMP; NEXT; }               \
     STENCIL(jnleii_##a##_##b) { if (!(i##a <= i##b)) JUMP; NEXT; }              \
     STENCIL(jngtii_##a##_##b) { if (!(i##a > i##b)) JUMP; NEXT; }               \
     STENCIL(jngeii_##a##_##b) { if (!(i##a >= i##b)) JUMP; NEXT; }              \
-    STENCIL(jneqii_##a##_##b) { if (!(i##a == i##b)) JUMP; NEXT; }
+    STENCIL(jneqii_##a##_##b) { if (!(i##a == i##b)) JUMP; NEXT; }              \
+    STENCIL(jeqii_##a##_##b) { if (i##a == i##b) JUMP; NEXT; }
 #define IJN_A(a, ...) I_B(IJN_B, a)
 I_A(IJN_A, x)
 #define IJNK(a, ...)                                                            \
@@ -542,7 +545,8 @@ I_A(IJN_A, x)
     STENCIL(jnleik_##a) { if (!(i##a <= ww_ki)) JUMP; NEXT; }                 \
     STENCIL(jngtik_##a) { if (!(i##a > ww_ki)) JUMP; NEXT; }                  \
     STENCIL(jngeik_##a) { if (!(i##a >= ww_ki)) JUMP; NEXT; }                 \
-    STENCIL(jneqik_##a) { if (!(i##a == ww_ki)) JUMP; NEXT; }
+    STENCIL(jneqik_##a) { if (!(i##a == ww_ki)) JUMP; NEXT; }                 \
+    STENCIL(jeqik_##a) { if (i##a == ww_ki) JUMP; NEXT; }
 I_A(IJNK, x)
 
 // The VM's typed comparisons of ints, their answer in i9.
@@ -2469,44 +2473,71 @@ I_A(HIDXWK, x)
 // A list of two- or four-byte whole numbers looked at once (2026-11-18), through steps of their
 // own, so that the steps above stay as they were: lookAt leaves its counts 0 (where the steps
 // above leave, should one meet it), and keeps in the fourth word kHeldNarrow + which, bit 7 set
-// where it may be changed, and from bit 8 how many items may be read.
-INLINE bool heldNarrow(const uint64_t* h, uint64_t index, bool change, uint64_t& which) {
+// where it may be changed, and from bit 8 how many items may be read. A set of steps for each kind
+// of item, the region's guess as it is made (hidxn16u reads a List<uint16>), so that each is a
+// check and a load: one for every kind, choosing as it ran, read a word to choose by, compared
+// three times, and had too few registers for it (the LZW loop's table, 2026-11-18). A list of
+// another kind leaves for the VM.
+INLINE bool heldNarrow(const uint64_t* h, uint64_t index, uint64_t which) {
     const uint64_t w = h[3];
-    which = (w & 0x7F) - kHeldNarrow;
-    return which >= kNarrowInt16 && which <= kNarrowUint32 && index < (w >> 8) && (!change || (w & 0x80) != 0);
+    return (w & 0x7F) == kHeldNarrow + which && index < (w >> 8);
 }
-#define HIDXN_B(c, a)                                                           \
-    STENCIL(hidxn_##a##_##c) {                                                  \
+INLINE bool heldNarrowToChange(const uint64_t* h, uint64_t index, uint64_t which) {
+    const uint64_t w = h[3];
+    return (w & 0xFF) == (kHeldNarrow + which | 0x80) && index < (w >> 8);
+}
+template <class T>
+INLINE int64_t heldItem(const uint64_t* h, uint64_t index) {
+    T v;
+    __builtin_memcpy(&v, reinterpret_cast<const uint8_t*>(h[0]) + index * sizeof(T), sizeof(T));
+    return v;
+}
+// An int set as such an item: false where it does not fit (the VM's, which says so).
+template <class T>
+INLINE bool setHeldItem(const uint64_t* h, uint64_t index, int64_t v) {
+    const T t = static_cast<T>(v);
+    if (static_cast<int64_t>(t) != v) return false;
+    __builtin_memcpy(reinterpret_cast<uint8_t*>(h[0]) + index * sizeof(T), &t, sizeof(T));
+    return true;
+}
+#define HIDXN_KIND(c, a, n, which, T)                                           \
+    STENCIL(hidxn##n##_##a##_##c) {                                             \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
-        uint64_t which;                                                         \
-        if (!heldNarrow(h, static_cast<uint64_t>(i##c), false, which)) EXIT;    \
-        i##a = narrowRead(reinterpret_cast<const uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c)); \
+        if (!heldNarrow(h, static_cast<uint64_t>(i##c), which)) EXIT;           \
+        i##a = heldItem<T>(h, static_cast<uint64_t>(i##c));                     \
         NEXT;                                                                   \
     }                                                                           \
-    STENCIL(hsetni_##a##_##c) {                                                 \
+    STENCIL(hsetni##n##_##a##_##c) {                                            \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
-        uint64_t which;                                                         \
-        if (!heldNarrow(h, static_cast<uint64_t>(i##c), true, which) ||         \
-            !narrowWrite(reinterpret_cast<uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c), i##a)) EXIT; \
+        if (!heldNarrowToChange(h, static_cast<uint64_t>(i##c), which) ||       \
+            !setHeldItem<T>(h, static_cast<uint64_t>(i##c), i##a)) EXIT;        \
         NEXT;                                                                   \
     }                                                                           \
-    STENCIL(hsetnb_##a##_##c) {                                                 \
+    STENCIL(hsetnb##n##_##a##_##c) {                                            \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
-        uint64_t which;                                                         \
-        if (!heldNarrow(h, static_cast<uint64_t>(i##c), true, which)) EXIT;     \
-        narrowWrite(reinterpret_cast<uint8_t*>(h[0]), which, static_cast<uint64_t>(i##c), i##a); /* a byte fits */ \
+        if (!heldNarrowToChange(h, static_cast<uint64_t>(i##c), which)) EXIT;   \
+        setHeldItem<T>(h, static_cast<uint64_t>(i##c), i##a); /* a byte fits */ \
         NEXT;                                                                   \
     }
+#define HIDXN_B(c, a)                                                           \
+    HIDXN_KIND(c, a, 16s, kNarrowInt16, int16_t)                                \
+    HIDXN_KIND(c, a, 16u, kNarrowUint16, uint16_t)                              \
+    HIDXN_KIND(c, a, 32s, kNarrowInt32, int32_t)                                \
+    HIDXN_KIND(c, a, 32u, kNarrowUint32, uint32_t)
 #define HIDXN_A(a, ...) I_B(HIDXN_B, a)
 I_A(HIDXN_A, x)
-#define HIDXNK(a, ...)                                                          \
-    STENCIL(hidxnk_##a) {                                                       \
+#define HIDXNK_KIND(a, n, which, T)                                             \
+    STENCIL(hidxnk##n##_##a) {                                                  \
         const uint64_t* h = ctx->lists + 4 * ww_slot;                         \
-        uint64_t which;                                                         \
-        if (!heldNarrow(h, static_cast<uint64_t>(ww_ki), false, which)) EXIT; \
-        i##a = narrowRead(reinterpret_cast<const uint8_t*>(h[0]), which, static_cast<uint64_t>(ww_ki)); \
+        if (!heldNarrow(h, static_cast<uint64_t>(ww_ki), which)) EXIT;        \
+        i##a = heldItem<T>(h, static_cast<uint64_t>(ww_ki));                  \
         NEXT;                                                                   \
     }
+#define HIDXNK(a, ...)                                                          \
+    HIDXNK_KIND(a, 16s, kNarrowInt16, int16_t)                                  \
+    HIDXNK_KIND(a, 16u, kNarrowUint16, uint16_t)                                \
+    HIDXNK_KIND(a, 32s, kNarrowInt32, int32_t)                                  \
+    HIDXNK_KIND(a, 32u, kNarrowUint32, uint32_t)
 I_A(HIDXNK, x)
 
 // A list of a value type's items looked at once (M9.5 B1), as lookAt: in the context's words 4k

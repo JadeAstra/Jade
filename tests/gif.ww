@@ -54,6 +54,14 @@ for (seeThrough in [false, true]) {
 // expect: Animation(20 x 12, 4 frames, loops 3) [true, true, true, true] [50, 100, 150, 200]
 print(Animation.load(Animation(frames(false)).encode(ImageFormat.gif)).loops, Animation.load(few.encode(ImageFormat.gif)).loops)   // expect: 0 1
 
+// A picture all see-through (a new Image is clear) has no colours of its own: written all the
+// see-through index, read back clear; so too a frame of an animation.
+val blank = Image(64, 64)
+print(Image.load(blank.encode(ImageFormat.gif)) == blank, Image.load(Image(1, 1).encode(ImageFormat.gif)) == Image(1, 1))   // expect: true true
+val blankFrames = [AnimationFrame(Image(8, 8, Color.red), 100.milliseconds), AnimationFrame(Image(8, 8), 100.milliseconds), AnimationFrame(Image(8, 8, Color.blue), 100.milliseconds)]
+val blankRead = Animation.load(Animation(blankFrames).encode(ImageFormat.gif))
+print((0 ..< 3).map { blankRead.frames[it].image == blankFrames[it].image })   // expect: [true, true, true]
+
 // Saved by name; a still picture is an animation of one frame.
 val folder = FilePath.createTempDirectory("ww_gif")
 Animation(frames(false)).save(folder.resolve("spin.gif"))
