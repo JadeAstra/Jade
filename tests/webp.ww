@@ -60,6 +60,57 @@ for (bad in [good[0 ..< 16], good[0 ..< 20] + Bytes([0x2E]) + good[21 ..], good[
 // expect: not a WebP file that can be read: its lossless data does not start with 0x2F
 // expect: not a WebP file that can be read: a chunk of 47 bytes past the end
 
+// Sizes and bounds a file states are checked before anything is made of them: a chunk may not
+// reach past the RIFF container or the animation frame that holds it, though the bytes are there;
+// a frame must lie on the canvas and be the size of its picture; an animation's canvas and frames
+// are counted before any is made; lossy data that runs out fails rather than going on as zeros.
+fun le(n : int, size : int) : Bytes {
+  val b = Bytes(size)
+  for (i in 0 ..< size) { b[i] = ((n >> (8 * i)) & 255).toByte() }
+  return b
+}
+fun riffChunk(name : string, body : Bytes) : Bytes => name.toBytes() + le(body.size, 4) + body + Bytes(body.size % 2)
+fun riffFile(body : Bytes) : Bytes => "RIFF".toBytes() + le(4 + body.size, 4) + "WEBP".toBytes() + body
+fun canvas(width : int, height : int) : Bytes => riffChunk("VP8X", Bytes([0x02, 0, 0, 0]) + le(width - 1, 3) + le(height - 1, 3))
+fun frame(width : int, height : int, picture : Bytes) : Bytes => riffChunk("ANMF", le(0, 6) + le(width - 1, 3) + le(height - 1, 3) + le(100, 3) + Bytes([0x02]) + picture)
+val fewChunk = good[12 ..< 12 + 8 + 47 + 1]   // its VP8L chunk, 33 by 17
+fun tryLoad(data : Bytes) {
+  try { print(Animation.load(data)) } catch (e : IOException) { print(e.message) }
+}
+tryLoad(riffFile(canvas(33, 17) + frame(33, 17, fewChunk)))
+val pastRiff = riffFile(fewChunk)
+pastRiff[4] = (pastRiff[4].toInt() - 4).toByte()
+tryLoad(pastRiff)
+val pastFrame = riffFile(canvas(33, 17) + frame(33, 17, fewChunk))
+pastFrame[30 + 4] = (pastFrame[30 + 4].toInt() - 4).toByte()   // the ANMF's size, 4 short of its picture's end
+tryLoad(pastFrame)
+tryLoad(riffFile(canvas(20, 17) + frame(33, 17, fewChunk)))
+tryLoad(riffFile(canvas(33, 17) + frame(33, 16, fewChunk)))
+var many = canvas(4096, 4096)
+for (i in 0 ..< 16) { many = many + frame(33, 17, fewChunk) }
+tryLoad(riffFile(many))
+tryLoad(riffFile(canvas(16777216, 2) + frame(33, 17, fewChunk)))
+// expect: Animation(33 x 17, 1 frames, loops 0)
+// expect: not a WebP file that can be read: a chunk of 47 bytes past the end
+// expect: not a WebP file that can be read: a chunk of 47 bytes past the end
+// expect: not a WebP file that can be read: an animation frame reaches past the canvas
+// expect: not a WebP file that can be read: a picture of 33 by 17 where 33 by 16 was given
+// expect: not a WebP file that can be read: a canvas of 4096 by 4096 pixels is too large for 16 frames
+// expect: not a WebP file that can be read: a canvas of 16777216 by 2 pixels is too large for a frame
+// A lossy picture whose header claims 4000 by 4000 with nothing behind it; a real one cut short
+// inside its macroblocks, and whole.
+tryLoad(riffFile(riffChunk("VP8 ", le(0x10 | (16 << 5), 3) + Bytes([0x9D, 0x01, 0x2A]) + le(4000, 2) + le(4000, 2) + Bytes(16))))
+val noisy = Image(64, 48)
+for (y in 0 ..< 48) { for (x in 0 ..< 64) { noisy[x, y] = Color((x * 37 + y * 11) % 256, (x * x + y * 3) % 256, (x * y * 7) % 256, 255) } }
+val noisyFile = noisy.encode(ImageFormat.webp, 0.9)
+val vp8 = noisyFile[20 ..< 20 + noisyFile.uint32(16)]
+val firstPartition = (vp8[0].toInt() | (vp8[1].toInt() << 8) | (vp8[2].toInt() << 16)) >> 5
+tryLoad(riffFile(riffChunk("VP8 ", vp8[0 ..< 10 + firstPartition + 4])))
+tryLoad(riffFile(riffChunk("VP8 ", vp8)))
+// expect: not a WebP file that can be read: its lossy data ends early
+// expect: not a WebP file that can be read: its lossy data ends early
+// expect: Animation(64 x 48, 1 frames, loops 0)
+
 // Lossy (VP8), with alpha too, made by libwebp and read the same as libwebp reads it.
 fun checkLossy(name : string, base64 : string, crc : int) {
   val image = Image.load(Base64.decode(base64))

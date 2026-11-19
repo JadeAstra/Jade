@@ -312,7 +312,11 @@ private:
         for (size_t i = 0; i < groupCount; i++) groups.push_back(group(cacheSize));
         std::vector<uint32_t> cache(static_cast<size_t>(cacheSize), 0);
         const size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
-        std::vector<uint32_t> out(total);
+        // Room for every pixel asked for at once but filled only as pixels come: the size is the
+        // file's word, and a few bytes can claim 16384 by 16384; memory never written to costs
+        // nothing, so data that fails early has used next to none.
+        std::vector<uint32_t> out;
+        out.reserve(total);
         auto remember = [&](uint32_t argb) {
             if (cacheBits > 0) cache[(0x1E35A7BDu * argb) >> (32 - cacheBits)] = argb;
         };
@@ -326,7 +330,8 @@ private:
                 const uint32_t red = static_cast<uint32_t>(g.codes[1].read(b_)), blue = static_cast<uint32_t>(g.codes[2].read(b_)),
                                alpha = static_cast<uint32_t>(g.codes[3].read(b_));
                 const uint32_t argb = (alpha << 24) | (red << 16) | (static_cast<uint32_t>(s) << 8) | blue;
-                out[at++] = argb;
+                out.push_back(argb);
+                at++;
                 remember(argb);
             } else if (s < 256 + 24) {
                 const int length = lengthOrDistance(s - 256);
@@ -343,15 +348,17 @@ private:
                 if (static_cast<size_t>(distance) > at) fail("a copy from before the picture's start");
                 if (at + static_cast<size_t>(length) > total) fail("a copy past the picture's end");
                 for (int k = 0; k < length; k++) {
-                    out[at] = out[at - static_cast<size_t>(distance)];
-                    remember(out[at]);
+                    const uint32_t argb = out[at - static_cast<size_t>(distance)];
+                    out.push_back(argb);
+                    remember(argb);
                     at++;
                 }
             } else {
                 const int key = s - 256 - 24;
                 if (key >= cacheSize) fail("a colour cache index past the cache");
-                out[at] = cache[static_cast<size_t>(key)];
-                remember(out[at]);
+                const uint32_t argb = cache[static_cast<size_t>(key)];
+                out.push_back(argb);
+                remember(argb);
                 at++;
             }
         }
@@ -462,15 +469,25 @@ struct BoolDecoder {
     const uint8_t* end = nullptr;
     uint32_t value = 0, range = 255;
     int bitCount = 0;
+    size_t past = 0;  // bytes asked for past the end, read as 0
 
     void init(const uint8_t* data, size_t size) {
         p = data;
         end = data + size;
+        past = 0;
         value = (next() << 8) | next();
         range = 255;
         bitCount = 0;
     }
-    uint32_t next() { return p < end ? *p++ : 0; }
+    uint32_t next() {
+        if (p < end) return *p++;
+        past++;
+        return 0;
+    }
+    // Read clearly past the end: more than the 2 bytes held ahead and the 2 a writer's shorter
+    // flush may leave out. A stream cut short (or made up) fails here, as libwebp's does, rather
+    // than going on through every macroblock its header claims with nothing but zeros.
+    bool overrun() const { return past > 4; }
     int read(int prob) {
         const uint32_t split = 1 + (((range - 1) * static_cast<uint32_t>(prob)) >> 8);
         const uint32_t bigSplit = split << 8;
@@ -764,6 +781,7 @@ private:
                     }
                 }
                 mb.hasCoefficients = any;
+                if (d.overrun() || tokens.overrun()) fail("its lossy data ends early");
                 reconstruct(mx, my, mb.yMode, bModes, uvMode, coefs, hasY2 && !skip);
             }
             // The four pixels right of the last macroblock, on its bottom row: the next row's
@@ -2179,7 +2197,10 @@ void registerWebp(VM& vm) {
         const std::vector<uint8_t>& data = asBytes(args[0])->data;
         const int64_t from = vm.toInt(args[1], "from"), to = vm.toInt(args[2], "to");
         if (from < 0 || to < from || to > static_cast<int64_t>(data.size())) throw vm.runtimeError(Thrown::IndexOutOfBoundsException, "a part outside the data");
-        int width = static_cast<int>(vm.toInt(args[3], "width")), height = static_cast<int>(vm.toInt(args[4], "height"));
+        const int64_t givenWidth = vm.toInt(args[3], "width"), givenHeight = vm.toInt(args[4], "height");
+        if ((givenWidth != 0 || givenHeight != 0) && (givenWidth < 1 || givenHeight < 1 || givenWidth > 16384 || givenHeight > 16384))
+            throw vm.runtimeError(Thrown::IllegalArgumentException, "a WebP is 1 to 16384 pixels each way, not " + std::to_string(givenWidth) + " by " + std::to_string(givenHeight));
+        int width = static_cast<int>(givenWidth), height = static_cast<int>(givenHeight);
         const bool headerless = width > 0 && height > 0;
         std::vector<uint32_t> argb;
         try {
