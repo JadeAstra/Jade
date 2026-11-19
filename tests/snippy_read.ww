@@ -1,0 +1,29 @@
+// Snippy reads Python as CPython does (the Snippy plan, part 5.1): python/grammar.py, a program
+// that uses every part of Python 3.14's grammar, read by Snippy's parser, its tree dumped as
+// ast.dump writes it and its nodes' places listed, and each compared with what CPython gives
+// (grammar.py.dump and grammar.py.pos, made by tools/snippy/astdump.py --beside and astpos.py).
+// The same check over all 624 files of CPython's own library is tools/snippy/compare.ww.
+import Snippy.*
+
+fun compare(what : string, cpython : string, snippy : string) {
+  if (cpython == snippy) {
+    print(what, "as CPython's")
+    return
+  }
+  var at = 0
+  while (at < cpython.size and at < snippy.size and cpython[at] == snippy[at]) { at += 1 }
+  print(what, "differs at", at)
+  print("  cpython:", cpython[Math.max(0, at - 60) ..< Math.min(cpython.size, at + 60)])
+  print("  snippy: ", snippy[Math.max(0, at - 60) ..< Math.min(snippy.size, at + 60)])
+}
+
+val source = FilePath("python/grammar.py").readText()
+val tree = pyParse(source, "grammar.py")
+compare("tree:", FilePath("python/grammar.py.dump").readText(), pyDump(tree))            // expect: tree: as CPython's
+compare("places:", FilePath("python/grammar.py.pos").readText().replace("\r\n", "\n"), pyPositions(tree))   // expect: places: as CPython's
+
+// Lines that end in \r\n read as those that end in \n, and a byte order mark is passed over.
+print(pyDump(pyParse("\u{FEFF}x = 1\r\nif x:\r\n    y = 'a\\\r\nb'\r\n")) == pyDump(pyParse("x = 1\nif x:\n    y = 'ab'\n")))   // expect: true
+// Constants as Python's repr writes them.
+print(pyDump(pyParse("x = (1e16, 1e-5, 0.1 + 0.2, 2**64, 'it\\'s', '\\u200b\\xa0', b'\\x00\\'', 1e400j, '\\udc80')")))
+// expect: Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Tuple(elts=[Constant(value=1e+16), Constant(value=1e-05), BinOp(left=Constant(value=0.1), op=Add(), right=Constant(value=0.2)), BinOp(left=Constant(value=2), op=Pow(), right=Constant(value=64)), Constant(value="it's"), Constant(value='\u200b\xa0'), Constant(value=b"\x00'"), Constant(value=infj), Constant(value='\udc80')], ctx=Load()))])

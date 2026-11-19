@@ -1,0 +1,201 @@
+// A syntax tree written as CPython 3.14's ast.dump(tree) writes it (its defaults: fields named,
+// no places, None fields and empty lists left out), so that a tree read here can be compared
+// with Python's own.
+
+// Each node's fields as Python names them, in order: "?" after one that is left out when None,
+// "*" after a list left out when empty (ast.py's dump, show_empty=False).
+internal val __pyFieldSpecs : Map<string, List<string>> = {
+  "Module": ["body*", "type_ignores*"],
+  "FunctionDef": ["name", "args", "body*", "decorator_list*", "returns?", "type_comment?", "type_params*"],
+  "AsyncFunctionDef": ["name", "args", "body*", "decorator_list*", "returns?", "type_comment?", "type_params*"],
+  "ClassDef": ["name", "bases*", "keywords*", "body*", "decorator_list*", "type_params*"],
+  "Return": ["value?"],
+  "Delete": ["targets*"],
+  "Assign": ["targets*", "value", "type_comment?"],
+  "TypeAlias": ["name", "type_params*", "value"],
+  "AugAssign": ["target", "op", "value"],
+  "AnnAssign": ["target", "annotation", "value?", "simple"],
+  "For": ["target", "iter", "body*", "orelse*", "type_comment?"],
+  "AsyncFor": ["target", "iter", "body*", "orelse*", "type_comment?"],
+  "While": ["test", "body*", "orelse*"],
+  "If": ["test", "body*", "orelse*"],
+  "With": ["items*", "body*", "type_comment?"],
+  "AsyncWith": ["items*", "body*", "type_comment?"],
+  "Match": ["subject", "cases*"],
+  "Raise": ["exc?", "cause?"],
+  "Try": ["body*", "handlers*", "orelse*", "finalbody*"],
+  "TryStar": ["body*", "handlers*", "orelse*", "finalbody*"],
+  "Assert": ["test", "msg?"],
+  "Import": ["names*"],
+  "ImportFrom": ["module?", "names*", "level?"],
+  "Global": ["names*"],
+  "Nonlocal": ["names*"],
+  "Expr": ["value"],
+  "Pass": [],
+  "Break": [],
+  "Continue": [],
+  "BoolOp": ["op", "values*"],
+  "NamedExpr": ["target", "value"],
+  "BinOp": ["left", "op", "right"],
+  "UnaryOp": ["op", "operand"],
+  "Lambda": ["args", "body"],
+  "IfExp": ["test", "body", "orelse"],
+  "Dict": ["keys*", "values*"],
+  "Set": ["elts*"],
+  "ListComp": ["elt", "generators*"],
+  "SetComp": ["elt", "generators*"],
+  "DictComp": ["key", "value", "generators*"],
+  "GeneratorExp": ["elt", "generators*"],
+  "Await": ["value"],
+  "Yield": ["value?"],
+  "YieldFrom": ["value"],
+  "Compare": ["left", "ops*", "comparators*"],
+  "Call": ["func", "args*", "keywords*"],
+  "FormattedValue": ["value", "conversion", "format_spec?"],
+  "Interpolation": ["value", "str", "conversion", "format_spec?"],
+  "JoinedStr": ["values*"],
+  "TemplateStr": ["values*"],
+  "Constant": ["value", "kind?"],
+  "Attribute": ["value", "attr", "ctx"],
+  "Subscript": ["value", "slice", "ctx"],
+  "Starred": ["value", "ctx"],
+  "Name": ["id", "ctx"],
+  "List": ["elts*", "ctx"],
+  "Tuple": ["elts*", "ctx"],
+  "Slice": ["lower?", "upper?", "step?"],
+  "comprehension": ["target", "iter", "ifs*", "is_async"],
+  "ExceptHandler": ["type?", "name?", "body*"],
+  "arguments": ["posonlyargs*", "args*", "vararg?", "kwonlyargs*", "kw_defaults*", "kwarg?", "defaults*"],
+  "arg": ["arg", "annotation?", "type_comment?"],
+  "keyword": ["arg?", "value"],
+  "alias": ["name", "asname?"],
+  "withitem": ["context_expr", "optional_vars?"],
+  "match_case": ["pattern", "guard?", "body*"],
+  "MatchValue": ["value"],
+  "MatchSingleton": ["value"],
+  "MatchSequence": ["patterns*"],
+  "MatchMapping": ["keys*", "patterns*", "rest?"],
+  "MatchClass": ["cls", "patterns*", "kwd_attrs*", "kwd_patterns*"],
+  "MatchStar": ["name?"],
+  "MatchAs": ["pattern?", "name?"],
+  "MatchOr": ["patterns*"],
+  "TypeVar": ["name", "bound?", "default_value?"],
+  "ParamSpec": ["name", "default_value?"],
+  "TypeVarTuple": ["name", "default_value?"]
+}
+
+// The name Python gives a node's class.
+fun pyNodeName(node : PyNode) : string {
+  when (node) {
+    is PyFunctionDef -> { return node.isAsync ? "AsyncFunctionDef" : "FunctionDef" }
+    is PyFor -> { return node.isAsync ? "AsyncFor" : "For" }
+    is PyWith -> { return node.isAsync ? "AsyncWith" : "With" }
+    is PyTry -> { return node.isStar ? "TryStar" : "Try" }
+    is PyExprStmt -> { return "Expr" }
+    is PyBoolOpExpr -> { return "BoolOp" }
+    is PyUnaryOpExpr -> { return "UnaryOp" }
+    is PyListExpr -> { return "List" }
+    is PyComprehension -> { return "comprehension" }
+    is PyArguments -> { return "arguments" }
+    is PyArg -> { return "arg" }
+    is PyKeyword -> { return "keyword" }
+    is PyAlias -> { return "alias" }
+    is PyWithItem -> { return "withitem" }
+    is PyMatchCase -> { return "match_case" }
+    else -> {
+      val name = node#.name
+      return name[2 ..< name.size]
+    }
+  }
+}
+
+// The tree as ast.dump(tree) writes it.
+fun pyDump(node : PyNode) : string {
+  val sb = StringBuilder()
+  __pyDumpInto(sb, node)
+  return sb.toString()
+}
+
+internal fun __pyDumpInto(sb : StringBuilder, value : any?) {
+  if (value is PyNode) {
+    val node = value as PyNode
+    val name = pyNodeName(node)
+    val specs = __pyFieldSpecs[name]!!
+    val values = node.fields()
+    sb.append(name)
+    sb.append('(')
+    var first = true
+    for (i in 0 ..< specs.size) {
+      var spec = specs[i]
+      val v = values[i]
+      if (spec.endsWith("?")) {
+        if (v == null) { continue }
+        spec = spec[0 ..< spec.size - 1]
+      } else if (spec.endsWith("*")) {
+        if ((v as List<any?>).size == 0) { continue }
+        spec = spec[0 ..< spec.size - 1]
+      }
+      if (!first) { sb.append(", ") }
+      first = false
+      sb.append(spec)
+      sb.append('=')
+      __pyDumpInto(sb, v)
+    }
+    sb.append(')')
+  } else if (value is List<any?>) {
+    val list = value as List<any?>
+    sb.append('[')
+    for (i in 0 ..< list.size) {
+      if (i > 0) { sb.append(", ") }
+      __pyDumpInto(sb, list[i])
+    }
+    sb.append(']')
+  } else if (value is PyCtx or value is PyBoolOp or value is PyOperator or value is PyUnaryOp or value is PyCmpOp) {
+    sb.append(value.toString())
+    sb.append("()")
+  } else {
+    sb.append(pyRepr(value))
+  }
+}
+
+// The places of the tree's nodes, as tools/snippy/astpos.py writes CPython's: a line for each
+// node Python gives a place, in ast.walk's order (breadth first), its class then
+// line:col-endline:endcol.
+fun pyPositions(tree : PyNode) : string {
+  val out : open List<string> = []
+  val todo : open List<PyNode> = [tree]
+  var at = 0
+  while (at < todo.size) {
+    val node = todo[at]
+    at += 1
+    for (v in node.fields()) {
+      if (v is PyNode) {
+        todo.add(v as PyNode)
+      } else if (v is List<any?>) {
+        for (item in v as List<any?>) {
+          if (item is PyNode) { todo.add(item as PyNode) }
+        }
+      }
+    }
+    if (node is PyModule or node is PyArguments or node is PyComprehension or node is PyWithItem or node is PyMatchCase) { continue }
+    out.add("${pyNodeName(node)} ${node.line}:${node.col}-${node.endLine}:${node.endCol}")
+  }
+  return out.join("\n")
+}
+
+// A constant's value as Python's repr() writes it.
+fun pyRepr(value : any?) : string {
+  if (value == null) { return "None" }
+  if (value is bool) { return value as bool ? "True" : "False" }
+  if (value is int) { return value.toString() }
+  if (value is BigInt) { return value.toString() }
+  if (value is float) { return pyReprFloat(value as float) }
+  if (value is Complex) {
+    val z = value as Complex
+    return pyReprComplex(z.re, z.im)
+  }
+  if (value is string) { return pyReprStr(value as string) }
+  if (value is Bytes) { return pyReprBytes(value as Bytes) }
+  if (value == PyEllipsis) { return "Ellipsis" }
+  return value.toString()
+}

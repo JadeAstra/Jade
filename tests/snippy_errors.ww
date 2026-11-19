@@ -1,0 +1,54 @@
+// Snippy's syntax errors (the Snippy plan, part 5.1): each broken program of python/errors.txt
+// read, and what Snippy's reader says of it, as CPython 3.14's ast.parse says it (the expect
+// lines are CPython's, made by tools/snippy/errors.py): the error's kind, its message, and
+// where (line and column, from 1).
+import Snippy.*
+
+val cases = FilePath("python/errors.txt").readText().replace("\r\n", "\n").split("\n===\n")
+for (case in cases) {
+  try {
+    pyParse(case, "<case>")
+    print("no error")
+  } catch (e : PySyntaxError) {
+    print("${e.kind}: ${e.description} (${e.line}:${e.col + 1})")
+  }
+}
+// expect: SyntaxError: expected ':' (1:5)
+// expect: SyntaxError: '(' was never closed (1:5)
+// expect: SyntaxError: closing parenthesis ')' does not match opening parenthesis '[' (1:10)
+// expect: SyntaxError: unterminated string literal (detected at line 1) (1:7)
+// expect: SyntaxError: unterminated triple-quoted string literal (detected at line 1) (1:5)
+// expect: IndentationError: expected an indented block after function definition on line 1 (2:1)
+// expect: IndentationError: unindent does not match any outer indentation level (3:8)
+// expect: SyntaxError: cannot assign to function call here. Maybe you meant '==' instead of '='? (1:1)
+// expect: SyntaxError: cannot assign to expression here. Maybe you meant '==' instead of '='? (1:1)
+// expect: SyntaxError: cannot delete function call (1:5)
+// expect: no error
+// expect: SyntaxError: leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers (1:5)
+// expect: SyntaxError: invalid digit '2' in binary literal (1:9)
+// expect: SyntaxError: 'literal' is an illegal expression for augmented assignment (1:1)
+// expect: SyntaxError: 'tuple' is an illegal expression for augmented assignment (1:1)
+// expect: SyntaxError: parameter without a default follows parameter with a default (1:12)
+// expect: SyntaxError: '(' was never closed (1:8)
+// expect: SyntaxError: expected ':' (1:18)
+// expect: SyntaxError: assignment to yield expression not possible (1:5)
+// expect: SyntaxError: iterable argument unpacking follows keyword argument unpacking (1:6)
+// expect: no error
+// expect: SyntaxError: invalid syntax (1:14)
+// expect: SyntaxError: invalid syntax (1:16)
+// expect: SyntaxError: invalid syntax (1:8)
+// expect: SyntaxError: invalid syntax (1:12)
+// expect: SyntaxError: expected 'except' or 'finally' block (2:9)
+// expect: SyntaxError: f-string: invalid conversion character 'z': expected 's', 'r', or 'a' (1:6)
+// expect: SyntaxError: f-string: expecting '}' (1:5)
+// expect: SyntaxError: ':' expected after dictionary key (1:12)
+// expect: SyntaxError: expected 'else' after 'if' expression (1:5)
+// expect: SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)? (1:1)
+// expect: SyntaxError: invalid syntax (1:7)
+// expect: IndentationError: unexpected indent (1:1)
+// expect: SyntaxError: invalid syntax (1:2)
+// expect: SyntaxError: invalid syntax (1:5)
+// expect: no error
+// expect: no error
+// expect: IndentationError: unexpected indent (2:2)
+// expect: no error

@@ -1,0 +1,1794 @@
+// Python's source read into its syntax tree (Ast.ww), as CPython 3.14's parser reads it: its
+// grammar (Grammar/python.gram) by recursive descent, going back to try another way where
+// Python's does (a parenthesized with, a match statement, a lambda's or call's arguments).
+//
+//   val tree = pyParse("print(f'{1 + 2 = }')", "hello.py")
+//   print(pyDump(tree))
+
+// The tree of a module's source; a PySyntaxError where it is not Python.
+fun pyParse(source : string, file : string = "<unknown>") : PyModule throws PySyntaxError => PyParser(source, file).parseModule()
+
+// Python's hard keywords: never a name.
+internal val __pyKeywords : Set<string> = setOf("False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+  "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+  "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield")
+
+internal val __pyAugOps : Map<string, PyOperator> = {
+  "+=": PyOperator.Add, "-=": PyOperator.Sub, "*=": PyOperator.Mult, "@=": PyOperator.MatMult, "/=": PyOperator.Div,
+  "%=": PyOperator.Mod, "**=": PyOperator.Pow, "<<=": PyOperator.LShift, ">>=": PyOperator.RShift, "|=": PyOperator.BitOr,
+  "^=": PyOperator.BitXor, "&=": PyOperator.BitAnd, "//=": PyOperator.FloorDiv
+}
+
+class PyParser {
+  // The file it reads, as errors name it.
+  val file : string
+  internal val src : string
+  internal val toks : List<PyToken>
+  internal var p = 0
+  // Where the text a field's '=' puts in its f-string comes from: its expression's first token, and the '='.
+  internal var debugFrom : PyToken = PyToken(PyTokenKind.End, "", 0, 0, 0, 0, 0, 0)
+  internal var debugTo : PyToken = PyToken(PyTokenKind.End, "", 0, 0, 0, 0, 0, 0)
+
+  // What the lexer found wrong where its tokens stop (at the Error token), thrown when the
+  // parser comes to it.
+  internal val lexFailure : PySyntaxError?
+
+  fun init(source : string, file : string = "<unknown>") {
+    val lexer = PyLexer(source, file)
+    toks = lexer.tokenize()
+    lexFailure = lexer.failure
+    src = lexer.src
+    this.file = file
+  }
+
+  // ---- Tokens ----
+
+  internal fun tok() : PyToken => toks[p]
+  internal fun ahead(k : int) : PyToken => toks[Math.min(p + k, toks.size - 1)]
+  internal fun isOp(s : string) : bool => toks[p].kind == PyTokenKind.Op and toks[p].text == s
+  internal fun isKw(s : string) : bool => toks[p].kind == PyTokenKind.Name and toks[p].text == s
+  internal fun isKind(k : PyTokenKind) : bool => toks[p].kind == k
+
+  internal fun acceptOp(s : string) : bool {
+    if (!isOp(s)) { return false }
+    p += 1
+    return true
+  }
+
+  internal fun acceptKw(s : string) : bool {
+    if (!isKw(s)) { return false }
+    p += 1
+    return true
+  }
+
+  internal fun error(description : string, at : PyToken = toks[p]) : PySyntaxError => PySyntaxError(description, file, at.line, at.col)
+
+  internal fun invalid() : PySyntaxError {
+    val t = toks[p]
+    if (t.kind == PyTokenKind.Error) { return lexFailure!! }
+    // (CPython places it where the indentation ends.)
+    if (t.kind == PyTokenKind.Indent) { return PySyntaxError("unexpected indent", file, t.line, t.endCol - 1, "IndentationError") }
+    if (t.kind == PyTokenKind.End) { return error("unexpected EOF while parsing") }
+    return error("invalid syntax")
+  }
+
+  internal fun expectOp(s : string) throws PySyntaxError {
+    if (!acceptOp(s)) {
+      if (s == ":" and toks[p].kind == PyTokenKind.Newline) { throw error("expected ':'") }
+      throw invalid()
+    }
+  }
+
+
+  internal fun expectKw(s : string) throws PySyntaxError {
+    if (!acceptKw(s)) { throw invalid() }
+  }
+
+  internal fun expectNewline() throws PySyntaxError {
+    if (isKind(PyTokenKind.Newline)) {
+      p += 1
+      return
+    }
+    throw invalid()
+  }
+
+  // A name that is no keyword.
+  internal fun identifier() : string throws PySyntaxError {
+    val t = toks[p]
+    if (t.kind != PyTokenKind.Name or t.text in __pyKeywords) { throw invalid() }
+    p += 1
+    return t.text
+  }
+
+  internal fun isIdentifier(t : PyToken) : bool => t.kind == PyTokenKind.Name and !(t.text in __pyKeywords)
+
+  // The node given the place from `start` to the token last read.
+  internal fun <T : PyNode> at(node : T, start : PyToken) : T {
+    node.line = start.line
+    node.col = start.col
+    // It ends where its last token of text does: a block's NEWLINE and DEDENT are not its.
+    var e = Math.max(p - 1, 0)
+    while (e > 0 and (toks[e].kind == PyTokenKind.Newline or toks[e].kind == PyTokenKind.Dedent or toks[e].kind == PyTokenKind.Indent)) { e -= 1 }
+    val last = toks[e]
+    node.endLine = last.endLine
+    node.endCol = last.endCol
+    return node
+  }
+
+  // Whether the token can begin an expression (after return, yield, raise and the like).
+  internal fun startsExpression() : bool {
+    val t = toks[p]
+    if (t.kind == PyTokenKind.Newline or t.kind == PyTokenKind.End or t.kind == PyTokenKind.FEnd) { return false }
+    if (t.kind == PyTokenKind.Op) { return t.text in setOf("(", "[", "{", "-", "+", "~", "*", "**", "...") }
+    if (t.kind == PyTokenKind.Name) { return !(t.text in __pyKeywords) or t.text in setOf("True", "False", "None", "not", "lambda", "await", "yield") }
+    return true
+  }
+
+  // ---- Statements ----
+
+  fun parseModule() : PyModule throws PySyntaxError {
+    val start = toks[0]
+    val body : open List<PyStmt> = []
+    while (!isKind(PyTokenKind.End)) {
+      if (isKind(PyTokenKind.Newline)) {
+        p += 1
+        continue
+      }
+      body.addAll(statement())
+    }
+    return at(PyModule(body), start)
+  }
+
+  internal fun statement() : List<PyStmt> throws PySyntaxError {
+    val t = toks[p]
+    if (t.kind == PyTokenKind.Name) {
+      when (t.text) {
+        "def" -> { return [funcDef([], false, t)] }
+        "class" -> { return [classDef([], t)] }
+        "if" -> { return [ifStmt()] }
+        "while" -> { return [whileStmt()] }
+        "for" -> { return [forStmt(false, t)] }
+        "try" -> { return [tryStmt()] }
+        "with" -> { return [withStmt(false, t)] }
+        "async" -> {
+          val next = ahead(1).text
+          if (next == "def" or next == "for" or next == "with") {
+            p += 1
+            if (next == "def") { return [funcDef([], true, t)] }
+            if (next == "for") { return [forStmt(true, t)] }
+            return [withStmt(true, t)]
+          }
+        }
+        "match" -> {
+          val m = tryMatch()
+          if (m != null) { return [m!!] }
+        }
+        else -> { }
+      }
+    }
+    if (t.kind == PyTokenKind.Indent) { throw invalid() }
+    if (isOp("@")) { return [decorated()] }
+    return simpleStmts()
+  }
+
+  // The statements of a block: an indented suite, or simple statements on the line.
+  internal fun block(what : string, start : PyToken) : List<PyStmt> throws PySyntaxError {
+    if (isKind(PyTokenKind.Newline)) {
+      p += 1
+      if (!isKind(PyTokenKind.Indent)) {
+        if (isKind(PyTokenKind.Error)) { throw lexFailure!! }
+        throw PySyntaxError("expected an indented block after $what on line ${start.line}", file, toks[p].line, toks[p].col, "IndentationError")
+      }
+      p += 1
+      val body : open List<PyStmt> = []
+      while (!isKind(PyTokenKind.Dedent) and !isKind(PyTokenKind.End)) { body.addAll(statement()) }
+      if (isKind(PyTokenKind.Dedent)) { p += 1 }
+      return body
+    }
+    return simpleStmts()
+  }
+
+  internal fun decorated() : PyStmt throws PySyntaxError {
+    val decorators : open List<PyExpr> = []
+    while (acceptOp("@")) {
+      decorators.add(namedExpression())
+      expectNewline()
+    }
+    val t = toks[p]
+    if (isKw("def")) { return funcDef(decorators, false, t) }
+    if (isKw("async") and ahead(1).text == "def") {
+      p += 1
+      return funcDef(decorators, true, t)
+    }
+    if (isKw("class")) { return classDef(decorators, t) }
+    throw invalid()
+  }
+
+  internal fun funcDef(decorators : List<PyExpr>, isAsync : bool, start : PyToken) : PyStmt throws PySyntaxError {
+    expectKw("def")
+    val name = identifier()
+    val tparams = isOp("[") ? typeParams() : []
+    expectOp("(")
+    val args = parameters(")", true)
+    expectOp(")")
+    val returns = acceptOp("->") ? expression() : null
+    expectOp(":")
+    val body = block("function definition", start)
+    return at(PyFunctionDef(name, args, body, decorators, returns, tparams, isAsync), start)
+  }
+
+  internal fun classDef(decorators : List<PyExpr>, start : PyToken) : PyStmt throws PySyntaxError {
+    expectKw("class")
+    val name = identifier()
+    val tparams = isOp("[") ? typeParams() : []
+    var bases : List<PyExpr> = []
+    var keywords : List<PyKeyword> = []
+    if (acceptOp("(")) {
+      val given = callArgs()
+      bases = given.first
+      keywords = given.second
+      expectOp(")")
+    }
+    expectOp(":")
+    val body = block("class definition", start)
+    return at(PyClassDef(name, bases, keywords, body, decorators, tparams), start)
+  }
+
+  // A def's parameters (with annotations) or a lambda's, up to `close`.
+  internal fun parameters(close : string, annotations : bool) : PyArguments throws PySyntaxError {
+    val start = toks[p]
+    val posonly : open List<PyArg> = []
+    val args : open List<PyArg> = []
+    val defaults : open List<PyExpr> = []
+    var vararg : PyArg? = null
+    val kwonly : open List<PyArg> = []
+    val kwDefaults : open List<PyExpr?> = []
+    var kwarg : PyArg? = null
+    var star = false
+    while (!isOp(close)) {
+      if (acceptOp("/")) {
+        posonly.addAll(args)
+        args.clear()
+      } else if (acceptOp("**")) {
+        kwarg = param(annotations, false)
+      } else if (acceptOp("*")) {
+        star = true
+        if (!isOp(",") and !isOp(close)) { vararg = param(annotations, true) }
+      } else {
+        val at = toks[p]
+        val a = param(annotations, false)
+        val d = acceptOp("=") ? expression() : null
+        if (star) {
+          kwonly.add(a)
+          kwDefaults.add(d)
+        } else {
+          args.add(a)
+          if (d != null) {
+            defaults.add(d!!)
+          } else if (defaults.size > 0) {
+            throw error("parameter without a default follows parameter with a default", at)
+          }
+        }
+      }
+      if (!acceptOp(",")) { break }
+    }
+    return at(PyArguments(posonly, args, vararg, kwonly, kwDefaults, kwarg, defaults), start)
+  }
+
+  internal fun param(annotations : bool, starAnnotation : bool) : PyArg throws PySyntaxError {
+    val t = toks[p]
+    val name = identifier()
+    var annotation : PyExpr? = null
+    if (annotations and acceptOp(":")) {
+      if (starAnnotation and isOp("*")) {
+        val s = toks[p]
+        p += 1
+        annotation = at(PyStarred(bitwiseOr(), PyCtx.Load), s)
+      } else {
+        annotation = expression()
+      }
+    }
+    return at(PyArg(name, annotation), t)
+  }
+
+  internal fun typeParams() : List<PyTypeParam> throws PySyntaxError {
+    expectOp("[")
+    val params : open List<PyTypeParam> = []
+    while (!isOp("]")) {
+      val t = toks[p]
+      if (acceptOp("**")) {
+        val name = identifier()
+        val default = acceptOp("=") ? expression() : null
+        params.add(at(PyParamSpec(name, default), t))
+      } else if (acceptOp("*")) {
+        val name = identifier()
+        val default = acceptOp("=") ? starExpression() : null
+        params.add(at(PyTypeVarTuple(name, default), t))
+      } else {
+        val name = identifier()
+        val bound = acceptOp(":") ? expression() : null
+        val default = acceptOp("=") ? expression() : null
+        params.add(at(PyTypeVar(name, bound, default), t))
+      }
+      if (!acceptOp(",")) { break }
+    }
+    expectOp("]")
+    return params
+  }
+
+  internal fun ifStmt() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1   // if or elif
+    val test = namedExpression()
+    expectOp(":")
+    val body = block("'${t.text}' statement", t)
+    var orelse : List<PyStmt> = []
+    if (isKw("elif")) {
+      orelse = [ifStmt()]
+    } else if (acceptKw("else")) {
+      expectOp(":")
+      orelse = block("'else' statement", toks[p - 2])
+    }
+    return at(PyIf(test, body, orelse), t)
+  }
+
+  internal fun elseBlock() : List<PyStmt> throws PySyntaxError {
+    if (!acceptKw("else")) { return [] }
+    expectOp(":")
+    return block("'else' statement", toks[p - 2])
+  }
+
+  internal fun whileStmt() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    val test = namedExpression()
+    expectOp(":")
+    val body = block("'while' statement", t)
+    return at(PyWhile(test, body, elseBlock()), t)
+  }
+
+  internal fun forStmt(isAsync : bool, start : PyToken) : PyStmt throws PySyntaxError {
+    expectKw("for")
+    val target = starTargets()
+    expectKw("in")
+    val iter = starExpressions()
+    expectOp(":")
+    val body = block("'for' statement", start)
+    return at(PyFor(target, iter, body, elseBlock(), isAsync), start)
+  }
+
+  internal fun tryStmt() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    expectOp(":")
+    val body = block("'try' statement", t)
+    val handlers : open List<PyExceptHandler> = []
+    var star = false
+    while (isKw("except")) {
+      val h = toks[p]
+      p += 1
+      if (acceptOp("*")) { star = true }
+      if (acceptOp(":")) {
+        handlers.add(at(PyExceptHandler(null, null, block(star ? "'except*' statement" : "'except' statement", h)), h))
+        continue
+      }
+      var type = expression()
+      if (isOp(",")) {
+        // except A, B: (3.14, PEP 758) is except (A, B):
+        val first = type
+        val elts : open List<PyExpr> = [type]
+        while (acceptOp(",")) { elts.add(expression()) }
+        val tuple = PyTuple(elts, PyCtx.Load)
+        tuple.line = first.line
+        tuple.col = first.col
+        tuple.endLine = toks[p - 1].endLine
+        tuple.endCol = toks[p - 1].endCol
+        type = tuple
+      }
+      val name = acceptKw("as") ? identifier() : null
+      expectOp(":")
+      handlers.add(at(PyExceptHandler(type, name, block(star ? "'except*' statement" : "'except' statement", h)), h))
+    }
+    val orelse = elseBlock()
+    var finalbody : List<PyStmt> = []
+    if (acceptKw("finally")) {
+      expectOp(":")
+      finalbody = block("'finally' statement", toks[p - 2])
+    }
+    if (handlers.size == 0 and finalbody.size == 0) { throw error("expected 'except' or 'finally' block") }
+    return at(PyTry(body, handlers, orelse, finalbody, star), t)
+  }
+
+  internal fun withStmt(isAsync : bool, start : PyToken) : PyStmt throws PySyntaxError {
+    expectKw("with")
+    var items : List<PyWithItem>? = null
+    if (isOp("(")) {
+      // with (a as b, c): first, as its own items in parentheses; else an expression that
+      // begins with a parenthesis.
+      val back = p
+      try {
+        p += 1
+        val inParens = withItems(")")
+        expectOp(")")
+        if (isOp(":")) { items = inParens } else { p = back }
+      } catch (e : PySyntaxError) {
+        p = back
+      }
+    }
+    if (items == null) { items = withItems(null) }
+    expectOp(":")
+    val body = block("'with' statement", start)
+    return at(PyWith(items!!, body, isAsync), start)
+  }
+
+  internal fun withItems(close : string?) : List<PyWithItem> throws PySyntaxError {
+    val items : open List<PyWithItem> = []
+    while (true) {
+      val t = toks[p]
+      val e = expression()
+      var vars : PyExpr? = null
+      if (acceptKw("as")) {
+        vars = starTarget()
+        setContext(vars!!, PyCtx.Store)
+      }
+      items.add(at(PyWithItem(e, vars), t))
+      if (!acceptOp(",")) { break }
+      if (close != null and isOp(close!!)) { break }
+    }
+    return items
+  }
+
+  // A match statement, where the line is one (match is a soft keyword: `match = 1` is not).
+  internal fun tryMatch() : PyStmt? throws PySyntaxError {
+    val t = toks[p]
+    val back = p
+    var subject : PyExpr? = null
+    try {
+      p += 1
+      subject = subjectExpr()
+      if (!isOp(":") or ahead(1).kind != PyTokenKind.Newline or ahead(2).kind != PyTokenKind.Indent or
+          !(ahead(3).kind == PyTokenKind.Name and ahead(3).text == "case")) {
+        p = back
+        return null
+      }
+    } catch (e : PySyntaxError) {
+      p = back
+      return null
+    }
+    p += 3
+    val cases : open List<PyMatchCase> = []
+    while (isKw("case")) {
+      val c = toks[p]
+      p += 1
+      val pattern = patterns()
+      val guard = acceptKw("if") ? namedExpression() : null
+      expectOp(":")
+      cases.add(at(PyMatchCase(pattern, guard, block("'case' statement", c)), c))
+    }
+    if (isKind(PyTokenKind.Dedent)) { p += 1 }
+    return at(PyMatch(subject!!, cases), t)
+  }
+
+  internal fun subjectExpr() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = starNamedExpression()
+    if (!isOp(",")) { return first }
+    val elts : open List<PyExpr> = [first]
+    while (acceptOp(",")) {
+      if (isOp(":")) { break }
+      elts.add(starNamedExpression())
+    }
+    return at(PyTuple(elts, PyCtx.Load), t)
+  }
+
+  internal fun simpleStmts() : List<PyStmt> throws PySyntaxError {
+    val stmts : open List<PyStmt> = [simpleStmt()]
+    while (acceptOp(";")) {
+      if (isKind(PyTokenKind.Newline)) { break }
+      stmts.add(simpleStmt())
+    }
+    if (!isKind(PyTokenKind.Newline)) {
+      // Python 2's print and exec statements: print 'hello'.
+      val last = stmts.last()
+      if (last is PyExprStmt and last.value is PyName and startsExpression() and !isKind(PyTokenKind.Error)) {
+        val name = (last.value as PyName).id
+        if (name == "print" or name == "exec") {
+          throw PySyntaxError("Missing parentheses in call to '$name'. Did you mean $name(...)?", file, last.line, last.col)
+        }
+      }
+    }
+    expectNewline()
+    return stmts
+  }
+
+  internal fun simpleStmt() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    if (t.kind == PyTokenKind.Name) {
+      when (t.text) {
+        "pass" -> {
+          p += 1
+          return at(PyPass(), t)
+        }
+        "break" -> {
+          p += 1
+          return at(PyBreak(), t)
+        }
+        "continue" -> {
+          p += 1
+          return at(PyContinue(), t)
+        }
+        "return" -> {
+          p += 1
+          val value = startsExpression() ? starExpressions() : null
+          return at(PyReturn(value), t)
+        }
+        "raise" -> {
+          p += 1
+          if (!startsExpression()) { return at(PyRaise(null, null), t) }
+          val exc = expression()
+          val cause = acceptKw("from") ? expression() : null
+          return at(PyRaise(exc, cause), t)
+        }
+        "global", "nonlocal" -> {
+          p += 1
+          val names : open List<string> = [identifier()]
+          while (acceptOp(",")) { names.add(identifier()) }
+          return t.text == "global" ? at(PyGlobal(names), t) : at(PyNonlocal(names), t)
+        }
+        "del" -> {
+          p += 1
+          val targets : open List<PyExpr> = []
+          while (true) {
+            val target = primary()
+            setContext(target, PyCtx.Del)
+            targets.add(target)
+            if (!acceptOp(",")) { break }
+            if (isKind(PyTokenKind.Newline) or isOp(";")) { break }
+          }
+          return at(PyDelete(targets), t)
+        }
+        "assert" -> {
+          p += 1
+          val test = expression()
+          val msg = acceptOp(",") ? expression() : null
+          return at(PyAssert(test, msg), t)
+        }
+        "import" -> { return importName() }
+        "from" -> { return importFrom() }
+        "type" -> {
+          if (isIdentifier(ahead(1)) and (ahead(2).kind == PyTokenKind.Op and (ahead(2).text == "=" or ahead(2).text == "["))) {
+            return typeAlias()
+          }
+        }
+        else -> { }
+      }
+    }
+    return assignmentOrExpression()
+  }
+
+  internal fun dottedName() : string throws PySyntaxError {
+    val sb = StringBuilder()
+    sb.append(identifier())
+    while (isOp(".")) {
+      p += 1
+      sb.append('.')
+      sb.append(identifier())
+    }
+    return sb.toString()
+  }
+
+  internal fun importName() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    val names : open List<PyAlias> = []
+    while (true) {
+      val a = toks[p]
+      val name = dottedName()
+      val asname = acceptKw("as") ? identifier() : null
+      names.add(at(PyAlias(name, asname), a))
+      if (!acceptOp(",")) { break }
+    }
+    return at(PyImport(names), t)
+  }
+
+  internal fun importFrom() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    var level = 0
+    while (isOp(".") or isOp("...")) {
+      level += toks[p].text.size
+      p += 1
+    }
+    val module = level > 0 and isKw("import") ? null : dottedName()
+    expectKw("import")
+    val names : open List<PyAlias> = []
+    if (isOp("*")) {
+      val a = toks[p]
+      p += 1
+      names.add(at(PyAlias("*", null), a))
+    } else {
+      val parens = acceptOp("(")
+      while (true) {
+        val a = toks[p]
+        val name = identifier()
+        val asname = acceptKw("as") ? identifier() : null
+        names.add(at(PyAlias(name, asname), a))
+        if (!acceptOp(",")) { break }
+        if (parens and isOp(")")) { break }
+      }
+      if (parens) { expectOp(")") }
+    }
+    return at(PyImportFrom(module, names, level), t)
+  }
+
+  internal fun typeAlias() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    val n = toks[p]
+    val name = at(PyName(identifier(), PyCtx.Store), n)
+    val tparams = isOp("[") ? typeParams() : []
+    expectOp("=")
+    val value = expression()
+    return at(PyTypeAlias(name, tparams, value), t)
+  }
+
+  internal fun assignmentOrExpression() : PyStmt throws PySyntaxError {
+    val t = toks[p]
+    val first = isKw("yield") ? yieldExpr() : starExpressions()
+    if (isOp(":")) {
+      p += 1
+      if (!(first is PyName or first is PyAttribute or first is PySubscript)) {
+        throw PySyntaxError("only single target (not ${first is PyTuple ? "tuple" : "list"}) can be annotated", file, first.line, first.col)
+      }
+      setContext(first, PyCtx.Store)
+      val annotation = expression()
+      val value = acceptOp("=") ? (isKw("yield") ? yieldExpr() : starExpressions()) : null
+      val simple = first is PyName and !first.inParens ? 1 : 0
+      return at(PyAnnAssign(first, annotation, value, simple), t)
+    }
+    if (isOp("=")) {
+      val targets : open List<PyExpr> = [first]
+      var value : PyExpr = first
+      while (acceptOp("=")) {
+        val e = isKw("yield") ? yieldExpr() : starExpressions()
+        if (isOp("=")) { targets.add(e) } else { value = e }
+      }
+      for (target in targets) {
+        // What cannot be assigned to, written where a comparison may have been meant.
+        if (target is PyYield or target is PyYieldFrom) {
+          throw PySyntaxError("assignment to yield expression not possible", file, target.line, target.col)
+        }
+        if (!(target is PyName or target is PyAttribute or target is PySubscript or target is PyStarred or target is PyTuple or target is PyListExpr)) {
+          throw PySyntaxError("cannot assign to ${__pyDescribe(target)} here. Maybe you meant '==' instead of '='?", file, target.line, target.col)
+        }
+        setContext(target, PyCtx.Store)
+      }
+      return at(PyAssign(targets, value), t)
+    }
+    if (toks[p].kind == PyTokenKind.Op and toks[p].text in __pyAugOps.keys) {
+      val op = __pyAugOps[toks[p].text]!!
+      p += 1
+      if (!(first is PyName or first is PyAttribute or first is PySubscript)) {
+        throw PySyntaxError("'${__pyDescribe(first)}' is an illegal expression for augmented assignment", file, first.line, first.col)
+      }
+      setContext(first, PyCtx.Store)
+      val value = isKw("yield") ? yieldExpr() : starExpressions()
+      return at(PyAugAssign(first, op, value), t)
+    }
+    return at(PyExprStmt(first), t)
+  }
+
+  // An expression made a target to assign to or delete; a PySyntaxError where it cannot be one.
+  internal fun setContext(e : PyExpr, ctx : PyCtx) throws PySyntaxError {
+    when (e) {
+      is PyName -> { e.ctx = ctx }
+      is PyAttribute -> { e.ctx = ctx }
+      is PySubscript -> { e.ctx = ctx }
+      is PyStarred -> {
+        e.ctx = ctx
+        setContext(e.value, ctx)
+      }
+      is PyTuple -> {
+        e.ctx = ctx
+        for (x in e.elts) { setContext(x, ctx) }
+      }
+      is PyListExpr -> {
+        e.ctx = ctx
+        for (x in e.elts) { setContext(x, ctx) }
+      }
+      else -> {
+        val what = __pyDescribe(e)
+        throw PySyntaxError(ctx == PyCtx.Del ? "cannot delete $what" : "cannot assign to $what", file, e.line, e.col)
+      }
+    }
+  }
+
+  // ---- Targets ----
+
+  internal fun starTargets() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = starTarget()
+    if (!isOp(",")) {
+      setContext(first, PyCtx.Store)
+      return first
+    }
+    val elts : open List<PyExpr> = [first]
+    while (acceptOp(",")) {
+      if (!(isIdentifier(toks[p]) or isOp("(") or isOp("[") or isOp("*"))) { break }
+      elts.add(starTarget())
+    }
+    val tuple = at(PyTuple(elts, PyCtx.Store), t)
+    setContext(tuple, PyCtx.Store)
+    return tuple
+  }
+
+  internal fun starTarget() : PyExpr throws PySyntaxError {
+    if (isOp("*")) {
+      val t = toks[p]
+      p += 1
+      return at(PyStarred(starTarget(), PyCtx.Store), t)
+    }
+    return primary()
+  }
+
+  // ---- Expressions ----
+
+  internal fun yieldExpr() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    if (acceptKw("from")) { return at(PyYieldFrom(expression()), t) }
+    val value = startsExpression() ? starExpressions() : null
+    return at(PyYield(value), t)
+  }
+
+  internal fun starExpressions() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = starExpression()
+    if (!isOp(",")) { return first }
+    val elts : open List<PyExpr> = [first]
+    while (acceptOp(",")) {
+      if (!startsExpression()) { break }
+      elts.add(starExpression())
+    }
+    return at(PyTuple(elts, PyCtx.Load), t)
+  }
+
+  internal fun starExpression() : PyExpr throws PySyntaxError {
+    if (isOp("*")) {
+      val t = toks[p]
+      p += 1
+      return at(PyStarred(bitwiseOr(), PyCtx.Load), t)
+    }
+    return expression()
+  }
+
+  internal fun starNamedExpression() : PyExpr throws PySyntaxError {
+    if (isOp("*")) {
+      val t = toks[p]
+      p += 1
+      return at(PyStarred(bitwiseOr(), PyCtx.Load), t)
+    }
+    return namedExpression()
+  }
+
+  internal fun namedExpression() : PyExpr throws PySyntaxError {
+    if (isIdentifier(toks[p]) and ahead(1).kind == PyTokenKind.Op and ahead(1).text == ":=") {
+      val t = toks[p]
+      p += 2
+      val target = PyName(t.text, PyCtx.Store)
+      target.line = t.line
+      target.col = t.col
+      target.endLine = t.endLine
+      target.endCol = t.endCol
+      return at(PyNamedExpr(target, expression()), t)
+    }
+    return expression()
+  }
+
+  internal fun expression() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    if (isKw("lambda")) { return lambdef() }
+    val e = disjunction()
+    if (isKw("if")) {
+      p += 1
+      val test = disjunction()
+      if (!acceptKw("else")) {
+        if (isKind(PyTokenKind.Newline) or isKind(PyTokenKind.End) or isOp(")") or isOp("]") or isOp("}") or isOp(",")) {
+          throw error("expected 'else' after 'if' expression", t)
+        }
+        throw invalid()
+      }
+      val orelse = expression()
+      return at(PyIfExp(test, e, orelse), t)
+    }
+    return e
+  }
+
+  internal fun lambdef() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    val args = parameters(":", false)
+    expectOp(":")
+    return at(PyLambda(args, expression()), t)
+  }
+
+  internal fun disjunction() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = conjunction()
+    if (!isKw("or")) { return first }
+    val values : open List<PyExpr> = [first]
+    while (acceptKw("or")) { values.add(conjunction()) }
+    return at(PyBoolOpExpr(PyBoolOp.Or, values), t)
+  }
+
+  internal fun conjunction() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = inversion()
+    if (!isKw("and")) { return first }
+    val values : open List<PyExpr> = [first]
+    while (acceptKw("and")) { values.add(inversion()) }
+    return at(PyBoolOpExpr(PyBoolOp.And, values), t)
+  }
+
+  internal fun inversion() : PyExpr throws PySyntaxError {
+    if (isKw("not")) {
+      val t = toks[p]
+      p += 1
+      return at(PyUnaryOpExpr(PyUnaryOp.Not, inversion()), t)
+    }
+    return comparison()
+  }
+
+  internal fun comparison() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val left = bitwiseOr()
+    val ops : open List<PyCmpOp> = []
+    val comparators : open List<PyExpr> = []
+    while (true) {
+      val o = toks[p]
+      var op : PyCmpOp? = null
+      if (o.kind == PyTokenKind.Op) {
+        when (o.text) {
+          "==" -> { op = PyCmpOp.Eq }
+          "!=" -> { op = PyCmpOp.NotEq }
+          "<" -> { op = PyCmpOp.Lt }
+          "<=" -> { op = PyCmpOp.LtE }
+          ">" -> { op = PyCmpOp.Gt }
+          ">=" -> { op = PyCmpOp.GtE }
+          else -> { }
+        }
+        if (op != null) { p += 1 }
+      } else if (o.kind == PyTokenKind.Name) {
+        if (o.text == "in") {
+          op = PyCmpOp.In
+          p += 1
+        } else if (o.text == "not" and ahead(1).kind == PyTokenKind.Name and ahead(1).text == "in") {
+          op = PyCmpOp.NotIn
+          p += 2
+        } else if (o.text == "is") {
+          if (ahead(1).kind == PyTokenKind.Name and ahead(1).text == "not") {
+            op = PyCmpOp.IsNot
+            p += 2
+          } else {
+            op = PyCmpOp.Is
+            p += 1
+          }
+        }
+      }
+      if (op == null) { break }
+      ops.add(op!!)
+      comparators.add(bitwiseOr())
+    }
+    if (ops.size == 0) { return left }
+    return at(PyCompare(left, ops, comparators), t)
+  }
+
+  internal fun bitwiseOr() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = bitwiseXor()
+    while (acceptOp("|")) { left = at(PyBinOp(left, PyOperator.BitOr, bitwiseXor()), t) }
+    return left
+  }
+
+  internal fun bitwiseXor() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = bitwiseAnd()
+    while (acceptOp("^")) { left = at(PyBinOp(left, PyOperator.BitXor, bitwiseAnd()), t) }
+    return left
+  }
+
+  internal fun bitwiseAnd() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = shiftExpr()
+    while (acceptOp("&")) { left = at(PyBinOp(left, PyOperator.BitAnd, shiftExpr()), t) }
+    return left
+  }
+
+  internal fun shiftExpr() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = sum()
+    while (true) {
+      if (acceptOp("<<")) {
+        left = at(PyBinOp(left, PyOperator.LShift, sum()), t)
+      } else if (acceptOp(">>")) {
+        left = at(PyBinOp(left, PyOperator.RShift, sum()), t)
+      } else {
+        break
+      }
+    }
+    return left
+  }
+
+  internal fun sum() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = term()
+    while (true) {
+      if (acceptOp("+")) {
+        left = at(PyBinOp(left, PyOperator.Add, term()), t)
+      } else if (acceptOp("-")) {
+        left = at(PyBinOp(left, PyOperator.Sub, term()), t)
+      } else {
+        break
+      }
+    }
+    return left
+  }
+
+  internal fun term() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var left = factor()
+    while (true) {
+      var op : PyOperator? = null
+      if (isOp("*")) {
+        op = PyOperator.Mult
+      } else if (isOp("/")) {
+        op = PyOperator.Div
+      } else if (isOp("//")) {
+        op = PyOperator.FloorDiv
+      } else if (isOp("%")) {
+        op = PyOperator.Mod
+      } else if (isOp("@")) {
+        op = PyOperator.MatMult
+      }
+      if (op == null) { break }
+      p += 1
+      left = at(PyBinOp(left, op!!, factor()), t)
+    }
+    return left
+  }
+
+  internal fun factor() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var op : PyUnaryOp? = null
+    if (isOp("+")) {
+      op = PyUnaryOp.UAdd
+    } else if (isOp("-")) {
+      op = PyUnaryOp.USub
+    } else if (isOp("~")) {
+      op = PyUnaryOp.Invert
+    }
+    if (op != null) {
+      p += 1
+      return at(PyUnaryOpExpr(op!!, factor()), t)
+    }
+    return power()
+  }
+
+  internal fun power() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val base = awaitPrimary()
+    if (acceptOp("**")) { return at(PyBinOp(base, PyOperator.Pow, factor()), t) }
+    return base
+  }
+
+  internal fun awaitPrimary() : PyExpr throws PySyntaxError {
+    if (isKw("await")) {
+      val t = toks[p]
+      p += 1
+      return at(PyAwait(primary()), t)
+    }
+    return primary()
+  }
+
+  internal fun primary() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var e = atom()
+    while (true) {
+      if (acceptOp(".")) {
+        e = at(PyAttribute(e, identifier(), PyCtx.Load), t)
+      } else if (isOp("(")) {
+        val open = toks[p]
+        p += 1
+        val given = callArgs()
+        expectOp(")")
+        // A generator expression that is the call's one argument takes the call's parentheses.
+        if (given.first.size == 1 and given.second.size == 0 and given.first[0] is PyGeneratorExp and !given.first[0].inParens) {
+          at(given.first[0], open)
+        }
+        e = at(PyCall(e, given.first, given.second), t)
+      } else if (acceptOp("[")) {
+        val s = slices()
+        expectOp("]")
+        e = at(PySubscript(e, s, PyCtx.Load), t)
+      } else {
+        break
+      }
+    }
+    return e
+  }
+
+  // A call's arguments, up to its ')': the positional ones (starred among them) and the keywords
+  // (** among them).
+  internal fun callArgs() : Pair<List<PyExpr>, List<PyKeyword>> throws PySyntaxError {
+    val args : open List<PyExpr> = []
+    val keywords : open List<PyKeyword> = []
+    var unpacked : PyKeyword? = null   // the first **mapping given, after which no positional may come
+    while (!isOp(")")) {
+      val t = toks[p]
+      if (acceptOp("*")) {
+        if (unpacked != null) {
+          throw PySyntaxError("iterable argument unpacking follows keyword argument unpacking", file, unpacked!!.endLine, unpacked!!.endCol)
+        }
+        args.add(at(PyStarred(expression(), PyCtx.Load), t))
+      } else if (acceptOp("**")) {
+        val k = at(PyKeyword(null, expression()), t)
+        if (unpacked == null) { unpacked = k }
+        keywords.add(k)
+      } else if (isIdentifier(t) and ahead(1).kind == PyTokenKind.Op and ahead(1).text == "=") {
+        p += 2
+        keywords.add(at(PyKeyword(t.text, expression()), t))
+      } else {
+        var e = namedExpression()
+        if (startsComprehension()) {
+          val generators = comprehensionClauses()
+          e = at(PyGeneratorExp(e, generators), t)
+        }
+        if (unpacked != null) { throw PySyntaxError("positional argument follows keyword argument unpacking", file, e.line, e.col) }
+        if (keywords.size > 0) { throw PySyntaxError("positional argument follows keyword argument", file, e.line, e.col) }
+        args.add(e)
+      }
+      if (!acceptOp(",")) { break }
+    }
+    return Pair(args, keywords)
+  }
+
+  internal fun slices() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val first = sliceItem()
+    if (!isOp(",")) {
+      // x[*a] is x[(*a,)], as Python reads it.
+      if (first is PyStarred) { return at(PyTuple([first], PyCtx.Load), t) }
+      return first
+    }
+    val elts : open List<PyExpr> = [first]
+    while (acceptOp(",")) {
+      if (isOp("]")) { break }
+      elts.add(sliceItem())
+    }
+    return at(PyTuple(elts, PyCtx.Load), t)
+  }
+
+  internal fun sliceItem() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    if (acceptOp("*")) { return at(PyStarred(bitwiseOr(), PyCtx.Load), t) }
+    val lower = isOp(":") ? null : namedExpression()
+    if (!acceptOp(":")) { return lower!! }
+    val upper = isOp(":") or isOp("]") or isOp(",") ? null : expression()
+    var step : PyExpr? = null
+    if (acceptOp(":")) { step = isOp("]") or isOp(",") ? null : expression() }
+    return at(PySlice(lower, upper, step), t)
+  }
+
+  internal fun startsComprehension() : bool => isKw("for") or isKw("async") and ahead(1).kind == PyTokenKind.Name and ahead(1).text == "for"
+
+  internal fun comprehensionClauses() : List<PyComprehension> throws PySyntaxError {
+    val generators : open List<PyComprehension> = []
+    while (startsComprehension()) {
+      val t = toks[p]
+      val isAsync = acceptKw("async") ? 1 : 0
+      expectKw("for")
+      val target = starTargets()
+      expectKw("in")
+      val iter = disjunction()
+      val ifs : open List<PyExpr> = []
+      while (acceptKw("if")) { ifs.add(disjunction()) }
+      generators.add(at(PyComprehension(target, iter, ifs, isAsync), t))
+    }
+    return generators
+  }
+
+  internal fun atom() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    when (t.kind) {
+      PyTokenKind.Name -> {
+        if (t.text == "True" or t.text == "False" or t.text == "None") {
+          p += 1
+          return at(PyConstant(t.text == "None" ? null : t.text == "True"), t)
+        }
+        if (t.text in __pyKeywords) { throw invalid() }
+        p += 1
+        return at(PyName(t.text, PyCtx.Load), t)
+      }
+      PyTokenKind.Number -> {
+        p += 1
+        return at(PyConstant(numberValue(t)), t)
+      }
+      PyTokenKind.String, PyTokenKind.FStart -> { return strings() }
+      PyTokenKind.Op -> {
+        when (t.text) {
+          "(" -> { return parenAtom() }
+          "[" -> { return listAtom() }
+          "{" -> { return braceAtom() }
+          "..." -> {
+            p += 1
+            return at(PyConstant(PyEllipsis), t)
+          }
+          else -> { }
+        }
+      }
+      else -> { }
+    }
+    throw invalid()
+  }
+
+  internal fun parenAtom() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    if (acceptOp(")")) { return at(PyTuple([], PyCtx.Load), t) }
+    if (isKw("yield")) {
+      val y = yieldExpr()
+      expectOp(")")
+      y.inParens = true
+      return y
+    }
+    val first = starNamedExpression()
+    if (startsComprehension()) {
+      val generators = comprehensionClauses()
+      expectOp(")")
+      val g = at(PyGeneratorExp(first, generators), t)
+      g.inParens = true   // its own parentheses, which a call's do not replace
+      return g
+    }
+    if (isOp(",")) {
+      val elts : open List<PyExpr> = [first]
+      while (acceptOp(",")) {
+        if (isOp(")")) { break }
+        elts.add(starNamedExpression())
+      }
+      expectOp(")")
+      val tuple = at(PyTuple(elts, PyCtx.Load), t)
+      tuple.inParens = true
+      return tuple
+    }
+    expectOp(")")
+    if (first is PyStarred) { throw PySyntaxError("cannot use starred expression here", file, first.line, first.col) }
+    first.inParens = true
+    return first
+  }
+
+  internal fun listAtom() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    if (acceptOp("]")) { return at(PyListExpr([], PyCtx.Load), t) }
+    val first = starNamedExpression()
+    if (startsComprehension()) {
+      val generators = comprehensionClauses()
+      expectOp("]")
+      return at(PyListComp(first, generators), t)
+    }
+    val elts : open List<PyExpr> = [first]
+    while (acceptOp(",")) {
+      if (isOp("]")) { break }
+      elts.add(starNamedExpression())
+    }
+    expectOp("]")
+    return at(PyListExpr(elts, PyCtx.Load), t)
+  }
+
+  internal fun braceAtom() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    p += 1
+    if (acceptOp("}")) { return at(PyDict([], []), t) }
+    val keys : open List<PyExpr?> = []
+    val values : open List<PyExpr> = []
+    if (acceptOp("**")) {
+      keys.add(null)
+      values.add(bitwiseOr())
+    } else {
+      val first = starNamedExpression()
+      if (acceptOp(":")) {
+        val value = expression()
+        if (startsComprehension()) {
+          val generators = comprehensionClauses()
+          expectOp("}")
+          return at(PyDictComp(first, value, generators), t)
+        }
+        keys.add(first)
+        values.add(value)
+      } else {
+        if (startsComprehension()) {
+          val generators = comprehensionClauses()
+          expectOp("}")
+          return at(PySetComp(first, generators), t)
+        }
+        val elts : open List<PyExpr> = [first]
+        while (acceptOp(",")) {
+          if (isOp("}")) { break }
+          elts.add(starNamedExpression())
+        }
+        expectOp("}")
+        return at(PySet(elts), t)
+      }
+    }
+    while (acceptOp(",")) {
+      if (isOp("}")) { break }
+      if (acceptOp("**")) {
+        keys.add(null)
+        values.add(bitwiseOr())
+      } else {
+        val key = expression()
+        if (!acceptOp(":")) {
+          if (isOp(",") or isOp("}")) { throw PySyntaxError("':' expected after dictionary key", file, key.line, key.col) }
+          throw invalid()
+        }
+        keys.add(key)
+        values.add(expression())
+      }
+    }
+    expectOp("}")
+    return at(PyDict(keys, values), t)
+  }
+
+  // ---- Literals ----
+
+  // A number's value: an int (a BigInt past 64 bits), a float, or a Complex for an imaginary one.
+  internal fun numberValue(t : PyToken) : any? throws PySyntaxError {
+    val text = t.text.replace("_", "")
+    val last = text[text.size - 1]
+    if (last == 'j' or last == 'J') { return Complex(0.0, __pyFloatOf(text[0 ..< text.size - 1])) }
+    if (text.size > 1 and text[0] == '0' and "xXoObB".contains(text[1])) {
+      val kind = text[1]
+      val base = kind == 'x' or kind == 'X' ? 16 : kind == 'o' or kind == 'O' ? 8 : 2
+      return __pyIntOf(text[2 ..< text.size], base)
+    }
+    if (text.contains('.') or text.contains('e') or text.contains('E')) { return __pyFloatOf(text) }
+    return __pyIntOf(text, 10)
+  }
+
+  // Adjacent string literals, joined: a str or bytes Constant, or a JoinedStr where an f-string is
+  // among them (a TemplateStr for t-strings).
+  internal fun strings() : PyExpr throws PySyntaxError {
+    val start = toks[p]
+    val values : open List<PyExpr> = []
+    val text = StringBuilder()
+    var pending = false            // text gathered since the last field
+    val bytes : open List<int> = []
+    var isBytes : bool? = null
+    var fstring = false
+    var template = false
+    var plain = false
+    var kind : string? = null
+    var first = true
+    var textStart = start
+    var textEnd = start
+    while (isKind(PyTokenKind.String) or isKind(PyTokenKind.FStart)) {
+      val t = toks[p]
+      var prefixEnd = 0
+      while (t.text[prefixEnd] != '"' and t.text[prefixEnd] != '\'') { prefixEnd += 1 }
+      val prefix = t.text[0 ..< prefixEnd].lower()
+      val raw = prefix.contains('r')
+      val thisBytes = prefix.contains('b')
+      if (isBytes != null and isBytes!! != thisBytes) { throw error("cannot mix bytes and nonbytes literals", t) }
+      isBytes = thisBytes
+      if (first and prefix.contains('u')) { kind = "u" }
+      if (t.kind == PyTokenKind.String) {
+        plain = true
+        p += 1
+        val quote = t.text[prefixEnd]
+        val q = t.text.size - prefixEnd >= 6 and t.text[prefixEnd + 1] == quote and t.text[prefixEnd + 2] == quote ? 3 : 1
+        val body = t.text[prefixEnd + q ..< t.text.size - q]
+        if (thisBytes) {
+          bytes.addAll(decodeBytes(body, raw, t))
+        } else {
+          if (!pending) { textStart = t }
+          textEnd = t
+          text.append(decodeText(body, raw, false, t))
+          pending = true
+        }
+      } else {
+        val isT = prefix.contains('t')
+        if (isT) { template = true } else { fstring = true }
+        p += 1
+        while (!isKind(PyTokenKind.FEnd)) {
+          val m = toks[p]
+          if (m.kind == PyTokenKind.FMiddle) {
+            p += 1
+            if (!pending) { textStart = m }
+            textEnd = m
+            text.append(decodeText(m.text, raw, true, m))
+            pending = true
+          } else if (isOp("{")) {
+            val field = replacementField(raw, isT)
+            if (field.second != null) {
+              if (!pending) { textStart = debugFrom }
+              textEnd = debugTo
+              text.append(field.second!!)
+              pending = true
+            }
+            if (pending and text.size > 0) { values.add(constantAt(text.toString(), textStart, textEnd)) }
+            text.clear()
+            pending = false
+            values.add(field.first)
+          } else {
+            throw invalid()
+          }
+        }
+        p += 1
+      }
+      first = false
+    }
+    if (template and (fstring or plain)) { throw error("cannot mix t-string literals with string or bytes literals", start) }
+    if (isBytes == true) { return at(PyConstant(Bytes(bytes)), start) }
+    if (!fstring and !template) { return at(PyConstant(text.toString(), kind), start) }
+    if (pending and text.size > 0) { values.add(constantAt(text.toString(), textStart, textEnd)) }
+    return template ? at(PyTemplateStr(values), start) : at(PyJoinedStr(values), start)
+  }
+
+  internal fun constantAt(text : string, t : PyToken, end : PyToken) : PyExpr {
+    val c = PyConstant(text)
+    c.line = t.line
+    c.col = t.col
+    c.endLine = end.endLine
+    c.endCol = end.endCol
+    return c
+  }
+
+  // A field of an f-string or t-string, from its '{': its node, and the text a '=' after its
+  // expression puts before it ({x=} shows "x=").
+  internal fun replacementField(raw : bool, template : bool) : Pair<PyExpr, string?> throws PySyntaxError {
+    val open = toks[p]
+    p += 1
+    val value = isKw("yield") ? yieldExpr() : starExpressions()
+    var debug : string? = null
+    val exprEnd = toks[p].start
+    if (isOp("=")) {
+      p += 1
+      debug = src[open.end ..< toks[p].start]
+      // Its place: all of it, from inside the '{' to what follows the '=' (spaces and all).
+      val next = toks[p]
+      debugFrom = PyToken(PyTokenKind.Op, "", open.end, open.end, open.endLine, open.endCol, open.endLine, open.endCol)
+      debugTo = PyToken(PyTokenKind.Op, "", next.start, next.start, next.line, next.col, next.line, next.col)
+    }
+    var conversion = -1
+    if (acceptOp("!")) {
+      val c = toks[p]
+      if (c.kind != PyTokenKind.Name or !(c.text == "s" or c.text == "r" or c.text == "a")) {
+        throw error("f-string: invalid conversion character" + (c.kind == PyTokenKind.Name ? " '${c.text}': expected 's', 'r', or 'a'" : ": expected 's', 'r', or 'a'"), c)
+      }
+      conversion = c.text[0].code
+      p += 1
+    }
+    var spec : PyExpr? = null
+    if (isOp(":")) {
+      val s = toks[p]
+      p += 1
+      spec = formatSpec(raw, template, s)
+    }
+    expectOp("}")
+    if (debug != null and conversion == -1 and spec == null) { conversion = 'r'.code }
+    val node : PyExpr = template ? PyInterpolation(value, src[open.end ..< exprEnd], conversion, spec) : PyFormattedValue(value, conversion, spec)
+    return Pair(at(node, open), debug)
+  }
+
+  internal fun formatSpec(raw : bool, template : bool, start : PyToken) : PyExpr throws PySyntaxError {
+    val values : open List<PyExpr> = []
+    val text = StringBuilder()
+    var textStart = start
+    var textEnd = start
+    while (!isOp("}")) {
+      val m = toks[p]
+      if (m.kind == PyTokenKind.FMiddle) {
+        p += 1
+        if (text.size == 0) { textStart = m }
+        textEnd = m
+        text.append(decodeText(m.text, raw, true, m))
+      } else if (isOp("{")) {
+        val field = replacementField(raw, template)
+        if (field.second != null) {
+          if (text.size == 0) { textStart = debugFrom }
+          textEnd = debugTo
+          text.append(field.second!!)
+        }
+        if (text.size > 0) { values.add(constantAt(text.toString(), textStart, textEnd)) }
+        text.clear()
+        values.add(field.first)
+      } else {
+        throw invalid()
+      }
+    }
+    if (text.size > 0) { values.add(constantAt(text.toString(), textStart, textEnd)) }
+    return at(PyJoinedStr(values), start)
+  }
+
+  // A str literal's body (or an f-string's text: `braces`, its {{ and }} single) with its
+  // escapes read.
+  internal fun decodeText(body : string, raw : bool, braces : bool, t : PyToken) : string throws PySyntaxError {
+    if (raw and !braces or !body.contains('\\') and !(braces and (body.contains("{{") or body.contains("}}")))) {
+      return body
+    }
+    val sb = StringBuilder()
+    var i = 0
+    val n = body.size
+    while (i < n) {
+      val c = body[i]
+      if (braces and (c == '{' or c == '}') and i + 1 < n and body[i + 1] == c) {
+        sb.append(c)
+        i += 2
+        continue
+      }
+      if (c != '\\' or raw) {
+        sb.append(c)
+        i += 1
+        continue
+      }
+      i += 1
+      if (i >= n) {
+        sb.append('\\')
+        break
+      }
+      val e = body[i]
+      i += 1
+      when (e) {
+        '\n' -> { }
+        '\\' -> { sb.append('\\') }
+        '\'' -> { sb.append('\'') }
+        '"' -> { sb.append('"') }
+        'a' -> { sb.append(7.char) }
+        'b' -> { sb.append(8.char) }
+        'f' -> { sb.append(12.char) }
+        'n' -> { sb.append('\n') }
+        'r' -> { sb.append('\r') }
+        't' -> { sb.append('\t') }
+        'v' -> { sb.append(11.char) }
+        'x' -> {
+          sb.append(__pyHexEscape(body, i, 2, t, file).char)
+          i += 2
+        }
+        'u' -> {
+          sb.append(pyChar(__pyHexEscape(body, i, 4, t, file)))
+          i += 4
+        }
+        'U' -> {
+          val cp = __pyHexEscape(body, i, 8, t, file)
+          if (cp > 0x10FFFF) { throw PySyntaxError("(unicode error) 'unicodeescape' codec can't decode bytes: illegal Unicode character", file, t.line, t.col) }
+          sb.append(pyChar(cp))
+          i += 8
+        }
+        'N' -> {
+          val close = body.indexOf('}', i)
+          if (i >= n or body[i] != '{' or close < 0) { throw PySyntaxError("(unicode error) 'unicodeescape' codec can't decode bytes: malformed \\N character escape", file, t.line, t.col) }
+          val name = body[i + 1 ..< close]
+          val cp = pyCharacterNamed(name)
+          if (cp < 0) { throw PySyntaxError("(unicode error) 'unicodeescape' codec can't decode bytes: unknown Unicode character name", file, t.line, t.col) }
+          sb.append(cp.char)
+          i = close + 1
+        }
+        else -> {
+          if (e >= '0' and e <= '7') {
+            var v = e.code - '0'.code
+            var k = 0
+            while (k < 2 and i < n and body[i] >= '0' and body[i] <= '7') {
+              v = v * 8 + (body[i].code - '0'.code)
+              i += 1
+              k += 1
+            }
+            sb.append(v.char)
+          } else {
+            // Not an escape (a SyntaxWarning in Python): the backslash kept.
+            sb.append('\\')
+            sb.append(e)
+          }
+        }
+      }
+    }
+    return sb.toString()
+  }
+
+  // A bytes literal's body as its bytes: ASCII characters only, and the escapes bytes have.
+  internal fun decodeBytes(body : string, raw : bool, t : PyToken) : List<int> throws PySyntaxError {
+    val out : open List<int> = []
+    var i = 0
+    val n = body.size
+    while (i < n) {
+      val c = body[i]
+      if (c.code >= 0x80) { throw error("bytes can only contain ASCII literal characters", t) }
+      if (c != '\\' or raw) {
+        out.add(c.code)
+        i += 1
+        continue
+      }
+      i += 1
+      if (i >= n) {
+        out.add(92)
+        break
+      }
+      val e = body[i]
+      i += 1
+      when (e) {
+        '\n' -> { }
+        '\\' -> { out.add(92) }
+        '\'' -> { out.add(39) }
+        '"' -> { out.add(34) }
+        'a' -> { out.add(7) }
+        'b' -> { out.add(8) }
+        'f' -> { out.add(12) }
+        'n' -> { out.add(10) }
+        'r' -> { out.add(13) }
+        't' -> { out.add(9) }
+        'v' -> { out.add(11) }
+        'x' -> {
+          out.add(__pyHexEscape(body, i, 2, t, file))
+          i += 2
+        }
+        else -> {
+          if (e >= '0' and e <= '7') {
+            var v = e.code - '0'.code
+            var k = 0
+            while (k < 2 and i < n and body[i] >= '0' and body[i] <= '7') {
+              v = v * 8 + (body[i].code - '0'.code)
+              i += 1
+              k += 1
+            }
+            out.add(v & 0xFF)
+          } else {
+            out.add(92)
+            out.add(e.code)
+          }
+        }
+      }
+    }
+    return out
+  }
+
+  // ---- Patterns ----
+
+  internal fun patterns() : PyPattern throws PySyntaxError {
+    val t = toks[p]
+    val first = maybeStarPattern()
+    if (!isOp(",")) { return first }
+    val pats : open List<PyPattern> = [first]
+    while (acceptOp(",")) {
+      if (isOp(":") or isKw("if")) { break }
+      pats.add(maybeStarPattern())
+    }
+    return at(PyMatchSequence(pats), t)
+  }
+
+  internal fun maybeStarPattern() : PyPattern throws PySyntaxError {
+    if (isOp("*")) {
+      val t = toks[p]
+      p += 1
+      val name = identifier()
+      return at(PyMatchStar(name == "_" ? null : name), t)
+    }
+    return pattern()
+  }
+
+  internal fun pattern() : PyPattern throws PySyntaxError {
+    val t = toks[p]
+    val first = orPattern()
+    if (acceptKw("as")) {
+      val n = toks[p]
+      val name = identifier()
+      if (name == "_") { throw error("cannot use '_' as a target", n) }
+      return at(PyMatchAs(first, name), t)
+    }
+    return first
+  }
+
+  internal fun orPattern() : PyPattern throws PySyntaxError {
+    val t = toks[p]
+    val first = closedPattern()
+    if (!isOp("|")) { return first }
+    val pats : open List<PyPattern> = [first]
+    while (acceptOp("|")) { pats.add(closedPattern()) }
+    return at(PyMatchOr(pats), t)
+  }
+
+  // A number pattern's value: a number, -number, or a complex one (1 + 2j, -1 - 2j).
+  internal fun signedNumber() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    val negative = acceptOp("-")
+    val n = toks[p]
+    if (n.kind != PyTokenKind.Number) { throw invalid() }
+    p += 1
+    var value : PyExpr = at(PyConstant(numberValue(n)), n)
+    if (negative) { value = at(PyUnaryOpExpr(PyUnaryOp.USub, value), t) }
+    if (isOp("+") or isOp("-")) {
+      val op = isOp("+") ? PyOperator.Add : PyOperator.Sub
+      p += 1
+      val n = toks[p]
+      if (n.kind != PyTokenKind.Number) { throw invalid() }
+      p += 1
+      value = at(PyBinOp(value, op, at(PyConstant(numberValue(n)), n)), t)
+    }
+    return value
+  }
+
+  // A dotted name in a pattern: a value (Color.RED) or a class.
+  internal fun nameOrAttr() : PyExpr throws PySyntaxError {
+    val t = toks[p]
+    var e : PyExpr = at(PyName(identifier(), PyCtx.Load), t)
+    while (acceptOp(".")) { e = at(PyAttribute(e, identifier(), PyCtx.Load), t) }
+    return e
+  }
+
+  internal fun closedPattern() : PyPattern throws PySyntaxError {
+    val t = toks[p]
+    if (t.kind == PyTokenKind.Number or isOp("-")) { return at(PyMatchValue(signedNumber()), t) }
+    if (t.kind == PyTokenKind.String or t.kind == PyTokenKind.FStart) { return at(PyMatchValue(strings()), t) }
+    if (t.kind == PyTokenKind.Name) {
+      if (t.text == "None" or t.text == "True" or t.text == "False") {
+        p += 1
+        return at(PyMatchSingleton(t.text == "None" ? null : t.text == "True"), t)
+      }
+      val dotted = ahead(1).kind == PyTokenKind.Op and ahead(1).text == "."
+      if (dotted or ahead(1).kind == PyTokenKind.Op and ahead(1).text == "(") {
+        val e = nameOrAttr()
+        if (isOp("(")) { return classPattern(e, t) }
+        return at(PyMatchValue(e), t)
+      }
+      val name = identifier()
+      return at(PyMatchAs(null, name == "_" ? null : name), t)
+    }
+    if (acceptOp("(")) {
+      if (acceptOp(")")) { return at(PyMatchSequence([]), t) }
+      val first = maybeStarPattern()
+      if (isOp(",")) {
+        val pats : open List<PyPattern> = [first]
+        while (acceptOp(",")) {
+          if (isOp(")")) { break }
+          pats.add(maybeStarPattern())
+        }
+        expectOp(")")
+        return at(PyMatchSequence(pats), t)
+      }
+      expectOp(")")
+      if (first is PyMatchStar) { return at(PyMatchSequence([first]), t) }
+      return first
+    }
+    if (acceptOp("[")) {
+      val pats : open List<PyPattern> = []
+      while (!isOp("]")) {
+        pats.add(maybeStarPattern())
+        if (!acceptOp(",")) { break }
+      }
+      expectOp("]")
+      return at(PyMatchSequence(pats), t)
+    }
+    if (acceptOp("{")) {
+      val keys : open List<PyExpr> = []
+      val pats : open List<PyPattern> = []
+      var rest : string? = null
+      while (!isOp("}")) {
+        if (acceptOp("**")) {
+          rest = identifier()
+        } else {
+          keys.add(mappingKey())
+          expectOp(":")
+          pats.add(pattern())
+        }
+        if (!acceptOp(",")) { break }
+      }
+      expectOp("}")
+      return at(PyMatchMapping(keys, pats, rest), t)
+    }
+    throw invalid()
+  }
+
+  // A key of a mapping pattern: a literal or a dotted name.
+  internal fun mappingKey() : PyExpr throws PySyntaxError {
+    val k = toks[p]
+    if (k.kind == PyTokenKind.Number or isOp("-")) { return signedNumber() }
+    if (k.kind == PyTokenKind.String) { return strings() }
+    if (k.kind == PyTokenKind.Name and (k.text == "None" or k.text == "True" or k.text == "False")) {
+      p += 1
+      return at(PyConstant(k.text == "None" ? null : k.text == "True"), k)
+    }
+    return nameOrAttr()
+  }
+
+  internal fun classPattern(cls : PyExpr, t : PyToken) : PyPattern throws PySyntaxError {
+    expectOp("(")
+    val pats : open List<PyPattern> = []
+    val kwdAttrs : open List<string> = []
+    val kwdPats : open List<PyPattern> = []
+    while (!isOp(")")) {
+      if (isIdentifier(toks[p]) and ahead(1).kind == PyTokenKind.Op and ahead(1).text == "=") {
+        kwdAttrs.add(toks[p].text)
+        p += 2
+        kwdPats.add(pattern())
+      } else {
+        pats.add(pattern())
+      }
+      if (!acceptOp(",")) { break }
+    }
+    expectOp(")")
+    return at(PyMatchClass(cls, pats, kwdAttrs, kwdPats), t)
+  }
+}
+
+// What an expression is, as Python's messages name it ("cannot assign to function call").
+internal fun __pyDescribe(e : PyExpr) : string {
+  when (e) {
+    is PyCall -> { return "function call" }
+    is PyConstant -> {
+      val v = e.value
+      if (v == null) { return "None" }
+      if (v is bool) { return v as bool ? "True" : "False" }
+      if (v == PyEllipsis) { return "ellipsis" }
+      return "literal"
+    }
+    is PyCompare -> { return "comparison" }
+    is PyBinOp, is PyUnaryOpExpr -> { return "expression" }
+    is PyBoolOpExpr -> { return "expression" }
+    is PyLambda -> { return "lambda" }
+    is PyIfExp -> { return "conditional expression" }
+    is PyNamedExpr -> { return "named expression" }
+    is PyListComp -> { return "list comprehension" }
+    is PySetComp -> { return "set comprehension" }
+    is PyDictComp -> { return "dict comprehension" }
+    is PyGeneratorExp -> { return "generator expression" }
+    is PyDict -> { return "dict literal" }
+    is PySet -> { return "set display" }
+    is PyJoinedStr -> { return "f-string expression" }
+    is PyAwait -> { return "await expression" }
+    is PyYield, is PyYieldFrom -> { return "yield expression" }
+    is PyTuple -> { return "tuple" }
+    is PyListExpr -> { return "list" }
+    else -> { return "expression" }
+  }
+}
+
+// The value of \x, \u or \U's hex digits at `i` (`count` of them).
+internal fun __pyHexEscape(body : string, i : int, count : int, t : PyToken, file : string) : int throws PySyntaxError {
+  if (i + count > body.size) {
+    throw PySyntaxError("(unicode error) 'unicodeescape' codec can't decode bytes: truncated \\${count == 2 ? "xXX" : count == 4 ? "uXXXX" : "UXXXXXXXX"} escape", file, t.line, t.col)
+  }
+  var v = 0
+  for (k in 0 ..< count) {
+    val c = body[i + k]
+    val d = c >= '0' and c <= '9' ? c.code - '0'.code : c >= 'a' and c <= 'f' ? c.code - 'a'.code + 10 : c >= 'A' and c <= 'F' ? c.code - 'A'.code + 10 : -1
+    if (d < 0) {
+      throw PySyntaxError("(unicode error) 'unicodeescape' codec can't decode bytes: truncated \\${count == 2 ? "xXX" : count == 4 ? "uXXXX" : "UXXXXXXXX"} escape", file, t.line, t.col)
+    }
+    v = v * 16 + d
+  }
+  return v
+}
+
+// An int's digits in the base as its value: an int where it fits, a BigInt past it.
+internal fun __pyIntOf(digits : string, base : int) : any? {
+  if (base == 10 and digits.size <= 18 or base == 16 and digits.size <= 15 or base == 8 and digits.size <= 20 or base == 2 and digits.size <= 62) {
+    return digits.toInt(base)
+  }
+  val big = BigInt.parse(digits, base)
+  return big.bitLength < 63 ? big.toInt() : big
+}
+
+// A float's text as Python reads it (5. and .5 among it); inf where it is too large.
+internal fun __pyFloatOf(text : string) : float {
+  var t = text
+  if (t.startsWith(".")) { t = "0" + t }
+  val dot = t.indexOf('.')
+  if (dot >= 0 and (dot + 1 == t.size or !(t[dot + 1] >= '0' and t[dot + 1] <= '9'))) { t = t[0 ..< dot + 1] + "0" + t[dot + 1 ..< t.size] }
+  val read = t.toFloatOrNull()
+  if (read != null) { return read!! }
+  // Past a float's range: Python reads 1e400 as inf, 1e-400 as 0.0.
+  val e = t.lower().indexOf('e')
+  return e >= 0 and t[e + 1] == '-' ? 0.0 : 1.0 / 0.0
+}
+
+// A character's code point from its Unicode name (\N{...}); -1 where the name is not known.
+// The names come with the unicodedata module (part 5.3); until then, none is.
+fun pyCharacterNamed(name : string) : int => -1

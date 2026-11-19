@@ -1,0 +1,75 @@
+// Snippy's reader against CPython's (the Snippy plan, part 5.1): each .py file in a folder made by
+// tools/snippy/astdump.py read by Snippy's parser, its tree dumped as ast.dump would, and the
+// dump compared with CPython's beside it (name.py.dump). Prints each file that differs, where
+// it first differs, and the count. With --positions, each node's place instead, against
+// tools/snippy/astpos.py's (name.py.pos): the first node placed otherwise in each file.
+//
+//   ww tools/snippy/compare.ww <folder> [--positions] [--quiet] [--only <part of a path>]
+import Snippy.*
+
+val args = Program.arguments
+if (args.size < 1) {
+  print("usage: ww tools/snippy/compare.ww <folder> [--positions] [--quiet] [--only <text>]")
+  exit(2)
+}
+val root = FilePath(args[0])
+val quiet = "--quiet" in args
+val positions = "--positions" in args
+val onlyAt = args.indexOf("--only")
+val only = onlyAt >= 0 and onlyAt + 1 < args.size ? args[onlyAt + 1] : null
+
+val files : open List<FilePath> = []
+fun gather(dir : FilePath) {
+  for (entry in dir.list().sortedBy { it.name }) {
+    if (entry.isDirectory()) {
+      gather(entry)
+    } else if (entry.name.endsWith(".py")) {
+      files.add(entry)
+    }
+  }
+}
+gather(root)
+
+var same = 0
+var differ = 0
+var failed = 0
+val started = Instant.now()
+for (file in files) {
+  val rel = file.toString()[root.toString().size + 1 ..< file.toString().size].replace("\\", "/")
+  if (only != null and !rel.contains(only!!)) { continue }
+  val expected = FilePath(file.toString() + (positions ? ".pos" : ".dump")).readText()
+  var got = ""
+  try {
+    val tree = pyParse(file.readText(), rel)
+    got = positions ? pyPositions(tree) : pyDump(tree)
+  } catch (e : PySyntaxError) {
+    got = "SyntaxError: " + e.message
+  } catch (e : Exception) {
+    got = "crashed: " + e.toString()
+  }
+  if (got == expected) {
+    same += 1
+    continue
+  }
+  if (got.startsWith("SyntaxError") or got.startsWith("crashed")) { failed += 1 } else { differ += 1 }
+  if (!quiet) {
+    var at = 0
+    while (at < got.size and at < expected.size and got[at] == expected[at]) { at += 1 }
+    val from = Math.max(0, at - 80)
+    print("== $rel: differs at $at")
+    if (got.startsWith("SyntaxError") or got.startsWith("crashed")) {
+      print("   got:    " + got)
+    } else if (positions) {
+      val want = expected.lines()
+      val have = got.lines()
+      var k = 0
+      while (k < want.size and k < have.size and want[k] == have[k]) { k += 1 }
+      print("   node $k: cpython ${k < want.size ? want[k] : "(none)"}, snippy ${k < have.size ? have[k] : "(none)"}")
+    } else {
+      print("   cpython: ..." + expected[from ..< Math.min(expected.size, at + 80)])
+      print("   snippy:  ..." + got[from ..< Math.min(got.size, at + 80)])
+    }
+  }
+}
+val millis = (Instant.now().epochNanoseconds - started.epochNanoseconds) / 1000000
+print("$same the same, $differ different, $failed not read, of ${same + differ + failed} files, in $millis ms")

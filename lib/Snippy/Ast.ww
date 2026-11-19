@@ -1,0 +1,283 @@
+// Python's syntax tree, as CPython 3.14's ast module has it: a class for each of its nodes (named
+// as Python's, Py before), with its fields in Python's order, so that pyDump writes a tree as
+// ast.dump does. Each node knows where it is in the source.
+
+abstract class PyNode {
+  // Where it starts (line from 1, column from 0, in characters) and ends.
+  var line = 0
+  var col = 0
+  var endLine = 0
+  var endCol = 0
+  // Its fields' values, in the order Python lists them (PyNode.fieldNames has their names).
+  abstract fun fields() : List<any?>
+}
+
+abstract class PyStmt : PyNode()
+abstract class PyExpr : PyNode() {
+  // Written inside parentheses: (x): int is no simple annotation.
+  var inParens = false
+}
+abstract class PyPattern : PyNode()
+abstract class PyTypeParam : PyNode()
+
+// The context of a name, attribute, subscript, starred, list or tuple: read, assigned or deleted.
+enum PyCtx { Load, Store, Del }
+enum PyBoolOp { And, Or }
+enum PyOperator { Add, Sub, Mult, MatMult, Div, Mod, Pow, LShift, RShift, BitOr, BitXor, BitAnd, FloorDiv }
+enum PyUnaryOp { Invert, Not, UAdd, USub }
+enum PyCmpOp { Eq, NotEq, Lt, LtE, Gt, GtE, Is, IsNot, In, NotIn }
+
+// Python's Ellipsis (...), as a constant's value.
+object PyEllipsis {
+  override fun toString() : string => "Ellipsis"
+}
+
+// ---- Modules ----
+
+class PyModule(val body : List<PyStmt>) : PyNode() {
+  override fun fields() : List<any?> => [body, []]
+}
+
+// ---- Statements ----
+
+class PyFunctionDef(val name : string, val args : PyArguments, val body : List<PyStmt>, val decoratorList : List<PyExpr>,
+                    val returns : PyExpr?, val typeParams : List<PyTypeParam>, val isAsync : bool = false) : PyStmt() {
+  override fun fields() : List<any?> => [name, args, body, decoratorList, returns, null, typeParams]
+}
+class PyClassDef(val name : string, val bases : List<PyExpr>, val keywords : List<PyKeyword>, val body : List<PyStmt>,
+                 val decoratorList : List<PyExpr>, val typeParams : List<PyTypeParam>) : PyStmt() {
+  override fun fields() : List<any?> => [name, bases, keywords, body, decoratorList, typeParams]
+}
+class PyReturn(val value : PyExpr?) : PyStmt() {
+  override fun fields() : List<any?> => [value]
+}
+class PyDelete(val targets : List<PyExpr>) : PyStmt() {
+  override fun fields() : List<any?> => [targets]
+}
+class PyAssign(val targets : List<PyExpr>, val value : PyExpr) : PyStmt() {
+  override fun fields() : List<any?> => [targets, value, null]
+}
+class PyTypeAlias(val name : PyExpr, val typeParams : List<PyTypeParam>, val value : PyExpr) : PyStmt() {
+  override fun fields() : List<any?> => [name, typeParams, value]
+}
+class PyAugAssign(val target : PyExpr, val op : PyOperator, val value : PyExpr) : PyStmt() {
+  override fun fields() : List<any?> => [target, op, value]
+}
+class PyAnnAssign(val target : PyExpr, val annotation : PyExpr, val value : PyExpr?, val simple : int) : PyStmt() {
+  override fun fields() : List<any?> => [target, annotation, value, simple]
+}
+class PyFor(val target : PyExpr, val iter : PyExpr, val body : List<PyStmt>, val orelse : List<PyStmt>, val isAsync : bool = false) : PyStmt() {
+  override fun fields() : List<any?> => [target, iter, body, orelse, null]
+}
+class PyWhile(val test : PyExpr, val body : List<PyStmt>, val orelse : List<PyStmt>) : PyStmt() {
+  override fun fields() : List<any?> => [test, body, orelse]
+}
+class PyIf(val test : PyExpr, val body : List<PyStmt>, val orelse : List<PyStmt>) : PyStmt() {
+  override fun fields() : List<any?> => [test, body, orelse]
+}
+class PyWith(val items : List<PyWithItem>, val body : List<PyStmt>, val isAsync : bool = false) : PyStmt() {
+  override fun fields() : List<any?> => [items, body, null]
+}
+class PyMatch(val subject : PyExpr, val cases : List<PyMatchCase>) : PyStmt() {
+  override fun fields() : List<any?> => [subject, cases]
+}
+class PyRaise(val exc : PyExpr?, val cause : PyExpr?) : PyStmt() {
+  override fun fields() : List<any?> => [exc, cause]
+}
+class PyTry(val body : List<PyStmt>, val handlers : List<PyExceptHandler>, val orelse : List<PyStmt>, val finalbody : List<PyStmt>,
+            val isStar : bool = false) : PyStmt() {
+  override fun fields() : List<any?> => [body, handlers, orelse, finalbody]
+}
+class PyAssert(val test : PyExpr, val msg : PyExpr?) : PyStmt() {
+  override fun fields() : List<any?> => [test, msg]
+}
+class PyImport(val names : List<PyAlias>) : PyStmt() {
+  override fun fields() : List<any?> => [names]
+}
+class PyImportFrom(val module : string?, val names : List<PyAlias>, val level : int) : PyStmt() {
+  override fun fields() : List<any?> => [module, names, level]
+}
+class PyGlobal(val names : List<string>) : PyStmt() {
+  override fun fields() : List<any?> => [names]
+}
+class PyNonlocal(val names : List<string>) : PyStmt() {
+  override fun fields() : List<any?> => [names]
+}
+class PyExprStmt(val value : PyExpr) : PyStmt() {
+  override fun fields() : List<any?> => [value]
+}
+class PyPass : PyStmt() {
+  override fun fields() : List<any?> => []
+}
+class PyBreak : PyStmt() {
+  override fun fields() : List<any?> => []
+}
+class PyContinue : PyStmt() {
+  override fun fields() : List<any?> => []
+}
+
+// ---- Expressions ----
+
+class PyBoolOpExpr(val op : PyBoolOp, val values : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [op, values]
+}
+class PyNamedExpr(val target : PyExpr, val value : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [target, value]
+}
+class PyBinOp(val left : PyExpr, val op : PyOperator, val right : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [left, op, right]
+}
+class PyUnaryOpExpr(val op : PyUnaryOp, val operand : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [op, operand]
+}
+class PyLambda(val args : PyArguments, val body : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [args, body]
+}
+class PyIfExp(val test : PyExpr, val body : PyExpr, val orelse : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [test, body, orelse]
+}
+// A dict display; a key of null stands for **mapping.
+class PyDict(val keys : List<PyExpr?>, val values : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [keys, values]
+}
+class PySet(val elts : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [elts]
+}
+class PyListComp(val elt : PyExpr, val generators : List<PyComprehension>) : PyExpr() {
+  override fun fields() : List<any?> => [elt, generators]
+}
+class PySetComp(val elt : PyExpr, val generators : List<PyComprehension>) : PyExpr() {
+  override fun fields() : List<any?> => [elt, generators]
+}
+class PyDictComp(val key : PyExpr, val value : PyExpr, val generators : List<PyComprehension>) : PyExpr() {
+  override fun fields() : List<any?> => [key, value, generators]
+}
+class PyGeneratorExp(val elt : PyExpr, val generators : List<PyComprehension>) : PyExpr() {
+  override fun fields() : List<any?> => [elt, generators]
+}
+class PyAwait(val value : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [value]
+}
+class PyYield(val value : PyExpr?) : PyExpr() {
+  override fun fields() : List<any?> => [value]
+}
+class PyYieldFrom(val value : PyExpr) : PyExpr() {
+  override fun fields() : List<any?> => [value]
+}
+class PyCompare(val left : PyExpr, val ops : List<PyCmpOp>, val comparators : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [left, ops, comparators]
+}
+class PyCall(val func : PyExpr, val args : List<PyExpr>, val keywords : List<PyKeyword>) : PyExpr() {
+  override fun fields() : List<any?> => [func, args, keywords]
+}
+// A field of an f-string: its expression, its conversion (-1 for none, else 's', 'r' or 'a' as
+// a number) and its format spec.
+class PyFormattedValue(val value : PyExpr, val conversion : int, val formatSpec : PyExpr?) : PyExpr() {
+  override fun fields() : List<any?> => [value, conversion, formatSpec]
+}
+// A field of a t-string, with its expression's text.
+class PyInterpolation(val value : PyExpr, val text : string, val conversion : int, val formatSpec : PyExpr?) : PyExpr() {
+  override fun fields() : List<any?> => [value, text, conversion, formatSpec]
+}
+class PyJoinedStr(val values : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [values]
+}
+class PyTemplateStr(val values : List<PyExpr>) : PyExpr() {
+  override fun fields() : List<any?> => [values]
+}
+// A constant: null (None), a bool, an int or BigInt, a float, a Complex, a string, Bytes, or
+// PyEllipsis; `kind` "u" for a string written u"...".
+class PyConstant(val value : any?, val kind : string? = null) : PyExpr() {
+  override fun fields() : List<any?> => [value, kind]
+}
+class PyAttribute(val value : PyExpr, val attr : string, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [value, attr, ctx]
+}
+class PySubscript(val value : PyExpr, val slice : PyExpr, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [value, slice, ctx]
+}
+class PyStarred(val value : PyExpr, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [value, ctx]
+}
+class PyName(val id : string, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [id, ctx]
+}
+class PyListExpr(val elts : List<PyExpr>, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [elts, ctx]
+}
+class PyTuple(val elts : List<PyExpr>, var ctx : PyCtx) : PyExpr() {
+  override fun fields() : List<any?> => [elts, ctx]
+}
+class PySlice(val lower : PyExpr?, val upper : PyExpr?, val step : PyExpr?) : PyExpr() {
+  override fun fields() : List<any?> => [lower, upper, step]
+}
+
+// ---- The parts of statements and expressions ----
+
+class PyComprehension(val target : PyExpr, val iter : PyExpr, val ifs : List<PyExpr>, val isAsync : int) : PyNode() {
+  override fun fields() : List<any?> => [target, iter, ifs, isAsync]
+}
+class PyExceptHandler(val type : PyExpr?, val name : string?, val body : List<PyStmt>) : PyNode() {
+  override fun fields() : List<any?> => [type, name, body]
+}
+// A function's parameters: positional-only, positional, *args, keyword-only (with their defaults,
+// null for none), **kwargs; `defaults` the last positional ones'.
+class PyArguments(val posonlyargs : List<PyArg>, val args : List<PyArg>, val vararg : PyArg?, val kwonlyargs : List<PyArg>,
+                  val kwDefaults : List<PyExpr?>, val kwarg : PyArg?, val defaults : List<PyExpr>) : PyNode() {
+  override fun fields() : List<any?> => [posonlyargs, args, vararg, kwonlyargs, kwDefaults, kwarg, defaults]
+}
+class PyArg(val arg : string, val annotation : PyExpr?) : PyNode() {
+  override fun fields() : List<any?> => [arg, annotation, null]
+}
+// A keyword argument; `arg` null for **mapping.
+class PyKeyword(val arg : string?, val value : PyExpr) : PyNode() {
+  override fun fields() : List<any?> => [arg, value]
+}
+class PyAlias(val name : string, val asname : string?) : PyNode() {
+  override fun fields() : List<any?> => [name, asname]
+}
+class PyWithItem(val contextExpr : PyExpr, val optionalVars : PyExpr?) : PyNode() {
+  override fun fields() : List<any?> => [contextExpr, optionalVars]
+}
+class PyMatchCase(val pattern : PyPattern, val guard : PyExpr?, val body : List<PyStmt>) : PyNode() {
+  override fun fields() : List<any?> => [pattern, guard, body]
+}
+
+// ---- Patterns ----
+
+class PyMatchValue(val value : PyExpr) : PyPattern() {
+  override fun fields() : List<any?> => [value]
+}
+class PyMatchSingleton(val value : any?) : PyPattern() {
+  override fun fields() : List<any?> => [value]
+}
+class PyMatchSequence(val patterns : List<PyPattern>) : PyPattern() {
+  override fun fields() : List<any?> => [patterns]
+}
+class PyMatchMapping(val keys : List<PyExpr>, val patterns : List<PyPattern>, val rest : string?) : PyPattern() {
+  override fun fields() : List<any?> => [keys, patterns, rest]
+}
+class PyMatchClass(val cls : PyExpr, val patterns : List<PyPattern>, val kwdAttrs : List<string>, val kwdPatterns : List<PyPattern>) : PyPattern() {
+  override fun fields() : List<any?> => [cls, patterns, kwdAttrs, kwdPatterns]
+}
+class PyMatchStar(val name : string?) : PyPattern() {
+  override fun fields() : List<any?> => [name]
+}
+class PyMatchAs(val pattern : PyPattern?, val name : string?) : PyPattern() {
+  override fun fields() : List<any?> => [pattern, name]
+}
+class PyMatchOr(val patterns : List<PyPattern>) : PyPattern() {
+  override fun fields() : List<any?> => [patterns]
+}
+
+// ---- Type parameters ----
+
+class PyTypeVar(val name : string, val bound : PyExpr?, val defaultValue : PyExpr?) : PyTypeParam() {
+  override fun fields() : List<any?> => [name, bound, defaultValue]
+}
+class PyParamSpec(val name : string, val defaultValue : PyExpr?) : PyTypeParam() {
+  override fun fields() : List<any?> => [name, defaultValue]
+}
+class PyTypeVarTuple(val name : string, val defaultValue : PyExpr?) : PyTypeParam() {
+  override fun fields() : List<any?> => [name, defaultValue]
+}

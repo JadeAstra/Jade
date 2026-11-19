@@ -416,14 +416,16 @@ bool cachedProgram(const std::string& path, std::string& bytecode) {
     }
     if (at == 0 || at == static_cast<size_t>(-1) || at + n != text.size()) return false;
 
-    // Looking at a file takes the system a while, so they are looked at a few at a time.
+    // Looking at a file takes the system a while, so they are looked at a few at a time: eight
+    // threads at most (measured 2026-11-19 on the start-up budgets' 850 files and folders: 14.5
+    // ms with four, 12.5 with eight, 14.5 again with sixteen, the system's own locks between them).
     std::atomic<bool> holds{true};
     std::atomic<size_t> next{0};
     auto look = [&] {
         for (size_t i = next++; i < sources.size() && holds; i = next++)
             if (!unchanged(sources[i])) holds = false;
     };
-    const size_t helpers = std::min<size_t>(sources.size() / 32, 3);
+    const size_t helpers = std::min<size_t>(sources.size() / 32, 7);
     std::vector<std::thread> threads;
     for (size_t i = 0; i < helpers; i++) threads.emplace_back(look);
     look();

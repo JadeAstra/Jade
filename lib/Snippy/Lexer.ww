@@ -1,0 +1,558 @@
+// Python's source read into tokens, as CPython 3.14's tokenizer reads it: logical lines and their
+// indentation, names, numbers, strings with their prefixes, operators, and f-strings and
+// t-strings in pieces (PEP 701), the expressions inside them read as any others.
+
+enum PyTokenKind { Name, Number, String, Op, Newline, Indent, Dedent, End, FStart, FMiddle, FEnd, Error }
+
+// A token: its kind, its text as written (a string with its prefix and quotes; an f-string's
+// middle as written, its {{ and escapes not yet read), and where it is: `start` and `end` index
+// the source's characters, `line` and `col` (both from 1 and 0, as Python's) where it starts.
+class PyToken(val kind : PyTokenKind, val text : string, val start : int, val end : int, val line : int, val col : int,
+              val endLine : int, val endCol : int) {
+  override fun toString() : string => "$kind '$text' $line:$col"
+}
+
+// What is wrong with a program's text, where: Python's SyntaxError (and its IndentationError and
+// TabError, `kind`).
+class PySyntaxError(val description : string, val file : string, val line : int, val col : int, val kind : string = "SyntaxError")
+    : Exception("$file:$line:${col + 1}: $kind: $description")
+
+// An f-string or t-string being read: its quote, whether triple, raw or a t-string, and where it
+// is: in its text, or inside a replacement field (the depth of brackets that field's '{' left).
+internal class __PyFString(val quote : char, val triple : bool, val raw : bool) {
+  var inField = false      // inside a { } field's expression
+  var inSpec = false       // in a field's format spec
+  var fieldDepth = 0       // the bracket depth just inside the field's '{'
+  // The fields this string has open, innermost last: each the bracket depth inside its '{' and
+  // whether its spec was being read when a field nested in that spec opened.
+  val fields : open List<Pair<int, bool>> = []
+}
+
+class PyLexer {
+  // The file it reads, as errors name it.
+  val file : string
+  internal val src : string
+  internal var pos = 0
+  internal var line = 1
+  internal var lineStart = 0
+  internal val tokens : open List<PyToken> = []
+  internal val indents : open List<int> = [0]
+  internal val altIndents : open List<int> = [0]
+  internal val brackets : open List<char> = []   // the brackets open, innermost last
+  internal val bracketsAt : open List<int> = []  // where each is
+  // What was wrong where the tokens stop (an Error token last): the parser throws it when it
+  // comes to it, as CPython's tokenizer, which reads as the parser asks, does.
+  var failure : PySyntaxError? = null
+  internal val strings : open List<__PyFString> = []
+  internal var atLineStart = true
+
+  fun init(source : string, file : string = "<unknown>") {
+    var text = source
+    if (text.startsWith("\u{FEFF}")) { text = text[1 ..< text.size] }
+    // Universal newlines, as CPython reads a source file: \r\n and \r are each a \n.
+    if (text.contains('\r')) { text = text.replace("\r\n", "\n").replace("\r", "\n") }
+    src = text
+    this.file = file
+  }
+
+  internal fun error(description : string, at : int = pos, kind : string = "SyntaxError") : PySyntaxError {
+    var l = 1
+    var ls = 0
+    for (i in 0 ..< Math.min(at, src.size)) {
+      if (src[i] == '\n') {
+        l += 1
+        ls = i + 1
+      }
+    }
+    return PySyntaxError(description, file, l, at - ls, kind)
+  }
+
+  internal fun peekChar(ahead : int = 0) : char => pos + ahead < src.size ? src[pos + ahead] : '\u{0}'
+
+  internal fun add(kind : PyTokenKind, start : int, text : string) {
+    // Where it starts: its line found from where the current line began, moving back over the
+    // lines a token may span (a triple-quoted string).
+    var l = line
+    var ls = lineStart
+    while (start < ls) {
+      l -= 1
+      var b = ls - 1
+      while (b > 0 and src[b - 1] != '\n') { b -= 1 }
+      ls = b
+    }
+    tokens.add(PyToken(kind, text, start, pos, l, start - ls, line, pos - lineStart))
+  }
+
+  internal fun newline() {
+    line += 1
+    lineStart = pos
+  }
+
+  // Every token, ENDMARKER last; or, where the text is not Python's, the tokens before what is
+  // wrong, then an Error token (`failure` says what is wrong).
+  fun tokenize() : List<PyToken> {
+    try {
+      readAll()
+    } catch (e : PySyntaxError) {
+      failure = e
+      tokens.add(PyToken(PyTokenKind.Error, "", pos, pos, e.line, e.col, e.line, e.col))
+    }
+    return tokens
+  }
+
+  internal fun readAll() throws PySyntaxError {
+    while (true) {
+      if (strings.size > 0) {
+        val f = strings.last()
+        if (!f.inField) {
+          readFStringText(f)
+          continue
+        }
+        if (f.inSpec) {
+          readFormatSpec(f)
+          continue
+        }
+      }
+      if (atLineStart and brackets.size == 0) {
+        if (!readIndentation()) { break }
+        continue
+      }
+      // Within a line: spaces, tabs and form feeds between tokens.
+      while (pos < src.size and (src[pos] == ' ' or src[pos] == '\t' or src[pos] == '\u{c}')) { pos += 1 }
+      if (pos >= src.size) {
+        if (strings.size > 0) { throw error("f-string: expecting '}'") }
+        if (brackets.size > 0) { throw error("'${brackets.last()}' was never closed", bracketsAt.last()) }
+        finish()
+        break
+      }
+      val c = src[pos]
+      if (c == '#') {
+        while (pos < src.size and src[pos] != '\n') { pos += 1 }
+        continue
+      }
+      if (c == '\\') {
+        if (peekChar(1) == '\n') {
+          pos += 2
+          newline()
+          if (pos >= src.size) { throw error("unexpected EOF while parsing") }
+          continue
+        }
+        throw error("unexpected character after line continuation character")
+      }
+      if (c == '\n') {
+        pos += 1
+        if (brackets.size > 0) {
+          newline()
+          continue
+        }
+        tokens.add(PyToken(PyTokenKind.Newline, "\n", pos - 1, pos, line, pos - 1 - lineStart, line, pos - lineStart))
+        newline()
+        atLineStart = true
+        continue
+      }
+      if (c.code < 0x80 and (c.isLetter() or c == '_') or c.code >= 0x80 and __pyIdentifierStart(c.code)) {
+        readNameOrString()
+        continue
+      }
+      if (c.isDigit() and c.code < 0x80 or c == '.' and peekChar(1).code < 0x80 and peekChar(1).isDigit()) {
+        readNumber()
+        continue
+      }
+      if (c == '"' or c == '\'') {
+        readString(pos, "")
+        continue
+      }
+      readOperator()
+    }
+  }
+
+  // At the start of a line (outside brackets): its indentation measured, INDENT or DEDENT tokens
+  // made, or the line passed over where it is blank or a comment. False at the end of the text.
+  internal fun readIndentation() : bool {
+    var col = 0
+    var alt = 0
+    val begin = pos
+    while (pos < src.size) {
+      val c = src[pos]
+      if (c == ' ') {
+        col += 1
+        alt += 1
+      } else if (c == '\t') {
+        col = (col / 8 + 1) * 8
+        alt += 1
+      } else if (c == '\u{c}') {
+        col = 0
+        alt = 0
+      } else {
+        break
+      }
+      pos += 1
+    }
+    if (pos >= src.size) {
+      finish()
+      return false
+    }
+    val c = src[pos]
+    if (c == '#' or c == '\n') {
+      // A blank line, or one of a comment alone: no tokens, its indentation not counted.
+      while (pos < src.size and src[pos] != '\n') { pos += 1 }
+      if (pos < src.size) {
+        pos += 1
+        newline()
+      }
+      return true
+    }
+    atLineStart = false
+    val top = indents.last()
+    if (col == top) {
+      if (alt != altIndents.last()) { throw error("inconsistent use of tabs and spaces in indentation", pos, "TabError") }
+    } else if (col > top) {
+      if (alt <= altIndents.last()) { throw error("inconsistent use of tabs and spaces in indentation", pos, "TabError") }
+      indents.add(col)
+      altIndents.add(alt)
+      tokens.add(PyToken(PyTokenKind.Indent, "", begin, pos, line, 0, line, pos - lineStart))
+    } else {
+      while (indents.size > 1 and col < indents.last()) {
+        indents.removeLast()
+        altIndents.removeLast()
+        tokens.add(PyToken(PyTokenKind.Dedent, "", pos, pos, line, pos - lineStart, line, pos - lineStart))
+      }
+      if (col != indents.last()) {
+        val lineEnd = src.indexOf('\n', pos)
+        throw error("unindent does not match any outer indentation level", lineEnd < 0 ? src.size : lineEnd, "IndentationError")
+      }
+      if (alt != altIndents.last()) { throw error("inconsistent use of tabs and spaces in indentation", pos, "TabError") }
+    }
+    return true
+  }
+
+  // The end: a NEWLINE ending the last logical line, a DEDENT for each indent open, ENDMARKER.
+  internal fun finish() {
+    if (tokens.size > 0 and tokens.last().kind != PyTokenKind.Newline and tokens.last().kind != PyTokenKind.Dedent and
+        tokens.last().kind != PyTokenKind.Indent) {
+      tokens.add(PyToken(PyTokenKind.Newline, "", pos, pos, line, pos - lineStart, line, pos - lineStart))
+    }
+    while (indents.size > 1) {
+      indents.removeLast()
+      tokens.add(PyToken(PyTokenKind.Dedent, "", pos, pos, line, pos - lineStart, line, pos - lineStart))
+    }
+    tokens.add(PyToken(PyTokenKind.End, "", pos, pos, line, pos - lineStart, line, pos - lineStart))
+  }
+
+  internal fun readNameOrString() {
+    val start = pos
+    while (pos < src.size) {
+      val c = src[pos]
+      if (c.code < 0x80 and (c.isLetterOrDigit() or c == '_') or c.code >= 0x80 and __pyIdentifierPart(c.code)) {
+        pos += 1
+      } else {
+        break
+      }
+    }
+    val name = src[start ..< pos]
+    if (pos < src.size and (src[pos] == '"' or src[pos] == '\'') and __pyIsStringPrefix(name)) {
+      readString(start, name.lower())
+      return
+    }
+    add(PyTokenKind.Name, start, name)
+  }
+
+  // A string literal from its prefix (lowercased) at `start`; an f-string's or t-string's start.
+  internal fun readString(start : int, prefix : string) {
+    val quote = src[pos]
+    val triple = peekChar(1) == quote and peekChar(2) == quote
+    pos += triple ? 3 : 1
+    val raw = prefix.contains('r')
+    if (prefix.contains('f') or prefix.contains('t')) {
+      add(PyTokenKind.FStart, start, src[start ..< pos])
+      strings.add(__PyFString(quote, triple, raw))
+      return
+    }
+    while (true) {
+      if (pos >= src.size) {
+        // Inside an f-string's field, a quote that opens a string never closed is the field's
+        // end missing (f"{x").
+        if (strings.size > 0) { throw error("f-string: expecting '}'", start) }
+        val detected = pos > 0 and src[pos - 1] == '\n' ? line - 1 : line
+        throw error((triple ? "unterminated triple-quoted string literal" : "unterminated string literal") + " (detected at line $detected)", start)
+      }
+      val c = src[pos]
+      if (c == '\\') {
+        pos += 1
+        if (pos < src.size) {
+          if (src[pos] == '\n') {
+            pos += 1
+            newline()
+          } else {
+            pos += 1
+          }
+        }
+        continue
+      }
+      if (c == '\n') {
+        if (!triple and strings.size > 0) { throw error("f-string: expecting '}'", start) }
+        if (!triple) { throw error("unterminated string literal (detected at line $line)", start) }
+        pos += 1
+        newline()
+        continue
+      }
+      if (c == quote and (!triple or peekChar(1) == quote and peekChar(2) == quote)) {
+        pos += triple ? 3 : 1
+        add(PyTokenKind.String, start, src[start ..< pos])
+        return
+      }
+      pos += 1
+    }
+  }
+
+  // An f-string's text, up to its end, or a field's '{'.
+  internal fun readFStringText(f : __PyFString) {
+    val start = pos
+    while (true) {
+      if (pos >= src.size) { throw error(f.triple ? "unterminated triple-quoted f-string literal" : "unterminated f-string literal") }
+      val c = src[pos]
+      if (c == f.quote and (!f.triple or peekChar(1) == f.quote and peekChar(2) == f.quote)) {
+        if (pos > start) { add(PyTokenKind.FMiddle, start, src[start ..< pos]) }
+        val q = pos
+        pos += f.triple ? 3 : 1
+        add(PyTokenKind.FEnd, q, src[q ..< pos])
+        strings.removeLast()
+        return
+      }
+      if (c == '\\') {
+        // An escape is the f-string's text, but for a '{' after it, which still opens a field:
+        // \N{...} (a character's name) excepted, outside a raw string.
+        if (!f.raw and peekChar(1) == 'N' and peekChar(2) == '{') {
+          pos += 3
+          while (pos < src.size and src[pos] != '}' and src[pos] != f.quote and src[pos] != '\n') { pos += 1 }
+          if (pos < src.size and src[pos] == '}') { pos += 1 }
+          continue
+        }
+        pos += 1
+        if (pos < src.size and src[pos] != '{' and src[pos] != '}') {
+          if (src[pos] == '\n') {
+            pos += 1
+            newline()
+          } else {
+            pos += 1
+          }
+        }
+        continue
+      }
+      if (c == '\n') {
+        if (!f.triple) { throw error("unterminated f-string literal (detected at line $line)") }
+        pos += 1
+        newline()
+        continue
+      }
+      if (c == '{' or c == '}') {
+        if (peekChar(1) == c) {
+          pos += 2
+          continue
+        }
+        if (c == '}') { throw error("f-string: single '}' is not allowed") }
+        if (pos > start) { add(PyTokenKind.FMiddle, start, src[start ..< pos]) }
+        openField(f)
+        return
+      }
+      pos += 1
+    }
+  }
+
+  // A field's '{': its expression read as tokens next, inside a bracket of its own.
+  internal fun openField(f : __PyFString) {
+    val at = pos
+    pos += 1
+    add(PyTokenKind.Op, at, "{")
+    f.fields.add(Pair(f.fieldDepth, f.inSpec))
+    brackets.add('{')
+    bracketsAt.add(at)
+    f.inField = true
+    f.inSpec = false
+    f.fieldDepth = brackets.size
+  }
+
+  // A field's '}': back to the f-string's text, or to the spec of the field it is in.
+  internal fun closeField(f : __PyFString) {
+    val at = pos
+    pos += 1
+    add(PyTokenKind.Op, at, "}")
+    brackets.removeLast()
+    bracketsAt.removeLast()
+    val outer = f.fields.removeLast()
+    f.fieldDepth = outer.first
+    f.inSpec = outer.second
+    f.inField = f.fields.size > 0
+  }
+
+  // A field's format spec, after its ':': text, up to the field's '}' or a nested field's '{'.
+  internal fun readFormatSpec(f : __PyFString) {
+    val start = pos
+    while (true) {
+      if (pos >= src.size) { throw error("f-string: expecting '}'") }
+      val c = src[pos]
+      if (c == '{' or c == '}') {
+        if (c == '{' and peekChar(1) == '{' or c == '}' and peekChar(1) == '}') {
+          pos += 2
+          continue
+        }
+        if (pos > start) { add(PyTokenKind.FMiddle, start, src[start ..< pos]) }
+        if (c == '{') { openField(f) } else { closeField(f) }
+        return
+      }
+      if (c == '\n' and !f.triple) { throw error("f-string: newlines are not allowed in format specifiers for single quoted f-strings") }
+      if (c == f.quote and (!f.triple or peekChar(1) == f.quote and peekChar(2) == f.quote)) { throw error("f-string: expecting '}'") }
+      if (c == '\n') { newline() }
+      if (c == '\\' and pos + 1 < src.size and src[pos + 1] != '{' and src[pos + 1] != '}') { pos += 1 }
+      pos += 1
+    }
+  }
+
+  // Digits of the base (2, 8, 10 or 16), with single underscores between them.
+  internal fun scanDigits(base : int) {
+    while (true) {
+      if (pos < src.size and __pyDigitOf(src[pos], base)) {
+        pos += 1
+      } else if (pos < src.size and src[pos] == '_' and pos + 1 < src.size and __pyDigitOf(src[pos + 1], base)) {
+        pos += 1
+      } else {
+        break
+      }
+    }
+  }
+
+  // A number may not run on into a name, but for one of the keywords Python lets follow it
+  // directly (1if x else y, 0x1for x in y).
+  internal fun checkNumberEnd(hex : bool) throws PySyntaxError {
+    if (pos >= src.size) { return }
+    val c = src[pos]
+    if (!(c.code < 0x80 and (c.isLetterOrDigit() or c == '_') or c.code >= 0x80 and __pyIdentifierPart(c.code))) { return }
+    for (k in ["and", "else", "for", "if", "in", "is", "not", "or"]) {
+      if (pos + k.size <= src.size and src[pos ..< pos + k.size] == k) { return }
+    }
+    throw error(hex ? "invalid hexadecimal literal" : "invalid decimal literal")
+  }
+
+  internal fun readNumber() {
+    val start = pos
+    if (src[pos] == '0' and pos + 1 < src.size and "xXoObB".contains(src[pos + 1])) {
+      val kind = src[pos + 1]
+      val base = kind == 'x' or kind == 'X' ? 16 : kind == 'o' or kind == 'O' ? 8 : 2
+      pos += 2
+      if (pos < src.size and src[pos] == '_') { pos += 1 }
+      val first = pos
+      scanDigits(base)
+      if (pos == first) { throw error("invalid ${base == 16 ? "hexadecimal" : base == 8 ? "octal" : "binary"} literal") }
+      if (base != 16 and pos < src.size and src[pos] >= '0' and src[pos] <= '9') {
+        throw error("invalid digit '${src[pos]}' in ${base == 8 ? "octal" : "binary"} literal")
+      }
+      checkNumberEnd(base == 16)
+      add(PyTokenKind.Number, start, src[start ..< pos])
+      return
+    }
+    scanDigits(10)
+    val whole = src[start ..< pos]
+    var isFloat = false
+    if (pos < src.size and src[pos] == '.') {
+      isFloat = true
+      pos += 1
+      scanDigits(10)
+    }
+    if (pos < src.size and (src[pos] == 'e' or src[pos] == 'E')) {
+      val back = pos
+      pos += 1
+      if (pos < src.size and (src[pos] == '+' or src[pos] == '-')) { pos += 1 }
+      if (pos < src.size and __pyDigitOf(src[pos], 10)) {
+        scanDigits(10)
+        isFloat = true
+      } else {
+        pos = back
+      }
+    }
+    var imaginary = false
+    if (pos < src.size and (src[pos] == 'j' or src[pos] == 'J')) {
+      pos += 1
+      imaginary = true
+    }
+    if (!isFloat and !imaginary and whole.size > 1 and whole[0] == '0' and whole.any { it != '0' and it != '_' }) {
+      throw error("leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers", start)
+    }
+    checkNumberEnd(false)
+    add(PyTokenKind.Number, start, src[start ..< pos])
+  }
+
+  internal fun readOperator() {
+    val start = pos
+    val c = src[pos]
+    val three = pos + 3 <= src.size ? src[pos ..< pos + 3] : ""
+    val two = pos + 2 <= src.size ? src[pos ..< pos + 2] : ""
+    var op = ""
+    if (three == "**=" or three == "//=" or three == ">>=" or three == "<<=" or three == "...") {
+      op = three
+    } else if (two in __pyTwoCharOps) {
+      op = two
+    } else if ("+-*/%@&|^~<>()[]{},:.;=!".contains(c)) {
+      op = c.toString()
+    } else {
+      throw error(c.code < 0x80 ? "invalid syntax" : pyIsPrintable(c.code) ? "invalid character '$c' (U+" + __pyHex(c.code, 4).upper() + ")" : "invalid non-printable character U+" + __pyHex(c.code, 4).upper())
+    }
+    // Inside an f-string's field, ':' at the field's own depth begins its format spec, and its
+    // '}' ends it; '!' (not '!=') is the conversion's.
+    if (strings.size > 0) {
+      val f = strings.last()
+      if (f.inField and brackets.size == f.fieldDepth) {
+        if (op == "}" ) {
+          closeField(f)
+          return
+        }
+        if (c == ':') {
+          pos += 1
+          add(PyTokenKind.Op, start, ":")
+          f.inSpec = true
+          return
+        }
+      }
+    }
+    pos += op.size
+    if (op == "(" or op == "[" or op == "{") {
+      brackets.add(op[0])
+      bracketsAt.add(start)
+    } else if (op == ")" or op == "]" or op == "}") {
+      if (brackets.size == 0) { throw error("unmatched '$op'", start) }
+      val open = brackets.last()
+      if (open == '(' and op != ")" or open == '[' and op != "]" or open == '{' and op != "}") {
+        throw error("closing parenthesis '$op' does not match opening parenthesis '$open'", start)
+      }
+      brackets.removeLast()
+      bracketsAt.removeLast()
+    }
+    add(PyTokenKind.Op, start, op)
+  }
+}
+
+internal val __pyTwoCharOps : Set<string> = setOf("**", "//", "<<", ">>", "<=", ">=", "==", "!=", "->", "+=", "-=", "*=", "/=", "%=",
+                                                    "&=", "|=", "^=", "@=", ":=")
+
+// Whether `c` is a digit of the base (2, 8, 10 or 16).
+internal fun __pyDigitOf(c : char, base : int) : bool {
+  if (base == 16) { return c >= '0' and c <= '9' or c >= 'a' and c <= 'f' or c >= 'A' and c <= 'F' }
+  return c >= '0' and c.code < '0'.code + base
+}
+
+// A string's prefixes, in any case: r u b f t and the pairs of them Python takes.
+internal fun __pyIsStringPrefix(name : string) : bool {
+  val p = name.lower()
+  return p in setOf("r", "u", "b", "f", "t", "br", "rb", "fr", "rf", "tr", "rt")
+}
+
+// Python's identifiers (PEP 3131), as its categories give them: XID_Start and XID_Continue,
+// near enough (the letters, letter numbers and _; then marks, digits and connectors too).
+internal fun __pyIdentifierStart(cp : int) : bool {
+  val c = pyCategory(cp)
+  return c[0] == 'L' or c == "Nl"
+}
+
+internal fun __pyIdentifierPart(cp : int) : bool {
+  val c = pyCategory(cp)
+  return c[0] == 'L' or c == "Nl" or c == "Mn" or c == "Mc" or c == "Nd" or c == "Pc"
+}
